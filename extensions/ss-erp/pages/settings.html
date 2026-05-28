@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>SS ERP - 松鼠跨境卖家助手</title>
+  <link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+  <main class="dashboard-shell">
+    <header class="hero-panel motion-in">
+      <div class="hero-copy">
+        <div class="eyebrow-row">
+          <span class="page-eyebrow">扩展设置</span>
+          <span class="source-pill">网页计算器同款工作流</span>
+        </div>
+        <h1>SS ERP - 松鼠跨境卖家助手</h1>
+        <p class=”subtitle”>物流配置、费用默认值、ERP 连接；完成配置后，打开 Ozon 商品页点击右侧”算价”。</p>
+        <p id="selectedSummary" class="selected-summary">等待读取我的物流集合...</p>
+        <div class="workflow-strip" aria-label="配置流程">
+          <div class="workflow-step">
+            <span class="workflow-index">1</span>
+            <div>
+              <strong>同步物流</strong>
+              <small>一键拉取 seller + official 数据</small>
+            </div>
+          </div>
+          <div class="workflow-step">
+            <span class="workflow-index">2</span>
+            <div>
+              <strong>选择我的物流</strong>
+              <small>确认实际发货模板集合</small>
+            </div>
+          </div>
+          <div class="workflow-step">
+            <span class="workflow-index">3</span>
+            <div>
+              <strong>保存后核价</strong>
+              <small>费用默认值和自动同步会带入商品页</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-actions" aria-label="物流配置">
+        <section class="command-group">
+          <div class="command-label">常用动作</div>
+          <div class="actions">
+            <button id="syncAllBtn" class="btn btn-primary" type="button">一键同步 seller+official</button>
+            <button id="openSelectorBtn" class="btn btn-secondary" type="button">重新选择物流</button>
+            <button id="openSellerBtn" class="btn btn-secondary" type="button">打开 Seller 物流页</button>
+            <button id="openOfficialBtn" class="btn btn-secondary" type="button">打开 official 运费页</button>
+            <button id="refreshBtn" class="btn btn-muted" type="button">刷新状态</button>
+          </div>
+          <p class="command-note">先同步 seller + official，再确认“我的物流集合”。费用默认值和自动同步会自动带入商品页。</p>
+        </section>
+
+        <section class="command-group">
+          <div class="command-label">文件与配置</div>
+          <div class="actions">
+            <button id="importBtn" class="btn btn-muted" type="button">导入同步文件</button>
+            <button id="exportSyncFileBtn" class="btn btn-success" type="button">导出插件同步文件</button>
+          </div>
+          <details class="advanced">
+            <summary>高级同步</summary>
+            <div class="sync-switches" aria-label="自动同步">
+              <label class="switch-row">
+                <input id="autoCommissionSyncInput" type="checkbox" />
+                <span>
+                  <strong>自动同步 Ozon 佣金费率</strong>
+                  <small>从 Ozon 帮助中心佣金页读取最新类目费率，商品页按类目和 RUB 价档自动匹配。</small>
+                </span>
+              </label>
+              <label class="switch-row">
+                <input id="autoFxSyncInput" type="checkbox" />
+                <span>
+                  <strong>自动同步汇率</strong>
+                  <small>商品页识别 RUB / CNY / KZT / BYN / USD / EUR 后自动换算为 CNY，并保留手动汇率兜底。</small>
+                </span>
+              </label>
+              <div class="actions">
+                <button id="syncCommissionRatesBtn" class="btn btn-muted" type="button">同步 Ozon 佣金费率</button>
+                <button id="syncFxRatesBtn" class="btn btn-muted" type="button">同步实时汇率</button>
+              </div>
+              <div id="commissionSyncStatus" class="status compact"></div>
+              <div id="fxSyncStatus" class="status compact"></div>
+            </div>
+            <div class="actions">
+              <button id="refreshLogisticsBtn" class="btn btn-muted" type="button">仅同步 seller</button>
+              <button id="syncOfficialBtn" class="btn btn-muted" type="button">仅同步 official</button>
+              <button id="sellerDiagnosticHarBtn" class="btn btn-muted" type="button">导出后台诊断数据</button>
+              <button id="sellerLogisticsJsonBtn" class="btn btn-muted" type="button">后台物流模板 JSON</button>
+              <button id="sellerLogisticsCsvBtn" class="btn btn-muted" type="button">后台物流模板 CSV</button>
+              <button id="officialDiagnosticHarBtn" class="btn btn-muted" type="button">导出官方参考诊断数据</button>
+              <button id="officialFreightJsonBtn" class="btn btn-muted" type="button">官方运费参考 JSON</button>
+              <button id="officialFreightCsvBtn" class="btn btn-muted" type="button">官方运费参考 CSV</button>
+            </div>
+          </details>
+        </section>
+      </div>
+    </header>
+
+    <input id="fileInput" type="file" accept=".json,application/json" hidden />
+
+    <section class="status-grid" aria-label="配置状态">
+      <article class="status-card">
+        <div class="card-head">
+          <h2>平台物流目录</h2>
+          <span id="sellerBadge" class="badge badge-muted">待读取</span>
+        </div>
+        <p>来源：seller 页面采集</p>
+        <dl>
+          <div><dt>服务数</dt><dd id="sellerCount">0</dd></div>
+          <div><dt>同步时间</dt><dd id="configUpdatedAt">无</dd></div>
+        </dl>
+      </article>
+
+      <article class="status-card">
+        <div class="card-head">
+          <h2>官方样本</h2>
+          <span id="officialBadge" class="badge badge-muted">待读取</span>
+        </div>
+        <p>来源：official 运费页采集</p>
+        <dl>
+          <div><dt>样本报价数</dt><dd id="officialSampleCount">0</dd></div>
+          <div><dt>采集记录</dt><dd id="officialCount">0</dd></div>
+        </dl>
+      </article>
+
+      <article class="status-card">
+        <div class="card-head">
+          <h2>我的物流</h2>
+          <span id="selectedBadge" class="badge badge-muted">未选择</span>
+        </div>
+        <p>只从这一组物流方式里命中最终报价。</p>
+        <dl>
+          <div><dt>已选数量</dt><dd id="selectedCount">0</dd></div>
+          <div><dt>目录总数</dt><dd id="allCount">0</dd></div>
+        </dl>
+      </article>
+
+      <article class="status-card strategy-card">
+        <div class="card-head">
+          <h2>自动命中策略</h2>
+          <span class="badge badge-local">本地记忆</span>
+        </div>
+        <div class="choice-stack" aria-label="自动命中策略">
+          <label class="choice-row">
+            <input id="resolutionLowestInput" name="resolutionMode" type="radio" value="lowest_cost" />
+            <span>最低运费优先</span>
+          </label>
+          <label class="choice-row">
+            <input id="resolutionPriorityInput" name="resolutionMode" type="radio" value="priority" />
+            <span>用户优先级优先</span>
+          </label>
+        </div>
+        <p>多个物流方式同时满足条件时，系统会按这里的策略自动选择最终命中的一个。</p>
+      </article>
+    </section>
+
+    <div class="notice-stack" aria-live="polite">
+      <div id="configStatus" class="status">等待状态...</div>
+    </div>
+
+    <section class="surface-panel health-panel" aria-labelledby="healthTitle">
+      <div class="panel-head">
+        <div>
+          <h2 id="healthTitle">系统健康摘要</h2>
+          <p class="subtitle">集中查看物流集合、官方佣金和实时汇率是否已经可用于商品页核价。</p>
+        </div>
+        <span class="version-pill">v<span id="extensionVersion">读取中</span></span>
+      </div>
+      <div id="healthSummary" class="health-summary">等待状态...</div>
+      <div class="health-grid" aria-label="系统健康明细">
+        <div class="health-item"><span>物流配置</span><strong id="healthLogistics">等待状态</strong></div>
+        <div class="health-item"><span>官方佣金</span><strong id="healthCommission">等待状态</strong></div>
+        <div class="health-item"><span>实时汇率</span><strong id="healthFx">等待状态</strong></div>
+      </div>
+    </section>
+
+    <section class="surface-panel guide-panel">
+      <button id="guideToggleBtn" class="panel-toggle" type="button" aria-expanded="false">
+        <span>
+          <strong>插件读取 / HAR 兜底教程</strong>
+          <small>优先用插件从已登录网页读取数据；导出 HAR 仍保留为兜底。</small>
+        </span>
+        <span class="toggle-icon" aria-hidden="true">⌄</span>
+      </button>
+      <div id="guideBody" class="guide-body" hidden>
+        <ol>
+          <li>打开 Seller 物流页并登录，刷新一次页面，让物流模板请求重新出现。</li>
+          <li>回到本页点击“一键同步 seller+official”，系统会生成目录、规则和官方运费样本。</li>
+          <li>点击“重新选择物流”，确认实际使用的物流集合并保存。</li>
+          <li>如果插件没有捕获到数据，再在浏览器 Network 面板导出 HAR，使用导入同步文件作为兜底。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="surface-grid">
+      <article class="surface-panel erp-panel">
+        <div class="panel-head">
+          <div>
+            <h2>ERP 连接配置</h2>
+            <p class="subtitle">连接松鼠跨境 ERP，支持商品采集推送。</p>
+          </div>
+          <button id="testErpBtn" class="btn btn-muted" type="button">测试连接</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px;margin-top:18px;">
+          <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+            <span>ERP 后端地址</span>
+            <input id="erpUrlInput" type="url" placeholder="http://localhost:3001" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
+            <small style="font-weight:400;color:#94a3b8;">填后端 API 端口（3001），不是前端页面（3000）</small>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+            <span>扩展 Token</span>
+            <input id="erpTokenInput" type="text" placeholder="从 ERP 采集页获取的 30 天 Token" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
+            <small style="font-weight:400;color:#94a3b8;">在 ERP → 一键上货 → SKU采集跟卖 → 获取扩展Token</small>
+          </label>
+        </div>
+        <div id="erpStatus" class="status compact" style="margin-top:12px;"></div>
+      </article>
+
+      <article class="surface-panel" style="border-left:3px solid #8b5cf6;">
+        <div class="panel-head">
+          <div>
+            <h2>店铺分析同步</h2>
+            <p class="subtitle">从 seller.ozon.ru 获取商品销售分析数据（30天销量、销售额、加购率等），推送到 ERP。</p>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:14px;">
+          <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+            <span>选择店铺</span>
+            <select id="analyticsShopSelect" style="height:36px;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:rgba(255,255,255,0.92);color:#0f172a;padding:0 10px;font-size:13px;font-weight:600;">
+              <option value="">加载中...</option>
+            </select>
+            <small style="font-weight:400;color:#94a3b8;">选择要同步分析数据的 OZON 店铺</small>
+          </label>
+          <div class="actions">
+            <button id="syncAnalyticsBtn" class="btn btn-primary" type="button">同步店铺分析到 ERP</button>
+            <button id="syncGraphsBtn" class="btn btn-secondary" type="button">同步经营图表到 ERP (V3)</button>
+            <button id="testMarketApisBtn" class="btn btn-secondary" type="button" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;">测试市场数据 API</button>
+          </div>
+        </div>
+        <div id="analyticsStatus" class="status compact" style="margin-top:12px;"></div>
+        <div id="marketApiResults" style="margin-top:12px;display:none;"></div>
+      </article>
+
+      <article class="surface-panel fee-panel">
+        <div class="panel-head">
+          <div>
+            <h2>费用默认值</h2>
+            <p class="subtitle">包装相关费用会自动带入商品页核价抽屉，商品页里仍可临时调整。</p>
+          </div>
+          <button id="saveFeeSettingsBtn" class="btn btn-success" type="button">保存费用默认值</button>
+        </div>
+        <div class="fee-grid">
+          <label>
+            <span>包装费（默认 0）</span>
+            <input id="packingFeeInput" type="number" min="0" step="0.01" value="0" placeholder="默认 0，留空使用物流规则" />
+          </label>
+          <label class="fee-custom">
+            <span>自定义费用（每行一项）</span>
+            <textarea id="customFeesInput" rows="3" placeholder="每行一项，例如：复核费 1.5"></textarea>
+          </label>
+        </div>
+        <div style="margin-top:18px;">
+          <label style="display:flex;flex-direction:column;gap:8px;color:#64748b;font-size:12px;font-weight:800;">
+            <span>其他费用规则（按百分比 / 固定金额）</span>
+            <small style="font-weight:400;color:#94a3b8;">例如：2% 手续费 + 5元包装费。算价面板合并显示为"其他费用"，核价分析分项展示。</small>
+          </label>
+          <div id="extraFeeRulesContainer" style="margin-top:8px;"></div>
+          <button id="addExtraFeeRuleBtn" type="button" class="btn btn-muted" style="margin-top:8px;font-size:12px;">+ 添加费用规则</button>
+        </div>
+        <div id="feeStatus" class="status compact"></div>
+      </article>
+
+      <article class="surface-panel diagnostic-panel">
+        <div class="panel-head">
+          <div>
+            <h2>插件同步诊断</h2>
+            <p class="subtitle">用于排查扩展桥接、最近响应与自动同步状态。</p>
+          </div>
+          <button id="refreshDiagnosticBtn" class="btn btn-muted" type="button">刷新状态</button>
+        </div>
+        <div class="diagnostic-grid">
+          <div><span>桥接标记</span><strong id="bridgeStatus">已检测到</strong></div>
+          <div><span>最近请求 ID</span><strong id="lastRequestId">等待同步</strong></div>
+          <div><span>最近响应</span><strong id="lastResponseStatus">等待状态</strong></div>
+          <div><span>最近读取类型</span><strong id="lastReadMode">seller+official</strong></div>
+        </div>
+        <details class="advanced diagnostic-actions">
+          <summary>查看诊断操作</summary>
+          <div class="actions">
+            <button id="clearBtn" class="btn btn-warning" type="button">清空诊断数据</button>
+          </div>
+        </details>
+        <div id="diagnosticStatus" class="status compact"></div>
+      </article>
+    </section>
+  </main>
+
+  <div id="serviceModal" class="modal-backdrop" hidden>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="serviceModalTitle">
+      <header class="modal-head">
+        <div>
+          <div class="modal-kicker">物流集合</div>
+          <h2 id="serviceModalTitle">选择我的物流方式</h2>
+          <p>这里列的是 seller 数据生成的具体物流模板。你选中的这一组，会成为当前计算器的“我的物流集合”。</p>
+        </div>
+        <label class="modal-search">
+          <span>搜索承运商或物流方式</span>
+          <input id="serviceSearchInput" type="search" placeholder="例如：RETS Economy 电池" />
+        </label>
+      </header>
+
+      <div class="selector-layout">
+        <section class="selector-catalog">
+          <div class="selector-tools">
+            <button id="selectVisibleBtn" class="btn btn-muted" type="button">全选当前结果</button>
+            <button id="clearSelectionBtn" class="btn btn-muted" type="button">清空已选</button>
+            <span class="count-pill">目录共 <strong id="filteredCount">0</strong> 项</span>
+          </div>
+          <div id="serviceList" class="service-list" aria-label="我的物流"></div>
+        </section>
+
+        <aside class="selected-panel">
+          <h3>我的物流集合（优先级顺序）</h3>
+          <p>当“用户优先级优先”开启时，系统会按下面从上到下的顺序选最终命中的物流方式。</p>
+          <div id="selectedServiceList" class="selected-service-list"></div>
+          <div class="selector-note">
+            seller 数据会同时刷新“能选什么”和“如何计算”。同步后先确认这一组模板，后续计算只从这组模板中自动命中。
+          </div>
+        </aside>
+      </div>
+
+      <footer class="modal-foot">
+        <div>已选 <strong id="modalSelectedCount">0</strong> 项。选择结果会保存到本机，也可以用“导出插件同步文件”带到其他电脑。</div>
+        <div class="modal-actions">
+          <button id="cancelSelectorBtn" class="btn btn-muted" type="button">取消</button>
+          <button id="saveServicesBtn" class="btn btn-primary" type="button">保存并使用</button>
+        </div>
+      </footer>
+    </section>
+  </div>
+
+  <script src="../shared/config-bridge/sync-schema.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

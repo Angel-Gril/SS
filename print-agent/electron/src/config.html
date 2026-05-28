@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>SS ERP 打印代理</title>
+<style>
+  :root {
+    --brand: #ea580c;
+    --brand-dark: #9a3412;
+    --line: #e5e7eb;
+    --bg: #fffaf5;
+    --paper: #ffffff;
+    --text: #18212f;
+    --muted: #64748b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--brand-dark);
+    margin-bottom: 4px;
+  }
+  .sub { font-size: 11px; color: var(--muted); margin-bottom: 16px; }
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .row:last-child { margin-bottom: 0; }
+  label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    width: 90px;
+    flex-shrink: 0;
+  }
+  select, input[type=number], input[type=text] {
+    flex: 1;
+    height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 12px;
+    background: #fff;
+    outline: none;
+  }
+  select:focus, input:focus { border-color: var(--brand); }
+  input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--brand); }
+  button {
+    height: 30px;
+    padding: 0 14px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  button:hover { border-color: var(--brand); color: var(--brand); }
+  button.primary {
+    background: linear-gradient(135deg, #f59e0b, var(--brand));
+    color: #fff;
+    border-color: transparent;
+  }
+  button.primary:hover { color: #fff; opacity: 0.9; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #dcfce7;
+    color: #16a34a;
+    font-weight: 600;
+  }
+  .status::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: #16a34a;
+  }
+  .footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .footer .actions { display: flex; gap: 8px; }
+  .toast {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #18212f;
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<h1>SS ERP 打印代理</h1>
+<div class="sub">本地打印服务，监听 ERP 后台发来的面单打印请求</div>
+
+<div class="card">
+  <div class="row">
+    <label>状态</label>
+    <span class="status" id="status">监听中...</span>
+    <span style="margin-left: auto; font-size: 11px; color: var(--muted)" id="meta"></span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <label>HTTP 端口</label>
+    <input type="number" id="port" min="1024" max="65535" />
+  </div>
+  <div class="row">
+    <label>默认打印机</label>
+    <select id="printer"></select>
+    <button id="refresh" title="刷新打印机列表">刷新</button>
+  </div>
+  <div class="row">
+    <label>默认份数</label>
+    <input type="number" id="copies" min="1" max="99" />
+  </div>
+  <div class="row">
+    <label>纸张</label>
+    <input type="text" id="paperSize" placeholder="留空使用打印机默认（如 A4 / Letter / 100x150mm）" />
+  </div>
+  <div class="row">
+    <label>静默打印</label>
+    <input type="checkbox" id="silent" />
+    <span style="font-size: 11px; color: var(--muted)">勾选后打印不弹窗</span>
+  </div>
+</div>
+
+<div class="footer">
+  <button id="testPrint">测试打印</button>
+  <div class="actions">
+    <button id="cancel">关闭</button>
+    <button class="primary" id="save">保存</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let cfg = {};
+
+  function showToast(msg) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2000);
+  }
+
+  async function loadPrinters() {
+    const r = await window.agent.listPrinters();
+    const sel = $('printer');
+    sel.innerHTML = '<option value="">系统默认打印机</option>';
+    if (r.ok && Array.isArray(r.printers)) {
+      r.printers.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = p.name;
+        sel.appendChild(opt);
+      });
+    }
+    sel.value = cfg.defaultPrinter || '';
+  }
+
+  async function init() {
+    cfg = await window.agent.getConfig();
+    $('port').value = cfg.port;
+    $('copies').value = cfg.copies;
+    $('paperSize').value = cfg.paperSize || '';
+    $('silent').checked = !!cfg.silent;
+    $('meta').textContent = '端口 ' + cfg.port + ' · 平台 ' + (navigator.userAgent.includes('Windows') ? 'Windows' : 'macOS');
+    await loadPrinters();
+  }
+
+  $('refresh').onclick = async () => { await loadPrinters(); showToast('打印机列表已刷新'); };
+
+  $('save').onclick = async () => {
+    const next = {
+      port: Number($('port').value),
+      defaultPrinter: $('printer').value,
+      copies: Number($('copies').value),
+      paperSize: $('paperSize').value.trim(),
+      silent: $('silent').checked,
+    };
+    cfg = await window.agent.saveConfig(next);
+    showToast('已保存（端口变更需重启代理）');
+  };
+
+  $('cancel').onclick = () => window.close();
+
+  $('testPrint').onclick = async () => {
+    const r = await window.agent.testPrint($('printer').value);
+    showToast(r.ok ? '测试打印已发送' : '失败：' + (r.error || '未知'));
+  };
+
+  init();
+</script>
+</body>
+</html>

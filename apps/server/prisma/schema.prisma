@@ -1,0 +1,970 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  STAFF
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum Platform {
+  OZON
+  YANDEX
+  KASPI
+  WILDBERRIES
+}
+
+enum ShopStatus {
+  ACTIVE
+  DISABLED
+  ERROR
+}
+
+enum SyncJobType {
+  PRODUCT_PULL
+  PRODUCT_PUSH
+  ORDER_PULL
+  STOCK_PUSH
+  IMAGE_RESIZE
+  RETURN_PULL
+}
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum BalanceLogType {
+  RECHARGE
+  CONSUME
+  REFUND
+  ADJUST
+}
+
+model User {
+  id           String     @id @default(cuid())
+  phone        String     @unique
+  email        String?    @unique
+  passwordHash String     @map("password_hash")
+  nickname     String?
+  avatar       String?
+  accountCode  String?    @unique @map("account_code")
+  role         UserRole   @default(USER)
+  status       UserStatus @default(ACTIVE)
+  balance      Decimal    @default(0) @db.Decimal(12, 2)
+  parentId     String?    @map("parent_id")
+  parent       User?      @relation("UserStaff", fields: [parentId], references: [id], onDelete: SetNull)
+  staff        User[]     @relation("UserStaff")
+  canInvite    Boolean    @default(false) @map("can_invite")
+  inviteLimit  Int        @default(0) @map("invite_limit")
+  inviteCount  Int        @default(0) @map("invite_count")
+  tenantType   String     @default("transit") @map("tenant_type")
+  perOrderFee  Decimal?   @map("per_order_fee") @db.Decimal(10, 2)
+  customColorEnabled Boolean @default(false) @map("custom_color_enabled")
+  activePortal String     @default("user") @map("active_portal")
+  isTransitProvider Boolean @default(false) @map("is_transit_provider")
+  canPublishAddress Boolean @default(false) @map("can_publish_address")
+  providerFee  Decimal?   @map("provider_fee") @db.Decimal(10, 2)
+  platformFee  Decimal?   @map("platform_fee") @db.Decimal(10, 2)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  lastLoginAt  DateTime?  @map("last_login_at")
+
+  shops        Shop[]
+  balanceLogs  BalanceLog[]
+  sessions     Session[]
+  supplyGoods  SupplyGoods[]
+  account      UserAccount?
+  userServiceTags UserServiceTag[]
+
+  @@index([parentId])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  userAgent String?  @map("user_agent")
+  ip        String?
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Shop {
+  id              String      @id @default(cuid())
+  userId          String      @map("user_id")
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform        Platform
+  name            String
+  clientId        String?     @map("client_id")
+  apiKeyEncrypted String      @map("api_key_encrypted")
+  apiSecretEncrypted String?  @map("api_secret_encrypted")
+  status          ShopStatus  @default(ACTIVE)
+  balance         Decimal     @default(0) @db.Decimal(12, 2)
+  lastSyncAt      DateTime?   @map("last_sync_at")
+  errorMessage    String?     @map("error_message")
+  config          Json?
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  products    Product[]
+  orders      Order[]
+  warehouses  Warehouse[]
+  syncJobs    SyncJob[]
+  returns     Return[]
+  issues      ExpressIssue[]
+  financeTransactions OzonFinanceTransaction[]
+
+  @@index([userId])
+  @@index([platform])
+  @@map("shops")
+}
+
+model Warehouse {
+  id                  String   @id @default(cuid())
+  shopId              String   @map("shop_id")
+  shop                Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  platformWarehouseId String?  @map("platform_warehouse_id")
+  name                String
+  type                String?
+  status              String?
+  phone               String?
+  // 结构化地址（用户私有）
+  countryCode         String?  @map("country_code")
+  city                String?
+  street              String?
+  zipCode             String?  @map("zip_code")
+  building            String?
+  block               String?
+  latitude            Float?
+  longitude           Float?
+  firstMileType       String?  @map("first_mile_type")
+  dropOffPointId      String?  @map("drop_off_point_id")
+  dropOffTimeslotId   Int?     @map("drop_off_timeslot_id")
+  cutInTime           Int?     @map("cut_in_time")
+  isKgt               Boolean  @default(false) @map("is_kgt")
+  isRfbs              Boolean  @default(false) @map("is_rfbs")
+  workingDays         Json?    @map("working_days")
+  warehouseOptions    Json?    @map("warehouse_options")
+  // 应用的模板 ID（用户从模板继承标准参数）
+  templateId          String?  @map("template_id")
+  // 退货设置（用户私有）
+  returnRecipient     String?  @map("return_recipient")
+  returnPhone         String?  @map("return_phone")
+  rawData             Json?    @map("raw_data")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  deliveryMethods     ShopDeliveryMethod[]
+
+  @@unique([shopId, platformWarehouseId])
+  @@index([shopId])
+  @@map("warehouses")
+}
+
+model ShopDeliveryMethod {
+  id                  String   @id @default(cuid())
+  warehouseId         String   @map("warehouse_id")
+  warehouse           Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  platformMethodId    Int      @map("platform_method_id")
+  name                String
+  status              String?
+  providerId          Int?     @map("provider_id")
+  cutoff              String?
+  slaCutIn            Int?     @map("sla_cut_in")
+  tplIntegrationType  String?  @map("tpl_integration_type")
+  dropOffPointAddress String?  @map("drop_off_point_address")
+  dropOffPointName    String?  @map("drop_off_point_name")
+  rawData             Json?    @map("raw_data")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@unique([warehouseId, platformMethodId])
+  @@index([warehouseId])
+  @@map("shop_delivery_methods")
+}
+
+model Product {
+  id                String   @id @default(cuid())
+  shopId            String   @map("shop_id")
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  platformProductId String?  @map("platform_product_id")
+  sku               String?
+  offerId           String?  @map("offer_id")
+  title             String
+  description       String?
+  categoryId        String?  @map("category_id")
+  price             Decimal? @db.Decimal(12, 2)
+  oldPrice          Decimal? @map("old_price") @db.Decimal(12, 2)
+  currency          String   @default("CNY")
+  stock             Int      @default(0)
+  weight            Int?
+  images            Json?
+  attributes        Json?
+  variants          Json?
+  modelId           String?  @map("model_id")
+  status            String?
+  visibility        String?
+  syncStatus        String?  @map("sync_status")
+  commissionRate    Decimal? @map("commission_rate") @db.Decimal(5, 2)
+  minPrice          Decimal? @map("min_price") @db.Decimal(12, 2)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([shopId, platformProductId])
+  @@unique([shopId, offerId])
+  @@index([shopId])
+  @@index([sku])
+  @@index([modelId])
+  @@map("products")
+}
+
+model Order {
+  id              String   @id @default(cuid())
+  shopId          String   @map("shop_id")
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  platformOrderId String   @map("platform_order_id")
+  postingNumber   String?  @map("posting_number")
+  status          String
+  subStatus       String?  @map("sub_status")
+  totalAmount     Decimal? @map("total_amount") @db.Decimal(12, 2)
+  currency        String   @default("CNY")
+  buyerInfo       Json?    @map("buyer_info")
+  shippingInfo    Json?    @map("shipping_info")
+  items           Json?
+  trackingNumber  String?  @map("tracking_number")
+  shippingMethod  String?  @map("shipping_method")
+  warehouseId     String?  @map("warehouse_id")
+  inProcessAt     DateTime? @map("in_process_at")
+  shipmentDate    DateTime? @map("shipment_date")
+  deliveringDate  DateTime? @map("delivering_date")
+  deliveredAt     DateTime? @map("delivered_at")
+
+  // 国内物流
+  domesticTrackingNumber String?  @map("domestic_tracking_number")
+  domesticCarrier        String?  @map("domestic_carrier")
+  domesticStatus         String?  @default("pending") @map("domestic_status")
+
+  // 国际物流
+  internationalTrackingNumber String? @map("international_tracking_number")
+  internationalCarrier        String? @map("international_carrier")
+  internationalStatus         String? @default("pending") @map("international_status")
+
+  // 采购信息
+  purchaseOrderId  String?  @map("purchase_order_id")
+  purchasePlatform String?  @map("purchase_platform")
+  purchaseAmount   Decimal? @map("purchase_amount") @db.Decimal(12, 2)
+
+  // 服务标签
+  serviceTags      Json?    @map("service_tags")
+  serviceFee       Decimal? @map("service_fee") @db.Decimal(10, 2)
+  shippingFee      Decimal? @map("shipping_fee") @db.Decimal(10, 2)
+  feeDeducted      Boolean  @default(false) @map("fee_deducted")
+  inspectionStatus String?  @map("inspection_status")
+  inspectionPhotos Json?    @map("inspection_photos")
+  inspectionNote   String?  @map("inspection_note")
+
+  // SoloSeller 计费 + 个人颜色
+  soloFee          Decimal? @map("solo_fee") @db.Decimal(10, 2)
+  soloFeeBilledAt  DateTime? @map("solo_fee_billed_at")
+  userColorTags    Json?    @map("user_color_tags")
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  warehouseLogs   WarehouseLog[]
+  trackingEvents  OrderTrackingEvent[]
+
+  @@unique([shopId, platformOrderId])
+  @@index([shopId])
+  @@index([status])
+  @@index([postingNumber])
+  @@index([domesticTrackingNumber])
+  @@index([internationalTrackingNumber])
+  @@map("orders")
+}
+
+model OrderTrackingEvent {
+  id          String   @id @default(cuid())
+  orderId     String   @map("order_id")
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  substatus   String
+  statusText  String   @map("status_text")
+  source      String   @default("ozon")
+  occurredAt  DateTime @map("occurred_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([orderId, substatus])
+  @@index([orderId, occurredAt])
+  @@map("order_tracking_events")
+}
+
+model Return {
+  id              String    @id @default(cuid())
+  shopId          String    @map("shop_id")
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  platformReturnId String   @map("platform_return_id")
+  postingNumber   String?   @map("posting_number")
+  status          String
+  reason          String?
+  reasonCode      String?   @map("reason_code")
+  product         Json?
+  quantity        Int       @default(1)
+  amount          Decimal?  @db.Decimal(12, 2)
+  currency        String    @default("CNY")
+  returnedToWarehouse Boolean @default(false) @map("returned_to_warehouse")
+  acceptedAt      DateTime? @map("accepted_at")
+  returnedAt      DateTime? @map("returned_at")
+  raw             Json?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@unique([shopId, platformReturnId])
+  @@index([shopId])
+  @@index([status])
+  @@index([postingNumber])
+  @@map("returns")
+}
+
+model ExpressIssue {
+  id              String   @id @default(cuid())
+  shopId          String   @map("shop_id")
+  shop            Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  orderId         String?  @map("order_id")
+  postingNumber   String?  @map("posting_number")
+  trackingNumber  String?  @map("tracking_number")
+  type            String
+  status          String   @default("open")
+  title           String
+  description     String?
+  resolution      String?
+  resolvedAt      DateTime? @map("resolved_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([shopId])
+  @@index([status])
+  @@index([type])
+  @@map("express_issues")
+}
+
+model SupplyGoods {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  sourceUrl       String?  @map("source_url")
+  sourcePlatform  String?  @map("source_platform")
+  supplier        String?
+  purchasePrice   Decimal? @map("purchase_price") @db.Decimal(12, 2)
+  currency        String   @default("CNY")
+  // 原始采集币种（如 RUB），purchasePrice 是按采集时汇率换算的 CNY 值
+  originalPrice    Decimal? @map("original_price") @db.Decimal(12, 2)
+  originalCurrency String?  @map("original_currency")
+  exchangeRateUsed Decimal? @map("exchange_rate_used") @db.Decimal(12, 6)
+  priceNeedsReview Boolean  @default(false) @map("price_needs_review")
+  sku             String?
+  images          Json?
+  variants        Json?    // 多变体 SKU 数组：[{ sku, attrs:{颜色:'红',尺码:'M'}, price, images?, stock? }]
+  modelId         String?  @map("model_id") // OZON model_id（多变体共享）
+  mappedProductId String?  @map("mapped_product_id")
+  notes           String?
+  metadata        Json?
+  status          String   @default("active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([status])
+  @@map("supply_goods")
+}
+
+model SyncJob {
+  id          String        @id @default(cuid())
+  shopId      String        @map("shop_id")
+  shop        Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  type        SyncJobType
+  status      SyncJobStatus @default(PENDING)
+  payload     Json?
+  result      Json?
+  errorMessage String?      @map("error_message")
+  startedAt   DateTime?     @map("started_at")
+  finishedAt  DateTime?     @map("finished_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([shopId])
+  @@index([status])
+  @@index([type])
+  @@map("sync_jobs")
+}
+
+model BalanceLog {
+  id          String         @id @default(cuid())
+  userId      String         @map("user_id")
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        BalanceLogType
+  amount      Decimal        @db.Decimal(12, 2)
+  balanceBefore Decimal      @map("balance_before") @db.Decimal(12, 2)
+  balanceAfter  Decimal      @map("balance_after") @db.Decimal(12, 2)
+  description String?
+  metadata    Json?
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([type])
+  @@map("balance_logs")
+}
+
+model Notice {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  level     String   @default("INFO")
+  pinned    Boolean  @default(false)
+  publishedAt DateTime @default(now()) @map("published_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([publishedAt])
+  @@map("notices")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  content   String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+enum InventoryRecordType {
+  IN
+  OUT
+  ADJUST
+}
+
+model InventoryItem {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  sku         String
+  productName String   @map("product_name")
+  quantity    Int      @default(0)
+  costPrice   Decimal? @map("cost_price") @db.Decimal(12, 2)
+  location    String?
+  remark      String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  records     InventoryRecord[]
+
+  @@unique([userId, sku])
+  @@index([userId])
+  @@map("inventory_items")
+}
+
+model InventoryRecord {
+  id          String              @id @default(cuid())
+  itemId      String              @map("item_id")
+  item        InventoryItem       @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  type        InventoryRecordType
+  quantity    Int
+  costPrice   Decimal?            @map("cost_price") @db.Decimal(12, 2)
+  reason      String?
+  operator    String?
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  @@index([itemId])
+  @@index([type])
+  @@map("inventory_records")
+}
+
+// 服务标签配置表（管理员维护）
+model ServiceTagConfig {
+  id             String   @id @default(cuid())
+  name           String
+  color          String
+  description    String?
+  fee            Decimal  @db.Decimal(10, 2)
+  needInspection Boolean  @default(false) @map("need_inspection")
+  isActive       Boolean  @default(true) @map("is_active")
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("service_tag_configs")
+}
+
+// 仓库操作日志
+model WarehouseLog {
+  id             String   @id @default(cuid())
+  orderId        String   @map("order_id")
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  operationType  String   @map("operation_type")
+  operatorId     String?  @map("operator_id")
+  trackingNumber String?  @map("tracking_number")
+  note           String?
+  photos         Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([operationType])
+  @@index([createdAt])
+  @@map("warehouse_logs")
+}
+
+// 用户账户（每个用户一个）
+model UserAccount {
+  id            String   @id @default(cuid())
+  userId        String   @unique @map("user_id")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance       Decimal  @default(0) @db.Decimal(12, 2)
+  creditLimit   Decimal  @default(0) @db.Decimal(12, 2) @map("credit_limit")
+  billingMode   String   @default("prepaid") @map("billing_mode")
+  frozenAmount  Decimal  @default(0) @db.Decimal(12, 2) @map("frozen_amount")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  transactions  Transaction[]
+
+  @@map("user_accounts")
+}
+
+// 交易流水
+model Transaction {
+  id           String      @id @default(cuid())
+  accountId    String      @map("account_id")
+  account      UserAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type         String
+  amount       Decimal     @db.Decimal(12, 2)
+  balanceAfter Decimal     @db.Decimal(12, 2) @map("balance_after")
+  orderId      String?     @map("order_id")
+  description  String?
+  operator     String?
+  ip           String?
+  module       String?
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  @@index([accountId])
+  @@index([orderId])
+  @@index([createdAt])
+  @@index([module])
+  @@map("transactions")
+}
+
+// 物流账单
+model LogisticsBill {
+  id              String   @id @default(cuid())
+  shopId          String   @map("shop_id")
+  orderId         String?  @map("order_id")
+  trackingNumber  String   @map("tracking_number")
+  weight          Int?
+  fee             Decimal  @db.Decimal(10, 2)
+  country         String?
+  shippingMethod  String?  @map("shipping_method")
+  status          String   @default("pending")
+  settledAt       DateTime? @map("settled_at")
+  remark          String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([shopId])
+  @@index([orderId])
+  @@index([trackingNumber])
+  @@index([status])
+  @@map("logistics_bills")
+}
+
+// 菜鸟包裹缓存（扩展推送）
+model CainiaoPackage {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  trackingNumber  String   @map("tracking_number")
+  carrier         String?
+  carrierCode     String?  @map("carrier_code")
+  status          String?
+  statusDesc      String?  @map("status_desc")
+  updateTime      String?  @map("update_time")
+  sender          String?
+  receiver        String?
+  boundToOrderId  String?  @map("bound_to_order_id")
+  syncedAt        DateTime @default(now()) @map("synced_at")
+
+  @@unique([userId, trackingNumber])
+  @@index([userId, boundToOrderId])
+  @@index([syncedAt])
+  @@map("cainiao_packages")
+}
+
+// OZON 店铺分析快照
+model ShopAnalyticsSnapshot {
+  id           String   @id @default(cuid())
+  shopId       String   @map("shop_id")
+  period       String   @default("30d")
+  data         Json
+  productCount Int      @default(0) @map("product_count")
+  totalSales   Decimal? @db.Decimal(14, 2) @map("total_sales")
+  totalOrders  Int?     @map("total_orders")
+  syncedAt     DateTime @default(now()) @map("synced_at")
+
+  @@index([shopId, syncedAt])
+  @@map("shop_analytics_snapshots")
+}
+
+model ShopBillingConfig {
+  id          String   @id @default(cuid())
+  shopId      String   @unique @map("shop_id")
+  perOrderFee Decimal  @db.Decimal(10, 2) @map("per_order_fee")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("shop_billing_configs")
+}
+
+model SoloBillingSnapshot {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  month      String
+  orderCount Int      @default(0) @map("order_count")
+  totalFee   Decimal  @db.Decimal(12, 2) @map("total_fee")
+  paidAt     DateTime? @map("paid_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, month])
+  @@index([userId])
+  @@index([month])
+  @@map("solo_billing_snapshots")
+}
+
+model ProviderClient {
+  id          String   @id @default(cuid())
+  providerId  String   @map("provider_id")
+  clientId    String   @map("client_id")
+  status      String   @default("active")
+  feeOverride Decimal? @db.Decimal(10, 2) @map("fee_override")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([providerId, clientId])
+  @@index([providerId])
+  @@index([clientId])
+  @@map("provider_clients")
+}
+
+model DomesticAddressTemplate {
+  id          String   @id @default(cuid())
+  // null = 平台超管下发（全员可见）
+  // 非 null = 自建仓主下发（仅自身 + 其下线 parentId=hostUserId 可见）
+  hostUserId  String?  @map("host_user_id")
+  name        String
+  recipient   String
+  phone       String
+  province    String
+  city        String
+  district    String
+  address     String
+  zipCode     String?  @map("zip_code")
+  isDefault   Boolean  @default(false) @map("is_default")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([hostUserId])
+  @@map("domestic_address_templates")
+}
+
+// 系统配置（超管维护，key-value 存储）
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  label       String?
+  group       String   @default("general")
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([group])
+  @@map("system_configs")
+}
+
+// 水印模板
+model WatermarkTemplate {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  name        String
+  type        String   @default("text") // text | image
+  text        String?
+  imageUrl    String?  @map("image_url")
+  position    String   @default("bottom-right") // bottom-right | center | tile | top-left | top-right | bottom-left
+  opacity     Int      @default(50)
+  fontSize    Int?     @map("font_size")
+  fontColor   String?  @default("#ffffff") @map("font_color")
+  scale       Int?     @default(25) // 水印图片占原图百分比
+  isDefault   Boolean  @default(false) @map("is_default")
+  shopId      String?  @map("shop_id") // 关联店铺，null 表示通用
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([shopId])
+  @@map("watermark_templates")
+}
+
+// 用户个人颜色标签（仅自己可见）
+model UserServiceTag {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  color       String
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("user_service_tags")
+}
+
+// 仓库模板（管理员维护）
+model WarehouseTemplate {
+  id                    String   @id @default(cuid())
+  name                  String
+  // 仓库类型：fbs（rFBS 跨境，对应 /v1/warehouse/fbs/create）/ aggregator（Ozon Partners 合作物流）
+  warehouseType         String   @default("fbs") @map("warehouse_type")
+
+  // 步骤1：仓库信息（结构化地址）
+  phone                 String
+  countryCode           String   @default("CN") @map("country_code")
+  city                  String?
+  street                String?
+  zipCode               String?  @map("zip_code")
+  building              String?
+  block                 String?
+  latitude              Float?
+  longitude             Float?
+
+  // 步骤2：仓库参数
+  minWorkingDays        Int      @default(5) @map("min_working_days")
+  workingDays           Json     @default("[\"MONDAY\",\"TUESDAY\",\"WEDNESDAY\",\"THURSDAY\",\"FRIDAY\"]") @map("working_days")
+  workingHourFrom       String   @default("09:00") @map("working_hour_from")
+  workingHourTo         String   @default("18:00") @map("working_hour_to")
+  // 节假日列表 [{ day: "2026-06-19", isWorking: true }]
+  holidays              Json?
+
+  // 步骤3：退货设置
+  // returnPolicy: destroy（销毁）/ send_back（发回）
+  returnPolicy          String   @default("send_back") @map("return_policy")
+  returnCarrier         String?  @map("return_carrier")
+  returnAddressSameAsWarehouse Boolean @default(true) @map("return_address_same")
+  returnPhoneSameAsWarehouse   Boolean @default(true) @map("return_phone_same")
+  returnRecipient       String?  @map("return_recipient")
+  returnMethod          String?  @map("return_method")
+  returnZipCode         String?  @map("return_zip_code")
+
+  // 聚合器/首公里专用字段
+  firstMileType         String   @default("DROP_OFF") @map("first_mile_type")
+  dropOffPointId        String?  @map("drop_off_point_id")
+  cutInTime             Int      @default(0) @map("cut_in_time")
+  timeslotId            Int      @default(0) @map("timeslot_id")
+  returnPointId         String?  @map("return_point_id")
+  isKgt                 Boolean  @default(false) @map("is_kgt")
+  warehouseOptions      Json?    @map("warehouse_options")
+  deliveryMethodPayload Json?    @map("delivery_method_payload")
+
+  // 旧字段保留兼容
+  ozonOfficialPickupId  String?  @map("ozon_official_pickup_id")
+  coverageRegions       Json?    @map("coverage_regions")
+  isRecommended         Boolean  @default(false) @map("is_recommended")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  commands              WarehouseUpdateCommand[]
+
+  @@map("warehouse_templates")
+}
+
+// 仓库更新指令（管理员下发，用户接收并执行）
+model WarehouseUpdateCommand {
+  id              String   @id @default(cuid())
+  shopId          String   @map("shop_id")
+  templateId      String   @map("template_id")
+  template        WarehouseTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  // create_warehouse | update_delivery_method
+  commandType     String   @default("create_warehouse") @map("command_type")
+  status          String   @default("pending")
+  operationId     String?  @map("operation_id")
+  result          Json?
+  errorMessage    String?  @map("error_message")
+  createdBy       String   @map("created_by")
+  acceptedAt      DateTime? @map("accepted_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([shopId, status])
+  @@index([status])
+  @@map("warehouse_update_commands")
+}
+
+// 费用模板
+model FeeTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  type        String   // packing | shipping | other
+  fee         Decimal  @db.Decimal(10, 2)
+  description String?
+  isDefault   Boolean  @default(false) @map("is_default")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("fee_templates")
+}
+
+// OZON 中国境内揽收点（超管维护，所有用户查看）
+// type: collect = 集运点 / dispatch = 发运点
+model OzonPickupPoint {
+  id           String   @id @default(cuid())
+  city         String                                          // 中文城市，如"义乌"、"广州"
+  province     String?                                         // 省份（可选）
+  type         String                                          // collect | dispatch
+  name         String                                          // 站点名称
+  address      String                                          // 详细地址
+  contact      String?                                         // 联系人
+  phone        String?                                         // 电话
+  workingHours String?  @map("working_hours")                  // 自由文本，如"周一至周六 09:00-18:00"
+  note         String?                                         // 备注：资费/限重/对接 OZON 仓等
+  isActive     Boolean  @default(true) @map("is_active")
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([city])
+  @@index([isActive])
+  @@map("ozon_pickup_points")
+}
+
+// ============================================================
+// 财务统计体系（任务 #6）
+// ============================================================
+
+// 汇率：每日一条，源币 -> CNY
+model ExchangeRate {
+  date         DateTime @db.Date
+  fromCurrency String   @map("from_currency")
+  toCurrency   String   @default("CNY") @map("to_currency")
+  rate         Decimal  @db.Decimal(12, 6)
+  source       String   @default("manual")
+  fetchedAt    DateTime @default(now()) @map("fetched_at")
+
+  @@id([date, fromCurrency, toCurrency])
+  @@index([fromCurrency, date])
+  @@map("exchange_rates")
+}
+
+// OZON 平台财务流水（按 transaction 拉，operation_type 分类，永久保留）
+model OzonFinanceTransaction {
+  id                String   @id @default(cuid())
+  shopId            String   @map("shop_id")
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  operationId       String   @map("operation_id")
+  operationType     String   @map("operation_type")
+  operationTypeName String?  @map("operation_type_name")
+  category          String
+  postingNumber     String?  @map("posting_number")
+  orderId           String?  @map("order_id")
+  amount            Decimal  @db.Decimal(14, 2)
+  currency          String
+  amountCny         Decimal  @db.Decimal(14, 2) @map("amount_cny")
+  exchangeRate      Decimal  @db.Decimal(12, 6) @map("exchange_rate")
+  operationDate     DateTime @map("operation_date")
+  raw               Json
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@unique([shopId, operationId])
+  @@index([shopId, operationDate])
+  @@index([category, operationDate])
+  @@index([orderId])
+  @@index([postingNumber])
+  @@map("ozon_finance_transactions")
+}
+
+// 订单成本快照（订单级，永久保留，结算后冻结）
+model OrderCostSnapshot {
+  id                  String    @id @default(cuid())
+  orderId             String    @unique @map("order_id")
+  shopId              String    @map("shop_id")
+  userId              String    @map("user_id")
+  accountCode         String?   @map("account_code")
+  yearMonth           String    @map("year_month")
+  orderDate           DateTime  @map("order_date")
+  orderStatus         String    @map("order_status")
+  exchangeRateUsed    Decimal?  @db.Decimal(12, 6) @map("exchange_rate_used")
+  saleAmountCny       Decimal?  @db.Decimal(12, 2) @map("sale_amount_cny")
+  commissionCny       Decimal?  @db.Decimal(12, 2) @map("commission_cny")
+  purchaseCostCny     Decimal?  @db.Decimal(12, 2) @map("purchase_cost_cny")
+  packageFeeCny       Decimal?  @db.Decimal(12, 2) @map("package_fee_cny")
+  shippingDomesticCny Decimal?  @db.Decimal(12, 2) @map("shipping_domestic_cny")
+  shippingLastMileCny Decimal?  @db.Decimal(12, 2) @map("shipping_last_mile_cny")
+  shippingIntlCny     Decimal?  @db.Decimal(12, 2) @map("shipping_intl_cny")
+  shippingPostCny     Decimal?  @db.Decimal(12, 2) @map("shipping_post_cny")
+  adCny               Decimal?  @db.Decimal(12, 2) @map("ad_cny")
+  penaltyCny          Decimal?  @db.Decimal(12, 2) @map("penalty_cny")
+  otherFeeCny         Decimal?  @db.Decimal(12, 2) @map("other_fee_cny")
+  profitCny           Decimal?  @db.Decimal(12, 2) @map("profit_cny")
+  marginPct           Decimal?  @db.Decimal(6, 2)  @map("margin_pct")
+  status              String    @default("provisional")
+  finalizedAt         DateTime? @map("finalized_at")
+  computedAt          DateTime  @default(now()) @map("computed_at")
+
+  @@index([userId, yearMonth])
+  @@index([shopId, yearMonth])
+  @@index([accountCode, yearMonth])
+  @@map("order_cost_snapshots")
+}
+
+// 账户/店铺月度聚合（永久保留）
+// shopId = null 表示账户汇总（跨该用户全部店铺）
+model AccountMonthlyStat {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  accountCode String?  @map("account_code")
+  shopId      String?  @map("shop_id")
+  yearMonth   String   @map("year_month")
+  currency    String   @default("CNY")
+  metrics     Json
+  computedAt  DateTime @default(now()) @map("computed_at")
+
+  @@unique([userId, accountCode, shopId, yearMonth])
+  @@index([yearMonth])
+  @@index([userId, yearMonth])
+  @@map("account_monthly_stats")
+}

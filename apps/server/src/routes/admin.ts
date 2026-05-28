@@ -1,0 +1,569 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import bcrypt from 'bcryptjs';
+import { authenticate, requireRole } from '../lib/auth.js';
+import { prisma } from '../lib/prisma.js';
+import { generateAccountCode } from '../lib/account-code.js';
+
+const createTagSchema = z.object({
+  name: z.string().min(1, '标签名称不能为空'),
+  color: z.string().min(1, '颜色不能为空'),
+  description: z.string().optional(),
+  fee: z.coerce.number().min(0, '费用不能为负'),
+  needInspection: z.boolean().default(false),
+  sortOrder: z.coerce.number().int().default(0),
+});
+
+const updateTagSchema = createTagSchema.partial();
+
+const updateAccountSchema = z.object({
+  billingMode: z.enum(['prepaid', 'monthly']).optional(),
+  creditLimit: z.coerce.number().min(0).optional(),
+});
+
+const adminRechargeSchema = z.object({
+  amount: z.coerce.number().positive('充值金额必须大于0').max(1000000),
+  description: z.string().optional(),
+});
+
+// 费用模板 schemas
+const createFeeTemplateSchema = z.object({
+  name: z.string().min(1, '模板名称不能为空'),
+  type: z.enum(['packing', 'shipping', 'other']),
+  fee: z.coerce.number().min(0, '费用不能为负'),
+  description: z.string().optional(),
+  isDefault: z.boolean().default(false),
+});
+
+const updateFeeTemplateSchema = createFeeTemplateSchema.partial();
+
+// 用户管理 schemas
+const createUserSchema = z.object({
+  phone: z.string().min(11, '手机号格式不正确').max(11),
+  password: z.string().min(6, '密码至少6位'),
+  role: z.enum(['ADMIN', 'USER', 'STAFF']).default('USER'),
+  nickname: z.string().optional(),
+  canInvite: z.boolean().default(false),
+  inviteLimit: z.coerce.number().int().min(0).default(0),
+});
+
+const updateUserSchema = z.object({
+  role: z.enum(['ADMIN', 'USER', 'STAFF']).optional(),
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'PENDING']).optional(),
+  nickname: z.string().optional(),
+  canInvite: z.boolean().optional(),
+  inviteLimit: z.coerce.number().int().min(0).optional(),
+  tenantType: z.enum(['transit', 'solo']).optional(),
+  perOrderFee: z.coerce.number().min(0).max(999.99).nullable().optional(),
+  customColorEnabled: z.boolean().optional(),
+  canPublishAddress: z.boolean().optional(),
+  isTransitProvider: z.boolean().optional(),
+});
+
+const resetPasswordSchema = z.object({
+  password: z.string().min(6, '密码至少6位'),
+});
+
+export async function adminRoutes(app: FastifyInstance) {
+  app.addHook('preHandler', authenticate);
+  app.addHook('preHandler', requireRole('ADMIN'));
+
+  // GET /api/admin/service-tags — 获取所有标签配置
+  app.get('/service-tags', async (_request, reply) => {
+    const tags = await prisma.serviceTagConfig.findMany({
+      orderBy: { sortOrder: 'asc' },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: tags.map((t) => ({ ...t, fee: t.fee.toString() })),
+    });
+  });
+
+  // POST /api/admin/service-tags — 创建标签
+  app.post('/service-tags', async (request, reply) => {
+    const parsed = createTagSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const tag = await prisma.serviceTagConfig.create({
+      data: {
+        name: parsed.data.name,
+        color: parsed.data.color,
+        description: parsed.data.description,
+        fee: parsed.data.fee,
+        needInspection: parsed.data.needInspection,
+        sortOrder: parsed.data.sortOrder,
+      },
+    });
+
+    return reply.send({ code: 1, msg: '创建成功', data: { ...tag, fee: tag.fee.toString() } });
+  });
+
+  // PUT /api/admin/service-tags/:id — 更新标签
+  app.put('/service-tags/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = updateTagSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const existing = await prisma.serviceTagConfig.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '标签不存在' });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (parsed.data.name !== undefined) data.name = parsed.data.name;
+    if (parsed.data.color !== undefined) data.color = parsed.data.color;
+    if (parsed.data.description !== undefined) data.description = parsed.data.description;
+    if (parsed.data.fee !== undefined) data.fee = parsed.data.fee;
+    if (parsed.data.needInspection !== undefined) data.needInspection = parsed.data.needInspection;
+    if (parsed.data.sortOrder !== undefined) data.sortOrder = parsed.data.sortOrder;
+
+    const tag = await prisma.serviceTagConfig.update({ where: { id }, data });
+    return reply.send({ code: 1, msg: '更新成功', data: { ...tag, fee: (tag.fee as any).toString() } });
+  });
+
+  // DELETE /api/admin/service-tags/:id — 软删除标签
+  app.delete('/service-tags/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const existing = await prisma.serviceTagConfig.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '标签不存在' });
+    }
+
+    await prisma.serviceTagConfig.update({ where: { id }, data: { isActive: false } });
+    return reply.send({ code: 1, msg: '删除成功' });
+  });
+
+  // GET /api/admin/accounts — 所有用户账户列表
+  app.get('/accounts', async (request, reply) => {
+    const { role } = (request as any).user;
+    if (role !== 'ADMIN') {
+      return reply.status(403).send({ code: 0, msg: '无权限' });
+    }
+
+    const query = request.query as { offset?: string; limit?: string; search?: string };
+    const offset = Math.max(0, Number(query.offset) || 0);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
+
+    const users = await prisma.user.findMany({
+      where: query.search
+        ? { OR: [{ phone: { contains: query.search } }, { nickname: { contains: query.search, mode: 'insensitive' } }] }
+        : undefined,
+      skip: offset,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        phone: true,
+        nickname: true,
+        role: true,
+        accountCode: true,
+        parentId: true,
+        account: true,
+      },
+    });
+
+    const total = await prisma.user.count({
+      where: query.search
+        ? { OR: [{ phone: { contains: query.search } }, { nickname: { contains: query.search, mode: 'insensitive' } }] }
+        : undefined,
+    });
+
+    const rows = users.map((u) => ({
+      userId: u.id,
+      phone: u.phone,
+      nickname: u.nickname,
+      role: u.role,
+      accountCode: u.accountCode,
+      parentId: u.parentId,
+      isSubAccount: !!u.parentId,
+      balance: u.account?.balance.toString() ?? '0',
+      creditLimit: u.account?.creditLimit.toString() ?? '0',
+      billingMode: u.account?.billingMode ?? 'prepaid',
+      frozenAmount: u.account?.frozenAmount.toString() ?? '0',
+    }));
+
+    return reply.send({ code: 1, msg: 'ok', data: { total, rows } });
+  });
+
+  // PUT /api/admin/accounts/:userId — 修改用户账户设置
+  app.put('/accounts/:userId', async (request, reply) => {
+    const { role } = (request as any).user;
+    if (role !== 'ADMIN') {
+      return reply.status(403).send({ code: 0, msg: '无权限' });
+    }
+
+    const { userId } = request.params as { userId: string };
+    const parsed = updateAccountSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    let account = await prisma.userAccount.findUnique({ where: { userId } });
+    if (!account) {
+      account = await prisma.userAccount.create({
+        data: { userId, balance: 0, creditLimit: 0, billingMode: 'prepaid', frozenAmount: 0 },
+      });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (parsed.data.billingMode !== undefined) data.billingMode = parsed.data.billingMode;
+    if (parsed.data.creditLimit !== undefined) data.creditLimit = parsed.data.creditLimit;
+
+    const updated = await prisma.userAccount.update({ where: { id: account.id }, data });
+
+    return reply.send({
+      code: 1,
+      msg: '更新成功',
+      data: {
+        balance: updated.balance.toString(),
+        creditLimit: updated.creditLimit.toString(),
+        billingMode: updated.billingMode,
+        frozenAmount: updated.frozenAmount.toString(),
+      },
+    });
+  });
+
+  // POST /api/admin/accounts/:userId/recharge — 给用户充值
+  app.post('/accounts/:userId/recharge', async (request, reply) => {
+    const { role, userId: operatorId } = (request as any).user;
+    if (role !== 'ADMIN') {
+      return reply.status(403).send({ code: 0, msg: '无权限' });
+    }
+
+    const { userId } = request.params as { userId: string };
+    const parsed = adminRechargeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const { amount, description } = parsed.data;
+
+    const result = await prisma.$transaction(async (tx) => {
+      let account = await tx.userAccount.findUnique({ where: { userId } });
+      if (!account) {
+        account = await tx.userAccount.create({
+          data: { userId, balance: 0, creditLimit: 0, billingMode: 'prepaid', frozenAmount: 0 },
+        });
+      }
+
+      const newBalance = account.balance.add(amount);
+      await tx.userAccount.update({ where: { id: account.id }, data: { balance: newBalance } });
+
+      const txn = await tx.transaction.create({
+        data: {
+          accountId: account.id,
+          type: 'recharge',
+          amount: amount,
+          balanceAfter: newBalance,
+          description: description || '管理员充值',
+          operator: operatorId,
+        },
+      });
+
+      return { balance: newBalance.toString(), transactionId: txn.id };
+    });
+
+    return reply.send({ code: 1, msg: '充值成功', data: result });
+  });
+
+  // ==================== 费用模板管理 ====================
+
+  // GET /api/admin/fee-templates — 获取所有费用模板
+  app.get('/fee-templates', async (_request, reply) => {
+    const templates = await prisma.feeTemplate.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: templates.map((t) => ({ ...t, fee: t.fee.toString() })),
+    });
+  });
+
+  // POST /api/admin/fee-templates — 创建费用模板
+  app.post('/fee-templates', async (request, reply) => {
+    const parsed = createFeeTemplateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    // 如果设为默认，取消同类型其他默认
+    if (parsed.data.isDefault) {
+      await prisma.feeTemplate.updateMany({
+        where: { type: parsed.data.type, isDefault: true },
+        data: { isDefault: false },
+      });
+    }
+
+    const template = await prisma.feeTemplate.create({ data: parsed.data });
+    return reply.send({ code: 1, msg: '创建成功', data: { ...template, fee: template.fee.toString() } });
+  });
+
+  // PUT /api/admin/fee-templates/:id — 更新费用模板
+  app.put('/fee-templates/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = updateFeeTemplateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const existing = await prisma.feeTemplate.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '模板不存在' });
+    }
+
+    // 如果设为默认，取消同类型其他默认
+    if (parsed.data.isDefault) {
+      const targetType = parsed.data.type || existing.type;
+      await prisma.feeTemplate.updateMany({
+        where: { type: targetType, isDefault: true, id: { not: id } },
+        data: { isDefault: false },
+      });
+    }
+
+    const template = await prisma.feeTemplate.update({ where: { id }, data: parsed.data });
+    return reply.send({ code: 1, msg: '更新成功', data: { ...template, fee: template.fee.toString() } });
+  });
+
+  // DELETE /api/admin/fee-templates/:id — 软删除费用模板
+  app.delete('/fee-templates/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const existing = await prisma.feeTemplate.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '模板不存在' });
+    }
+    await prisma.feeTemplate.update({ where: { id }, data: { isActive: false } });
+    return reply.send({ code: 1, msg: '删除成功' });
+  });
+
+  // ==================== 用户管理 ====================
+
+  // GET /api/admin/users — 用户列表
+  app.get('/users', async (request, reply) => {
+    const query = request.query as { offset?: string; limit?: string; search?: string; role?: string };
+    const offset = Math.max(0, Number(query.offset) || 0);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
+
+    const where: any = {};
+    if (query.search) {
+      where.OR = [
+        { phone: { contains: query.search } },
+        { nickname: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+    if (query.role) where.role = query.role;
+
+    const [total, users] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip: offset,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          phone: true,
+          nickname: true,
+          accountCode: true,
+          role: true,
+          status: true,
+          canInvite: true,
+          inviteLimit: true,
+          inviteCount: true,
+          parentId: true,
+          tenantType: true,
+          perOrderFee: true,
+          customColorEnabled: true,
+          canPublishAddress: true,
+          createdAt: true,
+          lastLoginAt: true,
+        },
+      }),
+    ]);
+
+    return reply.send({ code: 1, msg: 'ok', data: { total, rows: users } });
+  });
+
+  // POST /api/admin/users — 创建用户
+  app.post('/users', async (request, reply) => {
+    const parsed = createUserSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const { phone, password, role, nickname, canInvite, inviteLimit } = parsed.data;
+
+    const existing = await prisma.user.findUnique({ where: { phone } });
+    if (existing) {
+      return reply.status(409).send({ code: 0, msg: '该手机号已注册' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const accountCode = await generateAccountCode(null);
+    const user = await prisma.user.create({
+      data: {
+        phone,
+        passwordHash,
+        role: role as any,
+        nickname: nickname || `用户${phone.slice(-4)}`,
+        canInvite,
+        inviteLimit,
+        accountCode,
+      },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: '创建成功',
+      data: { id: user.id, phone: user.phone, nickname: user.nickname, role: user.role },
+    });
+  });
+
+  // PUT /api/admin/users/:id — 修改用户信息
+  app.put('/users/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = updateUserSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '用户不存在' });
+    }
+
+    const data: any = {};
+    if (parsed.data.role !== undefined) data.role = parsed.data.role;
+    if (parsed.data.status !== undefined) data.status = parsed.data.status;
+    if (parsed.data.nickname !== undefined) data.nickname = parsed.data.nickname;
+    if (parsed.data.canInvite !== undefined) data.canInvite = parsed.data.canInvite;
+    if (parsed.data.inviteLimit !== undefined) data.inviteLimit = parsed.data.inviteLimit;
+    if (parsed.data.tenantType !== undefined) data.tenantType = parsed.data.tenantType;
+    if (parsed.data.perOrderFee !== undefined) data.perOrderFee = parsed.data.perOrderFee;
+    if (parsed.data.customColorEnabled !== undefined) data.customColorEnabled = parsed.data.customColorEnabled;
+    if (parsed.data.canPublishAddress !== undefined) data.canPublishAddress = parsed.data.canPublishAddress;
+    if (parsed.data.isTransitProvider !== undefined) data.isTransitProvider = parsed.data.isTransitProvider;
+
+    const user = await prisma.user.update({ where: { id }, data });
+    return reply.send({
+      code: 1,
+      msg: '更新成功',
+      data: {
+        id: user.id, phone: user.phone, nickname: user.nickname, role: user.role, status: user.status,
+        canInvite: user.canInvite, inviteLimit: user.inviteLimit,
+        tenantType: user.tenantType, perOrderFee: user.perOrderFee?.toString() ?? null,
+        customColorEnabled: user.customColorEnabled,
+        canPublishAddress: user.canPublishAddress,
+      },
+    });
+  });
+
+  // POST /api/admin/users/:id/reset-password — 重置密码
+  app.post('/users/:id/reset-password', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = resetPasswordSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '用户不存在' });
+    }
+
+    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+    await prisma.user.update({ where: { id }, data: { passwordHash } });
+    return reply.send({ code: 1, msg: '密码已重置' });
+  });
+
+  // DELETE /api/admin/users/:id — 禁用用户
+  app.delete('/users/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '用户不存在' });
+    }
+    await prisma.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
+    return reply.send({ code: 1, msg: '用户已禁用' });
+  });
+
+  // === ShopBillingConfig CRUD ===
+
+  app.get('/shop-billing-configs', async (_request, reply) => {
+    const list = await prisma.shopBillingConfig.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    return reply.send({ code: 1, msg: 'ok', data: list.map((c) => ({ ...c, perOrderFee: c.perOrderFee.toString() })) });
+  });
+
+  app.post('/shop-billing-configs', async (request, reply) => {
+    const body = request.body as { shopId: string; perOrderFee: number };
+    if (!body?.shopId || body.perOrderFee == null) {
+      return reply.status(400).send({ code: 0, msg: '缺少 shopId 或 perOrderFee' });
+    }
+    const config = await prisma.shopBillingConfig.upsert({
+      where: { shopId: body.shopId },
+      create: { shopId: body.shopId, perOrderFee: body.perOrderFee },
+      update: { perOrderFee: body.perOrderFee, isActive: true },
+    });
+    return reply.send({ code: 1, msg: '已保存', data: { ...config, perOrderFee: config.perOrderFee.toString() } });
+  });
+
+  app.delete('/shop-billing-configs/:shopId', async (request, reply) => {
+    const { shopId } = request.params as { shopId: string };
+    await prisma.shopBillingConfig.deleteMany({ where: { shopId } });
+    return reply.send({ code: 1, msg: '已删除' });
+  });
+
+  // === SoloSeller 计费报表 ===
+
+  app.get('/solo-billing', async (request, reply) => {
+    const { month, userId } = request.query as { month?: string; userId?: string };
+    const where: any = {};
+    if (month) where.month = month;
+    if (userId) where.userId = userId;
+    const snapshots = await prisma.soloBillingSnapshot.findMany({
+      where,
+      orderBy: [{ month: 'desc' }, { totalFee: 'desc' }],
+      take: 200,
+    });
+    const userIds = [...new Set(snapshots.map((s) => s.userId))];
+    const users = await prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, phone: true, nickname: true },
+    });
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: snapshots.map((s) => ({
+        ...s,
+        totalFee: s.totalFee.toString(),
+        user: userMap.get(s.userId) || null,
+      })),
+    });
+  });
+}
+
+// 初始化默认标签数据
+export async function seedServiceTags() {
+  const count = await prisma.serviceTagConfig.count();
+  if (count > 0) return;
+
+  await prisma.serviceTagConfig.createMany({
+    data: [
+      { name: '正常发货', color: 'green', description: '标准发货流程', fee: 0, needInspection: false, sortOrder: 1 },
+      { name: '精细打包', color: 'yellow', description: '额外加固包装', fee: 5, needInspection: false, sortOrder: 2 },
+      { name: '拆包验视', color: 'red', description: '拆开包裹检查内容物', fee: 10, needInspection: true, sortOrder: 3 },
+      { name: '拍照验货', color: 'purple', description: '拍照记录商品状态', fee: 8, needInspection: true, sortOrder: 4 },
+      { name: '合包发货', color: 'blue', description: '多个包裹合并发出', fee: 3, needInspection: false, sortOrder: 5 },
+    ],
+  });
+}

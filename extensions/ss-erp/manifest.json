@@ -1,0 +1,169 @@
+{
+  "manifest_version": 3,
+  "name": "SS ERP - 松鼠跨境卖家助手",
+  "short_name": "SS ERP",
+  "version": "1.0.0",
+  "description": "OZON跨境电商利润计算、物流同步、商品采集、ERP对接一站式工具",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "downloads",
+    "cookies"
+  ],
+  "host_permissions": [
+    "file:///*",
+    "http://localhost/*",
+    "https://localhost/*",
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*",
+    "https://docs.ozon.ru/*",
+    "https://docs.ozon.com/*",
+    "https://open.er-api.com/*",
+    "https://*.ozon.ru/*",
+    "https://*.ozon.kz/*",
+    "https://*.ozon.by/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "externally_connectable": {
+    "matches": [
+      "http://localhost/*",
+      "https://localhost/*",
+      "http://127.0.0.1/*",
+      "https://127.0.0.1/*",
+      "https://*.ss-erp.com/*"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://seller.ozon.ru/*",
+        "https://globalcalculator.ozon.ru/*"
+      ],
+      "js": [
+        "content/capture-network-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://seller.ozon.ru/*"
+      ],
+      "js": [
+        "content/ozon-premium-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.ozon.ru/*",
+        "https://*.ozon.kz/*",
+        "https://*.ozon.by/*"
+      ],
+      "js": [
+        "shared/calculator-core/profit-engine.js",
+        "shared/calculator-core/rule-engine.js",
+        "shared/commission/commission-rates.js",
+        "shared/currency/fx-rates.js",
+        "shared/seller-products/seller-products-export.js",
+        "shared/official-freight/official-freight-export.js",
+        "shared/seller-logistics/seller-logistics-export.js",
+        "shared/erp-package/erp-package-export.js",
+        "shared/erp-package/erp-package-summary.js",
+        "shared/config-bridge/sync-schema.js",
+        "shared/config-bridge/config-store.js",
+        "shared/erp-adapter/index.js",
+        "shared/erp-adapter/collect-product.js",
+        "content/ozon-panel.js",
+        "content/ozon-injector.js"
+      ],
+      "css": [
+        "content/ozon-panel.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://detail.1688.com/*",
+        "https://www.temu.com/*",
+        "https://*.aliexpress.com/*",
+        "https://www.wildberries.ru/*",
+        "https://www.ozon.ru/*",
+        "https://item.jd.com/*",
+        "https://item.taobao.com/*",
+        "https://detail.tmall.com/*"
+      ],
+      "js": [
+        "content/collect-content-script.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://trade.1688.com/*",
+        "https://mobile.pinduoduo.com/*"
+      ],
+      "js": [
+        "content/logistics-bridge.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "file:///*",
+        "http://localhost/*",
+        "https://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*"
+      ],
+      "js": [
+        "shared/config-bridge/sync-schema.js",
+        "content/calculator-sync-bridge.js",
+        "content/erp-collect-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pages/sync-receiver.html",
+        "pages/sync-receiver.js",
+        "pages/config-import.html",
+        "pages/config-import.js",
+        "content/capture-page-hook.js",
+        "content/page-bridge.js",
+        "shared/capture-bridge/captured-har-store.js",
+        "shared/seller-products/seller-products-export.js",
+        "shared/official-freight/official-freight-export.js",
+        "shared/seller-logistics/seller-logistics-export.js",
+        "shared/erp-package/erp-package-export.js",
+        "shared/erp-package/erp-package-summary.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "action": {
+    "default_popup": "pages/popup.html",
+    "default_title": "SS ERP",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "pages/settings.html"
+}

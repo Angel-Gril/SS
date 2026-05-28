@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fb923c"/>
+      <stop offset="55%" style="stop-color:#ea580c"/>
+      <stop offset="100%" style="stop-color:#9a3412"/>
+    </linearGradient>
+    <linearGradient id="body" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" style="stop-color:#fff7ed"/>
+      <stop offset="100%" style="stop-color:#fed7aa"/>
+    </linearGradient>
+    <linearGradient id="tail" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#fed7aa"/>
+      <stop offset="100%" style="stop-color:#fdba74"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+
+  <!-- 大尾巴（卷曲弧形） -->
+  <path d="M 92 44
+           Q 116 48 112 78
+           Q 108 104 86 108
+           Q 76 110 70 102
+           Q 80 100 88 92
+           Q 96 82 94 70
+           Q 92 58 86 52
+           Z"
+        fill="url(#tail)" opacity="0.95"/>
+  <path d="M 96 56 Q 104 64 102 76 Q 100 88 92 94"
+        stroke="#9a3412" stroke-width="1.5" fill="none" opacity="0.35"/>
+
+  <!-- 身体 -->
+  <ellipse cx="58" cy="80" rx="24" ry="22" fill="url(#body)"/>
+
+  <!-- 头部 -->
+  <circle cx="54" cy="52" r="20" fill="url(#body)"/>
+
+  <!-- 耳朵 -->
+  <ellipse cx="40" cy="36" rx="6" ry="9" fill="#fed7aa" transform="rotate(-20 40 36)"/>
+  <ellipse cx="68" cy="36" rx="6" ry="9" fill="#fed7aa" transform="rotate(20 68 36)"/>
+  <ellipse cx="40" cy="38" rx="3" ry="5" fill="#fb923c" transform="rotate(-20 40 38)"/>
+  <ellipse cx="68" cy="38" rx="3" ry="5" fill="#fb923c" transform="rotate(20 68 38)"/>
+
+  <!-- 眼睛 -->
+  <circle cx="46" cy="50" r="3.5" fill="#1f2937"/>
+  <circle cx="62" cy="50" r="3.5" fill="#1f2937"/>
+  <circle cx="47" cy="49" r="1.2" fill="#ffffff"/>
+  <circle cx="63" cy="49" r="1.2" fill="#ffffff"/>
+
+  <!-- 鼻子 -->
+  <ellipse cx="54" cy="58" rx="2.5" ry="2" fill="#9a3412"/>
+
+  <!-- 嘴 -->
+  <path d="M 54 60 Q 54 64 50 64 M 54 60 Q 54 64 58 64"
+        stroke="#9a3412" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+
+  <!-- 腮红 -->
+  <circle cx="40" cy="58" r="3" fill="#fb923c" opacity="0.5"/>
+  <circle cx="68" cy="58" r="3" fill="#fb923c" opacity="0.5"/>
+
+  <!-- 抱着的橡果 -->
+  <ellipse cx="58" cy="84" rx="7" ry="9" fill="#92400e"/>
+  <path d="M 51 80 Q 58 76 65 80 L 65 78 Q 58 74 51 78 Z" fill="#451a03"/>
+  <ellipse cx="58" cy="82" rx="2.5" ry="1" fill="#fbbf24" opacity="0.6"/>
+
+  <!-- 小手 -->
+  <ellipse cx="48" cy="82" rx="4" ry="5" fill="#fed7aa"/>
+  <ellipse cx="68" cy="82" rx="4" ry="5" fill="#fed7aa"/>
+</svg>

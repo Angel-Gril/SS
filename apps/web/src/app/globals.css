@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    /* 松鼠橙色主题 */
+    --primary: 25 95% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 25 95% 53%;
+    --radius: 0.75rem;
+    /* iOS 风格侧边栏 - 浅橙色调背景 */
+    --sidebar: 25 100% 98%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-accent: 25 95% 53%;
+  }
+
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 9%;
+    --card-foreground: 210 40% 98%;
+    --primary: 25 95% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 73% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 25 95% 58%;
+    /* iOS 风格侧边栏 - 深色带橙色调 */
+    --sidebar: 25 20% 12%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-accent: 25 95% 58%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'cv11', 'ss01';
+    font-variation-settings: 'opsz' 32;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* iOS 风格滚动条 */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/20 rounded-full;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* iOS Dock 风格菜单项 */
+.dock-item {
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.dock-item:hover {
+  transform: scale(1.05) translateY(-2px);
+}
+
+.dock-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.dock-item:hover::before {
+  opacity: 1;
+}
+
+/* iOS 毛玻璃效果 - 优化性能 */
+.glass-effect {
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  background-color: hsl(var(--sidebar) / 0.85);
+  /* 性能优化：使用 GPU 加速 */
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* 活跃菜单项的橙色光晕效果 */
+.menu-active {
+  box-shadow: 0 0 20px rgba(255, 119, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.dark .menu-active {
+  box-shadow: 0 0 25px rgba(255, 119, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+}

@@ -1,0 +1,54 @@
+import { z } from 'zod';
+
+export const phoneRegex = /^1[3-9]\d{9}$/;
+
+export const registerSchema = z.object({
+  phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
+  password: z
+    .string()
+    .min(8, '密码至少 8 位')
+    .max(64, '密码最多 64 位')
+    .regex(/[a-zA-Z]/, '密码需包含字母')
+    .regex(/[0-9]/, '密码需包含数字'),
+  nickname: z.string().min(2).max(32).optional(),
+  inviteCode: z.string().optional(),
+});
+
+export const loginSchema = z.object({
+  phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
+  password: z.string().min(1, '请输入密码'),
+});
+
+export const changePasswordSchema = z.object({
+  oldPassword: z.string().min(1),
+  newPassword: z
+    .string()
+    .min(8)
+    .max(64)
+    .regex(/[a-zA-Z]/)
+    .regex(/[0-9]/),
+});
+
+export type RegisterInput = z.infer<typeof registerSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
+export interface AuthUser {
+  id: string;
+  phone: string;
+  nickname: string | null;
+  avatar: string | null;
+  role: 'ADMIN' | 'USER' | 'STAFF';
+  status: 'ACTIVE' | 'SUSPENDED' | 'PENDING';
+  balance: string;
+  accountCode?: string | null;
+  isSubAccount?: boolean;
+  parentAccountCode?: string | null;
+  parentNickname?: string | null;
+}
+
+export interface LoginResponse {
+  user: AuthUser;
+  token: string;
+  expiresAt: string;
+}
