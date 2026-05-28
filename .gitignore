@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output and caches
+dist/
+**/dist/
+.next/
+**/.next/
+out/
+coverage/
+.turbo/
+.cache/
+*.tsbuildinfo
+
+# Packaged runtime artifacts
+build/dist/
+build/runtime/
+build/tmp-*/
+build-resources/*.zip
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+apps/server/.env
+apps/web/.env
+apps/web/.env.local
+!.env.example
+
+# Runtime data, logs, and generated files
+logs/
+backups/
+data/
+*.log
+*.pid
+apps/server/public/uploads/
+apps/server/public/watermarked/
+apps/server/public/resized/
+public/uploads/
+public/watermarked/
+public/resized/
+
+# Local tool state
+.claude/
+.playwright-mcp/
+.vscode/
+.idea/
+.DS_Store
+
+# Local SQLite/dev database leftovers
+prisma/migrations/dev.db*
