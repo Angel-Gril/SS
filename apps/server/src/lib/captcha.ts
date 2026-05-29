@@ -1,4 +1,5 @@
 import { redis } from '../lib/redis.js';
+import { getSmsProvider } from './sms/index.js';
 
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
@@ -39,6 +40,10 @@ const SMS_RATE_KEY_PREFIX = 'sms:rate:';
 const SMS_CODE_KEY_PREFIX = 'sms:code:';
 const SMS_FAIL_KEY_PREFIX = 'sms:fail:';
 
+function maskPhone(phone: string): string {
+  return phone.replace(/^(\+?\d{2,3})?\d{3}(\d{4})$/, '$1***$2');
+}
+
 export async function sendSmsCode(phone: string): Promise<{ ok: boolean; msg: string }> {
   const rateKey = `${SMS_RATE_KEY_PREFIX}${phone}`;
   const existing = await redis.get(rateKey);
@@ -48,9 +53,12 @@ export async function sendSmsCode(phone: string): Promise<{ ok: boolean; msg: st
 
   const code = String(Math.floor(100000 + Math.random() * 900000));
 
-  // TODO: 接入真实短信网关（阿里云/腾讯云）
-  // await smsGateway.send(phone, `您的验证码是 ${code}，5 分钟内有效`);
-  console.log(`[SMS] 验证码 ${code} → ${phone}（开发模式，未实际发送）`);
+  const provider = getSmsProvider();
+  const result = await provider.send(phone, code);
+  if (!result.ok) {
+    console.error(`[SMS] 发送失败 ${maskPhone(phone)}: ${result.err}`);
+    return { ok: false, msg: '验证码发送失败，请稍后重试' };
+  }
 
   await redis.set(`${SMS_CODE_KEY_PREFIX}${phone}`, code, 'EX', SMS_CODE_TTL);
   await redis.set(rateKey, '1', 'EX', 60);
