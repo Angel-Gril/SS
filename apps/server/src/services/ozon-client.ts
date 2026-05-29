@@ -568,14 +568,70 @@ export class OzonClient {
 }
 
 export class OzonApiError extends Error {
+  public details: unknown;
+  public code: unknown;
+  public publicMessage: string;
+
   constructor(
     public status: number,
-    public body: string,
+    body: string,
     public path: string,
   ) {
-    super(`OZON API error ${status} on ${path}: ${body.slice(0, 200)}`);
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(body);
+    } catch {}
+
+    const errorMsg = buildOzonPublicErrorMessage(status, path, body, parsed);
+    super(`OZON API error ${status} on ${path}: ${errorMsg}`);
     this.name = 'OzonApiError';
+    this.details = sanitizeOzonErrorDetails(parsed);
+    this.code = parsed?.code ?? parsed?.error_code ?? null;
+    this.publicMessage = errorMsg;
   }
+
+  toLogContext() {
+    return {
+      name: this.name,
+      status: this.status,
+      path: this.path,
+      code: this.code,
+      message: this.publicMessage,
+      details: this.details,
+    };
+  }
+}
+
+function buildOzonPublicErrorMessage(status: number, path: string, body: string, parsed: any): string {
+  const candidates = [
+    parsed?.message,
+    parsed?.error?.message,
+    parsed?.error,
+    parsed?.description,
+    parsed?.details?.[0]?.message,
+    parsed?.details?.[0]?.value,
+  ].filter((v) => typeof v === 'string' && v.trim());
+
+  const message = candidates[0] || body || `HTTP ${status}`;
+  return `${message}`.replace(/\s+/g, ' ').slice(0, 500) || `OZON API ${path} 返回 HTTP ${status}`;
+}
+
+function sanitizeOzonErrorDetails(value: unknown, depth = 0): unknown {
+  if (value == null) return value;
+  if (depth > 4) return '[truncated]';
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').slice(0, 500);
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.slice(0, 10).map((item) => sanitizeOzonErrorDetails(item, depth + 1));
+
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (/authorization|api[-_]?key|client[-_]?id|cookie|token|secret|password/i.test(key)) {
+      out[key] = '[redacted]';
+    } else {
+      out[key] = sanitizeOzonErrorDetails(item, depth + 1);
+    }
+  }
+  return out;
 }
 
 export interface OzonProductListItem {

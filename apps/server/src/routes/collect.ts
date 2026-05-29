@@ -25,6 +25,23 @@ const collectSchema = z.object({
   sourceProductId: z.string().optional(),
 });
 
+function getOzonPublishErrorMessage(e: any): string {
+  if (e?.name === 'OzonApiError' && typeof e.publicMessage === 'string' && e.publicMessage.trim()) {
+    return e.publicMessage.slice(0, 500);
+  }
+  return (e?.message ? String(e.message) : '未知错误').slice(0, 500);
+}
+
+function getOzonPublishErrorLogContext(e: any): Record<string, unknown> {
+  if (e?.name === 'OzonApiError' && typeof e.toLogContext === 'function') {
+    return e.toLogContext();
+  }
+  return {
+    name: e?.name || 'Error',
+    message: (e?.message ? String(e.message) : '未知错误').slice(0, 500),
+  };
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -599,8 +616,9 @@ export async function collectRoutes(app: FastifyInstance) {
             },
           });
         } catch (e: any) {
-          fallbackError = e.message?.slice(0, 200) || '未知错误';
-          console.warn(`[publish-ozon fallback] import-by-sku failed:`, fallbackError);
+          const detailMsg = getOzonPublishErrorMessage(e);
+          fallbackError = detailMsg;
+          console.error(`[publish-ozon fallback] import-by-sku failed:`, getOzonPublishErrorLogContext(e));
         }
       }
     }
@@ -1063,7 +1081,9 @@ export async function collectRoutes(app: FastifyInstance) {
         data: { taskId, count: cleanItems.length, sourceCount: items.length, mode, followBrand, variantCount: variantTrace.length },
       });
     } catch (e: any) {
-      return reply.send({ code: 0, msg: `上架失败: ${e.message?.slice(0, 300) || '未知错误'}` });
+      const detailMsg = getOzonPublishErrorMessage(e);
+      console.error(`[publish-ozon] /v3/product/import failed:`, getOzonPublishErrorLogContext(e));
+      return reply.send({ code: 0, msg: `上架失败: ${detailMsg}` });
     }
   });
 
@@ -1635,4 +1655,3 @@ function parseOzonInput(input: string): { type: 'product_id' | 'offer_id'; value
   // 其他情况当作 offer_id
   return { type: 'offer_id', value: trimmed };
 }
-

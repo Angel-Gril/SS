@@ -168,7 +168,14 @@ export default function ListingPage() {
         toast({ title: '已提交上架任务，请到本页底部「改款上架记录」查看进度' });
         router.push('/collect');
       } else {
-        toast({ title: res.msg || '上架失败', variant: 'destructive' });
+        const errorMsg = res.msg || '上架失败';
+        toast({
+          title: '上架失败',
+          description: errorMsg,
+          variant: 'destructive',
+          duration: 8000,
+        });
+        console.error('[publish-ozon listing] error:', errorMsg);
       }
     } catch (e: any) {
       toast({ title: `提交失败：${e.message}`, variant: 'destructive' });

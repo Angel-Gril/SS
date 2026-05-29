@@ -318,10 +318,7 @@ export async function warehouseTemplateRoutes(app: FastifyInstance) {
       });
     } catch (e: any) {
       const statusCode = e instanceof OzonApiError ? e.status : 0;
-      let errorBody: any = null;
-      if (e instanceof OzonApiError && typeof e.body === 'string') {
-        try { errorBody = JSON.parse(e.body); } catch { errorBody = e.body; }
-      }
+      const errorBody = e instanceof OzonApiError ? e.details : null;
       return reply.send({
         code: 1,
         msg: 'probe completed (with error)',
@@ -329,7 +326,7 @@ export async function warehouseTemplateRoutes(app: FastifyInstance) {
           status: statusCode,
           ok: false,
           durationMs: Date.now() - startedAt,
-          error: e?.message || String(e),
+          error: e instanceof OzonApiError ? e.publicMessage : e?.message || String(e),
           body: errorBody,
         },
       });

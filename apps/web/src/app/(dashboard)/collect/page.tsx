@@ -317,8 +317,21 @@ export default function CollectPage() {
       ...(Object.keys(priceOverrides).length ? { priceOverrides } : {}),
     });
     setPublishing(false);
-    if (res.code === 1) { toast({ title: res.msg }); setSelectedIds(new Set()); setShowPublishDialog(false); fetchData(); }
-    else toast({ title: res.msg || '上架失败', variant: 'destructive' });
+    if (res.code === 1) {
+      toast({ title: res.msg });
+      setSelectedIds(new Set());
+      setShowPublishDialog(false);
+      fetchData();
+    } else {
+      const errorMsg = res.msg || '上架失败';
+      toast({
+        title: '上架失败',
+        description: errorMsg,
+        variant: 'destructive',
+        duration: 8000,
+      });
+      console.error('[publish-ozon] error:', errorMsg);
+    }
   }
 
   async function handleAutoInherit() {
