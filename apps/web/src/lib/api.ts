@@ -100,3 +100,86 @@ export const api = {
   delete: <T = unknown>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
   download: apiDownload,
 };
+
+export interface DirectUploadResult {
+  ok: true;
+  url: string;
+  key: string;
+}
+
+export interface DirectUploadError {
+  ok: false;
+  msg: string;
+}
+
+interface PresignData {
+  uploadUrl: string;
+  finalUrl: string;
+  key: string;
+  expiresIn: number;
+  maxBytes: number;
+  headers: Record<string, string>;
+}
+
+const DIRECT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const DIRECT_UPLOAD_ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
+export async function uploadDirect(file: File): Promise<DirectUploadResult | DirectUploadError> {
+  const contentType = normalizeImageMime(file.type || guessImageMime(file.name));
+  if (!DIRECT_UPLOAD_ALLOWED_MIME.has(contentType)) {
+    return { ok: false, msg: `不支持的文件类型: ${contentType || 'unknown'}` };
+  }
+  if (!Number.isFinite(file.size) || file.size <= 0) {
+    return { ok: false, msg: '文件为空，无法上传' };
+  }
+  if (file.size > DIRECT_UPLOAD_MAX_BYTES) {
+    return { ok: false, msg: `图片超出 ${DIRECT_UPLOAD_MAX_BYTES / 1024 / 1024}MB 限制` };
+  }
+
+  const presign = await api.post<PresignData>('/api/images/presign', {
+    filename: file.name,
+    contentType,
+    sizeBytes: file.size,
+  });
+
+  if (presign.code !== 1 || !presign.data) {
+    return { ok: false, msg: presign.msg || '获取上传凭证失败' };
+  }
+
+  const { uploadUrl, finalUrl, key, headers, maxBytes } = presign.data;
+  if (maxBytes && file.size > maxBytes) {
+    return { ok: false, msg: `图片超出 ${maxBytes / 1024 / 1024}MB 限制` };
+  }
+
+  try {
+    const res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': contentType },
+      body: file,
+    });
+    if (!res.ok) {
+      return { ok: false, msg: `OSS 上传失败 (HTTP ${res.status})` };
+    }
+  } catch (e: any) {
+    return { ok: false, msg: `网络错误: ${e?.message || 'unknown'}` };
+  }
+
+  return { ok: true, url: finalUrl, key };
+}
+
+function normalizeImageMime(value: string): string {
+  return value.split(';')[0]!.trim().toLowerCase();
+}
+
+function guessImageMime(filename: string): string {
+  const ext = filename.toLowerCase().split('.').pop();
+  switch (ext) {
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'gif': return 'image/gif';
+    case 'jpg':
+    case 'jpeg':
+    default:
+      return 'image/jpeg';
+  }
+}

@@ -11,8 +11,49 @@ const MAX_BYTES = 20 * 1024 * 1024;
 
 const LARGE_BODY_LIMIT = 30 * 1024 * 1024;
 
+const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
 export async function imageUploadRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
+
+  // OSS 直传：前端拿预签名 URL 后直接 PUT 到 OSS，不经后端中转
+  app.post('/presign', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const body = request.body as { filename?: string; contentType?: string; sizeBytes?: number };
+    const filename = body?.filename || `upload_${Date.now()}.jpg`;
+    const contentType = normalizeMime(body?.contentType || 'image/jpeg');
+    const sizeBytes = Number(body?.sizeBytes || 0);
+
+    if (!ALLOWED_MIME.has(contentType)) {
+      return reply.status(400).send({ code: 0, msg: `不支持的文件类型: ${contentType}` });
+    }
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+      return reply.status(400).send({ code: 0, msg: '缺少有效的文件大小' });
+    }
+    if (sizeBytes > MAX_BYTES) {
+      return reply.status(413).send({ code: 0, msg: `图片超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
+    }
+
+    try {
+      const backend = await getStorageBackend();
+      if (!backend.getPresignedPutUrl) {
+        return reply.status(400).send({ code: 0, msg: '当前存储后端不支持直传，请使用 upload-base64 接口' });
+      }
+      const result = await backend.getPresignedPutUrl({
+        filename,
+        mimeType: contentType,
+        sizeBytes,
+        maxBytes: MAX_BYTES,
+        ownerId: userId,
+      });
+      return reply.send({ code: 1, msg: 'ok', data: result });
+    } catch (e: any) {
+      if (String(e?.message || '').includes('OZON CDN 后端需要指定目标店铺')) {
+        return reply.status(400).send({ code: 0, msg: '当前存储后端不支持直传，请使用 upload-base64 接口' });
+      }
+      return reply.status(500).send({ code: 0, msg: `获取上传凭证失败: ${e.message}` });
+    }
+  });
 
   // 浏览器直传：前端把文件 base64 编码后放 body.dataUrl，自动转存到当前后端
   app.post('/upload-base64', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
@@ -175,4 +216,8 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
     return reply.send({ code: 1, msg: 'ok', data: { results } });
   });
+}
+
+function normalizeMime(value: string): string {
+  return value.split(';')[0]!.trim().toLowerCase();
 }

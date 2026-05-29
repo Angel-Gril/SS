@@ -20,9 +20,27 @@ export interface ImageUploadResult {
   backend: 'ozon-cdn' | 'oss' | 'local';
 }
 
+export interface PresignedUploadResult {
+  uploadUrl: string;
+  finalUrl: string;
+  key: string;
+  expiresIn: number;
+  maxBytes: number;
+  headers: Record<string, string>;
+}
+
+export interface PresignedUploadInput {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  maxBytes: number;
+  ownerId?: string;
+}
+
 export interface ImageStorageBackend {
   upload(filePath: string, mimeType?: string): Promise<ImageUploadResult>;
   uploadBuffer(buffer: Buffer, filename: string, mimeType?: string): Promise<ImageUploadResult>;
+  getPresignedPutUrl?(input: PresignedUploadInput): Promise<PresignedUploadResult>;
 }
 
 // ─── OZON CDN 上传（利用 seller 登录态） ───
@@ -231,13 +249,68 @@ class OssBackend implements ImageStorageBackend {
 
     return { url, filename: key.split('/').pop() || filename, backend: 'oss' };
   }
+
+  async getPresignedPutUrl(input: PresignedUploadInput): Promise<PresignedUploadResult> {
+    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+
+    const endpoint = this.config.endpoint.startsWith('http')
+      ? this.config.endpoint
+      : `https://${this.config.endpoint}`;
+
+    const client = new S3Client({
+      endpoint,
+      region: this.config.region || 'auto',
+      credentials: {
+        accessKeyId: this.config.accessKeyId,
+        secretAccessKey: this.config.accessKeySecret,
+      },
+      forcePathStyle: endpoint.includes('localhost') || endpoint.includes('minio'),
+    });
+
+    const ext = extensionFromMime(input.mimeType);
+    const random = randomObjectId();
+    const prefix = normalizeObjectPrefix(this.config.pathPrefix || 'ss-erp/images');
+    const owner = sanitizeObjectSegment(input.ownerId || 'shared');
+    const key = `${prefix}/${owner}/${Date.now()}_${random}.${ext}`;
+    const expiresIn = 300;
+
+    const uploadUrl = await getSignedUrl(
+      client,
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: key,
+        ContentType: input.mimeType,
+        ContentLength: input.sizeBytes,
+      }),
+      { expiresIn },
+    );
+
+    let finalUrl: string;
+    if (this.config.cdnDomain) {
+      const domain = this.config.cdnDomain.replace(/\/+$/, '');
+      finalUrl = `${domain.startsWith('http') ? domain : `https://${domain}`}/${key}`;
+    } else {
+      const ep = endpoint.replace(/\/+$/, '');
+      finalUrl = `${ep}/${this.config.bucket}/${key}`;
+    }
+
+    return {
+      uploadUrl,
+      finalUrl,
+      key,
+      expiresIn,
+      maxBytes: input.maxBytes,
+      headers: { 'Content-Type': input.mimeType },
+    };
+  }
 }
 
 // ─── 本地静态服务（开发测试用） ───
 
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 const LOCAL_UPLOAD_DIR = join(process.cwd(), 'public', 'uploads');
 
@@ -330,4 +403,31 @@ function guessMime(filename: string): string {
     case 'gif': return 'image/gif';
     default: return 'image/jpeg';
   }
+}
+
+function extensionFromMime(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'image/png': return 'png';
+    case 'image/webp': return 'webp';
+    case 'image/gif': return 'gif';
+    case 'image/jpeg':
+    default:
+      return 'jpg';
+  }
+}
+
+function randomObjectId(): string {
+  return randomUUID().replace(/-/g, '').slice(0, 16);
+}
+
+function normalizeObjectPrefix(prefix: string): string {
+  return prefix
+    .split('/')
+    .map((part) => sanitizeObjectSegment(part))
+    .filter(Boolean)
+    .join('/') || 'ss-erp/images';
+}
+
+function sanitizeObjectSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 80);
 }
