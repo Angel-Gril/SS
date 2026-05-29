@@ -17,6 +17,11 @@
 - [ ] **NODE_ENV=production**
   - 验证：`echo $NODE_ENV` 或检查 `.env`
 
+- [ ] **SETUP_TOKEN 已配置**
+  - 验证：`.env` 中存在高强度随机 `SETUP_TOKEN`
+  - 验证：首次打开 `/setup` 创建超级管理员时必须填写初始化令牌
+  - 验证：创建首个 ADMIN 后，`/api/setup/status` 返回 `needsSetup: false`
+
 ## High（强烈推荐）
 
 - [ ] **CORS_ORIGIN 配置生产域名**
@@ -82,6 +87,7 @@
 ## 功能验证清单
 
 ### 用户认证
+- [ ] 首个超级管理员通过 `/setup` 创建，而不是通过公开注册创建
 - [ ] 注册新账号（触发 Turnstile + 短信验证码，并完成服务端校验）
 - [ ] 登录成功（浏览器 DevTools → Application → Cookies 可见 `sserp_token` HttpOnly cookie）
 - [ ] 登录失败 5 次后强制 Turnstile

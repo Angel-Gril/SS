@@ -17,6 +17,11 @@ export async function authRoutes(app: FastifyInstance) {
 
   // 发送短信验证码（注册前调用）
   app.post('/sms-code', async (request, reply) => {
+    const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
+    if (adminCount === 0) {
+      return reply.status(403).send({ code: 0, msg: '系统尚未初始化，请先创建管理员账号' });
+    }
+
     const parsed = sendSmsCodeSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
@@ -38,6 +43,11 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/register', async (request, reply) => {
+    const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
+    if (adminCount === 0) {
+      return reply.status(403).send({ code: 0, msg: '系统尚未初始化，请先创建管理员账号' });
+    }
+
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });

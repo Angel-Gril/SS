@@ -17,15 +17,18 @@ export default function SetupPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [nickname, setNickname] = useState('系统管理员');
+  const [setupToken, setSetupToken] = useState('');
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get<{ needsSetup: boolean }>('/api/setup/status');
+        const res = await api.get<{ needsSetup: boolean; setupTokenRequired?: boolean }>('/api/setup/status');
         if (res.code === 1 && res.data?.needsSetup === false) {
           router.replace('/login');
           return;
         }
+        setSetupTokenRequired(!!res.data?.setupTokenRequired);
       } catch {
         // 后端没启动起来时也允许填写
       }
@@ -50,7 +53,7 @@ export default function SetupPage() {
 
     setSubmitting(true);
     try {
-      const res = await api.post('/api/setup/init', { phone, password, nickname });
+      const res = await api.post('/api/setup/init', { phone, password, nickname, setupToken });
       if (res.code === 1) {
         toast({ title: '初始化完成，请使用刚才的账号登录' });
         router.replace('/login');
@@ -102,6 +105,18 @@ export default function SetupPage() {
                 onChange={(e) => setNickname(e.target.value)}
               />
             </div>
+            {setupTokenRequired && (
+              <div className="space-y-2">
+                <Label htmlFor="setupToken">初始化令牌</Label>
+                <Input
+                  id="setupToken"
+                  type="password"
+                  value={setupToken}
+                  onChange={(e) => setSetupToken(e.target.value)}
+                  autoComplete="one-time-code"
+                />
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="password">登录密码</Label>
               <Input
