@@ -1,33 +1,37 @@
 #!/bin/bash
-# 生成 Prisma baseline migration
-# 用途：将当前 schema 状态标记为已应用的基线，让后续 migrate deploy 可以正常工作
+# Prisma Migration 使用指南
 #
-# 前提：
-#   1. 数据库已经通过 db push 同步到最新 schema
-#   2. 本地 .env 中 DATABASE_URL 指向目标数据库
+# === 新环境首次部署（空库）===
+# 直接执行所有 migration：
+#   cd apps/server
+#   npx prisma migrate deploy
 #
-# 执行步骤：
-#   1. 生成基线 migration 目录（不执行 SQL）
-#   2. 在目标数据库标记该 migration 为已应用
+# === 已有数据的开发库（之前用 db push 同步的）===
+# 标记 baseline 为已应用（不执行 SQL，只记录状态）：
+#   cd apps/server
+#   npx prisma migrate resolve --applied 20260529000000_baseline
+#
+# === 后续开发流程 ===
+# 1. 修改 schema.prisma
+# 2. 生成新 migration：
+#      npx prisma migrate dev --name describe_your_change
+# 3. 检查生成的 SQL 是否合理
+# 4. 提交 migration 文件到 Git
+#
+# === 生产部署 ===
+#   npx prisma migrate deploy
+#
+# === 禁止事项 ===
+# - 禁止在生产环境使用 db push
+# - 大表加列/加索引必须手写 SQL 使用 CONCURRENTLY
+# - 不要手动修改 _prisma_migrations 表
 
 set -e
 
-MIGRATION_NAME="baseline_$(date +%Y%m%d%H%M%S)"
-
-echo "=== Step 1: 生成基线 migration ==="
+echo "=== Prisma Migration 状态检查 ==="
 cd apps/server
-mkdir -p "prisma/migrations/${MIGRATION_NAME}"
-npx prisma migrate diff \
-  --from-empty \
-  --to-schema-datamodel prisma/schema.prisma \
-  --script > "prisma/migrations/${MIGRATION_NAME}/migration.sql"
+npx prisma migrate status
 
 echo ""
-echo "=== Step 2: 标记为已应用（在已有数据的生产库上执行） ==="
-echo "运行以下命令将基线标记为已应用（不会执行 SQL）："
-echo ""
-echo "  npx prisma migrate resolve --applied ${MIGRATION_NAME}"
-echo ""
-echo "=== 完成后 ==="
-echo "后续所有 schema 变更必须走 'npx prisma migrate dev'，禁止 db push"
-echo "生产部署用 'npx prisma migrate deploy'"
+echo "如果显示 'Database schema is up to date'，说明一切正常。"
+echo "如果显示 pending migrations，执行: npx prisma migrate deploy"
