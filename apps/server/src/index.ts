@@ -40,14 +40,6 @@ import { exportRoutes } from './routes/export.js';
 import { searchRoutes } from './routes/search.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
-import { startProductSyncWorker } from './workers/product-sync.js';
-import { startOrderSyncWorker } from './workers/order-sync.js';
-import { startWarehouseCommandPollWorker } from './workers/warehouse-command-poll.js';
-import { startSoloBillingWorker } from './workers/solo-billing.js';
-import { startScheduledDispatchWorker } from './workers/scheduled-dispatch.js';
-import { startExchangeRateSyncWorker } from './workers/exchange-rate-sync.js';
-import { startFinanceSyncWorker } from './workers/finance-sync.js';
-import { startNotificationCleanupWorker } from './workers/notification-cleanup.js';
 import { providerRoutes } from './routes/provider.js';
 import { ozonLogisticsRoutes, domesticAddressRoutes } from './routes/ozon-logistics.js';
 import { systemConfigRoutes } from './routes/system-config.js';
@@ -113,6 +105,28 @@ app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => 
 });
 
 app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+
+app.get('/ready', async (_request, reply) => {
+  const checks: Record<string, string> = {};
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.db = 'ok';
+  } catch {
+    checks.db = 'fail';
+  }
+  try {
+    if (process.env.REDIS_DISABLED === '1' || process.env.REDIS_DISABLED === 'true') {
+      checks.redis = 'disabled';
+    } else {
+      await redis.ping();
+      checks.redis = 'ok';
+    }
+  } catch {
+    checks.redis = 'fail';
+  }
+  const healthy = checks.db === 'ok' && (checks.redis === 'ok' || checks.redis === 'disabled');
+  return reply.status(healthy ? 200 : 503).send({ status: healthy ? 'ready' : 'degraded', checks });
+});
 
 await app.register(authRoutes, { prefix: '/api/auth' });
 await app.register(setupRoutes, { prefix: '/api/setup' });
@@ -195,17 +209,47 @@ app.get('/resized/:filename', async (request, reply) => {
 await seedServiceTags();
 await seedSystemConfig();
 
-startWarehouseCommandPollWorker();
-startNotificationCleanupWorker();
-if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
-  startProductSyncWorker();
-  startOrderSyncWorker();
-  startSoloBillingWorker();
-  startScheduledDispatchWorker();
-  startExchangeRateSyncWorker();
-  startFinanceSyncWorker();
+const RUN_WORKERS = process.env.RUN_WORKERS !== '0' && process.env.RUN_WORKERS !== 'false';
+
+if (RUN_WORKERS) {
+  const [
+    { startWarehouseCommandPollWorker },
+    { startNotificationCleanupWorker },
+  ] = await Promise.all([
+    import('./workers/warehouse-command-poll.js'),
+    import('./workers/notification-cleanup.js'),
+  ]);
+
+  startWarehouseCommandPollWorker();
+  startNotificationCleanupWorker();
+  if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
+    const [
+      { startProductSyncWorker },
+      { startOrderSyncWorker },
+      { startSoloBillingWorker },
+      { startScheduledDispatchWorker },
+      { startExchangeRateSyncWorker },
+      { startFinanceSyncWorker },
+    ] = await Promise.all([
+      import('./workers/product-sync.js'),
+      import('./workers/order-sync.js'),
+      import('./workers/solo-billing.js'),
+      import('./workers/scheduled-dispatch.js'),
+      import('./workers/exchange-rate-sync.js'),
+      import('./workers/finance-sync.js'),
+    ]);
+
+    startProductSyncWorker();
+    startOrderSyncWorker();
+    startSoloBillingWorker();
+    startScheduledDispatchWorker();
+    startExchangeRateSyncWorker();
+    startFinanceSyncWorker();
+  } else {
+    console.log('[bootstrap] REDIS_DISABLED=1, skipping BullMQ workers');
+  }
 } else {
-  console.log('[bootstrap] REDIS_DISABLED=1, skipping BullMQ workers (sync queues, billing, dispatch)');
+  console.log('[bootstrap] RUN_WORKERS=0, this instance is API-only (no workers)');
 }
 
 const port = Number(process.env.SERVER_PORT) || 3001;

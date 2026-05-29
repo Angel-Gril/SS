@@ -7,4 +7,8 @@ const nextConfig = {
   },
 };
 
+if (process.env.NEXT_STANDALONE === '1') {
+  nextConfig.output = 'standalone';
+}
+
 export default nextConfig;
