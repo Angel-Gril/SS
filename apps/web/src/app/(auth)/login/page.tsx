@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import { loginSchema, type LoginInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -12,11 +13,17 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/use-toast';
 
+const TURNSTILE_SITE_KEY =
+  process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
+  (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [showTurnstile, setShowTurnstile] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const turnstileRef = useRef<TurnstileInstance | null>(null);
 
-  // 首次启动检测：用户表为空时跳引导页
   useEffect(() => {
     (async () => {
       try {
@@ -25,7 +32,7 @@ export default function LoginPage() {
           router.replace('/setup');
         }
       } catch {
-        // 后端没起来时不阻塞登录页
+        // ignore
       }
     })();
   }, [router]);
@@ -41,10 +48,12 @@ export default function LoginPage() {
   async function onSubmit(data: LoginInput) {
     setLoading(true);
     try {
-      const res = await api.post<{ token?: string; user: { role: string } }>('/api/auth/login', data);
+      const res = await api.post<{ token?: string; user: { role: string } }>('/api/auth/login', {
+        ...data,
+        turnstileToken: turnstileToken || undefined,
+      });
       if (res.code === 1) {
         tokenStore.clear();
-        // 根据角色跳转到不同默认页面
         const role = res.data?.user?.role;
         if (role === 'STAFF') {
           router.push('/warehouse');
@@ -55,6 +64,11 @@ export default function LoginPage() {
         }
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
+        if (res.msg?.includes('人机验证') || res.msg?.includes('失败次数过多')) {
+          setShowTurnstile(true);
+        }
+        turnstileRef.current?.reset();
+        setTurnstileToken('');
       }
     } catch {
       toast({ title: '网络错误', variant: 'destructive' });
@@ -100,7 +114,29 @@ export default function LoginPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
+            {showTurnstile && (
+              TURNSTILE_SITE_KEY ? (
+                <div className="flex justify-center">
+                  <Turnstile
+                    ref={turnstileRef}
+                    siteKey={TURNSTILE_SITE_KEY}
+                    onSuccess={setTurnstileToken}
+                    onError={() => setTurnstileToken('')}
+                    onExpire={() => setTurnstileToken('')}
+                    options={{ size: 'flexible', theme: 'auto' }}
+                  />
+                </div>
+              ) : (
+                <p className="text-xs text-destructive text-center">
+                  Turnstile 站点密钥未配置，无法完成人机验证
+                </p>
+              )
+            )}
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={loading || (showTurnstile && !turnstileToken)}
+            >
               {loading ? '登录中...' : '登录'}
             </Button>
             <p className="text-center text-sm text-muted-foreground">

@@ -10,8 +10,8 @@
 |---|----------|----------|------|
 | 1 | ENCRYPTION_KEY fallback 裸奔 | 生产启动硬校验，缺失/过短直接 exit(1) | `bootstrap-config.ts:64-76` |
 | 2 | JWT_SECRET 默认值 | 同上，生产拒绝启动 | `bootstrap-config.ts:65-69` |
-| 3 | 注册无防护 | 后端 Turnstile 校验 + 路由级 10/min 频控；前端组件待接入 | `auth.ts:28`, `captcha.ts` |
-| 4 | 登录无防护 | 后端失败 5 次后强制 Turnstile + Redis 计数；前端失败态组件待接入 | `auth.ts:77-82` |
+| 3 | 注册无防护 | 发送短信验证码前先过 Turnstile + 路由级 10/min 频控 | `auth.ts`, `captcha.ts` |
+| 4 | 登录无防护 | 失败 5 次后强制 Turnstile + Redis 计数 + 前端验证组件 | `auth.ts`, `login/page.tsx` |
 | 5 | CORS 白名单过宽 | 生产严格匹配 CORS_ORIGIN（逗号分隔） | `index.ts:72-79` |
 | 6 | rateLimit 全局偏宽 | 全局 200/min + auth 路由 10/min 分级 | `index.ts:90`, `auth.ts:11` |
 | 7 | bodyLimit 30MB | 默认降到 1MB，图片路由单独放宽 | `index.ts:57` |
@@ -22,7 +22,7 @@
 | 12 | 无 Dockerfile | server + web 双 Dockerfile + compose.prod | `docker/` |
 | 13 | 无部署文档 | DEPLOYMENT.md + PRE-LAUNCH-CHECKLIST.md | 根目录 |
 | 14 | Redis 连接不统一 | redis.ts 走 REDIS_URL 环境变量 | `lib/redis.ts:38` |
-| 15 | 短信验证码骨架 | provider + sendSmsCode/verifySmsCode 已实现；注册路由/前端验证码闭环待接入 | `captcha.ts:42-76` |
+| 15 | 短信验证码骨架 | provider + sendSmsCode/verifySmsCode + 注册前端闭环已接入 | `captcha.ts`, `register/page.tsx` |
 | 16 | 双运行模式 | bootstrap-config.ts 支持 config.json 便携包 | `bootstrap-config.ts` |
 
 ---
@@ -35,7 +35,7 @@
 |---|------|------|------|
 | 1 | **Worker Redis 硬编码 127.0.0.1** | 6 个 worker 统一走 `lib/bullmq-connection.ts` 解析 REDIS_URL | ✅ 已完成 |
 | 2 | **Prisma baseline migration** | `20260529000000_baseline` 覆盖完整 schema，旧 migration 已清理 | ✅ 已完成 |
-| 3 | **SMS 网关接入** | `lib/sms/` 抽象层 + 腾讯云 provider + console fallback；注册验证码闭环待接入 | ✅ provider 已完成 / 📋 闭环待接入 |
+| 3 | **SMS 网关接入** | `lib/sms/` 抽象层 + 腾讯云 provider + console fallback；注册验证码闭环已接入 | ✅ 已完成 |
 
 ### P1：上线前强烈推荐
 
@@ -45,10 +45,10 @@
 | 5 | **Cloudflare 真源保护** | Nginx geo 限制只接受 CF IP；后端读 CF-Connecting-IP | 📋 待运维配置 |
 | 6 | **图片 OSS 直传（预签名 URL）** | `/api/images/presign` + 前端 `uploadDirect()` helper | ✅ 已完成 |
 | 7 | **Sentry 接入** | server `@sentry/node` + web `instrumentation.ts` + 全局 errorHandler | ✅ 已完成 |
-| 8 | **数据库备份脚本** | pg_dump cron + OSS 异地存储 | 📋 待运维实现 |
+| 8 | **数据库备份脚本** | pg_dump cron + S3/OSS 异地存储 + 恢复脚本 | ✅ 已完成 |
 | 9 | **蓝绿部署脚本** | docker-compose blue/green + Nginx upstream 切换 + 健康检查 | 📋 待运维实现 |
-| 10 | **Turnstile 前端接入** | 注册页必须传 `turnstileToken`；登录失败 5 次后显示验证 | 📋 待代码接入 |
-| 11 | **短信注册闭环** | 发送验证码接口 + 注册表单验证码 + 服务端 `verifySmsCode` | 📋 待代码接入 |
+| 10 | **Turnstile 前端接入** | 注册发短信前校验；登录失败 5 次后显示验证 | ✅ 已完成 |
+| 11 | **短信注册闭环** | 发送验证码接口 + 注册表单验证码 + 服务端 `verifySmsCode` | ✅ 已完成 |
 
 ### P2：上线后迭代
 
@@ -120,8 +120,8 @@ npx prisma migrate resolve --applied 20260529000000_baseline
 - captcha.ts 的 `sendSmsCode` 调用 provider.send()
 - 开发环境 fallback 到 console.log
 
-待完成：
-- 新增发送验证码 API（例如 `/api/auth/sms-code`）
+已完成：
+- 新增发送验证码 API：`/api/auth/sms-code`
 - 注册 schema / 路由加入 `smsCode` 并调用 `verifySmsCode(phone, smsCode)`
 - 注册页加入发送验证码按钮和验证码输入框
 
@@ -233,7 +233,7 @@ server {
 | 区分本地/云端双模式 | ✅ bootstrap-config.ts | config.json 便携包模式 |
 | Worker Redis 硬编码 | ✅ 已修 | P0 #1，lib/bullmq-connection.ts |
 | Cloudflare 真源保护 | 📋 待运维配置 | P1 #5，Nginx geo + CF-Connecting-IP |
-| Turnstile ≠ 短信 | ⚠️ 后端基础已分开 | 前端 Turnstile + 注册短信闭环待接入 |
+| Turnstile ≠ 短信 | ✅ 已分开并接入闭环 | Turnstile 保护发码，SMS code 保护注册 |
 | Chrome 扩展 OTA 限制 | 📋 已知 | P2 走 Web Store |
 | ICP 判断 | 📋 决策树已列 | 第六节 |
 | Web token → HttpOnly | ✅ 已修 | P1 #4，sserp_token cookie |

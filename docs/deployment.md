@@ -9,7 +9,7 @@
 - Web: Next.js 本地服务
 - API: Fastify 本地服务
 - DB: 本地 PostgreSQL 或打包版 PostgreSQL
-- Redis: 可禁用或本地 Redis
+- Redis: 可禁用或本地 Redis（禁用后短信验证码不可用，仅适合本地调试）
 - 文件: 本地 `public/uploads`、`public/watermarked`
 
 ### 云端 SaaS
@@ -40,7 +40,7 @@
 5. 构建并启动容器。
 6. 执行 `prisma migrate deploy`。
 7. 验证 `/health`、登录、店铺连接、图片上传、订单同步。
-8. Cloudflare 开启代理和 WAF；Turnstile 前端组件接入后再启用完整人机验证。
+8. Cloudflare 开启代理、WAF 和 Turnstile。
 9. 防火墙限制源站只接受 Cloudflare IP 和运维 SSH。
 
 ## 生产环境变量
@@ -57,8 +57,8 @@
 
 强烈推荐：
 
-- `REDIS_URL`（启用 BullMQ worker）
-- `TURNSTILE_SECRET_KEY`（注册人机验证）
+- `REDIS_URL`（启用短信验证码、登录失败计数和 BullMQ worker）
+- `TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`（注册/登录人机验证）
 - `SMS_PROVIDER` + `SMS_TENCENT_*`（短信验证码）
 - `SENTRY_DSN`（错误追踪）
 - `NEXT_PUBLIC_API_BASE_URL`（前端 API 地址）
@@ -80,7 +80,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.production exec api no
 
 - DNS 对 `app` 和 `api` 开启 proxy。
 - SSL/TLS 使用 Full (strict)。
-- Turnstile 后端已用于注册和登录失败后的二次验证；前端组件、短信发送和找回密码闭环仍需按功能接入。
+- Turnstile 用于注册发送短信验证码，以及登录失败后的二次验证。
 - WAF 增加登录、注册、短信发送、图片上传的 rate limiting。
 - 源站防火墙只允许 Cloudflare IP 访问 80/443。
 - API 获取真实 IP 时只信任 Cloudflare 转发头。

@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import { registerSchema, type RegisterInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -12,17 +13,71 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/use-toast';
 
+const TURNSTILE_SITE_KEY =
+  process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
+  (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
+
 export default function RegisterPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const turnstileRef = useRef<TurnstileInstance | null>(null);
 
   const {
     register,
     handleSubmit,
+    getValues,
     formState: { errors },
   } = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
   });
+
+  function startCountdown() {
+    setCountdown(60);
+    const timer = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+  }
+
+  async function onSendCode() {
+    const phone = getValues('phone');
+    if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
+      toast({ title: '请先输入有效手机号', variant: 'destructive' });
+      return;
+    }
+    if (!turnstileToken) {
+      toast({ title: '请先完成人机验证', variant: 'destructive' });
+      return;
+    }
+    setSending(true);
+    try {
+      const res = await api.post<unknown>('/api/auth/sms-code', { phone, turnstileToken });
+      if (res.code === 1) {
+        toast({ title: '验证码已发送' });
+        startCountdown();
+        turnstileRef.current?.reset();
+        setTurnstileToken('');
+      } else {
+        toast({ title: res.msg || '发送失败', variant: 'destructive' });
+        turnstileRef.current?.reset();
+        setTurnstileToken('');
+      }
+    } catch {
+      toast({ title: '网络错误', variant: 'destructive' });
+      turnstileRef.current?.reset();
+      setTurnstileToken('');
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function onSubmit(data: RegisterInput) {
     setLoading(true);
@@ -34,6 +89,8 @@ export default function RegisterPage() {
         router.push('/');
       } else {
         toast({ title: res.msg || '注册失败', variant: 'destructive' });
+        turnstileRef.current?.reset();
+        setTurnstileToken('');
       }
     } catch {
       toast({ title: '网络错误', variant: 'destructive' });
@@ -56,8 +113,30 @@ export default function RegisterPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="phone">手机号</Label>
-              <Input id="phone" placeholder="11 位手机号" {...register('phone')} />
+              <Input id="phone" placeholder="11 位手机号" {...register('phone')} autoComplete="tel" />
               {errors.phone && <p className="text-xs text-destructive">{errors.phone.message}</p>}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="smsCode">短信验证码</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="smsCode"
+                  placeholder="6 位验证码"
+                  inputMode="numeric"
+                  maxLength={6}
+                  {...register('smsCode')}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={onSendCode}
+                  disabled={sending || countdown > 0}
+                  className="shrink-0 w-32"
+                >
+                  {countdown > 0 ? `${countdown}s 后重试` : sending ? '发送中...' : '发送验证码'}
+                </Button>
+              </div>
+              {errors.smsCode && <p className="text-xs text-destructive">{errors.smsCode.message}</p>}
             </div>
             <div className="space-y-2">
               <Label htmlFor="nickname">昵称（可选）</Label>
@@ -70,11 +149,28 @@ export default function RegisterPage() {
                 type="password"
                 placeholder="至少 8 位，包含字母和数字"
                 {...register('password')}
+                autoComplete="new-password"
               />
               {errors.password && (
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
+            {TURNSTILE_SITE_KEY ? (
+              <div className="flex justify-center">
+                <Turnstile
+                  ref={turnstileRef}
+                  siteKey={TURNSTILE_SITE_KEY}
+                  onSuccess={setTurnstileToken}
+                  onError={() => setTurnstileToken('')}
+                  onExpire={() => setTurnstileToken('')}
+                  options={{ size: 'flexible', theme: 'auto' }}
+                />
+              </div>
+            ) : (
+              <p className="text-xs text-destructive text-center">
+                Turnstile 站点密钥未配置，无法发送验证码
+              </p>
+            )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '注册中...' : '注册'}
             </Button>

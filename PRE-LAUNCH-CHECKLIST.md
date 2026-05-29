@@ -23,7 +23,8 @@
   - 验证：从非白名单域名访问 API 返回 CORS 错误
 
 - [ ] **Turnstile 前后端闭环已接入**（防机器人注册）
-  - 验证：注册页显示 Cloudflare 验证框，并且 `/api/auth/register` 请求携带 `turnstileToken`
+  - 验证：注册页显示 Cloudflare 验证框，并且 `/api/auth/sms-code` 请求携带 `turnstileToken`
+  - 验证：连续登录失败 5 次后，登录页显示 Cloudflare 验证框
 
 - [ ] **Redis 已启动**（启用同步 worker）
   - 验证：`redis-cli ping` 返回 `PONG`
@@ -47,7 +48,7 @@
 
 - [ ] **短信验证码闭环已接入**
   - 验证：`.env` 中 `SMS_PROVIDER=tencent` 且 `SMS_TENCENT_*` 全部填写
-  - 验证：存在发送短信验证码接口，注册表单提交验证码，服务端调用 `verifySmsCode`
+  - 验证：`/api/auth/sms-code` 发送验证码，注册表单提交 `smsCode`，服务端调用 `verifySmsCode`
   - 验证：注册时手机收到验证码（非 console.log），错误验证码无法注册
 
 - [ ] **Sentry 已接入**

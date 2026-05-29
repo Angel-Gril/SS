@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { registerSchema, loginSchema } from 'shared';
+import { registerSchema, loginSchema, sendSmsCodeSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession, removeSession, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
-import { verifyTurnstile } from '../lib/captcha.js';
+import { verifyTurnstile, sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // 路由级频控：注册/登录 10 次/分钟
@@ -15,18 +15,38 @@ export async function authRoutes(app: FastifyInstance) {
     errorResponseBuilder: () => ({ code: 0, msg: '请求过于频繁，请稍后再试' }),
   });
 
+  // 发送短信验证码（注册前调用）
+  app.post('/sms-code', async (request, reply) => {
+    const parsed = sendSmsCodeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { phone, turnstileToken } = parsed.data;
+
+    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { phone } });
+    if (existing) {
+      return reply.status(409).send({ code: 0, msg: '该手机号已注册' });
+    }
+
+    const result = await sendSmsCode(phone);
+    return reply.send({ code: result.ok ? 1 : 0, msg: result.msg });
+  });
+
   app.post('/register', async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { phone, password, nickname } = parsed.data;
-    const { turnstileToken } = request.body as { turnstileToken?: string };
+    const { phone, password, nickname, smsCode } = parsed.data;
 
-    // Turnstile 人机校验
-    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
-      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    if (!await verifySmsCode(phone, smsCode)) {
+      return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
     }
 
     const existing = await prisma.user.findUnique({ where: { phone } });
@@ -67,8 +87,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { phone, password } = parsed.data;
-    const { turnstileToken } = request.body as { turnstileToken?: string };
+    const { phone, password, turnstileToken } = parsed.data;
 
     // 登录失败 5 次后强制 Turnstile
     const { redis } = await import('../lib/redis.js');

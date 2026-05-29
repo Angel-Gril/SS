@@ -10,13 +10,21 @@ export const registerSchema = z.object({
     .max(64, '密码最多 64 位')
     .regex(/[a-zA-Z]/, '密码需包含字母')
     .regex(/[0-9]/, '密码需包含数字'),
+  smsCode: z.string().regex(/^\d{6}$/, '请输入 6 位验证码'),
   nickname: z.string().min(2).max(32).optional(),
   inviteCode: z.string().optional(),
+  turnstileToken: z.string().optional(),
 });
 
 export const loginSchema = z.object({
   phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
   password: z.string().min(1, '请输入密码'),
+  turnstileToken: z.string().optional(),
+});
+
+export const sendSmsCodeSchema = z.object({
+  phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
+  turnstileToken: z.string().optional(),
 });
 
 export const changePasswordSchema = z.object({

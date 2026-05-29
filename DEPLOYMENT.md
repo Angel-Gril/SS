@@ -11,7 +11,7 @@
 
 ### 1.2 依赖服务
 - **PostgreSQL 14+**
-- **Redis 7+**（可选，禁用后 BullMQ worker 全部不启动）
+- **Redis 7+**（生产必须启用；短信验证码、登录失败计数和 BullMQ worker 依赖 Redis）
 - **Node.js 22+**
 - **pnpm 11+**
 
@@ -73,15 +73,16 @@ NODE_ENV="production"
 ### 3.2 强烈推荐
 
 ```bash
-# Redis（启用 BullMQ worker：订单/产品/财务同步、计费、调度、通知清理）
+# Redis（启用短信验证码、登录失败计数、BullMQ worker：订单/产品/财务同步、计费、调度、通知清理）
 REDIS_URL="redis://:password@host:6379"
 REDIS_DISABLED="0"
 
-# Cloudflare Turnstile（后端已校验 turnstileToken；生产上线前还需前端组件接入）
-# 不配置时生产环境会拒绝注册；配置后注册请求必须携带有效 turnstileToken
+# Cloudflare Turnstile（保护短信发码；登录失败过多后触发二次验证）
+# 不配置时生产环境会拒绝短信发码和登录二次验证；前端需要 NEXT_PUBLIC_TURNSTILE_SITE_KEY 渲染组件
 TURNSTILE_SECRET_KEY="your_turnstile_secret"
+NEXT_PUBLIC_TURNSTILE_SITE_KEY="your_turnstile_site_key"
 
-# 短信 provider（生产发送验证码用；注册验证码路由/前端闭环需上线前接入）
+# 短信 provider（生产发送注册验证码用）
 SMS_PROVIDER="tencent"
 SMS_TENCENT_SECRET_ID="..."
 SMS_TENCENT_SECRET_KEY="..."
@@ -240,7 +241,7 @@ sudo certbot --nginx -d app.yourdomain.com
 curl https://app.yourdomain.com/health
 # 预期: {"status":"ok","timestamp":"..."}
 
-# 注册流程：访问 https://app.yourdomain.com，确认前端已提交 turnstileToken 并完成短信验证码闭环
+# 注册流程：访问 https://app.yourdomain.com，确认发送短信验证码前已通过 Turnstile，注册提交时服务端校验短信码
 # 登录成功后浏览器应有 HttpOnly cookie sserp_token
 ```
 
@@ -324,11 +325,11 @@ bash scripts/restore-db.sh --from-s3 db/ss_erp_20260529_030000.sql.gz
 ### 9.1 启动报错 `JWT_SECRET 未配置或长度不足 16 字符`
 生产环境 `bootstrap-config.ts` 启动时硬校验 `JWT_SECRET` 和 `ENCRYPTION_KEY`，缺失或使用默认值会直接 `process.exit(1)`。检查 `.env` 字段值。
 
-### 9.2 注册返回 `人机验证失败，请重试`
-生产环境下 `/api/auth/register` 必须收到有效 `turnstileToken`。检查前端 Turnstile 组件是否已接入，以及 `TURNSTILE_SECRET_KEY` 是否正确。
+### 9.2 发送验证码返回 `人机验证失败，请重试`
+生产环境下 `/api/auth/sms-code` 必须收到有效 `turnstileToken`。检查前端 Turnstile 组件是否已渲染、`NEXT_PUBLIC_TURNSTILE_SITE_KEY` 是否正确，以及后端 `TURNSTILE_SECRET_KEY` 是否匹配。
 
 ### 9.3 启动报错 `SMS_PROVIDER 未配置`
-生产环境必须显式配置 `SMS_PROVIDER=tencent` 或 `console`（仅测试用）。注意：provider 只负责发送，注册验证码发送路由和前端校验闭环仍需确认已接入。
+生产环境必须显式配置 `SMS_PROVIDER=tencent` 或 `console`（仅测试用）。注意：provider 只负责发送，真实上线还要确认腾讯云签名、模板和短信内容已审核通过。
 
 ### 9.4 上架失败：完整错误被截断
 查看服务端日志：`docker-compose -f docker-compose.prod.yml logs -f api | grep "publish-ozon"`。常见原因：源商品禁止跟卖、必填属性缺失、offer_id 重复。
@@ -368,7 +369,7 @@ PasswordAuthentication no
 - [ ] 安装 PostgreSQL + Redis
 - [ ] 创建数据库
 - [ ] 配置 `.env`：DATABASE_URL / ENCRYPTION_KEY / JWT_SECRET / CORS_ORIGIN / NODE_ENV
-- [ ] 配置 Turnstile（`TURNSTILE_SECRET_KEY`）并确认前端提交 `turnstileToken`
+- [ ] 配置 Turnstile（`TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`）并确认发送验证码接口提交 `turnstileToken`
 - [ ] 配置短信网关（`SMS_PROVIDER` + `SMS_TENCENT_*`）并确认注册短信验证码闭环
 - [ ] 配置 Sentry（`SENTRY_DSN`）
 - [ ] 运行 Prisma migration（空库 `migrate deploy` / 已有库 `migrate resolve --applied`）
