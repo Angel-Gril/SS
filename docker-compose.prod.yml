@@ -11,7 +11,7 @@ services:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 3001
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     depends_on:
       redis:
         condition: service_healthy
@@ -27,6 +27,7 @@ services:
       dockerfile: docker/web.Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
     restart: unless-stopped
     env_file:
       - ${ENV_FILE:-.env.production}
@@ -35,7 +36,7 @@ services:
       PORT: 3000
       HOSTNAME: 0.0.0.0
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       api:
         condition: service_healthy

@@ -24,7 +24,7 @@ export interface PresignedUploadResult {
   uploadUrl: string;
   finalUrl: string;
   key: string;
-  objectKey?: string;
+  objectKey: string;
   expiresIn: number;
   maxBytes: number;
   headers: Record<string, string>;
@@ -227,7 +227,6 @@ class OssBackend implements ImageStorageBackend {
       forcePathStyle: endpoint.includes('localhost') || endpoint.includes('minio'),
     });
 
-    const hash = createHash('md5').update(buffer).digest('hex').slice(0, 8);
     const ext = filename.split('.').pop() || 'jpg';
     const userId = 'system';
     const objectKey = generateObjectKey(userId, 'raw', ext);
@@ -298,7 +297,7 @@ class OssBackend implements ImageStorageBackend {
     return {
       uploadUrl,
       finalUrl,
-      key: finalUrl,
+      key: objectKey,
       objectKey,
       expiresIn,
       maxBytes: input.maxBytes,
@@ -421,6 +420,12 @@ function generateObjectKey(userId: string, category: 'raw' | 'watermarked' | 'th
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const hash = createHash('md5').update(`${userId}-${Date.now()}-${Math.random()}`).digest('hex').slice(0, 12);
-  return `${userId}/${category}/${yyyy}/${mm}/${hash}.${ext}`;
+  const safeUserId = sanitizeObjectSegment(userId) || 'shared';
+  const safeExt = sanitizeObjectSegment(ext.toLowerCase().replace(/^\.+/, '')) || 'jpg';
+  const hash = createHash('sha256').update(`${safeUserId}-${Date.now()}-${Math.random()}`).digest('hex').slice(0, 16);
+  return `${safeUserId}/${category}/${yyyy}/${mm}/${hash}.${safeExt}`;
+}
+
+function sanitizeObjectSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^\.+/, '').slice(0, 80);
 }

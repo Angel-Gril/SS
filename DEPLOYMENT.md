@@ -101,7 +101,9 @@ SENTRY_DSN="https://xxx@xxx.ingest.sentry.io/xxx"
 
 部署完成后，使用超级管理员账号登录，访问 `/admin/settings` 配置（后端 API 为 `/api/admin/system-config`）：
 - `image_storage_backend`：取值 `local` / `oss` / `ozon-cdn`
-- `oss_config`：JSON，包含 `endpoint / bucket / accessKeyId / accessKeySecret / region / cdnDomain / pathPrefix`
+- `oss_config`：JSON，包含 `endpoint / bucket / accessKeyId / accessKeySecret / region / cdnDomain`
+
+对象路径由系统固定生成：`userId/category/yyyy/mm/hash.ext`，其中 `category` 目前为 `raw`，后续水印图/缩略图扩展为 `watermarked` / `thumbnail`。不要在 `.env` 或超管 UI 自定义路径前缀，避免生产数据进入后路径规则漂移。
 
 支持 S3 兼容存储（阿里云 OSS / 腾讯云 COS / Cloudflare R2 / AWS S3 / MinIO）。
 

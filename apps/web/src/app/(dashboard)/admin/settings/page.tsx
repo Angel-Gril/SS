@@ -100,10 +100,9 @@ function OssConfigEditor({ value, onChange }: { value: string; onChange: (v: str
           <Input className="mt-1 h-8 text-sm font-mono" type="password" value={parsed.accessKeySecret || ''} onChange={(e) => update('accessKeySecret', e.target.value)} placeholder="••••••" />
         </div>
       </div>
-      <div>
-        <Label className="text-xs">路径前缀（可选）</Label>
-        <Input className="mt-1 h-8 text-sm" value={parsed.pathPrefix || ''} onChange={(e) => update('pathPrefix', e.target.value)} placeholder="ss-erp/images" />
-      </div>
+      <p className="text-xs text-muted-foreground">
+        对象路径由系统固定生成：userId/category/yyyy/mm/hash.ext，便于后期按用户、类型和月份归档。
+      </p>
     </div>
   );
 }

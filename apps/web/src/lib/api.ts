@@ -116,6 +116,7 @@ interface PresignData {
   uploadUrl: string;
   finalUrl: string;
   key: string;
+  objectKey: string;
   expiresIn: number;
   maxBytes: number;
   headers: Record<string, string>;

@@ -24,7 +24,7 @@ const DEFAULTS: Array<{ key: string; value: string; label: string; group: string
     value: '',
     label: 'OSS 配置 (JSON)',
     group: 'storage',
-    description: 'S3 兼容存储配置。JSON: { endpoint, bucket, accessKeyId, accessKeySecret, region, cdnDomain?, pathPrefix? }。支持阿里云/腾讯云/CF R2/AWS/MinIO',
+    description: 'S3 兼容存储配置。JSON: { endpoint, bucket, accessKeyId, accessKeySecret, region, cdnDomain? }。对象 key 固定为 userId/category/yyyy/mm/hash.ext',
   },
   {
     key: 'ozon_cdn_relay_url',

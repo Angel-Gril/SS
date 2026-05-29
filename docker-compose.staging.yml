@@ -1,21 +1,40 @@
 # Staging 环境 Docker Compose
 # 用法：docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 
+name: ss-erp-staging
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ss_erp_staging
+      POSTGRES_PASSWORD: change-me-staging-db
+      POSTGRES_DB: ss_erp_staging
+    volumes:
+      - postgres-staging-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ss_erp_staging -d ss_erp_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: .
       dockerfile: docker/server.Dockerfile
     restart: unless-stopped
     env_file:
-      - .env.staging
+      - ${ENV_FILE:-.env.staging}
     environment:
       NODE_ENV: production
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 3001
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -33,13 +52,13 @@ services:
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}
     restart: unless-stopped
     env_file:
-      - .env.staging
+      - ${ENV_FILE:-.env.staging}
     environment:
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       api:
         condition: service_healthy
@@ -57,4 +76,5 @@ services:
       retries: 10
 
 volumes:
+  postgres-staging-data:
   redis-staging-data:

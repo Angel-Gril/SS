@@ -221,9 +221,9 @@ try {
 async function shutdown(signal: string) {
   console.log(`[shutdown] received ${signal}, closing gracefully...`);
   try {
-    await app.close();
     const { shutdownAllWorkers } = await import('./lib/worker-registry.js');
     await shutdownAllWorkers(30000);
+    await app.close();
     process.exit(0);
   } catch (err) {
     console.error('[shutdown] error during shutdown:', err);
