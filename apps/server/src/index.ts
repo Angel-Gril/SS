@@ -54,6 +54,7 @@ import { systemConfigRoutes } from './routes/system-config.js';
 import { watermarkTemplateRoutes } from './routes/watermark-template.js';
 import { imageUploadRoutes } from './routes/image-upload.js';
 import { chatRoutes } from './routes/chat.js';
+import { appVersionRoutes } from './routes/app-version.js';
 
 const app = Fastify({
   bodyLimit: 1 * 1024 * 1024,
@@ -150,6 +151,7 @@ await app.register(systemConfigRoutes, { prefix: '/api/admin/system-config' });
 await app.register(watermarkTemplateRoutes, { prefix: '/api/watermark-templates' });
 await app.register(imageUploadRoutes, { prefix: '/api/images' });
 await app.register(chatRoutes, { prefix: '/api/chat' });
+await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';

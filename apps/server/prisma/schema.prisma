@@ -968,3 +968,20 @@ model AccountMonthlyStat {
   @@index([userId, yearMonth])
   @@map("account_monthly_stats")
 }
+
+// 客户端版本管理（强制/推荐更新）
+model AppVersion {
+  id           String   @id @default(cuid())
+  platform     String   // web | electron | extension
+  version      String   // semver, e.g. "1.2.0"
+  minVersion   String   @map("min_version") // 低于此版本强制更新
+  releaseNotes String?  @map("release_notes")
+  downloadUrl  String?  @map("download_url")
+  isActive     Boolean  @default(true) @map("is_active")
+  publishedAt  DateTime @default(now()) @map("published_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([platform, version])
+  @@index([platform, isActive])
+  @@map("app_versions")
+}
