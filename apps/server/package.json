@@ -22,6 +22,7 @@
     "@fastify/helmet": "^12.0.1",
     "@fastify/rate-limit": "^10.2.1",
     "@prisma/client": "^6.2.1",
+    "@sentry/node": "^10.54.0",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.34.8",
     "dotenv": "^16.4.7",

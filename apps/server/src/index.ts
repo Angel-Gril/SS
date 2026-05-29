@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import './bootstrap-config.js';
+import { initSentry, Sentry } from './lib/sentry.js';
+initSentry();
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -95,6 +97,17 @@ await app.register(rateLimit, {
 app.addHook('onClose', async () => {
   await prisma.$disconnect();
   redis.disconnect();
+});
+
+app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
+  const status = error.statusCode || 500;
+  if (status >= 500) {
+    Sentry.captureException(error, {
+      tags: { route: request.routeOptions?.url || request.url, method: request.method },
+    });
+    request.log.error({ err: error }, 'unhandled error');
+  }
+  reply.status(status).send({ code: 0, msg: status >= 500 ? '服务器错误' : error.message || '请求失败' });
 });
 
 app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
