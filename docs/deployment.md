@@ -40,27 +40,30 @@
 5. 构建并启动容器。
 6. 执行 `prisma migrate deploy`。
 7. 验证 `/health`、登录、店铺连接、图片上传、订单同步。
-8. Cloudflare 开启代理、WAF、Turnstile。
+8. Cloudflare 开启代理和 WAF；Turnstile 前端组件接入后再启用完整人机验证。
 9. 防火墙限制源站只接受 Cloudflare IP 和运维 SSH。
 
 ## 生产环境变量
 
 核心变量见 `.env.production.example`。
 
-必须项：
+必须项（缺失会拒绝启动）：
 
 - `DATABASE_URL`
-- `REDIS_URL`
-- `JWT_SECRET`
-- `ENCRYPTION_KEY`
+- `JWT_SECRET`（≥32 字符）
+- `ENCRYPTION_KEY`（≥32 字符）
 - `CORS_ORIGIN`
-- `NEXT_PUBLIC_API_BASE_URL`
-- `TURNSTILE_SECRET_KEY`
-- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`
-- `OSS_ENDPOINT`
-- `OSS_BUCKET`
-- `OSS_ACCESS_KEY_ID`
-- `OSS_ACCESS_KEY_SECRET`
+- `NODE_ENV=production`
+
+强烈推荐：
+
+- `REDIS_URL`（启用 BullMQ worker）
+- `TURNSTILE_SECRET_KEY`（注册人机验证）
+- `SMS_PROVIDER` + `SMS_TENCENT_*`（短信验证码）
+- `SENTRY_DSN`（错误追踪）
+- `NEXT_PUBLIC_API_BASE_URL`（前端 API 地址）
+
+OSS 配置走超管 UI（`/admin/settings`），不在 .env 中。详见根目录 `DEPLOYMENT.md` 第 3.3 节。
 
 ## 部署命令示例
 
@@ -77,7 +80,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.production exec api no
 
 - DNS 对 `app` 和 `api` 开启 proxy。
 - SSL/TLS 使用 Full (strict)。
-- Turnstile 用于注册、短信发送、找回密码和登录失败后的二次验证。
+- Turnstile 后端已用于注册和登录失败后的二次验证；前端组件、短信发送和找回密码闭环仍需按功能接入。
 - WAF 增加登录、注册、短信发送、图片上传的 rate limiting。
 - 源站防火墙只允许 Cloudflare IP 访问 80/443。
 - API 获取真实 IP 时只信任 Cloudflare 转发头。
