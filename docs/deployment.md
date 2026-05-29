@@ -61,7 +61,7 @@
 - `REDIS_URL`（启用短信验证码、登录失败计数和 BullMQ worker）
 - `TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`（注册/登录人机验证）
 - `SMS_PROVIDER` + `SMS_TENCENT_*`（短信验证码）
-- `SENTRY_DSN`（错误追踪）
+- `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN`（服务端 / 浏览器端错误追踪）
 - `NEXT_PUBLIC_API_BASE_URL`（前端 API 地址）
 
 OSS 配置走超管 UI（`/admin/settings`），不在 .env 中。详见根目录 `DEPLOYMENT.md` 第 3.3 节。

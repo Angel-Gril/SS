@@ -1,3 +1,5 @@
+import { withSentryConfig } from '@sentry/nextjs';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ['shared'],
@@ -11,4 +13,11 @@ if (process.env.NEXT_STANDALONE === '1') {
   nextConfig.output = 'standalone';
 }
 
-export default nextConfig;
+const sentryEnabled = !!process.env.NEXT_PUBLIC_SENTRY_DSN;
+
+export default sentryEnabled
+  ? withSentryConfig(nextConfig, {
+      silent: true,
+      hideSourceMaps: true,
+    })
+  : nextConfig;

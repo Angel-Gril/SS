@@ -103,6 +103,7 @@ SMS_TENCENT_TEMPLATE_ID="..."
 
 # Sentry 错误追踪
 SENTRY_DSN="https://xxx@xxx.ingest.sentry.io/xxx"
+NEXT_PUBLIC_SENTRY_DSN="https://xxx@xxx.ingest.sentry.io/xxx"
 ```
 
 ### 3.3 OSS 对象存储 — 走超管 UI，不在 .env 配置
@@ -383,7 +384,7 @@ PasswordAuthentication no
 - [ ] 配置 `.env`：DATABASE_URL / ENCRYPTION_KEY / JWT_SECRET / CORS_ORIGIN / NODE_ENV
 - [ ] 配置 Turnstile（`TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`）并确认发送验证码接口提交 `turnstileToken`
 - [ ] 配置短信网关（`SMS_PROVIDER` + `SMS_TENCENT_*`）并确认注册短信验证码闭环
-- [ ] 配置 Sentry（`SENTRY_DSN`）
+- [ ] 配置 Sentry（`SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN`）
 - [ ] 运行 Prisma migration（空库 `migrate deploy` / 已有库 `migrate resolve --applied`）
 - [ ] 构建：`docker-compose -f docker-compose.prod.yml build`
 - [ ] 启动：`docker-compose -f docker-compose.prod.yml up -d`

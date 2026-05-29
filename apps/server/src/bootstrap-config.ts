@@ -73,4 +73,20 @@ if (process.env.NODE_ENV === 'production') {
     console.error('[FATAL] ENCRYPTION_KEY 未配置或长度不足 32 字符，拒绝启动');
     process.exit(1);
   }
+
+  if (!process.env.DATABASE_URL) {
+    console.error('[FATAL] DATABASE_URL 未配置，拒绝启动');
+    process.exit(1);
+  }
+
+  const redisDisabled = process.env.REDIS_DISABLED === '1' || process.env.REDIS_DISABLED === 'true';
+  if (!redisDisabled && !process.env.REDIS_URL) {
+    console.error('[FATAL] REDIS_URL 未配置且 REDIS_DISABLED 未开启，拒绝启动');
+    process.exit(1);
+  }
+
+  if (!process.env.CORS_ORIGIN) {
+    console.error('[FATAL] CORS_ORIGIN 未配置，拒绝启动');
+    process.exit(1);
+  }
 }

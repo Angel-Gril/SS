@@ -8,21 +8,27 @@ const UNREAD_RETENTION_DAYS = 365;
 let timer: NodeJS.Timeout | null = null;
 
 async function cleanupOnce() {
-  const now = Date.now();
-  const readCutoff = new Date(now - READ_RETENTION_DAYS * 24 * 3600 * 1000);
-  const unreadCutoff = new Date(now - UNREAD_RETENTION_DAYS * 24 * 3600 * 1000);
+  const now = new Date();
+  const readCutoff = new Date(now.getTime() - READ_RETENTION_DAYS * 24 * 3600 * 1000);
+  const unreadCutoff = new Date(now.getTime() - UNREAD_RETENTION_DAYS * 24 * 3600 * 1000);
 
-  const [readDeleted, unreadDeleted] = await Promise.all([
+  const [readDeleted, unreadDeleted, sessionsDeleted] = await Promise.all([
     prisma.notification.deleteMany({
       where: { read: true, createdAt: { lt: readCutoff } },
     }),
     prisma.notification.deleteMany({
       where: { read: false, createdAt: { lt: unreadCutoff } },
     }),
+    prisma.session.deleteMany({
+      where: { expiresAt: { lt: now } },
+    }),
   ]);
 
   if (readDeleted.count > 0 || unreadDeleted.count > 0) {
-    console.log(`[NotificationCleanup] deleted ${readDeleted.count} read + ${unreadDeleted.count} unread notifications`);
+    console.log(`[Cleanup] deleted ${readDeleted.count} read + ${unreadDeleted.count} unread notifications`);
+  }
+  if (sessionsDeleted.count > 0) {
+    console.log(`[Cleanup] deleted ${sessionsDeleted.count} expired sessions`);
   }
 }
 

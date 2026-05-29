@@ -61,7 +61,7 @@
   - 验证：注册时手机收到验证码（非 console.log），错误验证码无法注册
 
 - [ ] **Sentry 已接入**
-  - 验证：`.env` 中 `SENTRY_DSN` 已填写
+  - 验证：`.env` 中 `SENTRY_DSN` 和 `NEXT_PUBLIC_SENTRY_DSN` 已填写
   - 验证：启动日志包含 `[sentry] initialized`
   - 验证：手动触发 500 错误后 Sentry dashboard 有事件
 
