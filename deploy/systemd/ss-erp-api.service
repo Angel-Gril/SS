@@ -1,0 +1,26 @@
+[Unit]
+Description=SS ERP API Server
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/ss-erp/apps/server
+Environment=NODE_ENV=production
+Environment=RUN_WORKERS=0
+EnvironmentFile=/opt/ss-erp/.env.staging
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ss-erp/apps/server/public
+
+[Install]
+WantedBy=multi-user.target

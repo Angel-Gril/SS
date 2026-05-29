@@ -1,0 +1,25 @@
+[Unit]
+Description=SS ERP Web (Next.js)
+After=network.target ss-erp-api.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/ss-erp/apps/web
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=0.0.0.0
+EnvironmentFile=/opt/ss-erp/.env.staging
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 0.0.0.0
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ss-erp/apps/web/.next/cache
+
+[Install]
+WantedBy=multi-user.target
