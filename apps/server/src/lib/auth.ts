@@ -3,7 +3,34 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { redis } from './redis.js';
 import { prisma } from './prisma.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const DEV_JWT_FALLBACK = 'dev-secret-change-me';
+
+function resolveJwtSecret(): string {
+  const raw = process.env.JWT_SECRET || '';
+  if (!raw || raw === DEV_JWT_FALLBACK) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET 未配置，拒绝签发/校验 token');
+    }
+    if (!resolveJwtSecret.warned) {
+      resolveJwtSecret.warned = true;
+      console.error('[auth] JWT_SECRET 未配置，使用 dev fallback（仅限开发环境）');
+    }
+    return DEV_JWT_FALLBACK;
+  }
+  if (raw.length < 16) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET 长度不足 16 字符，拒绝启动');
+    }
+    if (!resolveJwtSecret.warned) {
+      resolveJwtSecret.warned = true;
+      console.error(`[auth] JWT_SECRET 长度仅 ${raw.length} 字符（推荐 32+），仅限开发环境`);
+    }
+  }
+  return raw;
+}
+resolveJwtSecret.warned = false as boolean;
+
+const JWT_SECRET = resolveJwtSecret();
 const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
 
 export interface JwtPayload {

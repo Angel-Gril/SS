@@ -45,6 +45,7 @@ import { startSoloBillingWorker } from './workers/solo-billing.js';
 import { startScheduledDispatchWorker } from './workers/scheduled-dispatch.js';
 import { startExchangeRateSyncWorker } from './workers/exchange-rate-sync.js';
 import { startFinanceSyncWorker } from './workers/finance-sync.js';
+import { startNotificationCleanupWorker } from './workers/notification-cleanup.js';
 import { providerRoutes } from './routes/provider.js';
 import { ozonLogisticsRoutes, domesticAddressRoutes } from './routes/ozon-logistics.js';
 import { systemConfigRoutes } from './routes/system-config.js';
@@ -53,7 +54,7 @@ import { imageUploadRoutes } from './routes/image-upload.js';
 import { chatRoutes } from './routes/chat.js';
 
 const app = Fastify({
-  bodyLimit: 30 * 1024 * 1024, // 30MB，支持 base64 图片直传（原图 20MB → base64 约 27MB）
+  bodyLimit: 1 * 1024 * 1024, // 默认 1MB，图片路由单独放宽
   logger: {
     level: process.env.LOG_LEVEL || 'info',
     transport:
@@ -67,6 +68,17 @@ await app.register(helmet);
 await app.register(cookie);
 await app.register(cors, {
   origin: function (origin, cb) {
+    // 生产环境：严格匹配 CORS_ORIGIN（支持逗号分隔多域名）
+    if (process.env.NODE_ENV === 'production') {
+      const allowed = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (!origin || allowed.includes(origin)) {
+        cb(null, true);
+      } else {
+        cb(new Error('CORS blocked'), false);
+      }
+      return;
+    }
+    // 开发环境：放行 localhost + 扩展
     if (!origin || origin.startsWith('http://localhost') || origin.startsWith('https://localhost') || origin.startsWith('http://127.0.0.1') || origin.startsWith('https://127.0.0.1') || origin.startsWith('chrome-extension://')) {
       cb(null, true);
     } else {
@@ -76,7 +88,7 @@ await app.register(cors, {
   credentials: true,
 });
 await app.register(rateLimit, {
-  max: 100,
+  max: 200,
   timeWindow: '1 minute',
 });
 
@@ -128,30 +140,38 @@ await app.register(chatRoutes, { prefix: '/api/chat' });
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';
 import { createReadStream, existsSync } from 'fs';
+
+function isSafeFilename(name: string): boolean {
+  return !name.includes('..') && !name.includes('/') && !name.includes('\\') && !name.includes('\0') && /^[\w.\-]+$/.test(name);
+}
+
 app.get('/watermarked/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
-  if (filename.includes('..') || filename.includes('/')) return reply.status(400).send('invalid');
+  if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
   const filepath = join(process.cwd(), 'public', 'watermarked', filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
+  reply.header('Cache-Control', 'public, max-age=86400');
   reply.type('image/jpeg');
   return reply.send(createReadStream(filepath));
 });
 
 app.get('/uploads/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
-  if (filename.includes('..') || filename.includes('/')) return reply.status(400).send('invalid');
+  if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
   const filepath = join(process.cwd(), 'public', 'uploads', filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
   const ext = filename.toLowerCase().split('.').pop();
+  reply.header('Cache-Control', 'public, max-age=86400');
   reply.type(ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
   return reply.send(createReadStream(filepath));
 });
 
 app.get('/resized/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
-  if (filename.includes('..') || filename.includes('/')) return reply.status(400).send('invalid');
+  if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
   const filepath = join(process.cwd(), 'public', 'resized', filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
+  reply.header('Cache-Control', 'public, max-age=86400');
   reply.type('image/jpeg');
   return reply.send(createReadStream(filepath));
 });
@@ -160,6 +180,7 @@ await seedServiceTags();
 await seedSystemConfig();
 
 startWarehouseCommandPollWorker();
+startNotificationCleanupWorker();
 if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
   startProductSyncWorker();
   startOrderSyncWorker();

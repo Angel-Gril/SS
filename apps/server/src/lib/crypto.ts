@@ -4,11 +4,34 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 const TAG_LENGTH = 16;
 
+const DEV_KEY_PLACEHOLDER = '32-byte-base64-key-for-encrypting-shop-credentials';
+
+let warned = false;
+function warnOnce(message: string): void {
+  if (warned) return;
+  warned = true;
+  console.error(`[crypto] ${message}`);
+}
+
 function getKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY || '';
-  if (raw.length < 32) {
-    return crypto.createHash('sha256').update(raw || 'dev-key').digest();
+
+  if (!raw || raw === DEV_KEY_PLACEHOLDER) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY 未配置，拒绝加解密店铺凭证');
+    }
+    warnOnce('ENCRYPTION_KEY 未配置，使用派生的 dev key（仅限开发环境）');
+    return crypto.createHash('sha256').update('dev-key').digest();
   }
+
+  if (raw.length < 32) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY 长度不足 32 字符，拒绝加解密');
+    }
+    warnOnce(`ENCRYPTION_KEY 长度仅 ${raw.length} 字符（推荐 32+），通过 sha256 派生 32 字节使用`);
+    return crypto.createHash('sha256').update(raw).digest();
+  }
+
   return Buffer.from(raw.slice(0, 32), 'utf-8');
 }
 

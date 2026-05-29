@@ -115,7 +115,7 @@ export async function collectRoutes(app: FastifyInstance) {
     return reply.send({ code: 1, msg: '采集成功', data: { id: item.id } });
   });
 
-  app.post('/batch', async (request, reply) => {
+  app.post('/batch', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
     const { userId } = (request as any).user;
     const body = request.body as { items: any[] };
 
@@ -377,7 +377,7 @@ export async function collectRoutes(app: FastifyInstance) {
     return reply.send({ code: 1, msg: '已保存' });
   });
 
-  app.post('/publish-ozon', async (request, reply) => {
+  app.post('/publish-ozon', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
     const { userId } = (request as any).user;
     const body = request.body as {
       ids: string[];

@@ -4,8 +4,17 @@ import { registerSchema, loginSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession, removeSession, authenticate } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
+import { verifyTurnstile } from '../lib/captcha.js';
 
 export async function authRoutes(app: FastifyInstance) {
+  // 路由级频控：注册/登录 10 次/分钟
+  await app.register(import('@fastify/rate-limit'), {
+    max: 10,
+    timeWindow: '1 minute',
+    keyGenerator: (request) => request.ip,
+    errorResponseBuilder: () => ({ code: 0, msg: '请求过于频繁，请稍后再试' }),
+  });
+
   app.post('/register', async (request, reply) => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -13,6 +22,12 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const { phone, password, nickname } = parsed.data;
+    const { turnstileToken } = request.body as { turnstileToken?: string };
+
+    // Turnstile 人机校验
+    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    }
 
     const existing = await prisma.user.findUnique({ where: { phone } });
     if (existing) {
@@ -54,9 +69,22 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const { phone, password } = parsed.data;
+    const { turnstileToken } = request.body as { turnstileToken?: string };
+
+    // 登录失败 5 次后强制 Turnstile
+    const { redis } = await import('../lib/redis.js');
+    const failKey = `login:fail:${request.ip}`;
+    const failCount = Number(await redis.get(failKey) || '0');
+    if (failCount >= 5) {
+      if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+        return reply.status(403).send({ code: 0, msg: '登录失败次数过多，请完成人机验证' });
+      }
+    }
 
     const user = await prisma.user.findUnique({ where: { phone } });
     if (!user) {
+      await redis.incr(failKey);
+      await redis.expire(failKey, 3600);
       return reply.status(401).send({ code: 0, msg: '手机号或密码错误' });
     }
 
@@ -66,6 +94,8 @@ export async function authRoutes(app: FastifyInstance) {
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
+      await redis.incr(failKey);
+      await redis.expire(failKey, 3600);
       return reply.status(401).send({ code: 0, msg: '手机号或密码错误' });
     }
 
@@ -73,6 +103,9 @@ export async function authRoutes(app: FastifyInstance) {
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
+
+    // 登录成功，清除失败计数
+    await redis.del(failKey);
 
     const token = signToken({ userId: user.id, role: user.role });
     await storeSession(user.id, token);

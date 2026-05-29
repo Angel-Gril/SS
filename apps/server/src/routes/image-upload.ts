@@ -9,11 +9,13 @@ import sharp from 'sharp';
 
 const MAX_BYTES = 20 * 1024 * 1024;
 
+const LARGE_BODY_LIMIT = 30 * 1024 * 1024;
+
 export async function imageUploadRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
   // 浏览器直传：前端把文件 base64 编码后放 body.dataUrl，自动转存到当前后端
-  app.post('/upload-base64', async (request, reply) => {
+  app.post('/upload-base64', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
     const body = request.body as { dataUrl: string; filename?: string; shopId?: string };
     if (!body?.dataUrl) return reply.status(400).send({ code: 0, msg: '缺少 dataUrl' });
     const m = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(body.dataUrl);
@@ -34,7 +36,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/upload-from-url', async (request, reply) => {
+  app.post('/upload-from-url', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
     const body = request.body as { url: string; shopId?: string };
     if (!body?.url) return reply.status(400).send({ code: 0, msg: '缺少 url' });
     try {
@@ -53,7 +55,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/upload-watermarked', async (request, reply) => {
+  app.post('/upload-watermarked', { bodyLimit: LARGE_BODY_LIMIT }, async (request, reply) => {
     const body = request.body as {
       sourceUrls: string[];
       itemId: string;
