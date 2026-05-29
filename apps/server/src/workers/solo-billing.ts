@@ -1,8 +1,8 @@
 import { Queue, Worker } from 'bullmq';
+import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 
 const QUEUE_NAME = 'solo-billing-snapshot';
-const connection = { host: '127.0.0.1', port: 6379 };
 
 export const soloBillingQueue = new Queue(QUEUE_NAME, { connection });
 

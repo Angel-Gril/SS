@@ -1,8 +1,7 @@
 import { Worker } from 'bullmq';
+import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 import { createNotification } from '../routes/notification.js';
-
-const connection = { host: '127.0.0.1', port: 6379 };
 
 export function startScheduledDispatchWorker() {
   const worker = new Worker(

@@ -1,12 +1,12 @@
 import { Queue, Worker } from 'bullmq';
 import { redisDisabled } from '../lib/redis.js';
+import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient, OzonFinanceOperation } from '../services/ozon-client.js';
 import { convertAmountToCny } from '../services/exchange-rate.js';
 
 const QUEUE_NAME = 'finance-sync';
-const connection = { host: '127.0.0.1', port: 6379 };
 
 export const financeSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 

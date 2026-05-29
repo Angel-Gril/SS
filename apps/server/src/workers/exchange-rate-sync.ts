@@ -1,7 +1,7 @@
 import { Worker, Queue } from 'bullmq';
+import { connection } from '../lib/bullmq-connection.js';
 import { fetchAndStoreRates } from '../services/exchange-rate.js';
 
-const connection = { host: '127.0.0.1', port: 6379 };
 const QUEUE_NAME = 'exchange-rate-sync';
 
 const queue = new Queue(QUEUE_NAME, { connection });

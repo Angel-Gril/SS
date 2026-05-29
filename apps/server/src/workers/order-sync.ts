@@ -1,5 +1,6 @@
 import { Queue, Worker } from 'bullmq';
 import { redisDisabled } from '../lib/redis.js';
+import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient, type OzonPosting } from '../services/ozon-client.js';
@@ -8,7 +9,6 @@ import { describeSubstatus } from '../lib/ozon-substatus.js';
 import { getRate } from '../services/exchange-rate.js';
 
 const QUEUE_NAME = 'order-sync';
-const connection = { host: '127.0.0.1', port: 6379 };
 
 export const orderSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 

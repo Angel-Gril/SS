@@ -1,12 +1,11 @@
 import { Queue, Worker } from 'bullmq';
 import { redis, redisDisabled } from '../lib/redis.js';
+import { connection } from '../lib/bullmq-connection.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 
 const QUEUE_NAME = 'product-sync';
-
-const connection = { host: '127.0.0.1', port: 6379 };
 
 export const productSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 
