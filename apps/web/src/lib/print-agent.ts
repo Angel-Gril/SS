@@ -80,11 +80,12 @@ export async function printViaBrowser(pdfBlob: Blob): Promise<void> {
 /** 下载面单 PDF Blob */
 export async function fetchLabelBlob(
   orderId: string,
-  token: string,
+  token: string | null,
   apiBase: string,
 ): Promise<Blob> {
   const res = await fetch(`${apiBase}/api/orders/${orderId}/label`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    credentials: 'include',
   });
 
   const contentType = res.headers.get('content-type') || '';
@@ -103,7 +104,7 @@ export async function fetchLabelBlob(
 /** 统一打印入口 */
 export async function printLabel(
   orderId: string,
-  token: string,
+  token: string | null,
   apiBase: string,
   config: PrintAgentConfig,
 ): Promise<void> {

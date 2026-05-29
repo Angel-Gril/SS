@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
-import { api, tokenStore } from '@/lib/api';
+import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { useScannerInput, playBeep } from '@/lib/scanner';
 
@@ -80,16 +80,20 @@ export default function ScanOutPage() {
   async function printLabel(orderId: string) {
     setPrinting(true);
     try {
-      const token = tokenStore.get();
       const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
       const res = await fetch(`${API_BASE}/api/orders/${orderId}/label`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
 
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const data = await res.json();
         toast({ title: '面单下载失败', description: data.msg || '无法获取面单', variant: 'destructive' });
+        setPrinting(false);
+        return;
+      }
+      if (!res.ok) {
+        toast({ title: '面单下载失败', description: `HTTP ${res.status}`, variant: 'destructive' });
         setPrinting(false);
         return;
       }

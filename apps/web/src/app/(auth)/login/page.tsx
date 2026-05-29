@@ -41,11 +41,11 @@ export default function LoginPage() {
   async function onSubmit(data: LoginInput) {
     setLoading(true);
     try {
-      const res = await api.post<{ token: string; user: { role: string } }>('/api/auth/login', data);
-      if (res.code === 1 && res.data?.token) {
-        tokenStore.set(res.data.token);
+      const res = await api.post<{ token?: string; user: { role: string } }>('/api/auth/login', data);
+      if (res.code === 1) {
+        tokenStore.clear();
         // 根据角色跳转到不同默认页面
-        const role = res.data.user?.role;
+        const role = res.data?.user?.role;
         if (role === 'STAFF') {
           router.push('/warehouse');
         } else if (role === 'USER') {

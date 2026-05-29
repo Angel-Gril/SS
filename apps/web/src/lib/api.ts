@@ -27,10 +27,8 @@ export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit = {},
 ): Promise<ApiResponse<T>> {
-  const token = tokenStore.get();
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -57,9 +55,7 @@ export async function apiDownload(
   filename: string,
   options: RequestInit = {},
 ): Promise<{ ok: true } | { ok: false; msg: string }> {
-  const token = tokenStore.get();
   const headers = new Headers(options.headers);
-  if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,

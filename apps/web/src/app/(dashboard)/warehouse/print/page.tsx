@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
-import { api, tokenStore } from '@/lib/api';
+import { api } from '@/lib/api';
 import {
   PrintAgentConfig,
   DEFAULT_PRINT_AGENT_CONFIG,
@@ -133,10 +133,7 @@ export default function PrintPage() {
   }
 
   async function doPrint(orderId: string, postingNumber: string) {
-    const token = tokenStore.get();
-    if (!token) throw new Error('未登录');
-
-    const blob = await fetchLabelBlob(orderId, token, API_BASE);
+    const blob = await fetchLabelBlob(orderId, null, API_BASE);
 
     if (printMode === 'agent' && agentConfig.enabled) {
       const online = await checkAgent(agentConfig.url);

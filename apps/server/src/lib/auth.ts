@@ -93,12 +93,11 @@ export function clearAuthContextCache(userId: string) {
 }
 
 export async function authenticate(request: FastifyRequest, reply: FastifyReply) {
-  const authHeader = request.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
+  const token = extractToken(request);
+  if (!token) {
     return reply.status(401).send({ code: 0, msg: '未登录' });
   }
 
-  const token = authHeader.slice(7);
   try {
     const payload = verifyToken(token);
     const sessionKey = `session:${payload.userId}:${token.slice(-8)}`;
@@ -129,6 +128,18 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
   }
 }
 
+export function extractToken(request: FastifyRequest): string | null {
+  // 优先从 HttpOnly cookie 读取（Web 端）
+  const cookieToken = (request.cookies as Record<string, string | undefined>)?.sserp_token;
+  if (cookieToken) return cookieToken;
+
+  // 回退到 Authorization header（扩展/打印代理）
+  const authHeader = request.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) return authHeader.slice(7);
+
+  return null;
+}
+
 export async function storeSession(userId: string, token: string, ttl?: number) {
   const sessionKey = `session:${userId}:${token.slice(-8)}`;
   const seconds = ttl || Number(process.env.SESSION_TTL_SECONDS) || 604800;
@@ -138,6 +149,26 @@ export async function storeSession(userId: string, token: string, ttl?: number) 
 export async function removeSession(userId: string, token: string) {
   const sessionKey = `session:${userId}:${token.slice(-8)}`;
   await redis.del(sessionKey);
+}
+
+const AUTH_COOKIE_NAME = 'sserp_token';
+const AUTH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  path: '/',
+};
+
+export function setAuthCookie(reply: FastifyReply, token: string, maxAgeSeconds?: number) {
+  const seconds = maxAgeSeconds || Number(process.env.SESSION_TTL_SECONDS) || 604800;
+  reply.setCookie(AUTH_COOKIE_NAME, token, {
+    ...AUTH_COOKIE_OPTIONS,
+    maxAge: seconds,
+  });
+}
+
+export function clearAuthCookie(reply: FastifyReply) {
+  reply.clearCookie(AUTH_COOKIE_NAME, AUTH_COOKIE_OPTIONS);
 }
 
 /**

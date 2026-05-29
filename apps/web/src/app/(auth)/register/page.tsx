@@ -27,9 +27,9 @@ export default function RegisterPage() {
   async function onSubmit(data: RegisterInput) {
     setLoading(true);
     try {
-      const res = await api.post<{ token: string }>('/api/auth/register', data);
-      if (res.code === 1 && res.data?.token) {
-        tokenStore.set(res.data.token);
+      const res = await api.post<{ token?: string }>('/api/auth/register', data);
+      if (res.code === 1) {
+        tokenStore.clear();
         toast({ title: '注册成功，欢迎使用松鼠跨境 ERP' });
         router.push('/');
       } else {

@@ -51,21 +51,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = tokenStore.get();
-    if (!token) {
-      router.replace('/login');
-      return;
-    }
+    let cancelled = false;
 
-    api.get<AuthUser>('/api/user/me').then((res) => {
-      if (res.code === 1 && res.data) {
-        setUser(res.data);
-      } else {
+    api.get<AuthUser>('/api/user/me')
+      .then((res) => {
+        if (cancelled) return;
+        if (res.code === 1 && res.data) {
+          setUser(res.data);
+        } else {
+          tokenStore.clear();
+          router.replace('/login');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
         tokenStore.clear();
         router.replace('/login');
-      }
-      setLoading(false);
-    });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   // 路由权限保护：基于 effectiveRole 判断（USER 切仓库端时按 STAFF 视角拦）

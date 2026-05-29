@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { registerSchema, loginSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
-import { signToken, storeSession, removeSession, authenticate } from '../lib/auth.js';
+import { signToken, storeSession, removeSession, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { verifyTurnstile } from '../lib/captcha.js';
 
@@ -42,6 +42,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const token = signToken({ userId: user.id, role: user.role });
     await storeSession(user.id, token);
+    setAuthCookie(reply, token);
 
     return reply.status(201).send({
       code: 1,
@@ -56,8 +57,6 @@ export async function authRoutes(app: FastifyInstance) {
           status: user.status,
           balance: user.balance.toString(),
         },
-        token,
-        expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
       },
     });
   });
@@ -109,6 +108,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const token = signToken({ userId: user.id, role: user.role });
     await storeSession(user.id, token);
+    setAuthCookie(reply, token);
 
     return reply.send({
       code: 1,
@@ -123,17 +123,15 @@ export async function authRoutes(app: FastifyInstance) {
           status: user.status,
           balance: user.balance.toString(),
         },
-        token,
-        expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
       },
     });
   });
 
   app.post('/logout', { preHandler: [authenticate] }, async (request, reply) => {
-    const token = request.headers.authorization!.slice(7);
     const user = (request as any).user;
-    // session key 按实际登录账号 ID 存的（见 authenticate）
-    await removeSession(user.actorUserId, token);
+    const token = extractToken(request);
+    if (token) await removeSession(user.actorUserId, token);
+    clearAuthCookie(reply);
     return reply.send({ code: 1, msg: '已退出' });
   });
 
