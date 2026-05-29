@@ -152,9 +152,13 @@ export async function removeSession(userId: string, token: string) {
 }
 
 const AUTH_COOKIE_NAME = 'sserp_token';
+const AUTH_COOKIE_SECURE =
+  process.env.AUTH_COOKIE_SECURE !== undefined
+    ? process.env.AUTH_COOKIE_SECURE === 'true'
+    : process.env.NODE_ENV === 'production';
 const AUTH_COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
+  secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
   path: '/',
 };

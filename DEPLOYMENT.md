@@ -64,6 +64,9 @@ ENCRYPTION_KEY="$(openssl rand -base64 32)"
 # JWT 密钥（≥32 字符）
 JWT_SECRET="$(openssl rand -base64 32)"
 
+# Cookie Secure 开关：正式 HTTPS 保持 true；仅 HTTP staging 临时测试可设 false
+AUTH_COOKIE_SECURE="true"
+
 # 首个超级管理员初始化令牌（仅 /setup 首次创建 ADMIN 使用）
 SETUP_TOKEN="$(openssl rand -base64 32)"
 
@@ -74,6 +77,8 @@ NODE_ENV="production"
 ```
 
 首个超级管理员必须通过 `/setup` 引导页创建，不能走公开注册。生产环境缺少 `SETUP_TOKEN` 时，`/api/setup/init` 会拒绝创建管理员，避免公网首个访问者抢占管理员权限。创建完成后，普通用户走 `/register`，员工和额外管理员由已有管理员在后台创建或邀请。
+
+如果暂时只用 `http://公网IP` 做 staging 验收，需要临时设置 `AUTH_COOKIE_SECURE=false`，否则浏览器不会保存生产环境的 Secure cookie，表现为注册/登录成功后仍进不了 ERP。绑定 HTTPS 域名后必须改回 `true` 或删除该变量。
 
 ### 3.2 强烈推荐
 

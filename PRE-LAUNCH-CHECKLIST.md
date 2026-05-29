@@ -17,6 +17,10 @@
 - [ ] **NODE_ENV=production**
   - 验证：`echo $NODE_ENV` 或检查 `.env`
 
+- [ ] **AUTH_COOKIE_SECURE 正确**
+  - 正式 HTTPS：设为 `true` 或留空
+  - 仅 HTTP staging 临时测试：可设为 `false`，上线前必须恢复
+
 - [ ] **SETUP_TOKEN 已配置**
   - 验证：`.env` 中存在高强度随机 `SETUP_TOKEN`
   - 验证：首次打开 `/setup` 创建超级管理员时必须填写初始化令牌
