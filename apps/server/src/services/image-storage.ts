@@ -24,6 +24,7 @@ export interface PresignedUploadResult {
   uploadUrl: string;
   finalUrl: string;
   key: string;
+  objectKey?: string;
   expiresIn: number;
   maxBytes: number;
   headers: Record<string, string>;
@@ -228,12 +229,13 @@ class OssBackend implements ImageStorageBackend {
 
     const hash = createHash('md5').update(buffer).digest('hex').slice(0, 8);
     const ext = filename.split('.').pop() || 'jpg';
-    const key = `${this.config.pathPrefix || 'ss-erp/images'}/${Date.now()}_${hash}.${ext}`;
+    const userId = 'system';
+    const objectKey = generateObjectKey(userId, 'raw', ext);
     const mime = mimeType || guessMime(filename);
 
     await client.send(new PutObjectCommand({
       Bucket: this.config.bucket,
-      Key: key,
+      Key: objectKey,
       Body: buffer,
       ContentType: mime,
     }));
@@ -241,13 +243,13 @@ class OssBackend implements ImageStorageBackend {
     let url: string;
     if (this.config.cdnDomain) {
       const domain = this.config.cdnDomain.replace(/\/+$/, '');
-      url = `${domain.startsWith('http') ? domain : `https://${domain}`}/${key}`;
+      url = `${domain.startsWith('http') ? domain : `https://${domain}`}/${objectKey}`;
     } else {
       const ep = endpoint.replace(/\/+$/, '');
-      url = `${ep}/${this.config.bucket}/${key}`;
+      url = `${ep}/${this.config.bucket}/${objectKey}`;
     }
 
-    return { url, filename: key.split('/').pop() || filename, backend: 'oss' };
+    return { url, filename: objectKey.split('/').pop() || filename, backend: 'oss' };
   }
 
   async getPresignedPutUrl(input: PresignedUploadInput): Promise<PresignedUploadResult> {
@@ -269,17 +271,15 @@ class OssBackend implements ImageStorageBackend {
     });
 
     const ext = extensionFromMime(input.mimeType);
-    const random = randomObjectId();
-    const prefix = normalizeObjectPrefix(this.config.pathPrefix || 'ss-erp/images');
-    const owner = sanitizeObjectSegment(input.ownerId || 'shared');
-    const key = `${prefix}/${owner}/${Date.now()}_${random}.${ext}`;
+    const userId = input.ownerId || 'shared';
+    const objectKey = generateObjectKey(userId, 'raw', ext);
     const expiresIn = 300;
 
     const uploadUrl = await getSignedUrl(
       client,
       new PutObjectCommand({
         Bucket: this.config.bucket,
-        Key: key,
+        Key: objectKey,
         ContentType: input.mimeType,
         ContentLength: input.sizeBytes,
       }),
@@ -289,16 +289,17 @@ class OssBackend implements ImageStorageBackend {
     let finalUrl: string;
     if (this.config.cdnDomain) {
       const domain = this.config.cdnDomain.replace(/\/+$/, '');
-      finalUrl = `${domain.startsWith('http') ? domain : `https://${domain}`}/${key}`;
+      finalUrl = `${domain.startsWith('http') ? domain : `https://${domain}`}/${objectKey}`;
     } else {
       const ep = endpoint.replace(/\/+$/, '');
-      finalUrl = `${ep}/${this.config.bucket}/${key}`;
+      finalUrl = `${ep}/${this.config.bucket}/${objectKey}`;
     }
 
     return {
       uploadUrl,
       finalUrl,
-      key,
+      key: finalUrl,
+      objectKey,
       expiresIn,
       maxBytes: input.maxBytes,
       headers: { 'Content-Type': input.mimeType },
@@ -310,7 +311,7 @@ class OssBackend implements ImageStorageBackend {
 
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
-import { createHash, randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 
 const LOCAL_UPLOAD_DIR = join(process.cwd(), 'public', 'uploads');
 
@@ -416,18 +417,10 @@ function extensionFromMime(mimeType: string): string {
   }
 }
 
-function randomObjectId(): string {
-  return randomUUID().replace(/-/g, '').slice(0, 16);
-}
-
-function normalizeObjectPrefix(prefix: string): string {
-  return prefix
-    .split('/')
-    .map((part) => sanitizeObjectSegment(part))
-    .filter(Boolean)
-    .join('/') || 'ss-erp/images';
-}
-
-function sanitizeObjectSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 80);
+function generateObjectKey(userId: string, category: 'raw' | 'watermarked' | 'thumbnail', ext: string): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const hash = createHash('md5').update(`${userId}-${Date.now()}-${Math.random()}`).digest('hex').slice(0, 12);
+  return `${userId}/${category}/${yyyy}/${mm}/${hash}.${ext}`;
 }

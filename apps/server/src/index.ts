@@ -56,7 +56,8 @@ import { imageUploadRoutes } from './routes/image-upload.js';
 import { chatRoutes } from './routes/chat.js';
 
 const app = Fastify({
-  bodyLimit: 1 * 1024 * 1024, // 默认 1MB，图片路由单独放宽
+  bodyLimit: 1 * 1024 * 1024,
+  trustProxy: process.env.NODE_ENV === 'production',
   logger: {
     level: process.env.LOG_LEVEL || 'info',
     transport:
@@ -215,3 +216,20 @@ try {
   app.log.error(err);
   process.exit(1);
 }
+
+// Graceful shutdown
+async function shutdown(signal: string) {
+  console.log(`[shutdown] received ${signal}, closing gracefully...`);
+  try {
+    await app.close();
+    const { shutdownAllWorkers } = await import('./lib/worker-registry.js');
+    await shutdownAllWorkers(30000);
+    process.exit(0);
+  } catch (err) {
+    console.error('[shutdown] error during shutdown:', err);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

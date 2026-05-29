@@ -1,5 +1,6 @@
 import { Queue, Worker } from 'bullmq';
 import { connection } from '../lib/bullmq-connection.js';
+import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 
 const QUEUE_NAME = 'solo-billing-snapshot';
@@ -75,5 +76,6 @@ export function startSoloBillingWorker() {
     console.error(`[SoloBilling] Job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }

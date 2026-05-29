@@ -1,6 +1,7 @@
 import { Queue, Worker } from 'bullmq';
 import { redisDisabled } from '../lib/redis.js';
 import { connection } from '../lib/bullmq-connection.js';
+import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient, OzonFinanceOperation } from '../services/ozon-client.js';
@@ -161,6 +162,7 @@ export function startFinanceSyncWorker() {
     console.error(`[FinanceSync] Job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }
 

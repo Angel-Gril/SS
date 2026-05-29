@@ -1,5 +1,6 @@
 import { Worker } from 'bullmq';
 import { connection } from '../lib/bullmq-connection.js';
+import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { createNotification } from '../routes/notification.js';
 
@@ -50,5 +51,6 @@ export function startScheduledDispatchWorker() {
     console.error(`[ScheduledDispatch] Job ${job?.id} failed:`, err.message);
   });
 
+  registerWorker(worker);
   return worker;
 }

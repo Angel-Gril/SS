@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { registerTimer } from '../lib/worker-registry.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient, OzonApiError } from '../services/ozon-client.js';
 import { createNotification } from '../routes/notification.js';
@@ -19,6 +20,7 @@ export function startWarehouseCommandPollWorker() {
     }
   };
   timer = setTimeout(tick, POLL_INTERVAL_MS);
+  registerTimer(stopWarehouseCommandPollWorker);
   console.log(`[WarehouseCommandPoll] started, interval ${POLL_INTERVAL_MS}ms`);
 }
 

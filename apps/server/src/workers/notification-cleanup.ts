@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { registerTimer } from '../lib/worker-registry.js';
 
 const TICK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const READ_RETENTION_DAYS = 90;
@@ -36,8 +37,8 @@ export function startNotificationCleanupWorker() {
       timer = setTimeout(tick, TICK_INTERVAL_MS);
     }
   };
-  // 启动后等 5 分钟再跑首次，避免冷启动占用资源
   timer = setTimeout(tick, 5 * 60 * 1000);
+  registerTimer(stopNotificationCleanupWorker);
   console.log(`[NotificationCleanup] started, retention: read=${READ_RETENTION_DAYS}d, unread=${UNREAD_RETENTION_DAYS}d`);
 }
 

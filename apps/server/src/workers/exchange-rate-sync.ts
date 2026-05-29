@@ -1,5 +1,6 @@
 import { Worker, Queue } from 'bullmq';
 import { connection } from '../lib/bullmq-connection.js';
+import { registerWorker } from '../lib/worker-registry.js';
 import { fetchAndStoreRates } from '../services/exchange-rate.js';
 
 const QUEUE_NAME = 'exchange-rate-sync';
@@ -35,5 +36,6 @@ export function startExchangeRateSyncWorker() {
     console.log(`[ExchangeRateSync] Job ${job.id} completed:`, job.returnvalue);
   });
 
+  registerWorker(worker);
   return worker;
 }

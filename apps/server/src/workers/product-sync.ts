@@ -1,6 +1,7 @@
 import { Queue, Worker } from 'bullmq';
 import { redis, redisDisabled } from '../lib/redis.js';
 import { connection } from '../lib/bullmq-connection.js';
+import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
@@ -190,6 +191,7 @@ export function startProductSyncWorker() {
     console.log(`[ProductSync] Job ${job.id} completed:`, result);
   });
 
+  registerWorker(worker);
   return worker;
 }
 
