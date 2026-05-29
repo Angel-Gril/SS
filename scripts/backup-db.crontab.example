@@ -1,0 +1,23 @@
+# SS ERP 数据库备份 cron 配置示例
+# 安装方式：
+#   1. 创建环境变量文件 /etc/ss-erp-backup.env（参考下方内容）
+#   2. 创建目录：sudo mkdir -p /var/backups/ss-erp /var/log/ss-erp
+#   3. 将下面的 cron 行加入 root crontab：sudo crontab -e
+#
+# ─── /etc/ss-erp-backup.env ───
+# BACKUP_DB_URL="postgresql://ss_erp_user:password@localhost:5432/ss_erp"
+# BACKUP_LOCAL_DIR="/var/backups/ss-erp"
+# BACKUP_KEEP_DAYS="7"
+# BACKUP_S3_BUCKET="ss-erp-backup"
+# BACKUP_S3_ENDPOINT="https://oss-cn-hangzhou.aliyuncs.com"
+# BACKUP_S3_ACCESS_KEY_ID="LTAI..."
+# BACKUP_S3_SECRET_ACCESS_KEY="..."
+# BACKUP_S3_PREFIX="db/"
+# BACKUP_S3_REGION="oss-cn-hangzhou"
+
+# ─── crontab 行 ───
+# 每天凌晨 3:00 执行备份（按服务器本地时区）
+0 3 * * * . /etc/ss-erp-backup.env && bash /opt/ss-erp/scripts/backup-db.sh >> /var/log/ss-erp/backup.log 2>&1
+
+# 每周日 4:00 额外做一次全量备份（可选，用于异地冗余）
+# 0 4 * * 0 . /etc/ss-erp-backup.env && bash /opt/ss-erp/scripts/backup-db.sh >> /var/log/ss-erp/backup-weekly.log 2>&1

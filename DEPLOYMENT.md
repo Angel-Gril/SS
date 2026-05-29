@@ -264,7 +264,51 @@ curl https://app.yourdomain.com/health
 ```
 
 ### 8.2 数据库备份
-TODO：详细脚本见 `scripts/backup-db.sh`（P1 #8 任务，待实现）。生产环境建议直接用云 RDS 自带 PITR + 每周 logical dump 到独立 OSS 桶。
+
+脚本位于 `scripts/backup-db.sh`，配套恢复脚本 `scripts/restore-db.sh`。
+
+**部署步骤：**
+```bash
+# 1. 创建环境变量文件（参考 scripts/backup-db.crontab.example）
+sudo tee /etc/ss-erp-backup.env << 'EOF'
+BACKUP_DB_URL="postgresql://ss_erp_user:password@localhost:5432/ss_erp"
+BACKUP_LOCAL_DIR="/var/backups/ss-erp"
+BACKUP_KEEP_DAYS="7"
+BACKUP_S3_BUCKET="ss-erp-backup"
+BACKUP_S3_ENDPOINT="https://oss-cn-hangzhou.aliyuncs.com"
+BACKUP_S3_ACCESS_KEY_ID="..."
+BACKUP_S3_SECRET_ACCESS_KEY="..."
+BACKUP_S3_PREFIX="db/"
+BACKUP_S3_REGION="oss-cn-hangzhou"
+EOF
+sudo chmod 600 /etc/ss-erp-backup.env
+sudo mkdir -p /var/backups/ss-erp /var/log/ss-erp
+
+# 2. 手动测试一次
+sudo bash -c 'source /etc/ss-erp-backup.env && bash /opt/ss-erp/scripts/backup-db.sh'
+
+# 3. 加入 root cron（每天凌晨 3:00，按服务器本地时区）
+(sudo crontab -l 2>/dev/null; echo '0 3 * * * . /etc/ss-erp-backup.env && bash /opt/ss-erp/scripts/backup-db.sh >> /var/log/ss-erp/backup.log 2>&1') | sudo crontab -
+```
+
+**恢复：**
+脚本生成的备份包含 `pg_dump --clean --if-exists`，恢复时会先删除并重建 dump 内的对象。执行前必须停止 API/worker，并确认 `BACKUP_DB_URL` 指向正确目标库。
+
+```bash
+source /etc/ss-erp-backup.env
+# 列出本地备份
+bash scripts/restore-db.sh
+# 从本地恢复
+bash scripts/restore-db.sh ss_erp_20260529_030000.sql.gz
+# 从 S3 恢复
+bash scripts/restore-db.sh --from-s3 db/ss_erp_20260529_030000.sql.gz
+```
+
+**后期修改：**
+- 改频率：`sudo crontab -e` 改时间表达式
+- 改保留天数：改 `/etc/ss-erp-backup.env` 的 `BACKUP_KEEP_DAYS`
+- 切桶：改 `BACKUP_S3_*` 变量
+- OSS 端保留策略：在 OSS 控制台设置桶生命周期规则（如 90 天自动删除）
 
 ### 8.3 监控指标
 - API 响应时间：`/health` 延迟
