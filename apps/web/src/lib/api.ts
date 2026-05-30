@@ -23,6 +23,17 @@ export const tokenStore = {
   },
 };
 
+function redirectToLoginForCurrentPath() {
+  if (typeof window === 'undefined') return;
+
+  const path = window.location.pathname;
+  const isAdminArea = path.startsWith('/admin');
+  const loginPath = isAdminArea ? '/admin/login' : '/login';
+  if (path !== loginPath && !path.startsWith('/login') && !path.startsWith('/admin/login')) {
+    window.location.href = loginPath;
+  }
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -38,9 +49,7 @@ export async function apiFetch<T = unknown>(
 
   if (res.status === 401) {
     tokenStore.clear();
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      window.location.href = '/login';
-    }
+    redirectToLoginForCurrentPath();
   }
 
   try {
@@ -65,9 +74,7 @@ export async function apiDownload(
 
   if (res.status === 401) {
     tokenStore.clear();
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      window.location.href = '/login';
-    }
+    redirectToLoginForCurrentPath();
     return { ok: false, msg: '未登录' };
   }
 

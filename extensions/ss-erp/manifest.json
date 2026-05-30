@@ -40,7 +40,8 @@
       "https://localhost/*",
       "http://127.0.0.1/*",
       "https://127.0.0.1/*",
-      "https://*.ss-erp.com/*"
+      "https://*.ss-erp.com/*",
+      "https://staging.ss-erp.com/*"
     ]
   },
   "content_scripts": [

@@ -1,6 +1,17 @@
 // Import collect/analytics background module
 try { importScripts('collect-background.js'); } catch (e) { console.warn('[SS ERP] collect-background load error:', e); }
 
+// Import runtime mode detection (cloud/local)
+try { importScripts('../shared/erp-adapter/runtime-mode.js'); } catch (e) { console.warn('[SS ERP] runtime-mode load error:', e); }
+
+// Import adapter layer (runtime-config → local/cloud adapter → unified client)
+try {
+  importScripts('../shared/adapters/runtime-config.js');
+  importScripts('../shared/adapters/local-adapter.js');
+  importScripts('../shared/adapters/cloud-adapter.js');
+  importScripts('../shared/adapters/erp-client.js');
+} catch (e) { console.warn('[SS ERP] adapter layer load error:', e); }
+
 const OZON_CALC_SYNC_CHANNEL = 'ozon-calc:sync-config';
 const OZON_CALC_ERP_QUEUE_KEY = 'ozon-calc:erp-queue';
 const OZON_CALC_CAPTURE_ENTRIES_KEY = 'ozon-calc:capture-har-entries';
@@ -76,6 +87,18 @@ try {
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[ozon-calc] installed');
+  if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !self.SS_ERP_RUNTIME) return;
+  if (
+    changes[OZON_CALC_ERP_ENDPOINT_KEY]
+    || changes[OZON_CALC_ERP_TOKEN_KEY]
+    || changes.ss_erp_connection
+  ) {
+    self.SS_ERP_RUNTIME.syncRuntimeMode();
+  }
 });
 
 const LEGACY_STORAGE_PREFIX = String.fromCharCode(113, 101, 104, 101, 108, 112) + '-clone';
@@ -508,6 +531,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       [OZON_CALC_ERP_ENDPOINT_KEY]: endpoint,
       [OZON_CALC_ERP_TOKEN_KEY]: token,
     }).then(() => {
+      if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
       sendResponse({ ok: true, endpoint, hasToken: Boolean(token) });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

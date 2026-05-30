@@ -43,6 +43,10 @@ function isPathForbidden(pathname: string, role: string): boolean {
   return false;
 }
 
+function getLoginPath(pathname: string): string {
+  return pathname.startsWith('/admin') ? '/admin/login' : '/login';
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -60,13 +64,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           setUser(res.data);
         } else {
           tokenStore.clear();
-          router.replace('/login');
+          router.replace(getLoginPath(pathname));
         }
       })
       .catch(() => {
         if (cancelled) return;
         tokenStore.clear();
-        router.replace('/login');
+        router.replace(getLoginPath(pathname));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -75,7 +79,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, pathname]);
 
   // 路由权限保护：基于 effectiveRole 判断（USER 切仓库端时按 STAFF 视角拦）
   useEffect(() => {
