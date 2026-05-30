@@ -9,9 +9,9 @@ Group=deploy
 WorkingDirectory=/opt/ss-erp/apps/web
 Environment=NODE_ENV=production
 Environment=PORT=3000
-Environment=HOSTNAME=0.0.0.0
+Environment=HOSTNAME=127.0.0.1
 EnvironmentFile=/opt/ss-erp/.env.staging
-ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 0.0.0.0
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
