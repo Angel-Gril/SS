@@ -106,4 +106,23 @@ if [ "$DELETED" -gt 0 ]; then
   echo "[backup] 已清理 ${DELETED} 个超过 ${BACKUP_KEEP_DAYS} 天的旧备份"
 fi
 
+# 写入备份状态 JSON（供后台 API 读取）
+STATUS_FILE="${BACKUP_LOCAL_DIR}/backup-status.json"
+REMOTE_UPLOADED="false"
+REMOTE_KEY=""
+if [ "$S3_ENABLED" -eq 1 ]; then
+  REMOTE_UPLOADED="true"
+  REMOTE_KEY="${S3_KEY}"
+fi
+
+cat > "$STATUS_FILE" <<EOJSON
+{
+  "lastBackupAt": "$(date -Iseconds)",
+  "lastLocalFile": "${FILENAME}",
+  "lastLocalSize": "${SIZE}",
+  "remoteUploaded": ${REMOTE_UPLOADED},
+  "lastRemoteKey": "${REMOTE_KEY}"
+}
+EOJSON
+
 echo "[backup] $(date '+%F %T') 完成"

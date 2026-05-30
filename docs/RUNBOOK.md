@@ -137,3 +137,73 @@ cd /opt/ss-erp/apps/server
 npx prisma migrate status
 npx prisma migrate resolve --applied <migration-name>  # 标记已应用
 ```
+
+## 维护模式
+
+### 开启
+
+超管后台 → 系统设置 → 维护模式 → 开启
+
+或通过 API：
+```bash
+curl -X PUT http://localhost:3001/api/admin/system-config/maintenance_enabled \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value":"true"}'
+```
+
+### 行为
+
+- 普通用户写接口返回 503 + `{"maintenance": true, "msg": "..."}`
+- 读接口（GET/HEAD/OPTIONS）正常通过
+- `/api/admin/*` 路径不受影响（管理员可继续操作）
+- 白名单路径：/health, /ready, /api/setup/status, /api/auth/login, /api/user/me, /api/app-version/check
+
+### 关闭
+
+超管后台 → 系统设置 → 维护模式 → 关闭（5秒内缓存过期生效）
+
+## 数据保留策略
+
+通过超管后台 → 系统设置 → 数据保留 配置。
+
+默认 `retention_cleanup_dry_run=true`（只统计不删除）。确认日志输出的统计数据合理后再关闭 dry-run。
+
+Worker 每天执行一次，清理对象：
+- 过期 session
+- 已读/未读通知（按配置天数）
+- 成功/失败 SyncJob（按配置天数）
+- 临时图片（watermarked/resized/uploads/tmp）
+
+**不会被自动删除的数据**：采集商品、订单、物流单号、成本快照。
+
+## 发布流程（推荐）
+
+```bash
+# 1. 开启维护模式
+# 2. 执行数据库备份
+./scripts/backup-db.sh
+# 3. git pull && pnpm install
+# 4. pnpm --filter server db:migrate
+# 5. pnpm build
+# 6. systemctl restart ss-erp-api ss-erp-worker ss-erp-web
+# 7. curl http://localhost:3001/ready
+# 8. 关闭维护模式
+```
+
+## 环境变量：图片存储
+
+云端模式下图片存储通过环境变量配置（不存数据库）：
+
+```env
+IMAGE_STORAGE_BACKEND=oss
+OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
+OSS_BUCKET=ss-erp-images
+OSS_ACCESS_KEY_ID=LTAI...
+OSS_ACCESS_KEY_SECRET=<secret>
+OSS_REGION=cn-hangzhou
+OSS_CDN_DOMAIN=https://cdn.example.com
+OZON_CDN_RELAY_URL=https://worker.example.com
+OSS_FALLBACK_TO_CDN=true
+LOCAL_BASE_URL=http://localhost:3001
+```

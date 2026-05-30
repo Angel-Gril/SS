@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Save, Settings as SettingsIcon, AlertCircle } from 'lucide-react';
+import { Loader2, Save, Settings as SettingsIcon, AlertCircle, HardDrive, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -20,6 +20,16 @@ interface SystemConfig {
   updatedAt: string;
 }
 
+interface BackupStatus {
+  available: boolean;
+  message?: string;
+  lastBackupAt?: string;
+  lastLocalFile?: string;
+  lastLocalSize?: string;
+  remoteUploaded?: boolean;
+  lastRemoteKey?: string;
+}
+
 const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
   retention: '数据保留',
@@ -30,8 +40,11 @@ const GROUP_LABELS: Record<string, string> = {
   general: '通用',
 };
 
+const GROUP_ORDER = ['maintenance', 'feature', 'retention', 'backup', 'version', 'randomize', 'general'];
+
 export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);
+  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -40,16 +53,17 @@ export default function AdminSettingsPage() {
 
   async function fetchConfigs() {
     setLoading(true);
-    const res = await api.get<SystemConfig[]>('/api/admin/system-config');
-    if (res.code === 1 && res.data) {
-      // 过滤掉已被独立页面接管的 group
-      const filtered = res.data.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
+    const [configRes, backupRes] = await Promise.all([
+      api.get<SystemConfig[]>('/api/admin/system-config'),
+      api.get<BackupStatus>('/api/admin/ops/backup-status'),
+    ]);
+    if (configRes.code === 1 && configRes.data) {
+      const filtered = configRes.data.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
       setConfigs(filtered);
       const map: Record<string, string> = {};
       filtered.forEach((c) => { map[c.key] = c.value; });
       setEditing(map);
-    } else if (res.code === 0) {
-      // 尝试初始化默认配置
+    } else if (configRes.code === 0) {
       await api.post('/api/admin/system-config/seed', {});
       const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
       if (res2.code === 1 && res2.data) {
@@ -60,6 +74,7 @@ export default function AdminSettingsPage() {
         setEditing(map);
       }
     }
+    if (backupRes.code === 1 && backupRes.data) setBackupStatus(backupRes.data);
     setLoading(false);
   }
 
@@ -87,6 +102,12 @@ export default function AdminSettingsPage() {
   configs.forEach((c) => {
     if (!grouped[c.group]) grouped[c.group] = [];
     grouped[c.group]!.push(c);
+  });
+
+  const sortedGroups = Object.keys(grouped).sort((a, b) => {
+    const ai = GROUP_ORDER.indexOf(a);
+    const bi = GROUP_ORDER.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   });
 
   if (loading) {
@@ -120,64 +141,108 @@ export default function AdminSettingsPage() {
         </Card>
       )}
 
-      {Object.entries(grouped).map(([group, items]) => (
-        <Card key={group}>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
-              <span className="text-sm text-muted-foreground">{items.length} 项</span>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {items.map((cfg) => (
-              <div key={cfg.key} className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1">
-                    <Label className="font-medium">{cfg.label || cfg.key}</Label>
-                    <code className="ml-2 text-xs text-muted-foreground">{cfg.key}</code>
-                    {cfg.description && (
-                      <p className="text-xs text-muted-foreground mt-1">{cfg.description}</p>
+      {sortedGroups.map((group) => {
+        const items = grouped[group]!;
+        return (
+          <div key={group} className="space-y-4">
+            {group === 'backup' && backupStatus && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">最近备份状态</span>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {!backupStatus.available ? (
+                    <p className="text-sm text-muted-foreground">{backupStatus.message || '备份状态不可用'}</p>
+                  ) : (
+                    <div className="grid gap-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">最近备份时间</span>
+                        <span>{backupStatus.lastBackupAt ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN') : '—'}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">本地文件</span>
+                        <code className="text-xs">{backupStatus.lastLocalFile || '—'}</code>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">文件大小</span>
+                        <span>{backupStatus.lastLocalSize || '—'}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">远程上传</span>
+                        <span className="flex items-center gap-1">
+                          {backupStatus.remoteUploaded
+                            ? <><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> 已上传</>
+                            : <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> 未上传</>
+                          }
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
+                  <span className="text-sm text-muted-foreground">{items.length} 项</span>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                {items.map((cfg) => (
+                  <div key={cfg.key} className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <Label className="font-medium">{cfg.label || cfg.key}</Label>
+                        <code className="ml-2 text-xs text-muted-foreground">{cfg.key}</code>
+                        {cfg.description && (
+                          <p className="text-xs text-muted-foreground mt-1">{cfg.description}</p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => saveConfig(cfg.key)}
+                        disabled={savingKey === cfg.key || editing[cfg.key] === cfg.value}
+                      >
+                        {savingKey === cfg.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                        <span className="ml-1">保存</span>
+                      </Button>
+                    </div>
+
+                    {editing[cfg.key] === 'true' || editing[cfg.key] === 'false' ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditing({ ...editing, [cfg.key]: editing[cfg.key] === 'true' ? 'false' : 'true' })}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            editing[cfg.key] === 'true' ? 'bg-primary' : 'bg-muted'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                              editing[cfg.key] === 'true' ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                        <span className="text-sm">{editing[cfg.key] === 'true' ? '已启用' : '已禁用'}</span>
+                      </div>
+                    ) : (
+                      <Input
+                        value={editing[cfg.key] || ''}
+                        onChange={(e) => setEditing({ ...editing, [cfg.key]: e.target.value })}
+                        placeholder={cfg.description || ''}
+                      />
                     )}
                   </div>
-                  <Button
-                    size="sm"
-                    onClick={() => saveConfig(cfg.key)}
-                    disabled={savingKey === cfg.key || editing[cfg.key] === cfg.value}
-                  >
-                    {savingKey === cfg.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                    <span className="ml-1">保存</span>
-                  </Button>
-                </div>
-
-                {editing[cfg.key] === 'true' || editing[cfg.key] === 'false' ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEditing({ ...editing, [cfg.key]: editing[cfg.key] === 'true' ? 'false' : 'true' })}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        editing[cfg.key] === 'true' ? 'bg-primary' : 'bg-muted'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
-                          editing[cfg.key] === 'true' ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                    <span className="text-sm">{editing[cfg.key] === 'true' ? '已启用' : '已禁用'}</span>
-                  </div>
-                ) : (
-                  <Input
-                    value={editing[cfg.key] || ''}
-                    onChange={(e) => setEditing({ ...editing, [cfg.key]: e.target.value })}
-                    placeholder={cfg.description || ''}
-                  />
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      ))}
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        );
+      })}
     </div>
   );
 }

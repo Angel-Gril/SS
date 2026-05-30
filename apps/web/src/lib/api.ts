@@ -28,6 +28,7 @@ export interface ApiResponse<T = unknown> {
   code: number;
   msg: string;
   data?: T;
+  maintenance?: boolean;
 }
 
 const TOKEN_KEY = 'sserp.token';
@@ -72,6 +73,18 @@ export async function apiFetch<T = unknown>(
   if (res.status === 401) {
     tokenStore.clear();
     redirectToLoginForCurrentPath();
+  }
+
+  if (res.status === 503) {
+    try {
+      const data = await res.json();
+      if (data?.maintenance) {
+        return { code: 0, msg: data.msg || '系统维护中，请稍后再试', maintenance: true } as ApiResponse<T>;
+      }
+      return { code: 0, msg: data?.msg || '服务暂不可用' } as ApiResponse<T>;
+    } catch {
+      return { code: 0, msg: '系统维护中，请稍后再试' } as ApiResponse<T>;
+    }
   }
 
   try {
