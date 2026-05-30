@@ -10,7 +10,7 @@ const createAnnouncementSchema = z.object({
   priority: z.enum(['NORMAL', 'IMPORTANT', 'CRITICAL']).default('NORMAL'),
   targetRole: z.enum(['ALL', 'USER', 'ADMIN', 'STAFF']).default('ALL'),
   attachments: z.array(z.object({
-    name: z.string(),
+    name: z.string().min(1).max(120),
     url: z.string().url().refine((value) => {
       try {
         const protocol = new URL(value).protocol;
@@ -19,8 +19,9 @@ const createAnnouncementSchema = z.object({
         return false;
       }
     }, '附件链接必须是 http(s) URL'),
-    size: z.number().optional(),
-  })).optional(),
+    size: z.number().int().nonnegative().max(20 * 1024 * 1024).optional(),
+    mime: z.string().max(120).optional(),
+  })).max(10).optional(),
   forcePopup: z.boolean().default(false),
   publishedAt: z.string().datetime().optional(),
   expiresAt: z.string().datetime().optional(),

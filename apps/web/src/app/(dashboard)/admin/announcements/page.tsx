@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { RichTextEditor } from '@/components/rich-text-editor';
+import { AnnouncementAttachments, type Attachment } from '@/components/announcement-attachments';
 
 interface Announcement {
   id: string;
@@ -36,6 +38,7 @@ interface FormState {
   targetRole: 'ALL' | 'USER' | 'ADMIN' | 'STAFF';
   forcePopup: boolean;
   expiresAt: string;
+  attachments: Attachment[];
 }
 
 const emptyForm: FormState = {
@@ -46,6 +49,7 @@ const emptyForm: FormState = {
   targetRole: 'ALL',
   forcePopup: false,
   expiresAt: '',
+  attachments: [],
 };
 
 export default function AdminAnnouncementsPage() {
@@ -81,6 +85,7 @@ export default function AdminAnnouncementsPage() {
       targetRole: item.targetRole,
       forcePopup: item.forcePopup,
       expiresAt: item.expiresAt ? item.expiresAt.slice(0, 16) : '',
+      attachments: Array.isArray(item.attachments) ? item.attachments : [],
     });
     setShowForm(true);
   }
@@ -178,12 +183,12 @@ export default function AdminAnnouncementsPage() {
               <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} maxLength={200} />
             </div>
             <div>
-              <Label>内容（支持 HTML）</Label>
-              <textarea
+              <Label>内容</Label>
+              <RichTextEditor
                 value={form.content}
-                onChange={(e) => setForm({ ...form, content: e.target.value })}
-                className="flex min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                placeholder="支持 HTML 富文本，例如 <p>段落</p> <a href='...'>链接</a>"
+                onChange={(html) => setForm({ ...form, content: html })}
+                placeholder="支持加粗、列表、链接、图片粘贴等富文本格式"
+                minHeight={240}
               />
             </div>
             <div className="grid grid-cols-3 gap-3">
@@ -221,6 +226,10 @@ export default function AdminAnnouncementsPage() {
               <Input type="datetime-local" value={form.expiresAt}
                      onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} />
             </div>
+            <AnnouncementAttachments
+              value={form.attachments}
+              onChange={(next) => setForm({ ...form, attachments: next })}
+            />
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.forcePopup}
                      onChange={(e) => setForm({ ...form, forcePopup: e.target.checked })} />

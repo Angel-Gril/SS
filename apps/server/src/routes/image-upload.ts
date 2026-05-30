@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { authenticate } from '../lib/auth.js';
+import { authenticate, requireRole } from '../lib/auth.js';
 import { getStorageBackend } from '../services/image-storage.js';
 import { applyWatermark, type WatermarkConfig } from '../services/watermark.js';
 import { readFile, writeFile, mkdir } from 'fs/promises';
@@ -12,6 +12,33 @@ const MAX_BYTES = 20 * 1024 * 1024;
 const LARGE_BODY_LIMIT = 30 * 1024 * 1024;
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
+const ALLOWED_ATTACHMENT_MIME = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/zip',
+  'application/x-zip-compressed',
+  'text/plain',
+]);
+
+const ATTACHMENT_EXT_MAP: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/zip': 'zip',
+  'application/x-zip-compressed': 'zip',
+  'text/plain': 'txt',
+};
 
 export async function imageUploadRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -61,7 +88,10 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     if (!body?.dataUrl) return reply.status(400).send({ code: 0, msg: '缺少 dataUrl' });
     const m = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(body.dataUrl);
     if (!m) return reply.status(400).send({ code: 0, msg: 'dataUrl 格式错误，需为 data:image/...;base64,...' });
-    const mime = m[1]!;
+    const mime = normalizeMime(m[1]!);
+    if (!ALLOWED_MIME.has(mime)) {
+      return reply.status(400).send({ code: 0, msg: `不支持的图片类型: ${mime}` });
+    }
     const buf = Buffer.from(m[2]!, 'base64');
     if (buf.length > MAX_BYTES) {
       return reply.status(413).send({ code: 0, msg: `图片超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
@@ -72,6 +102,31 @@ export async function imageUploadRoutes(app: FastifyInstance) {
       const backend = await getStorageBackend(body.shopId);
       const result = await backend.uploadBuffer(buf, filename, mime);
       return reply.send({ code: 1, msg: 'ok', data: result });
+    } catch (e: any) {
+      return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
+    }
+  });
+
+  // 通用附件上传：支持图片、PDF、Office、ZIP、纯文本（用于公告附件等）
+  app.post('/upload-attachment', { bodyLimit: LARGE_BODY_LIMIT, preHandler: [requireRole('ADMIN')] }, async (request, reply) => {
+    const body = request.body as { dataUrl: string; filename?: string };
+    if (!body?.dataUrl) return reply.status(400).send({ code: 0, msg: '缺少 dataUrl' });
+    const m = /^data:([a-z0-9/+.\-]+);base64,(.+)$/i.exec(body.dataUrl);
+    if (!m) return reply.status(400).send({ code: 0, msg: 'dataUrl 格式错误' });
+    const mime = m[1]!.toLowerCase();
+    if (!ALLOWED_ATTACHMENT_MIME.has(mime)) {
+      return reply.status(400).send({ code: 0, msg: `不支持的文件类型: ${mime}` });
+    }
+    const buf = Buffer.from(m[2]!, 'base64');
+    if (buf.length > MAX_BYTES) {
+      return reply.status(413).send({ code: 0, msg: `文件超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
+    }
+    const ext = ATTACHMENT_EXT_MAP[mime] || 'bin';
+    const safeName = (body.filename || `attachment_${Date.now()}.${ext}`).replace(/[^\w.\-]/g, '_').slice(0, 120);
+    try {
+      const backend = await getStorageBackend();
+      const result = await backend.uploadBuffer(buf, safeName, mime);
+      return reply.send({ code: 1, msg: 'ok', data: { url: result.url, filename: safeName, size: buf.length, mime } });
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
     }
