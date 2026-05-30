@@ -8,6 +8,9 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 export const metadata: Metadata = {
   title: '松鼠跨境 ERP',
   description: '跨境电商多平台管理系统',
+  icons: {
+    icon: '/favicon.ico',
+  },
   other: {
     'ss-erp-app': 'true',
   },
