@@ -49,6 +49,7 @@ import { chatRoutes } from './routes/chat.js';
 import { appVersionRoutes } from './routes/app-version.js';
 import { adminAuthRoutes } from './routes/admin-auth.js';
 import { extensionConfigRoutes } from './routes/extension-config.js';
+import { isAllowedCorsOrigin } from './lib/cors.js';
 
 const app = Fastify({
   bodyLimit: 1 * 1024 * 1024,
@@ -66,21 +67,10 @@ await app.register(helmet);
 await app.register(cookie);
 await app.register(cors, {
   origin: function (origin, cb) {
-    // 生产环境：严格匹配 CORS_ORIGIN（支持逗号分隔多域名）
-    if (process.env.NODE_ENV === 'production') {
-      const allowed = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
-      if (!origin || allowed.includes(origin)) {
-        cb(null, true);
-      } else {
-        cb(new Error('CORS blocked'), false);
-      }
-      return;
-    }
-    // 开发环境：放行 localhost + 扩展
-    if (!origin || origin.startsWith('http://localhost') || origin.startsWith('https://localhost') || origin.startsWith('http://127.0.0.1') || origin.startsWith('https://127.0.0.1') || origin.startsWith('chrome-extension://')) {
+    if (isAllowedCorsOrigin(origin)) {
       cb(null, true);
     } else {
-      cb(null, process.env.CORS_ORIGIN || 'http://localhost:3000');
+      cb(new Error('CORS blocked'), false);
     }
   },
   credentials: true,
