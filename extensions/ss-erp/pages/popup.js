@@ -119,9 +119,6 @@
   // Sync handlers
   function getSelectedShopId(callback) {
     chrome.storage.local.get(['ss_erp_connection', 'ss_erp_selected_shop'], function (result) {
-      var shopId = result.ss_erp_selected_shop;
-      if (shopId) return callback(shopId);
-
       var conn = result.ss_erp_connection || {};
       var baseUrl = (conn.baseUrl || '').replace(/\/+$/, '');
       var token = conn.token || '';
@@ -132,14 +129,24 @@
       }).then(function (r) { return r.json(); })
         .then(function (data) {
           if (data.code === 1 && data.data && data.data.length > 0) {
-            var ozonShop = data.data.find(function (s) { return s.platform === 'ozon'; });
-            var id = ozonShop ? ozonShop.id : data.data[0].id;
+            var shops = data.data;
+            var ozonShops = shops.filter(function (s) { return String(s.platform || '').toUpperCase() === 'OZON'; });
+            var candidates = ozonShops.length ? ozonShops : shops;
+            var cachedShopId = result.ss_erp_selected_shop;
+            var cachedShop = candidates.find(function (s) { return s.id === cachedShopId; });
+            if (cachedShop) return callback(cachedShop.id);
+
+            var id = candidates[0].id;
             chrome.storage.local.set({ ss_erp_selected_shop: id });
             callback(id);
           } else {
+            chrome.storage.local.remove(['ss_erp_selected_shop']);
             callback(null);
           }
-        }).catch(function () { callback(null); });
+        }).catch(function () {
+          chrome.storage.local.remove(['ss_erp_selected_shop']);
+          callback(null);
+        });
     });
   }
 
@@ -245,9 +252,13 @@
             opt.textContent = s.name + (s.clientId ? ' (' + s.clientId + ')' : '');
             cookieShopSelect.appendChild(opt);
           });
-          if (result.ss_erp_cookie_shop) {
-            cookieShopSelect.value = result.ss_erp_cookie_shop;
-            loadShopAuthInfo(result.ss_erp_cookie_shop);
+          var cachedShopId = result.ss_erp_cookie_shop;
+          var cachedExists = ozonShops.some(function (s) { return s.id === cachedShopId; });
+          if (cachedShopId && cachedExists) {
+            cookieShopSelect.value = cachedShopId;
+            loadShopAuthInfo(cachedShopId);
+          } else if (cachedShopId) {
+            chrome.storage.local.remove(['ss_erp_cookie_shop']);
           }
         }).catch(function () {});
     });
