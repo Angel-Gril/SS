@@ -70,7 +70,7 @@ await app.register(cors, {
     if (isAllowedCorsOrigin(origin)) {
       cb(null, true);
     } else {
-      cb(new Error('CORS blocked'), false);
+      cb(null, false);
     }
   },
   credentials: true,
