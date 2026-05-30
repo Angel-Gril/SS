@@ -8,6 +8,8 @@ const nextConfig = {
     NEXT_PUBLIC_RUNTIME_MODE: process.env.NEXT_PUBLIC_RUNTIME_MODE,
     NEXT_PUBLIC_TURNSTILE_SITE_KEY: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY,
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
+    NEXT_PUBLIC_ADMIN_HOSTNAME: process.env.NEXT_PUBLIC_ADMIN_HOSTNAME,
+    NEXT_PUBLIC_USER_HOSTNAME: process.env.NEXT_PUBLIC_USER_HOSTNAME,
   },
   experimental: {
     optimizePackageImports: ['lucide-react'],

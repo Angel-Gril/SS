@@ -49,6 +49,7 @@ import { chatRoutes } from './routes/chat.js';
 import { appVersionRoutes } from './routes/app-version.js';
 import { adminAuthRoutes } from './routes/admin-auth.js';
 import { extensionConfigRoutes } from './routes/extension-config.js';
+import { announcementRoutes } from './routes/announcements.js';
 import { isAllowedCorsOrigin } from './lib/cors.js';
 
 const app = Fastify({
@@ -160,6 +161,7 @@ await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
 await app.register(extensionConfigRoutes, { prefix: '/api/extension' });
+await app.register(announcementRoutes, { prefix: '/api/announcements' });
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';

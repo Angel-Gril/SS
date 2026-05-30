@@ -16,6 +16,7 @@ import {
   Image,
   Settings,
   MessageCircle,
+  Megaphone,
   User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -131,12 +132,14 @@ const navigation: NavItem[] = [
     ],
   },
   { label: '帮助中心', icon: HelpCircle, href: '/help' },
+  { label: '公告', icon: Megaphone, href: '/announcements' },
   {
     label: '系统管理',
     icon: Settings,
     roles: ['ADMIN'],
     children: [
       { label: '系统设置', href: '/admin/settings' },
+      { label: '公告管理', href: '/admin/announcements' },
       { label: '服务标签设置', href: '/admin/service-tags' },
       { label: '费用模板', href: '/admin/fee-templates' },
       { label: '用户管理', href: '/admin/users' },

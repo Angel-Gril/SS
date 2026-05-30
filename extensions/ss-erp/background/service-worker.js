@@ -519,6 +519,76 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'ss-erp:query-collect-status') {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY]).then((result) => {
+      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
+      if (!baseEndpoint) {
+        sendResponse({ ok: false, msg: '未配置 ERP' });
+        return;
+      }
+      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
+      if (!token) {
+        sendResponse({ ok: false, msg: '未配置 ERP Token' });
+        return;
+      }
+      const sku = String(message.sku || '').trim();
+      if (!sku) {
+        sendResponse({ ok: false, msg: '缺少 SKU' });
+        return;
+      }
+      const queryUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect/status?sku=' + encodeURIComponent(sku);
+      return fetch(queryUrl, {
+        method: 'GET',
+        headers: { authorization: 'Bearer ' + token },
+      }).then((response) => response.text().then((text) => {
+        if (!response.ok) {
+          sendResponse({ ok: false, msg: 'HTTP ' + response.status });
+          return;
+        }
+        let parsed = {};
+        try { parsed = JSON.parse(text); } catch (e) {}
+        if (parsed.code === 1 && parsed.data) {
+          sendResponse({ ok: true, collected: !!parsed.data.collected, shopName: parsed.data.shopName || null });
+        } else {
+          sendResponse({ ok: true, collected: false });
+        }
+      }));
+    }).catch((error) => {
+      sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:collect-product') {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY]).then((result) => {
+      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
+      if (!baseEndpoint) throw new Error('未配置 ERP');
+      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
+      if (!token) throw new Error('未配置 ERP Token');
+      const collectUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect';
+      return fetch(collectUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json;charset=utf-8', authorization: 'Bearer ' + token },
+        body: JSON.stringify({
+          title: 'OZON SKU ' + message.sku,
+          sourceUrl: message.url,
+          sourcePlatform: 'ozon',
+          sku: message.sku,
+          sourceProductId: message.sku,
+        }),
+      }).then((response) => response.text().then((text) => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        let parsed = {};
+        try { parsed = JSON.parse(text); } catch (e) {}
+        if (parsed.code === 0) throw new Error(parsed.msg || '采集失败');
+        sendResponse({ ok: true });
+      }));
+    }).catch((error) => {
+      sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === 'ozon-calc:erp-endpoint-save') {
     const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
     const endpoint = normalizeEndpoint(payload.endpoint);

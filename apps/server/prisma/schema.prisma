@@ -91,6 +91,8 @@ model User {
   supplyGoods  SupplyGoods[]
   account      UserAccount?
   userServiceTags UserServiceTag[]
+  createdAnnouncements Announcement[] @relation("AnnouncementCreator")
+  announcementReads    AnnouncementRead[]
 
   @@index([parentId])
   @@map("users")
@@ -984,4 +986,62 @@ model AppVersion {
   @@unique([platform, version])
   @@index([platform, isActive])
   @@map("app_versions")
+}
+
+// ─── 公告系统 ───
+
+enum AnnouncementType {
+  NOTICE
+  UPDATE
+  ALERT
+}
+
+enum AnnouncementPriority {
+  NORMAL
+  IMPORTANT
+  CRITICAL
+}
+
+enum AnnouncementTargetRole {
+  ALL
+  USER
+  ADMIN
+  STAFF
+}
+
+model Announcement {
+  id          String                 @id @default(cuid())
+  title       String
+  content     String                 // 富文本 HTML
+  type        AnnouncementType       @default(NOTICE)
+  priority    AnnouncementPriority   @default(NORMAL)
+  targetRole  AnnouncementTargetRole @default(ALL) @map("target_role")
+  attachments Json?                  // [{name, url, size}]
+  forcePopup  Boolean                @default(false) @map("force_popup")
+  publishedAt DateTime?              @map("published_at")
+  expiresAt   DateTime?              @map("expires_at")
+  createdBy   String                 @map("created_by")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+
+  creator     User                   @relation("AnnouncementCreator", fields: [createdBy], references: [id])
+  reads       AnnouncementRead[]
+
+  @@index([publishedAt])
+  @@index([targetRole, publishedAt])
+  @@map("announcements")
+}
+
+model AnnouncementRead {
+  id             String       @id @default(cuid())
+  announcementId String       @map("announcement_id")
+  userId         String       @map("user_id")
+  readAt         DateTime     @default(now()) @map("read_at")
+
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([userId, readAt])
+  @@map("announcement_reads")
 }

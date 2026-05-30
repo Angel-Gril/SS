@@ -2,14 +2,31 @@
 // zip 解压后 junction 会断裂，此脚本在 start.bat 中自动运行修复
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname);
 
+function resolveInsideRoot(value) {
+  const resolved = path.resolve(value);
+  const relative = path.relative(ROOT, resolved);
+  if (relative && (relative.startsWith('..') || path.isAbsolute(relative))) {
+    throw new Error(`Path escapes package root: ${value}`);
+  }
+  return resolved;
+}
+
 function mkJunction(link, target) {
-  try { fs.rmSync(link, { recursive: true, force: true }); } catch {}
+  let linkPath;
+  let targetPath;
   try {
-    execSync(`cmd /c mklink /J "${link}" "${target}"`, { stdio: 'ignore' });
+    linkPath = resolveInsideRoot(link);
+    targetPath = resolveInsideRoot(target);
+  } catch {
+    return;
+  }
+  try { fs.rmSync(linkPath, { recursive: true, force: true }); } catch {}
+  try {
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.symlinkSync(targetPath, linkPath, 'junction');
   } catch {}
 }
 

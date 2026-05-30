@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { Menu, Bell, LogOut, User, Moon, Sun, ArrowLeftRight, Key } from 'lucide-react';
+import { Menu, Bell, LogOut, User, Moon, Sun, ArrowLeftRight, Key, Megaphone } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -32,13 +32,18 @@ export function Topbar({ user, collapsed, onToggle }: TopbarProps) {
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
+  const [announcementUnread, setAnnouncementUnread] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
   const [recentNotifs, setRecentNotifs] = useState<NotifItem[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadUnreadCount();
-    const interval = setInterval(loadUnreadCount, 30000);
+    loadAnnouncementUnread();
+    const interval = setInterval(() => {
+      loadUnreadCount();
+      loadAnnouncementUnread();
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -55,6 +60,11 @@ export function Topbar({ user, collapsed, onToggle }: TopbarProps) {
   async function loadUnreadCount() {
     const res = await api.get<{ count: number }>('/api/notifications/unread-count');
     if (res.code === 1 && res.data) setUnreadCount(res.data.count);
+  }
+
+  async function loadAnnouncementUnread() {
+    const res = await api.get<{ count: number }>('/api/announcements/unread-count');
+    if (res.code === 1 && res.data) setAnnouncementUnread(res.data.count);
   }
 
   async function handleBellClick() {
@@ -96,6 +106,17 @@ export function Topbar({ user, collapsed, onToggle }: TopbarProps) {
             </Button>
           }
         />
+
+        <Link href="/announcements" title="公告">
+          <Button variant="ghost" size="icon" className="relative">
+            <Megaphone className="h-4.5 w-4.5" />
+            {announcementUnread > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold px-1">
+                {announcementUnread > 99 ? '99+' : announcementUnread}
+              </span>
+            )}
+          </Button>
+        </Link>
 
         <div className="relative" ref={dropdownRef}>
           <Button variant="ghost" size="icon" className="relative" onClick={handleBellClick}>

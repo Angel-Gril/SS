@@ -112,6 +112,22 @@
     },
     {
       "matches": [
+        "https://www.ozon.ru/*",
+        "https://www.ozon.kz/*",
+        "https://www.ozon.by/*"
+      ],
+      "exclude_matches": [
+        "https://*.ozon.ru/product/*",
+        "https://*.ozon.kz/product/*",
+        "https://*.ozon.by/product/*"
+      ],
+      "js": [
+        "content/ozon-list-overlay.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://trade.1688.com/*",
         "https://mobile.pinduoduo.com/*"
       ],

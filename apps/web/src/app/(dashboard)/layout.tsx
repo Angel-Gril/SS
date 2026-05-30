@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { api, tokenStore } from '@/lib/api';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
+import { AnnouncementPopup } from '@/components/announcement-popup';
 import type { AuthUser } from 'shared';
 
 /** USER 切到 warehouse 端时，按 STAFF 视角渲染（菜单/拦截/默认页都共用 STAFF 规则）*/
@@ -44,7 +45,9 @@ function isPathForbidden(pathname: string, role: string): boolean {
 }
 
 function getLoginPath(pathname: string): string {
-  return pathname.startsWith('/admin') ? '/admin/login' : '/login';
+  if (pathname.startsWith('/admin')) return '/admin/login';
+  if (pathname === '/') return '/landing';
+  return '/login';
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -113,6 +116,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         />
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
+      <AnnouncementPopup />
     </div>
   );
 }

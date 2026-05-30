@@ -32,6 +32,40 @@ jobs:
       - name: Typecheck web
         run: pnpm --filter web typecheck
 
+  security:
+    runs-on: ubuntu-latest
+    needs: typecheck
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Report-only until the planned Next 15 migration removes the current
+      # Next 14 advisories without mixing a framework upgrade into feature PRs.
+      - name: Audit production dependencies
+        run: pnpm audit --audit-level=high --prod
+        continue-on-error: true
+
+      - name: Semgrep static analysis
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/javascript
+            p/typescript
+            p/nodejs
+            p/owasp-top-ten
+            p/secrets
+        continue-on-error: true
+
   build:
     runs-on: ubuntu-latest
     needs: typecheck

@@ -45,6 +45,28 @@ function getOzonPublishErrorLogContext(e: any): Record<string, unknown> {
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
+  // 扩展查询：某 SKU 是否已被当前用户采集（用于 ozon.ru 列表页 overlay）
+  app.get('/status', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const query = request.query as { sku?: string };
+    const sku = String(query.sku || '').trim();
+    if (!sku) {
+      return reply.status(400).send({ code: 0, msg: '缺少 sku 参数' });
+    }
+    const goods = await prisma.supplyGoods.findFirst({
+      where: { userId, sku },
+      select: { id: true, title: true, status: true },
+    });
+    return reply.send({
+      code: 1,
+      data: {
+        collected: !!goods,
+        shopName: goods?.title?.slice(0, 30) || null,
+        status: goods?.status || null,
+      },
+    });
+  });
+
   app.get('/randomize-config', async () => {
     const cfg = await getRandomizeConfig();
     return {
