@@ -127,14 +127,19 @@
         "http://localhost/*",
         "https://localhost/*",
         "http://127.0.0.1/*",
-        "https://127.0.0.1/*",
-        "http://120.55.61.146/*",
-        "https://*.ss-erp.com/*",
-        "https://staging.ss-erp.com/*"
+        "https://127.0.0.1/*"
       ],
       "js": [
         "shared/config-bridge/sync-schema.js",
-        "content/calculator-sync-bridge.js",
+        "content/calculator-sync-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
         "content/erp-collect-bridge.js"
       ],
       "run_at": "document_start"
