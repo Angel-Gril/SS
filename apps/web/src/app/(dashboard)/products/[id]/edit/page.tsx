@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, apiUrl } from '@/lib/api';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
 
 interface ProductDetail {
@@ -56,8 +56,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'description', label: '描述信息' },
   { key: 'media', label: '多媒体' },
 ];
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
 export default function ProductEditPage() {
   const params = useParams();
@@ -434,7 +432,7 @@ export default function ProductEditPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {editImages.map((img, i) => (
                 <div key={i} className="relative group border rounded-md overflow-hidden aspect-square bg-muted">
-                  <img src={img.startsWith('/') ? `${API_BASE}${img}` : img} alt={`图${i + 1}`} className="w-full h-full object-cover" />
+                  <img src={img.startsWith('/') ? apiUrl(img) : img} alt={`图${i + 1}`} className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
                     {i > 0 && (
                       <button onClick={() => moveImage(i, -1)} className="text-white bg-white/20 rounded p-1 text-xs hover:bg-white/40">前移</button>

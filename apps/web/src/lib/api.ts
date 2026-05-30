@@ -1,6 +1,28 @@
 'use client';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
+const LOCAL_API_BASE = 'http://localhost:3001';
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+export function getApiBase(): string {
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (configured) return trimTrailingSlash(configured);
+
+  if (typeof window !== 'undefined') {
+    const { hostname, origin } = window.location;
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return origin;
+    }
+  }
+
+  return LOCAL_API_BASE;
+}
+
+export function apiUrl(path: string): string {
+  return `${getApiBase()}${path}`;
+}
 
 export interface ApiResponse<T = unknown> {
   code: number;
@@ -41,7 +63,7 @@ export async function apiFetch<T = unknown>(
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...options,
     headers,
     credentials: 'include',
@@ -66,7 +88,7 @@ export async function apiDownload(
 ): Promise<{ ok: true } | { ok: false; msg: string }> {
   const headers = new Headers(options.headers);
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...options,
     headers,
     credentials: 'include',

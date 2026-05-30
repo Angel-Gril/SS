@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, apiUrl } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { useScannerInput, playBeep } from '@/lib/scanner';
 
@@ -80,8 +80,7 @@ export default function ScanOutPage() {
   async function printLabel(orderId: string) {
     setPrinting(true);
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
-      const res = await fetch(`${API_BASE}/api/orders/${orderId}/label`, {
+      const res = await fetch(apiUrl(`/api/orders/${orderId}/label`), {
         credentials: 'include',
       });
 

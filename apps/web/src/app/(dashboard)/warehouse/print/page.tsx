@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, getApiBase } from '@/lib/api';
 import {
   PrintAgentConfig,
   DEFAULT_PRINT_AGENT_CONFIG,
@@ -48,8 +48,6 @@ interface OrderForPrint {
 }
 
 type PrintMode = 'browser' | 'agent';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
 export default function PrintPage() {
   const [barcode, setBarcode] = useState('');
@@ -133,7 +131,7 @@ export default function PrintPage() {
   }
 
   async function doPrint(orderId: string, postingNumber: string) {
-    const blob = await fetchLabelBlob(orderId, null, API_BASE);
+    const blob = await fetchLabelBlob(orderId, null, getApiBase());
 
     if (printMode === 'agent' && agentConfig.enabled) {
       const online = await checkAgent(agentConfig.url);

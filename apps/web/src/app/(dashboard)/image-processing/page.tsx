@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, apiUrl } from '@/lib/api';
 
 interface WatermarkTemplate {
   id: string;
@@ -35,8 +35,6 @@ const POSITION_OPTIONS = [
   { value: 'center', label: '居中' },
   { value: 'tile', label: '平铺' },
 ];
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
 type Tab = 'watermark' | 'resize';
 
@@ -173,7 +171,7 @@ function WatermarkPanel() {
     const res = await api.post<{ previewUrl: string }>('/api/images/preview-watermark', { url: previewSourceUrl, config });
     setPreviewLoading(false);
     if (res.code === 1 && res.data) {
-      setPreviewUrl(`${API_BASE}${res.data.previewUrl}`);
+      setPreviewUrl(apiUrl(res.data.previewUrl));
     } else {
       toast({ title: '预览失败', description: res.msg, variant: 'destructive' });
     }
@@ -440,7 +438,7 @@ function ResizePanel() {
                     {r.resized && (
                       <div className="flex items-center gap-2">
                         <span>本地:</span>
-                        <a href={`${API_BASE}${r.resized}`} target="_blank" rel="noreferrer" className="text-primary truncate">{r.resized}</a>
+                        <a href={apiUrl(r.resized)} target="_blank" rel="noreferrer" className="text-primary truncate">{r.resized}</a>
                       </div>
                     )}
                     {r.uploaded && (

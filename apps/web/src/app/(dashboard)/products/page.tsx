@@ -19,7 +19,7 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, apiUrl } from '@/lib/api';
 import { formatOrderAmount } from '@/lib/utils';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
 
@@ -822,8 +822,6 @@ const EDIT_TABS: { key: EditTabKey; label: string }[] = [
   { key: 'description', label: '描述信息' },
   { key: 'media', label: '多媒体' },
 ];
-const EDIT_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
-
 function ProductDetailDialog({ productId, onClose, onUpdated, warehouses: parentWarehouses }: {
   productId: string | null;
   onClose: () => void;
@@ -1171,7 +1169,7 @@ function ProductDetailDialog({ productId, onClose, onUpdated, warehouses: parent
                   <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
                     {editImages.map((img, i) => (
                       <div key={i} className="relative group border rounded-md overflow-hidden aspect-square bg-muted">
-                        <img src={img.startsWith('/') ? `${EDIT_API_BASE}${img}` : img} alt={`图${i + 1}`} className="w-full h-full object-cover" />
+                        <img src={img.startsWith('/') ? apiUrl(img) : img} alt={`图${i + 1}`} className="w-full h-full object-cover" />
                         <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
                           {i > 0 && <button onClick={() => moveImage(i, -1)} className="text-white bg-white/20 rounded p-1 text-xs hover:bg-white/40">前移</button>}
                           {i < editImages.length - 1 && <button onClick={() => moveImage(i, 1)} className="text-white bg-white/20 rounded p-1 text-xs hover:bg-white/40">后移</button>}
