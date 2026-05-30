@@ -74,7 +74,10 @@ export async function resolveImageUrls(
   let backend: ImageStorageBackend | null = null;
   let backendError: string | null = null;
 
-  for (const raw of images) {
+  // 过滤空字符串，防止透传给 OZON 导致 invalid URL
+  const validImages = images.filter((raw) => String(raw || '').trim().length > 0);
+
+  for (const raw of validImages) {
     let img = String(raw || '').trim();
     const localPath = localPathFromUrl(img);
     if (localPath) img = localPath;

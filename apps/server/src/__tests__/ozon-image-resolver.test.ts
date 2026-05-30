@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeOzonPublishImageUrl } from '../services/ozon-image-resolver.js';
+import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
 
 describe('ozon image resolver', () => {
   it('normalizes public image URLs before publishing', () => {
@@ -17,5 +17,11 @@ describe('ozon image resolver', () => {
     expect(() => normalizeOzonPublishImageUrl('')).toThrow('图片 URL 为空');
     expect(() => normalizeOzonPublishImageUrl('data:image/png;base64,abc')).toThrow('必须是 http/https');
     expect(() => normalizeOzonPublishImageUrl('/uploads/a.jpg')).toThrow('格式非法');
+  });
+
+  it('drops blank image entries while resolving publish images', async () => {
+    await expect(resolveImageUrls(['', '  ', 'https://cdn.example.com/a.jpg'], 'shop-1')).resolves.toEqual([
+      'https://cdn.example.com/a.jpg',
+    ]);
   });
 });
