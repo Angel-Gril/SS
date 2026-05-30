@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { authenticate, requireRole } from '../lib/auth.js';
+import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 
 const upsertSchema = z.object({
@@ -10,6 +10,51 @@ const upsertSchema = z.object({
   group: z.string().default('general'),
   description: z.string().optional(),
 });
+
+const SECRET_FIELDS = ['accessKeySecret', 'secretAccessKey', 'password', 'apiKey', 'token'];
+const SECRET_KEYS = new Set(['oss_config']);
+
+function maskSecretValue(key: string, value: string): string {
+  if (!SECRET_KEYS.has(key) || !value) return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object') {
+      for (const field of SECRET_FIELDS) {
+        if (parsed[field] && typeof parsed[field] === 'string' && parsed[field].length > 0) {
+          parsed[field] = '***MASKED***';
+        }
+      }
+      return JSON.stringify(parsed);
+    }
+  } catch {
+    // 非 JSON 字符串：整体掩码（保留前 4 后 4）
+    if (value.length > 12) {
+      return `${value.slice(0, 4)}***${value.slice(-4)}`;
+    }
+    return '***MASKED***';
+  }
+  return value;
+}
+
+// 用户提交时如果某 secret 字段是 ***MASKED*** 占位符，保留原值
+function mergeMaskedValue(key: string, newValue: string, oldValue: string): string {
+  if (!SECRET_KEYS.has(key) || !oldValue) return newValue;
+  try {
+    const next = JSON.parse(newValue);
+    const prev = JSON.parse(oldValue);
+    if (next && prev && typeof next === 'object' && typeof prev === 'object') {
+      for (const field of SECRET_FIELDS) {
+        if (next[field] === '***MASKED***' && prev[field]) {
+          next[field] = prev[field];
+        }
+      }
+      return JSON.stringify(next);
+    }
+  } catch {
+    // ignore
+  }
+  return newValue;
+}
 
 const DEFAULTS: Array<{ key: string; value: string; label: string; group: string; description: string }> = [
   {
@@ -46,6 +91,48 @@ const DEFAULTS: Array<{ key: string; value: string; label: string; group: string
     label: '客服聊天功能',
     group: 'feature',
     description: '是否启用 OZON 店铺客服聊天集成',
+  },
+  {
+    key: 'security_login_max_attempts',
+    value: '5',
+    label: '登录失败锁定阈值',
+    group: 'security',
+    description: '同一 IP 登录失败次数达到该值后强制要求 Turnstile 人机验证（云端模式）',
+  },
+  {
+    key: 'security_admin_ip_whitelist',
+    value: '',
+    label: '管理员 IP 白名单',
+    group: 'security',
+    description: '逗号分隔的 CIDR 列表（如 1.2.3.4/32,10.0.0.0/8）。留空表示不限制。生效需重启服务',
+  },
+  {
+    key: 'security_session_ttl_hours',
+    value: '168',
+    label: '会话有效期（小时）',
+    group: 'security',
+    description: '默认 168（7天）。修改后只对新发放的 token 生效',
+  },
+  {
+    key: 'security_admin_session_ttl_hours',
+    value: '24',
+    label: '管理员会话有效期（小时）',
+    group: 'security',
+    description: '管理员独立登录入口的 token 有效期，默认 24 小时',
+  },
+  {
+    key: 'security_audit_log_enabled',
+    value: 'false',
+    label: '审计日志（计划中）',
+    group: 'security',
+    description: '记录管理员/超管的写操作。Phase B5 任务，启用前需先建表',
+  },
+  {
+    key: 'integration_oss_fallback_to_cdn',
+    value: 'true',
+    label: 'OSS 失败自动降级到 OZON CDN',
+    group: 'integration',
+    description: '云端模式下，OSS 上传失败时是否自动尝试 OZON CDN（需店铺已同步 cookie）',
   },
   {
     key: 'feature_image_translate',
@@ -107,20 +194,21 @@ export async function seedSystemConfig() {
 
 export async function systemConfigRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
-  app.addHook('preHandler', requireRole('ADMIN'));
+  app.addHook('preHandler', requireSuperAdmin);
 
   app.get('/', async (request, reply) => {
     const { group } = request.query as { group?: string };
     const where = group ? { group } : undefined;
     const configs = await prisma.systemConfig.findMany({ where, orderBy: [{ group: 'asc' }, { key: 'asc' }] });
-    return reply.send({ code: 1, msg: 'ok', data: configs });
+    const masked = configs.map((c) => ({ ...c, value: maskSecretValue(c.key, c.value) }));
+    return reply.send({ code: 1, msg: 'ok', data: masked });
   });
 
   app.get('/:key', async (request, reply) => {
     const { key } = request.params as { key: string };
     const config = await prisma.systemConfig.findUnique({ where: { key } });
     if (!config) return reply.status(404).send({ code: 0, msg: '配置不存在' });
-    return reply.send({ code: 1, msg: 'ok', data: config });
+    return reply.send({ code: 1, msg: 'ok', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
 
   app.put('/:key', async (request, reply) => {
@@ -129,12 +217,14 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     if (typeof body?.value !== 'string') {
       return reply.status(400).send({ code: 0, msg: '缺少 value 字段' });
     }
+    const existing = await prisma.systemConfig.findUnique({ where: { key } });
+    const finalValue = mergeMaskedValue(key, body.value, existing?.value || '');
     const config = await prisma.systemConfig.upsert({
       where: { key },
-      create: { key, value: body.value, group: 'general' },
-      update: { value: body.value },
+      create: { key, value: finalValue, group: 'general' },
+      update: { value: finalValue },
     });
-    return reply.send({ code: 1, msg: '已保存', data: config });
+    return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
 
   app.post('/', async (request, reply) => {
@@ -142,12 +232,14 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
+    const existing = await prisma.systemConfig.findUnique({ where: { key: parsed.data.key } });
+    const finalValue = mergeMaskedValue(parsed.data.key, parsed.data.value, existing?.value || '');
     const config = await prisma.systemConfig.upsert({
       where: { key: parsed.data.key },
-      create: parsed.data,
-      update: parsed.data,
+      create: { ...parsed.data, value: finalValue },
+      update: { ...parsed.data, value: finalValue },
     });
-    return reply.send({ code: 1, msg: '已保存', data: config });
+    return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
 
   app.delete('/:key', async (request, reply) => {

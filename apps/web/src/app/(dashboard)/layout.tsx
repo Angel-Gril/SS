@@ -23,8 +23,11 @@ function getDefaultPath(role: string): string {
 }
 
 /** 检查当前路径是否对该角色禁止访问 */
-function isPathForbidden(pathname: string, role: string): boolean {
-  if (role === 'ADMIN') return false; // ADMIN 可访问所有
+function isPathForbidden(pathname: string, role: string, isSuperAdmin?: boolean): boolean {
+  if (role === 'ADMIN') {
+    const superAdminOnly = ['/admin/settings', '/admin/integrations', '/admin/security', '/admin/ops'];
+    return superAdminOnly.some((path) => pathname === path || pathname.startsWith(`${path}/`)) && !isSuperAdmin;
+  }
 
   if (role === 'STAFF') {
     // STAFF 只能访问仓储相关、仓库指令和帮助；用精确匹配避免 /warehouse 误吞 /warehouse-commands
@@ -88,7 +91,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     if (!user) return;
     const effRole = getEffectiveRole(user);
-    if (isPathForbidden(pathname, effRole)) {
+    if (isPathForbidden(pathname, effRole, user.isSuperAdmin)) {
       router.replace(getDefaultPath(effRole));
     }
   }, [user, pathname, router]);
@@ -107,7 +110,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen flex bg-background">
-      <Sidebar collapsed={collapsed} pathname={pathname} role={effRole} />
+      <Sidebar collapsed={collapsed} pathname={pathname} role={effRole} isSuperAdmin={user.isSuperAdmin} />
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar
           user={user}

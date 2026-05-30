@@ -93,7 +93,7 @@ export async function resolveImageUrls(
       }
       if (!backend) {
         throw new Error(
-          `本地水印图无法上传到 OZON：${backendError}。请在 /admin/settings 切换图片存储后端为 ozon-cdn 或 oss，并通过浏览器扩展同步该店铺的 seller cookie 与 company_id`,
+          `本地水印图无法上传到 OZON：${backendError}。请在 /admin/integrations 切换图片存储后端为 ozon-cdn 或 oss，并通过浏览器扩展同步该店铺的 seller cookie 与 company_id`,
         );
       }
       const localPath = join(process.cwd(), 'public', img.replace(/^\//, ''));

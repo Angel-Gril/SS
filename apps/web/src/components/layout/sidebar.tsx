@@ -28,7 +28,7 @@ interface NavItem {
   label: string;
   icon: React.ElementType;
   href?: string;
-  children?: { label: string; href: string }[];
+  children?: { label: string; href: string; superAdminOnly?: boolean }[];
   /** 允许访问的角色列表，不设置则所有角色可见 */
   roles?: UserRole[];
 }
@@ -138,7 +138,10 @@ const navigation: NavItem[] = [
     icon: Settings,
     roles: ['ADMIN'],
     children: [
-      { label: '系统设置', href: '/admin/settings' },
+      { label: '系统设置', href: '/admin/settings', superAdminOnly: true },
+      { label: '接口与集成', href: '/admin/integrations', superAdminOnly: true },
+      { label: '安全设置', href: '/admin/security', superAdminOnly: true },
+      { label: '运维状态', href: '/admin/ops', superAdminOnly: true },
       { label: '公告管理', href: '/admin/announcements' },
       { label: '服务标签设置', href: '/admin/service-tags' },
       { label: '费用模板', href: '/admin/fee-templates' },
@@ -179,13 +182,21 @@ interface SidebarProps {
   collapsed: boolean;
   pathname: string;
   role: UserRole;
+  isSuperAdmin?: boolean;
 }
 
-export function Sidebar({ collapsed, pathname, role }: SidebarProps) {
+export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: SidebarProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const visibleNav = navigation.filter(
-    (item) => !item.roles || item.roles.includes(role),
-  );
+  const visibleNav = navigation
+    .filter((item) => !item.roles || item.roles.includes(role))
+    .map((item) => {
+      if (!item.children) return item;
+      return {
+        ...item,
+        children: item.children.filter((child) => !child.superAdminOnly || isSuperAdmin),
+      };
+    })
+    .filter((item) => item.href || item.children?.length);
 
   // 当侧边栏折叠时，鼠标悬停自动展开
   const shouldExpand = collapsed && isHovered;

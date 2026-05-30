@@ -21,91 +21,10 @@ interface SystemConfig {
 }
 
 const GROUP_LABELS: Record<string, string> = {
-  storage: '图片存储',
   feature: '功能开关',
   randomize: '随机化（货号/尺寸/重量）',
   general: '通用',
 };
-
-const STORAGE_BACKEND_OPTIONS = [
-  { value: 'local', label: '本地存储', desc: '存到服务器 public/uploads，需公网可达地址' },
-  { value: 'ozon-cdn', label: 'OZON 临时CDN', desc: '走 upload.seller.ozon.ru，复用登录态，零成本' },
-  { value: 'oss', label: 'OSS 对象存储', desc: 'S3 兼容存储（阿里云/腾讯云/CF R2/AWS/MinIO）' },
-];
-
-const OSS_PRESETS: Array<{ label: string; endpoint: string; region: string }> = [
-  { label: '阿里云 OSS（杭州）', endpoint: 'https://oss-cn-hangzhou.aliyuncs.com', region: 'cn-hangzhou' },
-  { label: '阿里云 OSS（上海）', endpoint: 'https://oss-cn-shanghai.aliyuncs.com', region: 'cn-shanghai' },
-  { label: '腾讯云 COS（广州）', endpoint: 'https://cos.ap-guangzhou.myqcloud.com', region: 'ap-guangzhou' },
-  { label: 'Cloudflare R2', endpoint: 'https://<account-id>.r2.cloudflarestorage.com', region: 'auto' },
-  { label: 'AWS S3（us-east-1）', endpoint: 'https://s3.us-east-1.amazonaws.com', region: 'us-east-1' },
-  { label: '自定义 / MinIO', endpoint: '', region: '' },
-];
-
-function OssConfigEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  let parsed: any = {};
-  try { parsed = value ? JSON.parse(value) : {}; } catch {}
-
-  const update = (field: string, val: string) => {
-    const next = { ...parsed, [field]: val };
-    onChange(JSON.stringify(next));
-  };
-
-  return (
-    <div className="space-y-3 p-3 rounded-md border bg-muted/30">
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <Label className="text-xs">服务商预设</Label>
-          <select
-            className="w-full mt-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-            value=""
-            onChange={(e) => {
-              const preset = OSS_PRESETS[Number(e.target.value)];
-              if (preset) {
-                const next = { ...parsed, endpoint: preset.endpoint, region: preset.region };
-                onChange(JSON.stringify(next));
-              }
-            }}
-          >
-            <option value="">选择预设...</option>
-            {OSS_PRESETS.map((p, i) => <option key={i} value={i}>{p.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <Label className="text-xs">Region</Label>
-          <Input className="mt-1 h-8 text-sm" value={parsed.region || ''} onChange={(e) => update('region', e.target.value)} placeholder="cn-hangzhou / auto" />
-        </div>
-      </div>
-      <div>
-        <Label className="text-xs">Endpoint</Label>
-        <Input className="mt-1 h-8 text-sm font-mono" value={parsed.endpoint || ''} onChange={(e) => update('endpoint', e.target.value)} placeholder="https://oss-cn-hangzhou.aliyuncs.com" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <Label className="text-xs">Bucket</Label>
-          <Input className="mt-1 h-8 text-sm" value={parsed.bucket || ''} onChange={(e) => update('bucket', e.target.value)} placeholder="my-bucket" />
-        </div>
-        <div>
-          <Label className="text-xs">CDN 域名（可选）</Label>
-          <Input className="mt-1 h-8 text-sm" value={parsed.cdnDomain || ''} onChange={(e) => update('cdnDomain', e.target.value)} placeholder="https://cdn.example.com" />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <Label className="text-xs">Access Key ID</Label>
-          <Input className="mt-1 h-8 text-sm font-mono" value={parsed.accessKeyId || ''} onChange={(e) => update('accessKeyId', e.target.value)} placeholder="AKID..." />
-        </div>
-        <div>
-          <Label className="text-xs">Access Key Secret</Label>
-          <Input className="mt-1 h-8 text-sm font-mono" type="password" value={parsed.accessKeySecret || ''} onChange={(e) => update('accessKeySecret', e.target.value)} placeholder="••••••" />
-        </div>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        对象路径由系统固定生成：userId/category/yyyy/mm/hash.ext，便于后期按用户、类型和月份归档。
-      </p>
-    </div>
-  );
-}
 
 export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);
@@ -119,18 +38,21 @@ export default function AdminSettingsPage() {
     setLoading(true);
     const res = await api.get<SystemConfig[]>('/api/admin/system-config');
     if (res.code === 1 && res.data) {
-      setConfigs(res.data);
+      // 过滤掉已被独立页面接管的 group
+      const filtered = res.data.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
+      setConfigs(filtered);
       const map: Record<string, string> = {};
-      res.data.forEach((c) => { map[c.key] = c.value; });
+      filtered.forEach((c) => { map[c.key] = c.value; });
       setEditing(map);
     } else if (res.code === 0) {
       // 尝试初始化默认配置
       await api.post('/api/admin/system-config/seed', {});
       const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
       if (res2.code === 1 && res2.data) {
-        setConfigs(res2.data);
+        const filtered = res2.data.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
+        setConfigs(filtered);
         const map: Record<string, string> = {};
-        res2.data.forEach((c) => { map[c.key] = c.value; });
+        filtered.forEach((c) => { map[c.key] = c.value; });
         setEditing(map);
       }
     }
@@ -178,7 +100,9 @@ export default function AdminSettingsPage() {
           <h1 className="text-2xl font-semibold flex items-center gap-2">
             <SettingsIcon className="h-6 w-6" /> 系统设置
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">超管维护的全局功能配置</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            功能开关、随机化参数等通用配置。接口集成/安全/运维状态已拆分到独立页面。
+          </p>
         </div>
         <Button variant="outline" onClick={initDefaults}>初始化默认配置</Button>
       </div>
@@ -221,24 +145,7 @@ export default function AdminSettingsPage() {
                   </Button>
                 </div>
 
-                {cfg.key === 'image_storage_backend' ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    {STORAGE_BACKEND_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.value}
-                        onClick={() => setEditing({ ...editing, [cfg.key]: opt.value })}
-                        className={`text-left p-3 rounded-md border-2 transition-colors ${
-                          editing[cfg.key] === opt.value
-                            ? 'border-primary bg-primary/5'
-                            : 'border-border hover:border-primary/50'
-                        }`}
-                      >
-                        <div className="font-medium text-sm">{opt.label}</div>
-                        <div className="text-xs text-muted-foreground mt-1">{opt.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                ) : cfg.key === 'feature_customer_chat' || cfg.key === 'feature_image_translate' || cfg.key === 'randomize_enabled' || cfg.key === 'randomize_offer_id' ? (
+                {cfg.key === 'feature_customer_chat' || cfg.key === 'feature_image_translate' || cfg.key === 'randomize_enabled' || cfg.key === 'randomize_offer_id' ? (
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setEditing({ ...editing, [cfg.key]: editing[cfg.key] === 'true' ? 'false' : 'true' })}
@@ -254,27 +161,6 @@ export default function AdminSettingsPage() {
                     </button>
                     <span className="text-sm">{editing[cfg.key] === 'true' ? '已启用' : '已禁用'}</span>
                   </div>
-                ) : cfg.key === 'oss_config' ? (
-                  <OssConfigEditor value={editing[cfg.key] || ''} onChange={(v) => setEditing({ ...editing, [cfg.key]: v })} />
-                ) : cfg.key === 'ozon_cdn_relay_url' ? (
-                  <div className="space-y-2">
-                    <Input
-                      value={editing[cfg.key] || ''}
-                      onChange={(e) => setEditing({ ...editing, [cfg.key]: e.target.value })}
-                      placeholder="https://your-worker.workers.dev"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      部署 CF Worker 后填入地址。Worker 会将请求转发到 upload.seller.ozon.ru，解决国内网络问题。留空则直连（需代理/虚拟网卡）
-                    </p>
-                  </div>
-                ) : cfg.key === 'ozon_cdn_cookie' ? (
-                  <textarea
-                    value={editing[cfg.key] || ''}
-                    onChange={(e) => setEditing({ ...editing, [cfg.key]: e.target.value })}
-                    rows={3}
-                    placeholder="从 seller.ozon.ru 浏览器复制完整 cookie 字符串"
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-                  />
                 ) : (
                   <Input
                     value={editing[cfg.key] || ''}

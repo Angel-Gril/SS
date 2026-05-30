@@ -48,6 +48,7 @@ export interface AuthUser {
   avatar: string | null;
   role: 'ADMIN' | 'USER' | 'STAFF';
   status: 'ACTIVE' | 'SUSPENDED' | 'PENDING';
+  isSuperAdmin?: boolean;
   balance: string;
   accountCode?: string | null;
   isSubAccount?: boolean;

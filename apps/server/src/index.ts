@@ -50,6 +50,7 @@ import { appVersionRoutes } from './routes/app-version.js';
 import { adminAuthRoutes } from './routes/admin-auth.js';
 import { extensionConfigRoutes } from './routes/extension-config.js';
 import { announcementRoutes } from './routes/announcements.js';
+import { systemStatusRoutes } from './routes/system-status.js';
 import { isAllowedCorsOrigin } from './lib/cors.js';
 
 const app = Fastify({
@@ -162,6 +163,7 @@ await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
 await app.register(extensionConfigRoutes, { prefix: '/api/extension' });
 await app.register(announcementRoutes, { prefix: '/api/announcements' });
+await app.register(systemStatusRoutes, { prefix: '/api/admin/system-status' });
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';
