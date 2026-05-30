@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
+import { nextSuperAdminCode } from '../lib/account-code.js';
 
 export async function setupRoutes(app: FastifyInstance) {
   const setupTokenConfigured = !!process.env.SETUP_TOKEN;
@@ -53,16 +54,24 @@ export async function setupRoutes(app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+    let accountCode: string;
+    try {
+      accountCode = await nextSuperAdminCode();
+    } catch (e: any) {
+      return reply.status(400).send({ code: 0, msg: e.message || '超管账号编号分配失败' });
+    }
     const admin = await prisma.user.create({
       data: {
         phone,
         passwordHash,
         nickname,
         role: 'ADMIN',
+        isSuperAdmin: true,
+        accountCode,
         balance: 10000,
         canInvite: true,
       },
-      select: { id: true, phone: true, nickname: true, role: true },
+      select: { id: true, phone: true, nickname: true, role: true, isSuperAdmin: true, accountCode: true },
     });
 
     return { code: 1, msg: '初始化完成', data: admin };

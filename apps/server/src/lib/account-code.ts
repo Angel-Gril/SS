@@ -1,28 +1,45 @@
 import { prisma } from './prisma.js';
 
-// 1-100 为内部测试账号区段（手动分配）
-// 普通用户账号从 101 起，按注册顺序（UTC 时间）递增
-const USER_RANGE_START = 101;
+// 账号 code 区段
+//   1-10    超级管理员
+//   11-100  普通管理员
+//   101+    普通用户（按注册顺序递增）
+export const SUPER_ADMIN_RANGE_START = 1;
+export const SUPER_ADMIN_RANGE_END = 10;
+export const ADMIN_RANGE_START = 11;
+export const ADMIN_RANGE_END = 100;
+export const USER_RANGE_START = 101;
 
-/**
- * 计算下一个用户账号 code
- * 只统计 ≥ 101 的根账号取最大值 + 1，确保测试账号区段（1-100）不影响用户账号分配
- */
-async function nextRootCode(): Promise<string> {
+async function nextCodeInRange(start: number, end: number | null): Promise<string> {
   const roots = await prisma.user.findMany({
     where: { parentId: null, accountCode: { not: null } },
     select: { accountCode: true },
   });
-  let maxCode = USER_RANGE_START - 1; // 100，下一个返回 101
+  let maxCode = start - 1;
   for (const r of roots) {
     const code = r.accountCode!;
     if (/^\d+$/.test(code)) {
       const n = parseInt(code, 10);
-      // 只统计用户区段，跳过 1-100 的测试账号
-      if (n >= USER_RANGE_START && n > maxCode) maxCode = n;
+      if (n >= start && (end === null || n <= end) && n > maxCode) maxCode = n;
     }
   }
-  return String(maxCode + 1);
+  const next = maxCode + 1;
+  if (end !== null && next > end) {
+    throw new Error(`账号区段 ${start}-${end} 已满，无法分配新账号`);
+  }
+  return String(next);
+}
+
+async function nextRootCode(): Promise<string> {
+  return nextCodeInRange(USER_RANGE_START, null);
+}
+
+export async function nextSuperAdminCode(): Promise<string> {
+  return nextCodeInRange(SUPER_ADMIN_RANGE_START, SUPER_ADMIN_RANGE_END);
+}
+
+export async function nextAdminCode(): Promise<string> {
+  return nextCodeInRange(ADMIN_RANGE_START, ADMIN_RANGE_END);
 }
 
 /**

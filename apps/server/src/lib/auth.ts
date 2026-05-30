@@ -47,6 +47,7 @@ export interface AuthContext extends JwtPayload {
   parentId: string | null;
   isSubAccount: boolean;
   accountCode: string | null;
+  isSuperAdmin: boolean;
 }
 
 export function signToken(payload: JwtPayload, expiresIn?: SignOptions['expiresIn']): string {
@@ -63,6 +64,7 @@ type ContextFields = {
   parentId: string | null;
   isSubAccount: boolean;
   accountCode: string | null;
+  isSuperAdmin: boolean;
 };
 const ctxCache = new Map<string, { ctx: ContextFields; expiresAt: number }>();
 const CTX_TTL_MS = 60 * 1000;
@@ -73,7 +75,7 @@ async function loadAuthContext(userId: string): Promise<ContextFields | null> {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, parentId: true, accountCode: true, status: true },
+    select: { id: true, parentId: true, accountCode: true, status: true, isSuperAdmin: true, role: true },
   });
   if (!user || user.status === 'SUSPENDED') return null;
 
@@ -82,6 +84,7 @@ async function loadAuthContext(userId: string): Promise<ContextFields | null> {
     parentId: user.parentId,
     isSubAccount: !!user.parentId,
     accountCode: user.accountCode,
+    isSuperAdmin: user.role === 'ADMIN' && user.isSuperAdmin,
   };
   ctxCache.set(userId, { ctx, expiresAt: Date.now() + CTX_TTL_MS });
   return ctx;
@@ -122,6 +125,7 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
       parentId: ctx.parentId,
       isSubAccount: ctx.isSubAccount,
       accountCode: ctx.accountCode,
+      isSuperAdmin: ctx.isSuperAdmin,
     } as AuthContext & { actorUserId: string };
   } catch {
     return reply.status(401).send({ code: 0, msg: '无效的令牌' });
@@ -186,4 +190,16 @@ export function requireRole(...roles: string[]) {
       return reply.status(403).send({ code: 0, msg: '无权限访问' });
     }
   };
+}
+
+/**
+ * 超级管理员权限检查中间件
+ * 用法: app.addHook('preHandler', requireSuperAdmin)
+ * 必须先经过 authenticate
+ */
+export async function requireSuperAdmin(request: FastifyRequest, reply: FastifyReply) {
+  const user = (request as any).user;
+  if (!user || user.role !== 'ADMIN' || !user.isSuperAdmin) {
+    return reply.status(403).send({ code: 0, msg: '需要超级管理员权限' });
+  }
 }

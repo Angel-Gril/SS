@@ -79,6 +79,7 @@ model User {
   activePortal String     @default("user") @map("active_portal")
   isTransitProvider Boolean @default(false) @map("is_transit_provider")
   canPublishAddress Boolean @default(false) @map("can_publish_address")
+  isSuperAdmin Boolean @default(false) @map("is_super_admin")
   providerFee  Decimal?   @map("provider_fee") @db.Decimal(10, 2)
   platformFee  Decimal?   @map("platform_fee") @db.Decimal(10, 2)
   createdAt    DateTime   @default(now()) @map("created_at")

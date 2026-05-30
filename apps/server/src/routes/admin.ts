@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { authenticate, requireRole } from '../lib/auth.js';
+import { authenticate, clearAuthContextCache, requireRole } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
-import { generateAccountCode } from '../lib/account-code.js';
+import { generateAccountCode, nextAdminCode, nextSuperAdminCode } from '../lib/account-code.js';
 
 const createTagSchema = z.object({
   name: z.string().min(1, '标签名称不能为空'),
@@ -45,6 +45,7 @@ const createUserSchema = z.object({
   nickname: z.string().optional(),
   canInvite: z.boolean().default(false),
   inviteLimit: z.coerce.number().int().min(0).default(0),
+  isSuperAdmin: z.boolean().optional(),
 });
 
 const updateUserSchema = z.object({
@@ -58,11 +59,44 @@ const updateUserSchema = z.object({
   customColorEnabled: z.boolean().optional(),
   canPublishAddress: z.boolean().optional(),
   isTransitProvider: z.boolean().optional(),
+  isSuperAdmin: z.boolean().optional(),
 });
 
 const resetPasswordSchema = z.object({
   password: z.string().min(6, '密码至少6位'),
 });
+
+async function ensureCanModifyUser(actor: any, target: { isSuperAdmin: boolean }) {
+  if (target.isSuperAdmin && !actor?.isSuperAdmin) {
+    throw new Error('只有超级管理员可以修改超管账户');
+  }
+}
+
+async function ensureNotRemovingLastActiveSuperAdmin(
+  targetId: string,
+  existing: { role: string; status: string; isSuperAdmin: boolean },
+  next: { role?: string; status?: string; isSuperAdmin?: boolean },
+) {
+  if (existing.role !== 'ADMIN' || existing.status !== 'ACTIVE' || !existing.isSuperAdmin) return;
+
+  const nextRole = next.role ?? existing.role;
+  const nextStatus = next.status ?? existing.status;
+  const nextIsSuperAdmin = next.isSuperAdmin ?? existing.isSuperAdmin;
+  const remainsActiveSuperAdmin = nextRole === 'ADMIN' && nextStatus === 'ACTIVE' && nextIsSuperAdmin;
+  if (remainsActiveSuperAdmin) return;
+
+  const remaining = await prisma.user.count({
+    where: {
+      id: { not: targetId },
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      isSuperAdmin: true,
+    },
+  });
+  if (remaining === 0) {
+    throw new Error('不能移除最后一个可用的超级管理员');
+  }
+}
 
 export async function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -382,6 +416,7 @@ export async function adminRoutes(app: FastifyInstance) {
           perOrderFee: true,
           customColorEnabled: true,
           canPublishAddress: true,
+          isSuperAdmin: true,
           createdAt: true,
           lastLoginAt: true,
         },
@@ -398,7 +433,12 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
 
-    const { phone, password, role, nickname, canInvite, inviteLimit } = parsed.data;
+    const actor = (request as any).user;
+    const { phone, password, role, nickname, canInvite, inviteLimit, isSuperAdmin } = parsed.data;
+
+    if (isSuperAdmin && !actor?.isSuperAdmin) {
+      return reply.status(403).send({ code: 0, msg: '只有超级管理员可以创建超级管理员' });
+    }
 
     const existing = await prisma.user.findUnique({ where: { phone } });
     if (existing) {
@@ -406,7 +446,14 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const accountCode = await generateAccountCode(null);
+    let accountCode: string;
+    try {
+      accountCode = role === 'ADMIN'
+        ? (isSuperAdmin ? await nextSuperAdminCode() : await nextAdminCode())
+        : await generateAccountCode(null);
+    } catch (e: any) {
+      return reply.status(400).send({ code: 0, msg: e.message || '账号编号分配失败' });
+    }
     const user = await prisma.user.create({
       data: {
         phone,
@@ -416,13 +463,14 @@ export async function adminRoutes(app: FastifyInstance) {
         canInvite,
         inviteLimit,
         accountCode,
+        isSuperAdmin: role === 'ADMIN' && !!isSuperAdmin,
       },
     });
 
     return reply.send({
       code: 1,
       msg: '创建成功',
-      data: { id: user.id, phone: user.phone, nickname: user.nickname, role: user.role },
+      data: { id: user.id, phone: user.phone, nickname: user.nickname, role: user.role, accountCode: user.accountCode, isSuperAdmin: user.isSuperAdmin },
     });
   });
 
@@ -434,9 +482,19 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
     }
 
+    const actor = (request as any).user;
     const existing = await prisma.user.findUnique({ where: { id } });
     if (!existing) {
       return reply.status(404).send({ code: 0, msg: '用户不存在' });
+    }
+
+    if (parsed.data.isSuperAdmin !== undefined && !actor?.isSuperAdmin) {
+      return reply.status(403).send({ code: 0, msg: '只有超级管理员可以授予/撤销超管权限' });
+    }
+    try {
+      await ensureCanModifyUser(actor, existing);
+    } catch (e: any) {
+      return reply.status(403).send({ code: 0, msg: e.message });
     }
 
     const data: any = {};
@@ -450,8 +508,21 @@ export async function adminRoutes(app: FastifyInstance) {
     if (parsed.data.customColorEnabled !== undefined) data.customColorEnabled = parsed.data.customColorEnabled;
     if (parsed.data.canPublishAddress !== undefined) data.canPublishAddress = parsed.data.canPublishAddress;
     if (parsed.data.isTransitProvider !== undefined) data.isTransitProvider = parsed.data.isTransitProvider;
+    if (parsed.data.isSuperAdmin !== undefined) {
+      const targetRole = parsed.data.role !== undefined ? parsed.data.role : existing.role;
+      data.isSuperAdmin = targetRole === 'ADMIN' && parsed.data.isSuperAdmin;
+    } else if (parsed.data.role !== undefined && parsed.data.role !== 'ADMIN' && existing.isSuperAdmin) {
+      data.isSuperAdmin = false;
+    }
+
+    try {
+      await ensureNotRemovingLastActiveSuperAdmin(id, existing, data);
+    } catch (e: any) {
+      return reply.status(400).send({ code: 0, msg: e.message });
+    }
 
     const user = await prisma.user.update({ where: { id }, data });
+    clearAuthContextCache(id);
     return reply.send({
       code: 1,
       msg: '更新成功',
@@ -461,6 +532,7 @@ export async function adminRoutes(app: FastifyInstance) {
         tenantType: user.tenantType, perOrderFee: user.perOrderFee?.toString() ?? null,
         customColorEnabled: user.customColorEnabled,
         canPublishAddress: user.canPublishAddress,
+        isSuperAdmin: user.isSuperAdmin,
       },
     });
   });
@@ -477,9 +549,16 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!existing) {
       return reply.status(404).send({ code: 0, msg: '用户不存在' });
     }
+    const actor = (request as any).user;
+    try {
+      await ensureCanModifyUser(actor, existing);
+    } catch (e: any) {
+      return reply.status(403).send({ code: 0, msg: e.message });
+    }
 
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
     await prisma.user.update({ where: { id }, data: { passwordHash } });
+    clearAuthContextCache(id);
     return reply.send({ code: 1, msg: '密码已重置' });
   });
 
@@ -490,7 +569,15 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!existing) {
       return reply.status(404).send({ code: 0, msg: '用户不存在' });
     }
+    const actor = (request as any).user;
+    try {
+      await ensureCanModifyUser(actor, existing);
+      await ensureNotRemovingLastActiveSuperAdmin(id, existing, { status: 'SUSPENDED' });
+    } catch (e: any) {
+      return reply.status(existing.isSuperAdmin && !actor?.isSuperAdmin ? 403 : 400).send({ code: 0, msg: e.message });
+    }
     await prisma.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
+    clearAuthContextCache(id);
     return reply.send({ code: 1, msg: '用户已禁用' });
   });
 
@@ -550,6 +637,25 @@ export async function adminRoutes(app: FastifyInstance) {
       })),
     });
   });
+}
+
+// 数据迁移：如果系统有 ADMIN 但还没有任何超管，把最早创建的 ADMIN 提升为超管
+export async function seedSuperAdmin() {
+  const superCount = await prisma.user.count({ where: { role: 'ADMIN', status: 'ACTIVE', isSuperAdmin: true } });
+  if (superCount > 0) return;
+
+  const earliestAdmin = await prisma.user.findFirst({
+    where: { role: 'ADMIN', status: 'ACTIVE' },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, phone: true, accountCode: true },
+  });
+  if (!earliestAdmin) return;
+
+  await prisma.user.update({
+    where: { id: earliestAdmin.id },
+    data: { isSuperAdmin: true },
+  });
+  console.log(`[seed] 已将最早的管理员 ${earliestAdmin.phone}(${earliestAdmin.accountCode || 'no-code'}) 提升为超级管理员`);
 }
 
 // 初始化默认标签数据

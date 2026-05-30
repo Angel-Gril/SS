@@ -30,7 +30,7 @@ import { warehouseTemplateRoutes } from './routes/warehouse-template.js';
 import { ozonPickupPointRoutes } from './routes/ozon-pickup-point.js';
 import { warehouseCommandRoutes } from './routes/warehouse-command.js';
 import { userServiceTagRoutes } from './routes/user-service-tag.js';
-import { adminRoutes, seedServiceTags } from './routes/admin.js';
+import { adminRoutes, seedServiceTags, seedSuperAdmin } from './routes/admin.js';
 import { seedSystemConfig } from './routes/system-config.js';
 import { accountRoutes } from './routes/account.js';
 import { inviteRoutes } from './routes/invite.js';
@@ -203,6 +203,7 @@ app.get('/resized/:filename', async (request, reply) => {
 });
 
 await seedServiceTags();
+await seedSuperAdmin();
 await seedSystemConfig();
 
 const RUN_WORKERS = process.env.RUN_WORKERS !== '0' && process.env.RUN_WORKERS !== 'false';
