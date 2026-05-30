@@ -325,6 +325,7 @@ Copy-Item -Force (Join-Path $buildDir "scripts/fix-links.js") (Join-Path $out "f
 
 # config.json 模板
 $jwtSecret = -join ((1..48) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+$encryptionKey = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
 $configContent = @"
 {
   "webPort": 3400,
@@ -332,6 +333,7 @@ $configContent = @"
   "pgPort": 5433,
   "databaseUrl": "postgresql://postgres@127.0.0.1:5433/ss_erp",
   "jwtSecret": "$jwtSecret",
+  "encryptionKey": "$encryptionKey",
   "corsOrigin": "http://127.0.0.1:3400",
   "redisDisabled": true,
   "uploadDir": "./data/uploads",

@@ -14,6 +14,7 @@
  *   "webPort": 3400,
  *   "databaseUrl": "postgresql://...",
  *   "jwtSecret": "xxx",
+ *   "encryptionKey": "xxx",
  *   "corsOrigin": "http://localhost:3400"
  * }
  *
@@ -45,6 +46,7 @@ function loadExternalConfig(): void {
       if (cfg.serverHost) process.env.SERVER_HOST = String(cfg.serverHost);
       if (cfg.databaseUrl) process.env.DATABASE_URL = String(cfg.databaseUrl);
       if (cfg.jwtSecret) process.env.JWT_SECRET = String(cfg.jwtSecret);
+      if (cfg.encryptionKey || cfg.encryption_key) process.env.ENCRYPTION_KEY = String(cfg.encryptionKey || cfg.encryption_key);
       if (cfg.corsOrigin) process.env.CORS_ORIGIN = String(cfg.corsOrigin);
       if (cfg.redisUrl) process.env.REDIS_URL = String(cfg.redisUrl);
       if (cfg.redisDisabled !== undefined) process.env.REDIS_DISABLED = String(cfg.redisDisabled);

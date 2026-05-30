@@ -66,6 +66,8 @@ for /f "usebackq delims=" %%i in (`node -e "const c=require('./config.json');con
 for /f "usebackq delims=" %%i in (`node -e "const c=require('./config.json');process.stdout.write(c.jwtSecret||'')"`) do set "JWT_SECRET=%%i"
 for /f "usebackq delims=" %%i in (`node -e "const c=require('./config.json');process.stdout.write(c.corsOrigin||'')"`) do set "CORS_ORIGIN=%%i"
 for /f "usebackq delims=" %%i in (`node -e "const c=require('./config.json');process.stdout.write(c.uploadDir||'')"`) do set "UPLOAD_DIR=%%i"
+REM 旧测试包可能没有 encryptionKey；这里自动生成、写回 config.json，并传给 server
+for /f "usebackq delims=" %%i in (`"%NODE_DIR%\node.exe" -e "const fs=require('fs'),crypto=require('crypto'),p='./config.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));const k=String(c.encryptionKey?c.encryptionKey:'');if(/^[0-9a-f]{64}$/i.test(k)===false){c.encryptionKey=crypto.randomBytes(32).toString('hex');fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n');}process.stdout.write(String(c.encryptionKey));"`) do set "ENCRYPTION_KEY=%%i"
 echo  端口: web=!WEB_PORT! server=!SERVER_PORT! pg=!PG_PORT!
 
 REM ---------- 2. 首次运行: initdb ----------
