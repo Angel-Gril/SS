@@ -20,6 +20,7 @@ BACKUP_LOCAL_DIR="${BACKUP_LOCAL_DIR:-/var/backups/ss-erp}"
 BACKUP_KEEP_DAYS="${BACKUP_KEEP_DAYS:-7}"
 BACKUP_S3_PREFIX="${BACKUP_S3_PREFIX:-db/}"
 BACKUP_S3_REGION="${BACKUP_S3_REGION:-auto}"
+BACKUP_STATUS_GROUP="${BACKUP_STATUS_GROUP:-deploy}"
 S3_ENABLED=0
 TMP_FILE=""
 
@@ -124,5 +125,12 @@ cat > "$STATUS_FILE" <<EOJSON
   "lastRemoteKey": "${REMOTE_KEY}"
 }
 EOJSON
+
+# API 进程通常以 deploy 用户运行，需要能读取状态文件，但不需要读取备份包。
+if command -v getent >/dev/null 2>&1 && getent group "$BACKUP_STATUS_GROUP" >/dev/null 2>&1; then
+  chgrp "$BACKUP_STATUS_GROUP" "$BACKUP_LOCAL_DIR" "$STATUS_FILE" || true
+  chmod 750 "$BACKUP_LOCAL_DIR" || true
+  chmod 640 "$STATUS_FILE" || true
+fi
 
 echo "[backup] $(date '+%F %T') 完成"
