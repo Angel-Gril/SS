@@ -63,8 +63,9 @@
 - `SMS_PROVIDER` + `SMS_TENCENT_*`（短信验证码）
 - `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN`（服务端 / 浏览器端错误追踪）
 - `NEXT_PUBLIC_API_BASE_URL`（前端 API 地址）
+- `IMAGE_STORAGE_BACKEND` + `OSS_*`（图片存储；云端推荐 `oss`，OSS 未准备好时 staging 可临时用 `ozon-cdn`）
 
-OSS 配置走超管 UI（`/admin/settings`），不在 .env 中。详见根目录 `DEPLOYMENT.md` 第 3.3 节。
+OSS/图片存储配置走环境变量，不再存入 `system_configs`。详见根目录 `DEPLOYMENT.md` 第 3.3 节。
 
 首个超级管理员只允许通过 `/setup` 引导流程创建。公开注册只创建普通 `USER`，且在系统没有任何 `ADMIN` 前会被后端拒绝。生产环境必须配置 `SETUP_TOKEN`，防止公网首次访问者抢占管理员账号。
 

@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
+import { invalidateFeatureCache } from '../lib/feature-flags.js';
+import { invalidateMaintenanceCache } from '../lib/maintenance.js';
 
 const upsertSchema = z.object({
   key: z.string().min(1),
@@ -11,8 +13,8 @@ const upsertSchema = z.object({
   description: z.string().optional(),
 });
 
-const SECRET_FIELDS = ['accessKeySecret', 'secretAccessKey', 'password', 'apiKey', 'token'];
-const SECRET_KEYS = new Set(['oss_config']);
+const SECRET_FIELDS: string[] = [];
+const SECRET_KEYS = new Set<string>();
 
 function maskSecretValue(key: string, value: string): string {
   if (!SECRET_KEYS.has(key) || !value) return value;
@@ -56,35 +58,13 @@ function mergeMaskedValue(key: string, newValue: string, oldValue: string): stri
   return newValue;
 }
 
+function invalidateConfigCaches(key?: string) {
+  if (!key || key.startsWith('feature_')) invalidateFeatureCache(key);
+  if (!key || key.startsWith('maintenance_')) invalidateMaintenanceCache();
+}
+
 const DEFAULTS: Array<{ key: string; value: string; label: string; group: string; description: string }> = [
-  {
-    key: 'image_storage_backend',
-    value: 'local',
-    label: '图片存储后端',
-    group: 'storage',
-    description: '可选：local（本地）/ ozon-cdn（OZON 临时CDN）/ oss（对象存储）。OZON CDN 的 cookie 和 company_id 由各店铺单独配置（通过浏览器扩展同步），不在此处全局设置',
-  },
-  {
-    key: 'oss_config',
-    value: '',
-    label: 'OSS 配置 (JSON)',
-    group: 'storage',
-    description: 'S3 兼容存储配置。JSON: { endpoint, bucket, accessKeyId, accessKeySecret, region, cdnDomain? }。对象 key 固定为 userId/category/yyyy/mm/hash.ext',
-  },
-  {
-    key: 'ozon_cdn_relay_url',
-    value: '',
-    label: 'OZON CDN 中转地址',
-    group: 'storage',
-    description: 'CF Worker 反代地址（如 https://your-worker.workers.dev）。设置后 OZON CDN 上传走此中转，解决国内直连 upload.seller.ozon.ru 不通的问题。留空则直连',
-  },
-  {
-    key: 'local_base_url',
-    value: 'http://localhost:3001',
-    label: '本地服务公网地址',
-    group: 'storage',
-    description: '本地存储模式下，OZON 服务器拉图用的地址（需公网可达，本地测试用 ngrok）',
-  },
+  // ─── feature ───
   {
     key: 'feature_customer_chat',
     value: 'false',
@@ -92,6 +72,63 @@ const DEFAULTS: Array<{ key: string; value: string; label: string; group: string
     group: 'feature',
     description: '是否启用 OZON 店铺客服聊天集成',
   },
+  {
+    key: 'feature_image_translate',
+    value: 'false',
+    label: '图片翻译功能',
+    group: 'feature',
+    description: '是否启用图片 OCR + 翻译',
+  },
+  {
+    key: 'feature_oss_upload',
+    value: 'true',
+    label: 'OSS 上传',
+    group: 'feature',
+    description: '是否启用 OSS 对象存储上传（关闭后走本地或 OZON CDN）',
+  },
+  {
+    key: 'feature_ozon_cdn_fallback',
+    value: 'true',
+    label: 'OZON CDN 降级',
+    group: 'feature',
+    description: 'OSS 上传失败时自动降级到 OZON CDN',
+  },
+  {
+    key: 'feature_extension_list_overlay',
+    value: 'true',
+    label: '扩展列表覆盖层',
+    group: 'feature',
+    description: '浏览器扩展在 OZON 商品列表页显示覆盖层',
+  },
+  {
+    key: 'feature_new_listing_flow',
+    value: 'false',
+    label: '新版上架流程',
+    group: 'feature',
+    description: '启用新版上架流程（实验性）',
+  },
+  {
+    key: 'feature_announcement_popup',
+    value: 'true',
+    label: '公告弹窗',
+    group: 'feature',
+    description: '是否在用户登录后弹出未读公告',
+  },
+  {
+    key: 'feature_sms_register',
+    value: 'true',
+    label: '短信注册',
+    group: 'feature',
+    description: '是否允许通过短信验证码注册新账号',
+  },
+  {
+    key: 'feature_turnstile_login',
+    value: 'true',
+    label: 'Turnstile 登录验证',
+    group: 'feature',
+    description: '登录时是否要求 Cloudflare Turnstile 人机验证',
+  },
+  // ─── security ───
   {
     key: 'security_login_max_attempts',
     value: '5',
@@ -127,20 +164,200 @@ const DEFAULTS: Array<{ key: string; value: string; label: string; group: string
     group: 'security',
     description: '记录管理员/超管的写操作。Phase B5 任务，启用前需先建表',
   },
+  // ─── retention ───
   {
-    key: 'integration_oss_fallback_to_cdn',
+    key: 'retention_collect_archive_days',
+    value: '365',
+    label: '采集数据归档天数',
+    group: 'retention',
+    description: '超过此天数的采集记录标记为归档（第一阶段仅统计，不删除）',
+  },
+  {
+    key: 'retention_collect_min_keep',
+    value: '200',
+    label: '采集数据最少保留条数',
+    group: 'retention',
+    description: '即使超过归档天数，每个用户至少保留此数量的采集记录',
+  },
+  {
+    key: 'retention_cainiao_unbound_days',
+    value: '30',
+    label: '菜鸟未绑定缓存保留天数',
+    group: 'retention',
+    description: '未绑定到订单的菜鸟包裹缓存保留天数',
+  },
+  {
+    key: 'retention_cainiao_bound_days',
+    value: '180',
+    label: '菜鸟已绑定缓存保留天数',
+    group: 'retention',
+    description: '已绑定到订单的菜鸟包裹缓存保留天数',
+  },
+  {
+    key: 'retention_sync_success_days',
+    value: '30',
+    label: '成功同步任务保留天数',
+    group: 'retention',
+    description: '状态为 SUCCESS 的 SyncJob 记录保留天数',
+  },
+  {
+    key: 'retention_sync_failed_days',
+    value: '180',
+    label: '失败同步任务保留天数',
+    group: 'retention',
+    description: '状态为 FAILED 的 SyncJob 记录保留天数（便于排查问题）',
+  },
+  {
+    key: 'retention_notification_read_days',
+    value: '90',
+    label: '已读通知保留天数',
+    group: 'retention',
+    description: '已读通知超过此天数后自动清理',
+  },
+  {
+    key: 'retention_notification_unread_days',
+    value: '365',
+    label: '未读通知保留天数',
+    group: 'retention',
+    description: '未读通知超过此天数后自动清理',
+  },
+  {
+    key: 'retention_temp_images_days',
+    value: '30',
+    label: '临时图片保留天数',
+    group: 'retention',
+    description: '临时上传目录中超过此天数的图片自动清理',
+  },
+  {
+    key: 'retention_cleanup_dry_run',
     value: 'true',
-    label: 'OSS 失败自动降级到 OZON CDN',
-    group: 'integration',
-    description: '云端模式下，OSS 上传失败时是否自动尝试 OZON CDN（需店铺已同步 cookie）',
+    label: '清理 dry-run 模式',
+    group: 'retention',
+    description: '开启时只统计不删除，关闭后才真正执行清理',
+  },
+  // ─── backup ───
+  {
+    key: 'backup_enabled',
+    value: 'true',
+    label: '自动备份',
+    group: 'backup',
+    description: '是否启用定时数据库备份',
   },
   {
-    key: 'feature_image_translate',
-    value: 'false',
-    label: '图片翻译功能',
-    group: 'feature',
-    description: '是否启用图片 OCR + 翻译',
+    key: 'backup_schedule',
+    value: '0 3 * * *',
+    label: '备份 cron 表达式',
+    group: 'backup',
+    description: '备份执行时间（cron 格式），默认每天凌晨 3 点',
   },
+  {
+    key: 'backup_local_keep_days',
+    value: '7',
+    label: '本地备份保留天数',
+    group: 'backup',
+    description: '本地备份文件超过此天数后自动清理',
+  },
+  {
+    key: 'backup_remote_enabled',
+    value: 'false',
+    label: '远程备份',
+    group: 'backup',
+    description: '是否将备份上传到远程存储（S3 兼容）',
+  },
+  {
+    key: 'backup_remote_keep_days',
+    value: '30',
+    label: '远程备份保留天数',
+    group: 'backup',
+    description: '远程存储中超过此天数的备份自动清理',
+  },
+  {
+    key: 'backup_remote_provider',
+    value: 's3',
+    label: '远程存储类型',
+    group: 'backup',
+    description: '远程备份存储类型（目前仅支持 s3 兼容）',
+  },
+  {
+    key: 'backup_remote_bucket',
+    value: '',
+    label: '远程存储 Bucket',
+    group: 'backup',
+    description: '远程备份目标 bucket 名称',
+  },
+  {
+    key: 'backup_remote_endpoint',
+    value: '',
+    label: '远程存储 Endpoint',
+    group: 'backup',
+    description: '远程备份 S3 兼容 endpoint URL',
+  },
+  {
+    key: 'backup_remote_region',
+    value: 'auto',
+    label: '远程存储 Region',
+    group: 'backup',
+    description: '远程备份存储区域',
+  },
+  {
+    key: 'backup_remote_prefix',
+    value: 'db/',
+    label: '远程存储路径前缀',
+    group: 'backup',
+    description: '远程备份文件在 bucket 中的路径前缀',
+  },
+  // ─── maintenance ───
+  {
+    key: 'maintenance_enabled',
+    value: 'false',
+    label: '维护模式',
+    group: 'maintenance',
+    description: '开启后普通用户写接口返回 503，管理员仍可访问',
+  },
+  {
+    key: 'maintenance_message',
+    value: '系统维护中，请稍后再试',
+    label: '维护提示信息',
+    group: 'maintenance',
+    description: '维护模式下返回给用户的提示文案',
+  },
+  {
+    key: 'maintenance_allow_admin',
+    value: 'true',
+    label: '管理员免维护',
+    group: 'maintenance',
+    description: '维护模式下管理员是否可以继续访问',
+  },
+  {
+    key: 'maintenance_readonly',
+    value: 'true',
+    label: '只读模式',
+    group: 'maintenance',
+    description: '维护模式下是否允许读接口通过（仅拦截写操作）',
+  },
+  // ─── version ───
+  {
+    key: 'version_web_check_interval_hours',
+    value: '8',
+    label: 'Web 版本检查间隔（小时）',
+    group: 'version',
+    description: '前端检查新版本的间隔时间',
+  },
+  {
+    key: 'version_extension_check_interval_hours',
+    value: '8',
+    label: '扩展版本检查间隔（小时）',
+    group: 'version',
+    description: '浏览器扩展检查新版本的间隔时间',
+  },
+  {
+    key: 'version_force_refresh_enabled',
+    value: 'false',
+    label: '强制刷新',
+    group: 'version',
+    description: '检测到新版本时是否强制用户刷新页面',
+  },
+  // ─── randomize ───
   {
     key: 'randomize_enabled',
     value: 'false',
@@ -179,9 +396,17 @@ const DEFAULTS: Array<{ key: string; value: string; label: string; group: string
 ];
 
 export async function seedSystemConfig() {
-  // 清理已废弃的全局 OZON CDN 认证配置（改为按店铺存储）
+  // 清理已废弃的配置（storage 组已迁移到环境变量）
   await prisma.systemConfig.deleteMany({
-    where: { key: { in: ['ozon_cdn_cookie', 'ozon_cdn_company_id'] } },
+    where: {
+      key: {
+        in: [
+          'ozon_cdn_cookie', 'ozon_cdn_company_id',
+          'image_storage_backend', 'oss_config', 'ozon_cdn_relay_url',
+          'local_base_url', 'integration_oss_fallback_to_cdn',
+        ],
+      },
+    },
   });
 
   for (const item of DEFAULTS) {
@@ -224,6 +449,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       create: { key, value: finalValue, group: 'general' },
       update: { value: finalValue },
     });
+    invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
 
@@ -239,17 +465,20 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       create: { ...parsed.data, value: finalValue },
       update: { ...parsed.data, value: finalValue },
     });
+    invalidateConfigCaches(parsed.data.key);
     return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
 
   app.delete('/:key', async (request, reply) => {
     const { key } = request.params as { key: string };
     await prisma.systemConfig.deleteMany({ where: { key } });
+    invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已删除' });
   });
 
   app.post('/seed', async (_request, reply) => {
     await seedSystemConfig();
+    invalidateConfigCaches();
     return reply.send({ code: 1, msg: '默认配置已初始化' });
   });
 }

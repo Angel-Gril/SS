@@ -22,6 +22,10 @@ interface SystemConfig {
 
 const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
+  retention: '数据保留',
+  backup: '备份策略',
+  maintenance: '维护模式',
+  version: '版本更新',
   randomize: '随机化（货号/尺寸/重量）',
   general: '通用',
 };
@@ -145,9 +149,10 @@ export default function AdminSettingsPage() {
                   </Button>
                 </div>
 
-                {cfg.key === 'feature_customer_chat' || cfg.key === 'feature_image_translate' || cfg.key === 'randomize_enabled' || cfg.key === 'randomize_offer_id' ? (
+                {editing[cfg.key] === 'true' || editing[cfg.key] === 'false' ? (
                   <div className="flex items-center gap-2">
                     <button
+                      type="button"
                       onClick={() => setEditing({ ...editing, [cfg.key]: editing[cfg.key] === 'true' ? 'false' : 'true' })}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                         editing[cfg.key] === 'true' ? 'bg-primary' : 'bg-muted'

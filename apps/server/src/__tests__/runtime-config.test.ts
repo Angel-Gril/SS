@@ -39,4 +39,34 @@ describe('runtime config', () => {
     vi.stubEnv('IMAGE_STORAGE_BACKEND', 'invalid');
     expect(getRuntimeConfig().imageStorage).toBe('oss');
   });
+
+  it('reads image storage integration settings from environment variables', () => {
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('IMAGE_STORAGE_BACKEND', 'oss');
+    vi.stubEnv('OSS_ENDPOINT', 'https://oss.example.com');
+    vi.stubEnv('OSS_BUCKET', 'ss-erp-assets');
+    vi.stubEnv('OSS_ACCESS_KEY_ID', 'ak');
+    vi.stubEnv('OSS_ACCESS_KEY_SECRET', 'sk');
+    vi.stubEnv('OSS_REGION', 'auto');
+    vi.stubEnv('OSS_CDN_DOMAIN', 'https://assets.example.com');
+    vi.stubEnv('OZON_CDN_RELAY_URL', 'https://relay.example.com');
+    vi.stubEnv('OSS_FALLBACK_TO_CDN', 'false');
+    vi.stubEnv('LOCAL_BASE_URL', 'https://app.example.com');
+
+    expect(getRuntimeConfig()).toMatchObject({
+      mode: 'cloud',
+      imageStorage: 'oss',
+      oss: {
+        endpoint: 'https://oss.example.com',
+        bucket: 'ss-erp-assets',
+        accessKeyId: 'ak',
+        accessKeySecret: 'sk',
+        region: 'auto',
+        cdnDomain: 'https://assets.example.com',
+      },
+      ozonCdnRelayUrl: 'https://relay.example.com',
+      ossFallbackToCdn: false,
+      localBaseUrl: 'https://app.example.com',
+    });
+  });
 });

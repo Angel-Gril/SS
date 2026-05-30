@@ -50,8 +50,9 @@
 
 ## Medium（推荐配置）
 
-- [ ] **OSS 对象存储已配置**（超管 UI `/admin/settings`）
-  - 验证：`image_storage_backend` 设为 `oss`，`oss_config` JSON 完整
+- [ ] **图片存储后端已配置**
+  - 验证：`.env` 中 `IMAGE_STORAGE_BACKEND=oss` 且 `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET` 完整
+  - 验证：OSS 未准备好时，staging 临时使用 `IMAGE_STORAGE_BACKEND=ozon-cdn`，并通过浏览器扩展同步目标店铺 cookie/company_id
   - 验证：OSS bucket CORS 已配置允许前端域名 PUT
   - 验证：上传图片后 URL 可公开访问
 

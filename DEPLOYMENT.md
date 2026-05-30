@@ -106,13 +106,29 @@ SENTRY_DSN="https://xxx@xxx.ingest.sentry.io/xxx"
 NEXT_PUBLIC_SENTRY_DSN="https://xxx@xxx.ingest.sentry.io/xxx"
 ```
 
-### 3.3 OSS 对象存储 — 走超管 UI，不在 .env 配置
+### 3.3 图片存储 / OSS 对象存储
 
-> 重要：OSS 配置存在数据库 `system_configs` 表，不是环境变量。
+> 重要：图片存储和 OSS 凭证通过环境变量配置，不再写入数据库 `system_configs`。超管 `/admin/integrations` 页面只显示接入状态和测试连接。
 
-部署完成后，使用超级管理员账号登录，访问 `/admin/settings` 配置（后端 API 为 `/api/admin/system-config`）：
-- `image_storage_backend`：取值 `local` / `oss` / `ozon-cdn`
-- `oss_config`：JSON，包含 `endpoint / bucket / accessKeyId / accessKeySecret / region / cdnDomain`
+```bash
+# 云端推荐 oss；OSS 未准备好时，staging 可临时使用 ozon-cdn。
+IMAGE_STORAGE_BACKEND="oss"   # local / oss / ozon-cdn
+LOCAL_BASE_URL="https://app.yourdomain.com"
+
+# OZON CDN 国内直连失败时可填 CF Worker 中转地址
+OZON_CDN_RELAY_URL=""
+
+# OSS 失败时，如果目标店铺已同步 OZON CDN cookie/company_id，自动降级到 OZON CDN
+OSS_FALLBACK_TO_CDN="true"
+
+# IMAGE_STORAGE_BACKEND=oss 时必填
+OSS_ENDPOINT="https://oss-cn-hangzhou.aliyuncs.com"
+OSS_BUCKET="ss-erp-assets"
+OSS_ACCESS_KEY_ID="..."
+OSS_ACCESS_KEY_SECRET="..."
+OSS_REGION="cn-hangzhou"
+OSS_CDN_DOMAIN=""  # 可选，例如 https://assets.yourdomain.com
+```
 
 对象路径由系统固定生成：`userId/category/yyyy/mm/hash.ext`，其中 `category` 目前为 `raw`，后续水印图/缩略图扩展为 `watermarked` / `thumbnail`。不要在 `.env` 或超管 UI 自定义路径前缀，避免生产数据进入后路径规则漂移。
 
@@ -348,9 +364,9 @@ bash scripts/restore-db.sh --from-s3 db/ss_erp_20260529_030000.sql.gz
 查看服务端日志：`docker-compose -f docker-compose.prod.yml logs -f api | grep "publish-ozon"`。常见原因：源商品禁止跟卖、必填属性缺失、offer_id 重复。
 
 ### 9.5 图片上传失败
-- `local` 后端：检查 `public/uploads` 写权限
-- `oss` 后端：检查超管 UI 的 `oss_config`，以及 OSS bucket 的 CORS / 公读策略
-- `ozon-cdn` 后端：扩展同步 cookie 是否过期
+- `local` 后端：检查 `public/uploads` 写权限，以及 `LOCAL_BASE_URL` 是否为公网 HTTPS 地址
+- `oss` 后端：检查 `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET` 环境变量，以及 OSS bucket 的 CORS / 公读策略
+- `ozon-cdn` 后端：扩展同步 cookie 是否过期；国内直连失败时检查 `OZON_CDN_RELAY_URL`
 
 ### 9.6 登录失败 5 次后无法登录
 IP 失败计数命中 Turnstile 兜底。前端传 `turnstileToken` 或 `redis-cli DEL login:fail:<IP>`。
@@ -390,6 +406,6 @@ PasswordAuthentication no
 - [ ] 启动：`docker-compose -f docker-compose.prod.yml up -d`
 - [ ] Nginx 反代 + SSL
 - [ ] 健康检查：`curl https://app.yourdomain.com/health`
-- [ ] 超管登录后配置 OSS（`/admin/settings`）
+- [ ] 配置图片存储环境变量（`IMAGE_STORAGE_BACKEND` + `OSS_*` 或 staging 临时 `ozon-cdn`）
 - [ ] 设置 OSS bucket CORS（如启用 OSS 直传）
 - [ ] 配置数据库定时备份（cron + pg_dump）

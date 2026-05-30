@@ -51,7 +51,9 @@ import { adminAuthRoutes } from './routes/admin-auth.js';
 import { extensionConfigRoutes } from './routes/extension-config.js';
 import { announcementRoutes } from './routes/announcements.js';
 import { systemStatusRoutes } from './routes/system-status.js';
+import { opsRoutes } from './routes/ops.js';
 import { isAllowedCorsOrigin } from './lib/cors.js';
+import { registerMaintenanceHook } from './lib/maintenance.js';
 
 const app = Fastify({
   bodyLimit: 1 * 1024 * 1024,
@@ -81,6 +83,7 @@ await app.register(rateLimit, {
   max: 200,
   timeWindow: '1 minute',
 });
+registerMaintenanceHook(app);
 
 app.addHook('onClose', async () => {
   await prisma.$disconnect();
@@ -164,6 +167,7 @@ await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
 await app.register(extensionConfigRoutes, { prefix: '/api/extension' });
 await app.register(announcementRoutes, { prefix: '/api/announcements' });
 await app.register(systemStatusRoutes, { prefix: '/api/admin/system-status' });
+await app.register(opsRoutes, { prefix: '/api/admin/ops' });
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';

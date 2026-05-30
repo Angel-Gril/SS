@@ -44,7 +44,7 @@ export function normalizeOzonPublishImageUrl(raw: string): string {
   }
   if (isPrivateHostname(url.hostname)) {
     throw new Error(
-      `图片 URL 不是公网地址，OZON 无法拉取: ${previewUrl(text)}。请配置 OSS/OZON CDN，或把 local_base_url 配成公网 HTTPS 域名`,
+      `图片 URL 不是公网地址，OZON 无法拉取: ${previewUrl(text)}。请配置 OSS/OZON CDN，或设置环境变量 LOCAL_BASE_URL 为公网 HTTPS 域名`,
     );
   }
 

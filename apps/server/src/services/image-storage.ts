@@ -381,7 +381,9 @@ export class FallbackStorageBackend implements ImageStorageBackend {
   }
 }
 
-// ─── 工厂：根据 SystemConfig 获取当前存储后端 ───
+// ─── 工厂：根据环境变量获取当前存储后端 ───
+
+import { getRuntimeConfig } from '../adapters/runtime-config.js';
 
 export type StorageBackendType = 'ozon-cdn' | 'oss' | 'local';
 
@@ -403,28 +405,21 @@ async function buildOzonCdnBackend(shopId: string): Promise<OzonCdnBackend> {
   if (!auth) {
     throw new Error('目标店铺未同步 OZON CDN cookie/company_id，请通过浏览器扩展同步登录态');
   }
-  const relayConfig = await prisma.systemConfig.findUnique({ where: { key: 'ozon_cdn_relay_url' } });
-  const relayUrl = relayConfig?.value || undefined;
-  return new OzonCdnBackend({ ...auth, relayUrl });
+  const rc = getRuntimeConfig();
+  return new OzonCdnBackend({ ...auth, relayUrl: rc.ozonCdnRelayUrl });
 }
 
-async function buildOssBackend(): Promise<OssBackend> {
-  const ossConfig = await prisma.systemConfig.findUnique({ where: { key: 'oss_config' } });
-  if (!ossConfig?.value) {
-    throw new Error('OSS 未配置，请在超管设置中配置');
+function buildOssBackend(): OssBackend {
+  const rc = getRuntimeConfig();
+  if (!rc.oss) {
+    throw new Error('OSS 未配置，请设置环境变量 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET');
   }
-  const parsed = JSON.parse(ossConfig.value) as OssConfig;
-  return new OssBackend(parsed);
-}
-
-async function isOssFallbackEnabled(): Promise<boolean> {
-  const cfg = await prisma.systemConfig.findUnique({ where: { key: 'integration_oss_fallback_to_cdn' } });
-  return cfg?.value !== 'false';
+  return new OssBackend(rc.oss);
 }
 
 export async function getStorageBackend(shopId?: string): Promise<ImageStorageBackend> {
-  const backendConfig = await prisma.systemConfig.findUnique({ where: { key: 'image_storage_backend' } });
-  const backendType = (backendConfig?.value || 'local') as StorageBackendType;
+  const rc = getRuntimeConfig();
+  const backendType = rc.imageStorage;
 
   switch (backendType) {
     case 'ozon-cdn': {
@@ -434,9 +429,8 @@ export async function getStorageBackend(shopId?: string): Promise<ImageStorageBa
       return await buildOzonCdnBackend(shopId);
     }
     case 'oss': {
-      const ossBackend = await buildOssBackend();
-      // Cloud 模式：OSS 为主，店铺有 CDN 凭证时自动挂载 fallback
-      if (shopId && await isOssFallbackEnabled()) {
+      const ossBackend = buildOssBackend();
+      if (shopId && rc.ossFallbackToCdn) {
         try {
           const cdnFallback = await buildOzonCdnBackend(shopId);
           return new FallbackStorageBackend(ossBackend, cdnFallback, 'OSS', 'OZON-CDN');
@@ -448,9 +442,7 @@ export async function getStorageBackend(shopId?: string): Promise<ImageStorageBa
     }
     case 'local':
     default: {
-      const baseUrlConfig = await prisma.systemConfig.findUnique({ where: { key: 'local_base_url' } });
-      const baseUrl = baseUrlConfig?.value || 'http://localhost:3001';
-      return new LocalBackend(baseUrl);
+      return new LocalBackend(rc.localBaseUrl);
     }
   }
 }

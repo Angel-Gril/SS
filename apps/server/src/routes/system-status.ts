@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
+import { getRuntimeConfig } from '../adapters/runtime-config.js';
 
 interface ConfiguredCheck {
   key: string;
@@ -16,18 +17,14 @@ function envIsSet(name: string): boolean {
   return typeof v === 'string' && v.trim().length > 0;
 }
 
-async function dbConfigPresent(key: string): Promise<boolean> {
-  const cfg = await prisma.systemConfig.findUnique({ where: { key }, select: { value: true } });
-  return !!(cfg?.value && cfg.value.trim().length > 0);
-}
-
 export async function systemStatusRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireSuperAdmin);
 
   app.get('/integrations', async (_request, reply) => {
-    const ossConfigured = await dbConfigPresent('oss_config');
-    const ozonRelay = await dbConfigPresent('ozon_cdn_relay_url');
+    const rc = getRuntimeConfig();
+    const ossConfigured = rc.oss !== null;
+    const ozonRelay = !!rc.ozonCdnRelayUrl;
 
     const checks: ConfiguredCheck[] = [
       {
@@ -60,13 +57,14 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         key: 'oss',
         label: 'OSS 对象存储',
         configured: ossConfigured,
-        source: 'db',
+        source: 'env',
+        detail: ossConfigured ? `bucket=${rc.oss!.bucket}` : undefined,
       },
       {
         key: 'ozon_cdn_relay',
         label: 'OZON CDN 中转',
         configured: ozonRelay,
-        source: 'db',
+        source: 'env',
         detail: '可选，国内直连失败时用',
       },
     ];
@@ -164,25 +162,21 @@ export async function systemStatusRoutes(app: FastifyInstance) {
 
   app.post('/test/oss', async (_request, reply) => {
     try {
-      const cfg = await prisma.systemConfig.findUnique({ where: { key: 'oss_config' } });
-      if (!cfg?.value) return reply.send({ code: 0, msg: 'OSS 未配置' });
+      const rc = getRuntimeConfig();
+      if (!rc.oss) return reply.send({ code: 0, msg: 'OSS 未配置（需设置 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET）' });
 
-      const parsed = JSON.parse(cfg.value);
-      if (!parsed.endpoint || !parsed.bucket || !parsed.accessKeyId || !parsed.accessKeySecret) {
-        return reply.send({ code: 0, msg: 'OSS 配置不完整（endpoint/bucket/accessKey 必填）' });
-      }
-
+      const { endpoint, bucket, accessKeyId, accessKeySecret, region } = rc.oss;
       const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3');
-      const endpoint = parsed.endpoint.startsWith('http') ? parsed.endpoint : `https://${parsed.endpoint}`;
+      const fullEndpoint = endpoint.startsWith('http') ? endpoint : `https://${endpoint}`;
       const client = new S3Client({
-        endpoint,
-        region: parsed.region || 'auto',
-        credentials: { accessKeyId: parsed.accessKeyId, secretAccessKey: parsed.accessKeySecret },
-        forcePathStyle: endpoint.includes('localhost') || endpoint.includes('minio'),
+        endpoint: fullEndpoint,
+        region: region || 'auto',
+        credentials: { accessKeyId, secretAccessKey: accessKeySecret },
+        forcePathStyle: fullEndpoint.includes('localhost') || fullEndpoint.includes('minio'),
       });
 
-      await client.send(new HeadBucketCommand({ Bucket: parsed.bucket }));
-      return reply.send({ code: 1, msg: `OSS 连接成功（bucket=${parsed.bucket}）` });
+      await client.send(new HeadBucketCommand({ Bucket: bucket }));
+      return reply.send({ code: 1, msg: `OSS 连接成功（bucket=${bucket}）` });
     } catch (e: any) {
       return reply.send({ code: 0, msg: `OSS 连接失败: ${e?.message?.slice(0, 200) || 'unknown'}` });
     }
