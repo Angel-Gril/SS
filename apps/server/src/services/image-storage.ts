@@ -338,6 +338,49 @@ class LocalBackend implements ImageStorageBackend {
   }
 }
 
+// ─── Fallback 包装：OSS 失败自动降级到 OZON CDN ───
+
+export class FallbackStorageBackend implements ImageStorageBackend {
+  constructor(
+    private primary: ImageStorageBackend,
+    private fallback: ImageStorageBackend,
+    private primaryName: string,
+    private fallbackName: string,
+  ) {}
+
+  async upload(filePath: string, mimeType?: string): Promise<ImageUploadResult> {
+    try {
+      return await this.primary.upload(filePath, mimeType);
+    } catch (e: any) {
+      console.warn(`[image-storage] ${this.primaryName} upload failed, falling back to ${this.fallbackName}: ${e.message}`);
+      return await this.fallback.upload(filePath, mimeType);
+    }
+  }
+
+  async uploadBuffer(buffer: Buffer, filename: string, mimeType?: string): Promise<ImageUploadResult> {
+    try {
+      return await this.primary.uploadBuffer(buffer, filename, mimeType);
+    } catch (e: any) {
+      console.warn(`[image-storage] ${this.primaryName} uploadBuffer failed, falling back to ${this.fallbackName}: ${e.message}`);
+      return await this.fallback.uploadBuffer(buffer, filename, mimeType);
+    }
+  }
+
+  async getPresignedPutUrl(input: PresignedUploadInput): Promise<PresignedUploadResult> {
+    if (this.primary.getPresignedPutUrl) {
+      try {
+        return await this.primary.getPresignedPutUrl(input);
+      } catch (e: any) {
+        console.warn(`[image-storage] ${this.primaryName} presign failed: ${e.message}`);
+      }
+    }
+    if (this.fallback.getPresignedPutUrl) {
+      return await this.fallback.getPresignedPutUrl(input);
+    }
+    throw new Error(`${this.primaryName} 预签名失败且 ${this.fallbackName} 不支持预签名，请使用 upload-base64 接口`);
+  }
+}
+
 // ─── 工厂：根据 SystemConfig 获取当前存储后端 ───
 
 export type StorageBackendType = 'ozon-cdn' | 'oss' | 'local';
@@ -355,6 +398,25 @@ async function getShopOzonAuth(shopId: string): Promise<ShopOzonAuth | null> {
   return { cookie: config.ozonCdnCookie, companyId: String(config.ozonCompanyId) };
 }
 
+async function buildOzonCdnBackend(shopId: string): Promise<OzonCdnBackend> {
+  const auth = await getShopOzonAuth(shopId);
+  if (!auth) {
+    throw new Error('目标店铺未同步 OZON CDN cookie/company_id，请通过浏览器扩展同步登录态');
+  }
+  const relayConfig = await prisma.systemConfig.findUnique({ where: { key: 'ozon_cdn_relay_url' } });
+  const relayUrl = relayConfig?.value || undefined;
+  return new OzonCdnBackend({ ...auth, relayUrl });
+}
+
+async function buildOssBackend(): Promise<OssBackend> {
+  const ossConfig = await prisma.systemConfig.findUnique({ where: { key: 'oss_config' } });
+  if (!ossConfig?.value) {
+    throw new Error('OSS 未配置，请在超管设置中配置');
+  }
+  const parsed = JSON.parse(ossConfig.value) as OssConfig;
+  return new OssBackend(parsed);
+}
+
 export async function getStorageBackend(shopId?: string): Promise<ImageStorageBackend> {
   const backendConfig = await prisma.systemConfig.findUnique({ where: { key: 'image_storage_backend' } });
   const backendType = (backendConfig?.value || 'local') as StorageBackendType;
@@ -364,21 +426,20 @@ export async function getStorageBackend(shopId?: string): Promise<ImageStorageBa
       if (!shopId) {
         throw new Error('OZON CDN 后端需要指定目标店铺（shopId）');
       }
-      const auth = await getShopOzonAuth(shopId);
-      if (!auth) {
-        throw new Error('目标店铺未同步 OZON CDN cookie/company_id，请通过浏览器扩展同步登录态');
-      }
-      const relayConfig = await prisma.systemConfig.findUnique({ where: { key: 'ozon_cdn_relay_url' } });
-      const relayUrl = relayConfig?.value || undefined;
-      return new OzonCdnBackend({ ...auth, relayUrl });
+      return await buildOzonCdnBackend(shopId);
     }
     case 'oss': {
-      const ossConfig = await prisma.systemConfig.findUnique({ where: { key: 'oss_config' } });
-      if (!ossConfig?.value) {
-        throw new Error('OSS 未配置，请在超管设置中配置');
+      const ossBackend = await buildOssBackend();
+      // Cloud 模式：OSS 为主，店铺有 CDN 凭证时自动挂载 fallback
+      if (shopId) {
+        try {
+          const cdnFallback = await buildOzonCdnBackend(shopId);
+          return new FallbackStorageBackend(ossBackend, cdnFallback, 'OSS', 'OZON-CDN');
+        } catch {
+          // 店铺无 CDN 凭证，纯 OSS 无降级
+        }
       }
-      const parsed = JSON.parse(ossConfig.value) as OssConfig;
-      return new OssBackend(parsed);
+      return ossBackend;
     }
     case 'local':
     default: {

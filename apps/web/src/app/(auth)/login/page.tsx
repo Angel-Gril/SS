@@ -21,7 +21,6 @@ const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [showTurnstile, setShowTurnstile] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileError, setTurnstileError] = useState('');
   const turnstileRef = useRef<TurnstileInstance | null>(null);
@@ -81,9 +80,6 @@ export default function LoginPage() {
         }
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
-        if (!IS_LOCAL_RUNTIME && (res.msg?.includes('人机验证') || res.msg?.includes('失败次数过多'))) {
-          setShowTurnstile(true);
-        }
         resetTurnstile();
       }
     } catch {
@@ -130,7 +126,7 @@ export default function LoginPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            {!IS_LOCAL_RUNTIME && showTurnstile && (
+            {!IS_LOCAL_RUNTIME && (
               TURNSTILE_SITE_KEY ? (
                 <div className="flex justify-center">
                   <Turnstile
@@ -158,7 +154,7 @@ export default function LoginPage() {
                 </p>
               )
             )}
-            {showTurnstile && turnstileError && (
+            {!IS_LOCAL_RUNTIME && turnstileError && (
               <div className="space-y-2 text-center">
                 <p className="text-xs text-destructive">{turnstileError}</p>
                 <Button type="button" variant="outline" size="sm" onClick={resetTurnstile}>
@@ -169,7 +165,7 @@ export default function LoginPage() {
             <Button
               type="submit"
               className="w-full"
-              disabled={loading || (showTurnstile && !turnstileToken)}
+              disabled={loading || (!IS_LOCAL_RUNTIME && !turnstileToken)}
             >
               {loading ? '登录中...' : '登录'}
             </Button>

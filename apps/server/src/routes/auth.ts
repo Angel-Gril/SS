@@ -103,13 +103,15 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { phone, password, turnstileToken } = parsed.data;
 
-    // 登录失败 5 次后强制 Turnstile
     const { redis } = await import('../lib/redis.js');
     const failKey = `login:fail:${request.ip}`;
     const failCount = Number(await redis.get(failKey) || '0');
-    if (requiresAuthChallenges() && failCount >= 5) {
+
+    // 云端模式：始终校验 Turnstile
+    if (requiresAuthChallenges()) {
       if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
-        return reply.status(403).send({ code: 0, msg: '登录失败次数过多，请完成人机验证' });
+        const hint = failCount >= 5 ? '登录失败次数过多，' : '';
+        return reply.status(403).send({ code: 0, msg: `${hint}请完成人机验证` });
       }
     }
 
