@@ -71,6 +71,8 @@ if (-not $SkipBuild) {
     }
     # 构建时注入 API 地址（前端 NEXT_PUBLIC_* 在 build 时内联）
     $env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:3401"
+    $env:NEXT_PUBLIC_RUNTIME_MODE = "local"
+    $env:NEXT_PUBLIC_TURNSTILE_SITE_KEY = ""
     pnpm run build
     if ($LASTEXITCODE -ne 0) { throw "web build 失败" }
     Pop-Location

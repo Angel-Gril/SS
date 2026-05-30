@@ -38,3 +38,7 @@ export function getRuntimeConfig(): RuntimeConfig {
     extensionSync: 'direct',
   };
 }
+
+export function requiresAuthChallenges(): boolean {
+  return getRuntimeMode() === 'cloud';
+}

@@ -137,6 +137,7 @@ cd /d "%ROOT%"
 REM ---------- 5. 启动 server + web ----------
 echo  [5/5] 启动服务...
 set "NODE_ENV=production"
+set "RUNTIME_MODE=local"
 set "SS_ERP_CONFIG=%ROOT%\config.json"
 set "SERVER_PORT=!SERVER_PORT!"
 set "PORT=!WEB_PORT!"

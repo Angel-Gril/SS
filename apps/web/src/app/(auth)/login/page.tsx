@@ -16,6 +16,7 @@ import { toast } from '@/components/ui/use-toast';
 const TURNSTILE_SITE_KEY =
   process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
   (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
+const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -64,7 +65,7 @@ export default function LoginPage() {
         }
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
-        if (res.msg?.includes('人机验证') || res.msg?.includes('失败次数过多')) {
+        if (!IS_LOCAL_RUNTIME && (res.msg?.includes('人机验证') || res.msg?.includes('失败次数过多'))) {
           setShowTurnstile(true);
         }
         turnstileRef.current?.reset();
@@ -114,7 +115,7 @@ export default function LoginPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            {showTurnstile && (
+            {!IS_LOCAL_RUNTIME && showTurnstile && (
               TURNSTILE_SITE_KEY ? (
                 <div className="flex justify-center">
                   <Turnstile

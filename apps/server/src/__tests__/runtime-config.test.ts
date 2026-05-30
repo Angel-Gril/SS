@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getRuntimeConfig, getRuntimeMode } from '../adapters/runtime-config.js';
+import { getRuntimeConfig, getRuntimeMode, requiresAuthChallenges } from '../adapters/runtime-config.js';
 
 describe('runtime config', () => {
   afterEach(() => {
@@ -16,6 +16,7 @@ describe('runtime config', () => {
       authSource: 'cookie',
       extensionSync: 'direct',
     });
+    expect(requiresAuthChallenges()).toBe(false);
   });
 
   it('enables cloud capabilities when RUNTIME_MODE=cloud', () => {
@@ -27,6 +28,7 @@ describe('runtime config', () => {
       authSource: 'token',
       extensionSync: 'queue',
     });
+    expect(requiresAuthChallenges()).toBe(true);
   });
 
   it('accepts only known cloud image storage backends', () => {

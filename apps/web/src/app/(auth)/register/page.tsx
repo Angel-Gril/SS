@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
+import { z } from 'zod';
 import { registerSchema, type RegisterInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,17 @@ import { toast } from '@/components/ui/use-toast';
 const TURNSTILE_SITE_KEY =
   process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
   (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
+const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
+
+const registerFormSchema = registerSchema.superRefine((data, ctx) => {
+  if (!IS_LOCAL_RUNTIME && !data.smsCode) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['smsCode'],
+      message: '请输入 6 位验证码',
+    });
+  }
+});
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -31,7 +43,7 @@ export default function RegisterPage() {
     getValues,
     formState: { errors },
   } = useForm<RegisterInput>({
-    resolver: zodResolver(registerSchema),
+    resolver: zodResolver(registerFormSchema),
   });
 
   function startCountdown() {
@@ -53,7 +65,7 @@ export default function RegisterPage() {
       toast({ title: '请先输入有效手机号', variant: 'destructive' });
       return;
     }
-    if (!turnstileToken) {
+    if (!IS_LOCAL_RUNTIME && !turnstileToken) {
       toast({ title: '请先完成人机验证', variant: 'destructive' });
       return;
     }
@@ -116,28 +128,30 @@ export default function RegisterPage() {
               <Input id="phone" placeholder="11 位手机号" {...register('phone')} autoComplete="tel" />
               {errors.phone && <p className="text-xs text-destructive">{errors.phone.message}</p>}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="smsCode">短信验证码</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="smsCode"
-                  placeholder="6 位验证码"
-                  inputMode="numeric"
-                  maxLength={6}
-                  {...register('smsCode')}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={onSendCode}
-                  disabled={sending || countdown > 0}
-                  className="shrink-0 w-32"
-                >
-                  {countdown > 0 ? `${countdown}s 后重试` : sending ? '发送中...' : '发送验证码'}
-                </Button>
+            {!IS_LOCAL_RUNTIME && (
+              <div className="space-y-2">
+                <Label htmlFor="smsCode">短信验证码</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="smsCode"
+                    placeholder="6 位验证码"
+                    inputMode="numeric"
+                    maxLength={6}
+                    {...register('smsCode')}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={onSendCode}
+                    disabled={sending || countdown > 0}
+                    className="shrink-0 w-32"
+                  >
+                    {countdown > 0 ? `${countdown}s 后重试` : sending ? '发送中...' : '发送验证码'}
+                  </Button>
+                </div>
+                {errors.smsCode && <p className="text-xs text-destructive">{errors.smsCode.message}</p>}
               </div>
-              {errors.smsCode && <p className="text-xs text-destructive">{errors.smsCode.message}</p>}
-            </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="nickname">昵称（可选）</Label>
               <Input id="nickname" placeholder="您的昵称" {...register('nickname')} />
@@ -155,21 +169,23 @@ export default function RegisterPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            {TURNSTILE_SITE_KEY ? (
-              <div className="flex justify-center">
-                <Turnstile
-                  ref={turnstileRef}
-                  siteKey={TURNSTILE_SITE_KEY}
-                  onSuccess={setTurnstileToken}
-                  onError={() => setTurnstileToken('')}
-                  onExpire={() => setTurnstileToken('')}
-                  options={{ size: 'flexible', theme: 'auto' }}
-                />
-              </div>
-            ) : (
-              <p className="text-xs text-destructive text-center">
-                Turnstile 站点密钥未配置，无法发送验证码
-              </p>
+            {!IS_LOCAL_RUNTIME && (
+              TURNSTILE_SITE_KEY ? (
+                <div className="flex justify-center">
+                  <Turnstile
+                    ref={turnstileRef}
+                    siteKey={TURNSTILE_SITE_KEY}
+                    onSuccess={setTurnstileToken}
+                    onError={() => setTurnstileToken('')}
+                    onExpire={() => setTurnstileToken('')}
+                    options={{ size: 'flexible', theme: 'auto' }}
+                  />
+                </div>
+              ) : (
+                <p className="text-xs text-destructive text-center">
+                  Turnstile 站点密钥未配置，无法发送验证码
+                </p>
+              )
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '注册中...' : '注册'}

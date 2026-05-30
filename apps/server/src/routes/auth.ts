@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession, removeSession, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { verifyTurnstile, sendSmsCode, verifySmsCode } from '../lib/captcha.js';
+import { requiresAuthChallenges } from '../adapters/runtime-config.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // 路由级频控：注册/登录 10 次/分钟
@@ -28,6 +29,9 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const { phone, turnstileToken } = parsed.data;
+    if (!requiresAuthChallenges()) {
+      return reply.send({ code: 1, msg: '本地模式无需短信验证码' });
+    }
 
     if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
       return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
@@ -55,7 +59,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { phone, password, nickname, smsCode } = parsed.data;
 
-    if (!await verifySmsCode(phone, smsCode)) {
+    if (requiresAuthChallenges() && (!smsCode || !await verifySmsCode(phone, smsCode))) {
       return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
     }
 
@@ -103,7 +107,7 @@ export async function authRoutes(app: FastifyInstance) {
     const { redis } = await import('../lib/redis.js');
     const failKey = `login:fail:${request.ip}`;
     const failCount = Number(await redis.get(failKey) || '0');
-    if (failCount >= 5) {
+    if (requiresAuthChallenges() && failCount >= 5) {
       if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
         return reply.status(403).send({ code: 0, msg: '登录失败次数过多，请完成人机验证' });
       }

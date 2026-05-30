@@ -1,11 +1,16 @@
 import { redis } from '../lib/redis.js';
+import { requiresAuthChallenges } from '../adapters/runtime-config.js';
 import { getSmsProvider } from './sms/index.js';
 
-const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || '';
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
 export async function verifyTurnstile(token: string, ip?: string): Promise<boolean> {
-  if (!TURNSTILE_SECRET) {
+  if (!requiresAuthChallenges()) {
+    return true;
+  }
+
+  const secret = process.env.TURNSTILE_SECRET_KEY || '';
+  if (!secret) {
     if (process.env.NODE_ENV === 'production') {
       console.error('[captcha] TURNSTILE_SECRET_KEY 未配置，生产环境拒绝放行');
       return false;
@@ -15,7 +20,7 @@ export async function verifyTurnstile(token: string, ip?: string): Promise<boole
 
   try {
     const body = new URLSearchParams({
-      secret: TURNSTILE_SECRET,
+      secret,
       response: token,
       ...(ip ? { remoteip: ip } : {}),
     });
@@ -67,6 +72,10 @@ export async function sendSmsCode(phone: string): Promise<{ ok: boolean; msg: st
 }
 
 export async function verifySmsCode(phone: string, code: string): Promise<boolean> {
+  if (!requiresAuthChallenges()) {
+    return true;
+  }
+
   const key = `${SMS_CODE_KEY_PREFIX}${phone}`;
   const stored = await redis.get(key);
   if (!stored) return false;

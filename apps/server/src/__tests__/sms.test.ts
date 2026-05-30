@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { sendSmsCode, verifySmsCode } from '../lib/captcha.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { sendSmsCode, verifySmsCode, verifyTurnstile } from '../lib/captcha.js';
 
 vi.mock('../lib/redis.js', () => ({
   redis: {
@@ -14,6 +14,11 @@ vi.mock('../lib/redis.js', () => ({
 describe('SMS verification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('should generate 6-digit code and store in redis', async () => {
@@ -62,5 +67,23 @@ describe('SMS verification', () => {
     const valid = await verifySmsCode('13800138000', '123456');
 
     expect(valid).toBe(false);
+  });
+
+  it('should bypass SMS verification in local runtime', async () => {
+    const { redis } = await import('../lib/redis.js');
+    vi.stubEnv('RUNTIME_MODE', 'local');
+
+    const valid = await verifySmsCode('13800138000', '');
+
+    expect(valid).toBe(true);
+    expect(redis.get).not.toHaveBeenCalled();
+  });
+
+  it('should bypass Turnstile in local runtime even when NODE_ENV=production', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'local');
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '');
+
+    await expect(verifyTurnstile('', '127.0.0.1')).resolves.toBe(true);
   });
 });

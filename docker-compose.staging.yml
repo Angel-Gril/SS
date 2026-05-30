@@ -82,6 +82,7 @@ services:
       dockerfile: docker/web.Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://staging.yourdomain.com/api}
+        NEXT_PUBLIC_RUNTIME_MODE: ${NEXT_PUBLIC_RUNTIME_MODE:-cloud}
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}
     restart: unless-stopped
     env_file:
