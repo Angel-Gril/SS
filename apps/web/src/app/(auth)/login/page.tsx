@@ -23,6 +23,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [showTurnstile, setShowTurnstile] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileError, setTurnstileError] = useState('');
   const turnstileRef = useRef<TurnstileInstance | null>(null);
 
   useEffect(() => {
@@ -46,6 +47,20 @@ export default function LoginPage() {
     resolver: zodResolver(loginSchema),
   });
 
+  function resetTurnstile() {
+    turnstileRef.current?.reset();
+    setTurnstileToken('');
+  }
+
+  function handleTurnstileError(errorCode?: string) {
+    setTurnstileToken('');
+    setTurnstileError(
+      errorCode
+        ? `人机验证加载失败（错误代码：${errorCode}），请重试或关闭代理/浏览器插件后再试`
+        : '人机验证加载失败，请重试或关闭代理/浏览器插件后再试',
+    );
+  }
+
   async function onSubmit(data: LoginInput) {
     setLoading(true);
     try {
@@ -55,6 +70,7 @@ export default function LoginPage() {
       });
       if (res.code === 1) {
         tokenStore.clear();
+        setTurnstileError('');
         const role = res.data?.user?.role;
         if (role === 'STAFF') {
           router.push('/warehouse');
@@ -68,8 +84,7 @@ export default function LoginPage() {
         if (!IS_LOCAL_RUNTIME && (res.msg?.includes('人机验证') || res.msg?.includes('失败次数过多'))) {
           setShowTurnstile(true);
         }
-        turnstileRef.current?.reset();
-        setTurnstileToken('');
+        resetTurnstile();
       }
     } catch {
       toast({ title: '网络错误', variant: 'destructive' });
@@ -121,10 +136,20 @@ export default function LoginPage() {
                   <Turnstile
                     ref={turnstileRef}
                     siteKey={TURNSTILE_SITE_KEY}
-                    onSuccess={setTurnstileToken}
-                    onError={() => setTurnstileToken('')}
-                    onExpire={() => setTurnstileToken('')}
-                    options={{ size: 'flexible', theme: 'auto' }}
+                    onSuccess={(token) => {
+                      setTurnstileToken(token);
+                      setTurnstileError('');
+                    }}
+                    onError={handleTurnstileError}
+                    onExpire={() => {
+                      setTurnstileToken('');
+                      setTurnstileError('人机验证已过期，请重新验证');
+                    }}
+                    onTimeout={() => {
+                      setTurnstileToken('');
+                      setTurnstileError('人机验证超时，请重新验证');
+                    }}
+                    options={{ size: 'flexible', theme: 'auto', retry: 'auto', refreshExpired: 'auto', refreshTimeout: 'auto' }}
                   />
                 </div>
               ) : (
@@ -132,6 +157,14 @@ export default function LoginPage() {
                   Turnstile 站点密钥未配置，无法完成人机验证
                 </p>
               )
+            )}
+            {showTurnstile && turnstileError && (
+              <div className="space-y-2 text-center">
+                <p className="text-xs text-destructive">{turnstileError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={resetTurnstile}>
+                  重新加载验证
+                </Button>
+              </div>
             )}
             <Button
               type="submit"

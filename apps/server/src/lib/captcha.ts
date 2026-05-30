@@ -32,7 +32,10 @@ export async function verifyTurnstile(token: string, ip?: string): Promise<boole
       signal: AbortSignal.timeout(5000),
     });
 
-    const data = await res.json() as { success: boolean };
+    const data = await res.json() as { success: boolean; 'error-codes'?: string[] };
+    if (data.success !== true) {
+      console.warn('[captcha] Turnstile rejected:', data['error-codes']?.join(',') || 'unknown');
+    }
     return data.success === true;
   } catch (e: any) {
     console.error('[captcha] Turnstile verify failed:', e.message);

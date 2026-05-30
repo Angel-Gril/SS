@@ -35,6 +35,7 @@ export default function RegisterPage() {
   const [sending, setSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileError, setTurnstileError] = useState('');
   const turnstileRef = useRef<TurnstileInstance | null>(null);
 
   const {
@@ -59,6 +60,20 @@ export default function RegisterPage() {
     }, 1000);
   }
 
+  function resetTurnstile() {
+    turnstileRef.current?.reset();
+    setTurnstileToken('');
+  }
+
+  function handleTurnstileError(errorCode?: string) {
+    setTurnstileToken('');
+    setTurnstileError(
+      errorCode
+        ? `人机验证加载失败（错误代码：${errorCode}），请重试或关闭代理/浏览器插件后再试`
+        : '人机验证加载失败，请重试或关闭代理/浏览器插件后再试',
+    );
+  }
+
   async function onSendCode() {
     const phone = getValues('phone');
     if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
@@ -75,17 +90,14 @@ export default function RegisterPage() {
       if (res.code === 1) {
         toast({ title: '验证码已发送' });
         startCountdown();
-        turnstileRef.current?.reset();
-        setTurnstileToken('');
+        resetTurnstile();
       } else {
         toast({ title: res.msg || '发送失败', variant: 'destructive' });
-        turnstileRef.current?.reset();
-        setTurnstileToken('');
+        resetTurnstile();
       }
     } catch {
       toast({ title: '网络错误', variant: 'destructive' });
-      turnstileRef.current?.reset();
-      setTurnstileToken('');
+      resetTurnstile();
     } finally {
       setSending(false);
     }
@@ -97,12 +109,12 @@ export default function RegisterPage() {
       const res = await api.post<{ token?: string }>('/api/auth/register', data);
       if (res.code === 1) {
         tokenStore.clear();
+        setTurnstileError('');
         toast({ title: '注册成功，欢迎使用松鼠跨境 ERP' });
         router.push('/');
       } else {
         toast({ title: res.msg || '注册失败', variant: 'destructive' });
-        turnstileRef.current?.reset();
-        setTurnstileToken('');
+        resetTurnstile();
       }
     } catch {
       toast({ title: '网络错误', variant: 'destructive' });
@@ -175,10 +187,20 @@ export default function RegisterPage() {
                   <Turnstile
                     ref={turnstileRef}
                     siteKey={TURNSTILE_SITE_KEY}
-                    onSuccess={setTurnstileToken}
-                    onError={() => setTurnstileToken('')}
-                    onExpire={() => setTurnstileToken('')}
-                    options={{ size: 'flexible', theme: 'auto' }}
+                    onSuccess={(token) => {
+                      setTurnstileToken(token);
+                      setTurnstileError('');
+                    }}
+                    onError={handleTurnstileError}
+                    onExpire={() => {
+                      setTurnstileToken('');
+                      setTurnstileError('人机验证已过期，请重新验证');
+                    }}
+                    onTimeout={() => {
+                      setTurnstileToken('');
+                      setTurnstileError('人机验证超时，请重新验证');
+                    }}
+                    options={{ size: 'flexible', theme: 'auto', retry: 'auto', refreshExpired: 'auto', refreshTimeout: 'auto' }}
                   />
                 </div>
               ) : (
@@ -186,6 +208,14 @@ export default function RegisterPage() {
                   Turnstile 站点密钥未配置，无法发送验证码
                 </p>
               )
+            )}
+            {!IS_LOCAL_RUNTIME && turnstileError && (
+              <div className="space-y-2 text-center">
+                <p className="text-xs text-destructive">{turnstileError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={resetTurnstile}>
+                  重新加载验证
+                </Button>
+              </div>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '注册中...' : '注册'}
