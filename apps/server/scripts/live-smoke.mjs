@@ -88,6 +88,15 @@ function assertSecureAuthCookie(headers, context) {
   return cookie;
 }
 
+function assertClearedAuthCookie(headers, context) {
+  const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
+  if (!cookie) throw new Error(`${context} did not clear sserp_token cookie`);
+  if (!/;\s*Max-Age=0/i.test(cookie) && !/;\s*Expires=/i.test(cookie)) {
+    throw new Error(`${context} clear cookie missing expiry: ${cookie}`);
+  }
+  return cookie;
+}
+
 async function expectOkJson(path) {
   const out = await api(path);
   if (out.status !== 200) {
@@ -165,6 +174,17 @@ async function main() {
       throw new Error(JSON.stringify(body));
     }
     return body.data;
+  });
+
+  await record('setup init cannot run after initialization', async () => {
+    const out = await api('/api/setup/init', {
+      method: 'POST',
+      body: JSON.stringify({ phone: `195${suffix}`, password, nickname: 'Repeat Setup', setupToken: 'wrong-token' }),
+    });
+    if (out.status !== 403 || out.body?.code === 1) {
+      throw new Error(`setup init unexpectedly allowed: ${out.status} ${JSON.stringify(out.body)}`);
+    }
+    return { status: out.status, msg: out.body?.msg };
   });
 
   await record('public pages render', async () => {
@@ -306,6 +326,29 @@ async function main() {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     return { available: out.body.data.available, timestamp: out.body.data.timestamp || null };
+  });
+
+  await record('extension token requires auth and works as bearer token', async () => {
+    const unauth = await api('/api/auth/extension-token', { method: 'POST' });
+    if (unauth.status !== 401) {
+      throw new Error(`extension-token without auth returned ${unauth.status}: ${JSON.stringify(unauth.body)}`);
+    }
+
+    const out = await api('/api/auth/extension-token', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    if (out.status !== 200 || out.body?.code !== 1 || !out.body?.data?.token) {
+      throw new Error(`extension-token failed: ${out.status} ${JSON.stringify(out.body)}`);
+    }
+
+    const runtime = await api('/api/extension/runtime', {
+      headers: { authorization: `Bearer ${out.body.data.token}` },
+    });
+    if (runtime.status !== 200 || runtime.body?.code !== 1 || runtime.body?.data?.mode !== expectRuntime) {
+      throw new Error(`extension token unusable: ${runtime.status} ${JSON.stringify(runtime.body)}`);
+    }
+    return { unauthStatus: unauth.status, runtimeMode: runtime.body.data.mode };
   });
 
   await record('plain admin cannot access super admin config endpoints', async () => {
@@ -466,6 +509,25 @@ async function main() {
       throw new Error(`admin route unavailable: ${adminRoute.status} ${JSON.stringify(adminRoute.body)}`);
     }
     return { blockedStatus: blocked.status, adminStatus: adminRoute.status };
+  });
+
+  await record('logout clears cookie and invalidates session token', async () => {
+    const logout = await api('/api/auth/logout', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    if (logout.status !== 200 || logout.body?.code !== 1) {
+      throw new Error(`logout failed: ${logout.status} ${JSON.stringify(logout.body)}`);
+    }
+    assertClearedAuthCookie(logout.headers, 'logout');
+
+    const me = await api('/api/admin/auth/me', {
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    if (me.status !== 401) {
+      throw new Error(`logged out token still accepted: ${me.status} ${JSON.stringify(me.body)}`);
+    }
+    return { logoutStatus: logout.status, meAfterLogoutStatus: me.status };
   });
 }
 
