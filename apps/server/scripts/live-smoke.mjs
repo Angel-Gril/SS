@@ -25,6 +25,7 @@ const expectRuntime = process.env.SMOKE_EXPECT_RUNTIME || 'cloud';
 const password = `Smoke${crypto.randomBytes(9).toString('base64url')}1!`;
 const suffix = String(Date.now()).slice(-8);
 const adminPhone = `199${suffix}`;
+const plainAdminPhone = `196${suffix}`;
 const userPhone = `198${suffix}`;
 const blockedPhone = `197${suffix}`;
 const smsCode = '123456';
@@ -144,11 +145,11 @@ async function cleanup() {
     const keys = await redis.keys(`session:${userId}:*`);
     if (keys.length) await redis.del(...keys);
   }
-  await prisma.user.deleteMany({ where: { phone: { in: [adminPhone, userPhone, blockedPhone] } } });
+  await prisma.user.deleteMany({ where: { phone: { in: [adminPhone, plainAdminPhone, userPhone, blockedPhone] } } });
 }
 
 async function main() {
-  await prisma.user.deleteMany({ where: { phone: { in: [adminPhone, userPhone, blockedPhone] } } });
+  await prisma.user.deleteMany({ where: { phone: { in: [adminPhone, plainAdminPhone, userPhone, blockedPhone] } } });
 
   await record('ready probes database and redis', async () => {
     const body = await expectOkJson('/ready');
@@ -247,6 +248,19 @@ async function main() {
   });
   createdUserIds.add(admin.id);
 
+  const plainAdmin = await prisma.user.create({
+    data: {
+      phone: plainAdminPhone,
+      passwordHash: await bcrypt.hash(password, 12),
+      nickname: 'Live Smoke Plain Admin',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      isSuperAdmin: false,
+      accountCode: `SMA${suffix.slice(-5)}`,
+    },
+  });
+  createdUserIds.add(plainAdmin.id);
+
   await record('admin dedicated login works', async () => {
     const out = await api('/api/admin/auth/login', {
       method: 'POST',
@@ -292,6 +306,27 @@ async function main() {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     return { available: out.body.data.available, timestamp: out.body.data.timestamp || null };
+  });
+
+  await record('plain admin cannot access super admin config endpoints', async () => {
+    const login = await api('/api/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: plainAdminPhone, password }),
+    });
+    if (login.status !== 200 || login.body?.code !== 1 || !login.body?.data?.token) {
+      throw new Error(`plain admin login failed: ${login.status} ${JSON.stringify(login.body)}`);
+    }
+    const plainAdminToken = login.body.data.token;
+    const configRead = await api('/api/admin/system-config', {
+      headers: { authorization: `Bearer ${plainAdminToken}` },
+    });
+    const backupRead = await api('/api/admin/ops/backup-status', {
+      headers: { authorization: `Bearer ${plainAdminToken}` },
+    });
+    if (configRead.status !== 403 || backupRead.status !== 403) {
+      throw new Error(`plain admin reached super admin endpoint: config=${configRead.status}, backup=${backupRead.status}`);
+    }
+    return { configStatus: configRead.status, backupStatus: backupRead.status };
   });
 
   await record('cloud login requires turnstile token', async () => {
