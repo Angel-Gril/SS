@@ -21,7 +21,20 @@ for (const file of envCandidates) {
 }
 
 const baseUrl = (process.env.SMOKE_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'https://ss-erp.com').replace(/\/+$/, '');
+const webBaseUrl = (process.env.SMOKE_WEB_BASE_URL || process.env.NEXT_PUBLIC_WEB_BASE_URL || baseUrl).replace(/\/+$/, '');
 const expectRuntime = process.env.SMOKE_EXPECT_RUNTIME || 'cloud';
+const expectSecureCookie = process.env.SMOKE_EXPECT_SECURE_COOKIE !== undefined
+  ? process.env.SMOKE_EXPECT_SECURE_COOKIE === 'true'
+  : baseUrl.startsWith('https://');
+const expectBackupStatus = process.env.SMOKE_EXPECT_BACKUP_STATUS !== undefined
+  ? process.env.SMOKE_EXPECT_BACKUP_STATUS === 'true'
+  : expectRuntime === 'cloud';
+const expectWebNoLocalFallback = process.env.SMOKE_EXPECT_WEB_NO_LOCAL_FALLBACK !== undefined
+  ? process.env.SMOKE_EXPECT_WEB_NO_LOCAL_FALLBACK === 'true'
+  : expectRuntime === 'cloud';
+const expectOss = process.env.SMOKE_EXPECT_OSS !== undefined
+  ? process.env.SMOKE_EXPECT_OSS === 'true'
+  : (process.env.IMAGE_STORAGE_BACKEND || '').toLowerCase() === 'oss';
 const password = `Smoke${crypto.randomBytes(9).toString('base64url')}1!`;
 const suffix = String(Date.now()).slice(-8);
 const adminPhone = `199${suffix}`;
@@ -44,6 +57,7 @@ const createdUserIds = new Set();
 const maintenanceKeys = ['maintenance_enabled', 'maintenance_message', 'maintenance_allow_admin', 'maintenance_readonly'];
 let adminToken = '';
 let oldMaintenanceRows = null;
+let adminCookie = '';
 
 async function record(name, fn) {
   try {
@@ -73,6 +87,12 @@ async function api(path, options = {}) {
   return { status: response.status, body, headers: response.headers };
 }
 
+async function web(path, options = {}) {
+  const response = await fetch(`${webBaseUrl}${path}`, options);
+  const text = await response.text();
+  return { status: response.status, body: text, headers: response.headers };
+}
+
 function getSetCookies(headers) {
   if (typeof headers.getSetCookie === 'function') return headers.getSetCookie();
   const cookie = headers.get('set-cookie');
@@ -82,11 +102,35 @@ function getSetCookies(headers) {
 function assertSecureAuthCookie(headers, context) {
   const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
   if (!cookie) throw new Error(`${context} did not set sserp_token cookie`);
-  const requiredAttrs = [/;\s*HttpOnly/i, /;\s*Secure/i, /;\s*SameSite=Lax/i, /;\s*Path=\//i];
+  const requiredAttrs = [/;\s*HttpOnly/i, /;\s*SameSite=Lax/i, /;\s*Path=\//i];
   for (const attr of requiredAttrs) {
     if (!attr.test(cookie)) throw new Error(`${context} cookie missing ${attr}: ${cookie}`);
   }
+  if (expectSecureCookie && !/;\s*Secure/i.test(cookie)) {
+    throw new Error(`${context} cookie missing /;\\s*Secure/i: ${cookie}`);
+  }
+  if (!expectSecureCookie && /;\s*Secure/i.test(cookie)) {
+    throw new Error(`${context} cookie unexpectedly Secure for non-HTTPS smoke: ${cookie}`);
+  }
   return cookie;
+}
+
+function cookieHeaderFromSetCookie(headers) {
+  const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
+  if (!cookie) return '';
+  return cookie.split(';')[0];
+}
+
+function authHeaders(extra = {}) {
+  return {
+    ...(adminCookie ? { cookie: adminCookie } : {}),
+    ...(adminToken ? { authorization: `Bearer ${adminToken}` } : {}),
+    ...extra,
+  };
+}
+
+function findCheck(checks, key) {
+  return Array.isArray(checks) ? checks.find((item) => item && item.key === key) : null;
 }
 
 function assertClearedAuthCookie(headers, context) {
@@ -192,9 +236,9 @@ async function main() {
     const pages = ['/', '/login', '/admin/login', '/register', '/setup', '/landing'];
     const statuses = {};
     for (const page of pages) {
-      const out = await api(page, { headers: { accept: 'text/html' } });
+      const out = await web(page, { headers: { accept: 'text/html' }, redirect: 'manual' });
       statuses[page] = out.status;
-      if (out.status !== 200) throw new Error(`${page} returned ${out.status}`);
+      if (out.status !== 200 && out.status !== 307 && out.status !== 308) throw new Error(`${page} returned ${out.status}`);
     }
     return statuses;
   });
@@ -204,13 +248,13 @@ async function main() {
     const seen = new Set();
     const bad = [];
     for (const page of pages) {
-      const out = await api(page, { headers: { accept: 'text/html' } });
+      const out = await web(page, { headers: { accept: 'text/html' } });
       const html = String(out.body || '');
       const scripts = [...html.matchAll(/<script[^>]+src="([^"]+)"/g)]
         .map((match) => match[1])
         .filter((src) => src.includes('/_next/'));
       for (const src of scripts) {
-        const url = src.startsWith('http') ? src : `${baseUrl}${src}`;
+        const url = src.startsWith('http') ? src : `${webBaseUrl}${src}`;
         if (seen.has(url)) continue;
         seen.add(url);
         const res = await fetch(url);
@@ -220,8 +264,8 @@ async function main() {
         if (hasLocal && !hasBase) bad.push(url);
       }
     }
-    if (bad.length) throw new Error(`bad chunks: ${bad.join(', ')}`);
-    return { checkedChunks: seen.size };
+    if (expectWebNoLocalFallback && bad.length) throw new Error(`bad chunks: ${bad.join(', ')}`);
+    return { checkedChunks: seen.size, localFallbackChunks: bad.length };
   });
 
   await record('cors rejects untrusted origins', async () => {
@@ -291,13 +335,14 @@ async function main() {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     assertSecureAuthCookie(out.headers, 'admin login');
+    adminCookie = cookieHeaderFromSetCookie(out.headers);
     adminToken = out.body.data.token;
     return { status: out.status, role: out.body.data.user.role };
   });
 
   await record('admin me requires admin auth', async () => {
     const out = await api('/api/admin/auth/me', {
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
     if (out.status !== 200 || out.body?.code !== 1 || out.body?.data?.role !== 'ADMIN') {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
@@ -307,7 +352,7 @@ async function main() {
 
   await record('orders stats empty state returns complete fields', async () => {
     const out = await api('/api/orders/stats', {
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
     if (out.status !== 200 || out.body?.code !== 1) {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
@@ -321,12 +366,42 @@ async function main() {
 
   await record('super admin can read backup status', async () => {
     const out = await api('/api/admin/ops/backup-status', {
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
-    if (out.status !== 200 || out.body?.code !== 1 || out.body?.data?.available !== true) {
+    if (out.status !== 200 || out.body?.code !== 1) {
+      throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
+    }
+    if (expectBackupStatus && out.body?.data?.available !== true) {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
     return { available: out.body.data.available, timestamp: out.body.data.timestamp || null };
+  });
+
+  await record('super admin can inspect and test OSS integration when configured', async () => {
+    if (!expectOss) {
+      return { skipped: 'SMOKE_EXPECT_OSS not set and IMAGE_STORAGE_BACKEND != oss' };
+    }
+
+    const integrations = await api('/api/admin/system-status/integrations', {
+      headers: authHeaders(),
+    });
+    if (integrations.status !== 200 || integrations.body?.code !== 1) {
+      throw new Error(`integrations failed: ${integrations.status} ${JSON.stringify(integrations.body)}`);
+    }
+    const ossCheck = findCheck(integrations.body?.data?.checks, 'oss');
+    if (!ossCheck?.configured) {
+      throw new Error(`oss integration not configured: ${JSON.stringify(ossCheck)}`);
+    }
+
+    const test = await api('/api/admin/system-status/test/oss', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    if (test.status !== 200 || test.body?.code !== 1) {
+      throw new Error(`oss test failed: ${test.status} ${JSON.stringify(test.body)}`);
+    }
+
+    return { configured: true, detail: ossCheck.detail || null, message: test.body?.msg || null };
   });
 
   await record('extension token requires auth and works as bearer token', async () => {
@@ -337,7 +412,7 @@ async function main() {
 
     const out = await api('/api/auth/extension-token', {
       method: 'POST',
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
     if (out.status !== 200 || out.body?.code !== 1 || !out.body?.data?.token) {
       throw new Error(`extension-token failed: ${out.status} ${JSON.stringify(out.body)}`);
@@ -400,14 +475,21 @@ async function main() {
     if (expectRuntime === 'cloud' && register.status !== 400) {
       throw new Error(`register without sms should be rejected, got ${register.status}: ${JSON.stringify(register.body)}`);
     }
+    if (expectRuntime !== 'cloud' && register.status !== 201) {
+      throw new Error(`local register without sms should be allowed, got ${register.status}: ${JSON.stringify(register.body)}`);
+    }
 
     const existing = await prisma.user.findUnique({ where: { phone: userPhone }, select: { id: true } });
-    if (existing) throw new Error(`user was created without SMS proof: ${existing.id}`);
+    if (expectRuntime === 'cloud' && existing) throw new Error(`user was created without SMS proof: ${existing.id}`);
+    if (expectRuntime !== 'cloud' && existing) createdUserIds.add(existing.id);
 
     return { smsStatus: sms.status, registerStatus: register.status };
   });
 
   await record('registration with seeded sms creates normal user', async () => {
+    if (expectRuntime !== 'cloud') {
+      return { skipped: 'local runtime already allows registration without SMS proof' };
+    }
     await redis.set(`sms:code:${userPhone}`, smsCode, 'EX', 300);
     const out = await api('/api/auth/register', {
       method: 'POST',
@@ -465,7 +547,7 @@ async function main() {
     if (unauth.status !== 401) throw new Error(`runtime without auth returned ${unauth.status}`);
 
     const runtime = await api('/api/extension/runtime', {
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
     if (runtime.status !== 200 || runtime.body?.code !== 1) {
       throw new Error(`${runtime.status} ${JSON.stringify(runtime.body)}`);
@@ -476,7 +558,7 @@ async function main() {
 
     const sync = await api('/api/extension/sync-cookie', {
       method: 'POST',
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
       body: JSON.stringify({ shopId: 'smoke-missing-shop', cookie: 'a=b', companyId: '1' }),
     });
     if (expectRuntime === 'cloud' && sync.status !== 400) {
@@ -504,7 +586,7 @@ async function main() {
     }
 
     const adminRoute = await api('/api/admin/ops/backup-status', {
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
     if (adminRoute.status !== 200 || adminRoute.body?.code !== 1) {
       throw new Error(`admin route unavailable: ${adminRoute.status} ${JSON.stringify(adminRoute.body)}`);
@@ -515,7 +597,7 @@ async function main() {
   await record('logout clears cookie and invalidates session token', async () => {
     const logout = await api('/api/auth/logout', {
       method: 'POST',
-      headers: { authorization: `Bearer ${adminToken}` },
+      headers: authHeaders(),
     });
     if (logout.status !== 200 || logout.body?.code !== 1) {
       throw new Error(`logout failed: ${logout.status} ${JSON.stringify(logout.body)}`);

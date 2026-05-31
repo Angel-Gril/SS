@@ -21,6 +21,17 @@ Use this for the VPS production/early SaaS phase:
 - one VPS runs Nginx, Web, API, Worker, PostgreSQL, and Redis
 - services are still managed by systemd
 - deploys need a quick rollback path without introducing Kubernetes or a deploy panel
+- the simplest GitHub-based flow is still a normal git checkout plus `deploy-staging.sh`
+
+## VPS sizing and tuning
+
+For the current user scale, a single VPS is still the default recommendation:
+
+- `2C4G` is enough for small-stage testing or light production if builds are done off-box
+- `4C8G` is safer when API, Web, Worker, PostgreSQL, and Redis share one machine
+- add swap before reaching for bigger architecture changes
+- keep API/Web loopback-only and expose only `80/443`
+- split worker first when queue backlog or sync jobs start interfering with request latency
 
 ## Initialize Server
 
@@ -107,6 +118,15 @@ DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root ./scripts/rollback.sh 9538dc9
 
 Rollback switches the symlink, restarts services, and checks `/ready`.
 
+If the VPS is itself a git checkout and you want the lowest-friction update path, use:
+
+```bash
+cd /opt/ss-erp
+./scripts/deploy-staging.sh
+```
+
+That path is good for small teams and fast iteration. The release/symlink path is better when you want immutable releases and one-command rollback.
+
 ## Important Notes
 
 - Database migrations are not automatically reversed. Rollback restores application code, not database schema.
@@ -117,6 +137,17 @@ Rollback switches the symlink, restarts services, and checks `/ready`.
 ./scripts/verify-vps-deploy.sh
 cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
 ```
+
+Recommended deploy order:
+
+1. backup database
+2. publish commit / pull branch
+3. migrate database
+4. build
+5. restart services
+6. run `/ready`
+7. run `smoke:live`
+8. run `verify-vps-deploy.sh`
 
 ## Existing Non-Release Deploy
 

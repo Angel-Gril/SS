@@ -50,7 +50,7 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl start ss-erp-api ss-erp-worker ss-erp-web
 ```
 
-## 日常更新
+## 日常更新 / 今天的更新推送
 
 ```bash
 cd /opt/ss-erp
@@ -59,7 +59,7 @@ cd /opt/ss-erp
 
 执行部署脚本的用户需要有权限执行 `sudo systemctl restart ss-erp-*`。
 
-默认部署当前已 checkout 的分支；如需指定分支或部署目录：
+默认部署当前已 checkout 的分支；如果你想让 VPS 直接跟着 GitHub 仓库跑，这是最省事的方式。若要指定分支或部署目录：
 
 ```bash
 DEPLOY_BRANCH=hardening/prelaunch-auth-security ./scripts/deploy-staging.sh  # 当前预上线分支示例
@@ -67,6 +67,8 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/deploy-staging.sh
 ```
 
 `deploy-staging.sh` 会加载 `.env.staging`，用于 `prisma migrate deploy` 和 `next build`。如果密钥包含 `$`、`#`、空格等特殊字符，请在 `.env.staging` 里加引号，保持 shell-compatible。
+
+如果你更重视回滚和版本隔离，可以改用 `scripts/deploy.sh` 的 release 目录模式；这两种方式不要混着用。
 
 ## 查看日志
 
@@ -161,6 +163,13 @@ VERIFY_RESTORE_LOCAL_POSTGRES=1 ./scripts/verify-backup-restore.sh
 cat scripts/backup-db.crontab.example
 ```
 
+建议至少做两类备份测试：
+
+1. `backup-db.sh` 是否能成功生成本地备份和 `backup-status.json`
+2. `verify-backup-restore.sh` 是否能把备份恢复到临时库并自动清理
+
+如果备份桶接到了 R2 / 其他 S3 兼容存储，备份桶最好和图片桶分开，避免对象生命周期规则互相干扰。
+
 ## 常见问题
 
 ### API 启动失败
@@ -236,6 +245,15 @@ Worker 每天执行一次，清理对象：
 # 8. cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
 # 9. 关闭维护模式
 ```
+
+## VPS 最小优化建议
+
+- 当前用户量不大时，先保持单体部署
+- 2C4G 可以跑，但 4C8G 会更宽松，尤其是同机跑 PostgreSQL、Redis、worker 和构建任务时
+- 先加 swap，再考虑拆 worker
+- API 和 Web 都只监听 loopback，外网只暴露 Nginx 的 80/443
+- worker 只有在队列堆积、同步任务拖慢接口时才拆出去
+- 不需要 1Panel 或 K8s 才能把这套系统跑好
 
 ## 环境变量：图片存储
 
