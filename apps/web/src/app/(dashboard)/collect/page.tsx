@@ -28,6 +28,7 @@ interface CollectedItem {
   sourceUrl: string | null;
   sourcePlatform: string | null;
   sku: string | null;
+  sourceProductId: string | null;
   images: string[] | null;
   purchasePrice: string | null;
   currency: string;
@@ -636,6 +637,9 @@ export default function CollectPage() {
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
                           {item.sku && <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">SKU: {item.sku}</span>}
+                          {item.sourceProductId && item.sourceProductId !== item.sku && (
+                            <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">源ID: {item.sourceProductId}</span>
+                          )}
                           {item.sourcePlatform && (
                             <Badge variant="outline" className="text-xs font-normal">{item.sourcePlatform}</Badge>
                           )}

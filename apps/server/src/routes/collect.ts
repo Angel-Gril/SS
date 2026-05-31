@@ -179,6 +179,7 @@ export async function collectRoutes(app: FastifyInstance) {
       where.OR = [
         { title: { contains: query.search, mode: 'insensitive' } },
         { sku: { contains: query.search, mode: 'insensitive' } },
+        { sourceProductId: { contains: query.search, mode: 'insensitive' } },
       ];
     }
 
@@ -255,6 +256,7 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     let saved = 0;
+    const errors: { sku?: string; sourceProductId?: string; title?: string; error: string }[] = [];
     for (const item of body.items.slice(0, 50)) {
       try {
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
@@ -299,10 +301,25 @@ export async function collectRoutes(app: FastifyInstance) {
           },
         });
         saved++;
-      } catch {}
+      } catch (e: any) {
+        const errMsg = (e?.message ? String(e.message) : '未知错误').slice(0, 300);
+        console.error(`[batch-collect] failed sku=${item.sku || item.sourceProductId}:`, errMsg);
+        errors.push({
+          sku: item.sku ? String(item.sku) : undefined,
+          sourceProductId: item.sourceProductId ? String(item.sourceProductId) : undefined,
+          title: item.title ? String(item.title).slice(0, 100) : undefined,
+          error: errMsg,
+        });
+      }
     }
 
-    return reply.send({ code: 1, msg: `成功采集 ${saved} 件商品`, data: { saved } });
+    return reply.send({
+      code: saved > 0 ? 1 : 0,
+      msg: saved > 0
+        ? (errors.length ? `成功采集 ${saved} 件商品，${errors.length} 件失败` : `成功采集 ${saved} 件商品`)
+        : (errors.length ? `采集失败：${errors[0]!.error}` : '采集失败'),
+      data: { saved, errors },
+    });
   });
 
   app.post('/:id/list', async (request, reply) => {

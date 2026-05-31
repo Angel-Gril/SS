@@ -520,13 +520,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ss-erp:query-collect-status') {
-    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY]).then((result) => {
-      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, 'ss_erp_connection']).then((result) => {
+      const legacyConn = result.ss_erp_connection || {};
+      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY] || (legacyConn.baseUrl ? legacyConn.baseUrl + '/api/collect' : ''));
       if (!baseEndpoint) {
         sendResponse({ ok: false, msg: '未配置 ERP' });
         return;
       }
-      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
+      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY] || legacyConn.token).trim();
       if (!token) {
         sendResponse({ ok: false, msg: '未配置 ERP Token' });
         return;
@@ -559,33 +560,93 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'ss-erp:collect-product') {
-    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY]).then((result) => {
-      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
-      if (!baseEndpoint) throw new Error('未配置 ERP');
-      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
-      if (!token) throw new Error('未配置 ERP Token');
-      const collectUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect';
-      return fetch(collectUrl, {
+  if (message.type === 'ss-erp:query-collect-batch-snapshot') {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, 'ss_erp_connection']).then((result) => {
+      const legacyConn = result.ss_erp_connection || {};
+      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY] || (legacyConn.baseUrl ? legacyConn.baseUrl + '/api/collect' : ''));
+      if (!baseEndpoint) {
+        sendResponse({ ok: false, msg: '未配置 ERP' });
+        return;
+      }
+      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY] || legacyConn.token).trim();
+      if (!token) {
+        sendResponse({ ok: false, msg: '未配置 ERP Token' });
+        return;
+      }
+      const skus = Array.isArray(message.skus)
+        ? message.skus.map((s) => String(s || '').trim()).filter(Boolean)
+        : [];
+      if (!skus.length) {
+        sendResponse({ ok: false, msg: '缺少 SKU 列表' });
+        return;
+      }
+      const queryUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect/batch-snapshot';
+      return fetch(queryUrl, {
         method: 'POST',
-        headers: { 'content-type': 'application/json;charset=utf-8', authorization: 'Bearer ' + token },
-        body: JSON.stringify({
-          title: 'OZON SKU ' + message.sku,
-          sourceUrl: message.url,
-          sourcePlatform: 'ozon',
-          sku: message.sku,
-          sourceProductId: message.sku,
-        }),
+        headers: {
+          'content-type': 'application/json;charset=utf-8',
+          authorization: 'Bearer ' + token,
+        },
+        body: JSON.stringify({ skus: skus.slice(0, 100) }),
       }).then((response) => response.text().then((text) => {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
+        if (!response.ok) {
+          sendResponse({ ok: false, msg: 'HTTP ' + response.status });
+          return;
+        }
         let parsed = {};
         try { parsed = JSON.parse(text); } catch (e) {}
-        if (parsed.code === 0) throw new Error(parsed.msg || '采集失败');
-        sendResponse({ ok: true });
+        if (parsed.code === 1) {
+          sendResponse({ ok: true, data: parsed.data || {} });
+        } else {
+          sendResponse({ ok: false, msg: parsed.msg || '查询失败' });
+        }
       }));
     }).catch((error) => {
       sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
     });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:collect-product') {
+    // 复用 collect-background.js 暴露的完整链路，避免 background 自发消息导致 MV3 接收端丢失。
+    const sku = String(message.sku || '').trim();
+    if (!sku) {
+      sendResponse({ ok: false, msg: '缺少 SKU' });
+      return false;
+    }
+    const collector = globalThis.SS_ERP_COLLECT_BACKGROUND && globalThis.SS_ERP_COLLECT_BACKGROUND.collectOzonProductsToErp;
+    if (typeof collector !== 'function') {
+      sendResponse({ ok: false, msg: '采集模块未加载，请重新加载扩展后重试' });
+      return false;
+    }
+    collector([sku]).then((resp) => {
+        if (!resp || !resp.ok) {
+          sendResponse({ ok: false, msg: (resp && resp.error) || '采集失败' });
+          return;
+        }
+        const data = resp.data || {};
+        const errors = Array.isArray(data.errors) ? data.errors : [];
+        const collected = Number(data.collected) || 0;
+        if (collected > 0) {
+          const firstError = errors[0];
+          sendResponse({
+            ok: true,
+            collected,
+            errorCount: errors.length,
+            msg: errors.length
+              ? `已采集 ${collected} 件，${errors.length} 件失败：${firstError?.error || '未知错误'}`
+              : `已采集 ${collected} 件商品`,
+          });
+        } else {
+          const firstError = errors[0];
+          sendResponse({
+            ok: false,
+            msg: firstError?.error || '采集失败：未拿到商品数据',
+          });
+        }
+      }).catch((error) => {
+        sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+      });
     return true;
   }
 
@@ -597,9 +658,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'ERP 导入地址必须是 http/https URL' });
       return false;
     }
+    const baseUrl = endpoint.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
     chrome.storage.local.set({
       [OZON_CALC_ERP_ENDPOINT_KEY]: endpoint,
       [OZON_CALC_ERP_TOKEN_KEY]: token,
+      ss_erp_connection: { baseUrl, token },
     }).then(() => {
       if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
       sendResponse({ ok: true, endpoint, hasToken: Boolean(token) });
