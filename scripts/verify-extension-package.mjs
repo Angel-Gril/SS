@@ -1,0 +1,265 @@
+#!/usr/bin/env node
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+
+const extensionDir = path.resolve(process.env.EXTENSION_DIR || 'extensions/ss-erp');
+const strict = process.env.STRICT_EXTENSION_CHECK === '1';
+const failures = [];
+const warnings = [];
+const passes = [];
+
+function pass(message) {
+  passes.push(message);
+  console.log(`PASS ${message}`);
+}
+
+function warn(message) {
+  warnings.push(message);
+  console.log(`WARN ${message}`);
+}
+
+function fail(message) {
+  failures.push(message);
+  console.log(`FAIL ${message}`);
+}
+
+function readJson(file) {
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+function relToAbs(relPath) {
+  return path.resolve(extensionDir, relPath.replaceAll('/', path.sep));
+}
+
+function fileExists(relPath, label = relPath) {
+  const abs = relToAbs(relPath);
+  if (existsSync(abs) && statSync(abs).isFile()) {
+    pass(`${label} exists`);
+    return true;
+  }
+  fail(`${label} missing: ${relPath}`);
+  return false;
+}
+
+function addUnique(set, value) {
+  if (value && typeof value === 'string') set.add(value);
+}
+
+async function listFiles(dir) {
+  const out = [];
+  async function walk(current) {
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const abs = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        await walk(abs);
+      } else if (entry.isFile()) {
+        out.push(abs);
+      }
+    }
+  }
+  await walk(dir);
+  return out;
+}
+
+function parseImportScripts(jsRelPath) {
+  const abs = relToAbs(jsRelPath);
+  if (!existsSync(abs)) return [];
+  const text = readFileSync(abs, 'utf8');
+  const imports = [];
+  const regex = /importScripts\s*\(([^)]*)\)/g;
+  let match;
+  while ((match = regex.exec(text))) {
+    const args = match[1];
+    const stringRegex = /['"]([^'"]+)['"]/g;
+    let stringMatch;
+    while ((stringMatch = stringRegex.exec(args))) {
+      const importPath = stringMatch[1];
+      if (/^https?:\/\//i.test(importPath)) {
+        fail(`${jsRelPath} imports remote script: ${importPath}`);
+        continue;
+      }
+      const normalized = path
+        .normalize(path.join(path.dirname(jsRelPath), importPath))
+        .replaceAll(path.sep, '/');
+      imports.push(normalized);
+    }
+  }
+  return imports;
+}
+
+function parseHtmlLocalRefs(htmlRelPath) {
+  const abs = relToAbs(htmlRelPath);
+  if (!existsSync(abs)) return [];
+  const text = readFileSync(abs, 'utf8');
+  const refs = [];
+  const regex = /\b(?:src|href)=["']([^"']+)["']/g;
+  let match;
+  while ((match = regex.exec(text))) {
+    const ref = match[1];
+    if (!ref || ref.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(ref)) continue;
+    const normalized = path
+      .normalize(path.join(path.dirname(htmlRelPath), ref.split(/[?#]/)[0]))
+      .replaceAll(path.sep, '/');
+    refs.push(normalized);
+  }
+  return refs;
+}
+
+function checkSyntax(jsFiles) {
+  for (const relPath of jsFiles) {
+    const abs = relToAbs(relPath);
+    const result = spawnSync(process.execPath, ['--check', abs], { encoding: 'utf8' });
+    if (result.status === 0) {
+      pass(`js syntax ok: ${relPath}`);
+    } else {
+      fail(`js syntax failed: ${relPath}\n${result.stderr || result.stdout}`);
+    }
+  }
+}
+
+function checkDangerousCode(files) {
+  const remoteScriptPattern = /<script[^>]+src=["']https?:\/\//i;
+  for (const abs of files) {
+    const relPath = path.relative(extensionDir, abs).replaceAll(path.sep, '/');
+    const text = readFileSync(abs, 'utf8');
+    if (/\beval\s*\(/.test(text)) fail(`eval() found: ${relPath}`);
+    if (/\bnew\s+Function\s*\(/.test(text)) fail(`new Function() found: ${relPath}`);
+    if (remoteScriptPattern.test(text)) fail(`remote script tag found: ${relPath}`);
+  }
+  pass('dangerous code pattern scan complete');
+}
+
+const manifestPath = path.join(extensionDir, 'manifest.json');
+if (!existsSync(manifestPath)) {
+  console.error(`FAIL manifest missing: ${manifestPath}`);
+  process.exit(1);
+}
+
+const manifest = readJson(manifestPath);
+pass('manifest JSON parses');
+
+if (manifest.manifest_version === 3) pass('manifest_version is 3');
+else fail(`manifest_version is not 3: ${manifest.manifest_version}`);
+
+if (manifest.name && manifest.version) pass(`extension identity: ${manifest.name} ${manifest.version}`);
+else fail('manifest name/version missing');
+
+const referenced = new Set(['manifest.json']);
+const jsReferenced = new Set();
+const htmlReferenced = new Set();
+
+for (const icon of Object.values(manifest.icons || {})) addUnique(referenced, icon);
+for (const icon of Object.values(manifest.action?.default_icon || {})) addUnique(referenced, icon);
+addUnique(referenced, manifest.action?.default_popup);
+addUnique(referenced, manifest.options_page);
+
+if (manifest.background?.service_worker) {
+  addUnique(referenced, manifest.background.service_worker);
+  addUnique(jsReferenced, manifest.background.service_worker);
+} else {
+  fail('background.service_worker missing');
+}
+
+for (const script of manifest.content_scripts || []) {
+  for (const js of script.js || []) {
+    addUnique(referenced, js);
+    addUnique(jsReferenced, js);
+  }
+  for (const css of script.css || []) addUnique(referenced, css);
+}
+
+for (const resourceGroup of manifest.web_accessible_resources || []) {
+  for (const resource of resourceGroup.resources || []) {
+    if (!resource.includes('*')) addUnique(referenced, resource);
+  }
+}
+
+for (const html of [...referenced].filter((item) => item.endsWith('.html'))) {
+  addUnique(htmlReferenced, html);
+  for (const ref of parseHtmlLocalRefs(html)) addUnique(referenced, ref);
+}
+
+const importQueue = [...jsReferenced];
+for (let index = 0; index < importQueue.length; index += 1) {
+  const current = importQueue[index];
+  for (const imported of parseImportScripts(current)) {
+    if (!jsReferenced.has(imported)) {
+      jsReferenced.add(imported);
+      referenced.add(imported);
+      importQueue.push(imported);
+    }
+  }
+}
+
+for (const file of [...referenced].sort()) fileExists(file);
+
+const allFiles = await listFiles(extensionDir);
+const allJsFiles = allFiles
+  .filter((file) => file.endsWith('.js'))
+  .map((file) => path.relative(extensionDir, file).replaceAll(path.sep, '/'))
+  .sort();
+
+checkSyntax(allJsFiles);
+checkDangerousCode(allFiles.filter((file) => /\.(?:js|html)$/i.test(file)));
+
+const requiredAdapters = [
+  'shared/adapters/runtime-config.js',
+  'shared/adapters/local-adapter.js',
+  'shared/adapters/cloud-adapter.js',
+  'shared/adapters/erp-client.js',
+  'shared/erp-adapter/runtime-mode.js',
+];
+
+for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
+
+const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
+for (const adapter of requiredAdapters) {
+  const relFromBackground = `../${adapter}`;
+  if (swText.includes(relFromBackground)) pass(`service worker imports ${adapter}`);
+  else fail(`service worker does not import ${adapter}`);
+}
+
+const cloudText = readFileSync(relToAbs('shared/adapters/cloud-adapter.js'), 'utf8');
+if (cloudText.includes('Authorization') && cloudText.includes('Bearer ')) pass('cloud adapter sends bearer token');
+else fail('cloud adapter bearer token support missing');
+if (/syncCookie\s*\([^)]*\)\s*{[\s\S]*?(不支持|reject|cloud)/i.test(cloudText)) pass('cloud adapter rejects cookie sync');
+else fail('cloud adapter cookie sync rejection missing');
+
+const localText = readFileSync(relToAbs('shared/adapters/local-adapter.js'), 'utf8');
+if (localText.includes("credentials: 'include'") || localText.includes('credentials: "include"')) {
+  pass('local adapter keeps cookie credentials');
+} else {
+  fail('local adapter does not include credentials');
+}
+
+const externalMatches = manifest.externally_connectable?.matches || [];
+if (externalMatches.some((item) => item.includes('ss-erp.com'))) pass('externally_connectable includes ss-erp.com');
+else fail('externally_connectable missing ss-erp.com');
+if (externalMatches.some((item) => item.includes('localhost') || item.includes('127.0.0.1'))) {
+  pass('externally_connectable includes local development origins');
+} else {
+  warn('externally_connectable missing local origins');
+}
+if (externalMatches.some((item) => item.includes('120.55.61.146'))) {
+  warn('externally_connectable contains old server IP 120.55.61.146');
+}
+
+const hostPermissions = manifest.host_permissions || [];
+const contentMatches = (manifest.content_scripts || []).flatMap((script) => script.matches || []);
+const webResourceMatches = (manifest.web_accessible_resources || []).flatMap((group) => group.matches || []);
+if (hostPermissions.includes('<all_urls>')) warn('host_permissions contains <all_urls>; tighten before Chrome Web Store release');
+if (contentMatches.includes('<all_urls>')) warn('content_scripts contains <all_urls>; split local/cloud release package before store submission');
+if (webResourceMatches.includes('<all_urls>')) warn('web_accessible_resources contains <all_urls>; tighten before store submission');
+if (hostPermissions.includes('file:///*')) warn('host_permissions contains file:///*; keep only for local/offline package');
+
+const totalSize = allFiles.reduce((sum, file) => sum + statSync(file).size, 0);
+pass(`extension file count=${allFiles.length}, size=${totalSize} bytes`);
+
+console.log('');
+console.log(`=== Result: ${failures.length} failure(s), ${warnings.length} warning(s), ${passes.length} pass(es) ===`);
+if (failures.length || (strict && warnings.length)) {
+  process.exit(1);
+}

@@ -114,6 +114,14 @@ cd /opt/ss-erp/app
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
+浏览器扩展静态验收：
+
+```bash
+pnpm verify:extension
+```
+
+覆盖 manifest 引用文件、所有扩展 JS 语法、service worker adapter import、cloud/local adapter 基本行为、外部连接域名和 Chrome Web Store 权限风险提示。
+
 如果脚本失败，先确认清理状态：
 
 ```bash

@@ -608,6 +608,77 @@ async function queryPddOrderLogistics(orderSn) {
     world: "MAIN",
     args: [pddUrl, orderSn],
     func: async (url, sn) => {
+      function parseJsStringLiteral(literal) {
+        if (!literal || literal.length < 2) return "";
+        const quote = literal[0];
+        if (quote === '"') return JSON.parse(literal);
+        const inner = literal.slice(1, -1).replace(/\\'/g, "'");
+        return JSON.parse('"' + inner.replace(/"/g, '\\"') + '"');
+      }
+
+      function extractBalancedLiteral(text, startIndex) {
+        const open = text[startIndex];
+        const close = open === "{" ? "}" : "]";
+        let depth = 0;
+        let quote = "";
+        let escaped = false;
+        for (let i = startIndex; i < text.length; i++) {
+          const ch = text[i];
+          if (quote) {
+            if (escaped) {
+              escaped = false;
+            } else if (ch === "\\") {
+              escaped = true;
+            } else if (ch === quote) {
+              quote = "";
+            }
+            continue;
+          }
+          if (ch === '"' || ch === "'" || ch === "`") {
+            quote = ch;
+            continue;
+          }
+          if (ch === open) depth++;
+          if (ch === close) {
+            depth--;
+            if (depth === 0) return text.slice(startIndex, i + 1);
+          }
+        }
+        return "";
+      }
+
+      function parseWindowRawDataAssignment(text) {
+        const match = /window\.rawData\s*=\s*/.exec(text);
+        if (!match) return null;
+        let index = match.index + match[0].length;
+        while (/\s/.test(text[index] || "")) index++;
+
+        if (text.slice(index, index + 10) === "JSON.parse") {
+          const paren = text.indexOf("(", index);
+          if (paren < 0) return null;
+          let argStart = paren + 1;
+          while (/\s/.test(text[argStart] || "")) argStart++;
+          const quote = text[argStart];
+          if (quote !== '"' && quote !== "'") return null;
+          let escaped = false;
+          for (let i = argStart + 1; i < text.length; i++) {
+            const ch = text[i];
+            if (escaped) {
+              escaped = false;
+            } else if (ch === "\\") {
+              escaped = true;
+            } else if (ch === quote) {
+              return JSON.parse(parseJsStringLiteral(text.slice(argStart, i + 1)));
+            }
+          }
+          return null;
+        }
+
+        if (text[index] !== "{" && text[index] !== "[") return null;
+        const literal = extractBalancedLiteral(text, index);
+        return literal ? JSON.parse(literal) : null;
+      }
+
       const resp = await fetch(url, { credentials: "include" });
       const html = await resp.text();
 
@@ -620,9 +691,7 @@ async function queryPddOrderLogistics(orderSn) {
         const text = script.textContent || "";
         if (/window\.rawData\s*=/.test(text)) {
           try {
-            const sandbox = {};
-            new Function("window", text)(sandbox);
-            rawData = sandbox.rawData;
+            rawData = parseWindowRawDataAssignment(text);
           } catch (e) { /* ignore */ }
           break;
         }

@@ -50,6 +50,78 @@
    * 从 HTML 文本中提取 window.rawData
    * （用于拼多多订单详情页）
    */
+  function parseJsStringLiteral(literal) {
+    if (!literal || literal.length < 2) return "";
+    var quote = literal[0];
+    if (quote === '"') return JSON.parse(literal);
+    var inner = literal.slice(1, -1).replace(/\\'/g, "'");
+    return JSON.parse('"' + inner.replace(/"/g, '\\"') + '"');
+  }
+
+  function extractBalancedLiteral(text, startIndex) {
+    var open = text[startIndex];
+    var close = open === "{" ? "}" : "]";
+    var depth = 0;
+    var quote = "";
+    var escaped = false;
+
+    for (var i = startIndex; i < text.length; i++) {
+      var ch = text[i];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === quote) {
+          quote = "";
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        quote = ch;
+        continue;
+      }
+      if (ch === open) depth++;
+      if (ch === close) {
+        depth--;
+        if (depth === 0) return text.slice(startIndex, i + 1);
+      }
+    }
+    return "";
+  }
+
+  function parseWindowRawDataAssignment(text) {
+    var match = /window\.rawData\s*=\s*/.exec(text);
+    if (!match) return null;
+    var index = match.index + match[0].length;
+    while (/\s/.test(text[index] || "")) index++;
+
+    if (text.slice(index, index + 10) === "JSON.parse") {
+      var paren = text.indexOf("(", index);
+      if (paren < 0) return null;
+      var argStart = paren + 1;
+      while (/\s/.test(text[argStart] || "")) argStart++;
+      var quote = text[argStart];
+      if (quote !== '"' && quote !== "'") return null;
+      var escaped = false;
+      for (var i = argStart + 1; i < text.length; i++) {
+        var ch = text[i];
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === quote) {
+          return JSON.parse(parseJsStringLiteral(text.slice(argStart, i + 1)));
+        }
+      }
+      return null;
+    }
+
+    if (text[index] !== "{" && text[index] !== "[") return null;
+    var literal = extractBalancedLiteral(text, index);
+    return literal ? JSON.parse(literal) : null;
+  }
+
   function extractRawDataFromHtml(html) {
     var parser = new DOMParser();
     var doc = parser.parseFromString(html, "text/html");
@@ -60,11 +132,9 @@
       var text = scripts[i].textContent || "";
       if (/window\.rawData\s*=/.test(text)) {
         try {
-          var sandbox = {};
-          new Function("window", text)(sandbox);
-          rawData = sandbox.rawData;
+          rawData = parseWindowRawDataAssignment(text);
         } catch (e) {
-          // ignore eval errors
+          // ignore parse errors
         }
         break;
       }
