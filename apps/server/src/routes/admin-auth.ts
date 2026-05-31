@@ -13,13 +13,23 @@ const adminLoginSchema = z.object({
 
 export async function adminAuthRoutes(app: FastifyInstance) {
   await app.register(import('@fastify/rate-limit'), {
-    max: 5,
-    timeWindow: '1 minute',
-    keyGenerator: (request) => request.ip,
-    errorResponseBuilder: () => ({ code: 0, msg: '登录尝试过于频繁，请稍后再试' }),
+    global: false,
   });
 
-  app.post('/login', async (request, reply) => {
+  app.post('/login', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip,
+        errorResponseBuilder: (_request, context) => ({
+          statusCode: context.statusCode,
+          code: 0,
+          msg: '登录尝试过于频繁，请稍后再试',
+        }),
+      },
+    },
+  }, async (request, reply) => {
     const parsed = adminLoginSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });

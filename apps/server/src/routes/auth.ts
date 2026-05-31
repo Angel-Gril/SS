@@ -13,7 +13,11 @@ export async function authRoutes(app: FastifyInstance) {
     max: 10,
     timeWindow: '1 minute',
     keyGenerator: (request) => request.ip,
-    errorResponseBuilder: () => ({ code: 0, msg: '请求过于频繁，请稍后再试' }),
+    errorResponseBuilder: (_request, context) => ({
+      statusCode: context.statusCode,
+      code: 0,
+      msg: '请求过于频繁，请稍后再试',
+    }),
   });
 
   // 发送短信验证码（注册前调用）
