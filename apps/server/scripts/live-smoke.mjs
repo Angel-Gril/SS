@@ -71,6 +71,22 @@ async function api(path, options = {}) {
   return { status: response.status, body, headers: response.headers };
 }
 
+function getSetCookies(headers) {
+  if (typeof headers.getSetCookie === 'function') return headers.getSetCookie();
+  const cookie = headers.get('set-cookie');
+  return cookie ? [cookie] : [];
+}
+
+function assertSecureAuthCookie(headers, context) {
+  const cookie = getSetCookies(headers).find((item) => item.startsWith('sserp_token='));
+  if (!cookie) throw new Error(`${context} did not set sserp_token cookie`);
+  const requiredAttrs = [/;\s*HttpOnly/i, /;\s*Secure/i, /;\s*SameSite=Lax/i, /;\s*Path=\//i];
+  for (const attr of requiredAttrs) {
+    if (!attr.test(cookie)) throw new Error(`${context} cookie missing ${attr}: ${cookie}`);
+  }
+  return cookie;
+}
+
 async function expectOkJson(path) {
   const out = await api(path);
   if (out.status !== 200) {
@@ -239,6 +255,7 @@ async function main() {
     if (out.status !== 200 || out.body?.code !== 1 || !out.body?.data?.token) {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
+    assertSecureAuthCookie(out.headers, 'admin login');
     adminToken = out.body.data.token;
     return { status: out.status, role: out.body.data.user.role };
   });
@@ -288,6 +305,29 @@ async function main() {
     return { status: out.status, msg: out.body?.msg };
   });
 
+  await record('cloud registration requires SMS proof and SMS send requires Turnstile', async () => {
+    const sms = await api('/api/auth/sms-code', {
+      method: 'POST',
+      body: JSON.stringify({ phone: userPhone }),
+    });
+    if (expectRuntime === 'cloud' && sms.status !== 403) {
+      throw new Error(`sms without turnstile should be rejected, got ${sms.status}: ${JSON.stringify(sms.body)}`);
+    }
+
+    const register = await api('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ phone: userPhone, password, nickname: 'No SMS User' }),
+    });
+    if (expectRuntime === 'cloud' && register.status !== 400) {
+      throw new Error(`register without sms should be rejected, got ${register.status}: ${JSON.stringify(register.body)}`);
+    }
+
+    const existing = await prisma.user.findUnique({ where: { phone: userPhone }, select: { id: true } });
+    if (existing) throw new Error(`user was created without SMS proof: ${existing.id}`);
+
+    return { smsStatus: sms.status, registerStatus: register.status };
+  });
+
   await record('registration with seeded sms creates normal user', async () => {
     await redis.set(`sms:code:${userPhone}`, smsCode, 'EX', 300);
     const out = await api('/api/auth/register', {
@@ -302,6 +342,7 @@ async function main() {
     if (out.status !== 201 || out.body?.code !== 1) {
       throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
     }
+    assertSecureAuthCookie(out.headers, 'user registration');
     const user = await prisma.user.findUnique({
       where: { phone: userPhone },
       select: { id: true, role: true, isSuperAdmin: true },
