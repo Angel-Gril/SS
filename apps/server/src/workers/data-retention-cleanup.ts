@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { registerTimer } from '../lib/worker-registry.js';
+import { getConfig } from '../config/system-config-schema.js';
 import { existsSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
 
@@ -16,18 +17,21 @@ interface RetentionConfig {
 }
 
 async function loadConfig(): Promise<RetentionConfig> {
-  const rows = await prisma.systemConfig.findMany({
-    where: { group: 'retention' },
-    select: { key: true, value: true },
-  });
-  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const [syncSuccessDays, syncFailedDays, notificationReadDays, notificationUnreadDays, tempImagesDays, dryRun] = await Promise.all([
+    getConfig('retention_sync_success_days'),
+    getConfig('retention_sync_failed_days'),
+    getConfig('retention_notification_read_days'),
+    getConfig('retention_notification_unread_days'),
+    getConfig('retention_temp_images_days'),
+    getConfig('retention_cleanup_dry_run'),
+  ]);
   return {
-    syncSuccessDays: Number(map.get('retention_sync_success_days')) || 30,
-    syncFailedDays: Number(map.get('retention_sync_failed_days')) || 180,
-    notificationReadDays: Number(map.get('retention_notification_read_days')) || 90,
-    notificationUnreadDays: Number(map.get('retention_notification_unread_days')) || 365,
-    tempImagesDays: Number(map.get('retention_temp_images_days')) || 30,
-    dryRun: map.get('retention_cleanup_dry_run') !== 'false',
+    syncSuccessDays,
+    syncFailedDays,
+    notificationReadDays,
+    notificationUnreadDays,
+    tempImagesDays,
+    dryRun,
   };
 }
 

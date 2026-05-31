@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { prisma } from './prisma.js';
+import { getConfig } from '../config/system-config-schema.js';
 
 const BYPASS_PATHS = new Set([
   '/health',
@@ -24,16 +24,17 @@ async function loadMaintenanceConfig() {
   const now = Date.now();
   if (cachedEnabled !== null && now < cacheExpiry) return;
 
-  const rows = await prisma.systemConfig.findMany({
-    where: { group: 'maintenance' },
-    select: { key: true, value: true },
-  });
-  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const [enabled, message, allowAdmin, readonly] = await Promise.all([
+    getConfig('maintenance_enabled'),
+    getConfig('maintenance_message'),
+    getConfig('maintenance_allow_admin'),
+    getConfig('maintenance_readonly'),
+  ]);
 
-  cachedEnabled = map.get('maintenance_enabled') === 'true';
-  cachedMessage = map.get('maintenance_message') || '系统维护中，请稍后再试';
-  cachedAllowAdmin = map.get('maintenance_allow_admin') !== 'false';
-  cachedReadonly = map.get('maintenance_readonly') !== 'false';
+  cachedEnabled = enabled;
+  cachedMessage = message;
+  cachedAllowAdmin = allowAdmin;
+  cachedReadonly = readonly;
   cacheExpiry = now + 5000;
 }
 

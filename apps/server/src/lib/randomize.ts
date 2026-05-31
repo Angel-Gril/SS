@@ -1,4 +1,4 @@
-import { prisma } from './prisma.js';
+import { getConfig } from '../config/system-config-schema.js';
 
 interface RandomizeConfig {
   enabled: boolean;
@@ -29,26 +29,20 @@ function parseBuckets(raw: string): Array<[number, number]> {
 export async function getRandomizeConfig(): Promise<RandomizeConfig> {
   if (cache && Date.now() - cache.loadedAt < CACHE_TTL) return cache.value;
 
-  const configs = await prisma.systemConfig.findMany({
-    where: {
-      key: {
-        in: [
-          'randomize_enabled',
-          'randomize_offer_id',
-          'randomize_dimension_jitter_mm',
-          'randomize_dimension_min_mm',
-          'randomize_weight_buckets',
-        ],
-      },
-    },
-  });
-  const map = new Map(configs.map((c) => [c.key, c.value]));
+  const [enabled, randomOfferId, dimensionJitterMm, dimensionMinMm, weightBuckets] = await Promise.all([
+    getConfig('randomize_enabled'),
+    getConfig('randomize_offer_id'),
+    getConfig('randomize_dimension_jitter_mm'),
+    getConfig('randomize_dimension_min_mm'),
+    getConfig('randomize_weight_buckets'),
+  ]);
+
   const value: RandomizeConfig = {
-    enabled: map.get('randomize_enabled') === 'true',
-    randomOfferId: map.get('randomize_offer_id') !== 'false',
-    dimensionJitterMm: Number(map.get('randomize_dimension_jitter_mm') ?? '10') || 0,
-    dimensionMinMm: Number(map.get('randomize_dimension_min_mm') ?? '10') || 0,
-    weightBuckets: parseBuckets(map.get('randomize_weight_buckets') ?? ''),
+    enabled,
+    randomOfferId,
+    dimensionJitterMm,
+    dimensionMinMm,
+    weightBuckets: parseBuckets(weightBuckets),
   };
   cache = { value, loadedAt: Date.now() };
   return value;

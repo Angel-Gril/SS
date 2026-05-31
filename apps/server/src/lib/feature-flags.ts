@@ -1,4 +1,4 @@
-import { prisma } from './prisma.js';
+import { getConfig, validateKey } from '../config/system-config-schema.js';
 
 const cache = new Map<string, { value: boolean; expiry: number }>();
 const CACHE_TTL_MS = 10_000;
@@ -9,13 +9,14 @@ export async function isFeatureEnabled(key: string): Promise<boolean> {
   const cached = cache.get(fullKey);
   if (cached && now < cached.expiry) return cached.value;
 
-  const cfg = await prisma.systemConfig.findUnique({
-    where: { key: fullKey },
-    select: { value: true },
-  });
-  const enabled = cfg?.value === 'true';
-  cache.set(fullKey, { value: enabled, expiry: now + CACHE_TTL_MS });
-  return enabled;
+  if (!validateKey(fullKey)) {
+    cache.set(fullKey, { value: false, expiry: now + CACHE_TTL_MS });
+    return false;
+  }
+
+  const enabled = await getConfig(fullKey);
+  cache.set(fullKey, { value: Boolean(enabled), expiry: now + CACHE_TTL_MS });
+  return Boolean(enabled);
 }
 
 export function invalidateFeatureCache(key?: string) {
