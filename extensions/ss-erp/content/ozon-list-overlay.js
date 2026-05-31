@@ -239,6 +239,48 @@
       .replace(/"/g, '&quot;');
   }
 
+  function isShelfCard(card) {
+    return Boolean(card.closest('[data-widget="skuShelfGoods"]'));
+  }
+
+  function findDeliveryDateBlock(card) {
+    const monthPattern = '(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)';
+    const dateRe = new RegExp(`\\b\\d{1,2}\\s+${monthPattern}\\b`, 'i');
+    const candidates = Array.from(card.querySelectorAll('div, button'));
+    let best = null;
+
+    for (const el of candidates) {
+      if (el.classList && el.classList.contains(CARD_CLASS)) continue;
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!dateRe.test(text)) continue;
+
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 80 || rect.height < 20 || rect.height > 80) continue;
+
+      const style = getComputedStyle(el);
+      const bg = style.backgroundColor || '';
+      const looksLikeOzonDelivery = bg.includes('255') || text.length <= 20;
+      if (!looksLikeOzonDelivery) continue;
+
+      const area = rect.width * rect.height;
+      if (!best || area < best.area) best = { el, area };
+    }
+
+    return best ? best.el : null;
+  }
+
+  function insertOverlay(card, wrap) {
+    if (isShelfCard(card)) {
+      const deliveryBlock = findDeliveryDateBlock(card);
+      if (deliveryBlock && deliveryBlock.parentElement && card.contains(deliveryBlock.parentElement)) {
+        deliveryBlock.parentElement.insertBefore(wrap, deliveryBlock);
+        return;
+      }
+    }
+
+    card.appendChild(wrap);
+  }
+
   // === 渲染卡片 ===
   function buildCard(sku, dom) {
     const wrap = document.createElement('div');
@@ -392,7 +434,7 @@
 
     const dom = extractCardData(card);
     const wrap = buildCard(sku, dom);
-    card.appendChild(wrap);
+    insertOverlay(card, wrap);
 
     wrap.addEventListener('click', (e) => e.stopPropagation());
 
