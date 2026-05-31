@@ -72,15 +72,18 @@ $env:SMOKE_EXPECT_OSS='true'
 pnpm smoke:remote
 ```
 
-默认检查公开页面、`/ready`、初始化状态、未登录后台保护、Next chunk 是否还带 localhost。需要把 Turnstile、OSS/R2、备份状态也纳入验收时，提供管理员 token/cookie 和开关：
+默认检查公开页面、`/ready`、初始化状态、未登录后台保护、Next chunk 是否还带 localhost。需要把 Turnstile、OSS/R2、备份状态也纳入验收时，提供管理员 token/cookie，或直接提供管理员手机号和密码：
 
 ```bash
-$env:SMOKE_ADMIN_TOKEN='...'
+$env:SMOKE_ADMIN_PHONE='13800000000'
+$env:SMOKE_ADMIN_PASSWORD='your-password'
 $env:SMOKE_EXPECT_OSS='true'
 $env:SMOKE_EXPECT_BACKUP_STATUS='true'
 $env:SMOKE_EXPECT_AUTH_CHALLENGES='true'
 pnpm smoke:remote
 ```
+
+如果你已经从浏览器或接口拿到了 token，也可以用 `$env:SMOKE_ADMIN_TOKEN='...'` 代替手机号密码。
 
 ## 今天的更新推送
 

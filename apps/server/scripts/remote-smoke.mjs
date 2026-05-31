@@ -26,8 +26,10 @@ const expectWebNoLocalFallback = process.env.SMOKE_EXPECT_WEB_NO_LOCAL_FALLBACK 
 const expectOss = process.env.SMOKE_EXPECT_OSS === 'true';
 const expectBackupStatus = process.env.SMOKE_EXPECT_BACKUP_STATUS === 'true';
 const expectAuthChallenges = process.env.SMOKE_EXPECT_AUTH_CHALLENGES === 'true';
-const adminToken = process.env.SMOKE_ADMIN_TOKEN || '';
-const adminCookie = process.env.SMOKE_ADMIN_COOKIE || '';
+let adminToken = process.env.SMOKE_ADMIN_TOKEN || '';
+let adminCookie = process.env.SMOKE_ADMIN_COOKIE || '';
+const adminPhone = process.env.SMOKE_ADMIN_PHONE || '';
+const adminPassword = process.env.SMOKE_ADMIN_PASSWORD || '';
 
 const checks = [];
 
@@ -47,6 +49,27 @@ function authHeaders(extra = {}) {
     ...(adminCookie ? { cookie: adminCookie } : {}),
     ...extra,
   };
+}
+
+async function resolveAdminCredentials() {
+  if (adminToken || adminCookie) return;
+  if (!adminPhone || !adminPassword) return;
+
+  const login = await request(`${apiBaseUrl}/api/admin/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ phone: adminPhone, password: adminPassword }),
+  });
+  if (login.status !== 200 || login.body?.code !== 1 || !login.body?.data?.token) {
+    throw new Error(`admin login failed: ${login.status} ${JSON.stringify(login.body)}`);
+  }
+
+  const setCookie = login.headers.get('set-cookie') || '';
+  const cookie = setCookie.split(';')[0];
+  if (cookie) {
+    adminCookie = cookie;
+  }
+  adminToken = login.body.data.token;
 }
 
 function push(name, fn) {
@@ -208,6 +231,9 @@ push('admin auth can inspect integrations and backup status', async () => {
 
 for (const { name, fn } of checks) {
   try {
+    if (name === 'admin auth can inspect integrations and backup status') {
+      await resolveAdminCredentials();
+    }
     const detail = await fn();
     console.log(`PASS ${name}: ${JSON.stringify(detail)}`);
   } catch (error) {
