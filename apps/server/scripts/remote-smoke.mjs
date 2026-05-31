@@ -32,13 +32,15 @@ const adminPhone = process.env.SMOKE_ADMIN_PHONE || '';
 const adminPassword = process.env.SMOKE_ADMIN_PASSWORD || '';
 const userPhone = process.env.SMOKE_USER_PHONE || '';
 const userPassword = process.env.SMOKE_USER_PASSWORD || '';
-const createTempUser = process.env.SMOKE_CREATE_TEMP_USER === 'true';
 const expectUpload = process.env.SMOKE_EXPECT_UPLOAD === 'true' || expectOss;
-const tempSuffix = String(Date.now()).slice(-8);
+const smokeDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+const createTempUser = process.env.SMOKE_CREATE_TEMP_USER === 'true';
+const tempSuffix = smokeDate.slice(-8);
 const tempPhone = `188${tempSuffix}`;
 const tempPassword = `Smoke${tempSuffix}Aa1`;
 let userToken = process.env.SMOKE_USER_TOKEN || '';
 let userCookie = process.env.SMOKE_USER_COOKIE || '';
+let tempUserMode = 'none';
 
 const checks = [];
 
@@ -105,10 +107,28 @@ async function resolveUserCredentials() {
     const cookie = setCookie.split(';')[0];
     if (cookie) userCookie = cookie;
     userToken = login.body?.data?.token || '';
+    tempUserMode = 'provided';
     return;
   }
 
   if (!createTempUser) return;
+
+  const loginFirst = await request(`${apiBaseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ phone: tempPhone, password: tempPassword }),
+  });
+  if (loginFirst.status === 200 && loginFirst.body?.code === 1) {
+    userToken = loginFirst.body?.data?.token || '';
+    const loginCookie = (loginFirst.headers.get('set-cookie') || '').split(';')[0];
+    if (loginCookie) userCookie = loginCookie;
+    tempUserMode = 'reused';
+    return;
+  }
+
+  if (loginFirst.status !== 401 && loginFirst.status !== 403) {
+    throw new Error(`temp user pre-login failed: ${loginFirst.status} ${JSON.stringify(loginFirst.body)}`);
+  }
 
   const register = await request(`${apiBaseUrl}/api/auth/register`, {
     method: 'POST',
@@ -121,6 +141,7 @@ async function resolveUserCredentials() {
   const setCookie = register.headers.get('set-cookie') || '';
   const cookie = setCookie.split(';')[0];
   if (cookie) userCookie = cookie;
+  tempUserMode = 'created';
 
   const login = await request(`${apiBaseUrl}/api/auth/login`, {
     method: 'POST',
@@ -313,7 +334,11 @@ push('authenticated upload stores image in expected backend', async () => {
   if (expectOss && data.backend !== 'oss') {
     throw new Error(`expected oss backend, got ${JSON.stringify(data)}`);
   }
-  return { backend: data.backend || null, url: data.url || null, createdTempUser: createTempUser && !userPhone };
+  return {
+    backend: data.backend || null,
+    url: data.url || null,
+    userMode: tempUserMode,
+  };
 });
 
 for (const { name, fn } of checks) {
