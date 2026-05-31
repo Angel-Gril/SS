@@ -321,6 +321,16 @@ push('authenticated upload stores image in expected backend', async () => {
     return { skipped: 'no user credentials provided' };
   }
 
+  const runtime = await request(`${apiBaseUrl}/api/extension/runtime`, {
+    headers: userAuthHeaders(),
+  });
+  if (runtime.status !== 200 || runtime.body?.code !== 1) {
+    throw new Error(`extension runtime failed: ${runtime.status} ${JSON.stringify(runtime.body)}`);
+  }
+  if (expectOss && runtime.body?.data?.capabilities?.imageUpload !== 'oss') {
+    throw new Error(`expected extension runtime imageUpload=oss, got ${JSON.stringify(runtime.body?.data?.capabilities || {})}`);
+  }
+
   const oneByOnePng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
   const upload = await request(`${apiBaseUrl}/api/images/upload-base64`, {
     method: 'POST',
@@ -338,6 +348,7 @@ push('authenticated upload stores image in expected backend', async () => {
     backend: data.backend || null,
     url: data.url || null,
     userMode: tempUserMode,
+    runtimeImageUpload: runtime.body?.data?.capabilities?.imageUpload || null,
   };
 });
 
