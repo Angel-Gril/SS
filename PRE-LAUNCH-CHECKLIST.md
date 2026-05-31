@@ -119,7 +119,7 @@
 - [ ] 通过扩展采集 OZON 商品
 - [ ] 采集结果保存到 `supplyGoods` 表
 - [ ] 图片正确显示（本地或 OSS）
-- [ ] `pnpm verify:extension` 通过；如准备 Chrome Web Store 上架，处理其中 `<all_urls>` / `file:///*` 权限告警
+- [ ] `pnpm verify:extension` 通过；云端上架包需 `pnpm build:extension:cloud` 后用 `STRICT_EXTENSION_CHECK=1 EXTENSION_DIR=build/extensions/ss-erp-cloud pnpm verify:extension` 通过
 
 ### 商品上架
 - [ ] 普通商品模式（继承源商品属性）

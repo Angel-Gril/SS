@@ -6,16 +6,31 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+function isLocalHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
+function isLocalApiBase(value: string): boolean {
+  try {
+    return isLocalHost(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function getApiBase(): string {
   const configured = process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (configured) return trimTrailingSlash(configured);
+  const trimmedConfigured = configured ? trimTrailingSlash(configured) : '';
 
   if (typeof window !== 'undefined') {
     const { hostname, origin } = window.location;
-    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    if (!isLocalHost(hostname)) {
+      if (trimmedConfigured && !isLocalApiBase(trimmedConfigured)) return trimmedConfigured;
       return origin;
     }
   }
+
+  if (trimmedConfigured) return trimmedConfigured;
 
   return LOCAL_API_BASE;
 }

@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 
 const extensionDir = path.resolve(process.env.EXTENSION_DIR || 'extensions/ss-erp');
 const strict = process.env.STRICT_EXTENSION_CHECK === '1';
+const requestedTarget = process.env.EXTENSION_TARGET;
 const failures = [];
 const warnings = [];
 const passes = [];
@@ -141,6 +142,17 @@ if (!existsSync(manifestPath)) {
 const manifest = readJson(manifestPath);
 pass('manifest JSON parses');
 
+const packageTarget = requestedTarget || (
+  manifest.name?.includes('(Cloud)') ? 'cloud'
+    : manifest.name?.includes('(Local)') ? 'local'
+      : 'source'
+);
+if (['cloud', 'local', 'source'].includes(packageTarget)) {
+  pass(`extension package target: ${packageTarget}`);
+} else {
+  fail(`unknown extension package target: ${packageTarget}`);
+}
+
 if (manifest.manifest_version === 3) pass('manifest_version is 3');
 else fail(`manifest_version is not 3: ${manifest.manifest_version}`);
 
@@ -238,22 +250,44 @@ if (localText.includes("credentials: 'include'") || localText.includes('credenti
 const externalMatches = manifest.externally_connectable?.matches || [];
 if (externalMatches.some((item) => item.includes('ss-erp.com'))) pass('externally_connectable includes ss-erp.com');
 else fail('externally_connectable missing ss-erp.com');
-if (externalMatches.some((item) => item.includes('localhost') || item.includes('127.0.0.1'))) {
+const externalHasLocalOrigins = externalMatches.some((item) => item.includes('localhost') || item.includes('127.0.0.1'));
+if (packageTarget === 'cloud') {
+  if (externalHasLocalOrigins) fail('cloud package externally_connectable contains local origins');
+  else pass('cloud package externally_connectable excludes local origins');
+} else if (externalHasLocalOrigins) {
   pass('externally_connectable includes local development origins');
 } else {
   warn('externally_connectable missing local origins');
 }
 if (externalMatches.some((item) => item.includes('120.55.61.146'))) {
-  warn('externally_connectable contains old server IP 120.55.61.146');
+  if (packageTarget === 'cloud') fail('cloud package externally_connectable contains old server IP 120.55.61.146');
+  else warn('externally_connectable contains old server IP 120.55.61.146');
 }
 
 const hostPermissions = manifest.host_permissions || [];
 const contentMatches = (manifest.content_scripts || []).flatMap((script) => script.matches || []);
 const webResourceMatches = (manifest.web_accessible_resources || []).flatMap((group) => group.matches || []);
-if (hostPermissions.includes('<all_urls>')) warn('host_permissions contains <all_urls>; tighten before Chrome Web Store release');
-if (contentMatches.includes('<all_urls>')) warn('content_scripts contains <all_urls>; split local/cloud release package before store submission');
-if (webResourceMatches.includes('<all_urls>')) warn('web_accessible_resources contains <all_urls>; tighten before store submission');
-if (hostPermissions.includes('file:///*')) warn('host_permissions contains file:///*; keep only for local/offline package');
+const broadPermissionChecks = [
+  [hostPermissions, '<all_urls>', 'host_permissions contains <all_urls>; tighten before Chrome Web Store release'],
+  [contentMatches, '<all_urls>', 'content_scripts contains <all_urls>; split local/cloud release package before store submission'],
+  [webResourceMatches, '<all_urls>', 'web_accessible_resources contains <all_urls>; tighten before store submission'],
+  [hostPermissions, 'file:///*', 'host_permissions contains file:///*; keep only for local/offline package'],
+];
+
+for (const [values, blockedValue, message] of broadPermissionChecks) {
+  if (!values.includes(blockedValue)) continue;
+  if (packageTarget === 'cloud') fail(`cloud package ${message}`);
+  else warn(message);
+}
+
+if (packageTarget === 'cloud') {
+  const allPermissionValues = [...externalMatches, ...hostPermissions, ...contentMatches, ...webResourceMatches];
+  const localPermission = allPermissionValues.find((item) => (
+    item.includes('localhost') || item.includes('127.0.0.1') || item.includes('120.55.61.146')
+  ));
+  if (localPermission) fail(`cloud package contains non-production origin: ${localPermission}`);
+  else pass('cloud package excludes localhost, 127.0.0.1, and old server IP origins');
+}
 
 const totalSize = allFiles.reduce((sum, file) => sum + statSync(file).size, 0);
 pass(`extension file count=${allFiles.length}, size=${totalSize} bytes`);
