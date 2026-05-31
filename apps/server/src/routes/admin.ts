@@ -639,23 +639,78 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 }
 
-// 数据迁移：如果系统有 ADMIN 但还没有任何超管，把最早创建的 ADMIN 提升为超管
+// 数据迁移：
+// 1. 系统无超管时，把最早 ADMIN 提升为超管
+// 2. 回填超管 accountCode（NULL 或不在 1-10 区段）→ nextSuperAdminCode
+// 3. 回填普通管理员 accountCode（不在 11-100 区段）→ nextAdminCode
+// 二级子账号（accountCode = parentCode-N）级联同步
 export async function seedSuperAdmin() {
   const superCount = await prisma.user.count({ where: { role: 'ADMIN', status: 'ACTIVE', isSuperAdmin: true } });
-  if (superCount > 0) return;
+  if (superCount === 0) {
+    const earliestAdmin = await prisma.user.findFirst({
+      where: { role: 'ADMIN', status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, phone: true, accountCode: true },
+    });
+    if (earliestAdmin) {
+      await prisma.user.update({ where: { id: earliestAdmin.id }, data: { isSuperAdmin: true } });
+      console.log(`[seed] 已将最早的管理员 ${earliestAdmin.phone}(${earliestAdmin.accountCode || 'no-code'}) 提升为超级管理员`);
+    }
+  }
 
-  const earliestAdmin = await prisma.user.findFirst({
-    where: { role: 'ADMIN', status: 'ACTIVE' },
+  const superAdmins = await prisma.user.findMany({
+    where: { role: 'ADMIN', status: 'ACTIVE', isSuperAdmin: true },
     orderBy: { createdAt: 'asc' },
     select: { id: true, phone: true, accountCode: true },
   });
-  if (!earliestAdmin) return;
+  for (const u of superAdmins) {
+    if (isCodeInRange(u.accountCode, 1, 10)) continue;
+    try {
+      const newCode = await nextSuperAdminCode();
+      await reassignAccountCodeWithChildren(u.id, u.accountCode, newCode);
+      console.log(`[seed] 回填超管 ${u.phone} accountCode: ${u.accountCode || 'null'} → ${newCode}`);
+    } catch (e: any) {
+      console.error(`[seed] 超管 ${u.phone} 回填 accountCode 失败:`, e.message);
+    }
+  }
 
-  await prisma.user.update({
-    where: { id: earliestAdmin.id },
-    data: { isSuperAdmin: true },
+  const plainAdmins = await prisma.user.findMany({
+    where: { role: 'ADMIN', status: 'ACTIVE', isSuperAdmin: false },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, phone: true, accountCode: true },
   });
-  console.log(`[seed] 已将最早的管理员 ${earliestAdmin.phone}(${earliestAdmin.accountCode || 'no-code'}) 提升为超级管理员`);
+  for (const u of plainAdmins) {
+    if (isCodeInRange(u.accountCode, 11, 100)) continue;
+    try {
+      const newCode = await nextAdminCode();
+      await reassignAccountCodeWithChildren(u.id, u.accountCode, newCode);
+      console.log(`[seed] 回填管理员 ${u.phone} accountCode: ${u.accountCode || 'null'} → ${newCode}`);
+    } catch (e: any) {
+      console.error(`[seed] 管理员 ${u.phone} 回填 accountCode 失败:`, e.message);
+    }
+  }
+}
+
+function isCodeInRange(code: string | null, start: number, end: number): boolean {
+  if (!code || !/^\d+$/.test(code)) return false;
+  const n = parseInt(code, 10);
+  return n >= start && n <= end;
+}
+
+async function reassignAccountCodeWithChildren(userId: string, oldCode: string | null, newCode: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: userId }, data: { accountCode: newCode } });
+    if (oldCode) {
+      const children = await tx.user.findMany({
+        where: { parentId: userId, accountCode: { startsWith: `${oldCode}-` } },
+        select: { id: true, accountCode: true },
+      });
+      for (const child of children) {
+        const tail = child.accountCode!.slice(oldCode.length + 1);
+        await tx.user.update({ where: { id: child.id }, data: { accountCode: `${newCode}-${tail}` } });
+      }
+    }
+  });
 }
 
 // 初始化默认标签数据
