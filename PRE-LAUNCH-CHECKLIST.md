@@ -77,6 +77,7 @@
   - 验证：`sudo ufw status` 仅开放 22/80/443
   - 验证：API/Web 仅监听 `127.0.0.1:3001` / `127.0.0.1:3000`
   - 验证：直接访问源站 IP 的 80/443 被 Nginx/Cloudflare 真源保护断开
+  - 验证：`./scripts/verify-vps-deploy.sh` 通过
 
 ## Low（可选优化）
 
