@@ -131,6 +131,13 @@ sudo systemctl restart ss-erp-api ss-erp-worker ss-erp-web
 # 手动备份
 ./scripts/backup-db.sh
 
+# 无损恢复演练（恢复到临时库后自动删除）
+. /etc/ss-erp-backup.env
+./scripts/verify-backup-restore.sh
+
+# 如果应用数据库账号没有 CREATEDB 权限，且 PostgreSQL 就在本机：
+VERIFY_RESTORE_LOCAL_POSTGRES=1 ./scripts/verify-backup-restore.sh
+
 # 定时备份（参考 crontab）
 cat scripts/backup-db.crontab.example
 ```

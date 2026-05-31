@@ -71,6 +71,7 @@
 
 - [ ] **数据库备份脚本已配置**
   - 验证：`crontab -l` 包含备份任务
+  - 验证：`. /etc/ss-erp-backup.env && ./scripts/verify-backup-restore.sh` 可将最近备份恢复到临时库并自动删除
 
 - [ ] **防火墙规则已配置**
   - 验证：`sudo ufw status` 仅开放 22/80/443
