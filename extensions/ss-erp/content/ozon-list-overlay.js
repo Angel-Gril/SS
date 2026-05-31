@@ -248,11 +248,11 @@
       'margin:0',           // 紧贴上沿，不留缝
       'padding:8px 10px',
       'border-radius:8px',
-      'background:linear-gradient(135deg,#f8faff,#eef2ff)',
-      'border:1px solid #c7d2fe',
+      'background:linear-gradient(135deg,#fff7ed,#ffedd5)',
+      'border:1px solid #fdba74',
       'font-size:12px',
       'color:#1e293b',
-      'box-shadow:0 1px 3px rgba(99,102,241,0.06)',
+      'box-shadow:0 1px 4px rgba(249,115,22,0.12)',
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
       'box-sizing:border-box',
       'width:100%',
@@ -261,15 +261,15 @@
 
     wrap.innerHTML = [
       '<div class="ss-erp-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">',
-      '  <span style="font-weight:700;color:#4338ca;font-size:13px">SS ERP</span>',
-      '  <span class="ss-erp-status-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd">加载中…</span>',
+      '  <span style="font-weight:700;color:#c2410c;font-size:13px">SS ERP</span>',
+      '  <span class="ss-erp-status-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;border:1px solid #fdba74">加载中…</span>',
       '</div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
       '<div class="ss-erp-actions" style="display:flex;gap:6px">',
-      '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #6366f1;border-radius:6px;background:#6366f1;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
-      '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #c7d2fe;border-radius:6px;background:#fff;color:#4338ca;cursor:pointer;font-size:11px">展开</button>',
+      '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
+      '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #fdba74;border-radius:6px;background:#fff7ed;color:#c2410c;cursor:pointer;font-size:11px">展开</button>',
       '</div>',
-      '<div class="ss-erp-expanded" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #c7d2fe"></div>',
+      '<div class="ss-erp-expanded" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #fdba74"></div>',
     ].join('');
 
     renderMetrics(wrap, sku, dom, null);
@@ -284,19 +284,19 @@
     const sources = (premium && premium._sources) ? premium._sources : [];
     if (sources.includes('seller-analytics')) {
       pill.textContent = 'Premium';
-      pill.style.background = '#d1fae5';
-      pill.style.color = '#065f46';
-      pill.style.borderColor = '#86efac';
+      pill.style.background = '#ffedd5';
+      pill.style.color = '#c2410c';
+      pill.style.borderColor = '#fdba74';
     } else if (sources.includes('public-entrypoint')) {
       pill.textContent = '公开数据';
-      pill.style.background = '#dbeafe';
-      pill.style.color = '#1e40af';
-      pill.style.borderColor = '#93c5fd';
+      pill.style.background = '#fef3c7';
+      pill.style.color = '#92400e';
+      pill.style.borderColor = '#fcd34d';
     } else if (sources.includes('erp-cache')) {
       pill.textContent = 'ERP 缓存';
-      pill.style.background = '#e0e7ff';
-      pill.style.color = '#4338ca';
-      pill.style.borderColor = '#a5b4fc';
+      pill.style.background = '#f5f5f4';
+      pill.style.color = '#57534e';
+      pill.style.borderColor = '#d6d3d1';
     } else if (premium === null) {
       pill.textContent = '基础';
       pill.style.background = '#f1f5f9';
@@ -326,8 +326,8 @@
 
   function metricCell(label, value, locked) {
     return [
-      '<div style="background:#fff;border:1px solid #e0e7ff;border-radius:6px;padding:5px 8px;display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden">',
-      `  <span style="color:#94a3b8;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>`,
+      '<div style="background:#fff;border:1px solid #fed7aa;border-radius:6px;padding:5px 8px;display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden">',
+      `  <span style="color:#a16207;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>`,
       `  <span style="color:${locked ? '#cbd5e1' : '#0f172a'};font-weight:600;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(value)}</span>`,
       '</div>',
     ].join('');
@@ -338,8 +338,8 @@
     return [
       '<div style="display:grid;grid-template-columns:1fr;gap:0;font-size:11px;color:#475569">',
       ...fields.map(([k, v, locked]) => [
-        '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px dashed #e0e7ff;padding:3px 0;gap:8px;min-width:0">',
-        `  <span style="color:#94a3b8;flex-shrink:0;white-space:nowrap">${escapeHtml(k)}</span>`,
+        '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px dashed #fed7aa;padding:3px 0;gap:8px;min-width:0">',
+        `  <span style="color:#a16207;flex-shrink:0;white-space:nowrap">${escapeHtml(k)}</span>`,
         `  <span style="color:${locked ? '#cbd5e1' : '#1e293b'};font-weight:${locked ? '400' : '500'};text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1">${escapeHtml(v)}</span>`,
         '</div>',
       ].join('')),
@@ -436,8 +436,8 @@
         collectBtn.style.borderColor = '#ef4444';
         setTimeout(() => {
           collectBtn.textContent = oldText;
-          collectBtn.style.background = '#6366f1';
-          collectBtn.style.borderColor = '#6366f1';
+          collectBtn.style.background = '#f97316';
+          collectBtn.style.borderColor = '#f97316';
           collectBtn.style.opacity = '1';
         }, 4000);
       }
