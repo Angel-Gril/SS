@@ -94,6 +94,25 @@ curl http://127.0.0.1:3001/health
 curl http://127.0.0.1:3001/ready
 ```
 
+## 线上 Smoke 测试
+
+每次部署后运行：
+
+```bash
+cd /opt/ss-erp/app/apps/server
+SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
+```
+
+该脚本会创建临时超管和临时普通用户，覆盖健康检查、初始化状态、公开页面、Next 静态资源 API 地址、管理员独立登录、备份状态、注册短信码校验、扩展 runtime、维护模式阻断与恢复。脚本结束会删除临时用户、Redis session、短信码，并恢复维护模式配置。
+
+如果脚本失败，先确认清理状态：
+
+```bash
+cd /opt/ss-erp/app/apps/server
+set -a && . ../../.env.staging && set +a
+node --input-type=module -e "import {PrismaClient} from '@prisma/client'; const p = new PrismaClient(); console.log(await p.systemConfig.findUnique({ where: { key: 'maintenance_enabled' }, select: { value: true } })); await p.\$disconnect();"
+```
+
 ## 回滚
 
 ```bash
@@ -188,7 +207,8 @@ Worker 每天执行一次，清理对象：
 # 5. pnpm build
 # 6. systemctl restart ss-erp-api ss-erp-worker ss-erp-web
 # 7. curl http://localhost:3001/ready
-# 8. 关闭维护模式
+# 8. cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
+# 9. 关闭维护模式
 ```
 
 ## 环境变量：图片存储

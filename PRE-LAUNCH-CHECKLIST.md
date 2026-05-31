@@ -33,7 +33,7 @@
 
 - [ ] **Turnstile 前后端闭环已接入**（防机器人注册）
   - 验证：注册页显示 Cloudflare 验证框，并且 `/api/auth/sms-code` 请求携带 `turnstileToken`
-  - 验证：连续登录失败 5 次后，登录页显示 Cloudflare 验证框
+  - 验证：云端模式登录页始终显示 Cloudflare 验证框；无 `turnstileToken` 时 `/api/auth/login` 返回 403
 
 - [ ] **Redis 已启动**（启用同步 worker）
   - 验证：`redis-cli ping` 返回 `PONG`
@@ -74,6 +74,8 @@
 
 - [ ] **防火墙规则已配置**
   - 验证：`sudo ufw status` 仅开放 22/80/443
+  - 验证：API/Web 仅监听 `127.0.0.1:3001` / `127.0.0.1:3000`
+  - 验证：直接访问源站 IP 的 80/443 被 Nginx/Cloudflare 真源保护断开
 
 ## Low（可选优化）
 
@@ -95,8 +97,17 @@
 - [ ] 首个超级管理员通过 `/setup` 创建，而不是通过公开注册创建
 - [ ] 注册新账号（触发 Turnstile + 短信验证码，并完成服务端校验）
 - [ ] 登录成功（浏览器 DevTools → Application → Cookies 可见 `sserp_token` HttpOnly cookie）
-- [ ] 登录失败 5 次后强制 Turnstile
+- [ ] 云端模式登录必须携带 Turnstile token；本地离线模式不要求 Turnstile
 - [ ] 退出登录（cookie 被清除）
+
+### 自动化 smoke
+- [ ] 线上 smoke 脚本通过
+  ```bash
+  cd /opt/ss-erp/app/apps/server
+  SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
+  ```
+  - 覆盖：`/ready`、setup 状态、公开页面、Next 资源 API 地址、管理员独立登录、超管备份状态、注册短信码服务端校验、扩展 runtime、维护模式阻断与恢复
+  - 验证：脚本结束后测试用户被删除，`maintenance_enabled=false`
 
 ### 店铺管理
 - [ ] 添加 OZON 店铺（Client ID + API Key）
