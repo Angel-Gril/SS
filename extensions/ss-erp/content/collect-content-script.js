@@ -486,6 +486,9 @@
       collapse();
     });
 
+    // 默认展开数据一览窗
+    expand();
+
     panel.querySelector("[data-role='refresh']").addEventListener("click", (e) => {
       e.stopPropagation();
       collapse();
