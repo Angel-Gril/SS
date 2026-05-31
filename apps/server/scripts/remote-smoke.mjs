@@ -327,6 +327,7 @@ push('authenticated upload stores image in expected backend', async () => {
   if (runtime.status !== 200 || runtime.body?.code !== 1) {
     throw new Error(`extension runtime failed: ${runtime.status} ${JSON.stringify(runtime.body)}`);
   }
+  const runtimeMode = runtime.body?.data?.mode || null;
   if (expectOss && runtime.body?.data?.capabilities?.imageUpload !== 'oss') {
     throw new Error(`expected extension runtime imageUpload=oss, got ${JSON.stringify(runtime.body?.data?.capabilities || {})}`);
   }
@@ -349,6 +350,7 @@ push('authenticated upload stores image in expected backend', async () => {
     url: data.url || null,
     userMode: tempUserMode,
     runtimeImageUpload: runtime.body?.data?.capabilities?.imageUpload || null,
+    runtimeMode,
   };
 });
 

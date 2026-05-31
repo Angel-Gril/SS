@@ -125,6 +125,8 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 
 预期上传检查返回 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 为 `http://localhost:3001/uploads/...`，说明 R2 还没有被当前 API 进程实际使用，需要检查 `.env.staging` / systemd `EnvironmentFile` / 服务重启。
 
+如果结果里 `runtimeMode:"local"` 且 `runtimeImageUpload:"local"`，优先检查 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss` 是否已进入当前 API 进程。
+
 排查顺序：
 
 1. 确认运行中的 API 进程能读到 `IMAGE_STORAGE_BACKEND=oss`
