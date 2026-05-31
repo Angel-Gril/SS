@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import Redis from 'ioredis';
+import jwt from 'jsonwebtoken';
 
 const envCandidates = [
   process.env.SMOKE_ENV_FILE,
@@ -310,6 +311,33 @@ async function main() {
     }
     createdUserIds.add(user.id);
     return { role: user.role, isSuperAdmin: user.isSuperAdmin };
+  });
+
+  await record('normal user cannot use admin login or admin APIs', async () => {
+    const user = await prisma.user.findUnique({
+      where: { phone: userPhone },
+      select: { id: true, role: true },
+    });
+    if (!user) throw new Error(`registered smoke user missing: ${userPhone}`);
+
+    const adminLogin = await api('/api/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: userPhone, password }),
+    });
+    if (adminLogin.status !== 401 || adminLogin.body?.code === 1) {
+      throw new Error(`normal user admin login unexpectedly succeeded: ${adminLogin.status} ${JSON.stringify(adminLogin.body)}`);
+    }
+
+    const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '10m' });
+    await redis.set(`session:${user.id}:${token.slice(-8)}`, '1', 'EX', 600);
+    const adminApi = await api('/api/admin/ops/backup-status', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (adminApi.status !== 403 || adminApi.body?.code === 1) {
+      throw new Error(`normal user admin API unexpectedly succeeded: ${adminApi.status} ${JSON.stringify(adminApi.body)}`);
+    }
+
+    return { adminLoginStatus: adminLogin.status, adminApiStatus: adminApi.status };
   });
 
   await record('extension runtime and cloud cookie policy work', async () => {
