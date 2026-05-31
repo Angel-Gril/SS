@@ -99,8 +99,9 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     const ext = mime.split('/')[1]!.replace('jpeg', 'jpg');
     const filename = body.filename || `upload_${Date.now()}.${ext}`;
     try {
+      const { userId } = (request as any).user;
       const backend = await getStorageBackend(body.shopId);
-      const result = await backend.uploadBuffer(buf, filename, mime);
+      const result = await backend.uploadBuffer(buf, filename, mime, { category: 'raw', ownerId: userId });
       return reply.send({ code: 1, msg: 'ok', data: result });
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
@@ -125,7 +126,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     const safeName = (body.filename || `attachment_${Date.now()}.${ext}`).replace(/[^\w.\-]/g, '_').slice(0, 120);
     try {
       const backend = await getStorageBackend();
-      const result = await backend.uploadBuffer(buf, safeName, mime);
+      const result = await backend.uploadBuffer(buf, safeName, mime, { category: 'announcement' });
       return reply.send({ code: 1, msg: 'ok', data: { url: result.url, filename: safeName, size: buf.length, mime } });
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
@@ -136,6 +137,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     const body = request.body as { url: string; shopId?: string };
     if (!body?.url) return reply.status(400).send({ code: 0, msg: '缺少 url' });
     try {
+      const { userId } = (request as any).user;
       const res = await fetch(body.url, { signal: AbortSignal.timeout(30000) });
       if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
@@ -144,7 +146,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
       }
       const filename = body.url.split('/').pop()?.split('?')[0] || `img_${Date.now()}.jpg`;
       const backend = await getStorageBackend(body.shopId);
-      const result = await backend.uploadBuffer(buf, filename);
+      const result = await backend.uploadBuffer(buf, filename, undefined, { category: 'raw', ownerId: userId });
       return reply.send({ code: 1, msg: 'ok', data: result });
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
@@ -166,6 +168,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '缺少 itemId 或 config' });
     }
 
+    const { userId } = (request as any).user;
     const results: Array<{ source: string; watermarked: string; uploaded?: string; error?: string }> = [];
     const backend = body.uploadToCdn ? await getStorageBackend(body.shopId).catch((e) => {
       throw new Error(`存储后端未配置: ${e.message}`);
@@ -181,7 +184,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
           const localPath = join(process.cwd(), 'public', relativePath.replace(/^\//, ''));
           const buf = await readFile(localPath);
           const filename = relativePath.split('/').pop() || `wm_${i}.jpg`;
-          const uploaded = await backend.uploadBuffer(buf, filename);
+          const uploaded = await backend.uploadBuffer(buf, filename, undefined, { category: 'watermarked', ownerId: userId });
           entry.uploaded = uploaded.url;
           entry.backend = uploaded.backend;
         }
@@ -218,6 +221,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
       quality?: number;
       uploadToCdn?: boolean;
     };
+    const { userId } = (request as any).user;
 
     if (!Array.isArray(body?.urls) || body.urls.length === 0) {
       return reply.status(400).send({ code: 0, msg: '缺少 urls 数组' });
@@ -256,7 +260,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
 
         if (backend) {
           try {
-            const uploaded = await backend.uploadBuffer(outputBuf, filename);
+            const uploaded = await backend.uploadBuffer(outputBuf, filename, 'image/jpeg', { category: 'tmp', ownerId: userId });
             entry.uploaded = uploaded.url;
           } catch (e: any) {
             entry.error = `上传失败: ${e.message?.slice(0, 100)}`;

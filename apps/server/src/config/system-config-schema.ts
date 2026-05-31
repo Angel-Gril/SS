@@ -36,6 +36,14 @@ export const SystemConfigSchema = {
   retention_temp_images_days: z.number().int().min(1).max(365).default(30),
   retention_cleanup_dry_run: z.boolean().default(true),
 
+  // ─── OSS 对象生命周期 ───
+  retention_oss_raw_days: z.number().int().min(1).max(365).default(15),
+  retention_oss_watermarked_days: z.number().int().min(1).max(365).default(60),
+  retention_oss_tmp_days: z.number().int().min(1).max(365).default(7),
+  retention_oss_attachments_days: z.number().int().min(0).max(3650).default(0),
+  retention_oss_cleanup_enabled: z.boolean().default(false),
+  retention_oss_cleanup_dry_run: z.boolean().default(true),
+
   // ─── backup ───
   backup_enabled: z.boolean().default(true),
   backup_schedule: z.string().regex(/^[\d\s\*\/\-,]+$/).default('0 3 * * *'),
@@ -108,6 +116,13 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   retention_notification_unread_days: { label: '未读通知保留天数', group: 'retention', description: '未读通知超过此天数后自动清理' },
   retention_temp_images_days: { label: '临时图片保留天数', group: 'retention', description: '临时上传目录中超过此天数的图片自动清理' },
   retention_cleanup_dry_run: { label: '清理 dry-run 模式', group: 'retention', description: '开启时只统计不删除，关闭后才真正执行清理' },
+
+  retention_oss_raw_days: { label: 'OSS 原始图保留天数', group: 'retention', description: '用户采集的原始图片在 OSS/R2 中保留天数（默认 15 天）' },
+  retention_oss_watermarked_days: { label: 'OSS 水印图保留天数', group: 'retention', description: '生成的水印图在 OSS/R2 中保留天数（默认 60 天）' },
+  retention_oss_tmp_days: { label: 'OSS 临时图保留天数', group: 'retention', description: '失败任务的临时图在 OSS/R2 中保留天数（默认 7 天）' },
+  retention_oss_attachments_days: { label: 'OSS 附件保留天数', group: 'retention', description: '公告/系统附件保留天数（0 表示永久保留）' },
+  retention_oss_cleanup_enabled: { label: 'OSS 清理总开关', group: 'retention', description: '是否启用 OSS/R2 对象自动清理' },
+  retention_oss_cleanup_dry_run: { label: 'OSS 清理 dry-run', group: 'retention', description: '开启时只统计不删除，关闭后才真正删除 OSS 对象' },
 
   backup_enabled: { label: '自动备份', group: 'backup', description: '是否启用定时数据库备份' },
   backup_schedule: { label: '备份 cron 表达式', group: 'backup', description: '备份执行时间（cron 格式），默认每天凌晨 3 点' },

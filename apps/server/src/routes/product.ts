@@ -834,7 +834,7 @@ export async function productRoutes(app: FastifyInstance) {
     const { getStorageBackend } = await import('../services/image-storage.js');
     try {
       const backend = await getStorageBackend(body.shopId);
-      const result = await backend.uploadBuffer(buffer, body.filename);
+      const result = await backend.uploadBuffer(buffer, body.filename, undefined, { category: 'raw', ownerId: userId });
       return reply.send({ code: 1, msg: 'ok', data: result });
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });
@@ -949,7 +949,8 @@ export async function productRoutes(app: FastifyInstance) {
               const localPath = join(process.cwd(), 'public', img.replace(/^\//, ''));
               const buf = await readFile(localPath);
               const filename = img.split('/').pop() || 'img.jpg';
-              const result = await backend.uploadBuffer(buf, filename);
+              const category = img.startsWith('/watermarked/') ? 'watermarked' : 'raw';
+              const result = await backend.uploadBuffer(buf, filename, undefined, { category, ownerId: userId });
               resolvedImages.push(result.url);
             } catch { resolvedImages.push(img); }
           } else {
@@ -1032,7 +1033,7 @@ export async function productRoutes(app: FastifyInstance) {
           const localPath = join(process.cwd(), 'public', img.replace(/^\//, ''));
           const buf = await readFile(localPath);
           const filename = img.split('/').pop() || 'img.jpg';
-          const result = await backend.uploadBuffer(buf, filename);
+          const result = await backend.uploadBuffer(buf, filename, undefined, { category: 'watermarked', ownerId: userId });
           resolved.push(result.url);
         } else {
           resolved.push(img);

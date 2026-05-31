@@ -38,9 +38,21 @@ export interface PresignedUploadInput {
   ownerId?: string;
 }
 
+export type ImageUploadCategory = 'raw' | 'watermarked' | 'thumbnail' | 'tmp' | 'announcement' | 'system';
+
+export interface ImageUploadOptions {
+  category?: ImageUploadCategory;
+  ownerId?: string;
+}
+
 export interface ImageStorageBackend {
   upload(filePath: string, mimeType?: string): Promise<ImageUploadResult>;
-  uploadBuffer(buffer: Buffer, filename: string, mimeType?: string): Promise<ImageUploadResult>;
+  uploadBuffer(
+    buffer: Buffer,
+    filename: string,
+    mimeType?: string,
+    options?: ImageUploadOptions,
+  ): Promise<ImageUploadResult>;
   getPresignedPutUrl?(input: PresignedUploadInput): Promise<PresignedUploadResult>;
 }
 
@@ -106,7 +118,12 @@ class OzonCdnBackend implements ImageStorageBackend {
     return etc;
   }
 
-  async uploadBuffer(buffer: Buffer, filename: string, mimeType?: string): Promise<ImageUploadResult> {
+  async uploadBuffer(
+    buffer: Buffer,
+    filename: string,
+    mimeType?: string,
+    options?: ImageUploadOptions,
+  ): Promise<ImageUploadResult> {
     const boundary = `----WebKitFormBoundary${randomBoundary()}`;
     const mime = mimeType || guessMime(filename);
 
@@ -210,7 +227,12 @@ class OssBackend implements ImageStorageBackend {
     return this.uploadBuffer(buffer, filename);
   }
 
-  async uploadBuffer(buffer: Buffer, filename: string, mimeType?: string): Promise<ImageUploadResult> {
+  async uploadBuffer(
+    buffer: Buffer,
+    filename: string,
+    mimeType?: string,
+    options?: ImageUploadOptions,
+  ): Promise<ImageUploadResult> {
     const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
 
     const endpoint = this.config.endpoint.startsWith('http')
@@ -228,8 +250,9 @@ class OssBackend implements ImageStorageBackend {
     });
 
     const ext = filename.split('.').pop() || 'jpg';
-    const userId = 'system';
-    const objectKey = generateObjectKey(userId, 'raw', ext);
+    const category = options?.category || 'raw';
+    const userId = options?.ownerId || null;
+    const objectKey = generateObjectKey(userId, category, ext);
     const mime = mimeType || guessMime(filename);
 
     await client.send(new PutObjectCommand({
@@ -327,7 +350,12 @@ class LocalBackend implements ImageStorageBackend {
     return this.uploadBuffer(buffer, filename);
   }
 
-  async uploadBuffer(buffer: Buffer, filename: string): Promise<ImageUploadResult> {
+  async uploadBuffer(
+    buffer: Buffer,
+    filename: string,
+    mimeType?: string,
+    options?: ImageUploadOptions,
+  ): Promise<ImageUploadResult> {
     await mkdir(LOCAL_UPLOAD_DIR, { recursive: true });
     const hash = createHash('md5').update(buffer).digest('hex').slice(0, 8);
     const ext = filename.split('.').pop() || 'jpg';
@@ -357,12 +385,17 @@ export class FallbackStorageBackend implements ImageStorageBackend {
     }
   }
 
-  async uploadBuffer(buffer: Buffer, filename: string, mimeType?: string): Promise<ImageUploadResult> {
+  async uploadBuffer(
+    buffer: Buffer,
+    filename: string,
+    mimeType?: string,
+    options?: ImageUploadOptions,
+  ): Promise<ImageUploadResult> {
     try {
-      return await this.primary.uploadBuffer(buffer, filename, mimeType);
+      return await this.primary.uploadBuffer(buffer, filename, mimeType, options);
     } catch (e: any) {
       console.warn(`[image-storage] ${this.primaryName} uploadBuffer failed, falling back to ${this.fallbackName}: ${e.message}`);
-      return await this.fallback.uploadBuffer(buffer, filename, mimeType);
+      return await this.fallback.uploadBuffer(buffer, filename, mimeType, options);
     }
   }
 
@@ -474,14 +507,42 @@ function extensionFromMime(mimeType: string): string {
   }
 }
 
-function generateObjectKey(userId: string, category: 'raw' | 'watermarked' | 'thumbnail', ext: string): string {
+/**
+ * 生成 OSS 对象路径
+ *
+ * 路径规范：
+ * - 用户图片：users/{userId}/{category}/yyyy/mm/hash.ext
+ * - 公告附件：announcements/yyyy/mm/hash.ext
+ * - 系统附件：system/attachments/yyyy/mm/hash.ext
+ *
+ * @param userId 用户 ID（公告/系统附件传 null）
+ * @param category 分类：raw（原始采集图）、watermarked（水印图）、tmp（临时图）、announcement（公告附件）、system（系统附件）
+ * @param ext 文件扩展名
+ */
+function generateObjectKey(
+  userId: string | null,
+  category: ImageUploadCategory,
+  ext: string,
+): string {
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const safeUserId = sanitizeObjectSegment(userId) || 'shared';
   const safeExt = sanitizeObjectSegment(ext.toLowerCase().replace(/^\.+/, '')) || 'jpg';
-  const hash = createHash('sha256').update(`${safeUserId}-${Date.now()}-${Math.random()}`).digest('hex').slice(0, 16);
-  return `${safeUserId}/${category}/${yyyy}/${mm}/${hash}.${safeExt}`;
+  const hash = createHash('sha256').update(`${userId || 'system'}-${Date.now()}-${Math.random()}`).digest('hex').slice(0, 16);
+
+  // 公告附件：announcements/yyyy/mm/hash.ext
+  if (category === 'announcement') {
+    return `announcements/${yyyy}/${mm}/${hash}.${safeExt}`;
+  }
+
+  // 系统附件：system/attachments/yyyy/mm/hash.ext
+  if (category === 'system') {
+    return `system/attachments/${yyyy}/${mm}/${hash}.${safeExt}`;
+  }
+
+  // 用户图片：users/{userId}/{category}/yyyy/mm/hash.ext
+  const safeUserId = sanitizeObjectSegment(userId || 'shared') || 'shared';
+  return `users/${safeUserId}/${category}/${yyyy}/${mm}/${hash}.${safeExt}`;
 }
 
 function sanitizeObjectSegment(value: string): string {

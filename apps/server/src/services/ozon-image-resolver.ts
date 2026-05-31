@@ -69,6 +69,7 @@ function localPathFromUrl(raw: string): string | null {
 export async function resolveImageUrls(
   images: string[],
   shopId: string,
+  ownerId?: string,
 ): Promise<string[]> {
   const resolved: string[] = [];
   let backend: ImageStorageBackend | null = null;
@@ -104,7 +105,8 @@ export async function resolveImageUrls(
         throw new Error(`水印图文件不存在: ${img}（请重新点击"打水印"刷新）`);
       }
       const filename = img.split('/').pop() || 'img.jpg';
-      const result = await backend.uploadBuffer(buf, filename);
+      const category = img.startsWith('/watermarked/') ? 'watermarked' : 'raw';
+      const result = await backend.uploadBuffer(buf, filename, undefined, { category, ownerId });
       resolved.push(normalizeOzonPublishImageUrl(result.url));
     } else {
       resolved.push(normalizeOzonPublishImageUrl(img));

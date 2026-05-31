@@ -8,12 +8,14 @@ import { startScheduledDispatchWorker } from './workers/scheduled-dispatch.js';
 import { startExchangeRateSyncWorker } from './workers/exchange-rate-sync.js';
 import { startFinanceSyncWorker } from './workers/finance-sync.js';
 import { startDataRetentionWorker } from './workers/data-retention-cleanup.js';
+import { startOssCleanupWorker } from './workers/oss-cleanup.js';
 import { shutdownAllWorkers } from './lib/worker-registry.js';
 
 console.log('[worker] starting all workers as standalone process...');
 
 startWarehouseCommandPollWorker();
 startDataRetentionWorker();
+startOssCleanupWorker();
 startProductSyncWorker();
 startOrderSyncWorker();
 startSoloBillingWorker();

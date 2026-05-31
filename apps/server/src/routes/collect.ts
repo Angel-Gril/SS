@@ -599,7 +599,7 @@ export async function collectRoutes(app: FastifyInstance) {
                     ? matchedMeta.watermarkedImages
                     : matchedItem && Array.isArray(matchedItem.images) ? (matchedItem.images as string[]) : [];
                   if (rawImages.length) {
-                    const resolvedImages = await resolveImageUrls(rawImages, body.shopId);
+                    const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId);
                     await client.importProductPictures({ product_id: it.product_id, images: resolvedImages });
                     console.log(`[publish-ozon fallback] uploaded ${resolvedImages.length} images for product_id=${it.product_id}`);
                   }
@@ -770,7 +770,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const baseRawImages: string[] = meta?.watermarkedImages?.length
         ? meta.watermarkedImages
         : cloned?.images?.length ? cloned.images : (Array.isArray(item.images) ? (item.images as string[]) : []);
-      const baseImages = await resolveImageUrls(baseRawImages, body.shopId);
+      const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
       // 已加水印时，变体不能再走自己的源图（变体 images 是 OZON 缩略图，没水印）
       const watermarkApplied = !!meta?.watermarkedImages?.length;
 
@@ -816,7 +816,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const subImagesRaw: string[] = watermarkApplied
           ? baseRawImages
           : (Array.isArray(v.images) && v.images.length ? v.images : baseRawImages);
-        const subImages = subImagesRaw === baseRawImages ? baseImages : await resolveImageUrls(subImagesRaw, body.shopId);
+        const subImages = subImagesRaw === baseRawImages ? baseImages : await resolveImageUrls(subImagesRaw, body.shopId, userId);
         const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
         const subName = Object.keys(subAttrs).length
           ? `${item.title} ${Object.values(subAttrs).join(' ')}`.slice(0, 200)
