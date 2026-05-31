@@ -34,6 +34,52 @@ const OZON_ENDPOINTS = {
   productsList: "https://seller.ozon.ru/api/v1/products/list-by-filter"
 };
 
+const SELLER_OZON_ORIGIN = "https://seller.ozon.ru/*";
+const SELLER_OZON_PERMISSION_ERROR = "扩展未获得 seller.ozon.ru 站点访问权限。请点击同步按钮时允许授权，或在 Chrome 扩展详情页把“网站访问权限”设为允许 seller.ozon.ru，然后刷新 seller 页面重试。";
+
+function normalizeErrorMessage(error) {
+  return error && error.message ? error.message : String(error || "");
+}
+
+function isHostAccessError(error) {
+  return /Cannot access contents|manifest must request permission|respective host|host permission|Missing host permission/i.test(normalizeErrorMessage(error));
+}
+
+function isExtensionContextError(error) {
+  return /Extension context invalidated|context invalidated|Receiving end does not exist/i.test(normalizeErrorMessage(error));
+}
+
+function chromePermissionsContains(permissions) {
+  return new Promise((resolve) => {
+    if (!chrome.permissions || typeof chrome.permissions.contains !== "function") {
+      resolve(true);
+      return;
+    }
+
+    chrome.permissions.contains(permissions, (granted) => {
+      resolve(!chrome.runtime.lastError && Boolean(granted));
+    });
+  });
+}
+
+async function ensureSellerOzonHostAccess() {
+  const granted = await chromePermissionsContains({ origins: [SELLER_OZON_ORIGIN] });
+  if (!granted) {
+    throw new Error(SELLER_OZON_PERMISSION_ERROR);
+  }
+}
+
+async function executeScriptWithHostAccess(options, permissionErrorMessage) {
+  try {
+    return await chrome.scripting.executeScript(options);
+  } catch (error) {
+    if (isHostAccessError(error)) {
+      throw new Error(permissionErrorMessage || SELLER_OZON_PERMISSION_ERROR);
+    }
+    throw error;
+  }
+}
+
 function storageGet(key) {
   return new Promise((resolve) => {
     chrome.storage.local.get([key], (result) => resolve(result[key]));
@@ -164,6 +210,8 @@ async function getSellerCompanyId() {
 }
 
 async function getSellerTab() {
+  await ensureSellerOzonHostAccess();
+
   const tabs = await chrome.tabs.query({ url: "https://seller.ozon.ru/*" });
   if (!tabs.length) {
     throw new Error("请先打开并登录 seller.ozon.ru");
@@ -175,7 +223,7 @@ async function getSellerTab() {
 async function sellerTabFetchJson(url, body, companyId) {
   const targetTab = await getSellerTab();
 
-  const results = await chrome.scripting.executeScript({
+  const results = await executeScriptWithHostAccess({
     target: { tabId: targetTab.id },
     world: "MAIN",
     args: [url, body, companyId],
@@ -1574,7 +1622,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "spb-self-hosted:collect-current-tab":
         return { ok: true, data: await collectFromCurrentTab() };
       case "spb-self-hosted:get-ozon-insights":
-        return { ok: true, data: await getOzonInsights(message.productId || parseOzonProductId(message.sourceUrl || "")) };
+        try {
+          return { ok: true, data: await getOzonInsights(message.productId || parseOzonProductId(message.sourceUrl || "")) };
+        } catch (error) {
+          if (isExtensionContextError(error)) {
+            return { ok: false, error: "扩展刚刚被重新加载，请刷新当前 Ozon 商品页后重试数据一览。" };
+          }
+          throw error;
+        }
       case "spb-self-hosted:download-product":
         return await downloadProductJson(message.product);
       case "spb-self-hosted:track-logistics":

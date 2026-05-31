@@ -33,6 +33,46 @@
     if (val) val.textContent = label || (connected ? '已连接' : '未连接');
   }
 
+  function formatRuntimeError(message) {
+    var text = String(message || '');
+    if (/Extension context invalidated|context invalidated|Receiving end does not exist/i.test(text)) {
+      return '扩展刚刚被重新加载，请关闭并重新打开扩展弹窗后重试。';
+    }
+    return text || '扩展后台未响应';
+  }
+
+  function requestSellerOzonAccess(callback) {
+    if (!chrome.permissions || typeof chrome.permissions.request !== 'function') {
+      callback({ ok: true });
+      return;
+    }
+
+    var permissions = { origins: ['https://seller.ozon.ru/*'] };
+    chrome.permissions.request(permissions, function (granted) {
+      if (chrome.runtime.lastError) {
+        callback({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
+        return;
+      }
+      callback(granted
+        ? { ok: true }
+        : { ok: false, error: '未授权访问 seller.ozon.ru' });
+    });
+  }
+
+  function sendRuntimeMessage(message, callback) {
+    try {
+      chrome.runtime.sendMessage(message, function (response) {
+        if (chrome.runtime.lastError) {
+          callback({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
+          return;
+        }
+        callback(response || { ok: false, error: '无响应' });
+      });
+    } catch (error) {
+      callback({ ok: false, error: formatRuntimeError(error && error.message ? error.message : String(error)) });
+    }
+  }
+
   function formatTimeAgo(isoStr) {
     if (!isoStr) return '未同步';
     var diff = Date.now() - new Date(isoStr).getTime();
@@ -107,8 +147,8 @@
 
   // Load calculator status
   function loadCalculatorStatus() {
-    chrome.runtime.sendMessage({ type: 'ozon-calculator:status' }, function (response) {
-      if (chrome.runtime.lastError || !response || !response.ok) return;
+    sendRuntimeMessage({ type: 'ozon-calculator:status' }, function (response) {
+      if (!response || !response.ok) return;
       var counts = response.counts || {};
       setText(sellerCountNode, counts.seller || 0);
       setText(selectedCountNode, response.selectedServiceCount || 0);
@@ -154,16 +194,23 @@
     syncAnalyticsBtn.addEventListener('click', function () {
       syncAnalyticsBtn.disabled = true;
       syncAnalyticsBtn.textContent = '...';
-      getSelectedShopId(function (shopId) {
-        if (!shopId) {
-          syncAnalyticsBtn.textContent = '无店铺';
-          setTimeout(function () { syncAnalyticsBtn.textContent = '同步'; syncAnalyticsBtn.disabled = false; }, 2000);
+      requestSellerOzonAccess(function (permission) {
+        if (!permission.ok) {
+          syncAnalyticsBtn.textContent = '需授权';
+          setStatus(ozonStatusRow, false, permission.error || '未授权');
+          setTimeout(function () { syncAnalyticsBtn.textContent = '同步'; syncAnalyticsBtn.disabled = false; }, 2500);
           return;
         }
-        chrome.runtime.sendMessage({
-          type: 'spb-self-hosted:sync-shop-analytics',
-          shopId: shopId
-        }, function (response) {
+        getSelectedShopId(function (shopId) {
+          if (!shopId) {
+            syncAnalyticsBtn.textContent = '无店铺';
+            setTimeout(function () { syncAnalyticsBtn.textContent = '同步'; syncAnalyticsBtn.disabled = false; }, 2000);
+            return;
+          }
+          sendRuntimeMessage({
+            type: 'spb-self-hosted:sync-shop-analytics',
+            shopId: shopId
+          }, function (response) {
           if (response && response.ok) {
             syncAnalyticsBtn.textContent = 'OK';
             var now = new Date().toISOString();
@@ -175,8 +222,10 @@
             });
           } else {
             syncAnalyticsBtn.textContent = '失败';
+            if (response && response.error) setStatus(ozonStatusRow, false, response.error);
           }
           setTimeout(function () { syncAnalyticsBtn.textContent = '同步'; syncAnalyticsBtn.disabled = false; }, 2000);
+          });
         });
       });
     });
@@ -186,16 +235,23 @@
     syncGraphsBtn.addEventListener('click', function () {
       syncGraphsBtn.disabled = true;
       syncGraphsBtn.textContent = '...';
-      getSelectedShopId(function (shopId) {
-        if (!shopId) {
-          syncGraphsBtn.textContent = '无店铺';
-          setTimeout(function () { syncGraphsBtn.textContent = '同步'; syncGraphsBtn.disabled = false; }, 2000);
+      requestSellerOzonAccess(function (permission) {
+        if (!permission.ok) {
+          syncGraphsBtn.textContent = '需授权';
+          setStatus(ozonStatusRow, false, permission.error || '未授权');
+          setTimeout(function () { syncGraphsBtn.textContent = '同步'; syncGraphsBtn.disabled = false; }, 2500);
           return;
         }
-        chrome.runtime.sendMessage({
-          type: 'spb-self-hosted:sync-shop-graphs',
-          shopId: shopId
-        }, function (response) {
+        getSelectedShopId(function (shopId) {
+          if (!shopId) {
+            syncGraphsBtn.textContent = '无店铺';
+            setTimeout(function () { syncGraphsBtn.textContent = '同步'; syncGraphsBtn.disabled = false; }, 2000);
+            return;
+          }
+          sendRuntimeMessage({
+            type: 'spb-self-hosted:sync-shop-graphs',
+            shopId: shopId
+          }, function (response) {
           if (response && response.ok) {
             syncGraphsBtn.textContent = 'OK';
             var now = new Date().toISOString();
@@ -207,8 +263,10 @@
             });
           } else {
             syncGraphsBtn.textContent = '失败';
+            if (response && response.error) setStatus(ozonStatusRow, false, response.error);
           }
           setTimeout(function () { syncGraphsBtn.textContent = '同步'; syncGraphsBtn.disabled = false; }, 2000);
+          });
         });
       });
     });
@@ -304,17 +362,24 @@
       }
       syncCookieBtn.disabled = true;
       syncCookieBtn.textContent = '...';
-      // 自动读取已检测到的 company_id，手动输入的优先
-      chrome.storage.local.get(['ss_erp_ozon_company_id'], function (storageResult) {
-        var manualId = cookieCompanyIdInput ? cookieCompanyIdInput.value.trim() : '';
-        var autoId = storageResult.ss_erp_ozon_company_id || '';
-        var companyId = manualId || autoId;
-        if (companyId && cookieCompanyIdInput) cookieCompanyIdInput.value = companyId;
+      requestSellerOzonAccess(function (permission) {
+        if (!permission.ok) {
+          syncCookieBtn.textContent = '需授权';
+          setStatus(ozonStatusRow, false, permission.error || '未授权');
+          setTimeout(function () { syncCookieBtn.textContent = '同步'; syncCookieBtn.disabled = false; }, 2500);
+          return;
+        }
+        // 自动读取已检测到的 company_id，手动输入的优先
+        chrome.storage.local.get(['ss_erp_ozon_company_id'], function (storageResult) {
+          var manualId = cookieCompanyIdInput ? cookieCompanyIdInput.value.trim() : '';
+          var autoId = storageResult.ss_erp_ozon_company_id || '';
+          var companyId = manualId || autoId;
+          if (companyId && cookieCompanyIdInput) cookieCompanyIdInput.value = companyId;
 
-        chrome.runtime.sendMessage({
-          type: 'ozon-calc:sync-ozon-cookie',
-          payload: { shopId: shopId, companyId: companyId || undefined }
-        }, function (response) {
+          sendRuntimeMessage({
+            type: 'ozon-calc:sync-ozon-cookie',
+            payload: { shopId: shopId, companyId: companyId || undefined }
+          }, function (response) {
           if (response && response.ok) {
             syncCookieBtn.textContent = 'OK';
             var now = new Date().toISOString();
@@ -330,6 +395,7 @@
             if (response && response.error) alert('同步失败: ' + response.error);
           }
           setTimeout(function () { syncCookieBtn.textContent = '同步'; syncCookieBtn.disabled = false; }, 2000);
+          });
         });
       });
     });

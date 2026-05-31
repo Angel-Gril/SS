@@ -366,7 +366,7 @@
     document.body.appendChild(panel);
 
     try {
-      const response = await chrome.runtime.sendMessage({
+      const response = await sendRuntimeMessage({
         type: "spb-self-hosted:get-ozon-insights",
         productId,
         sourceUrl: location.href
@@ -383,6 +383,30 @@
         status.textContent = error && error.message ? error.message : String(error);
       }
     }
+  }
+
+  function sendRuntimeMessage(message) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(formatRuntimeMessageError(chrome.runtime.lastError.message)));
+            return;
+          }
+          resolve(response);
+        });
+      } catch (error) {
+        reject(new Error(formatRuntimeMessageError(error && error.message ? error.message : String(error))));
+      }
+    });
+  }
+
+  function formatRuntimeMessageError(message) {
+    const text = String(message || "");
+    if (/Extension context invalidated|context invalidated|Receiving end does not exist/i.test(text)) {
+      return "扩展刚刚被重新加载，请刷新当前 Ozon 商品页后重试数据一览。";
+    }
+    return text || "扩展后台未响应";
   }
 
   function createOzonPanelShell(productId) {

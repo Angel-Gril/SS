@@ -119,13 +119,54 @@
 
   function sendMessage(message) {
     return new Promise(function (resolve) {
-      chrome.runtime.sendMessage(message, function (response) {
+      try {
+        chrome.runtime.sendMessage(message, function (response) {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
+            return;
+          }
+          resolve(response || { ok: false, error: '无响应' });
+        });
+      } catch (error) {
+        resolve({ ok: false, error: formatRuntimeError(error && error.message ? error.message : String(error)) });
+      }
+    });
+  }
+
+  function formatRuntimeError(message) {
+    var text = String(message || '');
+    if (/Extension context invalidated|context invalidated|Receiving end does not exist/i.test(text)) {
+      return '扩展刚刚被重新加载，请刷新当前扩展设置页后重试。';
+    }
+    return text || '扩展后台未响应';
+  }
+
+  function requestSellerOzonAccess() {
+    return new Promise(function (resolve) {
+      if (!chrome.permissions || typeof chrome.permissions.request !== 'function') {
+        resolve({ ok: true });
+        return;
+      }
+
+      var permissions = { origins: ['https://seller.ozon.ru/*'] };
+      chrome.permissions.request(permissions, function (granted) {
         if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          resolve({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
           return;
         }
-        resolve(response || { ok: false, error: '无响应' });
+        resolve(granted
+          ? { ok: true }
+          : { ok: false, error: '未授权访问 seller.ozon.ru，无法读取卖家后台分析数据。请允许扩展访问 seller.ozon.ru 后重试。' });
       });
+    });
+  }
+
+  function runSellerOzonAction(action) {
+    return requestSellerOzonAccess().then(function (permission) {
+      if (!permission.ok) {
+        return permission;
+      }
+      return action();
     });
   }
 
@@ -964,8 +1005,11 @@
       setAnalyticsStatus('请先选择店铺', 'error');
       return;
     }
-    setAnalyticsStatus('正在从 seller.ozon.ru 获取分析数据并推送到 ERP...', '');
-    sendMessage({ type: 'spb-self-hosted:sync-shop-analytics', shopId: shopId }).then(function (response) {
+    setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
+    runSellerOzonAction(function () {
+      setAnalyticsStatus('正在从 seller.ozon.ru 获取分析数据并推送到 ERP...', '');
+      return sendMessage({ type: 'spb-self-hosted:sync-shop-analytics', shopId: shopId });
+    }).then(function (response) {
       if (!response || !response.ok) {
         setAnalyticsStatus('同步失败: ' + (response && response.error ? response.error : '未知错误'), 'error');
         return;
@@ -981,8 +1025,11 @@
       setAnalyticsStatus('请先选择店铺', 'error');
       return;
     }
-    setAnalyticsStatus('正在从 seller.ozon.ru 获取 V3 经营数据（含环比+AI推荐）...', '');
-    sendMessage({ type: 'spb-self-hosted:sync-shop-graphs', shopId: shopId }).then(function (response) {
+    setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
+    runSellerOzonAction(function () {
+      setAnalyticsStatus('正在从 seller.ozon.ru 获取 V3 经营数据（含环比+AI推荐）...', '');
+      return sendMessage({ type: 'spb-self-hosted:sync-shop-graphs', shopId: shopId });
+    }).then(function (response) {
       if (!response || !response.ok) {
         setAnalyticsStatus('同步失败: ' + (response && response.error ? response.error : '未知错误'), 'error');
         return;
@@ -1002,9 +1049,12 @@
   var marketApiResults = document.getElementById('marketApiResults');
 
   on(testMarketApisBtn, 'click', function () {
-    setAnalyticsStatus('正在测试市场数据 API（搜索词/趋势/爆品/竞争定位）...', '');
+    setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
     if (marketApiResults) { marketApiResults.style.display = 'none'; marketApiResults.innerHTML = ''; }
-    sendMessage({ type: 'spb-self-hosted:test-market-apis' }).then(function (response) {
+    runSellerOzonAction(function () {
+      setAnalyticsStatus('正在测试市场数据 API（搜索词/趋势/爆品/竞争定位）...', '');
+      return sendMessage({ type: 'spb-self-hosted:test-market-apis' });
+    }).then(function (response) {
       if (!response || !response.ok) {
         setAnalyticsStatus('测试失败: ' + (response && response.error ? response.error : '未知错误'), 'error');
         return;
