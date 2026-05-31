@@ -94,6 +94,7 @@ model User {
   userServiceTags UserServiceTag[]
   createdAnnouncements Announcement[] @relation("AnnouncementCreator")
   announcementReads    AnnouncementRead[]
+  auditLogs    AuditLog[]
 
   @@index([parentId])
   @@map("users")
@@ -240,6 +241,8 @@ model Product {
   @@index([shopId])
   @@index([sku])
   @@index([modelId])
+  @@index([shopId, status, updatedAt])
+  @@index([shopId, updatedAt])
   @@map("products")
 }
 
@@ -305,6 +308,8 @@ model Order {
   @@index([postingNumber])
   @@index([domesticTrackingNumber])
   @@index([internationalTrackingNumber])
+  @@index([shopId, status, createdAt])
+  @@index([shopId, createdAt])
   @@map("orders")
 }
 
@@ -400,6 +405,7 @@ model SupplyGoods {
 
   @@index([userId])
   @@index([status])
+  @@index([userId, status, createdAt])
   @@map("supply_goods")
 }
 
@@ -419,6 +425,7 @@ model SyncJob {
   @@index([shopId])
   @@index([status])
   @@index([type])
+  @@index([shopId, type, status, createdAt])
   @@map("sync_jobs")
 }
 
@@ -1045,4 +1052,25 @@ model AnnouncementRead {
   @@unique([announcementId, userId])
   @@index([userId, readAt])
   @@map("announcement_reads")
+}
+
+// 审计日志：记录管理员/超管的敏感操作
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorId     String?  @map("actor_id")
+  actorRole   UserRole @map("actor_role")
+  action      String   // 操作类型：system_config_update, user_role_change, maintenance_toggle, etc.
+  target      String?  // 操作目标：config key, user id, shop id, etc.
+  before      Json?    // 变更前的值（敏感字段已掩码）
+  after       Json?    // 变更后的值（敏感字段已掩码）
+  ip          String?
+  userAgent   String?  @map("user_agent")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  actor       User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
 }

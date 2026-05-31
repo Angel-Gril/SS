@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { authenticate, clearAuthContextCache, requireRole } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { generateAccountCode, nextAdminCode, nextSuperAdminCode } from '../lib/account-code.js';
+import { logAudit, extractRequestMeta } from '../lib/audit-log.js';
 
 const createTagSchema = z.object({
   name: z.string().min(1, '标签名称不能为空'),
@@ -522,6 +523,26 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const user = await prisma.user.update({ where: { id }, data });
+
+    // 审计日志：记录敏感字段变更
+    const sensitiveChanges: Record<string, any> = {};
+    if (data.role !== undefined) sensitiveChanges.role = { before: existing.role, after: data.role };
+    if (data.status !== undefined) sensitiveChanges.status = { before: existing.status, after: data.status };
+    if (data.isSuperAdmin !== undefined) sensitiveChanges.isSuperAdmin = { before: existing.isSuperAdmin, after: data.isSuperAdmin };
+    if (data.canInvite !== undefined) sensitiveChanges.canInvite = { before: existing.canInvite, after: data.canInvite };
+
+    if (Object.keys(sensitiveChanges).length > 0) {
+      await logAudit({
+        actorId: actor.actorUserId || actor.userId,
+        actorRole: actor.role,
+        action: 'user_permission_change',
+        target: id,
+        before: { phone: existing.phone, ...Object.fromEntries(Object.entries(sensitiveChanges).map(([k, v]) => [k, v.before])) },
+        after: { phone: user.phone, ...Object.fromEntries(Object.entries(sensitiveChanges).map(([k, v]) => [k, v.after])) },
+        ...extractRequestMeta(request),
+      });
+    }
+
     clearAuthContextCache(id);
     return reply.send({
       code: 1,

@@ -4,6 +4,7 @@ import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { invalidateFeatureCache } from '../lib/feature-flags.js';
 import { invalidateMaintenanceCache } from '../lib/maintenance.js';
+import { logAudit, extractRequestMeta } from '../lib/audit-log.js';
 import {
   SystemConfigSchema,
   SystemConfigMeta,
@@ -160,6 +161,20 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       create: { key, value: finalValue, label: meta.label, group: meta.group, description: meta.description },
       update: { value: finalValue },
     });
+
+    // 审计日志
+    const actor = (request as any).user;
+    await logAudit({
+      actorId: actor.actorUserId || actor.userId,
+      actorRole: actor.role,
+      action: 'system_config_update',
+      target: key,
+      before: existing ? { value: maskSecretValue(key, existing.value) } : null,
+      after: { value: maskSecretValue(key, finalValue) },
+      force: key === 'security_audit_log_enabled',
+      ...extractRequestMeta(request),
+    });
+
     invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
@@ -204,13 +219,45 @@ export async function systemConfigRoutes(app: FastifyInstance) {
         description: parsed.data.description || meta.description,
       },
     });
+
+    // 审计日志
+    const actor = (request as any).user;
+    await logAudit({
+      actorId: actor.actorUserId || actor.userId,
+      actorRole: actor.role,
+      action: 'system_config_update',
+      target: key,
+      before: existing ? { value: maskSecretValue(key, existing.value) } : null,
+      after: { value: maskSecretValue(key, finalValue) },
+      force: key === 'security_audit_log_enabled',
+      ...extractRequestMeta(request),
+    });
+
     invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
   });
 
   app.delete('/:key', async (request, reply) => {
     const { key } = request.params as { key: string };
+    if (!validateKey(key)) {
+      return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
+    }
+
+    const existing = await prisma.systemConfig.findUnique({ where: { key } });
     await prisma.systemConfig.deleteMany({ where: { key } });
+
+    const actor = (request as any).user;
+    await logAudit({
+      actorId: actor.actorUserId || actor.userId,
+      actorRole: actor.role,
+      action: 'system_config_delete',
+      target: key,
+      before: existing ? { value: maskSecretValue(key, existing.value) } : null,
+      after: null,
+      force: key === 'security_audit_log_enabled',
+      ...extractRequestMeta(request),
+    });
+
     invalidateConfigCaches(key);
     return reply.send({ code: 1, msg: '已删除' });
   });
