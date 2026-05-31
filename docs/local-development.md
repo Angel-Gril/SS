@@ -96,6 +96,12 @@ pnpm smoke:remote
 
 预期返回里 `authenticated upload stores image in expected backend` 应为 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 仍是 `http://localhost:3001/uploads/...`，说明 R2 bucket 可能已创建，但生产 API 进程没有读到 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 环境变量，或者部署后尚未重启生效。
 
+修复后再次验证时，先确认：
+
+1. 线上 API / Worker / Web 都已重启
+2. 运行中的进程实际加载了新的 `.env.staging`
+3. `smoke:remote` 返回的上传后端变成 `oss`
+
 ## 今天的更新推送
 
 最省事的流程是：
