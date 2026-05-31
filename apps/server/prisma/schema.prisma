@@ -95,6 +95,7 @@ model User {
   createdAnnouncements Announcement[] @relation("AnnouncementCreator")
   announcementReads    AnnouncementRead[]
   auditLogs    AuditLog[]
+  ozonAnalyticsCaches OzonAnalyticsCache[]
 
   @@index([parentId])
   @@map("users")
@@ -384,6 +385,7 @@ model SupplyGoods {
   title           String
   sourceUrl       String?  @map("source_url")
   sourcePlatform  String?  @map("source_platform")
+  sourceProductId String?  @map("source_product_id") // OZON SKU / product_id
   supplier        String?
   purchasePrice   Decimal? @map("purchase_price") @db.Decimal(12, 2)
   currency        String   @default("CNY")
@@ -406,6 +408,7 @@ model SupplyGoods {
   @@index([userId])
   @@index([status])
   @@index([userId, status, createdAt])
+  @@index([userId, sourceProductId])
   @@map("supply_goods")
 }
 
@@ -1073,4 +1076,22 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// OZON Premium 数据缓存：存储从 seller.ozon.ru 获取的商品分析数据
+model OzonAnalyticsCache {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sku         String   // OZON SKU / product_id
+  metrics     Json     // 完整的 Premium 数据（销量、GMV、加购率等）
+  source      String   // 数据来源：'seller-analytics' | 'seller-search' | 'public-api'
+  capturedAt  DateTime @map("captured_at") @default(now())
+  expiresAt   DateTime @map("expires_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([userId, sku])
+  @@index([expiresAt])
+  @@index([userId, sku, expiresAt])
+  @@map("ozon_analytics_cache")
 }

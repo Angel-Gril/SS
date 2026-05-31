@@ -42,6 +42,44 @@ function getOzonPublishErrorLogContext(e: any): Record<string, unknown> {
   };
 }
 
+function normalizeProductId(value: unknown): string | null {
+  const text = value == null ? '' : String(value).trim();
+  return text || null;
+}
+
+export function getSupplyGoodsLookupId(item: { sourceProductId?: string | null; sku?: string | null }): string | null {
+  return normalizeProductId(item.sourceProductId) || normalizeProductId(item.sku);
+}
+
+export function buildCollectSnapshot(item: {
+  id: string;
+  title: string;
+  sourceProductId?: string | null;
+  sku?: string | null;
+  sourceUrl?: string | null;
+  status: string;
+  createdAt: Date;
+  purchasePrice?: { toString(): string } | null;
+  images?: unknown;
+  metadata?: unknown;
+}) {
+  const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
+  return {
+    collected: true,
+    collectId: item.id,
+    title: item.title,
+    sourceProductId: item.sourceProductId || null,
+    sku: item.sku || null,
+    sourceUrl: item.sourceUrl || null,
+    status: item.status,
+    lastCollectedAt: item.createdAt.toISOString(),
+    price: item.purchasePrice?.toString() || null,
+    imageCount: Array.isArray(item.images) ? item.images.length : 0,
+    listed: item.status === 'listed',
+    lastError: meta.lastError || null,
+  };
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -54,7 +92,13 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '缺少 sku 参数' });
     }
     const goods = await prisma.supplyGoods.findFirst({
-      where: { userId, sku },
+      where: {
+        userId,
+        OR: [
+          { sku },
+          { sourceProductId: sku },
+        ],
+      },
       select: { id: true, title: true, status: true },
     });
     return reply.send({
@@ -65,6 +109,52 @@ export async function collectRoutes(app: FastifyInstance) {
         status: goods?.status || null,
       },
     });
+  });
+
+  // 批量快照：扩展列表页用，返回多个 SKU 的采集状态
+  app.post('/batch-snapshot', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const body = request.body as { skus: string[] };
+
+    if (!body?.skus?.length) {
+      return reply.status(400).send({ code: 0, msg: '缺少 skus 参数' });
+    }
+
+    const skus = Array.from(new Set(body.skus.map((sku) => String(sku || '').trim()).filter(Boolean))).slice(0, 100); // 限制最多 100 个
+    if (!skus.length) {
+      return reply.status(400).send({ code: 0, msg: '缺少 skus 参数' });
+    }
+
+    const records = await prisma.supplyGoods.findMany({
+      where: {
+        userId,
+        OR: [
+          { sourceProductId: { in: skus } },
+          { sku: { in: skus } },
+        ],
+      },
+      select: {
+        id: true,
+        sourceProductId: true,
+        sku: true,
+        title: true,
+        sourceUrl: true,
+        status: true,
+        createdAt: true,
+        purchasePrice: true,
+        images: true,
+        metadata: true,
+      },
+    });
+
+    const result: Record<string, any> = {};
+    for (const r of records) {
+      const key = getSupplyGoodsLookupId(r);
+      if (!key || result[key]) continue;
+      result[key] = buildCollectSnapshot(r);
+    }
+
+    return reply.send({ code: 1, data: result });
   });
 
   app.get('/randomize-config', async () => {
@@ -128,6 +218,7 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     const d = parsed.data;
+    const sourceProductId = normalizeProductId(d.sourceProductId || d.sku);
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const notes = [weightNote, d.description?.slice(0, 500)].filter(Boolean).join('\n') || null;
 
@@ -138,7 +229,8 @@ export async function collectRoutes(app: FastifyInstance) {
         title: d.title,
         sourceUrl: d.sourceUrl || null,
         sourcePlatform: d.sourcePlatform || 'ozon',
-        sku: d.sku || d.sourceProductId || null,
+        sourceProductId,
+        sku: d.sku || sourceProductId,
         images: d.images || undefined,
         purchasePrice: priceInfo.purchasePriceCny,
         currency: 'CNY',
@@ -165,6 +257,7 @@ export async function collectRoutes(app: FastifyInstance) {
     let saved = 0;
     for (const item of body.items.slice(0, 50)) {
       try {
+        const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
         const metadata: Record<string, unknown> = {};
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
@@ -189,7 +282,8 @@ export async function collectRoutes(app: FastifyInstance) {
             title: item.title || '未命名商品',
             sourceUrl: item.sourceUrl || null,
             sourcePlatform: item.sourcePlatform || 'ozon',
-            sku: item.sku || item.sourceProductId || null,
+            sourceProductId,
+            sku: item.sku || sourceProductId,
             images: item.images || undefined,
             purchasePrice: priceInfo.purchasePriceCny,
             currency: 'CNY',
@@ -1190,6 +1284,7 @@ export async function collectRoutes(app: FastifyInstance) {
               where: { id: existing.id },
               data: {
                 title: p.name,
+                sourceProductId: String(p.id),
                 images: p.images?.length ? p.images : (p.primary_image ? [p.primary_image] : undefined),
                 purchasePrice: p.price ? parseFloat(p.price) : undefined,
                 currency: p.currency_code || 'CNY',
@@ -1201,6 +1296,7 @@ export async function collectRoutes(app: FastifyInstance) {
               data: {
                 user: { connect: { id: userId } },
                 title: p.name,
+                sourceProductId: String(p.id),
                 sku: String(p.id),
                 sourceUrl: `https://www.ozon.ru/product/${p.id}`,
                 sourcePlatform: 'ozon',
@@ -1295,6 +1391,7 @@ export async function collectRoutes(app: FastifyInstance) {
             await prisma.supplyGoods.update({
               where: { id: existing.id },
               data: {
+                sourceProductId: String(p.id),
                 title: p.name,
                 images: p.images?.length ? p.images : (p.primary_image ? [p.primary_image] : undefined),
                 purchasePrice: p.price ? parseFloat(p.price) : undefined,
@@ -1307,6 +1404,7 @@ export async function collectRoutes(app: FastifyInstance) {
               data: {
                 user: { connect: { id: userId } },
                 title: p.name,
+                sourceProductId: String(p.id),
                 sku: String(p.id),
                 sourceUrl: `https://www.ozon.ru/product/${p.id}`,
                 sourcePlatform: 'ozon',
