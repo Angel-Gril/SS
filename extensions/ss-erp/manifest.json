@@ -40,7 +40,6 @@
       "https://localhost/*",
       "http://127.0.0.1/*",
       "https://127.0.0.1/*",
-      "http://120.55.61.146/*",
       "https://*.ss-erp.com/*",
       "https://staging.ss-erp.com/*"
     ]

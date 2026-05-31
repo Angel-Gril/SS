@@ -12,7 +12,6 @@
       window.location.protocol === 'file:' ||
       hostname === 'localhost' ||
       hostname === '127.0.0.1' ||
-      hostname === '120.55.61.146' ||
       hostname === 'staging.ss-erp.com' ||
       hostname === 'ss-erp.com' ||
       hostname.endsWith('.ss-erp.com')
