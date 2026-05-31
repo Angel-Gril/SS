@@ -92,7 +92,7 @@ export function useScannerInput(options: ScannerOptions = {}) {
     onCompositionEnd: (e: React.CompositionEvent<HTMLInputElement>) => {
       composingRef.current = false;
       const target = e.target as HTMLInputElement;
-      const cleaned = target.value.replace(/[一-龥　-〿＀-￯]/g, '');
+      const cleaned = target.value.replace(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g, '');
       if (cleaned !== target.value) target.value = cleaned;
     },
     isComposing: () => composingRef.current,

@@ -504,7 +504,15 @@ export default function CollectPage() {
   }
 
   function toggleSelect(id: string) {
-    setSelectedIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   }
   function toggleAll() {
     if (selectedIds.size === items.length) setSelectedIds(new Set());
