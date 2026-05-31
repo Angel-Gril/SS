@@ -50,3 +50,4 @@ public/resized/
 
 # Local SQLite/dev database leftovers
 prisma/migrations/dev.db*
+.gstack/
