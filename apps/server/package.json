@@ -18,7 +18,8 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "db:generate": "prisma generate",
-    "smoke:live": "node scripts/live-smoke.mjs"
+    "smoke:live": "node scripts/live-smoke.mjs",
+    "smoke:remote": "node scripts/remote-smoke.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1053.0",

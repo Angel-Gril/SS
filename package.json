@@ -15,6 +15,7 @@
     "db:migrate": "pnpm --filter server db:migrate",
     "db:studio": "pnpm --filter server db:studio",
     "db:seed": "pnpm --filter server db:seed",
+    "smoke:remote": "pnpm --filter server smoke:remote",
     "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",
     "build:extension:local": "node scripts/build-extension-package.mjs local",
     "verify:extension": "node scripts/verify-extension-package.mjs",

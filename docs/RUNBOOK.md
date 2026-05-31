@@ -105,6 +105,18 @@ cd /opt/ss-erp/app/apps/server
 SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
 ```
 
+如果你只能通过公网访问、没有 SSH 或数据库权限，用本地机器跑：
+
+```bash
+pnpm smoke:remote
+```
+
+需要连带检查后台、备份状态和 OSS/R2 时，提供管理员 token 或 cookie：
+
+```bash
+SMOKE_ADMIN_TOKEN=... SMOKE_EXPECT_OSS=true SMOKE_EXPECT_BACKUP_STATUS=true SMOKE_EXPECT_AUTH_CHALLENGES=true pnpm smoke:remote
+```
+
 该脚本会创建临时超管和临时普通用户，覆盖健康检查、初始化状态、公开页面、Next 静态资源 API 地址、CORS 负向检查、路径遍历负向检查、注入形态登录负向检查、管理员独立登录、备份状态、注册短信码校验、扩展 runtime、维护模式阻断与恢复。脚本结束会删除临时用户、Redis session、短信码，并恢复维护模式配置。
 
 部署层验收：
