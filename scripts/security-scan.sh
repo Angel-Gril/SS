@@ -4,6 +4,26 @@ set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+PNPM_BIN="${PNPM_BIN:-pnpm}"
+PNPM_CMD=("$PNPM_BIN")
+
+# WSL/Git Bash on Windows can see the npm shell shim, while bare "node" may not
+# resolve to node.exe. Run pnpm's JS entrypoint through Windows node.exe in that case.
+if ! command -v node >/dev/null 2>&1 && [ -x "/mnt/c/Program Files/nodejs/node.exe" ]; then
+  PNPM_SH="$(command -v "$PNPM_BIN" 2>/dev/null || true)"
+  if [ -n "$PNPM_SH" ]; then
+    PNPM_ENTRY="$(dirname "$PNPM_SH")/node_modules/pnpm/bin/pnpm.mjs"
+    if [ -f "$PNPM_ENTRY" ]; then
+      if command -v wslpath >/dev/null 2>&1; then
+        PNPM_ENTRY="$(wslpath -w "$PNPM_ENTRY")"
+      else
+        PNPM_ENTRY="C:/${PNPM_ENTRY#/mnt/c/}"
+      fi
+      PNPM_CMD=("/mnt/c/Program Files/nodejs/node.exe" "$PNPM_ENTRY")
+    fi
+  fi
+fi
+
 echo "=== SS ERP 安全扫描 ==="
 echo "目录: $ROOT"
 echo
@@ -14,7 +34,7 @@ FAIL=0
 echo "[1/4] pnpm audit (依赖漏洞)..."
 # 本地常用 npmmirror（无 audit 接口），临时切到官方 registry 跑 audit
 set +e
-pnpm audit --audit-level=high --prod --registry=https://registry.npmjs.org/ > /tmp/ss-erp-audit.log 2>&1
+"${PNPM_CMD[@]}" audit --audit-level=high --prod --registry=https://registry.npmjs.org/ > /tmp/ss-erp-audit.log 2>&1
 AUDIT_CODE=$?
 set -e
 cat /tmp/ss-erp-audit.log
