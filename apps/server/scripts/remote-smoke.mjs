@@ -30,6 +30,15 @@ let adminToken = process.env.SMOKE_ADMIN_TOKEN || '';
 let adminCookie = process.env.SMOKE_ADMIN_COOKIE || '';
 const adminPhone = process.env.SMOKE_ADMIN_PHONE || '';
 const adminPassword = process.env.SMOKE_ADMIN_PASSWORD || '';
+const userPhone = process.env.SMOKE_USER_PHONE || '';
+const userPassword = process.env.SMOKE_USER_PASSWORD || '';
+const createTempUser = process.env.SMOKE_CREATE_TEMP_USER === 'true';
+const expectUpload = process.env.SMOKE_EXPECT_UPLOAD === 'true' || expectOss;
+const tempSuffix = String(Date.now()).slice(-8);
+const tempPhone = `188${tempSuffix}`;
+const tempPassword = `Smoke${tempSuffix}Aa1`;
+let userToken = process.env.SMOKE_USER_TOKEN || '';
+let userCookie = process.env.SMOKE_USER_COOKIE || '';
 
 const checks = [];
 
@@ -47,6 +56,14 @@ function authHeaders(extra = {}) {
   return {
     ...(adminToken ? { authorization: `Bearer ${adminToken}` } : {}),
     ...(adminCookie ? { cookie: adminCookie } : {}),
+    ...extra,
+  };
+}
+
+function userAuthHeaders(extra = {}) {
+  return {
+    ...(userToken ? { authorization: `Bearer ${userToken}` } : {}),
+    ...(userCookie ? { cookie: userCookie } : {}),
     ...extra,
   };
 }
@@ -70,6 +87,51 @@ async function resolveAdminCredentials() {
     adminCookie = cookie;
   }
   adminToken = login.body.data.token;
+}
+
+async function resolveUserCredentials() {
+  if (userToken || userCookie) return;
+
+  if (userPhone && userPassword) {
+    const login = await request(`${apiBaseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ phone: userPhone, password: userPassword }),
+    });
+    if (login.status !== 200 || login.body?.code !== 1) {
+      throw new Error(`user login failed: ${login.status} ${JSON.stringify(login.body)}`);
+    }
+    const setCookie = login.headers.get('set-cookie') || '';
+    const cookie = setCookie.split(';')[0];
+    if (cookie) userCookie = cookie;
+    userToken = login.body?.data?.token || '';
+    return;
+  }
+
+  if (!createTempUser) return;
+
+  const register = await request(`${apiBaseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ phone: tempPhone, password: tempPassword, nickname: 'Remote Smoke User' }),
+  });
+  if (register.status !== 201 || register.body?.code !== 1) {
+    throw new Error(`temp user register failed: ${register.status} ${JSON.stringify(register.body)}`);
+  }
+  const setCookie = register.headers.get('set-cookie') || '';
+  const cookie = setCookie.split(';')[0];
+  if (cookie) userCookie = cookie;
+
+  const login = await request(`${apiBaseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ phone: tempPhone, password: tempPassword }),
+  });
+  if (login.status === 200 && login.body?.code === 1) {
+    userToken = login.body?.data?.token || '';
+    const loginCookie = (login.headers.get('set-cookie') || '').split(';')[0];
+    if (loginCookie) userCookie = loginCookie;
+  }
 }
 
 function push(name, fn) {
@@ -227,6 +289,31 @@ push('admin auth can inspect integrations and backup status', async () => {
     oss: ossResult,
     backup: { available: backup.body?.data?.available ?? null, timestamp: backup.body?.data?.timestamp || null },
   };
+});
+
+push('authenticated upload stores image in expected backend', async () => {
+  if (!expectUpload) {
+    return { skipped: 'SMOKE_EXPECT_UPLOAD/SMOKE_EXPECT_OSS not set' };
+  }
+  await resolveUserCredentials();
+  if (!userToken && !userCookie) {
+    return { skipped: 'no user credentials provided' };
+  }
+
+  const oneByOnePng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+  const upload = await request(`${apiBaseUrl}/api/images/upload-base64`, {
+    method: 'POST',
+    headers: userAuthHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ dataUrl: oneByOnePng, filename: `remote-smoke-${Date.now()}.png` }),
+  });
+  if (upload.status !== 200 || upload.body?.code !== 1) {
+    throw new Error(`upload failed: ${upload.status} ${JSON.stringify(upload.body)}`);
+  }
+  const data = upload.body?.data || {};
+  if (expectOss && data.backend !== 'oss') {
+    throw new Error(`expected oss backend, got ${JSON.stringify(data)}`);
+  }
+  return { backend: data.backend || null, url: data.url || null, createdTempUser: createTempUser && !userPhone };
 });
 
 for (const { name, fn } of checks) {

@@ -85,6 +85,17 @@ pnpm smoke:remote
 
 如果你已经从浏览器或接口拿到了 token，也可以用 `$env:SMOKE_ADMIN_TOKEN='...'` 代替手机号密码。
 
+如果只是要证明线上上传链路是否真的走 R2/OSS，可以创建临时用户并上传 1x1 测试图：
+
+```bash
+$env:SMOKE_CREATE_TEMP_USER='true'
+$env:SMOKE_EXPECT_OSS='true'
+$env:SMOKE_EXPECT_UPLOAD='true'
+pnpm smoke:remote
+```
+
+预期返回里 `authenticated upload stores image in expected backend` 应为 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 仍是 `http://localhost:3001/uploads/...`，说明 R2 bucket 可能已创建，但生产 API 进程没有读到 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 环境变量，或者部署后尚未重启生效。
+
 ## 今天的更新推送
 
 最省事的流程是：

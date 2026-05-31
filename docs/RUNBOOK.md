@@ -117,6 +117,14 @@ pnpm smoke:remote
 SMOKE_ADMIN_PHONE=13800000000 SMOKE_ADMIN_PASSWORD=... SMOKE_EXPECT_OSS=true SMOKE_EXPECT_BACKUP_STATUS=true SMOKE_EXPECT_AUTH_CHALLENGES=true pnpm smoke:remote
 ```
 
+只验证上传链路是否真正走 R2/OSS，可以不用超管，直接创建临时普通用户上传测试图：
+
+```bash
+SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
+```
+
+预期上传检查返回 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 为 `http://localhost:3001/uploads/...`，说明 R2 还没有被当前 API 进程实际使用，需要检查 `.env.staging` / systemd `EnvironmentFile` / 服务重启。
+
 该脚本会创建临时超管和临时普通用户，覆盖健康检查、初始化状态、公开页面、Next 静态资源 API 地址、CORS 负向检查、路径遍历负向检查、注入形态登录负向检查、管理员独立登录、备份状态、注册短信码校验、扩展 runtime、维护模式阻断与恢复。脚本结束会删除临时用户、Redis session、短信码，并恢复维护模式配置。
 
 部署层验收：
