@@ -32,6 +32,7 @@ interface BackupStatus {
 
 const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
+  upload: '上传安全',
   retention: '数据保留',
   backup: '备份策略',
   maintenance: '维护模式',
@@ -40,7 +41,7 @@ const GROUP_LABELS: Record<string, string> = {
   general: '通用',
 };
 
-const GROUP_ORDER = ['maintenance', 'feature', 'retention', 'backup', 'version', 'randomize', 'general'];
+const GROUP_ORDER = ['maintenance', 'feature', 'upload', 'retention', 'backup', 'version', 'randomize', 'general'];
 
 export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);

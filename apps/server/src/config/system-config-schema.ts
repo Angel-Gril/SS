@@ -24,6 +24,13 @@ export const SystemConfigSchema = {
   security_admin_session_ttl_hours: z.number().int().min(1).max(168).default(24),
   security_audit_log_enabled: z.boolean().default(false),
 
+  // ─── upload ───
+  upload_rate_limit_enabled: z.boolean().default(true),
+  upload_rate_limit_per_minute: z.number().int().min(1).max(100).default(10),
+  upload_daily_quota_enabled: z.boolean().default(true),
+  upload_daily_quota_mb: z.number().int().min(100).max(10000).default(1024),
+  upload_referer_check_enabled: z.boolean().default(true),
+
   // ─── retention ───
   retention_collect_archive_days: z.number().int().min(30).max(3650).default(365),
   retention_collect_min_keep: z.number().int().min(0).max(10000).default(200),
@@ -105,6 +112,12 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   security_session_ttl_hours: { label: '会话有效期（小时）', group: 'security', description: '默认 168（7天）。修改后只对新发放的 token 生效' },
   security_admin_session_ttl_hours: { label: '管理员会话有效期（小时）', group: 'security', description: '管理员独立登录入口的 token 有效期，默认 24 小时' },
   security_audit_log_enabled: { label: '审计日志', group: 'security', description: '记录管理员/超管的写操作（需先建表）' },
+
+  upload_rate_limit_enabled: { label: '上传频率限制', group: 'upload', description: '是否启用单用户上传频率限制' },
+  upload_rate_limit_per_minute: { label: '每分钟上传次数', group: 'upload', description: '单用户每分钟最多上传次数（默认 10 次）' },
+  upload_daily_quota_enabled: { label: '每日上传配额', group: 'upload', description: '是否启用单用户每日上传流量配额' },
+  upload_daily_quota_mb: { label: '每日上传配额（MB）', group: 'upload', description: '单用户每日最多上传流量（默认 1024MB = 1GB）' },
+  upload_referer_check_enabled: { label: 'Referer 检查', group: 'upload', description: '是否检查 Referer 防止盗链（仅对 /cdn/* 路径生效）' },
 
   retention_collect_archive_days: { label: '采集数据归档天数', group: 'retention', description: '超过此天数的采集记录标记为归档（第一阶段仅统计，不删除）' },
   retention_collect_min_keep: { label: '采集数据最少保留条数', group: 'retention', description: '即使超过归档天数，每个用户至少保留此数量的采集记录' },

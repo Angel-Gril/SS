@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-const ADMIN_HOSTNAME = process.env.NEXT_PUBLIC_ADMIN_HOSTNAME || '';
-const USER_HOSTNAME = process.env.NEXT_PUBLIC_USER_HOSTNAME || '';
+const ADMIN_HOSTNAME = process.env.NEXT_PUBLIC_ADMIN_HOSTNAME || 'admin.ss-erp.com';
+const USER_HOSTNAME = process.env.NEXT_PUBLIC_USER_HOSTNAME || 'app.ss-erp.com';
+const MARKETING_HOSTNAMES = ['ss-erp.com', 'www.ss-erp.com'];
 
 function hostMatches(host: string, configured: string): boolean {
   if (!configured) return false;
@@ -12,8 +13,10 @@ function hostMatches(host: string, configured: string): boolean {
 
 export function middleware(request: NextRequest) {
   const host = request.headers.get('host') || '';
+  const normalizedHost = host.split(':')[0]?.toLowerCase() || '';
   const pathname = request.nextUrl.pathname;
 
+  // 管理员域名：admin.ss-erp.com
   if (hostMatches(host, ADMIN_HOSTNAME)) {
     if (pathname === '/') {
       return NextResponse.redirect(new URL('/admin/login', request.url));
@@ -26,10 +29,29 @@ export function middleware(request: NextRequest) {
     }
   }
 
+  // 用户域名：app.ss-erp.com
   if (hostMatches(host, USER_HOSTNAME)) {
+    // 访问 /admin 路径时重定向到登录
     if (pathname.startsWith('/admin')) {
       return NextResponse.redirect(new URL('/login', request.url));
     }
+    // 访问根路径时重定向到登录（用户工作台）
+    if (pathname === '/') {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
+
+  // 根域名：ss-erp.com / www.ss-erp.com
+  // 根路径显示官网首页，内部复用 /landing，避免和 ERP 工作台的 "/" 路由冲突。
+  if (MARKETING_HOSTNAMES.includes(normalizedHost)) {
+    if (pathname === '/') {
+      return NextResponse.rewrite(new URL('/landing', request.url));
+    }
+    if (pathname === '/login' || pathname === '/register') {
+      return NextResponse.redirect(new URL(pathname, `https://${USER_HOSTNAME}`));
+    }
+  } else if (pathname === '/landing') {
+    return NextResponse.redirect(new URL('/login', request.url));
   }
 
   return NextResponse.next();

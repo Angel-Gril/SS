@@ -5,7 +5,11 @@ import { applyWatermark, type WatermarkConfig } from '../services/watermark.js';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { lookup } from 'dns/promises';
+import { isIP } from 'net';
 import sharp from 'sharp';
+import { uploadLimiter } from '../lib/upload-limiter.js';
+import { getConfig } from '../config/system-config-schema.js';
 
 const MAX_BYTES = 20 * 1024 * 1024;
 
@@ -40,6 +44,124 @@ const ATTACHMENT_EXT_MAP: Record<string, string> = {
   'text/plain': 'txt',
 };
 
+type UploadLimitCheck = { allowed: true } | { allowed: false; reason: string };
+
+async function checkUploadRateLimit(userId: string): Promise<UploadLimitCheck> {
+  const rateLimitEnabled = await getConfig('upload_rate_limit_enabled');
+  if (rateLimitEnabled) {
+    const maxPerMinute = await getConfig('upload_rate_limit_per_minute');
+    if (!uploadLimiter.checkRateLimit(userId, maxPerMinute)) {
+      return { allowed: false, reason: `上传过于频繁，每分钟最多 ${maxPerMinute} 次` };
+    }
+  }
+
+  return { allowed: true };
+}
+
+async function checkUploadQuota(userId: string, bytes: number): Promise<UploadLimitCheck> {
+  const quotaEnabled = await getConfig('upload_daily_quota_enabled');
+  if (quotaEnabled) {
+    const maxMB = await getConfig('upload_daily_quota_mb');
+    const maxBytes = maxMB * 1024 * 1024;
+    if (!uploadLimiter.checkDailyQuota(userId, bytes, maxBytes)) {
+      const usedMB = Math.round(uploadLimiter.getDailyUsage(userId) / 1024 / 1024);
+      return { allowed: false, reason: `今日上传配额已用完（${usedMB}MB / ${maxMB}MB）` };
+    }
+  }
+
+  return { allowed: true };
+}
+
+async function checkUploadLimits(userId: string, bytes: number): Promise<UploadLimitCheck> {
+  const rateCheck = await checkUploadRateLimit(userId);
+  if (!rateCheck.allowed) return rateCheck;
+  return checkUploadQuota(userId, bytes);
+}
+
+async function readLimitedResponseBuffer(res: Response, maxBytes: number): Promise<Buffer> {
+  const contentLength = Number(res.headers.get('content-length') || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`remote file exceeds ${maxBytes} bytes`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > maxBytes) throw new Error(`remote file exceeds ${maxBytes} bytes`);
+    return buf;
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`remote file exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+
+  return Buffer.concat(chunks, total);
+}
+
+function isPrivateIp(address: string): boolean {
+  if (address === '::1') return true;
+  if (address.startsWith('fe80:') || address.startsWith('fc') || address.startsWith('fd')) return true;
+
+  const mapped = address.startsWith('::ffff:') ? address.slice(7) : address;
+  if (isIP(mapped) !== 4) return false;
+
+  const parts = mapped.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return true;
+  }
+
+  const a = parts[0]!;
+  const b = parts[1]!;
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a >= 224) return true;
+
+  return false;
+}
+
+async function validateRemoteImageUrl(rawUrl: string): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error('URL 格式错误');
+  }
+
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('仅支持 http/https 图片 URL');
+  }
+  if (!parsed.hostname || parsed.username || parsed.password) {
+    throw new Error('图片 URL 不允许包含认证信息');
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    throw new Error('不允许抓取本机地址');
+  }
+  if (isIP(hostname) && isPrivateIp(hostname)) {
+    throw new Error('不允许抓取内网地址');
+  }
+
+  const records = await lookup(hostname, { all: true });
+  if (!records.length || records.some((record) => isPrivateIp(record.address))) {
+    throw new Error('不允许抓取内网地址');
+  }
+
+  return parsed;
+}
+
 export async function imageUploadRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -59,6 +181,11 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     }
     if (sizeBytes > MAX_BYTES) {
       return reply.status(413).send({ code: 0, msg: `图片超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
+    }
+
+    const limitCheck = await checkUploadLimits(userId, sizeBytes);
+    if (!limitCheck.allowed) {
+      return reply.status(429).send({ code: 0, msg: limitCheck.reason });
     }
 
     try {
@@ -96,10 +223,18 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     if (buf.length > MAX_BYTES) {
       return reply.status(413).send({ code: 0, msg: `图片超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
     }
+
+    const { userId } = (request as any).user;
+
+    // 检查上传限制
+    const limitCheck = await checkUploadLimits(userId, buf.length);
+    if (!limitCheck.allowed) {
+      return reply.status(429).send({ code: 0, msg: limitCheck.reason });
+    }
+
     const ext = mime.split('/')[1]!.replace('jpeg', 'jpg');
     const filename = body.filename || `upload_${Date.now()}.${ext}`;
     try {
-      const { userId } = (request as any).user;
       const backend = await getStorageBackend(body.shopId);
       const result = await backend.uploadBuffer(buf, filename, mime, { category: 'raw', ownerId: userId });
       return reply.send({ code: 1, msg: 'ok', data: result });
@@ -122,6 +257,15 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     if (buf.length > MAX_BYTES) {
       return reply.status(413).send({ code: 0, msg: `文件超出 ${MAX_BYTES / 1024 / 1024}MB 限制` });
     }
+
+    const { userId } = (request as any).user;
+
+    // 检查上传限制（管理员也受限）
+    const limitCheck = await checkUploadLimits(userId, buf.length);
+    if (!limitCheck.allowed) {
+      return reply.status(429).send({ code: 0, msg: limitCheck.reason });
+    }
+
     const ext = ATTACHMENT_EXT_MAP[mime] || 'bin';
     const safeName = (body.filename || `attachment_${Date.now()}.${ext}`).replace(/[^\w.\-]/g, '_').slice(0, 120);
     try {
@@ -138,15 +282,39 @@ export async function imageUploadRoutes(app: FastifyInstance) {
     if (!body?.url) return reply.status(400).send({ code: 0, msg: '缺少 url' });
     try {
       const { userId } = (request as any).user;
-      const res = await fetch(body.url, { signal: AbortSignal.timeout(30000) });
+      const rateCheck = await checkUploadRateLimit(userId);
+      if (!rateCheck.allowed) {
+        return reply.status(429).send({ code: 0, msg: rateCheck.reason });
+      }
+
+      const remoteUrl = await validateRemoteImageUrl(body.url);
+      const res = await fetch(remoteUrl, {
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
+      });
       if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
+      const buf = await readLimitedResponseBuffer(res, MAX_BYTES);
+
+      const quotaCheck = await checkUploadQuota(userId, buf.length);
+      if (!quotaCheck.allowed) {
+        return reply.status(429).send({ code: 0, msg: quotaCheck.reason });
+      }
+
+      const contentType = normalizeMime(res.headers.get('content-type') || '');
+      if (contentType && !ALLOWED_MIME.has(contentType)) {
+        return reply.status(400).send({ code: 0, msg: `不支持的图片类型: ${contentType}` });
+      }
+      const detected = await sharp(buf).metadata().catch(() => null);
+      if (!detected || !detected.format) {
+        return reply.status(400).send({ code: 0, msg: '远程 URL 不是有效图片' });
+      }
       if (buf.length > MAX_BYTES) {
         return reply.status(413).send({ code: 0, msg: '图片超出 20MB 限制' });
       }
-      const filename = body.url.split('/').pop()?.split('?')[0] || `img_${Date.now()}.jpg`;
+
+      const filename = decodeURIComponent(remoteUrl.pathname.split('/').pop() || '') || `img_${Date.now()}.jpg`;
       const backend = await getStorageBackend(body.shopId);
-      const result = await backend.uploadBuffer(buf, filename, undefined, { category: 'raw', ownerId: userId });
+      const result = await backend.uploadBuffer(buf, filename, contentType || undefined, { category: 'raw', ownerId: userId });
       return reply.send({ code: 1, msg: 'ok', data: result });
     } catch (e: any) {
       return reply.status(500).send({ code: 0, msg: `上传失败: ${e.message}` });

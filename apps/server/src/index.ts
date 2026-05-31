@@ -45,6 +45,7 @@ import { ozonLogisticsRoutes, domesticAddressRoutes } from './routes/ozon-logist
 import { systemConfigRoutes } from './routes/system-config.js';
 import { watermarkTemplateRoutes } from './routes/watermark-template.js';
 import { imageUploadRoutes } from './routes/image-upload.js';
+import { cdnProxyRoutes } from './routes/cdn-proxy.js';
 import { chatRoutes } from './routes/chat.js';
 import { appVersionRoutes } from './routes/app-version.js';
 import { adminAuthRoutes } from './routes/admin-auth.js';
@@ -161,6 +162,7 @@ await app.register(domesticAddressRoutes, { prefix: '/api/domestic-addresses' })
 await app.register(systemConfigRoutes, { prefix: '/api/admin/system-config' });
 await app.register(watermarkTemplateRoutes, { prefix: '/api/watermark-templates' });
 await app.register(imageUploadRoutes, { prefix: '/api/images' });
+await app.register(cdnProxyRoutes);
 await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
