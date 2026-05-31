@@ -55,12 +55,13 @@ async function record(name, fn) {
 }
 
 async function api(path, options = {}) {
+  const headers = {
+    ...(options.body ? { 'content-type': 'application/json' } : {}),
+    ...(options.headers || {}),
+  };
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
-    headers: {
-      'content-type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
   });
   const text = await response.text();
   let body = null;

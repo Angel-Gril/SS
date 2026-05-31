@@ -6,6 +6,7 @@ const BYPASS_PATHS = new Set([
   '/ready',
   '/api/setup/status',
   '/api/auth/login',
+  '/api/auth/logout',
   '/api/admin/auth/login',
   '/api/user/me',
   '/api/app-version/check',
