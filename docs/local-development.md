@@ -104,7 +104,7 @@ pnpm smoke:remote
 2. 运行中的进程实际加载了新的 `.env.staging`
 3. `smoke:remote` 返回的上传后端变成 `oss`
 
-服务器侧可以用只读脚本确认环境是否进入当前进程：
+服务器侧可以用只读脚本确认 `.env.staging`、systemd `EnvironmentFile`、API/Worker 进程实际环境变量是否一致：
 
 ```bash
 DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh

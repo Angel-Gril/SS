@@ -74,6 +74,11 @@ check_service_envfile() {
     warn "systemctl not available; skip service env check"
     return
   fi
+  if ! systemctl is-active --quiet "$service"; then
+    fail "$service is not active"
+  else
+    pass "$service active"
+  fi
   local fragment
   fragment=$(systemctl show "$service" -p FragmentPath --value 2>/dev/null || true)
   if [ -z "$fragment" ] || [ ! -f "$fragment" ]; then
@@ -85,6 +90,67 @@ check_service_envfile() {
   else
     warn "$service has no EnvironmentFile in $fragment"
   fi
+
+  local env_files
+  env_files=$(systemctl show "$service" -p EnvironmentFiles --value 2>/dev/null || true)
+  if [ -n "$env_files" ]; then
+    pass "$service systemd EnvironmentFiles=$env_files"
+  else
+    warn "$service systemd EnvironmentFiles empty"
+  fi
+}
+
+read_proc_env_value() {
+  local pid="$1"
+  local key="$2"
+  if [ ! -r "/proc/$pid/environ" ]; then
+    echo ""
+    return
+  fi
+  tr '\0' '\n' < "/proc/$pid/environ" | awk -F= -v k="$key" '$1 == k {print substr($0, length(k) + 2); exit}'
+}
+
+check_process_env() {
+  local service="$1"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return
+  fi
+  local pid
+  pid=$(systemctl show "$service" -p MainPID --value 2>/dev/null || true)
+  if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+    warn "$service MainPID not available"
+    return
+  fi
+  pass "$service MainPID=$pid"
+
+  local expected_runtime="${EXPECTED_RUNTIME_MODE:-cloud}"
+  local expected_storage="${EXPECTED_IMAGE_STORAGE_BACKEND:-oss}"
+  local runtime
+  runtime=$(read_proc_env_value "$pid" RUNTIME_MODE)
+  local storage
+  storage=$(read_proc_env_value "$pid" IMAGE_STORAGE_BACKEND)
+
+  if [ "$runtime" = "$expected_runtime" ]; then
+    pass "$service process RUNTIME_MODE=$expected_runtime"
+  else
+    fail "$service process RUNTIME_MODE expected $expected_runtime, got ${runtime:-empty}"
+  fi
+
+  if [ "$storage" = "$expected_storage" ]; then
+    pass "$service process IMAGE_STORAGE_BACKEND=$expected_storage"
+  else
+    fail "$service process IMAGE_STORAGE_BACKEND expected $expected_storage, got ${storage:-empty}"
+  fi
+
+  for key in OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_REGION; do
+    local value
+    value=$(read_proc_env_value "$pid" "$key")
+    if [ -n "$value" ]; then
+      pass "$service process $key is set"
+    else
+      fail "$service process $key is empty"
+    fi
+  done
 }
 
 check_runtime_endpoint() {
@@ -121,6 +187,8 @@ check_expected_env
 check_service_envfile "$API_SERVICE"
 check_service_envfile "$WORKER_SERVICE"
 check_service_envfile "$WEB_SERVICE"
+check_process_env "$API_SERVICE"
+check_process_env "$WORKER_SERVICE"
 
 check_runtime_endpoint
 
@@ -129,4 +197,3 @@ echo "=== Result: ${FAILURES} failure(s), ${WARNINGS} warning(s) ==="
 if [ "$FAILURES" -gt 0 ]; then
   exit 1
 fi
-

@@ -134,7 +134,7 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 3. 确认服务重启的是当前线上实例，而不是旧目录或旧容器
 4. 再跑一次 `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote`
 
-服务器上可先跑只读诊断，不会输出密钥：
+服务器上可先跑只读诊断，不会输出密钥；它会检查 `.env.staging`、systemd `EnvironmentFile`、API/Worker 进程实际环境变量：
 
 ```bash
 DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
