@@ -185,6 +185,38 @@ async function main() {
     return { checkedChunks: seen.size };
   });
 
+  await record('cors rejects untrusted origins', async () => {
+    const maliciousOrigin = 'https://evil.example';
+    const out = await api('/ready', {
+      headers: { origin: maliciousOrigin },
+    });
+    const allowedOrigin = out.headers.get('access-control-allow-origin');
+    if (allowedOrigin === maliciousOrigin || allowedOrigin === '*') {
+      throw new Error(`unexpected CORS allow-origin: ${allowedOrigin}`);
+    }
+    return { status: out.status, allowOrigin: allowedOrigin };
+  });
+
+  await record('path traversal does not expose server files', async () => {
+    const out = await api('/uploads/%2e%2e/%2e%2e/%2e%2e/etc/passwd');
+    const body = typeof out.body === 'string' ? out.body : JSON.stringify(out.body);
+    if (out.status < 400 || body.includes('root:x:')) {
+      throw new Error(`unsafe traversal response: ${out.status} ${body.slice(0, 120)}`);
+    }
+    return { status: out.status };
+  });
+
+  await record('admin login rejects injection-shaped phone', async () => {
+    const out = await api('/api/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: "x' OR 1=1--", password: "' OR 1=1--" }),
+    });
+    if (out.status === 200 || out.body?.code === 1) {
+      throw new Error(`injection login unexpectedly succeeded: ${JSON.stringify(out.body)}`);
+    }
+    return { status: out.status, msg: out.body?.msg };
+  });
+
   const admin = await prisma.user.create({
     data: {
       phone: adminPhone,

@@ -106,7 +106,7 @@
   cd /opt/ss-erp/app/apps/server
   SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
   ```
-  - 覆盖：`/ready`、setup 状态、公开页面、Next 资源 API 地址、管理员独立登录、超管备份状态、注册短信码服务端校验、扩展 runtime、维护模式阻断与恢复
+  - 覆盖：`/ready`、setup 状态、公开页面、Next 资源 API 地址、CORS 负向检查、路径遍历负向检查、注入形态登录负向检查、管理员独立登录、超管备份状态、注册短信码服务端校验、扩展 runtime、维护模式阻断与恢复
   - 验证：脚本结束后测试用户被删除，`maintenance_enabled=false`
 
 ### 店铺管理
