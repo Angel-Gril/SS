@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import {
   Search, RefreshCw, Loader2, ImageOff, Pencil, Check, X,
   Archive, ArchiveRestore, Package, DollarSign, Boxes, Upload, AlertTriangle,
-  Save, ImageIcon, Trash2, Plus, Palette,
+  Save, ImageIcon, Trash2, Plus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -529,7 +529,6 @@ function BatchPriceDialog({ open, onOpenChange, productIds, onSuccess }: {
   productIds: string[];
   onSuccess: () => void;
 }) {
-  const [mode, setMode] = useState<'fixed' | 'percent'>('fixed');
   const [value, setValue] = useState('');
   const [submitting, setSubmitting] = useState(false);
 

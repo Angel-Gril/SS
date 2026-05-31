@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Download, Upload, Sparkles, Image as ImageIcon, ShoppingCart, Trash2 } from 'lucide-react';
+import { Loader2, Download, Upload, Sparkles, ShoppingCart, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -512,4 +512,3 @@ export default function BatchCollectPage() {
     </div>
   );
 }
-

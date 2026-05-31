@@ -1,17 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Truck, Loader2, Search, Copy, CheckCircle2, ExternalLink } from 'lucide-react';
+import { Truck, Loader2, Search, Copy, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { TRACK_PROVIDERS, defaultTrackUrl } from '@/lib/tracking';
-import { describeSubstatus } from '@/lib/ozon-substatus';
 
 interface Order {
   id: string;

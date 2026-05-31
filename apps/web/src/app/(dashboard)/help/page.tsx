@@ -1,6 +1,6 @@
 'use client';
 
-import { HelpCircle, BookOpen, MessageCircle, FileText } from 'lucide-react';
+import { BookOpen, MessageCircle, FileText } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
 const HELP_SECTIONS = [

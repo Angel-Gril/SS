@@ -1,11 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, RefreshCw, ScrollText } from 'lucide-react';
+import { RefreshCw, ScrollText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { ListingJobDetailDialog } from './listing-job-detail-dialog';
 

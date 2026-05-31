@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Package, Truck, Printer, AlertTriangle, RefreshCw,
-  Loader2, Search, CheckCircle2, Clock, ArrowRight, Link2,
+  Loader2, Search, Clock, Link2,
   ChevronDown, ChevronRight, ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,7 +20,6 @@ import {
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount } from '@/lib/utils';
-import { TRACK_PROVIDERS } from '@/lib/tracking';
 import { describeSubstatus } from '@/lib/ozon-substatus';
 
 interface Order {

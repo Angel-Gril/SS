@@ -246,7 +246,6 @@ function GraphsTab({ shopId }: { shopId: string }) {
     // Revenue time series from graphData
     const revenuePoints = snapData.graphData?.items?.[0]?.points || [];
     const dailyRevenue = revenuePoints.map((p) => Number(p.metrics?.revenue) || 0);
-    const dailyDates = revenuePoints.map((p) => p.date?.slice(5, 10) || '');
 
     // Funnel revenue series
     const funnelRevenue = v3Funnel.map((d) => Number(d.dayMetrics?.value) || 0);
@@ -830,22 +829,22 @@ function ShopAnalyticsContent() {
                       <TableHead className="w-[80px]">SKU</TableHead>
                       <TableHead className="min-w-[200px]">商品名称</TableHead>
                       <TableHead>
-                        <SortButton label="30天销量" sortKey="soldCount" current={sortKey} asc={sortAsc} onClick={handleSort} />
+                        <SortButton label="30天销量" sortKey="soldCount" current={sortKey} onClick={handleSort} />
                       </TableHead>
                       <TableHead>
-                        <SortButton label="销售额" sortKey="soldSum" current={sortKey} asc={sortAsc} onClick={handleSort} />
+                        <SortButton label="销售额" sortKey="soldSum" current={sortKey} onClick={handleSort} />
                       </TableHead>
                       <TableHead>
-                        <SortButton label="均价" sortKey="avgPrice" current={sortKey} asc={sortAsc} onClick={handleSort} />
+                        <SortButton label="均价" sortKey="avgPrice" current={sortKey} onClick={handleSort} />
                       </TableHead>
                       <TableHead>
-                        <SortButton label="加购率" sortKey="convToCartPdp" current={sortKey} asc={sortAsc} onClick={handleSort} />
+                        <SortButton label="加购率" sortKey="convToCartPdp" current={sortKey} onClick={handleSort} />
                       </TableHead>
                       <TableHead>
-                        <SortButton label="曝光量" sortKey="views" current={sortKey} asc={sortAsc} onClick={handleSort} />
+                        <SortButton label="曝光量" sortKey="views" current={sortKey} onClick={handleSort} />
                       </TableHead>
                       <TableHead>
-                        <SortButton label="库存" sortKey="stock" current={sortKey} asc={sortAsc} onClick={handleSort} />
+                        <SortButton label="库存" sortKey="stock" current={sortKey} onClick={handleSort} />
                       </TableHead>
                       <TableHead>类目</TableHead>
                     </TableRow>
@@ -931,13 +930,11 @@ function SortButton({
   label,
   sortKey,
   current,
-  asc,
   onClick,
 }: {
   label: string;
   sortKey: SortKey;
   current: SortKey;
-  asc: boolean;
   onClick: (key: SortKey) => void;
 }) {
   return (

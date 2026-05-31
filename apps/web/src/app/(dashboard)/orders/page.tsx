@@ -21,7 +21,6 @@ import {
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
-import { TRACK_PROVIDERS } from '@/lib/tracking';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
 
 interface Order {

@@ -13,7 +13,6 @@ import {
   Globe,
   LayoutDashboard,
   ChevronDown,
-  Image,
   Settings,
   MessageCircle,
   Megaphone,

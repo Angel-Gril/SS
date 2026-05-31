@@ -28,7 +28,7 @@ interface NotifItem {
   createdAt: string;
 }
 
-export function Topbar({ user, collapsed, onToggle }: TopbarProps) {
+export function Topbar({ user, onToggle }: TopbarProps) {
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
@@ -219,4 +219,3 @@ function PortalSwitcher({ activePortal }: { activePortal: string }) {
     </Button>
   );
 }
-
