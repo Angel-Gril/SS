@@ -107,6 +107,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (!user) return null;
 
   const effRole = getEffectiveRole(user);
+  const pathForbidden = isPathForbidden(pathname, effRole, user.isSuperAdmin);
+
+  if (pathForbidden) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex bg-background">
