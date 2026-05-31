@@ -390,8 +390,8 @@ export default function OrdersPage() {
         <div className="grid gap-4 md:grid-cols-4">
           <StatMini label="总订单" value={String(stats.total)} />
           <StatMini label="待打包" value={String(stats.byStatus['awaiting_packaging'] || 0)} highlight />
-          <StatMini label="今日订单" value={String(stats.todayOrders)} />
-          <StatMini label="今日销售额" value={formatCurrency(convertToCny(stats.todayRevenue, 'RUB'), 'CNY')} />
+          <StatMini label="今日订单" value={String(stats.todayOrders ?? 0)} />
+          <StatMini label="今日销售额" value={formatCurrency(convertToCny(stats.todayRevenue ?? '0', 'RUB'), 'CNY')} />
         </div>
       )}
 

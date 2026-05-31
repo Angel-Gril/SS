@@ -17,7 +17,16 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     const shopIds = userShops.map((s) => s.id);
 
     if (shopIds.length === 0) {
-      return { code: 1, msg: 'ok', data: { total: 0, byStatus: {} } };
+      return {
+        code: 1,
+        msg: 'ok',
+        data: {
+          total: 0,
+          byStatus: {},
+          todayOrders: 0,
+          todayRevenue: '0',
+        },
+      };
     }
 
     const total = await prisma.order.count({ where: { shopId: { in: shopIds } } });

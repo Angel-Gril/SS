@@ -252,6 +252,20 @@ async function main() {
     return out.body.data;
   });
 
+  await record('orders stats empty state returns complete fields', async () => {
+    const out = await api('/api/orders/stats', {
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    if (out.status !== 200 || out.body?.code !== 1) {
+      throw new Error(`${out.status} ${JSON.stringify(out.body)}`);
+    }
+    const data = out.body.data;
+    if (data?.total !== 0 || !data.byStatus || data.todayOrders !== 0 || data.todayRevenue !== '0') {
+      throw new Error(`unexpected empty stats payload: ${JSON.stringify(data)}`);
+    }
+    return data;
+  });
+
   await record('super admin can read backup status', async () => {
     const out = await api('/api/admin/ops/backup-status', {
       headers: { authorization: `Bearer ${adminToken}` },
