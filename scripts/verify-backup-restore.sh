@@ -164,7 +164,18 @@ if [ "${VERIFY_RESTORE_LOCAL_POSTGRES:-0}" = "1" ]; then
   require_command sudo
   sudo -u postgres createdb -O "$SOURCE_USER" "$TEMP_DB"
 else
-  createdb --maintenance-db="$MAINTENANCE_URL" "$TEMP_DB"
+  CREATEDB_LOG=$(mktemp)
+  if ! createdb --maintenance-db="$MAINTENANCE_URL" "$TEMP_DB" 2>"$CREATEDB_LOG"; then
+    cat "$CREATEDB_LOG" >&2
+    if grep -qi 'permission denied to create database' "$CREATEDB_LOG"; then
+      echo "[verify-restore] ERROR: 当前数据库账号没有 CREATEDB 权限。" >&2
+      echo "[verify-restore] 如果 PostgreSQL 在本机，请改用：" >&2
+      echo "[verify-restore]   VERIFY_RESTORE_LOCAL_POSTGRES=1 bash scripts/verify-backup-restore.sh" >&2
+    fi
+    rm -f "$CREATEDB_LOG"
+    exit 1
+  fi
+  rm -f "$CREATEDB_LOG"
 fi
 CREATED=1
 
