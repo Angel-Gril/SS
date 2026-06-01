@@ -42,7 +42,7 @@ pnpm verify:extension
 | 代码健康 | 本地 | `pnpm --filter server typecheck && pnpm --filter web typecheck && pnpm --filter server test` | 无类型错误，测试全绿 |
 | 扩展静态验收 | 本地 | `pnpm verify:extension` | manifest、JS 语法、cloud/local adapter 检查通过 |
 | 公网基础功能 | 本地 | `pnpm smoke:remote` | `/ready` 的 DB/Redis 为 `ok`，公开页面可访问，未登录后台接口被拒绝 |
-| 公网登录后只读接口 | 本地 | `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=local pnpm smoke:remote` | 临时用户可登录，核心只读 API 正常返回 |
+| 公网登录后只读接口 | 本地 | `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=any pnpm smoke:remote` | 临时用户可登录，核心只读 API 正常返回 |
 | R2/OSS 上传 | 本地 | `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote` | 返回 `runtimeImageUpload:"oss"` 且上传结果 `backend:"oss"` |
 | VPS 部署层 | VPS | `DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh` | systemd、Nginx、端口、防火墙、备份状态、Prisma migration、`/ready` 均通过 |
 | 数据库备份 | VPS | `. /etc/ss-erp-backup.env && bash scripts/backup-db.sh` | 生成 `ss_erp_*.sql.gz` 和 `backup-status.json` |
@@ -148,7 +148,7 @@ sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web
 如果当前只想测试“验证码未接入前，服务器核心功能是否能跑”，可以先不强制 OSS，跑临时用户只读 smoke：
 
 ```bash
-SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=local pnpm smoke:remote
+SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=any pnpm smoke:remote
 ```
 
 这会登录或复用一个 smoke 临时用户，并检查这些不会改业务数据的接口：
@@ -171,7 +171,7 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=local pnpm smoke:remote
 - `/api/account/transactions`
 - `/api/account/fee-templates`
 
-线上切到云端后，把 `SMOKE_EXPECT_RUNTIME=local` 去掉，预期就应该回到默认的 `cloud`。
+`SMOKE_EXPECT_RUNTIME=any` 只适合排查核心 API 是否可用。正式云端验收时去掉它，预期就应该回到默认的 `cloud`；R2/OSS 上传验收仍必须返回 `runtimeImageUpload:"oss"` 和 `backend:"oss"`。
 
 ## 今天的更新推送
 

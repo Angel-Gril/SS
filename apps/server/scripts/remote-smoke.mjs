@@ -20,6 +20,7 @@ const marketingBaseUrl = (process.env.SMOKE_MARKETING_BASE_URL || 'https://ss-er
 const userWebBaseUrl = (process.env.SMOKE_WEB_BASE_URL || process.env.NEXT_PUBLIC_WEB_BASE_URL || 'https://app.ss-erp.com').replace(/\/+$/, '');
 const adminWebBaseUrl = (process.env.SMOKE_ADMIN_WEB_BASE_URL || 'https://admin.ss-erp.com').replace(/\/+$/, '');
 const expectRuntime = process.env.SMOKE_EXPECT_RUNTIME || 'cloud';
+const allowAnyRuntime = expectRuntime === 'any' || expectRuntime === '*';
 const expectWebNoLocalFallback = process.env.SMOKE_EXPECT_WEB_NO_LOCAL_FALLBACK !== undefined
   ? process.env.SMOKE_EXPECT_WEB_NO_LOCAL_FALLBACK === 'true'
   : true;
@@ -193,7 +194,7 @@ async function fetchUserRuntime() {
   }
 
   const runtimeMode = runtime.body?.data?.mode || null;
-  if (expectRuntime && runtimeMode !== expectRuntime) {
+  if (expectRuntime && !allowAnyRuntime && runtimeMode !== expectRuntime) {
     throw new Error(`expected runtime mode=${expectRuntime}. ${ossRuntimeHint(runtime.body)}`);
   }
 
