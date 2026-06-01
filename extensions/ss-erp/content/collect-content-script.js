@@ -152,11 +152,13 @@
       try { widgets.push({ key, state: JSON.parse(states[key]) }); } catch (e) {}
     }
 
+    let currency = null;
+    let priceString = null;
+
     let title = "";
     let images = [];
     let price = null;
     let oldPrice = null;
-    let currency = "RUB";
     let description = "";
     let brand = null;
     let category = null;
@@ -181,8 +183,13 @@
       if (!price && /^(webPrice|webSale|price)/.test(k) && st) {
         const rp = st.cardPrice || st.price || st.finalPrice || st.tradePrice;
         const ro = st.originalPrice || st.priceWithoutDiscount || st.oldPrice;
-        if (typeof rp === "string") price = rp.replace(/[^\d.,]/g, "").replace(",", ".");
-        if (typeof ro === "string") oldPrice = ro.replace(/[^\d.,]/g, "").replace(",", ".");
+        if (typeof rp === "string") {
+          priceString = rp;
+          price = rp.replace(/[^\d.,]/g, "").replace(",", ".");
+        }
+        if (typeof ro === "string") {
+          oldPrice = ro.replace(/[^\d.,]/g, "").replace(",", ".");
+        }
         if (typeof st.currency === "string") currency = st.currency;
       }
       if (!description && /^(webDescription|webRichAnnotation|description)/.test(k) && st) {
@@ -206,6 +213,25 @@
           if (nm && vl) attributes.push({ name: nm, value: vl });
         }
       }
+    }
+
+    if (priceString) {
+      if (priceString.indexOf("¥") >= 0) {
+        currency = "CNY";
+      } else if (priceString.indexOf("₽") >= 0) {
+        currency = "RUB";
+      } else if (priceString.indexOf("₸") >= 0) {
+        currency = "KZT";
+      } else if (priceString.indexOf("BYN") >= 0) {
+        currency = "BYN";
+      }
+    }
+
+    if (!currency) {
+      const host = location.hostname.toLowerCase();
+      if (host.includes('ozon.kz')) currency = 'KZT';
+      else if (host.includes('ozon.by')) currency = 'BYN';
+      else currency = 'RUB';
     }
 
     for (const a of attributes) {
