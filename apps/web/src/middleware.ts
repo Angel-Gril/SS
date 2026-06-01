@@ -3,7 +3,9 @@ import type { NextRequest } from 'next/server';
 
 const ADMIN_HOSTNAME = process.env.NEXT_PUBLIC_ADMIN_HOSTNAME || 'admin.ss-erp.com';
 const USER_HOSTNAME = process.env.NEXT_PUBLIC_USER_HOSTNAME || 'app.ss-erp.com';
-const MARKETING_HOSTNAMES = ['ss-erp.com', 'www.ss-erp.com'];
+const MARKETING_HOSTNAME = 'ss-erp.com';
+const WWW_MARKETING_HOSTNAME = 'www.ss-erp.com';
+const MARKETING_HOSTNAMES = [MARKETING_HOSTNAME, WWW_MARKETING_HOSTNAME];
 
 function hostMatches(host: string, configured: string): boolean {
   if (!configured) return false;
@@ -17,14 +19,33 @@ function getRequestOrigin(request: NextRequest): string {
   return `${proto}://${host}`;
 }
 
-function redirectTo(request: NextRequest, pathname: string) {
-  return NextResponse.redirect(new URL(pathname, getRequestOrigin(request)));
+function redirectTo(request: NextRequest, pathname: string, status = 307) {
+  return NextResponse.redirect(new URL(pathname, getRequestOrigin(request)), status);
+}
+
+function redirectToHost(request: NextRequest, hostname: string, pathname = request.nextUrl.pathname, status = 307) {
+  const url = request.nextUrl.clone();
+  url.protocol = `${request.headers.get('x-forwarded-proto') || request.nextUrl.protocol.replace(':', '') || 'https'}:`;
+  url.hostname = hostname;
+  url.port = '';
+  url.pathname = pathname;
+  return NextResponse.redirect(url, status);
+}
+
+function rewriteTo(request: NextRequest, pathname: string) {
+  const url = request.nextUrl.clone();
+  url.pathname = pathname;
+  return NextResponse.rewrite(url);
 }
 
 export function middleware(request: NextRequest) {
   const host = request.headers.get('host') || '';
   const normalizedHost = host.split(':')[0]?.toLowerCase() || '';
   const pathname = request.nextUrl.pathname;
+
+  if (normalizedHost === WWW_MARKETING_HOSTNAME) {
+    return redirectToHost(request, MARKETING_HOSTNAME, pathname === '/landing' ? '/' : pathname, 301);
+  }
 
   // 管理员域名：admin.ss-erp.com
   if (hostMatches(host, ADMIN_HOSTNAME)) {
@@ -52,13 +73,16 @@ export function middleware(request: NextRequest) {
   }
 
   // 根域名：ss-erp.com / www.ss-erp.com
-  // 根路径跳转到官网首页，避免和 ERP 工作台的 "/" 路由冲突。
+  // 根路径直接渲染官网首页，避免公开 URL 出现 /landing。
   if (MARKETING_HOSTNAMES.includes(normalizedHost)) {
     if (pathname === '/') {
-      return redirectTo(request, '/landing');
+      return rewriteTo(request, '/landing');
+    }
+    if (pathname === '/landing') {
+      return redirectTo(request, '/', 301);
     }
     if (pathname === '/login' || pathname === '/register') {
-      return NextResponse.redirect(new URL(pathname, `${getRequestOrigin(request).replace(/:\/\/[^/]+$/, '')}://${USER_HOSTNAME}`));
+      return redirectToHost(request, USER_HOSTNAME, pathname);
     }
   } else if (pathname === '/landing') {
     return redirectTo(request, '/login');

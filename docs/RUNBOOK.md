@@ -374,7 +374,8 @@ pnpm smoke:remote
 通过标准：
 
 - `/ready` 返回 `status:"ready"`，且 `db`、`redis` 都是 `ok`
-- `ss-erp.com`、`app.ss-erp.com`、`admin.ss-erp.com` 页面可访问
+- `ss-erp.com/` 直接渲染官网首页，`ss-erp.com/landing` 和 `www.ss-erp.com` 规范化到主域
+- `app.ss-erp.com`、`admin.ss-erp.com` 页面可访问并保持登录入口隔离
 - Next.js chunk 不再包含 `http://localhost:3001`
 - 未登录访问后台配置、备份状态、扩展 runtime 返回 401/403
 

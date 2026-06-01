@@ -126,6 +126,7 @@ pnpm --filter server smoke:remote
 通过标准：
 
 - `/ready` 的 DB / Redis 都是 `ok`
+- `ss-erp.com/` 直接渲染官网首页，`ss-erp.com/landing` 和 `www.ss-erp.com` 规范化到主域
 - `ss-erp.com`、`app.ss-erp.com`、`admin.ss-erp.com` 的跳转隔离正确
 - 未登录访问后台、备份、扩展 runtime 等接口会返回 401/403
 - Next.js chunk 不再硬编码 localhost
@@ -244,6 +245,8 @@ pnpm smoke:remote
 
 它会检查：
 
+- `ss-erp.com/` 是否直接显示官网首页
+- `ss-erp.com/landing`、`www.ss-erp.com/` 是否跳转到 `ss-erp.com/`
 - `ss-erp.com/login`、`ss-erp.com/register` 是否跳转到 `app.ss-erp.com`
 - `app.ss-erp.com/admin*` 是否跳转到用户登录页
 - `admin.ss-erp.com/`、`/login`、`/register` 是否跳转到 `admin.ss-erp.com/admin/login`

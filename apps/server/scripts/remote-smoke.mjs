@@ -17,6 +17,7 @@ for (const file of envCandidates) {
 
 const apiBaseUrl = (process.env.SMOKE_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'https://ss-erp.com').replace(/\/+$/, '');
 const marketingBaseUrl = (process.env.SMOKE_MARKETING_BASE_URL || 'https://ss-erp.com').replace(/\/+$/, '');
+const wwwMarketingBaseUrl = (process.env.SMOKE_WWW_MARKETING_BASE_URL || 'https://www.ss-erp.com').replace(/\/+$/, '');
 const userWebBaseUrl = (process.env.SMOKE_WEB_BASE_URL || process.env.NEXT_PUBLIC_WEB_BASE_URL || 'https://app.ss-erp.com').replace(/\/+$/, '');
 const adminWebBaseUrl = (process.env.SMOKE_ADMIN_WEB_BASE_URL || 'https://admin.ss-erp.com').replace(/\/+$/, '');
 const expectRuntime = process.env.SMOKE_EXPECT_RUNTIME || 'cloud';
@@ -260,6 +261,23 @@ push('domain routing isolates user and admin hosts', async () => {
 
   const cases = [
     {
+      label: 'marketing root renders canonical homepage',
+      url: `${marketingBaseUrl}/`,
+      expectStatus: 200,
+    },
+    {
+      label: 'marketing landing redirects to root',
+      url: `${marketingBaseUrl}/landing`,
+      locationPrefix: `${marketingBaseUrl}/`,
+      expectRedirectStatus: 301,
+    },
+    {
+      label: 'www marketing redirects to apex',
+      url: `${wwwMarketingBaseUrl}/`,
+      locationPrefix: `${marketingBaseUrl}/`,
+      expectRedirectStatus: 301,
+    },
+    {
       label: 'root login redirects to user app',
       url: 'https://ss-erp.com/login',
       locationPrefix: `${userWebBaseUrl}/login`,
@@ -317,7 +335,8 @@ push('domain routing isolates user and admin hosts', async () => {
     }
 
     const location = out.headers.get('location') || '';
-    if (![307, 308].includes(out.status) || !location.startsWith(item.locationPrefix)) {
+    const expectedRedirectStatuses = item.expectRedirectStatus ? [item.expectRedirectStatus] : [307, 308];
+    if (!expectedRedirectStatuses.includes(out.status) || !location.startsWith(item.locationPrefix)) {
       throw new Error(`${item.label} failed: status=${out.status} location=${location} expectedPrefix=${item.locationPrefix}`);
     }
     result[item.label] = location;
