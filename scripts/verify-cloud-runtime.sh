@@ -9,12 +9,15 @@ set -euo pipefail
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/ss-erp/current}"
 ENV_FILE="${ENV_FILE:-.env.staging}"
 VERIFY_DOMAIN="${VERIFY_DOMAIN:-ss-erp.com}"
-LOCAL_READY_URL="${LOCAL_READY_URL:-http://127.0.0.1:3001/ready}"
+LOCAL_API_BASE_URL="${LOCAL_API_BASE_URL:-${LOCAL_READY_URL:-http://127.0.0.1:3001}}"
+LOCAL_API_BASE_URL="${LOCAL_API_BASE_URL%/ready}"
+LOCAL_API_BASE_URL="${LOCAL_API_BASE_URL%/}"
 
 echo "=== SS ERP cloud runtime verification ==="
 echo "Deploy dir: $DEPLOY_DIR"
 echo "Env file: $ENV_FILE"
 echo "Domain: $VERIFY_DOMAIN"
+echo "Local API base URL: $LOCAL_API_BASE_URL"
 echo ""
 
 if [ ! -d "$DEPLOY_DIR" ]; then
@@ -35,7 +38,7 @@ fi
 echo "[1/2] Runtime/env diagnostics"
 DEPLOY_DIR="$DEPLOY_DIR" \
 ENV_FILE="$ENV_FILE" \
-API_BASE_URL="$LOCAL_READY_URL" \
+API_BASE_URL="$LOCAL_API_BASE_URL" \
 bash "$DEPLOY_DIR/scripts/diagnose-runtime-env.sh"
 
 echo ""
@@ -43,7 +46,7 @@ echo "[2/2] VPS deployment checks"
 DEPLOY_DIR="$DEPLOY_DIR" \
 ENV_FILE="$ENV_FILE" \
 VERIFY_DOMAIN="$VERIFY_DOMAIN" \
-VERIFY_LOCAL_READY_URL="$LOCAL_READY_URL" \
+VERIFY_LOCAL_READY_URL="$LOCAL_API_BASE_URL/ready" \
 bash "$DEPLOY_DIR/scripts/verify-vps-deploy.sh"
 
 echo ""
