@@ -172,6 +172,31 @@ function ossRuntimeHint(runtimeBody) {
   ].join(' | ');
 }
 
+async function fetchUserRuntime() {
+  await resolveUserCredentials();
+  if (!userToken && !userCookie) {
+    return { skipped: 'no user credentials provided' };
+  }
+
+  const runtime = await request(`${apiBaseUrl}/api/extension/runtime`, {
+    headers: userAuthHeaders(),
+  });
+  if (runtime.status !== 200 || runtime.body?.code !== 1) {
+    throw new Error(`extension runtime failed: ${runtime.status} ${JSON.stringify(runtime.body)}`);
+  }
+
+  const runtimeMode = runtime.body?.data?.mode || null;
+  if (expectRuntime && runtimeMode !== expectRuntime) {
+    throw new Error(`expected runtime mode=${expectRuntime}. ${ossRuntimeHint(runtime.body)}`);
+  }
+
+  if (expectOss && runtime.body?.data?.capabilities?.imageUpload !== 'oss') {
+    throw new Error(`expected extension runtime imageUpload=oss. ${ossRuntimeHint(runtime.body)}`);
+  }
+
+  return runtime;
+}
+
 push('ready endpoint reports healthy', async () => {
   const out = await request(`${apiBaseUrl}/ready`);
   if (out.status !== 200 || out.body?.status !== 'ready' || out.body?.checks?.db !== 'ok' || out.body?.checks?.redis !== 'ok') {
@@ -325,25 +350,29 @@ push('admin auth can inspect integrations and backup status', async () => {
   };
 });
 
+push('authenticated runtime reports expected mode', async () => {
+  if (!createTempUser && !userPhone && !userPassword && !userToken && !userCookie && !expectUpload) {
+    return { skipped: 'no user credentials requested' };
+  }
+
+  const runtime = await fetchUserRuntime();
+  if (runtime.skipped) return runtime;
+
+  return {
+    mode: runtime.body?.data?.mode || null,
+    imageUpload: runtime.body?.data?.capabilities?.imageUpload || null,
+    userMode: tempUserMode,
+  };
+});
+
 push('authenticated upload stores image in expected backend', async () => {
   if (!expectUpload) {
     return { skipped: 'SMOKE_EXPECT_UPLOAD/SMOKE_EXPECT_OSS not set' };
   }
-  await resolveUserCredentials();
-  if (!userToken && !userCookie) {
-    return { skipped: 'no user credentials provided' };
-  }
 
-  const runtime = await request(`${apiBaseUrl}/api/extension/runtime`, {
-    headers: userAuthHeaders(),
-  });
-  if (runtime.status !== 200 || runtime.body?.code !== 1) {
-    throw new Error(`extension runtime failed: ${runtime.status} ${JSON.stringify(runtime.body)}`);
-  }
+  const runtime = await fetchUserRuntime();
+  if (runtime.skipped) return runtime;
   const runtimeMode = runtime.body?.data?.mode || null;
-  if (expectOss && runtime.body?.data?.capabilities?.imageUpload !== 'oss') {
-    throw new Error(`expected extension runtime imageUpload=oss. ${ossRuntimeHint(runtime.body)}`);
-  }
 
   const oneByOnePng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
   const upload = await request(`${apiBaseUrl}/api/images/upload-base64`, {
