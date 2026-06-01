@@ -60,6 +60,10 @@ fi
 COMMIT_HASH="${1:-$(git rev-parse --short HEAD)}"
 TARBALL="build/ss-erp-app-$COMMIT_HASH.tar.gz"
 
+shell_escape() {
+  printf '%q' "$1"
+}
+
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   fail "tracked working tree has uncommitted changes"
 fi
@@ -72,26 +76,24 @@ log "Uploading package to $DEPLOY_USER@$DEPLOY_HOST"
 scp "${SSH_ARGS[@]}" "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
 
 log "Deploying app-dir release"
-ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
-  "$COMMIT_HASH" "$DEPLOY_BASE" "$APP_DIR" "$BACKUP_DIR" "$ENV_FILE_NAME" "$DEPLOY_RUN_USER" \
-  "$DEPLOY_ENV_PROFILE" "$RUN_DB_BACKUP" "$KEEP_APP_BACKUPS" "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" \
-  "$HEALTH_URL" "$(basename "$TARBALL")" <<'REMOTE'
+REMOTE_COMMAND="COMMIT_HASH=$(shell_escape "$COMMIT_HASH") DEPLOY_BASE=$(shell_escape "$DEPLOY_BASE") APP_DIR=$(shell_escape "$APP_DIR") BACKUP_DIR=$(shell_escape "$BACKUP_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") RUN_DB_BACKUP=$(shell_escape "$RUN_DB_BACKUP") KEEP_APP_BACKUPS=$(shell_escape "$KEEP_APP_BACKUPS") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") TARBALL_NAME=$(shell_escape "$(basename "$TARBALL")") bash -s"
+ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$REMOTE_COMMAND" <<'REMOTE'
 set -euo pipefail
 
-COMMIT_HASH="$1"
-DEPLOY_BASE="$2"
-APP_DIR="$3"
-BACKUP_DIR="$4"
-ENV_FILE_NAME="$5"
-DEPLOY_RUN_USER="$6"
-DEPLOY_ENV_PROFILE="$7"
-RUN_DB_BACKUP="$8"
-KEEP_APP_BACKUPS="$9"
-API_SERVICE="${10}"
-WEB_SERVICE="${11}"
-WORKER_SERVICE="${12}"
-HEALTH_URL="${13}"
-TARBALL="${14}"
+COMMIT_HASH="${COMMIT_HASH:?}"
+DEPLOY_BASE="${DEPLOY_BASE:?}"
+APP_DIR="${APP_DIR:?}"
+BACKUP_DIR="${BACKUP_DIR:?}"
+ENV_FILE_NAME="${ENV_FILE_NAME:?}"
+DEPLOY_RUN_USER="${DEPLOY_RUN_USER:?}"
+DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
+RUN_DB_BACKUP="${RUN_DB_BACKUP:-false}"
+KEEP_APP_BACKUPS="${KEEP_APP_BACKUPS:?}"
+API_SERVICE="${API_SERVICE:?}"
+WEB_SERVICE="${WEB_SERVICE:?}"
+WORKER_SERVICE="${WORKER_SERVICE:?}"
+HEALTH_URL="${HEALTH_URL:?}"
+TARBALL="${TARBALL_NAME:?}"
 
 log() { printf '[deploy-app] %s\n' "$*"; }
 fail() { printf '[deploy-app] ERROR: %s\n' "$*" >&2; exit 1; }
