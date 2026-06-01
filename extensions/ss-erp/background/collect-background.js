@@ -1767,6 +1767,9 @@ async function doFetchOzonProductViaTab(tab, productId) {
         data: {
           productId: Number(pid),
           title: title,
+          publishTitle: title,
+          sourceTitleRaw: title,
+          sourceLocale: "ru",
           images: images,
           price: price,
           priceText: priceText,
@@ -1903,6 +1906,9 @@ async function collectOzonProductsToErp(productIds) {
   const batchPayload = {
     items: collected.map((p) => ({
       title: p.title,
+      publishTitle: p.publishTitle || p.title,
+      sourceTitleRaw: p.sourceTitleRaw || p.title,
+      sourceLocale: p.sourceLocale || "ru",
       sourceUrl: p.url,
       sourcePlatform: "ozon",
       images: p.images,

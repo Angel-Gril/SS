@@ -44,6 +44,10 @@ interface CollectedItem {
   modelId?: string | null;
 }
 
+function hasCjkText(value?: string | null) {
+  return /[\u3400-\u9fff]/.test(String(value || ''));
+}
+
 interface Shop { id: string; name: string; platform: string; }
 
 export default function CollectPage() {
@@ -70,6 +74,7 @@ export default function CollectPage() {
   const [publishDepth, setPublishDepth] = useState('100');
   const [publishWidth, setPublishWidth] = useState('100');
   const [publishMarkup, setPublishMarkup] = useState('200');
+  const [publishMarkupAmount, setPublishMarkupAmount] = useState('0');
   const [publishMode, setPublishMode] = useState<'follow' | 'clone'>('clone');
   const [publishFollowBrand, setPublishFollowBrand] = useState(true);
   const [inheriting, setInheriting] = useState(false);
@@ -77,7 +82,7 @@ export default function CollectPage() {
   const [enrichShopId, setEnrichShopId] = useState('');
   const [showEnrichDialog, setShowEnrichDialog] = useState(false);
   const [editItemId, setEditItemId] = useState<string | null>(null);
-  const [editItemData, setEditItemData] = useState({ title: '', sku: '', purchasePrice: '', currency: 'CNY', sourceUrl: '', notes: '' });
+  const [editItemData, setEditItemData] = useState({ title: '', publishTitle: '', sku: '', purchasePrice: '', currency: 'CNY', sourceUrl: '', notes: '' });
   const [savingItem, setSavingItem] = useState(false);
   const [editImagesId, setEditImagesId] = useState<string | null>(null);
   const [editImagesText, setEditImagesText] = useState('');
@@ -92,7 +97,7 @@ export default function CollectPage() {
   const [extFetching, setExtFetching] = useState(false);
   const [extFetchResults, setExtFetchResults] = useState<any[] | null>(null);
   const [expandedVariantIds, setExpandedVariantIds] = useState<Set<string>>(new Set());
-  const [variantPriceOverrides, setVariantPriceOverrides] = useState<Record<string, Record<number, string>>>({});
+  const [variantPriceOverrides, setVariantPriceOverrides] = useState<Record<string, Record<string, string>>>({});
   const [extFetchErrors, setExtFetchErrors] = useState<string[]>([]);
   const [showWatermarkDialog, setShowWatermarkDialog] = useState(false);
   const [watermarking, setWatermarking] = useState(false);
@@ -165,6 +170,27 @@ export default function CollectPage() {
     const res = await api.delete(`/api/collect/${id}`);
     if (res.code === 1) { toast({ title: '已删除' }); fetchData(); }
     else toast({ title: res.msg || '删除失败', variant: 'destructive' });
+  }
+
+  async function handleDeleteVariant(itemId: string, sku?: string) {
+    if (!sku) { toast({ title: '该变体缺少 SKU，无法删除', variant: 'destructive' }); return; }
+    if (!window.confirm(`确认删除变体 SKU ${sku}？`)) return;
+    const res = await api.delete(`/api/collect/${itemId}/variants/${encodeURIComponent(sku)}`);
+    if (res.code === 1) {
+      toast({ title: '已删除变体' });
+      setVariantPriceOverrides((prev) => {
+        const next = { ...prev };
+        if (next[itemId]) {
+          const perItem = { ...next[itemId] };
+          delete perItem[sku];
+          next[itemId] = perItem;
+        }
+        return next;
+      });
+      fetchData();
+    } else {
+      toast({ title: res.msg || '删除变体失败', variant: 'destructive' });
+    }
   }
 
   async function handleSavePrice(id: string) {
@@ -290,14 +316,14 @@ export default function CollectPage() {
     setPublishing(true);
 
     // 收集变体价格覆盖：仅选中且确实有 override 的项才传
-    const priceOverrides: Record<string, Record<number, number>> = {};
+    const priceOverrides: Record<string, Record<string, number>> = {};
     for (const id of selectedIds) {
       const overrides = variantPriceOverrides[id];
       if (!overrides) continue;
-      const cleaned: Record<number, number> = {};
-      for (const [idx, val] of Object.entries(overrides)) {
+      const cleaned: Record<string, number> = {};
+      for (const [sku, val] of Object.entries(overrides)) {
         const num = parseFloat(val);
-        if (Number.isFinite(num) && num > 0) cleaned[Number(idx)] = num;
+        if (Number.isFinite(num) && num > 0) cleaned[sku] = num;
       }
       if (Object.keys(cleaned).length) priceOverrides[id] = cleaned;
     }
@@ -312,6 +338,7 @@ export default function CollectPage() {
       depth: Number(publishDepth) || 100,
       width: Number(publishWidth) || 100,
       markupPct: Number(publishMarkup) || 200,
+      markupAmount: Number(publishMarkupAmount) || 0,
       mode: publishMode,
       followBrand: publishFollowBrand,
       source: 'collect-page',
@@ -472,6 +499,7 @@ export default function CollectPage() {
     setEditItemId(item.id);
     setEditItemData({
       title: item.title,
+      publishTitle: item.metadata?.publishTitleRu || '',
       sku: item.sku || '',
       purchasePrice: item.purchasePrice || '',
       currency: item.currency || 'CNY',
@@ -485,6 +513,7 @@ export default function CollectPage() {
     setSavingItem(true);
     const body: Record<string, unknown> = {
       title: editItemData.title,
+      publishTitle: editItemData.publishTitle,
       sku: editItemData.sku,
       currency: editItemData.currency,
       sourceUrl: editItemData.sourceUrl,
@@ -643,6 +672,9 @@ export default function CollectPage() {
                           {item.sourcePlatform && (
                             <Badge variant="outline" className="text-xs font-normal">{item.sourcePlatform}</Badge>
                           )}
+                          {(item.metadata?.titleNeedsReview || hasCjkText(item.metadata?.publishTitleRu || item.title)) && (
+                            <Badge variant="destructive" className="text-xs font-normal">上架标题需检查</Badge>
+                          )}
                           {item.variants && item.variants.length > 0 && (
                             <button
                               type="button"
@@ -744,7 +776,8 @@ export default function CollectPage() {
                         {item.variants.map((v, idx) => {
                           const attrText = (v.attrs && Object.keys(v.attrs).length ? formatVariantAttrs(v.attrs) : '')
                             || (v.sku || `变体 #${idx + 1}`);
-                          const overrideValue = variantPriceOverrides[item.id]?.[idx] ?? '';
+                          const variantKey = v.sku || String(idx);
+                          const overrideValue = variantPriceOverrides[item.id]?.[variantKey] ?? '';
                           return (
                             <div key={idx} className="flex items-center gap-2 text-xs px-2 py-1.5 rounded bg-muted/40">
                               {v.images?.[0] && (
@@ -760,7 +793,7 @@ export default function CollectPage() {
                                   const val = e.target.value;
                                   setVariantPriceOverrides((prev) => ({
                                     ...prev,
-                                    [item.id]: { ...(prev[item.id] || {}), [idx]: val },
+                                    [item.id]: { ...(prev[item.id] || {}), [variantKey]: val },
                                   }));
                                 }}
                                 className="h-7 w-20 text-xs"
@@ -768,6 +801,15 @@ export default function CollectPage() {
                               {v.stock != null && (
                                 <span className="text-[10px] text-muted-foreground">库存 {v.stock}</span>
                               )}
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 shrink-0"
+                                onClick={() => handleDeleteVariant(item.id, v.sku)}
+                                title="删除该变体"
+                              >
+                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                              </Button>
                             </div>
                           );
                         })}
@@ -911,8 +953,14 @@ export default function CollectPage() {
                 <Label className="text-xs">加价比例 %</Label>
                 <Input value={publishMarkup} onChange={(e) => setPublishMarkup(e.target.value)} type="number" className="h-8 text-sm" placeholder="200" />
               </div>
+              <div className="space-y-1">
+                <Label className="text-xs">固定加价 CNY</Label>
+                <Input value={publishMarkupAmount} onChange={(e) => setPublishMarkupAmount(e.target.value)} type="number" className="h-8 text-sm" placeholder="0" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3">
               <div className="flex items-end pb-0.5">
-                <p className="text-xs text-muted-foreground">卖价 = 采购价 × (1 + 加价%/100)</p>
+                <p className="text-xs text-muted-foreground">卖价 = 采购价 × (1 + 加价%/100) + 固定加价；变体单独填写价格时按最终售价处理</p>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">将上架 {selectedIds.size} 件商品到 OZON（货币: CNY）</p>
@@ -1145,6 +1193,11 @@ export default function CollectPage() {
             <div className="space-y-1">
               <Label className="text-xs">商品标题</Label>
               <Input value={editItemData.title} onChange={(e) => setEditItemData({ ...editItemData, title: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">上架标题（俄文，发送给 OZON）</Label>
+              <Input value={editItemData.publishTitle} onChange={(e) => setEditItemData({ ...editItemData, publishTitle: e.target.value })} placeholder="Оригинальное русское название товара" />
+              <p className="text-[11px] text-muted-foreground">商品标题可中文展示；上架标题不能含中文，否则后端会阻止上架。</p>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">

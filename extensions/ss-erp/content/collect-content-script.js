@@ -133,7 +133,7 @@
       throw new Error("无法从 URL 提取 product_id");
     }
 
-    const url = "/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent("/product/" + productId + "/");
+    const url = "/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent("/product/" + productId + "/?language=ru");
     const res = await fetch(url, {
       credentials: "include",
       headers: { "x-o3-app-name": "dweb_client", "accept": "application/json", "x-o3-language": "ru", "Accept-Language": "ru" }
@@ -262,6 +262,9 @@
 
     return {
       title: title || "未知商品",
+      publishTitle: title || "",
+      sourceTitleRaw: title || "",
+      sourceLocale: "ru",
       productId,
       sourceUrl: location.href,
       sourceHost: location.hostname,

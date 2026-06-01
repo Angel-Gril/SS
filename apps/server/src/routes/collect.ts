@@ -8,8 +8,13 @@ import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 
+const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+
 const collectSchema = z.object({
   title: z.string().min(1),
+  publishTitle: z.string().optional(),
+  sourceTitleRaw: z.string().optional(),
+  sourceLocale: z.string().optional(),
   sourceUrl: z.string().optional(),
   sourcePlatform: z.string().optional(),
   images: z.array(z.string()).optional(),
@@ -25,6 +30,58 @@ const collectSchema = z.object({
   sku: z.string().optional(),
   sourceProductId: z.string().optional(),
 });
+
+export function containsCjkText(value: unknown): boolean {
+  return CJK_TEXT_RE.test(String(value || ''));
+}
+
+export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
+  const base = Number.isFinite(baseCny) && baseCny > 0 ? baseCny : 100;
+  const pct = Number.isFinite(markupPct) ? markupPct : 200;
+  const fixed = Number.isFinite(markupAmount) ? markupAmount : 0;
+  return Math.max(1, Math.ceil(base * (1 + pct / 100) + fixed));
+}
+
+export function getVariantOverridePrice(
+  overrides: Record<string | number, unknown> | undefined,
+  variant: { sku?: unknown },
+  index: number,
+): number | null {
+  if (!overrides) return null;
+  const raw = (variant.sku != null ? overrides[String(variant.sku)] : undefined)
+    ?? overrides[index]
+    ?? overrides[String(index)];
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.ceil(value) : null;
+}
+
+export function resolvePublishName(item: { title?: string | null; metadata?: unknown }, variantAttrs?: Record<string, string>): string {
+  const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
+  const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
+  const attrText = variantAttrs && Object.keys(variantAttrs).length ? Object.values(variantAttrs).filter(Boolean).join(' ') : '';
+  return attrText ? `${base} ${attrText}`.slice(0, 200) : base.slice(0, 200);
+}
+
+function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
+  const bad: string[] = [];
+  for (const item of items) {
+    const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
+    if (!variants.length) {
+      const name = resolvePublishName(item);
+      if (!name || containsCjkText(name)) bad.push(`${item.sku || item.id}: ${name || '空标题'}`);
+      continue;
+    }
+    for (const v of variants) {
+      const attrs = v?.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined;
+      const name = resolvePublishName(item, attrs);
+      if (!name || containsCjkText(name)) bad.push(`${v?.sku || item.sku || item.id}: ${name || '空标题'}`);
+    }
+  }
+  if (bad.length) {
+    const sample = bad.slice(0, 3).join('；');
+    throw new Error(`上架标题包含中文或为空，OZON 可能无法识别。请先补采俄文标题或编辑上架标题：${sample}`);
+  }
+}
 
 function getOzonPublishErrorMessage(e: any): string {
   if (e?.name === 'OzonApiError' && typeof e.publicMessage === 'string' && e.publicMessage.trim()) {
@@ -223,6 +280,11 @@ export async function collectRoutes(app: FastifyInstance) {
     const sourceProductId = normalizeProductId(d.sourceProductId || d.sku);
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const notes = [weightNote, d.description?.slice(0, 500)].filter(Boolean).join('\n') || null;
+    const metadata: Record<string, unknown> = {};
+    if (d.publishTitle) metadata.publishTitleRu = d.publishTitle;
+    if (d.sourceTitleRaw) metadata.sourceTitleRaw = d.sourceTitleRaw;
+    if (d.sourceLocale) metadata.sourceLocale = d.sourceLocale;
+    if (d.title && containsCjkText(d.title) && !d.publishTitle) metadata.titleNeedsReview = true;
 
     const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
     const item = await prisma.supplyGoods.create({
@@ -241,6 +303,7 @@ export async function collectRoutes(app: FastifyInstance) {
         exchangeRateUsed: priceInfo.exchangeRateUsed,
         priceNeedsReview: priceInfo.needsReview,
         notes,
+        metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
         status: 'collected',
       },
     });
@@ -262,6 +325,10 @@ export async function collectRoutes(app: FastifyInstance) {
       try {
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
         const metadata: Record<string, unknown> = {};
+        if (item.publishTitle) metadata.publishTitleRu = String(item.publishTitle);
+        if (item.sourceTitleRaw) metadata.sourceTitleRaw = String(item.sourceTitleRaw);
+        if (item.sourceLocale) metadata.sourceLocale = String(item.sourceLocale);
+        if (item.title && containsCjkText(item.title) && !item.publishTitle) metadata.titleNeedsReview = true;
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
         if (item.typeId) metadata.typeId = item.typeId;
@@ -352,9 +419,38 @@ export async function collectRoutes(app: FastifyInstance) {
     if (body.status !== undefined) data.status = String(body.status);
     if (body.images !== undefined) data.images = Array.isArray(body.images) ? body.images : null;
     if (body.sourceUrl !== undefined) data.sourceUrl = body.sourceUrl ? String(body.sourceUrl) : null;
+    if (body.publishTitle !== undefined) {
+      const meta: Record<string, unknown> = item.metadata && typeof item.metadata === 'object' ? { ...(item.metadata as any) } : {};
+      const publishTitle = String(body.publishTitle || '').trim();
+      if (publishTitle) meta.publishTitleRu = publishTitle;
+      else delete meta.publishTitleRu;
+      data.metadata = meta as any;
+    }
 
     await prisma.supplyGoods.update({ where: { id }, data: data as any });
     return reply.send({ code: 1, msg: '已更新' });
+  });
+
+  app.delete('/:id/variants/:sku', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id, sku } = request.params as { id: string; sku: string };
+
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+
+    const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+    const before = variants.length;
+    const next = variants.filter((v) => String(v?.sku || '') !== String(sku));
+    if (next.length === before) {
+      return reply.status(404).send({ code: 0, msg: '未找到该变体 SKU' });
+    }
+
+    await prisma.supplyGoods.update({
+      where: { id },
+      data: { variants: next.length ? (next as any) : null as any },
+    });
+
+    return reply.send({ code: 1, msg: '已删除变体', data: { count: next.length } });
   });
 
   app.post('/batch-price', async (request, reply) => {
@@ -466,6 +562,8 @@ export async function collectRoutes(app: FastifyInstance) {
           stock: v.stock || 0,
           images: v.images || [],
         })),
+        publishTitle: meta.publishTitleRu || null,
+        titleNeedsReview: !!meta.titleNeedsReview || containsCjkText(resolvePublishName(it)),
         modelId: it.modelId,
         categoryId: meta.descriptionCategoryId || null,
         typeId: meta.typeId || null,
@@ -494,6 +592,7 @@ export async function collectRoutes(app: FastifyInstance) {
       heightMm?: number;
       categoryId?: number;
       typeId?: number;
+      publishTitle?: string;
       variants?: Array<{ sku: string; price?: string; stock?: number }>;
     };
     if (!body?.id) return reply.status(400).send({ code: 0, msg: '缺少 id' });
@@ -508,6 +607,11 @@ export async function collectRoutes(app: FastifyInstance) {
     if (body.heightMm !== undefined) meta.heightMm = body.heightMm;
     if (body.categoryId !== undefined && body.categoryId > 0) meta.descriptionCategoryId = body.categoryId;
     if (body.typeId !== undefined && body.typeId > 0) meta.typeId = body.typeId;
+    if (body.publishTitle !== undefined) {
+      const publishTitle = String(body.publishTitle || '').trim();
+      if (publishTitle) meta.publishTitleRu = publishTitle;
+      else delete meta.publishTitleRu;
+    }
     // images 优先级最高路径：写到 watermarkedImages，让 publish-ozon 用这个版本
     if (body.images?.length) meta.watermarkedImages = body.images;
 
@@ -543,6 +647,7 @@ export async function collectRoutes(app: FastifyInstance) {
       depth?: number;
       width?: number;
       markupPct?: number;
+      markupAmount?: number;
       currencyRate?: number;
       mode?: 'follow' | 'clone';
       followBrand?: boolean;
@@ -590,6 +695,12 @@ export async function collectRoutes(app: FastifyInstance) {
       });
     }
 
+    try {
+      assertPublishNamesAreSafe(items);
+    } catch (e: any) {
+      return reply.status(400).send({ code: 0, msg: e?.message || '上架标题校验失败' });
+    }
+
     // 分流：有属性的走 /v3/product/import，没属性的走 /v1/product/import-by-sku (fallback)
     const withAttrs = items.filter((it) => {
       const meta = it.metadata as any;
@@ -601,6 +712,7 @@ export async function collectRoutes(app: FastifyInstance) {
     });
 
     const markupPct = body.markupPct ?? 200;
+    const markupAmount = Number(body.markupAmount) || 0;
     const mode = body.mode === 'clone' ? 'clone' : 'follow';
     const followBrand = body.followBrand !== false;
 
@@ -615,7 +727,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const fallbackItems = noAttrs
         .flatMap((item) => {
           const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
-          const priceWithMarkup = Math.ceil(basePriceCny * (1 + markupPct / 100));
+          const priceWithMarkup = calcPublishPrice(basePriceCny, markupPct, markupAmount);
           const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
           const itemOverrides = body.priceOverrides?.[item.id] || {};
           // variants[].price 是采集时的原币价（如 RUB），需要按采集时存的汇率换算 CNY
@@ -632,7 +744,7 @@ export async function collectRoutes(app: FastifyInstance) {
             if (firstImg) fallbackOfferImages[offerId] = firstImg;
             return [{
               sku: sourceSku,
-              name: item.title || '',
+              name: resolvePublishName(item),
               offer_id: offerId,
               price: String(priceWithMarkup),
               old_price: String(Math.ceil(priceWithMarkup * 1.2)),
@@ -646,10 +758,10 @@ export async function collectRoutes(app: FastifyInstance) {
             .map((v, idx) => {
               const subSourceSku = v.sku && /^\d+$/.test(String(v.sku)) ? Number(v.sku) : null;
               if (!subSourceSku) return null;
-              const overrideRaw = itemOverrides[idx] ?? itemOverrides[String(idx)];
+              const overridePrice = getVariantOverridePrice(itemOverrides, v, idx);
               let subPrice: number;
-              if (overrideRaw != null && Number.isFinite(Number(overrideRaw)) && Number(overrideRaw) > 0) {
-                subPrice = Math.ceil(Number(overrideRaw));
+              if (overridePrice != null) {
+                subPrice = overridePrice;
               } else {
                 const subPriceRaw = v.price != null && v.price !== '' ? parseFloat(String(v.price)) : null;
                 // v.price 是原币（RUB），用采集汇率转成 CNY 后再 markup
@@ -657,7 +769,7 @@ export async function collectRoutes(app: FastifyInstance) {
                   ? (fxRate ? subPriceRaw * fxRate : subPriceRaw)
                   : null;
                 subPrice = subBaseCny != null
-                  ? Math.ceil(subBaseCny * (1 + markupPct / 100))
+                  ? calcPublishPrice(subBaseCny, markupPct, markupAmount)
                   : priceWithMarkup;
               }
               const offerId = `f${Date.now().toString(36)}${randomSuffix(4)}`;
@@ -671,9 +783,8 @@ export async function collectRoutes(app: FastifyInstance) {
               const itemImg = Array.isArray(item.images) && item.images.length ? String(item.images[0]) : '';
               const firstImg = variantImg || itemImg;
               if (firstImg) fallbackOfferImages[offerId] = firstImg;
-              const subTitle = v.attrs && Object.keys(v.attrs).length
-                ? `${item.title || ''} ${Object.values(v.attrs as Record<string, string>).join(' ')}`.slice(0, 200)
-                : (item.title || '');
+              const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined;
+              const subTitle = resolvePublishName(item, subAttrs);
               return {
                 sku: subSourceSku,
                 name: subTitle,
@@ -873,7 +984,7 @@ export async function collectRoutes(app: FastifyInstance) {
     try {
       const nested = await Promise.all(items.map(async (item) => {
       const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
-      const priceWithMarkup = Math.ceil(basePriceCny * (1 + markupPct / 100));
+      const priceWithMarkup = calcPublishPrice(basePriceCny, markupPct, markupAmount);
       const sourceProductId = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
       const cloned = sourceProductId ? cloneAttrsByProductId.get(sourceProductId) : undefined;
       const meta = item.metadata as any;
@@ -891,7 +1002,7 @@ export async function collectRoutes(app: FastifyInstance) {
       // 无 variants：保持原行为（1 个 item）
       if (!variants.length) {
         return [{
-          name: item.title,
+          name: resolvePublishName(item),
           offer_id: buildOfferId(item.sku, `import-${item.id}`),
           description_category_id: categoryId,
           type_id: typeId,
@@ -918,22 +1029,15 @@ export async function collectRoutes(app: FastifyInstance) {
       const subItems = await Promise.all(variants.map(async (v: any, idx: number) => {
         // 价格优先级：前端单独覆盖（CNY） > 整组 priceWithMarkup（CNY）
         // v.price 是采集自源平台的原始币种（RUB），不能直接 ×markup 上架
-        const overrideRaw = itemOverrides[idx] ?? itemOverrides[String(idx)];
-        let subPrice: number;
-        if (overrideRaw != null && Number.isFinite(Number(overrideRaw)) && Number(overrideRaw) > 0) {
-          subPrice = Math.ceil(Number(overrideRaw));
-        } else {
-          subPrice = priceWithMarkup;
-        }
+        const overridePrice = getVariantOverridePrice(itemOverrides, v, idx);
+        const subPrice = overridePrice ?? priceWithMarkup;
         const subSku = v.sku ? String(v.sku) : `${item.sku || item.id}-v${idx}`;
         const subImagesRaw: string[] = watermarkApplied
           ? baseRawImages
           : (Array.isArray(v.images) && v.images.length ? v.images : baseRawImages);
         const subImages = subImagesRaw === baseRawImages ? baseImages : await resolveImageUrls(subImagesRaw, body.shopId, userId);
         const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
-        const subName = Object.keys(subAttrs).length
-          ? `${item.title} ${Object.values(subAttrs).join(' ')}`.slice(0, 200)
-          : item.title;
+        const subName = resolvePublishName(item, subAttrs);
 
         // === 优先用每个变体自己的 ozonAttributes（扩展端 Step 2 抓的）===
         // 没有时退化用 cloned（来自源 SKU 的共用属性）
