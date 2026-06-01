@@ -10,6 +10,15 @@ API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:3001}"
+EXPECTED_API_WORKING_DIR="${EXPECTED_API_WORKING_DIR:-$DEPLOY_DIR/apps/server}"
+EXPECTED_WORKER_WORKING_DIR="${EXPECTED_WORKER_WORKING_DIR:-$DEPLOY_DIR/apps/server}"
+EXPECTED_WEB_WORKING_DIR="${EXPECTED_WEB_WORKING_DIR:-$DEPLOY_DIR/apps/web}"
+if [ -z "${EXPECTED_ENV_FILE_PATH:-}" ]; then
+  case "$DEPLOY_DIR" in
+    */current) EXPECTED_ENV_FILE_PATH="${DEPLOY_DIR%/current}/shared/$ENV_FILE" ;;
+    *) EXPECTED_ENV_FILE_PATH="$DEPLOY_DIR/$ENV_FILE" ;;
+  esac
+fi
 
 FAILURES=0
 WARNINGS=0
@@ -70,6 +79,7 @@ check_expected_env() {
 
 check_service_envfile() {
   local service="$1"
+  local expected_working_dir="$2"
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not available; skip service env check"
     return
@@ -85,6 +95,14 @@ check_service_envfile() {
     warn "$service unit file not found"
     return
   fi
+  local working_dir
+  working_dir=$(systemctl show "$service" -p WorkingDirectory --value 2>/dev/null || true)
+  if [ "$working_dir" = "$expected_working_dir" ]; then
+    pass "$service WorkingDirectory=$expected_working_dir"
+  else
+    fail "$service WorkingDirectory expected $expected_working_dir, got ${working_dir:-empty}"
+  fi
+
   if grep -q 'EnvironmentFile' "$fragment"; then
     pass "$service has EnvironmentFile: $(grep 'EnvironmentFile' "$fragment" | tr -d '[:space:]')"
   else
@@ -95,6 +113,11 @@ check_service_envfile() {
   env_files=$(systemctl show "$service" -p EnvironmentFiles --value 2>/dev/null || true)
   if [ -n "$env_files" ]; then
     pass "$service systemd EnvironmentFiles=$env_files"
+    if printf '%s\n' "$env_files" | grep -Fq "$EXPECTED_ENV_FILE_PATH"; then
+      pass "$service uses expected env file: $EXPECTED_ENV_FILE_PATH"
+    else
+      fail "$service EnvironmentFiles expected to include $EXPECTED_ENV_FILE_PATH"
+    fi
   else
     warn "$service systemd EnvironmentFiles empty"
   fi
@@ -178,15 +201,16 @@ env_path="$DEPLOY_DIR/$ENV_FILE"
 echo "=== SS ERP runtime env diagnostics ==="
 echo "Deploy dir: $DEPLOY_DIR"
 echo "Env file: $env_path"
+echo "Expected systemd env file: $EXPECTED_ENV_FILE_PATH"
 echo "API base URL: $API_BASE_URL"
 echo ""
 
 load_env_file "$env_path"
 check_expected_env
 
-check_service_envfile "$API_SERVICE"
-check_service_envfile "$WORKER_SERVICE"
-check_service_envfile "$WEB_SERVICE"
+check_service_envfile "$API_SERVICE" "$EXPECTED_API_WORKING_DIR"
+check_service_envfile "$WORKER_SERVICE" "$EXPECTED_WORKER_WORKING_DIR"
+check_service_envfile "$WEB_SERVICE" "$EXPECTED_WEB_WORKING_DIR"
 check_process_env "$API_SERVICE"
 check_process_env "$WORKER_SERVICE"
 

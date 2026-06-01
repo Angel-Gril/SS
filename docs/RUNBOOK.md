@@ -163,6 +163,14 @@ EnvironmentFile=/opt/ss-erp/shared/.env.staging
 
 该脚本是只读诊断：只检查环境文件、systemd `EnvironmentFile`、API/Worker 运行进程实际环境变量和本机 `/ready`。不会创建用户、不会修改数据库、不会上传文件。若 smoke 已提示 `runtime.mode="local"` 或 `imageUpload="local"`，优先跑它确认当前进程是否真的读取到了 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss`。
 
+诊断脚本还会检查 systemd 的 `WorkingDirectory` 与 `EnvironmentFiles` 是否匹配当前部署模式。`DEPLOY_DIR=/opt/ss-erp/current` 时，脚本会期望：
+
+- API/Worker 工作目录：`/opt/ss-erp/current/apps/server`
+- Web 工作目录：`/opt/ss-erp/current/apps/web`
+- systemd 环境文件：`/opt/ss-erp/shared/.env.staging`
+
+如果这些检查失败，先修 systemd unit，再继续测 R2。
+
 部署层验收：
 
 ```bash
