@@ -211,6 +211,7 @@ interface OssConfig {
   accessKeySecret: string;
   region: string;
   cdnDomain?: string;
+  publicBaseUrl?: string;
   pathPrefix?: string;
 }
 
@@ -262,14 +263,7 @@ class OssBackend implements ImageStorageBackend {
       ContentType: mime,
     }));
 
-    let url: string;
-    if (this.config.cdnDomain) {
-      const domain = this.config.cdnDomain.replace(/\/+$/, '');
-      url = `${domain.startsWith('http') ? domain : `https://${domain}`}/${objectKey}`;
-    } else {
-      const ep = endpoint.replace(/\/+$/, '');
-      url = `${ep}/${this.config.bucket}/${objectKey}`;
-    }
+    const url = this.getPublicObjectUrl(objectKey);
 
     return { url, filename: objectKey.split('/').pop() || filename, backend: 'oss' };
   }
@@ -308,14 +302,7 @@ class OssBackend implements ImageStorageBackend {
       { expiresIn },
     );
 
-    let finalUrl: string;
-    if (this.config.cdnDomain) {
-      const domain = this.config.cdnDomain.replace(/\/+$/, '');
-      finalUrl = `${domain.startsWith('http') ? domain : `https://${domain}`}/${objectKey}`;
-    } else {
-      const ep = endpoint.replace(/\/+$/, '');
-      finalUrl = `${ep}/${this.config.bucket}/${objectKey}`;
-    }
+    const finalUrl = this.getPublicObjectUrl(objectKey);
 
     return {
       uploadUrl,
@@ -326,6 +313,16 @@ class OssBackend implements ImageStorageBackend {
       maxBytes: input.maxBytes,
       headers: { 'Content-Type': input.mimeType },
     };
+  }
+
+  private getPublicObjectUrl(objectKey: string): string {
+    if (this.config.cdnDomain) {
+      const domain = this.config.cdnDomain.replace(/\/+$/, '');
+      return `${domain.startsWith('http') ? domain : `https://${domain}`}/${objectKey}`;
+    }
+
+    const publicBaseUrl = (this.config.publicBaseUrl || 'http://localhost:3001').replace(/\/+$/, '');
+    return `${publicBaseUrl}/api/cdn/${objectKey}`;
   }
 }
 
@@ -447,7 +444,7 @@ async function buildOssBackend(): Promise<OssBackend> {
   if (!rc.oss) {
     throw new Error('OSS 未配置，请在超管设置中填写上传 R2/OSS 配置，或设置环境变量 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET');
   }
-  return new OssBackend(rc.oss);
+  return new OssBackend({ ...rc.oss, publicBaseUrl: rc.localBaseUrl });
 }
 
 export async function getStorageBackend(shopId?: string): Promise<ImageStorageBackend> {

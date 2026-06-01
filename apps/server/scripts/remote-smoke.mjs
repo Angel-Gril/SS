@@ -636,9 +636,24 @@ push('authenticated upload stores image in expected backend', async () => {
   if (expectOss && data.backend !== 'oss') {
     throw new Error(`expected upload backend=oss, got ${JSON.stringify(data)}. ${ossRuntimeHint(runtime.body)}`);
   }
+  if (!data.url) {
+    throw new Error(`upload response missing url: ${JSON.stringify(data)}`);
+  }
+
+  const uploadedUrl = new URL(data.url, apiBaseUrl).toString();
+  const uploadedFile = await request(uploadedUrl, {
+    headers: { accept: 'image/*', referer: userWebBaseUrl },
+  });
+  const uploadedContentType = uploadedFile.headers.get('content-type') || '';
+  if (uploadedFile.status !== 200 || !uploadedContentType.toLowerCase().startsWith('image/')) {
+    throw new Error(`uploaded image is not readable: ${uploadedFile.status} content-type=${uploadedContentType} url=${uploadedUrl}`);
+  }
+
   return {
     backend: data.backend || null,
-    url: data.url || null,
+    url: uploadedUrl,
+    readStatus: uploadedFile.status,
+    contentType: uploadedContentType,
     userMode: tempUserMode,
     runtimeImageUpload: runtime.body?.data?.capabilities?.imageUpload || null,
     runtimeMode,

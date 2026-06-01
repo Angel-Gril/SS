@@ -165,6 +165,7 @@ await app.register(systemConfigRoutes, { prefix: '/api/admin/system-config' });
 await app.register(watermarkTemplateRoutes, { prefix: '/api/watermark-templates' });
 await app.register(imageUploadRoutes, { prefix: '/api/images' });
 await app.register(cdnProxyRoutes);
+await app.register(cdnProxyRoutes, { prefix: '/api' });
 await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
