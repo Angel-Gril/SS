@@ -91,6 +91,22 @@ export default function AdminSettingsPage() {
     }
   }
 
+  async function saveConfigs(keys: string[], label: string, overrides: Record<string, string> = {}) {
+    const available = keys.filter((key) => Object.prototype.hasOwnProperty.call(editing, key));
+    setSavingKey(`group:${label}`);
+    for (const key of available) {
+      const res = await api.put(`/api/admin/system-config/${key}`, { value: overrides[key] ?? editing[key] ?? '' });
+      if (res.code !== 1) {
+        setSavingKey(null);
+        toast({ title: '保存失败', description: `${key}: ${res.msg || '未知错误'}`, variant: 'destructive' });
+        return;
+      }
+    }
+    setSavingKey(null);
+    toast({ title: '已保存', description: `${label} 更新成功` });
+    fetchConfigs();
+  }
+
   async function initDefaults() {
     const res = await api.post('/api/admin/system-config/seed', {});
     if (res.code === 1) {
@@ -144,6 +160,20 @@ export default function AdminSettingsPage() {
 
       {sortedGroups.map((group) => {
         const items = grouped[group]!;
+        if (group === 'upload') {
+          return (
+            <UploadSettingsPanel
+              key={group}
+              items={items}
+              editing={editing}
+              setEditing={setEditing}
+              savingKey={savingKey}
+              saveConfig={saveConfig}
+              saveConfigs={saveConfigs}
+            />
+          );
+        }
+
         return (
           <div key={group} className="space-y-4">
             {group === 'backup' && backupStatus && (
@@ -193,12 +223,6 @@ export default function AdminSettingsPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-5">
-                  {group === 'upload' && (
-                    <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
-                      图片和附件上传优先读取这里的 `upload_*` 配置；未填写时才回退到 VPS 环境变量。
-                      云端 R2 测试请选择 `upload_storage_backend=oss`，并填写 R2 endpoint、bucket 和访问密钥。
-                    </p>
-                  )}
                   {group === 'backup' && (
                     <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
                       这里配置的是数据库备份的远程存储（`backup_remote_*`），不影响图片/附件上传。
@@ -256,6 +280,225 @@ export default function AdminSettingsPage() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+interface UploadSettingsPanelProps {
+  items: SystemConfig[];
+  editing: Record<string, string>;
+  setEditing: (next: Record<string, string>) => void;
+  savingKey: string | null;
+  saveConfig: (key: string) => Promise<void>;
+  saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+}
+
+const R2_REQUIRED_KEYS = [
+  'upload_oss_endpoint',
+  'upload_oss_bucket',
+  'upload_oss_access_key_id',
+  'upload_oss_access_key_secret',
+  'upload_oss_region',
+];
+
+const UPLOAD_SECURITY_KEYS = [
+  'upload_rate_limit_enabled',
+  'upload_rate_limit_per_minute',
+  'upload_daily_quota_enabled',
+  'upload_daily_quota_mb',
+  'upload_referer_check_enabled',
+];
+
+function UploadSettingsPanel({
+  items,
+  editing,
+  setEditing,
+  savingKey,
+  saveConfig,
+  saveConfigs,
+}: UploadSettingsPanelProps) {
+  const configs = Object.fromEntries(items.map((item) => [item.key, item]));
+  const mode = editing.upload_storage_backend || 'env';
+  const isSavingMode = savingKey === 'upload_storage_backend';
+  const isSavingR2 = savingKey === 'group:R2 对象存储';
+  const isSavingSecurity = savingKey === 'group:上传保护';
+
+  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const hasR2Fields = R2_REQUIRED_KEYS.some((key) => (editing[key] || '').trim().length > 0);
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">上传与对象存储</Badge>
+            <span className="text-sm text-muted-foreground">图片、附件、R2 和上传保护</span>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">存储模式</h3>
+                <p className="text-xs text-muted-foreground">
+                  当前：{mode === 'oss' ? 'R2/OSS' : mode === 'ozon-cdn' ? 'OZON CDN' : mode === 'local' ? '本地存储' : '跟随服务器环境'}
+                  {mode === 'env' && hasR2Fields ? '，已检测到部分 R2 配置' : ''}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfig('upload_storage_backend')}
+                disabled={isSavingMode || editing.upload_storage_backend === configs.upload_storage_backend?.value}
+              >
+                {isSavingMode ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存模式</span>
+              </Button>
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-4">
+              {[
+                { value: 'oss', label: 'R2 / OSS', desc: '云端推荐' },
+                { value: 'env', label: '服务器环境', desc: '读取 .env' },
+                { value: 'ozon-cdn', label: 'OZON CDN', desc: '店铺 cookie' },
+                { value: 'local', label: '本地存储', desc: '离线版' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setValue('upload_storage_backend', option.value)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                    mode === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{option.label}</span>
+                  <span className="text-xs text-muted-foreground">{option.desc}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-md border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">R2 对象存储</h3>
+                <p className="text-xs text-muted-foreground">填完这 5 项即可测试 OSS 连接；保存会自动切换为 R2/OSS 模式。</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfigs(['upload_storage_backend', ...R2_REQUIRED_KEYS], 'R2 对象存储', { upload_storage_backend: 'oss' })}
+                disabled={isSavingR2}
+              >
+                {isSavingR2 ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存 R2</span>
+              </Button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <ConfigInput cfg={configs.upload_oss_endpoint} editing={editing} setValue={setValue} placeholder="https://<account-id>.r2.cloudflarestorage.com" />
+              <ConfigInput cfg={configs.upload_oss_bucket} editing={editing} setValue={setValue} placeholder="Bucket 名称" />
+              <ConfigInput cfg={configs.upload_oss_access_key_id} editing={editing} setValue={setValue} placeholder="Access Key ID" />
+              <ConfigInput cfg={configs.upload_oss_access_key_secret} editing={editing} setValue={setValue} placeholder="Secret Access Key" type="password" />
+              <ConfigInput cfg={configs.upload_oss_region} editing={editing} setValue={setValue} placeholder="auto" />
+            </div>
+
+            <details className="rounded-md border border-dashed px-3 py-2">
+              <summary className="cursor-pointer text-sm font-medium">高级可选项</summary>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <ConfigInput cfg={configs.upload_oss_cdn_domain} editing={editing} setValue={setValue} placeholder="自定义 CDN 域名，可留空" />
+                <ConfigInput cfg={configs.upload_ozon_cdn_relay_url} editing={editing} setValue={setValue} placeholder="OZON CDN 中转，可留空" />
+                <ConfigInput cfg={configs.upload_local_base_url} editing={editing} setValue={setValue} placeholder="本地存储 Base URL，可留空" />
+              </div>
+            </details>
+          </section>
+
+          <section className="space-y-3 rounded-md border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">上传保护</h3>
+                <p className="text-xs text-muted-foreground">频率限制、每日配额和 /cdn 防盗链。</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfigs(UPLOAD_SECURITY_KEYS, '上传保护')}
+                disabled={isSavingSecurity}
+              >
+                {isSavingSecurity ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存保护</span>
+              </Button>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <ConfigToggle cfg={configs.upload_rate_limit_enabled} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.upload_rate_limit_per_minute} editing={editing} setValue={setValue} />
+              <ConfigToggle cfg={configs.upload_daily_quota_enabled} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.upload_daily_quota_mb} editing={editing} setValue={setValue} />
+              <ConfigToggle cfg={configs.upload_referer_check_enabled} editing={editing} setValue={setValue} />
+            </div>
+          </section>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ConfigInput({
+  cfg,
+  editing,
+  setValue,
+  placeholder,
+  type = 'text',
+}: {
+  cfg?: SystemConfig;
+  editing: Record<string, string>;
+  setValue: (key: string, value: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  if (!cfg) return null;
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
+      {cfg.description && <p className="text-xs text-muted-foreground">{cfg.description}</p>}
+      <Input
+        type={type}
+        value={editing[cfg.key] || ''}
+        onChange={(event) => setValue(cfg.key, event.target.value)}
+        placeholder={placeholder || cfg.description || ''}
+      />
+    </div>
+  );
+}
+
+function ConfigToggle({
+  cfg,
+  editing,
+  setValue,
+}: {
+  cfg?: SystemConfig;
+  editing: Record<string, string>;
+  setValue: (key: string, value: string) => void;
+}) {
+  if (!cfg) return null;
+  const enabled = editing[cfg.key] === 'true';
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-2">
+      <div>
+        <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
+        {cfg.description && <p className="text-xs text-muted-foreground mt-0.5">{cfg.description}</p>}
+      </div>
+      <button
+        type="button"
+        onClick={() => setValue(cfg.key, enabled ? 'false' : 'true')}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+          enabled ? 'bg-primary' : 'bg-muted'
+        }`}
+      >
+        <span
+          className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+            enabled ? 'translate-x-6' : 'translate-x-1'
+          }`}
+        />
+      </button>
     </div>
   );
 }
