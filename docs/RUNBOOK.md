@@ -146,13 +146,33 @@ DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.s
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
+如果已经切到 release 目录 + symlink 部署：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+```
+
+release 模式下，systemd 应使用 `deploy/systemd-release/*.service` 模板，关键字段是：
+
+```ini
+WorkingDirectory=/opt/ss-erp/current/apps/server
+EnvironmentFile=/opt/ss-erp/shared/.env.staging
+```
+
+如果仍使用 `deploy/systemd/*.service`，服务会从 `/opt/ss-erp/.env.staging` 读取环境变量；这会导致你已经在 shared env 写入 R2 配置，但运行中的 API 仍返回 `mode:"local"`。
+
 该脚本是只读诊断：只检查环境文件、systemd `EnvironmentFile`、API/Worker 运行进程实际环境变量和本机 `/ready`。不会创建用户、不会修改数据库、不会上传文件。若 smoke 已提示 `runtime.mode="local"` 或 `imageUpload="local"`，优先跑它确认当前进程是否真的读取到了 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss`。
 
 部署层验收：
 
 ```bash
-cd /opt/ss-erp/app
-./scripts/verify-vps-deploy.sh
+# git checkout 模式
+cd /opt/ss-erp
+DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
+
+# release/symlink 模式
+cd /opt/ss-erp/current
+DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 ```
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。

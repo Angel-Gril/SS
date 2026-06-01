@@ -53,18 +53,31 @@ Release deployment expects services to start from the symlink:
 
 ```ini
 WorkingDirectory=/opt/ss-erp/current/apps/server
+EnvironmentFile=/opt/ss-erp/shared/.env.staging
 ExecStart=/usr/bin/node dist/index.js
 ```
 
 ```ini
 WorkingDirectory=/opt/ss-erp/current/apps/server
+EnvironmentFile=/opt/ss-erp/shared/.env.staging
 ExecStart=/usr/bin/node dist/worker.js
 ```
 
 ```ini
 WorkingDirectory=/opt/ss-erp/current/apps/web
+EnvironmentFile=/opt/ss-erp/shared/.env.staging
 ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0.1
 ```
+
+Install the release-mode unit templates when switching to the symlink deployment:
+
+```bash
+sudo cp deploy/systemd-release/ss-erp-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web
+```
+
+The older `deploy/systemd/*.service` templates are for a direct git checkout at `/opt/ss-erp` and read `/opt/ss-erp/.env.staging`. Do not use those templates with `/opt/ss-erp/current`, otherwise the running process can keep reading the wrong env file and stay in local mode even after R2 values are added.
 
 The service names used by the scripts default to the existing names:
 
@@ -134,8 +147,15 @@ That path is good for small teams and fast iteration. The release/symlink path i
 - The current smoke and verification scripts still apply after deploying:
 
 ```bash
-./scripts/verify-vps-deploy.sh
-cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
+DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
+cd /opt/ss-erp/current/apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
+```
+
+For release-mode deployments, run diagnostics against the active symlink and shared env file:
+
+```bash
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
 ```
 
 Recommended deploy order:

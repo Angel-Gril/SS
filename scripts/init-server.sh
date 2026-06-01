@@ -33,7 +33,8 @@ Directories:
 
 Next steps:
   1. Put production env values in $SHARED_DIR/$ENV_FILE_NAME
-  2. Ensure systemd services use WorkingDirectory=$CURRENT_LINK/apps/server and $CURRENT_LINK/apps/web
-  3. Deploy with:
+  2. Install release-mode systemd units from deploy/systemd-release/
+  3. Ensure systemd uses EnvironmentFile=$SHARED_DIR/$ENV_FILE_NAME
+  4. Deploy with:
      DEPLOY_HOST=<server> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
 EOF

@@ -1,0 +1,24 @@
+[Unit]
+Description=SS ERP Background Workers (BullMQ)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/ss-erp/current/apps/server
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/ss-erp/shared/.env.staging
+ExecStart=/usr/bin/node dist/worker.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ss-erp/shared/uploads /opt/ss-erp/current/apps/server/public
+
+[Install]
+WantedBy=multi-user.target
