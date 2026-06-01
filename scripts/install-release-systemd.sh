@@ -7,12 +7,15 @@ set -euo pipefail
 #   DEPLOY_BASE=/opt/ss-erp bash scripts/install-release-systemd.sh [--restart]
 
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
+ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
 UNIT_SRC_DIR="${UNIT_SRC_DIR:-deploy/systemd-release}"
 UNIT_DST_DIR="${UNIT_DST_DIR:-/etc/systemd/system}"
 API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 RESTART=false
+CURRENT_LINK="$DEPLOY_BASE/current"
+SHARED_ENV_FILE="$DEPLOY_BASE/shared/$ENV_FILE_NAME"
 
 for arg in "$@"; do
   case "$arg" in
@@ -26,6 +29,22 @@ done
 
 if [ ! -d "$UNIT_SRC_DIR" ]; then
   echo "[systemd] ERROR: unit source directory missing: $UNIT_SRC_DIR" >&2
+  exit 1
+fi
+
+if [ ! -e "$CURRENT_LINK" ]; then
+  echo "[systemd] ERROR: current symlink missing: $CURRENT_LINK" >&2
+  echo "[systemd] Run scripts/init-server.sh and deploy.sh before installing release-mode units." >&2
+  exit 1
+fi
+
+if [ ! -d "$CURRENT_LINK/apps/server" ] || [ ! -d "$CURRENT_LINK/apps/web" ]; then
+  echo "[systemd] ERROR: current release does not contain apps/server and apps/web: $CURRENT_LINK" >&2
+  exit 1
+fi
+
+if [ ! -f "$SHARED_ENV_FILE" ]; then
+  echo "[systemd] ERROR: shared env file missing: $SHARED_ENV_FILE" >&2
   exit 1
 fi
 
@@ -46,8 +65,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable "$API_SERVICE" "$WORKER_SERVICE" "$WEB_SERVICE"
 
 echo "[systemd] Expected release paths:"
-echo "[systemd]   current: $DEPLOY_BASE/current"
-echo "[systemd]   env:     $DEPLOY_BASE/shared/.env.staging"
+echo "[systemd]   current: $CURRENT_LINK"
+echo "[systemd]   env:     $SHARED_ENV_FILE"
 
 if [ "$RESTART" = true ]; then
   echo "[systemd] Restarting services"

@@ -165,7 +165,7 @@ EnvironmentFile=/opt/ss-erp/shared/.env.staging
 
 ```bash
 cd /opt/ss-erp/current
-DEPLOY_BASE=/opt/ss-erp bash scripts/install-release-systemd.sh --restart
+DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging bash scripts/install-release-systemd.sh --restart
 ```
 
 该脚本是只读诊断：只检查环境文件、systemd `EnvironmentFile`、API/Worker 运行进程实际环境变量和本机 `/ready`。不会创建用户、不会修改数据库、不会上传文件。若 smoke 已提示 `runtime.mode="local"` 或 `imageUpload="local"`，优先跑它确认当前进程是否真的读取到了 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss`。
