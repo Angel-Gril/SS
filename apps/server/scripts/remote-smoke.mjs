@@ -159,6 +159,19 @@ function push(name, fn) {
   checks.push({ name, fn });
 }
 
+function ossRuntimeHint(runtimeBody) {
+  const data = runtimeBody?.data || {};
+  const capabilities = data.capabilities || {};
+  return [
+    `runtime=${JSON.stringify({ mode: data.mode || null, capabilities })}`,
+    'expected runtime mode/capability: mode="cloud", capabilities.imageUpload="oss"',
+    'check the running VPS process, not only the bucket console:',
+    '  DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh',
+    'required server env: RUNTIME_MODE=cloud, IMAGE_STORAGE_BACKEND=oss, OSS_ENDPOINT, OSS_BUCKET, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_REGION',
+    'after fixing env, restart: sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web',
+  ].join(' | ');
+}
+
 push('ready endpoint reports healthy', async () => {
   const out = await request(`${apiBaseUrl}/ready`);
   if (out.status !== 200 || out.body?.status !== 'ready' || out.body?.checks?.db !== 'ok' || out.body?.checks?.redis !== 'ok') {
@@ -329,7 +342,7 @@ push('authenticated upload stores image in expected backend', async () => {
   }
   const runtimeMode = runtime.body?.data?.mode || null;
   if (expectOss && runtime.body?.data?.capabilities?.imageUpload !== 'oss') {
-    throw new Error(`expected extension runtime imageUpload=oss, got ${JSON.stringify(runtime.body?.data?.capabilities || {})}`);
+    throw new Error(`expected extension runtime imageUpload=oss. ${ossRuntimeHint(runtime.body)}`);
   }
 
   const oneByOnePng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
@@ -343,7 +356,7 @@ push('authenticated upload stores image in expected backend', async () => {
   }
   const data = upload.body?.data || {};
   if (expectOss && data.backend !== 'oss') {
-    throw new Error(`expected oss backend, got ${JSON.stringify(data)}`);
+    throw new Error(`expected upload backend=oss, got ${JSON.stringify(data)}. ${ossRuntimeHint(runtime.body)}`);
   }
   return {
     backend: data.backend || null,
