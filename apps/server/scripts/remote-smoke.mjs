@@ -174,6 +174,7 @@ function ossRuntimeHint(runtimeBody) {
     `runtime=${JSON.stringify({ mode: data.mode || null, capabilities })}`,
     'expected runtime mode/capability: mode="cloud", capabilities.imageUpload="oss"',
     'check the running VPS process, not only the bucket console:',
+    '  pnpm env:check -- --profile cloud-r2 --env .env.staging',
     '  DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh',
     'required server env: RUNTIME_MODE=cloud, IMAGE_STORAGE_BACKEND=oss, OSS_ENDPOINT, OSS_BUCKET, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_REGION',
     'after fixing env, restart: sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web',

@@ -35,14 +35,26 @@ if [ ! -f "$DEPLOY_DIR/scripts/verify-vps-deploy.sh" ]; then
   exit 1
 fi
 
-echo "[1/2] Runtime/env diagnostics"
+if [ ! -f "$DEPLOY_DIR/scripts/validate-env.mjs" ]; then
+  echo "[cloud-runtime] ERROR: env validation script missing in deploy dir" >&2
+  exit 1
+fi
+
+echo "[1/3] Static env file validation"
+(
+  cd "$DEPLOY_DIR"
+  node scripts/validate-env.mjs --profile cloud-r2 --env "$ENV_FILE"
+)
+
+echo ""
+echo "[2/3] Runtime/env diagnostics"
 DEPLOY_DIR="$DEPLOY_DIR" \
 ENV_FILE="$ENV_FILE" \
 API_BASE_URL="$LOCAL_API_BASE_URL" \
 bash "$DEPLOY_DIR/scripts/diagnose-runtime-env.sh"
 
 echo ""
-echo "[2/2] VPS deployment checks"
+echo "[3/3] VPS deployment checks"
 DEPLOY_DIR="$DEPLOY_DIR" \
 ENV_FILE="$ENV_FILE" \
 VERIFY_DOMAIN="$VERIFY_DOMAIN" \
