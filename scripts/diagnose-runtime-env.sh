@@ -22,6 +22,7 @@ fi
 
 FAILURES=0
 WARNINGS=0
+UPLOAD_CONFIG_SOURCE="unknown"
 
 pass() { echo "PASS $1"; }
 warn() { WARNINGS=$((WARNINGS + 1)); echo "WARN $1"; }
@@ -52,29 +53,117 @@ load_env_file() {
 
 check_expected_env() {
   local expected_runtime="${EXPECTED_RUNTIME_MODE:-cloud}"
-  local expected_storage="${EXPECTED_IMAGE_STORAGE_BACKEND:-oss}"
 
   if [ "${RUNTIME_MODE:-}" = "$expected_runtime" ]; then
     pass "RUNTIME_MODE=$expected_runtime"
   else
     fail "RUNTIME_MODE expected $expected_runtime, got ${RUNTIME_MODE:-empty}"
   fi
+}
 
-  if [ "${IMAGE_STORAGE_BACKEND:-}" = "$expected_storage" ]; then
-    pass "IMAGE_STORAGE_BACKEND=$expected_storage"
-  else
-    fail "IMAGE_STORAGE_BACKEND expected $expected_storage, got ${IMAGE_STORAGE_BACKEND:-empty}"
+check_env_upload_fallback() {
+  local expected_storage="${EXPECTED_IMAGE_STORAGE_BACKEND:-oss}"
+  local missing=()
+
+  if [ "${IMAGE_STORAGE_BACKEND:-}" != "$expected_storage" ]; then
+    missing+=("IMAGE_STORAGE_BACKEND expected $expected_storage got ${IMAGE_STORAGE_BACKEND:-empty}")
   fi
 
   for key in OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_REGION; do
     local state
     state=$(mask_state "$key")
-    if [ "$state" = "set" ]; then
-      pass "$key is set"
-    else
-      fail "$key is empty"
-    fi
+    [ "$state" = "set" ] || missing+=("$key is empty")
   done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    pass "env OSS fallback complete (IMAGE_STORAGE_BACKEND=$expected_storage, OSS_* present)"
+    UPLOAD_CONFIG_SOURCE="env"
+  else
+    fail "env OSS fallback incomplete: $(IFS='; '; echo "${missing[*]}")"
+    UPLOAD_CONFIG_SOURCE="missing"
+  fi
+}
+
+check_upload_system_config() {
+  local server_dir="$DEPLOY_DIR/apps/server"
+  if [ ! -d "$server_dir" ]; then
+    warn "server directory missing; skip SystemConfig upload check: $server_dir"
+    check_env_upload_fallback
+    return
+  fi
+
+  local report
+  if ! report=$(cd "$server_dir" && ENV_FILE="$ENV_FILE" node --input-type=module <<'NODE' 2>/tmp/ss-erp-upload-config.$$
+import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
+
+dotenv.config({ path: `../../${process.env.ENV_FILE || '.env.staging'}` });
+
+const prisma = new PrismaClient();
+const keys = [
+  'upload_storage_backend',
+  'upload_oss_endpoint',
+  'upload_oss_bucket',
+  'upload_oss_access_key_id',
+  'upload_oss_access_key_secret',
+  'upload_oss_region',
+];
+
+try {
+  const rows = await prisma.systemConfig.findMany({
+    where: { key: { in: keys } },
+    select: { key: true, value: true },
+  });
+  const map = Object.fromEntries(rows.map((row) => [row.key, row.value || '']));
+  const required = [
+    'upload_oss_endpoint',
+    'upload_oss_bucket',
+    'upload_oss_access_key_id',
+    'upload_oss_access_key_secret',
+    'upload_oss_region',
+  ];
+  const backend = map.upload_storage_backend || 'env';
+  const filled = required.filter((key) => String(map[key] || '').trim().length > 0);
+  const missing = required.filter((key) => String(map[key] || '').trim().length === 0);
+  const hasAny = backend !== 'env' || filled.length > 0;
+  console.log(`DB_UPLOAD_BACKEND=${backend}`);
+  console.log(`DB_UPLOAD_HAS_ANY=${hasAny ? '1' : '0'}`);
+  console.log(`DB_UPLOAD_READY=${missing.length === 0 ? '1' : '0'}`);
+  console.log(`DB_UPLOAD_FILLED=${filled.join(',')}`);
+  console.log(`DB_UPLOAD_MISSING=${missing.join(',')}`);
+} finally {
+  await prisma.$disconnect();
+}
+NODE
+); then
+    warn "SystemConfig upload check failed: $(tr '\n' ' ' </tmp/ss-erp-upload-config.$$ 2>/dev/null || true)"
+    rm -f /tmp/ss-erp-upload-config.$$
+    check_env_upload_fallback
+    return
+  fi
+  rm -f /tmp/ss-erp-upload-config.$$
+
+  local db_backend db_has_any db_ready db_missing db_filled
+  db_backend=$(printf '%s\n' "$report" | awk -F= '$1 == "DB_UPLOAD_BACKEND" {print $2; exit}')
+  db_has_any=$(printf '%s\n' "$report" | awk -F= '$1 == "DB_UPLOAD_HAS_ANY" {print $2; exit}')
+  db_ready=$(printf '%s\n' "$report" | awk -F= '$1 == "DB_UPLOAD_READY" {print $2; exit}')
+  db_missing=$(printf '%s\n' "$report" | awk -F= '$1 == "DB_UPLOAD_MISSING" {print $2; exit}')
+  db_filled=$(printf '%s\n' "$report" | awk -F= '$1 == "DB_UPLOAD_FILLED" {print $2; exit}')
+
+  if [ "$db_ready" = "1" ]; then
+    pass "upload SystemConfig complete (backend=${db_backend:-unknown}; filled=${db_filled:-all})"
+    UPLOAD_CONFIG_SOURCE="system-config"
+    return
+  fi
+
+  if [ "$db_has_any" = "1" ]; then
+    fail "upload SystemConfig incomplete (backend=${db_backend:-unknown}; missing=${db_missing:-unknown}); fill System Settings -> Upload and object storage"
+    UPLOAD_CONFIG_SOURCE="incomplete-system-config"
+    return
+  fi
+
+  pass "upload SystemConfig empty; checking env OSS fallback"
+  check_env_upload_fallback
 }
 
 check_service_envfile() {
@@ -147,11 +236,8 @@ check_process_env() {
   pass "$service MainPID=$pid"
 
   local expected_runtime="${EXPECTED_RUNTIME_MODE:-cloud}"
-  local expected_storage="${EXPECTED_IMAGE_STORAGE_BACKEND:-oss}"
   local runtime
   runtime=$(read_proc_env_value "$pid" RUNTIME_MODE)
-  local storage
-  storage=$(read_proc_env_value "$pid" IMAGE_STORAGE_BACKEND)
 
   if [ "$runtime" = "$expected_runtime" ]; then
     pass "$service process RUNTIME_MODE=$expected_runtime"
@@ -159,6 +245,14 @@ check_process_env() {
     fail "$service process RUNTIME_MODE expected $expected_runtime, got ${runtime:-empty}"
   fi
 
+  if [ "$UPLOAD_CONFIG_SOURCE" != "env" ]; then
+    pass "$service process upload config source=$UPLOAD_CONFIG_SOURCE; skip OSS env fallback checks"
+    return
+  fi
+
+  local expected_storage="${EXPECTED_IMAGE_STORAGE_BACKEND:-oss}"
+  local storage
+  storage=$(read_proc_env_value "$pid" IMAGE_STORAGE_BACKEND)
   if [ "$storage" = "$expected_storage" ]; then
     pass "$service process IMAGE_STORAGE_BACKEND=$expected_storage"
   else
@@ -207,6 +301,7 @@ echo ""
 
 load_env_file "$env_path"
 check_expected_env
+check_upload_system_config
 
 check_service_envfile "$API_SERVICE" "$EXPECTED_API_WORKING_DIR"
 check_service_envfile "$WORKER_SERVICE" "$EXPECTED_WORKER_WORKING_DIR"

@@ -166,13 +166,11 @@ cd /opt/ss-erp/app
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
-如果输出是：
+`diagnose-runtime-env.sh` 会先读取后台 `upload_storage_backend` 和 `upload_oss_*`，后台 R2 配置完整时即使 env 兜底还是 `IMAGE_STORAGE_BACKEND=ozon-cdn` 也不应报错。常见结果：
 
-- `RUNTIME_MODE=cloud`
-- `IMAGE_STORAGE_BACKEND expected oss, got ozon-cdn`
-- `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION is empty`
-
-说明线上代码可以已经是最新，但 env 兜底未切到 R2。新版本优先在超管后台填写 `upload_storage_backend=oss` 和 `upload_oss_*`；如果使用 env 兜底，再把 `OSS_*` 写入 VPS `.env.staging` 并重启服务。
+- `upload SystemConfig complete`：后台上传 R2 配置完整，继续跑上传 smoke。
+- `upload SystemConfig incomplete ... missing=...`：后台只填了一部分 R2，先补齐缺项。
+- `upload SystemConfig empty; checking env OSS fallback`：后台未配置上传 R2，才需要看 env 里的 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*`。
 
 如果要检查三个域名是否按最新规则隔离：
 
