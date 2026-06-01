@@ -178,6 +178,15 @@ DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging bash scripts/install-release-
 
 如果这些检查失败，先修 systemd unit，再继续测 R2。
 
+云端运行态一键验收（只读）：
+
+```bash
+cd /opt/ss-erp/current
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
+```
+
+它会串行执行运行时环境诊断和 VPS 部署层检查。通过后，再从本地机器运行 R2 smoke。
+
 部署层验收：
 
 ```bash
