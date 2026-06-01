@@ -11,6 +11,16 @@ function hostMatches(host: string, configured: string): boolean {
   return h === configured.toLowerCase();
 }
 
+function getRequestOrigin(request: NextRequest): string {
+  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || request.nextUrl.host || '';
+  const proto = request.headers.get('x-forwarded-proto') || request.nextUrl.protocol.replace(':', '') || 'https';
+  return `${proto}://${host}`;
+}
+
+function redirectTo(request: NextRequest, pathname: string) {
+  return NextResponse.redirect(new URL(pathname, getRequestOrigin(request)));
+}
+
 export function middleware(request: NextRequest) {
   const host = request.headers.get('host') || '';
   const normalizedHost = host.split(':')[0]?.toLowerCase() || '';
@@ -19,13 +29,13 @@ export function middleware(request: NextRequest) {
   // 管理员域名：admin.ss-erp.com
   if (hostMatches(host, ADMIN_HOSTNAME)) {
     if (pathname === '/') {
-      return NextResponse.redirect(new URL('/admin/login', request.url));
+      return redirectTo(request, '/admin/login');
     }
     if (pathname === '/login' || pathname === '/register' || pathname === '/landing') {
-      return NextResponse.redirect(new URL('/admin/login', request.url));
+      return redirectTo(request, '/admin/login');
     }
     if (!pathname.startsWith('/admin') && !pathname.startsWith('/api')) {
-      return NextResponse.redirect(new URL('/admin/login', request.url));
+      return redirectTo(request, '/admin/login');
     }
   }
 
@@ -33,25 +43,25 @@ export function middleware(request: NextRequest) {
   if (hostMatches(host, USER_HOSTNAME)) {
     // 访问 /admin 路径时重定向到登录
     if (pathname.startsWith('/admin')) {
-      return NextResponse.redirect(new URL('/login', request.url));
+      return redirectTo(request, '/login');
     }
     // 访问根路径时重定向到登录（用户工作台）
     if (pathname === '/') {
-      return NextResponse.redirect(new URL('/login', request.url));
+      return redirectTo(request, '/login');
     }
   }
 
   // 根域名：ss-erp.com / www.ss-erp.com
-  // 根路径显示官网首页，内部复用 /landing，避免和 ERP 工作台的 "/" 路由冲突。
+  // 根路径跳转到官网首页，避免和 ERP 工作台的 "/" 路由冲突。
   if (MARKETING_HOSTNAMES.includes(normalizedHost)) {
     if (pathname === '/') {
-      return NextResponse.rewrite(new URL('/landing', request.url));
+      return redirectTo(request, '/landing');
     }
     if (pathname === '/login' || pathname === '/register') {
-      return NextResponse.redirect(new URL(pathname, `https://${USER_HOSTNAME}`));
+      return NextResponse.redirect(new URL(pathname, `${getRequestOrigin(request).replace(/:\/\/[^/]+$/, '')}://${USER_HOSTNAME}`));
     }
   } else if (pathname === '/landing') {
-    return NextResponse.redirect(new URL('/login', request.url));
+    return redirectTo(request, '/login');
   }
 
   return NextResponse.next();
