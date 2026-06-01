@@ -14,6 +14,7 @@ const collectSchema = z.object({
   sourcePlatform: z.string().optional(),
   images: z.array(z.string()).optional(),
   price: z.string().optional(),
+  priceText: z.string().optional(),
   currency: z.string().optional(),
   categoryId: z.number().optional(),
   categoryName: z.string().optional(),
@@ -223,7 +224,7 @@ export async function collectRoutes(app: FastifyInstance) {
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const notes = [weightNote, d.description?.slice(0, 500)].filter(Boolean).join('\n') || null;
 
-    const priceInfo = await resolveCollectedPrice(d.price, d.currency, d.sourceUrl);
+    const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
     const item = await prisma.supplyGoods.create({
       data: {
         user: { connect: { id: userId } },
@@ -270,13 +271,14 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.heightMm) metadata.heightMm = item.heightMm;
         if (item.manufacturerName) metadata.manufacturerName = item.manufacturerName;
         if (item.brandName) metadata.brandName = item.brandName;
+        if (item.priceText) metadata.priceText = String(item.priceText);
         // 调试用：未识别的 widget 全量 dump（扩展占位阶段使用）
         if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
 
         const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
         console.log(`[batch-collect] SKU=${item.sku} | modelId=${item.modelId || 'none'} | variants=${hasVariants ? item.variants.length : 0} | ozonAttributes=${Array.isArray(item.ozonAttributes) ? item.ozonAttributes.length : 'NONE'}`);
 
-        const priceInfo = await resolveCollectedPrice(item.price, item.currency, item.sourceUrl);
+        const priceInfo = await resolveCollectedPrice(item.priceText || item.price, item.currency, item.sourceUrl);
 
         await prisma.supplyGoods.create({
           data: {

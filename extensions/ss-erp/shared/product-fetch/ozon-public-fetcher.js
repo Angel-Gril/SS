@@ -30,6 +30,8 @@
   }
 
   function parseWidgetStates(productId, data) {
+    var priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
+    var fallbackCurrencyByHost = priceCurrency.fallbackCurrencyByHost || function () { return 'RUB'; };
     var states = data && data.widgetStates;
     if (!states || typeof states !== 'object') {
       return { ok: false, productId: productId, error: 'no widgetStates', _rawKeys: [] };
@@ -51,7 +53,7 @@
       images: [],
       price: null,
       oldPrice: null,
-      currency: 'RUB',
+      currency: null,
       description: '',
       brand: null,
       category: null,
@@ -74,6 +76,10 @@
     if (!result.title) {
       result.ok = false;
       result.error = 'title not found (product may not exist)';
+    }
+    if (!result.currency) {
+      var host = typeof location !== 'undefined' ? location.hostname : '';
+      result.currency = fallbackCurrencyByHost(host);
     }
 
     for (var a = 0; a < result.attributes.length; a++) {
@@ -115,13 +121,38 @@
     if (r.price) return;
     if (!/^(webPrice|webSale|price)/.test(key)) return;
     if (!s) return;
+    var priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
+    var parsePriceWithCurrency = priceCurrency.parsePriceWithCurrency || function (text, fallback) {
+      return { price: normalizePrice(text), currency: fallback || null };
+    };
+    var detectCurrencyFromText = priceCurrency.detectCurrencyFromText || function (text, fallback) {
+      var raw = text == null ? '' : String(text);
+      if (raw.indexOf('¥') >= 0 || raw.indexOf('￥') >= 0 || /\b(?:CNY|RMB)\b/i.test(raw)) return 'CNY';
+      if (raw.indexOf('₽') >= 0 || /\bRUB\b/i.test(raw)) return 'RUB';
+      if (raw.indexOf('₸') >= 0 || /\bKZT\b/i.test(raw)) return 'KZT';
+      if (/\bBYN\b/i.test(raw)) return 'BYN';
+      return fallback || null;
+    };
     var raw = s.cardPrice || s.price || s.finalPrice || s.tradePrice;
     var rawOld = s.originalPrice || s.priceWithoutDiscount || s.oldPrice;
-    if (typeof raw === 'string') r.price = normalizePrice(raw);
-    if (typeof rawOld === 'string') r.oldPrice = normalizePrice(rawOld);
-    if (typeof s.currency === 'string') r.currency = s.currency;
+    if (typeof raw === 'string') {
+      var parsed = parsePriceWithCurrency(raw, r.currency || s.currency);
+      r.price = parsed.price;
+      r.currency = parsed.currency || r.currency;
+    }
+    if (typeof rawOld === 'string') {
+      var parsedOld = parsePriceWithCurrency(rawOld, r.currency || s.currency);
+      r.oldPrice = parsedOld.price;
+      r.currency = r.currency || parsedOld.currency;
+    }
+    r.currency = detectCurrencyFromText(s.disclaimerPriceHeader, r.currency || s.currency);
+    if (Array.isArray(s.disclaimerPriceBodyRs)) {
+      for (var i = 0; i < s.disclaimerPriceBodyRs.length; i++) {
+        r.currency = detectCurrencyFromText(s.disclaimerPriceBodyRs[i] && s.disclaimerPriceBodyRs[i].content, r.currency);
+      }
+    }
     if (typeof s.currencySign === 'string' && !r.currency) {
-      r.currency = s.currencySign.indexOf('₽') >= 0 ? 'RUB' : s.currencySign;
+      r.currency = detectCurrencyFromText(s.currencySign, null);
     }
   }
 

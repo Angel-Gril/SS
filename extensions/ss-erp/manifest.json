@@ -106,6 +106,7 @@
         "https://detail.tmall.com/*"
       ],
       "js": [
+        "shared/currency/price-currency.js",
         "content/collect-content-script.js"
       ],
       "run_at": "document_idle"
@@ -122,6 +123,7 @@
         "https://*.ozon.by/product/*"
       ],
       "js": [
+        "shared/currency/price-currency.js",
         "content/ozon-list-overlay.js"
       ],
       "run_at": "document_idle"

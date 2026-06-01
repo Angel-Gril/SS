@@ -152,6 +152,26 @@
       try { widgets.push({ key, state: JSON.parse(states[key]) }); } catch (e) {}
     }
 
+    const priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
+    const parsePriceWithCurrency = priceCurrency.parsePriceWithCurrency || ((text, fallback) => ({
+      price: text ? String(text).replace(/[^\d.,]/g, "").replace(",", ".") : null,
+      currency: fallback || null,
+    }));
+    const detectCurrencyFromText = priceCurrency.detectCurrencyFromText || ((text, fallback) => {
+      const raw = text == null ? "" : String(text);
+      if (raw.indexOf("¥") >= 0 || raw.indexOf("￥") >= 0 || /\b(?:CNY|RMB)\b/i.test(raw)) return "CNY";
+      if (raw.indexOf("₽") >= 0 || /\bRUB\b/i.test(raw)) return "RUB";
+      if (raw.indexOf("₸") >= 0 || /\bKZT\b/i.test(raw)) return "KZT";
+      if (/\bBYN\b/i.test(raw)) return "BYN";
+      return fallback || null;
+    });
+    const fallbackCurrencyByHost = priceCurrency.fallbackCurrencyByHost || ((host) => {
+      const value = String(host || "").toLowerCase();
+      if (value.includes("ozon.kz")) return "KZT";
+      if (value.includes("ozon.by")) return "BYN";
+      return "RUB";
+    });
+
     let currency = null;
     let priceString = null;
 
@@ -185,12 +205,21 @@
         const ro = st.originalPrice || st.priceWithoutDiscount || st.oldPrice;
         if (typeof rp === "string") {
           priceString = rp;
-          price = rp.replace(/[^\d.,]/g, "").replace(",", ".");
+          const parsed = parsePriceWithCurrency(rp, currency || st.currency);
+          price = parsed.price;
+          currency = parsed.currency || currency;
         }
         if (typeof ro === "string") {
-          oldPrice = ro.replace(/[^\d.,]/g, "").replace(",", ".");
+          const parsedOld = parsePriceWithCurrency(ro, currency || st.currency);
+          oldPrice = parsedOld.price;
+          currency = currency || parsedOld.currency;
         }
-        if (typeof st.currency === "string") currency = st.currency;
+        currency = detectCurrencyFromText(st.disclaimerPriceHeader, currency || st.currency);
+        if (Array.isArray(st.disclaimerPriceBodyRs)) {
+          for (const row of st.disclaimerPriceBodyRs) {
+            currency = detectCurrencyFromText(row && row.content, currency);
+          }
+        }
       }
       if (!description && /^(webDescription|webRichAnnotation|description)/.test(k) && st) {
         description = st.richAnnotation || st.description || st.text || "";
@@ -215,23 +244,10 @@
       }
     }
 
-    if (priceString) {
-      if (priceString.indexOf("¥") >= 0) {
-        currency = "CNY";
-      } else if (priceString.indexOf("₽") >= 0) {
-        currency = "RUB";
-      } else if (priceString.indexOf("₸") >= 0) {
-        currency = "KZT";
-      } else if (priceString.indexOf("BYN") >= 0) {
-        currency = "BYN";
-      }
-    }
+    currency = detectCurrencyFromText(priceString, currency);
 
     if (!currency) {
-      const host = location.hostname.toLowerCase();
-      if (host.includes('ozon.kz')) currency = 'KZT';
-      else if (host.includes('ozon.by')) currency = 'BYN';
-      else currency = 'RUB';
+      currency = fallbackCurrencyByHost(location.hostname);
     }
 
     for (const a of attributes) {
@@ -291,11 +307,14 @@
               const text = v.data && Array.isArray(v.data.textRs) && v.data.textRs[0] ? v.data.textRs[0].content : null;
               const cover = v.data && v.data.coverImage ? v.data.coverImage : null;
               const priceText = v.data && v.data.price ? v.data.price : null;
+              const parsedPrice = parsePriceWithCurrency(priceText, currency);
               return {
                 sku: String(v.sku),
                 attrs: aspectName ? { [aspectName]: text || String(v.sku) } : (text ? { variant: text } : {}),
-                price: typeof v.price === "number" ? v.price : null,
+                price: parsedPrice.price || (typeof v.price === "number" ? v.price : null),
+                priceCurrency: parsedPrice.currency || currency || null,
                 priceText: priceText,
+                ozonInternalPrice: typeof v.price === "number" ? v.price : null,
                 images: cover ? [cover] : [],
                 availability: v.availability || null,
                 active: !!v.active,

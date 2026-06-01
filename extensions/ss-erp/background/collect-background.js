@@ -1418,6 +1418,28 @@ async function doFetchOzonProductViaTab(tab, productId) {
     world: "MAIN",
     args: [String(productId)],
     func: async (pid) => {
+      var priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
+      var parsePriceWithCurrency = priceCurrency.parsePriceWithCurrency || function (text, fallback) {
+        return {
+          price: text ? String(text).replace(/[^\d.,]/g, "").replace(",", ".") : null,
+          currency: fallback || null
+        };
+      };
+      var detectCurrencyFromText = priceCurrency.detectCurrencyFromText || function (text, fallback) {
+        var raw = text == null ? "" : String(text);
+        if (raw.indexOf("¥") >= 0 || raw.indexOf("￥") >= 0 || /\b(?:CNY|RMB)\b/i.test(raw)) return "CNY";
+        if (raw.indexOf("₽") >= 0 || /\bRUB\b/i.test(raw)) return "RUB";
+        if (raw.indexOf("₸") >= 0 || /\bKZT\b/i.test(raw)) return "KZT";
+        if (/\bBYN\b/i.test(raw)) return "BYN";
+        return fallback || null;
+      };
+      var fallbackCurrencyByHost = priceCurrency.fallbackCurrencyByHost || function (host) {
+        var value = String(host || "").toLowerCase();
+        if (value.indexOf("ozon.kz") >= 0) return "KZT";
+        if (value.indexOf("ozon.by") >= 0) return "BYN";
+        return "RUB";
+      };
+
       // 强制俄语：language=ru 放进内嵌 url，避免被中文 cookie 覆盖
       var encodedPath = encodeURIComponent("/product/" + pid + "/?language=ru");
       var primaryUrl = "/api/entrypoint-api.bx/page/json/v2?url=" + encodedPath;
@@ -1457,7 +1479,8 @@ async function doFetchOzonProductViaTab(tab, productId) {
       var images = [];
       var price = null;
       var oldPrice = null;
-      var currency = "RUB";
+      var priceText = null;
+      var currency = null;
       var description = "";
       var brand = null;
       var category = null;
@@ -1488,9 +1511,23 @@ async function doFetchOzonProductViaTab(tab, productId) {
         if (!price && /^(webPrice|webSale|price)/.test(k) && st) {
           var rp = st.cardPrice || st.price || st.finalPrice || st.tradePrice;
           var ro = st.originalPrice || st.priceWithoutDiscount || st.oldPrice;
-          if (typeof rp === "string") price = rp.replace(/[^\d.,]/g, "").replace(",", ".");
-          if (typeof ro === "string") oldPrice = ro.replace(/[^\d.,]/g, "").replace(",", ".");
-          if (typeof st.currency === "string") currency = st.currency;
+          if (typeof rp === "string") {
+            priceText = rp;
+            var parsedPrice = parsePriceWithCurrency(rp, currency || st.currency);
+            price = parsedPrice.price;
+            currency = parsedPrice.currency || currency;
+          }
+          if (typeof ro === "string") {
+            var parsedOldPrice = parsePriceWithCurrency(ro, currency || st.currency);
+            oldPrice = parsedOldPrice.price;
+            currency = currency || parsedOldPrice.currency;
+          }
+          currency = detectCurrencyFromText(st.disclaimerPriceHeader, currency || st.currency);
+          if (Array.isArray(st.disclaimerPriceBodyRs)) {
+            for (var dpi = 0; dpi < st.disclaimerPriceBodyRs.length; dpi++) {
+              currency = detectCurrencyFromText(st.disclaimerPriceBodyRs[dpi] && st.disclaimerPriceBodyRs[dpi].content, currency);
+            }
+          }
         }
 
         if (!description && /^(webDescription|webRichAnnotation|description)/.test(k) && st) {
@@ -1570,12 +1607,15 @@ async function doFetchOzonProductViaTab(tab, productId) {
               var avText = av.data && Array.isArray(av.data.textRs) && av.data.textRs[0] ? av.data.textRs[0].content : null;
               var avCover = av.data && av.data.coverImage ? av.data.coverImage : null;
               var avPriceText = av.data && av.data.price ? av.data.price : null;
+              var avParsedPrice = parsePriceWithCurrency(avPriceText, currency);
               if (!variantSkuIndex[skuKey]) {
                 var variantObj = {
                   sku: skuKey,
                   attrs: {},
-                  price: typeof av.price === "number" ? av.price : null,
+                  price: avParsedPrice.price || (typeof av.price === "number" ? av.price : null),
+                  priceCurrency: avParsedPrice.currency || currency || null,
                   priceText: avPriceText,
+                  ozonInternalPrice: typeof av.price === "number" ? av.price : null,
                   images: avCover ? [avCover] : [],
                   availability: av.availability || null,
                   active: !!av.active,
@@ -1589,6 +1629,8 @@ async function doFetchOzonProductViaTab(tab, productId) {
               variantSkuIndex[skuKey].attrs[dimName] = avText || skuKey;
               // 补全缺失的元数据
               if (avPriceText && !variantSkuIndex[skuKey].priceText) variantSkuIndex[skuKey].priceText = avPriceText;
+              if (avParsedPrice.price && !variantSkuIndex[skuKey].price) variantSkuIndex[skuKey].price = avParsedPrice.price;
+              if (avParsedPrice.currency && !variantSkuIndex[skuKey].priceCurrency) variantSkuIndex[skuKey].priceCurrency = avParsedPrice.currency;
               if (avCover && !(variantSkuIndex[skuKey].images && variantSkuIndex[skuKey].images.length)) variantSkuIndex[skuKey].images = [avCover];
               if (av.link && !variantSkuIndex[skuKey].link) variantSkuIndex[skuKey].link = av.link;
             }
@@ -1673,12 +1715,15 @@ async function doFetchOzonProductViaTab(tab, productId) {
                 var mvText = mav.data && Array.isArray(mav.data.textRs) && mav.data.textRs[0] ? mav.data.textRs[0].content : null;
                 var mvCover = mav.data && mav.data.coverImage ? mav.data.coverImage : null;
                 var mvPriceText = mav.data && mav.data.price ? mav.data.price : null;
+                var mvParsedPrice = parsePriceWithCurrency(mvPriceText, currency);
                 if (!variantSkuIndex[mSku]) {
                   var mObj = {
                     sku: mSku,
                     attrs: {},
-                    price: typeof mav.price === "number" ? mav.price : null,
+                    price: mvParsedPrice.price || (typeof mav.price === "number" ? mav.price : null),
+                    priceCurrency: mvParsedPrice.currency || currency || null,
                     priceText: mvPriceText,
+                    ozonInternalPrice: typeof mav.price === "number" ? mav.price : null,
                     images: mvCover ? [mvCover] : [],
                     availability: mav.availability || null,
                     active: !!mav.active,
@@ -1693,6 +1738,8 @@ async function doFetchOzonProductViaTab(tab, productId) {
                 // 合并维度值
                 variantSkuIndex[mSku].attrs[mDimName] = mvText || mSku;
                 if (mvPriceText && !variantSkuIndex[mSku].priceText) variantSkuIndex[mSku].priceText = mvPriceText;
+                if (mvParsedPrice.price && !variantSkuIndex[mSku].price) variantSkuIndex[mSku].price = mvParsedPrice.price;
+                if (mvParsedPrice.currency && !variantSkuIndex[mSku].priceCurrency) variantSkuIndex[mSku].priceCurrency = mvParsedPrice.currency;
                 if (mvCover && !(variantSkuIndex[mSku].images && variantSkuIndex[mSku].images.length)) variantSkuIndex[mSku].images = [mvCover];
                 if (mav.link && !variantSkuIndex[mSku].link) variantSkuIndex[mSku].link = mav.link;
               }
@@ -1722,8 +1769,9 @@ async function doFetchOzonProductViaTab(tab, productId) {
           title: title,
           images: images,
           price: price,
+          priceText: priceText,
           oldPrice: oldPrice,
-          currency: currency,
+          currency: currency || fallbackCurrencyByHost(location.hostname),
           description: typeof description === "string" ? description.slice(0, 2000) : "",
           brand: brand,
           category: category,
@@ -1859,6 +1907,7 @@ async function collectOzonProductsToErp(productIds) {
       sourcePlatform: "ozon",
       images: p.images,
       price: p.price || "",
+      priceText: p.priceText || p.price || "",
       currency: p.currency || "RUB",
       description: p.description || "",
       sku: String(p.productId),

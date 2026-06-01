@@ -79,7 +79,7 @@
     const priceTexts = [];
     card.querySelectorAll('span').forEach((el) => {
       const t = (el.textContent || '').trim();
-      if (/\d.*₽/.test(t) && t.length < 30) priceTexts.push(t);
+      if (/\d.*(?:₽|¥|￥|₸|\b(?:CNY|RMB|RUB|BYN|KZT)\b)/i.test(t) && t.length < 30) priceTexts.push(t);
     });
     const price = parsePrice(priceTexts[0] || '');
     const oldPrice = parsePrice(priceTexts[1] || '');
@@ -115,9 +115,12 @@
 
   function parsePrice(text) {
     if (!text) return null;
-    const cleaned = String(text).replace(/[^\d]/g, '');
-    if (!cleaned) return null;
-    const n = parseInt(cleaned, 10);
+    const helper = globalThis.SS_ERP_PRICE_CURRENCY;
+    const normalized = helper && helper.normalizePriceText
+      ? helper.normalizePriceText(text)
+      : String(text).replace(/[^\d.,]/g, '').replace(',', '.');
+    if (!normalized) return null;
+    const n = Number(normalized);
     return Number.isFinite(n) ? n : null;
   }
 
