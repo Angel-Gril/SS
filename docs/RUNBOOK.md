@@ -146,7 +146,7 @@ DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.s
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
-该脚本会创建临时超管和临时普通用户，覆盖健康检查、初始化状态、公开页面、Next 静态资源 API 地址、CORS 负向检查、路径遍历负向检查、注入形态登录负向检查、管理员独立登录、备份状态、注册短信码校验、扩展 runtime、维护模式阻断与恢复。脚本结束会删除临时用户、Redis session、短信码，并恢复维护模式配置。
+该脚本是只读诊断：只检查环境文件、systemd `EnvironmentFile`、API/Worker 运行进程实际环境变量和本机 `/ready`。不会创建用户、不会修改数据库、不会上传文件。若 smoke 已提示 `runtime.mode="local"` 或 `imageUpload="local"`，优先跑它确认当前进程是否真的读取到了 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss`。
 
 部署层验收：
 
@@ -156,6 +156,86 @@ cd /opt/ss-erp/app
 ```
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
+
+## 服务器功能验收清单
+
+验证码未实现时，可以先把验证码相关检查视为已知缺口，其余项目必须给出明确通过/失败结果。
+
+### 公网基础功能
+
+在本地机器运行：
+
+```bash
+pnpm smoke:remote
+```
+
+通过标准：
+
+- `/ready` 返回 `status:"ready"`，且 `db`、`redis` 都是 `ok`
+- `ss-erp.com`、`app.ss-erp.com`、`admin.ss-erp.com` 页面可访问
+- Next.js chunk 不再包含 `http://localhost:3001`
+- 未登录访问后台配置、备份状态、扩展 runtime 返回 401/403
+
+### R2/OSS 上传链路
+
+在本地机器运行：
+
+```bash
+SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
+```
+
+通过标准：
+
+- `/api/extension/runtime` 返回 `mode:"cloud"`
+- `capabilities.imageUpload` 返回 `oss`
+- `/api/images/upload-base64` 返回 `backend:"oss"`
+
+如果返回 `mode:"local"` 或 `imageUpload:"local"`，说明线上服务仍在本地模式。不要改扩展或前端，先在 VPS 上跑：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+```
+
+若服务器仍在旧目录运行，则改为：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+```
+
+### VPS 系统层
+
+在 VPS 运行：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
+```
+
+通过标准：
+
+- `ss-erp-api`、`ss-erp-worker`、`ss-erp-web`、Nginx、PostgreSQL、Redis 都 active
+- API/Web/PostgreSQL/Redis 内部端口只监听 loopback
+- 80/443 对外可用
+- Prisma migration up to date
+- `backup-status.json` 存在且格式正确
+- 最近 API/Worker 日志没有 fatal、exception、unhandled、panic
+
+### 备份与恢复
+
+在 VPS 运行：
+
+```bash
+. /etc/ss-erp-backup.env
+bash scripts/backup-db.sh
+bash scripts/verify-backup-restore.sh
+```
+
+通过标准：
+
+- 本地生成 `ss_erp_*.sql.gz`
+- 写入 `/var/backups/ss-erp/backup-status.json`
+- 恢复演练能创建临时库、恢复备份、读到 public 表，并自动删除临时库
+
+备份 R2/S3 bucket 建议和图片 R2 bucket 分开，避免生命周期规则互相影响。
 
 浏览器扩展静态验收：
 
