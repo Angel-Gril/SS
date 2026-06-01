@@ -52,14 +52,38 @@ sudo systemctl start ss-erp-api ss-erp-worker ss-erp-web
 
 ## 日常更新 / 今天的更新推送
 
+先确认当前服务器部署模式：
+
 ```bash
-cd /opt/ss-erp
-./scripts/deploy-staging.sh
+systemctl cat ss-erp-api ss-erp-web ss-erp-worker | grep -E 'WorkingDirectory|EnvironmentFile'
 ```
 
-执行部署脚本的用户需要有权限执行 `sudo systemctl restart ss-erp-*`。
+如果输出指向 `/opt/ss-erp/app`，当前是 app-dir 打包模式。不要在 VPS 上 `git pull`；从本地仓库执行：
 
-默认部署当前已 checkout 的分支；如果你想让 VPS 直接跟着 GitHub 仓库跑，这是最省事的方式。若要指定分支或部署目录：
+```bash
+DEPLOY_HOST=45.76.49.64 \
+DEPLOY_USER=root \
+SSH_KEY=~/.ssh/ss_erp_vultr_sg \
+DEPLOY_ENV_PROFILE=cloud-r2 \
+./scripts/deploy-app-dir.sh
+```
+
+如果输出指向 `/opt/ss-erp` 且目录里有 `.git`，才使用 git checkout 模式：
+
+```bash
+cd /opt/ss-erp
+DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
+```
+
+如果输出指向 `/opt/ss-erp/current`，使用 release/symlink 模式：
+
+```bash
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+```
+
+执行部署脚本的用户需要有权限执行 `systemctl restart ss-erp-*`。
+
+git checkout 模式默认部署当前已 checkout 的分支；如果你想让 VPS 直接跟着 GitHub 仓库跑，这是最省事的方式。若要指定分支或部署目录：
 
 ```bash
 DEPLOY_BRANCH=hardening/prelaunch-auth-security ./scripts/deploy-staging.sh  # 当前预上线分支示例
@@ -69,6 +93,8 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/deploy-staging.sh
 `deploy-staging.sh` 会加载 `.env.staging`，用于 `prisma migrate deploy` 和 `next build`。如果密钥包含 `$`、`#`、空格等特殊字符，请在 `.env.staging` 里加引号，保持 shell-compatible。
 
 如果你更重视回滚和版本隔离，可以改用 `scripts/deploy.sh` 的 release 目录模式；这两种方式不要混着用。
+
+当前 `/opt/ss-erp/app` 模式可以继续用 `deploy-app-dir.sh` 过渡。它会先构建新目录，成功后再替换 app 目录；失败时不会覆盖正在运行的旧目录。
 
 ## 查看日志
 
@@ -181,11 +207,18 @@ DEPLOY_BASE=/opt/ss-erp ENV_FILE_NAME=.env.staging bash scripts/install-release-
 云端运行态一键验收（只读）：
 
 ```bash
-cd /opt/ss-erp/current
-DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
+cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
 ```
 
 它会串行执行运行时环境诊断和 VPS 部署层检查。通过后，再从本地机器运行 R2 smoke。
+
+release/symlink 模式改用：
+
+```bash
+cd /opt/ss-erp/current
+DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
+```
 
 部署层验收：
 

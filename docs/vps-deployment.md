@@ -1,6 +1,72 @@
 # VPS Release Deployment
 
-This project can keep the current single-server systemd model while gaining fast rollback by deploying each build into a release directory and switching a `current` symlink.
+This project can keep the current single-server systemd model. There are three supported update paths:
+
+1. existing app-dir tar deployment at `/opt/ss-erp/app`
+2. direct Git checkout deployment at `/opt/ss-erp`
+3. release directory deployment with `/opt/ss-erp/current`
+
+Do not mix the three in one deploy. First identify which path systemd is currently using:
+
+```bash
+systemctl cat ss-erp-api ss-erp-web ss-erp-worker | grep -E 'WorkingDirectory|EnvironmentFile'
+```
+
+The current VPS can run from `/opt/ss-erp/app`; use the app-dir deploy script for that shape.
+
+## Existing App-Dir Deployment
+
+Use this when systemd points to:
+
+```ini
+WorkingDirectory=/opt/ss-erp/app/apps/server
+EnvironmentFile=/opt/ss-erp/app/.env.staging
+```
+
+Deploy the latest local commit from your workstation:
+
+```bash
+DEPLOY_HOST=45.76.49.64 \
+DEPLOY_USER=root \
+SSH_KEY=~/.ssh/ss_erp_vultr_sg \
+DEPLOY_ENV_PROFILE=cloud-r2 \
+./scripts/deploy-app-dir.sh
+```
+
+The script packages the requested commit, uploads it to the server, builds it in a temporary directory, copies the current `.env.staging`, runs migrations, swaps `/opt/ss-erp/app`, restarts services, and checks `/ready`.
+
+Deploy a specific commit:
+
+```bash
+DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh 4b47043
+```
+
+Optional pre-deploy database backup:
+
+```bash
+DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg RUN_DB_BACKUP=true DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
+```
+
+After deploying:
+
+```bash
+ssh -i ~/.ssh/ss_erp_vultr_sg root@45.76.49.64
+cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
+DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
+```
+
+Then from the local repository:
+
+```bash
+pnpm preflight --remote-oss
+```
+
+For R2 this only passes when `/api/extension/runtime` reports `mode:"cloud"` and `capabilities.imageUpload:"oss"`, and the upload response returns `backend:"oss"`.
+
+## Release/Symlink Deployment
+
+Use this after you intentionally switch systemd to `/opt/ss-erp/current`.
 
 ```text
 /opt/ss-erp/
@@ -16,12 +82,12 @@ This project can keep the current single-server systemd model while gaining fast
 
 ## When To Use This
 
-Use this for the VPS production/early SaaS phase:
+Use release/symlink deployment for the VPS production/early SaaS phase when rollback speed matters:
 
 - one VPS runs Nginx, Web, API, Worker, PostgreSQL, and Redis
 - services are still managed by systemd
 - deploys need a quick rollback path without introducing Kubernetes or a deploy panel
-- the simplest GitHub-based flow is still a normal git checkout plus `deploy-staging.sh`
+- the existing app-dir path can stay in use until you intentionally migrate
 
 ## VPS sizing and tuning
 
@@ -90,13 +156,13 @@ Override them with `API_SERVICE`, `WORKER_SERVICE`, and `WEB_SERVICE` if needed.
 From the local repository:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
 ```
 
 Deploy a specific commit:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh 9538dc9
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh 9538dc9
 ```
 
 The script:
@@ -118,13 +184,13 @@ The script:
 Roll back to the previous release:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root ./scripts/rollback.sh
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg ./scripts/rollback.sh
 ```
 
 Roll back to a specific release:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root ./scripts/rollback.sh 9538dc9
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root SSH_KEY=~/.ssh/ss_erp_vultr_sg ./scripts/rollback.sh 9538dc9
 ```
 
 Rollback switches the symlink, restarts services, and checks `/ready`.

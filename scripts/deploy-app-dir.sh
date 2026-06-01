@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Deploy into the existing /opt/ss-erp/app directory layout.
+#
+# This is for servers that already run systemd services from:
+#   /opt/ss-erp/app/apps/server
+#   /opt/ss-erp/app/apps/web
+#
+# Required env:
+#   DEPLOY_HOST=your-server
+#
+# Optional env:
+#   DEPLOY_USER=root
+#   SSH_KEY=~/.ssh/ss_erp_vultr_sg
+#   DEPLOY_BASE=/opt/ss-erp
+#   APP_DIR=$DEPLOY_BASE/app
+#   BACKUP_DIR=$DEPLOY_BASE/backups
+#   ENV_FILE_NAME=.env.staging
+#   DEPLOY_RUN_USER=deploy
+#   DEPLOY_ENV_PROFILE=cloud-r2
+#   RUN_DB_BACKUP=false
+#   KEEP_APP_BACKUPS=3
+#   API_SERVICE=ss-erp-api
+#   WEB_SERVICE=ss-erp-web
+#   WORKER_SERVICE=ss-erp-worker
+#   HEALTH_URL=http://127.0.0.1:3001/ready
+#
+# Usage:
+#   DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg ./scripts/deploy-app-dir.sh [commit]
+
+DEPLOY_USER="${DEPLOY_USER:-root}"
+DEPLOY_HOST="${DEPLOY_HOST:-}"
+SSH_KEY="${SSH_KEY:-}"
+DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
+APP_DIR="${APP_DIR:-$DEPLOY_BASE/app}"
+BACKUP_DIR="${BACKUP_DIR:-$DEPLOY_BASE/backups}"
+ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
+DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
+DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
+RUN_DB_BACKUP="${RUN_DB_BACKUP:-false}"
+KEEP_APP_BACKUPS="${KEEP_APP_BACKUPS:-3}"
+API_SERVICE="${API_SERVICE:-ss-erp-api}"
+WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
+WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/ready}"
+
+log() { printf '[deploy-app] %s\n' "$*"; }
+fail() { printf '[deploy-app] ERROR: %s\n' "$*" >&2; exit 1; }
+
+if [ -z "$DEPLOY_HOST" ]; then
+  fail "DEPLOY_HOST is required"
+fi
+
+SSH_ARGS=(-o BatchMode=yes)
+if [ -n "$SSH_KEY" ]; then
+  SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+fi
+
+COMMIT_HASH="${1:-$(git rev-parse --short HEAD)}"
+TARBALL="build/ss-erp-app-$COMMIT_HASH.tar.gz"
+
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  fail "tracked working tree has uncommitted changes"
+fi
+
+mkdir -p build
+log "Packaging $COMMIT_HASH"
+git archive --format=tar.gz --prefix=ss-erp/ -o "$TARBALL" "$COMMIT_HASH"
+
+log "Uploading package to $DEPLOY_USER@$DEPLOY_HOST"
+scp "${SSH_ARGS[@]}" "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
+
+log "Deploying app-dir release"
+ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
+  "$COMMIT_HASH" "$DEPLOY_BASE" "$APP_DIR" "$BACKUP_DIR" "$ENV_FILE_NAME" "$DEPLOY_RUN_USER" \
+  "$DEPLOY_ENV_PROFILE" "$RUN_DB_BACKUP" "$KEEP_APP_BACKUPS" "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" \
+  "$HEALTH_URL" "$(basename "$TARBALL")" <<'REMOTE'
+set -euo pipefail
+
+COMMIT_HASH="$1"
+DEPLOY_BASE="$2"
+APP_DIR="$3"
+BACKUP_DIR="$4"
+ENV_FILE_NAME="$5"
+DEPLOY_RUN_USER="$6"
+DEPLOY_ENV_PROFILE="$7"
+RUN_DB_BACKUP="$8"
+KEEP_APP_BACKUPS="$9"
+API_SERVICE="${10}"
+WEB_SERVICE="${11}"
+WORKER_SERVICE="${12}"
+HEALTH_URL="${13}"
+TARBALL="${14}"
+
+log() { printf '[deploy-app] %s\n' "$*"; }
+fail() { printf '[deploy-app] ERROR: %s\n' "$*" >&2; exit 1; }
+
+run_in_dir() {
+  local dir="$1"
+  local command="$2"
+  if id "$DEPLOY_RUN_USER" >/dev/null 2>&1; then
+    sudo -u "$DEPLOY_RUN_USER" bash -lc "cd '$dir' && $command"
+  else
+    bash -lc "cd '$dir' && $command"
+  fi
+}
+
+if [ ! -d "$APP_DIR" ]; then
+  fail "app dir missing: $APP_DIR"
+fi
+if [ ! -f "$APP_DIR/$ENV_FILE_NAME" ]; then
+  fail "env file missing: $APP_DIR/$ENV_FILE_NAME"
+fi
+
+mkdir -p "$DEPLOY_BASE" "$BACKUP_DIR"
+
+if [ "$RUN_DB_BACKUP" = "true" ] || [ "$RUN_DB_BACKUP" = "1" ]; then
+  if [ -f /etc/ss-erp-backup.env ] && [ -f "$APP_DIR/scripts/backup-db.sh" ]; then
+    log "Running database backup before deploy"
+    # shellcheck disable=SC1091
+    . /etc/ss-erp-backup.env
+    bash "$APP_DIR/scripts/backup-db.sh"
+  else
+    fail "RUN_DB_BACKUP requested but /etc/ss-erp-backup.env or backup-db.sh is missing"
+  fi
+fi
+
+NEXT_DIR="$DEPLOY_BASE/app-next-$COMMIT_HASH-$$"
+FAILED_DIR="$DEPLOY_BASE/app-failed-$COMMIT_HASH-$(date +%Y%m%d%H%M%S)"
+BACKUP_TARGET="$BACKUP_DIR/app-before-$(date +%Y%m%d%H%M%S)"
+
+rm -rf "$NEXT_DIR"
+mkdir -p "$NEXT_DIR"
+tar -xzf "/tmp/$TARBALL" -C "$NEXT_DIR" --strip-components=1
+rm -f "/tmp/$TARBALL"
+
+cp -p "$APP_DIR/$ENV_FILE_NAME" "$NEXT_DIR/$ENV_FILE_NAME"
+mkdir -p "$NEXT_DIR/apps/server/public"
+for runtime_dir in uploads watermarked resized tmp; do
+  mkdir -p "$DEPLOY_BASE/shared/$runtime_dir"
+  if [ -d "$APP_DIR/apps/server/public/$runtime_dir" ] && [ ! -L "$APP_DIR/apps/server/public/$runtime_dir" ]; then
+    cp -a "$APP_DIR/apps/server/public/$runtime_dir/." "$DEPLOY_BASE/shared/$runtime_dir/" 2>/dev/null || true
+  fi
+  ln -sfn "$DEPLOY_BASE/shared/$runtime_dir" "$NEXT_DIR/apps/server/public/$runtime_dir"
+done
+echo "$COMMIT_HASH" > "$NEXT_DIR/DEPLOYED_COMMIT"
+
+if id "$DEPLOY_RUN_USER" >/dev/null 2>&1; then
+  chown -R "$DEPLOY_RUN_USER:$DEPLOY_RUN_USER" "$NEXT_DIR" "$DEPLOY_BASE/shared"
+fi
+
+if [ -n "$DEPLOY_ENV_PROFILE" ]; then
+  log "Validating env profile: $DEPLOY_ENV_PROFILE"
+  run_in_dir "$NEXT_DIR" "node scripts/validate-env.mjs --profile '$DEPLOY_ENV_PROFILE' --env '$ENV_FILE_NAME'"
+fi
+
+log "Installing dependencies"
+run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm install --frozen-lockfile"
+
+log "Generating Prisma client and migrating database"
+run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; npx prisma generate && npx prisma migrate deploy"
+
+log "Building server and web"
+run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm --filter server build && pnpm --filter web build"
+
+rollback() {
+  log "Rolling back app dir"
+  systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+  if [ -d "$APP_DIR" ]; then
+    rm -rf "$FAILED_DIR"
+    mv "$APP_DIR" "$FAILED_DIR"
+  fi
+  if [ -d "$BACKUP_TARGET" ]; then
+    mv "$BACKUP_TARGET" "$APP_DIR"
+  fi
+  systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+}
+
+log "Switching $APP_DIR"
+mv "$APP_DIR" "$BACKUP_TARGET"
+mv "$NEXT_DIR" "$APP_DIR"
+
+log "Restarting services"
+if ! systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
+  rollback
+  exit 1
+fi
+
+sleep 3
+for service in "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; do
+  if ! systemctl is-active --quiet "$service"; then
+    echo "[deploy-app] ERROR: service is not active after restart: $service" >&2
+    rollback
+    exit 1
+  fi
+done
+
+log "Health check: $HEALTH_URL"
+if ! curl -fsS "$HEALTH_URL" >/dev/null; then
+  rollback
+  exit 1
+fi
+
+log "Cleaning old app backups"
+find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -name 'app-before-*' -printf '%T@ %p\n' \
+  | sort -nr \
+  | tail -n +"$((KEEP_APP_BACKUPS + 1))" \
+  | cut -d' ' -f2- \
+  | xargs -r rm -rf
+
+log "Success: $COMMIT_HASH"
+REMOTE
+
+rm -f "$TARBALL"
+log "Deployment complete"

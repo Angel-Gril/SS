@@ -8,6 +8,7 @@ set -euo pipefail
 #
 # Optional env:
 #   DEPLOY_USER=root
+#   SSH_KEY=~/.ssh/ss_erp_vultr_sg
 #   DEPLOY_BASE=/opt/ss-erp
 #   RELEASES_DIR=$DEPLOY_BASE/releases
 #   CURRENT_LINK=$DEPLOY_BASE/current
@@ -21,6 +22,7 @@ set -euo pipefail
 
 DEPLOY_USER="${DEPLOY_USER:-root}"
 DEPLOY_HOST="${DEPLOY_HOST:-}"
+SSH_KEY="${SSH_KEY:-}"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
 RELEASES_DIR="${RELEASES_DIR:-$DEPLOY_BASE/releases}"
 CURRENT_LINK="${CURRENT_LINK:-$DEPLOY_BASE/current}"
@@ -35,9 +37,14 @@ if [ -z "$DEPLOY_HOST" ]; then
   fail "DEPLOY_HOST is required"
 fi
 
+SSH_ARGS=(-o BatchMode=yes)
+if [ -n "$SSH_KEY" ]; then
+  SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+fi
+
 TARGET_COMMIT="${1:-}"
 
-ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
+ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
   "$TARGET_COMMIT" "$RELEASES_DIR" "$CURRENT_LINK" "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" "$HEALTH_URL" <<'REMOTE'
 set -euo pipefail
 

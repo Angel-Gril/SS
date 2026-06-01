@@ -8,6 +8,7 @@ set -euo pipefail
 #
 # Optional env:
 #   DEPLOY_USER=root
+#   SSH_KEY=~/.ssh/ss_erp_vultr_sg
 #   DEPLOY_BASE=/opt/ss-erp
 #   RELEASES_DIR=$DEPLOY_BASE/releases
 #   CURRENT_LINK=$DEPLOY_BASE/current
@@ -25,6 +26,7 @@ set -euo pipefail
 
 DEPLOY_USER="${DEPLOY_USER:-root}"
 DEPLOY_HOST="${DEPLOY_HOST:-}"
+SSH_KEY="${SSH_KEY:-}"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
 RELEASES_DIR="${RELEASES_DIR:-$DEPLOY_BASE/releases}"
 CURRENT_LINK="${CURRENT_LINK:-$DEPLOY_BASE/current}"
@@ -44,6 +46,11 @@ if [ -z "$DEPLOY_HOST" ]; then
   fail "DEPLOY_HOST is required"
 fi
 
+SSH_ARGS=(-o BatchMode=yes)
+if [ -n "$SSH_KEY" ]; then
+  SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+fi
+
 COMMIT_HASH="${1:-$(git rev-parse --short HEAD)}"
 RELEASE_DIR="$RELEASES_DIR/$COMMIT_HASH"
 TARBALL="build/ss-erp-release-$COMMIT_HASH.tar.gz"
@@ -57,10 +64,10 @@ log "Packaging $COMMIT_HASH"
 git archive --format=tar.gz --prefix=ss-erp/ -o "$TARBALL" "$COMMIT_HASH"
 
 log "Uploading package to $DEPLOY_USER@$DEPLOY_HOST"
-scp "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
+scp "${SSH_ARGS[@]}" "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
 
 log "Deploying release"
-ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
+ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
   "$COMMIT_HASH" "$RELEASE_DIR" "$RELEASES_DIR" "$CURRENT_LINK" "$SHARED_DIR" "$ENV_FILE_NAME" \
   "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" "$HEALTH_URL" "$KEEP_RELEASES" "$(basename "$TARBALL")" \
   "$DEPLOY_ENV_PROFILE" <<'REMOTE'
