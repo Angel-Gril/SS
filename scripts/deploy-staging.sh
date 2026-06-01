@@ -7,6 +7,7 @@ set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/ss-erp}"
 ENV_FILE="${ENV_FILE:-.env.staging}"
+DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
 SKIP_BUILD=false
 
 for arg in "$@"; do
@@ -38,6 +39,7 @@ echo "=== SS ERP Staging Deploy ==="
 echo "Branch: $BRANCH"
 echo "Dir: $DEPLOY_DIR"
 echo "Env: $ENV_FILE"
+echo "Env profile: ${DEPLOY_ENV_PROFILE:-skip}"
 echo ""
 
 # 加载 staging 环境变量，供 prisma migrate 和 next build 使用。
@@ -46,6 +48,11 @@ set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 set +a
+
+if [ -n "$DEPLOY_ENV_PROFILE" ]; then
+  echo "[0/7] Validating env profile: $DEPLOY_ENV_PROFILE"
+  node scripts/validate-env.mjs --profile "$DEPLOY_ENV_PROFILE" --env "$ENV_FILE"
+fi
 
 # 1. 拉取最新代码
 echo "[1/7] Pulling latest code..."

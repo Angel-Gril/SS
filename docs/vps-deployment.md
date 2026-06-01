@@ -90,13 +90,13 @@ Override them with `API_SERVICE`, `WORKER_SERVICE`, and `WEB_SERVICE` if needed.
 From the local repository:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root ./scripts/deploy.sh
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
 ```
 
 Deploy a specific commit:
 
 ```bash
-DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root ./scripts/deploy.sh 9538dc9
+DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh 9538dc9
 ```
 
 The script:
@@ -133,7 +133,7 @@ If the VPS is itself a git checkout and you want the lowest-friction update path
 
 ```bash
 cd /opt/ss-erp
-./scripts/deploy-staging.sh
+DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
 That path is good for small teams and fast iteration. The release/symlink path is better when you want immutable releases and one-command rollback.

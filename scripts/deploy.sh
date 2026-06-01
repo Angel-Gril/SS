@@ -18,6 +18,7 @@ set -euo pipefail
 #   WORKER_SERVICE=ss-erp-worker
 #   HEALTH_URL=http://127.0.0.1:3001/ready
 #   KEEP_RELEASES=5
+#   DEPLOY_ENV_PROFILE=cloud-r2   # optional: validate shared env before build
 #
 # Usage:
 #   DEPLOY_HOST=45.76.49.64 DEPLOY_USER=root ./scripts/deploy.sh [commit]
@@ -34,6 +35,7 @@ WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/ready}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
+DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 fail() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -60,7 +62,8 @@ scp "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
 log "Deploying release"
 ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- \
   "$COMMIT_HASH" "$RELEASE_DIR" "$RELEASES_DIR" "$CURRENT_LINK" "$SHARED_DIR" "$ENV_FILE_NAME" \
-  "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" "$HEALTH_URL" "$KEEP_RELEASES" "$(basename "$TARBALL")" <<'REMOTE'
+  "$API_SERVICE" "$WEB_SERVICE" "$WORKER_SERVICE" "$HEALTH_URL" "$KEEP_RELEASES" "$(basename "$TARBALL")" \
+  "$DEPLOY_ENV_PROFILE" <<'REMOTE'
 set -euo pipefail
 
 COMMIT_HASH="$1"
@@ -75,6 +78,7 @@ WORKER_SERVICE="$9"
 HEALTH_URL="${10}"
 KEEP_RELEASES="${11}"
 TARBALL="${12}"
+DEPLOY_ENV_PROFILE="${13}"
 
 echo "[deploy] Preparing $RELEASE_DIR"
 mkdir -p "$RELEASE_DIR" "$SHARED_DIR"
@@ -99,6 +103,11 @@ set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE_NAME"
 set +a
+
+if [ -n "$DEPLOY_ENV_PROFILE" ]; then
+  echo "[deploy] Validating env profile: $DEPLOY_ENV_PROFILE"
+  node scripts/validate-env.mjs --profile "$DEPLOY_ENV_PROFILE" --env "$ENV_FILE_NAME"
+fi
 
 echo "[deploy] Installing dependencies"
 pnpm install --frozen-lockfile

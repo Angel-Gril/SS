@@ -235,7 +235,7 @@ VPS 上如果是 git checkout 模式：
 
 ```bash
 cd /opt/ss-erp
-./scripts/deploy-staging.sh
+DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 ```
 
 如果已经切到 release 目录 + symlink 模式，不要再用 `deploy-staging.sh`，改用：
@@ -253,7 +253,7 @@ DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
 ```bash
 cd /opt/ss-erp
 git status --short
-DEPLOY_BRANCH=feature/saas-cloud-prep ./scripts/deploy-staging.sh
+DEPLOY_BRANCH=feature/saas-cloud-prep DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 ```
@@ -278,7 +278,7 @@ pnpm smoke:remote
 如果 VPS 已经切到 release/symlink 模式，不要在服务器上 `git pull` 部署，改为本地执行：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
 ```
 
 然后同样跑 `diagnose-runtime-env.sh`、`verify-vps-deploy.sh` 和 `smoke:remote`。

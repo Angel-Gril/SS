@@ -72,6 +72,12 @@ pnpm env:check -- --profile local --env .env
 
 优点是简单，适合单机小团队。
 
+本地离线版不要设置 `DEPLOY_ENV_PROFILE=cloud-r2`；如果要在部署前校验本地环境，单独先跑：
+
+```bash
+pnpm env:check -- --profile local --env .env
+```
+
 ### 方式 B: release 目录 + symlink 回滚
 
 如果你更看重回滚速度和版本隔离，使用：
