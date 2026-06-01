@@ -308,6 +308,14 @@ const R2_REQUIRED_KEYS = [
   'upload_oss_region',
 ];
 
+const R2_REQUIRED_LABELS: Record<string, string> = {
+  upload_oss_endpoint: 'Endpoint',
+  upload_oss_bucket: 'Bucket',
+  upload_oss_access_key_id: 'Access Key ID',
+  upload_oss_access_key_secret: 'Secret Access Key',
+  upload_oss_region: 'Region',
+};
+
 const UPLOAD_SECURITY_KEYS = [
   'upload_rate_limit_enabled',
   'upload_rate_limit_per_minute',
@@ -332,6 +340,8 @@ function UploadSettingsPanel({
 
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const filledR2Count = R2_REQUIRED_KEYS.filter((key) => (editing[key] || '').trim().length > 0).length;
+  const missingR2Keys = R2_REQUIRED_KEYS.filter((key) => (editing[key] || '').trim().length === 0);
+  const hasAllR2Required = missingR2Keys.length === 0;
   const isR2Ready = filledR2Count === R2_REQUIRED_KEYS.length && mode === 'oss';
 
   return (
@@ -353,9 +363,24 @@ function UploadSettingsPanel({
                 </p>
               </div>
               <Badge variant={isR2Ready ? 'default' : 'secondary'}>
-                {isR2Ready ? 'R2 配置已填写' : `已填写 ${filledR2Count}/${R2_REQUIRED_KEYS.length} 项`}
+                {isR2Ready ? 'R2 已启用' : `R2 必填项 ${filledR2Count}/${R2_REQUIRED_KEYS.length}`}
               </Badge>
             </div>
+            {!isR2Ready && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                {!hasAllR2Required ? (
+                  <>
+                    <span className="font-medium">还不能测试 R2 上传：</span>
+                    <span>缺少 {missingR2Keys.map((key) => R2_REQUIRED_LABELS[key] || key).join('、')}。</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium">R2 参数已填完，但尚未启用：</span>
+                    <span>请点击“保存 R2”，系统会自动切换为 R2 / OSS 模式。</span>
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="space-y-3">
@@ -408,12 +433,17 @@ function UploadSettingsPanel({
               <Button
                 size="sm"
                 onClick={() => saveConfigs(['upload_storage_backend', ...R2_REQUIRED_KEYS], 'R2 对象存储', { upload_storage_backend: 'oss' })}
-                disabled={isSavingR2}
+                disabled={isSavingR2 || !hasAllR2Required}
+                title={!hasAllR2Required ? '请先补齐 R2 必填项' : undefined}
               >
                 {isSavingR2 ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">保存 R2</span>
+                <span className="ml-1">{hasAllR2Required ? '保存 R2' : `缺少 ${missingR2Keys.length} 项`}</span>
               </Button>
             </div>
+
+            <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              Cloudflare R2 的 Endpoint 只是连接地址；Bucket 名称和 R2 API Token 生成的 Access Key ID / Secret Access Key 也必须填写。
+            </p>
 
             <div className="grid gap-3 md:grid-cols-2">
               <ConfigInput cfg={configs.upload_oss_endpoint} editing={editing} setValue={setValue} placeholder="https://<account-id>.r2.cloudflarestorage.com" />
