@@ -17,7 +17,21 @@ coverage/
 build/dist/
 build/runtime/
 build/tmp-*/
+build/extensions/
+build/*.png
+build/*.tar
+build/*.tar.gz
+build/ss-erp-*.zip
 build-resources/*.zip
+extensions/*.7z
+extensions/*.zip
+
+# Local QA screenshots and scratch notes
+ss-erp-login.png
+ss-erp-setup.png
+docs/extension-enhancement-plan.md
+docs/ozon-premium-data-plan.md
+extensions/ss-erp/debug-extension.md
 
 # Local environment and secrets
 .env
