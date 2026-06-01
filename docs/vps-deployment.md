@@ -47,6 +47,24 @@ Optional pre-deploy database backup:
 DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg RUN_DB_BACKUP=true DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
 ```
 
+Before using `DEPLOY_ENV_PROFILE=cloud-r2`, the server env must already contain R2 values. On the VPS:
+
+```bash
+cd /opt/ss-erp/app
+export OSS_ENDPOINT='https://<account-id>.r2.cloudflarestorage.com'
+export OSS_BUCKET='ss-erp-assets'
+export OSS_ACCESS_KEY_ID='...'
+export OSS_ACCESS_KEY_SECRET='...'
+export OSS_REGION='auto'
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/configure-cloud-r2-env.sh
+```
+
+If the current server version does not have this script yet, copy it first:
+
+```bash
+scp -i ~/.ssh/ss_erp_vultr_sg scripts/configure-cloud-r2-env.sh root@45.76.49.64:/opt/ss-erp/app/scripts/
+```
+
 After deploying:
 
 ```bash

@@ -180,6 +180,24 @@ OSS_ACCESS_KEY_SECRET=...
 OSS_REGION=auto
 ```
 
+可以用仓库脚本安全写入 VPS env（不会打印密钥，会自动备份旧 `.env.staging`）：
+
+```bash
+cd /opt/ss-erp/app
+export OSS_ENDPOINT='https://<account-id>.r2.cloudflarestorage.com'
+export OSS_BUCKET='ss-erp-assets'
+export OSS_ACCESS_KEY_ID='...'
+export OSS_ACCESS_KEY_SECRET='...'
+export OSS_REGION='auto'
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/configure-cloud-r2-env.sh
+```
+
+如果当前服务器旧版本没有这个脚本，先从本地复制：
+
+```powershell
+scp -i $env:USERPROFILE\.ssh\ss_erp_vultr_sg scripts/configure-cloud-r2-env.sh root@45.76.49.64:/opt/ss-erp/app/scripts/
+```
+
 然后重启 API、Worker、Web：
 
 ```bash

@@ -153,6 +153,39 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 
 如果结果里 `runtimeMode:"local"` 且 `runtimeImageUpload:"local"`，优先检查 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss` 是否已进入当前 API 进程。
 
+### 配置 R2 / OSS 环境变量
+
+不要把 R2 密钥提交到 Git。当前 `/opt/ss-erp/app` 模式可以在 VPS 上这样写入 `.env.staging`：
+
+```bash
+cd /opt/ss-erp/app
+export OSS_ENDPOINT='https://<account-id>.r2.cloudflarestorage.com'
+export OSS_BUCKET='ss-erp-assets'
+export OSS_ACCESS_KEY_ID='...'
+export OSS_ACCESS_KEY_SECRET='...'
+export OSS_REGION='auto'
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/configure-cloud-r2-env.sh
+```
+
+脚本会先生成 `.env.staging.bak.<timestamp>`，再写入：
+
+- `RUNTIME_MODE=cloud`
+- `NEXT_PUBLIC_RUNTIME_MODE=cloud`
+- `IMAGE_STORAGE_BACKEND=oss`
+- `OSS_ENDPOINT`
+- `OSS_BUCKET`
+- `OSS_ACCESS_KEY_ID`
+- `OSS_ACCESS_KEY_SECRET`
+- `OSS_REGION`
+
+旧版本如果没有 `configure-cloud-r2-env.sh`，先从本地复制脚本到服务器再执行，或手动把上述 key 写入 `.env.staging`：
+
+```bash
+scp -i ~/.ssh/ss_erp_vultr_sg scripts/configure-cloud-r2-env.sh root@45.76.49.64:/opt/ss-erp/app/scripts/
+```
+
+写完后必须重启 API、Worker、Web，才会进入当前进程环境。
+
 排查顺序：
 
 1. 确认运行中的 API 进程能读到 `IMAGE_STORAGE_BACKEND=oss`
