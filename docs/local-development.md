@@ -26,6 +26,35 @@ pnpm dev
 
 ## 本地验收
 
+推荐先跑统一入口：
+
+```bash
+pnpm preflight
+```
+
+默认会串行执行：
+
+- `pnpm --filter server typecheck`
+- `pnpm --filter web typecheck`
+- `pnpm --filter server test`
+- `pnpm verify:extension`
+
+如果要把公网服务器也纳入验收：
+
+```bash
+pnpm preflight --remote --remote-core
+```
+
+如果这次发布涉及 R2/OSS 上传链路，再加：
+
+```bash
+pnpm preflight --remote --remote-core --remote-oss
+```
+
+`--remote-oss` 目前必须等线上 runtime 返回 `cloud` 且上传结果为 `backend:"oss"` 才算通过。
+
+底层命令仍可单独运行，便于定位具体失败点：
+
 ```bash
 pnpm --filter server typecheck
 pnpm --filter web typecheck
@@ -39,11 +68,11 @@ pnpm verify:extension
 
 | 场景 | 在哪里跑 | 命令 | 通过标准 |
 | --- | --- | --- | --- |
-| 代码健康 | 本地 | `pnpm --filter server typecheck && pnpm --filter web typecheck && pnpm --filter server test` | 无类型错误，测试全绿 |
+| 代码健康 | 本地 | `pnpm preflight` | 类型检查、后端测试、扩展静态验收均通过 |
 | 扩展静态验收 | 本地 | `pnpm verify:extension` | manifest、JS 语法、cloud/local adapter 检查通过 |
 | 公网基础功能 | 本地 | `pnpm smoke:remote` | `/ready` 的 DB/Redis 为 `ok`，公开页面可访问，未登录后台接口被拒绝 |
-| 公网登录后只读接口 | 本地 | `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=any pnpm smoke:remote` | 临时用户可登录，核心只读 API 正常返回 |
-| R2/OSS 上传 | 本地 | `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote` | 返回 `runtimeImageUpload:"oss"` 且上传结果 `backend:"oss"` |
+| 公网登录后只读接口 | 本地 | `pnpm preflight --remote-core` | 临时用户可登录，核心只读 API 正常返回 |
+| R2/OSS 上传 | 本地 | `pnpm preflight --remote-oss` | 返回 `runtimeImageUpload:"oss"` 且上传结果 `backend:"oss"` |
 | VPS 部署层 | VPS | `DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh` | systemd、Nginx、端口、防火墙、备份状态、Prisma migration、`/ready` 均通过 |
 | 数据库备份 | VPS | `. /etc/ss-erp-backup.env && bash scripts/backup-db.sh` | 生成 `ss_erp_*.sql.gz` 和 `backup-status.json` |
 | 恢复演练 | VPS | `. /etc/ss-erp-backup.env && bash scripts/verify-backup-restore.sh` | 临时库恢复成功并自动清理 |
