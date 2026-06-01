@@ -139,6 +139,16 @@ $env:SMOKE_USER_TOKEN='<user-token>'
 pnpm --filter server smoke:remote
 ```
 
+如果可以 SSH 到 VPS，推荐直接在服务器上生成 2 小时临时 token，避免把真实密码写进本地命令历史：
+
+```bash
+cd /opt/ss-erp/app/apps/server
+SMOKE_ENV_FILE=../../.env.staging node scripts/create-smoke-token.mjs --role USER
+SMOKE_ENV_FILE=../../.env.staging node scripts/create-smoke-token.mjs --role ADMIN
+```
+
+脚本会选择最早的 active 用户；`--role ADMIN` 默认选择超管。输出 JSON 里的 `token` 填到本地 `SMOKE_USER_TOKEN` 或 `SMOKE_ADMIN_TOKEN`。
+
 通过标准是 `authenticated core read endpoints respond` 检查 17 个只读接口均通过。这个只能证明服务器主体 API 正常，不能替代登录、注册、短信验证码验收。
 
 如果使用统一入口，也可以先设置 `$env:SMOKE_USER_TOKEN`，再跑：
@@ -274,6 +284,8 @@ upload_oss_access_key_id=...
 upload_oss_access_key_secret=...
 upload_oss_region=auto
 ```
+
+只填 R2 Endpoint 不会切换上传链路；Bucket、Access Key ID、Secret Access Key 也必须填写。保存后先在“接口与集成”页面点 OSS 测试，再跑 `SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm --filter server smoke:remote`。
 
 如果选择用环境变量兜底，再在 VPS 上确认：
 

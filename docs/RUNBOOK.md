@@ -215,6 +215,16 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 SMOKE_USER_TOKEN=<user-token> SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
 ```
 
+有 SSH 权限时可以直接在 VPS 生成短期 smoke token：
+
+```bash
+cd /opt/ss-erp/app/apps/server
+SMOKE_ENV_FILE=../../.env.staging node scripts/create-smoke-token.mjs --role USER
+SMOKE_ENV_FILE=../../.env.staging node scripts/create-smoke-token.mjs --role ADMIN
+```
+
+输出 JSON 不会打印密码；把 `token` 复制到本地 `SMOKE_USER_TOKEN` / `SMOKE_ADMIN_TOKEN` 即可。默认 TTL 为 7200 秒，可用 `--ttl-seconds 600` 缩短。
+
 预期上传检查返回 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 为 `http://localhost:3001/uploads/...`，说明 R2 还没有被当前 API 实际使用，需要检查后台 `upload_*`、env 兜底配置或服务版本。
 
 如果结果里 `runtimeMode:"local"` 且 `runtimeImageUpload:"local"`，优先检查 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss` 是否已进入当前 API 进程。
@@ -233,6 +243,8 @@ upload_oss_region=auto
 ```
 
 保存后到"接口与集成"页面点 OSS 测试。通过后再跑 `SMOKE_USER_TOKEN=<user-token> SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote`。
+
+只填 `upload_oss_endpoint` 不够。R2 上传链路必须同时有 `upload_oss_bucket`、`upload_oss_access_key_id`、`upload_oss_access_key_secret`，且 `upload_storage_backend=oss`。如果 backend 仍是 `env`，系统会回退到 VPS `.env.staging`，当前 env 兜底可能仍是 `IMAGE_STORAGE_BACKEND=ozon-cdn`。
 
 环境变量仍可作为部署级兜底：
 

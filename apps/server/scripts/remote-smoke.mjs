@@ -175,11 +175,15 @@ function ossRuntimeHint(runtimeBody) {
   return [
     `runtime=${JSON.stringify({ mode: data.mode || null, capabilities })}`,
     'expected runtime mode/capability: mode="cloud", capabilities.imageUpload="oss"',
-    'check the running VPS process, not only the bucket console:',
+    'first check super admin settings: System Settings -> Upload and object storage',
+    'required admin config: upload_storage_backend=oss, upload_oss_endpoint, upload_oss_bucket, upload_oss_access_key_id, upload_oss_access_key_secret, upload_oss_region=auto',
+    'bucket console alone is not enough; the API only switches to OSS after upload_* is complete',
+    'env is only fallback when admin upload_* config is absent or incomplete:',
+    '  RUNTIME_MODE=cloud IMAGE_STORAGE_BACKEND=oss OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_REGION',
+    'then check the running VPS process:',
     '  pnpm env:check -- --profile cloud-r2 --env .env.staging',
     `  DEPLOY_DIR=${deployDir} ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh`,
     'if systemd points to another directory, set SMOKE_VPS_DEPLOY_DIR accordingly',
-    'required server env: RUNTIME_MODE=cloud, IMAGE_STORAGE_BACKEND=oss, OSS_ENDPOINT, OSS_BUCKET, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_REGION',
     'after fixing env, restart: sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web',
   ].join(' | ');
 }
