@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getRuntimeConfig, getRuntimeMode, requiresAuthChallenges } from '../adapters/runtime-config.js';
+import { getRuntimeConfig, getRuntimeConfigForStorage, getRuntimeMode, requiresAuthChallenges } from '../adapters/runtime-config.js';
 
 describe('runtime config', () => {
   afterEach(() => {
@@ -68,5 +68,41 @@ describe('runtime config', () => {
       ossFallbackToCdn: false,
       localBaseUrl: 'https://app.example.com',
     });
+  });
+
+  it('lets SystemConfig upload settings override env image storage for uploads', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('IMAGE_STORAGE_BACKEND', 'ozon-cdn');
+
+    vi.doMock('../config/system-config-schema.js', () => ({
+      getConfig: async (key: string) => {
+        const values: Record<string, string> = {
+          upload_storage_backend: 'oss',
+          upload_oss_endpoint: 'https://r2.example.com',
+          upload_oss_bucket: 'assets',
+          upload_oss_access_key_id: 'ak',
+          upload_oss_access_key_secret: 'sk',
+          upload_oss_region: 'auto',
+          upload_oss_cdn_domain: '',
+          upload_ozon_cdn_relay_url: '',
+          upload_local_base_url: '',
+        };
+        return values[key] ?? '';
+      },
+    }));
+
+    const config = await getRuntimeConfigForStorage();
+
+    expect(config.source).toBe('system-config');
+    expect(config.imageStorage).toBe('oss');
+    expect(config.oss).toMatchObject({
+      endpoint: 'https://r2.example.com',
+      bucket: 'assets',
+      accessKeyId: 'ak',
+      accessKeySecret: 'sk',
+      region: 'auto',
+    });
+
+    vi.doUnmock('../config/system-config-schema.js');
   });
 });

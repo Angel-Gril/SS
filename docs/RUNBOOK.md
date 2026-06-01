@@ -75,7 +75,7 @@ cd /opt/ss-erp/app
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash scripts/verify-deploy-readiness.sh
 ```
 
-如果它提示 `IMAGE_STORAGE_BACKEND expected oss` 或 `OSS_* is required`，先配置 R2 env，不要直接部署。
+如果它提示 `IMAGE_STORAGE_BACKEND expected oss` 或 `OSS_* is required`，说明 env 兜底未配置。新版本也可以改用超管后台的 `upload_*` 配置驱动图片上传。
 
 如果输出指向 `/opt/ss-erp` 且目录里有 `.git`，才使用 git checkout 模式：
 
@@ -155,8 +155,24 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 注意区分两类“R2 设置”：
 
 - `backup_remote_*` 是数据库备份的远程存储，只影响 `backup-db.sh` 和 `backup-status.json`。
-- `IMAGE_STORAGE_BACKEND=oss` 与 `OSS_*` 是图片/附件上传运行时配置，读的是 VPS `.env.staging` 和 systemd 进程环境，不是后台页面里的备份表单。
-- 所以即使超管后台里能看到 R2 Endpoint，只要 VPS 进程还没加载 `IMAGE_STORAGE_BACKEND=oss`，上传 smoke 仍会返回 `local` 或 `ozon-cdn`。
+- `upload_storage_backend` 与 `upload_oss_*` 是图片/附件上传的后台配置，优先级高于 env。
+- `IMAGE_STORAGE_BACKEND=oss` 与 `OSS_*` 是图片/附件上传的部署级兜底配置。
+- 所以只在备份设置里填 `backup_remote_*` 不会切换图片上传；图片上传必须填 `upload_*` 或 env `OSS_*`。
+
+当前 `/opt/ss-erp/app` app-dir 模式下，先看实际进程环境：
+
+```bash
+cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+```
+
+如果输出是：
+
+- `RUNTIME_MODE=cloud`
+- `IMAGE_STORAGE_BACKEND expected oss, got ozon-cdn`
+- `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION is empty`
+
+说明线上代码可以已经是最新，但 env 兜底未切到 R2。新版本优先在超管后台填写 `upload_storage_backend=oss` 和 `upload_oss_*`；如果使用 env 兜底，再把 `OSS_*` 写入 VPS `.env.staging` 并重启服务。
 
 如果要检查三个域名是否按最新规则隔离：
 
@@ -166,7 +182,7 @@ SMOKE_EXPECT_DOMAIN_SPLIT=true pnpm smoke:remote
 
 它会验证根域 `/login` 和 `/register` 跳转到用户域，用户域 `/admin*` 被挡回用户登录，管理员域只允许 `/admin/*`。
 
-如果要验证 OSS 上传是否真的生效，优先看 VPS 当前进程环境，而不是后台备份表单：
+如果要验证 OSS 上传是否真的生效，优先看超管后台"系统设置 → 上传与对象存储"里的 `upload_*`，同时确认它不是只填了备份 `backup_remote_*`。使用 env 兜底时再看 VPS 当前进程环境：
 
 ```bash
 cd /opt/ss-erp/app
@@ -179,7 +195,7 @@ bash scripts/diagnose-runtime-env.sh
 - `IMAGE_STORAGE_BACKEND=oss`
 - `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION` 都为非空
 
-如果这里仍然是 `ozon-cdn` 或空值，说明图片上传还没切到 R2 / OSS。不要只看后台里的 `backup_remote_*`。
+如果这里仍然是 `ozon-cdn` 或空值，但后台 `upload_*` 已填，新版本仍应该优先使用后台配置；这时看 `/api/extension/runtime` 的 `source` 和 `capabilities.imageUpload`。
 
 需要连带检查后台、备份状态和 OSS/R2 时，提供管理员手机号密码，或管理员 token/cookie：
 
@@ -193,11 +209,32 @@ SMOKE_ADMIN_PHONE=13800000000 SMOKE_ADMIN_PASSWORD=... SMOKE_EXPECT_OSS=true SMO
 SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
 ```
 
-预期上传检查返回 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 为 `http://localhost:3001/uploads/...`，说明 R2 还没有被当前 API 进程实际使用，需要检查 `.env.staging` / systemd `EnvironmentFile` / 服务重启。
+如果验证码服务尚未接入，临时用户注册会被短信验证码挡住。此时先用已有用户生成或复制一个 `SMOKE_USER_TOKEN`，再跑：
+
+```bash
+SMOKE_USER_TOKEN=<user-token> SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
+```
+
+预期上传检查返回 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 为 `http://localhost:3001/uploads/...`，说明 R2 还没有被当前 API 实际使用，需要检查后台 `upload_*`、env 兜底配置或服务版本。
 
 如果结果里 `runtimeMode:"local"` 且 `runtimeImageUpload:"local"`，优先检查 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss` 是否已进入当前 API 进程。
 
-### 配置 R2 / OSS 环境变量
+### 配置 R2 / OSS
+
+推荐入口：超管后台 → 系统设置 → 上传与对象存储。
+
+```env
+upload_storage_backend=oss
+upload_oss_endpoint=https://<account-id>.r2.cloudflarestorage.com
+upload_oss_bucket=ss-erp-assets
+upload_oss_access_key_id=...
+upload_oss_access_key_secret=...
+upload_oss_region=auto
+```
+
+保存后到"接口与集成"页面点 OSS 测试。通过后再跑 `SMOKE_USER_TOKEN=<user-token> SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote`。
+
+环境变量仍可作为部署级兜底：
 
 不要把 R2 密钥提交到 Git。当前 `/opt/ss-erp/app` 模式可以在 VPS 上这样写入 `.env.staging`：
 
@@ -232,10 +269,11 @@ scp -i ~/.ssh/ss_erp_vultr_sg scripts/configure-cloud-r2-env.sh root@45.76.49.64
 
 排查顺序：
 
-1. 确认运行中的 API 进程能读到 `IMAGE_STORAGE_BACKEND=oss`
-2. 确认 `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION` 都是非空
-3. 确认服务重启的是当前线上实例，而不是旧目录或旧容器
-4. 再跑一次 `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote`
+1. 确认后台 `upload_storage_backend=oss`
+2. 确认 `upload_oss_endpoint / upload_oss_bucket / upload_oss_access_key_id / upload_oss_access_key_secret / upload_oss_region` 都已填写
+3. 打开"接口与集成"页面点 OSS 测试
+4. 如果使用 env 兜底，再确认运行中的 API 进程能读到 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*`
+5. 再跑一次 `SMOKE_USER_TOKEN=<user-token> SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote`
 
 服务器上可先跑只读诊断，不会输出密钥；它会检查 `.env.staging`、systemd `EnvironmentFile`、API/Worker 进程实际环境变量：
 
@@ -336,6 +374,12 @@ pnpm smoke:remote
 
 ```bash
 SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
+```
+
+如果验证码服务尚未接入，临时用户注册会被挡住。改用已有用户 token：
+
+```bash
+SMOKE_USER_TOKEN=<user-token> SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
 ```
 
 通过标准：
@@ -530,9 +574,9 @@ Worker 每天执行一次，清理对象：
 - worker 只有在队列堆积、同步任务拖慢接口时才拆出去
 - 不需要 1Panel 或 K8s 才能把这套系统跑好
 
-## 环境变量：图片存储
+## 图片存储配置
 
-云端模式下图片存储通过环境变量配置（不存数据库）：
+云端模式下图片存储优先通过超管后台 `upload_*` 配置。环境变量用于部署级兜底：
 
 ```env
 IMAGE_STORAGE_BACKEND=oss

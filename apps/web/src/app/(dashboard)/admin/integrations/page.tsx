@@ -52,11 +52,10 @@ export default function AdminIntegrationsPage() {
           <Plug className="h-6 w-6" /> 接口与集成
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          第三方服务接入状态。所有配置通过环境变量管理，修改后需重启服务生效。
+          第三方服务接入状态。上传对象存储优先读取超管设置里的 upload_* 配置，其它服务主要读取环境变量。
         </p>
         <p className="text-xs text-muted-foreground mt-2">
-          这里显示的是运行态检查，不是所有后台表单配置。数据库备份的远程存储使用 backup_remote_*，
-          图片和附件上传使用 VPS .env.staging 里的 IMAGE_STORAGE_BACKEND 和 OSS_*。
+          数据库备份的远程存储使用 backup_remote_*；图片和附件上传使用 upload_*，未填写时才回退到 VPS 环境变量。
         </p>
       </div>
 
@@ -103,7 +102,7 @@ function IntegrationRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm">{check.label}</span>
-          <Badge variant="outline" className="text-[10px]">环境变量</Badge>
+          <Badge variant="outline" className="text-[10px]">{check.source === 'db' ? '后台配置' : '环境变量'}</Badge>
           {!check.configured && <Badge variant="secondary" className="text-[10px]">未配置</Badge>}
         </div>
         {check.detail && <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>}

@@ -54,30 +54,36 @@ if (includeRemote) {
 }
 
 if (includeRemoteCore) {
+  const remoteCoreEnv = {
+    SMOKE_EXPECT_RUNTIME: 'any',
+    SMOKE_EXPECT_UPLOAD: 'false',
+    SMOKE_EXPECT_OSS: 'false',
+  };
+  if (!process.env.SMOKE_USER_TOKEN && !process.env.SMOKE_USER_COOKIE) {
+    remoteCoreEnv.SMOKE_CREATE_TEMP_USER = 'true';
+  }
   steps.push({
     name: 'remote authenticated core smoke',
     command: 'pnpm',
     args: ['smoke:remote'],
-    env: {
-      SMOKE_CREATE_TEMP_USER: 'true',
-      SMOKE_EXPECT_RUNTIME: 'any',
-      SMOKE_EXPECT_UPLOAD: 'false',
-      SMOKE_EXPECT_OSS: 'false',
-    },
+    env: remoteCoreEnv,
   });
 }
 
 if (includeRemoteOss) {
+  const remoteOssEnv = {
+    SMOKE_EXPECT_UPLOAD: 'true',
+    SMOKE_EXPECT_OSS: 'true',
+    SMOKE_EXPECT_RUNTIME: undefined,
+  };
+  if (!process.env.SMOKE_USER_TOKEN && !process.env.SMOKE_USER_COOKIE) {
+    remoteOssEnv.SMOKE_CREATE_TEMP_USER = 'true';
+  }
   steps.push({
     name: 'remote R2/OSS upload smoke',
     command: 'pnpm',
     args: ['smoke:remote'],
-    env: {
-      SMOKE_CREATE_TEMP_USER: 'true',
-      SMOKE_EXPECT_UPLOAD: 'true',
-      SMOKE_EXPECT_OSS: 'true',
-      SMOKE_EXPECT_RUNTIME: undefined,
-    },
+    env: remoteOssEnv,
   });
 }
 

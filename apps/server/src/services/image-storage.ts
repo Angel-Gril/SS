@@ -416,7 +416,7 @@ export class FallbackStorageBackend implements ImageStorageBackend {
 
 // ─── 工厂：根据环境变量获取当前存储后端 ───
 
-import { getRuntimeConfig } from '../adapters/runtime-config.js';
+import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 
 export type StorageBackendType = 'ozon-cdn' | 'oss' | 'local';
 
@@ -438,20 +438,20 @@ async function buildOzonCdnBackend(shopId: string): Promise<OzonCdnBackend> {
   if (!auth) {
     throw new Error('目标店铺未同步 OZON CDN cookie/company_id，请通过浏览器扩展同步登录态');
   }
-  const rc = getRuntimeConfig();
+  const rc = await getRuntimeConfigForStorage();
   return new OzonCdnBackend({ ...auth, relayUrl: rc.ozonCdnRelayUrl });
 }
 
-function buildOssBackend(): OssBackend {
-  const rc = getRuntimeConfig();
+async function buildOssBackend(): Promise<OssBackend> {
+  const rc = await getRuntimeConfigForStorage();
   if (!rc.oss) {
-    throw new Error('OSS 未配置，请设置环境变量 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET');
+    throw new Error('OSS 未配置，请在超管设置中填写上传 R2/OSS 配置，或设置环境变量 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET');
   }
   return new OssBackend(rc.oss);
 }
 
 export async function getStorageBackend(shopId?: string): Promise<ImageStorageBackend> {
-  const rc = getRuntimeConfig();
+  const rc = await getRuntimeConfigForStorage();
   const backendType = rc.imageStorage;
 
   switch (backendType) {
@@ -462,7 +462,7 @@ export async function getStorageBackend(shopId?: string): Promise<ImageStorageBa
       return await buildOzonCdnBackend(shopId);
     }
     case 'oss': {
-      const ossBackend = buildOssBackend();
+      const ossBackend = await buildOssBackend();
       if (shopId && rc.ossFallbackToCdn) {
         try {
           const cdnFallback = await buildOzonCdnBackend(shopId);

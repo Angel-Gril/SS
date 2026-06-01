@@ -42,7 +42,7 @@ DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/sserp
 REDIS_URL=redis://127.0.0.1:6379
 ```
 
-如果以后本地版也要把图片放到 R2 / S3，再单独把 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 补上。不要把本地版默认做成云端依赖，否则离线价值会下降。
+如果以后本地版也要把图片放到 R2 / S3，可以在超管后台设置 `upload_storage_backend=oss` 和 `upload_oss_*`，也可以用 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 做部署级兜底。不要把本地版默认做成云端依赖，否则离线价值会下降。
 
 改完环境文件后先校验：
 
@@ -51,6 +51,43 @@ pnpm env:check -- --profile local --env .env
 ```
 
 如果本地版临时切到 R2 / S3 测试，不要用 `local` profile 验收，改用云端上传 smoke 单独验证对象存储链路。
+
+## 本地版和云端版的验收差异
+
+本地版验收看“能离线跑完整主体功能”，云端版验收看“外部服务是否真正接入”。两者不要共用同一套通过标准。
+
+| 项目 | 本地版通过标准 | 云端版通过标准 |
+| --- | --- | --- |
+| 运行模式 | `RUNTIME_MODE=local` | `RUNTIME_MODE=cloud` |
+| 图片上传 | `IMAGE_STORAGE_BACKEND=local` 或单独接一个对象存储 | 后台 `upload_storage_backend=oss` 或 env `IMAGE_STORAGE_BACKEND=oss`，且上传返回 `backend:"oss"` |
+| 登录验证 | 不依赖 Turnstile，短信可用 `console` | Turnstile 和短信服务都必须真实可用 |
+| 扩展包 | `pnpm build:extension:local` | `pnpm build:extension:cloud` |
+| 备份 | 本地备份必须可恢复，远程备份可选 | 本地备份 + 远程备份建议都验收 |
+
+如果客户环境没有短信服务，本地版不要强行开启云端验证码；否则会出现登录/注册流程被验证码挡住，主体 ERP 功能无法验收的问题。
+
+## 本地版推荐测试流程
+
+```bash
+pnpm env:check -- --profile local --env .env
+pnpm preflight
+pnpm build:extension:local
+pnpm verify:extension
+```
+
+如果本地服务器已经通过 Nginx 暴露到局域网或公网，再跑：
+
+```bash
+SMOKE_EXPECT_RUNTIME=local SMOKE_BASE_URL=http://127.0.0.1:3001 pnpm --filter server smoke:live
+```
+
+本地版测试重点：
+
+- 登录、采集、商品、订单、财务等主体页面可用
+- 扩展能连接到本地 API
+- 图片落到本地 `uploads/` 或配置的单一对象存储
+- 数据库备份文件能生成并恢复到临时库
+- 更新后可回滚到上一版本
 
 ## 适用边界
 

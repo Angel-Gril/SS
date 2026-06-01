@@ -1,5 +1,6 @@
 import { registerTimer } from '../lib/worker-registry.js';
 import { getConfig } from '../config/system-config-schema.js';
+import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 
 const TICK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 每天运行一次
 let timer: NodeJS.Timeout | null = null;
@@ -43,12 +44,12 @@ async function cleanupOssPrefix(
   // 动态导入 AWS SDK（避免启动时加载）
   const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
 
-  // 从环境变量读取 OSS 配置
-  const endpoint = process.env.OSS_ENDPOINT;
-  const bucket = process.env.OSS_BUCKET;
-  const accessKeyId = process.env.OSS_ACCESS_KEY_ID;
-  const accessKeySecret = process.env.OSS_ACCESS_KEY_SECRET;
-  const region = process.env.OSS_REGION || 'auto';
+  const runtime = await getRuntimeConfigForStorage();
+  const endpoint = runtime.oss?.endpoint;
+  const bucket = runtime.oss?.bucket;
+  const accessKeyId = runtime.oss?.accessKeyId;
+  const accessKeySecret = runtime.oss?.accessKeySecret;
+  const region = runtime.oss?.region || 'auto';
 
   if (!endpoint || !bucket || !accessKeyId || !accessKeySecret) {
     console.log('[oss-cleanup] OSS 未配置，跳过清理');

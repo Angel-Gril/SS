@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getConfig } from '../config/system-config-schema.js';
+import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 
 /**
  * CDN 代理路由
@@ -125,10 +126,11 @@ export async function cdnProxyRoutes(app: FastifyInstance) {
     }
 
     try {
-      const endpoint = process.env.R2_INTERNAL_URL || process.env.OSS_ENDPOINT;
-      const bucket = process.env.OSS_BUCKET;
-      const accessKeyId = process.env.OSS_ACCESS_KEY_ID;
-      const secretAccessKey = process.env.OSS_ACCESS_KEY_SECRET;
+      const runtime = await getRuntimeConfigForStorage();
+      const endpoint = process.env.R2_INTERNAL_URL || runtime.oss?.endpoint;
+      const bucket = runtime.oss?.bucket;
+      const accessKeyId = runtime.oss?.accessKeyId;
+      const secretAccessKey = runtime.oss?.accessKeySecret;
 
       if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
         return reply.status(500).send({ code: 0, msg: 'OSS/R2 credentials not configured' });
@@ -138,7 +140,7 @@ export async function cdnProxyRoutes(app: FastifyInstance) {
       const normalizedEndpoint = endpoint.startsWith('http') ? endpoint : `https://${endpoint}`;
       const client = new S3Client({
         endpoint: normalizedEndpoint,
-        region: process.env.OSS_REGION || 'auto',
+        region: runtime.oss?.region || 'auto',
         credentials: { accessKeyId, secretAccessKey },
         forcePathStyle: normalizedEndpoint.includes('localhost') || normalizedEndpoint.includes('minio'),
       });

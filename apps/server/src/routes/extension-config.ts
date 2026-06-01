@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { getRuntimeConfig } from '../adapters/runtime-config.js';
+import { getRuntimeConfig, getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 
@@ -13,11 +13,12 @@ const syncCookieSchema = z.object({
 export async function extensionConfigRoutes(app: FastifyInstance) {
   // 扩展启动时调用，获取当前运行模式和能力
   app.get('/runtime', { preHandler: [authenticate] }, async (_request, reply) => {
-    const config = getRuntimeConfig();
+    const config = await getRuntimeConfigForStorage();
     return reply.send({
       code: 1,
       data: {
         mode: config.mode,
+        source: config.source,
         capabilities: {
           imageUpload: config.imageStorage,
           sync: config.extensionSync,

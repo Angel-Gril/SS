@@ -12,7 +12,7 @@
 | 2 | 公网核心功能 | `pnpm preflight --remote-core` |
 | 3 | 域名隔离 | `SMOKE_EXPECT_DOMAIN_SPLIT=true pnpm smoke:remote` |
 | 4 | 备份链路 | `backup-status.json`、`backup-db.sh`、`verify-backup-restore.sh` |
-| 5 | 图片上传 R2 / OSS | VPS 进程环境 `IMAGE_STORAGE_BACKEND=oss` + `OSS_*` |
+| 5 | 图片上传 R2 / OSS | 超管后台 `upload_storage_backend=oss` + `upload_oss_*`，或 VPS env `IMAGE_STORAGE_BACKEND=oss` + `OSS_*` |
 
 ## 目标
 
@@ -45,9 +45,9 @@ pnpm env:check -- --profile cloud-r2 --env .env.staging
 
 先区分两类配置，不要混着看：
 
-- `backup_remote_*` 是数据库备份的远程存储配置，主要在超管后台的备份设置里编辑。
-- `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 是图片 / 附件上传链路的运行时配置，读的是 VPS `.env.staging`，不是后台表单。
-- 所以你在后台填了 R2 Bucket 或 Endpoint，只能影响备份，不会自动把线上图片上传切到 R2。
+- `backup_remote_*` 是数据库备份的远程存储配置。
+- `upload_storage_backend` 和 `upload_oss_*` 是图片 / 附件上传链路的后台配置。
+- 如果 `upload_*` 没填，服务才回退到 VPS `.env.staging` 里的 `IMAGE_STORAGE_BACKEND` 和 `OSS_*`。
 
 本地离线版：
 
@@ -108,6 +108,71 @@ pnpm verify:extension
 | 数据库备份 | VPS | `. /etc/ss-erp-backup.env && bash scripts/backup-db.sh` | 生成 `ss_erp_*.sql.gz` 和 `backup-status.json` |
 | 恢复演练 | VPS | `. /etc/ss-erp-backup.env && bash scripts/verify-backup-restore.sh` | 临时库恢复成功并自动清理 |
 
+## 当前服务器验收流程
+
+服务器功能性测试分三层，不要把结果混在一起：
+
+1. 公网基础功能和域名隔离：
+
+```powershell
+$env:SMOKE_BASE_URL='https://ss-erp.com'
+$env:SMOKE_MARKETING_BASE_URL='https://ss-erp.com'
+$env:SMOKE_WEB_BASE_URL='https://app.ss-erp.com'
+$env:SMOKE_ADMIN_WEB_BASE_URL='https://admin.ss-erp.com'
+$env:SMOKE_EXPECT_DOMAIN_SPLIT='true'
+pnpm --filter server smoke:remote
+```
+
+通过标准：
+
+- `/ready` 的 DB / Redis 都是 `ok`
+- `ss-erp.com`、`app.ss-erp.com`、`admin.ss-erp.com` 的跳转隔离正确
+- 未登录访问后台、备份、扩展 runtime 等接口会返回 401/403
+- Next.js chunk 不再硬编码 localhost
+
+2. 验证码未接入前的登录后只读接口：
+
+云端登录和注册现在会被 Turnstile / SMS 挡住。如果验证码服务还没接入，不要用“临时用户注册”证明主体 API 是否可用；改用已有测试用户 token 或手动生成一个 smoke token，再跑：
+
+```powershell
+$env:SMOKE_USER_TOKEN='<user-token>'
+pnpm --filter server smoke:remote
+```
+
+通过标准是 `authenticated core read endpoints respond` 检查 17 个只读接口均通过。这个只能证明服务器主体 API 正常，不能替代登录、注册、短信验证码验收。
+
+如果使用统一入口，也可以先设置 `$env:SMOKE_USER_TOKEN`，再跑：
+
+```powershell
+pnpm preflight --remote-core
+```
+
+有 `SMOKE_USER_TOKEN` 或 `SMOKE_USER_COOKIE` 时，preflight 会复用已有会话，不会再创建临时用户。
+
+3. R2/OSS 图片上传链路：
+
+这项必须单独验收。只有同时满足下面两条才算通过：
+
+- `/api/extension/runtime` 返回 `mode:"cloud"` 且 `capabilities.imageUpload:"oss"`
+- `/api/images/upload-base64` 返回 `backend:"oss"`
+
+如果当前验证码未接入，`SMOKE_CREATE_TEMP_USER=true` 可能会因为短信验证码失败而卡住。此时使用已有用户 token：
+
+```powershell
+$env:SMOKE_USER_TOKEN='<user-token>'
+$env:SMOKE_EXPECT_UPLOAD='true'
+$env:SMOKE_EXPECT_OSS='true'
+pnpm --filter server smoke:remote
+```
+
+如果返回 `imageUpload:"ozon-cdn"`，说明代码和域名可以是最新的，但后台 `upload_*` 或 VPS env 仍没有让图片上传切到 OSS。
+
+当前线上仍是 `/opt/ss-erp/app` app-dir 模式。如果 smoke 的排查提示需要指定部署目录，可以设置：
+
+```powershell
+$env:SMOKE_VPS_DEPLOY_DIR='/opt/ss-erp/app'
+```
+
 ### 本地 smoke
 
 ```bash
@@ -130,7 +195,7 @@ pnpm --filter server smoke:live
 $env:SMOKE_EXPECT_OSS='true'
 ```
 
-并确保这些变量已经设置：
+并确保后台 `upload_storage_backend=oss` 和 `upload_oss_*` 已配置，或这些变量已经设置：
 
 - `IMAGE_STORAGE_BACKEND=oss`
 - `OSS_ENDPOINT`
@@ -182,7 +247,7 @@ $env:SMOKE_EXPECT_UPLOAD='true'
 pnpm smoke:remote
 ```
 
-预期返回里 `authenticated upload stores image in expected backend` 应为 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 仍是 `http://localhost:3001/uploads/...`，说明 R2 bucket 可能已创建，但生产 API 进程没有读到 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 环境变量，或者部署后尚未重启生效。
+预期返回里 `authenticated upload stores image in expected backend` 应为 `backend:"oss"`。如果返回 `backend:"local"` 或 URL 仍是 `http://localhost:3001/uploads/...`，说明 R2 bucket 可能已创建，但生产 API 没有读到后台 `upload_*` 或 env `OSS_*` 配置。
 
 如果同时看到 `runtimeMode:"local"` / `runtimeImageUpload:"local"`，说明运行态仍是本地模式，优先修正 `RUNTIME_MODE=cloud` 和 `IMAGE_STORAGE_BACKEND=oss`。
 
@@ -196,10 +261,21 @@ pnpm smoke:remote
 
 ```bash
 pnpm env:check -- --profile cloud-r2 --env .env.staging
-DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
-如果线上 R2 已经在 Cloudflare 控制台创建，但 smoke 仍返回 `imageUpload:"local"`，不要继续改前端或扩展。优先在 VPS 上确认：
+如果线上 R2 已经在 Cloudflare 控制台创建，但 smoke 仍返回 `imageUpload:"local"` 或 `imageUpload:"ozon-cdn"`，不要继续改前端或扩展。优先确认超管后台：
+
+```env
+upload_storage_backend=oss
+upload_oss_endpoint=...
+upload_oss_bucket=...
+upload_oss_access_key_id=...
+upload_oss_access_key_secret=...
+upload_oss_region=auto
+```
+
+如果选择用环境变量兜底，再在 VPS 上确认：
 
 ```env
 RUNTIME_MODE=cloud

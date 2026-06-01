@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
-import { getRuntimeConfig } from '../adapters/runtime-config.js';
+import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 
 interface ConfiguredCheck {
   key: string;
@@ -22,7 +22,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireSuperAdmin);
 
   app.get('/integrations', async (_request, reply) => {
-    const rc = getRuntimeConfig();
+    const rc = await getRuntimeConfigForStorage();
     const ossConfigured = rc.oss !== null;
     const ozonRelay = !!rc.ozonCdnRelayUrl;
 
@@ -57,14 +57,14 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         key: 'oss',
         label: 'OSS 对象存储',
         configured: ossConfigured,
-        source: 'env',
-        detail: ossConfigured ? `bucket=${rc.oss!.bucket}` : undefined,
+        source: rc.source === 'system-config' ? 'db' : 'env',
+        detail: ossConfigured ? `backend=${rc.imageStorage}, bucket=${rc.oss!.bucket}` : `backend=${rc.imageStorage}`,
       },
       {
         key: 'ozon_cdn_relay',
         label: 'OZON CDN 中转',
         configured: ozonRelay,
-        source: 'env',
+        source: rc.source === 'system-config' ? 'db' : 'env',
         detail: '可选，国内直连失败时用',
       },
     ];
@@ -162,10 +162,10 @@ export async function systemStatusRoutes(app: FastifyInstance) {
 
   app.post('/test/oss', async (_request, reply) => {
     try {
-      const rc = getRuntimeConfig();
-      if (!rc.oss) return reply.send({ code: 0, msg: 'OSS 未配置（需设置 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET）' });
+      const storageConfig = await getRuntimeConfigForStorage();
+      if (!storageConfig.oss) return reply.send({ code: 0, msg: 'OSS 未配置（需在超管设置中填写上传 R2/OSS 配置，或设置 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET）' });
 
-      const { endpoint, bucket, accessKeyId, accessKeySecret, region } = rc.oss;
+      const { endpoint, bucket, accessKeyId, accessKeySecret, region } = storageConfig.oss;
       const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3');
       const fullEndpoint = endpoint.startsWith('http') ? endpoint : `https://${endpoint}`;
       const client = new S3Client({

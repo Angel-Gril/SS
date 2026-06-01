@@ -32,7 +32,7 @@ interface BackupStatus {
 
 const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
-  upload: '上传安全',
+  upload: '上传与对象存储',
   retention: '数据保留',
   backup: '备份策略',
   maintenance: '维护模式',
@@ -127,7 +127,7 @@ export default function AdminSettingsPage() {
             <SettingsIcon className="h-6 w-6" /> 系统设置
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            功能开关、随机化参数等通用配置。接口集成/安全/运维状态已拆分到独立页面。
+            功能开关、上传对象存储、备份策略和保留时间等通用配置。接口连通性在"接口与集成"页面测试。
           </p>
         </div>
         <Button variant="outline" onClick={initDefaults}>初始化默认配置</Button>
@@ -193,10 +193,16 @@ export default function AdminSettingsPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-5">
+                  {group === 'upload' && (
+                    <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
+                      图片和附件上传优先读取这里的 `upload_*` 配置；未填写时才回退到 VPS 环境变量。
+                      云端 R2 测试请选择 `upload_storage_backend=oss`，并填写 R2 endpoint、bucket 和访问密钥。
+                    </p>
+                  )}
                   {group === 'backup' && (
                     <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
                       这里配置的是数据库备份的远程存储（`backup_remote_*`），不影响图片/附件上传。
-                      图片上传的 R2 / OSS 仍读取 VPS `.env.staging` 里的 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*`。
+                      图片/附件对象存储请在"上传与对象存储"里配置 `upload_*`。
                     </p>
                   )}
                   {items.map((cfg) => (
