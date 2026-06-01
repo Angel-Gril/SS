@@ -143,7 +143,7 @@ export default function AdminSettingsPage() {
             <SettingsIcon className="h-6 w-6" /> 系统设置
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            功能开关、上传对象存储、备份策略和保留时间等通用配置。接口连通性在"接口与集成"页面测试。
+            常用配置默认展开，高级运维参数默认收起。当前 R2 上传测试只需要填写"上传与对象存储"里的 R2 必填项。
           </p>
         </div>
         <Button variant="outline" onClick={initDefaults}>初始化默认配置</Button>
@@ -216,13 +216,19 @@ export default function AdminSettingsPage() {
               </Card>
             )}
               <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
-                    <span className="text-sm text-muted-foreground">{items.length} 项</span>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-5">
+                <details open={group === 'maintenance'} className="group">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
+                      <span className="text-sm text-muted-foreground">{items.length} 项</span>
+                      {group !== 'maintenance' && (
+                        <span className="text-xs text-muted-foreground">低频配置，点开后修改</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+                    <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+                  </summary>
+                <CardContent className="space-y-5 border-t pt-5">
                   {group === 'backup' && (
                     <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
                       这里配置的是数据库备份的远程存储（`backup_remote_*`），不影响图片/附件上传。
@@ -276,6 +282,7 @@ export default function AdminSettingsPage() {
                   </div>
                 ))}
               </CardContent>
+                </details>
             </Card>
           </div>
         );
@@ -324,7 +331,8 @@ function UploadSettingsPanel({
   const isSavingSecurity = savingKey === 'group:上传保护';
 
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
-  const hasR2Fields = R2_REQUIRED_KEYS.some((key) => (editing[key] || '').trim().length > 0);
+  const filledR2Count = R2_REQUIRED_KEYS.filter((key) => (editing[key] || '').trim().length > 0).length;
+  const isR2Ready = filledR2Count === R2_REQUIRED_KEYS.length && mode === 'oss';
 
   return (
     <div className="space-y-4">
@@ -332,17 +340,31 @@ function UploadSettingsPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <Badge variant="secondary">上传与对象存储</Badge>
-            <span className="text-sm text-muted-foreground">图片、附件、R2 和上传保护</span>
+            <span className="text-sm text-muted-foreground">当前重点：R2 图片/附件上传测试</span>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          <section className="rounded-md border bg-muted/20 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-sm font-medium">R2 测试状态</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  这里是图片和公告附件上传用的对象存储，不是数据库备份。填完必填项后，到"接口与集成"页面点 OSS 测试。
+                </p>
+              </div>
+              <Badge variant={isR2Ready ? 'default' : 'secondary'}>
+                {isR2Ready ? 'R2 配置已填写' : `已填写 ${filledR2Count}/${R2_REQUIRED_KEYS.length} 项`}
+              </Badge>
+            </div>
+          </section>
+
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-medium">存储模式</h3>
                 <p className="text-xs text-muted-foreground">
                   当前：{mode === 'oss' ? 'R2/OSS' : mode === 'ozon-cdn' ? 'OZON CDN' : mode === 'local' ? '本地存储' : '跟随服务器环境'}
-                  {mode === 'env' && hasR2Fields ? '，已检测到部分 R2 配置' : ''}
+                  {mode === 'env' && filledR2Count > 0 ? '，已检测到部分 R2 配置但还没切换到 R2' : ''}
                 </p>
               </div>
               <Button
@@ -358,8 +380,8 @@ function UploadSettingsPanel({
             <div className="grid gap-2 md:grid-cols-4">
               {[
                 { value: 'oss', label: 'R2 / OSS', desc: '云端推荐' },
-                { value: 'env', label: '服务器环境', desc: '读取 .env' },
-                { value: 'ozon-cdn', label: 'OZON CDN', desc: '店铺 cookie' },
+                { value: 'env', label: '服务器环境', desc: '高级：读取 .env' },
+                { value: 'ozon-cdn', label: 'OZON CDN', desc: '备用旧链路' },
                 { value: 'local', label: '本地存储', desc: '离线版' },
               ].map((option) => (
                 <button
@@ -380,8 +402,8 @@ function UploadSettingsPanel({
           <section className="space-y-3 rounded-md border p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-medium">R2 对象存储</h3>
-                <p className="text-xs text-muted-foreground">填完这 5 项即可测试 OSS 连接；保存会自动切换为 R2/OSS 模式。</p>
+                <h3 className="text-sm font-medium">R2 必填项</h3>
+                <p className="text-xs text-muted-foreground">只填下面 5 项即可开始测试上传；保存会自动切换为 R2/OSS 模式。</p>
               </div>
               <Button
                 size="sm"
@@ -402,7 +424,10 @@ function UploadSettingsPanel({
             </div>
 
             <details className="rounded-md border border-dashed px-3 py-2">
-              <summary className="cursor-pointer text-sm font-medium">高级可选项</summary>
+              <summary className="cursor-pointer text-sm font-medium">高级可选：自定义访问域名 / 旧 CDN / 本地 Base URL</summary>
+              <p className="mt-2 text-xs text-muted-foreground">
+                R2 基础测试不需要改这里。只有要换公开访问域名、保留 OZON CDN 中转或部署离线版时才需要填写。
+              </p>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <ConfigInput cfg={configs.upload_oss_cdn_domain} editing={editing} setValue={setValue} placeholder="自定义 CDN 域名，可留空" />
                 <ConfigInput cfg={configs.upload_ozon_cdn_relay_url} editing={editing} setValue={setValue} placeholder="OZON CDN 中转，可留空" />
@@ -411,30 +436,30 @@ function UploadSettingsPanel({
             </details>
           </section>
 
-          <section className="space-y-3 rounded-md border p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium">上传保护</h3>
-                <p className="text-xs text-muted-foreground">频率限制、每日配额和 /cdn 防盗链。</p>
+          <details className="rounded-md border p-4">
+            <summary className="cursor-pointer text-sm font-medium">上传保护（默认值够用，测试 R2 可先不改）</summary>
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">频率限制、每日配额和 /cdn 防盗链。用户量上来或被刷上传时再重点调整。</p>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(UPLOAD_SECURITY_KEYS, '上传保护')}
+                  disabled={isSavingSecurity}
+                >
+                  {isSavingSecurity ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">保存保护</span>
+                </Button>
               </div>
-              <Button
-                size="sm"
-                onClick={() => saveConfigs(UPLOAD_SECURITY_KEYS, '上传保护')}
-                disabled={isSavingSecurity}
-              >
-                {isSavingSecurity ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">保存保护</span>
-              </Button>
-            </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <ConfigToggle cfg={configs.upload_rate_limit_enabled} editing={editing} setValue={setValue} />
-              <ConfigInput cfg={configs.upload_rate_limit_per_minute} editing={editing} setValue={setValue} />
-              <ConfigToggle cfg={configs.upload_daily_quota_enabled} editing={editing} setValue={setValue} />
-              <ConfigInput cfg={configs.upload_daily_quota_mb} editing={editing} setValue={setValue} />
-              <ConfigToggle cfg={configs.upload_referer_check_enabled} editing={editing} setValue={setValue} />
+              <div className="grid gap-4 md:grid-cols-2">
+                <ConfigToggle cfg={configs.upload_rate_limit_enabled} editing={editing} setValue={setValue} />
+                <ConfigInput cfg={configs.upload_rate_limit_per_minute} editing={editing} setValue={setValue} />
+                <ConfigToggle cfg={configs.upload_daily_quota_enabled} editing={editing} setValue={setValue} />
+                <ConfigInput cfg={configs.upload_daily_quota_mb} editing={editing} setValue={setValue} />
+                <ConfigToggle cfg={configs.upload_referer_check_enabled} editing={editing} setValue={setValue} />
+              </div>
             </div>
-          </section>
+          </details>
         </CardContent>
       </Card>
     </div>
