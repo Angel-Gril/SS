@@ -72,9 +72,7 @@ ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -p 3000 -H 127.0.0
 Install the release-mode unit templates when switching to the symlink deployment:
 
 ```bash
-sudo cp deploy/systemd-release/ss-erp-*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web
+DEPLOY_BASE=/opt/ss-erp bash scripts/install-release-systemd.sh --restart
 ```
 
 The older `deploy/systemd/*.service` templates are for a direct git checkout at `/opt/ss-erp` and read `/opt/ss-erp/.env.staging`. Do not use those templates with `/opt/ss-erp/current`, otherwise the running process can keep reading the wrong env file and stay in local mode even after R2 values are added.

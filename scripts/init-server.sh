@@ -33,7 +33,8 @@ Directories:
 
 Next steps:
   1. Put production env values in $SHARED_DIR/$ENV_FILE_NAME
-  2. Install release-mode systemd units from deploy/systemd-release/
+  2. Install release-mode systemd units:
+     DEPLOY_BASE=$DEPLOY_BASE bash scripts/install-release-systemd.sh --restart
   3. Ensure systemd uses EnvironmentFile=$SHARED_DIR/$ENV_FILE_NAME
   4. Deploy with:
      DEPLOY_HOST=<server> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
