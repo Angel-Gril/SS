@@ -70,6 +70,13 @@ function userAuthHeaders(extra = {}) {
   };
 }
 
+function expectCodeOne(label, out) {
+  if (out.status !== 200 || out.body?.code !== 1) {
+    throw new Error(`${label} failed: ${out.status} ${JSON.stringify(out.body)}`);
+  }
+  return out.body.data;
+}
+
 async function resolveAdminCredentials() {
   if (adminToken || adminCookie) return;
   if (!adminPhone || !adminPassword) return;
@@ -295,6 +302,166 @@ push('admin endpoints require auth', async () => {
     throw new Error(`unexpected auth behavior: ${integrations.status}, ${backup.status}, ${extension.status}`);
   }
   return { integrations: integrations.status, backup: backup.status, extension: extension.status };
+});
+
+push('authenticated core read endpoints respond', async () => {
+  if (!createTempUser && !userPhone && !userPassword && !userToken && !userCookie && !expectUpload) {
+    return { skipped: 'no user credentials requested' };
+  }
+
+  await resolveUserCredentials();
+  if (!userToken && !userCookie) {
+    return { skipped: 'no user credentials provided' };
+  }
+
+  const endpoints = [
+    {
+      label: 'user/me',
+      path: '/api/user/me',
+      validate: (data) => {
+        if (!data?.id || !data?.role) throw new Error('missing user identity');
+        return { role: data.role, shopCount: data.shopCount ?? null };
+      },
+    },
+    {
+      label: 'user/shops',
+      path: '/api/user/shops',
+      validate: (data) => {
+        if (!Array.isArray(data)) throw new Error('expected array');
+        return { count: data.length };
+      },
+    },
+    {
+      label: 'shops',
+      path: '/api/shops',
+      validate: (data) => {
+        if (!Array.isArray(data)) throw new Error('expected array');
+        return { count: data.length };
+      },
+    },
+    {
+      label: 'dashboard/stats',
+      path: '/api/dashboard/stats',
+      validate: (data) => {
+        if (typeof data?.shopCount !== 'number') throw new Error('missing shopCount');
+        return { shopCount: data.shopCount, orderCount: data.orderCount ?? null };
+      },
+    },
+    {
+      label: 'dashboard/order-trend',
+      path: '/api/dashboard/order-trend?days=7',
+      validate: (data) => {
+        if (!Array.isArray(data)) throw new Error('expected array');
+        return { days: data.length };
+      },
+    },
+    {
+      label: 'orders',
+      path: '/api/orders?limit=1',
+      validate: (data) => {
+        if (typeof data?.total !== 'number' || !Array.isArray(data?.rows)) throw new Error('expected paginated rows');
+        return { total: data.total, rows: data.rows.length };
+      },
+    },
+    {
+      label: 'orders/stats',
+      path: '/api/orders/stats',
+      validate: (data) => {
+        if (typeof data?.total !== 'number') throw new Error('missing total');
+        return { total: data.total, todayOrders: data.todayOrders ?? null };
+      },
+    },
+    {
+      label: 'orders/pipeline',
+      path: '/api/orders/pipeline',
+      validate: (data) => {
+        if (!Array.isArray(data?.stages)) throw new Error('missing stages');
+        return { stages: data.stages.length };
+      },
+    },
+    {
+      label: 'collect',
+      path: '/api/collect?limit=1',
+      validate: (data) => {
+        if (typeof data?.total !== 'number' || !Array.isArray(data?.rows)) throw new Error('expected paginated rows');
+        return { total: data.total, rows: data.rows.length };
+      },
+    },
+    {
+      label: 'collect/randomize-config',
+      path: '/api/collect/randomize-config',
+      validate: (data) => ({ enabled: !!data?.enabled }),
+    },
+    {
+      label: 'notifications/unread-count',
+      path: '/api/notifications/unread-count',
+      validate: (data) => {
+        if (typeof data?.count !== 'number') throw new Error('missing count');
+        return { count: data.count };
+      },
+    },
+    {
+      label: 'announcements/unread-count',
+      path: '/api/announcements/unread-count',
+      validate: (data) => {
+        if (typeof data?.count !== 'number') throw new Error('missing count');
+        return { count: data.count };
+      },
+    },
+    {
+      label: 'announcements/list',
+      path: '/api/announcements/list',
+      validate: (data) => {
+        if (!Array.isArray(data)) throw new Error('expected array');
+        return { count: data.length };
+      },
+    },
+    {
+      label: 'finance/balance',
+      path: '/api/finance/balance',
+      validate: (data) => {
+        if (typeof data?.balance !== 'string') throw new Error('missing balance');
+        return { balance: data.balance };
+      },
+    },
+    {
+      label: 'finance/stats',
+      path: '/api/finance/stats',
+      validate: (data) => {
+        if (typeof data?.balance !== 'string') throw new Error('missing balance');
+        return { balance: data.balance, totalConsume: data.totalConsume ?? null };
+      },
+    },
+    {
+      label: 'account/transactions',
+      path: '/api/account/transactions?limit=1',
+      validate: (data) => {
+        if (typeof data?.total !== 'number' || !Array.isArray(data?.rows)) throw new Error('expected paginated rows');
+        return { total: data.total, rows: data.rows.length };
+      },
+    },
+    {
+      label: 'account/fee-templates',
+      path: '/api/account/fee-templates',
+      validate: (data) => {
+        if (!Array.isArray(data)) throw new Error('expected array');
+        return { count: data.length };
+      },
+    },
+  ];
+
+  const result = {};
+  for (const endpoint of endpoints) {
+    const out = await request(`${apiBaseUrl}${endpoint.path}`, { headers: userAuthHeaders() });
+    const data = expectCodeOne(endpoint.label, out);
+    try {
+      result[endpoint.label] = endpoint.validate(data);
+    } catch (error) {
+      throw new Error(`${endpoint.label} invalid response: ${error?.message || String(error)} ${JSON.stringify(data)}`);
+    }
+  }
+
+  return { checked: endpoints.length, userMode: tempUserMode, endpoints: result };
 });
 
 push('admin auth can inspect integrations and backup status', async () => {
