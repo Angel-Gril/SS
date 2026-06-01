@@ -2,6 +2,18 @@
 
 这份文档只讲一件事：在自己的机器上把 SS ERP 跑起来、测通、再推送。
 
+## 验收优先级
+
+先按下面顺序看结果，避免把配置入口看串：
+
+| 顺序 | 验收项 | 看什么 |
+| --- | --- | --- |
+| 1 | 代码健康 | `pnpm preflight` |
+| 2 | 公网核心功能 | `pnpm preflight --remote-core` |
+| 3 | 域名隔离 | `SMOKE_EXPECT_DOMAIN_SPLIT=true pnpm smoke:remote` |
+| 4 | 备份链路 | `backup-status.json`、`backup-db.sh`、`verify-backup-restore.sh` |
+| 5 | 图片上传 R2 / OSS | VPS 进程环境 `IMAGE_STORAGE_BACKEND=oss` + `OSS_*` |
+
 ## 目标
 
 - Web、API、数据库、Redis 都能本地跑

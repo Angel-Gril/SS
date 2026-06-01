@@ -2,6 +2,20 @@
 
 这份方案适合用户不多、网络条件不稳定、或者需要在单机上长期运行的场景。
 
+## 本地版定位
+
+本地版不是云端 SaaS 的缩水版，而是一个可以离线交付、单机长期跑的稳定包。默认目标如下：
+
+| 项目 | 本地版默认 |
+| --- | --- |
+| 部署形态 | 单台 VPS 或本地服务器 |
+| 图片存储 | 本地磁盘，必要时再接单一对象存储 |
+| 短信 | `console` 或本地替代实现 |
+| 登录验证 | 不依赖 Turnstile / 第三方验证码 |
+| 更新方式 | Git checkout 或 release/symlink 二选一 |
+| 备份 | 本地备份优先，远程备份可选 |
+| 扩展包 | `build:extension:local` |
+
 ## 建议架构
 
 - Web、API、Worker、PostgreSQL、Redis 全部放在同一台 VPS 或本地服务器
@@ -57,6 +71,7 @@ pnpm env:check -- --profile local --env .env
 - 能本地备份和恢复
 - 能通过 `deploy-staging.sh` 或 release symlink 更新
 - 能在没有云短信、没有 R2、没有外部 CDN 时继续测试核心链路
+- 能在单机上长期稳定运行，不依赖额外运维面板
 
 ## 更新方式
 
