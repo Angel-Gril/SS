@@ -96,13 +96,14 @@ function IntegrationRow({
 }) {
   const Icon = check.configured ? CheckCircle2 : XCircle;
   const color = check.configured ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground';
+  const sourceLabel = check.source === 'db' ? '后台配置' : check.source === 'mixed' ? '后台+环境' : '环境变量';
   return (
     <div className="flex items-center gap-3 py-2 border-b last:border-b-0">
       <Icon className={`h-5 w-5 shrink-0 ${color}`} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm">{check.label}</span>
-          <Badge variant="outline" className="text-[10px]">{check.source === 'db' ? '后台配置' : '环境变量'}</Badge>
+          <Badge variant="outline" className="text-[10px]">{sourceLabel}</Badge>
           {!check.configured && <Badge variant="secondary" className="text-[10px]">未配置</Badge>}
         </div>
         {check.detail && <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>}

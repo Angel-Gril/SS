@@ -3,6 +3,7 @@ import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
+import { getConfig } from '../config/system-config-schema.js';
 
 interface ConfiguredCheck {
   key: string;
@@ -17,14 +18,66 @@ function envIsSet(name: string): boolean {
   return typeof v === 'string' && v.trim().length > 0;
 }
 
+async function getUploadOssDiagnostic() {
+  const [
+    backend,
+    endpoint,
+    bucket,
+    accessKeyId,
+    accessKeySecret,
+    region,
+  ] = await Promise.all([
+    getConfig('upload_storage_backend'),
+    getConfig('upload_oss_endpoint'),
+    getConfig('upload_oss_bucket'),
+    getConfig('upload_oss_access_key_id'),
+    getConfig('upload_oss_access_key_secret'),
+    getConfig('upload_oss_region'),
+  ]);
+
+  const required = [
+    { key: 'upload_oss_endpoint', label: 'Endpoint', value: endpoint },
+    { key: 'upload_oss_bucket', label: 'Bucket', value: bucket },
+    { key: 'upload_oss_access_key_id', label: 'Access Key ID', value: accessKeyId },
+    { key: 'upload_oss_access_key_secret', label: 'Secret Access Key', value: accessKeySecret },
+    { key: 'upload_oss_region', label: 'Region', value: region },
+  ];
+  const missing = required.filter((item) => !String(item.value || '').trim()).map((item) => item.label);
+  const filled = required.filter((item) => String(item.value || '').trim()).map((item) => item.label);
+  const hasAnyDbUploadConfig = backend !== 'env' || filled.length > 0;
+
+  return {
+    backend,
+    missing,
+    filled,
+    hasAnyDbUploadConfig,
+    hasCompleteDbOssConfig: missing.length === 0,
+  };
+}
+
 export async function systemStatusRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireSuperAdmin);
 
   app.get('/integrations', async (_request, reply) => {
     const rc = await getRuntimeConfigForStorage();
+    const uploadOss = await getUploadOssDiagnostic();
     const ossConfigured = rc.oss !== null;
     const ozonRelay = !!rc.ozonCdnRelayUrl;
+    const ossSource = rc.source === 'system-config'
+      ? 'db'
+      : uploadOss.hasAnyDbUploadConfig
+        ? 'mixed'
+        : 'env';
+    const ossDetail = ossConfigured
+      ? `backend=${rc.imageStorage}, bucket=${rc.oss!.bucket}`
+      : [
+          `backend=${rc.imageStorage}`,
+          uploadOss.hasAnyDbUploadConfig
+            ? `后台 R2 未完整：缺少 ${uploadOss.missing.join('、') || '无'}`
+            : '后台 upload_* 未配置',
+          '需在系统设置保存完整 R2 必填项后才会切换为 oss',
+        ].join('；');
 
     const checks: ConfiguredCheck[] = [
       {
@@ -57,8 +110,8 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         key: 'oss',
         label: 'OSS 对象存储',
         configured: ossConfigured,
-        source: rc.source === 'system-config' ? 'db' : 'env',
-        detail: ossConfigured ? `backend=${rc.imageStorage}, bucket=${rc.oss!.bucket}` : `backend=${rc.imageStorage}`,
+        source: ossSource,
+        detail: ossDetail,
       },
       {
         key: 'ozon_cdn_relay',
@@ -163,7 +216,13 @@ export async function systemStatusRoutes(app: FastifyInstance) {
   app.post('/test/oss', async (_request, reply) => {
     try {
       const storageConfig = await getRuntimeConfigForStorage();
-      if (!storageConfig.oss) return reply.send({ code: 0, msg: 'OSS 未配置（需在超管设置中填写上传 R2/OSS 配置，或设置 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET）' });
+      if (!storageConfig.oss) {
+        const uploadOss = await getUploadOssDiagnostic();
+        const missing = uploadOss.hasAnyDbUploadConfig && uploadOss.missing.length > 0
+          ? `，当前后台缺少：${uploadOss.missing.join('、')}`
+          : '';
+        return reply.send({ code: 0, msg: `OSS 未配置${missing}。请在超管设置 -> 上传与对象存储中补齐 R2 必填项并保存，或设置 OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET` });
+      }
 
       const { endpoint, bucket, accessKeyId, accessKeySecret, region } = storageConfig.oss;
       const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3');
