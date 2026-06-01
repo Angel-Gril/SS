@@ -166,6 +166,21 @@ SMOKE_EXPECT_DOMAIN_SPLIT=true pnpm smoke:remote
 
 它会验证根域 `/login` 和 `/register` 跳转到用户域，用户域 `/admin*` 被挡回用户登录，管理员域只允许 `/admin/*`。
 
+如果要验证 OSS 上传是否真的生效，优先看 VPS 当前进程环境，而不是后台备份表单：
+
+```bash
+cd /opt/ss-erp/app
+bash scripts/diagnose-runtime-env.sh
+```
+
+预期里必须同时看到：
+
+- `RUNTIME_MODE=cloud`
+- `IMAGE_STORAGE_BACKEND=oss`
+- `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION` 都为非空
+
+如果这里仍然是 `ozon-cdn` 或空值，说明图片上传还没切到 R2 / OSS。不要只看后台里的 `backup_remote_*`。
+
 需要连带检查后台、备份状态和 OSS/R2 时，提供管理员手机号密码，或管理员 token/cookie：
 
 ```bash
