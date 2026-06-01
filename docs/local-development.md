@@ -33,6 +33,20 @@ pnpm --filter server test
 pnpm verify:extension
 ```
 
+建议把这四条当成开发提交前的最低门槛。涉及部署、存储、备份或扩展发布时，再按下面的测试矩阵补跑对应项。
+
+## 测试矩阵
+
+| 场景 | 在哪里跑 | 命令 | 通过标准 |
+| --- | --- | --- | --- |
+| 代码健康 | 本地 | `pnpm --filter server typecheck && pnpm --filter web typecheck && pnpm --filter server test` | 无类型错误，测试全绿 |
+| 扩展静态验收 | 本地 | `pnpm verify:extension` | manifest、JS 语法、cloud/local adapter 检查通过 |
+| 公网基础功能 | 本地 | `pnpm smoke:remote` | `/ready` 的 DB/Redis 为 `ok`，公开页面可访问，未登录后台接口被拒绝 |
+| R2/OSS 上传 | 本地 | `SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote` | 返回 `runtimeImageUpload:"oss"` 且上传结果 `backend:"oss"` |
+| VPS 部署层 | VPS | `DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh` | systemd、Nginx、端口、防火墙、备份状态、Prisma migration、`/ready` 均通过 |
+| 数据库备份 | VPS | `. /etc/ss-erp-backup.env && bash scripts/backup-db.sh` | 生成 `ss_erp_*.sql.gz` 和 `backup-status.json` |
+| 恢复演练 | VPS | `. /etc/ss-erp-backup.env && bash scripts/verify-backup-restore.sh` | 临时库恢复成功并自动清理 |
+
 ### 本地 smoke
 
 ```bash
@@ -110,6 +124,26 @@ pnpm smoke:remote
 DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
+如果线上 R2 已经在 Cloudflare 控制台创建，但 smoke 仍返回 `imageUpload:"local"`，不要继续改前端或扩展。优先在 VPS 上确认：
+
+```env
+RUNTIME_MODE=cloud
+IMAGE_STORAGE_BACKEND=oss
+OSS_ENDPOINT=...
+OSS_BUCKET=...
+OSS_ACCESS_KEY_ID=...
+OSS_ACCESS_KEY_SECRET=...
+OSS_REGION=auto
+```
+
+然后重启 API、Worker、Web：
+
+```bash
+sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web
+```
+
+重启后再从本地跑一次 R2/OSS 上传 smoke。只有返回 `runtimeImageUpload:"oss"` 和 `backend:"oss"`，才算 R2 真正进入生产上传链路。
+
 ## 今天的更新推送
 
 最省事的流程是：
@@ -122,6 +156,21 @@ git push
 
 然后在 VPS 上用本文档后面的发布方式拉取并部署，再跑一次 smoke。
 
+VPS 上如果是 git checkout 模式：
+
+```bash
+cd /opt/ss-erp
+./scripts/deploy-staging.sh
+```
+
+如果已经切到 release 目录 + symlink 模式，不要再用 `deploy-staging.sh`，改用：
+
+```bash
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
+```
+
+两种方式二选一。`deploy-staging.sh` 适合当前小团队快速迭代；`deploy.sh` 适合需要版本隔离和快速回滚的线上阶段。
+
 ## 备份验证
 
 数据库备份脚本和恢复演练都只建议在 Linux / VPS / WSL 上跑。
@@ -133,3 +182,10 @@ bash scripts/verify-backup-restore.sh
 ```
 
 R2 / S3 兼容备份建议单独使用一个 bucket，不要和图片桶混用。
+
+推荐策略：
+
+- 本地 VPS 备份保留 7 天。
+- 远程 R2/S3 备份保留 30-90 天。
+- 每次重要发布前手动跑一次 `backup-db.sh`。
+- 每月至少跑一次 `verify-backup-restore.sh`，不要只确认“有备份文件”。
