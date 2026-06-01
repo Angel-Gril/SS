@@ -149,10 +149,13 @@ sudo systemctl restart ss-erp-worker ss-erp-api ss-erp-web
 最省事的流程是：
 
 ```bash
-git add .
+git status --short
+git add <本次需要提交的文件>
 git commit -m "..."
 git push
 ```
+
+不要用 `git add .`。仓库里经常会有截图、扩展压缩包、部署 tar 包等本地测试产物，误提交后会把发布历史弄脏。
 
 然后在 VPS 上用本文档后面的发布方式拉取并部署，再跑一次 smoke。
 
@@ -170,6 +173,43 @@ DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
 ```
 
 两种方式二选一。`deploy-staging.sh` 适合当前小团队快速迭代；`deploy.sh` 适合需要版本隔离和快速回滚的线上阶段。
+
+## GitHub 仓库部署测试
+
+如果 VPS 本身就是 GitHub checkout，日常发布可以按这个顺序测：
+
+```bash
+cd /opt/ss-erp
+git status --short
+DEPLOY_BRANCH=feature/saas-cloud-prep ./scripts/deploy-staging.sh
+DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
+DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
+```
+
+本地机器再跑：
+
+```bash
+pnpm smoke:remote
+```
+
+如果这次更新包含 R2/OSS、上传、CDN 代理、扩展上传链路，再补跑：
+
+```bash
+$env:SMOKE_CREATE_TEMP_USER='true'
+$env:SMOKE_EXPECT_UPLOAD='true'
+$env:SMOKE_EXPECT_OSS='true'
+pnpm smoke:remote
+```
+
+这条只有返回 `runtimeImageUpload:"oss"` 和上传结果 `backend:"oss"` 才算通过。
+
+如果 VPS 已经切到 release/symlink 模式，不要在服务器上 `git pull` 部署，改为本地执行：
+
+```bash
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> ./scripts/deploy.sh
+```
+
+然后同样跑 `diagnose-runtime-env.sh`、`verify-vps-deploy.sh` 和 `smoke:remote`。
 
 ## 备份验证
 
@@ -189,3 +229,38 @@ R2 / S3 兼容备份建议单独使用一个 bucket，不要和图片桶混用�
 - 远程 R2/S3 备份保留 30-90 天。
 - 每次重要发布前手动跑一次 `backup-db.sh`。
 - 每月至少跑一次 `verify-backup-restore.sh`，不要只确认“有备份文件”。
+
+发布前的最低备份测试：
+
+```bash
+source /etc/ss-erp-backup.env
+bash scripts/backup-db.sh
+bash scripts/verify-backup-restore.sh
+DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
+```
+
+`verify-vps-deploy.sh` 会检查 cron 是否包含 `backup-db.sh`、`backup-status.json` 是否可读、是否有恢复演练残留的临时库。它不是备份本身的替代品，只是确认备份链路处于可观测状态。
+
+## VPS 系统层优化验证
+
+现阶段不需要 1Panel，也不需要 K8s。VPS 优化先围绕可观测、可回滚、低暴露面做：
+
+- API 和 Web 只监听 `127.0.0.1:3001` / `127.0.0.1:3000`，公网只开放 `80/443`。
+- PostgreSQL 和 Redis 只允许本机访问。
+- UFW 默认拒绝入站，只允许 SSH、HTTP、HTTPS。
+- Nginx 反代启用 Cloudflare 真实 IP 还原和源站保护。
+- systemd 服务独立管理 `api`、`worker`、`web`。
+- 服务器至少配置 swap，避免 build 或图片处理时内存打满。
+- 日志和备份目录要有保留策略，避免磁盘被撑满。
+
+这些项目目前主要通过下面命令验证：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
+```
+
+如果迁移到 release/symlink：
+
+```bash
+DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
+```
