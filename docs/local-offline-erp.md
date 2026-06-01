@@ -30,6 +30,14 @@ REDIS_URL=redis://127.0.0.1:6379
 
 如果以后本地版也要把图片放到 R2 / S3，再单独把 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 补上。不要把本地版默认做成云端依赖，否则离线价值会下降。
 
+改完环境文件后先校验：
+
+```bash
+pnpm env:check -- --profile local --env .env
+```
+
+如果本地版临时切到 R2 / S3 测试，不要用 `local` profile 验收，改用云端上传 smoke 单独验证对象存储链路。
+
 ## 适用边界
 
 - 适合小规模用户

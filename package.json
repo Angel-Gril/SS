@@ -16,6 +16,7 @@
     "db:studio": "pnpm --filter server db:studio",
     "db:seed": "pnpm --filter server db:seed",
     "preflight": "node scripts/preflight.mjs",
+    "env:check": "node scripts/validate-env.mjs",
     "smoke:remote": "pnpm --filter server smoke:remote",
     "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",
     "build:extension:local": "node scripts/build-extension-package.mjs local",

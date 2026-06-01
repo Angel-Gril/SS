@@ -13,6 +13,7 @@
 
 ```bash
 pnpm install
+pnpm env:check -- --profile local --env .env
 pnpm --filter server db:migrate
 pnpm dev
 ```
@@ -23,6 +24,18 @@ pnpm dev
 - `REDIS_URL`
 - `JWT_SECRET`
 - `ENCRYPTION_KEY`
+
+云端 R2 环境文件可以先做静态校验，不会打印密钥：
+
+```bash
+pnpm env:check -- --profile cloud-r2 --env .env.staging
+```
+
+本地离线版：
+
+```bash
+pnpm env:check -- --profile local --env .env
+```
 
 ## 本地验收
 
@@ -151,6 +164,7 @@ pnpm smoke:remote
 服务器侧可以用只读脚本确认 `.env.staging`、systemd `EnvironmentFile`、API/Worker 进程实际环境变量是否一致：
 
 ```bash
+pnpm env:check -- --profile cloud-r2 --env .env.staging
 DEPLOY_DIR=/opt/ss-erp ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
