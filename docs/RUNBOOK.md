@@ -146,6 +146,26 @@ SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:l
 pnpm smoke:remote
 ```
 
+如果要验证图片 / 附件上传是否真的切到 R2 / OSS，再加：
+
+```bash
+SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm smoke:remote
+```
+
+注意区分两类“R2 设置”：
+
+- `backup_remote_*` 是数据库备份的远程存储，只影响 `backup-db.sh` 和 `backup-status.json`。
+- `IMAGE_STORAGE_BACKEND=oss` 与 `OSS_*` 是图片/附件上传运行时配置，读的是 VPS `.env.staging` 和 systemd 进程环境，不是后台页面里的备份表单。
+- 所以即使超管后台里能看到 R2 Endpoint，只要 VPS 进程还没加载 `IMAGE_STORAGE_BACKEND=oss`，上传 smoke 仍会返回 `local` 或 `ozon-cdn`。
+
+如果要检查三个域名是否按最新规则隔离：
+
+```bash
+SMOKE_EXPECT_DOMAIN_SPLIT=true pnpm smoke:remote
+```
+
+它会验证根域 `/login` 和 `/register` 跳转到用户域，用户域 `/admin*` 被挡回用户登录，管理员域只允许 `/admin/*`。
+
 需要连带检查后台、备份状态和 OSS/R2 时，提供管理员手机号密码，或管理员 token/cookie：
 
 ```bash

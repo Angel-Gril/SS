@@ -185,17 +185,23 @@ export default function AdminSettingsPage() {
                 </CardContent>
               </Card>
             )}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
-                  <span className="text-sm text-muted-foreground">{items.length} 项</span>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {items.map((cfg) => (
-                  <div key={cfg.key} className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0">
-                    <div className="flex items-start justify-between gap-3">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
+                    <span className="text-sm text-muted-foreground">{items.length} 项</span>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  {group === 'backup' && (
+                    <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
+                      这里配置的是数据库备份的远程存储（`backup_remote_*`），不影响图片/附件上传。
+                      图片上传的 R2 / OSS 仍读取 VPS `.env.staging` 里的 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*`。
+                    </p>
+                  )}
+                  {items.map((cfg) => (
+                    <div key={cfg.key} className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0">
+                      <div className="flex items-start justify-between gap-3">
                       <div className="flex-1">
                         <Label className="font-medium">{cfg.label || cfg.key}</Label>
                         <code className="ml-2 text-xs text-muted-foreground">{cfg.key}</code>

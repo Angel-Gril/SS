@@ -54,6 +54,10 @@ export default function AdminIntegrationsPage() {
         <p className="text-sm text-muted-foreground mt-1">
           第三方服务接入状态。所有配置通过环境变量管理，修改后需重启服务生效。
         </p>
+        <p className="text-xs text-muted-foreground mt-2">
+          这里显示的是运行态检查，不是所有后台表单配置。数据库备份的远程存储使用 backup_remote_*，
+          图片和附件上传使用 VPS .env.staging 里的 IMAGE_STORAGE_BACKEND 和 OSS_*。
+        </p>
       </div>
 
       <Card>

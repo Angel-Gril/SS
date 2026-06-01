@@ -31,6 +31,12 @@ pnpm dev
 pnpm env:check -- --profile cloud-r2 --env .env.staging
 ```
 
+先区分两类配置，不要混着看：
+
+- `backup_remote_*` 是数据库备份的远程存储配置，主要在超管后台的备份设置里编辑。
+- `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 是图片 / 附件上传链路的运行时配置，读的是 VPS `.env.staging`，不是后台表单。
+- 所以你在后台填了 R2 Bucket 或 Endpoint，只能影响备份，不会自动把线上图片上传切到 R2。
+
 本地离线版：
 
 ```bash
@@ -141,6 +147,19 @@ pnpm smoke:remote
 ```
 
 如果你已经从浏览器或接口拿到了 token，也可以用 `$env:SMOKE_ADMIN_TOKEN='...'` 代替手机号密码。
+
+如果要在发布后专门验证域名隔离是否生效，可以加：
+
+```bash
+$env:SMOKE_EXPECT_DOMAIN_SPLIT='true'
+pnpm smoke:remote
+```
+
+它会检查：
+
+- `ss-erp.com/login`、`ss-erp.com/register` 是否跳转到 `app.ss-erp.com`
+- `app.ss-erp.com/admin*` 是否跳转到用户登录页
+- `admin.ss-erp.com/`、`/login`、`/register` 是否跳转到 `admin.ss-erp.com/admin/login`
 
 如果只是要证明线上上传链路是否真的走 R2/OSS，可以创建临时用户并上传 1x1 测试图：
 

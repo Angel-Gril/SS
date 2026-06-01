@@ -27,6 +27,7 @@ const expectWebNoLocalFallback = process.env.SMOKE_EXPECT_WEB_NO_LOCAL_FALLBACK 
 const expectOss = process.env.SMOKE_EXPECT_OSS === 'true';
 const expectBackupStatus = process.env.SMOKE_EXPECT_BACKUP_STATUS === 'true';
 const expectAuthChallenges = process.env.SMOKE_EXPECT_AUTH_CHALLENGES === 'true';
+const expectDomainSplit = process.env.SMOKE_EXPECT_DOMAIN_SPLIT === 'true';
 let adminToken = process.env.SMOKE_ADMIN_TOKEN || '';
 let adminCookie = process.env.SMOKE_ADMIN_COOKIE || '';
 const adminPhone = process.env.SMOKE_ADMIN_PHONE || '';
@@ -243,6 +244,79 @@ push('public pages render', async () => {
       throw new Error(`${page.label} returned ${out.status}`);
     }
   }
+  return result;
+});
+
+push('domain routing isolates user and admin hosts', async () => {
+  if (!expectDomainSplit) {
+    return { skipped: 'SMOKE_EXPECT_DOMAIN_SPLIT not set' };
+  }
+
+  const cases = [
+    {
+      label: 'root login redirects to user app',
+      url: 'https://ss-erp.com/login',
+      locationPrefix: `${userWebBaseUrl}/login`,
+    },
+    {
+      label: 'root register redirects to user app',
+      url: 'https://ss-erp.com/register',
+      locationPrefix: `${userWebBaseUrl}/register`,
+    },
+    {
+      label: 'user root redirects to login',
+      url: `${userWebBaseUrl}/`,
+      locationPrefix: `${userWebBaseUrl}/login`,
+    },
+    {
+      label: 'user admin path redirects to login',
+      url: `${userWebBaseUrl}/admin`,
+      locationPrefix: `${userWebBaseUrl}/login`,
+    },
+    {
+      label: 'admin root redirects to admin login',
+      url: `${adminWebBaseUrl}/`,
+      locationPrefix: `${adminWebBaseUrl}/admin/login`,
+    },
+    {
+      label: 'admin login path redirects to admin login',
+      url: `${adminWebBaseUrl}/login`,
+      locationPrefix: `${adminWebBaseUrl}/admin/login`,
+    },
+    {
+      label: 'admin register path redirects to admin login',
+      url: `${adminWebBaseUrl}/register`,
+      locationPrefix: `${adminWebBaseUrl}/admin/login`,
+    },
+    {
+      label: 'admin login page reachable',
+      url: `${adminWebBaseUrl}/admin/login`,
+      expectStatus: 200,
+    },
+  ];
+
+  const result = {};
+  for (const item of cases) {
+    const out = await request(item.url, {
+      headers: { accept: 'text/html' },
+      redirect: 'manual',
+    });
+
+    if (item.expectStatus) {
+      if (out.status !== item.expectStatus) {
+        throw new Error(`${item.label} returned ${out.status}, expected ${item.expectStatus}`);
+      }
+      result[item.label] = out.status;
+      continue;
+    }
+
+    const location = out.headers.get('location') || '';
+    if (![307, 308].includes(out.status) || !location.startsWith(item.locationPrefix)) {
+      throw new Error(`${item.label} failed: status=${out.status} location=${location} expectedPrefix=${item.locationPrefix}`);
+    }
+    result[item.label] = location;
+  }
+
   return result;
 });
 
