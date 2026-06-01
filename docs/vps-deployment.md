@@ -70,6 +70,7 @@ After deploying:
 ```bash
 ssh -i ~/.ssh/ss_erp_vultr_sg root@45.76.49.64
 cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash scripts/verify-deploy-readiness.sh
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
 DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 ```

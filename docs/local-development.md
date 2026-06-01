@@ -317,6 +317,15 @@ DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV
 DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
 ```
 
+部署前可先在 VPS 做只读就绪检查：
+
+```bash
+cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash scripts/verify-deploy-readiness.sh
+```
+
+这一步会明确检查当前版本、systemd 指向、备份状态、R2 env 是否齐全。
+
 部署后在 VPS 上验证：
 
 ```bash

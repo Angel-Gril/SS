@@ -68,6 +68,15 @@ DEPLOY_ENV_PROFILE=cloud-r2 \
 ./scripts/deploy-app-dir.sh
 ```
 
+部署前可以先在 VPS 做只读就绪检查：
+
+```bash
+cd /opt/ss-erp/app
+DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash scripts/verify-deploy-readiness.sh
+```
+
+如果它提示 `IMAGE_STORAGE_BACKEND expected oss` 或 `OSS_* is required`，先配置 R2 env，不要直接部署。
+
 如果输出指向 `/opt/ss-erp` 且目录里有 `.git`，才使用 git checkout 模式：
 
 ```bash
