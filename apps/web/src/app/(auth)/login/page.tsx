@@ -94,7 +94,6 @@ export default function LoginPage() {
     }
 
     try {
-      turnstileRef.current?.execute();
       const token = await turnstileRef.current?.getResponsePromise(30000);
       if (token) {
         setTurnstileToken(token);
@@ -105,7 +104,7 @@ export default function LoginPage() {
       // handled below with a user-facing message
     }
 
-    const message = '请先完成人机验证';
+    const message = '请先完成人机验证；如果没有看到验证框，请检查 Turnstile Site Key 是否允许 app.ss-erp.com';
     setTurnstileError(message);
     toast({ title: message, variant: 'destructive' });
     return null;
@@ -129,10 +128,8 @@ export default function LoginPage() {
         const role = res.data?.user?.role;
         if (role === 'STAFF') {
           router.push('/warehouse');
-        } else if (role === 'USER') {
-          router.push('/orders');
         } else {
-          router.push('/');
+          router.push('/orders');
         }
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
@@ -202,13 +199,11 @@ export default function LoginPage() {
                       setTurnstileError('人机验证超时，请重新验证');
                     }}
                     options={{
-                      size: 'flexible',
+                      size: 'normal',
                       theme: 'auto',
                       retry: 'auto',
                       refreshExpired: 'auto',
                       refreshTimeout: 'auto',
-                      execution: 'execute',
-                      appearance: 'execute',
                     }}
                   />
                 </div>

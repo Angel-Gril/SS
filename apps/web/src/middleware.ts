@@ -73,9 +73,10 @@ export function middleware(request: NextRequest) {
     if (pathname.startsWith('/admin')) {
       return redirectTo(request, '/login');
     }
-    // 访问根路径时重定向到登录（用户工作台）
+    // 访问根路径时进入用户工作台；未登录再回登录页。
     if (pathname === '/') {
-      return redirectTo(request, '/login');
+      const hasAuthCookie = request.cookies.has('sserp_token');
+      return redirectTo(request, hasAuthCookie ? '/orders' : '/login');
     }
   }
 

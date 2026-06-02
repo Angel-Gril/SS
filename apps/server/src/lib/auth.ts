@@ -160,11 +160,13 @@ const AUTH_COOKIE_SECURE =
   process.env.AUTH_COOKIE_SECURE !== undefined
     ? process.env.AUTH_COOKIE_SECURE === 'true'
     : process.env.NODE_ENV === 'production';
+const AUTH_COOKIE_DOMAIN = process.env.AUTH_COOKIE_DOMAIN?.trim() || undefined;
 const AUTH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: AUTH_COOKIE_SECURE,
   sameSite: 'lax' as const,
   path: '/',
+  ...(AUTH_COOKIE_DOMAIN ? { domain: AUTH_COOKIE_DOMAIN } : {}),
 };
 
 export function setAuthCookie(reply: FastifyReply, token: string, maxAgeSeconds?: number) {
