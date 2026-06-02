@@ -7,6 +7,8 @@ const appOrigin = process.env.NEXT_PUBLIC_USER_HOSTNAME
   : '';
 const loginHref = `${appOrigin}/login`;
 const registerHref = `${appOrigin}/register`;
+const cloudExtensionHref = `${appOrigin}/api/extensions/download/cloud`;
+const localExtensionHref = `${appOrigin}/api/extensions/download/local`;
 
 export default function DownloadPage() {
   return (
@@ -41,11 +43,22 @@ export default function DownloadPage() {
                 登录后一键连接
               </Button>
             </Link>
-            <Button size="lg" variant="outline" className="gap-2" disabled>
-              <Download className="h-4 w-4" />
-              扩展包待发布
+            <Button asChild size="lg" variant="outline" className="gap-2">
+              <a href={cloudExtensionHref}>
+                <Download className="h-4 w-4" />
+                下载云端扩展
+              </a>
+            </Button>
+            <Button asChild size="lg" variant="ghost" className="gap-2">
+              <a href={localExtensionHref}>
+                <Download className="h-4 w-4" />
+                下载本地扩展
+              </a>
             </Button>
           </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            云端扩展连接 app.ss-erp.com；本地扩展连接 127.0.0.1:3001，适合 Windows 本地测试包。
+          </p>
         </div>
 
         <div className="mx-auto mt-12 grid max-w-5xl gap-6 md:grid-cols-3">

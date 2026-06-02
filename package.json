@@ -20,6 +20,8 @@
     "smoke:remote": "pnpm --filter server smoke:remote",
     "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",
     "build:extension:local": "node scripts/build-extension-package.mjs local",
+    "package:extension:cloud": "node scripts/package-extension-package.mjs cloud",
+    "package:extension:local": "node scripts/package-extension-package.mjs local",
     "verify:extension": "node scripts/verify-extension-package.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
   },

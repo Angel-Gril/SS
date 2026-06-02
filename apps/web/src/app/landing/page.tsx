@@ -26,7 +26,7 @@ const appOrigin = process.env.NEXT_PUBLIC_USER_HOSTNAME
   : '';
 const loginHref = `${appOrigin}/login`;
 const registerHref = `${appOrigin}/register`;
-const downloadHref = '/download';
+const downloadHref = appOrigin ? `${appOrigin}/download` : '/download';
 
 export default function LandingPage() {
   return (
