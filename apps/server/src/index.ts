@@ -226,15 +226,18 @@ if (RUN_WORKERS) {
     { startWarehouseCommandPollWorker },
     { startNotificationCleanupWorker },
     { startOssCleanupWorker },
+    { startDatabaseBackupWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
     import('./workers/oss-cleanup.js'),
+    import('./workers/database-backup.js'),
   ]);
 
   startWarehouseCommandPollWorker();
   startNotificationCleanupWorker();
   startOssCleanupWorker();
+  startDatabaseBackupWorker();
   if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
     const [
       { startProductSyncWorker },

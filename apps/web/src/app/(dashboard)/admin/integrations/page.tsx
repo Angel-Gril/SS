@@ -27,7 +27,7 @@ interface IntegrationCheck {
   detail?: string;
 }
 
-type IntegrationTestKey = 'turnstile' | 'sms' | 'oss' | 'sentry';
+type IntegrationTestKey = 'turnstile' | 'sms' | 'oss' | 'backup' | 'sentry';
 type DiagnosticStepStatus = 'pass' | 'warn' | 'fail' | 'skip';
 
 const appHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME
@@ -52,6 +52,7 @@ interface IntegrationTestData {
   bucket?: string;
   source?: string;
   backend?: string;
+  prefix?: string;
   proxyPath?: string;
   proxyUrl?: string;
   testObjectDeleted?: boolean;
@@ -144,7 +145,7 @@ export default function AdminIntegrationsPage() {
               check={c}
               testing={testingKey === c.key}
               onTest={
-                c.key === 'turnstile' || c.key === 'sms' || c.key === 'oss' || c.key === 'sentry'
+                c.key === 'turnstile' || c.key === 'sms' || c.key === 'oss' || c.key === 'backup' || c.key === 'sentry'
                   ? () => testIntegration(c.key as any)
                   : undefined
               }
@@ -260,11 +261,13 @@ function IntegrationRow({
 function IntegrationTestDetails({ result }: { result: LastTestResult }) {
   const title = result.key === 'oss'
     ? 'R2/OSS 最近一次测试'
-    : result.key === 'sms'
-      ? '短信最近一次测试'
-      : result.key === 'turnstile'
-        ? 'Turnstile 最近一次测试'
-        : 'Sentry 最近一次测试';
+    : result.key === 'backup'
+      ? '备份 R2 最近一次测试'
+      : result.key === 'sms'
+        ? '短信最近一次测试'
+        : result.key === 'turnstile'
+          ? 'Turnstile 最近一次测试'
+          : 'Sentry 最近一次测试';
   const statusVariant = result.ok ? 'success' : 'destructive';
   const steps = result.data?.steps || [];
 
@@ -288,6 +291,15 @@ function IntegrationTestDetails({ result }: { result: LastTestResult }) {
             <InfoLine label="Endpoint" value={result.data.endpoint || '-'} />
             <InfoLine label="代理路径" value={result.data.proxyPath || '-'} />
             <InfoLine label="测试对象" value={result.data.testObjectDeleted ? '已删除' : '未确认删除'} />
+          </div>
+        )}
+
+        {result.key === 'backup' && result.data && (
+          <div className="grid gap-3 text-xs md:grid-cols-2">
+            <InfoLine label="配置来源" value={result.data.source || '-'} />
+            <InfoLine label="Bucket" value={result.data.bucket || '-'} />
+            <InfoLine label="Endpoint" value={result.data.endpoint || '-'} />
+            <InfoLine label="Prefix" value={result.data.prefix || '-'} />
           </div>
         )}
 

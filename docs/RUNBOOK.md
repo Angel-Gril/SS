@@ -154,7 +154,7 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_UPLOAD=true SMOKE_EXPECT_OSS=true pnpm 
 
 注意区分两类“R2 设置”：
 
-- `backup_remote_*` 是数据库备份的远程存储，只影响 `backup-db.sh` 和 `backup-status.json`。
+- `backup_remote_*` 是数据库备份的远程存储，优先供 `ss-erp-worker` 的数据库备份任务使用；旧 `backup-db.sh` 仍读取 `BACKUP_S3_*` 作为兼容兜底。
 - `upload_storage_backend` 与 `upload_oss_*` 是图片/附件上传的后台配置，优先级高于 env。
 - `IMAGE_STORAGE_BACKEND=oss` 与 `OSS_*` 是图片/附件上传的部署级兜底配置。
 - 所以只在备份设置里填 `backup_remote_*` 不会切换图片上传；图片上传必须填 `upload_*` 或 env `OSS_*`。
@@ -478,6 +478,14 @@ sudo systemctl restart ss-erp-api ss-erp-worker ss-erp-web
 
 ## 数据库备份
 
+新版本优先使用后台配置：
+
+- 超管后台 `系统设置 -> 备份策略`：配置 `backup_remote_*`，密钥加密入库。
+- 超管后台 `接口与集成`：测试“数据库备份 R2”是否可写。
+- 超管后台 `系统设置 -> 备份策略`：可点“立即备份”，由 `ss-erp-worker` 执行 `pg_dump`、压缩、上传和状态写入。
+
+旧脚本仍保留，适合作为兼容兜底或恢复演练：
+
 ```bash
 # 手动备份
 ./scripts/backup-db.sh
@@ -495,8 +503,9 @@ cat scripts/backup-db.crontab.example
 
 建议至少做两类备份测试：
 
-1. `backup-db.sh` 是否能成功生成本地备份和 `backup-status.json`
-2. `verify-backup-restore.sh` 是否能把备份恢复到临时库并自动清理
+1. 后台“数据库备份 R2”测试是否能写入并删除测试对象。
+2. 后台“立即备份”是否能生成本地备份、上传 R2、写入 `backup-status.json`。
+3. `verify-backup-restore.sh` 是否能把备份恢复到临时库并自动清理。
 
 如果备份桶接到了 R2 / 其他 S3 兼容存储，备份桶最好和图片桶分开，避免对象生命周期规则互相干扰。
 

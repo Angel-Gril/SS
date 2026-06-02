@@ -7,6 +7,7 @@ import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { getSmsRuntimeConfig, getTurnstileRuntimeConfig } from '../lib/auth-challenge-config.js';
 import { getSmsProvider } from '../lib/sms/index.js';
+import { getBackupRuntimeConfig, testBackupRemoteStorage } from '../services/backup.service.js';
 
 interface ConfiguredCheck {
   key: string;
@@ -96,6 +97,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       getSmsRuntimeConfig(),
       getTurnstileRuntimeConfig(),
     ]);
+    const backupConfig = await getBackupRuntimeConfig();
     const uploadOss = await getUploadOssDiagnostic();
     const ossConfigured = rc.oss !== null;
     const ozonRelay = !!rc.ozonCdnRelayUrl;
@@ -156,6 +158,17 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         configured: ossConfigured,
         source: ossSource,
         detail: ossDetail,
+      },
+      {
+        key: 'backup',
+        label: '数据库备份 R2',
+        configured: !!backupConfig.remote,
+        source: backupConfig.remoteSource === 'system-config' ? 'db' : 'env',
+        detail: backupConfig.remote
+          ? `bucket=${backupConfig.remote.bucket}, prefix=${backupConfig.remote.prefix}, source=${backupConfig.remoteSource}`
+          : backupConfig.remoteEnabled
+            ? `远程备份未完整：缺少 ${backupConfig.remoteMissing.join('、') || '未知字段'}`
+            : '未启用远程备份；可在系统设置 -> 备份策略中配置',
       },
       {
         key: 'ozon_cdn_relay',
@@ -489,6 +502,19 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       });
     } catch (e: any) {
       return reply.send({ code: 0, msg: `OSS 连接失败: ${e?.message?.slice(0, 200) || 'unknown'}` });
+    }
+  });
+
+  app.post('/test/backup', async (_request, reply) => {
+    try {
+      const result = await testBackupRemoteStorage();
+      return reply.send({
+        code: result.ok ? 1 : 0,
+        msg: result.msg,
+        data: result.data,
+      });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: `备份 R2 测试失败: ${e?.message?.slice(0, 200) || 'unknown'}` });
     }
   });
 

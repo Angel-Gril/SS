@@ -86,6 +86,8 @@ export const SystemConfigSchema = {
   backup_remote_endpoint: z.string().default(''),
   backup_remote_region: z.string().default('auto'),
   backup_remote_prefix: z.string().default('db/'),
+  backup_remote_access_key_id: z.string().default(''),
+  backup_remote_secret_access_key: z.string().default(''),
 
   // ─── maintenance ───
   maintenance_enabled: z.boolean().default(false),
@@ -194,6 +196,8 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   backup_remote_endpoint: { label: '远程存储 Endpoint', group: 'backup', description: '远程备份 S3 兼容 endpoint URL', sensitive: true },
   backup_remote_region: { label: '远程存储 Region', group: 'backup', description: '远程备份存储区域' },
   backup_remote_prefix: { label: '远程存储路径前缀', group: 'backup', description: '远程备份文件在 bucket 中的路径前缀' },
+  backup_remote_access_key_id: { label: '远程备份 Access Key ID', group: 'backup', description: '远程备份 bucket 专用访问密钥 ID', sensitive: true, encrypted: true },
+  backup_remote_secret_access_key: { label: '远程备份 Secret Access Key', group: 'backup', description: '远程备份 bucket 专用访问密钥 Secret', sensitive: true, encrypted: true },
 
   maintenance_enabled: { label: '维护模式', group: 'maintenance', description: '开启后普通用户写接口返回 503，管理员仍可访问' },
   maintenance_message: { label: '维护提示信息', group: 'maintenance', description: '维护模式下返回给用户的提示文案' },

@@ -36,6 +36,17 @@ describe('SystemConfig sensitive storage', () => {
     await expect(getConfig('auth_sms_tencent_secret_key')).resolves.toBe('super-secret');
   });
 
+  it('encrypts backup remote access secrets when saving and decrypts when reading', async () => {
+    const { getConfig, setConfig } = await import('../config/system-config-schema.js');
+
+    await setConfig('backup_remote_secret_access_key', 'backup-secret');
+
+    const stored = configStore.get('backup_remote_secret_access_key');
+    expect(stored).toMatch(/^enc:v1:/);
+    expect(stored).not.toContain('backup-secret');
+    await expect(getConfig('backup_remote_secret_access_key')).resolves.toBe('backup-secret');
+  });
+
   it('keeps reading legacy plaintext sensitive values for backward compatibility', async () => {
     const { getConfig } = await import('../config/system-config-schema.js');
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Save, Settings as SettingsIcon, AlertCircle, HardDrive, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -25,9 +25,15 @@ interface BackupStatus {
   message?: string;
   lastBackupAt?: string;
   lastLocalFile?: string;
+  lastLocalPath?: string;
   lastLocalSize?: string;
+  lastLocalSizeBytes?: number;
   remoteUploaded?: boolean;
   lastRemoteKey?: string;
+  remoteSource?: string;
+  remoteCleanupDeleted?: number;
+  localDeleted?: number;
+  warnings?: string[];
 }
 
 const GROUP_LABELS: Record<string, string> = {
@@ -50,6 +56,7 @@ export default function AdminSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [runningBackup, setRunningBackup] = useState(false);
 
   useEffect(() => { fetchConfigs(); }, []);
 
@@ -112,6 +119,19 @@ export default function AdminSettingsPage() {
     const res = await api.post('/api/admin/system-config/seed', {});
     if (res.code === 1) {
       toast({ title: '默认配置已初始化' });
+      fetchConfigs();
+    }
+  }
+
+  async function runBackupNow() {
+    setRunningBackup(true);
+    const res = await api.post<BackupStatus>('/api/admin/ops/backup/run', {});
+    setRunningBackup(false);
+    if (res.code === 1) {
+      toast({ title: '备份完成', description: res.msg || '数据库备份已完成' });
+      fetchConfigs();
+    } else {
+      toast({ title: '备份失败', description: res.msg || '请查看运维状态', variant: 'destructive' });
       fetchConfigs();
     }
   }
@@ -188,47 +208,24 @@ export default function AdminSettingsPage() {
           );
         }
 
+        if (group === 'backup') {
+          return (
+            <BackupSettingsPanel
+              key={group}
+              items={items}
+              editing={editing}
+              setEditing={setEditing}
+              savingKey={savingKey}
+              saveConfigs={saveConfigs}
+              backupStatus={backupStatus}
+              runningBackup={runningBackup}
+              runBackupNow={runBackupNow}
+            />
+          );
+        }
+
         return (
           <div key={group} className="space-y-4">
-            {group === 'backup' && backupStatus && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">最近备份状态</span>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {!backupStatus.available ? (
-                    <p className="text-sm text-muted-foreground">{backupStatus.message || '备份状态不可用'}</p>
-                  ) : (
-                    <div className="grid gap-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">最近备份时间</span>
-                        <span>{backupStatus.lastBackupAt ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN') : '—'}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">本地文件</span>
-                        <code className="text-xs">{backupStatus.lastLocalFile || '—'}</code>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">文件大小</span>
-                        <span>{backupStatus.lastLocalSize || '—'}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">远程上传</span>
-                        <span className="flex items-center gap-1">
-                          {backupStatus.remoteUploaded
-                            ? <><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> 已上传</>
-                            : <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> 未上传</>
-                          }
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
               <Card>
                 <details open={group === 'maintenance'} className="group">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
@@ -320,6 +317,17 @@ interface AuthSettingsPanelProps {
   setEditing: (next: Record<string, string>) => void;
   savingKey: string | null;
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+}
+
+interface BackupSettingsPanelProps {
+  items: SystemConfig[];
+  editing: Record<string, string>;
+  setEditing: (next: Record<string, string>) => void;
+  savingKey: string | null;
+  saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+  backupStatus: BackupStatus | null;
+  runningBackup: boolean;
+  runBackupNow: () => Promise<void>;
 }
 
 const AUTH_GENERAL_KEYS = [
@@ -482,6 +490,168 @@ function AuthSettingsPanel({
           </CardContent>
         </details>
       </Card>
+    </div>
+  );
+}
+
+const BACKUP_GENERAL_KEYS = [
+  'backup_enabled',
+  'backup_schedule',
+  'backup_local_keep_days',
+];
+
+const BACKUP_REMOTE_KEYS = [
+  'backup_remote_enabled',
+  'backup_remote_keep_days',
+  'backup_remote_provider',
+  'backup_remote_bucket',
+  'backup_remote_endpoint',
+  'backup_remote_region',
+  'backup_remote_prefix',
+  'backup_remote_access_key_id',
+  'backup_remote_secret_access_key',
+];
+
+function BackupSettingsPanel({
+  items,
+  editing,
+  setEditing,
+  savingKey,
+  saveConfigs,
+  backupStatus,
+  runningBackup,
+  runBackupNow,
+}: BackupSettingsPanelProps) {
+  const configs = Object.fromEntries(items.map((item) => [item.key, item]));
+  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const isSavingGeneral = savingKey === 'group:备份基础策略';
+  const isSavingRemote = savingKey === 'group:备份 R2';
+  const remoteEnabled = editing.backup_remote_enabled === 'true';
+  const remoteRequiredKeys = [
+    'backup_remote_bucket',
+    'backup_remote_endpoint',
+    'backup_remote_access_key_id',
+    'backup_remote_secret_access_key',
+  ];
+  const missingRemote = remoteRequiredKeys.filter((key) => !(editing[key] || '').trim());
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">备份策略</Badge>
+              <span className="text-sm text-muted-foreground">数据库备份、本地保留、备份 R2</span>
+            </div>
+            <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+            <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+          </summary>
+          <CardContent className="space-y-6 border-t pt-5">
+            <section className="rounded-md border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="h-4 w-4 text-muted-foreground" />
+                    <h3 className="text-sm font-medium">最近备份状态</h3>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    手动备份会调用 worker 备份服务，使用后台加密配置；正式恢复仍建议先做临时库演练。
+                  </p>
+                </div>
+                <Button size="sm" variant="outline" onClick={runBackupNow} disabled={runningBackup}>
+                  {runningBackup ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">{runningBackup ? '备份中' : '立即备份'}</span>
+                </Button>
+              </div>
+
+              {!backupStatus?.available ? (
+                <p className="mt-4 text-sm text-muted-foreground">{backupStatus?.message || '还没有备份状态。保存配置后可先点“立即备份”。'}</p>
+              ) : (
+                <div className="mt-4 grid gap-2 text-sm">
+                  <BackupStatusRow label="最近备份时间" value={backupStatus.lastBackupAt ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN') : '-'} />
+                  <BackupStatusRow label="本地文件" value={backupStatus.lastLocalFile || '-'} monospace />
+                  <BackupStatusRow label="文件大小" value={backupStatus.lastLocalSize || '-'} />
+                  <BackupStatusRow
+                    label="远程上传"
+                    value={backupStatus.remoteUploaded ? `已上传 ${backupStatus.lastRemoteKey || ''}` : '未上传'}
+                    ok={backupStatus.remoteUploaded}
+                  />
+                  {backupStatus.warnings && backupStatus.warnings.length > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      {backupStatus.warnings.join('；')}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">基础备份策略</h3>
+                  <p className="text-xs text-muted-foreground">备份时间使用服务器本地时间；默认每天 03:00 执行。</p>
+                </div>
+                <Button size="sm" onClick={() => saveConfigs(BACKUP_GENERAL_KEYS, '备份基础策略')} disabled={isSavingGeneral}>
+                  {isSavingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">保存基础策略</span>
+                </Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigToggle cfg={configs.backup_enabled} editing={editing} setValue={setValue} />
+                <ConfigInput cfg={configs.backup_schedule} editing={editing} setValue={setValue} placeholder="0 3 * * *" />
+                <ConfigInput cfg={configs.backup_local_keep_days} editing={editing} setValue={setValue} placeholder="7" />
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">备份 R2 远程存储</h3>
+                  <p className="text-xs text-muted-foreground">
+                    这里是数据库备份专用 bucket，不影响图片/附件上传。建议使用单独 R2 token 和单独 bucket。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(BACKUP_REMOTE_KEYS, '备份 R2', { backup_remote_provider: 's3' })}
+                  disabled={isSavingRemote || (remoteEnabled && missingRemote.length > 0)}
+                  title={remoteEnabled && missingRemote.length > 0 ? `缺少 ${missingRemote.length} 个必填项` : undefined}
+                >
+                  {isSavingRemote ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">保存备份 R2</span>
+                </Button>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigToggle cfg={configs.backup_remote_enabled} editing={editing} setValue={setValue} />
+                <ConfigInput cfg={configs.backup_remote_keep_days} editing={editing} setValue={setValue} placeholder="180" />
+                <ConfigInput cfg={configs.backup_remote_bucket} editing={editing} setValue={setValue} placeholder="ss-erp-backups" />
+                <ConfigInput cfg={configs.backup_remote_endpoint} editing={editing} setValue={setValue} placeholder="https://<account-id>.r2.cloudflarestorage.com" />
+                <ConfigInput cfg={configs.backup_remote_region} editing={editing} setValue={setValue} placeholder="auto" />
+                <ConfigInput cfg={configs.backup_remote_prefix} editing={editing} setValue={setValue} placeholder="db/daily/" />
+                <ConfigInput cfg={configs.backup_remote_access_key_id} editing={editing} setValue={setValue} type="password" placeholder="Access Key ID" />
+                <ConfigInput cfg={configs.backup_remote_secret_access_key} editing={editing} setValue={setValue} type="password" placeholder="Secret Access Key" />
+              </div>
+            </section>
+          </CardContent>
+        </details>
+      </Card>
+    </div>
+  );
+}
+
+function BackupStatusRow({ label, value, monospace = false, ok }: { label: string; value: string; monospace?: boolean; ok?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b py-1.5 last:border-b-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`flex min-w-0 items-center gap-1 text-right ${monospace ? 'font-mono text-xs' : ''}`}>
+        {typeof ok === 'boolean' && (ok
+          ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-600" />
+          : <XCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="truncate" title={value}>{value}</span>
+      </span>
     </div>
   );
 }
