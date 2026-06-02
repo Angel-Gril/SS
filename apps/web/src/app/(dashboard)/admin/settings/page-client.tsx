@@ -365,13 +365,16 @@ function AuthSettingsPanel({
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary">短信与人机验证</Badge>
-            <span className="text-sm text-muted-foreground">注册短信、登录人机验证、测试短信白名单</span>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
+        <details open className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">短信与人机验证</Badge>
+              <span className="text-sm text-muted-foreground">注册短信、登录人机验证、测试短信白名单</span>
+            </div>
+            <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+            <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+          </summary>
+          <CardContent className="space-y-6 border-t pt-5">
           <section className="rounded-md border bg-muted/20 p-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
@@ -476,7 +479,8 @@ function AuthSettingsPanel({
               <ConfigInput cfg={configs.auth_turnstile_secret_key} editing={editing} setValue={setValue} type="password" placeholder="0x4AAAA... secret" />
             </div>
           </section>
-        </CardContent>
+          </CardContent>
+        </details>
       </Card>
     </div>
   );
@@ -529,13 +533,16 @@ function UploadSettingsPanel({
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary">上传与对象存储</Badge>
-            <span className="text-sm text-muted-foreground">当前重点：R2 图片/附件上传测试</span>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
+        <details open className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">上传与对象存储</Badge>
+              <span className="text-sm text-muted-foreground">当前重点：R2 图片/附件上传测试</span>
+            </div>
+            <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+            <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+          </summary>
+          <CardContent className="space-y-6 border-t pt-5">
           <section className="rounded-md border bg-muted/20 p-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
@@ -672,7 +679,8 @@ function UploadSettingsPanel({
               </div>
             </div>
           </details>
-        </CardContent>
+          </CardContent>
+        </details>
       </Card>
     </div>
   );
