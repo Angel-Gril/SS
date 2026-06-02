@@ -87,19 +87,41 @@ export default function LoginPage() {
     );
   }
 
-  async function onSubmit(data: LoginInput) {
-    if (needsTurnstile && !turnstileToken) {
-      const message = '请先完成人机验证';
-      setTurnstileError(message);
-      toast({ title: message, variant: 'destructive' });
-      return;
+  async function getTurnstileTokenForSubmit(): Promise<string | null> {
+    const existingToken = turnstileToken || turnstileRef.current?.getResponse();
+    if (existingToken) {
+      return existingToken;
     }
 
+    try {
+      turnstileRef.current?.execute();
+      const token = await turnstileRef.current?.getResponsePromise(30000);
+      if (token) {
+        setTurnstileToken(token);
+        setTurnstileError('');
+        return token;
+      }
+    } catch {
+      // handled below with a user-facing message
+    }
+
+    const message = '请先完成人机验证';
+    setTurnstileError(message);
+    toast({ title: message, variant: 'destructive' });
+    return null;
+  }
+
+  async function onSubmit(data: LoginInput) {
     setLoading(true);
     try {
+      const captchaToken = needsTurnstile ? await getTurnstileTokenForSubmit() : '';
+      if (needsTurnstile && !captchaToken) {
+        return;
+      }
+
       const res = await api.post<{ token?: string; user: { role: string } }>('/api/auth/login', {
         ...data,
-        turnstileToken: turnstileToken || undefined,
+        turnstileToken: captchaToken || undefined,
       });
       if (res.code === 1) {
         tokenStore.clear();
@@ -179,7 +201,15 @@ export default function LoginPage() {
                       setTurnstileToken('');
                       setTurnstileError('人机验证超时，请重新验证');
                     }}
-                    options={{ size: 'flexible', theme: 'auto', retry: 'auto', refreshExpired: 'auto', refreshTimeout: 'auto' }}
+                    options={{
+                      size: 'flexible',
+                      theme: 'auto',
+                      retry: 'auto',
+                      refreshExpired: 'auto',
+                      refreshTimeout: 'auto',
+                      execution: 'execute',
+                      appearance: 'execute',
+                    }}
                   />
                 </div>
               ) : (
