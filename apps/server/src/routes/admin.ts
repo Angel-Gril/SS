@@ -99,6 +99,19 @@ async function ensureNotRemovingLastActiveSuperAdmin(
   }
 }
 
+export function getPermanentUserDeletionError(
+  actor: { actorUserId?: string; userId?: string; role?: string; isSuperAdmin?: boolean } | null | undefined,
+  target: { id: string; role: string; isSuperAdmin: boolean },
+): string | null {
+  if (!actor?.isSuperAdmin) return '只有超级管理员可以永久删除账户';
+  const actorId = actor.actorUserId || actor.userId;
+  if (actorId && actorId === target.id) return '不能删除当前登录账户';
+  if (target.role === 'ADMIN' && target.isSuperAdmin) {
+    return '不能永久删除超级管理员，请先撤销超管权限或禁用账户';
+  }
+  return null;
+}
+
 export async function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireRole('ADMIN'));
@@ -600,6 +613,64 @@ export async function adminRoutes(app: FastifyInstance) {
     await prisma.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
     clearAuthContextCache(id);
     return reply.send({ code: 1, msg: '用户已禁用' });
+  });
+
+  // DELETE /api/admin/users/:id/permanent — 永久删除普通管理员/用户
+  app.delete('/users/:id/permanent', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const actor = (request as any).user;
+    const existing = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        phone: true,
+        nickname: true,
+        role: true,
+        status: true,
+        isSuperAdmin: true,
+      },
+    });
+    if (!existing) {
+      return reply.status(404).send({ code: 0, msg: '用户不存在' });
+    }
+
+    const guardError = getPermanentUserDeletionError(actor, existing);
+    if (guardError) {
+      return reply.status(403).send({ code: 0, msg: guardError });
+    }
+
+    const createdAnnouncements = await prisma.announcement.count({ where: { createdBy: id } });
+    if (createdAnnouncements > 0) {
+      return reply.status(409).send({ code: 0, msg: '该账户创建过公告，不能直接删除；请先保留账户并禁用，或转移公告创建者' });
+    }
+
+    try {
+      await prisma.user.delete({ where: { id } });
+    } catch (e: any) {
+      if (e?.code === 'P2003') {
+        return reply.status(409).send({ code: 0, msg: '该账户存在无法级联清理的关联数据，不能直接删除；请先禁用账户' });
+      }
+      throw e;
+    }
+
+    clearAuthContextCache(id);
+    await logAudit({
+      actorId: actor.actorUserId || actor.userId,
+      actorRole: actor.role,
+      action: 'user_delete',
+      target: id,
+      before: {
+        id: existing.id,
+        phone: existing.phone,
+        nickname: existing.nickname,
+        role: existing.role,
+        status: existing.status,
+        isSuperAdmin: existing.isSuperAdmin,
+      },
+      after: null,
+      ...extractRequestMeta(request),
+    });
+    return reply.send({ code: 1, msg: '账户已永久删除' });
   });
 
   // === ShopBillingConfig CRUD ===

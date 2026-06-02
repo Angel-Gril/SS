@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, Search, Pencil, KeyRound, Ban, CheckCircle } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus, Search, Pencil, KeyRound, Ban, CheckCircle, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -33,6 +33,7 @@ interface UserRow {
   perOrderFee?: string | null;
   customColorEnabled?: boolean;
   canPublishAddress?: boolean;
+  isSuperAdmin?: boolean;
 }
 
 const ROLE_MAP: Record<string, { label: string; variant: 'default' | 'secondary' | 'destructive' }> = {
@@ -47,8 +48,22 @@ const STATUS_MAP: Record<string, { label: string; variant: 'default' | 'secondar
   PENDING: { label: '待激活', variant: 'secondary' },
 };
 
+interface CurrentUser {
+  id: string;
+  role: string;
+  isSuperAdmin: boolean;
+}
+
+function getRoleMeta(user: UserRow): { label: string; variant: 'default' | 'secondary' | 'destructive' } {
+  if (user.role === 'ADMIN' && user.isSuperAdmin) {
+    return { label: '超级管理员', variant: 'destructive' };
+  }
+  return ROLE_MAP[user.role] || { label: user.role, variant: 'secondary' };
+}
+
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState('');
@@ -56,8 +71,16 @@ export default function AdminUsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editTarget, setEditTarget] = useState<UserRow | null>(null);
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
   const limit = 20;
 // PLACEHOLDER_USERS_PAGE_BODY
+
+  async function loadCurrentUser() {
+    const res = await api.get<CurrentUser>('/api/user/me');
+    if (res.code === 1 && res.data) {
+      setCurrentUser(res.data);
+    }
+  }
 
   async function loadUsers() {
     setLoading(true);
@@ -71,6 +94,7 @@ export default function AdminUsersPage() {
     setLoading(false);
   }
 
+  useEffect(() => { loadCurrentUser(); }, []);
   useEffect(() => { loadUsers(); }, [page]);
 
   function handleSearch(e: React.FormEvent) {
@@ -84,6 +108,10 @@ export default function AdminUsersPage() {
     const res = await api.put(`/api/admin/users/${user.id}`, { status: newStatus });
     if (res.code === 1) { toast({ title: newStatus === 'ACTIVE' ? '已启用' : '已禁用' }); loadUsers(); }
     else toast({ title: res.msg || '操作失败', variant: 'destructive' });
+  }
+
+  function canPermanentlyDelete(user: UserRow) {
+    return !!currentUser?.isSuperAdmin && currentUser.id !== user.id && !(user.role === 'ADMIN' && user.isSuperAdmin);
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -126,26 +154,34 @@ export default function AdminUsersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users.map((u) => (
-                  <TableRow key={u.id}>
-                    <TableCell className="font-mono text-sm tabular-nums">{u.accountCode || '-'}</TableCell>
-                    <TableCell className="font-medium">{u.nickname || '-'}</TableCell>
-                    <TableCell className="font-mono text-sm">{u.phone}</TableCell>
-                    <TableCell><Badge variant={ROLE_MAP[u.role]?.variant || 'secondary'}>{ROLE_MAP[u.role]?.label || u.role}</Badge></TableCell>
-                    <TableCell><Badge variant={STATUS_MAP[u.status]?.variant || 'secondary'}>{STATUS_MAP[u.status]?.label || u.status}</Badge></TableCell>
-                    <TableCell className="text-sm">{u.canInvite ? `${u.inviteCount}/${u.inviteLimit}` : '-'}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => setEditTarget(u)} title="编辑"><Pencil className="h-3.5 w-3.5" /></Button>
-                        <Button size="sm" variant="ghost" onClick={() => setResetTarget(u)} title="重置密码"><KeyRound className="h-3.5 w-3.5" /></Button>
-                        <Button size="sm" variant="ghost" onClick={() => toggleStatus(u)} title={u.status === 'ACTIVE' ? '禁用' : '启用'}>
-                          {u.status === 'ACTIVE' ? <Ban className="h-3.5 w-3.5 text-destructive" /> : <CheckCircle className="h-3.5 w-3.5 text-green-600" />}
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {users.map((u) => {
+                  const roleMeta = getRoleMeta(u);
+                  return (
+                    <TableRow key={u.id}>
+                      <TableCell className="font-mono text-sm tabular-nums">{u.accountCode || '-'}</TableCell>
+                      <TableCell className="font-medium">{u.nickname || '-'}</TableCell>
+                      <TableCell className="font-mono text-sm">{u.phone}</TableCell>
+                      <TableCell><Badge variant={roleMeta.variant}>{roleMeta.label}</Badge></TableCell>
+                      <TableCell><Badge variant={STATUS_MAP[u.status]?.variant || 'secondary'}>{STATUS_MAP[u.status]?.label || u.status}</Badge></TableCell>
+                      <TableCell className="text-sm">{u.canInvite ? `${u.inviteCount}/${u.inviteLimit}` : '-'}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="ghost" onClick={() => setEditTarget(u)} title="编辑"><Pencil className="h-3.5 w-3.5" /></Button>
+                          <Button size="sm" variant="ghost" onClick={() => setResetTarget(u)} title="重置密码"><KeyRound className="h-3.5 w-3.5" /></Button>
+                          <Button size="sm" variant="ghost" onClick={() => toggleStatus(u)} title={u.status === 'ACTIVE' ? '禁用' : '启用'}>
+                            {u.status === 'ACTIVE' ? <Ban className="h-3.5 w-3.5 text-destructive" /> : <CheckCircle className="h-3.5 w-3.5 text-green-600" />}
+                          </Button>
+                          {canPermanentlyDelete(u) && (
+                            <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(u)} title="永久删除">
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -164,6 +200,7 @@ export default function AdminUsersPage() {
       {showCreate && <CreateUserDialog onClose={() => setShowCreate(false)} onSuccess={() => { setShowCreate(false); loadUsers(); }} />}
       {editTarget && <EditUserDialog user={editTarget} onClose={() => setEditTarget(null)} onSuccess={() => { setEditTarget(null); loadUsers(); }} />}
       {resetTarget && <ResetPasswordDialog user={resetTarget} onClose={() => setResetTarget(null)} onSuccess={() => { setResetTarget(null); }} />}
+      {deleteTarget && <DeleteUserDialog user={deleteTarget} onClose={() => setDeleteTarget(null)} onSuccess={() => { setDeleteTarget(null); loadUsers(); }} />}
     </div>
   );
 }
@@ -390,6 +427,60 @@ function ResetPasswordDialog({ user, onClose, onSuccess }: { user: UserRow; onCl
             <Button type="submit" disabled={submitting}>{submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : '确认重置'}</Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteUserDialog({ user, onClose, onSuccess }: { user: UserRow; onClose: () => void; onSuccess: () => void }) {
+  const [submitting, setSubmitting] = useState(false);
+  const roleMeta = getRoleMeta(user);
+
+  async function handleDelete() {
+    setSubmitting(true);
+    const res = await api.delete(`/api/admin/users/${user.id}/permanent`);
+    setSubmitting(false);
+    if (res.code === 1) {
+      toast({ title: '账户已永久删除' });
+      onSuccess();
+    } else {
+      toast({ title: res.msg || '删除失败', variant: 'destructive' });
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>永久删除账户</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <div className="flex gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+            <div className="space-y-1 text-sm">
+              <p className="font-medium text-destructive">此操作不可恢复。</p>
+              <p className="text-muted-foreground">会删除该账户以及可级联清理的业务数据；如果存在无法清理的关联数据，系统会拒绝删除。</p>
+            </div>
+          </div>
+          <div className="rounded-md border p-3 text-sm">
+            <div className="flex justify-between gap-4 py-1">
+              <span className="text-muted-foreground">账户</span>
+              <span className="font-mono">{user.accountCode || '-'}</span>
+            </div>
+            <div className="flex justify-between gap-4 py-1">
+              <span className="text-muted-foreground">手机号</span>
+              <span className="font-mono">{user.phone}</span>
+            </div>
+            <div className="flex justify-between gap-4 py-1">
+              <span className="text-muted-foreground">角色</span>
+              <Badge variant={roleMeta.variant}>{roleMeta.label}</Badge>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>取消</Button>
+          <Button type="button" variant="destructive" onClick={handleDelete} disabled={submitting}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : '永久删除'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
