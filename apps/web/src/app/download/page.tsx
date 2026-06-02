@@ -2,9 +2,9 @@ import Link from 'next/link';
 import { ArrowLeft, Cable, CheckCircle2, Download, Key, Package, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-const appOrigin = process.env.NEXT_PUBLIC_USER_HOSTNAME
-  ? `https://${process.env.NEXT_PUBLIC_USER_HOSTNAME}`
-  : '';
+const appHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME
+  || (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
+const appOrigin = appHostname ? `https://${appHostname}` : '';
 const loginHref = `${appOrigin}/login`;
 const registerHref = `${appOrigin}/register`;
 const cloudExtensionHref = `${appOrigin}/api/extensions/download/cloud`;
