@@ -13,9 +13,6 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/use-toast';
 
-const TURNSTILE_SITE_KEY =
-  process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
-  (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
 const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
 
 interface AuthChallengeConfig {
@@ -28,9 +25,9 @@ interface AuthChallengeConfig {
 
 const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
   runtimeMode: IS_LOCAL_RUNTIME ? 'local' : 'cloud',
-  smsRegisterEnabled: !IS_LOCAL_RUNTIME,
-  turnstileEnabled: !IS_LOCAL_RUNTIME,
-  turnstileSiteKey: TURNSTILE_SITE_KEY,
+  smsRegisterEnabled: false,
+  turnstileEnabled: false,
+  turnstileSiteKey: '',
   smsRateLimitSeconds: 60,
 };
 
