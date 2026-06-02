@@ -65,6 +65,7 @@ docker/                   Docker/Nginx 生产模板
 docs/                     项目文档
 docs/archive/             历史记录、阶段性分析和旧文档
 build/scripts/            本地离线包脚本
+scripts/windows-local/    Windows 本地版 Portable v0.1 脚本
 ```
 
 根目录只放工程入口和配置文件。临时构建包、截图、压缩包、一次性部署脚本不进入 Git，生成后可以安全清理。
@@ -166,6 +167,7 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-e
 ## 文档地图
 
 - [本地开发](local-development.md)
+- [本地 Windows 版](local-windows-package.md)
 - [运维手册](RUNBOOK.md)
 - [VPS 部署](vps-deployment.md)
 - [本地离线 ERP](local-offline-erp.md)

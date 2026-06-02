@@ -208,13 +208,13 @@
         <div style="display:flex;flex-direction:column;gap:14px;margin-top:18px;">
           <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
             <span>ERP 后端地址</span>
-            <input id="erpUrlInput" type="url" placeholder="http://localhost:3001" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
-            <small style="font-weight:400;color:#94a3b8;">填后端 API 端口（3001），不是前端页面（3000）</small>
+            <input id="erpUrlInput" type="url" placeholder="http://127.0.0.1:3001" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
+            <small style="font-weight:400;color:#94a3b8;">本地版填 http://127.0.0.1:3001；云端版填当前 ERP 域名。这里填后端 API 地址，不是前端页面。</small>
           </label>
           <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
             <span>扩展 Token</span>
-            <input id="erpTokenInput" type="text" placeholder="从 ERP 采集页获取的 30 天 Token" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
-            <small style="font-weight:400;color:#94a3b8;">在 ERP → 一键上货 → SKU采集跟卖 → 获取扩展Token</small>
+            <input id="erpTokenInput" type="text" placeholder="本机 ERP 生成的 30 天扩展 Token" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
+            <small style="font-weight:400;color:#94a3b8;">先登录当前 ERP，在扩展连接入口生成。Windows 本地版生成的是本机 API Token，不需要云端 Token。</small>
           </label>
         </div>
         <div id="erpStatus" class="status compact" style="margin-top:12px;"></div>

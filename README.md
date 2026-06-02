@@ -7,6 +7,7 @@ SS ERP 是面向 OZON 跨境卖家的跨境电商 SaaS ERP，覆盖商品采集�
 - [项目总览](docs/PROJECT-OVERVIEW.md)
 - [文档索引](docs/README.md)
 - [本地开发](docs/local-development.md)
+- [本地 Windows 版](docs/local-windows-package.md)
 - [运维手册](docs/RUNBOOK.md)
 
 ## 技术栈
@@ -55,6 +56,7 @@ packages/shared/   共享类型和 schema
 extensions/ss-erp/ Chrome 扩展
 print-agent/       打印代理原型
 scripts/           部署、备份、诊断、预检脚本
+scripts/windows-local/ Windows 本地版 Portable v0.1 脚本
 deploy/            systemd 服务模板
 docker/            Docker/Nginx 模板
 docs/              项目文档

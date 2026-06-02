@@ -16,6 +16,7 @@ coverage/
 # Packaged runtime artifacts
 build/dist/
 build/runtime/
+build/windows-local/
 build/tmp-*/
 build/extensions/
 build/*.png
@@ -36,6 +37,7 @@ extensions/ss-erp/debug-extension.md
 # Local environment and secrets
 .env
 .env.local
+.env.local-windows
 .env.*.local
 apps/server/.env
 apps/web/.env

@@ -4,12 +4,14 @@
 
 1. [项目总览](PROJECT-OVERVIEW.md)
 2. [本地开发](local-development.md)
-3. [运维手册](RUNBOOK.md)
-4. [VPS 部署](vps-deployment.md)
+3. [本地 Windows 版](local-windows-package.md)
+4. [运维手册](RUNBOOK.md)
+5. [VPS 部署](vps-deployment.md)
 
 专题文档：
 
 - [本地离线 ERP](local-offline-erp.md)
+- [本地 Windows 版打包路线](local-windows-package.md)
 - [PostgreSQL 慢查询](postgresql-slow-query.md)
 - [Service 层指南](service-layer-guide.md)
 - [前端通用组件](common-components-guide.md)

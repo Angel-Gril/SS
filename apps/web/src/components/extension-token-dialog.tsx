@@ -58,7 +58,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            把下面的 ERP 地址和 Token 填入 Chrome 扩展的设置面板，扩展即可向 ERP 推送采集数据、店铺分析和经营图表。
+            把下面的 ERP 地址和 Token 填入 Chrome 扩展的设置面板，扩展即可向当前 ERP 推送采集数据、店铺分析和经营图表。本地 Windows 版使用本机 API Token，不需要云端 Token。
           </p>
 
           <div className="space-y-2">
@@ -104,7 +104,8 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
             <p className="font-medium text-foreground">使用说明</p>
             <ol className="list-decimal list-inside space-y-0.5">
               <li>打开 Chrome 扩展 SS ERP 设置面板</li>
-              <li>填入上面的 ERP 地址和 Token</li>
+              <li>ERP 地址使用当前页面显示的地址；本地版通常是 http://127.0.0.1:3001</li>
+              <li>填入上面的 Token</li>
               <li>保存后即可在 OZON / 1688 等页面采集推送</li>
             </ol>
           </div>
