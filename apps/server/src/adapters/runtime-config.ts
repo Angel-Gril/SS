@@ -50,6 +50,16 @@ function getOssConfig(): OssEnvConfig | null {
   };
 }
 
+function getDefaultLocalBaseUrl(mode: RuntimeMode): string {
+  const explicit = process.env.LOCAL_BASE_URL || process.env.PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (explicit) return explicit;
+  if (mode === 'cloud') {
+    const userHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME || 'app.ss-erp.com';
+    return `https://${userHostname}`;
+  }
+  return 'http://localhost:3001';
+}
+
 export function getRuntimeConfig(): RuntimeConfig {
   const mode = getRuntimeMode();
   return {
@@ -61,7 +71,7 @@ export function getRuntimeConfig(): RuntimeConfig {
     oss: getOssConfig(),
     ozonCdnRelayUrl: process.env.OZON_CDN_RELAY_URL || undefined,
     ossFallbackToCdn: process.env.OSS_FALLBACK_TO_CDN !== 'false',
-    localBaseUrl: process.env.LOCAL_BASE_URL || 'http://localhost:3001',
+    localBaseUrl: getDefaultLocalBaseUrl(mode),
   };
 }
 

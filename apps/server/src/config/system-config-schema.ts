@@ -164,7 +164,7 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   upload_oss_region: { label: 'R2/OSS Region', group: 'upload', description: 'Cloudflare R2 通常填写 auto' },
   upload_oss_cdn_domain: { label: 'R2/OSS 公网访问域名', group: 'upload', description: '可选。只填 Cloudflare R2 自定义域名或 r2.dev 公网域名；不要填 r2.cloudflarestorage.com S3 API endpoint。为空时走 /api/cdn 安全代理' },
   upload_ozon_cdn_relay_url: { label: 'OZON CDN 中转地址', group: 'upload', description: '可选。存储后端为 ozon-cdn 或 OSS 降级时使用' },
-  upload_local_base_url: { label: '上传访问 Base URL', group: 'upload', description: 'local 存储及 OSS /api/cdn 代理访问使用。云端通常填写 https://ss-erp.com；为空则跟随 LOCAL_BASE_URL 环境变量' },
+  upload_local_base_url: { label: '上传访问 Base URL', group: 'upload', description: 'local 存储及 OSS /api/cdn 代理访问使用。云端通常填写 https://app.ss-erp.com；为空时云端默认使用 app.ss-erp.com' },
 
   retention_collect_archive_days: { label: '采集数据归档天数', group: 'retention', description: '超过此天数的采集记录标记为归档（第一阶段仅统计，不删除）' },
   retention_collect_min_keep: { label: '采集数据最少保留条数', group: 'retention', description: '即使超过归档天数，每个用户至少保留此数量的采集记录' },

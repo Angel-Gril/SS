@@ -21,14 +21,26 @@ describe('runtime config', () => {
 
   it('enables cloud capabilities when RUNTIME_MODE=cloud', () => {
     vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('NEXT_PUBLIC_USER_HOSTNAME', '');
+    vi.stubEnv('LOCAL_BASE_URL', '');
+    vi.stubEnv('PUBLIC_API_BASE_URL', '');
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', '');
 
     expect(getRuntimeConfig()).toMatchObject({
       mode: 'cloud',
       imageStorage: 'oss',
       authSource: 'token',
       extensionSync: 'queue',
+      localBaseUrl: 'https://app.ss-erp.com',
     });
     expect(requiresAuthChallenges()).toBe(true);
+  });
+
+  it('uses configured user hostname as cloud upload proxy base url', () => {
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
+    vi.stubEnv('NEXT_PUBLIC_USER_HOSTNAME', 'app.example.com');
+
+    expect(getRuntimeConfig().localBaseUrl).toBe('https://app.example.com');
   });
 
   it('accepts only known cloud image storage backends', () => {

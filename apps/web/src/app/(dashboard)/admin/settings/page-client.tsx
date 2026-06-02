@@ -510,6 +510,16 @@ const UPLOAD_SECURITY_KEYS = [
   'upload_referer_check_enabled',
 ];
 
+const UPLOAD_ADVANCED_KEYS = [
+  'upload_oss_cdn_domain',
+  'upload_ozon_cdn_relay_url',
+  'upload_local_base_url',
+];
+
+const RECOMMENDED_UPLOAD_BASE_URL = process.env.NEXT_PUBLIC_USER_HOSTNAME
+  ? `https://${process.env.NEXT_PUBLIC_USER_HOSTNAME}`
+  : 'https://app.ss-erp.com';
+
 function UploadSettingsPanel({
   items,
   editing,
@@ -523,6 +533,7 @@ function UploadSettingsPanel({
   const isSavingMode = savingKey === 'upload_storage_backend';
   const isSavingR2 = savingKey === 'group:R2 对象存储';
   const isSavingSecurity = savingKey === 'group:上传保护';
+  const isSavingAdvanced = savingKey === 'group:上传高级选项';
 
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const filledR2Count = R2_REQUIRED_KEYS.filter((key) => (editing[key] || '').trim().length > 0).length;
@@ -644,13 +655,39 @@ function UploadSettingsPanel({
 
             <details className="rounded-md border border-dashed px-3 py-2">
               <summary className="cursor-pointer text-sm font-medium">高级可选：自定义访问域名 / 旧 CDN / 本地 Base URL</summary>
-              <p className="mt-2 text-xs text-muted-foreground">
-                R2 基础测试不需要改这里。只有要换公开访问域名、保留 OZON CDN 中转或部署离线版时才需要填写。
-              </p>
+              <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <p>
+                    当前走 /api/cdn 代理时，建议把 <code className="font-mono">upload_local_base_url</code> 设为 {RECOMMENDED_UPLOAD_BASE_URL}。
+                  </p>
+                  <p>
+                    <code className="font-mono">upload_oss_cdn_domain</code> 保持为空，除非你配置了 R2 自定义公开域名或 r2.dev。
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setValue('upload_local_base_url', RECOMMENDED_UPLOAD_BASE_URL)}
+                  >
+                    填入推荐 Base URL
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => saveConfigs(UPLOAD_ADVANCED_KEYS, '上传高级选项')}
+                    disabled={isSavingAdvanced}
+                  >
+                    {isSavingAdvanced ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    <span className="ml-1">保存高级选项</span>
+                  </Button>
+                </div>
+              </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <ConfigInput cfg={configs.upload_oss_cdn_domain} editing={editing} setValue={setValue} placeholder="自定义 CDN 域名，可留空" />
                 <ConfigInput cfg={configs.upload_ozon_cdn_relay_url} editing={editing} setValue={setValue} placeholder="OZON CDN 中转，可留空" />
-                <ConfigInput cfg={configs.upload_local_base_url} editing={editing} setValue={setValue} placeholder="本地存储 Base URL，可留空" />
+                <ConfigInput cfg={configs.upload_local_base_url} editing={editing} setValue={setValue} placeholder={RECOMMENDED_UPLOAD_BASE_URL} />
               </div>
             </details>
           </section>
@@ -702,7 +739,10 @@ function ConfigInput({
   if (!cfg) return null;
   return (
     <div className="space-y-1.5">
-      <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
+      <div>
+        <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
+        <code className="ml-2 text-[11px] text-muted-foreground">{cfg.key}</code>
+      </div>
       {cfg.description && <p className="text-xs text-muted-foreground">{cfg.description}</p>}
       <Input
         type={type}

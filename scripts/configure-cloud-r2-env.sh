@@ -18,7 +18,7 @@ set -euo pipefail
 #   OSS_REGION=auto
 #   OSS_CDN_DOMAIN=
 #   OSS_FALLBACK_TO_CDN=true
-#   LOCAL_BASE_URL=https://ss-erp.com
+#   LOCAL_BASE_URL=https://app.ss-erp.com
 #
 # Usage:
 #   OSS_ENDPOINT=... OSS_BUCKET=... OSS_ACCESS_KEY_ID=... OSS_ACCESS_KEY_SECRET=... \
@@ -44,7 +44,7 @@ done
 OSS_REGION="${OSS_REGION:-auto}"
 OSS_CDN_DOMAIN="${OSS_CDN_DOMAIN:-}"
 OSS_FALLBACK_TO_CDN="${OSS_FALLBACK_TO_CDN:-true}"
-LOCAL_BASE_URL="${LOCAL_BASE_URL:-https://ss-erp.com}"
+LOCAL_BASE_URL="${LOCAL_BASE_URL:-https://app.ss-erp.com}"
 
 escape_env_value() {
   local value="$1"
