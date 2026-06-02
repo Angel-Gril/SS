@@ -56,6 +56,7 @@ import { systemStatusRoutes } from './routes/system-status.js';
 import { opsRoutes } from './routes/ops.js';
 import { isAllowedCorsOrigin } from './lib/cors.js';
 import { registerMaintenanceHook } from './lib/maintenance.js';
+import { getLocalAssetDir } from './lib/local-assets.js';
 
 const app = Fastify({
   bodyLimit: 1 * 1024 * 1024,
@@ -185,7 +186,7 @@ function isSafeFilename(name: string): boolean {
 app.get('/watermarked/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
   if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
-  const filepath = join(process.cwd(), 'public', 'watermarked', filename);
+  const filepath = join(getLocalAssetDir('watermarked'), filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
   reply.header('Cache-Control', 'public, max-age=86400');
   reply.type('image/jpeg');
@@ -195,7 +196,7 @@ app.get('/watermarked/:filename', async (request, reply) => {
 app.get('/uploads/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
   if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
-  const filepath = join(process.cwd(), 'public', 'uploads', filename);
+  const filepath = join(getLocalAssetDir('uploads'), filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
   const ext = filename.toLowerCase().split('.').pop();
   reply.header('Cache-Control', 'public, max-age=86400');
@@ -206,7 +207,7 @@ app.get('/uploads/:filename', async (request, reply) => {
 app.get('/resized/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
   if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
-  const filepath = join(process.cwd(), 'public', 'resized', filename);
+  const filepath = join(getLocalAssetDir('resized'), filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
   reply.header('Cache-Control', 'public, max-age=86400');
   reply.type('image/jpeg');

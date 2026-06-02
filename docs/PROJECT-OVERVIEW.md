@@ -7,7 +7,7 @@ SS ERP 是面向 OZON 跨境卖家的 SaaS ERP。系统目标是把商品采集�
 ## 当前定位
 
 - **目标用户**：OZON 跨境卖家、中小运营团队、需要从表格/手工流程迁移到系统化运营的团队。
-- **部署阶段**：单 VPS 云端部署为主，保留本地离线 ERP 能力。
+- **部署阶段**：单 VPS 云端部署为主，保留本地离线 ERP 能力；Windows 本地版按 Portable v0.1 和 Runtime-assisted v0.2 两步推进。
 - **规模假设**：早期到中期总用户约 1 万以内，优先单体架构、可观测性、备份、回滚和扩展稳定性，不提前引入 K8s 或复杂集群。
 - **核心原则**：先保证采集、上架、订单、图片、账号、安全、备份这些主链路可靠，再做横向扩容。
 
@@ -64,8 +64,8 @@ deploy/                   systemd 服务模板
 docker/                   Docker/Nginx 生产模板
 docs/                     项目文档
 docs/archive/             历史记录、阶段性分析和旧文档
-build/scripts/            本地离线包脚本
-scripts/windows-local/    Windows 本地版 Portable v0.1 脚本
+build/scripts/            本地离线包旧脚本
+scripts/windows-local/    Windows 本地版 Portable v0.1 / Runtime-assisted v0.2 脚本
 ```
 
 根目录只放工程入口和配置文件。临时构建包、截图、压缩包、一次性部署脚本不进入 Git，生成后可以安全清理。
@@ -167,7 +167,7 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-e
 ## 文档地图
 
 - [本地开发](local-development.md)
-- [本地 Windows 版](local-windows-package.md)
+- [本地 Windows 版](local-windows-package.md)：Portable v0.1、Runtime-assisted v0.2、备份恢复和扩展 local 包
 - [运维手册](RUNBOOK.md)
 - [VPS 部署](vps-deployment.md)
 - [本地离线 ERP](local-offline-erp.md)

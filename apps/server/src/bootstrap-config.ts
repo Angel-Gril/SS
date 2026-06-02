@@ -22,8 +22,25 @@
  * jwtSecret 缺失时不在这里生成（启动器脚本负责生成并写盘）。
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+function resolveConfigPath(configPath: string, value: string): string {
+  return isAbsolute(value) ? value : resolve(dirname(configPath), value);
+}
+
+function assertLocalUploadDirSafe(configPath: string, uploadDir: string): void {
+  const dataRoot = resolve(dirname(configPath), 'data');
+  const normalizedDataRoot = dataRoot.replace(/[\\/]+$/, '');
+  const normalizedUploadDir = resolve(uploadDir).replace(/[\\/]+$/, '');
+  const separator = process.platform === 'win32' ? '\\' : '/';
+  const comparableDataRoot = process.platform === 'win32' ? normalizedDataRoot.toLowerCase() : normalizedDataRoot;
+  const comparableUploadDir = process.platform === 'win32' ? normalizedUploadDir.toLowerCase() : normalizedUploadDir;
+  const dataPrefix = `${comparableDataRoot}${separator}`;
+  if (comparableUploadDir === comparableDataRoot || !comparableUploadDir.startsWith(dataPrefix)) {
+    throw new Error(`local uploadDir must be a child directory under ${dataRoot}`);
+  }
+}
 
 function loadExternalConfig(): void {
   const candidates: string[] = [];
@@ -50,7 +67,14 @@ function loadExternalConfig(): void {
       if (cfg.corsOrigin) process.env.CORS_ORIGIN = String(cfg.corsOrigin);
       if (cfg.redisUrl) process.env.REDIS_URL = String(cfg.redisUrl);
       if (cfg.redisDisabled !== undefined) process.env.REDIS_DISABLED = String(cfg.redisDisabled);
-      if (cfg.uploadDir) process.env.UPLOAD_DIR = String(cfg.uploadDir);
+      if (cfg.uploadDir) {
+        const uploadDir = resolveConfigPath(path, String(cfg.uploadDir));
+        const runtimeMode = String(cfg.runtimeMode || process.env.RUNTIME_MODE || '').toLowerCase();
+        if (runtimeMode === 'local') {
+          assertLocalUploadDirSafe(path, uploadDir);
+        }
+        process.env.UPLOAD_DIR = uploadDir;
+      }
       if (cfg.httpsProxy) process.env.HTTPS_PROXY = String(cfg.httpsProxy);
       console.log(`[bootstrap] loaded external config from ${path}`);
       return;

@@ -11,7 +11,7 @@
 专题文档：
 
 - [本地离线 ERP](local-offline-erp.md)
-- [本地 Windows 版打包路线](local-windows-package.md)
+- [本地 Windows 版打包路线](local-windows-package.md)：Portable v0.1 与 Runtime-assisted v0.2
 - [PostgreSQL 慢查询](postgresql-slow-query.md)
 - [Service 层指南](service-layer-guide.md)
 - [前端通用组件](common-components-guide.md)

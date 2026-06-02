@@ -4,6 +4,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { getLocalAssetPath } from '../lib/local-assets.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -941,12 +942,12 @@ export async function productRoutes(app: FastifyInstance) {
       try { backend = await getStorageBackend(); } catch {}
       if (backend) {
         const { readFile } = await import('fs/promises');
-        const { join } = await import('path');
         resolvedImages = [];
         for (const img of body.images) {
           if (img.startsWith('/watermarked/') || img.startsWith('/uploads/')) {
             try {
-              const localPath = join(process.cwd(), 'public', img.replace(/^\//, ''));
+              const localPath = getLocalAssetPath(img);
+              if (!localPath) throw new Error(`本地图片路径非法: ${img}`);
               const buf = await readFile(localPath);
               const filename = img.split('/').pop() || 'img.jpg';
               const category = img.startsWith('/watermarked/') ? 'watermarked' : 'raw';
@@ -1026,11 +1027,11 @@ export async function productRoutes(app: FastifyInstance) {
     try {
       const backend = await getStorageBackend(product.shop.id);
       const { readFile } = await import('fs/promises');
-      const { join } = await import('path');
       const resolved: string[] = [];
       for (const img of wmResult.watermarkedImages) {
         if (img.startsWith('/watermarked/')) {
-          const localPath = join(process.cwd(), 'public', img.replace(/^\//, ''));
+          const localPath = getLocalAssetPath(img);
+          if (!localPath) throw new Error(`本地水印路径非法: ${img}`);
           const buf = await readFile(localPath);
           const filename = img.split('/').pop() || 'img.jpg';
           const result = await backend.uploadBuffer(buf, filename, undefined, { category: 'watermarked', ownerId: userId });

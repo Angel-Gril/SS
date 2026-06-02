@@ -1,5 +1,6 @@
 param(
     [string]$EnvFile = ".env.local-windows",
+    [string]$ConfigFile = "",
     [string]$BackupFile = "",
     [string]$BackupDir = "data\backups",
     [switch]$Latest,
@@ -12,8 +13,13 @@ $ErrorActionPreference = "Stop"
 $root = Get-SSRoot
 Set-Location $root
 
-Import-SSEnvFile $EnvFile | Out-Null
-Set-SSLocalEnvDefaults
+$usingRuntimeConfig = -not [string]::IsNullOrWhiteSpace($ConfigFile)
+if (-not $usingRuntimeConfig) {
+    Import-SSEnvFile $EnvFile | Out-Null
+    Set-SSLocalEnvDefaults
+} else {
+    Import-SSRuntimeConfig -ConfigFile $ConfigFile | Out-Null
+}
 
 $pgRestore = Get-SSCommandPath "pg_restore"
 if (-not $pgRestore) {
@@ -75,6 +81,10 @@ if (-not $ConfirmRestore) {
     exit 2
 }
 
+if ($usingRuntimeConfig) {
+    Assert-SSRuntimeDatabaseTargetSafe "Restore"
+}
+
 Write-SSInfo "Restoring PostgreSQL backup: $databaseDump"
 & $pgRestore --dbname $env:DATABASE_URL --clean --if-exists --no-owner --no-acl $databaseDump
 if ($LASTEXITCODE -ne 0) {
@@ -84,13 +94,13 @@ if ($LASTEXITCODE -ne 0) {
 if ($assetRoot -and (Test-Path -LiteralPath $assetRoot)) {
     foreach ($name in @("uploads", "watermarked", "resized")) {
         $source = Join-Path $assetRoot $name
-        $dest = Join-Path $root "apps\server\public\$name"
+        $dest = Get-SSLocalAssetDir $name
         if (Test-Path -LiteralPath $source) {
             if (-not (Test-Path -LiteralPath $dest)) {
                 New-Item -ItemType Directory -Path $dest -Force | Out-Null
             }
             Copy-Item -Path (Join-Path $source "*") -Destination $dest -Recurse -Force -ErrorAction SilentlyContinue
-            Write-SSOk "Asset restore copied: apps/server/public/$name"
+            Write-SSOk "Asset restore copied: $dest"
         }
     }
 } else {

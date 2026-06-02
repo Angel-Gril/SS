@@ -1,14 +1,19 @@
 # 本地 Windows 版打包路线
 
-本页定义 SS ERP 本地 Windows 版的交付边界。当前目标是 Portable v0.1：在一台 Windows 机器上运行现有源码和本机服务，先满足启动、采集、本地存图、备份恢复和扩展连接；暂不做完全免依赖安装器。Portable v0.1 默认连接用户已有 PostgreSQL；如果用户手动准备 `runtime\node`、`runtime\pgsql`，脚本可以走接近旧离线包的 runtime-assisted 模式，但不会自动下载、安装或把大二进制提交进 Git。
+本页定义 SS ERP 本地 Windows 版的交付边界。当前分两条路线推进：
+
+- Portable v0.1：源码 + 脚本 + 用户本机依赖，默认连接用户已有 PostgreSQL/Redis，先满足启动、采集、本地存图、备份恢复和扩展连接。
+- Runtime-assisted v0.2：打包时手动提供 `runtime\node` 和 `runtime\pgsql`，产物使用生产构建和包内 PostgreSQL，解压后通过 `start.bat` 尽量一键启动。
+
+两条路线都不会自动下载 runtime，不会把 Node/PostgreSQL/Redis 大二进制、数据库数据或 zip 提交进 Git。
 
 ## 本地版目标
 
-- Windows 单机可启动 Web、API 和 Worker。
+- Windows 单机可启动 Web 和 API。Portable v0.1 在 Redis 可用时可以启动 Worker；Runtime-assisted v0.2 默认不启动 Worker。
 - 商品采集能从 local 扩展包推送到本机 API。
 - 图片默认写入本地磁盘，不依赖 R2、OSS、Cloudflare 或外部 CDN。
 - 登录、注册不依赖短信服务和 Cloudflare Turnstile。
-- 数据库可以备份到本地目录并恢复。
+- 数据库和本地图可以备份到本地目录并恢复。
 - 扩展 local 包默认连接 `http://127.0.0.1:3001`。
 
 ## 和 SaaS 云端版的差异
@@ -66,7 +71,9 @@
 
 ## 运行依赖
 
-Portable v0.1 默认不捆绑大二进制运行时，需要用户机器已有：
+### Portable v0.1
+
+默认不捆绑大二进制运行时，需要用户机器已有：
 
 - Windows 10/11 或 Windows Server。
 - Node.js 20+。
@@ -86,6 +93,16 @@ Portable v0.1 默认不负责安装 PostgreSQL，也不会自动创建数据库�
 
 现实限制：Redis 没有官方稳定 Windows 发行版。Portable v0.1 不强行把 Redis 打进安装包。可选路线是使用 WSL/Docker/第三方 Windows Redis 兼容发行版，或在最小采集场景下显式设置 `REDIS_DISABLED=1`，但这不是完整 Worker/队列验收。
 
+### Runtime-assisted v0.2
+
+打包机器需要 Node、pnpm 和手动准备好的 `runtime\node`、`runtime\pgsql`。最终用户解压后的目录内置：
+
+- `runtime\node\node.exe`：启动 API 和 Next standalone Web，不要求用户安装 Node/pnpm。
+- `runtime\pgsql\bin\*.exe`：首次启动自动初始化 `data\pgsql`，自动创建 `ss_erp` 数据库，并执行 Prisma migration。
+- 生产构建产物：API 使用 `apps/server/dist/index.js`，Web 使用 `apps/web/standalone/**/server.js`。
+
+Runtime-assisted v0.2 默认 `REDIS_DISABLED=1`、`RUN_WORKERS=0`，只启动 Web + API + PostgreSQL。采集、登录、本地图片上传、基础 ERP 功能优先跑通；Redis 和完整 Worker 队列作为后续增强模式处理。
+
 ## 目录结构
 
 推荐从仓库根目录运行：
@@ -97,13 +114,36 @@ SS ERP/
   runtime/node/               可选手动放置的 Node runtime，不提交 Git
   runtime/pgsql/              可选手动放置的 PostgreSQL runtime，不提交 Git
   data/pgsql/                 runtime-assisted PostgreSQL 数据目录，不提交 Git
-  apps/server/public/uploads/ 当前代码默认本地上传目录
+  apps/server/public/uploads/ 未设置 UPLOAD_DIR 时的本地上传目录
   data/backups/               Windows local 脚本默认备份目录
   logs/windows-local/         start/status/stop 日志和 pid
   scripts/windows-local/      Portable v0.1 脚本
 ```
 
-当前 `image-storage.ts` 的 local 后端写入 `apps/server/public/uploads`。`data/uploads` 可以作为后续完整安装器的目标目录，但在未改静态文件服务前不要把它写进运行配置。
+Runtime-assisted v0.2 产物目录：
+
+```text
+SS-ERP-Local/
+  start.bat
+  stop.bat
+  backup.bat
+  restore-latest.bat
+  config.json
+  runtime/node/
+  runtime/pgsql/
+  apps/server/dist/
+  apps/server/node_modules/
+  apps/web/standalone/
+  extension/
+  data/pgsql/
+  data/uploads/
+  data/watermarked/
+  data/resized/
+  data/backups/
+  logs/windows-local/
+```
+
+未设置 `UPLOAD_DIR` 时，local 后端沿用 `apps/server/public/uploads`、`watermarked`、`resized`。Runtime-assisted v0.2 的 `config.json` 默认 `uploadDir=data/uploads`，图片目录会切到包根 `data/uploads`、`data/watermarked`、`data/resized`，便于备份和升级时保留用户数据。runtime 配置里的 `uploadDir` 必须是包根 `data/` 下的子目录，脚本和 server bootstrap 都会拒绝越界目录。
 
 ## 准备
 
@@ -136,6 +176,8 @@ SS_ERP_NODE_EXE=""
 留空时脚本会先找 `runtime\pgsql\bin` 和 `runtime\node\node.exe`，再回退到 PATH。
 
 ## 启动、停止、状态检查
+
+### Portable v0.1
 
 启动：
 
@@ -189,7 +231,36 @@ SS_ERP_NODE_EXE=""
 
 如果 `.env.local-windows` 设置了 `REDIS_DISABLED=1`，`start.ps1` 会跳过独立 Worker 进程。原因是部分 BullMQ Worker 仍会在模块加载或启动时创建 Redis-backed queue。这个模式只用于最小本地采集验证，不算完整 Worker/队列验收。
 
+### Runtime-assisted v0.2
+
+最终用户解压后使用包根入口：
+
+```powershell
+.\start.bat
+```
+
+首次启动会：
+
+- 读取或创建 `config.json`。
+- 初始化 `data\pgsql`。
+- 启动脚本管理的 PostgreSQL，默认端口 `5433`。
+- 自动创建 `ss_erp` 数据库。
+- 执行 Prisma migration。
+- 启动 API：`node apps/server/dist/index.js`。
+- 启动 Web：`node apps/web/standalone/**/server.js`。
+- 打开 `http://127.0.0.1:3000`。
+
+停止：
+
+```powershell
+.\stop.bat
+```
+
+停止脚本只停止自己记录的 Web/API/PostgreSQL 进程，不会停止用户系统里的 PostgreSQL/Redis 服务。Runtime-assisted v0.2 默认不启动 Redis，也不启动独立 Worker。
+
 ## Portable 打包
+
+### Portable v0.1 源码包
 
 默认 dry-run：
 
@@ -207,7 +278,55 @@ SS_ERP_NODE_EXE=""
 
 这个参数只复制已经存在的 `runtime\node` 和 `runtime\pgsql`，不下载 runtime，不包含 Redis，不复制其他 `runtime/` 子目录，也不改变 Git 忽略规则。如果 `runtime\pgsql` 任意层级发现 `data`、`pgdata`、`log`、`logs`、`pg_log`、`PG_VERSION`、`postmaster.pid`、`postmaster.opts` 或常见日志文件，脚本会拒绝打包，避免把数据库状态或日志带进 Portable 目录。
 
+### Runtime-assisted v0.2 生产构建包
+
+先手动准备：
+
+```text
+runtime/node/node.exe
+runtime/pgsql/bin/postgres.exe
+runtime/pgsql/bin/pg_ctl.exe
+runtime/pgsql/bin/initdb.exe
+runtime/pgsql/bin/psql.exe
+runtime/pgsql/bin/pg_dump.exe
+runtime/pgsql/bin/pg_restore.exe
+```
+
+然后 dry-run：
+
+```powershell
+.\scripts\windows-local\package-runtime.ps1 -DryRun
+```
+
+构建 runtime-assisted 目录：
+
+```powershell
+pnpm build:local-windows-runtime
+```
+
+或直接运行：
+
+```powershell
+.\scripts\windows-local\package-runtime.ps1
+```
+
+打包脚本会构建 server、生成 Prisma client、以 `NEXT_STANDALONE=1` 构建 Web、构建 local 扩展包，并输出到：
+
+```text
+build/windows-local/SS-ERP-Local-runtime-0.2.0/
+```
+
+如果构建产物已经存在，可以只整理目录：
+
+```powershell
+.\scripts\windows-local\package-runtime.ps1 -SkipBuild
+```
+
+使用 `-Zip` 会在 `build/windows-local/` 下额外生成 zip。zip 是产物，不提交 Git。
+
 ## 备份和恢复
+
+### Portable v0.1
 
 备份：
 
@@ -242,6 +361,31 @@ data/backups/ss_erp_YYYYMMDD_HHMMSS/
 ```
 
 恢复会覆盖当前数据库对象，并把备份里的本地图复制回 `apps/server/public/*`。资产恢复只覆盖同名文件，不会清空当前目录里的额外文件。执行前先确认备份来自同一套 SS ERP 版本，并建议先手动再跑一次 `backup.ps1`。
+
+### Runtime-assisted v0.2
+
+包根入口：
+
+```powershell
+.\backup.bat
+.\restore-latest.bat
+```
+
+`restore-latest.bat` 默认只打印破坏性恢复提示，不直接加 `-ConfirmRestore`。确认最新备份确实是目标备份后，再运行显式确认命令。
+
+也可以直接指定 `config.json`：
+
+```powershell
+.\scripts\windows-local\backup.ps1 -ConfigFile .\config.json
+.\scripts\windows-local\restore.ps1 -ConfigFile .\config.json -Latest -ConfirmRestore
+```
+
+Runtime-assisted v0.2 备份包含：
+
+- PostgreSQL dump：`data/backups/ss_erp_*/database.dump`
+- 本地图：`data/uploads`、`data/watermarked`、`data/resized`
+
+恢复会把数据库对象清理后重放 dump，并把资产复制回当前 `config.json` 指定的本地图片目录。
 
 ## 扩展 local 模式安装
 
@@ -283,13 +427,28 @@ pnpm verify:extension
 
 Redis Windows 没有官方稳定发行版。完整本地版建议使用 WSL、Docker 或可信的第三方兼容发行版。只做最小本地采集时可以临时设置 `REDIS_DISABLED=1`，但队列和部分 Worker 能力不算完整验收。
 
+Runtime-assisted v0.2 默认就是 `REDIS_DISABLED=1` 和 `RUN_WORKERS=0`，因此不需要 Redis 才能启动 Web/API/PostgreSQL。本地测试重点是登录、采集、本地图和基础 ERP 功能；后台同步、批量队列和自动任务后续再作为高级模式打开。
+
+### PowerShell 提示 pnpm.ps1 / usr/bin/env 警告
+
+如果命令 exit code 是 0，这通常是本机 pnpm shim 或 Corepack shim 的兼容警告，不是 SS ERP 脚本失败。`scripts/windows-local` 会优先查找 `pnpm.cmd`、`pnpm.exe`，再回退到 `pnpm`，因此脚本启动一般能绕开 `pnpm.ps1`。
+
+手工执行时可以直接使用：
+
+```powershell
+pnpm.cmd --filter server typecheck
+pnpm.cmd build:extension:local
+```
+
+如果想从根上修复本机 shim，重新安装或启用 Corepack/pnpm，让 Windows 重新生成 `pnpm.cmd` 和 `pnpm.ps1`；但只要 exit code 为 0，不影响当前验收结论。
+
 ### 扩展提示未配置 Token
 
 local 扩展默认知道本机 API 地址，但采集接口仍要知道当前用户是谁。先登录本机 Web，再用本机 Web 生成扩展 Token，填到扩展设置页。
 
 ### 图片没有写到 data/uploads
 
-当前代码默认写入 `apps/server/public/uploads` 并从 `/uploads/:filename` 读取。`data/uploads` 是后续安装器整理目录时再迁移的目标。
+未设置 `UPLOAD_DIR` 时，当前代码默认写入 `apps/server/public/uploads` 并从 `/uploads/:filename` 读取。Runtime-assisted v0.2 的 `config.json` 默认 `uploadDir=data/uploads`，启动器会把它解析到包根 `data/uploads`，并让 `/uploads/*`、`/watermarked/*`、`/resized/*` 从 `data/*` 读取。runtime 模式不允许把 `uploadDir` 指向包根 `data/` 之外。
 
 ### 不想影响 SaaS 云端
 
@@ -297,8 +456,9 @@ Windows local 模板和脚本只设置本地进程环境变量，不改 `.env.st
 
 ## 后续安装器路线
 
-1. Portable ZIP：当前 v0.1，源码 + 脚本 + env 模板，不捆绑大二进制。
-2. Inno Setup / NSIS：增加安装向导、开始菜单、服务管理和卸载流程。
-3. Runtime bundling：评估是否内置 Node、PostgreSQL，Redis 仍需单独路线或替代队列方案。
+1. Portable v0.1：源码 + 脚本 + env 模板，不捆绑大二进制。
+2. Runtime-assisted v0.2：手动准备 Node/PostgreSQL runtime，打包生产构建，默认禁用 Redis/Worker，解压后 `start.bat` 启动。
+3. Inno Setup / NSIS：增加安装向导、开始菜单、服务管理和卸载流程。
 4. 代码签名：安装器和可执行启动器签名，降低 Windows Defender / SmartScreen 干扰。
-5. 升级和回滚：安装前自动备份数据库，保留上一版本目录。
+5. 升级和回滚：安装前自动备份数据库，保留上一版本目录，升级时不覆盖 `data/`。
+6. 高级模式：评估 Redis 替代方案或可选 runtime，恢复完整 Worker 队列能力。

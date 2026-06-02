@@ -2,12 +2,7 @@ import sharp from 'sharp';
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-
-const WATERMARK_DIR = join(process.cwd(), 'public', 'watermarked');
-
-if (!existsSync(WATERMARK_DIR)) {
-  mkdirSync(WATERMARK_DIR, { recursive: true });
-}
+import { getLocalAssetDir } from '../lib/local-assets.js';
 
 export type WatermarkPosition =
   | 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
@@ -165,7 +160,11 @@ export async function applyWatermark(imageUrl: string, itemId: string, index: nu
 
   const hash = createHash('md5').update(imageUrl + JSON.stringify(config)).digest('hex').slice(0, 8);
   const filename = `${itemId}_${index}_${hash}.jpg`;
-  const filepath = join(WATERMARK_DIR, filename);
+  const watermarkDir = getLocalAssetDir('watermarked');
+  if (!existsSync(watermarkDir)) {
+    mkdirSync(watermarkDir, { recursive: true });
+  }
+  const filepath = join(watermarkDir, filename);
 
   await sharp(result).toFile(filepath);
 

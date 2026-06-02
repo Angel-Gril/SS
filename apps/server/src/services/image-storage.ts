@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises';
 import { basename } from 'path';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { prisma } from '../lib/prisma.js';
+import { getLocalAssetDir } from '../lib/local-assets.js';
 
 // 复用一个 ProxyAgent（如果设置了 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY）
 const PROXY_URL =
@@ -332,8 +333,6 @@ import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 
-const LOCAL_UPLOAD_DIR = join(process.cwd(), 'public', 'uploads');
-
 class LocalBackend implements ImageStorageBackend {
   private baseUrl: string;
 
@@ -353,11 +352,12 @@ class LocalBackend implements ImageStorageBackend {
     mimeType?: string,
     options?: ImageUploadOptions,
   ): Promise<ImageUploadResult> {
-    await mkdir(LOCAL_UPLOAD_DIR, { recursive: true });
+    const uploadDir = getLocalAssetDir('uploads');
+    await mkdir(uploadDir, { recursive: true });
     const hash = createHash('md5').update(buffer).digest('hex').slice(0, 8);
     const ext = filename.split('.').pop() || 'jpg';
     const storedName = `${Date.now()}_${hash}.${ext}`;
-    await writeFile(join(LOCAL_UPLOAD_DIR, storedName), buffer);
+    await writeFile(join(uploadDir, storedName), buffer);
     const url = `${this.baseUrl}/uploads/${storedName}`;
     return { url, filename: storedName, backend: 'local' };
   }

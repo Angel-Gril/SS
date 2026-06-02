@@ -1,5 +1,6 @@
 param(
     [string]$EnvFile = ".env.local-windows",
+    [string]$ConfigFile = "",
     [string]$BackupDir = "data\backups"
 )
 
@@ -9,8 +10,13 @@ $ErrorActionPreference = "Stop"
 $root = Get-SSRoot
 Set-Location $root
 
-Import-SSEnvFile $EnvFile | Out-Null
-Set-SSLocalEnvDefaults
+$usingRuntimeConfig = -not [string]::IsNullOrWhiteSpace($ConfigFile)
+if (-not $usingRuntimeConfig) {
+    Import-SSEnvFile $EnvFile | Out-Null
+    Set-SSLocalEnvDefaults
+} else {
+    Import-SSRuntimeConfig -ConfigFile $ConfigFile | Out-Null
+}
 
 $pgDump = Get-SSCommandPath "pg_dump"
 if (-not $pgDump) {
@@ -19,6 +25,10 @@ if (-not $pgDump) {
 
 if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
     throw "DATABASE_URL is empty. Check $EnvFile."
+}
+
+if ($usingRuntimeConfig) {
+    Assert-SSRuntimeDatabaseTargetSafe "Backup"
 }
 
 $targetDir = if ([System.IO.Path]::IsPathRooted($BackupDir)) { $BackupDir } else { Join-Path $root $BackupDir }
@@ -40,14 +50,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 foreach ($name in @("uploads", "watermarked", "resized")) {
-    $source = Join-Path $root "apps\server\public\$name"
+    $source = Get-SSLocalAssetDir $name
     $dest = Join-Path $assetRoot $name
     if (Test-Path -LiteralPath $source) {
         Copy-Item -LiteralPath $source -Destination $dest -Recurse -Force
-        Write-SSOk "Asset backup copied: apps/server/public/$name"
+        Write-SSOk "Asset backup copied: $source"
     } else {
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
-        Write-SSWarn "Asset directory missing, created empty backup folder: apps/server/public/$name"
+        Write-SSWarn "Asset directory missing, created empty backup folder: $source"
     }
 }
 

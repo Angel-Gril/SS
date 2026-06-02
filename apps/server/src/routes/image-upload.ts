@@ -10,6 +10,7 @@ import { isIP } from 'net';
 import sharp from 'sharp';
 import { uploadLimiter } from '../lib/upload-limiter.js';
 import { getConfig } from '../config/system-config-schema.js';
+import { getLocalAssetDir, getLocalAssetPath } from '../lib/local-assets.js';
 
 const MAX_BYTES = 20 * 1024 * 1024;
 
@@ -349,7 +350,10 @@ export async function imageUploadRoutes(app: FastifyInstance) {
         const entry: any = { source: src, watermarked: relativePath };
 
         if (backend) {
-          const localPath = join(process.cwd(), 'public', relativePath.replace(/^\//, ''));
+          const localPath = getLocalAssetPath(relativePath);
+          if (!localPath) {
+            throw new Error(`本地水印路径非法: ${relativePath}`);
+          }
           const buf = await readFile(localPath);
           const filename = relativePath.split('/').pop() || `wm_${i}.jpg`;
           const uploaded = await backend.uploadBuffer(buf, filename, undefined, { category: 'watermarked', ownerId: userId });
@@ -398,7 +402,7 @@ export async function imageUploadRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '至少指定 width 或 height' });
     }
 
-    const RESIZE_DIR = join(process.cwd(), 'public', 'resized');
+    const RESIZE_DIR = getLocalAssetDir('resized');
     await mkdir(RESIZE_DIR, { recursive: true });
 
     const results: Array<{ source: string; resized?: string; uploaded?: string; error?: string; size?: { w: number; h: number } }> = [];

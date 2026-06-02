@@ -220,6 +220,21 @@ function Resolve-SSRootRelativePath {
     return (Join-Path (Get-SSRoot) $Path)
 }
 
+function Resolve-SSConfigRelativePath {
+    param(
+        [string]$Path,
+        [string]$BaseDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ""
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return $Path
+    }
+    return (Join-Path $BaseDir $Path)
+}
+
 function Get-SSNodeRuntimePath {
     $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:SS_ERP_NODE_EXE)) {
@@ -294,6 +309,25 @@ function Invoke-SSCheckedCommand {
     if ($exitCode -ne 0) {
         throw "$Label failed with exit code $exitCode"
     }
+}
+
+function Convert-SSToProcessArguments {
+    param([string[]]$Arguments)
+
+    $escaped = @()
+    foreach ($argument in $Arguments) {
+        $text = [string]$argument
+        if ($text -eq "") {
+            $escaped += '""'
+            continue
+        }
+        if ($text -match '[\s"]') {
+            $escaped += '"' + $text.Replace('"', '\"') + '"'
+        } else {
+            $escaped += $text
+        }
+    }
+    return ($escaped -join " ")
 }
 
 function Get-SSDatabaseInfo {
@@ -422,9 +456,11 @@ function Start-SSManagedProcess {
     $stderr = Join-Path $logDir "$Name.err.log"
     $pidFile = Get-SSPidFile $Name
 
+    $argumentList = Convert-SSToProcessArguments $Arguments
+
     $process = Start-Process `
         -FilePath $FilePath `
-        -ArgumentList $Arguments `
+        -ArgumentList $argumentList `
         -WorkingDirectory $WorkingDirectory `
         -WindowStyle Hidden `
         -RedirectStandardOutput $stdout `
@@ -487,6 +523,201 @@ function New-SSRandomHex {
     return (($buffer | ForEach-Object { $_.ToString("x2") }) -join "")
 }
 
+function Resolve-SSRuntimeConfigFile {
+    param([string]$ConfigFile = "config.json")
+
+    if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
+        $ConfigFile = "config.json"
+    }
+    if ([System.IO.Path]::IsPathRooted($ConfigFile)) {
+        return $ConfigFile
+    }
+    return (Join-Path (Get-SSRoot) $ConfigFile)
+}
+
+function Get-SSObjectValue {
+    param(
+        $Object,
+        [string]$Name,
+        $DefaultValue
+    )
+
+    if ($Object -and ($Object.PSObject.Properties.Name -contains $Name)) {
+        $value = $Object.$Name
+        if ($null -ne $value) {
+            if ($value -is [string] -and [string]::IsNullOrWhiteSpace($value)) {
+                return $DefaultValue
+            }
+            return $value
+        }
+    }
+    return $DefaultValue
+}
+
+function Convert-SSToBool {
+    param(
+        $Value,
+        [bool]$DefaultValue = $false
+    )
+
+    if ($null -eq $Value) {
+        return $DefaultValue
+    }
+    if ($Value -is [bool]) {
+        return [bool]$Value
+    }
+    $text = ([string]$Value).Trim().ToLowerInvariant()
+    if ($text -in @("1", "true", "yes", "y", "on")) {
+        return $true
+    }
+    if ($text -in @("0", "false", "no", "n", "off")) {
+        return $false
+    }
+    return $DefaultValue
+}
+
+function New-SSRuntimeConfigFile {
+    param([string]$Path)
+
+    $config = [ordered]@{
+        webPort = 3000
+        serverPort = 3001
+        pgPort = 5433
+        databaseName = "ss_erp"
+        databaseUrl = "postgresql://postgres@127.0.0.1:5433/ss_erp"
+        jwtSecret = New-SSRandomHex 32
+        encryptionKey = New-SSRandomHex 32
+        setupToken = New-SSRandomHex 16
+        corsOrigin = "http://127.0.0.1:3000,http://localhost:3000"
+        redisDisabled = $true
+        runWorkers = $false
+        uploadDir = "data/uploads"
+        postgresDataDir = "data/pgsql"
+        runtimeMode = "local"
+        imageStorageBackend = "local"
+        authCookieSecure = $false
+        smsProvider = "console"
+        openBrowser = $true
+    }
+
+    $parent = Split-Path -Path $Path -Parent
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-SSOk "Created runtime config: $Path"
+}
+
+function Import-SSRuntimeConfig {
+    param(
+        [string]$ConfigFile = "config.json",
+        [switch]$CreateIfMissing
+    )
+
+    $path = Resolve-SSRuntimeConfigFile $ConfigFile
+    if (-not (Test-Path -LiteralPath $path)) {
+        if ($CreateIfMissing) {
+            New-SSRuntimeConfigFile $path
+        } else {
+            throw "Runtime config not found: $path"
+        }
+    }
+
+    $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $configDir = Split-Path -Path $path -Parent
+    $webPort = [int](Get-SSObjectValue $config "webPort" 3000)
+    $serverPort = [int](Get-SSObjectValue $config "serverPort" 3001)
+    $pgPort = [int](Get-SSObjectValue $config "pgPort" 5433)
+    $databaseName = [string](Get-SSObjectValue $config "databaseName" "ss_erp")
+    $databaseUrl = [string](Get-SSObjectValue $config "databaseUrl" "postgresql://postgres@127.0.0.1:$pgPort/$databaseName")
+    $databaseInfo = Get-SSDatabaseInfo $databaseUrl
+    if (-not $databaseInfo.Database.Equals($databaseName, [System.StringComparison]::Ordinal)) {
+        throw "Runtime databaseUrl database '$($databaseInfo.Database)' must match databaseName '$databaseName'. Update both fields in $path before starting, backup or restore."
+    }
+    $corsOrigin = [string](Get-SSObjectValue $config "corsOrigin" "http://127.0.0.1:$webPort,http://localhost:$webPort")
+    $redisDisabled = Convert-SSToBool (Get-SSObjectValue $config "redisDisabled" $true) $true
+    $runWorkers = Convert-SSToBool (Get-SSObjectValue $config "runWorkers" $false) $false
+    $runtimeMode = [string](Get-SSObjectValue $config "runtimeMode" "local")
+    $uploadDir = [string](Get-SSObjectValue $config "uploadDir" "data/uploads")
+    $resolvedUploadDir = Resolve-SSConfigRelativePath $uploadDir $configDir
+    if ($runtimeMode.Trim().ToLowerInvariant() -eq "local") {
+        Assert-SSRuntimeLocalAssetDirSafe $resolvedUploadDir (Join-Path $configDir "data")
+    }
+    $postgresDataDir = [string](Get-SSObjectValue $config "postgresDataDir" "data/pgsql")
+    $resolvedPostgresDataDir = Resolve-SSConfigRelativePath $postgresDataDir $configDir
+    $imageStorageBackend = [string](Get-SSObjectValue $config "imageStorageBackend" "local")
+    $authCookieSecure = Convert-SSToBool (Get-SSObjectValue $config "authCookieSecure" $false) $false
+    $smsProvider = [string](Get-SSObjectValue $config "smsProvider" "console")
+    $apiBaseUrl = [string](Get-SSObjectValue $config "apiBaseUrl" "http://127.0.0.1:$serverPort")
+    $webBaseUrl = [string](Get-SSObjectValue $config "webBaseUrl" "http://127.0.0.1:$webPort")
+    $postgresBin = [string](Get-SSObjectValue $config "postgresBin" "runtime/pgsql/bin")
+    $resolvedPostgresBin = Resolve-SSConfigRelativePath $postgresBin $configDir
+
+    [Environment]::SetEnvironmentVariable("SS_ERP_CONFIG", $path, "Process")
+    [Environment]::SetEnvironmentVariable("NODE_ENV", "production", "Process")
+    [Environment]::SetEnvironmentVariable("SERVER_HOST", "127.0.0.1", "Process")
+    [Environment]::SetEnvironmentVariable("SERVER_PORT", [string]$serverPort, "Process")
+    [Environment]::SetEnvironmentVariable("DATABASE_URL", $databaseUrl, "Process")
+    [Environment]::SetEnvironmentVariable("SS_ERP_DATABASE_NAME", $databaseName, "Process")
+    [Environment]::SetEnvironmentVariable("JWT_SECRET", [string](Get-SSObjectValue $config "jwtSecret" ""), "Process")
+    [Environment]::SetEnvironmentVariable("ENCRYPTION_KEY", [string](Get-SSObjectValue $config "encryptionKey" ""), "Process")
+    [Environment]::SetEnvironmentVariable("SETUP_TOKEN", [string](Get-SSObjectValue $config "setupToken" ""), "Process")
+    [Environment]::SetEnvironmentVariable("CORS_ORIGIN", $corsOrigin, "Process")
+    [Environment]::SetEnvironmentVariable("CORS_EXTENSION_ORIGINS", "chrome-extension://*", "Process")
+    [Environment]::SetEnvironmentVariable("REDIS_DISABLED", $(if ($redisDisabled) { "1" } else { "0" }), "Process")
+    [Environment]::SetEnvironmentVariable("RUN_WORKERS", $(if ($runWorkers) { "1" } else { "0" }), "Process")
+    [Environment]::SetEnvironmentVariable("UPLOAD_DIR", $resolvedUploadDir, "Process")
+    [Environment]::SetEnvironmentVariable("RUNTIME_MODE", $runtimeMode, "Process")
+    [Environment]::SetEnvironmentVariable("NEXT_PUBLIC_RUNTIME_MODE", $runtimeMode, "Process")
+    [Environment]::SetEnvironmentVariable("NEXT_PUBLIC_API_BASE_URL", $apiBaseUrl, "Process")
+    [Environment]::SetEnvironmentVariable("NEXT_PUBLIC_WEB_BASE_URL", $webBaseUrl, "Process")
+    [Environment]::SetEnvironmentVariable("LOCAL_BASE_URL", $apiBaseUrl, "Process")
+    [Environment]::SetEnvironmentVariable("IMAGE_STORAGE_BACKEND", $imageStorageBackend, "Process")
+    [Environment]::SetEnvironmentVariable("AUTH_COOKIE_SECURE", $(if ($authCookieSecure) { "true" } else { "false" }), "Process")
+    [Environment]::SetEnvironmentVariable("SMS_PROVIDER", $smsProvider, "Process")
+    [Environment]::SetEnvironmentVariable("TURNSTILE_SECRET_KEY", "", "Process")
+    [Environment]::SetEnvironmentVariable("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "", "Process")
+    [Environment]::SetEnvironmentVariable("OSS_ENDPOINT", "", "Process")
+    [Environment]::SetEnvironmentVariable("OSS_BUCKET", "", "Process")
+    [Environment]::SetEnvironmentVariable("OSS_ACCESS_KEY_ID", "", "Process")
+    [Environment]::SetEnvironmentVariable("OSS_ACCESS_KEY_SECRET", "", "Process")
+    [Environment]::SetEnvironmentVariable("SS_ERP_POSTGRES_BIN", $resolvedPostgresBin, "Process")
+    [Environment]::SetEnvironmentVariable("SS_ERP_POSTGRES_DATA_DIR", $resolvedPostgresDataDir, "Process")
+
+    return [pscustomobject]@{
+        Path = $path
+        WebPort = $webPort
+        ServerPort = $serverPort
+        PgPort = $pgPort
+        DatabaseName = $databaseName
+        DatabaseUrl = $databaseUrl
+        ApiBaseUrl = $apiBaseUrl
+        WebBaseUrl = $webBaseUrl
+        RedisDisabled = $redisDisabled
+        RunWorkers = $runWorkers
+        UploadDir = $resolvedUploadDir
+        PostgresDataDir = $resolvedPostgresDataDir
+    }
+}
+
+function Get-SSLocalAssetDir {
+    param(
+        [ValidateSet("uploads", "watermarked", "resized")]
+        [string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($env:UPLOAD_DIR)) {
+        return (Join-Path (Get-SSRoot) "apps\server\public\$Name")
+    }
+
+    $uploadDir = Resolve-SSRootRelativePath $env:UPLOAD_DIR
+    if ($Name -eq "uploads") {
+        return $uploadDir
+    }
+
+    return (Join-Path (Split-Path -Path $uploadDir -Parent) $Name)
+}
+
 function Get-SSRuntimePostgresDataDir {
     if (-not [string]::IsNullOrWhiteSpace($env:SS_ERP_POSTGRES_DATA_DIR)) {
         if ([System.IO.Path]::IsPathRooted($env:SS_ERP_POSTGRES_DATA_DIR)) {
@@ -495,6 +726,29 @@ function Get-SSRuntimePostgresDataDir {
         return (Join-Path (Get-SSRoot) $env:SS_ERP_POSTGRES_DATA_DIR)
     }
     return (Join-Path (Get-SSRoot) "data\pgsql")
+}
+
+function Assert-SSRuntimeLocalAssetDirSafe {
+    param(
+        [string]$UploadDir,
+        [string]$DataRoot = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DataRoot)) {
+        $DataRoot = Join-Path (Get-SSRoot) "data"
+    }
+
+    $rootData = Get-SSFullPath $DataRoot
+    $resolvedUploadDir = Get-SSFullPath $UploadDir
+    if ([string]::IsNullOrWhiteSpace($resolvedUploadDir)) {
+        throw "Runtime uploadDir is empty."
+    }
+
+    $rootDataPrefix = $rootData.TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
+    $normalizedUploadDir = $resolvedUploadDir.TrimEnd("\", "/")
+    if ($normalizedUploadDir -eq $rootData.TrimEnd("\", "/") -or -not $normalizedUploadDir.StartsWith($rootDataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Runtime uploadDir must be a child directory under $rootData so package backup/restore never copies arbitrary user folders: $resolvedUploadDir"
+    }
 }
 
 function Get-SSFullPath {
@@ -800,6 +1054,40 @@ function Stop-SSRuntimePostgres {
     } else {
         Write-SSOk "Runtime PostgreSQL stopped."
         Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-SSRuntimeDatabaseTargetSafe {
+    param([string]$Action = "operation")
+
+    $currentDb = Get-SSDatabaseInfo $env:DATABASE_URL
+    $expectedDatabaseName = if ([string]::IsNullOrWhiteSpace($env:SS_ERP_DATABASE_NAME)) { "ss_erp" } else { $env:SS_ERP_DATABASE_NAME }
+    if (-not $currentDb.Database.Equals($expectedDatabaseName, [System.StringComparison]::Ordinal)) {
+        throw "$Action refused because DATABASE_URL database '$($currentDb.Database)' does not match runtime databaseName '$expectedDatabaseName'."
+    }
+    Assert-SSRuntimePostgresHost $currentDb
+
+    $expectedDataDir = Get-SSRuntimePostgresDataDir
+    Assert-SSRuntimePostgresDataDirSafe $expectedDataDir
+
+    $markerPath = Get-SSRuntimePostgresMarkerPath
+    if (-not (Test-Path -LiteralPath $markerPath)) {
+        throw "$Action requires the script-managed runtime PostgreSQL marker: $markerPath. Start the runtime package first, or do not use -ConfigFile for an existing PostgreSQL service."
+    }
+
+    $marker = $null
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "$Action refused because the runtime PostgreSQL marker is not valid JSON: $markerPath"
+    }
+
+    if (-not (Test-SSRuntimePostgresMarkerMatches $marker $currentDb $expectedDataDir)) {
+        throw "$Action refused because DATABASE_URL/data dir do not match the script-managed runtime PostgreSQL marker: $markerPath"
+    }
+
+    if (-not (Test-SSRuntimePostgresConnectionMatches $currentDb $expectedDataDir)) {
+        throw "$Action refused because the connected PostgreSQL data_directory does not match the runtime package data dir: $expectedDataDir"
     }
 }
 

@@ -20,6 +20,7 @@
     "smoke:remote": "pnpm --filter server smoke:remote",
     "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",
     "build:extension:local": "node scripts/build-extension-package.mjs local",
+    "build:local-windows-runtime": "pwsh -File scripts/windows-local/package-runtime.ps1",
     "verify:extension": "node scripts/verify-extension-package.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
   },

@@ -47,6 +47,19 @@ pnpm --filter web build
 pnpm verify:extension
 ```
 
+## Windows 本地版
+
+本地 Windows 版路线见 [docs/local-windows-package.md](docs/local-windows-package.md)。当前有两种包：
+
+- Portable v0.1：源码 + 脚本 + 用户本机 Node/pnpm/PostgreSQL/Redis。
+- Runtime-assisted v0.2：手动准备 `runtime/node`、`runtime/pgsql` 后，打包生产构建和本地 PostgreSQL runtime，默认禁用 Redis/Worker。
+
+```powershell
+.\scripts\windows-local\package.ps1 -DryRun
+.\scripts\windows-local\package-runtime.ps1 -DryRun
+pnpm build:local-windows-runtime
+```
+
 ## 项目结构
 
 ```text
@@ -56,7 +69,7 @@ packages/shared/   共享类型和 schema
 extensions/ss-erp/ Chrome 扩展
 print-agent/       打印代理原型
 scripts/           部署、备份、诊断、预检脚本
-scripts/windows-local/ Windows 本地版 Portable v0.1 脚本
+scripts/windows-local/ Windows 本地版 Portable v0.1 / Runtime-assisted v0.2 脚本
 deploy/            systemd 服务模板
 docker/            Docker/Nginx 模板
 docs/              项目文档

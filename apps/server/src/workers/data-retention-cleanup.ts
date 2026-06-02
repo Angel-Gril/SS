@@ -3,6 +3,7 @@ import { registerTimer } from '../lib/worker-registry.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { existsSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { getLocalAssetDir } from '../lib/local-assets.js';
 
 const TICK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let timer: NodeJS.Timeout | null = null;
@@ -103,11 +104,14 @@ async function cleanupOnce() {
   }
 
   // 6. Temp images (local filesystem)
-  const tempDirs = ['public/watermarked', 'public/resized', 'public/uploads/tmp'];
+  const tempDirs = [
+    getLocalAssetDir('watermarked'),
+    getLocalAssetDir('resized'),
+    join(getLocalAssetDir('uploads'), 'tmp'),
+  ];
   const tempCutoff = daysAgo(cfg.tempImagesDays);
   let tempFilesCount = 0;
-  for (const dir of tempDirs) {
-    const fullDir = join(process.cwd(), dir);
+  for (const fullDir of tempDirs) {
     if (!existsSync(fullDir)) continue;
     try {
       const files = readdirSync(fullDir);

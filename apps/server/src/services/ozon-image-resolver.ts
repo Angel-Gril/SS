@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
-import { join } from 'path';
 import { getStorageBackend, type ImageStorageBackend } from './image-storage.js';
+import { getLocalAssetPath } from '../lib/local-assets.js';
 
 function previewUrl(value: string): string {
   return value.length > 120 ? `${value.slice(0, 117)}...` : value;
@@ -97,7 +97,10 @@ export async function resolveImageUrls(
           `本地水印图无法上传到 OZON：${backendError}。请在 /admin/integrations 切换图片存储后端为 ozon-cdn 或 oss，并通过浏览器扩展同步该店铺的 seller cookie 与 company_id`,
         );
       }
-      const localPath = join(process.cwd(), 'public', img.replace(/^\//, ''));
+      const localPath = getLocalAssetPath(img);
+      if (!localPath) {
+        throw new Error(`水印图路径非法: ${img}`);
+      }
       let buf: Buffer;
       try {
         buf = await readFile(localPath);
