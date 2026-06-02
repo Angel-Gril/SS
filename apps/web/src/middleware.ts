@@ -35,6 +35,9 @@ function redirectToHost(request: NextRequest, hostname: string, pathname = reque
 function rewriteTo(request: NextRequest, pathname: string) {
   const url = request.nextUrl.clone();
   url.pathname = pathname;
+  if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+    url.protocol = 'http:';
+  }
   return NextResponse.rewrite(url);
 }
 
