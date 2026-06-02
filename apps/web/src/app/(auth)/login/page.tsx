@@ -88,6 +88,13 @@ export default function LoginPage() {
   }
 
   async function onSubmit(data: LoginInput) {
+    if (needsTurnstile && !turnstileToken) {
+      const message = '请先完成人机验证';
+      setTurnstileError(message);
+      toast({ title: message, variant: 'destructive' });
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await api.post<{ token?: string; user: { role: string } }>('/api/auth/login', {
@@ -192,7 +199,7 @@ export default function LoginPage() {
             <Button
               type="submit"
               className="w-full"
-              disabled={loading || (needsTurnstile && !turnstileToken)}
+              disabled={loading}
             >
               {loading ? '登录中...' : '登录'}
             </Button>
