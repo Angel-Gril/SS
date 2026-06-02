@@ -19,9 +19,33 @@ foreach ($name in @("server", "worker", "web")) {
     }
 }
 
+$nodeRuntime = Get-SSNodeRuntimePath
+if ($nodeRuntime) {
+    Write-SSOk "Optional Node runtime found: $nodeRuntime"
+} else {
+    Write-SSWarn "Optional Node runtime not found; PATH Node is required."
+}
+
+$pgRuntimeBin = Get-SSPostgresBinDir
+if ($pgRuntimeBin) {
+    Write-SSOk "Optional PostgreSQL runtime found: $pgRuntimeBin"
+    if (Test-Path -LiteralPath (Get-SSRuntimePostgresMarkerPath)) {
+        Write-SSOk "Runtime PostgreSQL marker exists; stop.ps1 can stop the script-managed PostgreSQL process."
+    } else {
+        Write-SSWarn "Runtime PostgreSQL marker not found; stop.ps1 will leave PostgreSQL untouched."
+    }
+} else {
+    Write-SSWarn "Optional PostgreSQL runtime not found; existing PostgreSQL service is required."
+}
+
 $db = Get-SSDatabaseInfo $env:DATABASE_URL
 if (Test-SSTcpPort $db.Host $db.Port) {
     Write-SSOk "PostgreSQL reachable: $($db.Host):$($db.Port)"
+    if (Test-SSDatabaseConnection) {
+        Write-SSOk "Target database reachable: $($db.Database)"
+    } else {
+        Write-SSError "Target database not accessible: $($db.Database)"
+    }
 } else {
     Write-SSError "PostgreSQL not reachable: $($db.Host):$($db.Port)"
 }

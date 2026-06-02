@@ -36,6 +36,20 @@ if (-not (Test-Path -LiteralPath $envPath)) {
 $envValues = Import-SSEnvFile $EnvFile
 Set-SSLocalEnvDefaults
 
+$nodeRuntime = Get-SSNodeRuntimePath
+if ($nodeRuntime) {
+    Write-SSOk "Optional Node runtime found: $nodeRuntime"
+} else {
+    Write-SSInfo "Optional Node runtime not found under runtime\node; PATH Node will be used."
+}
+
+$pgRuntimeBin = Get-SSPostgresBinDir
+if ($pgRuntimeBin) {
+    Write-SSOk "Optional PostgreSQL runtime found: $pgRuntimeBin"
+} else {
+    Write-SSInfo "Optional PostgreSQL runtime not found under runtime\pgsql; existing PostgreSQL service/client tools will be used."
+}
+
 $checks = @(
     (Test-SSCommand "node" "Install Node.js 20+ and reopen PowerShell."),
     (Test-SSCommand "pnpm" "Install pnpm 11.x: corepack enable, then corepack prepare pnpm@11.1.3 --activate."),
@@ -48,8 +62,17 @@ $checks = @(
 $db = Get-SSDatabaseInfo $env:DATABASE_URL
 if (Test-SSTcpPort $db.Host $db.Port) {
     Write-SSOk "PostgreSQL port reachable: $($db.Host):$($db.Port)"
+    if (Test-SSDatabaseConnection) {
+        Write-SSOk "Target database reachable: $($db.Database)"
+    } else {
+        Write-SSWarn "PostgreSQL host/port is reachable, but target database '$($db.Database)' is not accessible yet."
+        Write-SSWarn "Create it manually, run start.ps1 -CreateDatabase, or use start.ps1 -UseRuntimePostgres when runtime\pgsql is available."
+    }
 } else {
     Write-SSWarn "PostgreSQL is not reachable at $($db.Host):$($db.Port). Start PostgreSQL and verify DATABASE_URL."
+    if ($pgRuntimeBin) {
+        Write-SSWarn "runtime\pgsql is available; start.ps1 -UseRuntimePostgres can initialize data\pgsql and create the target database."
+    }
 }
 
 $redisDisabled = $env:REDIS_DISABLED -eq "1" -or $env:REDIS_DISABLED -eq "true"

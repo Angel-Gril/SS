@@ -1,7 +1,9 @@
 param(
     [string]$EnvFile = ".env.local-windows",
     [switch]$SkipMigrate,
-    [switch]$SkipWorker
+    [switch]$SkipWorker,
+    [switch]$CreateDatabase,
+    [switch]$UseRuntimePostgres
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,16 +21,38 @@ Write-SSInfo "Root: $root"
 $node = Get-SSCommandPath "node"
 $pnpm = Get-SSCommandPath "pnpm"
 $pgReady = Get-SSCommandPath "pg_isready"
+$psql = Get-SSCommandPath "psql"
 
 if (-not $node) { throw "node not found. Run prepare.ps1 first." }
 if (-not $pnpm) { throw "pnpm not found. Run prepare.ps1 first." }
 if (-not $pgReady) { throw "pg_isready not found. Install PostgreSQL client tools." }
+if (-not $psql) { throw "psql not found. Install PostgreSQL client tools." }
 
 $db = Get-SSDatabaseInfo $env:DATABASE_URL
-if (-not (Test-SSTcpPort $db.Host $db.Port)) {
-    throw "PostgreSQL is not reachable at $($db.Host):$($db.Port). Start PostgreSQL and verify DATABASE_URL."
+if ($UseRuntimePostgres) {
+    if (-not (Test-SSPostgresRuntime)) {
+        throw "PostgreSQL runtime not found. Put PostgreSQL under runtime\pgsql or set SS_ERP_POSTGRES_BIN, then rerun start.ps1 -UseRuntimePostgres."
+    }
+    Start-SSRuntimePostgres $db
+    Ensure-SSDatabaseExists $db
+} else {
+    if (-not (Test-SSTcpPort $db.Host $db.Port)) {
+        throw "PostgreSQL is not reachable at $($db.Host):$($db.Port). Start PostgreSQL and verify DATABASE_URL, or use -UseRuntimePostgres when runtime\pgsql is available."
+    }
+    Write-SSOk "PostgreSQL reachable: $($db.Host):$($db.Port)"
+
+    if ($CreateDatabase) {
+        Ensure-SSDatabaseExists $db
+    } elseif (-not (Test-SSDatabaseConnection)) {
+        throw "DATABASE_URL host/port is reachable, but the target database is not accessible. Create database '$($db.Database)' first, or rerun with -CreateDatabase if this user can create databases."
+    }
 }
-Write-SSOk "PostgreSQL reachable: $($db.Host):$($db.Port)"
+
+if (Test-SSDatabaseConnection) {
+    Write-SSOk "Target database reachable: $($db.Database)"
+} else {
+    throw "Target database check failed after PostgreSQL setup. Verify DATABASE_URL."
+}
 
 $redisDisabled = $env:REDIS_DISABLED -eq "1" -or $env:REDIS_DISABLED -eq "true"
 if ($redisDisabled) {

@@ -1,6 +1,6 @@
 # 本地 Windows 版打包路线
 
-本页定义 SS ERP 本地 Windows 版的交付边界。当前目标是 Portable v0.1：在一台 Windows 机器上运行现有源码和本机服务，先满足启动、采集、本地存图、备份恢复和扩展连接；暂不做完全免依赖安装器。
+本页定义 SS ERP 本地 Windows 版的交付边界。当前目标是 Portable v0.1：在一台 Windows 机器上运行现有源码和本机服务，先满足启动、采集、本地存图、备份恢复和扩展连接；暂不做完全免依赖安装器。Portable v0.1 默认连接用户已有 PostgreSQL；如果用户手动准备 `runtime\node`、`runtime\pgsql`，脚本可以走接近旧离线包的 runtime-assisted 模式，但不会自动下载、安装或把大二进制提交进 Git。
 
 ## 本地版目标
 
@@ -66,7 +66,7 @@
 
 ## 运行依赖
 
-Portable v0.1 不捆绑大二进制运行时，需要用户机器已有：
+Portable v0.1 默认不捆绑大二进制运行时，需要用户机器已有：
 
 - Windows 10/11 或 Windows Server。
 - Node.js 20+。
@@ -74,7 +74,15 @@ Portable v0.1 不捆绑大二进制运行时，需要用户机器已有：
 - PostgreSQL 客户端工具和数据库服务，至少包含 `psql`、`pg_isready`、`pg_dump`、`pg_restore`。
 - Redis 服务或兼容服务。
 
-Portable v0.1 不负责安装 PostgreSQL，也不会自动创建数据库。启动脚本只会对 `DATABASE_URL` 指向的已有数据库执行 Prisma migration；首次使用前需要先创建好 `ss_erp`（或把 `DATABASE_URL` 改成你已经创建的库）。
+Portable v0.1 默认不负责安装 PostgreSQL，也不会自动创建数据库。默认启动只会对 `DATABASE_URL` 指向的已有数据库执行 Prisma migration；首次使用前需要先创建好 `ss_erp`（或把 `DATABASE_URL` 改成你已经创建的库）。
+
+为了接近之前 `build/scripts/start.bat` 的旧离线包体验，脚本额外支持两个显式数据库入口：
+
+- `start.ps1 -CreateDatabase`：仍然使用用户机器已有 PostgreSQL 服务，但会在当前 `DATABASE_URL` 用户有 `CREATEDB` 权限时幂等创建目标数据库。
+- `start.ps1 -UseRuntimePostgres`：只在用户已经手动提供 `runtime\pgsql\bin` 或设置 `SS_ERP_POSTGRES_BIN` 时启用。脚本会初始化 `data\pgsql`、启动脚本管理的 PostgreSQL、创建目标数据库并跑 migration。因为 PostgreSQL runtime 初始化使用 trust auth，这个模式只允许 `DATABASE_URL` host 为 `127.0.0.1` 或 `localhost`。
+
+这两个入口都不自动安装 PostgreSQL，也不下载 PostgreSQL runtime。`runtime/`、`build/runtime/`、`data/` 都被 Git 忽略，不能把 Node/PostgreSQL runtime 或数据库文件提交进仓库。
+即使提供了 `runtime\node`，Portable v0.1 仍需要可用的 pnpm（或手动把可执行的 pnpm 放进 PATH），因为当前启动方式仍是源码 + pnpm 脚本。
 
 现实限制：Redis 没有官方稳定 Windows 发行版。Portable v0.1 不强行把 Redis 打进安装包。可选路线是使用 WSL/Docker/第三方 Windows Redis 兼容发行版，或在最小采集场景下显式设置 `REDIS_DISABLED=1`，但这不是完整 Worker/队列验收。
 
@@ -86,6 +94,9 @@ Portable v0.1 不负责安装 PostgreSQL，也不会自动创建数据库。启�
 SS ERP/
   .env.local-windows          本机私有配置，不提交 Git
   .env.local-windows.example  模板
+  runtime/node/               可选手动放置的 Node runtime，不提交 Git
+  runtime/pgsql/              可选手动放置的 PostgreSQL runtime，不提交 Git
+  data/pgsql/                 runtime-assisted PostgreSQL 数据目录，不提交 Git
   apps/server/public/uploads/ 当前代码默认本地上传目录
   data/backups/               Windows local 脚本默认备份目录
   logs/windows-local/         start/status/stop 日志和 pid
@@ -103,8 +114,9 @@ SS ERP/
 它会：
 
 - 检查 Node、pnpm、PostgreSQL CLI、Redis 可用性。
+- 检测是否存在可选 `runtime\node` / `runtime\pgsql`。
 - 如果 `.env.local-windows` 不存在，从模板生成一份并写入本机随机密钥。
-- 提示 PostgreSQL / Redis 当前是否可连接。
+- 提示 PostgreSQL / Redis 当前是否可连接，并区分 PostgreSQL 端口可达和目标数据库可访问。
 
 生成后按实际数据库密码修改：
 
@@ -112,6 +124,16 @@ SS ERP/
 DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/ss_erp"
 REDIS_URL="redis://127.0.0.1:6379"
 ```
+
+可选 runtime-assisted 字段：
+
+```env
+SS_ERP_POSTGRES_BIN=""
+SS_ERP_POSTGRES_DATA_DIR="data/pgsql"
+SS_ERP_NODE_EXE=""
+```
+
+留空时脚本会先找 `runtime\pgsql\bin` 和 `runtime\node\node.exe`，再回退到 PATH。
 
 ## 启动、停止、状态检查
 
@@ -124,12 +146,26 @@ REDIS_URL="redis://127.0.0.1:6379"
 默认会：
 
 - 加载 `.env.local-windows`。
-- 检查 PostgreSQL 和 Redis。
+- 检查 PostgreSQL、目标数据库和 Redis。
 - 执行 `pnpm --filter server db:deploy`。
 - 启动 API、Worker、Web。
 - 写入 `logs/windows-local/*.pid` 和日志文件。
 
-如果 `DATABASE_URL` 指向的数据库不存在，`db:deploy` 会失败；先在 PostgreSQL 中创建数据库后再重新启动。
+如果 `DATABASE_URL` 指向的数据库不存在，默认启动会在 migration 前失败并提示先创建数据库。可以选用：
+
+```powershell
+.\scripts\windows-local\start.ps1 -CreateDatabase
+```
+
+前提是 `DATABASE_URL` 中的用户有建库权限。
+
+如果你已经手动提供 `runtime\pgsql\bin`，可以走接近旧离线包的模式：
+
+```powershell
+.\scripts\windows-local\start.ps1 -UseRuntimePostgres
+```
+
+这个模式会初始化 `data\pgsql`（首次运行）、启动脚本管理的 PostgreSQL、幂等创建目标数据库，然后执行 migration。它不会安装 PostgreSQL，也不会停止用户系统里的共享 PostgreSQL 服务。出于安全边界，`-UseRuntimePostgres` 只接受 `127.0.0.1` 或 `localhost`，如果 `DATABASE_URL` 指向 `0.0.0.0`、局域网 IP 或其他非 loopback host，会直接拒绝。
 
 停止：
 
@@ -145,7 +181,31 @@ REDIS_URL="redis://127.0.0.1:6379"
 
 `stop.ps1` 只停止脚本启动的 Node 进程，不停止本机 PostgreSQL/Redis 服务，避免误伤用户已有数据库。
 
+如果是 `-UseRuntimePostgres` 启动的脚本管理 PostgreSQL，`stop.ps1` 会根据 `logs/windows-local/postgres-runtime.json` 停止该 runtime PostgreSQL。使用 `-KeepRuntimePostgres` 可以保留它继续运行：
+
+```powershell
+.\scripts\windows-local\stop.ps1 -KeepRuntimePostgres
+```
+
 如果 `.env.local-windows` 设置了 `REDIS_DISABLED=1`，`start.ps1` 会跳过独立 Worker 进程。原因是部分 BullMQ Worker 仍会在模块加载或启动时创建 Redis-backed queue。这个模式只用于最小本地采集验证，不算完整 Worker/队列验收。
+
+## Portable 打包
+
+默认 dry-run：
+
+```powershell
+.\scripts\windows-local\package.ps1 -DryRun
+```
+
+默认包只包含源码、`scripts/windows-local/`、文档和 `.env*.example`，排除 `.env*`、`node_modules`、`runtime/`、`build/runtime/`、`data/`、`logs/`、本地图目录和 zip 等产物。
+
+如果你已经手动准备根目录 `runtime\node` 和 `runtime\pgsql`，可以生成 runtime-assisted 目录：
+
+```powershell
+.\scripts\windows-local\package.ps1 -IncludeRuntime
+```
+
+这个参数只复制已经存在的 `runtime\node` 和 `runtime\pgsql`，不下载 runtime，不包含 Redis，不复制其他 `runtime/` 子目录，也不改变 Git 忽略规则。如果 `runtime\pgsql` 任意层级发现 `data`、`pgdata`、`log`、`logs`、`pg_log`、`PG_VERSION`、`postmaster.pid`、`postmaster.opts` 或常见日志文件，脚本会拒绝打包，避免把数据库状态或日志带进 Portable 目录。
 
 ## 备份和恢复
 
@@ -208,6 +268,16 @@ pnpm verify:extension
 ### PostgreSQL 不可连接
 
 先确认数据库服务已启动，并且 `.env.local-windows` 的 `DATABASE_URL` 用户名、密码、端口和数据库名正确。`prepare.ps1` 和 `status.ps1` 会提示当前 host/port 是否可连。
+
+如果提示端口可达但目标数据库不可访问，说明 PostgreSQL 服务在运行，但 `DATABASE_URL` 指向的库不存在或当前用户无权访问。处理方式：
+
+- 先手动创建 `ss_erp`。
+- 或运行 `start.ps1 -CreateDatabase`，前提是当前用户有建库权限。
+- 或手动提供 `runtime\pgsql\bin` 后运行 `start.ps1 -UseRuntimePostgres`，让脚本管理 `data\pgsql`。
+
+### 想接近之前打包版本的一键数据库体验
+
+之前旧包依赖 `build/runtime/pgsql`，会在首次启动时 `initdb`、启动 PostgreSQL、创建 `ss_erp` 并跑 migration。Portable v0.1 现在保留这个能力的受控版本：手动提供 `runtime\pgsql` 后用 `start.ps1 -UseRuntimePostgres`。默认路线仍然只连接已有 PostgreSQL，避免误解成免依赖安装器。
 
 ### Redis 不可用
 
