@@ -46,6 +46,10 @@ export function middleware(request: NextRequest) {
   const normalizedHost = host.split(':')[0]?.toLowerCase() || '';
   const pathname = request.nextUrl.pathname;
 
+  if ((normalizedHost === 'localhost' || normalizedHost === '127.0.0.1') && pathname === '/landing') {
+    return NextResponse.next();
+  }
+
   if (normalizedHost === WWW_MARKETING_HOSTNAME) {
     return redirectToHost(request, MARKETING_HOSTNAME, pathname === '/landing' ? '/' : pathname, 301);
   }
