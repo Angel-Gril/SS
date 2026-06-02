@@ -1,7 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, CheckCircle2, XCircle, Plug, TestTube2, AlertTriangle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  Loader2,
+  Package,
+  Plug,
+  TestTube2,
+  XCircle,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +29,14 @@ interface IntegrationCheck {
 
 type IntegrationTestKey = 'turnstile' | 'sms' | 'oss' | 'sentry';
 type DiagnosticStepStatus = 'pass' | 'warn' | 'fail' | 'skip';
+
+const appHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME
+  || (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
+const appOrigin = appHostname ? `https://${appHostname}` : '';
+
+function toAppHref(pathname: string): string {
+  return appOrigin ? `${appOrigin}${pathname}` : pathname;
+}
 
 interface DiagnosticStep {
   key: string;
@@ -48,8 +66,17 @@ interface LastTestResult {
   data?: IntegrationTestData;
 }
 
+interface ExtensionRelease {
+  version: string;
+  targets: {
+    cloud: { filename: string; downloadUrl: string };
+    local: { filename: string; downloadUrl: string };
+  };
+}
+
 export default function AdminIntegrationsPage() {
   const [checks, setChecks] = useState<IntegrationCheck[]>([]);
+  const [extensionRelease, setExtensionRelease] = useState<ExtensionRelease | null>(null);
   const [loading, setLoading] = useState(true);
   const [testingKey, setTestingKey] = useState<string | null>(null);
   const [smsTestPhone, setSmsTestPhone] = useState('');
@@ -59,8 +86,12 @@ export default function AdminIntegrationsPage() {
 
   async function load() {
     setLoading(true);
-    const res = await api.get<{ checks: IntegrationCheck[] }>('/api/admin/system-status/integrations');
-    if (res.code === 1 && res.data) setChecks(res.data.checks);
+    const [integrationRes, extensionRes] = await Promise.all([
+      api.get<{ checks: IntegrationCheck[] }>('/api/admin/system-status/integrations'),
+      api.get<ExtensionRelease>('/api/extensions/latest'),
+    ]);
+    if (integrationRes.code === 1 && integrationRes.data) setChecks(integrationRes.data.checks);
+    if (extensionRes.code === 1 && extensionRes.data) setExtensionRelease(extensionRes.data);
     setLoading(false);
   }
 
@@ -97,6 +128,8 @@ export default function AdminIntegrationsPage() {
         </p>
       </div>
 
+      <ExtensionReleaseCard release={extensionRelease} />
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -124,6 +157,58 @@ export default function AdminIntegrationsPage() {
 
       {lastTest && <IntegrationTestDetails result={lastTest} />}
     </div>
+  );
+}
+
+function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null }) {
+  const cloudHref = toAppHref(release?.targets.cloud.downloadUrl || '/api/extensions/download/cloud');
+  const localHref = toAppHref(release?.targets.local.downloadUrl || '/api/extensions/download/local');
+  const publicDownloadHref = toAppHref('/download');
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10">
+              <Package className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h2 className="font-medium">浏览器扩展发布</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                当前扩展包由已部署代码自动打包生成；更新扩展逻辑需要提交代码并重新部署，不通过公告热更新 JS。
+              </p>
+            </div>
+          </div>
+          <Badge variant="outline">v{release?.version || '-'}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+        <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
+          <InfoLine label="云端扩展包" value={release?.targets.cloud.filename || 'ss-erp-cloud.zip'} />
+          <InfoLine label="本地扩展包" value={release?.targets.local.filename || 'ss-erp-local.zip'} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" className="gap-1.5">
+            <a href={cloudHref}>
+              <Download className="h-3.5 w-3.5" />
+              下载云端包
+            </a>
+          </Button>
+          <Button asChild size="sm" variant="outline" className="gap-1.5">
+            <a href={localHref}>
+              <Download className="h-3.5 w-3.5" />
+              下载本地包
+            </a>
+          </Button>
+          <Button asChild size="sm" variant="ghost" className="gap-1.5">
+            <a href={publicDownloadHref}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              公开下载页
+            </a>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
