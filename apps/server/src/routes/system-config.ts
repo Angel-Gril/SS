@@ -12,6 +12,9 @@ import {
   getDefaultValue,
   validateKey,
   coerceConfigValue,
+  decryptConfigValue,
+  encryptConfigValue,
+  isSensitiveConfigKey,
 } from '../config/system-config-schema.js';
 
 const upsertSchema = z.object({
@@ -25,7 +28,7 @@ const upsertSchema = z.object({
 const SECRET_FIELDS: string[] = [];
 
 function isSecretKey(key: string): boolean {
-  return validateKey(key) && !!SystemConfigMeta[key].sensitive;
+  return isSensitiveConfigKey(key);
 }
 
 function maskSecretValue(key: string, value: string): string {
@@ -78,6 +81,10 @@ function invalidateConfigCaches(key?: string) {
   if (!key || key.startsWith('maintenance_')) invalidateMaintenanceCache();
 }
 
+function toPublicConfigValue(key: string, storedValue: string): string {
+  return maskSecretValue(key, decryptConfigValue(key, storedValue));
+}
+
 // 从 schema 生成 DEFAULTS（启动时 seed）
 const DEFAULTS = (Object.keys(SystemConfigSchema) as SystemConfigKey[]).map((key) => {
   const meta = SystemConfigMeta[key];
@@ -109,6 +116,19 @@ export async function seedSystemConfig() {
     const existing = await prisma.systemConfig.findUnique({ where: { key: item.key } });
     if (!existing) {
       await prisma.systemConfig.create({ data: item });
+    } else if (
+      existing.label !== item.label ||
+      existing.group !== item.group ||
+      existing.description !== item.description
+    ) {
+      await prisma.systemConfig.update({
+        where: { key: item.key },
+        data: {
+          label: item.label,
+          group: item.group,
+          description: item.description,
+        },
+      });
     }
   }
 }
@@ -121,7 +141,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     const { group } = request.query as { group?: string };
     const where = group ? { group } : undefined;
     const configs = await prisma.systemConfig.findMany({ where, orderBy: [{ group: 'asc' }, { key: 'asc' }] });
-    const masked = configs.map((c) => ({ ...c, value: maskSecretValue(c.key, c.value) }));
+    const masked = configs.map((c) => ({ ...c, value: toPublicConfigValue(c.key, c.value) }));
     return reply.send({ code: 1, msg: 'ok', data: masked });
   });
 
@@ -129,7 +149,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     const { key } = request.params as { key: string };
     const config = await prisma.systemConfig.findUnique({ where: { key } });
     if (!config) return reply.status(404).send({ code: 0, msg: '配置不存在' });
-    return reply.send({ code: 1, msg: 'ok', data: { ...config, value: maskSecretValue(config.key, config.value) } });
+    return reply.send({ code: 1, msg: 'ok', data: { ...config, value: toPublicConfigValue(config.key, config.value) } });
   });
 
   app.put('/:key', async (request, reply) => {
@@ -144,7 +164,8 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     }
 
     const existing = await prisma.systemConfig.findUnique({ where: { key } });
-    const finalValue = mergeMaskedValue(key, body.value, existing?.value || '');
+    const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
+    const finalValue = mergeMaskedValue(key, body.value, oldValue);
 
     // Schema 校验
     const schema = SystemConfigSchema[key];
@@ -155,11 +176,13 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: `${key}: ${errMsg}` });
     }
 
+    const displayValue = String(validated.data);
+    const storedValue = encryptConfigValue(key, displayValue);
     const meta = SystemConfigMeta[key];
     const config = await prisma.systemConfig.upsert({
       where: { key },
-      create: { key, value: finalValue, label: meta.label, group: meta.group, description: meta.description },
-      update: { value: finalValue },
+      create: { key, value: storedValue, label: meta.label, group: meta.group, description: meta.description },
+      update: { value: storedValue },
     });
 
     // 审计日志
@@ -169,14 +192,14 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       actorRole: actor.role,
       action: 'system_config_update',
       target: key,
-      before: existing ? { value: maskSecretValue(key, existing.value) } : null,
-      after: { value: maskSecretValue(key, finalValue) },
+      before: existing ? { value: maskSecretValue(key, oldValue) } : null,
+      after: { value: maskSecretValue(key, displayValue) },
       force: key === 'security_audit_log_enabled',
       ...extractRequestMeta(request),
     });
 
     invalidateConfigCaches(key);
-    return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
+    return reply.send({ code: 1, msg: '已保存', data: { ...config, value: toPublicConfigValue(config.key, config.value) } });
   });
 
   app.post('/', async (request, reply) => {
@@ -191,7 +214,8 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     }
 
     const existing = await prisma.systemConfig.findUnique({ where: { key } });
-    const finalValue = mergeMaskedValue(key, parsed.data.value, existing?.value || '');
+    const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
+    const finalValue = mergeMaskedValue(key, parsed.data.value, oldValue);
 
     // Schema 校验
     const schema = SystemConfigSchema[key];
@@ -202,18 +226,20 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: `${key}: ${errMsg}` });
     }
 
+    const displayValue = String(validated.data);
+    const storedValue = encryptConfigValue(key, displayValue);
     const meta = SystemConfigMeta[key];
     const config = await prisma.systemConfig.upsert({
       where: { key },
       create: {
         key,
-        value: finalValue,
+        value: storedValue,
         label: parsed.data.label || meta.label,
         group: parsed.data.group === 'general' ? meta.group : parsed.data.group,
         description: parsed.data.description || meta.description,
       },
       update: {
-        value: finalValue,
+        value: storedValue,
         label: parsed.data.label || meta.label,
         group: parsed.data.group === 'general' ? meta.group : parsed.data.group,
         description: parsed.data.description || meta.description,
@@ -227,14 +253,14 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       actorRole: actor.role,
       action: 'system_config_update',
       target: key,
-      before: existing ? { value: maskSecretValue(key, existing.value) } : null,
-      after: { value: maskSecretValue(key, finalValue) },
+      before: existing ? { value: maskSecretValue(key, oldValue) } : null,
+      after: { value: maskSecretValue(key, displayValue) },
       force: key === 'security_audit_log_enabled',
       ...extractRequestMeta(request),
     });
 
     invalidateConfigCaches(key);
-    return reply.send({ code: 1, msg: '已保存', data: { ...config, value: maskSecretValue(config.key, config.value) } });
+    return reply.send({ code: 1, msg: '已保存', data: { ...config, value: toPublicConfigValue(config.key, config.value) } });
   });
 
   app.delete('/:key', async (request, reply) => {
@@ -244,6 +270,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     }
 
     const existing = await prisma.systemConfig.findUnique({ where: { key } });
+    const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
     await prisma.systemConfig.deleteMany({ where: { key } });
 
     const actor = (request as any).user;
@@ -252,7 +279,7 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       actorRole: actor.role,
       action: 'system_config_delete',
       target: key,
-      before: existing ? { value: maskSecretValue(key, existing.value) } : null,
+      before: existing ? { value: maskSecretValue(key, oldValue) } : null,
       after: null,
       force: key === 'security_audit_log_enabled',
       ...extractRequestMeta(request),

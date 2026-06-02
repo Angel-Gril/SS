@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
+import { decrypt, encrypt } from '../lib/crypto.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema 定义：所有 SystemConfig key 的类型、默认值、校验规则
@@ -16,6 +17,20 @@ export const SystemConfigSchema = {
   feature_announcement_popup: z.boolean().default(true),
   feature_sms_register: z.boolean().default(true),
   feature_turnstile_login: z.boolean().default(true),
+
+  // ─── auth / challenge ───
+  auth_sms_provider: z.enum(['env', 'console', 'tencent']).default('env'),
+  auth_sms_tencent_secret_id: z.string().default(''),
+  auth_sms_tencent_secret_key: z.string().default(''),
+  auth_sms_tencent_region: z.string().default('ap-guangzhou'),
+  auth_sms_tencent_sdk_app_id: z.string().default(''),
+  auth_sms_tencent_sign_name: z.string().default(''),
+  auth_sms_tencent_template_id: z.string().default(''),
+  auth_sms_code_ttl_seconds: z.number().int().min(60).max(1800).default(300),
+  auth_sms_rate_limit_seconds: z.number().int().min(30).max(600).default(60),
+  auth_sms_test_phone_whitelist: z.string().default(''),
+  auth_turnstile_site_key: z.string().default(''),
+  auth_turnstile_secret_key: z.string().default(''),
 
   // ─── security ───
   security_login_max_attempts: z.number().int().min(1).max(100).default(5),
@@ -103,6 +118,7 @@ export interface ConfigMeta {
   group: string;
   description: string;
   sensitive?: boolean;
+  encrypted?: boolean;
 }
 
 export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
@@ -113,8 +129,21 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   feature_extension_list_overlay: { label: '扩展列表覆盖层', group: 'feature', description: '浏览器扩展在 OZON 商品列表页显示覆盖层' },
   feature_new_listing_flow: { label: '新版上架流程', group: 'feature', description: '启用新版上架流程（实验性）' },
   feature_announcement_popup: { label: '公告弹窗', group: 'feature', description: '是否在用户登录后弹出未读公告' },
-  feature_sms_register: { label: '短信注册', group: 'feature', description: '是否允许通过短信验证码注册新账号' },
-  feature_turnstile_login: { label: 'Turnstile 登录验证', group: 'feature', description: '登录时是否要求 Cloudflare Turnstile 人机验证' },
+  feature_sms_register: { label: '短信注册验证', group: 'auth', description: '云端模式注册时是否要求短信验证码' },
+  feature_turnstile_login: { label: 'Turnstile 登录验证', group: 'auth', description: '云端模式登录/发送短信时是否要求 Cloudflare Turnstile 人机验证' },
+
+  auth_sms_provider: { label: '短信服务来源', group: 'auth', description: 'env 表示跟随服务器环境变量；正式短信请选择 tencent；console 仅用于开发/测试' },
+  auth_sms_tencent_secret_id: { label: '腾讯云 SecretId', group: 'auth', description: '腾讯云账号 API SecretId', sensitive: true, encrypted: true },
+  auth_sms_tencent_secret_key: { label: '腾讯云 SecretKey', group: 'auth', description: '腾讯云账号 API SecretKey', sensitive: true, encrypted: true },
+  auth_sms_tencent_region: { label: '腾讯云短信 Region', group: 'auth', description: '默认 ap-guangzhou' },
+  auth_sms_tencent_sdk_app_id: { label: '短信 SDK AppId', group: 'auth', description: '腾讯云短信应用的 SDK AppId' },
+  auth_sms_tencent_sign_name: { label: '短信签名', group: 'auth', description: '腾讯云短信已审核通过的签名名称' },
+  auth_sms_tencent_template_id: { label: '短信模板 ID', group: 'auth', description: '验证码模板 ID；当前模板变量顺序为 {1}=验证码' },
+  auth_sms_code_ttl_seconds: { label: '验证码有效期（秒）', group: 'auth', description: '注册短信验证码有效期，默认 300 秒' },
+  auth_sms_rate_limit_seconds: { label: '短信发送间隔（秒）', group: 'auth', description: '同一手机号两次发送验证码之间的最小间隔，默认 60 秒' },
+  auth_sms_test_phone_whitelist: { label: '测试手机号白名单', group: 'auth', description: '逗号分隔。填写后，接口与集成页面只能向白名单手机号发送测试短信' },
+  auth_turnstile_site_key: { label: 'Turnstile Site Key', group: 'auth', description: '前端渲染 Cloudflare Turnstile 使用的公开 Site Key' },
+  auth_turnstile_secret_key: { label: 'Turnstile Secret Key', group: 'auth', description: '后端校验 Cloudflare Turnstile 使用的 Secret Key', sensitive: true, encrypted: true },
 
   security_login_max_attempts: { label: '登录失败锁定阈值', group: 'security', description: '同一 IP 登录失败次数达到该值后强制要求 Turnstile 人机验证（云端模式）' },
   security_admin_ip_whitelist: { label: '管理员 IP 白名单', group: 'security', description: '逗号分隔的 CIDR 列表（如 1.2.3.4/32,10.0.0.0/8）。留空表示不限制。生效需重启服务', sensitive: true },
@@ -186,9 +215,39 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
 // Typed Accessor：类型安全的读写接口
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const ENCRYPTED_CONFIG_PREFIX = 'enc:v1:';
+
+export function isSensitiveConfigKey(key: string): key is SystemConfigKey {
+  return validateKey(key) && !!SystemConfigMeta[key].sensitive;
+}
+
+export function isEncryptedConfigKey(key: string): key is SystemConfigKey {
+  if (!validateKey(key)) return false;
+  const meta = SystemConfigMeta[key];
+  const defaultValue = getDefaultValue(key);
+  return !!(meta.encrypted || meta.sensitive) && typeof defaultValue === 'string';
+}
+
+export function decryptConfigValue(key: string, raw: string): string {
+  if (!validateKey(key) || !raw.startsWith(ENCRYPTED_CONFIG_PREFIX)) return raw;
+  try {
+    return decrypt(raw.slice(ENCRYPTED_CONFIG_PREFIX.length));
+  } catch (error: any) {
+    console.warn(`[SystemConfig] ${key} 解密失败，使用原始值: ${error?.message || error}`);
+    return raw;
+  }
+}
+
+export function encryptConfigValue(key: string, value: string): string {
+  if (!isEncryptedConfigKey(key) || value === '') return value;
+  if (value.startsWith(ENCRYPTED_CONFIG_PREFIX)) return value;
+  return `${ENCRYPTED_CONFIG_PREFIX}${encrypt(value)}`;
+}
+
 function parseValue<K extends SystemConfigKey>(key: K, raw: string): SystemConfigValue<K> {
   const schema = SystemConfigSchema[key];
-  const parsed = schema.safeParse(coerceConfigValue(key, raw));
+  const decrypted = decryptConfigValue(key, raw);
+  const parsed = schema.safeParse(coerceConfigValue(key, decrypted));
   if (!parsed.success) {
     console.warn(`[SystemConfig] ${key} 解析失败，使用默认值:`, parsed.error.errors);
     return schema.parse(undefined); // 触发 default
@@ -223,7 +282,7 @@ export function coerceConfigValue<K extends SystemConfigKey>(key: K, raw: string
 }
 
 function serializeValue<K extends SystemConfigKey>(key: K, value: SystemConfigValue<K>): string {
-  return String(value);
+  return encryptConfigValue(key, String(value));
 }
 
 export async function getConfig<K extends SystemConfigKey>(key: K): Promise<SystemConfigValue<K>> {
@@ -255,7 +314,7 @@ export async function getAllConfigs(): Promise<Record<string, string>> {
   const records = await prisma.systemConfig.findMany({ select: { key: true, value: true } });
   const result: Record<string, string> = {};
   for (const r of records) {
-    result[r.key] = r.value;
+    result[r.key] = decryptConfigValue(r.key, r.value);
   }
   return result;
 }

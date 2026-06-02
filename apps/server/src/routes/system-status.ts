@@ -4,6 +4,8 @@ import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
+import { getSmsRuntimeConfig, getTurnstileRuntimeConfig } from '../lib/auth-challenge-config.js';
+import { getSmsProvider } from '../lib/sms/index.js';
 
 interface ConfiguredCheck {
   key: string;
@@ -16,6 +18,14 @@ interface ConfiguredCheck {
 function envIsSet(name: string): boolean {
   const v = process.env[name];
   return typeof v === 'string' && v.trim().length > 0;
+}
+
+function hasAll(values: string[]): boolean {
+  return values.every((value) => String(value || '').trim().length > 0);
+}
+
+function maskPhone(phone: string): string {
+  return phone.replace(/^(\+?\d{2,3})?\d{3}(\d{4})$/, '$1***$2');
 }
 
 async function getUploadOssDiagnostic() {
@@ -61,6 +71,10 @@ export async function systemStatusRoutes(app: FastifyInstance) {
 
   app.get('/integrations', async (_request, reply) => {
     const rc = await getRuntimeConfigForStorage();
+    const [smsConfig, turnstileConfig] = await Promise.all([
+      getSmsRuntimeConfig(),
+      getTurnstileRuntimeConfig(),
+    ]);
     const uploadOss = await getUploadOssDiagnostic();
     const ossConfigured = rc.oss !== null;
     const ozonRelay = !!rc.ozonCdnRelayUrl;
@@ -83,22 +97,31 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       {
         key: 'sms',
         label: '短信服务',
-        configured:
-          envIsSet('SMS_PROVIDER') &&
-          process.env.SMS_PROVIDER !== 'console' &&
-          envIsSet('SMS_TENCENT_SECRET_ID') &&
-          envIsSet('SMS_TENCENT_SECRET_KEY') &&
-          envIsSet('SMS_TENCENT_SDK_APP_ID') &&
-          envIsSet('SMS_TENCENT_SIGN_NAME') &&
-          envIsSet('SMS_TENCENT_TEMPLATE_ID'),
-        source: 'env',
-        detail: process.env.SMS_PROVIDER === 'console' ? '当前为 console（仅开发）' : (process.env.SMS_PROVIDER || '未配置'),
+        configured: smsConfig.provider === 'console' || (
+          smsConfig.provider === 'tencent' &&
+          hasAll([
+            smsConfig.tencent.secretId,
+            smsConfig.tencent.secretKey,
+            smsConfig.tencent.sdkAppId,
+            smsConfig.tencent.signName,
+            smsConfig.tencent.templateId,
+          ])
+        ),
+        source: smsConfig.source === 'system-config' ? 'db' : smsConfig.source,
+        detail: smsConfig.provider === 'console'
+          ? '当前为 console（仅开发/测试，不发送真实短信）'
+          : smsConfig.provider === 'tencent'
+            ? `provider=tencent, region=${smsConfig.tencent.region}, sdkAppId=${smsConfig.tencent.sdkAppId || '未填'}`
+            : '未配置短信 provider',
       },
       {
         key: 'turnstile',
         label: 'Cloudflare Turnstile',
-        configured: envIsSet('TURNSTILE_SECRET_KEY'),
-        source: 'env',
+        configured: hasAll([turnstileConfig.secretKey]),
+        source: turnstileConfig.source === 'system-config' ? 'db' : turnstileConfig.source === 'none' ? 'env' : turnstileConfig.source,
+        detail: turnstileConfig.enabled
+          ? `已启用，Site Key ${turnstileConfig.siteKey ? '已配置' : '未配置'}`
+          : '后台开关已关闭，当前不会要求人机验证',
       },
       {
         key: 'sentry',
@@ -174,8 +197,9 @@ export async function systemStatusRoutes(app: FastifyInstance) {
   });
 
   app.post('/test/turnstile', async (_request, reply) => {
-    const secret = process.env.TURNSTILE_SECRET_KEY;
-    if (!secret) return reply.send({ code: 0, msg: 'TURNSTILE_SECRET_KEY 未配置' });
+    const turnstileConfig = await getTurnstileRuntimeConfig();
+    const secret = turnstileConfig.secretKey;
+    if (!secret) return reply.send({ code: 0, msg: 'Turnstile Secret Key 未配置。请在系统设置 -> 短信与人机验证中填写，或配置 TURNSTILE_SECRET_KEY' });
 
     try {
       const body = new URLSearchParams({ secret, response: 'XXXX.DUMMY.TOKEN.XXXX' });
@@ -188,7 +212,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       const data = (await res.json()) as { success: boolean; 'error-codes'?: string[] };
       const codes = data['error-codes'] || [];
       if (codes.includes('invalid-input-secret') || codes.includes('missing-input-secret')) {
-        return reply.send({ code: 0, msg: 'Secret Key 无效，请检查 TURNSTILE_SECRET_KEY' });
+        return reply.send({ code: 0, msg: 'Secret Key 无效，请检查后台配置或 TURNSTILE_SECRET_KEY' });
       }
       return reply.send({ code: 1, msg: 'Secret Key 已被 Cloudflare 接受（测试 token 被预期拒绝）', data: { errorCodes: codes } });
     } catch (e: any) {
@@ -196,18 +220,54 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/test/sms', async (_request, reply) => {
-    const provider = process.env.SMS_PROVIDER || '';
-    if (!provider || provider === 'console') {
-      return reply.send({ code: 0, msg: 'SMS_PROVIDER 未配置或为 console（仅开发用）' });
+  app.post('/test/sms', async (request, reply) => {
+    const smsConfig = await getSmsRuntimeConfig();
+    const body = request.body as { phone?: string };
+    const phone = String(body?.phone || '').trim();
+
+    if (!smsConfig.provider) {
+      return reply.send({ code: 0, msg: '短信 provider 未配置。请在系统设置 -> 短信与人机验证中选择 tencent，或配置 SMS_PROVIDER' });
     }
-    if (provider !== 'tencent') {
-      return reply.send({ code: 0, msg: `provider=${provider} 测试尚未实现` });
+
+    if (smsConfig.provider === 'console') {
+      if (phone) {
+        const provider = await getSmsProvider();
+        await provider.send(phone, '123456');
+      }
+      return reply.send({ code: 1, msg: phone ? `console 测试短信已写入服务器日志（${maskPhone(phone)}）` : 'console provider 可用（仅开发/测试，不发送真实短信）' });
     }
+
+    if (smsConfig.provider !== 'tencent') {
+      return reply.send({ code: 0, msg: `provider=${smsConfig.provider} 测试尚未实现` });
+    }
+
+    const missing = [
+      ['SecretId', smsConfig.tencent.secretId],
+      ['SecretKey', smsConfig.tencent.secretKey],
+      ['SDK AppId', smsConfig.tencent.sdkAppId],
+      ['签名', smsConfig.tencent.signName],
+      ['模板 ID', smsConfig.tencent.templateId],
+    ].filter(([, value]) => !String(value || '').trim()).map(([label]) => label);
+    if (missing.length > 0) {
+      return reply.send({ code: 0, msg: `腾讯云 SMS 配置不完整：缺少 ${missing.join('、')}` });
+    }
+
     try {
-      const { TencentSmsProvider } = await import('../lib/sms/tencent.js');
-      new TencentSmsProvider();
-      return reply.send({ code: 1, msg: '腾讯云 SMS 配置已加载，凭证字段齐全（实际发送需触发注册流程）' });
+      const provider = await getSmsProvider();
+      if (!phone) {
+        return reply.send({ code: 1, msg: '腾讯云 SMS 配置已加载，凭证字段齐全。填写手机号可发送真实测试短信' });
+      }
+
+      if (smsConfig.testPhoneWhitelist.length > 0 && !smsConfig.testPhoneWhitelist.includes(phone)) {
+        return reply.send({ code: 0, msg: `测试手机号不在白名单中：${maskPhone(phone)}` });
+      }
+
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const result = await provider.send(phone, code);
+      if (!result.ok) {
+        return reply.send({ code: 0, msg: `测试短信发送失败：${result.err || 'unknown'}` });
+      }
+      return reply.send({ code: 1, msg: `测试短信已发送到 ${maskPhone(phone)}` });
     } catch (e: any) {
       return reply.send({ code: 0, msg: e?.message || '加载失败' });
     }

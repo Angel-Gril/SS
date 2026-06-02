@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
-import { z } from 'zod';
 import { registerSchema, type RegisterInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -19,15 +18,21 @@ const TURNSTILE_SITE_KEY =
   (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
 const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
 
-const registerFormSchema = registerSchema.superRefine((data, ctx) => {
-  if (!IS_LOCAL_RUNTIME && !data.smsCode) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['smsCode'],
-      message: '请输入 6 位验证码',
-    });
-  }
-});
+interface AuthChallengeConfig {
+  runtimeMode: 'local' | 'cloud';
+  smsRegisterEnabled: boolean;
+  turnstileEnabled: boolean;
+  turnstileSiteKey: string;
+  smsRateLimitSeconds: number;
+}
+
+const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
+  runtimeMode: IS_LOCAL_RUNTIME ? 'local' : 'cloud',
+  smsRegisterEnabled: !IS_LOCAL_RUNTIME,
+  turnstileEnabled: !IS_LOCAL_RUNTIME,
+  turnstileSiteKey: TURNSTILE_SITE_KEY,
+  smsRateLimitSeconds: 60,
+};
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -36,7 +41,23 @@ export default function RegisterPage() {
   const [countdown, setCountdown] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileError, setTurnstileError] = useState('');
+  const [challengeConfig, setChallengeConfig] = useState<AuthChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
   const turnstileRef = useRef<TurnstileInstance | null>(null);
+  const needsSms = challengeConfig.runtimeMode === 'cloud' && challengeConfig.smsRegisterEnabled;
+  const needsTurnstile = needsSms && challengeConfig.turnstileEnabled;
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get<AuthChallengeConfig>('/api/auth/challenge-config');
+        if (res.code === 1 && res.data) {
+          setChallengeConfig(res.data);
+        }
+      } catch {
+        // keep build-time fallback
+      }
+    })();
+  }, []);
 
   const {
     register,
@@ -44,11 +65,11 @@ export default function RegisterPage() {
     getValues,
     formState: { errors },
   } = useForm<RegisterInput>({
-    resolver: zodResolver(registerFormSchema),
+    resolver: zodResolver(registerSchema),
   });
 
   function startCountdown() {
-    setCountdown(60);
+    setCountdown(challengeConfig.smsRateLimitSeconds || 60);
     const timer = setInterval(() => {
       setCountdown((c) => {
         if (c <= 1) {
@@ -80,7 +101,7 @@ export default function RegisterPage() {
       toast({ title: '请先输入有效手机号', variant: 'destructive' });
       return;
     }
-    if (!IS_LOCAL_RUNTIME && !turnstileToken) {
+    if (needsTurnstile && !turnstileToken) {
       toast({ title: '请先完成人机验证', variant: 'destructive' });
       return;
     }
@@ -104,6 +125,11 @@ export default function RegisterPage() {
   }
 
   async function onSubmit(data: RegisterInput) {
+    if (needsSms && !data.smsCode) {
+      toast({ title: '请输入 6 位验证码', variant: 'destructive' });
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await api.post<{ token?: string }>('/api/auth/register', data);
@@ -140,7 +166,7 @@ export default function RegisterPage() {
               <Input id="phone" placeholder="11 位手机号" {...register('phone')} autoComplete="tel" />
               {errors.phone && <p className="text-xs text-destructive">{errors.phone.message}</p>}
             </div>
-            {!IS_LOCAL_RUNTIME && (
+            {needsSms && (
               <div className="space-y-2">
                 <Label htmlFor="smsCode">短信验证码</Label>
                 <div className="flex gap-2">
@@ -181,12 +207,12 @@ export default function RegisterPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            {!IS_LOCAL_RUNTIME && (
-              TURNSTILE_SITE_KEY ? (
+            {needsTurnstile && (
+              challengeConfig.turnstileSiteKey ? (
                 <div className="flex justify-center">
                   <Turnstile
                     ref={turnstileRef}
-                    siteKey={TURNSTILE_SITE_KEY}
+                    siteKey={challengeConfig.turnstileSiteKey}
                     onSuccess={(token) => {
                       setTurnstileToken(token);
                       setTurnstileError('');
@@ -209,7 +235,7 @@ export default function RegisterPage() {
                 </p>
               )
             )}
-            {!IS_LOCAL_RUNTIME && turnstileError && (
+            {needsTurnstile && turnstileError && (
               <div className="space-y-2 text-center">
                 <p className="text-xs text-destructive">{turnstileError}</p>
                 <Button type="button" variant="outline" size="sm" onClick={resetTurnstile}>

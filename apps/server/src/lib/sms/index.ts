@@ -2,30 +2,40 @@ import type { SmsProvider } from './types.js';
 import { ConsoleSmsProvider } from './console.js';
 import { TencentSmsProvider } from './tencent.js';
 import { AliyunSmsProvider } from './aliyun.js';
+import { getSmsRuntimeConfig } from '../auth-challenge-config.js';
 
 export type { SmsProvider, SmsResult } from './types.js';
 
-let _provider: SmsProvider | null = null;
+let _provider: { signature: string; provider: SmsProvider } | null = null;
 
-export function getSmsProvider(): SmsProvider {
-  if (_provider) return _provider;
-
-  const name = process.env.SMS_PROVIDER || (process.env.NODE_ENV === 'production' ? '' : 'console');
-
+function createProvider(name: string, tencentConfig?: ConstructorParameters<typeof TencentSmsProvider>[0]): SmsProvider {
   switch (name) {
     case 'tencent':
-      _provider = new TencentSmsProvider();
-      break;
+      return new TencentSmsProvider(tencentConfig);
     case 'aliyun':
-      _provider = new AliyunSmsProvider();
-      break;
+      return new AliyunSmsProvider();
     case 'console':
-      _provider = new ConsoleSmsProvider();
-      break;
+      return new ConsoleSmsProvider();
     default:
       throw new Error('[SMS] SMS_PROVIDER 未配置，生产环境必须配置真实短信 provider');
   }
+}
 
-  console.log(`[SMS] provider = ${name}`);
-  return _provider;
+export async function getSmsProvider(): Promise<SmsProvider> {
+  const config = await getSmsRuntimeConfig();
+  const signature = JSON.stringify({
+    provider: config.provider,
+    tencent: config.tencent,
+  });
+
+  if (_provider?.signature === signature) return _provider.provider;
+
+  const provider = createProvider(config.provider, config.tencent);
+  _provider = { signature, provider };
+  console.log(`[SMS] provider = ${config.provider || 'unset'} (${config.source})`);
+  return provider;
+}
+
+export function resetSmsProviderCache() {
+  _provider = null;
 }

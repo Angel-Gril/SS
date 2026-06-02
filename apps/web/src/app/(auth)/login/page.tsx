@@ -18,15 +18,42 @@ const TURNSTILE_SITE_KEY =
   (process.env.NODE_ENV === 'production' ? '' : '1x00000000000000000000AA');
 const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
 
+interface AuthChallengeConfig {
+  runtimeMode: 'local' | 'cloud';
+  smsRegisterEnabled: boolean;
+  turnstileEnabled: boolean;
+  turnstileSiteKey: string;
+  smsRateLimitSeconds: number;
+}
+
+const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
+  runtimeMode: IS_LOCAL_RUNTIME ? 'local' : 'cloud',
+  smsRegisterEnabled: !IS_LOCAL_RUNTIME,
+  turnstileEnabled: !IS_LOCAL_RUNTIME,
+  turnstileSiteKey: TURNSTILE_SITE_KEY,
+  smsRateLimitSeconds: 60,
+};
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileError, setTurnstileError] = useState('');
+  const [challengeConfig, setChallengeConfig] = useState<AuthChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
   const turnstileRef = useRef<TurnstileInstance | null>(null);
+  const needsTurnstile = challengeConfig.runtimeMode === 'cloud' && challengeConfig.turnstileEnabled;
 
   useEffect(() => {
     (async () => {
+      try {
+        const challengeRes = await api.get<AuthChallengeConfig>('/api/auth/challenge-config');
+        if (challengeRes.code === 1 && challengeRes.data) {
+          setChallengeConfig(challengeRes.data);
+        }
+      } catch {
+        // keep build-time fallback
+      }
+
       try {
         const res = await api.get<{ needsSetup: boolean }>('/api/setup/status');
         if (res.code === 1 && res.data?.needsSetup) {
@@ -126,12 +153,12 @@ export default function LoginPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            {!IS_LOCAL_RUNTIME && (
-              TURNSTILE_SITE_KEY ? (
+            {needsTurnstile && (
+              challengeConfig.turnstileSiteKey ? (
                 <div className="flex justify-center">
                   <Turnstile
                     ref={turnstileRef}
-                    siteKey={TURNSTILE_SITE_KEY}
+                    siteKey={challengeConfig.turnstileSiteKey}
                     onSuccess={(token) => {
                       setTurnstileToken(token);
                       setTurnstileError('');
@@ -154,7 +181,7 @@ export default function LoginPage() {
                 </p>
               )
             )}
-            {!IS_LOCAL_RUNTIME && turnstileError && (
+            {needsTurnstile && turnstileError && (
               <div className="space-y-2 text-center">
                 <p className="text-xs text-destructive">{turnstileError}</p>
                 <Button type="button" variant="outline" size="sm" onClick={resetTurnstile}>
@@ -165,7 +192,7 @@ export default function LoginPage() {
             <Button
               type="submit"
               className="w-full"
-              disabled={loading || (!IS_LOCAL_RUNTIME && !turnstileToken)}
+              disabled={loading || (needsTurnstile && !turnstileToken)}
             >
               {loading ? '登录中...' : '登录'}
             </Button>

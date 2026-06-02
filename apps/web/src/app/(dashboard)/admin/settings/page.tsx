@@ -32,6 +32,7 @@ interface BackupStatus {
 
 const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
+  auth: '短信与人机验证',
   upload: '上传与对象存储',
   retention: '数据保留',
   backup: '备份策略',
@@ -41,7 +42,7 @@ const GROUP_LABELS: Record<string, string> = {
   general: '通用',
 };
 
-const GROUP_ORDER = ['maintenance', 'feature', 'upload', 'retention', 'backup', 'version', 'randomize', 'general'];
+const GROUP_ORDER = ['maintenance', 'auth', 'feature', 'upload', 'retention', 'backup', 'version', 'randomize', 'general'];
 
 export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);
@@ -174,6 +175,19 @@ export default function AdminSettingsPage() {
           );
         }
 
+        if (group === 'auth') {
+          return (
+            <AuthSettingsPanel
+              key={group}
+              items={items}
+              editing={editing}
+              setEditing={setEditing}
+              savingKey={savingKey}
+              saveConfigs={saveConfigs}
+            />
+          );
+        }
+
         return (
           <div key={group} className="space-y-4">
             {group === 'backup' && backupStatus && (
@@ -298,6 +312,157 @@ interface UploadSettingsPanelProps {
   savingKey: string | null;
   saveConfig: (key: string) => Promise<void>;
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+}
+
+interface AuthSettingsPanelProps {
+  items: SystemConfig[];
+  editing: Record<string, string>;
+  setEditing: (next: Record<string, string>) => void;
+  savingKey: string | null;
+  saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+}
+
+const AUTH_GENERAL_KEYS = [
+  'feature_sms_register',
+  'feature_turnstile_login',
+  'auth_sms_provider',
+  'auth_sms_code_ttl_seconds',
+  'auth_sms_rate_limit_seconds',
+  'auth_sms_test_phone_whitelist',
+  'auth_turnstile_site_key',
+  'auth_turnstile_secret_key',
+];
+
+const AUTH_TENCENT_KEYS = [
+  'auth_sms_tencent_secret_id',
+  'auth_sms_tencent_secret_key',
+  'auth_sms_tencent_region',
+  'auth_sms_tencent_sdk_app_id',
+  'auth_sms_tencent_sign_name',
+  'auth_sms_tencent_template_id',
+];
+
+function AuthSettingsPanel({
+  items,
+  editing,
+  setEditing,
+  savingKey,
+  saveConfigs,
+}: AuthSettingsPanelProps) {
+  const configs = Object.fromEntries(items.map((item) => [item.key, item]));
+  const provider = editing.auth_sms_provider || 'env';
+  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const isSavingAuth = savingKey === 'group:短信与人机验证';
+  const isSavingTencent = savingKey === 'group:腾讯云短信';
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">短信与人机验证</Badge>
+            <span className="text-sm text-muted-foreground">注册短信、登录人机验证、测试短信白名单</span>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <section className="rounded-md border bg-muted/20 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-sm font-medium">云端注册与登录保护</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  后台配置优先于 VPS .env。密钥保存后会加密入库，页面只返回掩码。
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfigs(AUTH_GENERAL_KEYS, '短信与人机验证')}
+                disabled={isSavingAuth}
+              >
+                {isSavingAuth ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存验证配置</span>
+              </Button>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="grid gap-4 md:grid-cols-2">
+              <ConfigToggle cfg={configs.feature_sms_register} editing={editing} setValue={setValue} />
+              <ConfigToggle cfg={configs.feature_turnstile_login} editing={editing} setValue={setValue} />
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-md border p-4">
+            <div>
+              <h3 className="text-sm font-medium">短信服务来源</h3>
+              <p className="text-xs text-muted-foreground">正式云端建议选择腾讯云短信；env 表示继续读取服务器环境变量。</p>
+            </div>
+            <div className="grid gap-2 md:grid-cols-3">
+              {[
+                { value: 'tencent', label: '腾讯云短信', desc: '正式注册验证码' },
+                { value: 'env', label: '服务器环境', desc: '读取 VPS .env' },
+                { value: 'console', label: 'Console 测试', desc: '只写日志不发短信' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setValue('auth_sms_provider', option.value)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                    provider === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{option.label}</span>
+                  <span className="text-xs text-muted-foreground">{option.desc}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <ConfigInput cfg={configs.auth_sms_code_ttl_seconds} editing={editing} setValue={setValue} placeholder="300" />
+              <ConfigInput cfg={configs.auth_sms_rate_limit_seconds} editing={editing} setValue={setValue} placeholder="60" />
+              <ConfigInput cfg={configs.auth_sms_test_phone_whitelist} editing={editing} setValue={setValue} placeholder="13800138000,13900139000" />
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-md border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">腾讯云短信</h3>
+                <p className="text-xs text-muted-foreground">模板变量当前按 {`{1}=验证码`} 发送，腾讯云模板需保持一致。</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfigs(['auth_sms_provider', ...AUTH_TENCENT_KEYS], '腾讯云短信', { auth_sms_provider: 'tencent' })}
+                disabled={isSavingTencent}
+              >
+                {isSavingTencent ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存腾讯云短信</span>
+              </Button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <ConfigInput cfg={configs.auth_sms_tencent_secret_id} editing={editing} setValue={setValue} type="password" placeholder="SecretId" />
+              <ConfigInput cfg={configs.auth_sms_tencent_secret_key} editing={editing} setValue={setValue} type="password" placeholder="SecretKey" />
+              <ConfigInput cfg={configs.auth_sms_tencent_region} editing={editing} setValue={setValue} placeholder="ap-guangzhou" />
+              <ConfigInput cfg={configs.auth_sms_tencent_sdk_app_id} editing={editing} setValue={setValue} placeholder="SDK AppId" />
+              <ConfigInput cfg={configs.auth_sms_tencent_sign_name} editing={editing} setValue={setValue} placeholder="已审核签名" />
+              <ConfigInput cfg={configs.auth_sms_tencent_template_id} editing={editing} setValue={setValue} placeholder="模板 ID" />
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-md border p-4">
+            <div>
+              <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>
+              <p className="text-xs text-muted-foreground">Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <ConfigInput cfg={configs.auth_turnstile_site_key} editing={editing} setValue={setValue} placeholder="0x4AAAA..." />
+              <ConfigInput cfg={configs.auth_turnstile_secret_key} editing={editing} setValue={setValue} type="password" placeholder="0x4AAAA... secret" />
+            </div>
+          </section>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 const R2_REQUIRED_KEYS = [

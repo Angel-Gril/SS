@@ -5,6 +5,7 @@ import { Loader2, CheckCircle2, XCircle, Plug, TestTube2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -20,6 +21,7 @@ export default function AdminIntegrationsPage() {
   const [checks, setChecks] = useState<IntegrationCheck[]>([]);
   const [loading, setLoading] = useState(true);
   const [testingKey, setTestingKey] = useState<string | null>(null);
+  const [smsTestPhone, setSmsTestPhone] = useState('');
 
   useEffect(() => { load(); }, []);
 
@@ -32,7 +34,10 @@ export default function AdminIntegrationsPage() {
 
   async function testIntegration(key: 'turnstile' | 'sms' | 'oss' | 'sentry') {
     setTestingKey(key);
-    const res = await api.post<{ errorCodes?: string[] }>(`/api/admin/system-status/test/${key}`, {});
+    const res = await api.post<{ errorCodes?: string[] }>(
+      `/api/admin/system-status/test/${key}`,
+      key === 'sms' && smsTestPhone.trim() ? { phone: smsTestPhone.trim() } : {},
+    );
     setTestingKey(null);
     if (res.code === 1) {
       toast({ title: `${key} 测试通过`, description: res.msg });
@@ -77,6 +82,8 @@ export default function AdminIntegrationsPage() {
                   ? () => testIntegration(c.key as any)
                   : undefined
               }
+              testPhone={c.key === 'sms' ? smsTestPhone : undefined}
+              onTestPhoneChange={c.key === 'sms' ? setSmsTestPhone : undefined}
             />
           ))}
         </CardContent>
@@ -89,10 +96,14 @@ function IntegrationRow({
   check,
   testing,
   onTest,
+  testPhone,
+  onTestPhoneChange,
 }: {
   check: IntegrationCheck;
   testing: boolean;
   onTest?: () => void;
+  testPhone?: string;
+  onTestPhoneChange?: (value: string) => void;
 }) {
   const Icon = check.configured ? CheckCircle2 : XCircle;
   const color = check.configured ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground';
@@ -108,10 +119,18 @@ function IntegrationRow({
         </div>
         {check.detail && <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>}
       </div>
+      {check.key === 'sms' && onTestPhoneChange && (
+        <Input
+          value={testPhone || ''}
+          onChange={(event) => onTestPhoneChange(event.target.value)}
+          placeholder="测试手机号（可选）"
+          className="hidden h-8 w-40 shrink-0 md:block"
+        />
+      )}
       {onTest && check.configured && (
         <Button variant="outline" size="sm" disabled={testing} onClick={onTest} className="gap-1.5 shrink-0">
           {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TestTube2 className="h-3.5 w-3.5" />}
-          测试
+          {check.key === 'sms' && testPhone?.trim() ? '发送测试短信' : '测试'}
         </Button>
       )}
     </div>

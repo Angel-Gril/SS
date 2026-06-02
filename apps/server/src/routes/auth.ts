@@ -5,7 +5,10 @@ import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession, removeSession, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { verifyTurnstile, sendSmsCode, verifySmsCode } from '../lib/captcha.js';
-import { requiresAuthChallenges } from '../adapters/runtime-config.js';
+import {
+  getPublicAuthChallengeConfig,
+  isSmsRegistrationChallengeEnabled,
+} from '../lib/auth-challenge-config.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // 路由级频控：注册/登录 10 次/分钟
@@ -18,6 +21,11 @@ export async function authRoutes(app: FastifyInstance) {
       code: 0,
       msg: '请求过于频繁，请稍后再试',
     }),
+  });
+
+  app.get('/challenge-config', async (_request, reply) => {
+    const config = await getPublicAuthChallengeConfig();
+    return reply.send({ code: 1, msg: 'ok', data: config });
   });
 
   // 发送短信验证码（注册前调用）
@@ -33,8 +41,8 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const { phone, turnstileToken } = parsed.data;
-    if (!requiresAuthChallenges()) {
-      return reply.send({ code: 1, msg: '本地模式无需短信验证码' });
+    if (!await isSmsRegistrationChallengeEnabled()) {
+      return reply.send({ code: 1, msg: '当前无需短信验证码' });
     }
 
     if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
@@ -63,7 +71,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const { phone, password, nickname, smsCode } = parsed.data;
 
-    if (requiresAuthChallenges() && (!smsCode || !await verifySmsCode(phone, smsCode))) {
+    if (await isSmsRegistrationChallengeEnabled() && (!smsCode || !await verifySmsCode(phone, smsCode))) {
       return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
     }
 
@@ -111,12 +119,9 @@ export async function authRoutes(app: FastifyInstance) {
     const failKey = `login:fail:${request.ip}`;
     const failCount = Number(await redis.get(failKey) || '0');
 
-    // 云端模式：始终校验 Turnstile
-    if (requiresAuthChallenges()) {
-      if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
-        const hint = failCount >= 5 ? '登录失败次数过多，' : '';
-        return reply.status(403).send({ code: 0, msg: `${hint}请完成人机验证` });
-      }
+    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+      const hint = failCount >= 5 ? '登录失败次数过多，' : '';
+      return reply.status(403).send({ code: 0, msg: `${hint}请完成人机验证` });
     }
 
     const user = await prisma.user.findUnique({ where: { phone } });
