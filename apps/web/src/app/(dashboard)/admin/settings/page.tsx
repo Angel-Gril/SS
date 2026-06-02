@@ -342,6 +342,12 @@ const AUTH_TENCENT_KEYS = [
   'auth_sms_tencent_template_id',
 ];
 
+const AUTH_TURNSTILE_KEYS = [
+  'feature_turnstile_login',
+  'auth_turnstile_site_key',
+  'auth_turnstile_secret_key',
+];
+
 function AuthSettingsPanel({
   items,
   editing,
@@ -354,6 +360,7 @@ function AuthSettingsPanel({
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const isSavingAuth = savingKey === 'group:短信与人机验证';
   const isSavingTencent = savingKey === 'group:腾讯云短信';
+  const isSavingTurnstile = savingKey === 'group:Cloudflare Turnstile';
 
   return (
     <div className="space-y-4">
@@ -450,9 +457,19 @@ function AuthSettingsPanel({
           </section>
 
           <section className="space-y-3 rounded-md border p-4">
-            <div>
-              <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>
-              <p className="text-xs text-muted-foreground">Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。</p>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>
+                <p className="text-xs text-muted-foreground">Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfigs(AUTH_TURNSTILE_KEYS, 'Cloudflare Turnstile')}
+                disabled={isSavingTurnstile}
+              >
+                {isSavingTurnstile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存 Turnstile</span>
+              </Button>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <ConfigInput cfg={configs.auth_turnstile_site_key} editing={editing} setValue={setValue} placeholder="0x4AAAA..." />
