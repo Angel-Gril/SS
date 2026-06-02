@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'crypto';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
@@ -15,6 +16,17 @@ interface ConfiguredCheck {
   detail?: string;
 }
 
+type DiagnosticStepStatus = 'pass' | 'warn' | 'fail' | 'skip';
+
+interface DiagnosticStep {
+  key: string;
+  label: string;
+  status: DiagnosticStepStatus;
+  detail?: string;
+  elapsedMs?: number;
+  critical?: boolean;
+}
+
 function envIsSet(name: string): boolean {
   const v = process.env[name];
   return typeof v === 'string' && v.trim().length > 0;
@@ -26,6 +38,15 @@ function hasAll(values: string[]): boolean {
 
 function maskPhone(phone: string): string {
   return phone.replace(/^(\+?\d{2,3})?\d{3}(\d{4})$/, '$1***$2');
+}
+
+function shortError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || 'unknown');
+  return message.replace(/\s+/g, ' ').slice(0, 300);
+}
+
+function buildCdnProxyUrl(baseUrl: string, objectKey: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/api/cdn/${objectKey.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 async function getUploadOssDiagnostic() {
@@ -285,7 +306,7 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       }
 
       const { endpoint, bucket, accessKeyId, accessKeySecret, region } = storageConfig.oss;
-      const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3');
+      const { S3Client, HeadBucketCommand, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
       const fullEndpoint = endpoint.startsWith('http') ? endpoint : `https://${endpoint}`;
       const client = new S3Client({
         endpoint: fullEndpoint,
@@ -294,8 +315,178 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         forcePathStyle: fullEndpoint.includes('localhost') || fullEndpoint.includes('minio'),
       });
 
-      await client.send(new HeadBucketCommand({ Bucket: bucket }));
-      return reply.send({ code: 1, msg: `OSS 连接成功（bucket=${bucket}）` });
+      const steps: DiagnosticStep[] = [
+        {
+          key: 'config',
+          label: '读取上传配置',
+          status: 'pass',
+          detail: `backend=${storageConfig.imageStorage}, source=${storageConfig.source}, bucket=${bucket}, region=${region || 'auto'}`,
+        },
+      ];
+      const testKey = `system/attachments/tests/oss-health-${Date.now()}-${randomUUID()}.txt`;
+      const testBody = `ss-erp oss health check\nkey=${testKey}\nat=${new Date().toISOString()}\n`;
+      const proxyUrl = buildCdnProxyUrl(storageConfig.localBaseUrl, testKey);
+      let uploaded = false;
+
+      async function addStep(
+        key: string,
+        label: string,
+        critical: boolean,
+        fn: () => Promise<string | undefined>,
+        warnOnly = false,
+      ): Promise<boolean> {
+        const startedAt = Date.now();
+        try {
+          const detail = await fn();
+          steps.push({
+            key,
+            label,
+            status: 'pass',
+            detail,
+            elapsedMs: Date.now() - startedAt,
+            critical,
+          });
+          return true;
+        } catch (error) {
+          steps.push({
+            key,
+            label,
+            status: warnOnly ? 'warn' : 'fail',
+            detail: shortError(error),
+            elapsedMs: Date.now() - startedAt,
+            critical,
+          });
+          return warnOnly;
+        }
+      }
+
+      await addStep(
+        'headBucket',
+        '桶访问诊断',
+        false,
+        async () => {
+          await client.send(new HeadBucketCommand({ Bucket: bucket }));
+          return 'Bucket 可访问';
+        },
+        true,
+      );
+
+      const putOk = await addStep(
+        'putObject',
+        '写入测试对象',
+        true,
+        async () => {
+          await client.send(new PutObjectCommand({
+            Bucket: bucket,
+            Key: testKey,
+            Body: Buffer.from(testBody, 'utf8'),
+            ContentType: 'text/plain; charset=utf-8',
+            CacheControl: 'no-store',
+          }));
+          uploaded = true;
+          return `已写入 ${testKey}`;
+        },
+      );
+
+      const getOk = putOk && await addStep(
+        'getObject',
+        '直接读取校验',
+        true,
+        async () => {
+          const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: testKey }));
+          const body = result.Body
+            ? Buffer.from(await result.Body.transformToByteArray()).toString('utf8')
+            : '';
+          if (body !== testBody) throw new Error('读取内容与写入内容不一致');
+          return `读取成功，${Buffer.byteLength(body)} bytes`;
+        },
+      );
+
+      if (!putOk) {
+        steps.push({
+          key: 'getObject',
+          label: '直接读取校验',
+          status: 'skip',
+          detail: '写入失败，跳过读取',
+          critical: true,
+        });
+        steps.push({
+          key: 'proxyRead',
+          label: 'CDN 代理读取',
+          status: 'skip',
+          detail: '写入失败，跳过代理读取',
+          critical: true,
+        });
+      } else if (!getOk) {
+        steps.push({
+          key: 'proxyRead',
+          label: 'CDN 代理读取',
+          status: 'skip',
+          detail: '直接读取失败，跳过代理读取',
+          critical: true,
+        });
+      } else {
+        await addStep(
+          'proxyRead',
+          'CDN 代理读取',
+          true,
+          async () => {
+            const res = await fetch(proxyUrl, {
+              headers: { 'user-agent': 'SS-ERP-OSS-HealthCheck/1.0' },
+              signal: AbortSignal.timeout(8000),
+            });
+            const text = await res.text();
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 160)}`);
+            if (text !== testBody) throw new Error('代理读取内容与写入内容不一致');
+            return `代理可读：${proxyUrl}`;
+          },
+        );
+      }
+
+      if (uploaded) {
+        const deleteOk = await addStep(
+          'deleteObject',
+          '删除测试对象',
+          true,
+          async () => {
+            await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: testKey }));
+            uploaded = false;
+            return '测试对象已删除';
+          },
+        );
+        if (!deleteOk) {
+          console.warn(`[system-status] OSS health check left test object: ${testKey}`);
+        }
+      } else {
+        steps.push({
+          key: 'deleteObject',
+          label: '删除测试对象',
+          status: 'skip',
+          detail: '未写入测试对象，无需删除',
+          critical: true,
+        });
+      }
+
+      const criticalFailed = steps.some((step) => step.critical && step.status === 'fail');
+      const warnCount = steps.filter((step) => step.status === 'warn').length;
+      return reply.send({
+        code: criticalFailed ? 0 : 1,
+        msg: criticalFailed
+          ? 'OSS/R2 完整链路测试失败，请查看失败步骤'
+          : warnCount > 0
+            ? 'OSS/R2 上传读取链路可用，但存在非关键诊断警告'
+            : 'OSS/R2 完整链路测试通过',
+        data: {
+          endpoint: fullEndpoint,
+          bucket,
+          source: storageConfig.source,
+          backend: storageConfig.imageStorage,
+          proxyPath: `/api/cdn/${testKey}`,
+          proxyUrl,
+          testObjectDeleted: !uploaded,
+          steps,
+        },
+      });
     } catch (e: any) {
       return reply.send({ code: 0, msg: `OSS 连接失败: ${e?.message?.slice(0, 200) || 'unknown'}` });
     }
