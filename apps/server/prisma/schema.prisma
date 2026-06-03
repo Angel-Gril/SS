@@ -91,6 +91,8 @@ model User {
   sessions     Session[]
   supplyGoods  SupplyGoods[]
   account      UserAccount?
+  rechargeOrders RechargeOrder[] @relation("RechargeOrderUser")
+  reviewedRechargeOrders RechargeOrder[] @relation("RechargeOrderReviewer")
   userServiceTags UserServiceTag[]
   createdAnnouncements Announcement[] @relation("AnnouncementCreator")
   announcementReads    AnnouncementRead[]
@@ -589,6 +591,121 @@ model Transaction {
   @@index([createdAt])
   @@index([module])
   @@map("transactions")
+}
+
+// 支付网关配置：易支付兼容网关 / 人工充值网关
+model PaymentProvider {
+  id                   String   @id @default(cuid())
+  type                 String   @default("epay")
+  name                 String
+  isEnabled            Boolean  @default(false) @map("is_enabled")
+  priority             Int      @default(0)
+  gatewayUrl           String?  @map("gateway_url")
+  merchantId           String?  @map("merchant_id")
+  merchantKeyEncrypted String?  @map("merchant_key_encrypted")
+  supportedMethods     Json?    @map("supported_methods")
+  minAmount            Decimal  @default(10) @map("min_amount") @db.Decimal(10, 2)
+  maxAmount            Decimal  @default(10000) @map("max_amount") @db.Decimal(10, 2)
+  dailyLimit           Decimal? @map("daily_limit") @db.Decimal(12, 2)
+  feeRate              Decimal? @map("fee_rate") @db.Decimal(6, 4)
+  feeFixed             Decimal? @map("fee_fixed") @db.Decimal(10, 2)
+  feePayer             String   @default("platform") @map("fee_payer")
+  config               Json?
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  rechargeOrders RechargeOrder[]
+  notifyLogs     PaymentNotifyLog[]
+
+  @@index([type, isEnabled, priority])
+  @@map("payment_providers")
+}
+
+// 充值订单：自动易支付和人工收款码统一记录
+model RechargeOrder {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  user            User     @relation("RechargeOrderUser", fields: [userId], references: [id], onDelete: Cascade)
+  providerId      String   @map("provider_id")
+  provider        PaymentProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  manualQrCodeId  String?  @map("manual_qr_code_id")
+  manualQrCode    ManualPaymentQRCode? @relation(fields: [manualQrCodeId], references: [id], onDelete: SetNull)
+
+  orderNo         String   @unique @map("order_no")
+  amount          Decimal  @db.Decimal(10, 2)
+  fee             Decimal  @default(0) @db.Decimal(10, 2)
+  actualAmount    Decimal  @map("actual_amount") @db.Decimal(10, 2)
+  paymentMethod   String   @map("payment_method")
+  paymentType     String   @map("payment_type")
+  platformOrderNo String?  @map("platform_order_no")
+  status          String   @default("pending")
+  payUrl          String?  @map("pay_url")
+  qrcodeUrl       String?  @map("qrcode_url")
+  proofImage      String?  @map("proof_image")
+  proofNote       String?  @map("proof_note")
+  reviewerId      String?  @map("reviewer_id")
+  reviewer        User?    @relation("RechargeOrderReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewedAt      DateTime? @map("reviewed_at")
+  rejectReason    String?  @map("reject_reason")
+  paidAt          DateTime? @map("paid_at")
+  expireAt        DateTime  @map("expire_at")
+  isProcessed     Boolean  @default(false) @map("is_processed")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  notifyLogs      PaymentNotifyLog[]
+
+  @@index([userId, status, createdAt])
+  @@index([providerId, status])
+  @@index([platformOrderNo])
+  @@index([status, expireAt])
+  @@index([manualQrCodeId])
+  @@map("recharge_orders")
+}
+
+// 支付回调日志：记录验签、金额核对和处理结果，便于补单/对账
+model PaymentNotifyLog {
+  id            String   @id @default(cuid())
+  orderId       String?  @map("order_id")
+  order         RechargeOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  providerId    String   @map("provider_id")
+  provider      PaymentProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  rawParams     Json     @map("raw_params")
+  ip            String
+  userAgent     String?  @map("user_agent")
+  signValid     Boolean? @map("sign_valid")
+  expectedSign  String?  @map("expected_sign")
+  receivedSign  String?  @map("received_sign")
+  isSuccess     Boolean  @default(false) @map("is_success")
+  errorMessage  String?  @map("error_message")
+  response      String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([providerId, createdAt])
+  @@index([isSuccess, createdAt])
+  @@map("payment_notify_logs")
+}
+
+// 人工充值收款码：自动充值失败时的备用通道
+model ManualPaymentQRCode {
+  id          String   @id @default(cuid())
+  method      String
+  name        String
+  qrcodeImage String   @map("qrcode_image")
+  accountName String?  @map("account_name")
+  minAmount   Decimal  @default(10) @map("min_amount") @db.Decimal(10, 2)
+  maxAmount   Decimal  @default(10000) @map("max_amount") @db.Decimal(10, 2)
+  dailyLimit  Decimal? @map("daily_limit") @db.Decimal(12, 2)
+  weight      Int      @default(100)
+  isEnabled   Boolean  @default(true) @map("is_enabled")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rechargeOrders RechargeOrder[]
+
+  @@index([method, isEnabled])
+  @@map("manual_payment_qrcodes")
 }
 
 // 物流账单

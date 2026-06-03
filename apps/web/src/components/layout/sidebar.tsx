@@ -146,6 +146,7 @@ const navigation: NavItem[] = [
       { label: '费用模板', href: '/admin/fee-templates' },
       { label: '用户管理', href: '/admin/users' },
       { label: '账户管理', href: '/admin/accounts' },
+      { label: '充值与支付', href: '/admin/payments', superAdminOnly: true },
       { label: '仓库模板', href: '/admin/warehouse-templates' },
       { label: '仓库指令', href: '/admin/warehouse-commands' },
       { label: 'OZON 揽收点', href: '/admin/ozon-pickup-points' },

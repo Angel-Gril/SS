@@ -34,6 +34,9 @@ import { userServiceTagRoutes } from './routes/user-service-tag.js';
 import { adminRoutes, seedServiceTags, seedSuperAdmin } from './routes/admin.js';
 import { seedSystemConfig } from './routes/system-config.js';
 import { accountRoutes } from './routes/account.js';
+import { rechargeRoutes } from './routes/recharge.js';
+import { paymentRoutes } from './routes/payment.js';
+import { adminPaymentRoutes } from './routes/admin-payment.js';
 import { inviteRoutes } from './routes/invite.js';
 import { logisticsBillRoutes } from './routes/logistics-bill.js';
 import { logisticsRoutes } from './routes/logistics.js';
@@ -154,6 +157,9 @@ await app.register(warehouseCommandRoutes, { prefix: '/api/warehouse-commands' }
 await app.register(userServiceTagRoutes, { prefix: '/api/user-service-tags' });
 await app.register(adminRoutes, { prefix: '/api/admin' });
 await app.register(accountRoutes, { prefix: '/api/account' });
+await app.register(rechargeRoutes, { prefix: '/api/recharges' });
+await app.register(paymentRoutes, { prefix: '/api/payments' });
+await app.register(adminPaymentRoutes, { prefix: '/api/admin/payments' });
 await app.register(inviteRoutes, { prefix: '/api/invite' });
 await app.register(logisticsBillRoutes, { prefix: '/api/logistics-bills' });
 await app.register(logisticsRoutes, { prefix: '/api/logistics' });
@@ -227,17 +233,20 @@ if (RUN_WORKERS) {
     { startNotificationCleanupWorker },
     { startOssCleanupWorker },
     { startDatabaseBackupWorker },
+    { startRechargeTimeoutWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
     import('./workers/oss-cleanup.js'),
     import('./workers/database-backup.js'),
+    import('./workers/recharge-timeout.js'),
   ]);
 
   startWarehouseCommandPollWorker();
   startNotificationCleanupWorker();
   startOssCleanupWorker();
   startDatabaseBackupWorker();
+  startRechargeTimeoutWorker();
   if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
     const [
       { startProductSyncWorker },

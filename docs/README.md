@@ -15,6 +15,7 @@
 - [前端通用组件](common-components-guide.md)
 - [TanStack Query 指南](tanstack-query-guide.md)
 - [Git 工作流](git-workflow.md)
+- [充值与支付](payment-recharge.md)
 - [上线优化计划](LAUNCH-OPTIMIZATION-PLAN.md)
 - [上线检查清单](launch-checklist.md)
 
