@@ -270,16 +270,40 @@ function createS3Client(remote: BackupRemoteConfig): S3Client {
   });
 }
 
+export function normalizePgDumpConnection(dbUrl: string): { dbUrl: string; schema?: string } {
+  try {
+    const parsed = new URL(dbUrl);
+    if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+      return { dbUrl };
+    }
+    const schema = parsed.searchParams.get('schema') || undefined;
+    for (const key of ['schema', 'connection_limit', 'pool_timeout', 'pgbouncer']) {
+      parsed.searchParams.delete(key);
+    }
+    return {
+      dbUrl: parsed.toString().replace(/\?$/, ''),
+      schema,
+    };
+  } catch {
+    return { dbUrl };
+  }
+}
+
 async function dumpDatabaseToGzip(dbUrl: string, outputPath: string): Promise<void> {
   if (!dbUrl) throw new Error('DATABASE_URL/BACKUP_DB_URL 未配置，无法执行数据库备份');
   const pgDump = process.env.PG_DUMP_BIN || 'pg_dump';
-  const child = spawn(pgDump, [
-    `--dbname=${dbUrl}`,
+  const normalized = normalizePgDumpConnection(dbUrl);
+  const args = [
+    `--dbname=${normalized.dbUrl}`,
     '--clean',
     '--if-exists',
     '--no-owner',
     '--no-privileges',
-  ], {
+  ];
+  if (normalized.schema) {
+    args.push(`--schema=${normalized.schema}`);
+  }
+  const child = spawn(pgDump, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 

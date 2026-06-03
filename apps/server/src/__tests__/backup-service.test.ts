@@ -106,3 +106,14 @@ describe('backup schedule helpers', () => {
     expect(shouldRunBackupNow('30 2 * * 7', new Date(2026, 5, 7, 2, 30, 0), null)).toBe(true);
   });
 });
+
+describe('pg_dump connection helpers', () => {
+  it('removes Prisma-only schema query param and returns it as pg_dump schema option', async () => {
+    const { normalizePgDumpConnection } = await import('../services/backup.service.js');
+
+    expect(normalizePgDumpConnection('postgresql://u:p@127.0.0.1:5432/db?schema=public&connection_limit=5')).toEqual({
+      dbUrl: 'postgresql://u:p@127.0.0.1:5432/db',
+      schema: 'public',
+    });
+  });
+});
