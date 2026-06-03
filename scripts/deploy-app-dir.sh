@@ -121,7 +121,9 @@ if [ "$RUN_DB_BACKUP" = "true" ] || [ "$RUN_DB_BACKUP" = "1" ]; then
   if [ -f /etc/ss-erp-backup.env ] && [ -f "$APP_DIR/scripts/backup-db.sh" ]; then
     log "Running database backup before deploy"
     # shellcheck disable=SC1091
+    set -a
     . /etc/ss-erp-backup.env
+    set +a
     bash "$APP_DIR/scripts/backup-db.sh"
   else
     fail "RUN_DB_BACKUP requested but /etc/ss-erp-backup.env or backup-db.sh is missing"
