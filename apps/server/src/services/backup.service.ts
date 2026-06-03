@@ -61,8 +61,7 @@ export interface BackupRunResult {
   warnings?: string[];
 }
 
-const DEFAULT_LOCAL_DIR = '/var/backups/ss-erp';
-const DEFAULT_STATUS_PATH = '/var/backups/ss-erp/backup-status.json';
+const LEGACY_STATUS_PATH = '/var/backups/ss-erp/backup-status.json';
 const BACKUP_FILE_PREFIX = 'ss_erp_';
 const BACKUP_FILE_SUFFIX = '.sql.gz';
 
@@ -74,6 +73,16 @@ export function normalizeRemotePrefix(prefix: string): string {
   const normalized = prefix.trim().replace(/^\/+/, '');
   if (!normalized) return '';
   return normalized.endsWith('/') ? normalized : `${normalized}/`;
+}
+
+export function resolveDefaultBackupDir(): string {
+  const configured = trimValue(process.env.BACKUP_LOCAL_DIR) || trimValue(process.env.SS_ERP_BACKUP_DIR);
+  if (configured) return configured;
+  return path.resolve(process.cwd(), '../../../shared/backups');
+}
+
+function backupStatusPath(localDir = resolveDefaultBackupDir()): string {
+  return trimValue(process.env.BACKUP_STATUS_PATH) || path.join(localDir, 'backup-status.json');
 }
 
 function completeRemoteConfig(values: {
@@ -162,7 +171,7 @@ export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
   return {
     enabled: Boolean(enabled),
     schedule: trimValue(schedule) || '0 3 * * *',
-    localDir: trimValue(process.env.BACKUP_LOCAL_DIR) || DEFAULT_LOCAL_DIR,
+    localDir: resolveDefaultBackupDir(),
     localKeepDays: Number(localKeepDays) || 7,
     dbUrl: trimValue(process.env.BACKUP_DB_URL) || trimValue(process.env.DATABASE_URL),
     remoteEnabled: Boolean(remoteEnabled) || !!envRemote,
@@ -355,8 +364,8 @@ async function cleanupRemoteBackups(remote: BackupRemoteConfig, keepDays: number
   return deleted;
 }
 
-async function writeBackupStatus(result: BackupRunResult): Promise<void> {
-  const statusPath = process.env.BACKUP_STATUS_PATH || DEFAULT_STATUS_PATH;
+async function writeBackupStatus(result: BackupRunResult, localDir?: string): Promise<void> {
+  const statusPath = backupStatusPath(localDir);
   await mkdir(path.dirname(statusPath), { recursive: true });
   await writeFile(statusPath, `${JSON.stringify({
     available: result.ok,
@@ -375,14 +384,25 @@ async function writeBackupStatus(result: BackupRunResult): Promise<void> {
   }, null, 2)}\n`, { mode: 0o640 });
 }
 
-export async function readBackupStatus(): Promise<Record<string, unknown> | null> {
-  const statusPath = process.env.BACKUP_STATUS_PATH || DEFAULT_STATUS_PATH;
+async function safeWriteBackupStatus(result: BackupRunResult, localDir?: string): Promise<void> {
   try {
-    const raw = await readFile(statusPath, 'utf8');
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return null;
+    await writeBackupStatus(result, localDir);
+  } catch (error: any) {
+    console.warn(`[backup] 写入备份状态失败: ${error?.message || error}`);
   }
+}
+
+export async function readBackupStatus(): Promise<Record<string, unknown> | null> {
+  const paths = [...new Set([backupStatusPath(), LEGACY_STATUS_PATH])];
+  for (const statusPath of paths) {
+    try {
+      const raw = await readFile(statusPath, 'utf8');
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      // try next status location
+    }
+  }
+  return null;
 }
 
 export async function runDatabaseBackup(options: { force?: boolean; trigger?: 'scheduled' | 'manual' } = {}): Promise<BackupRunResult> {
@@ -440,7 +460,7 @@ export async function runDatabaseBackup(options: { force?: boolean; trigger?: 's
       remoteCleanupDeleted,
       warnings,
     };
-    await writeBackupStatus(result);
+    await safeWriteBackupStatus(result, config.localDir);
     return result;
   } catch (error: any) {
     try {
@@ -455,7 +475,7 @@ export async function runDatabaseBackup(options: { force?: boolean; trigger?: 's
       completedAt: new Date().toISOString(),
       warnings,
     };
-    await writeBackupStatus(result);
+    await safeWriteBackupStatus(result, config.localDir);
     return result;
   }
 }

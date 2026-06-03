@@ -146,6 +146,7 @@ for runtime_dir in uploads watermarked resized tmp; do
   fi
   ln -sfn "$DEPLOY_BASE/shared/$runtime_dir" "$NEXT_DIR/apps/server/public/$runtime_dir"
 done
+mkdir -p "$DEPLOY_BASE/shared/backups"
 echo "$COMMIT_HASH" > "$NEXT_DIR/DEPLOYED_COMMIT"
 
 if id "$DEPLOY_RUN_USER" >/dev/null 2>&1; then

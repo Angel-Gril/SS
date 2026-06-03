@@ -74,6 +74,20 @@ describe('backup service config', () => {
       },
     });
   });
+
+  it('defaults local worker backups to the deploy shared directory instead of /var/backups', async () => {
+    configStore.set('backup_enabled', true);
+    configStore.set('backup_schedule', '0 3 * * *');
+    configStore.set('backup_local_keep_days', 7);
+    configStore.set('backup_remote_enabled', false);
+    configStore.set('backup_remote_keep_days', 30);
+
+    const { getBackupRuntimeConfig } = await import('../services/backup.service.js');
+
+    const config = await getBackupRuntimeConfig();
+    expect(config.localDir.replaceAll('\\', '/')).toMatch(/\/shared\/backups$/);
+    expect(config.localDir).not.toBe('/var/backups/ss-erp');
+  });
 });
 
 describe('backup schedule helpers', () => {

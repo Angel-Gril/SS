@@ -483,6 +483,7 @@ sudo systemctl restart ss-erp-api ss-erp-worker ss-erp-web
 - 超管后台 `系统设置 -> 备份策略`：配置 `backup_remote_*`，密钥加密入库。
 - 超管后台 `接口与集成`：测试“数据库备份 R2”是否可写。
 - 超管后台 `系统设置 -> 备份策略`：可点“立即备份”，由 `ss-erp-worker` 执行 `pg_dump`、压缩、上传和状态写入。
+- app-dir 部署默认写入 `/opt/ss-erp/shared/backups`；旧 `/var/backups/ss-erp` 只作为 `backup-status.json` 读取兼容路径。
 
 旧脚本仍保留，适合作为兼容兜底或恢复演练：
 
