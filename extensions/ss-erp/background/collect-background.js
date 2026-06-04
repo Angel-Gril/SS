@@ -3,7 +3,7 @@ const STORAGE_KEYS = {
   lastCollected: "spb_self_hosted_last_collected"
 };
 
-const OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
+var SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
 
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
@@ -221,7 +221,7 @@ async function getSellerCompanyId() {
       const cookies = await chrome.cookies.getAll(query);
       const companyId = normalizeOzonCompanyId(cookies[0] && cookies[0].value);
       if (companyId) {
-        await storageSet({ [OZON_COMPANY_ID_STORAGE_KEY]: companyId });
+        await storageSet({ [SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY]: companyId });
         return companyId;
       }
     } catch (error) {
@@ -229,7 +229,7 @@ async function getSellerCompanyId() {
     }
   }
 
-  const storedCompanyId = normalizeOzonCompanyId(await storageGet(OZON_COMPANY_ID_STORAGE_KEY));
+  const storedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
   if (storedCompanyId) {
     return storedCompanyId;
   }
