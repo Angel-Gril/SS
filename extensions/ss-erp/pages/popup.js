@@ -319,6 +319,12 @@
   var cookieCompanyIdInput = document.getElementById('cookieCompanyIdInput');
   var shopAuthLoadSeq = 0;
 
+  if (cookieCompanyIdInput) {
+    cookieCompanyIdInput.addEventListener('input', function () {
+      cookieCompanyIdInput.dataset.source = 'manual';
+    });
+  }
+
   // 加载店铺列表到下拉框
   function loadShopsToSelect() {
     if (!cookieShopSelect) return;
@@ -387,6 +393,7 @@
     var seq = shopAuthLoadSeq;
     if (cookieCompanyIdInput) {
       cookieCompanyIdInput.value = '';
+      cookieCompanyIdInput.dataset.source = '';
       cookieCompanyIdInput.placeholder = shopId ? '正在读取该店铺 company_id...' : 'company_id（自动检测/手动输入）';
     }
     renderSyncTime(cookieSyncTime, '');
@@ -395,6 +402,7 @@
       if (seq !== shopAuthLoadSeq) return;
       if (cookieCompanyIdInput) {
         cookieCompanyIdInput.value = auth.companyId || '';
+        cookieCompanyIdInput.dataset.source = auth.companyId ? 'erp' : '';
         cookieCompanyIdInput.placeholder = auth.companyId ? '已绑定该店铺 company_id' : '该店铺未保存 company_id，可在 seller 当前店铺下同步';
       }
       renderSyncTime(cookieSyncTime, auth.updatedAt || '');
@@ -424,19 +432,22 @@
           setTimeout(function () { syncCookieBtn.textContent = '同步'; syncCookieBtn.disabled = false; }, 2500);
           return;
         }
-        // 自动读取已检测到的 company_id，手动输入的优先
-        chrome.storage.local.get(['ss_erp_ozon_company_id'], function (storageResult) {
-          var manualId = cookieCompanyIdInput ? cookieCompanyIdInput.value.trim() : '';
-          var autoId = storageResult.ss_erp_ozon_company_id || '';
-          var companyId = manualId || autoId;
-          if (companyId && cookieCompanyIdInput) cookieCompanyIdInput.value = companyId;
+        // 只有用户手动编辑过输入框才优先使用它；ERP 自动加载的旧值不能覆盖当前 seller 店铺。
+        var manualId = cookieCompanyIdInput && cookieCompanyIdInput.dataset.source === 'manual' ? cookieCompanyIdInput.value.trim() : '';
+        var companyId = manualId || '';
+        if (companyId && cookieCompanyIdInput) cookieCompanyIdInput.value = companyId;
 
-          sendRuntimeMessage({
-            type: 'ozon-calc:sync-ozon-cookie',
-            payload: { shopId: shopId, companyId: companyId || undefined }
-          }, function (response) {
+        sendRuntimeMessage({
+          type: 'ozon-calc:sync-ozon-cookie',
+          payload: { shopId: shopId, companyId: companyId || undefined, useStoredCompanyId: Boolean(manualId) }
+        }, function (response) {
           if (response && response.ok) {
             syncCookieBtn.textContent = 'OK';
+            if (cookieCompanyIdInput && response.data && response.data.companyId) {
+              cookieCompanyIdInput.value = response.data.companyId;
+              cookieCompanyIdInput.dataset.source = 'erp';
+              cookieCompanyIdInput.placeholder = '已绑定该店铺 company_id';
+            }
             var now = new Date().toISOString();
             chrome.storage.local.get([SYNC_STORAGE_KEY], function (r) {
               var times = r[SYNC_STORAGE_KEY] || {};
@@ -450,7 +461,6 @@
             if (response && response.error) alert('同步失败: ' + response.error);
           }
           setTimeout(function () { syncCookieBtn.textContent = '同步'; syncCookieBtn.disabled = false; }, 2000);
-          });
         });
       });
     });

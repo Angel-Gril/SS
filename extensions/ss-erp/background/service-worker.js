@@ -1312,7 +1312,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const apiBase = baseEndpoint.replace(/\/api\/.*$/, '');
         const body = { cookie: cookieStr };
         const storedCompanyId = normalizeOzonCompanyIdForSync(result[OZON_SYNC_COMPANY_ID_STORAGE_KEY]);
-        const companyId = payloadCompanyId || cookieCompanyId || storedCompanyId;
+        const useStoredCompanyId = message.payload && message.payload.useStoredCompanyId !== false;
+        const companyId = payloadCompanyId || cookieCompanyId || (useStoredCompanyId ? storedCompanyId : '');
         if (companyId) {
           body.companyId = companyId;
           chrome.storage.local.set({ [OZON_SYNC_COMPANY_ID_STORAGE_KEY]: companyId }).catch(() => {});
