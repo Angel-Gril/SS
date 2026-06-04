@@ -2130,12 +2130,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         // 获取 ERP 连接配置
-        const connData = await new Promise((resolve) => {
-          chrome.storage.local.get(["ss_erp_connection"], (result) => resolve(result));
-        });
-        const conn = connData.ss_erp_connection || {};
-        const baseUrl = (conn.baseUrl || "").replace(/\/+$/, "");
-        const token = conn.token || "";
+        const conn = await getStoredErpConnection();
+        const baseUrl = conn.baseUrl;
+        const token = conn.token;
 
         if (!baseUrl) {
           return { ok: false, error: "请先在设置中配置 ERP 后端地址" };
@@ -2187,12 +2184,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         const graphShopId = message.shopId;
         if (graphShopId) {
-          const graphConnData = await new Promise((resolve) => {
-            chrome.storage.local.get(["ss_erp_connection"], (result) => resolve(result));
-          });
-          const graphConn = graphConnData.ss_erp_connection || {};
-          const graphBaseUrl = (graphConn.baseUrl || "").replace(/\/+$/, "");
-          const graphToken = graphConn.token || "";
+          const graphConn = await getStoredErpConnection();
+          const graphBaseUrl = graphConn.baseUrl;
+          const graphToken = graphConn.token;
 
           if (graphBaseUrl && graphToken) {
             await fetch(graphBaseUrl + "/api/shops/" + graphShopId + "/analytics-graphs", {
@@ -2215,12 +2209,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       case "spb-self-hosted:get-ozon-shops": {
         // 从 ERP 获取用户的 OZON 店铺列表
-        const shopConnData = await new Promise((resolve) => {
-          chrome.storage.local.get(["ss_erp_connection"], (result) => resolve(result));
-        });
-        const shopConn = shopConnData.ss_erp_connection || {};
-        const shopBaseUrl = (shopConn.baseUrl || "").replace(/\/+$/, "");
-        const shopToken = shopConn.token || "";
+        const shopConn = await getStoredErpConnection();
+        const shopBaseUrl = shopConn.baseUrl;
+        const shopToken = shopConn.token;
 
         if (!shopBaseUrl || !shopToken) {
           return { ok: false, error: "请先配置 ERP 连接" };

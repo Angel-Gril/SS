@@ -915,6 +915,9 @@
       if (!conn.token && data['ozon-calc:erp-token']) {
         conn.token = data['ozon-calc:erp-token'];
       }
+      if (conn.baseUrl && conn.token) {
+        chrome.storage.local.set({ ss_erp_connection: conn });
+      }
       if (erpUrlInput && conn.baseUrl) erpUrlInput.value = conn.baseUrl;
       if (erpTokenInput && conn.token) erpTokenInput.value = conn.token;
     });

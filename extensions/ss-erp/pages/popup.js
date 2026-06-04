@@ -98,13 +98,31 @@
     node.className = 'sync-time' + (isStale(isoStr) ? ' warn' : '');
   }
 
+  function normalizeErpBaseUrl(value) {
+    return String(value || '').trim().replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+  }
+
+  function getErpConnectionStorage(extraKeys, callback) {
+    var keys = ['ss_erp_connection', 'ozon-calc:erp-endpoint', 'ozon-calc:erp-token'];
+    (extraKeys || []).forEach(function (key) {
+      if (keys.indexOf(key) < 0) keys.push(key);
+    });
+    chrome.storage.local.get(keys, function (result) {
+      var legacyConn = result.ss_erp_connection || {};
+      var baseUrl = normalizeErpBaseUrl(result['ozon-calc:erp-endpoint'] || legacyConn.baseUrl);
+      var token = String(result['ozon-calc:erp-token'] || legacyConn.token || '').trim();
+      if (baseUrl && token && (legacyConn.baseUrl !== baseUrl || legacyConn.token !== token)) {
+        chrome.storage.local.set({ ss_erp_connection: { baseUrl: baseUrl, token: token } });
+      }
+      callback({ baseUrl: baseUrl, token: token }, result);
+    });
+  }
+
   // Check ERP connection
   function checkErpConnection() {
-    chrome.storage.local.get(['ss_erp_connection'], function (result) {
-      var conn = result.ss_erp_connection || {};
-      var baseUrl = (conn.baseUrl || '').replace(/\/+$/, '');
-      var token = conn.token || '';
-
+    getErpConnectionStorage([], function (conn) {
+      var baseUrl = conn.baseUrl;
+      var token = conn.token;
       if (!baseUrl || !token) {
         setStatus(erpStatusRow, false, '未配置');
         return;
@@ -158,10 +176,9 @@
 
   // Sync handlers
   function getSelectedShopId(callback) {
-    chrome.storage.local.get(['ss_erp_connection', 'ss_erp_selected_shop'], function (result) {
-      var conn = result.ss_erp_connection || {};
-      var baseUrl = (conn.baseUrl || '').replace(/\/+$/, '');
-      var token = conn.token || '';
+    getErpConnectionStorage(['ss_erp_selected_shop'], function (conn, result) {
+      var baseUrl = conn.baseUrl;
+      var token = conn.token;
       if (!baseUrl || !token) return callback(null);
 
       fetch(baseUrl + '/api/shops', {
@@ -292,10 +309,9 @@
   // 加载店铺列表到下拉框
   function loadShopsToSelect() {
     if (!cookieShopSelect) return;
-    chrome.storage.local.get(['ss_erp_connection', 'ss_erp_cookie_shop'], function (result) {
-      var conn = result.ss_erp_connection || {};
-      var baseUrl = (conn.baseUrl || '').replace(/\/+$/, '');
-      var token = conn.token || '';
+    getErpConnectionStorage(['ss_erp_cookie_shop'], function (conn, result) {
+      var baseUrl = conn.baseUrl;
+      var token = conn.token;
       if (!baseUrl || !token) return;
 
       fetch(baseUrl + '/api/shops', { headers: { 'Authorization': 'Bearer ' + token } })
@@ -325,10 +341,9 @@
   // 加载所选店铺的现有认证信息
   function loadShopAuthInfo(shopId) {
     if (!shopId) return;
-    chrome.storage.local.get(['ss_erp_connection'], function (result) {
-      var conn = result.ss_erp_connection || {};
-      var baseUrl = (conn.baseUrl || '').replace(/\/+$/, '');
-      var token = conn.token || '';
+    getErpConnectionStorage([], function (conn) {
+      var baseUrl = conn.baseUrl;
+      var token = conn.token;
       if (!baseUrl || !token) return;
       fetch(baseUrl + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
         headers: { 'Authorization': 'Bearer ' + token }
