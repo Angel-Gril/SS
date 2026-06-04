@@ -977,7 +977,6 @@
   var syncAnalyticsBtn = document.getElementById('syncAnalyticsBtn');
   var syncGraphsBtn = document.getElementById('syncGraphsBtn');
   var analyticsStatusNode = document.getElementById('analyticsStatus');
-  var analyticsShopsById = new Map();
 
   function setAnalyticsStatus(text, tone) {
     if (!analyticsStatusNode) return;
@@ -988,7 +987,6 @@
   function loadAnalyticsShops() {
     sendMessage({ type: 'spb-self-hosted:get-ozon-shops' }).then(function (response) {
       if (!analyticsShopSelect) return;
-      analyticsShopsById.clear();
       if (!response || !response.ok) {
         analyticsShopSelect.innerHTML = '<option value="">获取失败，请先配置 ERP 连接</option>';
         return;
@@ -999,39 +997,15 @@
         return;
       }
       analyticsShopSelect.innerHTML = shops.map(function (shop) {
-        analyticsShopsById.set(String(shop.id), shop);
         return '<option value="' + shop.id + '">' + escapeHtml(shop.name) + '</option>';
       }).join('');
     });
   }
 
-  function readAnalyticsShopCompanyId(shopId) {
-    if (!shopId) return Promise.resolve('');
-    var shop = analyticsShopsById.get(String(shopId)) || {};
-    var inlineCompanyId = shop.companyId || shop.ozonCompanyId || (shop.config && shop.config.ozonCompanyId);
-    if (inlineCompanyId) return Promise.resolve(String(inlineCompanyId));
-
-    var conn = saveErpConfig();
-    if (!conn.baseUrl || !conn.token) return Promise.resolve('');
-    return fetch(conn.baseUrl + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
-      headers: { 'Authorization': 'Bearer ' + conn.token }
-    }).then(function (response) {
-      if (!response.ok) return '';
-      return response.json();
-    }).then(function (data) {
-      return data && data.code === 1 && data.data && data.data.companyId ? String(data.data.companyId) : '';
-    }).catch(function () {
-      return '';
-    });
-  }
-
   function sendSellerAnalyticsMessage(type, shopId) {
-    return readAnalyticsShopCompanyId(shopId).then(function (companyId) {
-      return sendMessage({
-        type: type,
-        shopId: shopId || undefined,
-        companyId: companyId || undefined
-      });
+    return sendMessage({
+      type: type,
+      shopId: shopId || undefined
     });
   }
 
