@@ -3,8 +3,8 @@ const STORAGE_KEYS = {
   lastCollected: "spb_self_hosted_last_collected"
 };
 
-var SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
-var SS_ERP_COLLECT_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY = "ss_erp_ozon_company_id_captured_at";
+var SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
+var SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY = "ss_erp_ozon_company_id_captured_at";
 var SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id_invalid";
 var SS_ERP_COLLECT_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 
@@ -121,6 +121,24 @@ function isRecentOzonCompanyIdCapture(value) {
   return capturedAt > 0 && Date.now() - capturedAt <= SS_ERP_COLLECT_RECENT_COMPANY_ID_MS;
 }
 
+function rememberRuntimeOzonCompanyId(value, capturedAt) {
+  const companyId = normalizeOzonCompanyId(value);
+  if (!companyId) return "";
+  globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE = {
+    companyId,
+    capturedAt: Number(capturedAt) || Date.now()
+  };
+  return companyId;
+}
+
+function getRuntimeOzonCompanyId() {
+  const capture = globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE || {};
+  if (!isRecentOzonCompanyIdCapture(capture.capturedAt)) return "";
+  return normalizeOzonCompanyId(capture.companyId);
+}
+
+globalThis.SS_ERP_REMEMBER_OZON_COMPANY_ID = rememberRuntimeOzonCompanyId;
+
 async function getInvalidSellerCompanyId() {
   const value = await storageGet(SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY);
   if (!value || typeof value !== "object") return "";
@@ -133,13 +151,13 @@ async function getInvalidSellerCompanyId() {
 async function markSellerCompanyIdInvalid(companyId) {
   const normalized = normalizeOzonCompanyId(companyId);
   if (!normalized) return;
-  const storedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
-  if (storedCompanyId === normalized) {
-    await storageRemove([
-      SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY,
-      SS_ERP_COLLECT_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY
-    ]);
+  if (getRuntimeOzonCompanyId() === normalized) {
+    globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE = null;
   }
+  await storageRemove([
+    SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_STORAGE_KEY,
+    SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY
+  ]);
   await storageSet({
     [SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY]: {
       companyId: normalized,
@@ -263,13 +281,11 @@ async function getSellerCompanyId(preferredCompanyId) {
   const preferred = normalizeOzonCompanyId(preferredCompanyId);
   const invalidCompanyId = await getInvalidSellerCompanyId();
   if (preferred) {
-    await storageSet({ [SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY]: preferred });
-    return preferred;
+    return rememberRuntimeOzonCompanyId(preferred);
   }
 
-  const capturedAt = await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY);
-  const capturedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
-  if (capturedCompanyId && capturedCompanyId !== invalidCompanyId && isRecentOzonCompanyIdCapture(capturedAt)) {
+  const capturedCompanyId = getRuntimeOzonCompanyId();
+  if (capturedCompanyId && capturedCompanyId !== invalidCompanyId) {
     return capturedCompanyId;
   }
 
@@ -285,21 +301,11 @@ async function getSellerCompanyId(preferredCompanyId) {
       const companyId = normalizeOzonCompanyId(cookies[0] && cookies[0].value);
       if (companyId) {
         if (companyId === invalidCompanyId) continue;
-        await storageSet({ [SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY]: companyId });
-        return companyId;
+        return rememberRuntimeOzonCompanyId(companyId);
       }
     } catch (error) {
       console.warn("[SS ERP] read Ozon company cookie failed:", error);
     }
-  }
-
-  const storedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
-  if (storedCompanyId) {
-    if (storedCompanyId === invalidCompanyId) {
-      await storageRemove(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY);
-      throw new Error(formatOzonCompanyPermissionError(storedCompanyId, "该 company_id 刚刚被 Ozon 返回无权限"));
-    }
-    return storedCompanyId;
   }
 
   throw new Error("未检测到 Ozon Seller Company ID。请在本机打开 seller.ozon.ru，选择对应店铺并进入商品/数据分析页面，等待扩展自动捕获 x-o3-company-id 后再重试；也可以在扩展的 Cookie 同步区域手动填写 company_id 并同步。");

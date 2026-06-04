@@ -31,9 +31,14 @@
       forwardCapturedEntry(data.payload);
     }
     if (data.type === 'ozon-company-id' && data.payload) {
-      chrome.storage.local.set({
-        'ss_erp_ozon_company_id': String(data.payload),
-        'ss_erp_ozon_company_id_captured_at': Date.now()
+      chrome.runtime.sendMessage({
+        type: 'ss-erp:ozon-company-id-captured',
+        companyId: String(data.payload),
+        capturedAt: Date.now()
+      }, function () {
+        if (chrome.runtime.lastError) {
+          console.warn('[SS ERP] company id capture forward failed', chrome.runtime.lastError.message);
+        }
       });
     }
   });

@@ -397,7 +397,7 @@
     if (cookieCompanyIdInput) {
       cookieCompanyIdInput.value = '';
       cookieCompanyIdInput.dataset.source = '';
-      cookieCompanyIdInput.placeholder = shopId ? '正在读取该店铺 company_id...' : 'company_id（自动检测/手动输入）';
+      cookieCompanyIdInput.placeholder = shopId ? '正在读取店铺同步状态...' : '可选：留空自动识别当前 seller 店铺';
     }
     renderSyncTime(cookieSyncTime, '');
     if (!shopId) return;
@@ -408,8 +408,8 @@
         cookieCompanyIdInput.dataset.source = '';
         cookieCompanyIdInput.dataset.savedCompanyId = auth.companyId || '';
         cookieCompanyIdInput.placeholder = auth.companyId
-          ? 'ERP已保存 ' + auth.companyId + '；点同步将使用当前 seller 店铺'
-          : '该店铺未保存 company_id，可在 seller 当前店铺下同步';
+          ? '可选：留空将使用当前 seller 店铺'
+          : '可选：留空自动识别当前 seller 店铺';
       }
       renderSyncTime(cookieSyncTime, auth.updatedAt || '');
     });
@@ -450,9 +450,10 @@
           if (response && response.ok) {
             syncCookieBtn.textContent = 'OK';
             if (cookieCompanyIdInput && response.data && response.data.companyId) {
-              cookieCompanyIdInput.value = response.data.companyId;
-              cookieCompanyIdInput.dataset.source = 'erp';
-              cookieCompanyIdInput.placeholder = '已绑定该店铺 company_id';
+              cookieCompanyIdInput.value = '';
+              cookieCompanyIdInput.dataset.source = '';
+              cookieCompanyIdInput.dataset.savedCompanyId = response.data.companyId;
+              cookieCompanyIdInput.placeholder = '已同步当前 seller 店铺';
             }
             var now = new Date().toISOString();
             chrome.storage.local.get([SYNC_STORAGE_KEY], function (r) {
@@ -487,12 +488,4 @@
   loadCalculatorStatus();
   loadCookieSyncTime();
   loadShopsToSelect();
-  // 自动回填已检测到的 company_id
-  if (cookieCompanyIdInput) {
-    chrome.storage.local.get(['ss_erp_ozon_company_id'], function (r) {
-      if (r.ss_erp_ozon_company_id && !cookieCompanyIdInput.value) {
-        cookieCompanyIdInput.placeholder = '已自动检测: ' + r.ss_erp_ozon_company_id;
-      }
-    });
-  }
 }());
