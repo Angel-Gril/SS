@@ -83,12 +83,19 @@
 
   function getVisibleText(selectors) {
     for (var index = 0; index < selectors.length; index += 1) {
-      var node = document.querySelector(selectors[index]);
-      if (!node) continue;
-      var text = String(node.textContent || node.innerText || '').trim();
-      if (text) return text;
+      var nodes = document.querySelectorAll(selectors[index]);
+      for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+        var node = nodes[nodeIndex];
+        if (!node || isInjectedExtensionNode(node)) continue;
+        var text = String(node.textContent || node.innerText || '').trim();
+        if (text) return text;
+      }
     }
     return '';
+  }
+
+  function isInjectedExtensionNode(node) {
+    return Boolean(node && typeof node.closest === 'function' && node.closest('#ozon-calc-drawer, #ozon-calc-fab, #spb-self-hosted-ozon-panel'));
   }
 
   function parsePrice(text) {
@@ -106,6 +113,53 @@
     });
   }
 
+  function normalizeCurrencyCode(value) {
+    var text = String(value || '').trim().toUpperCase();
+    if (!text) return '';
+    if (text === 'RMB' || text === '￥' || text === '¥') return 'CNY';
+    if (text === '₽' || text === 'RUR') return 'RUB';
+    if (text === '₸') return 'KZT';
+    if (text === 'BR') return 'BYN';
+    return /^(CNY|RUB|KZT|BYN|USD|EUR)$/.test(text) ? text : '';
+  }
+
+  function detectCurrencyToken(text) {
+    var raw = String(text || '');
+    var source = raw.toUpperCase();
+    // Chrome Translate may render Ozon's yuan symbol as "日元"; this Ozon flow treats that source price as CNY.
+    if (raw.indexOf('¥') >= 0 || raw.indexOf('￥') >= 0 || /\b(?:CNY|RMB)\b/i.test(raw) || raw.indexOf('人民币') >= 0 || raw.indexOf('日元') >= 0) return 'CNY';
+    if (raw.indexOf('₽') >= 0 || /\b(?:RUB|RUR)\b/i.test(raw) || /(?:^|[\s\d])руб\.?/i.test(raw)) return 'RUB';
+    if (raw.indexOf('₸') >= 0 || /\bKZT\b/i.test(raw) || /тенге/i.test(raw) || /\bТГ\b/i.test(source)) return 'KZT';
+    if (/\bBYN\b/i.test(raw) || /\bBR\b/i.test(raw)) return 'BYN';
+    if (raw.indexOf('$') >= 0 || /\bUSD\b/i.test(raw)) return 'USD';
+    if (raw.indexOf('€') >= 0 || /\bEUR\b/i.test(raw)) return 'EUR';
+    return '';
+  }
+
+  function detectCurrencyFromPriceEntry(entry) {
+    if (entry == null) return '';
+    if (typeof entry === 'string') return detectCurrencyToken(entry) || normalizeCurrencyCode(entry);
+    if (typeof entry !== 'object') return '';
+    var direct = normalizeCurrencyCode(entry.currency || entry.currencyCode || entry.priceCurrency || entry.currencyName);
+    if (direct) return direct;
+    var textCurrency = detectCurrencyToken(entry.price || entry.value || entry.text || entry.content || entry.label || entry.disclaimerPriceHeader || '');
+    if (textCurrency) return textCurrency;
+    var nestedKeys = ['price', 'cardPrice', 'originalPrice', 'offerPrice', 'finalPrice', 'currentPrice'];
+    for (var index = 0; index < nestedKeys.length; index += 1) {
+      var nested = detectCurrencyFromPriceEntry(entry[nestedKeys[index]]);
+      if (nested) return nested;
+    }
+    return '';
+  }
+
+  function resolvePriceCurrency(semantic, visiblePriceText, fallbackCurrency) {
+    return detectCurrencyToken(visiblePriceText)
+      || normalizeCurrencyCode(fallbackCurrency)
+      || normalizeCurrencyCode(semantic && semantic.currency)
+      || detectCurrencyToken(visiblePriceText)
+      || 'RUB';
+  }
+
   function extractSemanticPricesFromDataState() {
     var data = {};
     if (!document || typeof document.querySelectorAll !== 'function') return data;
@@ -116,17 +170,36 @@
         try {
           var parsed = JSON.parse(raw);
           if (!parsed || typeof parsed !== 'object') return;
+          if (data.currency == null && (parsed.price || parsed.cardPrice || parsed.originalPrice || parsed.offerPrice || parsed.finalPrice || parsed.currentPrice)) {
+            var parsedCurrency = detectCurrencyFromPriceEntry(parsed);
+            if (parsedCurrency) data.currency = parsedCurrency;
+          }
           if (parsed.price && data.blackPrice == null) {
-            var black = parsePrice(typeof parsed.price === 'string' ? parsed.price : (parsed.price.price || parsed.price.value || ''));
+            var blackSource = typeof parsed.price === 'string' ? parsed.price : (parsed.price.price || parsed.price.value || '');
+            var black = parsePrice(blackSource);
             if (black > 0) data.blackPrice = black;
+            if (data.currency == null) {
+              var blackCurrency = detectCurrencyFromPriceEntry(parsed.price);
+              if (blackCurrency) data.currency = blackCurrency;
+            }
           }
           if (parsed.cardPrice && data.greenPrice == null) {
-            var green = parsePrice(typeof parsed.cardPrice === 'string' ? parsed.cardPrice : (parsed.cardPrice.price || parsed.cardPrice.value || ''));
+            var greenSource = typeof parsed.cardPrice === 'string' ? parsed.cardPrice : (parsed.cardPrice.price || parsed.cardPrice.value || '');
+            var green = parsePrice(greenSource);
             if (green > 0) data.greenPrice = green;
+            if (data.currency == null) {
+              var greenCurrency = detectCurrencyFromPriceEntry(parsed.cardPrice);
+              if (greenCurrency) data.currency = greenCurrency;
+            }
           }
           if (parsed.originalPrice && data.oldPrice == null) {
-            var old = parsePrice(typeof parsed.originalPrice === 'string' ? parsed.originalPrice : (parsed.originalPrice.price || parsed.originalPrice.value || ''));
+            var oldSource = typeof parsed.originalPrice === 'string' ? parsed.originalPrice : (parsed.originalPrice.price || parsed.originalPrice.value || '');
+            var old = parsePrice(oldSource);
             if (old > 0) data.oldPrice = old;
+            if (data.currency == null) {
+              var oldCurrency = detectCurrencyFromPriceEntry(parsed.originalPrice);
+              if (oldCurrency) data.currency = oldCurrency;
+            }
           }
         } catch (error) {}
       });
@@ -152,16 +225,12 @@
   }
 
   function detectCurrency(text, fallbackCurrency) {
-    var source = String(text || '').toUpperCase();
-    if (source.indexOf('¥') >= 0 || source.indexOf('￥') >= 0 || source.indexOf('CNY') >= 0 || source.indexOf('RMB') >= 0) return 'CNY';
-    if (source.indexOf('₽') >= 0 || source.indexOf('RUB') >= 0) return 'RUB';
-    return String(fallbackCurrency || 'RUB').toUpperCase();
+    return detectCurrencyToken(text) || normalizeCurrencyCode(fallbackCurrency) || 'RUB';
   }
 
   function extractPriceBundle(htmlText, visiblePriceText, fallbackCurrency) {
     var html = String(htmlText || '');
     var currentText = String(visiblePriceText || '');
-    var currency = detectCurrency(currentText || html, fallbackCurrency);
 
     function parseCandidate(text) {
       return parsePrice(text);
@@ -177,6 +246,7 @@
 
     // Priority 1: structured data-state JSON (immune to browser translation)
     var semantic = extractSemanticPricesFromDataState();
+    var currency = resolvePriceCurrency(semantic, currentText, fallbackCurrency);
 
     // Priority 2: text search (only as fallback, breaks when page is translated)
     var bankPrices = findPricesBefore('с Ozon Банком', 1);
@@ -494,7 +564,6 @@
   function extractPriceBundle(htmlText, visiblePriceText, fallbackCurrency) {
     var html = String(htmlText || '');
     var currentText = String(visiblePriceText || '');
-    var currency = detectCurrency(currentText || html, fallbackCurrency);
 
     function parseCandidate(text) {
       return parsePrice(text);
@@ -510,6 +579,7 @@
 
     // Priority 1: structured data-state JSON (immune to browser translation)
     var semantic = extractSemanticPricesFromDataState();
+    var currency = resolvePriceCurrency(semantic, currentText, fallbackCurrency);
 
     // Priority 2: text search (only as fallback, breaks when page is translated)
     var bankPrices = findPricesBefore('с Ozon Банком', 1);
@@ -551,7 +621,7 @@
 
   function hydrateProductFromHtml(rawHtml, product) {
     var next = Object.assign({}, product || {});
-    var bundle = extractPriceBundle(rawHtml, '', next.pagePriceCurrency || 'RUB');
+    var bundle = extractPriceBundle(rawHtml, '', next.pagePriceCurrency || '');
     if (bundle.currency) next.pagePriceCurrency = bundle.currency;
     if (bundle.bankPriceValue > 0) next.bankPriceValue = bundle.bankPriceValue;
     if (bundle.greenPriceValue > 0) next.greenPriceValue = bundle.greenPriceValue;
@@ -568,26 +638,7 @@
   }
 
   function detectCurrency(text, fallbackCurrency) {
-    var source = String(text || '').toUpperCase();
-    if (source.indexOf('¥') >= 0 || source.indexOf('￥') >= 0 || source.indexOf('CNY') >= 0 || source.indexOf('RMB') >= 0) {
-      return 'CNY';
-    }
-    if (source.indexOf('₽') >= 0 || source.indexOf('RUB') >= 0) {
-      return 'RUB';
-    }
-    if (source.indexOf('₸') >= 0 || source.indexOf('KZT') >= 0 || /\bТГ\b/i.test(source)) {
-      return 'KZT';
-    }
-    if (source.indexOf('BYN') >= 0 || /\bBR\b/i.test(source)) {
-      return 'BYN';
-    }
-    if (source.indexOf('$') >= 0 || source.indexOf('USD') >= 0) {
-      return 'USD';
-    }
-    if (source.indexOf('€') >= 0 || source.indexOf('EUR') >= 0) {
-      return 'EUR';
-    }
-    return String(fallbackCurrency || 'RUB').toUpperCase();
+    return detectCurrencyToken(text) || normalizeCurrencyCode(fallbackCurrency) || 'RUB';
   }
 
   function readStateData(prefix) {
@@ -647,6 +698,8 @@
       poolMessage: '',
       visibleSnapshotMessage: '',
       autoPriceFromPage: false,
+      autoProductRefreshTimers: [],
+      autoProductSpecsHandler: null,
       targetMarginPct: null,
       inputs: {
         cost: 0,
@@ -850,6 +903,7 @@
     if (galleryState && galleryState.offerPrice) structuredPrice = String(galleryState.offerPrice);
     if (!structuredPrice && galleryState && galleryState.price) structuredPrice = String(galleryState.price);
     if (galleryState && galleryState.currency) structuredCurrency = String(galleryState.currency);
+    if (!structuredCurrency && galleryState) structuredCurrency = detectCurrencyFromPriceEntry(galleryState);
     if (!structuredPrice) structuredPrice = getMetaContent([
       'meta[property="product:sale_price:amount"]',
       'meta[property="product:price:amount"]',
@@ -1419,6 +1473,16 @@
 
   function renderDrawerContent(body) {
     var state = ensurePanelState();
+    if (Array.isArray(state.autoProductRefreshTimers)) {
+      state.autoProductRefreshTimers.forEach(function (timerId) {
+        window.clearTimeout(timerId);
+      });
+    }
+    state.autoProductRefreshTimers = [];
+    if (state.autoProductSpecsHandler) {
+      window.removeEventListener('ss-erp:ozon-insights-specs', state.autoProductSpecsHandler);
+      state.autoProductSpecsHandler = null;
+    }
     var product = collectPageProduct();
     state.product = product;
     var drawer = body && typeof body.closest === 'function' ? body.closest('#ozon-calc-drawer') : null;
@@ -1565,6 +1629,57 @@
       }
     }
 
+    function refreshProductSnapshotFromPage() {
+      var freshProduct = collectPageProduct();
+      if (!freshProduct || freshProduct.pageType !== 'detail') return false;
+      var changed = false;
+      product = freshProduct;
+      state.product = freshProduct;
+
+      if (state.autoPriceFromPage) {
+        var previousPrice = Number(state.inputs.priceRMB) || 0;
+        refreshAutoPriceFromProduct(state, inputCard);
+        if (Math.abs((Number(state.inputs.priceRMB) || 0) - previousPrice) > 0.000001) changed = true;
+      }
+
+      var weightInput = inputCard.querySelector('input[data-field="weightG"]');
+      var domWeight = weightInput ? toNumber(weightInput.value, 0) : 0;
+      if (freshProduct.weightG > 0 && !(domWeight > 0) && !(state.inputs.weightG > 0)) {
+        state.inputs.weightG = freshProduct.weightG;
+        syncInputFieldValue(inputCard, 'weightG', freshProduct.weightG);
+        changed = true;
+      }
+
+      var weightHintNode = inputCard.querySelector('[data-weight-hint]');
+      if (weightHintNode) weightHintNode.textContent = weightSourceText(product);
+      renderProductCard();
+      updateDimensionInputVisibility();
+      return changed;
+    }
+
+    function scheduleProductSnapshotRefreshes() {
+      if (!product || product.pageType !== 'detail' || state.inputs.weightG > 0) return;
+      [400, 1000, 1800, 3000, 5000].forEach(function (delayMs) {
+        var timerId = window.setTimeout(function () {
+          state.autoProductRefreshTimers = (state.autoProductRefreshTimers || []).filter(function (item) {
+            return item !== timerId;
+          });
+          var changed = refreshProductSnapshotFromPage();
+          if (changed && state.lastResult) compute();
+        }, delayMs);
+        state.autoProductRefreshTimers.push(timerId);
+      });
+    }
+
+    function bindSharedSpecsRefresh() {
+      if (!product || product.pageType !== 'detail') return;
+      state.autoProductSpecsHandler = function () {
+        var changed = refreshProductSnapshotFromPage();
+        if (changed && state.lastResult) compute();
+      };
+      window.addEventListener('ss-erp:ozon-insights-specs', state.autoProductSpecsHandler);
+    }
+
     inputCard.querySelectorAll('input[data-field]').forEach(function (input) {
       input.addEventListener('input', function () {
         var field = input.getAttribute('data-field');
@@ -1628,12 +1743,7 @@
       syncInputsFromDom();
       // Re-attempt weight extraction if still 0 (data panel may have loaded since initial render)
       if (!(state.inputs.weightG > 0)) {
-        var freshProduct = collectPageProduct();
-        if (freshProduct.weightG > 0) {
-          state.inputs.weightG = freshProduct.weightG;
-          var weightInput = body.querySelector('[data-field="weightG"]');
-          if (weightInput) weightInput.value = String(freshProduct.weightG);
-        }
+        refreshProductSnapshotFromPage();
       }
       if (!state.configSnapshot || !state.configSnapshot.userConfig || !state.configSnapshot.userConfig.selectedServiceIds.length) {
         resultCard.innerHTML = '<h3>核价结果</h3><div class="ozon-calc-muted">未同步物流配置，无法正式核价。</div>';
@@ -1848,6 +1958,9 @@
         });
       });
     }
+
+    bindSharedSpecsRefresh();
+    scheduleProductSnapshotRefreshes();
 
     if (window.OZON_CALC_CONFIG_STORE && typeof window.OZON_CALC_CONFIG_STORE.readSnapshot === 'function') {
       window.OZON_CALC_CONFIG_STORE.readSnapshot().then(function (result) {

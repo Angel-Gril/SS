@@ -584,6 +584,9 @@
     const item = data.item || {};
     const specs = data.specs || {};
     window.__OZON_INSIGHTS_SPECS__ = specs;
+    try {
+      window.dispatchEvent(new CustomEvent("ss-erp:ozon-insights-specs", { detail: specs }));
+    } catch (error) {}
 
     const status = panel.querySelector("[data-role='status']");
     const grid = panel.querySelector("[data-role='grid']");
