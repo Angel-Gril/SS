@@ -4,7 +4,9 @@ const STORAGE_KEYS = {
 };
 
 var SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
+var SS_ERP_COLLECT_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY = "ss_erp_ozon_company_id_captured_at";
 var SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id_invalid";
+var SS_ERP_COLLECT_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
@@ -114,6 +116,11 @@ function normalizeOzonCompanyId(value) {
   return value == null ? "" : String(value).trim();
 }
 
+function isRecentOzonCompanyIdCapture(value) {
+  const capturedAt = Number(value) || 0;
+  return capturedAt > 0 && Date.now() - capturedAt <= SS_ERP_COLLECT_RECENT_COMPANY_ID_MS;
+}
+
 async function getInvalidSellerCompanyId() {
   const value = await storageGet(SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY);
   if (!value || typeof value !== "object") return "";
@@ -128,7 +135,10 @@ async function markSellerCompanyIdInvalid(companyId) {
   if (!normalized) return;
   const storedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
   if (storedCompanyId === normalized) {
-    await storageRemove(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY);
+    await storageRemove([
+      SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY,
+      SS_ERP_COLLECT_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY
+    ]);
   }
   await storageSet({
     [SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY]: {
@@ -255,6 +265,12 @@ async function getSellerCompanyId(preferredCompanyId) {
   if (preferred) {
     await storageSet({ [SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY]: preferred });
     return preferred;
+  }
+
+  const capturedAt = await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY);
+  const capturedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
+  if (capturedCompanyId && capturedCompanyId !== invalidCompanyId && isRecentOzonCompanyIdCapture(capturedAt)) {
+    return capturedCompanyId;
   }
 
   const cookieQueries = [

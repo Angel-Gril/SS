@@ -31,7 +31,10 @@
       forwardCapturedEntry(data.payload);
     }
     if (data.type === 'ozon-company-id' && data.payload) {
-      chrome.storage.local.set({ 'ss_erp_ozon_company_id': String(data.payload) });
+      chrome.storage.local.set({
+        'ss_erp_ozon_company_id': String(data.payload),
+        'ss_erp_ozon_company_id_captured_at': Date.now()
+      });
     }
   });
 

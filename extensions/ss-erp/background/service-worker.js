@@ -23,6 +23,8 @@ const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
 const OZON_CALC_ERP_PUSH_HISTORY_KEY = 'ozon-calc:erp-push-history';
 const OZON_SYNC_COMPANY_ID_STORAGE_KEY = 'ss_erp_ozon_company_id';
+const OZON_SYNC_COMPANY_ID_CAPTURED_AT_KEY = 'ss_erp_ozon_company_id_captured_at';
+const OZON_SYNC_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
 const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
 const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
@@ -155,6 +157,11 @@ function toText(value) {
 
 function normalizeOzonCompanyIdForSync(value) {
   return toText(value).trim();
+}
+
+function isRecentOzonCompanyIdForSync(value) {
+  const capturedAt = Number(value) || 0;
+  return capturedAt > 0 && Date.now() - capturedAt <= OZON_SYNC_RECENT_COMPANY_ID_MS;
 }
 
 function findOzonCompanyIdFromCookies(cookies) {
@@ -1304,7 +1311,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const payloadCompanyId = normalizeOzonCompanyIdForSync(message.payload && message.payload.companyId);
       const cookieCompanyId = findOzonCompanyIdFromCookies(cookies);
 
-      return chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, OZON_SYNC_COMPANY_ID_STORAGE_KEY]).then((result) => {
+      return chrome.storage.local.get([
+        OZON_CALC_ERP_ENDPOINT_KEY,
+        OZON_CALC_ERP_TOKEN_KEY,
+        OZON_SYNC_COMPANY_ID_STORAGE_KEY,
+        OZON_SYNC_COMPANY_ID_CAPTURED_AT_KEY
+      ]).then((result) => {
         const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
         if (!baseEndpoint) throw new Error('请先在插件设置中配置 ERP 地址');
         const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
@@ -1312,8 +1324,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const apiBase = baseEndpoint.replace(/\/api\/.*$/, '');
         const body = { cookie: cookieStr };
         const storedCompanyId = normalizeOzonCompanyIdForSync(result[OZON_SYNC_COMPANY_ID_STORAGE_KEY]);
+        const capturedCompanyId = isRecentOzonCompanyIdForSync(result[OZON_SYNC_COMPANY_ID_CAPTURED_AT_KEY]) ? storedCompanyId : '';
         const useStoredCompanyId = message.payload && message.payload.useStoredCompanyId !== false;
-        const companyId = payloadCompanyId || cookieCompanyId || (useStoredCompanyId ? storedCompanyId : '');
+        const companyId = payloadCompanyId || capturedCompanyId || cookieCompanyId || (useStoredCompanyId ? storedCompanyId : '');
         if (companyId) {
           body.companyId = companyId;
           chrome.storage.local.set({ [OZON_SYNC_COMPANY_ID_STORAGE_KEY]: companyId }).catch(() => {});

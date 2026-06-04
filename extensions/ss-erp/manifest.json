@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SS ERP - 松鼠跨境卖家助手",
   "short_name": "SS ERP",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "OZON跨境电商利润计算、物流同步、商品采集、ERP对接一站式工具",
   "icons": {
     "16": "icons/icon16.png",

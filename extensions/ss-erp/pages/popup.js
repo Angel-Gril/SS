@@ -213,6 +213,11 @@
     });
   }
 
+  function getManualSellerCompanyIdOverride() {
+    if (!cookieCompanyIdInput || cookieCompanyIdInput.dataset.source !== 'manual') return '';
+    return cookieCompanyIdInput.value.trim();
+  }
+
   if (syncAnalyticsBtn) {
     syncAnalyticsBtn.addEventListener('click', function () {
       syncAnalyticsBtn.disabled = true;
@@ -230,12 +235,12 @@
             setTimeout(function () { syncAnalyticsBtn.textContent = '同步'; syncAnalyticsBtn.disabled = false; }, 2000);
             return;
           }
-          readShopAuthInfo(shopId, function (auth) {
-            sendRuntimeMessage({
-              type: 'spb-self-hosted:sync-shop-analytics',
-              shopId: shopId,
-              companyId: auth.companyId || undefined
-            }, function (response) {
+          var companyId = getManualSellerCompanyIdOverride();
+          sendRuntimeMessage({
+            type: 'spb-self-hosted:sync-shop-analytics',
+            shopId: shopId,
+            companyId: companyId || undefined
+          }, function (response) {
           if (response && response.ok) {
             syncAnalyticsBtn.textContent = 'OK';
             var now = new Date().toISOString();
@@ -250,7 +255,6 @@
             if (response && response.error) setStatus(ozonStatusRow, false, response.error);
           }
           setTimeout(function () { syncAnalyticsBtn.textContent = '同步'; syncAnalyticsBtn.disabled = false; }, 2000);
-            });
           });
         });
       });
@@ -274,12 +278,12 @@
             setTimeout(function () { syncGraphsBtn.textContent = '同步'; syncGraphsBtn.disabled = false; }, 2000);
             return;
           }
-          readShopAuthInfo(shopId, function (auth) {
-            sendRuntimeMessage({
-              type: 'spb-self-hosted:sync-shop-graphs',
-              shopId: shopId,
-              companyId: auth.companyId || undefined
-            }, function (response) {
+          var companyId = getManualSellerCompanyIdOverride();
+          sendRuntimeMessage({
+            type: 'spb-self-hosted:sync-shop-graphs',
+            shopId: shopId,
+            companyId: companyId || undefined
+          }, function (response) {
           if (response && response.ok) {
             syncGraphsBtn.textContent = 'OK';
             var now = new Date().toISOString();
@@ -294,7 +298,6 @@
             if (response && response.error) setStatus(ozonStatusRow, false, response.error);
           }
           setTimeout(function () { syncGraphsBtn.textContent = '同步'; syncGraphsBtn.disabled = false; }, 2000);
-            });
           });
         });
       });
@@ -401,9 +404,12 @@
     readShopAuthInfo(shopId, function (auth) {
       if (seq !== shopAuthLoadSeq) return;
       if (cookieCompanyIdInput) {
-        cookieCompanyIdInput.value = auth.companyId || '';
-        cookieCompanyIdInput.dataset.source = auth.companyId ? 'erp' : '';
-        cookieCompanyIdInput.placeholder = auth.companyId ? '已绑定该店铺 company_id' : '该店铺未保存 company_id，可在 seller 当前店铺下同步';
+        cookieCompanyIdInput.value = '';
+        cookieCompanyIdInput.dataset.source = '';
+        cookieCompanyIdInput.dataset.savedCompanyId = auth.companyId || '';
+        cookieCompanyIdInput.placeholder = auth.companyId
+          ? 'ERP已保存 ' + auth.companyId + '；点同步将使用当前 seller 店铺'
+          : '该店铺未保存 company_id，可在 seller 当前店铺下同步';
       }
       renderSyncTime(cookieSyncTime, auth.updatedAt || '');
     });
