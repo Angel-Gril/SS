@@ -24,6 +24,8 @@ const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
 const OZON_CALC_ERP_PUSH_HISTORY_KEY = 'ozon-calc:erp-push-history';
 const OZON_SYNC_LEGACY_COMPANY_ID_STORAGE_KEY = 'ss_erp_ozon_company_id';
 const OZON_SYNC_LEGACY_COMPANY_ID_CAPTURED_AT_KEY = 'ss_erp_ozon_company_id_captured_at';
+const OZON_SYNC_SESSION_COMPANY_ID_KEY = 'ss_erp_ozon_company_id_session';
+const OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY = 'ss_erp_ozon_company_id_session_captured_at';
 const OZON_SYNC_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
 const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
@@ -174,13 +176,20 @@ function isRecentOzonCompanyIdForSync(value) {
 function rememberRuntimeOzonCompanyIdForSync(value, capturedAt) {
   const companyId = normalizeOzonCompanyIdForSync(value);
   if (!companyId) return '';
+  const nextCapturedAt = Number(capturedAt) || Date.now();
   if (typeof globalThis.SS_ERP_REMEMBER_OZON_COMPANY_ID === 'function') {
-    return globalThis.SS_ERP_REMEMBER_OZON_COMPANY_ID(companyId, capturedAt);
+    return globalThis.SS_ERP_REMEMBER_OZON_COMPANY_ID(companyId, nextCapturedAt);
   }
   globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE = {
     companyId,
-    capturedAt: Number(capturedAt) || Date.now()
+    capturedAt: nextCapturedAt
   };
+  if (chrome.storage && chrome.storage.session) {
+    chrome.storage.session.set({
+      [OZON_SYNC_SESSION_COMPANY_ID_KEY]: companyId,
+      [OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY]: nextCapturedAt
+    }).catch(() => {});
+  }
   return companyId;
 }
 
@@ -188,6 +197,22 @@ function getRuntimeOzonCompanyIdForSync() {
   const capture = globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE || {};
   if (!isRecentOzonCompanyIdForSync(capture.capturedAt)) return '';
   return normalizeOzonCompanyIdForSync(capture.companyId);
+}
+
+function getCapturedOzonCompanyIdForSync() {
+  const runtimeCompanyId = getRuntimeOzonCompanyIdForSync();
+  if (runtimeCompanyId || !chrome.storage || !chrome.storage.session) {
+    return Promise.resolve(runtimeCompanyId);
+  }
+  return chrome.storage.session.get([
+    OZON_SYNC_SESSION_COMPANY_ID_KEY,
+    OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY
+  ]).then((result) => {
+    if (!isRecentOzonCompanyIdForSync(result[OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY])) return '';
+    const companyId = normalizeOzonCompanyIdForSync(result[OZON_SYNC_SESSION_COMPANY_ID_KEY]);
+    if (companyId) rememberRuntimeOzonCompanyIdForSync(companyId, result[OZON_SYNC_SESSION_COMPANY_ID_CAPTURED_AT_KEY]);
+    return companyId;
+  }).catch(() => '');
 }
 
 function findOzonCompanyIdFromCookies(cookies) {
@@ -1343,18 +1368,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const payloadCompanyId = normalizeOzonCompanyIdForSync(message.payload && message.payload.companyId);
       const cookieCompanyId = findOzonCompanyIdFromCookies(cookies);
 
-      return chrome.storage.local.get([
+      return Promise.all([
+        getCapturedOzonCompanyIdForSync(),
+        chrome.storage.local.get([
         OZON_CALC_ERP_ENDPOINT_KEY,
         OZON_CALC_ERP_TOKEN_KEY
-      ]).then((result) => {
+        ])
+      ]).then(([capturedCompanyId, result]) => {
         const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY]);
         if (!baseEndpoint) throw new Error('请先在插件设置中配置 ERP 地址');
         const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
         if (!token) throw new Error('请先在插件设置中配置 ERP Token');
         const apiBase = baseEndpoint.replace(/\/api\/.*$/, '');
         const body = { cookie: cookieStr };
-        const runtimeCompanyId = getRuntimeOzonCompanyIdForSync();
-        const companyId = payloadCompanyId || runtimeCompanyId || cookieCompanyId;
+        const companyId = payloadCompanyId || capturedCompanyId || cookieCompanyId;
         if (companyId) {
           body.companyId = companyId;
           rememberRuntimeOzonCompanyIdForSync(companyId);

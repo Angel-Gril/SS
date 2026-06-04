@@ -77,6 +77,37 @@
     } catch (error) {}
   }
 
+  function postCompanyId(companyId) {
+    var value = toText(companyId).trim();
+    if (!value) return;
+    try {
+      window.postMessage({ source: PAGE_MESSAGE_SOURCE, type: 'ozon-company-id', payload: value }, '*');
+    } catch (error) {}
+  }
+
+  function readHeader(headers, name) {
+    var target = toText(name).toLowerCase();
+    if (!headers) return '';
+    try {
+      if (typeof headers.get === 'function') return headers.get(name) || headers.get(target) || '';
+      if (Array.isArray(headers)) {
+        for (var i = 0; i < headers.length; i += 1) {
+          var pair = headers[i] || [];
+          if (toText(pair[0]).toLowerCase() === target) return pair[1] || '';
+        }
+        return '';
+      }
+      if (typeof headers === 'object') {
+        var keys = Object.keys(headers);
+        for (var keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+          var key = keys[keyIndex];
+          if (toText(key).toLowerCase() === target) return headers[key] || '';
+        }
+      }
+    } catch (error) {}
+    return '';
+  }
+
   if (typeof window.fetch === 'function') {
     var originalFetch = window.fetch;
     window.fetch = function () {
@@ -91,17 +122,7 @@
       // 自动提取 x-o3-company-id
       try {
         var headers = init.headers || (input && input.headers);
-        var companyId = null;
-        if (headers) {
-          if (typeof headers.get === 'function') {
-            companyId = headers.get('x-o3-company-id');
-          } else if (typeof headers === 'object') {
-            companyId = headers['x-o3-company-id'] || headers['X-O3-Company-Id'];
-          }
-        }
-        if (companyId) {
-          window.postMessage({ source: PAGE_MESSAGE_SOURCE, type: 'ozon-company-id', payload: String(companyId) }, '*');
-        }
+        postCompanyId(readHeader(headers, 'x-o3-company-id'));
       } catch (e) {}
 
       return originalFetch.apply(this, arguments).then(function (response) {
@@ -144,12 +165,20 @@
         startedDateTime: '',
       };
       var originalOpen = xhr.open;
+      var originalSetRequestHeader = xhr.setRequestHeader;
       var originalSend = xhr.send;
 
       xhr.open = function (method, url) {
         request.method = toText(method).toUpperCase() || 'GET';
         request.url = toText(url);
         return originalOpen.apply(xhr, arguments);
+      };
+
+      xhr.setRequestHeader = function (name, value) {
+        if (toText(name).toLowerCase() === 'x-o3-company-id') {
+          postCompanyId(value);
+        }
+        return originalSetRequestHeader.apply(xhr, arguments);
       };
 
       xhr.send = function (body) {

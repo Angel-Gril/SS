@@ -5,6 +5,8 @@ const STORAGE_KEYS = {
 
 var SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
 var SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY = "ss_erp_ozon_company_id_captured_at";
+var SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_KEY = "ss_erp_ozon_company_id_session";
+var SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY = "ss_erp_ozon_company_id_session_captured_at";
 var SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id_invalid";
 var SS_ERP_COLLECT_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 
@@ -112,6 +114,36 @@ function storageRemove(keys) {
   });
 }
 
+function storageSessionGet(keys) {
+  return new Promise((resolve) => {
+    if (!chrome.storage || !chrome.storage.session) {
+      resolve({});
+      return;
+    }
+    chrome.storage.session.get(keys, (result) => resolve(result || {}));
+  });
+}
+
+function storageSessionSet(patch) {
+  return new Promise((resolve) => {
+    if (!chrome.storage || !chrome.storage.session) {
+      resolve();
+      return;
+    }
+    chrome.storage.session.set(patch, resolve);
+  });
+}
+
+function storageSessionRemove(keys) {
+  return new Promise((resolve) => {
+    if (!chrome.storage || !chrome.storage.session) {
+      resolve();
+      return;
+    }
+    chrome.storage.session.remove(keys, resolve);
+  });
+}
+
 function normalizeOzonCompanyId(value) {
   return value == null ? "" : String(value).trim();
 }
@@ -124,10 +156,15 @@ function isRecentOzonCompanyIdCapture(value) {
 function rememberRuntimeOzonCompanyId(value, capturedAt) {
   const companyId = normalizeOzonCompanyId(value);
   if (!companyId) return "";
+  const nextCapturedAt = Number(capturedAt) || Date.now();
   globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE = {
     companyId,
-    capturedAt: Number(capturedAt) || Date.now()
+    capturedAt: nextCapturedAt
   };
+  storageSessionSet({
+    [SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_KEY]: companyId,
+    [SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY]: nextCapturedAt
+  }).catch(() => {});
   return companyId;
 }
 
@@ -135,6 +172,22 @@ function getRuntimeOzonCompanyId() {
   const capture = globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE || {};
   if (!isRecentOzonCompanyIdCapture(capture.capturedAt)) return "";
   return normalizeOzonCompanyId(capture.companyId);
+}
+
+async function getCapturedOzonCompanyId() {
+  const runtimeCompanyId = getRuntimeOzonCompanyId();
+  if (runtimeCompanyId) return runtimeCompanyId;
+
+  const session = await storageSessionGet([
+    SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_KEY,
+    SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY
+  ]);
+  if (!isRecentOzonCompanyIdCapture(session[SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY])) {
+    return "";
+  }
+  const companyId = normalizeOzonCompanyId(session[SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_KEY]);
+  if (companyId) rememberRuntimeOzonCompanyId(companyId, session[SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY]);
+  return companyId;
 }
 
 globalThis.SS_ERP_REMEMBER_OZON_COMPANY_ID = rememberRuntimeOzonCompanyId;
@@ -154,6 +207,10 @@ async function markSellerCompanyIdInvalid(companyId) {
   if (getRuntimeOzonCompanyId() === normalized) {
     globalThis.SS_ERP_OZON_COMPANY_ID_CAPTURE = null;
   }
+  await storageSessionRemove([
+    SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_KEY,
+    SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY
+  ]);
   await storageRemove([
     SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_STORAGE_KEY,
     SS_ERP_COLLECT_LEGACY_OZON_COMPANY_ID_CAPTURED_AT_STORAGE_KEY
@@ -284,7 +341,7 @@ async function getSellerCompanyId(preferredCompanyId) {
     return rememberRuntimeOzonCompanyId(preferred);
   }
 
-  const capturedCompanyId = getRuntimeOzonCompanyId();
+  const capturedCompanyId = await getCapturedOzonCompanyId();
   if (capturedCompanyId && capturedCompanyId !== invalidCompanyId) {
     return capturedCompanyId;
   }
