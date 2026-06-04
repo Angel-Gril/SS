@@ -3,6 +3,8 @@ const STORAGE_KEYS = {
   lastCollected: "spb_self_hosted_last_collected"
 };
 
+const OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
+
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
   erpPushPath: "/api/extensions/products/import",
@@ -92,6 +94,10 @@ function storageSet(patch) {
   });
 }
 
+function normalizeOzonCompanyId(value) {
+  return value == null ? "" : String(value).trim();
+}
+
 async function getConfig() {
   const saved = await storageGet(STORAGE_KEYS.config);
   return { ...DEFAULT_CONFIG, ...(saved || {}) };
@@ -178,8 +184,16 @@ async function collectFromCurrentTab() {
 
   const ozonProductId = parseOzonProductId(payload.sourceUrl || payload.tabUrl || "");
   if (isOzonProductUrl(payload.sourceUrl || payload.tabUrl || "") && ozonProductId) {
-    const ozonInsights = await getOzonInsights(ozonProductId);
-    mergeOzonInsightsIntoProduct(payload, ozonInsights);
+    try {
+      const ozonInsights = await getOzonInsights(ozonProductId);
+      mergeOzonInsightsIntoProduct(payload, ozonInsights);
+    } catch (error) {
+      payload.metadata = {
+        ...(payload.metadata || {}),
+        ozonInsightsError: normalizeErrorMessage(error)
+      };
+      console.warn("[SS ERP] Ozon seller insights skipped:", error);
+    }
   }
 
   await setLastCollected(payload);
@@ -196,17 +210,31 @@ function parseOzonProductId(url) {
 }
 
 async function getSellerCompanyId() {
-  const cookies = await chrome.cookies.getAll({
-    url: "https://seller.ozon.ru/",
-    name: "sc_company_id"
-  });
+  const cookieQueries = [
+    { url: "https://seller.ozon.ru/", name: "sc_company_id" },
+    { domain: ".ozon.ru", name: "sc_company_id" },
+    { domain: "seller.ozon.ru", name: "sc_company_id" }
+  ];
 
-  const companyId = cookies[0] && cookies[0].value ? cookies[0].value : "";
-  if (!companyId) {
-    throw new Error("未检测到 seller.ozon.ru 的 sc_company_id，请先登录 Ozon 卖家后台");
+  for (const query of cookieQueries) {
+    try {
+      const cookies = await chrome.cookies.getAll(query);
+      const companyId = normalizeOzonCompanyId(cookies[0] && cookies[0].value);
+      if (companyId) {
+        await storageSet({ [OZON_COMPANY_ID_STORAGE_KEY]: companyId });
+        return companyId;
+      }
+    } catch (error) {
+      console.warn("[SS ERP] read Ozon company cookie failed:", error);
+    }
   }
 
-  return companyId;
+  const storedCompanyId = normalizeOzonCompanyId(await storageGet(OZON_COMPANY_ID_STORAGE_KEY));
+  if (storedCompanyId) {
+    return storedCompanyId;
+  }
+
+  throw new Error("未检测到 Ozon Seller Company ID。请在本机打开 seller.ozon.ru，选择对应店铺并进入商品/数据分析页面，等待扩展自动捕获 x-o3-company-id 后再重试；也可以在扩展的 Cookie 同步区域手动填写 company_id 并同步。");
 }
 
 async function getSellerTab() {
