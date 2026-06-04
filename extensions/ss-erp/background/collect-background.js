@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
 };
 
 var SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
+var SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id_invalid";
 
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
@@ -51,6 +52,15 @@ function isExtensionContextError(error) {
   return /Extension context invalidated|context invalidated|Receiving end does not exist/i.test(normalizeErrorMessage(error));
 }
 
+function isOzonCompanyPermissionError(message) {
+  return /PermissionDenied|no access to this company|user has no roles/i.test(normalizeErrorMessage(message));
+}
+
+function formatOzonCompanyPermissionError(companyId, rawError) {
+  const suffix = companyId ? "当前 company_id=" + companyId + "。" : "";
+  return "OZON 拒绝访问该店铺分析数据：" + suffix + "请在 seller.ozon.ru 确认已登录有权限的卖家账号，切换到对应店铺后刷新 seller 页面，并在扩展里重新同步 Cookie/company_id。原始错误: " + normalizeErrorMessage(rawError);
+}
+
 function chromePermissionsContains(permissions) {
   return new Promise((resolve) => {
     if (!chrome.permissions || typeof chrome.permissions.contains !== "function") {
@@ -94,8 +104,38 @@ function storageSet(patch) {
   });
 }
 
+function storageRemove(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(keys, resolve);
+  });
+}
+
 function normalizeOzonCompanyId(value) {
   return value == null ? "" : String(value).trim();
+}
+
+async function getInvalidSellerCompanyId() {
+  const value = await storageGet(SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY);
+  if (!value || typeof value !== "object") return "";
+  const companyId = normalizeOzonCompanyId(value.companyId);
+  const invalidatedAt = Number(value.invalidatedAt) || 0;
+  if (!companyId || Date.now() - invalidatedAt > 10 * 60 * 1000) return "";
+  return companyId;
+}
+
+async function markSellerCompanyIdInvalid(companyId) {
+  const normalized = normalizeOzonCompanyId(companyId);
+  if (!normalized) return;
+  const storedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
+  if (storedCompanyId === normalized) {
+    await storageRemove(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY);
+  }
+  await storageSet({
+    [SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY]: {
+      companyId: normalized,
+      invalidatedAt: Date.now()
+    }
+  });
 }
 
 async function getConfig() {
@@ -209,7 +249,14 @@ function parseOzonProductId(url) {
   return match ? match[1] : "";
 }
 
-async function getSellerCompanyId() {
+async function getSellerCompanyId(preferredCompanyId) {
+  const preferred = normalizeOzonCompanyId(preferredCompanyId);
+  const invalidCompanyId = await getInvalidSellerCompanyId();
+  if (preferred) {
+    await storageSet({ [SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY]: preferred });
+    return preferred;
+  }
+
   const cookieQueries = [
     { url: "https://seller.ozon.ru/", name: "sc_company_id" },
     { domain: ".ozon.ru", name: "sc_company_id" },
@@ -221,6 +268,7 @@ async function getSellerCompanyId() {
       const cookies = await chrome.cookies.getAll(query);
       const companyId = normalizeOzonCompanyId(cookies[0] && cookies[0].value);
       if (companyId) {
+        if (companyId === invalidCompanyId) continue;
         await storageSet({ [SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY]: companyId });
         return companyId;
       }
@@ -231,6 +279,10 @@ async function getSellerCompanyId() {
 
   const storedCompanyId = normalizeOzonCompanyId(await storageGet(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY));
   if (storedCompanyId) {
+    if (storedCompanyId === invalidCompanyId) {
+      await storageRemove(SS_ERP_COLLECT_OZON_COMPANY_ID_STORAGE_KEY);
+      throw new Error(formatOzonCompanyPermissionError(storedCompanyId, "该 company_id 刚刚被 Ozon 返回无权限"));
+    }
     return storedCompanyId;
   }
 
@@ -303,6 +355,10 @@ async function sellerTabFetchJson(url, body, companyId) {
     throw new Error("seller.ozon.ru 请求没有返回结果");
   }
   if (!result.ok) {
+    if (isOzonCompanyPermissionError(result.error)) {
+      await markSellerCompanyIdInvalid(companyId);
+      throw new Error(formatOzonCompanyPermissionError(companyId, result.error));
+    }
     throw new Error(result.error || "seller.ozon.ru 请求失败");
   }
   return result.data;
@@ -2065,7 +2121,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "spb-self-hosted:sync-shop-analytics": {
         // 从 seller.ozon.ru 获取商品分析数据并推送到 ERP
         // 使用 chartsV3TableBySku（已验证可用），不再依赖 what_to_sell/data/v3
-        const companyId = await getSellerCompanyId();
+        const companyId = await getSellerCompanyId(message.companyId);
         let analyticsItems = [];
 
         try {
@@ -2122,7 +2178,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             offset += PAGE_SIZE;
           }
         } catch (e) {
-          return { ok: false, error: "获取分析数据失败。请确认已登录 seller.ozon.ru 并打开了卖家后台页面。错误: " + (e.message || String(e)) };
+          const messageText = e.message || String(e);
+          if (isOzonCompanyPermissionError(messageText)) {
+            return { ok: false, error: messageText };
+          }
+          return { ok: false, error: "获取分析数据失败。请确认已登录 seller.ozon.ru 并打开了卖家后台页面。错误: " + messageText };
         }
 
         if (!analyticsItems.length) {
@@ -2177,7 +2237,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         };
       }
       case "spb-self-hosted:sync-shop-graphs": {
-        const companyId = await getSellerCompanyId();
+        const companyId = await getSellerCompanyId(message.companyId);
         const period = message.period || 30;
 
         const v3Result = await syncShopGraphsWithFallback(companyId, period);
@@ -2203,7 +2263,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return { ok: true, data: v3Result };
       }
       case "spb-self-hosted:test-market-apis": {
-        const companyId = await getSellerCompanyId();
+        const companyId = await getSellerCompanyId(message.companyId);
         const testResults = await testMarketDataApis(companyId);
         return { ok: true, data: testResults };
       }
