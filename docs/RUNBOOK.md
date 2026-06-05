@@ -446,6 +446,13 @@ bash scripts/verify-backup-restore.sh
 
 备份 R2/S3 bucket 建议和图片 R2 bucket 分开，避免生命周期规则互相影响。
 
+阿里云 RDS 模式下，不要把超管后台的 `backup_*` 误认为 RDS 控制台设置：
+
+- RDS 自动备份、日志备份、时间点恢复在阿里云控制台配置，本系统不会直接修改 RDS。
+- 超管后台"备份策略"里的 `backup_*` 是应用层 `pg_dump` 副本设置。
+- 低成本初期建议：RDS 自动备份保留 7 天；`pg_dump` 每天一次，OSS 备份 bucket 只保留最近 3 天。
+- `backup_rds_snapshot_keep_days` 只是记录/提示 RDS 控制台应配置的保留天数，不能低于 7。
+
 浏览器扩展静态验收：
 
 ```bash
@@ -499,6 +506,22 @@ cat scripts/backup-db.crontab.example
 2. `verify-backup-restore.sh` 是否能把备份恢复到临时库并自动清理
 
 如果备份桶接到了 R2 / 其他 S3 兼容存储，备份桶最好和图片桶分开，避免对象生命周期规则互相干扰。
+
+阿里云 RDS 场景推荐 `/etc/ss-erp-backup.env`：
+
+```env
+BACKUP_DB_URL="postgresql://USER:PASSWORD@RDS_HOST:5432/ss_erp?schema=public"
+BACKUP_LOCAL_DIR="/var/backups/ss-erp"
+BACKUP_KEEP_DAYS="3"
+BACKUP_S3_BUCKET="ss-erp-backup"
+BACKUP_S3_ENDPOINT="https://oss-cn-hangzhou.aliyuncs.com"
+BACKUP_S3_ACCESS_KEY_ID="..."
+BACKUP_S3_SECRET_ACCESS_KEY="..."
+BACKUP_S3_PREFIX="db/"
+BACKUP_S3_REGION="oss-cn-hangzhou"
+```
+
+同时在阿里云 RDS 控制台配置自动备份保留 7 天。RDS 备份负责主恢复链路；`pg_dump` 是额外逻辑副本。
 
 ## 常见问题
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Save, Settings as SettingsIcon, AlertCircle, HardDrive, CheckCircle2, XCircle } from 'lucide-react';
+import { Loader2, Save, Settings as SettingsIcon, AlertCircle, HardDrive, CheckCircle2, XCircle, Database } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -92,7 +92,10 @@ export default function AdminSettingsPage() {
   }
 
   async function saveConfigs(keys: string[], label: string, overrides: Record<string, string> = {}) {
-    const available = keys.filter((key) => Object.prototype.hasOwnProperty.call(editing, key));
+    const available = keys.filter((key) => (
+      Object.prototype.hasOwnProperty.call(editing, key) ||
+      Object.prototype.hasOwnProperty.call(overrides, key)
+    ));
     setSavingKey(`group:${label}`);
     for (const key of available) {
       const res = await api.put(`/api/admin/system-config/${key}`, { value: overrides[key] ?? editing[key] ?? '' });
@@ -174,47 +177,23 @@ export default function AdminSettingsPage() {
           );
         }
 
+        if (group === 'backup') {
+          return (
+            <BackupSettingsPanel
+              key={group}
+              items={items}
+              backupStatus={backupStatus}
+              editing={editing}
+              setEditing={setEditing}
+              savingKey={savingKey}
+              saveConfig={saveConfig}
+              saveConfigs={saveConfigs}
+            />
+          );
+        }
+
         return (
           <div key={group} className="space-y-4">
-            {group === 'backup' && backupStatus && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">最近备份状态</span>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {!backupStatus.available ? (
-                    <p className="text-sm text-muted-foreground">{backupStatus.message || '备份状态不可用'}</p>
-                  ) : (
-                    <div className="grid gap-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">最近备份时间</span>
-                        <span>{backupStatus.lastBackupAt ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN') : '—'}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">本地文件</span>
-                        <code className="text-xs">{backupStatus.lastLocalFile || '—'}</code>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">文件大小</span>
-                        <span>{backupStatus.lastLocalSize || '—'}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">远程上传</span>
-                        <span className="flex items-center gap-1">
-                          {backupStatus.remoteUploaded
-                            ? <><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> 已上传</>
-                            : <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> 未上传</>
-                          }
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
               <Card>
                 <details open={group === 'maintenance'} className="group">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
@@ -229,12 +208,6 @@ export default function AdminSettingsPage() {
                     <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
                   </summary>
                 <CardContent className="space-y-5 border-t pt-5">
-                  {group === 'backup' && (
-                    <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
-                      这里配置的是数据库备份的远程存储（`backup_remote_*`），不影响图片/附件上传。
-                      图片/附件对象存储请在"上传与对象存储"里配置 `upload_*`。
-                    </p>
-                  )}
                   {items.map((cfg) => (
                     <div key={cfg.key} className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0">
                       <div className="flex items-start justify-between gap-3">
@@ -323,6 +296,218 @@ const UPLOAD_SECURITY_KEYS = [
   'upload_daily_quota_mb',
   'upload_referer_check_enabled',
 ];
+
+const BACKUP_RECOMMENDED_KEYS = [
+  'backup_database_provider',
+  'backup_rds_snapshot_keep_days',
+  'backup_rpo_hours',
+  'backup_rto_hours',
+  'backup_enabled',
+  'backup_schedule',
+  'backup_local_keep_days',
+  'backup_remote_enabled',
+  'backup_remote_keep_days',
+  'backup_remote_provider',
+  'backup_remote_prefix',
+];
+
+const BACKUP_RECOMMENDED_OVERRIDES: Record<string, string> = {
+  backup_database_provider: 'aliyun-rds',
+  backup_rds_snapshot_keep_days: '7',
+  backup_rpo_hours: '24',
+  backup_rto_hours: '8',
+  backup_enabled: 'true',
+  backup_schedule: '0 3 * * *',
+  backup_local_keep_days: '3',
+  backup_remote_enabled: 'true',
+  backup_remote_keep_days: '3',
+  backup_remote_provider: 's3',
+  backup_remote_prefix: 'db/',
+};
+
+interface BackupSettingsPanelProps {
+  items: SystemConfig[];
+  backupStatus: BackupStatus | null;
+  editing: Record<string, string>;
+  setEditing: (next: Record<string, string>) => void;
+  savingKey: string | null;
+  saveConfig: (key: string) => Promise<void>;
+  saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+}
+
+function BackupSettingsPanel({
+  items,
+  backupStatus,
+  editing,
+  setEditing,
+  savingKey,
+  saveConfig,
+  saveConfigs,
+}: BackupSettingsPanelProps) {
+  const configs = Object.fromEntries(items.map((item) => [item.key, item]));
+  const provider = editing.backup_database_provider || 'self-managed';
+  const isAliyunRds = provider === 'aliyun-rds';
+  const isSavingRecommended = savingKey === 'group:阿里云 RDS 低成本备份';
+  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">备份策略</Badge>
+              <span className="text-sm text-muted-foreground">
+                {isAliyunRds ? '阿里云 RDS 自动备份 + 应用层 pg_dump 副本' : '自管 PostgreSQL pg_dump 备份'}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => saveConfigs(BACKUP_RECOMMENDED_KEYS, '阿里云 RDS 低成本备份', BACKUP_RECOMMENDED_OVERRIDES)}
+              disabled={isSavingRecommended}
+            >
+              {isSavingRecommended ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              <span className="ml-1">应用 RDS 推荐值</span>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <section className="rounded-md border bg-muted/20 p-4">
+            <div className="flex items-start gap-3">
+              <Database className="mt-0.5 h-4 w-4 text-muted-foreground" />
+              <div className="space-y-2 text-sm">
+                <p className="font-medium">{isAliyunRds ? 'RDS 服务层备份' : '自管数据库备份'}</p>
+                {isAliyunRds ? (
+                  <p className="text-muted-foreground">
+                    阿里云 RDS 自动快照、日志备份和时间点恢复在阿里云控制台配置，本系统不会直接修改 RDS。
+                    本页的 pg_dump 设置只是额外保留一份应用层逻辑备份，建议独立上传到备份 bucket。
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground">
+                    自管 PostgreSQL 或 VPS 单机部署时，系统脚本 pg_dump 是主要数据库备份来源。
+                    请确保 cron、远程备份 bucket 和恢复演练都已配置。
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-medium">数据库备份模式</h3>
+                <p className="text-xs text-muted-foreground">选择后保存模式。阿里云 RDS 模式下，RDS 保留天数只是记录建议值。</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => saveConfig('backup_database_provider')}
+                disabled={savingKey === 'backup_database_provider' || editing.backup_database_provider === configs.backup_database_provider?.value}
+              >
+                {savingKey === 'backup_database_provider' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1">保存模式</span>
+              </Button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {[
+                { value: 'aliyun-rds', label: '阿里云 RDS', desc: '云服务层负责自动备份，系统保留 pg_dump 副本' },
+                { value: 'self-managed', label: '自管 PostgreSQL', desc: 'VPS/本地 PostgreSQL，系统 pg_dump 是主要备份' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setValue('backup_database_provider', option.value)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                    provider === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{option.label}</span>
+                  <span className="text-xs text-muted-foreground">{option.desc}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="grid gap-4 md:grid-cols-2">
+            <ConfigInput cfg={configs.backup_rds_snapshot_keep_days} editing={editing} setValue={setValue} />
+            <ConfigInput cfg={configs.backup_rpo_hours} editing={editing} setValue={setValue} />
+            <ConfigInput cfg={configs.backup_rto_hours} editing={editing} setValue={setValue} />
+            <ConfigToggle cfg={configs.backup_enabled} editing={editing} setValue={setValue} />
+          </section>
+
+          <section className="space-y-3 rounded-md border p-4">
+            <div>
+              <h3 className="text-sm font-medium">应用层 pg_dump 副本</h3>
+              <p className="text-xs text-muted-foreground">
+                这些设置对应 `scripts/backup-db.sh` 和 `/etc/ss-erp-backup.env`。修改后台配置不会自动改 RDS 控制台，也不会自动改服务器 cron。
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <ConfigInput cfg={configs.backup_schedule} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.backup_local_keep_days} editing={editing} setValue={setValue} />
+              <ConfigToggle cfg={configs.backup_remote_enabled} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.backup_remote_keep_days} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.backup_remote_provider} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.backup_remote_prefix} editing={editing} setValue={setValue} />
+            </div>
+          </section>
+
+          <details className="rounded-md border border-dashed px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium">远程备份 bucket 凭证</summary>
+            <p className="mt-2 text-xs text-muted-foreground">
+              只用于数据库 pg_dump 备份，不用于图片/附件上传。备份 bucket 应和图片 bucket 分开。
+            </p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <ConfigInput cfg={configs.backup_remote_bucket} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.backup_remote_endpoint} editing={editing} setValue={setValue} />
+              <ConfigInput cfg={configs.backup_remote_region} editing={editing} setValue={setValue} />
+            </div>
+          </details>
+        </CardContent>
+      </Card>
+
+      {backupStatus && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">最近 pg_dump 状态</span>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {!backupStatus.available ? (
+              <p className="text-sm text-muted-foreground">{backupStatus.message || '备份状态不可用'}</p>
+            ) : (
+              <div className="grid gap-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">最近备份时间</span>
+                  <span>{backupStatus.lastBackupAt ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN') : '-'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">本地文件</span>
+                  <code className="text-xs">{backupStatus.lastLocalFile || '-'}</code>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">文件大小</span>
+                  <span>{backupStatus.lastLocalSize || '-'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">远程上传</span>
+                  <span className="flex items-center gap-1">
+                    {backupStatus.remoteUploaded
+                      ? <><CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> 已上传</>
+                      : <><XCircle className="h-3.5 w-3.5 text-muted-foreground" /> 未上传</>
+                    }
+                  </span>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
 
 function UploadSettingsPanel({
   items,

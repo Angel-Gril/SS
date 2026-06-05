@@ -97,7 +97,11 @@ docker compose -f docker-compose.prod.yml --env-file .env.production exec api no
 
 ## 备份策略
 
-- RDS 自动备份和 PITR 至少保留 7 天。
-- 每周 `pg_dump` 到独立 OSS bucket，保留 90 天。
+云端托管 PostgreSQL 和 VPS 自管 PostgreSQL 要分开看：
+
+- 阿里云 RDS PostgreSQL：RDS 自动快照/日志备份是主恢复链路，在阿里云控制台配置。备份保留天数最小按 RDS 规则从 7 天起。
+- 应用层 `pg_dump`：只作为额外逻辑副本，上传到独立 OSS bucket。低成本初期建议每天一次，保留最近 3 天。
+- 自管 PostgreSQL / VPS 单机：`pg_dump` 是主要备份链路，建议本地保留 7 天，远程 OSS 保留 30 天以上。
+- 备份 bucket 必须和图片/附件 bucket 分开，避免生命周期规则互相影响。
 - 备份账号和应用账号分离。
 - 每月至少做一次恢复演练。
