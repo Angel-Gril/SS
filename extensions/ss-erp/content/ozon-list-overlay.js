@@ -86,12 +86,95 @@
     return /ozon\.(ru|kz|by)/.test(href);
   }
 
+  function extractSkuFromHref(href) {
+    if (!href) return null;
+    const text = String(href);
+    const m = text.match(/\/product\/[^/?#]*-(\d+)(?:[/?#]|$)/) || text.match(/\/product\/(\d+)(?:[/?#]|$)/);
+    return m ? m[1] : null;
+  }
+
+  function getProductLinks(root) {
+    if (!root || !root.querySelectorAll) return [];
+    const links = [];
+    if (root.matches && root.matches('a[href*="/product/"]')) links.push(root);
+    root.querySelectorAll('a[href*="/product/"]').forEach((link) => links.push(link));
+    return links;
+  }
+
+  function collectDistinctProductSkus(root) {
+    const skus = new Set();
+    getProductLinks(root).forEach((link) => {
+      const sku = extractSkuFromHref(link.getAttribute('href') || '');
+      if (sku) skus.add(sku);
+    });
+    return skus;
+  }
+
+  function countDistinctProductSkus(root) {
+    return collectDistinctProductSkus(root).size;
+  }
+
+  function findSingleSkuAncestor(link, boundary) {
+    let best = null;
+    let el = link && link.parentElement;
+
+    while (el && el !== document.body && el !== document.documentElement) {
+      const skuCount = countDistinctProductSkus(el);
+      if (skuCount === 1) best = el;
+      if (skuCount > 1) break;
+      if (el === boundary) break;
+      el = el.parentElement;
+    }
+
+    return best;
+  }
+
+  function resolveProductCardTarget(candidate, link) {
+    const target = link ? findSingleSkuAncestor(link, candidate) : candidate;
+    if (!target || countDistinctProductSkus(target) !== 1) return null;
+    return target;
+  }
+
+  function collectProductCardTargets(candidate) {
+    const skuCount = countDistinctProductSkus(candidate);
+    if (skuCount === 0) return [];
+    if (skuCount === 1) {
+      const target = resolveProductCardTarget(candidate);
+      return target ? [target] : [];
+    }
+
+    const targetsBySku = new Map();
+    getProductLinks(candidate).forEach((link) => {
+      const sku = extractSkuFromHref(link.getAttribute('href') || '');
+      if (!sku) return;
+
+      const target = resolveProductCardTarget(candidate, link);
+      if (!target) return;
+
+      const existing = targetsBySku.get(sku);
+      if (!existing || target.contains(existing)) targetsBySku.set(sku, target);
+    });
+
+    return Array.from(new Set(targetsBySku.values()));
+  }
+
+  function addProductCardTarget(targets, target) {
+    const sku = extractSku(target);
+    if (!sku) return;
+
+    for (const existing of Array.from(targets)) {
+      if (extractSku(existing) !== sku) continue;
+      if (existing.contains(target)) return;
+      if (target.contains(existing)) targets.delete(existing);
+    }
+
+    targets.add(target);
+  }
+
   function extractSku(card) {
     const link = card.querySelector('a[href*="/product/"]');
     if (!link) return null;
-    const href = link.getAttribute('href') || '';
-    const m = href.match(/\/product\/[^/]*-(\d+)/) || href.match(/\/product\/(\d+)/);
-    return m ? m[1] : null;
+    return extractSkuFromHref(link.getAttribute('href') || '');
   }
 
   function extractCardData(card) {
@@ -475,7 +558,10 @@
   }
 
   // === 注入卡片 + 绑定事件 ===
-  async function attachOverlay(card) {
+  async function attachOverlay(target) {
+    const card = resolveProductCardTarget(target);
+    if (!card) return;
+
     const sku = extractSku(card);
     if (!sku) return;
     const existingSku = card.getAttribute(SKU_ATTR);
@@ -564,14 +650,20 @@
   function scan() {
     if (!isProductPage()) return;
     const io = ensureIntersectionObserver();
+    const targets = new Set();
+
     CARD_SELECTORS.forEach((sel) => {
-      document.querySelectorAll(sel).forEach((card) => {
-        const sku = extractSku(card);
-        if (!sku) return;
-        if (card.getAttribute(PROCESSED_ATTR) && card.getAttribute(SKU_ATTR) === sku && card.querySelector(`.${CARD_CLASS}`)) return;
-        if (io) io.observe(card);
-        else attachOverlay(card);
+      document.querySelectorAll(sel).forEach((candidate) => {
+        collectProductCardTargets(candidate).forEach((target) => addProductCardTarget(targets, target));
       });
+    });
+
+    targets.forEach((target) => {
+      const sku = extractSku(target);
+      if (!sku) return;
+      if (target.getAttribute(PROCESSED_ATTR) && target.getAttribute(SKU_ATTR) === sku && target.querySelector(`.${CARD_CLASS}`)) return;
+      if (io) io.observe(target);
+      else attachOverlay(target);
     });
   }
 

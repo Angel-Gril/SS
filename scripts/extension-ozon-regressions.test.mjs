@@ -21,6 +21,19 @@ test('Ozon list overlay scans current list widgets and retries transient data fa
   assert.match(source, /data-ss-erp-overlay-sku/);
 });
 
+test('Ozon list overlay attaches only to single-product card targets', () => {
+  const source = readRepoFile('extensions', 'ss-erp', 'content', 'ozon-list-overlay.js');
+
+  assert.match(source, /function\s+extractSkuFromHref/);
+  assert.match(source, /function\s+collectDistinctProductSkus/);
+  assert.match(source, /function\s+resolveProductCardTarget/);
+  assert.match(source, /function\s+collectProductCardTargets/);
+  assert.match(source, /countDistinctProductSkus\(target\)\s*!==\s*1/);
+  assert.match(source, /attachOverlay\(target\)/);
+  assert.doesNotMatch(source, /attachOverlay\(card\)/);
+  assert.doesNotMatch(source, /io\.observe\(card\)/);
+});
+
 test('Ozon commission sync primes the help center session before document-manager API requests', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
 
