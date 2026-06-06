@@ -36,6 +36,7 @@ const OZON_ENDPOINTS = {
 
 const SELLER_OZON_ORIGIN = "https://seller.ozon.ru/*";
 const SELLER_OZON_PERMISSION_ERROR = "扩展未获得 seller.ozon.ru 站点访问权限。请点击同步按钮时允许授权，或在 Chrome 扩展详情页把“网站访问权限”设为允许 seller.ozon.ru，然后刷新 seller 页面重试。";
+const SELLER_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id";
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
@@ -90,6 +91,11 @@ function storageSet(patch) {
   return new Promise((resolve) => {
     chrome.storage.local.set(patch, resolve);
   });
+}
+
+function normalizeSellerCompanyId(value) {
+  const text = value == null ? "" : String(value).trim();
+  return text && /^[0-9]+$/.test(text) ? text : "";
 }
 
 async function getConfig() {
@@ -196,17 +202,148 @@ function parseOzonProductId(url) {
 }
 
 async function getSellerCompanyId() {
-  const cookies = await chrome.cookies.getAll({
-    url: "https://seller.ozon.ru/",
-    name: "sc_company_id"
-  });
+  const fromCookie = await getSellerCompanyIdFromCookies();
+  if (fromCookie) return fromCookie;
 
-  const companyId = cookies[0] && cookies[0].value ? cookies[0].value : "";
-  if (!companyId) {
-    throw new Error("未检测到 seller.ozon.ru 的 sc_company_id，请先登录 Ozon 卖家后台");
+  const fromStorage = await getStoredSellerCompanyId();
+  if (fromStorage) return fromStorage;
+
+  const fromSellerTab = await refreshSellerCompanyIdFromTab().catch(() => "");
+  if (fromSellerTab) return fromSellerTab;
+
+  throw new Error("未检测到 seller.ozon.ru 的 company_id。请确认已登录 Ozon 卖家后台，并刷新 seller.ozon.ru 页面后重试；也可以在扩展弹窗的 company_id 输入框手动填写后同步。");
+}
+
+async function getSellerCompanyIdFromCookies() {
+  const queries = [
+    { url: "https://seller.ozon.ru/", name: "sc_company_id" },
+    { url: "https://www.ozon.ru/", name: "sc_company_id" },
+    { domain: ".ozon.ru", name: "sc_company_id" },
+    { domain: "ozon.ru", name: "sc_company_id" },
+    { name: "sc_company_id" }
+  ];
+
+  for (const query of queries) {
+    const cookies = await chrome.cookies.getAll(query).catch(() => []);
+    const cookie = (cookies || []).find((item) => {
+      const domain = String(item && item.domain || "").replace(/^\./, "");
+      return domain === "ozon.ru" || domain.endsWith(".ozon.ru") || domain === "seller.ozon.ru";
+    }) || (cookies || [])[0];
+    const companyId = normalizeSellerCompanyId(cookie && cookie.value);
+    if (companyId) {
+      await storageSet({ [SELLER_COMPANY_ID_STORAGE_KEY]: companyId });
+      return companyId;
+    }
   }
 
-  return companyId;
+  return "";
+}
+
+async function getStoredSellerCompanyId() {
+  return normalizeSellerCompanyId(await storageGet(SELLER_COMPANY_ID_STORAGE_KEY));
+}
+
+async function refreshSellerCompanyIdFromTab() {
+  const tab = await getSellerTab();
+  if (!tab || !tab.id) return "";
+
+  await injectSellerCaptureBridge(tab.id).catch(() => {});
+  const fromPage = await probeSellerCompanyIdFromPage(tab.id).catch(() => "");
+  if (fromPage) {
+    await storageSet({ [SELLER_COMPANY_ID_STORAGE_KEY]: fromPage });
+    return fromPage;
+  }
+
+  return waitForStoredSellerCompanyId(6000);
+}
+
+async function injectSellerCaptureBridge(tabId) {
+  return executeScriptWithHostAccess({
+    target: { tabId },
+    files: ["content/capture-network-bridge.js"]
+  }, SELLER_OZON_PERMISSION_ERROR);
+}
+
+async function probeSellerCompanyIdFromPage(tabId) {
+  const results = await executeScriptWithHostAccess({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      function clean(value) {
+        const text = value == null ? "" : String(value).trim();
+        return /^[0-9]+$/.test(text) ? text : "";
+      }
+
+      function findInText(value) {
+        const text = value == null ? "" : String(value);
+        const patterns = [
+          /["'](?:company_id|companyId|sellerCompanyId|activeCompanyId)["']\s*:\s*["']?([0-9]+)["']?/i,
+          /(?:company_id|companyId|sellerCompanyId|activeCompanyId)[^0-9]{0,60}([0-9]{3,})/i,
+          /x-o3-company-id[^0-9]{0,60}([0-9]{3,})/i
+        ];
+        for (const pattern of patterns) {
+          const match = text.match(pattern);
+          const id = clean(match && match[1]);
+          if (id) return id;
+        }
+        return "";
+      }
+
+      const cookieMatch = String(document.cookie || "").match(/(?:^|;\s*)sc_company_id=([^;]+)/);
+      const cookieId = clean(cookieMatch && decodeURIComponent(cookieMatch[1] || ""));
+      if (cookieId) return cookieId;
+
+      const stores = [];
+      try { stores.push(window.localStorage); } catch (error) {}
+      try { stores.push(window.sessionStorage); } catch (error) {}
+      for (const store of stores) {
+        if (!store) continue;
+        for (let index = 0; index < store.length; index += 1) {
+          const key = store.key(index) || "";
+          const keyId = findInText(key);
+          if (keyId) return keyId;
+          const value = store.getItem(key);
+          const valueId = findInText(value);
+          if (valueId) return valueId;
+        }
+      }
+
+      const globalKeys = ["__NUXT__", "__NEXT_DATA__", "__INITIAL_STATE__", "__APP_STATE__", "__INITIAL_DATA__"];
+      for (const key of globalKeys) {
+        try {
+          const value = window[key];
+          if (!value) continue;
+          const text = typeof value === "string" ? value : JSON.stringify(value);
+          const id = findInText(text && text.length > 2000000 ? text.slice(0, 2000000) : text);
+          if (id) return id;
+        } catch (error) {}
+      }
+
+      return "";
+    }
+  }, SELLER_OZON_PERMISSION_ERROR);
+
+  const value = results && results[0] && results[0].result;
+  return normalizeSellerCompanyId(value);
+}
+
+function waitForStoredSellerCompanyId(timeoutMs) {
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    const tick = async () => {
+      const stored = await getStoredSellerCompanyId();
+      if (stored) {
+        resolve(stored);
+        return;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        resolve("");
+        return;
+      }
+      setTimeout(tick, 350);
+    };
+    tick();
+  });
 }
 
 async function getSellerTab() {
@@ -1162,6 +1299,246 @@ async function syncShopGraphsWithFallback(companyId, period) {
   }
 }
 
+function normalizeAnalyticsNumber(value) {
+  let raw = value;
+  if (raw && typeof raw === "object") {
+    if (raw.value != null) raw = raw.value;
+    else if (raw.current != null) raw = raw.current;
+    else if (raw.currentValue != null) raw = raw.currentValue;
+  }
+  if (raw == null || raw === "") return 0;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
+  const text = String(raw).trim().replace(/\s+/g, "").replace(",", ".").replace(/[^\d.-]/g, "");
+  if (!text) return 0;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function firstAnalyticsValue() {
+  for (let i = 0; i < arguments.length; i += 1) {
+    const value = arguments[i];
+    if (value == null || value === "" || value === "-") continue;
+    return value;
+  }
+  return "";
+}
+
+function firstAnalyticsText() {
+  const value = firstAnalyticsValue.apply(null, arguments);
+  return value == null ? "" : String(value);
+}
+
+function readAnalyticsMetric(metrics, keys) {
+  const source = metrics || {};
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      return normalizeAnalyticsNumber(source[key]);
+    }
+  }
+  return 0;
+}
+
+function extractAnalyticsRows(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload.items)) return payload.items;
+  if (payload.result && Array.isArray(payload.result.data)) return payload.result.data;
+  if (payload.data && Array.isArray(payload.data.items)) return payload.data.items;
+  if (Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+function compactShopAnalyticsItems(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter(function (item, index) {
+    if (!item || (!item.sku && !item.name)) return false;
+    const key = item.sku
+      ? "sku:" + String(item.sku)
+      : "row:" + String(item.name || "") + ":" + String(item.article || "") + ":" + index;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function mapChartsV3AnalyticsItem(item) {
+  const info = item && (item.productInfo || item.product || item.product_info || {}) || {};
+  const metrics = item && item.metrics || {};
+  const soldCount = readAnalyticsMetric(metrics, ["orderedUnits", "ordered_units", "orders", "soldCount"]);
+  const soldSum = readAnalyticsMetric(metrics, ["revenue", "orderedAmount", "soldSum"]);
+  const avgPrice = readAnalyticsMetric(metrics, ["avgPrice", "averagePrice"]) || (soldCount > 0 ? soldSum / soldCount : 0);
+
+  return {
+    sku: firstAnalyticsText(info.sku, info.skuId, item && item.sku, item && item.skuId),
+    name: firstAnalyticsText(info.name, info.title, item && item.name, info.sku, item && item.sku),
+    image: firstAnalyticsText(info.image, info.photo, info.imageUrl, item && item.image),
+    article: firstAnalyticsText(info.article, info.offerId, item && item.article),
+    variantId: firstAnalyticsText(info.variantId, item && item.variantId),
+    soldCount,
+    soldSum,
+    avgPrice,
+    views: readAnalyticsMetric(metrics, ["pdpViews", "sessionViewPdp", "session_view_pdp", "views"]),
+    searchViews: readAnalyticsMetric(metrics, ["searchViews", "sessionCountSearch", "session_count_search"]),
+    searchPosition: readAnalyticsMetric(metrics, ["searchPosition", "position", "positionCategory"]),
+    convToCartPdp: readAnalyticsMetric(metrics, ["convPdpViewsToCart", "convToCartPdp", "conv_tocart_pdp"]),
+    cancellations: readAnalyticsMetric(metrics, ["cancelledUnits", "cancellations"]),
+    returns: readAnalyticsMetric(metrics, ["returnedUnits", "returns"]),
+    stock: readAnalyticsMetric(metrics, ["stock", "sumItemsInStock"]),
+    category1: firstAnalyticsText(info.category1, item && item.category1),
+    category3: firstAnalyticsText(info.category3, item && item.category3),
+    _source: "charts_v3_table"
+  };
+}
+
+function mapWhatToSellAnalyticsItem(item) {
+  const soldCount = normalizeAnalyticsNumber(item && item.soldCount);
+  const soldSum = normalizeAnalyticsNumber(item && item.soldSum);
+  const avgPrice = normalizeAnalyticsNumber(item && item.avgPrice) || (soldCount > 0 ? soldSum / soldCount : 0);
+
+  return {
+    sku: firstAnalyticsText(item && item.sku, item && item.skuId, item && item.variantId),
+    name: firstAnalyticsText(item && item.name, item && item.skuName, item && item.sku),
+    image: firstAnalyticsText(item && item.photo, item && item.image, item && item.imageUrl),
+    article: firstAnalyticsText(item && item.article),
+    variantId: firstAnalyticsText(item && item.variantId),
+    soldCount,
+    soldSum,
+    avgPrice,
+    minSellerPrice: normalizeAnalyticsNumber(item && item.minSellerPrice),
+    salesDynamics: normalizeAnalyticsNumber(item && item.salesDynamics),
+    views: normalizeAnalyticsNumber(firstAnalyticsValue(item && item.views, item && item.qtyViewPdp, item && item.sessionCount)),
+    searchViews: normalizeAnalyticsNumber(item && item.sessionCountSearch),
+    convToCartPdp: normalizeAnalyticsNumber(firstAnalyticsValue(item && item.convToCartPdp, item && item.pdpToCartConversion)),
+    stock: normalizeAnalyticsNumber(firstAnalyticsValue(item && item.stock, item && item.sumItemsInStock)),
+    fbsStock: normalizeAnalyticsNumber(item && item.fbsStock),
+    fboStock: normalizeAnalyticsNumber(item && item.fboStock),
+    cbStock: normalizeAnalyticsNumber(item && item.cbStock),
+    sellerId: firstAnalyticsText(item && item.sellerId),
+    sellerName: firstAnalyticsText(item && item.sellerName),
+    brand: firstAnalyticsText(item && item.brand),
+    category1: firstAnalyticsText(item && item.category1),
+    category3: firstAnalyticsText(item && item.category3),
+    avgDeliveryDays: normalizeAnalyticsNumber(item && item.avgDeliveryDays),
+    salesSchema: firstAnalyticsText(item && item.salesSchema),
+    nullableCreateDate: firstAnalyticsText(item && item.nullableCreateDate),
+    _source: "what_to_sell_data"
+  };
+}
+
+async function fetchShopAnalyticsFromChartsV3(companyId, period) {
+  const days = Math.max(1, Number(period) || 30);
+  const dateTo = new Date();
+  const dateFrom = new Date(Date.now() - days * 24 * 3600 * 1000);
+  const dateFromStr = dateFrom.toISOString().slice(0, 10);
+  const dateToStr = dateTo.toISOString().slice(0, 10);
+  const prevFrom = new Date(Date.now() - days * 2 * 24 * 3600 * 1000);
+  const prevFromStr = prevFrom.toISOString().slice(0, 10);
+  const prevToStr = dateFromStr;
+  const pageSize = 50;
+  const maxPages = 20;
+  const analyticsItems = [];
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const offset = page * pageSize;
+    const tableResult = await sellerTabFetchJson(
+      OZON_ENDPOINTS.chartsV3TableBySku,
+      {
+        current_period: { date_from: dateFromStr, date_to: dateToStr },
+        previous_period: { date_from: prevFromStr, date_to: prevToStr },
+        filters: { desc_type_ids: [], category_3_ids: [], category_2_ids: [] },
+        limit: String(pageSize),
+        offset: String(offset),
+        metrics: ["search_position", "search_views", "ordered_units", "revenue", "conv_pdp_views_to_cart", "pdp_views", "cancelled_units", "returned_units"],
+        sort: { key: "ordered_units_sort", order: "desc" }
+      },
+      companyId
+    );
+
+    const pageItems = extractAnalyticsRows(tableResult);
+    if (!pageItems.length) break;
+    pageItems.forEach(function (item) {
+      analyticsItems.push(mapChartsV3AnalyticsItem(item));
+    });
+    if (pageItems.length < pageSize) break;
+  }
+
+  const items = compactShopAnalyticsItems(analyticsItems);
+  if (!items.length) {
+    throw new Error("charts_v3_table 返回空数据");
+  }
+
+  return {
+    analyticsSource: "charts_v3_table",
+    fallbackUsed: false,
+    items,
+    period: days + "d"
+  };
+}
+
+async function fetchShopAnalyticsFromWhatToSell(companyId, period) {
+  const days = Math.max(1, Number(period) || 30);
+  const pageSize = 50;
+  const maxPages = 20;
+  const analyticsItems = [];
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const offset = page * pageSize;
+    const result = await sellerTabFetchJson(
+      OZON_ENDPOINTS.analytics,
+      {
+        filter: { stock: "any_stock" },
+        sort: { key: "sum_rating" },
+        limit: pageSize,
+        offset
+      },
+      companyId
+    );
+
+    const pageItems = extractAnalyticsRows(result);
+    if (!pageItems.length) break;
+    pageItems.forEach(function (item) {
+      analyticsItems.push(mapWhatToSellAnalyticsItem(item));
+    });
+    if (pageItems.length < pageSize) break;
+  }
+
+  const items = compactShopAnalyticsItems(analyticsItems);
+  if (!items.length) {
+    throw new Error("what_to_sell/data/v3 返回空数据");
+  }
+
+  return {
+    analyticsSource: "what_to_sell_data",
+    fallbackUsed: true,
+    items,
+    period: days + "d"
+  };
+}
+
+async function syncShopAnalyticsWithFallback(companyId, period) {
+  const sourceErrors = {};
+
+  try {
+    const chartsResult = await fetchShopAnalyticsFromChartsV3(companyId, period);
+    return { ...chartsResult, sourceErrors };
+  } catch (error) {
+    sourceErrors.chartsV3 = error && error.message ? error.message : String(error);
+  }
+
+  try {
+    const fallbackResult = await fetchShopAnalyticsFromWhatToSell(companyId, period);
+    return { ...fallbackResult, sourceErrors };
+  } catch (error) {
+    sourceErrors.whatToSell = error && error.message ? error.message : String(error);
+  }
+
+  throw new Error(
+    "获取分析数据失败。charts_v3_table: " + (sourceErrors.chartsV3 || "不可用")
+    + "；what_to_sell/data/v3: " + (sourceErrors.whatToSell || "不可用")
+    + "。请确认已登录 seller.ozon.ru，并刷新卖家后台页面后重试。"
+  );
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await storageGet(STORAGE_KEYS.config);
   if (!current) {
@@ -2095,80 +2472,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "spb-self-hosted:check-logins":
         return { ok: true, logins: await checkPlatformLogins() };
       case "spb-self-hosted:sync-shop-analytics": {
-        // 从 seller.ozon.ru 获取商品分析数据并推送到 ERP
-        // 使用 chartsV3TableBySku（已验证可用），不再依赖 what_to_sell/data/v3
         const companyId = await getSellerCompanyId();
-        let analyticsItems = [];
-
-        try {
-          const dateTo = new Date();
-          const dateFrom = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-          const dateFromStr = dateFrom.toISOString().slice(0, 10);
-          const dateToStr = dateTo.toISOString().slice(0, 10);
-          const prevFrom = new Date(Date.now() - 60 * 24 * 3600 * 1000);
-          const prevFromStr = prevFrom.toISOString().slice(0, 10);
-          const prevToStr = dateFromStr;
-
-          const PAGE_SIZE = 50;
-          const MAX_PAGES = 20;
-          let offset = 0;
-
-          for (let page = 0; page < MAX_PAGES; page++) {
-            const tableResult = await sellerTabFetchJson(
-              OZON_ENDPOINTS.chartsV3TableBySku,
-              {
-                current_period: { date_from: dateFromStr, date_to: dateToStr },
-                previous_period: { date_from: prevFromStr, date_to: prevToStr },
-                filters: { desc_type_ids: [], category_3_ids: [], category_2_ids: [] },
-                limit: String(PAGE_SIZE), offset: String(offset),
-                metrics: ["search_position", "search_views", "ordered_units", "revenue", "conv_pdp_views_to_cart", "pdp_views", "cancelled_units", "returned_units"],
-                sort: { key: "ordered_units_sort", order: "desc" }
-              },
-              companyId
-            );
-
-            const pageItems = tableResult && Array.isArray(tableResult.items) ? tableResult.items : [];
-            if (!pageItems.length) break;
-
-            pageItems.forEach(function (item) {
-              const info = item.productInfo || {};
-              const m = item.metrics || {};
-              analyticsItems.push({
-                sku: info.sku || "",
-                name: info.name || info.sku || "",
-                image: info.image || "",
-                article: info.article || "",
-                soldCount: Number(m.orderedUnits) || 0,
-                soldSum: Number(m.revenue) || 0,
-                views: Number(m.pdpViews) || 0,
-                searchViews: Number(m.searchViews) || 0,
-                searchPosition: Number(m.searchPosition) || 0,
-                convToCartPdp: Number(m.convPdpViewsToCart) || 0,
-                cancellations: Number(m.cancelledUnits) || 0,
-                returns: Number(m.returnedUnits) || 0,
-                _source: "charts_v3_table"
-              });
-            });
-
-            if (pageItems.length < PAGE_SIZE) break;
-            offset += PAGE_SIZE;
-          }
-        } catch (e) {
-          return { ok: false, error: "获取分析数据失败。请确认已登录 seller.ozon.ru 并打开了卖家后台页面。错误: " + (e.message || String(e)) };
-        }
-
-        if (!analyticsItems.length) {
-          return { ok: false, error: "未获取到分析数据，请确认已登录 seller.ozon.ru" };
-        }
-
-        // 获取 ERP 连接配置
-        const connData = await new Promise((resolve) => {
-          chrome.storage.local.get(["ss_erp_connection"], (result) => resolve(result));
-        });
-        const conn = connData.ss_erp_connection || {};
-        const baseUrl = (conn.baseUrl || "").replace(/\/+$/, "");
-        const token = conn.token || "";
-
+        const period = message.period || 30;
+        const analyticsResult = await syncShopAnalyticsWithFallback(companyId, period);
+        const analyticsItems = analyticsResult.items || [];
+        const { baseUrl, token } = await getStoredErpConnection();
         if (!baseUrl) {
           return { ok: false, error: "请先在设置中配置 ERP 后端地址" };
         }
@@ -2182,7 +2490,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return { ok: false, error: "请指定店铺 ID" };
         }
 
-        const pushUrl = baseUrl + "/api/shops/" + shopId + "/analytics";
+        const pushUrl = baseUrl + "/api/shops/" + encodeURIComponent(shopId) + "/analytics";
         const pushResponse = await fetch(pushUrl, {
           method: "POST",
           headers: {
@@ -2191,7 +2499,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           },
           body: JSON.stringify({
             items: analyticsItems,
-            period: "30d"
+            period: analyticsResult.period || "30d",
+            source: analyticsResult.analyticsSource,
+            fallbackUsed: analyticsResult.fallbackUsed,
+            sourceErrors: analyticsResult.sourceErrors || {}
           })
         });
 
@@ -2202,11 +2513,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         let pushParsed = {};
         try { pushParsed = JSON.parse(pushText); } catch (e) {}
+        if (pushParsed && pushParsed.code === 0) {
+          return { ok: false, error: pushParsed.msg || "ERP 保存分析数据失败" };
+        }
 
         return {
           ok: true,
           data: {
             itemCount: analyticsItems.length,
+            analyticsSource: analyticsResult.analyticsSource,
+            fallbackUsed: analyticsResult.fallbackUsed,
+            sourceErrors: analyticsResult.sourceErrors || {},
             erpResponse: pushParsed
           }
         };
@@ -2219,23 +2536,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         const graphShopId = message.shopId;
         if (graphShopId) {
-          const graphConnData = await new Promise((resolve) => {
-            chrome.storage.local.get(["ss_erp_connection"], (result) => resolve(result));
-          });
-          const graphConn = graphConnData.ss_erp_connection || {};
-          const graphBaseUrl = (graphConn.baseUrl || "").replace(/\/+$/, "");
-          const graphToken = graphConn.token || "";
-
-          if (graphBaseUrl && graphToken) {
-            await fetch(graphBaseUrl + "/api/shops/" + graphShopId + "/analytics-graphs", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json;charset=utf-8",
-                "Authorization": "Bearer " + graphToken
-              },
-              body: JSON.stringify(v3Result)
-            });
+          const graphConn = await getStoredErpConnection();
+          if (!graphConn.baseUrl || !graphConn.token) {
+            return { ok: false, error: "请先配置 ERP 连接" };
           }
+
+          const graphResponse = await fetch(graphConn.baseUrl + "/api/shops/" + encodeURIComponent(graphShopId) + "/analytics-graphs", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json;charset=utf-8",
+              "Authorization": "Bearer " + graphConn.token
+            },
+            body: JSON.stringify(v3Result)
+          });
+          const graphText = await graphResponse.text();
+          if (!graphResponse.ok) {
+            return { ok: false, error: "ERP 返回 HTTP " + graphResponse.status + ": " + graphText.slice(0, 300) };
+          }
+          let graphParsed = {};
+          try { graphParsed = JSON.parse(graphText); } catch (e) {}
+          if (graphParsed && graphParsed.code === 0) {
+            return { ok: false, error: graphParsed.msg || "ERP 保存经营图表失败" };
+          }
+          v3Result.erpResponse = graphParsed;
         }
 
         return { ok: true, data: v3Result };

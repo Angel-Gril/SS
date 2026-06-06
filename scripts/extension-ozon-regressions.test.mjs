@@ -32,6 +32,29 @@ test('Ozon commission sync primes the help center session before document-manage
   assert.match(source, /credentials:\s*'include'/);
 });
 
+test('Ozon seller company id detection falls back to captured x-o3-company-id', () => {
+  const source = readRepoFile('extensions', 'ss-erp', 'background', 'collect-background.js');
+
+  assert.match(source, /ss_erp_ozon_company_id/);
+  assert.match(source, /getStoredSellerCompanyId/);
+  assert.match(source, /refreshSellerCompanyIdFromTab/);
+  assert.match(source, /\.ozon\.ru/);
+});
+
+test('Ozon shop analytics sync falls back from charts table to what-to-sell data', () => {
+  const source = readRepoFile('extensions', 'ss-erp', 'background', 'collect-background.js');
+
+  assert.match(source, /syncShopAnalyticsWithFallback/);
+  assert.match(source, /fetchShopAnalyticsFromChartsV3/);
+  assert.match(source, /fetchShopAnalyticsFromWhatToSell/);
+  assert.match(source, /mapChartsV3AnalyticsItem/);
+  assert.match(source, /mapWhatToSellAnalyticsItem/);
+  assert.match(source, /OZON_ENDPOINTS\.chartsV3TableBySku/);
+  assert.match(source, /OZON_ENDPOINTS\.analytics/);
+  assert.match(source, /analyticsSource/);
+  assert.doesNotMatch(source, /不再依赖\s+what_to_sell\/data\/v3/);
+});
+
 test('production sources and extension package do not contain competitor brand markers', () => {
   const files = [
     ['extensions', 'ss-erp', 'content', 'ozon-list-overlay.js'],
