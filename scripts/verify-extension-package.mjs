@@ -233,6 +233,38 @@ for (const adapter of requiredAdapters) {
   if (swText.includes(relFromBackground)) pass(`service worker imports ${adapter}`);
   else fail(`service worker does not import ${adapter}`);
 }
+if (swText.includes('https://global-help.ozon.com/zh-hans/commissions/ozon-fees/commissions/?country=OTHER')) {
+  pass('service worker uses Ozon global-help commission URL');
+} else {
+  fail('service worker missing Ozon global-help commission URL');
+}
+if (swText.includes('document-manager-api/global-help/api/v3/document/public/by-path')
+  && swText.includes('childDocsRegion=CHN')) {
+  pass('service worker uses Ozon document-manager commission API');
+} else {
+  fail('service worker missing Ozon document-manager commission API');
+}
+if (swText.includes('buildSnapshotFromOzonDocumentPayload')) {
+  pass('service worker parses Ozon document-manager commission payloads');
+} else {
+  fail('service worker does not parse Ozon document-manager commission payloads');
+}
+if (swText.indexOf('https://global-help.ozon.com/zh-hans/commissions/ozon-fees/commissions/?country=OTHER') >= 0
+  && swText.indexOf('https://docs.ozon.com/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER') >= 0
+  && swText.indexOf('https://global-help.ozon.com/zh-hans/commissions/ozon-fees/commissions/?country=OTHER')
+    < swText.indexOf('https://docs.ozon.com/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER')) {
+  pass('service worker tries global-help commission URL before legacy docs URL');
+} else {
+  fail('service worker does not prioritize Ozon global-help commission URL');
+}
+if (swText.indexOf('document-manager-api/global-help/api/v3/document/public/by-path') >= 0
+  && swText.indexOf('https://docs.ozon.com/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER') >= 0
+  && swText.indexOf('document-manager-api/global-help/api/v3/document/public/by-path')
+    < swText.indexOf('https://docs.ozon.com/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER')) {
+  pass('service worker tries Ozon document-manager API before legacy docs URL');
+} else {
+  fail('service worker does not prioritize Ozon document-manager API');
+}
 
 const cloudText = readFileSync(relToAbs('shared/adapters/cloud-adapter.js'), 'utf8');
 if (cloudText.includes('Authorization') && cloudText.includes('Bearer ')) pass('cloud adapter sends bearer token');
@@ -265,6 +297,11 @@ if (externalMatches.some((item) => item.includes('120.55.61.146'))) {
 }
 
 const hostPermissions = manifest.host_permissions || [];
+if (hostPermissions.includes('https://global-help.ozon.com/*')) {
+  pass('host_permissions includes global-help.ozon.com');
+} else {
+  fail('host_permissions missing global-help.ozon.com');
+}
 const contentMatches = (manifest.content_scripts || []).flatMap((script) => script.matches || []);
 const webResourceMatches = (manifest.web_accessible_resources || []).flatMap((group) => group.matches || []);
 const broadPermissionChecks = [

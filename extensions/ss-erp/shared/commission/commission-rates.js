@@ -297,6 +297,32 @@
     return [];
   }
 
+  function buildRulesFromRows(rows) {
+    var rules = [];
+    (Array.isArray(rows) ? rows : []).forEach(function (cells) {
+      cells = (Array.isArray(cells) ? cells : []).map(toText);
+      var firstPercentIndex = cells.findIndex(function (cell) {
+        return /%|％/.test(cell);
+      });
+      if (firstPercentIndex <= 0) return;
+      var prefixCells = cells.slice(0, firstPercentIndex).filter(Boolean);
+      var percentValues = cells.slice(firstPercentIndex).map(parsePercent).filter(function (rate) {
+        return rate > 0;
+      });
+      var bands = inferBands(percentValues);
+      if (!prefixCells.length || !bands.length) return;
+      var category = prefixCells[prefixCells.length - 1];
+      var group = prefixCells.length > 1 ? prefixCells[0] : '';
+      rules.push({
+        group: group,
+        category: category,
+        aliases: buildAliases(category, group),
+        bands: bands,
+      });
+    });
+    return rules;
+  }
+
   function normalizeBand(value) {
     value = value && typeof value === 'object' ? value : {};
     return {
@@ -337,35 +363,139 @@
 
   function buildSnapshotFromHtml(html, sourceUrl) {
     var section = selectCommissionHtml(html);
-    var rules = [];
     var rows = parseTableRows(section);
     if (!rows.length) rows = parseMarkdownTableRows(section);
-    rows.forEach(function (cells) {
-      var firstPercentIndex = cells.findIndex(function (cell) {
-        return /%|％/.test(cell);
-      });
-      if (firstPercentIndex <= 0) return;
-      var prefixCells = cells.slice(0, firstPercentIndex).filter(Boolean);
-      var percentValues = cells.slice(firstPercentIndex).map(parsePercent).filter(function (rate) {
-        return rate > 0;
-      });
-      var bands = inferBands(percentValues);
-      if (!prefixCells.length || !bands.length) return;
-      var category = prefixCells[prefixCells.length - 1];
-      var group = prefixCells.length > 1 ? prefixCells[0] : '';
-      rules.push({
-        group: group,
-        category: category,
-        aliases: buildAliases(category, group),
-        bands: bands,
-      });
-    });
+    var rules = buildRulesFromRows(rows);
     return normalizeSnapshot({
       sourceUrl: sourceUrl || DEFAULT_SOURCE_URL,
       source: 'official-docs',
       rules: rules,
       diagnostics: {
         parsedRuleCount: rules.length,
+      },
+    });
+  }
+
+  function parseJsonObject(value) {
+    if (value && typeof value === 'object') return value;
+    var text = toText(value);
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function extractOzonContentDocument(payload) {
+    var data = parseJsonObject(payload);
+    if (!data) return null;
+    var contentJson = data.document && data.document.contentJson !== undefined
+      ? data.document.contentJson
+      : data.contentJson;
+    var document = parseJsonObject(contentJson);
+    if (document && Array.isArray(document.content)) return document;
+    if (data.document && Array.isArray(data.document.content)) return data.document;
+    if (Array.isArray(data.content)) return data;
+    return null;
+  }
+
+  function ozonNodeText(node) {
+    if (!node || typeof node !== 'object') return '';
+    var parts = [];
+    if (typeof node.text === 'string') parts.push(node.text);
+    if (node.type === 'hardBreak') parts.push('\n');
+    (Array.isArray(node.content) ? node.content : []).forEach(function (child) {
+      parts.push(ozonNodeText(child));
+    });
+    return parts.join('').replace(/\s+/g, ' ').trim();
+  }
+
+  function isCommissionHeading(text) {
+    return /(商品销售佣金|sales\s+commission|fee\s+for\s+selling|комисс)/i.test(toText(text))
+      && !/(折扣积分|discount\s+points|积分)/i.test(toText(text));
+  }
+
+  function collectOzonTables(document) {
+    var content = document && Array.isArray(document.content) ? document.content : [];
+    var startIndex = -1;
+    for (var index = 0; index < content.length; index += 1) {
+      if (content[index] && content[index].type === 'heading' && isCommissionHeading(ozonNodeText(content[index]))) {
+        startIndex = index;
+        break;
+      }
+    }
+    if (startIndex >= 0) {
+      var selectedTables = [];
+      for (var sectionIndex = startIndex + 1; sectionIndex < content.length; sectionIndex += 1) {
+        var node = content[sectionIndex];
+        if (node && node.type === 'heading') break;
+        if (node && node.type === 'table') selectedTables.push(node);
+      }
+      if (selectedTables.length) return selectedTables;
+    }
+    return content.filter(function (node) {
+      return node && node.type === 'table';
+    });
+  }
+
+  function parseSpan(value) {
+    var span = parseInt(toText(value), 10);
+    return span > 0 ? span : 1;
+  }
+
+  function ozonTableRows(table) {
+    var activeRowspans = {};
+    return (Array.isArray(table && table.content) ? table.content : []).filter(function (row) {
+      return row && row.type === 'tableRow';
+    }).map(function (row) {
+      var cells = [];
+      var columnIndex = 0;
+      var rowCells = Array.isArray(row.content) ? row.content : [];
+
+      function fillActiveCells() {
+        while (activeRowspans[columnIndex]) {
+          cells[columnIndex] = activeRowspans[columnIndex].text;
+          activeRowspans[columnIndex].remaining -= 1;
+          if (activeRowspans[columnIndex].remaining <= 0) delete activeRowspans[columnIndex];
+          columnIndex += 1;
+        }
+      }
+
+      rowCells.forEach(function (cell) {
+        fillActiveCells();
+        var text = ozonNodeText(cell);
+        var attrs = cell && cell.attrs && typeof cell.attrs === 'object' ? cell.attrs : {};
+        var colspan = parseSpan(attrs.colspan);
+        var rowspan = parseSpan(attrs.rowspan);
+        for (var spanIndex = 0; spanIndex < colspan; spanIndex += 1) {
+          cells[columnIndex] = text;
+          if (rowspan > 1) {
+            activeRowspans[columnIndex] = { text: text, remaining: rowspan - 1 };
+          }
+          columnIndex += 1;
+        }
+      });
+      fillActiveCells();
+      return cells;
+    });
+  }
+
+  function buildSnapshotFromOzonDocumentPayload(payload, sourceUrl) {
+    var document = extractOzonContentDocument(payload);
+    var tables = collectOzonTables(document);
+    var rows = [];
+    tables.forEach(function (table) {
+      rows = rows.concat(ozonTableRows(table));
+    });
+    var rules = buildRulesFromRows(rows);
+    return normalizeSnapshot({
+      sourceUrl: sourceUrl || DEFAULT_SOURCE_URL,
+      source: 'official-docs',
+      rules: rules,
+      diagnostics: {
+        parsedRuleCount: rules.length,
+        parsedTableCount: tables.length,
       },
     });
   }
@@ -470,6 +600,7 @@
     DEFAULT_SOURCE_URL: DEFAULT_SOURCE_URL,
     normalizeSnapshot: normalizeSnapshot,
     buildSnapshotFromHtml: buildSnapshotFromHtml,
+    buildSnapshotFromOzonDocumentPayload: buildSnapshotFromOzonDocumentPayload,
     matchCommissionRate: matchCommissionRate,
   };
 }(typeof window !== 'undefined' ? window : globalThis));

@@ -27,7 +27,15 @@ const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
 const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
 const OZON_COMMISSION_SNAPSHOT_KEY = 'ozon-calculator:commission-snapshot';
 const OZON_FX_SNAPSHOT_KEY = 'ozon-calculator:fx-snapshot';
+const OZON_COMMISSION_API_URLS = [
+  'https://global-help.ozon.com/document-manager-api/global-help/api/v3/document/public/by-path?path=%2Fcommissions%2Fozon-fees%2Fcommissions&lang=zh&childDocsRegion=CHN',
+  'https://global-help.ozon.com/document-manager-api/global-help/api/v3/document/public/by-path?path=%2Fcommissions%2Fozon-fees%2Fcommissions&lang=en&childDocsRegion=CHN',
+  'https://global-help.ozon.com/document-manager-api/global-help/api/v3/document/public/by-path?path=%2Fcommissions%2Fozon-fees%2Fcommissions&lang=zh&childDocsRegion=OTHER',
+];
 const OZON_COMMISSION_DOC_URLS = [
+  'https://global-help.ozon.com/zh/commissions/ozon-fees/commissions?region=CHN',
+  'https://global-help.ozon.com/zh-hans/commissions/ozon-fees/commissions/?country=OTHER',
+  'https://global-help.ozon.com/en/commissions/ozon-fees/commissions/?country=OTHER',
   'https://docs.ozon.com/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER',
   'https://docs.ozon.com/global/en/commissions/ozon-fees/commissions/?country=OTHER',
   'https://docs.ozon.ru/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER',
@@ -256,15 +264,30 @@ function buildCaptureCounts(entries) {
 }
 
 async function fetchTextOrThrow(url) {
-  const response = await fetch(url, { cache: 'no-store', credentials: 'include' });
+  const response = await fetch(url, {
+    cache: 'no-store',
+    credentials: 'include',
+    headers: {
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+  });
   if (!response || !response.ok) {
     throw new Error(`请求失败：${response ? response.status : 'no-response'}`);
   }
   return response.text();
 }
 
-async function fetchJsonOrThrow(url) {
-  const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
+async function fetchJsonOrThrow(url, options) {
+  const input = options && typeof options === 'object' ? options : {};
+  const response = await fetch(url, {
+    cache: 'no-store',
+    credentials: input.credentials || 'omit',
+    headers: Object.assign({
+      accept: 'application/json',
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    }, input.headers || {}),
+  });
   if (!response || !response.ok) {
     throw new Error(`请求失败：${response ? response.status : 'no-response'}`);
   }
@@ -276,9 +299,26 @@ async function syncCommissionSnapshot() {
   if (!parser || typeof parser.buildSnapshotFromHtml !== 'function') {
     throw new Error('佣金费率解析器未加载');
   }
+  if (typeof parser.buildSnapshotFromOzonDocumentPayload !== 'function') {
+    throw new Error('Ozon 佣金文档解析器未加载');
+  }
+  let snapshot = null;
+  let lastError = null;
+  for (const url of OZON_COMMISSION_API_URLS) {
+    try {
+      const payload = await fetchJsonOrThrow(url, { credentials: 'include' });
+      snapshot = parser.buildSnapshotFromOzonDocumentPayload(payload, url);
+      if (snapshot && Array.isArray(snapshot.rules) && snapshot.rules.length) {
+        await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: snapshot });
+        return snapshot;
+      }
+      throw new Error('未能从 Ozon 文档接口解析到佣金费率表');
+    } catch (error) {
+      lastError = error;
+    }
+  }
   let html = '';
   let sourceUrl = '';
-  let lastError = null;
   for (const url of OZON_COMMISSION_DOC_URLS) {
     try {
       html = await fetchTextOrThrow(url);
@@ -289,12 +329,12 @@ async function syncCommissionSnapshot() {
     }
   }
   if (!html) throw lastError || new Error('无法请求 Ozon 佣金文档');
-  const snapshot = parser.buildSnapshotFromHtml(html, sourceUrl);
-  if (!snapshot || !Array.isArray(snapshot.rules) || !snapshot.rules.length) {
+  const htmlSnapshot = parser.buildSnapshotFromHtml(html, sourceUrl);
+  if (!htmlSnapshot || !Array.isArray(htmlSnapshot.rules) || !htmlSnapshot.rules.length) {
     throw new Error('未能从 Ozon 帮助中心解析到佣金费率表');
   }
-  await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: snapshot });
-  return snapshot;
+  await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: htmlSnapshot });
+  return htmlSnapshot;
 }
 
 async function syncFxSnapshot(manualRubRate) {
