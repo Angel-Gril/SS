@@ -16,6 +16,7 @@
   const PROCESSED_ATTR = 'data-ss-erp-overlay';
   const SKU_ATTR = 'data-ss-erp-overlay-sku';
   const CARD_CLASS = 'ss-erp-overlay-card';
+  const PORTAL_ATTR = 'data-ss-erp-portal';
   const CARD_SELECTORS = [
     '[data-widget="searchResultsV2"] [data-index]',
     '[data-widget="skuShelfGoods"] [data-index]',
@@ -39,6 +40,9 @@
   const inFlightPremium = new Map(); // sku -> Promise
   const premiumQueue = [];
   let activePremiumRequests = 0;
+  let overlayIdCounter = 0;
+  let activeExpandedPanel = null;
+  let expandedPanelListenersInstalled = false;
 
   function getCached(map, key, ttl) {
     const hit = map.get(key);
@@ -445,17 +449,148 @@
       '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
       '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #fdba74;border-radius:6px;background:#fff7ed;color:#c2410c;cursor:pointer;font-size:11px">展开</button>',
       '</div>',
-      '<div class="ss-erp-expanded" style="display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:2147483000;box-sizing:border-box;padding:8px 10px;border:1px solid #fdba74;border-radius:8px;background:#fff7ed;box-shadow:0 10px 24px rgba(15,23,42,0.18);max-height:min(520px,70vh);overflow:auto"></div>',
     ].join('');
 
     renderMetrics(wrap, sku, dom, null);
     return wrap;
   }
 
+  function getExpandedPanel(wrap) {
+    return wrap && wrap.__ssErpExpandedPanel ? wrap.__ssErpExpandedPanel : null;
+  }
+
+  function createExpandedPortal(wrap, sku) {
+    const expanded = document.createElement('div');
+    const anchorId = `ss-erp-overlay-${Date.now()}-${++overlayIdCounter}`;
+
+    wrap.setAttribute('data-ss-erp-overlay-id', anchorId);
+    expanded.className = 'ss-erp-expanded';
+    expanded.setAttribute(PORTAL_ATTR, '1');
+    expanded.setAttribute('data-ss-erp-anchor-id', anchorId);
+    expanded.setAttribute('data-ss-erp-sku', sku);
+    expanded.setAttribute('aria-hidden', 'true');
+    expanded.style.cssText = [
+      'display:none',
+      'position:fixed',
+      'left:8px',
+      'top:8px',
+      'z-index:2147483000',
+      'box-sizing:border-box',
+      'padding:8px 10px',
+      'border:1px solid #fdba74',
+      'border-radius:8px',
+      'background:#fff7ed',
+      'box-shadow:0 10px 24px rgba(15,23,42,0.18)',
+      'max-height:min(520px,70vh)',
+      'overflow:auto',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    ].join(';');
+    expanded.addEventListener('click', (e) => e.stopPropagation());
+
+    document.body.appendChild(expanded);
+    wrap.__ssErpExpandedPanel = expanded;
+    return expanded;
+  }
+
+  function removeExpandedPortal(wrap) {
+    const expanded = getExpandedPanel(wrap);
+    if (!expanded) return;
+
+    if (activeExpandedPanel && activeExpandedPanel.expanded === expanded) {
+      activeExpandedPanel = null;
+    }
+    expanded.remove();
+    wrap.__ssErpExpandedPanel = null;
+  }
+
+  function cleanupDetachedExpandedPanels() {
+    document.querySelectorAll(`.ss-erp-expanded[${PORTAL_ATTR}="1"]`).forEach((expanded) => {
+      const anchorId = expanded.getAttribute('data-ss-erp-anchor-id');
+      if (anchorId && document.querySelector(`[data-ss-erp-overlay-id="${anchorId}"]`)) return;
+
+      if (activeExpandedPanel && activeExpandedPanel.expanded === expanded) {
+        activeExpandedPanel = null;
+      }
+      expanded.remove();
+    });
+  }
+
+  function positionExpandedPanel(wrap, expanded) {
+    if (!wrap || !wrap.isConnected || !expanded) return;
+
+    const rect = wrap.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 6;
+    const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    const viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+    const maxViewportWidth = Math.max(160, viewportWidth - viewportPadding * 2);
+    const width = Math.max(220, Math.min(rect.width, maxViewportWidth));
+    const leftLimit = viewportWidth - width - viewportPadding;
+    const left = Math.max(viewportPadding, Math.min(rect.left, leftLimit));
+    const spaceBelow = viewportHeight - rect.bottom - gap - viewportPadding;
+    const spaceAbove = rect.top - gap - viewportPadding;
+    const openBelow = spaceBelow >= 180 || spaceBelow >= spaceAbove;
+    const availableHeight = Math.max(140, openBelow ? spaceBelow : spaceAbove);
+    const maxHeight = Math.min(520, availableHeight);
+    const top = openBelow
+      ? Math.max(viewportPadding, rect.bottom + gap)
+      : Math.max(viewportPadding, rect.top - gap - maxHeight);
+
+    expanded.style.width = `${Math.round(width)}px`;
+    expanded.style.left = `${Math.round(left)}px`;
+    expanded.style.top = `${Math.round(top)}px`;
+    expanded.style.maxHeight = `${Math.round(maxHeight)}px`;
+  }
+
+  function closeActiveExpandedPanel(exceptExpanded) {
+    if (!activeExpandedPanel || activeExpandedPanel.expanded === exceptExpanded) return;
+
+    const current = activeExpandedPanel;
+    activeExpandedPanel = null;
+    if (current.expanded && current.expanded.isConnected) {
+      current.expanded.style.display = 'none';
+      current.expanded.setAttribute('aria-hidden', 'true');
+    }
+    if (current.expandBtn) current.expandBtn.textContent = '展开';
+    if (current.wrap) {
+      current.wrap.classList.remove('ss-erp-overlay-card-expanded');
+      current.wrap.style.zIndex = '1';
+    }
+  }
+
+  function repositionActiveExpandedPanel() {
+    if (!activeExpandedPanel) return;
+    if (!activeExpandedPanel.wrap || !activeExpandedPanel.wrap.isConnected) {
+      closeActiveExpandedPanel();
+      return;
+    }
+    positionExpandedPanel(activeExpandedPanel.wrap, activeExpandedPanel.expanded);
+  }
+
+  function ensureExpandedPanelListeners() {
+    if (expandedPanelListenersInstalled) return;
+    expandedPanelListenersInstalled = true;
+
+    window.addEventListener('scroll', repositionActiveExpandedPanel, true);
+    window.addEventListener('resize', repositionActiveExpandedPanel);
+    document.addEventListener('click', () => closeActiveExpandedPanel());
+  }
+
   function setExpandedPanelOpen(wrap, expanded, expandBtn, isOpen) {
+    if (!expanded) return;
+
+    if (isOpen) {
+      closeActiveExpandedPanel(expanded);
+      ensureExpandedPanelListeners();
+      positionExpandedPanel(wrap, expanded);
+      activeExpandedPanel = { wrap, expanded, expandBtn };
+    } else if (activeExpandedPanel && activeExpandedPanel.expanded === expanded) {
+      activeExpandedPanel = null;
+    }
+
     expanded.style.display = isOpen ? 'block' : 'none';
     expanded.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-    expandBtn.textContent = isOpen ? '收起' : '展开';
+    if (expandBtn) expandBtn.textContent = isOpen ? '收起' : '展开';
     wrap.classList.toggle('ss-erp-overlay-card-expanded', isOpen);
     wrap.style.zIndex = isOpen ? '2147483000' : '1';
   }
@@ -501,10 +636,11 @@
       metricCell('重量', weight == null ? '--' : weight + 'g', weight == null),
     ].join('');
 
-    const expanded = wrap.querySelector('.ss-erp-expanded');
-    if (expanded.style.display !== 'none' || expanded.getAttribute('data-rendered') === '1') {
+    const expanded = getExpandedPanel(wrap);
+    if (expanded && (expanded.style.display !== 'none' || expanded.getAttribute('data-rendered') === '1')) {
       expanded.innerHTML = renderExpandedFields(sku, dom, premium);
       expanded.setAttribute('data-rendered', '1');
+      if (expanded.style.display !== 'none') positionExpandedPanel(wrap, expanded);
     }
   }
 
@@ -578,20 +714,23 @@
     if (card.getAttribute(PROCESSED_ATTR) && existingSku === sku && card.querySelector(`.${CARD_CLASS}`)) return;
 
     const oldWrap = card.querySelector(`.${CARD_CLASS}`);
-    if (oldWrap) oldWrap.remove();
+    if (oldWrap) {
+      removeExpandedPortal(oldWrap);
+      oldWrap.remove();
+    }
 
     card.setAttribute(PROCESSED_ATTR, '1');
     card.setAttribute(SKU_ATTR, sku);
 
     const dom = extractCardData(card);
     const wrap = buildCard(sku, dom);
+    const expanded = createExpandedPortal(wrap, sku);
     insertOverlay(card, wrap);
 
     wrap.addEventListener('click', (e) => e.stopPropagation());
 
     const collectBtn = wrap.querySelector('.ss-erp-collect-btn');
     const expandBtn = wrap.querySelector('.ss-erp-expand-btn');
-    const expanded = wrap.querySelector('.ss-erp-expanded');
 
     expandBtn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -658,6 +797,7 @@
 
   function scan() {
     if (!isProductPage()) return;
+    cleanupDetachedExpandedPanels();
     const io = ensureIntersectionObserver();
     const targets = new Set();
 

@@ -34,16 +34,20 @@ test('Ozon list overlay attaches only to single-product card targets', () => {
   assert.doesNotMatch(source, /io\.observe\(card\)/);
 });
 
-test('Ozon list overlay expanded panel floats without changing grid row height', () => {
+test('Ozon list overlay expanded panel uses a body portal to avoid Ozon card clipping', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'content', 'ozon-list-overlay.js');
 
+  assert.match(source, /function\s+createExpandedPortal/);
+  assert.match(source, /function\s+positionExpandedPanel/);
   assert.match(source, /function\s+setExpandedPanelOpen/);
+  assert.match(source, /document\.body\.appendChild\(expanded\)/);
+  assert.match(source, /data-ss-erp-portal/);
   assert.match(source, /ss-erp-overlay-card-expanded/);
-  assert.match(source, /overflow:visible/);
-  assert.match(source, /position:absolute/);
-  assert.match(source, /top:calc\(100%\s*\+\s*6px\)/);
-  assert.match(source, /max-height:min\(520px,70vh\)/);
-  assert.doesNotMatch(source, /ss-erp-expanded" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #fdba74"/);
+  assert.match(source, /position:fixed/);
+  assert.match(source, /window\.addEventListener\('scroll'/);
+  assert.doesNotMatch(source, /ss-erp-expanded" style=/);
+  assert.doesNotMatch(source, /wrap\.querySelector\('\\.ss-erp-expanded'\)/);
+  assert.doesNotMatch(source, /position:absolute/);
 });
 
 test('Ozon commission sync primes the help center session before document-manager API requests', () => {
