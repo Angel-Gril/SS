@@ -430,7 +430,9 @@
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
       'box-sizing:border-box',
       'width:100%',
-      'overflow:hidden',
+      'position:relative',
+      'z-index:1',
+      'overflow:visible',
     ].join(';');
 
     wrap.innerHTML = [
@@ -443,11 +445,19 @@
       '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
       '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #fdba74;border-radius:6px;background:#fff7ed;color:#c2410c;cursor:pointer;font-size:11px">展开</button>',
       '</div>',
-      '<div class="ss-erp-expanded" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #fdba74"></div>',
+      '<div class="ss-erp-expanded" style="display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:2147483000;box-sizing:border-box;padding:8px 10px;border:1px solid #fdba74;border-radius:8px;background:#fff7ed;box-shadow:0 10px 24px rgba(15,23,42,0.18);max-height:min(520px,70vh);overflow:auto"></div>',
     ].join('');
 
     renderMetrics(wrap, sku, dom, null);
     return wrap;
+  }
+
+  function setExpandedPanelOpen(wrap, expanded, expandBtn, isOpen) {
+    expanded.style.display = isOpen ? 'block' : 'none';
+    expanded.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    expandBtn.textContent = isOpen ? '收起' : '展开';
+    wrap.classList.toggle('ss-erp-overlay-card-expanded', isOpen);
+    wrap.style.zIndex = isOpen ? '2147483000' : '1';
   }
 
   function renderMetrics(wrap, sku, dom, premium) {
@@ -586,16 +596,15 @@
     expandBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const isOpen = expanded.style.display !== 'none';
-      expanded.style.display = isOpen ? 'none' : 'block';
-      expandBtn.textContent = isOpen ? '展开' : '收起';
+      const willOpen = expanded.style.display === 'none';
       // 展开时若数据已加载则立即渲染
-      if (!isOpen) {
+      if (willOpen) {
         const cached = premiumCache.get(sku);
         const premium = cached ? cached.data : null;
         expanded.innerHTML = renderExpandedFields(sku, dom, premium);
         expanded.setAttribute('data-rendered', '1');
       }
+      setExpandedPanelOpen(wrap, expanded, expandBtn, willOpen);
     });
 
     collectBtn.addEventListener('click', async (e) => {

@@ -34,6 +34,18 @@ test('Ozon list overlay attaches only to single-product card targets', () => {
   assert.doesNotMatch(source, /io\.observe\(card\)/);
 });
 
+test('Ozon list overlay expanded panel floats without changing grid row height', () => {
+  const source = readRepoFile('extensions', 'ss-erp', 'content', 'ozon-list-overlay.js');
+
+  assert.match(source, /function\s+setExpandedPanelOpen/);
+  assert.match(source, /ss-erp-overlay-card-expanded/);
+  assert.match(source, /overflow:visible/);
+  assert.match(source, /position:absolute/);
+  assert.match(source, /top:calc\(100%\s*\+\s*6px\)/);
+  assert.match(source, /max-height:min\(520px,70vh\)/);
+  assert.doesNotMatch(source, /ss-erp-expanded" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #fdba74"/);
+});
+
 test('Ozon commission sync primes the help center session before document-manager API requests', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
 
