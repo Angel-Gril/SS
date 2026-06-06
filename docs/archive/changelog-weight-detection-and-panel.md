@@ -152,7 +152,7 @@ node --check extensions/ss-erp/content/collect-content-script.js ✓
 - 提取商品卡片中的 SKU → 调用 Seller API → 注入信息卡片
 - 用属性标记已处理的卡片避免重复
 
-**参考**：企鹅店长用 `setInterval(500ms)` 轮询 + `pose="1"` 标记
+**参考**：同类工具常用 `setInterval(500ms)` 轮询 + DOM 标记
 
 ### 4. 多 SKU 关联采集
 **需求**：采集有变体的商品时，自动采集所有关联 SKU

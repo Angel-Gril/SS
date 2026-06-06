@@ -1,4 +1,4 @@
-// SS ERP Ozon 列表页增强 - 企鹅店长式商品信息卡片
+// SS ERP Ozon 列表页增强
 // 数据来源（多层降级）：
 //   1. DOM 提取（标题/价格/评分/评论/图片/SKU）
 //   2. OZON 公开 entrypoint API（销量/卖家/库存等，无需登录）
@@ -14,20 +14,31 @@
   window.__SS_ERP_LIST_OVERLAY__ = true;
 
   const PROCESSED_ATTR = 'data-ss-erp-overlay';
+  const SKU_ATTR = 'data-ss-erp-overlay-sku';
   const CARD_CLASS = 'ss-erp-overlay-card';
   const CARD_SELECTORS = [
     '[data-widget="searchResultsV2"] [data-index]',
     '[data-widget="skuShelfGoods"] [data-index]',
+    '[data-widget="skuGridSimple"] [data-index]',
     '[data-widget="skuGrid"] [data-index]',
     '[data-widget="tileGridDesktop"] [data-index]',
     '[data-widget="tileGrid"] [data-index]',
+    '#layoutPage [data-index]',
   ];
 
   const PREMIUM_TTL_MS = 10 * 60 * 1000;
+  const PREMIUM_FAILURE_TTL_MS = 90 * 1000;
+  const PREMIUM_CONCURRENCY = 3;
+  const CARD_SCAN_FAST_MS = 500;
+  const CARD_SCAN_SLOW_MS = 2000;
+  const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
 
   // === 工具：缓存 ===
   const premiumCache = new Map();  // sku -> { data, ts }
-  const failedPremiumCache = new Map(); // sku -> ts （失败 30 分钟内不再请求）
+  const failedPremiumCache = new Map(); // sku -> ts
+  const inFlightPremium = new Map(); // sku -> Promise
+  const premiumQueue = [];
+  let activePremiumRequests = 0;
 
   function getCached(map, key, ttl) {
     const hit = map.get(key);
@@ -41,6 +52,30 @@
 
   function setCached(map, key, data) {
     map.set(key, { data, ts: Date.now() });
+  }
+
+  function enqueuePremiumRequest(task) {
+    return new Promise((resolve) => {
+      premiumQueue.push({ task, resolve });
+      drainPremiumQueue();
+    });
+  }
+
+  function drainPremiumQueue() {
+    while (activePremiumRequests < PREMIUM_CONCURRENCY && premiumQueue.length) {
+      const next = premiumQueue.shift();
+      activePremiumRequests += 1;
+      Promise.resolve()
+        .then(next.task)
+        .then(
+          (value) => next.resolve(value),
+          () => next.resolve(null),
+        )
+        .finally(() => {
+          activePremiumRequests -= 1;
+          drainPremiumQueue();
+        });
+    }
   }
 
   // === 工具：DOM 解析 ===
@@ -159,20 +194,31 @@
     if (cached) return cached;
 
     const failTs = failedPremiumCache.get(sku);
-    if (failTs && Date.now() - failTs < 30 * 60 * 1000) return null;
+    if (failTs && Date.now() - failTs < PREMIUM_FAILURE_TTL_MS) return null;
+    if (inFlightPremium.has(sku)) return inFlightPremium.get(sku);
 
-    const resp = await send(
-      { type: 'spb-self-hosted:aggregate-product-insights', productId: sku },
-      20000,
-    );
-    if (!resp || !resp.ok || !resp.item) {
-      failedPremiumCache.set(sku, Date.now());
-      return null;
-    }
+    const request = enqueuePremiumRequest(async () => {
+      const resp = await send(
+        { type: 'spb-self-hosted:aggregate-product-insights', productId: sku },
+        20000,
+      );
+      return resp;
+    }).then((resp) => {
+      if (!resp || !resp.ok || !resp.item) {
+        failedPremiumCache.set(sku, Date.now());
+        return null;
+      }
 
-    const data = Object.assign({}, resp.item, { _sources: resp.sources || [] });
-    setCached(premiumCache, sku, data);
-    return data;
+      const data = Object.assign({}, resp.item, { _sources: resp.sources || [] });
+      setCached(premiumCache, sku, data);
+      failedPremiumCache.delete(sku);
+      return data;
+    }).finally(() => {
+      inFlightPremium.delete(sku);
+    });
+
+    inFlightPremium.set(sku, request);
+    return request;
   }
 
   // === 字段提取（聚合接口扁平格式 + 兼容旧的 item/_insightsItem 嵌套）===
@@ -430,10 +476,16 @@
 
   // === 注入卡片 + 绑定事件 ===
   async function attachOverlay(card) {
-    if (card.getAttribute(PROCESSED_ATTR)) return;
     const sku = extractSku(card);
     if (!sku) return;
+    const existingSku = card.getAttribute(SKU_ATTR);
+    if (card.getAttribute(PROCESSED_ATTR) && existingSku === sku && card.querySelector(`.${CARD_CLASS}`)) return;
+
+    const oldWrap = card.querySelector(`.${CARD_CLASS}`);
+    if (oldWrap) oldWrap.remove();
+
     card.setAttribute(PROCESSED_ATTR, '1');
+    card.setAttribute(SKU_ATTR, sku);
 
     const dom = extractCardData(card);
     const wrap = buildCard(sku, dom);
@@ -514,7 +566,9 @@
     const io = ensureIntersectionObserver();
     CARD_SELECTORS.forEach((sel) => {
       document.querySelectorAll(sel).forEach((card) => {
-        if (card.getAttribute(PROCESSED_ATTR)) return;
+        const sku = extractSku(card);
+        if (!sku) return;
+        if (card.getAttribute(PROCESSED_ATTR) && card.getAttribute(SKU_ATTR) === sku && card.querySelector(`.${CARD_CLASS}`)) return;
         if (io) io.observe(card);
         else attachOverlay(card);
       });
@@ -533,9 +587,23 @@
 
   function init() {
     if (!isProductPage()) return;
+    const startedAt = Date.now();
     scan();
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.body, { childList: true, subtree: true });
+    startPeriodicScan(startedAt);
+  }
+
+  function startPeriodicScan(startedAt) {
+    function tick() {
+      if (!isProductPage()) return;
+      if (document.visibilityState === 'visible') scan();
+      const delay = Date.now() - startedAt < CARD_SCAN_FAST_UNTIL_MS
+        ? CARD_SCAN_FAST_MS
+        : CARD_SCAN_SLOW_MS;
+      setTimeout(tick, delay);
+    }
+    setTimeout(tick, CARD_SCAN_FAST_MS);
   }
 
   if (document.readyState === 'loading') {

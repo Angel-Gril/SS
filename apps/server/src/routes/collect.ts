@@ -889,7 +889,7 @@ export async function collectRoutes(app: FastifyInstance) {
     items = withAttrs;
 
     // 跟卖和复制都走 /v3/product/import：创建新卡片但属性/图片继承源商品
-    // 区别仅在 offer_id 命名策略：跟卖用 {sku}-{rand}，复制用 {sku}-{rand}（与企鹅店长一致）
+    // 区别仅在 offer_id 命名策略：跟卖和复制都使用 {sku}-{rand}，避免重复冲突。
     const randomizeCfg = await getRandomizeConfig();
     function getItemDimensions(item: any) {
       const meta = item.metadata as any;

@@ -43,6 +43,10 @@ const OZON_COMMISSION_DOC_URLS = [
   'https://docs.ozon.com/global/zh-hans/commissions',
   'https://docs.ozon.ru/global/zh-hans/commissions',
 ];
+const OZON_COMMISSION_BOOTSTRAP_URLS = [
+  'https://global-help.ozon.com/zh/commissions/ozon-fees/commissions?region=CHN',
+  'https://global-help.ozon.com/en/commissions/ozon-fees/commissions/?country=OTHER',
+];
 const OZON_FX_API_URL = 'https://open.er-api.com/v6/latest/CNY';
 const OZON_CALC_CAPTURE_LIMIT = 200;
 const OZON_CALC_VISIBLE_SNAPSHOT_LIMIT = 50;
@@ -111,8 +115,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-const LEGACY_STORAGE_PREFIX = String.fromCharCode(113, 101, 104, 101, 108, 112) + '-clone';
-const LEGACY_CAPTURE_META_KEY = '_' + String.fromCharCode(113, 101, 104, 101, 108, 112);
+const LEGACY_VENDOR_KEY_CHARS = [113, 101, 104, 101, 108, 112];
+const LEGACY_STORAGE_PREFIX = String.fromCharCode(...LEGACY_VENDOR_KEY_CHARS) + '-clone';
+const LEGACY_CAPTURE_META_KEY = '_' + String.fromCharCode(...LEGACY_VENDOR_KEY_CHARS);
 
 function legacyStorageKey(suffix) {
   return LEGACY_STORAGE_PREFIX + ':' + suffix;
@@ -273,7 +278,7 @@ async function fetchTextOrThrow(url) {
     },
   });
   if (!response || !response.ok) {
-    throw new Error(`请求失败：${response ? response.status : 'no-response'}`);
+    throw new Error(`请求失败：${response ? response.status : 'no-response'} ${url}`);
   }
   return response.text();
 }
@@ -289,9 +294,144 @@ async function fetchJsonOrThrow(url, options) {
     }, input.headers || {}),
   });
   if (!response || !response.ok) {
-    throw new Error(`请求失败：${response ? response.status : 'no-response'}`);
+    throw new Error(`请求失败：${response ? response.status : 'no-response'} ${url}`);
   }
-  return response.json();
+  const payload = await response.json();
+  if (isOzonChallengePayload(payload)) {
+    throw new Error('Ozon 帮助中心返回风控验证，请先打开帮助中心页面通过验证');
+  }
+  return payload;
+}
+
+function isOzonChallengePayload(payload) {
+  return Boolean(payload && typeof payload === 'object' && (
+    payload.challengeURL
+    || payload.incidentId
+    || payload.blockURL
+  ));
+}
+
+async function primeOzonCommissionSession() {
+  for (const url of OZON_COMMISSION_BOOTSTRAP_URLS) {
+    try {
+      await fetch(url, {
+        cache: 'no-store',
+        credentials: 'include',
+        headers: {
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+      });
+      return true;
+    } catch (error) {
+      // Ozon may return an anti-bot page here. The API retry below is still useful
+      // because this request can set the redirect/session cookies first.
+    }
+  }
+  return false;
+}
+
+async function getOrCreateOzonHelpTab() {
+  const tabs = await chrome.tabs.query({ url: 'https://global-help.ozon.com/*' });
+  const selected = tabs.find((tab) => (tab.url || '').includes('/commissions/ozon-fees/commissions'))
+    || tabs.find((tab) => tab.active)
+    || tabs[0];
+  if (selected && selected.id) {
+    await waitForChromeTabReady(selected.id, 12000).catch(() => {});
+    return selected;
+  }
+
+  const created = await chrome.tabs.create({
+    url: OZON_COMMISSION_BOOTSTRAP_URLS[0],
+    active: false,
+  });
+  if (!created || !created.id) {
+    throw new Error('无法打开 Ozon 帮助中心页面');
+  }
+  await waitForChromeTabReady(created.id, 20000).catch(() => {});
+  return created;
+}
+
+function waitForChromeTabReady(tabId, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    if (!tabId) {
+      reject(new Error('标签页无效'));
+      return;
+    }
+
+    let done = false;
+    const finish = (ok, error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      if (ok) resolve();
+      else reject(error || new Error('页面加载超时'));
+    };
+
+    const timer = setTimeout(() => finish(false), timeoutMs || 12000);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') finish(true);
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        finish(false, new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (tab && tab.status === 'complete') finish(true);
+    });
+  });
+}
+
+async function fetchCommissionPayloadViaHelpTab(url) {
+  const tab = await getOrCreateOzonHelpTab();
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      args: [url],
+      func: async (targetUrl) => {
+        try {
+          const response = await fetch(targetUrl, {
+            cache: 'no-store',
+            credentials: 'include',
+            headers: {
+              accept: 'application/json,text/plain,*/*',
+              'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            },
+          });
+          const text = await response.text();
+          if (!response.ok) {
+            return { ok: false, error: 'HTTP ' + response.status + ': ' + text.slice(0, 200) };
+          }
+          try {
+            const payload = JSON.parse(text);
+            if (payload && (payload.challengeURL || payload.incidentId || payload.blockURL)) {
+              return { ok: false, challenge: true, error: 'Ozon 帮助中心需要验证' };
+            }
+            return { ok: true, payload };
+          } catch (error) {
+            return { ok: false, error: 'JSON 解析失败: ' + text.slice(0, 200) };
+          }
+        } catch (error) {
+          return { ok: false, error: error && error.message ? error.message : String(error) };
+        }
+      },
+    });
+  } catch (error) {
+    throw new Error('无法在 Ozon 帮助中心页面请求佣金表。请手动打开 global-help.ozon.com 佣金页，通过验证后重试同步。');
+  }
+  const result = results && results[0] ? results[0].result : null;
+  if (!result || !result.ok) {
+    const message = result && result.challenge
+      ? 'Ozon 帮助中心需要验证。请打开 global-help.ozon.com 佣金页完成验证后，再点击同步。'
+      : (result && result.error ? result.error : '帮助中心页面请求没有返回结果');
+    throw new Error(message);
+  }
+  return result.payload;
 }
 
 async function syncCommissionSnapshot() {
@@ -304,9 +444,16 @@ async function syncCommissionSnapshot() {
   }
   let snapshot = null;
   let lastError = null;
+  await primeOzonCommissionSession();
   for (const url of OZON_COMMISSION_API_URLS) {
     try {
-      const payload = await fetchJsonOrThrow(url, { credentials: 'include' });
+      let payload;
+      try {
+        payload = await fetchJsonOrThrow(url, { credentials: 'include' });
+      } catch (directError) {
+        lastError = directError;
+        payload = await fetchCommissionPayloadViaHelpTab(url);
+      }
       snapshot = parser.buildSnapshotFromOzonDocumentPayload(payload, url);
       if (snapshot && Array.isArray(snapshot.rules) && snapshot.rules.length) {
         await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: snapshot });
@@ -319,6 +466,7 @@ async function syncCommissionSnapshot() {
   }
   let html = '';
   let sourceUrl = '';
+  await primeOzonCommissionSession();
   for (const url of OZON_COMMISSION_DOC_URLS) {
     try {
       html = await fetchTextOrThrow(url);
@@ -328,7 +476,7 @@ async function syncCommissionSnapshot() {
       lastError = error;
     }
   }
-  if (!html) throw lastError || new Error('无法请求 Ozon 佣金文档');
+  if (!html) throw lastError || new Error('无法请求 Ozon 佣金文档。请先在浏览器打开 global-help.ozon.com 佣金页面，通过验证后重试同步。');
   const htmlSnapshot = parser.buildSnapshotFromHtml(html, sourceUrl);
   if (!htmlSnapshot || !Array.isArray(htmlSnapshot.rules) || !htmlSnapshot.rules.length) {
     throw new Error('未能从 Ozon 帮助中心解析到佣金费率表');

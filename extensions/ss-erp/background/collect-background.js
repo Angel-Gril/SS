@@ -213,18 +213,87 @@ async function getSellerTab() {
   await ensureSellerOzonHostAccess();
 
   const tabs = await chrome.tabs.query({ url: "https://seller.ozon.ru/*" });
-  if (!tabs.length) {
-    throw new Error("请先打开并登录 seller.ozon.ru");
+  const selected = tabs.find((tab) => tab.active && (tab.url || "").includes("/app/"))
+    || tabs.find((tab) => (tab.url || "").includes("/app/"))
+    || tabs.find((tab) => tab.active)
+    || tabs[0];
+
+  if (selected && selected.id) {
+    await waitForTabReady(selected.id, 12000).catch(() => {});
+    return selected;
   }
 
-  return tabs.find((tab) => tab.active) || tabs.find((tab) => (tab.url || "").includes("/app/")) || tabs[0];
+  const created = await chrome.tabs.create({
+    url: "https://seller.ozon.ru/app/analytics/graphs",
+    active: false
+  });
+  if (!created || !created.id) {
+    throw new Error("无法打开 seller.ozon.ru 后台页，请手动打开并登录后重试");
+  }
+  await waitForTabReady(created.id, 20000).catch(() => {});
+  return created;
 }
 
 async function sellerTabFetchJson(url, body, companyId) {
   const targetTab = await getSellerTab();
+  await waitForTabReady(targetTab.id, 12000).catch(() => {});
 
-  const results = await executeScriptWithHostAccess({
-    target: { tabId: targetTab.id },
+  let results;
+  try {
+    results = await executeSellerFetchScript(targetTab.id, url, body, companyId);
+  } catch (error) {
+    await waitForTabReady(targetTab.id, 15000).catch(() => {});
+    results = await executeSellerFetchScript(targetTab.id, url, body, companyId);
+  }
+
+  const result = results && results[0] ? results[0].result : null;
+  if (!result) {
+    throw new Error("seller.ozon.ru 请求没有返回结果");
+  }
+  if (!result.ok) {
+    throw new Error(result.error || "seller.ozon.ru 请求失败");
+  }
+  return result.data;
+}
+
+function waitForTabReady(tabId, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    if (!tabId) {
+      reject(new Error("seller.ozon.ru 标签页无效"));
+      return;
+    }
+
+    let done = false;
+    const finish = (ok, error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      if (ok) resolve();
+      else reject(error || new Error("seller.ozon.ru 页面加载超时"));
+    };
+
+    const timer = setTimeout(() => finish(false), timeoutMs || 12000);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        finish(true);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        finish(false, new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (tab && tab.status === "complete") finish(true);
+    });
+  });
+}
+
+async function executeSellerFetchScript(tabId, url, body, companyId) {
+  return executeScriptWithHostAccess({
+    target: { tabId },
     world: "MAIN",
     args: [url, body, companyId],
     func: async (targetUrl, requestBody, xCompanyId) => {
@@ -251,7 +320,7 @@ async function sellerTabFetchJson(url, body, companyId) {
         clearTimeout(timer);
 
         if (response.redirected && /\/(signin|login)/i.test(response.url)) {
-          return { ok: false, error: "seller.ozon.ru 登录态已过期" };
+          return { ok: false, error: "seller.ozon.ru 登录态已过期，请重新登录卖家后台" };
         }
 
         if (!response.ok) {
@@ -268,16 +337,7 @@ async function sellerTabFetchJson(url, body, companyId) {
         return { ok: false, error: error && error.message ? error.message : String(error) };
       }
     }
-  });
-
-  const result = results && results[0] ? results[0].result : null;
-  if (!result) {
-    throw new Error("seller.ozon.ru 请求没有返回结果");
-  }
-  if (!result.ok) {
-    throw new Error(result.error || "seller.ozon.ru 请求失败");
-  }
-  return result.data;
+  }, SELLER_OZON_PERMISSION_ERROR);
 }
 
 function buildOzonAnalyticsRequestBody(productId) {
