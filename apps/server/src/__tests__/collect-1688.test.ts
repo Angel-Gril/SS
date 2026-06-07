@@ -22,12 +22,18 @@ describe('1688 collect helpers', () => {
       priceText: '¥25.80',
       categoryPath: '鞋类 > 男鞋 > 运动鞋',
       shopName: '义乌某某工厂',
+      supplierLocation: '浙江 金华',
+      supplierYears: 6,
       attributesText: '材质：网布\n颜色: 黑色',
       skuItems: [
-        { skuId: 'sku-red-42', specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2 },
+        { skuId: 'sku-red-42', attrs: { 颜色: '红色', 尺码: '42' }, specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2 },
       ],
       monthlySales: 3000,
       grossWeightGrams: 650,
+      minOrderQty: 2,
+      logisticsText: '广东发货，快递费按地区计算',
+      shippingInfo: { text: '广东发货，快递费按地区计算' },
+      customizationInfo: { supported: true, text: '支持贴牌定制' },
     });
 
     expect(record).toMatchObject({
@@ -43,8 +49,14 @@ describe('1688 collect helpers', () => {
         offerId: '734567890123',
         categoryPath: '鞋类 > 男鞋 > 运动鞋',
         supplierName: '义乌某某工厂',
+        supplierLocation: '浙江 金华',
+        supplierYears: 6,
         monthlySales: 3000,
         grossWeightGrams: 650,
+        minOrderQty: 2,
+        logisticsText: '广东发货，快递费按地区计算',
+        shippingInfo: { text: '广东发货，快递费按地区计算' },
+        customizationInfo: { supported: true, text: '支持贴牌定制' },
         attributes: { 材质: '网布', 颜色: '黑色' },
         skuCount: 1,
         categoryMappingStatus: 'deferred_until_listing',
@@ -53,7 +65,7 @@ describe('1688 collect helpers', () => {
       variants: [
         {
           sku: 'sku-red-42',
-          attrs: { 规格: '红色 / 42' },
+          attrs: { 颜色: '红色', 尺码: '42' },
           price: '26.5',
           stock: 120,
           minOrderQty: 2,

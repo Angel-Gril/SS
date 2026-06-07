@@ -44,8 +44,14 @@ const alibaba1688CollectSchema = z.object({
   categoryPath: z.string().optional(),
   shopName: z.string().optional(),
   supplierName: z.string().optional(),
+  supplierLocation: z.string().optional(),
+  supplierYears: z.union([z.string(), z.number()]).optional(),
   monthlySales: z.union([z.string(), z.number()]).optional(),
   grossWeightGrams: z.union([z.string(), z.number()]).optional(),
+  minOrderQty: z.union([z.string(), z.number()]).optional(),
+  shippingInfo: z.unknown().optional(),
+  logisticsText: z.string().optional(),
+  customizationInfo: z.unknown().optional(),
   attributes: z.record(z.string()).optional(),
   attributesText: z.string().optional(),
   skuItems: z.array(z.record(z.unknown())).optional(),
@@ -226,6 +232,8 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const skuItems = normalize1688SkuItems(input.skuItems?.length ? input.skuItems : input.variants);
   const supplierName = compactString(input.supplierName) || compactString(input.shopName);
   const weight = Number(input.grossWeightGrams);
+  const supplierYears = Number(input.supplierYears);
+  const minOrderQty = Number(input.minOrderQty);
   const notes = [
     input.description ? String(input.description).slice(0, 500) : '',
     input.notes ? String(input.notes).slice(0, 500) : '',
@@ -247,8 +255,14 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
       offerId,
       categoryPath: compactString(input.categoryPath),
       supplierName,
+      supplierLocation: compactString(input.supplierLocation),
+      supplierYears: Number.isFinite(supplierYears) && supplierYears > 0 ? supplierYears : null,
       monthlySales: input.monthlySales ?? null,
       grossWeightGrams: Number.isFinite(weight) ? weight : null,
+      minOrderQty: Number.isFinite(minOrderQty) && minOrderQty > 0 ? minOrderQty : null,
+      shippingInfo: input.shippingInfo ?? null,
+      logisticsText: compactString(input.logisticsText),
+      customizationInfo: input.customizationInfo ?? null,
       attributes,
       skuCount: skuItems.length,
       categoryMappingStatus: 'deferred_until_listing',

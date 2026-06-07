@@ -83,6 +83,10 @@ test('1688 extension collect payloads are routed to the dedicated collect endpoi
     assert.match(source, /1688/);
     assert.match(source, /\/api\/collect\/1688/);
     assert.match(source, /sourcePlatform\s*\|\|\s*data\.platform/);
+    assert.match(source, /supplierLocation/);
+    assert.match(source, /minOrderQty/);
+    assert.match(source, /shippingInfo/);
+    assert.match(source, /customizationInfo/);
   }
 });
 
@@ -109,8 +113,17 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /categorySelectors/);
   assert.match(collectScript, /function\s+pickPrice/);
   assert.match(collectScript, /function\s+pickCategoryPath/);
+  assert.match(collectScript, /function\s+pickSupplierInfo/);
+  assert.match(collectScript, /function\s+pickMinOrderQty/);
+  assert.match(collectScript, /function\s+pickShippingInfo/);
+  assert.match(collectScript, /function\s+pickCustomizationInfo/);
+  assert.match(collectScript, /function\s+normalizeSkuAttrs/);
   assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
   assert.match(collectScript, /categoryPath/);
+  assert.match(collectScript, /supplierLocation/);
+  assert.match(collectScript, /minOrderQty/);
+  assert.match(collectScript, /logisticsText/);
+  assert.match(collectScript, /customizationInfo/);
   assert.ok(collectScript.includes('[¥￥]'));
   assert.ok(collectScript.includes('元|CNY|RMB'));
 });

@@ -856,9 +856,10 @@
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /近30天成交[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".title-text", ".d-title"],
-      shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name"],
+      shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name", "[class*='company']", "[class*='supplier']", "[class*='shop']"],
       priceSelectors: [".price", ".price-text", ".price-range", ".ma-ref-price", "[class*='price']", "[class*='Price']"],
       categorySelectors: [".breadcrumb", ".bread-crumb", ".detail-breadcrumb", "[class*='breadcrumb']", "[class*='crumb']"],
+      shippingSelectors: [".logistics", ".delivery", ".shipping", ".freight", "[class*='logistics']", "[class*='delivery']", "[class*='shipping']", "[class*='freight']"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
     });
   }
@@ -979,12 +980,19 @@
     const attributes = pickAttributes(context.sources);
     const priceInfo = pickPrice(config.priceSelectors, context.sources, skuItems);
     const categoryPath = pickCategoryPath(config.categorySelectors, context.sources);
+    const minOrderQty = pickMinOrderQty(context.pageText, context.sources, skuItems);
+    const supplierInfo = pickSupplierInfo(context.pageText, context.sources, shopName);
+    const shippingInfo = pickShippingInfo(config.shippingSelectors, context.pageText, context.sources);
+    const customizationInfo = pickCustomizationInfo(context.pageText, context.sources);
 
     return {
       platform: context.platform,
       extractor: `self-hosted-${context.platform}`,
       title,
       shopName,
+      supplierName: supplierInfo.name || shopName,
+      supplierLocation: supplierInfo.location,
+      supplierYears: supplierInfo.years,
       productId,
       price: priceInfo.price,
       priceText: priceInfo.priceText,
@@ -993,6 +1001,10 @@
       categoryName: categoryPath ? categoryPath.split(/\s*[>›/]\s*/).filter(Boolean).slice(-1)[0] || categoryPath : "",
       monthlySales,
       grossWeightGrams,
+      minOrderQty,
+      shippingInfo,
+      logisticsText: shippingInfo.text,
+      customizationInfo,
       skuCount,
       skuItems,
       images,
@@ -1002,6 +1014,9 @@
         productIdEvidence: productId ? "url/dom/json" : "",
         priceCandidates: priceInfo.candidates,
         categoryPathEvidence: categoryPath ? "dom/json" : "",
+        supplierEvidence: supplierInfo.evidence,
+        shippingEvidence: shippingInfo.evidence,
+        customizationEvidence: customizationInfo.evidence,
         monthlySalesCandidates: collectNumberCandidates(context.sources, /(month|sale|sold|trade|销量|成交|已售)/i).slice(0, 20),
         weightCandidates: collectNumberCandidates(context.sources, /(weight|gross|gram|克|斤|重量|毛重|净重)/i).slice(0, 20),
         rawSources: summarizeSources(context.sources)
@@ -1131,6 +1146,104 @@
     return candidates[0] || "";
   }
 
+  function pickMinOrderQty(pageText, sources, skuItems) {
+    const skuValues = (Array.isArray(skuItems) ? skuItems : [])
+      .map((item) => item && item.minOrderQty)
+      .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+      .map(Number)
+      .sort((a, b) => a - b);
+    if (skuValues.length) return skuValues[0];
+
+    const patterns = [
+      /起订量[:：]?\s*([0-9.,]+)/i,
+      /最小起订量[:：]?\s*([0-9.,]+)/i,
+      /起批量[:：]?\s*([0-9.,]+)/i,
+      /min(?:imum)?\s*order(?:\s*qty|\s*quantity)?[:：]?\s*([0-9.,]+)/i,
+      /MOQ[:：]?\s*([0-9.,]+)/i
+    ];
+    for (const pattern of patterns) {
+      const match = pageText.match(pattern);
+      if (match && match[1]) {
+        const value = parseLooseNumber(match[1]);
+        if (value != null && value > 0) return value;
+      }
+    }
+
+    const candidates = collectNumberCandidates(sources, /(minOrder|min_order|minimumOrder|moq|起订|起批)/i);
+    const hit = candidates.find((item) => item.value != null && item.value > 0);
+    return hit ? hit.value : null;
+  }
+
+  function pickSupplierInfo(pageText, sources, fallbackName) {
+    const name = fallbackName || pickStringByKey(sources, /(supplierName|sellerName|companyName|shopName|storeName|供应商|公司名)$/i);
+    const location =
+      pickStringByKey(sources, /(province|city|location|area|address|region|所在地|地区|地址)$/i) ||
+      matchTextValue(pageText, /(?:所在地|地区|地址)[:：]?\s*([^\n，,。]{2,40})/);
+    const yearsText =
+      pickStringByKey(sources, /(years|yearEstablished|established|经营年限|诚信通|年限)$/i) ||
+      matchTextValue(pageText, /(?:经营|诚信通|开店)\s*([0-9]+)\s*年/);
+    const years = parseLooseNumber(yearsText);
+    return {
+      name: normalizeWhitespace(name || ""),
+      location: normalizeWhitespace(location || ""),
+      years: Number.isFinite(Number(years)) && Number(years) > 0 ? Number(years) : null,
+      evidence: [name ? "name" : "", location ? "location" : "", years ? "years" : ""].filter(Boolean).join(",")
+    };
+  }
+
+  function pickShippingInfo(selectors, pageText, sources) {
+    const texts = [];
+    for (const selector of selectors || []) {
+      document.querySelectorAll(selector).forEach((node) => {
+        const text = normalizeWhitespace(node.textContent || "");
+        if (text && text.length <= 240 && /(运费|物流|快递|配送|发货|shipping|delivery|freight)/i.test(text)) {
+          texts.push(text);
+        }
+      });
+      if (texts.length) break;
+    }
+
+    collectStringCandidates(sources, /(shipping|delivery|freight|logistics|postage|运费|物流|配送|发货)$/i)
+      .slice(0, 10)
+      .forEach((item) => {
+        if (item.value && item.value.length <= 240) texts.push(item.value);
+      });
+
+    if (!texts.length) {
+      const match = pageText.match(/(?:运费|物流|快递|配送|发货)[:：]?\s*([^\n。]{2,120})/);
+      if (match && match[0]) texts.push(normalizeWhitespace(match[0]));
+    }
+
+    const text = Array.from(new Set(texts)).slice(0, 3).join(" / ");
+    return {
+      text,
+      evidence: text ? "dom/json/text" : ""
+    };
+  }
+
+  function pickCustomizationInfo(pageText, sources) {
+    const texts = [];
+    collectStringCandidates(sources, /(custom|customization|customized|定制|加工|印刷|贴牌|代工|OEM|ODM)$/i)
+      .slice(0, 10)
+      .forEach((item) => {
+        if (item.value && item.value.length <= 240) texts.push(item.value);
+      });
+    const textMatch = pageText.match(/(?:支持)?(?:定制|贴牌|代工|OEM|ODM|加工)[:：]?\s*([^\n。]{0,120})/i);
+    if (textMatch && textMatch[0]) texts.push(normalizeWhitespace(textMatch[0]));
+
+    const text = Array.from(new Set(texts)).slice(0, 3).join(" / ");
+    return {
+      supported: text ? !/(不支持|无|否|not support)/i.test(text) : null,
+      text,
+      evidence: text ? "json/text" : ""
+    };
+  }
+
+  function matchTextValue(text, pattern) {
+    const match = String(text || "").match(pattern);
+    return match && match[1] ? normalizeWhitespace(match[1]) : "";
+  }
+
   function pickGrossWeight(pageText, sources, patterns, skuItems) {
     for (const pattern of patterns || []) {
       const match = pageText.match(pattern);
@@ -1203,25 +1316,80 @@
   function normalizeSkuItem(item) {
     const skuId = pickFirstValue(item, ["skuId", "sku_id", "id", "offerId", "specId", "nameId"]);
     const name = pickFirstValue(item, ["name", "title", "skuName", "sku_name", "displayName"]);
+    const attrs = normalizeSkuAttrs(item);
     const specText = [
       pickFirstValue(item, ["spec", "specText", "specValue", "skuSpec", "attributeValue"]),
-      Array.isArray(item.attributes) ? item.attributes.join(" / ") : ""
+      Object.keys(attrs).length ? Object.entries(attrs).map(([key, value]) => `${key}: ${value}`).join(" / ") : "",
+      Array.isArray(item.attributes) ? item.attributes.map((entry) => {
+        if (entry && typeof entry === "object") {
+          const key = pickFirstValue(entry, ["name", "key", "attrName", "title"]);
+          const value = pickFirstValue(entry, ["value", "attrValue", "text", "content"]);
+          return key && value ? `${key}: ${value}` : "";
+        }
+        return String(entry || "");
+      }).filter(Boolean).join(" / ") : ""
     ]
       .filter(Boolean)
       .join(" / ");
     const price = parseLooseNumber(pickFirstValue(item, ["price", "salePrice", "finalPrice", "discountPrice", "promotionPrice"]));
     const stock = parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"]));
+    const minOrderQty = parseLooseNumber(pickFirstValue(item, ["minOrderQty", "minOrderQuantity", "minimumOrderQuantity", "moq", "beginAmount", "startQuantity"]));
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
 
     return {
       skuId: skuId == null ? "" : String(skuId),
       name: name == null ? "" : String(name),
+      attrs,
       specText,
       price,
       stock,
+      minOrderQty,
       grossWeightGrams
     };
+  }
+
+  function normalizeSkuAttrs(item) {
+    const output = {};
+    const directAttrs = pickFirstValue(item, ["attrs", "attributes", "skuAttributes", "skuAttrs", "specAttrs", "props", "properties"]);
+    const addPair = (key, value) => {
+      const name = normalizeWhitespace(key);
+      const text = normalizeWhitespace(value);
+      if (name && text && name.length <= 80 && text.length <= 120) {
+        output[name] = text;
+      }
+    };
+
+    if (directAttrs && typeof directAttrs === "object" && !Array.isArray(directAttrs)) {
+      Object.entries(directAttrs).forEach(([key, value]) => {
+        if (value && typeof value === "object") {
+          addPair(
+            pickFirstValue(value, ["name", "key", "attrName", "title"]) || key,
+            pickFirstValue(value, ["value", "attrValue", "text", "content", "name"]) || ""
+          );
+        } else {
+          addPair(key, value);
+        }
+      });
+    }
+
+    if (Array.isArray(directAttrs)) {
+      directAttrs.forEach((entry) => {
+        if (!entry || typeof entry !== "object") return;
+        addPair(
+          pickFirstValue(entry, ["name", "key", "attrName", "title"]),
+          pickFirstValue(entry, ["value", "attrValue", "text", "content"])
+        );
+      });
+    }
+
+    ["color", "colour", "颜色", "size", "尺码", "型号", "规格"].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(item || {}, key)) {
+        addPair(key, item[key]);
+      }
+    });
+
+    return output;
   }
 
   function pickSkuCountFromDom() {
@@ -1264,6 +1432,32 @@
 
   function pickAttributes(sources) {
     const attrs = [];
+    const seen = new Set();
+    const addAttr = (name, value) => {
+      const key = normalizeWhitespace(name);
+      const text = normalizeWhitespace(value);
+      if (!key || !text || key.length > 80 || text.length > 240) return;
+      const signature = `${key}=${text}`;
+      if (seen.has(signature)) return;
+      seen.add(signature);
+      attrs.push({ name: key, value: text });
+    };
+
+    document.querySelectorAll("table tr, [class*='attribute'] li, [class*='attributes'] li, [class*='property'] li, [class*='props'] li, [class*='参数'] li, [class*='属性'] li").forEach((row) => {
+      const cells = Array.from(row.querySelectorAll("th,td,span,div"))
+        .map((node) => normalizeWhitespace(node.textContent || ""))
+        .filter(Boolean);
+      if (cells.length >= 2) {
+        addAttr(cells[0], cells.slice(1).join(" "));
+        return;
+      }
+      const text = normalizeWhitespace(row.textContent || "");
+      const parts = text.split(/[:：]/);
+      if (parts.length >= 2) {
+        addAttr(parts.shift(), parts.join(":"));
+      }
+    });
+
     const pairs = collectObjectCandidates(sources, /(attribute|spec|property|props|参数|属性)/i).slice(0, 20);
 
     pairs.forEach((item) => {
@@ -1272,9 +1466,20 @@
           if (row && typeof row === "object") {
             const name = pickFirstValue(row, ["name", "key", "attrName", "title"]);
             const value = pickFirstValue(row, ["value", "attrValue", "text", "content"]);
-            if (name && value) {
-              attrs.push({ name: String(name), value: String(value) });
-            }
+            addAttr(name, value);
+          }
+        });
+        return;
+      }
+      if (item.value && typeof item.value === "object") {
+        Object.entries(item.value).forEach(([key, value]) => {
+          if (value && typeof value === "object") {
+            addAttr(
+              pickFirstValue(value, ["name", "key", "attrName", "title"]) || key,
+              pickFirstValue(value, ["value", "attrValue", "text", "content"]) || ""
+            );
+          } else {
+            addAttr(key, value);
           }
         });
       }
