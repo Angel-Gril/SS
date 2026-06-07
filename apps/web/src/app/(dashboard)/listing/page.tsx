@@ -206,10 +206,10 @@ export default function ListingPage() {
                 <ArrowLeft className="h-4 w-4 mr-1" /> 去 SKU采集跟卖
               </Button>
               <Button variant="outline" onClick={() => router.push('/collect/1688')}>
-                1688 采集上品
+                货源采集上品
               </Button>
               <Button variant="outline" onClick={() => router.push('/listing/1688')}>
-                1688 上架准备
+                货源上架准备
               </Button>
             </div>
           </CardContent>

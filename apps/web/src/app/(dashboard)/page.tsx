@@ -65,8 +65,8 @@ export default function DashboardPage() {
           <QuickAction label="同步商品" href="/products" />
           <QuickAction label="处理订单" href="/orders" />
           <QuickAction label="批量上架" href="/listing" />
-          <QuickAction label="1688采集上品" href="/collect/1688" />
-          <QuickAction label="1688上架准备" href="/listing/1688" />
+          <QuickAction label="货源采集上品" href="/collect/1688" />
+          <QuickAction label="货源上架准备" href="/listing/1688" />
         </CardContent>
       </Card>
     </div>

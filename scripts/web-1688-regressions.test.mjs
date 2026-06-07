@@ -48,14 +48,20 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
   }
 });
 
-test('dashboard and main listing page expose 1688 workflow entry points', () => {
+test('dashboard and main listing page expose domestic supply workflow entry points', () => {
   const dashboardPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'page.tsx');
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', 'page.tsx');
 
   assert.match(dashboardPage, /href="\/collect\/1688"/);
   assert.match(dashboardPage, /href="\/listing\/1688"/);
+  assert.match(dashboardPage, /货源采集上品/);
+  assert.match(dashboardPage, /货源上架准备/);
+  assert.doesNotMatch(dashboardPage, /1688采集上品|1688上架准备/);
   assert.match(listingPage, /router\.push\('\/collect\/1688'\)/);
   assert.match(listingPage, /router\.push\('\/listing\/1688'\)/);
+  assert.match(listingPage, /货源采集上品/);
+  assert.match(listingPage, /货源上架准备/);
+  assert.doesNotMatch(listingPage, /1688 采集上品|1688 上架准备/);
 });
 
 test('1688 listing preparation exposes Ozon category mapping fields', () => {
