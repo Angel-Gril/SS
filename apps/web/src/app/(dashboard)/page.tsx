@@ -60,11 +60,13 @@ export default function DashboardPage() {
         <CardHeader>
           <CardTitle className="text-base">快速操作</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <CardContent className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <QuickAction label="绑定店铺" href="/shops/ozon" />
           <QuickAction label="同步商品" href="/products" />
           <QuickAction label="处理订单" href="/orders" />
           <QuickAction label="批量上架" href="/listing" />
+          <QuickAction label="1688采集上品" href="/collect/1688" />
+          <QuickAction label="1688上架准备" href="/listing/1688" />
         </CardContent>
       </Card>
     </div>

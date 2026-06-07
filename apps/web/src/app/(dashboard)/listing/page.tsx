@@ -201,9 +201,17 @@ export default function ListingPage() {
         <Card className="border-orange-200 dark:border-orange-900">
           <CardContent className="py-12 text-center text-muted-foreground space-y-3">
             <p className="text-sm">请先到 SKU采集跟卖 选择要改款的商品，点击「SKU 采集改款」按钮跳转</p>
-            <Button onClick={() => router.push('/collect')} className="bg-orange-600 hover:bg-orange-700 text-white">
-              <ArrowLeft className="h-4 w-4 mr-1" /> 去 SKU采集跟卖
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button onClick={() => router.push('/collect')} className="bg-orange-600 hover:bg-orange-700 text-white">
+                <ArrowLeft className="h-4 w-4 mr-1" /> 去 SKU采集跟卖
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/collect/1688')}>
+                1688 采集上品
+              </Button>
+              <Button variant="outline" onClick={() => router.push('/listing/1688')}>
+                1688 上架准备
+              </Button>
+            </div>
           </CardContent>
         </Card>
         <ListingJobList entryFilter="listing-page" title="改款上架记录" accentEmerald limit={30} />

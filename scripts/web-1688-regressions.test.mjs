@@ -35,3 +35,13 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
     assert.match(source, /aria-label="SKU 图片"/);
   }
 });
+
+test('dashboard and main listing page expose 1688 workflow entry points', () => {
+  const dashboardPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'page.tsx');
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', 'page.tsx');
+
+  assert.match(dashboardPage, /href="\/collect\/1688"/);
+  assert.match(dashboardPage, /href="\/listing\/1688"/);
+  assert.match(listingPage, /router\.push\('\/collect\/1688'\)/);
+  assert.match(listingPage, /router\.push\('\/listing\/1688'\)/);
+});
