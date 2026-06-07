@@ -671,8 +671,10 @@ export function normalizeAlibaba1688PreparationVariants(
   const fallbackBySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
-      const sku = compactString(variant?.sku ?? variant?.sourceSkuId);
-      if (sku) fallbackBySku.set(sku, variant);
+      const sourceSku = compactString(variant?.sourceSkuId);
+      const legacySku = compactString(variant?.sku);
+      if (sourceSku && !fallbackBySku.has(sourceSku)) fallbackBySku.set(sourceSku, variant);
+      if (legacySku && !fallbackBySku.has(legacySku)) fallbackBySku.set(legacySku, variant);
     }
   }
   return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform }).map((variant, index) => {

@@ -1025,6 +1025,39 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
+  it('matches existing preparation variants by source SKU before legacy generic SKU fields', () => {
+    expect(normalizeAlibaba1688PreparationVariants([
+      { sourceSkuId: 'tb-source-red', specText: '红色', price: '21.5' },
+    ], [
+      {
+        sku: 'ozon-sku-legacy',
+        sourceSkuId: 'tb-source-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-sku-red',
+        ozonProductId: 'ozon-product-red',
+        ozonOfferId: 'ozon-offer-red',
+        attrs: { 规格: '红色' },
+        price: '19.9',
+        images: ['https://img.example.com/existing-red.jpg'],
+      },
+    ], { sourcePlatform: 'taobao' })).toEqual([
+      {
+        sku: 'tb-source-red',
+        attrs: { 规格: '红色' },
+        price: '21.5',
+        stock: null,
+        minOrderQty: null,
+        grossWeightGrams: null,
+        sourceSkuId: 'tb-source-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-sku-red',
+        ozonProductId: 'ozon-product-red',
+        ozonOfferId: 'ozon-offer-red',
+        images: ['https://img.example.com/existing-red.jpg'],
+      },
+    ]);
+  });
+
   it('ignores invalid inherited source platforms during listing preparation', () => {
     expect(normalizeAlibaba1688PreparationVariants([
       { skuId: 'tb-sku-red', specText: '红色', price: '21.5' },
