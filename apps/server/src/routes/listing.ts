@@ -33,6 +33,7 @@ const batchListSchema = z.object({
 
 const listingTaskEntrySchema = z.enum(['1688-listing', 'listing-page', 'collect-page', 'manual-batch']);
 const DOMESTIC_SUPPLY_SOURCE_PLATFORMS = new Set(['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']);
+const DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST = Array.from(DOMESTIC_SUPPLY_SOURCE_PLATFORMS);
 
 type ListingImportItem = {
   offer_id?: string | null;
@@ -56,6 +57,10 @@ function traceText(source: Record<string, unknown>, key: string) {
 function traceSourcePlatform(source: Record<string, unknown>) {
   const sourcePlatform = traceText(source, 'sourcePlatform').toLowerCase();
   return DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform) ? sourcePlatform : '';
+}
+
+function isDomesticSupplySourcePlatform(value: unknown) {
+  return DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(String(value || '').trim().toLowerCase());
 }
 
 function safeMetadata(metadata: unknown) {
@@ -370,10 +375,14 @@ export async function listingRoutes(app: FastifyInstance) {
         const supplyGoodsIds = Array.from(sourcesBySupplyGoodsId.keys());
         if (supplyGoodsIds.length) {
           const goods = await prisma.supplyGoods.findMany({
-            where: { id: { in: supplyGoodsIds }, userId },
-            select: { id: true, metadata: true },
+            where: {
+              id: { in: supplyGoodsIds },
+              userId,
+              sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
+            },
+            select: { id: true, sourcePlatform: true, metadata: true },
           });
-          await Promise.all(goods.map((item) => {
+          await Promise.all(goods.filter((item) => isDomesticSupplySourcePlatform(item.sourcePlatform)).map((item) => {
             const traces = sourcesBySupplyGoodsId.get(item.id) || [];
             const itemOfferIds = Array.from(new Set(
               traces.map((trace) => traceText(trace, 'offerId')).filter(Boolean),
@@ -539,11 +548,15 @@ export async function listingRoutes(app: FastifyInstance) {
           const supplyGoodsIds = resultUpdates.map((item) => item.supplyGoodsId);
           const resultBySupplyGoodsId = new Map(resultUpdates.map((item) => [item.supplyGoodsId, item] as const));
           const goods = await prisma.supplyGoods.findMany({
-            where: { id: { in: supplyGoodsIds }, userId },
-            select: { id: true, metadata: true },
+            where: {
+              id: { in: supplyGoodsIds },
+              userId,
+              sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
+            },
+            select: { id: true, sourcePlatform: true, metadata: true },
           });
 
-          await Promise.all(goods.map((item) => {
+          await Promise.all(goods.filter((item) => isDomesticSupplySourcePlatform(item.sourcePlatform)).map((item) => {
             const resultUpdate = resultBySupplyGoodsId.get(item.id);
             if (!resultUpdate) return null;
             return prisma.supplyGoods.update({
