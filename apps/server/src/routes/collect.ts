@@ -323,6 +323,14 @@ export function parseAttributeText(text?: string): Record<string, string> {
   return output;
 }
 
+function formatAttributeText(attrs: Record<string, unknown>): string {
+  return Object.entries(attrs)
+    .map(([key, value]) => [String(key).trim(), String(value || '').trim()])
+    .filter(([key, value]) => key && value)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join('\n');
+}
+
 export function getAlibaba1688SourceDataIssues(input: {
   images?: unknown[];
   priceText?: unknown;
@@ -519,6 +527,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     minOrderQty: Number.isFinite(Number(meta.minOrderQty)) ? Number(meta.minOrderQty) : null,
     logisticsText: meta.logisticsText || '',
     attributes,
+    attributesText: formatAttributeText(attributes),
     skuCount: Number.isFinite(Number(meta.skuCount)) ? Number(meta.skuCount) : variants.length,
     sourceDataIssues,
     categoryMappingStatus: meta.categoryMappingStatus || 'deferred_until_listing',
@@ -566,6 +575,9 @@ export function buildAlibaba1688PreparationMetadata(
     preparedTitleRu?: string | null;
     targetPriceCny?: string | number | null;
     listingNotes?: string | null;
+    description?: string | null;
+    attributes?: Record<string, unknown> | null;
+    attributesText?: string | null;
   },
   source?: {
     hasImages?: boolean;
@@ -584,6 +596,24 @@ export function buildAlibaba1688PreparationMetadata(
   else delete meta.targetPriceCny;
   if (notes) meta.listingNotes = notes;
   else delete meta.listingNotes;
+  if (row.description !== undefined) {
+    const description = compactString(row.description)?.slice(0, 2000);
+    if (description) meta.description = description;
+    else delete meta.description;
+  }
+  if (row.attributesText !== undefined || row.attributes !== undefined) {
+    const attributes = {
+      ...parseAttributeText(row.attributesText || ''),
+      ...(row.attributes && typeof row.attributes === 'object' && !Array.isArray(row.attributes) ? row.attributes : {}),
+    };
+    const normalized = Object.fromEntries(
+      Object.entries(attributes)
+        .map(([key, value]) => [String(key).trim(), String(value || '').trim()])
+        .filter(([key, value]) => key && value),
+    );
+    if (Object.keys(normalized).length) meta.attributes = normalized;
+    else delete meta.attributes;
+  }
 
   const issues = getAlibaba1688PreparationIssues(row, source);
   meta.listingPreparationStatus = issues.length ? 'draft' : 'ready';
@@ -861,6 +891,10 @@ export async function collectRoutes(app: FastifyInstance) {
         targetPriceCny?: string | number | null;
         listingNotes?: string;
         images?: string[];
+        purchasePrice?: string | number | null;
+        description?: string | null;
+        attributes?: Record<string, unknown> | null;
+        attributesText?: string | null;
       }>;
     };
     const rows = (body?.items || []).filter((item) => item?.id).slice(0, 100);
@@ -885,12 +919,19 @@ export async function collectRoutes(app: FastifyInstance) {
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
       const nextImages = normalizeAlibaba1688PreparationImages(row.images, item.images);
+      const nextPurchasePriceRaw = row.purchasePrice !== undefined
+        ? row.purchasePrice
+        : item.purchasePrice?.toString();
+      const nextPurchasePriceNumber = numericValue(nextPurchasePriceRaw);
+      const nextPurchasePrice = nextPurchasePriceNumber != null && nextPurchasePriceNumber > 0
+        ? Math.round(nextPurchasePriceNumber * 100) / 100
+        : null;
       const preparationMeta = buildAlibaba1688PreparationMetadata(item.metadata, row, {
         hasImages: nextImages.length > 0,
       });
       const meta = refreshAlibaba1688SourceDataIssues(preparationMeta, {
         images: nextImages,
-        purchasePrice: item.purchasePrice?.toString(),
+        purchasePrice: nextPurchasePrice,
         variants: item.variants,
       });
 
@@ -899,12 +940,18 @@ export async function collectRoutes(app: FastifyInstance) {
         data: {
           metadata: meta as any,
           images: nextImages.length ? nextImages as any : null as any,
+          purchasePrice: nextPurchasePrice,
         },
       });
       saved++;
       if (meta.listingPreparationStatus === 'ready') ready++;
       else draft++;
-      updatedItems.push(buildAlibaba1688ListingPrefill({ ...item, images: nextImages, metadata: meta }));
+      updatedItems.push(buildAlibaba1688ListingPrefill({
+        ...item,
+        images: nextImages,
+        purchasePrice: nextPurchasePrice == null ? null : { toString: () => String(nextPurchasePrice) },
+        metadata: meta,
+      }));
     }
 
     return reply.send({

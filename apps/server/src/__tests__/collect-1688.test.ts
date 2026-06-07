@@ -323,6 +323,38 @@ describe('1688 collect helpers', () => {
     expect(metadata).not.toHaveProperty('listingPreparationIssues');
   });
 
+  it('saves 1688 source repairs during listing preparation without executing mapping', () => {
+    const metadata = buildAlibaba1688PreparationMetadata(
+      {
+        sourceKind: 'alibaba1688',
+        sourceDataIssues: ['missing_description', 'missing_attributes'],
+        categoryMappingStatus: 'deferred_until_listing',
+        listingPreparationStatus: 'collected_only',
+      },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        description: '补充后的货源详情',
+        attributesText: '材质：网布\n颜色：黑色',
+      } as any,
+      { hasImages: true },
+    );
+    const refreshed = refreshAlibaba1688SourceDataIssues(metadata, {
+      images: ['https://img.example.com/ready.jpg'],
+      purchasePrice: '25.80',
+      variants: [{ sku: 'sku-1' }],
+    });
+
+    expect(refreshed).toMatchObject({
+      sourceKind: 'alibaba1688',
+      description: '补充后的货源详情',
+      attributes: { 材质: '网布', 颜色: '黑色' },
+      sourceDataIssues: [],
+      categoryMappingStatus: 'deferred_until_listing',
+      listingPreparationStatus: 'ready',
+    });
+  });
+
   it('clears empty 1688 preparation draft fields while preserving deferred mapping state', () => {
     const metadata = buildAlibaba1688PreparationMetadata(
       {

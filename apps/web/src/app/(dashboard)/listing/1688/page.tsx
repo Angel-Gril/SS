@@ -48,6 +48,7 @@ interface Alibaba1688ListingItem {
   minOrderQty: number | string | null;
   logisticsText: string | null;
   attributes: Record<string, string>;
+  attributesText: string;
   skuCount: number;
   sourceDataIssues: string[];
   categoryMappingStatus: string;
@@ -99,6 +100,20 @@ const preparationFilterOptions: Array<{ value: PreparationFilter; label: string 
 
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
+}
+
+function parseAttributeText(text: string): Record<string, string> {
+  const output: Record<string, string> = {};
+  text.split('\n').forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const parts = trimmed.split(/[:：]/);
+    if (parts.length < 2) return;
+    const key = parts.shift()?.trim();
+    const value = parts.join(':').trim();
+    if (key && value) output[key] = value;
+  });
+  return output;
 }
 
 function supplierText(item: Alibaba1688ListingItem) {
@@ -170,6 +185,17 @@ function currentPreparationStatus(item: Alibaba1688ListingItem) {
   return currentPreparationIssues(item).length ? 'draft' : 'ready';
 }
 
+function currentSourceDataIssues(item: Alibaba1688ListingItem) {
+  const issues: string[] = [];
+  const purchasePrice = Number(String(item.purchasePrice || '').replace(/[^\d.]/g, ''));
+  if (!validImageUrls(item.images).length) issues.push('missing_source_images');
+  if (!(Number.isFinite(purchasePrice) && purchasePrice > 0)) issues.push('missing_purchase_price');
+  if (!item.variants.length) issues.push('missing_sku_items');
+  if (!String(item.description || '').trim()) issues.push('missing_description');
+  if (!item.attributes || Object.keys(item.attributes).length === 0) issues.push('missing_attributes');
+  return issues;
+}
+
 function sourceDimensionsText(item: Alibaba1688ListingItem) {
   const length = Number(item.lengthMm);
   const width = Number(item.widthMm);
@@ -237,8 +263,19 @@ export default function Alibaba1688ListingPage() {
     });
   }
 
-  function updateItem(id: string, field: 'preparedTitleRu' | 'targetPriceCny' | 'listingNotes', value: string) {
+  function updateItem(
+    id: string,
+    field: 'preparedTitleRu' | 'targetPriceCny' | 'listingNotes' | 'purchasePrice' | 'description',
+    value: string,
+  ) {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+    markItemDirty(id);
+  }
+
+  function updateItemAttributes(id: string, value: string) {
+    setItems((prev) => prev.map((item) => (
+      item.id === id ? { ...item, attributesText: value, attributes: parseAttributeText(value) } : item
+    )));
     markItemDirty(id);
   }
 
@@ -311,6 +348,9 @@ export default function Alibaba1688ListingPage() {
         targetPriceCny: item.targetPriceCny,
         listingNotes: item.listingNotes,
         images: item.images,
+        purchasePrice: item.purchasePrice,
+        description: item.description,
+        attributesText: item.attributesText,
       })),
     });
     setSaving(false);
@@ -404,6 +444,7 @@ export default function Alibaba1688ListingPage() {
       {filteredItems.map((item) => {
         const validImages = validImageUrls(item.images);
         const invalidImages = invalidImageUrls(item.images);
+        const sourceIssues = currentSourceDataIssues(item);
 
         return (
         <Card key={item.id}>
@@ -497,9 +538,9 @@ export default function Alibaba1688ListingPage() {
                     ))}
                   </div>
                 )}
-                {sourceDataIssueLabels(item.sourceDataIssues).length > 0 && (
+                {sourceDataIssueLabels(sourceIssues).length > 0 && (
                   <div className="flex flex-wrap gap-1">
-                    {sourceDataIssueLabels(item.sourceDataIssues).map((label) => (
+                    {sourceDataIssueLabels(sourceIssues).map((label) => (
                       <Badge key={label} variant="outline" className="text-amber-600 border-amber-300">
                         {label}
                       </Badge>
@@ -568,6 +609,14 @@ export default function Alibaba1688ListingPage() {
                   </div>
                 )}
               </div>
+              <div className="space-y-1">
+                <Label className="text-xs">货源采购价 CNY</Label>
+                <Input
+                  value={item.purchasePrice || ''}
+                  onChange={(e) => updateItem(item.id, 'purchasePrice', e.target.value)}
+                  placeholder="25.80"
+                />
+              </div>
               <div className="space-y-1 md:col-span-2">
                 <Label className="text-xs">商品图片链接</Label>
                 <textarea
@@ -602,6 +651,24 @@ export default function Alibaba1688ListingPage() {
                     )}
                   </div>
                 )}
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label className="text-xs">货源商品描述</Label>
+                <textarea
+                  className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={item.description || ''}
+                  onChange={(e) => updateItem(item.id, 'description', e.target.value)}
+                  placeholder="商品详情、包装说明、材质说明等"
+                />
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label className="text-xs">货源商品属性</Label>
+                <textarea
+                  className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={item.attributesText || ''}
+                  onChange={(e) => updateItemAttributes(item.id, e.target.value)}
+                  placeholder={'材质：棉\n颜色：黑色\n风格：休闲'}
+                />
               </div>
               <div className="space-y-1 md:col-span-2">
                 <Label className="text-xs">上架备注</Label>
