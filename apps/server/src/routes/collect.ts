@@ -9,6 +9,7 @@ import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+const ALIBABA_1688_DESCRIPTION_LIMIT = 6000;
 
 const collectSchema = z.object({
   title: z.string().min(1),
@@ -461,7 +462,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const heightMm = Number(input.heightMm);
   const supplierYears = Number(input.supplierYears);
   const minOrderQty = Number(input.minOrderQty);
-  const description = compactString(input.description)?.slice(0, 2000) || null;
+  const description = compactString(input.description)?.slice(0, ALIBABA_1688_DESCRIPTION_LIMIT) || null;
   const sourceDataIssues = getAlibaba1688SourceDataIssues({
     images,
     priceText,
@@ -648,7 +649,7 @@ export function buildAlibaba1688PreparationMetadata(
   if (notes) meta.listingNotes = notes;
   else delete meta.listingNotes;
   if (row.description !== undefined) {
-    const description = compactString(row.description)?.slice(0, 2000);
+    const description = compactString(row.description)?.slice(0, ALIBABA_1688_DESCRIPTION_LIMIT);
     if (description) meta.description = description;
     else delete meta.description;
   }

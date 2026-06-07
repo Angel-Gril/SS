@@ -121,6 +121,29 @@ describe('1688 collect helpers', () => {
     })).toEqual([]);
   });
 
+  it('preserves long 1688 source descriptions for later listing preparation', () => {
+    const longDescription = '商品详情'.repeat(900);
+    const record = buildAlibaba1688CollectRecord({
+      title: '长详情货源',
+      description: longDescription,
+    });
+
+    expect(record.metadata.description).toHaveLength(3600);
+    expect(record.metadata.description).toBe(longDescription);
+
+    const repaired = buildAlibaba1688PreparationMetadata(
+      { sourceKind: 'alibaba1688' },
+      {
+        preparedTitleRu: 'Test title',
+        targetPriceCny: '99',
+        description: longDescription,
+      },
+    );
+
+    expect(repaired.description).toHaveLength(3600);
+    expect(repaired.description).toBe(longDescription);
+  });
+
   it('refreshes 1688 source data issues after preparation images change', () => {
     const metadata = refreshAlibaba1688SourceDataIssues(
       {
