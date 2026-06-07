@@ -895,17 +895,27 @@ function alibaba1688VariantTraceKey(variant: unknown): string | null {
 
 function mergeAlibaba1688RecollectVariants(nextVariants: unknown[], existingVariants: unknown[]) {
   const existingByTraceKey = new Map<string, Record<string, unknown>>();
+  const legacyExistingBySourceSku = new Map<string, Record<string, unknown>>();
   for (const variant of existingVariants) {
     const key = alibaba1688VariantTraceKey(variant);
     if (key && variant && typeof variant === 'object' && !Array.isArray(variant)) {
-      existingByTraceKey.set(key, variant as Record<string, unknown>);
+      const item = variant as Record<string, unknown>;
+      existingByTraceKey.set(key, item);
+      if (!normalizeDomesticSupplySourcePlatform(item.sourcePlatform, null)) {
+        const sourceSkuId = compactString(item.sourceSkuId ?? item.sku);
+        if (sourceSkuId && !legacyExistingBySourceSku.has(sourceSkuId)) {
+          legacyExistingBySourceSku.set(sourceSkuId, item);
+        }
+      }
     }
   }
 
   return nextVariants.map((variant) => {
     if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return variant;
     const next = { ...(variant as Record<string, unknown>) };
-    const existing = existingByTraceKey.get(alibaba1688VariantTraceKey(next) || '');
+    const sourceSkuId = compactString(next.sourceSkuId ?? next.sku);
+    const existing = existingByTraceKey.get(alibaba1688VariantTraceKey(next) || '')
+      || (sourceSkuId ? legacyExistingBySourceSku.get(sourceSkuId) : undefined);
     if (!existing) return next;
     for (const key of ['ozonSku', 'ozonProductId', 'ozonOfferId'] as const) {
       if (!compactString(next[key]) && compactString(existing[key])) {

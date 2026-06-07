@@ -281,4 +281,55 @@ describe('1688 collect route', () => {
       },
     });
   });
+
+  it('preserves Ozon SKU trace for legacy variants that lack source platform', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue({
+      id: 'legacy-variant-record',
+      status: 'collected',
+      images: ['https://img.example.com/main.jpg'],
+      variants: [
+        {
+          sku: 'legacy-red',
+          sourceSkuId: 'legacy-red',
+          ozonSku: 'ozon-legacy-red',
+          ozonProductId: 'ozon-product-legacy',
+          ozonOfferId: 'ozon-offer-legacy',
+        },
+      ],
+      purchasePrice: { toString: () => '19.90' },
+      metadata: { sourceKind: 'alibaba1688' },
+    });
+    supplyGoodsMock.update.mockResolvedValue({ id: 'legacy-variant-record' });
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '旧变体平台补齐',
+        sourcePlatform: 'taobao',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+        priceText: '¥22.90',
+        skuItems: [
+          { sourceSkuId: 'legacy-red', specText: '红色', price: '22.9' },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const updateData = supplyGoodsMock.update.mock.calls[0]?.[0]?.data;
+    expect(updateData.variants).toEqual([
+      expect.objectContaining({
+        sourceSkuId: 'legacy-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-legacy-red',
+        ozonProductId: 'ozon-product-legacy',
+        ozonOfferId: 'ozon-offer-legacy',
+      }),
+    ]);
+  });
 });
