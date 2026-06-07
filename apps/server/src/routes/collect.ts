@@ -653,7 +653,10 @@ export function normalizeAlibaba1688PreparationVariants(
     return Array.isArray(fallbackVariants) ? fallbackVariants as any[] : [];
   }
   if (!Array.isArray(inputVariants)) return [];
-  const sourcePlatform = normalizeSourcePlatform(options.sourcePlatform) || '1688';
+  const optionSourcePlatform = normalizeSourcePlatform(options.sourcePlatform);
+  const sourcePlatform = optionSourcePlatform && isDomesticSupplySourcePlatform(optionSourcePlatform)
+    ? optionSourcePlatform
+    : '1688';
   const fallbackBySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
@@ -665,7 +668,10 @@ export function normalizeAlibaba1688PreparationVariants(
     const rawInput = (inputVariants as Array<Record<string, unknown>>)[index] || {};
     const hasExplicitSourcePlatform = !!compactString(rawInput.sourcePlatform ?? rawInput.platform);
     const fallback = fallbackBySku.get(variant.sku);
-    const fallbackSourcePlatform = normalizeSourcePlatform(fallback?.sourcePlatform);
+    const normalizedFallbackSourcePlatform = normalizeSourcePlatform(fallback?.sourcePlatform);
+    const fallbackSourcePlatform = normalizedFallbackSourcePlatform && isDomesticSupplySourcePlatform(normalizedFallbackSourcePlatform)
+      ? normalizedFallbackSourcePlatform
+      : null;
     const inherited = {
       ...(fallbackSourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallbackSourcePlatform } : {}),
       ...(fallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: fallback.ozonSku } : {}),

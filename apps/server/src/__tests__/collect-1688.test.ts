@@ -975,6 +975,33 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
+  it('ignores invalid inherited source platforms during listing preparation', () => {
+    expect(normalizeAlibaba1688PreparationVariants([
+      { skuId: 'tb-sku-red', specText: '红色', price: '21.5' },
+    ], [
+      {
+        sku: 'tb-sku-red',
+        sourceSkuId: 'tb-sku-red',
+        sourcePlatform: 'ozon-product-123',
+        ozonSku: 'ozon-sku-red',
+        attrs: { 规格: '红色' },
+        price: '19.9',
+      },
+    ], { sourcePlatform: 'taobao' })).toEqual([
+      {
+        sku: 'tb-sku-red',
+        attrs: { 规格: '红色' },
+        price: '21.5',
+        stock: null,
+        minOrderQty: null,
+        grossWeightGrams: null,
+        sourceSkuId: 'tb-sku-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-sku-red',
+      },
+    ]);
+  });
+
   it('uses the collected item source platform when new editable SKU text omits the platform column', () => {
     expect(normalizeAlibaba1688PreparationVariants([
       { skuId: 'tb-sku-blue', specText: '蓝色', price: '22.5' },
