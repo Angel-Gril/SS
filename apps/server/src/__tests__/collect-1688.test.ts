@@ -1076,6 +1076,46 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
+  it('inherits the collected item source platform when draft SKU rows omit it', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-taobao-ready',
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-sku-red',
+          sourceSkuId: 'tb-sku-red',
+          ozonSku: 'ozon-sku-red',
+          attrs: { color: 'red' },
+          stock: 50,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Товар Taobao',
+        targetPriceCny: '129',
+        ozonCategoryId: 17028922,
+        ozonTypeId: 93410,
+        description: 'Описание товара',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.issues).toEqual([]);
+    expect(result.items.map((item) => item.offerId)).toEqual(['sstaobao-tb-998877-tb-sku-red']);
+    expect(result.items[0]?.sourceTrace).toMatchObject({
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      sourceSkuId: 'tb-sku-red',
+      ozonSku: 'ozon-sku-red',
+    });
+  });
+
   it('retries duplicate source SKU variants by failed offer id only', () => {
     const result = buildAlibaba1688OzonListingDraftItems({
       id: 'collect-1688-duplicate-source-sku-retry',

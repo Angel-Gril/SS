@@ -982,6 +982,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   title: string;
   status?: string | null;
   sourceUrl?: string | null;
+  sourcePlatform?: string | null;
   sourceProductId?: string | null;
   purchasePrice?: { toString(): string } | null;
   currency?: string | null;
@@ -1027,10 +1028,11 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const allVariants = Array.isArray(prefill.variants) && prefill.variants.length
     ? prefill.variants as Array<Record<string, any>>
     : [null];
+  const itemSourcePlatform = compactString(prefill.sourcePlatform) || '1688';
   const variantEntries = allVariants.map((variant, index) => ({
     variant,
     index,
-    sourcePlatform: compactString(variant?.sourcePlatform) || '1688',
+    sourcePlatform: compactString(variant?.sourcePlatform) || itemSourcePlatform,
     sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`,
   }));
   const offerIds = buildUniqueAlibaba1688DraftOfferIds(variantEntries.map((entry) => ({
@@ -1062,7 +1064,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     const stock = nonNegativeIntegerValue(variant?.stock) ?? 0;
     const sourceTrace: Record<string, unknown> = {
       supplyGoodsId: item.id,
-      sourcePlatform: compactString(variant?.sourcePlatform) || '1688',
+      sourcePlatform: compactString(variant?.sourcePlatform) || itemSourcePlatform,
       sourceProductId: prefill.sourceProductId || null,
       sourceSkuId,
     };
