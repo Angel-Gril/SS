@@ -374,6 +374,10 @@ export function getListingResultStatus(importItems: ListingImportItem[]): Listin
   return 'submitted';
 }
 
+function supplyGoodsStatusForListingResult(resultStatus: ListingResultStatus) {
+  return resultStatus === 'failed' || resultStatus === 'partial_failed' ? 'listing_failed' : 'listed';
+}
+
 function compactImportErrors(errors: ListingImportItem['errors']) {
   if (!Array.isArray(errors)) return [];
   return errors.slice(0, 5).map((error) => ({
@@ -912,7 +916,7 @@ export async function listingRoutes(app: FastifyInstance) {
             return prisma.supplyGoods.update({
               where: { id: item.id },
               data: {
-                status: resultUpdate.resultStatus === 'failed' ? 'listing_failed' : 'listed',
+                status: supplyGoodsStatusForListingResult(resultUpdate.resultStatus),
                 metadata: applyAlibaba1688ListingResultMetadata(item.metadata, resultUpdate) as any,
               },
             });

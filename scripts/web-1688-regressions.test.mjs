@@ -180,7 +180,9 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /function\s+isAlibaba1688ListingJobPayload\(payload:\s*unknown\)/);
   assert.match(listingRoute, /data\.entry\s*===\s*'1688-listing'\s*\|\|\s*data\.mode\s*===\s*'1688'/);
   assert.match(listingRoute, /if\s*\(isAlibaba1688ListingJobPayload\(job\.payload\)\)/);
-  assert.match(listingRoute, /status:\s*resultUpdate\.resultStatus\s*===\s*'failed'\s*\?\s*'listing_failed'\s*:\s*'listed'/);
+  assert.match(listingRoute, /function\s+supplyGoodsStatusForListingResult\(resultStatus:\s*ListingResultStatus\)/);
+  assert.match(listingRoute, /resultStatus\s*===\s*'failed'\s*\|\|\s*resultStatus\s*===\s*'partial_failed'\s*\?\s*'listing_failed'\s*:\s*'listed'/);
+  assert.match(listingRoute, /status:\s*supplyGoodsStatusForListingResult\(resultUpdate\.resultStatus\)/);
   assert.match(collectPage, /status:\s*string/);
   assert.match(collectPage, /function\s+listingStatusText\(item:\s*Collected1688Item\)/);
   assert.match(collectPage, /function\s+listingResultStatus\(item:\s*Collected1688Item\)/);

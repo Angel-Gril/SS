@@ -785,6 +785,107 @@ describe('listing route', () => {
     }));
   });
 
+  it('marks partially failed supply listing refreshes as listing_failed on the collect record', async () => {
+    syncJobMock.findFirst.mockResolvedValueOnce({
+      id: 'job-partial-1688',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        taskId: 78,
+        entry: '1688-listing',
+        mode: '1688',
+        listingSources: [
+          {
+            supplyGoodsId: 'supply-taobao',
+            sourcePlatform: 'taobao',
+            sourceProductId: '998877',
+            sourceSkuId: 'tb-red',
+            offerId: 'sstaobao-998877-tb-red',
+          },
+          {
+            supplyGoodsId: 'supply-taobao',
+            sourcePlatform: 'taobao',
+            sourceProductId: '998877',
+            sourceSkuId: 'tb-blue',
+            offerId: 'sstaobao-998877-tb-blue',
+          },
+        ],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        platform: 'OZON',
+        clientId: 'client-1',
+        apiKeyEncrypted: 'encrypted-key',
+      },
+    });
+    syncJobMock.update.mockImplementationOnce(async ({ data }: any) => ({
+      id: 'job-partial-1688',
+      status: data.status,
+      finishedAt: data.finishedAt,
+      payload: data.payload,
+    }));
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-taobao',
+        sourcePlatform: 'taobao',
+        metadata: { sourceKind: 'alibaba1688' },
+      },
+    ]);
+    ozonGetImportInfoMock.mockResolvedValueOnce({
+      items: [
+        {
+          offer_id: 'sstaobao-998877-tb-red',
+          product_id: 9001,
+          status: 'imported',
+          errors: [],
+        },
+        {
+          offer_id: 'sstaobao-998877-tb-blue',
+          product_id: 0,
+          status: 'failed',
+          errors: [{ code: 'ATTRIBUTE_ERROR', description: 'required attribute missing' }],
+        },
+      ],
+    });
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/tasks/job-partial-1688/refresh',
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 1,
+      data: {
+        status: 'SUCCESS',
+        payload: {
+          resultStatus: 'partial_failed',
+          importedCount: 1,
+          failedCount: 1,
+          pendingCount: 0,
+        },
+      },
+    });
+    expect(supplyGoodsMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'supply-taobao' },
+      data: expect.objectContaining({
+        status: 'listing_failed',
+        metadata: expect.objectContaining({
+          listingStatus: 'partial_failed',
+          lastListingResultStatus: 'partial_failed',
+          lastListingFailedCount: 1,
+          lastListingImportedCount: 1,
+        }),
+      }),
+    }));
+  });
+
   it('lists legacy mode-only 1688 listing jobs when filtering supply listing tasks', async () => {
     shopMock.findMany.mockResolvedValueOnce([{ id: 'shop-1' }]);
     syncJobMock.count.mockResolvedValueOnce(1);
