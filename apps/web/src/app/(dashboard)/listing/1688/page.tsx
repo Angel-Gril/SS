@@ -83,7 +83,15 @@ interface PriceSuggestion {
   recommendationSource?: string | null;
 }
 
+type PreparationFilter = 'all' | 'draft' | 'ready';
+
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+
+const preparationFilterOptions: Array<{ value: PreparationFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'draft', label: '待补资料' },
+  { value: 'ready', label: '准备完成' },
+];
 
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
@@ -201,6 +209,7 @@ export default function Alibaba1688ListingPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [items, setItems] = useState<Alibaba1688ListingItem[]>([]);
+  const [preparationFilter, setPreparationFilter] = useState<PreparationFilter>('all');
 
   useEffect(() => {
     setLoading(true);
@@ -244,6 +253,22 @@ export default function Alibaba1688ListingPage() {
       title: applied ? `已填入 ${applied} 个建议售价` : '没有可填入的空售价',
     });
   }
+
+  const filteredItems = useMemo(
+    () => items.filter((item) => preparationFilter === 'all' || currentPreparationStatus(item) === preparationFilter),
+    [items, preparationFilter],
+  );
+  const statusCounts = useMemo(() => {
+    const counts: Record<PreparationFilter, number> = {
+      all: items.length,
+      draft: 0,
+      ready: 0,
+    };
+    items.forEach((item) => {
+      counts[currentPreparationStatus(item)] += 1;
+    });
+    return counts;
+  }, [items]);
 
   async function handleSave() {
     if (!items.length) return;
@@ -300,7 +325,7 @@ export default function Alibaba1688ListingPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {ids.length ? `共 ${items.length} 件商品` : `最近 ${items.length} 条 1688 采集记录`} · 待翻译 · 待类目映射 · 待属性生成
+            {ids.length ? `共 ${items.length} 件商品` : `最近 ${items.length} 条 1688 采集记录`} · 当前显示 {filteredItems.length} 条 · 待翻译 · 待类目映射 · 待属性生成
           </p>
         </div>
         <div className="flex gap-2">
@@ -317,7 +342,28 @@ export default function Alibaba1688ListingPage() {
         </div>
       </div>
 
-      {items.map((item) => {
+      <div className="flex flex-wrap gap-1">
+        {preparationFilterOptions.map((option) => (
+          <Button
+            key={option.value}
+            variant={preparationFilter === option.value ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setPreparationFilter(option.value)}
+          >
+            {option.label}({statusCounts[option.value]})
+          </Button>
+        ))}
+      </div>
+
+      {filteredItems.length === 0 && (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            当前筛选下暂无 1688 上架准备记录
+          </CardContent>
+        </Card>
+      )}
+
+      {filteredItems.map((item) => {
         const validImages = validImageUrls(item.images);
         const invalidImages = invalidImageUrls(item.images);
 
