@@ -884,6 +884,32 @@ function buildAlibaba1688DraftOfferId(
   return `ss1688-${productPart}-${skuPart}`.slice(0, 100);
 }
 
+function appendOfferIdSuffix(offerId: string, suffixNumber: number): string {
+  const suffix = `-${suffixNumber}`;
+  return `${offerId.slice(0, Math.max(1, 100 - suffix.length))}${suffix}`;
+}
+
+function buildUniqueAlibaba1688DraftOfferIds(entries: Array<{
+  sourceProductId: unknown;
+  sourceSkuId: unknown;
+  index: number;
+}>) {
+  const used = new Set<string>();
+  const baseCounts = new Map<string, number>();
+  return entries.map((entry) => {
+    const base = buildAlibaba1688DraftOfferId(entry.sourceProductId, entry.sourceSkuId, entry.index);
+    let count = (baseCounts.get(base) || 0) + 1;
+    let candidate = count === 1 ? base : appendOfferIdSuffix(base, count);
+    while (used.has(candidate)) {
+      count += 1;
+      candidate = appendOfferIdSuffix(base, count);
+    }
+    baseCounts.set(base, count);
+    used.add(candidate);
+    return candidate;
+  });
+}
+
 function getAlibaba1688FailedRetryKeys(metadata: Record<string, any>, listingStatus: string) {
   if (listingStatus !== 'partial_failed') return null;
   const resultItems = Array.isArray(metadata.lastListingResultItems) ? metadata.lastListingResultItems : [];
@@ -894,7 +920,10 @@ function getAlibaba1688FailedRetryKeys(metadata: Record<string, any>, listingSta
   if (!failedItems.length) return null;
   return {
     offerIds: new Set(failedItems.map((item: any) => compactString(item?.offerId)).filter(Boolean) as string[]),
-    sourceSkuIds: new Set(failedItems.map((item: any) => compactString(item?.sourceSkuId)).filter(Boolean) as string[]),
+    sourceSkuIds: new Set(failedItems
+      .filter((item: any) => !compactString(item?.offerId))
+      .map((item: any) => compactString(item?.sourceSkuId))
+      .filter(Boolean) as string[]),
   };
 }
 
@@ -948,20 +977,31 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const allVariants = Array.isArray(prefill.variants) && prefill.variants.length
     ? prefill.variants as Array<Record<string, any>>
     : [null];
+  const variantEntries = allVariants.map((variant, index) => ({
+    variant,
+    index,
+    sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`,
+  }));
+  const offerIds = buildUniqueAlibaba1688DraftOfferIds(variantEntries.map((entry) => ({
+    sourceProductId: prefill.sourceProductId || item.id,
+    sourceSkuId: entry.sourceSkuId,
+    index: entry.index,
+  })));
+  const variantEntriesWithOfferIds = variantEntries.map((entry, index) => ({
+    ...entry,
+    offerId: offerIds[index]!,
+  }));
   const variants = retryKeys
-    ? allVariants.filter((variant, index) => {
-      const sourceSkuId = compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`;
-      const offerId = buildAlibaba1688DraftOfferId(prefill.sourceProductId || item.id, sourceSkuId, index);
-      return retryKeys.offerIds.has(offerId) || retryKeys.sourceSkuIds.has(sourceSkuId);
+    ? variantEntriesWithOfferIds.filter((entry) => {
+      return retryKeys.offerIds.has(entry.offerId) || retryKeys.sourceSkuIds.has(entry.sourceSkuId);
     })
-    : allVariants;
+    : variantEntriesWithOfferIds;
 
   if (retryKeys && variants.length === 0) {
     return { items: [], issues: ['listing_retry_failed_items_not_found'], listingStatus };
   }
 
-  const items = variants.map((variant, index) => {
-    const sourceSkuId = compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`;
+  const items = variants.map(({ variant, sourceSkuId, offerId }) => {
     const variantImages = parseImageList([
       ...(Array.isArray(variant?.images) ? variant.images : []),
       variant?.imageUrl,
@@ -982,7 +1022,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     if (ozonOfferId) sourceTrace.ozonOfferId = ozonOfferId;
 
     return {
-      offerId: buildAlibaba1688DraftOfferId(prefill.sourceProductId || item.id, sourceSkuId, index),
+      offerId,
       title,
       description: compactString(meta.description) || '',
       categoryId,

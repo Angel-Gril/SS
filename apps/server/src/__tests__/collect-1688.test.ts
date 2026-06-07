@@ -909,6 +909,117 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('deduplicates Ozon offer ids when source SKUs repeat across variants', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-duplicate-source-sku',
+      title: '男士运动鞋',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-red',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-blue',
+          attrs: { color: 'blue', size: '43' },
+          stock: 80,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        description: 'Описание товара',
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(result.issues).toEqual([]);
+    expect(result.items.map((item) => item.offerId)).toEqual([
+      'ss1688-734567890123-same-source-sku',
+      'ss1688-734567890123-same-source-sku-2',
+    ]);
+    expect(result.items.map((item) => item.sourceTrace)).toEqual([
+      expect.objectContaining({ sourceSkuId: 'same-source-sku', ozonSku: 'ozon-sku-red' }),
+      expect.objectContaining({ sourceSkuId: 'same-source-sku', ozonSku: 'ozon-sku-blue' }),
+    ]);
+  });
+
+  it('retries duplicate source SKU variants by failed offer id only', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-duplicate-source-sku-retry',
+      title: '男士运动鞋',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-red',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-blue',
+          attrs: { color: 'blue', size: '43' },
+          stock: 80,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        description: 'Описание товара',
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+        lastListingResultStatus: 'partial_failed',
+        lastListingResultItems: [
+          {
+            offerId: 'ss1688-734567890123-same-source-sku',
+            sourceSkuId: 'same-source-sku',
+            status: 'imported',
+          },
+          {
+            offerId: 'ss1688-734567890123-same-source-sku-2',
+            sourceSkuId: 'same-source-sku',
+            status: 'failed',
+            errors: [{ code: 'ATTRIBUTE_ERROR', description: 'required attribute missing' }],
+          },
+        ],
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.issues).toEqual([]);
+    expect(result.items.map((item) => item.offerId)).toEqual(['ss1688-734567890123-same-source-sku-2']);
+    expect(result.items[0]?.sourceTrace).toMatchObject({
+      sourceSkuId: 'same-source-sku',
+      ozonSku: 'ozon-sku-blue',
+    });
+  });
+
   it('builds Ozon listing draft items from ready 1688 preparation while preserving SKU trace', () => {
     const result = buildAlibaba1688OzonListingDraftItems({
       id: 'collect-1688-ready',
