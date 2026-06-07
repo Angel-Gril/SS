@@ -1851,7 +1851,8 @@
   }
 
   function normalizeSkuItem(item) {
-    const skuId = pickFirstValue(item, ["skuId", "sku_id", "id", "offerId", "specId", "nameId"]);
+    const sourceSkuId = pickFirstValue(item, ["sourceSkuId", "source_sku_id", "sourceSku", "source_sku", "skuId", "sku_id", "id", "offerId", "specId", "nameId"]);
+    const skuId = sourceSkuId;
     const name = pickFirstValue(item, ["name", "title", "skuName", "sku_name", "displayName"]);
     const attrs = normalizeSkuAttrs(item);
     const specText = [
@@ -1880,7 +1881,7 @@
 
     return {
       skuId: skuId == null ? "" : String(skuId),
-      sourceSkuId: skuId == null ? "" : String(skuId),
+      sourceSkuId: sourceSkuId == null ? "" : String(sourceSkuId),
       name: name == null ? "" : String(name),
       attrs,
       specText,
