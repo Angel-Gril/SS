@@ -323,6 +323,22 @@ export function parseAttributeText(text?: string): Record<string, string> {
   return output;
 }
 
+export function getAlibaba1688SourceDataIssues(input: {
+  images?: unknown[];
+  priceText?: unknown;
+  skuItems?: unknown[];
+  description?: unknown;
+  attributes?: Record<string, unknown>;
+}): string[] {
+  const issues: string[] = [];
+  if (!Array.isArray(input.images) || input.images.length === 0) issues.push('missing_source_images');
+  if (!(numericValue(input.priceText) != null && numericValue(input.priceText)! > 0)) issues.push('missing_purchase_price');
+  if (!Array.isArray(input.skuItems) || input.skuItems.length === 0) issues.push('missing_sku_items');
+  if (!String(input.description || '').trim()) issues.push('missing_description');
+  if (!input.attributes || Object.keys(input.attributes).length === 0) issues.push('missing_attributes');
+  return issues;
+}
+
 function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
   if (!Array.isArray(items)) return [];
   return items.slice(0, 200).map((item, index) => {
@@ -355,6 +371,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
     ...(input.attributes || {}),
   };
   const skuItems = normalize1688SkuItems(input.skuItems?.length ? input.skuItems : input.variants);
+  const priceText = compactString(input.priceText ?? input.price);
   const supplierName = compactString(input.supplierName) || compactString(input.shopName);
   const weight = Number(input.grossWeightGrams);
   const lengthMm = Number(input.lengthMm);
@@ -363,6 +380,13 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const supplierYears = Number(input.supplierYears);
   const minOrderQty = Number(input.minOrderQty);
   const description = compactString(input.description)?.slice(0, 2000) || null;
+  const sourceDataIssues = getAlibaba1688SourceDataIssues({
+    images,
+    priceText,
+    skuItems,
+    description,
+    attributes,
+  });
   const notes = [
     description ? description.slice(0, 500) : '',
     input.notes ? String(input.notes).slice(0, 500) : '',
@@ -375,7 +399,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
     sourceProductId: offerId,
     sku: offerId,
     images,
-    priceText: compactString(input.priceText ?? input.price),
+    priceText,
     currency: compactString(input.currency) || 'CNY',
     notes,
     variants: skuItems,
@@ -399,6 +423,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
       customizationInfo: input.customizationInfo ?? null,
       attributes,
       skuCount: skuItems.length,
+      sourceDataIssues,
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'collected_only',
       raw: input.raw ?? null,
@@ -459,6 +484,7 @@ export function buildAlibaba1688ListingPrefill(item: {
       ? meta.attributes
       : {},
     skuCount: Number.isFinite(Number(meta.skuCount)) ? Number(meta.skuCount) : variants.length,
+    sourceDataIssues: Array.isArray(meta.sourceDataIssues) ? meta.sourceDataIssues : [],
     categoryMappingStatus: meta.categoryMappingStatus || 'deferred_until_listing',
     listingPreparationStatus: meta.listingPreparationStatus || 'collected_only',
     listingPreparationIssues: Array.isArray(meta.listingPreparationIssues) ? meta.listingPreparationIssues : [],

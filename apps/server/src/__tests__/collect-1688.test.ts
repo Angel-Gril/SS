@@ -4,6 +4,7 @@ import {
   buildAlibaba1688CollectRecord,
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688PreparationMetadata,
+  getAlibaba1688SourceDataIssues,
   getAlibaba1688PreparationIssues,
   normalizeAlibaba1688PreparationImages,
   parseAttributeText,
@@ -72,6 +73,7 @@ describe('1688 collect helpers', () => {
         customizationInfo: { supported: true, text: '支持贴牌定制' },
         attributes: { 材质: '网布', 颜色: '黑色' },
         skuCount: 1,
+        sourceDataIssues: [],
         categoryMappingStatus: 'deferred_until_listing',
         listingPreparationStatus: 'collected_only',
       },
@@ -87,6 +89,33 @@ describe('1688 collect helpers', () => {
         },
       ],
     });
+  });
+
+  it('tracks missing 1688 source data without changing listing preparation state', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '只有标题的货源',
+    });
+
+    expect(record.metadata).toMatchObject({
+      sourceKind: 'alibaba1688',
+      sourceDataIssues: [
+        'missing_source_images',
+        'missing_purchase_price',
+        'missing_sku_items',
+        'missing_description',
+        'missing_attributes',
+      ],
+      categoryMappingStatus: 'deferred_until_listing',
+      listingPreparationStatus: 'collected_only',
+    });
+
+    expect(getAlibaba1688SourceDataIssues({
+      images: ['https://img.example.com/1.jpg'],
+      priceText: '¥25.80',
+      skuItems: [{ skuId: 'sku-1' }],
+      description: '商品详情',
+      attributes: { 材质: '棉' },
+    })).toEqual([]);
   });
 
   it('serializes 1688 collected records for listing preparation without executing mapping', () => {

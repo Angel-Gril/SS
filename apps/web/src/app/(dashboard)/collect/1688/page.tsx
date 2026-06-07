@@ -49,6 +49,7 @@ interface Collected1688Item {
     logisticsText?: string | null;
     attributes?: Record<string, string>;
     skuCount?: number;
+    sourceDataIssues?: string[];
     categoryMappingStatus?: string;
     listingPreparationStatus?: string | null;
     listingPreparationIssues?: string[];
@@ -178,6 +179,18 @@ function preparationIssueText(issues?: string[]) {
     prepared_title_contains_cjk: '标题含中文',
     missing_target_price_cny: '待补目标售价',
     missing_source_images: '待补商品图片',
+  };
+  return issues.map((issue) => labels[issue] || issue).join(' / ');
+}
+
+function sourceDataIssueText(issues?: string[]) {
+  if (!issues?.length) return '';
+  const labels: Record<string, string> = {
+    missing_source_images: '缺图片',
+    missing_purchase_price: '缺采购价',
+    missing_sku_items: '缺SKU',
+    missing_description: '缺描述',
+    missing_attributes: '缺属性',
   };
   return issues.map((issue) => labels[issue] || issue).join(' / ');
 }
@@ -669,6 +682,11 @@ export default function Collect1688Page() {
                     {preparationIssueText(item.metadata?.listingPreparationIssues) && (
                       <div className="text-xs text-amber-600 truncate">
                         准备缺项: {preparationIssueText(item.metadata?.listingPreparationIssues)}
+                      </div>
+                    )}
+                    {sourceDataIssueText(item.metadata?.sourceDataIssues) && (
+                      <div className="text-xs text-amber-600 truncate">
+                        货源缺项: {sourceDataIssueText(item.metadata?.sourceDataIssues)}
                       </div>
                     )}
                   </div>
