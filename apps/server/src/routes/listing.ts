@@ -364,7 +364,7 @@ export async function listingRoutes(app: FastifyInstance) {
         const supplyGoodsIds = Array.from(sourcesBySupplyGoodsId.keys());
         if (supplyGoodsIds.length) {
           const goods = await prisma.supplyGoods.findMany({
-            where: { id: { in: supplyGoodsIds }, userId, sourcePlatform: '1688' },
+            where: { id: { in: supplyGoodsIds }, userId },
             select: { id: true, metadata: true },
           });
           await Promise.all(goods.map((item) => {
@@ -533,7 +533,7 @@ export async function listingRoutes(app: FastifyInstance) {
           const supplyGoodsIds = resultUpdates.map((item) => item.supplyGoodsId);
           const resultBySupplyGoodsId = new Map(resultUpdates.map((item) => [item.supplyGoodsId, item] as const));
           const goods = await prisma.supplyGoods.findMany({
-            where: { id: { in: supplyGoodsIds }, userId, sourcePlatform: '1688' },
+            where: { id: { in: supplyGoodsIds }, userId },
             select: { id: true, metadata: true },
           });
 

@@ -129,7 +129,8 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /listingSources,/);
   assert.match(listingRoute, /if\s*\(source\s*===\s*'1688-listing'\)/);
   assert.match(listingRoute, /sourcesBySupplyGoodsId/);
-  assert.match(listingRoute, /where:\s*\{\s*id:\s*\{\s*in:\s*supplyGoodsIds\s*\},\s*userId,\s*sourcePlatform:\s*'1688'\s*\}/);
+  assert.match(listingRoute, /where:\s*\{\s*id:\s*\{\s*in:\s*supplyGoodsIds\s*\},\s*userId\s*\}/);
+  assert.doesNotMatch(listingRoute, /id:\s*\{\s*in:\s*supplyGoodsIds\s*\},\s*userId,\s*sourcePlatform:\s*'1688'/);
   assert.match(listingRoute, /status:\s*'listed'/);
   assert.match(listingRoute, /lastListingTaskId:\s*task\.taskId/);
   assert.match(listingRoute, /lastListingOfferIds:\s*task\.offerIds/);
