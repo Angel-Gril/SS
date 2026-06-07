@@ -26,7 +26,9 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
     assert.match(source, /ozonSku:\s*parts\[7\]\s*\|\|\s*undefined/);
     assert.match(source, /SKU图片URL/);
     assert.match(source, /Ozon SKU/);
-    assert.match(source, /variant\.sourceSkuId\s*\?\s*`货源SKU\s*\$\{variant\.sourceSkuId\}`/);
+    assert.match(source, /function\s+sourceSkuLabel\(variant:\s*Alibaba1688Variant\)/);
+    assert.match(source, /variant\.sourcePlatform\s*\?\s*`\$\{variant\.sourcePlatform\}\s+SKU`\s*:\s*'货源SKU'/);
+    assert.match(source, /variant\.sourceSkuId\s*\?\s*`\$\{sourceSkuLabel\(variant\)\}\s+\$\{variant\.sourceSkuId\}`/);
     assert.match(source, /variant\.ozonSku\s*\?\s*`Ozon SKU\s*\$\{variant\.ozonSku\}`/);
     assert.match(source, /function\s+variantImageUrl\(variant:\s*Alibaba1688Variant\)/);
     assert.match(source, /\.\.\.\(variant\.images\s*\|\|\s*\[\]\),\s*variant\.imageUrl\s*\|\|\s*''/);
@@ -155,9 +157,10 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(collectPage, /lastListingResultItems\?:\s*Array<\{/);
   assert.match(collectPage, /function\s+listingResultFailureItems\(metadata\?:\s*Collected1688Item\['metadata'\]\)/);
   assert.match(collectPage, /function\s+listingResultItemErrorText\(item:\s*ListingResultItem\)/);
+  assert.match(collectPage, /function\s+resultSourceSkuLabel\(item:\s*ListingResultItem\)/);
   assert.match(collectPage, /item\.metadata\?\.lastListingResultItems/);
   assert.match(collectPage, /失败明细/);
-  assert.match(collectPage, /货源 SKU/);
+  assert.match(collectPage, /resultSourceSkuLabel\(resultItem\)/);
   assert.match(collectPage, /Ozon SKU/);
   assert.match(collectPage, /Ozon 结果:/);
   assert.match(collectPage, /lastListingTaskId/);

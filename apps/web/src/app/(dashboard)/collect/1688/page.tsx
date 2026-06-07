@@ -276,6 +276,10 @@ function listingResultItemErrorText(item: ListingResultItem) {
   return text || 'Ozon 未返回详细错误';
 }
 
+function resultSourceSkuLabel(item: ListingResultItem) {
+  return item.sourcePlatform ? `${item.sourcePlatform} SKU` : '货源 SKU';
+}
+
 function preparationStatus(item: Collected1688Item): PreparationFilter {
   const status = item.metadata?.listingPreparationStatus;
   if (status === 'draft' || status === 'ready') return status;
@@ -337,9 +341,13 @@ function variantSpecText(variant: Alibaba1688Variant) {
   return text || variant.sku || '默认规格';
 }
 
+function sourceSkuLabel(variant: Alibaba1688Variant) {
+  return variant.sourcePlatform ? `${variant.sourcePlatform} SKU` : '货源SKU';
+}
+
 function variantMetaText(variant: Alibaba1688Variant) {
   return [
-    variant.sourceSkuId ? `货源SKU ${variant.sourceSkuId}` : '',
+    variant.sourceSkuId ? `${sourceSkuLabel(variant)} ${variant.sourceSkuId}` : '',
     variant.ozonSku ? `Ozon SKU ${variant.ozonSku}` : '',
     variant.price != null && variant.price !== '' ? `¥${variant.price}` : '',
     variant.stock != null ? `库存 ${variant.stock}` : '',
@@ -817,7 +825,7 @@ export default function Collect1688Page() {
                           <div key={`${resultItem.offerId || resultItem.sourceSkuId || 'failed'}-${index}`} className="min-w-0">
                             <div className="truncate">
                               offer {resultItem.offerId || '-'}
-                              {resultItem.sourceSkuId ? ` · 货源 SKU ${resultItem.sourceSkuId}` : ''}
+                              {resultItem.sourceSkuId ? ` · ${resultSourceSkuLabel(resultItem)} ${resultItem.sourceSkuId}` : ''}
                               {resultItem.ozonSku ? ` · Ozon SKU ${resultItem.ozonSku}` : ''}
                               {resultItem.productId ? ` · Product ${resultItem.productId}` : ''}
                             </div>

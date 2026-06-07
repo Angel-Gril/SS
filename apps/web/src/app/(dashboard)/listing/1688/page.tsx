@@ -320,9 +320,13 @@ function variantSpecText(variant: Alibaba1688Variant) {
   return text || variant.sku || '默认规格';
 }
 
+function sourceSkuLabel(variant: Alibaba1688Variant) {
+  return variant.sourcePlatform ? `${variant.sourcePlatform} SKU` : '货源SKU';
+}
+
 function variantMetaText(variant: Alibaba1688Variant) {
   return [
-    variant.sourceSkuId ? `货源SKU ${variant.sourceSkuId}` : '',
+    variant.sourceSkuId ? `${sourceSkuLabel(variant)} ${variant.sourceSkuId}` : '',
     variant.ozonSku ? `Ozon SKU ${variant.ozonSku}` : '',
     variant.price != null && variant.price !== '' ? `¥${variant.price}` : '',
     variant.stock != null ? `库存 ${variant.stock}` : '',
