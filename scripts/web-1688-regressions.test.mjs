@@ -64,6 +64,7 @@ test('1688 listing preparation exposes Ozon category mapping fields', () => {
 test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+  const listingRoute = readRepoFile('apps', 'server', 'src', 'routes', 'listing.ts');
 
   assert.match(collectRoute, /app\.post\('\/1688\/listing-drafts'/);
   assert.match(collectRoute, /buildAlibaba1688OzonListingDraftItems\(item\)/);
@@ -73,4 +74,13 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingPage, /\/api\/collect\/1688\/listing-drafts/);
   assert.match(listingPage, /生成上架草稿/);
   assert.match(listingPage, /请先保存修改，再生成上架草稿/);
+  assert.match(listingPage, /interface\s+Shop\s*\{\s*id:\s*string;\s*name:\s*string;\s*platform:\s*string;\s*status\?:\s*string/);
+  assert.match(listingPage, /api\.get<Shop\[\]>\('\/api\/shops'\)/);
+  assert.match(listingPage, /const\s+\[shopId,\s*setShopId\]\s*=\s*useState\(''\)/);
+  assert.match(listingPage, /\/api\/listing\/batch/);
+  assert.match(listingPage, /请选择目标店铺/);
+  assert.match(listingPage, /提交到 Ozon/);
+  assert.match(listingRoute, /sourceTrace:\s*z\.record\(z\.unknown\(\)\)\.optional\(\)/);
+  assert.match(listingRoute, /const\s+listingSources\s*=\s*items\s*\.map\(\(item\)\s*=>\s*item\.sourceTrace\)/);
+  assert.match(listingRoute, /listingSources,/);
 });

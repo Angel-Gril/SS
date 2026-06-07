@@ -26,6 +26,7 @@ const batchListSchema = z.object({
       id: z.number(),
       value: z.string(),
     })).optional(),
+    sourceTrace: z.record(z.unknown()).optional(),
   })).min(1).max(100),
 });
 
@@ -85,6 +86,9 @@ export async function listingRoutes(app: FastifyInstance) {
         '/v3/product/import',
         { body: { items: ozonItems } },
       );
+      const listingSources = items
+        .map((item) => item.sourceTrace)
+        .filter((source): source is Record<string, unknown> => !!source);
 
       await prisma.syncJob.create({
         data: {
@@ -92,7 +96,11 @@ export async function listingRoutes(app: FastifyInstance) {
           type: 'PRODUCT_PUSH',
           status: 'RUNNING',
           startedAt: new Date(),
-          payload: { taskId: result.result.task_id, itemCount: items.length },
+          payload: {
+            taskId: result.result.task_id,
+            itemCount: items.length,
+            listingSources,
+          } as any,
         },
       });
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, ExternalLink, FileText, Loader2, Save, Tags } from 'lucide-react';
+import { ArrowLeft, ExternalLink, FileText, Loader2, Save, Tags, Upload } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -99,13 +99,28 @@ interface PriceSuggestion {
   recommendationSource?: string | null;
 }
 
+interface Shop {
+  id: string;
+  name: string;
+  platform: string;
+  status?: string;
+}
+
 interface Alibaba1688OzonListingDraftItem {
   offerId: string;
   title: string;
+  description?: string;
   categoryId: number;
   typeId: number;
   price: number;
+  oldPrice?: number;
+  currency: string;
+  stock: number;
   images: string[];
+  weight: number;
+  height: number;
+  depth: number;
+  width: number;
   sourceTrace?: Record<string, unknown>;
 }
 
@@ -297,6 +312,9 @@ export default function Alibaba1688ListingPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [shopId, setShopId] = useState('');
   const [items, setItems] = useState<Alibaba1688ListingItem[]>([]);
   const [preparationFilter, setPreparationFilter] = useState<PreparationFilter>('all');
   const [dirtyItemIds, setDirtyItemIds] = useState<Set<string>>(new Set());
@@ -313,6 +331,15 @@ export default function Alibaba1688ListingPage() {
       setLoading(false);
     });
   }, [ids.join(',')]);
+
+  useEffect(() => {
+    api.get<Shop[]>('/api/shops').then((res) => {
+      if (res.code !== 1 || !res.data) return;
+      const ozonShops = res.data.filter((shop) => shop.platform === 'OZON' && shop.status === 'ACTIVE');
+      setShops(ozonShops);
+      if (ozonShops.length > 0) setShopId((current) => current || ozonShops[0]!.id);
+    });
+  }, []);
 
   function markItemDirty(id: string) {
     setDirtyItemIds((prev) => {
@@ -440,34 +467,66 @@ export default function Alibaba1688ListingPage() {
     }
   }
 
-  async function handleBuildListingDrafts() {
-    if (dirtyItemIds.size) {
-      toast({ title: '请先保存修改，再生成上架草稿', variant: 'destructive' });
-      return;
-    }
-    const readyIds = items
+  function readyItemIds() {
+    return items
       .filter((item) => currentPreparationStatus(item) === 'ready')
       .map((item) => item.id);
+  }
+
+  async function loadListingDraftItems(): Promise<Alibaba1688OzonListingDraftItem[] | null> {
+    if (dirtyItemIds.size) {
+      toast({ title: '请先保存修改，再生成上架草稿', variant: 'destructive' });
+      return null;
+    }
+    const readyIds = readyItemIds();
     if (!readyIds.length) {
       toast({ title: '没有准备完成的 1688 记录可生成上架草稿', variant: 'destructive' });
-      return;
+      return null;
     }
 
+    const res = await api.post<{ items: Alibaba1688OzonListingDraftItem[] }>('/api/collect/1688/listing-drafts', {
+      ids: readyIds,
+    });
+    if (res.code === 1) return res.data?.items || [];
+    toast({ title: res.msg || '生成上架草稿失败', variant: 'destructive' });
+    return null;
+  }
+
+  async function handleBuildListingDrafts() {
     setDrafting(true);
     try {
-      const res = await api.post<{ items: Alibaba1688OzonListingDraftItem[] }>('/api/collect/1688/listing-drafts', {
-        ids: readyIds,
-      });
-
-      if (res.code === 1) {
-        toast({ title: res.msg || `已生成 ${res.data?.items?.length || 0} 条上架草稿` });
-      } else {
-        toast({ title: res.msg || '生成上架草稿失败', variant: 'destructive' });
-      }
+      const draftItems = await loadListingDraftItems();
+      if (draftItems) toast({ title: `已生成 ${draftItems.length} 条上架草稿` });
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '生成上架草稿失败', variant: 'destructive' });
     } finally {
       setDrafting(false);
+    }
+  }
+
+  async function handleSubmitListingDrafts() {
+    if (!shopId) {
+      toast({ title: '请选择目标店铺', variant: 'destructive' });
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const draftItems = await loadListingDraftItems();
+      if (!draftItems) return;
+      const res = await api.post<{ taskId?: number }>('/api/listing/batch', {
+        shopId,
+        items: draftItems,
+      });
+      if (res.code === 1) {
+        toast({ title: res.msg || `已提交 ${draftItems.length} 条 1688 上架草稿到 Ozon` });
+      } else {
+        toast({ title: res.msg || '提交到 Ozon 失败', variant: 'destructive' });
+      }
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '提交到 Ozon 失败', variant: 'destructive' });
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -507,12 +566,25 @@ export default function Alibaba1688ListingPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <select
+            aria-label="目标店铺"
+            value={shopId}
+            onChange={(event) => setShopId(event.target.value)}
+            className="h-8 min-w-40 rounded-md border border-input bg-background px-2 text-sm"
+          >
+            {shops.length === 0 && <option value="">请先添加并测试 OZON 店铺</option>}
+            {shops.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}
+          </select>
           <Button variant="outline" size="sm" onClick={applySuggestedPricesToEmpty} disabled={!items.length}>
             填入当前空售价
           </Button>
           <Button variant="outline" size="sm" onClick={handleBuildListingDrafts} disabled={drafting || saving || !items.length}>
             {drafting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <FileText className="h-4 w-4 mr-1" />}
             生成上架草稿
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleSubmitListingDrafts} disabled={submitting || drafting || saving || !items.length}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Upload className="h-4 w-4 mr-1" />}
+            提交到 Ozon
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push('/collect/1688')}>
             <ArrowLeft className="h-4 w-4 mr-1" />返回采集
