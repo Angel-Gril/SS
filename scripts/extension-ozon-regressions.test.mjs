@@ -99,8 +99,14 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
     (entry.matches || []).includes('https://s.1688.com/*')
       && (entry.js || []).includes('content/collect-content-script.js')
   );
+  const detailScript = manifest.content_scripts.find((entry) =>
+    (entry.matches || []).includes('https://detail.1688.com/*')
+      && (entry.js || []).includes('content/collect-content-script.js')
+  );
 
   assert.ok(searchScript, 'collect-content-script must be injected on 1688 search pages');
+  assert.ok(detailScript, 'collect-content-script must be injected on 1688 detail pages');
+  assert.ok((detailScript.js || []).includes('shared/currency/fx-rates.js'), '1688 price check must load fx rates');
   assert.match(collectScript, /data-role="price-check-1688"/);
   assert.match(collectScript, /1688核价/);
   assert.match(collectScript, /initAlibaba1688PriceCheckSearchPanel/);
@@ -108,6 +114,10 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
   assert.match(collectScript, /ss-erp:start-1688-price-check/);
   assert.match(collectScript, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
   assert.match(collectScript, /buildPriceCheckSummary/);
+  assert.match(collectScript, /loadFxSnapshot/);
+  assert.match(collectScript, /convertPriceForContext/);
+  assert.match(collectScript, /priceToRUB/);
+  assert.match(collectScript, /粗差/);
   assert.match(collectScript, /data-role="price-check-clear"/);
   assert.match(collectScript, /clearPriceCheckContext/);
   assert.match(serviceWorker, /ss-erp:start-1688-price-check/);

@@ -599,7 +599,7 @@
             calc.textContent = "计算中...";
             try {
               const current = await collectCurrentPage();
-              const summary = buildPriceCheckSummary(context, current);
+              const summary = await buildPriceCheckSummary(context, current);
               setStatus(summary, false);
               calc.textContent = "已计算";
             } catch (error) {
@@ -898,7 +898,7 @@
     });
   }
 
-  function buildPriceCheckSummary(ozonContext, alibabaProduct) {
+  async function buildPriceCheckSummary(ozonContext, alibabaProduct) {
     const ozonPrice = Number(ozonContext && ozonContext.price);
     const ozonCurrency = String((ozonContext && ozonContext.currency) || "RUB").toUpperCase();
     const purchasePrice = Number(alibabaProduct && alibabaProduct.price);
@@ -908,13 +908,53 @@
     if (Number.isFinite(ozonPrice) && Number.isFinite(purchasePrice) && ozonCurrency === purchaseCurrency) {
       return `核价：Ozon ${ozonText} / 1688 ${purchaseText} / 差额 ${formatPriceForContext(ozonPrice - purchasePrice, ozonCurrency)}`;
     }
+    if (Number.isFinite(ozonPrice) && Number.isFinite(purchasePrice)) {
+      const fxSnapshot = await loadFxSnapshot();
+      const convertedPurchase = convertPriceForContext(purchasePrice, purchaseCurrency, ozonCurrency, fxSnapshot);
+      if (Number.isFinite(convertedPurchase) && convertedPurchase > 0) {
+        const diff = ozonPrice - convertedPurchase;
+        return `核价：Ozon ${ozonText} / 1688采购 ${purchaseText} ≈ ${formatPriceForContext(convertedPurchase, ozonCurrency)} / 粗差 ${formatPriceForContext(diff, ozonCurrency)}`;
+      }
+    }
     return `核价：Ozon ${ozonText} / 1688采购 ${purchaseText}（币种不同，后续按汇率和费用核算利润）`;
   }
 
+  function loadFxSnapshot() {
+    return new Promise((resolve) => {
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+        resolve(null);
+        return;
+      }
+      chrome.storage.local.get(["ozon-calculator:fx-snapshot"], (result) => {
+        resolve(result && result["ozon-calculator:fx-snapshot"] ? result["ozon-calculator:fx-snapshot"] : null);
+      });
+    });
+  }
+
+  function convertPriceForContext(value, fromCurrency, toCurrency, fxSnapshot) {
+    const amount = Number(value);
+    const from = String(fromCurrency || "").toUpperCase();
+    const to = String(toCurrency || "").toUpperCase();
+    if (!Number.isFinite(amount) || amount <= 0 || !from || !to) return 0;
+    if (from === to) return amount;
+    if (window.OZON_CALC_FX_RATES) {
+      if (to === "RUB" && typeof window.OZON_CALC_FX_RATES.priceToRUB === "function") {
+        return window.OZON_CALC_FX_RATES.priceToRUB(amount, from, fxSnapshot, 0.08);
+      }
+      if (to === "CNY" && typeof window.OZON_CALC_FX_RATES.priceToCNY === "function") {
+        return window.OZON_CALC_FX_RATES.priceToCNY(amount, from, fxSnapshot, 0.08);
+      }
+    }
+    if (from === "CNY" && to === "RUB") return amount / 0.08;
+    if (from === "RUB" && to === "CNY") return amount * 0.08;
+    return 0;
+  }
+
   function formatPriceForContext(price, currency) {
+    if (price == null || price === "") return `- ${String(currency || "").toUpperCase() || "CNY"}`;
     const value = Number(price);
     const suffix = String(currency || "").toUpperCase() || "CNY";
-    return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)} ${suffix}` : `- ${suffix}`;
+    return Number.isFinite(value) ? `${value.toFixed(2)} ${suffix}` : `- ${suffix}`;
   }
 
   function fillOzonPanel(panel, data) {

@@ -108,6 +108,7 @@
         "https://detail.tmall.com/*"
       ],
       "js": [
+        "shared/currency/fx-rates.js",
         "shared/currency/price-currency.js",
         "content/collect-content-script.js"
       ],
