@@ -4,12 +4,21 @@
 (function () {
   const DOMESTIC_SUPPLY_PLATFORMS = ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'];
 
-  function isDomesticSupplyPayload(payload) {
+  function inferDomesticSupplyPlatform(payload) {
     var data = payload && typeof payload === 'object' ? payload : {};
-    var platform = String(data.sourcePlatform || data.platform || '').toLowerCase();
-    var url = String(data.sourceUrl || data.tabUrl || data.sourceHost || '');
-    return DOMESTIC_SUPPLY_PLATFORMS.indexOf(platform) >= 0
-      || /(^|\.)(1688|taobao|tmall|jd|pinduoduo|yangkeduo)\.com/i.test(url);
+    var platform = String(data.sourcePlatform || data.platform || '').trim().toLowerCase();
+    if (DOMESTIC_SUPPLY_PLATFORMS.indexOf(platform) >= 0) return platform;
+    var url = String(data.sourceUrl || data.tabUrl || data.sourceHost || '').toLowerCase();
+    if (/(^|\.)1688\.com/i.test(url)) return '1688';
+    if (/(^|\.)taobao\.com/i.test(url)) return 'taobao';
+    if (/(^|\.)tmall\.com/i.test(url)) return 'tmall';
+    if (/(^|\.)jd\.com/i.test(url)) return 'jd';
+    if (/(^|\.)(pinduoduo|yangkeduo)\.com/i.test(url)) return 'pinduoduo';
+    return '';
+  }
+
+  function isDomesticSupplyPayload(payload) {
+    return !!inferDomesticSupplyPlatform(payload);
   }
 
   function normalizeAttributeRecord(attributes) {
@@ -34,7 +43,7 @@
       path: '/api/collect/1688',
       body: {
         title: data.title,
-        sourcePlatform: data.sourcePlatform || data.platform || '1688',
+        sourcePlatform: inferDomesticSupplyPlatform(data) || '1688',
         sourceUrl: data.sourceUrl || data.tabUrl,
         offerId: data.offerId || data.productId || data.sourceProductId || data.sku,
         sku: data.sku || data.productId,

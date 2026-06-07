@@ -95,7 +95,13 @@ test('domestic supply extension collect payloads are routed to the dedicated col
     assert.match(source, /pinduoduo/);
     assert.match(source, /\/api\/collect\/1688/);
     assert.match(source, /sourcePlatform\s*\|\|\s*data\.platform/);
-    assert.match(source, /sourcePlatform:\s*data\.sourcePlatform\s*\|\|\s*data\.platform\s*\|\|\s*'1688'/);
+    assert.match(source, /function\s+inferDomesticSupplyPlatform\(payload\)/);
+    assert.match(source, /sourcePlatform:\s*inferDomesticSupplyPlatform\(data\)\s*\|\|\s*'1688'/);
+    assert.doesNotMatch(source, /sourcePlatform:\s*data\.sourcePlatform\s*\|\|\s*data\.platform\s*\|\|\s*'1688'/);
+    assert.match(source, /return\s+'taobao'/);
+    assert.match(source, /return\s+'tmall'/);
+    assert.match(source, /return\s+'jd'/);
+    assert.match(source, /return\s+'pinduoduo'/);
     assert.match(source, /supplierLocation/);
     assert.match(source, /minOrderQty/);
     assert.match(source, /shippingInfo/);
