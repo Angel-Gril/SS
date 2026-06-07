@@ -959,6 +959,54 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
+  it('separates Ozon offer ids by source platform when source SKU values match', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-mixed-source-platforms',
+      title: '男士运动鞋',
+      sourceProductId: 'shared-product',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-1688',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: 'taobao',
+          ozonSku: 'ozon-sku-taobao',
+          attrs: { color: 'blue', size: '43' },
+          stock: 80,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '299',
+        ozonCategoryId: 17028922,
+        ozonTypeId: 93410,
+        description: 'Описание товара',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(result.issues).toEqual([]);
+    expect(result.items.map((item) => item.offerId)).toEqual([
+      'ss1688-shared-product-same-source-sku',
+      'sstaobao-shared-product-same-source-sku',
+    ]);
+    expect(result.items.map((item) => item.sourceTrace)).toEqual([
+      expect.objectContaining({ sourcePlatform: '1688', sourceSkuId: 'same-source-sku', ozonSku: 'ozon-sku-1688' }),
+      expect.objectContaining({ sourcePlatform: 'taobao', sourceSkuId: 'same-source-sku', ozonSku: 'ozon-sku-taobao' }),
+    ]);
+  });
+
   it('retries duplicate source SKU variants by failed offer id only', () => {
     const result = buildAlibaba1688OzonListingDraftItems({
       id: 'collect-1688-duplicate-source-sku-retry',

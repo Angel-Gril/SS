@@ -874,14 +874,21 @@ function sanitizeOfferIdSegment(value: unknown, fallback: string): string {
   return text || fallback;
 }
 
+function sourcePlatformOfferPrefix(sourcePlatform: unknown): string {
+  const platformPart = sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase().slice(0, 16);
+  return platformPart === '1688' ? 'ss1688' : `ss${platformPart || 'source'}`;
+}
+
 function buildAlibaba1688DraftOfferId(
+  sourcePlatform: unknown,
   sourceProductId: unknown,
   sourceSkuId: unknown,
   index: number,
 ): string {
+  const prefix = sourcePlatformOfferPrefix(sourcePlatform);
   const productPart = sanitizeOfferIdSegment(sourceProductId, `item-${index + 1}`);
   const skuPart = sanitizeOfferIdSegment(sourceSkuId, `sku-${index + 1}`);
-  return `ss1688-${productPart}-${skuPart}`.slice(0, 100);
+  return `${prefix}-${productPart}-${skuPart}`.slice(0, 100);
 }
 
 function appendOfferIdSuffix(offerId: string, suffixNumber: number): string {
@@ -890,6 +897,7 @@ function appendOfferIdSuffix(offerId: string, suffixNumber: number): string {
 }
 
 function buildUniqueAlibaba1688DraftOfferIds(entries: Array<{
+  sourcePlatform: unknown;
   sourceProductId: unknown;
   sourceSkuId: unknown;
   index: number;
@@ -897,7 +905,7 @@ function buildUniqueAlibaba1688DraftOfferIds(entries: Array<{
   const used = new Set<string>();
   const baseCounts = new Map<string, number>();
   return entries.map((entry) => {
-    const base = buildAlibaba1688DraftOfferId(entry.sourceProductId, entry.sourceSkuId, entry.index);
+    const base = buildAlibaba1688DraftOfferId(entry.sourcePlatform, entry.sourceProductId, entry.sourceSkuId, entry.index);
     let count = (baseCounts.get(base) || 0) + 1;
     let candidate = count === 1 ? base : appendOfferIdSuffix(base, count);
     while (used.has(candidate)) {
@@ -980,9 +988,11 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const variantEntries = allVariants.map((variant, index) => ({
     variant,
     index,
+    sourcePlatform: compactString(variant?.sourcePlatform) || '1688',
     sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`,
   }));
   const offerIds = buildUniqueAlibaba1688DraftOfferIds(variantEntries.map((entry) => ({
+    sourcePlatform: entry.sourcePlatform,
     sourceProductId: prefill.sourceProductId || item.id,
     sourceSkuId: entry.sourceSkuId,
     index: entry.index,
