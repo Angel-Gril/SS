@@ -1432,7 +1432,7 @@
       if (texts.length) break;
     }
 
-    collectStringCandidates(sources, /(description|desc|productDescription|detailDesc|详情|描述|说明)$/i)
+    collectStringCandidates(sources, /(description|desc|productDescription|detailDesc|详情|描述|说明)$/i, 6000)
       .slice(0, 20)
       .forEach((item) => {
         if (item.value && item.value.length >= 20 && item.value.length <= 6000) {
@@ -2044,14 +2044,14 @@
     return candidates.length ? candidates[0].value : "";
   }
 
-  function collectStringCandidates(sources, regex) {
+  function collectStringCandidates(sources, regex, maxLength = 300) {
     const results = [];
     sources.forEach((source) => {
       walkObject(source, [], (value, path) => {
         const lastKey = path[path.length - 1] || "";
         if (typeof value === "string" && regex.test(String(lastKey))) {
           const text = normalizeWhitespace(value);
-          if (text && text.length <= 300) {
+          if (text && text.length <= maxLength) {
             results.push({ path: path.join("."), value: text });
           }
         }

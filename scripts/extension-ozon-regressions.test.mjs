@@ -156,6 +156,8 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+pickPrice/);
   assert.match(collectScript, /function\s+pickCategoryPath/);
   assert.match(collectScript, /function\s+pickDescription/);
+  assert.match(collectScript, /collectStringCandidates\(sources,\s*\/\(description\|desc\|productDescription\|detailDesc\|详情\|描述\|说明\)\$\/i,\s*6000\)/);
+  assert.match(collectScript, /function\s+collectStringCandidates\(sources,\s*regex,\s*maxLength\s*=\s*300\)/);
   assert.match(collectScript, /function\s+pickSupplierInfo/);
   assert.match(collectScript, /function\s+pickMinOrderQty/);
   assert.match(collectScript, /function\s+pickShippingInfo/);
