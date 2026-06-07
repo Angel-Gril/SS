@@ -1381,7 +1381,7 @@ export async function collectRoutes(app: FastifyInstance) {
     }
     const invalid = items.filter((it) => !isDomesticSupplySourcePlatform(it.sourcePlatform));
     if (invalid.length) {
-      return reply.status(400).send({ code: 0, msg: '只能选择货源采集记录进入 1688 上架准备' });
+      return reply.status(400).send({ code: 0, msg: '只能选择货源采集记录进入货源上架准备' });
     }
 
     const byId = new Map(items.map((it) => [it.id, it]));
@@ -1902,7 +1902,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const sample = alibabaItems.slice(0, 3).map((it) => it.title).join('、');
       return reply.status(400).send({
         code: 0,
-        msg: `货源采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖/复制接口。请先进入 1688 上架准备流程完成翻译、类目映射和属性生成：${sample}`,
+        msg: `货源采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖/复制接口。请先进入货源上架准备流程完成翻译、类目映射和属性生成：${sample}`,
       });
     }
 

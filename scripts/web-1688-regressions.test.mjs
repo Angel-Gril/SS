@@ -51,6 +51,7 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
 test('dashboard and main listing page expose domestic supply workflow entry points', () => {
   const dashboardPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'page.tsx');
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', 'page.tsx');
+  const sidebar = readRepoFile('apps', 'web', 'src', 'components', 'layout', 'sidebar.tsx');
 
   assert.match(dashboardPage, /href="\/collect\/1688"/);
   assert.match(dashboardPage, /href="\/listing\/1688"/);
@@ -62,6 +63,9 @@ test('dashboard and main listing page expose domestic supply workflow entry poin
   assert.match(listingPage, /货源采集上品/);
   assert.match(listingPage, /货源上架准备/);
   assert.doesNotMatch(listingPage, /1688 采集上品|1688 上架准备/);
+  assert.match(sidebar, /label:\s*'货源采集上品'/);
+  assert.match(sidebar, /label:\s*'货源上架准备'/);
+  assert.doesNotMatch(sidebar, /1688采集上品|1688上架准备/);
 });
 
 test('1688 listing preparation exposes Ozon category mapping fields', () => {
@@ -236,6 +240,9 @@ test('1688 listing preparation routes accept domestic supply source platforms', 
   assert.match(collectRoute, /!isDomesticSupplySourcePlatform\(it\.sourcePlatform\)/);
   assert.match(collectRoute, /!isDomesticSupplySourcePlatform\(item\.sourcePlatform\)/);
   assert.match(collectRoute, /货源采集记录/);
+  assert.match(collectRoute, /进入货源上架准备/);
+  assert.match(collectRoute, /请先进入货源上架准备流程/);
+  assert.doesNotMatch(collectRoute, /进入 1688 上架准备|进入 1688 上架准备流程/);
   assert.doesNotMatch(collectRoute, /item\.sourcePlatform\s*!==\s*'1688'/);
   assert.doesNotMatch(collectRoute, /it\.sourcePlatform\s*!==\s*'1688'/);
   assert.doesNotMatch(collectRoute, /where:\s*\{\s*id:\s*\{\s*in:\s*ids\s*\},\s*userId,\s*sourcePlatform:\s*'1688'\s*\}/);
