@@ -841,7 +841,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, msg: '缺少 SKU' });
         return;
       }
-      const queryUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect/status?sku=' + encodeURIComponent(sku);
+      const queryUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect/status?sku=' + encodeURIComponent(sku) + '&sourcePlatform=ozon';
       return fetch(queryUrl, {
         method: 'GET',
         headers: { authorization: 'Bearer ' + token },
@@ -891,7 +891,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           'content-type': 'application/json;charset=utf-8',
           authorization: 'Bearer ' + token,
         },
-        body: JSON.stringify({ skus: skus.slice(0, 100) }),
+        body: JSON.stringify({ skus: skus.slice(0, 100), sourcePlatform: 'ozon' }),
       }).then((response) => response.text().then((text) => {
         if (!response.ok) {
           sendResponse({ ok: false, msg: 'HTTP ' + response.status });

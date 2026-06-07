@@ -1,11 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { buildCollectSnapshot, getSupplyGoodsLookupId } from '../routes/collect.js';
+import { buildCollectSnapshot, buildCollectSnapshotWhere, getSupplyGoodsLookupId } from '../routes/collect.js';
 
 describe('collect snapshot helpers', () => {
   it('prefers sourceProductId and falls back to legacy sku', () => {
     expect(getSupplyGoodsLookupId({ sourceProductId: ' 123 ', sku: 'old' })).toBe('123');
     expect(getSupplyGoodsLookupId({ sourceProductId: null, sku: '456' })).toBe('456');
     expect(getSupplyGoodsLookupId({ sourceProductId: '', sku: '' })).toBeNull();
+  });
+
+  it('limits Ozon list-page snapshot lookups to Ozon source records by default', () => {
+    expect(buildCollectSnapshotWhere('user-1', ['123', '456'])).toEqual({
+      userId: 'user-1',
+      sourcePlatform: 'ozon',
+      OR: [
+        { sourceProductId: { in: ['123', '456'] } },
+        { sku: { in: ['123', '456'] } },
+      ],
+    });
+  });
+
+  it('allows explicit source platform snapshot lookups for non-Ozon source records', () => {
+    expect(buildCollectSnapshotWhere('user-1', ['tb-123'], 'taobao')).toEqual({
+      userId: 'user-1',
+      sourcePlatform: 'taobao',
+      OR: [
+        { sourceProductId: { in: ['tb-123'] } },
+        { sku: { in: ['tb-123'] } },
+      ],
+    });
   });
 
   it('serializes ERP collect status for list-page overlays', () => {

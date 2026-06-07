@@ -70,6 +70,13 @@ test('Ozon seller company id detection falls back to captured x-o3-company-id', 
   assert.match(source, /\.ozon\.ru/);
 });
 
+test('Ozon collect snapshot queries are scoped to Ozon source records', () => {
+  const source = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+
+  assert.match(source, /sourcePlatform=ozon/);
+  assert.match(source, /JSON\.stringify\(\{\s*skus:\s*skus\.slice\(0,\s*100\),\s*sourcePlatform:\s*'ozon'\s*\}\)/);
+});
+
 test('1688 extension collect payloads are routed to the dedicated collect endpoint', () => {
   const files = [
     ['extensions', 'ss-erp', 'shared', 'adapters', 'cloud-adapter.js'],

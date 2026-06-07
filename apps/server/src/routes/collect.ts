@@ -155,6 +155,19 @@ export function getSupplyGoodsLookupId(item: { sourceProductId?: string | null; 
   return normalizeProductId(item.sourceProductId) || normalizeProductId(item.sku);
 }
 
+export function buildCollectSnapshotWhere(userId: string, skus: string[], sourcePlatform?: unknown) {
+  const sourcePlatformValue = normalizeProductId(sourcePlatform) || 'ozon';
+  const lookupSkus = Array.from(new Set(skus.map((sku) => normalizeProductId(sku)).filter((sku): sku is string => !!sku)));
+  return {
+    userId,
+    sourcePlatform: sourcePlatformValue,
+    OR: [
+      { sourceProductId: { in: lookupSkus } },
+      { sku: { in: lookupSkus } },
+    ],
+  };
+}
+
 export function buildCollectSnapshot(item: {
   id: string;
   title: string;
@@ -1059,19 +1072,13 @@ export async function collectRoutes(app: FastifyInstance) {
   // 扩展查询：某 SKU 是否已被当前用户采集（用于 ozon.ru 列表页 overlay）
   app.get('/status', async (request, reply) => {
     const { userId } = (request as any).user;
-    const query = request.query as { sku?: string };
+    const query = request.query as { sku?: string; sourcePlatform?: string };
     const sku = String(query.sku || '').trim();
     if (!sku) {
       return reply.status(400).send({ code: 0, msg: '缺少 sku 参数' });
     }
     const goods = await prisma.supplyGoods.findFirst({
-      where: {
-        userId,
-        OR: [
-          { sku },
-          { sourceProductId: sku },
-        ],
-      },
+      where: buildCollectSnapshotWhere(userId, [sku], query.sourcePlatform),
       select: { id: true, title: true, status: true },
     });
     return reply.send({
@@ -1087,7 +1094,7 @@ export async function collectRoutes(app: FastifyInstance) {
   // 批量快照：扩展列表页用，返回多个 SKU 的采集状态
   app.post('/batch-snapshot', async (request, reply) => {
     const { userId } = (request as any).user;
-    const body = request.body as { skus: string[] };
+    const body = request.body as { skus: string[]; sourcePlatform?: string };
 
     if (!body?.skus?.length) {
       return reply.status(400).send({ code: 0, msg: '缺少 skus 参数' });
@@ -1099,13 +1106,7 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     const records = await prisma.supplyGoods.findMany({
-      where: {
-        userId,
-        OR: [
-          { sourceProductId: { in: skus } },
-          { sku: { in: skus } },
-        ],
-      },
+      where: buildCollectSnapshotWhere(userId, skus, body.sourcePlatform),
       select: {
         id: true,
         sourceProductId: true,
