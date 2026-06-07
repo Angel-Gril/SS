@@ -551,8 +551,10 @@ function normalize1688SkuItems(
   return items.slice(0, 200).map((item, index) => {
     const sourcePlatform = normalizeSourcePlatform(item.sourcePlatform ?? item.platform) || defaultSourcePlatform;
     const fallbackSku = `${sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase()}-${index + 1}`;
-    const sku = compactString(item.skuId ?? item.sku ?? item.specId ?? item.id) || fallbackSku;
-    const sourceSkuId = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.skuId ?? item.sku ?? item.specId ?? item.id) || sku;
+    const explicitSourceSku = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.sourceSku ?? item.source_sku);
+    const rawSku = compactString(item.skuId ?? item.sku_id ?? item.sku ?? item.specId ?? item.id);
+    const sku = explicitSourceSku || rawSku || fallbackSku;
+    const sourceSkuId = explicitSourceSku || rawSku || sku;
     const ozonSku = compactString(
       item.ozonSku
         ?? item.ozon_sku
