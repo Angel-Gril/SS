@@ -84,6 +84,14 @@ test('1688 listing preparation exposes Ozon category mapping fields', () => {
   assert.match(listingPage, /Ozon 类型ID/);
 });
 
+test('1688 listing preparation treats source data issues as draft blockers', () => {
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(listingPage, /function\s+currentSourceDataIssues\(item:\s*Alibaba1688ListingItem\)/);
+  assert.match(listingPage, /function\s+currentPreparationIssues\(item:\s*Alibaba1688ListingItem\)[\s\S]*?currentSourceDataIssues\(item\)[\s\S]*?issues\.includes\(issue\)[\s\S]*?issues\.push\(issue\)/);
+  assert.match(listingPage, /sourceDataIssueLabels\(sourceIssues\)/);
+});
+
 test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
   const collectPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');

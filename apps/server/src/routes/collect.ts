@@ -1229,6 +1229,16 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     return { items: [], issues: [blockedIssue], listingStatus };
   }
 
+  const meta = (item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata))
+    ? item.metadata as Record<string, any>
+    : {};
+  const sourceDataIssues = Array.isArray(meta.sourceDataIssues)
+    ? meta.sourceDataIssues.map((issue) => compactString(issue)).filter((issue): issue is string => !!issue)
+    : [];
+  if (sourceDataIssues.length) {
+    return { items: [], issues: sourceDataIssues, listingStatus };
+  }
+
   const baseImages = parseImageList(
     (Array.isArray(prefill.images) ? prefill.images : []).map((image) => String(image || '')),
   );
@@ -1243,9 +1253,6 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     return { items: [], issues, listingStatus };
   }
 
-  const meta = (item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata))
-    ? item.metadata as Record<string, any>
-    : {};
   const retryKeys = getAlibaba1688FailedRetryKeys(meta, listingStatus);
   const title = String(prefill.preparedTitleRu || '').trim();
   const categoryId = positiveIntegerValue(prefill.ozonCategoryId)!;

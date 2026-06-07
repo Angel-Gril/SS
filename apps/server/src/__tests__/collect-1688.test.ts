@@ -1183,6 +1183,42 @@ describe('1688 collect helpers', () => {
     expect(result.issues).toEqual(['missing_ozon_category_id', 'missing_ozon_type_id']);
   });
 
+  it('keeps source-incomplete supply records out of Ozon listing drafts', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-taobao-source-incomplete',
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-sku-red',
+          sourceSkuId: 'tb-sku-red',
+          sourcePlatform: 'taobao',
+          attrs: { color: 'red' },
+          stock: 50,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Товар Taobao',
+        targetPriceCny: '129',
+        ozonCategoryId: 17028922,
+        ozonTypeId: 93410,
+        description: '',
+        sourceDataIssues: ['missing_description', 'missing_attributes'],
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.items).toEqual([]);
+    expect(result.issues).toEqual(['missing_description', 'missing_attributes']);
+  });
+
   it('keeps already active 1688 listing records out of Ozon listing drafts', () => {
     const baseReadyItem = {
       id: 'collect-1688-ready',

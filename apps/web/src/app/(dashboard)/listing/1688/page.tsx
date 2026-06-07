@@ -301,6 +301,9 @@ function currentPreparationIssues(item: Alibaba1688ListingItem) {
   if (!item.ozonCategoryId.trim()) issues.push('missing_ozon_category_id');
   if (!item.ozonTypeId.trim()) issues.push('missing_ozon_type_id');
   if (!validImageUrls(item.images).length) issues.push('missing_source_images');
+  for (const issue of currentSourceDataIssues(item)) {
+    if (!issues.includes(issue)) issues.push(issue);
+  }
   return issues;
 }
 
