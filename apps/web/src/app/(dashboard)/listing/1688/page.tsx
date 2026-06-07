@@ -459,6 +459,12 @@ export default function Alibaba1688ListingPage() {
     });
     return counts;
   }, [items]);
+  const submittableReadyItemIds = useMemo(
+    () => items
+      .filter((item) => currentPreparationStatus(item) === 'ready' && canCreateListingDraft(item))
+      .map((item) => item.id),
+    [items],
+  );
 
   async function handleSave() {
     const dirtyItems = items.filter((item) => dirtyItemIds.has(item.id));
@@ -501,9 +507,7 @@ export default function Alibaba1688ListingPage() {
   }
 
   function readyItemIds() {
-    return items
-      .filter((item) => currentPreparationStatus(item) === 'ready' && canCreateListingDraft(item))
-      .map((item) => item.id);
+    return submittableReadyItemIds;
   }
 
   function markSubmittedListingItems(draftItems: Alibaba1688OzonListingDraftItem[]) {
@@ -624,11 +628,11 @@ export default function Alibaba1688ListingPage() {
           <Button variant="outline" size="sm" onClick={applySuggestedPricesToEmpty} disabled={!items.length}>
             填入当前空售价
           </Button>
-          <Button variant="outline" size="sm" onClick={handleBuildListingDrafts} disabled={drafting || saving || !items.length}>
+          <Button variant="outline" size="sm" onClick={handleBuildListingDrafts} disabled={drafting || saving || submittableReadyItemIds.length === 0}>
             {drafting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <FileText className="h-4 w-4 mr-1" />}
             生成上架草稿
           </Button>
-          <Button variant="outline" size="sm" onClick={handleSubmitListingDrafts} disabled={submitting || drafting || saving || !items.length}>
+          <Button variant="outline" size="sm" onClick={handleSubmitListingDrafts} disabled={submitting || drafting || saving || submittableReadyItemIds.length === 0}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Upload className="h-4 w-4 mr-1" />}
             提交到 Ozon
           </Button>
