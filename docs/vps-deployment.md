@@ -12,6 +12,8 @@ Do not mix the three in one deploy. First identify which path systemd is current
 systemctl cat ss-erp-api ss-erp-web ss-erp-worker | grep -E 'WorkingDirectory|EnvironmentFile'
 ```
 
+Production deploys should use committed Git objects only. Deploy `main`, a frozen `release/*` branch, a release tag, or an explicitly approved commit. Do not copy individual application or extension files to the VPS as a release mechanism; use the deploy script so the server records `DEPLOYED_COMMIT`, runs migrations/builds, restarts services, health-checks, and can roll back.
+
 The current VPS can run from `/opt/ss-erp/app`; use the app-dir deploy script for that shape.
 
 ## Existing App-Dir Deployment
@@ -23,7 +25,7 @@ WorkingDirectory=/opt/ss-erp/app/apps/server
 EnvironmentFile=/opt/ss-erp/app/.env.staging
 ```
 
-Deploy the latest local commit from your workstation:
+Deploy the latest local commit from your workstation. The tracked working tree must be clean, and the commit should already be pushed with CI passing:
 
 ```bash
 DEPLOY_HOST=45.76.49.64 \
@@ -33,7 +35,7 @@ DEPLOY_ENV_PROFILE=cloud-r2 \
 ./scripts/deploy-app-dir.sh
 ```
 
-The script packages the requested commit, uploads it to the server, builds it in a temporary directory, copies the current `.env.staging`, runs migrations, swaps `/opt/ss-erp/app`, restarts services, and checks `/ready`.
+The script packages the requested commit, uploads it to the server, builds it in a temporary directory, copies the current `.env.staging`, runs migrations, swaps `/opt/ss-erp/app`, restarts services, writes `DEPLOYED_COMMIT`, and checks `/ready`.
 
 Deploy a specific commit:
 
@@ -70,6 +72,7 @@ After deploying:
 ```bash
 ssh -i ~/.ssh/ss_erp_vultr_sg root@45.76.49.64
 cd /opt/ss-erp/app
+cat DEPLOYED_COMMIT
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash scripts/verify-deploy-readiness.sh
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
 DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
@@ -78,6 +81,9 @@ DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 Then from the local repository:
 
 ```bash
+pnpm test:repo
+pnpm build:extension:cloud
+STRICT_EXTENSION_CHECK=1 EXTENSION_DIR=build/extensions/ss-erp-cloud pnpm verify:extension
 pnpm preflight --remote-oss
 ```
 

@@ -24,6 +24,11 @@ const steps = [
     args: ['--filter', 'server', 'test'],
   },
   {
+    name: 'repository regression tests',
+    command: 'pnpm',
+    args: ['test:repo'],
+  },
+  {
     name: 'extension static verification',
     command: 'pnpm',
     args: ['verify:extension'],
@@ -41,6 +46,20 @@ if (includeBuild) {
       name: 'web build',
       command: 'pnpm',
       args: ['--filter', 'web', 'build'],
+    },
+    {
+      name: 'cloud extension package',
+      command: 'pnpm',
+      args: ['build:extension:cloud'],
+    },
+    {
+      name: 'cloud extension package verification',
+      command: 'pnpm',
+      args: ['verify:extension'],
+      env: {
+        STRICT_EXTENSION_CHECK: '1',
+        EXTENSION_DIR: 'build/extensions/ss-erp-cloud',
+      },
     },
   );
 }

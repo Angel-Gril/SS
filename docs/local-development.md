@@ -371,7 +371,7 @@ git push
 
 不要用 `git add .`。仓库里经常会有截图、扩展压缩包、部署 tar 包等本地测试产物，误提交后会把发布历史弄脏。
 
-然后在 VPS 上用本文档后面的发布方式拉取并部署，再跑一次 smoke。
+然后用本文档后面的发布方式部署这个 commit，再跑一次 smoke。扩展更新也必须跟随 commit 部署，不要把 `extensions/ss-erp` 或 `build/extensions` 里的单个文件直接替换到 VPS。
 
 VPS 上如果是 git checkout 模式：
 
@@ -383,17 +383,18 @@ DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-staging.sh
 如果 VPS 仍是当前旧式 `/opt/ss-erp/app` 打包目录模式，不要用 `git pull`，从本地仓库执行：
 
 ```powershell
+$commit = git rev-parse --short HEAD
 $env:DEPLOY_HOST='45.76.49.64'
 $env:DEPLOY_USER='root'
 $env:SSH_KEY="$env:USERPROFILE\.ssh\ss_erp_vultr_sg"
 $env:DEPLOY_ENV_PROFILE='cloud-r2'
-C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh
+C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh $commit
 ```
 
 如果已经切到 release 目录 + symlink 模式，不要再用 `deploy-staging.sh`，改用：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> ./scripts/deploy.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> ./scripts/deploy.sh <commit-or-tag>
 ```
 
 三种方式三选一。`deploy-app-dir.sh` 适合当前 VPS 已经在跑 `/opt/ss-erp/app` 的情况；`deploy-staging.sh` 适合服务器本身就是 GitHub checkout；`deploy.sh` 适合已经切换到 release/symlink 的线上阶段。
@@ -430,7 +431,7 @@ pnpm smoke:remote
 如果 VPS 已经切到 release/symlink 模式，不要在服务器上 `git pull` 部署，改为本地执行：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy.sh <commit-or-tag>
 ```
 
 然后同样跑 `diagnose-runtime-env.sh`、`verify-vps-deploy.sh` 和 `smoke:remote`。
@@ -438,7 +439,7 @@ DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV
 如果 VPS 仍是 `/opt/ss-erp/app` 模式，则对应命令是：
 
 ```bash
-DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
+DEPLOY_HOST=<server-ip> DEPLOY_USER=<ssh-user> SSH_KEY=<ssh-key-path> DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh <commit>
 ```
 
 部署前可先在 VPS 做只读就绪检查：
@@ -454,6 +455,7 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash 
 
 ```bash
 cd /opt/ss-erp/app
+cat DEPLOYED_COMMIT
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
 DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 ```

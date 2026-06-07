@@ -52,6 +52,8 @@ sudo systemctl start ss-erp-api ss-erp-worker ss-erp-web
 
 ## 日常更新 / 今天的更新推送
 
+线上更新必须以 Git commit/tag 为边界。先在本地提交、推送，并等待 GitHub Actions 通过；不要把单个业务文件、扩展文件或 `build/extensions` 产物直接 `scp` 到 VPS 当作发布。
+
 先确认当前服务器部署模式：
 
 ```bash
@@ -60,12 +62,14 @@ systemctl cat ss-erp-api ss-erp-web ss-erp-worker | grep -E 'WorkingDirectory|En
 
 如果输出指向 `/opt/ss-erp/app`，当前是 app-dir 打包模式。不要在 VPS 上 `git pull`；从本地仓库执行：
 
-```bash
-DEPLOY_HOST=45.76.49.64 \
-DEPLOY_USER=root \
-SSH_KEY=~/.ssh/ss_erp_vultr_sg \
-DEPLOY_ENV_PROFILE=cloud-r2 \
-./scripts/deploy-app-dir.sh
+```powershell
+$commit = git rev-parse --short HEAD
+git push origin HEAD
+$env:DEPLOY_HOST="45.76.49.64"
+$env:DEPLOY_USER="root"
+$env:SSH_KEY="$env:USERPROFILE\.ssh\ss_erp_vultr_sg"
+$env:DEPLOY_ENV_PROFILE="cloud-r2"
+C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh $commit
 ```
 
 部署前可以先在 VPS 做只读就绪检查：
@@ -104,6 +108,22 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/deploy-staging.sh
 如果你更重视回滚和版本隔离，可以改用 `scripts/deploy.sh` 的 release 目录模式；这两种方式不要混着用。
 
 当前 `/opt/ss-erp/app` 模式可以继续用 `deploy-app-dir.sh` 过渡。它会先构建新目录，成功后再替换 app 目录；失败时不会覆盖正在运行的旧目录。
+
+部署后至少确认：
+
+```bash
+cat /opt/ss-erp/app/DEPLOYED_COMMIT
+curl -fsS http://127.0.0.1:3001/ready
+```
+
+扩展更新必须跟随同一个 commit 部署。发布前本地和 CI 都应通过：
+
+```bash
+pnpm test:repo
+pnpm verify:extension
+pnpm build:extension:cloud
+STRICT_EXTENSION_CHECK=1 EXTENSION_DIR=build/extensions/ss-erp-cloud pnpm verify:extension
+```
 
 ## 查看日志
 
@@ -586,18 +606,13 @@ Worker 每天执行一次，清理对象：
 
 ## 发布流程（推荐）
 
-```bash
-# 1. 开启维护模式
-# 2. 执行数据库备份
-./scripts/backup-db.sh
-# 3. git pull && pnpm install
-# 4. pnpm --filter server db:migrate
-# 5. pnpm build
-# 6. systemctl restart ss-erp-api ss-erp-worker ss-erp-web
-# 7. curl http://localhost:3001/ready
-# 8. cd apps/server && SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
-# 9. 关闭维护模式
-```
+1. 本地确认 commit 已推送，GitHub Actions 通过。
+2. 必要时开启维护模式。
+3. 执行数据库备份，或在 app-dir 部署时设置 `RUN_DB_BACKUP=true`。
+4. 当前 `/opt/ss-erp/app` 过渡模式运行 `scripts/deploy-app-dir.sh <commit>`；release/symlink 模式运行 `scripts/deploy.sh <commit-or-tag>`。
+5. 部署脚本负责安装依赖、迁移数据库、构建、切换目录、重启服务和 `/ready` 检查。
+6. 部署后确认 `DEPLOYED_COMMIT`、运行 `verify-vps-deploy.sh`，再从本地运行 `pnpm smoke:remote`。
+7. 关闭维护模式。
 
 ## VPS 最小优化建议
 
