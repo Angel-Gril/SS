@@ -32,6 +32,7 @@ const batchListSchema = z.object({
 });
 
 const listingTaskEntrySchema = z.enum(['1688-listing', 'listing-page', 'collect-page', 'manual-batch']);
+const DOMESTIC_SUPPLY_SOURCE_PLATFORMS = new Set(['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']);
 
 type ListingImportItem = {
   offer_id?: string | null;
@@ -53,7 +54,8 @@ function traceText(source: Record<string, unknown>, key: string) {
 }
 
 function traceSourcePlatform(source: Record<string, unknown>) {
-  return traceText(source, 'sourcePlatform').toLowerCase();
+  const sourcePlatform = traceText(source, 'sourcePlatform').toLowerCase();
+  return DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform) ? sourcePlatform : '';
 }
 
 function safeMetadata(metadata: unknown) {
