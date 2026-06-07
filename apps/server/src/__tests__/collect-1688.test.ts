@@ -339,6 +339,41 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('accepts ozonPriceCheckContext alias when collecting price-checked supply records', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '核价货源别名',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      skuItems: [
+        { sourceSkuId: 'tb-red', specText: '红色', price: '19.9' },
+      ],
+      raw: {
+        ozonPriceCheckContext: {
+          title: 'Ozon 原商品',
+          productId: '123456789',
+          ozonSku: 'ozon-sku-red',
+          ozonOfferId: 'seller-offer-red',
+          sourceUrl: 'https://www.ozon.ru/product/test-123456789/',
+        },
+      },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sourceSkuId: 'tb-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-sku-red',
+        ozonProductId: '123456789',
+        ozonOfferId: 'seller-offer-red',
+      }),
+    ]);
+    expect(record.metadata.ozonPriceCheckContext).toMatchObject({
+      productId: '123456789',
+      sku: 'ozon-sku-red',
+      offerId: 'seller-offer-red',
+    });
+  });
+
   it('keeps explicit source SKU ids separate from generic Ozon SKU fields', () => {
     const record = buildAlibaba1688CollectRecord({
       title: 'SKU 追踪货源',

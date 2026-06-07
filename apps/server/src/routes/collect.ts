@@ -347,7 +347,7 @@ function extractOzonPriceCheckContext(metadata: unknown): OzonPriceCheckContext 
   const raw = meta.raw && typeof meta.raw === 'object' && !Array.isArray(meta.raw)
     ? meta.raw as Record<string, any>
     : {};
-  const source = meta.ozonPriceCheckContext || raw.priceCheckContext;
+  const source = meta.ozonPriceCheckContext || raw.priceCheckContext || raw.ozonPriceCheckContext;
   if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
 
   const title = compactString(source.title);

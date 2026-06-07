@@ -112,6 +112,7 @@ test('domestic supply extension collect payloads are routed to the dedicated col
     assert.match(source, /shippingInfo/);
     assert.match(source, /customizationInfo/);
     assert.match(source, /priceCheckContext/);
+    assert.match(source, /priceCheckContext:\s*data\.priceCheckContext\s*\|\|\s*data\.ozonPriceCheckContext\s*\|\|\s*null/);
     assert.match(source, /lengthMm/);
     assert.match(source, /widthMm/);
     assert.match(source, /heightMm/);

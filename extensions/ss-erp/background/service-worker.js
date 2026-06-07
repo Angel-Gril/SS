@@ -331,7 +331,7 @@ function normalizeCollectPayloadForEndpoint(payload) {
         extractor: data.extractor || null,
         warnings: data.warnings || [],
         debug: data.debug || null,
-        priceCheckContext: data.priceCheckContext || null,
+        priceCheckContext: data.priceCheckContext || data.ozonPriceCheckContext || null,
         collectedAt: data.collectedAt || null,
       },
     },
