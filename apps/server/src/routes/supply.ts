@@ -3,10 +3,25 @@ import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 
+const SUPPLY_SOURCE_PLATFORMS = ['1688', 'pinduoduo', 'pdd', 'taobao', 'tmall', 'jd', 'other'] as const;
+const SUPPLY_SOURCE_PLATFORM_SET = new Set<string>(SUPPLY_SOURCE_PLATFORMS);
+
+export function normalizeSupplySourcePlatform(value: unknown): string | null {
+  const text = value == null ? '' : String(value).trim();
+  if (!text) return null;
+  const normalized = text.toLowerCase();
+  return SUPPLY_SOURCE_PLATFORM_SET.has(normalized) ? normalized : null;
+}
+
+const sourcePlatformSchema = z.preprocess((value) => {
+  if (value == null || String(value).trim() === '') return null;
+  return normalizeSupplySourcePlatform(value) || String(value).trim().toLowerCase();
+}, z.enum(SUPPLY_SOURCE_PLATFORMS).nullable().optional());
+
 const createSchema = z.object({
   title: z.string().min(1).max(500),
   sourceUrl: z.string().url().optional().or(z.literal('')),
-  sourcePlatform: z.enum(['1688', 'pinduoduo', 'pdd', 'taobao', 'tmall', 'jd', 'other']).optional(),
+  sourcePlatform: sourcePlatformSchema,
   supplier: z.string().optional(),
   purchasePrice: z.coerce.number().min(0).optional(),
   currency: z.string().default('CNY'),
@@ -15,6 +30,18 @@ const createSchema = z.object({
   mappedProductId: z.string().optional(),
   notes: z.string().optional(),
 });
+
+const updateSchema = createSchema.extend({
+  status: z.string().optional(),
+}).partial();
+
+export function parseSupplyCreateInput(input: unknown) {
+  return createSchema.parse(input);
+}
+
+export function parseSupplyUpdateInput(input: unknown) {
+  return updateSchema.parse(input);
+}
 
 export async function supplyRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -86,7 +113,10 @@ export async function supplyRoutes(app: FastifyInstance) {
     const existing = await prisma.supplyGoods.findFirst({ where: { id, userId } });
     if (!existing) return reply.status(404).send({ code: 0, msg: '货源不存在' });
 
-    const body = request.body as Record<string, unknown>;
+    const parsed = updateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+
+    const body = parsed.data as Record<string, unknown>;
     const data: Record<string, unknown> = {};
     if (body.title !== undefined) data.title = body.title;
     if (body.sourceUrl !== undefined) data.sourceUrl = body.sourceUrl || null;
