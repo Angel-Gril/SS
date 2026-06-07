@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowRight, ExternalLink, Loader2, PackagePlus, RefreshCw, Save, ShoppingCart } from 'lucide-react';
+import { ArrowRight, ExternalLink, ListChecks, Loader2, PackagePlus, RefreshCw, Save, ShoppingCart } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +27,7 @@ interface Collected1688Item {
     attributes?: Record<string, string>;
     skuCount?: number;
     categoryMappingStatus?: string;
+    listingPreparationStatus?: string | null;
   } | null;
 }
 
@@ -76,12 +77,19 @@ function attributePreview(metadata?: Collected1688Item['metadata']) {
   return Object.entries(attrs).slice(0, 4).map(([key, value]) => `${key}: ${value}`).join(' / ');
 }
 
+function preparationStatusLabel(status?: string | null) {
+  if (status === 'draft') return '准备草稿';
+  if (status === 'ready') return '准备完成';
+  return '仅采集';
+}
+
 export default function Collect1688Page() {
   const router = useRouter();
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<Collected1688Item[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchRecent();
@@ -97,10 +105,37 @@ export default function Collect1688Page() {
     const res = await api.get<{ rows: Collected1688Item[] }>(`/api/collect?${params}`);
     if (res.code === 1 && res.data) {
       setItems(res.data.rows);
+      setSelectedIds(new Set());
     } else {
       toast({ title: res.msg || '加载 1688 采集记录失败', variant: 'destructive' });
     }
     setLoading(false);
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    if (items.length > 0 && items.every((item) => selectedIds.has(item.id))) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(items.map((item) => item.id)));
+  }
+
+  function goToPreparation(ids: string[]) {
+    const normalized = ids.map((id) => id.trim()).filter(Boolean);
+    if (!normalized.length) {
+      toast({ title: '请先选择 1688 采集记录', variant: 'destructive' });
+      return;
+    }
+    router.push(`/listing/1688?ids=${encodeURIComponent(normalized.join(','))}`);
   }
 
   async function handleSubmit() {
@@ -133,14 +168,22 @@ export default function Collect1688Page() {
     }
   }
 
+  const selectedCount = selectedIds.size;
+  const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.has(item.id));
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688 采集上品</h1>
           <p className="text-sm text-muted-foreground mt-1">保存货源商品信息，类目映射、翻译和属性生成在上架准备阶段执行。</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          {selectedCount > 0 && (
+            <Button size="sm" onClick={() => goToPreparation(Array.from(selectedIds))}>
+              <ListChecks className="h-4 w-4 mr-1" />批量上架准备({selectedCount})
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={fetchRecent} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             <span className="ml-1">刷新</span>
@@ -226,7 +269,20 @@ export default function Collect1688Page() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">最近 1688 采集记录</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="text-base">最近 1688 采集记录</CardTitle>
+            {items.length > 0 && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleAllVisible}
+                  className="h-4 w-4 rounded"
+                />
+                全选当前页
+              </label>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -239,6 +295,15 @@ export default function Collect1688Page() {
             <div className="space-y-3">
               {items.map((item) => (
                 <div key={item.id} className="rounded-md border p-3 flex gap-3">
+                  <div className="flex items-start pt-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(item.id)}
+                      onChange={() => toggleSelected(item.id)}
+                      className="h-4 w-4 rounded"
+                      aria-label={`选择 ${item.title}`}
+                    />
+                  </div>
                   <div className="h-16 w-16 rounded border bg-muted/40 overflow-hidden shrink-0">
                     {item.images?.[0] ? (
                       <img src={item.images[0]} alt="" className="h-full w-full object-cover" />
@@ -253,6 +318,7 @@ export default function Collect1688Page() {
                       <h2 className="font-medium text-sm truncate max-w-[620px]">{item.title}</h2>
                       <Badge variant="outline">1688</Badge>
                       <Badge variant="secondary">类目映射待上架</Badge>
+                      <Badge variant="outline">{preparationStatusLabel(item.metadata?.listingPreparationStatus)}</Badge>
                     </div>
                     <div className="text-xs text-muted-foreground flex gap-3 flex-wrap">
                       <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
@@ -267,7 +333,7 @@ export default function Collect1688Page() {
                     )}
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
-                    <Button size="sm" onClick={() => router.push(`/listing/1688?ids=${encodeURIComponent(item.id)}`)}>
+                    <Button size="sm" onClick={() => goToPreparation([item.id])}>
                       <ArrowRight className="h-4 w-4 mr-1" />上架准备
                     </Button>
                     {item.sourceUrl && (
