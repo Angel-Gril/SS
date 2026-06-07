@@ -412,6 +412,7 @@
     if (platform === "jd") return /^https:\/\/item\.jd\.com\/\d+\.html/i.test(location.href);
     if (platform === "taobao") return /^https:\/\/item\.taobao\.com\/item\.htm/i.test(location.href);
     if (platform === "tmall") return /^https:\/\/detail\.tmall\.com\/item\.htm/i.test(location.href);
+    if (platform === "pinduoduo") return /^https:\/\/mobile\.(?:pinduoduo|yangkeduo)\.com\/goods(?:\d+)?\.html/i.test(location.href);
     return false;
   }
 
@@ -1094,6 +1095,7 @@
     jd: extractJdProduct,
     taobao: extractTaobaoProduct,
     tmall: extractTmallProduct,
+    pinduoduo: extractPinduoduoProduct,
     amazon: extractAmazonProduct
   };
 
@@ -1107,6 +1109,7 @@
     if (host.includes("jd.com")) return "jd";
     if (host.includes("taobao.com")) return "taobao";
     if (host.includes("tmall.com")) return "tmall";
+    if (host.includes("pinduoduo.com") || host.includes("yangkeduo.com")) return "pinduoduo";
     if (host.includes("amazon.")) return "amazon";
     return "generic";
   }
@@ -1256,6 +1259,16 @@
       titleSelectors: ["h1", ".ItemHeader--mainTitle", ".tb-detail-hd h1"],
       shopSelectors: [".shopName", ".slogo-shopname"],
       productIdRegexes: [/id=(\d+)/i]
+    });
+  }
+
+  function extractPinduoduoProduct(context) {
+    return buildProductResult(context, {
+      monthlySalesKeywords: [/已拼[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i, /销量[:：]?\s*([0-9.,万wW+]+)/i],
+      weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
+      titleSelectors: ["h1", "[class*='goodsName']", "[class*='goods-name']", "[class*='GoodsName']"],
+      shopSelectors: ["[class*='mallName']", "[class*='shopName']", "[class*='storeName']"],
+      productIdRegexes: [/goods_id=(\d+)/i, /goodsId[=:/"]+(\d+)/i, /goods[_-]?id[=:/"]+(\d+)/i]
     });
   }
 

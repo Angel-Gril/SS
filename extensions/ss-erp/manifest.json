@@ -105,7 +105,9 @@
         "https://www.ozon.ru/*",
         "https://item.jd.com/*",
         "https://item.taobao.com/*",
-        "https://detail.tmall.com/*"
+        "https://detail.tmall.com/*",
+        "https://mobile.pinduoduo.com/*",
+        "https://mobile.yangkeduo.com/*"
       ],
       "js": [
         "shared/currency/fx-rates.js",

@@ -39,6 +39,7 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://detail.1688.com/*',
   'https://trade.1688.com/*',
   'https://mobile.pinduoduo.com/*',
+  'https://mobile.yangkeduo.com/*',
   'https://www.temu.com/*',
   'https://*.aliexpress.com/*',
   'https://www.wildberries.ru/*',

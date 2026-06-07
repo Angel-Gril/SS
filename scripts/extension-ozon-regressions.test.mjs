@@ -164,6 +164,8 @@ test('domestic supply product pages expose a direct collect-to-ERP action', () =
       && (entry.matches || []).includes('https://item.jd.com/*')
       && (entry.matches || []).includes('https://item.taobao.com/*')
       && (entry.matches || []).includes('https://detail.tmall.com/*')
+      && (entry.matches || []).includes('https://mobile.pinduoduo.com/*')
+      && (entry.matches || []).includes('https://mobile.yangkeduo.com/*')
       && (entry.js || []).includes('content/collect-content-script.js')
   );
 
@@ -178,6 +180,10 @@ test('domestic supply product pages expose a direct collect-to-ERP action', () =
   assert.ok(collectScript.includes('item\\.jd\\.com\\/\\d+\\.html'));
   assert.ok(collectScript.includes('item\\.taobao\\.com\\/item\\.htm'));
   assert.ok(collectScript.includes('detail\\.tmall\\.com\\/item\\.htm'));
+  assert.ok(collectScript.includes('mobile\\.(?:pinduoduo|yangkeduo)\\.com\\/goods'));
+  assert.match(collectScript, /if\s*\(platform === "pinduoduo"\)/);
+  assert.match(collectScript, /pinduoduo:\s*extractPinduoduoProduct/);
+  assert.match(collectScript, /function\s+extractPinduoduoProduct/);
 });
 
 test('1688 product extraction includes price and category fields for ERP records', () => {
