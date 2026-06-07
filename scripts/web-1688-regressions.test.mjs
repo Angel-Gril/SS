@@ -125,6 +125,12 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(collectPage, /status:\s*string/);
   assert.match(collectPage, /function\s+listingStatusText\(item:\s*Collected1688Item\)/);
   assert.match(collectPage, /function\s+listingResultStatus\(item:\s*Collected1688Item\)/);
+  assert.match(collectPage, /function\s+canSelectForListing\(item:\s*Collected1688Item\)/);
+  assert.match(collectPage, /status\s*!==\s*'submitted'\s*&&\s*status\s*!==\s*'pending'\s*&&\s*status\s*!==\s*'imported'/);
+  assert.match(collectPage, /const\s+selectableItems\s*=\s*filteredItems\.filter\(canSelectForListing\)/);
+  assert.match(collectPage, /preparationStatus\(item\)\s*===\s*'ready'\s*&&\s*canSelectForListing\(item\)/);
+  assert.match(collectPage, /disabled=\{!canSelectForListing\(item\)\}/);
+  assert.match(collectPage, /selectableFilteredItems\.length\s*>\s*0\s*&&\s*selectableFilteredItems\.every/);
   assert.match(collectPage, /item\.status\s*===\s*'listing_failed'/);
   assert.match(collectPage, /上架成功/);
   assert.match(collectPage, /部分失败/);

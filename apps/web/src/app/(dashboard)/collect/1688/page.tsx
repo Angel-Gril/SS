@@ -215,6 +215,11 @@ function listingStatusBadgeVariant(item: Collected1688Item): 'default' | 'second
   return 'default';
 }
 
+function canSelectForListing(item: Collected1688Item) {
+  const status = listingResultStatus(item);
+  return status !== 'submitted' && status !== 'pending' && status !== 'imported';
+}
+
 function listingResultSummaryText(metadata?: Collected1688Item['metadata']) {
   if (!metadata?.lastListingRefreshedAt) return '';
   const imported = Number(metadata.lastListingImportedCount ?? 0);
@@ -338,6 +343,8 @@ export default function Collect1688Page() {
   }
 
   function toggleSelected(id: string) {
+    const item = items.find((row) => row.id === id);
+    if (item && !canSelectForListing(item)) return;
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -347,21 +354,28 @@ export default function Collect1688Page() {
   }
 
   function toggleAllVisible() {
-    if (filteredItems.length > 0 && filteredItems.every((item) => selectedIds.has(item.id))) {
+    const selectableItems = filteredItems.filter(canSelectForListing);
+    if (!selectableItems.length) {
+      toast({ title: '当前筛选下没有可重新上架准备的记录' });
+      return;
+    }
+    if (selectableItems.every((item) => selectedIds.has(item.id))) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        filteredItems.forEach((item) => next.delete(item.id));
+        selectableItems.forEach((item) => next.delete(item.id));
         return next;
       });
       return;
     }
-    setSelectedIds((prev) => new Set([...prev, ...filteredItems.map((item) => item.id)]));
+    setSelectedIds((prev) => new Set([...prev, ...selectableItems.map((item) => item.id)]));
   }
 
   function selectReadyVisible() {
-    const readyIds = filteredItems.filter((item) => preparationStatus(item) === 'ready').map((item) => item.id);
+    const readyIds = filteredItems
+      .filter((item) => preparationStatus(item) === 'ready' && canSelectForListing(item))
+      .map((item) => item.id);
     if (!readyIds.length) {
-      toast({ title: '当前筛选下没有准备完成的记录' });
+      toast({ title: '当前筛选下没有可重新上架准备的完成记录' });
       return;
     }
     setSelectedIds(new Set(readyIds));
@@ -434,10 +448,10 @@ export default function Collect1688Page() {
     });
     return counts;
   }, [items]);
-  const allVisibleSelected = filteredItems.length > 0 && filteredItems.every((item) => selectedIds.has(item.id));
   const formImageLinks = useMemo(() => splitImageInput(form.imageText), [form.imageText]);
   const validFormImages = useMemo(() => validImageUrls(formImageLinks), [formImageLinks]);
   const invalidFormImages = useMemo(() => invalidImageUrls(formImageLinks), [formImageLinks]);
+  const selectableFilteredItems = useMemo(() => filteredItems.filter(canSelectForListing), [filteredItems]);
 
   return (
     <div className="space-y-4">
@@ -637,7 +651,7 @@ export default function Collect1688Page() {
                 <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
                   <input
                     type="checkbox"
-                    checked={allVisibleSelected}
+                    checked={selectableFilteredItems.length > 0 && selectableFilteredItems.every((item) => selectedIds.has(item.id))}
                     onChange={toggleAllVisible}
                     className="h-4 w-4 rounded"
                   />
@@ -664,6 +678,7 @@ export default function Collect1688Page() {
                     <input
                       type="checkbox"
                       checked={selectedIds.has(item.id)}
+                      disabled={!canSelectForListing(item)}
                       onChange={() => toggleSelected(item.id)}
                       className="h-4 w-4 rounded"
                       aria-label={`选择 ${item.title}`}
