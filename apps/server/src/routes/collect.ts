@@ -274,13 +274,38 @@ export function buildAlibaba1688PriceSuggestion(
   };
 }
 
-function exposeSupplyGoodsMetadata(metadata: unknown, purchasePrice?: unknown, purchaseCurrency?: unknown) {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-  const meta = { ...(metadata as Record<string, any>) };
+export function exposeSupplyGoodsMetadata(
+  metadata: unknown,
+  source?: {
+    sourcePlatform?: string | null;
+    images?: unknown;
+    purchasePrice?: unknown;
+    purchaseCurrency?: unknown;
+    variants?: unknown;
+  },
+) {
+  const isMetadataObject = !!metadata && typeof metadata === 'object' && !Array.isArray(metadata);
+  if (!isMetadataObject && source?.sourcePlatform !== '1688') return null;
+  const meta = isMetadataObject ? { ...(metadata as Record<string, any>) } : {};
+  const purchasePrice = source?.purchasePrice;
+  const purchaseCurrency = source?.purchaseCurrency;
   const ozonPriceCheckContext = extractOzonPriceCheckContext(meta);
   if (ozonPriceCheckContext) meta.ozonPriceCheckContext = ozonPriceCheckContext;
   const priceCheckEstimate = buildPriceCheckEstimate(ozonPriceCheckContext, purchasePrice, purchaseCurrency);
   if (priceCheckEstimate) meta.priceCheckEstimate = priceCheckEstimate;
+  if (source?.sourcePlatform === '1688' && !Array.isArray(meta.sourceDataIssues)) {
+    const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
+      ? meta.attributes as Record<string, unknown>
+      : {};
+    meta.sourceKind = meta.sourceKind || 'alibaba1688';
+    meta.sourceDataIssues = getAlibaba1688SourceDataIssues({
+      images: Array.isArray(source.images) ? source.images : [],
+      priceText: purchasePrice,
+      skuItems: Array.isArray(source.variants) ? source.variants : [],
+      description: meta.description,
+      attributes,
+    });
+  }
   return meta;
 }
 
@@ -751,7 +776,13 @@ export async function collectRoutes(app: FastifyInstance) {
           purchasePrice: r.purchasePrice?.toString() ?? null,
           originalPrice: r.originalPrice?.toString() ?? null,
           exchangeRateUsed: r.exchangeRateUsed?.toString() ?? null,
-          metadata: exposeSupplyGoodsMetadata(r.metadata, r.purchasePrice?.toString(), r.currency),
+          metadata: exposeSupplyGoodsMetadata(r.metadata, {
+            sourcePlatform: r.sourcePlatform,
+            images: r.images,
+            purchasePrice: r.purchasePrice?.toString(),
+            purchaseCurrency: r.currency,
+            variants: r.variants,
+          }),
         })),
       },
     };

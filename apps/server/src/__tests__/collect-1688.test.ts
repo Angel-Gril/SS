@@ -4,6 +4,7 @@ import {
   buildAlibaba1688CollectRecord,
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688PreparationMetadata,
+  exposeSupplyGoodsMetadata,
   getAlibaba1688SourceDataIssues,
   getAlibaba1688PreparationIssues,
   normalizeAlibaba1688PreparationImages,
@@ -170,6 +171,27 @@ describe('1688 collect helpers', () => {
       'missing_description',
       'missing_attributes',
     ]);
+  });
+
+  it('infers 1688 source data issues for old collect list records', () => {
+    const metadata = exposeSupplyGoodsMetadata(null, {
+      sourcePlatform: '1688',
+      images: [],
+      purchasePrice: null,
+      purchaseCurrency: 'CNY',
+      variants: [],
+    });
+
+    expect(metadata).toMatchObject({
+      sourceKind: 'alibaba1688',
+      sourceDataIssues: [
+        'missing_source_images',
+        'missing_purchase_price',
+        'missing_sku_items',
+        'missing_description',
+        'missing_attributes',
+      ],
+    });
   });
 
   it('serializes 1688 collected records for listing preparation without executing mapping', () => {
