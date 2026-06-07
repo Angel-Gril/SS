@@ -358,7 +358,7 @@ function variantSpecText(variant: Alibaba1688Variant) {
 }
 
 function sourceSkuLabel(variant: Alibaba1688Variant) {
-  return variant.sourcePlatform ? `${variant.sourcePlatform} SKU` : '货源SKU';
+  return variant.sourcePlatform ? `${sourcePlatformLabel(variant.sourcePlatform)} SKU` : '货源 SKU';
 }
 
 function variantMetaText(variant: Alibaba1688Variant) {
