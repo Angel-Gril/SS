@@ -60,3 +60,17 @@ test('1688 listing preparation exposes Ozon category mapping fields', () => {
   assert.match(listingPage, /Ozon 分类ID/);
   assert.match(listingPage, /Ozon 类型ID/);
 });
+
+test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
+  const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(collectRoute, /app\.post\('\/1688\/listing-drafts'/);
+  assert.match(collectRoute, /buildAlibaba1688OzonListingDraftItems\(item\)/);
+  assert.match(collectRoute, /sourcePlatform:\s*'1688'/);
+  assert.match(collectRoute, /1688 采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖\/复制接口/);
+  assert.match(listingPage, /Alibaba1688OzonListingDraftItem/);
+  assert.match(listingPage, /\/api\/collect\/1688\/listing-drafts/);
+  assert.match(listingPage, /生成上架草稿/);
+  assert.match(listingPage, /请先保存修改，再生成上架草稿/);
+});

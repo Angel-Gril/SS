@@ -826,6 +826,116 @@ export function buildAlibaba1688PreparationMetadata(
   return meta;
 }
 
+function nonNegativeIntegerValue(value: unknown): number | null {
+  const number = numericValue(value);
+  if (!(number != null && Number.isFinite(number) && number >= 0)) return null;
+  return Math.trunc(number);
+}
+
+function sanitizeOfferIdSegment(value: unknown, fallback: string): string {
+  const text = compactString(value)
+    ?.replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return text || fallback;
+}
+
+function buildAlibaba1688DraftOfferId(
+  sourceProductId: unknown,
+  sourceSkuId: unknown,
+  index: number,
+): string {
+  const productPart = sanitizeOfferIdSegment(sourceProductId, `item-${index + 1}`);
+  const skuPart = sanitizeOfferIdSegment(sourceSkuId, `sku-${index + 1}`);
+  return `ss1688-${productPart}-${skuPart}`.slice(0, 100);
+}
+
+export function buildAlibaba1688OzonListingDraftItems(item: {
+  id: string;
+  title: string;
+  sourceUrl?: string | null;
+  sourceProductId?: string | null;
+  purchasePrice?: { toString(): string } | null;
+  currency?: string | null;
+  images?: unknown;
+  variants?: unknown;
+  notes?: string | null;
+  metadata?: unknown;
+  createdAt: Date;
+}) {
+  const prefill = buildAlibaba1688ListingPrefill(item);
+  const baseImages = parseImageList(
+    (Array.isArray(prefill.images) ? prefill.images : []).map((image) => String(image || '')),
+  );
+  const issues = getAlibaba1688PreparationIssues({
+    preparedTitleRu: prefill.preparedTitleRu,
+    targetPriceCny: prefill.targetPriceCny,
+    ozonCategoryId: prefill.ozonCategoryId,
+    ozonTypeId: prefill.ozonTypeId,
+  }, { hasImages: baseImages.length > 0 });
+
+  if (issues.length) {
+    return { items: [], issues };
+  }
+
+  const meta = (item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata))
+    ? item.metadata as Record<string, any>
+    : {};
+  const title = String(prefill.preparedTitleRu || '').trim();
+  const categoryId = positiveIntegerValue(prefill.ozonCategoryId)!;
+  const typeId = positiveIntegerValue(prefill.ozonTypeId)!;
+  const price = numericValue(prefill.targetPriceCny)!;
+  const weight = positiveIntegerValue(meta.grossWeightGrams) || 500;
+  const height = positiveIntegerValue(meta.heightMm) || 100;
+  const depth = positiveIntegerValue(meta.lengthMm) || 100;
+  const width = positiveIntegerValue(meta.widthMm) || 100;
+  const variants = Array.isArray(prefill.variants) && prefill.variants.length
+    ? prefill.variants as Array<Record<string, any>>
+    : [null];
+
+  const items = variants.map((variant, index) => {
+    const sourceSkuId = compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`;
+    const variantImages = parseImageList([
+      ...(Array.isArray(variant?.images) ? variant.images : []),
+      variant?.imageUrl,
+      ...baseImages,
+    ].map((image) => String(image || '')));
+    const stock = nonNegativeIntegerValue(variant?.stock) ?? 0;
+    const sourceTrace: Record<string, unknown> = {
+      supplyGoodsId: item.id,
+      sourcePlatform: compactString(variant?.sourcePlatform) || '1688',
+      sourceProductId: prefill.sourceProductId || null,
+      sourceSkuId,
+    };
+    const ozonSku = compactString(variant?.ozonSku);
+    const ozonProductId = compactString(variant?.ozonProductId);
+    const ozonOfferId = compactString(variant?.ozonOfferId);
+    if (ozonSku) sourceTrace.ozonSku = ozonSku;
+    if (ozonProductId) sourceTrace.ozonProductId = ozonProductId;
+    if (ozonOfferId) sourceTrace.ozonOfferId = ozonOfferId;
+
+    return {
+      offerId: buildAlibaba1688DraftOfferId(prefill.sourceProductId || item.id, sourceSkuId, index),
+      title,
+      description: compactString(meta.description) || '',
+      categoryId,
+      typeId,
+      price,
+      oldPrice: Math.ceil(price * 1.2),
+      currency: 'CNY',
+      stock,
+      images: variantImages,
+      weight,
+      height,
+      depth,
+      width,
+      sourceTrace,
+    };
+  });
+
+  return { items, issues: [] };
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -1172,6 +1282,48 @@ export async function collectRoutes(app: FastifyInstance) {
       code: 1,
       msg: `已保存 ${saved} 条 1688 上架准备，${ready} 条准备完成，${draft} 条仍为草稿`,
       data: { saved, ready, draft, items: updatedItems },
+    });
+  });
+
+  app.post('/1688/listing-drafts', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const body = request.body as { ids?: string[] };
+    const ids = Array.from(new Set((body?.ids || []).map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 100);
+    if (!ids.length) return reply.status(400).send({ code: 0, msg: '缺少要生成上架草稿的 1688 采集记录' });
+
+    const items = await prisma.supplyGoods.findMany({
+      where: { id: { in: ids }, userId, sourcePlatform: '1688' },
+    });
+    if (items.length !== ids.length) {
+      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在、无权限或不是 1688 采集记录' });
+    }
+
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const draftItems: any[] = [];
+    const blocked: Array<{ id: string; title: string; issues: string[] }> = [];
+
+    for (const id of ids) {
+      const item = byId.get(id)!;
+      const result = buildAlibaba1688OzonListingDraftItems(item);
+      if (result.issues.length) {
+        blocked.push({ id: item.id, title: item.title, issues: result.issues });
+      } else {
+        draftItems.push(...result.items);
+      }
+    }
+
+    if (blocked.length) {
+      return reply.status(400).send({
+        code: 0,
+        msg: `${blocked.length} 条 1688 采集记录尚未完成上架准备`,
+        data: { items: draftItems, blocked },
+      });
+    }
+
+    return reply.send({
+      code: 1,
+      msg: `已生成 ${draftItems.length} 条 1688 Ozon 上架草稿`,
+      data: { items: draftItems },
     });
   });
 

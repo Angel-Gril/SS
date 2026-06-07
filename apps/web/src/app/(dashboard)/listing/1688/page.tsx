@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, ExternalLink, Loader2, Save, Tags } from 'lucide-react';
+import { ArrowLeft, ExternalLink, FileText, Loader2, Save, Tags } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -97,6 +97,16 @@ interface PriceSuggestion {
   cnyPerRub?: number | null;
   recommendedTargetPriceCny?: number | null;
   recommendationSource?: string | null;
+}
+
+interface Alibaba1688OzonListingDraftItem {
+  offerId: string;
+  title: string;
+  categoryId: number;
+  typeId: number;
+  price: number;
+  images: string[];
+  sourceTrace?: Record<string, unknown>;
 }
 
 type PreparationFilter = 'all' | 'draft' | 'ready';
@@ -286,6 +296,7 @@ export default function Alibaba1688ListingPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [drafting, setDrafting] = useState(false);
   const [items, setItems] = useState<Alibaba1688ListingItem[]>([]);
   const [preparationFilter, setPreparationFilter] = useState<PreparationFilter>('all');
   const [dirtyItemIds, setDirtyItemIds] = useState<Set<string>>(new Set());
@@ -429,6 +440,37 @@ export default function Alibaba1688ListingPage() {
     }
   }
 
+  async function handleBuildListingDrafts() {
+    if (dirtyItemIds.size) {
+      toast({ title: '请先保存修改，再生成上架草稿', variant: 'destructive' });
+      return;
+    }
+    const readyIds = items
+      .filter((item) => currentPreparationStatus(item) === 'ready')
+      .map((item) => item.id);
+    if (!readyIds.length) {
+      toast({ title: '没有准备完成的 1688 记录可生成上架草稿', variant: 'destructive' });
+      return;
+    }
+
+    setDrafting(true);
+    try {
+      const res = await api.post<{ items: Alibaba1688OzonListingDraftItem[] }>('/api/collect/1688/listing-drafts', {
+        ids: readyIds,
+      });
+
+      if (res.code === 1) {
+        toast({ title: res.msg || `已生成 ${res.data?.items?.length || 0} 条上架草稿` });
+      } else {
+        toast({ title: res.msg || '生成上架草稿失败', variant: 'destructive' });
+      }
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '生成上架草稿失败', variant: 'destructive' });
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -467,6 +509,10 @@ export default function Alibaba1688ListingPage() {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={applySuggestedPricesToEmpty} disabled={!items.length}>
             填入当前空售价
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleBuildListingDrafts} disabled={drafting || saving || !items.length}>
+            {drafting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <FileText className="h-4 w-4 mr-1" />}
+            生成上架草稿
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push('/collect/1688')}>
             <ArrowLeft className="h-4 w-4 mr-1" />返回采集

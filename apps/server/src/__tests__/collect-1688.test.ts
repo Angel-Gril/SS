@@ -3,6 +3,7 @@ import {
   buildAlibaba1688PriceSuggestion,
   buildAlibaba1688CollectRecord,
   buildAlibaba1688ListingPrefill,
+  buildAlibaba1688OzonListingDraftItems,
   buildAlibaba1688PreparationMetadata,
   exposeSupplyGoodsMetadata,
   getAlibaba1688SourceDataIssues,
@@ -656,5 +657,93 @@ describe('1688 collect helpers', () => {
       categoryMappingStatus: 'manual_ready',
     });
     expect(metadata).not.toHaveProperty('listingPreparationIssues');
+  });
+
+  it('keeps 1688 records out of Ozon listing drafts until preparation is ready', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-draft',
+      title: '男士运动鞋',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/ready.jpg'],
+      variants: [],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        categoryMappingStatus: 'deferred_until_listing',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.issues).toEqual(['missing_ozon_category_id', 'missing_ozon_type_id']);
+  });
+
+  it('builds Ozon listing draft items from ready 1688 preparation while preserving SKU trace', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-ready',
+      title: '男士运动鞋',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'sku-red-42',
+          sourceSkuId: 'sku-red-42',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-42',
+          ozonProductId: '123456789',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+          images: ['https://img.example.com/sku-red.jpg'],
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        description: 'Описание товара',
+        grossWeightGrams: 650,
+        lengthMm: 320,
+        widthMm: 220,
+        heightMm: 110,
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(result.issues).toEqual([]);
+    expect(result.items).toEqual([
+      {
+        offerId: 'ss1688-734567890123-sku-red-42',
+        title: 'Мужские кроссовки',
+        description: 'Описание товара',
+        categoryId: 17031663,
+        typeId: 971234,
+        price: 199,
+        oldPrice: 239,
+        currency: 'CNY',
+        stock: 120,
+        images: ['https://img.example.com/sku-red.jpg', 'https://img.example.com/base.jpg'],
+        weight: 650,
+        height: 110,
+        depth: 320,
+        width: 220,
+        sourceTrace: {
+          supplyGoodsId: 'collect-1688-ready',
+          sourcePlatform: '1688',
+          sourceProductId: '734567890123',
+          sourceSkuId: 'sku-red-42',
+          ozonSku: 'ozon-sku-42',
+          ozonProductId: '123456789',
+        },
+      },
+    ]);
   });
 });
