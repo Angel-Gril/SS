@@ -409,4 +409,97 @@ describe('1688 collect route', () => {
     });
     expect(supplyGoodsMock.update).not.toHaveBeenCalled();
   });
+
+  it('rejects listing draft generation when selected records include Ozon collect records', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-ready',
+        userId: 'user-1',
+        title: '淘宝货源',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        images: ['https://img.example.com/supply-main.jpg'],
+        variants: [
+          {
+            sku: 'tb-red',
+            sourceSkuId: 'tb-red',
+            sourcePlatform: 'taobao',
+            attrs: { color: 'red' },
+            stock: 10,
+          },
+        ],
+        purchasePrice: { toString: () => '21.90' },
+        currency: 'CNY',
+        metadata: {
+          sourceKind: 'alibaba1688',
+          preparedTitleRu: 'Товар Taobao',
+          targetPriceCny: '129',
+          ozonCategoryId: 17028922,
+          ozonTypeId: 93410,
+          description: 'Описание товара',
+          attributes: { Материал: 'текстиль' },
+          listingPreparationStatus: 'ready',
+        },
+        createdAt: new Date('2026-06-07T12:00:00.000Z'),
+      },
+      {
+        id: 'ozon-record',
+        userId: 'user-1',
+        title: 'Ozon 采集记录',
+        sourcePlatform: 'ozon',
+        sourceProductId: '123456789',
+        images: ['https://img.example.com/ozon-main.jpg'],
+        variants: [
+          {
+            sku: 'ozon-red',
+            sourceSkuId: 'ozon-red',
+            sourcePlatform: 'ozon',
+            attrs: { color: 'red' },
+            stock: 10,
+          },
+        ],
+        purchasePrice: { toString: () => '1990' },
+        currency: 'RUB',
+        metadata: {
+          sourceKind: 'ozon',
+          preparedTitleRu: 'Товар Ozon',
+          targetPriceCny: '199',
+          ozonCategoryId: 17028922,
+          ozonTypeId: 93410,
+          description: 'Описание товара',
+          attributes: { Материал: 'текстиль' },
+          listingPreparationStatus: 'ready',
+        },
+        createdAt: new Date('2026-06-07T12:00:00.000Z'),
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688/listing-drafts',
+      payload: {
+        ids: ['supply-ready', 'ozon-record'],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '只能选择货源采集记录生成货源 Ozon 上架草稿',
+      data: {
+        invalid: [
+          {
+            id: 'ozon-record',
+            title: 'Ozon 采集记录',
+            sourcePlatform: 'ozon',
+          },
+        ],
+      },
+    });
+  });
 });

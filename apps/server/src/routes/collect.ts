@@ -1758,10 +1758,24 @@ export async function collectRoutes(app: FastifyInstance) {
     if (!ids.length) return reply.status(400).send({ code: 0, msg: '缺少要生成上架草稿的货源采集记录' });
 
     const items = await prisma.supplyGoods.findMany({
-      where: { id: { in: ids }, userId, sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST } },
+      where: { id: { in: ids }, userId },
     });
     if (items.length !== ids.length) {
-      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在、无权限或不是货源采集记录' });
+      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在或无权限' });
+    }
+    const invalid = items.filter((item) => !isDomesticSupplySourcePlatform(item.sourcePlatform));
+    if (invalid.length) {
+      return reply.status(400).send({
+        code: 0,
+        msg: '只能选择货源采集记录生成货源 Ozon 上架草稿',
+        data: {
+          invalid: invalid.map((item) => ({
+            id: item.id,
+            title: item.title,
+            sourcePlatform: item.sourcePlatform,
+          })),
+        },
+      });
     }
 
     const byId = new Map(items.map((item) => [item.id, item]));
