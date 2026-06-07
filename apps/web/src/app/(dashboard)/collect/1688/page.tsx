@@ -23,11 +23,17 @@ interface Collected1688Item {
   createdAt: string;
   metadata?: {
     supplierName?: string | null;
+    supplierLocation?: string | null;
+    supplierYears?: number | string | null;
+    monthlySales?: number | string | null;
     categoryPath?: string | null;
+    grossWeightGrams?: number | string | null;
     lengthMm?: number | string | null;
     widthMm?: number | string | null;
     heightMm?: number | string | null;
     dimensionsText?: string | null;
+    minOrderQty?: number | string | null;
+    logisticsText?: string | null;
     attributes?: Record<string, string>;
     skuCount?: number;
     categoryMappingStatus?: string;
@@ -59,7 +65,17 @@ interface FormState {
   priceText: string;
   imageText: string;
   supplierName: string;
+  supplierLocation: string;
+  supplierYears: string;
+  monthlySales: string;
   categoryPath: string;
+  grossWeightGrams: string;
+  lengthMm: string;
+  widthMm: string;
+  heightMm: string;
+  dimensionsText: string;
+  minOrderQty: string;
+  logisticsText: string;
   attributesText: string;
   skuText: string;
   notes: string;
@@ -71,7 +87,17 @@ const emptyForm: FormState = {
   priceText: '',
   imageText: '',
   supplierName: '',
+  supplierLocation: '',
+  supplierYears: '',
+  monthlySales: '',
   categoryPath: '',
+  grossWeightGrams: '',
+  lengthMm: '',
+  widthMm: '',
+  heightMm: '',
+  dimensionsText: '',
+  minOrderQty: '',
+  logisticsText: '',
   attributesText: '',
   skuText: '',
   notes: '',
@@ -97,6 +123,15 @@ function parseSkuText(text: string) {
 function attributePreview(metadata?: Collected1688Item['metadata']) {
   const attrs = metadata?.attributes || {};
   return Object.entries(attrs).slice(0, 4).map(([key, value]) => `${key}: ${value}`).join(' / ');
+}
+
+function supplierText(metadata?: Collected1688Item['metadata']) {
+  if (!metadata) return '';
+  return [
+    metadata.supplierName,
+    metadata.supplierLocation,
+    metadata.supplierYears ? `${metadata.supplierYears}年` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function preparationStatusLabel(status?: string | null) {
@@ -140,6 +175,16 @@ function sourceDimensionsText(metadata?: Collected1688Item['metadata']) {
     return `货源尺寸: ${Math.round(length)} x ${Math.round(width)} x ${Math.round(height)} mm`;
   }
   return metadata.dimensionsText ? `货源尺寸: ${metadata.dimensionsText}` : '';
+}
+
+function sourcePackageText(metadata?: Collected1688Item['metadata']) {
+  if (!metadata) return '';
+  const parts = [
+    metadata.grossWeightGrams ? `毛重 ${metadata.grossWeightGrams}g` : '',
+    metadata.minOrderQty ? `起订 ${metadata.minOrderQty}` : '',
+    metadata.monthlySales ? `月销 ${metadata.monthlySales}` : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '';
 }
 
 export default function Collect1688Page() {
@@ -210,7 +255,17 @@ export default function Collect1688Page() {
       priceText: form.priceText || undefined,
       imageText: form.imageText || undefined,
       supplierName: form.supplierName || undefined,
+      supplierLocation: form.supplierLocation || undefined,
+      supplierYears: form.supplierYears || undefined,
+      monthlySales: form.monthlySales || undefined,
       categoryPath: form.categoryPath || undefined,
+      grossWeightGrams: form.grossWeightGrams || undefined,
+      lengthMm: form.lengthMm || undefined,
+      widthMm: form.widthMm || undefined,
+      heightMm: form.heightMm || undefined,
+      dimensionsText: form.dimensionsText || undefined,
+      minOrderQty: form.minOrderQty || undefined,
+      logisticsText: form.logisticsText || undefined,
       attributesText: form.attributesText || undefined,
       skuItems: form.skuText.trim() ? parseSkuText(form.skuText) : undefined,
       notes: form.notes || undefined,
@@ -277,9 +332,52 @@ export default function Collect1688Page() {
               <Label className="text-xs">供应商</Label>
               <Input value={form.supplierName} onChange={(e) => update('supplierName', e.target.value)} placeholder="工厂/店铺名称" />
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs">供应商地区</Label>
+              <Input value={form.supplierLocation} onChange={(e) => update('supplierLocation', e.target.value)} placeholder="浙江 金华" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">经营年限</Label>
+              <Input value={form.supplierYears} onChange={(e) => update('supplierYears', e.target.value)} placeholder="6" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">月销量</Label>
+              <Input value={form.monthlySales} onChange={(e) => update('monthlySales', e.target.value)} placeholder="3000" />
+            </div>
             <div className="space-y-1 md:col-span-2">
               <Label className="text-xs">1688 类目路径</Label>
               <Input value={form.categoryPath} onChange={(e) => update('categoryPath', e.target.value)} placeholder="鞋类 > 男鞋 > 运动鞋" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">毛重(g)</Label>
+              <Input value={form.grossWeightGrams} onChange={(e) => update('grossWeightGrams', e.target.value)} placeholder="650" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">长(mm)</Label>
+              <Input value={form.lengthMm} onChange={(e) => update('lengthMm', e.target.value)} placeholder="320" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">宽(mm)</Label>
+              <Input value={form.widthMm} onChange={(e) => update('widthMm', e.target.value)} placeholder="220" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">高(mm)</Label>
+              <Input value={form.heightMm} onChange={(e) => update('heightMm', e.target.value)} placeholder="110" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">起订量</Label>
+              <Input value={form.minOrderQty} onChange={(e) => update('minOrderQty', e.target.value)} placeholder="2" />
+            </div>
+            <div className="space-y-1 md:col-span-3">
+              <Label className="text-xs">尺寸原文</Label>
+              <Input value={form.dimensionsText} onChange={(e) => update('dimensionsText', e.target.value)} placeholder="32x22x11cm" />
+            </div>
+            <div className="space-y-1 md:col-span-4">
+              <Label className="text-xs">物流说明</Label>
+              <Input value={form.logisticsText} onChange={(e) => update('logisticsText', e.target.value)} placeholder="广东发货，快递费按地区计算" />
             </div>
           </div>
 
@@ -385,9 +483,19 @@ export default function Collect1688Page() {
                       <span>SKU: {item.metadata?.skuCount || 0}</span>
                       <span>{formatDate(item.createdAt)}</span>
                     </div>
-                    {(item.metadata?.supplierName || item.metadata?.categoryPath || attributePreview(item.metadata)) && (
+                    {(supplierText(item.metadata) || item.metadata?.categoryPath || attributePreview(item.metadata)) && (
                       <div className="text-xs text-muted-foreground truncate">
-                        {[item.metadata?.supplierName, item.metadata?.categoryPath, attributePreview(item.metadata)].filter(Boolean).join(' · ')}
+                        {[supplierText(item.metadata), item.metadata?.categoryPath, attributePreview(item.metadata)].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                    {sourcePackageText(item.metadata) && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        {sourcePackageText(item.metadata)}
+                      </div>
+                    )}
+                    {item.metadata?.logisticsText && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        物流: {item.metadata.logisticsText}
                       </div>
                     )}
                     {item.metadata?.ozonPriceCheckContext && (

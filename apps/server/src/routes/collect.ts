@@ -383,11 +383,17 @@ export function buildAlibaba1688ListingPrefill(item: {
     variants,
     notes: item.notes || '',
     supplierName: meta.supplierName || null,
+    supplierLocation: meta.supplierLocation || null,
+    supplierYears: Number.isFinite(Number(meta.supplierYears)) ? Number(meta.supplierYears) : null,
+    monthlySales: meta.monthlySales ?? null,
     categoryPath: meta.categoryPath || null,
+    grossWeightGrams: Number.isFinite(Number(meta.grossWeightGrams)) ? Number(meta.grossWeightGrams) : null,
     lengthMm: Number.isFinite(Number(meta.lengthMm)) ? Number(meta.lengthMm) : null,
     widthMm: Number.isFinite(Number(meta.widthMm)) ? Number(meta.widthMm) : null,
     heightMm: Number.isFinite(Number(meta.heightMm)) ? Number(meta.heightMm) : null,
     dimensionsText: meta.dimensionsText || '',
+    minOrderQty: Number.isFinite(Number(meta.minOrderQty)) ? Number(meta.minOrderQty) : null,
+    logisticsText: meta.logisticsText || '',
     attributes: meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
       ? meta.attributes
       : {},

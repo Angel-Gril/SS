@@ -23,11 +23,17 @@ interface Alibaba1688ListingItem {
   variants: Array<{ sku?: string; attrs?: Record<string, string>; price?: string | number | null; stock?: number | null }>;
   notes: string;
   supplierName: string | null;
+  supplierLocation: string | null;
+  supplierYears: number | string | null;
+  monthlySales: number | string | null;
   categoryPath: string | null;
+  grossWeightGrams: number | string | null;
   lengthMm: number | string | null;
   widthMm: number | string | null;
   heightMm: number | string | null;
   dimensionsText: string | null;
+  minOrderQty: number | string | null;
+  logisticsText: string | null;
   attributes: Record<string, string>;
   skuCount: number;
   categoryMappingStatus: string;
@@ -60,6 +66,14 @@ const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
+}
+
+function supplierText(item: Alibaba1688ListingItem) {
+  return [
+    item.supplierName,
+    item.supplierLocation,
+    item.supplierYears ? `${item.supplierYears}年` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function priceCheckText(context?: OzonPriceCheckContext | null) {
@@ -115,6 +129,15 @@ function sourceDimensionsText(item: Alibaba1688ListingItem) {
     return `货源尺寸: ${Math.round(length)} x ${Math.round(width)} x ${Math.round(height)} mm`;
   }
   return item.dimensionsText ? `货源尺寸: ${item.dimensionsText}` : '';
+}
+
+function sourcePackageText(item: Alibaba1688ListingItem) {
+  const parts = [
+    item.grossWeightGrams ? `毛重 ${item.grossWeightGrams}g` : '',
+    item.minOrderQty ? `起订 ${item.minOrderQty}` : '',
+    item.monthlySales ? `月销 ${item.monthlySales}` : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '';
 }
 
 export default function Alibaba1688ListingPage() {
@@ -243,8 +266,18 @@ export default function Alibaba1688ListingPage() {
                   <span>{formatDate(item.createdAt)}</span>
                 </div>
                 <div className="text-muted-foreground truncate">
-                  {[item.supplierName, item.categoryPath, attrsText(item.attributes)].filter(Boolean).join(' · ') || '暂无供应商/类目/属性信息'}
+                  {[supplierText(item), item.categoryPath, attrsText(item.attributes)].filter(Boolean).join(' · ') || '暂无供应商/类目/属性信息'}
                 </div>
+                {sourcePackageText(item) && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    {sourcePackageText(item)}
+                  </div>
+                )}
+                {item.logisticsText && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    物流: {item.logisticsText}
+                  </div>
+                )}
                 {item.ozonPriceCheckContext && (
                   <div className="text-xs text-muted-foreground truncate">
                     核价来源: {priceCheckText(item.ozonPriceCheckContext)}
