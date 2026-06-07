@@ -298,6 +298,34 @@ export function buildAlibaba1688ListingPrefill(item: {
   };
 }
 
+export function buildAlibaba1688PreparationMetadata(
+  metadata: unknown,
+  row: {
+    preparedTitleRu?: string | null;
+    targetPriceCny?: string | number | null;
+    listingNotes?: string | null;
+  },
+) {
+  const meta: Record<string, any> = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...(metadata as Record<string, any>) }
+    : {};
+  const title = String(row.preparedTitleRu || '').trim();
+  const notes = String(row.listingNotes || '').trim();
+  const targetPrice = Number(row.targetPriceCny);
+
+  if (title) meta.preparedTitleRu = title;
+  else delete meta.preparedTitleRu;
+  if (Number.isFinite(targetPrice) && targetPrice > 0) meta.targetPriceCny = String(targetPrice);
+  else delete meta.targetPriceCny;
+  if (notes) meta.listingNotes = notes;
+  else delete meta.listingNotes;
+
+  meta.listingPreparationStatus = 'draft';
+  meta.categoryMappingStatus = meta.categoryMappingStatus || 'deferred_until_listing';
+
+  return meta;
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -571,19 +599,7 @@ export async function collectRoutes(app: FastifyInstance) {
     let saved = 0;
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
-
-      const meta: any = (item.metadata as any) || {};
-      const title = String(row.preparedTitleRu || '').trim();
-      const notes = String(row.listingNotes || '').trim();
-      const targetPrice = Number(row.targetPriceCny);
-      if (title) meta.preparedTitleRu = title;
-      else delete meta.preparedTitleRu;
-      if (Number.isFinite(targetPrice) && targetPrice > 0) meta.targetPriceCny = String(targetPrice);
-      else delete meta.targetPriceCny;
-      if (notes) meta.listingNotes = notes;
-      else delete meta.listingNotes;
-      meta.listingPreparationStatus = 'draft';
-      meta.categoryMappingStatus = meta.categoryMappingStatus || 'deferred_until_listing';
+      const meta = buildAlibaba1688PreparationMetadata(item.metadata, row);
 
       await prisma.supplyGoods.update({
         where: { id: item.id },

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildAlibaba1688CollectRecord, buildAlibaba1688ListingPrefill, parseAttributeText } from '../routes/collect.js';
+import {
+  buildAlibaba1688CollectRecord,
+  buildAlibaba1688ListingPrefill,
+  buildAlibaba1688PreparationMetadata,
+  parseAttributeText,
+} from '../routes/collect.js';
 
 describe('1688 collect helpers', () => {
   it('parses attribute text into a record', () => {
@@ -97,5 +102,56 @@ describe('1688 collect helpers', () => {
       listingNotes: '',
       createdAt: '2026-06-07T12:00:00.000Z',
     });
+  });
+
+  it('saves 1688 listing preparation metadata without executing category mapping', () => {
+    const metadata = buildAlibaba1688PreparationMetadata(
+      {
+        sourceKind: 'alibaba1688',
+        offerId: '734567890123',
+        categoryPath: '鞋类 > 男鞋 > 运动鞋',
+        categoryMappingStatus: 'deferred_until_listing',
+        listingPreparationStatus: 'collected_only',
+      },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199.90',
+        listingNotes: '图片需要处理',
+      },
+    );
+
+    expect(metadata).toMatchObject({
+      sourceKind: 'alibaba1688',
+      offerId: '734567890123',
+      categoryPath: '鞋类 > 男鞋 > 运动鞋',
+      preparedTitleRu: 'Мужские кроссовки',
+      targetPriceCny: '199.9',
+      listingNotes: '图片需要处理',
+      categoryMappingStatus: 'deferred_until_listing',
+      listingPreparationStatus: 'draft',
+    });
+  });
+
+  it('clears empty 1688 preparation draft fields while preserving deferred mapping state', () => {
+    const metadata = buildAlibaba1688PreparationMetadata(
+      {
+        preparedTitleRu: 'old title',
+        targetPriceCny: '188',
+        listingNotes: 'old note',
+      },
+      {
+        preparedTitleRu: '   ',
+        targetPriceCny: 0,
+        listingNotes: '',
+      },
+    );
+
+    expect(metadata).toMatchObject({
+      categoryMappingStatus: 'deferred_until_listing',
+      listingPreparationStatus: 'draft',
+    });
+    expect(metadata).not.toHaveProperty('preparedTitleRu');
+    expect(metadata).not.toHaveProperty('targetPriceCny');
+    expect(metadata).not.toHaveProperty('listingNotes');
   });
 });
