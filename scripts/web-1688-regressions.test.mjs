@@ -242,3 +242,18 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);
   assert.doesNotMatch(collectPage, /sourcePlatform\s*===\s*'1688'/);
 });
+
+test('supply goods management accepts all domestic supply platform labels', () => {
+  const supplyRoute = readRepoFile('apps', 'server', 'src', 'routes', 'supply.ts');
+  const supplyPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'supply', 'goods', 'page.tsx');
+
+  for (const platform of ['1688', 'pinduoduo', 'pdd', 'taobao', 'tmall', 'jd', 'other']) {
+    assert.match(supplyRoute, new RegExp(`'${platform}'`));
+    assert.match(supplyPage, new RegExp(`${platform}:|'${platform}'`));
+    assert.match(supplyPage, new RegExp(`<option value="${platform}">`));
+  }
+
+  assert.match(supplyPage, /tmall:\s*'天猫'/);
+  assert.match(supplyPage, /jd:\s*'京东'/);
+  assert.match(supplyPage, /pdd:\s*'拼多多'/);
+});

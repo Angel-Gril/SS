@@ -6,7 +6,7 @@ import { prisma } from '../lib/prisma.js';
 const createSchema = z.object({
   title: z.string().min(1).max(500),
   sourceUrl: z.string().url().optional().or(z.literal('')),
-  sourcePlatform: z.enum(['1688', 'pinduoduo', 'taobao', 'other']).optional(),
+  sourcePlatform: z.enum(['1688', 'pinduoduo', 'pdd', 'taobao', 'tmall', 'jd', 'other']).optional(),
   supplier: z.string().optional(),
   purchasePrice: z.coerce.number().min(0).optional(),
   currency: z.string().default('CNY'),

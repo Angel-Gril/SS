@@ -28,7 +28,13 @@ interface SupplyItem {
 }
 
 const PLATFORM_LABELS: Record<string, string> = {
-  '1688': '1688', pinduoduo: '拼多多', taobao: '淘宝', other: '其他',
+  '1688': '1688',
+  pinduoduo: '拼多多',
+  pdd: '拼多多',
+  taobao: '淘宝',
+  tmall: '天猫',
+  jd: '京东',
+  other: '其他',
 };
 
 export default function SupplyGoodsPage() {
@@ -198,7 +204,10 @@ function CreateSupplyDialog({ open, onClose, onCreated }: { open: boolean; onClo
               <select value={sourcePlatform} onChange={(e) => setSourcePlatform(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
                 <option value="1688">1688</option>
                 <option value="pinduoduo">拼多多</option>
+                <option value="pdd">拼多多(PDD)</option>
                 <option value="taobao">淘宝</option>
+                <option value="tmall">天猫</option>
+                <option value="jd">京东</option>
                 <option value="other">其他</option>
               </select>
             </div>
