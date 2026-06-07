@@ -10,6 +10,8 @@ import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const ALIBABA_1688_DESCRIPTION_LIMIT = 6000;
+export const DOMESTIC_SUPPLY_SOURCE_PLATFORMS = new Set(['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']);
+export const DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST = Array.from(DOMESTIC_SUPPLY_SOURCE_PLATFORMS);
 
 type OzonPriceCheckContext = {
   title?: string | null;
@@ -154,6 +156,11 @@ function normalizeProductId(value: unknown): string | null {
 
 export function getSupplyGoodsLookupId(item: { sourceProductId?: string | null; sku?: string | null }): string | null {
   return normalizeProductId(item.sourceProductId) || normalizeProductId(item.sku);
+}
+
+export function isDomesticSupplySourcePlatform(value: unknown): boolean {
+  const sourcePlatform = compactString(value)?.toLowerCase();
+  return !!sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform);
 }
 
 export function buildCollectSnapshotWhere(userId: string, skus: string[], sourcePlatform?: unknown) {
@@ -354,7 +361,7 @@ export function exposeSupplyGoodsMetadata(
   },
 ) {
   const isMetadataObject = !!metadata && typeof metadata === 'object' && !Array.isArray(metadata);
-  if (!isMetadataObject && source?.sourcePlatform !== '1688') return null;
+  if (!isMetadataObject && !isDomesticSupplySourcePlatform(source?.sourcePlatform)) return null;
   const meta = isMetadataObject ? { ...(metadata as Record<string, any>) } : {};
   const purchasePrice = source?.purchasePrice;
   const purchaseCurrency = source?.purchaseCurrency;
@@ -362,15 +369,15 @@ export function exposeSupplyGoodsMetadata(
   if (ozonPriceCheckContext) meta.ozonPriceCheckContext = ozonPriceCheckContext;
   const priceCheckEstimate = buildPriceCheckEstimate(ozonPriceCheckContext, purchasePrice, purchaseCurrency);
   if (priceCheckEstimate) meta.priceCheckEstimate = priceCheckEstimate;
-  if (source?.sourcePlatform === '1688' && !Array.isArray(meta.sourceDataIssues)) {
+  if (isDomesticSupplySourcePlatform(source?.sourcePlatform) && !Array.isArray(meta.sourceDataIssues)) {
     const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
       ? meta.attributes as Record<string, unknown>
       : {};
     meta.sourceKind = meta.sourceKind || 'alibaba1688';
     meta.sourceDataIssues = getAlibaba1688SourceDataIssues({
-      images: Array.isArray(source.images) ? source.images : [],
+      images: Array.isArray(source?.images) ? source.images : [],
       priceText: purchasePrice,
-      skuItems: Array.isArray(source.variants) ? source.variants : [],
+      skuItems: Array.isArray(source?.variants) ? source.variants : [],
       description: meta.description,
       attributes,
     });
@@ -1278,7 +1285,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
     return reply.send({
       code: 1,
-      msg: '1688 商品已保存到采集记录，类目映射将在上架时处理',
+      msg: '货源商品已保存到采集记录，类目映射将在上架时处理',
       data: { id: item.id },
     });
   });
@@ -1289,7 +1296,7 @@ export async function collectRoutes(app: FastifyInstance) {
     const ids = Array.from(new Set((body?.ids || []).map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 100);
     if (!ids.length) {
       const items = await prisma.supplyGoods.findMany({
-        where: { userId, sourcePlatform: '1688' },
+        where: { userId, sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST } },
         orderBy: { createdAt: 'desc' },
         take: 20,
       });
@@ -1307,9 +1314,9 @@ export async function collectRoutes(app: FastifyInstance) {
     if (items.length !== ids.length) {
       return reply.status(404).send({ code: 0, msg: '部分采集记录不存在或无权限' });
     }
-    const invalid = items.filter((it) => it.sourcePlatform !== '1688');
+    const invalid = items.filter((it) => !isDomesticSupplySourcePlatform(it.sourcePlatform));
     if (invalid.length) {
-      return reply.status(400).send({ code: 0, msg: '只能选择 1688 采集记录进入 1688 上架准备' });
+      return reply.status(400).send({ code: 0, msg: '只能选择货源采集记录进入 1688 上架准备' });
     }
 
     const byId = new Map(items.map((it) => [it.id, it]));
@@ -1348,8 +1355,8 @@ export async function collectRoutes(app: FastifyInstance) {
     if (items.length !== ids.length) {
       return reply.status(404).send({ code: 0, msg: '部分采集记录不存在或无权限' });
     }
-    if (items.some((item) => item.sourcePlatform !== '1688')) {
-      return reply.status(400).send({ code: 0, msg: '只能保存 1688 采集记录的上架准备草稿' });
+    if (items.some((item) => !isDomesticSupplySourcePlatform(item.sourcePlatform))) {
+      return reply.status(400).send({ code: 0, msg: '只能保存货源采集记录的上架准备草稿' });
     }
 
     const byId = new Map(items.map((item) => [item.id, item]));
@@ -1400,7 +1407,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
     return reply.send({
       code: 1,
-      msg: `已保存 ${saved} 条 1688 上架准备，${ready} 条准备完成，${draft} 条仍为草稿`,
+      msg: `已保存 ${saved} 条货源上架准备，${ready} 条准备完成，${draft} 条仍为草稿`,
       data: { saved, ready, draft, items: updatedItems },
     });
   });
@@ -1409,13 +1416,13 @@ export async function collectRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const body = request.body as { ids?: string[] };
     const ids = Array.from(new Set((body?.ids || []).map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 100);
-    if (!ids.length) return reply.status(400).send({ code: 0, msg: '缺少要生成上架草稿的 1688 采集记录' });
+    if (!ids.length) return reply.status(400).send({ code: 0, msg: '缺少要生成上架草稿的货源采集记录' });
 
     const items = await prisma.supplyGoods.findMany({
-      where: { id: { in: ids }, userId, sourcePlatform: '1688' },
+      where: { id: { in: ids }, userId, sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST } },
     });
     if (items.length !== ids.length) {
-      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在、无权限或不是 1688 采集记录' });
+      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在、无权限或不是货源采集记录' });
     }
 
     const byId = new Map(items.map((item) => [item.id, item]));
@@ -1437,15 +1444,15 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.status(400).send({
         code: 0,
         msg: hasActiveListing
-          ? `${blocked.length} 条 1688 采集记录已提交、导入中或已上架成功，不能重复生成草稿`
-          : `${blocked.length} 条 1688 采集记录尚未完成上架准备`,
+          ? `${blocked.length} 条货源采集记录已提交、导入中或已上架成功，不能重复生成草稿`
+          : `${blocked.length} 条货源采集记录尚未完成上架准备`,
         data: { items: draftItems, blocked },
       });
     }
 
     return reply.send({
       code: 1,
-      msg: `已生成 ${draftItems.length} 条 1688 Ozon 上架草稿`,
+      msg: `已生成 ${draftItems.length} 条货源 Ozon 上架草稿`,
       data: { items: draftItems },
     });
   });
@@ -1823,12 +1830,12 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.send({ code: 0, msg: '未找到有效商品' });
     }
 
-    const alibabaItems = items.filter((it) => it.sourcePlatform === '1688');
+    const alibabaItems = items.filter((it) => isDomesticSupplySourcePlatform(it.sourcePlatform));
     if (alibabaItems.length) {
       const sample = alibabaItems.slice(0, 3).map((it) => it.title).join('、');
       return reply.status(400).send({
         code: 0,
-        msg: `1688 采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖/复制接口。请先进入 1688 上架准备流程完成翻译、类目映射和属性生成：${sample}`,
+        msg: `货源采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖/复制接口。请先进入 1688 上架准备流程完成翻译、类目映射和属性生成：${sample}`,
       });
     }
 

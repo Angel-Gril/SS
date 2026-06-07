@@ -8,6 +8,7 @@ import {
   exposeSupplyGoodsMetadata,
   getAlibaba1688SourceDataIssues,
   getAlibaba1688PreparationIssues,
+  isDomesticSupplySourcePlatform,
   normalizeAlibaba1688PreparationVariants,
   normalizeAlibaba1688PreparationImages,
   parseAttributeText,
@@ -15,6 +16,23 @@ import {
 } from '../routes/collect.js';
 
 describe('1688 collect helpers', () => {
+  it('recognizes domestic supply platforms that carry source platform SKUs', () => {
+    expect(['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'].map(isDomesticSupplySourcePlatform)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(['ozon', '', null, undefined].map(isDomesticSupplySourcePlatform)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
   it('parses attribute text into a record', () => {
     expect(parseAttributeText('材质：棉\n风格: 休闲\n无效行')).toEqual({
       材质: '棉',
@@ -283,13 +301,20 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
-  it('infers 1688 source data issues for old collect list records', () => {
-    const metadata = exposeSupplyGoodsMetadata(null, {
-      sourcePlatform: '1688',
+  it('infers source data issues for old domestic supply collect list records', () => {
+    const source = {
       images: [],
       purchasePrice: null,
       purchaseCurrency: 'CNY',
       variants: [],
+    };
+    const metadata = exposeSupplyGoodsMetadata(null, {
+      ...source,
+      sourcePlatform: '1688',
+    });
+    const taobaoMetadata = exposeSupplyGoodsMetadata(null, {
+      ...source,
+      sourcePlatform: 'taobao',
     });
 
     expect(metadata).toMatchObject({
@@ -302,6 +327,7 @@ describe('1688 collect helpers', () => {
         'missing_attributes',
       ],
     });
+    expect(taobaoMetadata).toMatchObject(metadata as Record<string, unknown>);
   });
 
   it('serializes 1688 collected records for listing preparation without executing mapping', () => {

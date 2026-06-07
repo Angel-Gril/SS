@@ -48,6 +48,12 @@ function hasCjkText(value?: string | null) {
   return /[\u3400-\u9fff]/.test(String(value || ''));
 }
 
+const DOMESTIC_SUPPLY_SOURCE_PLATFORMS = new Set(['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']);
+
+function isDomesticSupplySourcePlatform(sourcePlatform?: string | null) {
+  return !!sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform.toLowerCase());
+}
+
 interface Shop { id: string; name: string; platform: string; }
 
 export default function CollectPage() {
@@ -551,8 +557,8 @@ export default function CollectPage() {
 
   const totalPages = Math.ceil(total / limit);
   const selectedItems = items.filter((i) => selectedIds.has(i.id));
-  const selectedHasAlibaba1688 = selectedItems.some((i) => i.sourcePlatform === '1688');
-  const selectedAllAlibaba1688 = selectedItems.length > 0 && selectedItems.every((i) => i.sourcePlatform === '1688');
+  const selectedHasDomesticSupply = selectedItems.some((i) => isDomesticSupplySourcePlatform(i.sourcePlatform));
+  const selectedAllDomesticSupply = selectedItems.length > 0 && selectedItems.every((i) => isDomesticSupplySourcePlatform(i.sourcePlatform));
 
   return (
     <div className="space-y-4">
@@ -585,7 +591,7 @@ export default function CollectPage() {
                 <ImageIcon className="h-4 w-4 mr-1" />打水印
               </Button>
               <div className="flex items-center gap-2 ml-auto">
-                {selectedAllAlibaba1688 && (
+                {selectedAllDomesticSupply && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -601,8 +607,8 @@ export default function CollectPage() {
                   size="sm"
                   variant="outline"
                   onClick={() => {
-                    if (selectedHasAlibaba1688) {
-                      toast({ title: '1688 记录需要先走 1688 上架准备流程，不能使用 Ozon 改款入口', variant: 'destructive' });
+                    if (selectedHasDomesticSupply) {
+                      toast({ title: '货源记录需要先走 1688 上架准备流程，不能使用 Ozon 改款入口', variant: 'destructive' });
                       return;
                     }
                     handleGoToListing();
@@ -613,8 +619,8 @@ export default function CollectPage() {
                 <Button
                   size="sm"
                   onClick={() => {
-                    if (selectedHasAlibaba1688) {
-                      toast({ title: '1688 记录仅保存货源信息，上架前需要先完成翻译、类目映射和属性生成', variant: 'destructive' });
+                    if (selectedHasDomesticSupply) {
+                      toast({ title: '货源记录仅保存货源信息，上架前需要先完成翻译、类目映射和属性生成', variant: 'destructive' });
                       return;
                     }
                     setShowPublishDialog(true);

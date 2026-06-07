@@ -76,7 +76,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(collectRoute, /app\.post\('\/1688\/listing-drafts'/);
   assert.match(collectRoute, /buildAlibaba1688OzonListingDraftItems\(item\)/);
   assert.match(collectRoute, /sourcePlatform:\s*'1688'/);
-  assert.match(collectRoute, /1688 采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖\/复制接口/);
+  assert.match(collectRoute, /货源采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖\/复制接口/);
   assert.match(listingPage, /Alibaba1688OzonListingDraftItem/);
   assert.match(listingPage, /\/api\/collect\/1688\/listing-drafts/);
   assert.match(listingPage, /生成上架草稿/);
@@ -210,4 +210,35 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobDetail, /来源追踪/);
   assert.match(listingJobDetail, /货源\s*\{sourceValue\(source,\s*'sourceSkuId'\)\}/);
   assert.match(listingJobDetail, /PID\s*\{sourceValue\(source,\s*'ozonProductId'\)\}/);
+});
+
+test('1688 listing preparation routes accept domestic supply source platforms', () => {
+  const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
+
+  assert.match(collectRoute, /DOMESTIC_SUPPLY_SOURCE_PLATFORMS/);
+  assert.match(collectRoute, /function\s+isDomesticSupplySourcePlatform\(value:\s*unknown\)/);
+  assert.match(collectRoute, /where:\s*\{\s*userId,\s*sourcePlatform:\s*\{\s*in:\s*DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST\s*\}\s*\}/);
+  assert.match(collectRoute, /sourcePlatform:\s*\{\s*in:\s*DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST\s*\}/);
+  assert.match(collectRoute, /!isDomesticSupplySourcePlatform\(it\.sourcePlatform\)/);
+  assert.match(collectRoute, /!isDomesticSupplySourcePlatform\(item\.sourcePlatform\)/);
+  assert.match(collectRoute, /货源采集记录/);
+  assert.doesNotMatch(collectRoute, /item\.sourcePlatform\s*!==\s*'1688'/);
+  assert.doesNotMatch(collectRoute, /it\.sourcePlatform\s*!==\s*'1688'/);
+  assert.doesNotMatch(collectRoute, /where:\s*\{\s*id:\s*\{\s*in:\s*ids\s*\},\s*userId,\s*sourcePlatform:\s*'1688'\s*\}/);
+});
+
+test('collect page gates listing actions by domestic supply platforms instead of 1688 only', () => {
+  const collectPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', 'page.tsx');
+
+  assert.match(collectPage, /DOMESTIC_SUPPLY_SOURCE_PLATFORMS/);
+  assert.match(collectPage, /function\s+isDomesticSupplySourcePlatform\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
+  assert.match(collectPage, /selectedHasDomesticSupply/);
+  assert.match(collectPage, /selectedAllDomesticSupply/);
+  assert.match(collectPage, /selectedItems\.some\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);
+  assert.match(collectPage, /selectedItems\.every\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);
+  assert.match(collectPage, /货源记录需要先走 1688 上架准备流程/);
+  assert.match(collectPage, /货源记录仅保存货源信息/);
+  assert.doesNotMatch(collectPage, /selectedHasAlibaba1688/);
+  assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);
+  assert.doesNotMatch(collectPage, /sourcePlatform\s*===\s*'1688'/);
 });
