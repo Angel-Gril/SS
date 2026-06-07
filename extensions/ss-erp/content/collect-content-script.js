@@ -1826,7 +1826,7 @@
     ]
       .filter(Boolean)
       .join(" / ");
-    const price = parseLooseNumber(pickFirstValue(item, ["price", "salePrice", "finalPrice", "discountPrice", "promotionPrice"]));
+    const price = parseDecimalNumber(pickFirstValue(item, ["price", "salePrice", "finalPrice", "discountPrice", "promotionPrice"]));
     const stock = parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"]));
     const minOrderQty = parseLooseNumber(pickFirstValue(item, ["minOrderQty", "minOrderQuantity", "minimumOrderQuantity", "moq", "beginAmount", "startQuantity"]));
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);

@@ -176,6 +176,7 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+pickSkuItemsFromDom/);
   assert.match(collectScript, /pickSkuItemsFromDom\(\)/);
   assert.match(collectScript, /\[data-sku-id\]/);
+  assert.match(collectScript, /const\s+price\s*=\s*parseDecimalNumber\(pickFirstValue\(item,\s*\["price",\s*"salePrice",\s*"finalPrice",\s*"discountPrice",\s*"promotionPrice"\]\)\)/);
   assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
   assert.match(collectScript, /attributes,\s*description,/);
   assert.match(collectScript, /categoryPath/);
