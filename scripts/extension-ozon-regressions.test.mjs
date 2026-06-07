@@ -152,8 +152,10 @@ test('1688 product extraction includes price and category fields for ERP records
 
   assert.match(collectScript, /priceSelectors/);
   assert.match(collectScript, /categorySelectors/);
+  assert.match(collectScript, /descriptionSelectors/);
   assert.match(collectScript, /function\s+pickPrice/);
   assert.match(collectScript, /function\s+pickCategoryPath/);
+  assert.match(collectScript, /function\s+pickDescription/);
   assert.match(collectScript, /function\s+pickSupplierInfo/);
   assert.match(collectScript, /function\s+pickMinOrderQty/);
   assert.match(collectScript, /function\s+pickShippingInfo/);
@@ -166,6 +168,7 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+guessLengthUnit/);
   assert.match(collectScript, /function\s+normalizeSkuAttrs/);
   assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
+  assert.match(collectScript, /attributes,\s*description,/);
   assert.match(collectScript, /categoryPath/);
   assert.match(collectScript, /supplierLocation/);
   assert.match(collectScript, /lengthMm:\s*dimensions\.lengthMm/);

@@ -1132,6 +1132,7 @@
       shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name", "[class*='company']", "[class*='supplier']", "[class*='shop']"],
       priceSelectors: [".price", ".price-text", ".price-range", ".ma-ref-price", "[class*='price']", "[class*='Price']"],
       categorySelectors: [".breadcrumb", ".bread-crumb", ".detail-breadcrumb", "[class*='breadcrumb']", "[class*='crumb']"],
+      descriptionSelectors: ["#desc-lazyload-container", ".detail-description", ".description", "[class*='description']", "[class*='Description']", "[class*='detail-desc']", "[class*='DetailDesc']"],
       shippingSelectors: [".logistics", ".delivery", ".shipping", ".freight", "[class*='logistics']", "[class*='delivery']", "[class*='shipping']", "[class*='freight']"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
     });
@@ -1252,6 +1253,7 @@
     const dimensions = pickDimensions(context.pageText, context.sources);
     const images = pickImages(context.sources);
     const attributes = pickAttributes(context.sources);
+    const description = pickDescription(config.descriptionSelectors, context.sources);
     const priceInfo = pickPrice(config.priceSelectors, context.sources, skuItems);
     const categoryPath = pickCategoryPath(config.categorySelectors, context.sources);
     const minOrderQty = pickMinOrderQty(context.pageText, context.sources, skuItems);
@@ -1287,6 +1289,7 @@
       skuItems,
       images,
       attributes,
+      description,
       debug: {
         pageState: context.pageState,
         productIdEvidence: productId ? "url/dom/json" : "",
@@ -1381,6 +1384,29 @@
     }
 
     return { price: null, priceText: "", currency: "CNY", candidates: candidates.slice(0, 10) };
+  }
+
+  function pickDescription(selectors, sources) {
+    const texts = [];
+    for (const selector of selectors || []) {
+      document.querySelectorAll(selector).forEach((node) => {
+        const text = normalizeWhitespace(node.textContent || "");
+        if (text && text.length >= 20 && text.length <= 6000) {
+          texts.push(text);
+        }
+      });
+      if (texts.length) break;
+    }
+
+    collectStringCandidates(sources, /(description|desc|productDescription|detailDesc|详情|描述|说明)$/i)
+      .slice(0, 20)
+      .forEach((item) => {
+        if (item.value && item.value.length >= 20 && item.value.length <= 6000) {
+          texts.push(item.value);
+        }
+      });
+
+    return Array.from(new Set(texts))[0]?.slice(0, 2000) || "";
   }
 
   function parsePriceValue(input) {
