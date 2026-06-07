@@ -225,6 +225,22 @@ export default function Alibaba1688ListingPage() {
     updateItem(id, 'targetPriceCny', String(number));
   }
 
+  function applySuggestedPricesToEmpty() {
+    let applied = 0;
+    const nextItems = items.map((item) => {
+      if (item.targetPriceCny.trim()) return item;
+      const value = Number(item.priceSuggestion?.recommendedTargetPriceCny);
+      if (!Number.isFinite(value) || value <= 0) return item;
+      applied++;
+      return { ...item, targetPriceCny: String(value) };
+    });
+    setItems(nextItems);
+
+    toast({
+      title: applied ? `已填入 ${applied} 个建议售价` : '没有可填入的空售价',
+    });
+  }
+
   async function handleSave() {
     if (!items.length) return;
     setSaving(true);
@@ -279,6 +295,9 @@ export default function Alibaba1688ListingPage() {
           <p className="text-sm text-muted-foreground mt-1">共 {items.length} 件商品 · 待翻译 · 待类目映射 · 待属性生成</p>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={applySuggestedPricesToEmpty} disabled={!items.length}>
+            填入空售价
+          </Button>
           <Button variant="outline" size="sm" onClick={() => router.push('/collect/1688')}>
             <ArrowLeft className="h-4 w-4 mr-1" />返回采集
           </Button>
