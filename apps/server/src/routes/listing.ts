@@ -113,6 +113,18 @@ function compactImportResultItem(source: Record<string, unknown>, importItem: Li
   };
 }
 
+function prioritizeStoredResultItems(items: Array<ReturnType<typeof compactImportResultItem>>) {
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      rank: isFailedStatus(item.status) ? 0 : isPendingStatus(item.status) ? 1 : 2,
+    }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .slice(0, 100)
+    .map(({ item }) => item);
+}
+
 export function buildAlibaba1688ListingResultUpdates(params: {
   payload: unknown;
   importItems: ListingImportItem[];
@@ -164,7 +176,7 @@ export function buildAlibaba1688ListingResultUpdates(params: {
       failedCount,
       pendingCount,
       offerIds,
-      resultItems: allResultItems.slice(0, 100),
+      resultItems: prioritizeStoredResultItems(allResultItems),
     };
   });
 }

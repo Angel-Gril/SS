@@ -181,6 +181,13 @@ describe('1688 listing result helpers', () => {
     });
     expect(update!.offerIds).toHaveLength(105);
     expect(update!.resultItems).toHaveLength(100);
+    expect(update!.resultItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        offerId: 'ss1688-734567890123-source-sku-105',
+        sourceSkuId: 'source-sku-105',
+        status: 'failed',
+      }),
+    ]));
   });
 
   it('marks a retry submission as current and clears stale Ozon result summary', () => {
