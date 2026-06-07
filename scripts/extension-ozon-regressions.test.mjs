@@ -70,6 +70,22 @@ test('Ozon seller company id detection falls back to captured x-o3-company-id', 
   assert.match(source, /\.ozon\.ru/);
 });
 
+test('1688 extension collect payloads are routed to the dedicated collect endpoint', () => {
+  const files = [
+    ['extensions', 'ss-erp', 'shared', 'adapters', 'cloud-adapter.js'],
+    ['extensions', 'ss-erp', 'shared', 'adapters', 'local-adapter.js'],
+    ['extensions', 'ss-erp', 'shared', 'erp-adapter', 'collect-product.js'],
+    ['extensions', 'ss-erp', 'background', 'service-worker.js'],
+  ];
+
+  for (const parts of files) {
+    const source = readRepoFile(...parts);
+    assert.match(source, /1688/);
+    assert.match(source, /\/api\/collect\/1688/);
+    assert.match(source, /sourcePlatform\s*\|\|\s*data\.platform/);
+  }
+});
+
 test('Ozon shop analytics sync falls back from charts table to what-to-sell data', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'background', 'collect-background.js');
 

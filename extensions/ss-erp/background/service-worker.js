@@ -257,6 +257,61 @@ function normalizeEndpoint(value) {
   }
 }
 
+function isAlibaba1688CollectPayload(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const platform = String(data.sourcePlatform || data.platform || '').toLowerCase();
+  const url = String(data.sourceUrl || data.tabUrl || data.sourceHost || '');
+  return platform === '1688' || /(^|\.)1688\.com/i.test(url);
+}
+
+function normalizeCollectAttributeRecord(attributes) {
+  if (!Array.isArray(attributes)) {
+    return attributes && typeof attributes === 'object' ? attributes : undefined;
+  }
+  return attributes.reduce((record, item) => {
+    if (!item || typeof item !== 'object') return record;
+    const key = String(item.name || item.key || item.attrName || '').trim();
+    const value = String(item.value || item.attrValue || item.text || '').trim();
+    if (key && value) record[key] = value;
+    return record;
+  }, {});
+}
+
+function normalizeCollectPayloadForEndpoint(payload) {
+  if (!isAlibaba1688CollectPayload(payload)) {
+    return { path: '/api/collect', body: payload || {} };
+  }
+  const data = payload && typeof payload === 'object' ? payload : {};
+  return {
+    path: '/api/collect/1688',
+    body: {
+      title: data.title,
+      sourceUrl: data.sourceUrl || data.tabUrl,
+      offerId: data.offerId || data.productId || data.sourceProductId || data.sku,
+      sku: data.sku || data.productId,
+      images: Array.isArray(data.images) ? data.images : undefined,
+      price: data.price,
+      priceText: data.priceText || data.price,
+      currency: data.currency || 'CNY',
+      categoryPath: data.categoryPath || data.categoryName,
+      shopName: data.shopName,
+      supplierName: data.supplierName || data.shopName,
+      monthlySales: data.monthlySales,
+      grossWeightGrams: data.grossWeightGrams,
+      attributes: normalizeCollectAttributeRecord(data.attributes),
+      skuItems: Array.isArray(data.skuItems) ? data.skuItems : data.variants,
+      description: data.description,
+      notes: data.notes,
+      raw: {
+        extractor: data.extractor || null,
+        warnings: data.warnings || [],
+        debug: data.debug || null,
+        collectedAt: data.collectedAt || null,
+      },
+    },
+  };
+}
+
 function buildCaptureCounts(entries) {
   const counts = { seller: 0, official: 0, sellerProducts: 0, all: Array.isArray(entries) ? entries.length : 0 };
   (Array.isArray(entries) ? entries : []).forEach((entry) => {
@@ -685,13 +740,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!baseEndpoint) throw new Error('请先在插件设置中配置 ERP 地址');
       const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
       if (!token) throw new Error('请先在插件设置中配置 ERP Token');
-      const collectUrl = baseEndpoint.replace(/\/api\/.*$/, '') + '/api/collect';
+      const normalized = normalizeCollectPayloadForEndpoint(message.payload || {});
+      const collectUrl = baseEndpoint.replace(/\/api\/.*$/, '') + normalized.path;
       const headers = { 'content-type': 'application/json;charset=utf-8' };
       headers.authorization = 'Bearer ' + token;
       return fetch(collectUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(message.payload || {}),
+        body: JSON.stringify(normalized.body),
       }).then((response) => {
         return response.text().then((text) => {
           if (!response.ok) {
