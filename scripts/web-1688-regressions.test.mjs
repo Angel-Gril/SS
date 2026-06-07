@@ -63,6 +63,7 @@ test('1688 listing preparation exposes Ozon category mapping fields', () => {
 
 test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
+  const collectPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
   const listingRoute = readRepoFile('apps', 'server', 'src', 'routes', 'listing.ts');
   const listingJobList = readRepoFile('apps', 'web', 'src', 'components', 'listing-job-list.tsx');
@@ -87,6 +88,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingPage, /提交到 Ozon/);
   assert.match(listingRoute, /source:\s*z\.enum\(\['1688-listing',\s*'manual-batch'\]\)\.optional\(\)/);
   assert.match(listingRoute, /const\s+listingTaskEntrySchema\s*=\s*z\.enum\(\['1688-listing',\s*'listing-page',\s*'collect-page',\s*'manual-batch'\]\)/);
+  assert.match(listingRoute, /function\s+appendListingTaskHistory/);
   assert.match(listingRoute, /sourceTrace:\s*z\.record\(z\.unknown\(\)\)\.optional\(\)/);
   assert.match(listingRoute, /const\s+listingSources\s*=\s*items\.flatMap\(\(item\)\s*=>\s*\(/);
   assert.match(listingRoute, /\.\.\.\(item\.sourceTrace\s+as\s+Record<string,\s*unknown>\),\s*offerId:\s*item\.offerId/);
@@ -106,6 +108,19 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /const\s+offerIds\s*=\s*items\.map\(\(item\)\s*=>\s*item\.offerId\)/);
   assert.match(listingRoute, /offerImages/);
   assert.match(listingRoute, /listingSources,/);
+  assert.match(listingRoute, /if\s*\(source\s*===\s*'1688-listing'\)/);
+  assert.match(listingRoute, /sourcesBySupplyGoodsId/);
+  assert.match(listingRoute, /where:\s*\{\s*id:\s*\{\s*in:\s*supplyGoodsIds\s*\},\s*userId,\s*sourcePlatform:\s*'1688'\s*\}/);
+  assert.match(listingRoute, /status:\s*'listed'/);
+  assert.match(listingRoute, /lastListingTaskId:\s*task\.taskId/);
+  assert.match(listingRoute, /lastListingOfferIds:\s*task\.offerIds/);
+  assert.match(listingRoute, /listingTasks:\s*\[task,\s*\.\.\.history\]\.slice\(0,\s*10\)/);
+  assert.match(collectPage, /status:\s*string/);
+  assert.match(collectPage, /function\s+listingStatusText\(item:\s*Collected1688Item\)/);
+  assert.match(collectPage, /item\.status\s*===\s*'listed'/);
+  assert.match(collectPage, /已提交上架/);
+  assert.match(collectPage, /lastListingTaskId/);
+  assert.match(collectPage, /最近上架:\s*Task/);
   assert.match(listingJobList, /entryFilter\?:\s*'collect-page'\s*\|\s*'listing-page'\s*\|\s*'1688-listing'/);
   assert.match(listingJobList, /mode\?:\s*'follow'\s*\|\s*'clone'\s*\|\s*'follow-by-sku'\s*\|\s*'1688'\s*\|\s*'batch'/);
   assert.match(listingJobList, /sourcePlatforms\?:\s*string\[\]/);

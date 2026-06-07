@@ -33,6 +33,36 @@ const batchListSchema = z.object({
 
 const listingTaskEntrySchema = z.enum(['1688-listing', 'listing-page', 'collect-page', 'manual-batch']);
 
+function traceText(source: Record<string, unknown>, key: string) {
+  return String(source[key] || '').trim();
+}
+
+function appendListingTaskHistory(
+  metadata: unknown,
+  task: {
+    taskId: number;
+    listingJobId: string;
+    shopId: string;
+    offerIds: string[];
+    submittedAt: string;
+  },
+) {
+  const meta = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...(metadata as Record<string, any>) }
+    : {};
+  const history = Array.isArray(meta.listingTasks) ? meta.listingTasks : [];
+  return {
+    ...meta,
+    listingStatus: 'submitted',
+    lastListingTaskId: task.taskId,
+    lastListingJobId: task.listingJobId,
+    lastListingShopId: task.shopId,
+    lastListingOfferIds: task.offerIds,
+    lastListingSubmittedAt: task.submittedAt,
+    listingTasks: [task, ...history].slice(0, 10),
+  };
+}
+
 export async function listingRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -92,10 +122,9 @@ export async function listingRoutes(app: FastifyInstance) {
       const listingSources = items.flatMap((item) => (
         item.sourceTrace ? [{ ...(item.sourceTrace as Record<string, unknown>), offerId: item.offerId }] : []
       ));
-      const traceValue = (source: Record<string, unknown>, key: string) => String(source[key] || '').trim();
       const traceValues = (key: string) => Array.from(new Set(
         listingSources
-          .map((source) => traceValue(source, key))
+          .map((source) => traceText(source, key))
           .filter(Boolean),
       ));
       const sourceSkus = traceValues('sourceSkuId');
@@ -110,7 +139,7 @@ export async function listingRoutes(app: FastifyInstance) {
           .filter((entry): entry is readonly [string, string] => !!entry[1]),
       );
 
-      await prisma.syncJob.create({
+      const syncJob = await prisma.syncJob.create({
         data: {
           shopId,
           type: 'PRODUCT_PUSH',
@@ -132,6 +161,44 @@ export async function listingRoutes(app: FastifyInstance) {
           } as any,
         },
       });
+      if (source === '1688-listing') {
+        const submittedAt = new Date().toISOString();
+        const sourcesBySupplyGoodsId = new Map<string, Record<string, unknown>[]>();
+        for (const trace of listingSources) {
+          const supplyGoodsId = traceText(trace, 'supplyGoodsId');
+          if (!supplyGoodsId) continue;
+          const list = sourcesBySupplyGoodsId.get(supplyGoodsId) || [];
+          list.push(trace);
+          sourcesBySupplyGoodsId.set(supplyGoodsId, list);
+        }
+
+        const supplyGoodsIds = Array.from(sourcesBySupplyGoodsId.keys());
+        if (supplyGoodsIds.length) {
+          const goods = await prisma.supplyGoods.findMany({
+            where: { id: { in: supplyGoodsIds }, userId, sourcePlatform: '1688' },
+            select: { id: true, metadata: true },
+          });
+          await Promise.all(goods.map((item) => {
+            const traces = sourcesBySupplyGoodsId.get(item.id) || [];
+            const itemOfferIds = Array.from(new Set(
+              traces.map((trace) => traceText(trace, 'offerId')).filter(Boolean),
+            ));
+            return prisma.supplyGoods.update({
+              where: { id: item.id },
+              data: {
+                status: 'listed',
+                metadata: appendListingTaskHistory(item.metadata, {
+                  taskId: result.result.task_id,
+                  listingJobId: syncJob.id,
+                  shopId,
+                  offerIds: itemOfferIds,
+                  submittedAt,
+                }) as any,
+              },
+            });
+          }));
+        }
+      }
 
       return reply.send({
         code: 1,

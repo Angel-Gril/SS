@@ -32,6 +32,7 @@ interface Alibaba1688Variant {
 interface Collected1688Item {
   id: string;
   title: string;
+  status: string;
   sourceUrl: string | null;
   sourceProductId: string | null;
   images: string[] | null;
@@ -59,6 +60,11 @@ interface Collected1688Item {
     categoryMappingStatus?: string;
     listingPreparationStatus?: string | null;
     listingPreparationIssues?: string[];
+    listingStatus?: string | null;
+    lastListingTaskId?: number | string | null;
+    lastListingJobId?: string | null;
+    lastListingOfferIds?: string[];
+    lastListingSubmittedAt?: string | null;
     ozonPriceCheckContext?: OzonPriceCheckContext | null;
     priceCheckEstimate?: PriceCheckEstimate | null;
   } | null;
@@ -176,6 +182,12 @@ function preparationStatusLabel(status?: string | null) {
   if (status === 'draft') return '准备草稿';
   if (status === 'ready') return '准备完成';
   return '仅采集';
+}
+
+function listingStatusText(item: Collected1688Item) {
+  if (item.status === 'listed') return '已提交上架';
+  if (item.metadata?.listingStatus === 'submitted') return '已提交上架';
+  return '';
 }
 
 function preparationStatus(item: Collected1688Item): PreparationFilter {
@@ -631,6 +643,7 @@ export default function Collect1688Page() {
                       <Badge variant="outline">1688</Badge>
                       <Badge variant="secondary">类目映射待上架</Badge>
                       <Badge variant="outline">{preparationStatusLabel(item.metadata?.listingPreparationStatus)}</Badge>
+                      {listingStatusText(item) && <Badge>{listingStatusText(item)}</Badge>}
                     </div>
                     <div className="text-xs text-muted-foreground flex gap-3 flex-wrap">
                       <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
@@ -684,6 +697,13 @@ export default function Collect1688Page() {
                     {item.metadata?.ozonPriceCheckContext && (
                       <div className="text-xs text-muted-foreground truncate">
                         核价来源: {priceCheckText(item.metadata.ozonPriceCheckContext)}
+                      </div>
+                    )}
+                    {item.metadata?.lastListingTaskId && (
+                      <div className="text-xs text-emerald-700 dark:text-emerald-400 truncate">
+                        最近上架: Task {item.metadata.lastListingTaskId}
+                        {item.metadata.lastListingOfferIds?.length ? ` · offer ${item.metadata.lastListingOfferIds.length} 个` : ''}
+                        {item.metadata.lastListingSubmittedAt ? ` · ${formatDate(item.metadata.lastListingSubmittedAt)}` : ''}
                       </div>
                     )}
                     {priceCheckEstimateText(item.metadata?.priceCheckEstimate) && (
