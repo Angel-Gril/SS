@@ -83,6 +83,34 @@ function validateAlibaba1688ListingSourceTraces(items: Array<{ offerId: string; 
     .filter((item): item is { offerId: string; reason: string } => !!item);
 }
 
+function alibaba1688ListingSupplyGoodsIds(items: Array<{ sourceTrace?: Record<string, unknown> }>) {
+  return Array.from(new Set(
+    items
+      .map((item) => (
+        item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+          ? traceText(item.sourceTrace, 'supplyGoodsId')
+          : ''
+      ))
+      .filter(Boolean),
+  ));
+}
+
+function invalidAlibaba1688ListingSupplyRecords(
+  items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
+  validSupplyGoodsIds: Set<string>,
+) {
+  return items
+    .map((item) => {
+      const supplyGoodsId = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+        ? traceText(item.sourceTrace, 'supplyGoodsId')
+        : '';
+      return supplyGoodsId && !validSupplyGoodsIds.has(supplyGoodsId)
+        ? { offerId: item.offerId, supplyGoodsId, reason: 'invalid_supply_goods_record' }
+        : null;
+    })
+    .filter((item): item is { offerId: string; supplyGoodsId: string; reason: string } => !!item);
+}
+
 function safeMetadata(metadata: unknown) {
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...(metadata as Record<string, any>) }
@@ -314,6 +342,30 @@ export async function listingRoutes(app: FastifyInstance) {
     }
     if (shop.status !== 'ACTIVE') {
       return reply.send({ code: 0, msg: '店铺状态异常，请先测试连接' });
+    }
+    if (source === '1688-listing') {
+      const supplyGoodsIds = alibaba1688ListingSupplyGoodsIds(items);
+      const supplyGoods = supplyGoodsIds.length
+        ? await prisma.supplyGoods.findMany({
+          where: {
+            id: { in: supplyGoodsIds },
+            userId,
+            sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
+          },
+          select: { id: true },
+        })
+        : [];
+      const invalidItems = invalidAlibaba1688ListingSupplyRecords(
+        items,
+        new Set(supplyGoods.map((item) => item.id)),
+      );
+      if (invalidItems.length) {
+        return reply.status(400).send({
+          code: 0,
+          msg: '货源上架商品引用的采集记录不存在或不是货源记录',
+          data: { invalidItems },
+        });
+      }
     }
 
     const client = new OzonClient({

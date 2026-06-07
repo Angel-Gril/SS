@@ -230,4 +230,70 @@ describe('listing route', () => {
     expect(ozonRequestMock).not.toHaveBeenCalled();
     expect(syncJobMock.create).not.toHaveBeenCalled();
   });
+
+  it('rejects supply listing submissions that reference missing supply records before calling Ozon', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-missing-record-tb-red',
+            title: 'Товар с отсутствующей записью',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/missing-record.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'missing-record',
+              sourcePlatform: 'taobao',
+              sourceProductId: '998877',
+              sourceSkuId: 'tb-red',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品引用的采集记录不存在或不是货源记录',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-missing-record-tb-red',
+            supplyGoodsId: 'missing-record',
+            reason: 'invalid_supply_goods_record',
+          },
+        ],
+      },
+    });
+    expect(supplyGoodsMock.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['missing-record'] },
+        userId: 'user-1',
+        sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
+      },
+      select: { id: true },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
 });
