@@ -178,6 +178,7 @@ export function ListingJobList({
 
 function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void }) {
   const sourceSkus = row.payload?.sourceSkus || [];
+  const sourcePlatforms = row.payload?.sourcePlatforms || [];
   const ozonSkus = row.payload?.ozonSkus || [];
   const offerIds = row.payload?.offerIds || [];
   const total = row.payload?.itemCount ?? 0;
@@ -196,6 +197,11 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
         </div>
         <Badge variant="outline" className={`text-[10px] ${mode.cls}`}>{mode.text}</Badge>
         <StatusBadge s={row.status} />
+        {sourcePlatforms.length > 0 && (
+          <span className="text-[11px] text-muted-foreground">
+            货源平台 {sourcePlatforms.join(' / ')}
+          </span>
+        )}
         {total > 0 && (
           <span className="text-xs text-muted-foreground">
             共 {total}

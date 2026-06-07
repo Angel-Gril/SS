@@ -186,6 +186,8 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobList, /params\.set\('entry',\s*entryFilter\)/);
   assert.match(listingJobList, /if\s*\(entryFilter\s*===\s*'1688-listing'\)\s*return\s*e\s*===\s*'1688-listing'/);
   assert.match(listingJobList, /text:\s*'1688 上架'/);
+  assert.match(listingJobList, /const\s+sourcePlatforms\s*=\s*row\.payload\?\.sourcePlatforms\s*\|\|\s*\[\]/);
+  assert.match(listingJobList, /货源平台/);
   assert.match(listingJobList, /货源 SKU/);
   assert.match(listingJobList, /Ozon SKU/);
   assert.match(listingJobDetail, /货源平台/);
