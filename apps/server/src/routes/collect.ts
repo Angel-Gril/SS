@@ -295,6 +295,20 @@ function parseImageList(images?: string[], imageText?: string): string[] {
     .slice(0, 30);
 }
 
+export function normalizeAlibaba1688PreparationImages(inputImages?: unknown, fallbackImages?: unknown): string[] {
+  if (inputImages === undefined) {
+    return Array.isArray(fallbackImages)
+      ? parseImageList(fallbackImages.map((item) => String(item || '')))
+      : [];
+  }
+
+  if (!Array.isArray(inputImages)) {
+    return [];
+  }
+
+  return parseImageList(inputImages.map((item) => String(item || '')));
+}
+
 export function parseAttributeText(text?: string): Record<string, string> {
   const output: Record<string, string> = {};
   for (const line of String(text || '').split('\n')) {
@@ -769,6 +783,7 @@ export async function collectRoutes(app: FastifyInstance) {
         preparedTitleRu?: string;
         targetPriceCny?: string | number | null;
         listingNotes?: string;
+        images?: string[];
       }>;
     };
     const rows = (body?.items || []).filter((item) => item?.id).slice(0, 100);
@@ -792,18 +807,22 @@ export async function collectRoutes(app: FastifyInstance) {
     const updatedItems: ReturnType<typeof buildAlibaba1688ListingPrefill>[] = [];
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
+      const nextImages = normalizeAlibaba1688PreparationImages(row.images, item.images);
       const meta = buildAlibaba1688PreparationMetadata(item.metadata, row, {
-        hasImages: Array.isArray(item.images) && item.images.length > 0,
+        hasImages: nextImages.length > 0,
       });
 
       await prisma.supplyGoods.update({
         where: { id: item.id },
-        data: { metadata: meta as any },
+        data: {
+          metadata: meta as any,
+          images: nextImages.length ? nextImages as any : null as any,
+        },
       });
       saved++;
       if (meta.listingPreparationStatus === 'ready') ready++;
       else draft++;
-      updatedItems.push(buildAlibaba1688ListingPrefill({ ...item, metadata: meta }));
+      updatedItems.push(buildAlibaba1688ListingPrefill({ ...item, images: nextImages, metadata: meta }));
     }
 
     return reply.send({

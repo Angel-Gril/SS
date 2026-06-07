@@ -5,6 +5,7 @@ import {
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688PreparationMetadata,
   getAlibaba1688PreparationIssues,
+  normalizeAlibaba1688PreparationImages,
   parseAttributeText,
 } from '../routes/collect.js';
 
@@ -299,5 +300,41 @@ describe('1688 collect helpers', () => {
       listingPreparationIssues: ['missing_source_images'],
       categoryMappingStatus: 'deferred_until_listing',
     });
+  });
+
+  it('normalizes 1688 preparation image links', () => {
+    expect(normalizeAlibaba1688PreparationImages([
+      'https://img.example.com/1.jpg',
+      'not-a-url',
+      ' https://img.example.com/2.jpg ',
+      'https://img.example.com/1.jpg',
+    ])).toEqual([
+      'https://img.example.com/1.jpg',
+      'https://img.example.com/2.jpg',
+    ]);
+
+    expect(normalizeAlibaba1688PreparationImages(undefined, ['https://img.example.com/fallback.jpg'])).toEqual([
+      'https://img.example.com/fallback.jpg',
+    ]);
+  });
+
+  it('marks 1688 preparation ready after required images are supplied', () => {
+    const images = normalizeAlibaba1688PreparationImages(['https://img.example.com/ready.jpg']);
+    const metadata = buildAlibaba1688PreparationMetadata(
+      { categoryMappingStatus: 'deferred_until_listing' },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+      },
+      { hasImages: images.length > 0 },
+    );
+
+    expect(metadata).toMatchObject({
+      preparedTitleRu: 'Мужские кроссовки',
+      targetPriceCny: '199',
+      listingPreparationStatus: 'ready',
+      categoryMappingStatus: 'deferred_until_listing',
+    });
+    expect(metadata).not.toHaveProperty('listingPreparationIssues');
   });
 });

@@ -221,6 +221,14 @@ export default function Alibaba1688ListingPage() {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
   }
 
+  function updateItemImages(id: string, value: string) {
+    const images = value
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, images } : item)));
+  }
+
   function applyTargetPrice(id: string, value?: number | null) {
     const number = Number(value);
     if (!Number.isFinite(number) || number <= 0) return;
@@ -252,6 +260,7 @@ export default function Alibaba1688ListingPage() {
         preparedTitleRu: item.preparedTitleRu,
         targetPriceCny: item.targetPriceCny,
         listingNotes: item.listingNotes,
+        images: item.images,
       })),
     });
     setSaving(false);
@@ -459,6 +468,15 @@ export default function Alibaba1688ListingPage() {
                     )}
                   </div>
                 )}
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label className="text-xs">商品图片链接</Label>
+                <textarea
+                  className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={item.images.join('\n')}
+                  onChange={(e) => updateItemImages(item.id, e.target.value)}
+                  placeholder="每行一个图片 URL"
+                />
               </div>
               <div className="space-y-1 md:col-span-2">
                 <Label className="text-xs">上架备注</Label>
