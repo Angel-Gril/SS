@@ -5,12 +5,14 @@
   const PAGE_STATE_TIMEOUT_MS = 8000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
   const ALIBABA_1688_COLLECT_ID = "ss-erp-1688-collect-panel";
+  const ALIBABA_1688_PRICE_CHECK_SEARCH_ID = "ss-erp-1688-search-price-check-panel";
   const OZON_1688_PRICE_CHECK_CONTEXT_KEY = "ss-erp:ozon-1688-price-check-context";
   let lastOzonUrl = "";
 
   injectPageBridge();
   initOzonOverlay();
   initAlibaba1688CollectButton();
+  initAlibaba1688PriceCheckSearchPanel();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.type !== "spb-self-hosted:collect-product") {
@@ -397,6 +399,76 @@
 
   function isAlibaba1688ProductPage() {
     return /^https:\/\/detail\.1688\.com\/offer\/\d+\.html/i.test(location.href);
+  }
+
+  function isAlibaba1688SearchPage() {
+    return /^https:\/\/s\.1688\.com\//i.test(location.href);
+  }
+
+  function initAlibaba1688PriceCheckSearchPanel() {
+    if (!isAlibaba1688SearchPage()) {
+      return;
+    }
+
+    const render = () => {
+      if (document.getElementById(ALIBABA_1688_PRICE_CHECK_SEARCH_ID)) {
+        return;
+      }
+
+      loadPriceCheckContext().then((context) => {
+        if (!context || document.getElementById(ALIBABA_1688_PRICE_CHECK_SEARCH_ID)) {
+          return;
+        }
+
+        const panel = document.createElement("section");
+        panel.id = ALIBABA_1688_PRICE_CHECK_SEARCH_ID;
+        panel.style.cssText = [
+          "position:fixed",
+          "right:18px",
+          "top:168px",
+          "z-index:2147483646",
+          "width:280px",
+          "border-radius:10px",
+          "background:#fff7ed",
+          "border:1px solid #fed7aa",
+          "box-shadow:0 10px 28px rgba(15,23,42,0.16)",
+          "color:#7c2d12",
+          "font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif",
+          "font-size:12px",
+          "line-height:1.45",
+          "padding:10px",
+          "text-align:left"
+        ].join(";");
+
+        const sourceLink = /^https?:\/\//i.test(String(context.sourceUrl || "")) ? String(context.sourceUrl) : "";
+        panel.innerHTML = [
+          '<div style="font-weight:800;font-size:13px;margin-bottom:5px;">Ozon 核价</div>',
+          `<div style="font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(context.title || "")}">${escapeHtml(context.title || "未命名 Ozon 商品")}</div>`,
+          `<div style="margin-top:3px;color:#9a3412;">售价：${escapeHtml(formatPriceForContext(context.price, context.currency))}</div>`,
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">',
+          sourceLink ? `<a href="${escapeHtml(sourceLink)}" target="_blank" rel="noreferrer" style="border:1px solid #fdba74;border-radius:7px;background:#fff;color:#9a3412;padding:5px 8px;text-decoration:none;font-size:12px;font-weight:700;">打开Ozon</a>` : "",
+          '<button type="button" data-role="price-check-clear" style="border:1px solid #fdba74;border-radius:7px;background:#fff;color:#9a3412;padding:5px 8px;cursor:pointer;font-size:12px;font-weight:700;">清除</button>',
+          '</div>'
+        ].join("");
+
+        const clear = panel.querySelector("[data-role='price-check-clear']");
+        if (clear) {
+          clear.addEventListener("click", async () => {
+            clear.disabled = true;
+            await clearPriceCheckContext();
+            panel.remove();
+          });
+        }
+
+        document.body.appendChild(panel);
+      }).catch(() => {});
+    };
+
+    if (document.body) {
+      render();
+    } else {
+      window.addEventListener("DOMContentLoaded", render, { once: true });
+    }
   }
 
   function initAlibaba1688CollectButton() {

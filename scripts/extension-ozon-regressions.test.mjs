@@ -92,11 +92,19 @@ test('1688 extension collect payloads are routed to the dedicated collect endpoi
 });
 
 test('Ozon product panel can start a 1688 price check workflow', () => {
+  const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
   const serviceWorker = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+  const searchScript = manifest.content_scripts.find((entry) =>
+    (entry.matches || []).includes('https://s.1688.com/*')
+      && (entry.js || []).includes('content/collect-content-script.js')
+  );
 
+  assert.ok(searchScript, 'collect-content-script must be injected on 1688 search pages');
   assert.match(collectScript, /data-role="price-check-1688"/);
   assert.match(collectScript, /1688核价/);
+  assert.match(collectScript, /initAlibaba1688PriceCheckSearchPanel/);
+  assert.match(collectScript, /ALIBABA_1688_PRICE_CHECK_SEARCH_ID/);
   assert.match(collectScript, /ss-erp:start-1688-price-check/);
   assert.match(collectScript, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
   assert.match(collectScript, /buildPriceCheckSummary/);

@@ -98,6 +98,7 @@
     {
       "matches": [
         "https://detail.1688.com/*",
+        "https://s.1688.com/*",
         "https://www.temu.com/*",
         "https://*.aliexpress.com/*",
         "https://www.wildberries.ru/*",
