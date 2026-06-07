@@ -127,6 +127,14 @@ interface Alibaba1688OzonListingDraftItem {
   sourceTrace?: Record<string, unknown>;
 }
 
+function submittedSupplyGoodsIds(draftItems: Alibaba1688OzonListingDraftItem[]) {
+  return new Set(
+    draftItems
+      .map((item) => String(item.sourceTrace?.supplyGoodsId || '').trim())
+      .filter(Boolean),
+  );
+}
+
 type PreparationFilter = 'all' | 'draft' | 'ready';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
@@ -498,6 +506,16 @@ export default function Alibaba1688ListingPage() {
       .map((item) => item.id);
   }
 
+  function markSubmittedListingItems(draftItems: Alibaba1688OzonListingDraftItem[]) {
+    const submittedIds = submittedSupplyGoodsIds(draftItems);
+    if (!submittedIds.size) return;
+    setItems((prev) => prev.map((item) => (
+      submittedIds.has(item.id)
+        ? { ...item, listingStatus: 'submitted', canCreateListingDraft: false }
+        : item
+    )));
+  }
+
   async function loadListingDraftItems(): Promise<Alibaba1688OzonListingDraftItem[] | null> {
     if (dirtyItemIds.size) {
       toast({ title: '请先保存修改，再生成上架草稿', variant: 'destructive' });
@@ -546,6 +564,7 @@ export default function Alibaba1688ListingPage() {
       });
       if (res.code === 1) {
         toast({ title: res.msg || `已提交 ${draftItems.length} 条 1688 上架草稿到 Ozon` });
+        markSubmittedListingItems(draftItems);
         setListingJobsRefreshToken((value) => value + 1);
       } else {
         toast({ title: res.msg || '提交到 Ozon 失败', variant: 'destructive' });

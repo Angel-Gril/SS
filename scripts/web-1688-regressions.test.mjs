@@ -87,6 +87,10 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingPage, /status\s*!==\s*'submitted'\s*&&\s*status\s*!==\s*'pending'\s*&&\s*status\s*!==\s*'imported'/);
   assert.match(listingPage, /currentPreparationStatus\(item\)\s*===\s*'ready'\s*&&\s*canCreateListingDraft\(item\)/);
   assert.match(listingPage, /不可重复提交/);
+  assert.match(listingPage, /function\s+submittedSupplyGoodsIds\(draftItems:\s*Alibaba1688OzonListingDraftItem\[\]\)/);
+  assert.match(listingPage, /function\s+markSubmittedListingItems\(draftItems:\s*Alibaba1688OzonListingDraftItem\[\]\)/);
+  assert.match(listingPage, /listingStatus:\s*'submitted'/);
+  assert.match(listingPage, /canCreateListingDraft:\s*false/);
   assert.match(listingPage, /\/api\/listing\/batch/);
   assert.match(listingPage, /source:\s*'1688-listing'/);
   assert.match(listingPage, /setListingJobsRefreshToken\(\(value\)\s*=>\s*value\s*\+\s*1\)/);
