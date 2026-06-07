@@ -273,6 +273,20 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.doesNotMatch(collect1688Page, /<Badge variant="outline">1688<\/Badge>/);
 });
 
+test('1688 collect page can create records for selected domestic source platforms', () => {
+  const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
+
+  assert.match(collect1688Page, /sourcePlatform:\s*string;/);
+  assert.match(collect1688Page, /sourcePlatform:\s*'1688'/);
+  assert.match(collect1688Page, /sourcePlatform:\s*form\.sourcePlatform/);
+  assert.match(collect1688Page, /<Label className="text-xs">货源平台<\/Label>/);
+  for (const platform of ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']) {
+    assert.match(collect1688Page, new RegExp(`<option value="${platform}">`));
+  }
+  assert.match(collect1688Page, /<Label className="text-xs">货源商品链接<\/Label>/);
+  assert.match(collect1688Page, /placeholder="https:\/\/detail\.1688\.com\/offer\/\.\.\. \/ 淘宝 \/ 京东商品链接"/);
+});
+
 test('1688 listing preparation page shows real domestic source platforms', () => {
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
 

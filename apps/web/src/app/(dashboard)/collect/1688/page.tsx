@@ -116,6 +116,7 @@ interface PriceCheckEstimate {
 
 interface FormState {
   title: string;
+  sourcePlatform: string;
   sourceUrl: string;
   priceText: string;
   imageText: string;
@@ -141,6 +142,7 @@ type PreparationFilter = 'all' | 'collected_only' | 'draft' | 'ready';
 
 const emptyForm: FormState = {
   title: '',
+  sourcePlatform: '1688',
   sourceUrl: '',
   priceText: '',
   imageText: '',
@@ -462,6 +464,7 @@ export default function Collect1688Page() {
     setSaving(true);
     const res = await api.post<{ id: string }>('/api/collect/1688', {
       title: form.title,
+      sourcePlatform: form.sourcePlatform,
       sourceUrl: form.sourceUrl || undefined,
       priceText: form.priceText || undefined,
       imageText: form.imageText || undefined,
@@ -486,7 +489,7 @@ export default function Collect1688Page() {
     setSaving(false);
 
     if (res.code === 1) {
-      toast({ title: res.msg || '1688 商品已保存' });
+      toast({ title: res.msg || '货源商品已保存' });
       setForm(emptyForm);
       fetchRecent();
     } else {
@@ -542,7 +545,7 @@ export default function Collect1688Page() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <PackagePlus className="h-4 w-4" /> 新增 1688 采集记录
+            <PackagePlus className="h-4 w-4" /> 新增货源采集记录
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -552,8 +555,23 @@ export default function Collect1688Page() {
               <Input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="1688 商品标题" />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">1688 商品链接</Label>
-              <Input value={form.sourceUrl} onChange={(e) => update('sourceUrl', e.target.value)} placeholder="https://detail.1688.com/offer/..." />
+              <Label className="text-xs">货源平台</Label>
+              <select
+                value={form.sourcePlatform}
+                onChange={(e) => update('sourcePlatform', e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="1688">1688</option>
+                <option value="taobao">淘宝</option>
+                <option value="tmall">天猫</option>
+                <option value="jd">京东</option>
+                <option value="pinduoduo">拼多多</option>
+                <option value="pdd">拼多多(PDD)</option>
+              </select>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label className="text-xs">货源商品链接</Label>
+              <Input value={form.sourceUrl} onChange={(e) => update('sourceUrl', e.target.value)} placeholder="https://detail.1688.com/offer/... / 淘宝 / 京东商品链接" />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">采购价</Label>
