@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { invalidImageUrls, splitImageInput, validImageUrls } from '@/lib/image-links';
+import { previewText } from '@/lib/text-preview';
 import { formatDate } from '@/lib/utils';
 
 interface Alibaba1688Variant {
@@ -215,12 +216,6 @@ function sourcePackageText(metadata?: Collected1688Item['metadata']) {
     metadata.monthlySales ? `月销 ${metadata.monthlySales}` : '',
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : '';
-}
-
-function descriptionPreview(text?: string | null) {
-  const value = String(text || '').trim();
-  if (!value) return '';
-  return value.length > 160 ? `${value.slice(0, 160)}...` : value;
 }
 
 function variantSpecText(variant: Alibaba1688Variant) {
@@ -637,9 +632,9 @@ export default function Collect1688Page() {
                         物流: {item.metadata.logisticsText}
                       </div>
                     )}
-                    {descriptionPreview(item.metadata?.description) && (
+                    {previewText(item.metadata?.description) && (
                       <div className="text-xs text-muted-foreground truncate">
-                        描述: {descriptionPreview(item.metadata?.description)}
+                        描述: {previewText(item.metadata?.description)}
                       </div>
                     )}
                     {!!item.variants?.length && (
