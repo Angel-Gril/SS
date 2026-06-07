@@ -210,12 +210,14 @@ export default function Alibaba1688ListingPage() {
   const [saving, setSaving] = useState(false);
   const [items, setItems] = useState<Alibaba1688ListingItem[]>([]);
   const [preparationFilter, setPreparationFilter] = useState<PreparationFilter>('all');
+  const [dirtyItemIds, setDirtyItemIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setLoading(true);
     api.post<Alibaba1688ListingItem[]>('/api/collect/1688/prefill', ids.length ? { ids } : {}).then((res) => {
       if (res.code === 1 && res.data) {
         setItems(res.data);
+        setDirtyItemIds(new Set());
       } else {
         toast({ title: res.msg || '加载 1688 上架准备数据失败', variant: 'destructive' });
       }
@@ -223,13 +225,23 @@ export default function Alibaba1688ListingPage() {
     });
   }, [ids.join(',')]);
 
+  function markItemDirty(id: string) {
+    setDirtyItemIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }
+
   function updateItem(id: string, field: 'preparedTitleRu' | 'targetPriceCny' | 'listingNotes', value: string) {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+    markItemDirty(id);
   }
 
   function updateItemImages(id: string, value: string) {
     const images = splitImageInput(value);
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, images } : item)));
+    markItemDirty(id);
   }
 
   function applyTargetPrice(id: string, value?: number | null) {
@@ -245,15 +257,20 @@ export default function Alibaba1688ListingPage() {
     }
     const visibleIds = new Set(filteredItems.map((item) => item.id));
     let applied = 0;
+    const appliedIds: string[] = [];
     const nextItems = items.map((item) => {
       if (!visibleIds.has(item.id)) return item;
       if (item.targetPriceCny.trim()) return item;
       const value = Number(item.priceSuggestion?.recommendedTargetPriceCny);
       if (!Number.isFinite(value) || value <= 0) return item;
       applied++;
+      appliedIds.push(item.id);
       return { ...item, targetPriceCny: String(value) };
     });
     setItems(nextItems);
+    if (appliedIds.length) {
+      setDirtyItemIds((prev) => new Set([...prev, ...appliedIds]));
+    }
 
     toast({
       title: applied ? `已填入当前筛选中的 ${applied} 个建议售价` : '当前筛选下没有可填入的空售价',
@@ -277,10 +294,14 @@ export default function Alibaba1688ListingPage() {
   }, [items]);
 
   async function handleSave() {
-    if (!items.length) return;
+    const dirtyItems = items.filter((item) => dirtyItemIds.has(item.id));
+    if (!dirtyItems.length) {
+      toast({ title: '没有需要保存的修改' });
+      return;
+    }
     setSaving(true);
     const res = await api.post<{ saved: number; ready: number; draft: number; items?: Alibaba1688ListingItem[] }>('/api/collect/1688/save-preparation', {
-      items: items.map((item) => ({
+      items: dirtyItems.map((item) => ({
         id: item.id,
         preparedTitleRu: item.preparedTitleRu,
         targetPriceCny: item.targetPriceCny,
@@ -292,7 +313,14 @@ export default function Alibaba1688ListingPage() {
     if (res.code === 1) {
       toast({ title: res.msg || '已保存 1688 上架准备草稿' });
       if (res.data?.items?.length) {
-        setItems(res.data.items);
+        const updatedItems = new Map(res.data.items.map((item) => [item.id, item]));
+        setItems((prev) => prev.map((item) => updatedItems.get(item.id) || item));
+        const savedIds = new Set(res.data.items.map((item) => item.id));
+        setDirtyItemIds((prev) => {
+          const next = new Set(prev);
+          savedIds.forEach((id) => next.delete(id));
+          return next;
+        });
       }
     } else {
       toast({ title: res.msg || '保存失败', variant: 'destructive' });
@@ -343,7 +371,7 @@ export default function Alibaba1688ListingPage() {
           </Button>
           <Button size="sm" onClick={handleSave} disabled={saving || !items.length}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
-            保存草稿
+            保存修改{dirtyItemIds.size ? `(${dirtyItemIds.size})` : ''}
           </Button>
         </div>
       </div>
@@ -381,6 +409,7 @@ export default function Alibaba1688ListingPage() {
               <span className="truncate">{item.title}</span>
               <Badge variant="outline">1688</Badge>
               <Badge variant="secondary">类目映射待上架</Badge>
+              {dirtyItemIds.has(item.id) && <Badge variant="outline">未保存</Badge>}
               <Badge variant={currentPreparationStatus(item) === 'ready' ? 'default' : 'outline'}>
                 {preparationStatusLabel(currentPreparationStatus(item))}
               </Badge>
