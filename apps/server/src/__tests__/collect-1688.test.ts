@@ -1577,6 +1577,64 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('retries failed source SKU fallbacks by source platform when Ozon result lacks offer id', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-mixed-platform-retry-without-offer-id',
+      title: '男士运动鞋',
+      sourceProductId: 'shared-product',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-1688',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+        {
+          sku: 'same-source-sku',
+          sourceSkuId: 'same-source-sku',
+          sourcePlatform: 'taobao',
+          ozonSku: 'ozon-sku-taobao',
+          attrs: { color: 'blue', size: '43' },
+          stock: 80,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '299',
+        ozonCategoryId: 17028922,
+        ozonTypeId: 93410,
+        description: 'Описание товара',
+        listingPreparationStatus: 'ready',
+        lastListingResultStatus: 'partial_failed',
+        lastListingResultItems: [
+          {
+            sourcePlatform: 'taobao',
+            sourceSkuId: 'same-source-sku',
+            status: 'failed',
+            errors: [{ code: 'IMPORT_ERROR', description: 'missing offer id in legacy result' }],
+          },
+        ],
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.issues).toEqual([]);
+    expect(result.items.map((item) => item.offerId)).toEqual(['sstaobao-shared-product-same-source-sku']);
+    expect(result.items.map((item) => item.sourceTrace)).toEqual([
+      expect.objectContaining({
+        sourcePlatform: 'taobao',
+        sourceSkuId: 'same-source-sku',
+        ozonSku: 'ozon-sku-taobao',
+      }),
+    ]);
+  });
+
   it('builds Ozon listing draft items from ready 1688 preparation while preserving SKU trace', () => {
     const result = buildAlibaba1688OzonListingDraftItems({
       id: 'collect-1688-ready',

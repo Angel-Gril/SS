@@ -1180,6 +1180,12 @@ function buildUniqueAlibaba1688DraftOfferIds(entries: Array<{
   });
 }
 
+function sourcePlatformSkuKey(sourcePlatform: unknown, sourceSkuId: unknown) {
+  const platform = normalizeDomesticSupplySourcePlatform(sourcePlatform, null);
+  const sku = compactString(sourceSkuId);
+  return platform && sku ? `${platform}:${sku}` : null;
+}
+
 function getAlibaba1688FailedRetryKeys(metadata: Record<string, any>, listingStatus: string) {
   if (listingStatus !== 'partial_failed') return null;
   const resultItems = Array.isArray(metadata.lastListingResultItems) ? metadata.lastListingResultItems : [];
@@ -1190,8 +1196,12 @@ function getAlibaba1688FailedRetryKeys(metadata: Record<string, any>, listingSta
   if (!failedItems.length) return null;
   return {
     offerIds: new Set(failedItems.map((item: any) => compactString(item?.offerId)).filter(Boolean) as string[]),
-    sourceSkuIds: new Set(failedItems
+    sourcePlatformSkuKeys: new Set(failedItems
       .filter((item: any) => !compactString(item?.offerId))
+      .map((item: any) => sourcePlatformSkuKey(item?.sourcePlatform, item?.sourceSkuId))
+      .filter(Boolean) as string[]),
+    sourceSkuIds: new Set(failedItems
+      .filter((item: any) => !compactString(item?.offerId) && !normalizeDomesticSupplySourcePlatform(item?.sourcePlatform, null))
       .map((item: any) => compactString(item?.sourceSkuId))
       .filter(Boolean) as string[]),
   };
@@ -1267,7 +1277,10 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   }));
   const variants = retryKeys
     ? variantEntriesWithOfferIds.filter((entry) => {
-      return retryKeys.offerIds.has(entry.offerId) || retryKeys.sourceSkuIds.has(entry.sourceSkuId);
+      const platformSkuKey = sourcePlatformSkuKey(entry.sourcePlatform, entry.sourceSkuId);
+      return retryKeys.offerIds.has(entry.offerId)
+        || (!!platformSkuKey && retryKeys.sourcePlatformSkuKeys.has(platformSkuKey))
+        || retryKeys.sourceSkuIds.has(entry.sourceSkuId);
     })
     : variantEntriesWithOfferIds;
 
