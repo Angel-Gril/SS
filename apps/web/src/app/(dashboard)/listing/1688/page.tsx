@@ -32,6 +32,7 @@ interface Alibaba1688ListingItem {
   targetPriceCny: string;
   listingNotes: string;
   ozonPriceCheckContext: OzonPriceCheckContext | null;
+  priceCheckEstimate: PriceCheckEstimate | null;
   createdAt: string;
 }
 
@@ -43,6 +44,13 @@ interface OzonPriceCheckContext {
   currency?: string | null;
 }
 
+interface PriceCheckEstimate {
+  ozonPriceRub?: number | null;
+  purchasePriceRub?: number | null;
+  roughSpreadRub?: number | null;
+  cnyPerRub?: number | null;
+}
+
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
 }
@@ -52,6 +60,15 @@ function priceCheckText(context?: OzonPriceCheckContext | null) {
   const title = context.title || context.productId || 'Ozon 商品';
   const price = context.price ? `${context.price} ${context.currency || 'RUB'}` : '';
   return price ? `${title} · 售价 ${price}` : title;
+}
+
+function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
+  if (!estimate || estimate.roughSpreadRub == null || estimate.purchasePriceRub == null) return '';
+  const spread = Number(estimate.roughSpreadRub);
+  const purchaseRub = Number(estimate.purchasePriceRub);
+  if (!Number.isFinite(spread) || !Number.isFinite(purchaseRub)) return '';
+  const sign = spread > 0 ? '+' : '';
+  return `核价粗差: ${sign}${spread.toFixed(2)} RUB · 采购折算 ${purchaseRub.toFixed(2)} RUB`;
 }
 
 export default function Alibaba1688ListingPage() {
@@ -182,6 +199,11 @@ export default function Alibaba1688ListingPage() {
                 {item.ozonPriceCheckContext && (
                   <div className="text-xs text-muted-foreground truncate">
                     核价来源: {priceCheckText(item.ozonPriceCheckContext)}
+                  </div>
+                )}
+                {priceCheckEstimateText(item.priceCheckEstimate) && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    {priceCheckEstimateText(item.priceCheckEstimate)}
                   </div>
                 )}
                 {(item.sourceUrl || item.ozonPriceCheckContext?.sourceUrl) && (

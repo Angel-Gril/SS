@@ -29,6 +29,7 @@ interface Collected1688Item {
     categoryMappingStatus?: string;
     listingPreparationStatus?: string | null;
     ozonPriceCheckContext?: OzonPriceCheckContext | null;
+    priceCheckEstimate?: PriceCheckEstimate | null;
   } | null;
 }
 
@@ -38,6 +39,13 @@ interface OzonPriceCheckContext {
   sourceUrl?: string | null;
   price?: string | null;
   currency?: string | null;
+}
+
+interface PriceCheckEstimate {
+  ozonPriceRub?: number | null;
+  purchasePriceRub?: number | null;
+  roughSpreadRub?: number | null;
+  cnyPerRub?: number | null;
 }
 
 interface FormState {
@@ -97,6 +105,15 @@ function priceCheckText(context?: OzonPriceCheckContext | null) {
   const title = context.title || context.productId || 'Ozon 商品';
   const price = context.price ? `${context.price} ${context.currency || 'RUB'}` : '';
   return price ? `${title} · 售价 ${price}` : title;
+}
+
+function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
+  if (!estimate || estimate.roughSpreadRub == null || estimate.purchasePriceRub == null) return '';
+  const spread = Number(estimate.roughSpreadRub);
+  const purchaseRub = Number(estimate.purchasePriceRub);
+  if (!Number.isFinite(spread) || !Number.isFinite(purchaseRub)) return '';
+  const sign = spread > 0 ? '+' : '';
+  return `核价粗差: ${sign}${spread.toFixed(2)} RUB · 采购折算 ${purchaseRub.toFixed(2)} RUB`;
 }
 
 export default function Collect1688Page() {
@@ -350,6 +367,11 @@ export default function Collect1688Page() {
                     {item.metadata?.ozonPriceCheckContext && (
                       <div className="text-xs text-muted-foreground truncate">
                         核价来源: {priceCheckText(item.metadata.ozonPriceCheckContext)}
+                      </div>
+                    )}
+                    {priceCheckEstimateText(item.metadata?.priceCheckEstimate) && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        {priceCheckEstimateText(item.metadata?.priceCheckEstimate)}
                       </div>
                     )}
                   </div>

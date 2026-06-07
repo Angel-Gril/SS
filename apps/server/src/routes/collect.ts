@@ -203,11 +203,47 @@ function extractOzonPriceCheckContext(metadata: unknown) {
   };
 }
 
-function exposeSupplyGoodsMetadata(metadata: unknown) {
+function numericValue(value: unknown): number | null {
+  const text = String(value == null ? '' : value).replace(/[\s,¥￥₽]/g, '').trim();
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const number = Number(match[0]);
+  return Number.isFinite(number) ? number : null;
+}
+
+function buildPriceCheckEstimate(
+  context: ReturnType<typeof extractOzonPriceCheckContext>,
+  purchasePrice: unknown,
+  purchaseCurrency: unknown,
+) {
+  if (!context) return null;
+  const ozonPrice = numericValue(context.price);
+  const purchase = numericValue(purchasePrice);
+  const ozonCurrency = String(context.currency || 'RUB').toUpperCase();
+  const sourceCurrency = String(purchaseCurrency || 'CNY').toUpperCase();
+  const cnyPerRub = 0.08;
+  if (!(ozonPrice != null && ozonPrice > 0 && purchase != null && purchase > 0)) return null;
+  if (ozonCurrency !== 'RUB' || sourceCurrency !== 'CNY') return null;
+
+  const purchaseRub = Math.round((purchase / cnyPerRub) * 100) / 100;
+  const roughSpreadRub = Math.round((ozonPrice - purchaseRub) * 100) / 100;
+  return {
+    ozonPriceRub: ozonPrice,
+    purchasePriceCny: purchase,
+    purchasePriceRub: purchaseRub,
+    roughSpreadRub,
+    cnyPerRub,
+    note: 'rough_source_price_only',
+  };
+}
+
+function exposeSupplyGoodsMetadata(metadata: unknown, purchasePrice?: unknown, purchaseCurrency?: unknown) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const meta = { ...(metadata as Record<string, any>) };
   const ozonPriceCheckContext = extractOzonPriceCheckContext(meta);
   if (ozonPriceCheckContext) meta.ozonPriceCheckContext = ozonPriceCheckContext;
+  const priceCheckEstimate = buildPriceCheckEstimate(ozonPriceCheckContext, purchasePrice, purchaseCurrency);
+  if (priceCheckEstimate) meta.priceCheckEstimate = priceCheckEstimate;
   return meta;
 }
 
@@ -347,6 +383,11 @@ export function buildAlibaba1688ListingPrefill(item: {
     targetPriceCny: meta.targetPriceCny || '',
     listingNotes: meta.listingNotes || '',
     ozonPriceCheckContext: extractOzonPriceCheckContext(meta),
+    priceCheckEstimate: buildPriceCheckEstimate(
+      extractOzonPriceCheckContext(meta),
+      item.purchasePrice?.toString(),
+      item.currency || 'CNY',
+    ),
     createdAt: item.createdAt.toISOString(),
   };
 }
@@ -506,7 +547,7 @@ export async function collectRoutes(app: FastifyInstance) {
           purchasePrice: r.purchasePrice?.toString() ?? null,
           originalPrice: r.originalPrice?.toString() ?? null,
           exchangeRateUsed: r.exchangeRateUsed?.toString() ?? null,
-          metadata: exposeSupplyGoodsMetadata(r.metadata),
+          metadata: exposeSupplyGoodsMetadata(r.metadata, r.purchasePrice?.toString(), r.currency),
         })),
       },
     };

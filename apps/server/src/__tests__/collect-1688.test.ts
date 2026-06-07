@@ -128,6 +128,14 @@ describe('1688 collect helpers', () => {
         price: '1590',
         currency: 'RUB',
       },
+      priceCheckEstimate: {
+        ozonPriceRub: 1590,
+        purchasePriceCny: 25.8,
+        purchasePriceRub: 322.5,
+        roughSpreadRub: 1267.5,
+        cnyPerRub: 0.08,
+        note: 'rough_source_price_only',
+      },
       createdAt: '2026-06-07T12:00:00.000Z',
     });
   });
