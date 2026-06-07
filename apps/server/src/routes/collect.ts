@@ -48,6 +48,10 @@ const alibaba1688CollectSchema = z.object({
   supplierYears: z.union([z.string(), z.number()]).optional(),
   monthlySales: z.union([z.string(), z.number()]).optional(),
   grossWeightGrams: z.union([z.string(), z.number()]).optional(),
+  lengthMm: z.union([z.string(), z.number()]).optional(),
+  widthMm: z.union([z.string(), z.number()]).optional(),
+  heightMm: z.union([z.string(), z.number()]).optional(),
+  dimensionsText: z.string().optional(),
   minOrderQty: z.union([z.string(), z.number()]).optional(),
   shippingInfo: z.unknown().optional(),
   logisticsText: z.string().optional(),
@@ -306,6 +310,9 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const skuItems = normalize1688SkuItems(input.skuItems?.length ? input.skuItems : input.variants);
   const supplierName = compactString(input.supplierName) || compactString(input.shopName);
   const weight = Number(input.grossWeightGrams);
+  const lengthMm = Number(input.lengthMm);
+  const widthMm = Number(input.widthMm);
+  const heightMm = Number(input.heightMm);
   const supplierYears = Number(input.supplierYears);
   const minOrderQty = Number(input.minOrderQty);
   const notes = [
@@ -333,6 +340,10 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
       supplierYears: Number.isFinite(supplierYears) && supplierYears > 0 ? supplierYears : null,
       monthlySales: input.monthlySales ?? null,
       grossWeightGrams: Number.isFinite(weight) ? weight : null,
+      lengthMm: Number.isFinite(lengthMm) && lengthMm > 0 ? Math.round(lengthMm) : null,
+      widthMm: Number.isFinite(widthMm) && widthMm > 0 ? Math.round(widthMm) : null,
+      heightMm: Number.isFinite(heightMm) && heightMm > 0 ? Math.round(heightMm) : null,
+      dimensionsText: compactString(input.dimensionsText),
       minOrderQty: Number.isFinite(minOrderQty) && minOrderQty > 0 ? minOrderQty : null,
       shippingInfo: input.shippingInfo ?? null,
       logisticsText: compactString(input.logisticsText),
@@ -373,6 +384,10 @@ export function buildAlibaba1688ListingPrefill(item: {
     notes: item.notes || '',
     supplierName: meta.supplierName || null,
     categoryPath: meta.categoryPath || null,
+    lengthMm: Number.isFinite(Number(meta.lengthMm)) ? Number(meta.lengthMm) : null,
+    widthMm: Number.isFinite(Number(meta.widthMm)) ? Number(meta.widthMm) : null,
+    heightMm: Number.isFinite(Number(meta.heightMm)) ? Number(meta.heightMm) : null,
+    dimensionsText: meta.dimensionsText || '',
     attributes: meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
       ? meta.attributes
       : {},

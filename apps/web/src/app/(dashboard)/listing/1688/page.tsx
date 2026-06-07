@@ -24,6 +24,10 @@ interface Alibaba1688ListingItem {
   notes: string;
   supplierName: string | null;
   categoryPath: string | null;
+  lengthMm: number | string | null;
+  widthMm: number | string | null;
+  heightMm: number | string | null;
+  dimensionsText: string | null;
   attributes: Record<string, string>;
   skuCount: number;
   categoryMappingStatus: string;
@@ -69,6 +73,16 @@ function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
   if (!Number.isFinite(spread) || !Number.isFinite(purchaseRub)) return '';
   const sign = spread > 0 ? '+' : '';
   return `核价粗差: ${sign}${spread.toFixed(2)} RUB · 采购折算 ${purchaseRub.toFixed(2)} RUB`;
+}
+
+function sourceDimensionsText(item: Alibaba1688ListingItem) {
+  const length = Number(item.lengthMm);
+  const width = Number(item.widthMm);
+  const height = Number(item.heightMm);
+  if (Number.isFinite(length) && length > 0 && Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+    return `货源尺寸: ${Math.round(length)} x ${Math.round(width)} x ${Math.round(height)} mm`;
+  }
+  return item.dimensionsText ? `货源尺寸: ${item.dimensionsText}` : '';
 }
 
 export default function Alibaba1688ListingPage() {
@@ -204,6 +218,11 @@ export default function Alibaba1688ListingPage() {
                 {priceCheckEstimateText(item.priceCheckEstimate) && (
                   <div className="text-xs text-muted-foreground truncate">
                     {priceCheckEstimateText(item.priceCheckEstimate)}
+                  </div>
+                )}
+                {sourceDimensionsText(item) && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    {sourceDimensionsText(item)}
                   </div>
                 )}
                 {(item.sourceUrl || item.ozonPriceCheckContext?.sourceUrl) && (

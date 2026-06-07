@@ -1249,6 +1249,7 @@
     const skuItems = pickSkuItems(context.sources);
     const skuCount = skuItems.length || pickSkuCountFromDom();
     const grossWeightGrams = pickGrossWeight(context.pageText, context.sources, config.weightKeywords, skuItems);
+    const dimensions = pickDimensions(context.pageText, context.sources);
     const images = pickImages(context.sources);
     const attributes = pickAttributes(context.sources);
     const priceInfo = pickPrice(config.priceSelectors, context.sources, skuItems);
@@ -1274,6 +1275,10 @@
       categoryName: categoryPath ? categoryPath.split(/\s*[>›/]\s*/).filter(Boolean).slice(-1)[0] || categoryPath : "",
       monthlySales,
       grossWeightGrams,
+      lengthMm: dimensions.lengthMm,
+      widthMm: dimensions.widthMm,
+      heightMm: dimensions.heightMm,
+      dimensionsText: dimensions.rawText,
       minOrderQty,
       shippingInfo,
       logisticsText: shippingInfo.text,
@@ -1292,6 +1297,7 @@
         customizationEvidence: customizationInfo.evidence,
         monthlySalesCandidates: collectNumberCandidates(context.sources, /(month|sale|sold|trade|销量|成交|已售)/i).slice(0, 20),
         weightCandidates: collectNumberCandidates(context.sources, /(weight|gross|gram|克|斤|重量|毛重|净重)/i).slice(0, 20),
+        dimensionCandidates: dimensions.candidates,
         rawSources: summarizeSources(context.sources)
       }
     };
@@ -1540,6 +1546,162 @@
     const candidates = collectNumberCandidates(sources, /(weight|gross|gram|克|斤|重量|毛重|净重)/i);
     const weightHit = candidates.find((item) => item.weightGrams != null);
     return weightHit ? weightHit.weightGrams : null;
+  }
+
+  function pickDimensions(pageText, sources) {
+    const candidates = [];
+    const page = normalizeWhitespace(pageText);
+    const combinedPattern = /(?:包装尺寸|产品尺寸|商品尺寸|外箱尺寸|尺寸|长宽高|规格)[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:x|X|×|\*)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:x|X|×|\*)\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|毫米|cm|厘米|m|米|inch|in|英寸)?/ig;
+    let match;
+    while ((match = combinedPattern.exec(page)) && candidates.length < 8) {
+      candidates.push({
+        rawText: normalizeWhitespace(match[0]),
+        length: match[1],
+        width: match[2],
+        height: match[3],
+        unit: match[4] || ""
+      });
+    }
+
+    const labelledMatch = page.match(/长(?:度)?[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|毫米|cm|厘米|m|米|inch|in|英寸)?[\s,，;；/]+宽(?:度)?[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|毫米|cm|厘米|m|米|inch|in|英寸)?[\s,，;；/]+高(?:度)?[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|毫米|cm|厘米|m|米|inch|in|英寸)?/i);
+    if (labelledMatch) {
+      candidates.push({
+        rawText: normalizeWhitespace(labelledMatch[0]),
+        length: labelledMatch[1],
+        width: labelledMatch[3],
+        height: labelledMatch[5],
+        unit: labelledMatch[2] || labelledMatch[4] || labelledMatch[6] || ""
+      });
+    }
+
+    collectStringCandidates(sources, /(dimension|dimensions|size|packageSize|package_size|length|width|height|尺寸|长宽高|包装尺寸|商品尺寸)$/i)
+      .slice(0, 20)
+      .forEach((item) => {
+        const text = normalizeWhitespace(item.value);
+        const dim = parseDimensionText(text);
+        if (dim) candidates.push({ ...dim, rawText: text, path: item.path });
+      });
+
+    collectStructuredDimensionCandidates(sources).forEach((item) => candidates.push(item));
+
+    const hit = candidates
+      .map((item) => normalizeDimensionCandidate(item))
+      .find((item) => item.lengthMm && item.widthMm && item.heightMm);
+    return hit || { lengthMm: null, widthMm: null, heightMm: null, rawText: "", candidates: candidates.slice(0, 10) };
+  }
+
+  function collectStructuredDimensionCandidates(sources) {
+    const results = [];
+    sources.forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        if (!value || typeof value !== "object" || Array.isArray(value) || results.length >= 10) {
+          return;
+        }
+
+        const fields = {};
+        Object.keys(value).forEach((key) => {
+          const field = classifyDimensionKey(key);
+          if (!field || fields[field]) {
+            return;
+          }
+
+          const parsed = parseDecimalNumber(value[key]);
+          if (parsed != null && parsed > 0) {
+            fields[field] = { key, value: value[key] };
+          }
+        });
+
+        if (!fields.length || !fields.width || !fields.height) {
+          return;
+        }
+
+        const unitText = normalizeWhitespace([
+          value.unit,
+          value.units,
+          value.dimensionUnit,
+          value.dimensionsUnit,
+          value.lengthUnit,
+          value.sizeUnit,
+          fields.length.value,
+          fields.width.value,
+          fields.height.value
+        ].filter(Boolean).join(" "));
+        const unit = guessLengthUnit(unitText);
+        const rawText = `${fields.length.value}x${fields.width.value}x${fields.height.value}${unit || ""}`;
+        results.push({
+          rawText,
+          length: fields.length.value,
+          width: fields.width.value,
+          height: fields.height.value,
+          unit,
+          path: path.join(".")
+        });
+      });
+    });
+    return results;
+  }
+
+  function classifyDimensionKey(key) {
+    const raw = String(key || "");
+    const compact = raw.replace(/[\s_\-]/g, "").toLowerCase();
+    if (/^(length|packagelength|productlength|itemlength|goodsLength|boxlength|cartonlength)$/i.test(raw) || /(长度|长)$/.test(raw)) {
+      return "length";
+    }
+    if (/^(width|packagewidth|productwidth|itemwidth|goodswidth|boxwidth|cartonwidth)$/i.test(raw) || /(宽度|宽)$/.test(raw)) {
+      return "width";
+    }
+    if (/^(height|packageheight|productheight|itemheight|goodsheight|boxheight|cartonheight)$/i.test(raw) || /(高度|高)$/.test(raw)) {
+      return "height";
+    }
+    if (/(?:package|product|item|goods|box|carton)(?:length|width|height)$/.test(compact)) {
+      if (compact.endsWith("length")) return "length";
+      if (compact.endsWith("width")) return "width";
+      if (compact.endsWith("height")) return "height";
+    }
+    return "";
+  }
+
+  function parseDimensionText(text) {
+    const combined = String(text || "").match(/([0-9]+(?:\.[0-9]+)?)\s*(?:x|X|×|\*)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:x|X|×|\*)\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|毫米|cm|厘米|m|米|inch|in|英寸)?/i);
+    if (combined) {
+      return { length: combined[1], width: combined[2], height: combined[3], unit: combined[4] || "" };
+    }
+    return null;
+  }
+
+  function normalizeDimensionCandidate(candidate) {
+    const unit = candidate && candidate.unit ? String(candidate.unit) : "";
+    const lengthMm = convertLengthToMm(candidate && candidate.length, unit);
+    const widthMm = convertLengthToMm(candidate && candidate.width, unit);
+    const heightMm = convertLengthToMm(candidate && candidate.height, unit);
+    return {
+      lengthMm,
+      widthMm,
+      heightMm,
+      rawText: candidate && candidate.rawText ? candidate.rawText : "",
+      unit,
+      candidates: [candidate].filter(Boolean)
+    };
+  }
+
+  function convertLengthToMm(value, unitHint) {
+    const parsed = parseDecimalNumber(value);
+    if (parsed == null || parsed <= 0) return null;
+    const unit = String(unitHint || "").toLowerCase();
+    if (unit.includes("mm") || unit.includes("毫米")) return Math.round(parsed);
+    if (unit.includes("cm") || unit.includes("厘米")) return Math.round(parsed * 10);
+    if (unit === "m" || unit.includes("米")) return Math.round(parsed * 1000);
+    if (unit.includes("inch") || unit === "in" || unit.includes("英寸")) return Math.round(parsed * 25.4);
+    return Math.round(parsed);
+  }
+
+  function guessLengthUnit(text) {
+    const unitText = String(text || "").toLowerCase();
+    if (unitText.includes("mm") || unitText.includes("毫米")) return "mm";
+    if (unitText.includes("cm") || unitText.includes("厘米")) return "cm";
+    if (unitText.includes("inch") || unitText.includes("英寸")) return "inch";
+    if (/(^|[^a-z])m([^a-z]|$)/i.test(unitText) || unitText.includes("米")) return "m";
+    return "";
   }
 
   function pickSkuItems(sources) {
@@ -1913,6 +2075,15 @@
     if (unit === "k") value *= 1000;
     if (unit === "m") value *= 1000000;
     return Math.round(value);
+  }
+
+  function parseDecimalNumber(input) {
+    if (input == null || input === "") return null;
+    if (typeof input === "number" && Number.isFinite(input)) return input;
+    const match = String(input).replace(/,/g, "").match(/([0-9]+(?:\.[0-9]+)?)/);
+    if (!match) return null;
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? value : null;
   }
 
   function convertWeightToGrams(value, unitHint) {

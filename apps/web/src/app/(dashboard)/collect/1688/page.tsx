@@ -24,6 +24,10 @@ interface Collected1688Item {
   metadata?: {
     supplierName?: string | null;
     categoryPath?: string | null;
+    lengthMm?: number | string | null;
+    widthMm?: number | string | null;
+    heightMm?: number | string | null;
+    dimensionsText?: string | null;
     attributes?: Record<string, string>;
     skuCount?: number;
     categoryMappingStatus?: string;
@@ -114,6 +118,17 @@ function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
   if (!Number.isFinite(spread) || !Number.isFinite(purchaseRub)) return '';
   const sign = spread > 0 ? '+' : '';
   return `核价粗差: ${sign}${spread.toFixed(2)} RUB · 采购折算 ${purchaseRub.toFixed(2)} RUB`;
+}
+
+function sourceDimensionsText(metadata?: Collected1688Item['metadata']) {
+  if (!metadata) return '';
+  const length = Number(metadata.lengthMm);
+  const width = Number(metadata.widthMm);
+  const height = Number(metadata.heightMm);
+  if (Number.isFinite(length) && length > 0 && Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+    return `货源尺寸: ${Math.round(length)} x ${Math.round(width)} x ${Math.round(height)} mm`;
+  }
+  return metadata.dimensionsText ? `货源尺寸: ${metadata.dimensionsText}` : '';
 }
 
 export default function Collect1688Page() {
@@ -372,6 +387,11 @@ export default function Collect1688Page() {
                     {priceCheckEstimateText(item.metadata?.priceCheckEstimate) && (
                       <div className="text-xs text-muted-foreground truncate">
                         {priceCheckEstimateText(item.metadata?.priceCheckEstimate)}
+                      </div>
+                    )}
+                    {sourceDimensionsText(item.metadata) && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        {sourceDimensionsText(item.metadata)}
                       </div>
                     )}
                   </div>

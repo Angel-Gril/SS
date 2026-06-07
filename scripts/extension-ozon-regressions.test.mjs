@@ -88,6 +88,10 @@ test('1688 extension collect payloads are routed to the dedicated collect endpoi
     assert.match(source, /shippingInfo/);
     assert.match(source, /customizationInfo/);
     assert.match(source, /priceCheckContext/);
+    assert.match(source, /lengthMm/);
+    assert.match(source, /widthMm/);
+    assert.match(source, /heightMm/);
+    assert.match(source, /dimensionsText/);
   }
 });
 
@@ -154,10 +158,21 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+pickMinOrderQty/);
   assert.match(collectScript, /function\s+pickShippingInfo/);
   assert.match(collectScript, /function\s+pickCustomizationInfo/);
+  assert.match(collectScript, /function\s+pickDimensions/);
+  assert.match(collectScript, /function\s+collectStructuredDimensionCandidates/);
+  assert.match(collectScript, /function\s+classifyDimensionKey/);
+  assert.match(collectScript, /function\s+parseDimensionText/);
+  assert.match(collectScript, /function\s+convertLengthToMm/);
+  assert.match(collectScript, /function\s+guessLengthUnit/);
   assert.match(collectScript, /function\s+normalizeSkuAttrs/);
   assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
   assert.match(collectScript, /categoryPath/);
   assert.match(collectScript, /supplierLocation/);
+  assert.match(collectScript, /lengthMm:\s*dimensions\.lengthMm/);
+  assert.match(collectScript, /widthMm:\s*dimensions\.widthMm/);
+  assert.match(collectScript, /heightMm:\s*dimensions\.heightMm/);
+  assert.match(collectScript, /dimensionsText:\s*dimensions\.rawText/);
+  assert.match(collectScript, /dimensionCandidates/);
   assert.match(collectScript, /minOrderQty/);
   assert.match(collectScript, /logisticsText/);
   assert.match(collectScript, /customizationInfo/);
