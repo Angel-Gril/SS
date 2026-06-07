@@ -258,11 +258,14 @@ function normalizeEndpoint(value) {
   }
 }
 
-function isAlibaba1688CollectPayload(payload) {
+const DOMESTIC_SUPPLY_PLATFORMS = ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'];
+
+function isDomesticSupplyCollectPayload(payload) {
   const data = payload && typeof payload === 'object' ? payload : {};
   const platform = String(data.sourcePlatform || data.platform || '').toLowerCase();
   const url = String(data.sourceUrl || data.tabUrl || data.sourceHost || '');
-  return platform === '1688' || /(^|\.)1688\.com/i.test(url);
+  return DOMESTIC_SUPPLY_PLATFORMS.indexOf(platform) >= 0
+    || /(^|\.)(1688|taobao|tmall|jd|pinduoduo|yangkeduo)\.com/i.test(url);
 }
 
 function normalizeCollectAttributeRecord(attributes) {
@@ -279,7 +282,7 @@ function normalizeCollectAttributeRecord(attributes) {
 }
 
 function normalizeCollectPayloadForEndpoint(payload) {
-  if (!isAlibaba1688CollectPayload(payload)) {
+  if (!isDomesticSupplyCollectPayload(payload)) {
     return { path: '/api/collect', body: payload || {} };
   }
   const data = payload && typeof payload === 'object' ? payload : {};
@@ -287,6 +290,7 @@ function normalizeCollectPayloadForEndpoint(payload) {
     path: '/api/collect/1688',
     body: {
       title: data.title,
+      sourcePlatform: data.sourcePlatform || data.platform || '1688',
       sourceUrl: data.sourceUrl || data.tabUrl,
       offerId: data.offerId || data.productId || data.sourceProductId || data.sku,
       sku: data.sku || data.productId,

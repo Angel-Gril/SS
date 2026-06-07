@@ -3,11 +3,14 @@
 // 不同步 cookie，不依赖本地浏览器登录态
 
 (function () {
-  function isAlibaba1688Payload(payload) {
+  const DOMESTIC_SUPPLY_PLATFORMS = ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'];
+
+  function isDomesticSupplyPayload(payload) {
     var data = payload && typeof payload === 'object' ? payload : {};
     var platform = String(data.sourcePlatform || data.platform || '').toLowerCase();
     var url = String(data.sourceUrl || data.tabUrl || data.sourceHost || '');
-    return platform === '1688' || /(^|\.)1688\.com/i.test(url);
+    return DOMESTIC_SUPPLY_PLATFORMS.indexOf(platform) >= 0
+      || /(^|\.)(1688|taobao|tmall|jd|pinduoduo|yangkeduo)\.com/i.test(url);
   }
 
   function normalizeAttributeRecord(attributes) {
@@ -24,7 +27,7 @@
   }
 
   function normalizeCollectPayload(payload) {
-    if (!isAlibaba1688Payload(payload)) {
+    if (!isDomesticSupplyPayload(payload)) {
       return { path: '/api/collect', body: payload || {} };
     }
     var data = payload && typeof payload === 'object' ? payload : {};
@@ -32,6 +35,7 @@
       path: '/api/collect/1688',
       body: {
         title: data.title,
+        sourcePlatform: data.sourcePlatform || data.platform || '1688',
         sourceUrl: data.sourceUrl || data.tabUrl,
         offerId: data.offerId || data.productId || data.sourceProductId || data.sku,
         sku: data.sku || data.productId,

@@ -77,7 +77,7 @@ test('Ozon collect snapshot queries are scoped to Ozon source records', () => {
   assert.match(source, /JSON\.stringify\(\{\s*skus:\s*skus\.slice\(0,\s*100\),\s*sourcePlatform:\s*'ozon'\s*\}\)/);
 });
 
-test('1688 extension collect payloads are routed to the dedicated collect endpoint', () => {
+test('domestic supply extension collect payloads are routed to the dedicated collect endpoint', () => {
   const files = [
     ['extensions', 'ss-erp', 'shared', 'adapters', 'cloud-adapter.js'],
     ['extensions', 'ss-erp', 'shared', 'adapters', 'local-adapter.js'],
@@ -87,9 +87,15 @@ test('1688 extension collect payloads are routed to the dedicated collect endpoi
 
   for (const parts of files) {
     const source = readRepoFile(...parts);
+    assert.match(source, /DOMESTIC_SUPPLY_PLATFORMS/);
     assert.match(source, /1688/);
+    assert.match(source, /taobao/);
+    assert.match(source, /tmall/);
+    assert.match(source, /jd/);
+    assert.match(source, /pinduoduo/);
     assert.match(source, /\/api\/collect\/1688/);
     assert.match(source, /sourcePlatform\s*\|\|\s*data\.platform/);
+    assert.match(source, /sourcePlatform:\s*data\.sourcePlatform\s*\|\|\s*data\.platform\s*\|\|\s*'1688'/);
     assert.match(source, /supplierLocation/);
     assert.match(source, /minOrderQty/);
     assert.match(source, /shippingInfo/);
