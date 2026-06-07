@@ -130,6 +130,8 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
   assert.match(collectScript, /ALIBABA_1688_PRICE_CHECK_SEARCH_ID/);
   assert.match(collectScript, /ss-erp:start-1688-price-check/);
   assert.match(collectScript, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
+  assert.match(collectScript, /ozonProductId:\s*resolvedProductId/);
+  assert.match(collectScript, /ozonOfferId:\s*offerId\s*\|\|\s*null/);
   assert.match(collectScript, /buildPriceCheckSummary/);
   assert.match(collectScript, /loadFxSnapshot/);
   assert.match(collectScript, /convertPriceForContext/);
@@ -139,6 +141,10 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
   assert.match(collectScript, /clearPriceCheckContext/);
   assert.match(serviceWorker, /ss-erp:start-1688-price-check/);
   assert.match(serviceWorker, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
+  assert.match(serviceWorker, /sku:\s*toText\(data\.sku\s*\|\|\s*data\.ozonSku\)\.trim\(\)/);
+  assert.match(serviceWorker, /ozonSku:\s*toText\(data\.ozonSku\s*\|\|\s*data\.sku\)\.trim\(\)/);
+  assert.match(serviceWorker, /offerId:\s*toText\(data\.offerId\s*\|\|\s*data\.offer_id\s*\|\|\s*data\.ozonOfferId\)\.trim\(\)/);
+  assert.match(serviceWorker, /ozonOfferId:\s*toText\(data\.ozonOfferId\s*\|\|\s*data\.offerId\s*\|\|\s*data\.offer_id\)\.trim\(\)/);
   assert.match(serviceWorker, /build1688SearchUrlFromOzonContext/);
   assert.match(serviceWorker, /s\.1688\.com\/youyuan\/index\.htm/);
   assert.match(serviceWorker, /chrome\.tabs\.create/);
@@ -189,8 +195,12 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+normalizeSkuImages/);
   assert.match(collectScript, /\["image",\s*"imageUrl",\s*"imgUrl",\s*"picUrl",\s*"skuImage",\s*"skuImageUrl",\s*"previewImage",\s*"thumbUrl",\s*"mainImage"\]/);
   assert.match(collectScript, /ozonSku\s*=\s*pickFirstValue\(item,\s*\["ozonSku",\s*"ozon_sku",\s*"targetOzonSku",\s*"target_ozon_sku",\s*"targetSku",\s*"ozonProductSku"\]\)/);
+  assert.match(collectScript, /ozonProductId\s*=\s*pickFirstValue\(item,\s*\["ozonProductId",\s*"ozon_product_id",\s*"targetOzonProductId",\s*"target_ozon_product_id"\]\)/);
+  assert.match(collectScript, /ozonOfferId\s*=\s*pickFirstValue\(item,\s*\["ozonOfferId",\s*"ozon_offer_id",\s*"targetOzonOfferId",\s*"target_ozon_offer_id"\]\)/);
   assert.match(collectScript, /sourceSkuId:\s*skuId == null \? "" : String\(skuId\)/);
   assert.match(collectScript, /ozonSku:\s*ozonSku == null \? "" : String\(ozonSku\)/);
+  assert.match(collectScript, /ozonProductId:\s*ozonProductId == null \? "" : String\(ozonProductId\)/);
+  assert.match(collectScript, /ozonOfferId:\s*ozonOfferId == null \? "" : String\(ozonOfferId\)/);
   assert.match(collectScript, /function\s+pickSkuItemsFromDom/);
   assert.match(collectScript, /pickSkuItemsFromDom\(\)/);
   assert.match(collectScript, /\[data-sku-id\]/);

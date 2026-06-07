@@ -333,9 +333,15 @@ function normalizeOzonPriceCheckContext(payload) {
   const images = Array.isArray(data.images)
     ? data.images.map((url) => toText(url).trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 8)
     : [];
+  const productId = toText(data.productId || data.ozonProductId).trim();
   return {
     sourcePlatform: 'ozon',
-    productId: toText(data.productId).trim(),
+    productId,
+    ozonProductId: toText(data.ozonProductId || data.productId).trim(),
+    sku: toText(data.sku || data.ozonSku).trim(),
+    ozonSku: toText(data.ozonSku || data.sku).trim(),
+    offerId: toText(data.offerId || data.offer_id || data.ozonOfferId).trim(),
+    ozonOfferId: toText(data.ozonOfferId || data.offerId || data.offer_id).trim(),
     title: toText(data.title).trim().slice(0, 300),
     price: data.price != null && data.price !== '' ? data.price : null,
     currency: toText(data.currency || 'RUB').trim().toUpperCase() || 'RUB',

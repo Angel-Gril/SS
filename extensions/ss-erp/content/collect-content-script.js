@@ -863,9 +863,11 @@
     return {
       sourcePlatform: "ozon",
       productId: resolvedProductId,
+      ozonProductId: resolvedProductId,
       sku: ozonSku,
       ozonSku,
       offerId: offerId || null,
+      ozonOfferId: offerId || null,
       title: String((payload && payload.title) || item.name || document.querySelector("h1")?.textContent || "").trim(),
       price: payload && payload.price != null && payload.price !== "" ? payload.price : item.avgPrice,
       currency: (payload && payload.currency) || "RUB",
@@ -1839,6 +1841,8 @@
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
     const images = normalizeSkuImages(item);
     const ozonSku = pickFirstValue(item, ["ozonSku", "ozon_sku", "targetOzonSku", "target_ozon_sku", "targetSku", "ozonProductSku"]);
+    const ozonProductId = pickFirstValue(item, ["ozonProductId", "ozon_product_id", "targetOzonProductId", "target_ozon_product_id"]);
+    const ozonOfferId = pickFirstValue(item, ["ozonOfferId", "ozon_offer_id", "targetOzonOfferId", "target_ozon_offer_id"]);
 
     return {
       skuId: skuId == null ? "" : String(skuId),
@@ -1851,7 +1855,9 @@
       minOrderQty,
       grossWeightGrams,
       images,
-      ozonSku: ozonSku == null ? "" : String(ozonSku)
+      ozonSku: ozonSku == null ? "" : String(ozonSku),
+      ozonProductId: ozonProductId == null ? "" : String(ozonProductId),
+      ozonOfferId: ozonOfferId == null ? "" : String(ozonOfferId)
     };
   }
 
