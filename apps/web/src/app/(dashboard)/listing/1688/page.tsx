@@ -142,6 +142,35 @@ function preparationIssueLabels(issues?: string[]) {
   return (issues || []).map((issue) => labels[issue] || issue);
 }
 
+function splitImageInput(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validImageUrls(images: string[]) {
+  const seen = new Set<string>();
+  return images.filter((image) => {
+    if (!isHttpUrl(image) || seen.has(image)) return false;
+    seen.add(image);
+    return true;
+  });
+}
+
+function invalidImageUrls(images: string[]) {
+  return images.filter((image) => !isHttpUrl(image));
+}
+
 function currentPreparationIssues(item: Alibaba1688ListingItem) {
   const title = item.preparedTitleRu.trim();
   const targetPrice = Number(item.targetPriceCny);
@@ -149,7 +178,7 @@ function currentPreparationIssues(item: Alibaba1688ListingItem) {
   if (!title) issues.push('missing_prepared_title_ru');
   else if (CJK_TEXT_RE.test(title)) issues.push('prepared_title_contains_cjk');
   if (!(Number.isFinite(targetPrice) && targetPrice > 0)) issues.push('missing_target_price_cny');
-  if (!item.images.length) issues.push('missing_source_images');
+  if (!validImageUrls(item.images).length) issues.push('missing_source_images');
   return issues;
 }
 
@@ -222,10 +251,7 @@ export default function Alibaba1688ListingPage() {
   }
 
   function updateItemImages(id: string, value: string) {
-    const images = value
-      .split(/[\n,]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const images = splitImageInput(value);
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, images } : item)));
   }
 
@@ -321,7 +347,11 @@ export default function Alibaba1688ListingPage() {
         </div>
       </div>
 
-      {items.map((item) => (
+      {items.map((item) => {
+        const validImages = validImageUrls(item.images);
+        const invalidImages = invalidImageUrls(item.images);
+
+        return (
         <Card key={item.id}>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
@@ -337,8 +367,8 @@ export default function Alibaba1688ListingPage() {
           <CardContent className="space-y-4">
             <div className="flex gap-3">
               <div className="h-20 w-20 rounded-md border bg-muted/40 overflow-hidden shrink-0">
-                {item.images[0] ? (
-                  <img src={item.images[0]} alt="" className="h-full w-full object-cover" />
+                {validImages[0] ? (
+                  <img src={validImages[0]} alt="" className="h-full w-full object-cover" />
                 ) : (
                   <div className="h-full w-full flex items-center justify-center text-muted-foreground">
                     <Tags className="h-5 w-5" />
@@ -477,6 +507,32 @@ export default function Alibaba1688ListingPage() {
                   onChange={(e) => updateItemImages(item.id, e.target.value)}
                   placeholder="每行一个图片 URL"
                 />
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>{validImages.length ? `有效图片 ${validImages.length} 张` : '暂无有效图片'}</span>
+                  {invalidImages.length > 0 && (
+                    <span className="text-amber-600">有 {invalidImages.length} 条无效链接</span>
+                  )}
+                </div>
+                {validImages.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {validImages.slice(0, 8).map((image, index) => (
+                      <a
+                        key={`${image}-${index}`}
+                        href={image}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="h-12 w-12 rounded border bg-muted/40 overflow-hidden"
+                      >
+                        <img src={image} alt="" className="h-full w-full object-cover" />
+                      </a>
+                    ))}
+                    {validImages.length > 8 && (
+                      <div className="h-12 min-w-12 rounded border bg-muted/40 px-2 flex items-center justify-center text-xs text-muted-foreground">
+                        +{validImages.length - 8}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="space-y-1 md:col-span-2">
                 <Label className="text-xs">上架备注</Label>
@@ -489,7 +545,8 @@ export default function Alibaba1688ListingPage() {
             </div>
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }
