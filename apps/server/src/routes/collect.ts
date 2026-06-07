@@ -878,6 +878,20 @@ function buildAlibaba1688DraftOfferId(
   return `ss1688-${productPart}-${skuPart}`.slice(0, 100);
 }
 
+function getAlibaba1688FailedRetryKeys(metadata: Record<string, any>, listingStatus: string) {
+  if (listingStatus !== 'partial_failed') return null;
+  const resultItems = Array.isArray(metadata.lastListingResultItems) ? metadata.lastListingResultItems : [];
+  const failedItems = resultItems.filter((item: any) => (
+    String(item?.status || '').toLowerCase() === 'failed'
+    || (Array.isArray(item?.errors) && item.errors.length > 0)
+  ));
+  if (!failedItems.length) return null;
+  return {
+    offerIds: new Set(failedItems.map((item: any) => compactString(item?.offerId)).filter(Boolean) as string[]),
+    sourceSkuIds: new Set(failedItems.map((item: any) => compactString(item?.sourceSkuId)).filter(Boolean) as string[]),
+  };
+}
+
 export function buildAlibaba1688OzonListingDraftItems(item: {
   id: string;
   title: string;
@@ -916,6 +930,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const meta = (item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata))
     ? item.metadata as Record<string, any>
     : {};
+  const retryKeys = getAlibaba1688FailedRetryKeys(meta, listingStatus);
   const title = String(prefill.preparedTitleRu || '').trim();
   const categoryId = positiveIntegerValue(prefill.ozonCategoryId)!;
   const typeId = positiveIntegerValue(prefill.ozonTypeId)!;
@@ -924,9 +939,20 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const height = positiveIntegerValue(meta.heightMm) || 100;
   const depth = positiveIntegerValue(meta.lengthMm) || 100;
   const width = positiveIntegerValue(meta.widthMm) || 100;
-  const variants = Array.isArray(prefill.variants) && prefill.variants.length
+  const allVariants = Array.isArray(prefill.variants) && prefill.variants.length
     ? prefill.variants as Array<Record<string, any>>
     : [null];
+  const variants = retryKeys
+    ? allVariants.filter((variant, index) => {
+      const sourceSkuId = compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`;
+      const offerId = buildAlibaba1688DraftOfferId(prefill.sourceProductId || item.id, sourceSkuId, index);
+      return retryKeys.offerIds.has(offerId) || retryKeys.sourceSkuIds.has(sourceSkuId);
+    })
+    : allVariants;
+
+  if (retryKeys && variants.length === 0) {
+    return { items: [], issues: ['listing_retry_failed_items_not_found'], listingStatus };
+  }
 
   const items = variants.map((variant, index) => {
     const sourceSkuId = compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`;

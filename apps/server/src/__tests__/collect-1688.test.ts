@@ -769,6 +769,68 @@ describe('1688 collect helpers', () => {
     expect(result.listingStatus).toBe('partial_failed');
   });
 
+  it('retries only failed 1688 variants after a partial Ozon import', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-partial-retry',
+      title: '男士运动鞋',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'sku-red-42',
+          sourceSkuId: 'sku-red-42',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-42',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+        {
+          sku: 'sku-green-43',
+          sourceSkuId: 'sku-green-43',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-43',
+          attrs: { color: 'green', size: '43' },
+          stock: 80,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        description: 'Описание товара',
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+        lastListingResultStatus: 'partial_failed',
+        lastListingResultItems: [
+          {
+            offerId: 'ss1688-734567890123-sku-red-42',
+            sourceSkuId: 'sku-red-42',
+            status: 'imported',
+          },
+          {
+            offerId: 'ss1688-734567890123-sku-green-43',
+            sourceSkuId: 'sku-green-43',
+            status: 'failed',
+            errors: [{ code: 'ATTRIBUTE_ERROR', description: 'required attribute missing' }],
+          },
+        ],
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.issues).toEqual([]);
+    expect(result.listingStatus).toBe('partial_failed');
+    expect(result.items.map((item) => item.offerId)).toEqual(['ss1688-734567890123-sku-green-43']);
+    expect(result.items[0]?.sourceTrace).toMatchObject({
+      sourceSkuId: 'sku-green-43',
+      ozonSku: 'ozon-sku-43',
+    });
+  });
+
   it('builds Ozon listing draft items from ready 1688 preparation while preserving SKU trace', () => {
     const result = buildAlibaba1688OzonListingDraftItems({
       id: 'collect-1688-ready',
