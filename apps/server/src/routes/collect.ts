@@ -11,6 +11,17 @@ import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const ALIBABA_1688_DESCRIPTION_LIMIT = 6000;
 
+type OzonPriceCheckContext = {
+  title?: string | null;
+  productId?: string | null;
+  sku?: string | null;
+  ozonSku?: string | null;
+  offerId?: string | null;
+  sourceUrl?: string | null;
+  price?: string | null;
+  currency?: string | null;
+} | null;
+
 const collectSchema = z.object({
   title: z.string().min(1),
   publishTitle: z.string().optional(),
@@ -192,7 +203,7 @@ function normalizeImageUrl(value: unknown): string | null {
   return null;
 }
 
-function extractOzonPriceCheckContext(metadata: unknown) {
+function extractOzonPriceCheckContext(metadata: unknown): OzonPriceCheckContext {
   const meta = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? metadata as Record<string, any>
     : {};
@@ -204,12 +215,17 @@ function extractOzonPriceCheckContext(metadata: unknown) {
 
   const title = compactString(source.title);
   const productId = compactString(source.productId);
+  const sku = compactString(source.sku ?? source.ozonSku ?? source.targetSku ?? source.productSku);
+  const offerId = compactString(source.offerId ?? source.offer_id ?? source.ozonOfferId);
   const sourceUrl = compactHttpUrl(source.sourceUrl);
-  if (!title && !productId && !sourceUrl) return null;
+  if (!title && !productId && !sku && !offerId && !sourceUrl) return null;
 
   return {
     title,
     productId,
+    sku,
+    ozonSku: sku || productId,
+    offerId,
     sourceUrl,
     price: source.price != null && source.price !== '' ? String(source.price) : null,
     currency: compactString(source.currency) || 'RUB',
@@ -225,7 +241,7 @@ function numericValue(value: unknown): number | null {
 }
 
 function buildPriceCheckEstimate(
-  context: ReturnType<typeof extractOzonPriceCheckContext>,
+  context: OzonPriceCheckContext,
   purchasePrice: unknown,
   purchaseCurrency: unknown,
 ) {
@@ -251,7 +267,7 @@ function buildPriceCheckEstimate(
 }
 
 export function buildAlibaba1688PriceSuggestion(
-  context: ReturnType<typeof extractOzonPriceCheckContext>,
+  context: OzonPriceCheckContext,
   purchasePrice: unknown,
   purchaseCurrency: unknown,
 ) {
@@ -405,10 +421,43 @@ export function refreshAlibaba1688SourceDataIssues(
   return meta;
 }
 
-function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
+function normalize1688SkuItems(
+  items?: Array<Record<string, unknown>>,
+  options: {
+    sourcePlatform?: string;
+    ozonPriceCheckContext?: OzonPriceCheckContext;
+  } = {},
+) {
   if (!Array.isArray(items)) return [];
+  const defaultSourcePlatform = compactString(options.sourcePlatform) || '1688';
+  const context = options.ozonPriceCheckContext;
+  const defaultOzonSku = compactString(context?.sku ?? context?.ozonSku ?? context?.productId);
+  const defaultOzonProductId = compactString(context?.productId);
+  const defaultOzonOfferId = compactString(context?.offerId);
   return items.slice(0, 200).map((item, index) => {
     const sku = compactString(item.skuId ?? item.sku ?? item.specId ?? item.id) || `1688-${index + 1}`;
+    const sourceSkuId = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.skuId ?? item.sku ?? item.specId ?? item.id) || sku;
+    const sourcePlatform = compactString(item.sourcePlatform ?? item.platform) || defaultSourcePlatform;
+    const ozonSku = compactString(
+      item.ozonSku
+        ?? item.ozon_sku
+        ?? item.targetOzonSku
+        ?? item.target_ozon_sku
+        ?? item.targetSku
+        ?? item.ozonProductSku,
+    ) || defaultOzonSku;
+    const ozonProductId = compactString(
+      item.ozonProductId
+        ?? item.ozon_product_id
+        ?? item.targetOzonProductId
+        ?? item.target_ozon_product_id,
+    ) || defaultOzonProductId;
+    const ozonOfferId = compactString(
+      item.ozonOfferId
+        ?? item.ozon_offer_id
+        ?? item.targetOzonOfferId
+        ?? item.target_ozon_offer_id,
+    ) || defaultOzonOfferId;
     const attrs = item.attrs && typeof item.attrs === 'object' && !Array.isArray(item.attrs)
       ? item.attrs as Record<string, unknown>
       : {};
@@ -425,7 +474,11 @@ function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
       minOrderQty: Number.isFinite(Number(item.minOrderQty)) ? Number(item.minOrderQty) : null,
       grossWeightGrams: Number.isFinite(Number(item.grossWeightGrams)) ? Number(item.grossWeightGrams) : null,
       ...(images.length ? { images } : {}),
-      sourceSkuId: sku,
+      sourceSkuId,
+      sourcePlatform,
+      ...(ozonSku ? { ozonSku } : {}),
+      ...(ozonProductId ? { ozonProductId } : {}),
+      ...(ozonOfferId ? { ozonOfferId } : {}),
     };
   });
 }
@@ -471,15 +524,21 @@ export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown,
       if (sku) fallbackBySku.set(sku, variant);
     }
   }
-  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>).map((variant) => {
-    if (Array.isArray((variant as any).images) && (variant as any).images.length) {
-      return variant;
-    }
+  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform: '1688' }).map((variant) => {
     const fallback = fallbackBySku.get(variant.sku);
+    const inherited = {
+      ...(fallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: fallback.ozonSku } : {}),
+      ...(fallback?.ozonProductId && !(variant as any).ozonProductId ? { ozonProductId: fallback.ozonProductId } : {}),
+      ...(fallback?.ozonOfferId && !(variant as any).ozonOfferId ? { ozonOfferId: fallback.ozonOfferId } : {}),
+    };
+    const nextVariant = Object.keys(inherited).length ? { ...variant, ...inherited } : variant;
+    if (Array.isArray((nextVariant as any).images) && (nextVariant as any).images.length) {
+      return nextVariant;
+    }
     const fallbackImages = Array.isArray(fallback?.images)
       ? parseImageList(fallback.images.map((item: unknown) => String(item || '')))
       : [];
-    return fallbackImages.length ? { ...variant, images: fallbackImages } : variant;
+    return fallbackImages.length ? { ...nextVariant, images: fallbackImages } : nextVariant;
   });
 }
 
@@ -500,6 +559,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       variant?.minOrderQty ?? '',
       variant?.grossWeightGrams ?? '',
       imageUrl,
+      variant?.ozonSku ?? '',
     ].map((value) => String(value || '')).join(' | ');
   }).join('\n');
 }
@@ -512,7 +572,11 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
     ...parseAttributeText(input.attributesText),
     ...(input.attributes || {}),
   };
-  const skuItems = normalize1688SkuItems(input.skuItems?.length ? input.skuItems : input.variants);
+  const ozonPriceCheckContext = extractOzonPriceCheckContext({ raw: input.raw ?? null });
+  const skuItems = normalize1688SkuItems(
+    input.skuItems?.length ? input.skuItems : input.variants,
+    { sourcePlatform: '1688', ozonPriceCheckContext },
+  );
   const priceText = compactString(input.priceText ?? input.price);
   const supplierName = compactString(input.supplierName) || compactString(input.shopName);
   const weight = Number(input.grossWeightGrams);
@@ -568,6 +632,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
       sourceDataIssues,
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'collected_only',
+      ...(ozonPriceCheckContext ? { ozonPriceCheckContext } : {}),
       raw: input.raw ?? null,
     },
   };

@@ -43,6 +43,7 @@ describe('1688 collect helpers', () => {
           grossWeightGrams: 650,
           imageUrl: '//img.example.com/sku-red.jpg',
           images: ['https://img.example.com/sku-red-2.jpg', 'not-a-url'],
+          ozonSku: 'ozon-sku-42',
         },
       ],
       description: '商品详情包含材质、适用场景和包装说明',
@@ -100,8 +101,53 @@ describe('1688 collect helpers', () => {
           grossWeightGrams: 650,
           images: ['https://img.example.com/sku-red-2.jpg', 'https://img.example.com/sku-red.jpg'],
           sourceSkuId: 'sku-red-42',
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-42',
         },
       ],
+    });
+  });
+
+  it('links 1688 source SKUs to the Ozon SKU from price-check context', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '核价货源',
+      sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+      priceText: '¥25.80',
+      skuItems: [
+        { skuId: 'sku-black-xl', specText: '黑色 / XL', price: '25.8' },
+      ],
+      raw: {
+        priceCheckContext: {
+          title: 'Ozon 原商品',
+          productId: '123456789',
+          sku: 'ozon-sku-xl',
+          offerId: 'seller-offer-xl',
+          sourceUrl: 'https://www.ozon.ru/product/test-123456789/',
+          price: '1590',
+          currency: 'RUB',
+        },
+      },
+    });
+
+    expect(record.variants).toEqual([
+      {
+        sku: 'sku-black-xl',
+        attrs: { 规格: '黑色 / XL' },
+        price: '25.8',
+        stock: null,
+        minOrderQty: null,
+        grossWeightGrams: null,
+        sourceSkuId: 'sku-black-xl',
+        sourcePlatform: '1688',
+        ozonSku: 'ozon-sku-xl',
+        ozonProductId: '123456789',
+        ozonOfferId: 'seller-offer-xl',
+      },
+    ]);
+    expect(record.metadata.ozonPriceCheckContext).toMatchObject({
+      productId: '123456789',
+      sku: 'ozon-sku-xl',
+      offerId: 'seller-offer-xl',
     });
   });
 
@@ -238,7 +284,7 @@ describe('1688 collect helpers', () => {
       purchasePrice: { toString: () => '25.80' },
       currency: 'CNY',
       images: ['https://img.example.com/1.jpg'],
-      variants: [{ sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5', images: ['https://img.example.com/sku-red.jpg'] }],
+      variants: [{ sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5', images: ['https://img.example.com/sku-red.jpg'], sourceSkuId: 'sku-red-42', ozonSku: 'ozon-sku-42' }],
       notes: '货源备注',
       metadata: {
         description: '商品详情包含材质、适用场景和包装说明',
@@ -292,7 +338,7 @@ describe('1688 collect helpers', () => {
       logisticsText: '广东发货，快递费按地区计算',
       attributes: { 材质: '网布' },
       skuCount: 1,
-      skuText: 'sku-red-42 | 红色 / 42 | 26.5 |  |  |  | https://img.example.com/sku-red.jpg',
+      skuText: 'sku-red-42 | 红色 / 42 | 26.5 |  |  |  | https://img.example.com/sku-red.jpg | ozon-sku-42',
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'collected_only',
       listingPreparationIssues: ['missing_prepared_title_ru'],
@@ -503,7 +549,7 @@ describe('1688 collect helpers', () => {
     ]);
 
     expect(normalizeAlibaba1688PreparationVariants([
-      { skuId: 'sku-red-42', specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650, skuImageUrl: '//img.example.com/sku-red.jpg' },
+      { skuId: 'sku-red-42', specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650, skuImageUrl: '//img.example.com/sku-red.jpg', ozonSku: 'ozon-sku-42' },
     ])).toEqual([
       {
         sku: 'sku-red-42',
@@ -514,6 +560,8 @@ describe('1688 collect helpers', () => {
         grossWeightGrams: 650,
         images: ['https://img.example.com/sku-red.jpg'],
         sourceSkuId: 'sku-red-42',
+        sourcePlatform: '1688',
+        ozonSku: 'ozon-sku-42',
       },
     ]);
 
@@ -531,6 +579,7 @@ describe('1688 collect helpers', () => {
         grossWeightGrams: null,
         images: ['https://img.example.com/existing-sku.jpg'],
         sourceSkuId: 'sku-red-42',
+        sourcePlatform: '1688',
       },
     ]);
   });

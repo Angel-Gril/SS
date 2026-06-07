@@ -175,6 +175,9 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+normalizeSkuAttrs/);
   assert.match(collectScript, /function\s+normalizeSkuImages/);
   assert.match(collectScript, /\["image",\s*"imageUrl",\s*"imgUrl",\s*"picUrl",\s*"skuImage",\s*"skuImageUrl",\s*"previewImage",\s*"thumbUrl",\s*"mainImage"\]/);
+  assert.match(collectScript, /ozonSku\s*=\s*pickFirstValue\(item,\s*\["ozonSku",\s*"ozon_sku",\s*"targetOzonSku",\s*"target_ozon_sku",\s*"targetSku",\s*"ozonProductSku"\]\)/);
+  assert.match(collectScript, /sourceSkuId:\s*skuId == null \? "" : String\(skuId\)/);
+  assert.match(collectScript, /ozonSku:\s*ozonSku == null \? "" : String\(ozonSku\)/);
   assert.match(collectScript, /function\s+pickSkuItemsFromDom/);
   assert.match(collectScript, /pickSkuItemsFromDom\(\)/);
   assert.match(collectScript, /\[data-sku-id\]/);

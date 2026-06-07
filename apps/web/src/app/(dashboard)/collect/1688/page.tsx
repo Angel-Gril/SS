@@ -17,6 +17,9 @@ import { formatDate } from '@/lib/utils';
 
 interface Alibaba1688Variant {
   sku?: string | null;
+  sourceSkuId?: string | null;
+  sourcePlatform?: string | null;
+  ozonSku?: string | null;
   attrs?: Record<string, string> | null;
   price?: string | number | null;
   stock?: number | null;
@@ -64,6 +67,9 @@ interface Collected1688Item {
 interface OzonPriceCheckContext {
   title?: string | null;
   productId?: string | null;
+  sku?: string | null;
+  ozonSku?: string | null;
+  offerId?: string | null;
   sourceUrl?: string | null;
   price?: string | null;
   currency?: string | null;
@@ -140,12 +146,14 @@ function parseSkuText(text: string) {
       const parts = line.split(/[|\t]/).map((part) => part.trim());
       return {
         skuId: parts[0] || `sku-${index + 1}`,
+        sourceSkuId: parts[0] || `sku-${index + 1}`,
         specText: parts[1] || '',
         price: parts[2] || '',
         stock: parts[3] ? Number(parts[3]) : null,
         minOrderQty: parts[4] ? Number(parts[4]) : null,
         grossWeightGrams: parts[5] ? Number(parts[5]) : null,
         imageUrl: parts[6] || undefined,
+        ozonSku: parts[7] || undefined,
       };
     });
 }
@@ -189,9 +197,10 @@ function preparationIssueText(issues?: string[]) {
 
 function priceCheckText(context?: OzonPriceCheckContext | null) {
   if (!context) return '';
-  const title = context.title || context.productId || 'Ozon 商品';
+  const sku = context.sku || context.ozonSku || context.productId || '';
+  const title = context.title || sku || 'Ozon 商品';
   const price = context.price ? `${context.price} ${context.currency || 'RUB'}` : '';
-  return price ? `${title} · 售价 ${price}` : title;
+  return [title, sku ? `Ozon SKU ${sku}` : '', price ? `售价 ${price}` : ''].filter(Boolean).join(' · ');
 }
 
 function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
@@ -232,6 +241,8 @@ function variantSpecText(variant: Alibaba1688Variant) {
 
 function variantMetaText(variant: Alibaba1688Variant) {
   return [
+    variant.sourceSkuId ? `货源SKU ${variant.sourceSkuId}` : '',
+    variant.ozonSku ? `Ozon SKU ${variant.ozonSku}` : '',
     variant.price != null && variant.price !== '' ? `¥${variant.price}` : '',
     variant.stock != null ? `库存 ${variant.stock}` : '',
     variant.minOrderQty != null ? `起订 ${variant.minOrderQty}` : '',
@@ -531,7 +542,7 @@ export default function Collect1688Page() {
                 className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                 value={form.skuText}
                 onChange={(e) => update('skuText', e.target.value)}
-                placeholder={'skuId | 规格 | 价格 | 库存 | 起订量 | 毛重(g) | SKU图片URL\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg'}
+                placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | SKU图片URL | Ozon SKU\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42'}
               />
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -623,7 +634,7 @@ export default function Collect1688Page() {
                     </div>
                     <div className="text-xs text-muted-foreground flex gap-3 flex-wrap">
                       <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
-                      <span>Offer: {item.sourceProductId || '-'}</span>
+                      <span>1688 Offer: {item.sourceProductId || '-'}</span>
                       <span>SKU: {item.metadata?.skuCount || 0}</span>
                       <span>{formatDate(item.createdAt)}</span>
                     </div>

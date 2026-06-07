@@ -857,9 +857,15 @@
   function buildOzonPriceCheckContext(payload, insights, productId) {
     const item = insights && insights.item ? insights.item : {};
     const images = Array.isArray(payload && payload.images) ? payload.images : [];
+    const resolvedProductId = String((payload && payload.productId) || productId || "").trim();
+    const ozonSku = String((payload && (payload.sku || payload.ozonSku)) || resolvedProductId || "").trim();
+    const offerId = String((payload && (payload.offerId || payload.offer_id)) || item.offerId || item.offer_id || "").trim();
     return {
       sourcePlatform: "ozon",
-      productId: String((payload && payload.productId) || productId || ""),
+      productId: resolvedProductId,
+      sku: ozonSku,
+      ozonSku,
+      offerId: offerId || null,
       title: String((payload && payload.title) || item.name || document.querySelector("h1")?.textContent || "").trim(),
       price: payload && payload.price != null && payload.price !== "" ? payload.price : item.avgPrice,
       currency: (payload && payload.currency) || "RUB",
@@ -1832,9 +1838,11 @@
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
     const images = normalizeSkuImages(item);
+    const ozonSku = pickFirstValue(item, ["ozonSku", "ozon_sku", "targetOzonSku", "target_ozon_sku", "targetSku", "ozonProductSku"]);
 
     return {
       skuId: skuId == null ? "" : String(skuId),
+      sourceSkuId: skuId == null ? "" : String(skuId),
       name: name == null ? "" : String(name),
       attrs,
       specText,
@@ -1842,7 +1850,8 @@
       stock,
       minOrderQty,
       grossWeightGrams,
-      images
+      images,
+      ozonSku: ozonSku == null ? "" : String(ozonSku)
     };
   }
 
