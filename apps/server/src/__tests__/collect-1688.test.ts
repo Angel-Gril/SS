@@ -1169,11 +1169,21 @@ describe('1688 collect helpers', () => {
       purchasePrice: { toString: () => '25.80' },
       currency: 'CNY',
       images: ['https://img.example.com/ready.jpg'],
-      variants: [],
+      variants: [
+        {
+          sku: 'sku-red-42',
+          sourceSkuId: 'sku-red-42',
+          sourcePlatform: '1688',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+      ],
       metadata: {
         sourceKind: 'alibaba1688',
         preparedTitleRu: 'Мужские кроссовки',
         targetPriceCny: '199',
+        description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         categoryMappingStatus: 'deferred_until_listing',
       },
       createdAt: new Date('2026-06-07T12:00:00.000Z'),
@@ -1219,6 +1229,40 @@ describe('1688 collect helpers', () => {
     expect(result.issues).toEqual(['missing_description', 'missing_attributes']);
   });
 
+  it('infers source issues for legacy supply records before building Ozon listing drafts', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-taobao-legacy-source-incomplete',
+      title: '淘宝旧货源商品',
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-sku-red',
+          sourceSkuId: 'tb-sku-red',
+          sourcePlatform: 'taobao',
+          attrs: { color: 'red' },
+          stock: 50,
+        },
+      ],
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Товар Taobao',
+        targetPriceCny: '129',
+        ozonCategoryId: 17028922,
+        ozonTypeId: 93410,
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.items).toEqual([]);
+    expect(result.issues).toEqual(['missing_description', 'missing_attributes']);
+  });
+
   it('keeps already active 1688 listing records out of Ozon listing drafts', () => {
     const baseReadyItem = {
       id: 'collect-1688-ready',
@@ -1244,6 +1288,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17031663,
         ozonTypeId: 971234,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         categoryMappingStatus: 'manual_ready',
         listingPreparationStatus: 'ready',
       },
@@ -1295,6 +1340,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17031663,
         ozonTypeId: 971234,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         categoryMappingStatus: 'manual_ready',
         listingPreparationStatus: 'ready',
         lastListingResultStatus: 'partial_failed',
@@ -1340,6 +1386,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17031663,
         ozonTypeId: 971234,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         categoryMappingStatus: 'manual_ready',
         listingPreparationStatus: 'ready',
         lastListingResultStatus: 'partial_failed',
@@ -1402,6 +1449,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17031663,
         ozonTypeId: 971234,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         categoryMappingStatus: 'manual_ready',
         listingPreparationStatus: 'ready',
       },
@@ -1452,6 +1500,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17028922,
         ozonTypeId: 93410,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
       },
       createdAt: new Date('2026-06-07T12:00:00.000Z'),
     });
@@ -1492,6 +1541,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17028922,
         ozonTypeId: 93410,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         listingPreparationStatus: 'ready',
       },
       createdAt: new Date('2026-06-07T12:00:00.000Z'),
@@ -1535,6 +1585,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17028922,
         ozonTypeId: 93410,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         listingPreparationStatus: 'ready',
       },
       createdAt: new Date('2026-06-07T12:00:00.000Z'),
@@ -1585,6 +1636,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17031663,
         ozonTypeId: 971234,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         categoryMappingStatus: 'manual_ready',
         listingPreparationStatus: 'ready',
         lastListingResultStatus: 'partial_failed',
@@ -1646,6 +1698,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17028922,
         ozonTypeId: 93410,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         listingPreparationStatus: 'ready',
         lastListingResultStatus: 'partial_failed',
         lastListingResultItems: [
@@ -1698,6 +1751,7 @@ describe('1688 collect helpers', () => {
         ozonCategoryId: 17031663,
         ozonTypeId: 971234,
         description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
         grossWeightGrams: 650,
         lengthMm: 320,
         widthMm: 220,

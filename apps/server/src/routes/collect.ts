@@ -1232,8 +1232,8 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const meta = (item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata))
     ? item.metadata as Record<string, any>
     : {};
-  const sourceDataIssues = Array.isArray(meta.sourceDataIssues)
-    ? meta.sourceDataIssues.map((issue) => compactString(issue)).filter((issue): issue is string => !!issue)
+  const sourceDataIssues = Array.isArray(prefill.sourceDataIssues)
+    ? prefill.sourceDataIssues.map((issue) => compactString(issue)).filter((issue): issue is string => !!issue)
     : [];
   if (sourceDataIssues.length) {
     return { items: [], issues: sourceDataIssues, listingStatus };
