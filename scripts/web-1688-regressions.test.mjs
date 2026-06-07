@@ -128,12 +128,14 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /const\s+listingTaskEntrySchema\s*=\s*z\.enum\(\['1688-listing',\s*'listing-page',\s*'collect-page',\s*'manual-batch'\]\)/);
   assert.match(listingRoute, /function\s+appendListingTaskHistory/);
   assert.match(listingRoute, /sourceTrace:\s*z\.record\(z\.unknown\(\)\)\.optional\(\)/);
+  assert.match(listingRoute, /function\s+traceSourcePlatform\(source:\s*Record<string,\s*unknown>\)/);
   assert.match(listingRoute, /const\s+listingSources\s*=\s*items\.flatMap\(\(item\)\s*=>\s*\(/);
   assert.match(listingRoute, /\.\.\.\(item\.sourceTrace\s+as\s+Record<string,\s*unknown>\),\s*offerId:\s*item\.offerId/);
   assert.match(listingRoute, /entry:\s*source/);
   assert.match(listingRoute, /mode:\s*source\s*===\s*'1688-listing'\s*\?\s*'1688'\s*:\s*'batch'/);
   assert.match(listingRoute, /const\s+sourceSkus\s*=\s*traceValues\('sourceSkuId'\)/);
   assert.match(listingRoute, /const\s+sourcePlatforms\s*=\s*traceValues\('sourcePlatform'\)/);
+  assert.match(listingRoute, /key\s*===\s*'sourcePlatform'\s*\?\s*traceSourcePlatform\(source\)\s*:\s*traceText\(source,\s*key\)/);
   assert.match(listingRoute, /const\s+ozonSkus\s*=\s*traceValues\('ozonSku'\)/);
   assert.match(listingRoute, /const\s+ozonProductIds\s*=\s*traceValues\('ozonProductId'\)/);
   assert.match(listingRoute, /const\s+ozonOfferIds\s*=\s*traceValues\('ozonOfferId'\)/);

@@ -52,6 +52,10 @@ function traceText(source: Record<string, unknown>, key: string) {
   return String(source[key] || '').trim();
 }
 
+function traceSourcePlatform(source: Record<string, unknown>) {
+  return traceText(source, 'sourcePlatform').toLowerCase();
+}
+
 function safeMetadata(metadata: unknown) {
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...(metadata as Record<string, any>) }
@@ -103,7 +107,7 @@ function compactImportResultItem(source: Record<string, unknown>, importItem: Li
     offerId: traceText(source, 'offerId'),
     productId: importItem?.product_id != null ? String(importItem.product_id) : null,
     status: normalizeImportStatus(importItem?.status) || 'pending',
-    sourcePlatform: traceText(source, 'sourcePlatform') || null,
+    sourcePlatform: traceSourcePlatform(source) || null,
     sourceProductId: traceText(source, 'sourceProductId') || null,
     sourceSkuId: traceText(source, 'sourceSkuId') || null,
     ozonSku: traceText(source, 'ozonSku') || null,
@@ -313,7 +317,7 @@ export async function listingRoutes(app: FastifyInstance) {
       ));
       const traceValues = (key: string) => Array.from(new Set(
         listingSources
-          .map((source) => traceText(source, key))
+          .map((source) => key === 'sourcePlatform' ? traceSourcePlatform(source) : traceText(source, key))
           .filter(Boolean),
       ));
       const sourceSkus = traceValues('sourceSkuId');
