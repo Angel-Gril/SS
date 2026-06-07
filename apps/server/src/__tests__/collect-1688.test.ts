@@ -229,6 +229,31 @@ describe('1688 collect helpers', () => {
     }
   });
 
+  it('infers domestic source platforms from URLs when submitted platform data is missing or invalid', () => {
+    const tmallRecord = buildAlibaba1688CollectRecord({
+      title: '天猫货源商品',
+      sourceUrl: 'https://detail.tmall.com/item.htm?id=123456789',
+      skuItems: [{ specText: '默认规格', price: '29.9' }],
+    });
+    const taobaoRecord = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'not-a-platform',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      skuItems: [{ specText: '默认规格', price: '19.9' }],
+    });
+
+    expect(tmallRecord).toMatchObject({
+      sourcePlatform: 'tmall',
+      sourceProductId: '123456789',
+      variants: [expect.objectContaining({ sourcePlatform: 'tmall', sourceSkuId: 'tmall-1' })],
+    });
+    expect(taobaoRecord).toMatchObject({
+      sourcePlatform: 'taobao',
+      sourceProductId: '998877',
+      variants: [expect.objectContaining({ sourcePlatform: 'taobao', sourceSkuId: 'taobao-1' })],
+    });
+  });
+
   it('links 1688 source SKUs to the Ozon SKU from price-check context', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '核价货源',

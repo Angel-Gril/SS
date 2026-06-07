@@ -251,6 +251,18 @@ function parseUrlLike(value: unknown): URL | null {
   }
 }
 
+function inferDomesticSupplySourcePlatformFromUrl(sourceUrl: unknown): string | null {
+  const url = parseUrlLike(sourceUrl);
+  const host = url?.hostname.toLowerCase() || '';
+  if (!host) return null;
+  if (host.includes('1688.com')) return '1688';
+  if (host.includes('taobao.com')) return 'taobao';
+  if (host.includes('tmall.com')) return 'tmall';
+  if (host.includes('jd.com')) return 'jd';
+  if (host.includes('yangkeduo.com') || host.includes('pinduoduo.com')) return 'pinduoduo';
+  return null;
+}
+
 function extractDomesticSupplyProductIdFromUrl(sourceUrl: unknown, sourcePlatform?: unknown): string | null {
   const text = compactString(sourceUrl);
   if (!text) return null;
@@ -699,7 +711,13 @@ function formatAlibaba1688VariantText(variants: any[]): string {
 }
 
 export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688CollectSchema>) {
-  const sourcePlatform = normalizeSourcePlatform(input.sourcePlatform) || '1688';
+  const submittedSourcePlatform = normalizeSourcePlatform(input.sourcePlatform);
+  const inferredSourcePlatform = inferDomesticSupplySourcePlatformFromUrl(input.sourceUrl);
+  const sourcePlatform = (
+    submittedSourcePlatform && isDomesticSupplySourcePlatform(submittedSourcePlatform)
+      ? submittedSourcePlatform
+      : inferredSourcePlatform
+  ) || '1688';
   const offerIdFromUrl = extractDomesticSupplyProductIdFromUrl(input.sourceUrl, sourcePlatform);
   const offerId = compactString(input.offerId) || offerIdFromUrl || compactString(input.sku);
   const images = parseImageList(input.images, input.imageText);
