@@ -168,6 +168,25 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('uses the real source platform for fallback source SKU ids', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝无 SKU 货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      skuItems: [
+        { specText: '默认规格', price: '19.9' },
+      ],
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sku: 'taobao-1',
+        sourceSkuId: 'taobao-1',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
+  });
+
   it('infers source product ids from domestic supply urls when no offer id is submitted', () => {
     const cases = [
       ['taobao', 'https://item.taobao.com/item.htm?id=998877', '998877'],

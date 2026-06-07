@@ -540,9 +540,10 @@ function normalize1688SkuItems(
   const defaultOzonProductId = compactString(context?.productId);
   const defaultOzonOfferId = compactString(context?.offerId);
   return items.slice(0, 200).map((item, index) => {
-    const sku = compactString(item.skuId ?? item.sku ?? item.specId ?? item.id) || `1688-${index + 1}`;
-    const sourceSkuId = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.skuId ?? item.sku ?? item.specId ?? item.id) || sku;
     const sourcePlatform = compactString(item.sourcePlatform ?? item.platform) || defaultSourcePlatform;
+    const fallbackSku = `${sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase()}-${index + 1}`;
+    const sku = compactString(item.skuId ?? item.sku ?? item.specId ?? item.id) || fallbackSku;
+    const sourceSkuId = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.skuId ?? item.sku ?? item.specId ?? item.id) || sku;
     const ozonSku = compactString(
       item.ozonSku
         ?? item.ozon_sku
