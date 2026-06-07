@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyAlibaba1688ListingResultMetadata,
+  appendListingTaskHistory,
   buildAlibaba1688ListingResultUpdates,
   getListingResultStatus,
 } from '../routes/listing.js';
@@ -180,5 +181,61 @@ describe('1688 listing result helpers', () => {
     });
     expect(update!.offerIds).toHaveLength(105);
     expect(update!.resultItems).toHaveLength(100);
+  });
+
+  it('marks a retry submission as current and clears stale Ozon result summary', () => {
+    const metadata = appendListingTaskHistory(
+      {
+        sourceKind: 'alibaba1688',
+        listingStatus: 'partial_failed',
+        lastListingTaskId: 77,
+        lastListingResultStatus: 'partial_failed',
+        lastListingFailedCount: 1,
+        lastListingImportedCount: 1,
+        lastListingPendingCount: 0,
+        lastListingRefreshedAt: '2026-06-08T10:00:00.000Z',
+        lastListingResultItems: [
+          { offerId: 'ss1688-old-success', sourceSkuId: 'sku-red', status: 'imported' },
+          { offerId: 'ss1688-old-failed', sourceSkuId: 'sku-green', status: 'failed' },
+        ],
+        listingTasks: [
+          {
+            taskId: 77,
+            resultStatus: 'partial_failed',
+            importedCount: 1,
+            failedCount: 1,
+            pendingCount: 0,
+          },
+        ],
+      },
+      {
+        taskId: 78,
+        listingJobId: 'job-78',
+        shopId: 'shop-1',
+        offerIds: ['ss1688-new-failed-retry'],
+        submittedAt: '2026-06-08T11:00:00.000Z',
+      },
+    );
+
+    expect(metadata).toMatchObject({
+      listingStatus: 'submitted',
+      lastListingTaskId: 78,
+      lastListingResultStatus: 'submitted',
+      lastListingFailedCount: 0,
+      lastListingImportedCount: 0,
+      lastListingPendingCount: 0,
+      lastListingRefreshedAt: null,
+      lastListingResultItems: [],
+      listingTasks: [
+        {
+          taskId: 78,
+          submittedAt: '2026-06-08T11:00:00.000Z',
+        },
+        {
+          taskId: 77,
+          resultStatus: 'partial_failed',
+        },
+      ],
+    });
   });
 });

@@ -211,7 +211,7 @@ export function applyAlibaba1688ListingResultMetadata(
   };
 }
 
-function appendListingTaskHistory(
+export function appendListingTaskHistory(
   metadata: unknown,
   task: {
     taskId: number;
@@ -231,6 +231,12 @@ function appendListingTaskHistory(
     lastListingShopId: task.shopId,
     lastListingOfferIds: task.offerIds,
     lastListingSubmittedAt: task.submittedAt,
+    lastListingResultStatus: 'submitted',
+    lastListingFailedCount: 0,
+    lastListingImportedCount: 0,
+    lastListingPendingCount: 0,
+    lastListingRefreshedAt: null,
+    lastListingResultItems: [],
     listingTasks: [task, ...history].slice(0, 10),
   };
 }
