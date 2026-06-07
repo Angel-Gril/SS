@@ -61,6 +61,21 @@ export function ListingJobDetailDialog({
   }, [jobId]);
 
   const mode = data ? modeLabel(data.payload) : null;
+  const sourcePlatforms = data?.payload?.sourcePlatforms || [];
+  const sourceSkus = data?.payload?.sourceSkus || [];
+  const ozonSkus = data?.payload?.ozonSkus || [];
+  const ozonProductIds = data?.payload?.ozonProductIds || [];
+  const ozonOfferIds = data?.payload?.ozonOfferIds || [];
+
+  const renderCodes = (values: string[]) => (
+    values.length ? (
+      <div className="flex flex-wrap gap-1">
+        {values.map((value, i) => (
+          <code key={`${value}-${i}`} className="bg-muted px-1.5 py-0.5 rounded text-xs">{value}</code>
+        ))}
+      </div>
+    ) : '—'
+  );
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -92,14 +107,24 @@ export function ListingJobDetailDialog({
                 </div>
               )}
               <div className="col-span-2">
-                <div className="text-muted-foreground mb-1">源 SKU：</div>
-                {data.payload?.sourceSkus?.length ? (
-                  <div className="flex flex-wrap gap-1">
-                    {data.payload.sourceSkus.map((sku, i) => (
-                      <code key={i} className="bg-muted px-1.5 py-0.5 rounded text-xs">{sku}</code>
-                    ))}
-                  </div>
-                ) : '—'}
+                <div className="text-muted-foreground mb-1">货源平台：</div>
+                {renderCodes(sourcePlatforms)}
+              </div>
+              <div className="col-span-2">
+                <div className="text-muted-foreground mb-1">货源 SKU：</div>
+                {renderCodes(sourceSkus)}
+              </div>
+              <div className="col-span-2">
+                <div className="text-muted-foreground mb-1">Ozon SKU：</div>
+                {renderCodes(ozonSkus)}
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Ozon Product ID：</div>
+                {renderCodes(ozonProductIds)}
+              </div>
+              <div>
+                <div className="text-muted-foreground mb-1">Ozon Offer ID：</div>
+                {renderCodes(ozonOfferIds)}
               </div>
             </div>
 

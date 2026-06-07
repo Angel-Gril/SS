@@ -15,9 +15,13 @@ export interface JobRow {
   status: Status;
   payload: {
     taskId?: number;
-    mode?: 'follow' | 'clone' | 'follow-by-sku';
-    entry?: 'collect-page' | 'listing-page';
+    mode?: 'follow' | 'clone' | 'follow-by-sku' | '1688' | 'batch';
+    entry?: 'collect-page' | 'listing-page' | '1688-listing' | 'manual-batch';
     sourceSkus?: string[];
+    sourcePlatforms?: string[];
+    ozonSkus?: string[];
+    ozonProductIds?: string[];
+    ozonOfferIds?: string[];
     offerIds?: string[];
     offerImages?: Record<string, string> | null;
     itemCount?: number;
@@ -48,6 +52,19 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
   const sourceCount = payload?.sourceItemCount ?? 0;
   const isMultiVariant = sourceCount > 0 && itemCount > sourceCount;
 
+  if (mode === '1688') {
+    return {
+      text: '1688 上架',
+      cls: 'border-sky-300 text-sky-700 bg-sky-50 dark:bg-sky-950 dark:text-sky-300',
+    };
+  }
+  if (mode === 'batch') {
+    return {
+      text: '批量上架',
+      cls: 'border-zinc-300 text-zinc-700 bg-zinc-50 dark:bg-zinc-950 dark:text-zinc-300',
+    };
+  }
+
   // mode 空时兜底显示跟卖（兼容老数据）
   const baseAction = mode === 'clone' ? '复制' : '跟卖';
   const text = isMultiVariant ? `多SKU变体${baseAction}` : baseAction;
@@ -59,7 +76,7 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
 
 interface Props {
   // 按上架来源过滤：'listing-page' = 改款页发起；'collect-page' = 采集跟卖页发起
-  entryFilter?: 'collect-page' | 'listing-page' | null;
+  entryFilter?: 'collect-page' | 'listing-page' | '1688-listing' | null;
   // 按模式过滤：'follow' = 跟卖；'clone' = 复制
   modeFilter?: 'follow' | 'clone' | null;
   // 卡片标题文案
@@ -89,6 +106,7 @@ export function ListingJobList({
       if (entryFilter) {
         filtered = filtered.filter((r) => {
           const e = r.payload?.entry;
+          if (entryFilter === '1688-listing') return e === '1688-listing';
           // listing-page：必须明确写了 listing-page；老数据/没有 entry 字段的不显示在改款页
           if (entryFilter === 'listing-page') return e === 'listing-page';
           // collect-page：明确 collect-page，或老数据（兼容历史记录）
@@ -150,6 +168,7 @@ export function ListingJobList({
 
 function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void }) {
   const sourceSkus = row.payload?.sourceSkus || [];
+  const ozonSkus = row.payload?.ozonSkus || [];
   const offerIds = row.payload?.offerIds || [];
   const total = row.payload?.itemCount ?? 0;
   const failed = row.payload?.failedCount ?? 0;
@@ -180,10 +199,10 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
         </Button>
       </div>
 
-      {/* 主体：原 SKU + 新 offer_id 两栏 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+      {/* 主体：货源 SKU + Ozon SKU + 新 offer_id */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
         <div className="space-y-1">
-          <div className="text-[11px] text-muted-foreground">原 SKU（{sourceSkus.length}）</div>
+          <div className="text-[11px] text-muted-foreground">货源 SKU（{sourceSkus.length}）</div>
           <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
             {sourceSkus.length === 0 ? (
               <span className="text-xs text-muted-foreground">—</span>
@@ -195,6 +214,23 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
             {sourceSkus.length > 8 && (
               <button onClick={onOpenDetail} className="text-[11px] text-primary hover:underline">
                 +{sourceSkus.length - 8} 更多
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-[11px] text-muted-foreground">Ozon SKU（{ozonSkus.length}）</div>
+          <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+            {ozonSkus.length === 0 ? (
+              <span className="text-xs text-muted-foreground">—</span>
+            ) : (
+              ozonSkus.slice(0, 8).map((sku, i) => (
+                <code key={i} className="bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-1.5 py-0.5 rounded text-[11px]">{sku}</code>
+              ))
+            )}
+            {ozonSkus.length > 8 && (
+              <button onClick={onOpenDetail} className="text-[11px] text-primary hover:underline">
+                +{ozonSkus.length - 8} 更多
               </button>
             )}
           </div>

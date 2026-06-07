@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
+import { ListingJobList } from '@/components/listing-job-list';
 import { sourceDataIssueLabels } from '@/lib/1688-source-issues';
 import { api } from '@/lib/api';
 import { invalidImageUrls, splitImageInput, validImageUrls } from '@/lib/image-links';
@@ -516,6 +517,7 @@ export default function Alibaba1688ListingPage() {
       if (!draftItems) return;
       const res = await api.post<{ taskId?: number }>('/api/listing/batch', {
         shopId,
+        source: '1688-listing',
         items: draftItems,
       });
       if (res.code === 1) {
@@ -894,6 +896,8 @@ export default function Alibaba1688ListingPage() {
         </Card>
         );
       })}
+
+      <ListingJobList entryFilter="1688-listing" title="1688 上架记录" limit={30} />
     </div>
   );
 }

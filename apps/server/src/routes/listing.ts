@@ -7,6 +7,7 @@ import { OzonClient } from '../services/ozon-client.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
+  source: z.enum(['1688-listing', 'manual-batch']).optional(),
   items: z.array(z.object({
     offerId: z.string().min(1),
     title: z.string().min(1),
@@ -40,7 +41,7 @@ export async function listingRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { shopId, items } = parsed.data;
+    const { shopId, items, source = 'manual-batch' } = parsed.data;
 
     const shop = await prisma.shop.findFirst({ where: { id: shopId, userId } });
     if (!shop) {
@@ -89,6 +90,23 @@ export async function listingRoutes(app: FastifyInstance) {
       const listingSources = items
         .map((item) => item.sourceTrace)
         .filter((source): source is Record<string, unknown> => !!source);
+      const traceValue = (source: Record<string, unknown>, key: string) => String(source[key] || '').trim();
+      const traceValues = (key: string) => Array.from(new Set(
+        listingSources
+          .map((source) => traceValue(source, key))
+          .filter(Boolean),
+      ));
+      const sourceSkus = traceValues('sourceSkuId');
+      const sourcePlatforms = traceValues('sourcePlatform');
+      const ozonSkus = traceValues('ozonSku');
+      const ozonProductIds = traceValues('ozonProductId');
+      const ozonOfferIds = traceValues('ozonOfferId');
+      const offerIds = items.map((item) => item.offerId);
+      const offerImages = Object.fromEntries(
+        items
+          .map((item) => [item.offerId, item.images[0]] as const)
+          .filter((entry): entry is readonly [string, string] => !!entry[1]),
+      );
 
       await prisma.syncJob.create({
         data: {
@@ -99,6 +117,15 @@ export async function listingRoutes(app: FastifyInstance) {
           payload: {
             taskId: result.result.task_id,
             itemCount: items.length,
+            entry: source,
+            mode: source === '1688-listing' ? '1688' : 'batch',
+            sourceSkus,
+            sourcePlatforms,
+            ozonSkus,
+            ozonProductIds,
+            ozonOfferIds,
+            offerIds,
+            offerImages,
             listingSources,
           } as any,
         },
