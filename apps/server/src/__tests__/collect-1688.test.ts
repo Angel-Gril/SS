@@ -281,4 +281,23 @@ describe('1688 collect helpers', () => {
       categoryMappingStatus: 'deferred_until_listing',
     });
   });
+
+  it('keeps 1688 preparation drafts when source images are missing', () => {
+    const metadata = buildAlibaba1688PreparationMetadata(
+      { categoryMappingStatus: 'deferred_until_listing' },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+      },
+      { hasImages: false },
+    );
+
+    expect(metadata).toMatchObject({
+      preparedTitleRu: 'Мужские кроссовки',
+      targetPriceCny: '199',
+      listingPreparationStatus: 'draft',
+      listingPreparationIssues: ['missing_source_images'],
+      categoryMappingStatus: 'deferred_until_listing',
+    });
+  });
 });

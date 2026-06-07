@@ -137,6 +137,7 @@ function preparationIssueLabels(issues?: string[]) {
     missing_prepared_title_ru: '待补俄语标题',
     prepared_title_contains_cjk: '标题含中文',
     missing_target_price_cny: '待补目标售价',
+    missing_source_images: '待补商品图片',
   };
   return (issues || []).map((issue) => labels[issue] || issue);
 }
@@ -148,6 +149,7 @@ function currentPreparationIssues(item: Alibaba1688ListingItem) {
   if (!title) issues.push('missing_prepared_title_ru');
   else if (CJK_TEXT_RE.test(title)) issues.push('prepared_title_contains_cjk');
   if (!(Number.isFinite(targetPrice) && targetPrice > 0)) issues.push('missing_target_price_cny');
+  if (!item.images.length) issues.push('missing_source_images');
   return issues;
 }
 

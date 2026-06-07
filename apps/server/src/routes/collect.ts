@@ -458,6 +458,8 @@ export function buildAlibaba1688ListingPrefill(item: {
 export function getAlibaba1688PreparationIssues(row: {
   preparedTitleRu?: string | null;
   targetPriceCny?: string | number | null;
+}, source?: {
+  hasImages?: boolean;
 }) {
   const title = String(row.preparedTitleRu || '').trim();
   const targetPrice = Number(row.targetPriceCny);
@@ -472,6 +474,9 @@ export function getAlibaba1688PreparationIssues(row: {
   if (!(Number.isFinite(targetPrice) && targetPrice > 0)) {
     issues.push('missing_target_price_cny');
   }
+  if (source && !source.hasImages) {
+    issues.push('missing_source_images');
+  }
 
   return issues;
 }
@@ -482,6 +487,9 @@ export function buildAlibaba1688PreparationMetadata(
     preparedTitleRu?: string | null;
     targetPriceCny?: string | number | null;
     listingNotes?: string | null;
+  },
+  source?: {
+    hasImages?: boolean;
   },
 ) {
   const meta: Record<string, any> = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
@@ -498,7 +506,7 @@ export function buildAlibaba1688PreparationMetadata(
   if (notes) meta.listingNotes = notes;
   else delete meta.listingNotes;
 
-  const issues = getAlibaba1688PreparationIssues(row);
+  const issues = getAlibaba1688PreparationIssues(row, source);
   meta.listingPreparationStatus = issues.length ? 'draft' : 'ready';
   if (issues.length) meta.listingPreparationIssues = issues;
   else delete meta.listingPreparationIssues;
@@ -784,7 +792,9 @@ export async function collectRoutes(app: FastifyInstance) {
     const updatedItems: ReturnType<typeof buildAlibaba1688ListingPrefill>[] = [];
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
-      const meta = buildAlibaba1688PreparationMetadata(item.metadata, row);
+      const meta = buildAlibaba1688PreparationMetadata(item.metadata, row, {
+        hasImages: Array.isArray(item.images) && item.images.length > 0,
+      });
 
       await prisma.supplyGoods.update({
         where: { id: item.id },

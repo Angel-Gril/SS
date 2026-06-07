@@ -171,6 +171,7 @@ function preparationIssueText(issues?: string[]) {
     missing_prepared_title_ru: '待补俄语标题',
     prepared_title_contains_cjk: '标题含中文',
     missing_target_price_cny: '待补目标售价',
+    missing_source_images: '待补商品图片',
   };
   return issues.map((issue) => labels[issue] || issue).join(' / ');
 }
