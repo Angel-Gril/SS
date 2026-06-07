@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { invalidImageUrls, splitImageInput, validImageUrls } from '@/lib/image-links';
 import { formatDate } from '@/lib/utils';
 
 interface Alibaba1688Variant {
@@ -140,35 +141,6 @@ function preparationIssueLabels(issues?: string[]) {
     missing_source_images: '待补商品图片',
   };
   return (issues || []).map((issue) => labels[issue] || issue);
-}
-
-function splitImageInput(value: string) {
-  return value
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function isHttpUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-function validImageUrls(images: string[]) {
-  const seen = new Set<string>();
-  return images.filter((image) => {
-    if (!isHttpUrl(image) || seen.has(image)) return false;
-    seen.add(image);
-    return true;
-  });
-}
-
-function invalidImageUrls(images: string[]) {
-  return images.filter((image) => !isHttpUrl(image));
 }
 
 function currentPreparationIssues(item: Alibaba1688ListingItem) {
