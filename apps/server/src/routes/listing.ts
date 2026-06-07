@@ -147,7 +147,6 @@ export function buildAlibaba1688ListingResultUpdates(params: {
   const grouped = new Map<string, Record<string, unknown>[]>();
 
   for (const source of listingSources) {
-    if (traceText(source, 'sourcePlatform') !== '1688') continue;
     const supplyGoodsId = traceText(source, 'supplyGoodsId');
     const offerId = traceText(source, 'offerId');
     if (!supplyGoodsId || !offerId) continue;

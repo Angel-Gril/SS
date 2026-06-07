@@ -190,6 +190,51 @@ describe('1688 listing result helpers', () => {
     ]));
   });
 
+  it('keeps domestic source platform SKU traces when backfilling 1688 listing results', () => {
+    const updates = buildAlibaba1688ListingResultUpdates({
+      taskId: 89,
+      listingJobId: 'job-89',
+      shopId: 'shop-1',
+      refreshedAt: '2026-06-08T10:20:00.000Z',
+      payload: {
+        listingSources: [
+          {
+            supplyGoodsId: 'collect-taobao-source',
+            sourcePlatform: 'taobao',
+            sourceProductId: 'tb-998877',
+            sourceSkuId: 'tb-sku-red',
+            ozonSku: 'ozon-sku-red',
+            offerId: 'ss1688-tb-998877-tb-sku-red',
+          },
+        ],
+      },
+      importItems: [
+        {
+          offer_id: 'ss1688-tb-998877-tb-sku-red',
+          product_id: 9003,
+          status: 'imported',
+          errors: [],
+        },
+      ],
+    });
+
+    expect(updates).toEqual([
+      expect.objectContaining({
+        supplyGoodsId: 'collect-taobao-source',
+        resultStatus: 'imported',
+        resultItems: [
+          expect.objectContaining({
+            offerId: 'ss1688-tb-998877-tb-sku-red',
+            sourcePlatform: 'taobao',
+            sourceProductId: 'tb-998877',
+            sourceSkuId: 'tb-sku-red',
+            ozonSku: 'ozon-sku-red',
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it('marks a retry submission as current and clears stale Ozon result summary', () => {
     const metadata = appendListingTaskHistory(
       {
