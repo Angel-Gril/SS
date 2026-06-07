@@ -63,6 +63,26 @@ function isDomesticSupplySourcePlatform(value: unknown) {
   return DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(String(value || '').trim().toLowerCase());
 }
 
+function validateAlibaba1688ListingSourceTraces(items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>) {
+  return items
+    .map((item) => {
+      const source = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+        ? item.sourceTrace
+        : null;
+      if (!source || !traceText(source, 'supplyGoodsId')) {
+        return { offerId: item.offerId, reason: 'missing_source_trace' };
+      }
+      if (!isDomesticSupplySourcePlatform(source.sourcePlatform)) {
+        return { offerId: item.offerId, reason: 'invalid_source_platform' };
+      }
+      if (!traceText(source, 'sourceSkuId')) {
+        return { offerId: item.offerId, reason: 'missing_source_sku_id' };
+      }
+      return null;
+    })
+    .filter((item): item is { offerId: string; reason: string } => !!item);
+}
+
 function safeMetadata(metadata: unknown) {
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...(metadata as Record<string, any>) }
@@ -274,6 +294,16 @@ export async function listingRoutes(app: FastifyInstance) {
     }
 
     const { shopId, items, source = 'manual-batch' } = parsed.data;
+    if (source === '1688-listing') {
+      const invalidItems = validateAlibaba1688ListingSourceTraces(items);
+      if (invalidItems.length) {
+        return reply.status(400).send({
+          code: 0,
+          msg: '货源上架商品缺少有效货源追踪，不能提交到 Ozon',
+          data: { invalidItems },
+        });
+      }
+    }
 
     const shop = await prisma.shop.findFirst({ where: { id: shopId, userId } });
     if (!shop) {

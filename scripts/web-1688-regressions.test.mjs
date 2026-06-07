@@ -129,6 +129,10 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /function\s+appendListingTaskHistory/);
   assert.match(listingRoute, /sourceTrace:\s*z\.record\(z\.unknown\(\)\)\.optional\(\)/);
   assert.match(listingRoute, /function\s+traceSourcePlatform\(source:\s*Record<string,\s*unknown>\)/);
+  assert.match(listingRoute, /function\s+validateAlibaba1688ListingSourceTraces\(items:/);
+  assert.match(listingRoute, /source\s*===\s*'1688-listing'[\s\S]*validateAlibaba1688ListingSourceTraces\(items\)/);
+  assert.match(listingRoute, /reason:\s*'missing_source_sku_id'/);
+  assert.match(listingRoute, /货源上架商品缺少有效货源追踪，不能提交到 Ozon/);
   assert.match(listingRoute, /const\s+listingSources\s*=\s*items\.flatMap\(\(item\)\s*=>\s*\(/);
   assert.match(listingRoute, /\.\.\.\(item\.sourceTrace\s+as\s+Record<string,\s*unknown>\),\s*offerId:\s*item\.offerId/);
   assert.match(listingRoute, /entry:\s*source/);

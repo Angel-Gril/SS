@@ -105,27 +105,6 @@ describe('listing route', () => {
               ozonSku: 'ozon-red',
             },
           },
-          {
-            offerId: 'ssbad-ozon-red',
-            title: 'Bad trace',
-            description: 'Описание',
-            categoryId: 17028922,
-            typeId: 93410,
-            price: 129,
-            currency: 'CNY',
-            stock: 10,
-            images: ['https://img.example.com/bad.jpg'],
-            weight: 500,
-            height: 100,
-            depth: 100,
-            width: 100,
-            sourceTrace: {
-              supplyGoodsId: 'supply-ozon',
-              sourcePlatform: 'ozon',
-              sourceProductId: 'ozon-product-123',
-              sourceSkuId: 'ozon-red',
-            },
-          },
         ],
       },
     });
@@ -136,7 +115,7 @@ describe('listing route', () => {
     expect(JSON.parse(response.body)).toMatchObject({ code: 1 });
     expect(supplyGoodsMock.findMany).toHaveBeenCalledWith({
       where: {
-        id: { in: ['supply-domestic', 'supply-ozon'] },
+        id: { in: ['supply-domestic'] },
         userId: 'user-1',
         sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
       },
@@ -147,5 +126,108 @@ describe('listing route', () => {
       where: { id: 'supply-domestic' },
       data: expect.objectContaining({ status: 'listed' }),
     }));
+  });
+
+  it('rejects supply listing submissions without domestic source trace', async () => {
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-998877-missing-trace',
+            title: 'Товар без источника',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/missing-trace.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品缺少有效货源追踪，不能提交到 Ozon',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-998877-missing-trace',
+            reason: 'missing_source_trace',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects supply listing submissions without source SKU trace', async () => {
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-998877-no-source-sku',
+            title: 'Товар без SKU источника',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/no-source-sku.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'supply-domestic',
+              sourcePlatform: 'taobao',
+              sourceProductId: '998877',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品缺少有效货源追踪，不能提交到 Ozon',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-998877-no-source-sku',
+            reason: 'missing_source_sku_id',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
   });
 });
