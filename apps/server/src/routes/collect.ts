@@ -168,7 +168,7 @@ export function isDomesticSupplySourcePlatform(value: unknown): boolean {
 }
 
 export function buildCollectSnapshotWhere(userId: string, skus: string[], sourcePlatform?: unknown) {
-  const sourcePlatformValue = normalizeProductId(sourcePlatform) || 'ozon';
+  const sourcePlatformValue = normalizeSourcePlatform(sourcePlatform) || 'ozon';
   const lookupSkus = Array.from(new Set(skus.map((sku) => normalizeProductId(sku)).filter((sku): sku is string => !!sku)));
   return {
     userId,

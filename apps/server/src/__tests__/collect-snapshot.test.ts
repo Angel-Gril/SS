@@ -30,6 +30,17 @@ describe('collect snapshot helpers', () => {
     });
   });
 
+  it('normalizes explicit source platform snapshot lookups', () => {
+    expect(buildCollectSnapshotWhere('user-1', ['tb-123'], 'Taobao')).toEqual({
+      userId: 'user-1',
+      sourcePlatform: 'taobao',
+      OR: [
+        { sourceProductId: { in: ['tb-123'] } },
+        { sku: { in: ['tb-123'] } },
+      ],
+    });
+  });
+
   it('serializes ERP collect status for list-page overlays', () => {
     const createdAt = new Date('2026-05-31T12:00:00.000Z');
 
