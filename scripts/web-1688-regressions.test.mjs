@@ -231,7 +231,8 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobDetail, /function\s+listingSourceFor\(offerId:\s*string,\s*index:\s*number\)/);
   assert.match(listingJobDetail, /sourceValue\(source,\s*'offerId'\)\s*===\s*offerId/);
   assert.match(listingJobDetail, /来源追踪/);
-  assert.match(listingJobDetail, /货源\s*\{sourceValue\(source,\s*'sourceSkuId'\)\}/);
+  assert.match(listingJobDetail, /const\s+sourceSkuLabel\s*=\s*sourcePlatform\s*\?\s*`\$\{sourcePlatformLabel\(sourcePlatform\)\}\s+SKU`\s*:\s*'货源 SKU'/);
+  assert.match(listingJobDetail, /\{sourceSkuLabel\}\s*\{sourceValue\(source,\s*'sourceSkuId'\)\}/);
   assert.match(listingJobDetail, /PID\s*\{sourceValue\(source,\s*'ozonProductId'\)\}/);
 });
 

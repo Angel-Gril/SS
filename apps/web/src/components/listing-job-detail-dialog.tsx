@@ -195,6 +195,7 @@ export function ListingJobDetailDialog({
                       const img = data.payload?.offerImages?.[it.offer_id];
                       const source = listingSourceFor(it.offer_id, i);
                       const sourcePlatform = sourceValue(source, 'sourcePlatform');
+                      const sourceSkuLabel = sourcePlatform ? `${sourcePlatformLabel(sourcePlatform)} SKU` : '货源 SKU';
                       return (
                         <tr key={i} className="border-t">
                           <td className="px-3 py-2">
@@ -220,7 +221,7 @@ export function ListingJobDetailDialog({
                                     <Badge variant="outline" className="text-[10px]">{sourcePlatformLabel(sourcePlatform)}</Badge>
                                   )}
                                   {sourceValue(source, 'sourceSkuId') && (
-                                    <code className="bg-muted px-1.5 py-0.5 rounded text-[11px]">货源 {sourceValue(source, 'sourceSkuId')}</code>
+                                    <code className="bg-muted px-1.5 py-0.5 rounded text-[11px]">{sourceSkuLabel} {sourceValue(source, 'sourceSkuId')}</code>
                                   )}
                                 </div>
                                 <div className="flex flex-wrap gap-1">
