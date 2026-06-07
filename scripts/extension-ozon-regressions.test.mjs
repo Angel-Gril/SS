@@ -239,6 +239,9 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /customizationInfo/);
   assert.match(pageBridge, /__GLOBAL_DATA__/);
   assert.match(pageBridge, /offerDetailData/);
+  assert.match(pageBridge, /goodsDetailData/);
+  assert.match(pageBridge, /goodsData/);
+  assert.match(pageBridge, /mallData/);
   assert.match(pageBridge, /skuData/);
   assert.ok(collectScript.includes('[¥￥]'));
   assert.ok(collectScript.includes('元|CNY|RMB'));
