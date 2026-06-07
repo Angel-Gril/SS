@@ -492,8 +492,37 @@ describe('1688 collect helpers', () => {
       createdAt: new Date('2026-06-07T12:00:00.000Z'),
     });
 
-    expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  | https://img.example.com/tb-red.jpg | ozon-sku-red | taobao');
+    expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  | https://img.example.com/tb-red.jpg | ozon-sku-red |  |  | taobao');
     expect(item.sourcePlatform).toBe('taobao');
+  });
+
+  it('serializes Ozon product and offer trace fields in editable SKU text', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-taobao-trace',
+      title: '淘宝货源追踪',
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-sku-red',
+          sourceSkuId: 'tb-sku-red',
+          sourcePlatform: 'taobao',
+          ozonSku: 'ozon-sku-red',
+          ozonProductId: '123456789',
+          ozonOfferId: 'seller-offer-red',
+          attrs: { 规格: '红色' },
+          price: '19.9',
+          images: ['https://img.example.com/tb-red.jpg'],
+        },
+      ],
+      metadata: { sourceKind: 'alibaba1688' },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  | https://img.example.com/tb-red.jpg | ozon-sku-red | 123456789 | seller-offer-red | taobao');
   });
 
   it('serializes editable SKU text from the source SKU id before legacy sku', () => {

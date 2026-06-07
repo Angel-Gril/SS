@@ -665,6 +665,8 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       ? normalizeImageUrl(variant.images[0]) || ''
       : '';
     const sourcePlatform = compactString(variant?.sourcePlatform);
+    const ozonProductId = compactString(variant?.ozonProductId);
+    const ozonOfferId = compactString(variant?.ozonOfferId);
     const values = [
       variant?.sourceSkuId || variant?.sku || '',
       specText,
@@ -675,6 +677,9 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       imageUrl,
       variant?.ozonSku ?? '',
     ];
+    if (ozonProductId || ozonOfferId || (sourcePlatform && sourcePlatform !== '1688')) {
+      values.push(ozonProductId || '', ozonOfferId || '');
+    }
     if (sourcePlatform && sourcePlatform !== '1688') values.push(sourcePlatform);
     return values.map((value) => String(value || '')).join(' | ');
   }).join('\n');
