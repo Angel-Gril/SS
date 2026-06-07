@@ -244,7 +244,7 @@ export default function Alibaba1688ListingPage() {
   async function handleSave() {
     if (!items.length) return;
     setSaving(true);
-    const res = await api.post<{ saved: number; ready: number; draft: number }>('/api/collect/1688/save-preparation', {
+    const res = await api.post<{ saved: number; ready: number; draft: number; items?: Alibaba1688ListingItem[] }>('/api/collect/1688/save-preparation', {
       items: items.map((item) => ({
         id: item.id,
         preparedTitleRu: item.preparedTitleRu,
@@ -255,7 +255,9 @@ export default function Alibaba1688ListingPage() {
     setSaving(false);
     if (res.code === 1) {
       toast({ title: res.msg || '已保存 1688 上架准备草稿' });
-      router.push('/collect/1688');
+      if (res.data?.items?.length) {
+        setItems(res.data.items);
+      }
     } else {
       toast({ title: res.msg || '保存失败', variant: 'destructive' });
     }

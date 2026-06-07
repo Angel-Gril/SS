@@ -781,6 +781,7 @@ export async function collectRoutes(app: FastifyInstance) {
     let saved = 0;
     let ready = 0;
     let draft = 0;
+    const updatedItems: ReturnType<typeof buildAlibaba1688ListingPrefill>[] = [];
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
       const meta = buildAlibaba1688PreparationMetadata(item.metadata, row);
@@ -792,12 +793,13 @@ export async function collectRoutes(app: FastifyInstance) {
       saved++;
       if (meta.listingPreparationStatus === 'ready') ready++;
       else draft++;
+      updatedItems.push(buildAlibaba1688ListingPrefill({ ...item, metadata: meta }));
     }
 
     return reply.send({
       code: 1,
       msg: `已保存 ${saved} 条 1688 上架准备，${ready} 条准备完成，${draft} 条仍为草稿`,
-      data: { saved, ready, draft },
+      data: { saved, ready, draft, items: updatedItems },
     });
   });
 
