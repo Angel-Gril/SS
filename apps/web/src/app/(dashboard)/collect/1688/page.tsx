@@ -20,6 +20,8 @@ interface Alibaba1688Variant {
   sourceSkuId?: string | null;
   sourcePlatform?: string | null;
   ozonSku?: string | null;
+  ozonProductId?: string | null;
+  ozonOfferId?: string | null;
   attrs?: Record<string, string> | null;
   price?: string | number | null;
   stock?: number | null;
@@ -180,8 +182,25 @@ const SOURCE_PLATFORM_LABELS: Record<string, string> = {
   pdd: '拼多多',
 };
 
+const SOURCE_PLATFORM_VALUES = new Set(Object.keys(SOURCE_PLATFORM_LABELS));
+
 function sourcePlatformLabel(sourcePlatform?: string | null) {
   return sourcePlatform ? SOURCE_PLATFORM_LABELS[sourcePlatform] || sourcePlatform : '货源';
+}
+
+function normalizeSourcePlatform(value?: string) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && SOURCE_PLATFORM_VALUES.has(normalized) ? normalized : value || undefined;
+}
+
+function parseSkuSourceTrace(parts: string[]) {
+  const legacyPlatform = normalizeSourcePlatform(parts[8]);
+  const isLegacyPlatformColumn = !!legacyPlatform && !parts[9] && !parts[10];
+  return {
+    ozonProductId: isLegacyPlatformColumn ? undefined : parts[8] || undefined,
+    ozonOfferId: isLegacyPlatformColumn ? undefined : parts[9] || undefined,
+    sourcePlatform: isLegacyPlatformColumn ? legacyPlatform : normalizeSourcePlatform(parts[10]),
+  };
 }
 
 function parseSkuText(text: string) {
@@ -191,6 +210,7 @@ function parseSkuText(text: string) {
     .filter(Boolean)
     .map((line, index) => {
       const parts = line.split(/[|\t]/).map((part) => part.trim());
+      const sourceTrace = parseSkuSourceTrace(parts);
       return {
         skuId: parts[0] || `sku-${index + 1}`,
         sourceSkuId: parts[0] || `sku-${index + 1}`,
@@ -201,7 +221,9 @@ function parseSkuText(text: string) {
         grossWeightGrams: parts[5] ? Number(parts[5]) : null,
         imageUrl: parts[6] || undefined,
         ozonSku: parts[7] || undefined,
-        sourcePlatform: parts[8] || undefined,
+        ozonProductId: sourceTrace.ozonProductId,
+        ozonOfferId: sourceTrace.ozonOfferId,
+        sourcePlatform: sourceTrace.sourcePlatform,
       };
     });
 }
@@ -366,6 +388,8 @@ function variantMetaText(variant: Alibaba1688Variant) {
   return [
     variant.sourceSkuId ? `${sourceSkuLabel(variant)} ${variant.sourceSkuId}` : '',
     variant.ozonSku ? `Ozon SKU ${variant.ozonSku}` : '',
+    variant.ozonProductId ? `Ozon Product ID ${variant.ozonProductId}` : '',
+    variant.ozonOfferId ? `Ozon Offer ID ${variant.ozonOfferId}` : '',
     variant.price != null && variant.price !== '' ? `¥${variant.price}` : '',
     variant.stock != null ? `库存 ${variant.stock}` : '',
     variant.minOrderQty != null ? `起订 ${variant.minOrderQty}` : '',
@@ -690,7 +714,7 @@ export default function Collect1688Page() {
                 className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                 value={form.skuText}
                 onChange={(e) => update('skuText', e.target.value)}
-                placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | SKU图片URL | Ozon SKU | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | 1688'}
+                placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | SKU图片URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
               />
             </div>
             <div className="space-y-1 md:col-span-2">
