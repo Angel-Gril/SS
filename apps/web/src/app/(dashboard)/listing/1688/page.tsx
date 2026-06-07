@@ -319,6 +319,7 @@ export default function Alibaba1688ListingPage() {
   const [items, setItems] = useState<Alibaba1688ListingItem[]>([]);
   const [preparationFilter, setPreparationFilter] = useState<PreparationFilter>('all');
   const [dirtyItemIds, setDirtyItemIds] = useState<Set<string>>(new Set());
+  const [listingJobsRefreshToken, setListingJobsRefreshToken] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -522,6 +523,7 @@ export default function Alibaba1688ListingPage() {
       });
       if (res.code === 1) {
         toast({ title: res.msg || `已提交 ${draftItems.length} 条 1688 上架草稿到 Ozon` });
+        setListingJobsRefreshToken((value) => value + 1);
       } else {
         toast({ title: res.msg || '提交到 Ozon 失败', variant: 'destructive' });
       }
@@ -897,7 +899,7 @@ export default function Alibaba1688ListingPage() {
         );
       })}
 
-      <ListingJobList entryFilter="1688-listing" title="1688 上架记录" limit={30} />
+      <ListingJobList entryFilter="1688-listing" title="1688 上架记录" limit={30} refreshToken={listingJobsRefreshToken} />
     </div>
   );
 }

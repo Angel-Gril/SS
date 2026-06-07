@@ -90,6 +90,8 @@ interface Props {
   accentEmerald?: boolean;
   // limit
   limit?: number;
+  // 外部动作完成后触发重新加载，比如提交新的 1688 上架任务后刷新记录列表
+  refreshToken?: number | string;
 }
 
 export function ListingJobList({
@@ -98,6 +100,7 @@ export function ListingJobList({
   title = '上架记录',
   accentEmerald = false,
   limit = 30,
+  refreshToken = 0,
 }: Props) {
   const [rows, setRows] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -134,7 +137,7 @@ export function ListingJobList({
 
   useEffect(() => {
     load();
-  }, [entryFilter, modeFilter, limit]);
+  }, [entryFilter, modeFilter, limit, refreshToken]);
 
   const accent = accentEmerald ? 'border-emerald-200 dark:border-emerald-900' : '';
   const iconColor = accentEmerald ? 'text-emerald-600' : 'text-muted-foreground';

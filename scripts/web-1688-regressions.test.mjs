@@ -80,9 +80,11 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingPage, /interface\s+Shop\s*\{\s*id:\s*string;\s*name:\s*string;\s*platform:\s*string;\s*status\?:\s*string/);
   assert.match(listingPage, /api\.get<Shop\[\]>\('\/api\/shops'\)/);
   assert.match(listingPage, /const\s+\[shopId,\s*setShopId\]\s*=\s*useState\(''\)/);
+  assert.match(listingPage, /const\s+\[listingJobsRefreshToken,\s*setListingJobsRefreshToken\]\s*=\s*useState\(0\)/);
   assert.match(listingPage, /\/api\/listing\/batch/);
   assert.match(listingPage, /source:\s*'1688-listing'/);
-  assert.match(listingPage, /<ListingJobList\s+entryFilter="1688-listing"/);
+  assert.match(listingPage, /setListingJobsRefreshToken\(\(value\)\s*=>\s*value\s*\+\s*1\)/);
+  assert.match(listingPage, /<ListingJobList\s+entryFilter="1688-listing"[\s\S]*refreshToken=\{listingJobsRefreshToken\}/);
   assert.match(listingPage, /1688 上架记录/);
   assert.match(listingPage, /请选择目标店铺/);
   assert.match(listingPage, /提交到 Ozon/);
@@ -136,6 +138,9 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(collectPage, /最近上架:\s*Task/);
   assert.match(listingJobList, /entryFilter\?:\s*'collect-page'\s*\|\s*'listing-page'\s*\|\s*'1688-listing'/);
   assert.match(listingJobList, /mode\?:\s*'follow'\s*\|\s*'clone'\s*\|\s*'follow-by-sku'\s*\|\s*'1688'\s*\|\s*'batch'/);
+  assert.match(listingJobList, /refreshToken\?:\s*number\s*\|\s*string/);
+  assert.match(listingJobList, /refreshToken\s*=\s*0/);
+  assert.match(listingJobList, /\[entryFilter,\s*modeFilter,\s*limit,\s*refreshToken\]/);
   assert.match(listingJobList, /sourcePlatforms\?:\s*string\[\]/);
   assert.match(listingJobList, /ozonSkus\?:\s*string\[\]/);
   assert.match(listingJobList, /ozonProductIds\?:\s*string\[\]/);
