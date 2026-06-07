@@ -68,7 +68,8 @@ export function ListingJobDetailDialog({
   const ozonProductIds = data?.payload?.ozonProductIds || [];
   const ozonOfferIds = data?.payload?.ozonOfferIds || [];
   const listingSources = data?.payload?.listingSources || [];
-  const canRefresh = !!data && (data.payload?.entry === '1688-listing' || (data.status !== 'SUCCESS' && data.status !== 'FAILED'));
+  const isAlibaba1688Listing = data?.payload?.entry === '1688-listing' || data?.payload?.mode === '1688';
+  const canRefresh = !!data && (isAlibaba1688Listing || (data.status !== 'SUCCESS' && data.status !== 'FAILED'));
 
   const renderCodes = (values: string[], formatValue: (value: string) => string = (value) => value) => (
     values.length ? (
@@ -169,7 +170,7 @@ export function ListingJobDetailDialog({
             <div className="flex justify-end">
               <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing || !canRefresh}>
                 <RefreshCw className={`h-3.5 w-3.5 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
-                {data.payload?.entry === '1688-listing' && (data.status === 'SUCCESS' || data.status === 'FAILED')
+                {isAlibaba1688Listing && (data.status === 'SUCCESS' || data.status === 'FAILED')
                   ? '重新拉取 Ozon 结果'
                   : '从 OZON 拉取最新状态'}
               </Button>

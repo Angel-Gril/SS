@@ -340,6 +340,11 @@ function safeMetadata(metadata: unknown) {
     : {};
 }
 
+function isAlibaba1688ListingJobPayload(payload: unknown) {
+  const data = safeMetadata(payload);
+  return data.entry === '1688-listing' || data.mode === '1688';
+}
+
 function normalizeImportStatus(status: unknown) {
   return String(status || '').trim().toLowerCase();
 }
@@ -771,7 +776,14 @@ export async function listingRoutes(app: FastifyInstance) {
     };
     const entry = listingTaskEntrySchema.safeParse(query.entry);
     if (entry.success) {
-      where.payload = { path: ['entry'], equals: entry.data };
+      if (entry.data === '1688-listing') {
+        where.OR = [
+          { payload: { path: ['entry'], equals: '1688-listing' } },
+          { payload: { path: ['mode'], equals: '1688' } },
+        ];
+      } else {
+        where.payload = { path: ['entry'], equals: entry.data };
+      }
     }
 
     const [total, rows] = await Promise.all([
@@ -872,7 +884,7 @@ export async function listingRoutes(app: FastifyInstance) {
           errorMessage: failed > 0 ? `${failed} 个商品上架失败` : null,
         },
       });
-      if ((job.payload as any)?.entry === '1688-listing') {
+      if (isAlibaba1688ListingJobPayload(job.payload)) {
         const resultUpdates = buildAlibaba1688ListingResultUpdates({
           payload: nextPayload,
           importItems: info.items,

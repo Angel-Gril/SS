@@ -7,10 +7,15 @@ const authenticateMock = vi.hoisted(() => vi.fn(async (request: any) => {
 
 const shopMock = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  findMany: vi.fn(),
 }));
 
 const syncJobMock = vi.hoisted(() => ({
   create: vi.fn(),
+  count: vi.fn(),
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+  update: vi.fn(),
 }));
 
 const supplyGoodsMock = vi.hoisted(() => ({
@@ -19,6 +24,7 @@ const supplyGoodsMock = vi.hoisted(() => ({
 }));
 
 const ozonRequestMock = vi.hoisted(() => vi.fn());
+const ozonGetImportInfoMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../lib/auth.js', () => ({
   authenticate: authenticateMock,
@@ -39,6 +45,7 @@ vi.mock('../lib/prisma.js', () => ({
 vi.mock('../services/ozon-client.js', () => ({
   OzonClient: vi.fn(function (this: any) {
     this.request = ozonRequestMock;
+    this.getImportInfo = ozonGetImportInfoMock;
   }),
 }));
 
@@ -55,7 +62,17 @@ describe('listing route', () => {
       clientId: 'client-1',
       apiKeyEncrypted: 'encrypted-key',
     });
+    shopMock.findMany.mockResolvedValue([]);
     syncJobMock.create.mockResolvedValue({ id: 'job-1' });
+    syncJobMock.count.mockResolvedValue(0);
+    syncJobMock.findMany.mockResolvedValue([]);
+    syncJobMock.findFirst.mockResolvedValue(null);
+    syncJobMock.update.mockResolvedValue({
+      id: 'job-1',
+      status: 'SUCCESS',
+      finishedAt: new Date('2026-06-08T10:00:00.000Z'),
+      payload: {},
+    });
     supplyGoodsMock.findMany.mockResolvedValue([
       {
         id: 'supply-domestic',
@@ -70,6 +87,7 @@ describe('listing route', () => {
     ]);
     supplyGoodsMock.update.mockResolvedValue({});
     ozonRequestMock.mockResolvedValue({ result: { task_id: 9001 } });
+    ozonGetImportInfoMock.mockResolvedValue({ items: [] });
   });
 
   it('updates only domestic supply records after submitting supply listing drafts', async () => {
@@ -652,5 +670,178 @@ describe('listing route', () => {
     });
     expect(ozonRequestMock).not.toHaveBeenCalled();
     expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
+
+  it('backfills legacy 1688 listing refresh results while preserving source and Ozon SKU trace', async () => {
+    const refreshedPayload = {
+      taskId: 77,
+      mode: '1688',
+      listingSources: [
+        {
+          supplyGoodsId: 'supply-domestic',
+          sourcePlatform: 'taobao',
+          sourceProductId: '998877',
+          sourceSkuId: 'tb-red',
+          ozonSku: 'ozon-red',
+          ozonProductId: 'ozon-product-red',
+          ozonOfferId: 'seller-offer-red',
+          offerId: 'sstaobao-998877-tb-red',
+        },
+        {
+          supplyGoodsId: 'supply-ozon',
+          sourcePlatform: 'ozon',
+          sourceProductId: 'ozon-product-old',
+          sourceSkuId: 'ozon-sku-old',
+          offerId: 'ssozon-legacy',
+        },
+      ],
+    };
+    syncJobMock.findFirst.mockResolvedValueOnce({
+      id: 'job-legacy-1688',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: refreshedPayload,
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        platform: 'OZON',
+        clientId: 'client-1',
+        apiKeyEncrypted: 'encrypted-key',
+      },
+    });
+    syncJobMock.update.mockImplementationOnce(async ({ data }: any) => ({
+      id: 'job-legacy-1688',
+      status: data.status,
+      finishedAt: data.finishedAt,
+      payload: data.payload,
+    }));
+    ozonGetImportInfoMock.mockResolvedValueOnce({
+      items: [
+        {
+          offer_id: 'sstaobao-998877-tb-red',
+          product_id: 9001,
+          status: 'imported',
+          errors: [],
+        },
+      ],
+    });
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/tasks/job-legacy-1688/refresh',
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 1,
+      data: {
+        id: 'job-legacy-1688',
+        status: 'SUCCESS',
+        payload: {
+          mode: '1688',
+          resultStatus: 'imported',
+          importedCount: 1,
+          failedCount: 0,
+          pendingCount: 0,
+        },
+      },
+    });
+    expect(supplyGoodsMock.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['supply-domestic', 'supply-ozon'] },
+        userId: 'user-1',
+        sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
+      },
+      select: { id: true, sourcePlatform: true, metadata: true },
+    });
+    expect(supplyGoodsMock.update).toHaveBeenCalledTimes(1);
+    expect(supplyGoodsMock.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'supply-domestic' },
+      data: expect.objectContaining({
+        status: 'listed',
+        metadata: expect.objectContaining({
+          listingStatus: 'imported',
+          lastListingResultStatus: 'imported',
+          lastListingResultItems: [
+            expect.objectContaining({
+              offerId: 'sstaobao-998877-tb-red',
+              productId: '9001',
+              status: 'imported',
+              sourcePlatform: 'taobao',
+              sourceProductId: '998877',
+              sourceSkuId: 'tb-red',
+              ozonSku: 'ozon-red',
+              ozonProductId: 'ozon-product-red',
+              ozonOfferId: 'seller-offer-red',
+            }),
+          ],
+        }),
+      }),
+    }));
+  });
+
+  it('lists legacy mode-only 1688 listing jobs when filtering supply listing tasks', async () => {
+    shopMock.findMany.mockResolvedValueOnce([{ id: 'shop-1' }]);
+    syncJobMock.count.mockResolvedValueOnce(1);
+    syncJobMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'job-legacy-1688',
+        status: 'SUCCESS',
+        payload: {
+          taskId: 77,
+          mode: '1688',
+          sourcePlatforms: ['taobao'],
+          sourceSkus: ['tb-red'],
+        },
+        createdAt: new Date('2026-06-08T10:00:00.000Z'),
+        errorMessage: null,
+        shop: { name: 'Ozon 店铺', platform: 'OZON' },
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/listing/tasks?entry=1688-listing',
+    });
+
+    await app.close();
+
+    const expectedWhere = {
+      shopId: { in: ['shop-1'] },
+      type: 'PRODUCT_PUSH',
+      OR: [
+        { payload: { path: ['entry'], equals: '1688-listing' } },
+        { payload: { path: ['mode'], equals: '1688' } },
+      ],
+    };
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 1,
+      data: {
+        total: 1,
+        rows: [
+          {
+            id: 'job-legacy-1688',
+            payload: {
+              mode: '1688',
+              sourcePlatforms: ['taobao'],
+              sourceSkus: ['tb-red'],
+            },
+          },
+        ],
+      },
+    });
+    expect(syncJobMock.count).toHaveBeenCalledWith({ where: expectedWhere });
+    expect(syncJobMock.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expectedWhere,
+    }));
   });
 });

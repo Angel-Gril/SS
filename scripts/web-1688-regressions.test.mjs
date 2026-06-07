@@ -177,7 +177,9 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /export\s+function\s+buildAlibaba1688ListingResultUpdates/);
   assert.match(listingRoute, /export\s+function\s+applyAlibaba1688ListingResultMetadata/);
   assert.match(listingRoute, /getListingResultStatus\(info\.items\)/);
-  assert.match(listingRoute, /if\s*\(\(job\.payload\s+as\s+any\)\?\.entry\s*===\s*'1688-listing'\)/);
+  assert.match(listingRoute, /function\s+isAlibaba1688ListingJobPayload\(payload:\s*unknown\)/);
+  assert.match(listingRoute, /data\.entry\s*===\s*'1688-listing'\s*\|\|\s*data\.mode\s*===\s*'1688'/);
+  assert.match(listingRoute, /if\s*\(isAlibaba1688ListingJobPayload\(job\.payload\)\)/);
   assert.match(listingRoute, /status:\s*resultUpdate\.resultStatus\s*===\s*'failed'\s*\?\s*'listing_failed'\s*:\s*'listed'/);
   assert.match(collectPage, /status:\s*string/);
   assert.match(collectPage, /function\s+listingStatusText\(item:\s*Collected1688Item\)/);
@@ -228,7 +230,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobList, /new\s+URLSearchParams\(\{\s*limit:\s*String\(limit\)\s*\}\)/);
   assert.match(listingJobList, /entryFilter\s*&&\s*entryFilter\s*!==\s*'collect-page'/);
   assert.match(listingJobList, /params\.set\('entry',\s*entryFilter\)/);
-  assert.match(listingJobList, /if\s*\(entryFilter\s*===\s*'1688-listing'\)\s*return\s*e\s*===\s*'1688-listing'/);
+  assert.match(listingJobList, /if\s*\(entryFilter\s*===\s*'1688-listing'\)\s*return\s*e\s*===\s*'1688-listing'\s*\|\|\s*r\.payload\?\.mode\s*===\s*'1688'/);
   assert.match(listingJobList, /text:\s*'货源上架'/);
   assert.match(listingJobList, /const\s+sourcePlatforms\s*=\s*row\.payload\?\.sourcePlatforms\s*\|\|\s*\[\]/);
   assert.match(listingJobList, /货源平台/);
@@ -239,7 +241,8 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobDetail, /Ozon SKU/);
   assert.match(listingJobDetail, /Ozon Product ID/);
   assert.match(listingJobDetail, /Ozon Offer ID/);
-  assert.match(listingJobDetail, /const\s+canRefresh\s*=\s*!!data\s*&&\s*\(data\.payload\?\.entry\s*===\s*'1688-listing'/);
+  assert.match(listingJobDetail, /const\s+isAlibaba1688Listing\s*=\s*data\?\.\payload\?\.entry\s*===\s*'1688-listing'\s*\|\|\s*data\?\.\payload\?\.mode\s*===\s*'1688'/);
+  assert.match(listingJobDetail, /const\s+canRefresh\s*=\s*!!data\s*&&\s*\(isAlibaba1688Listing/);
   assert.match(listingJobDetail, /disabled=\{refreshing\s*\|\|\s*!canRefresh\}/);
   assert.match(listingJobDetail, /重新拉取 Ozon 结果/);
   assert.match(listingJobDetail, /error\.message\s*\|\|\s*error\.description\s*\|\|\s*error\.code\s*\|\|\s*error\.field/);

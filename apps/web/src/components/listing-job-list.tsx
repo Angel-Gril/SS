@@ -117,7 +117,7 @@ export function ListingJobList({
       if (entryFilter) {
         filtered = filtered.filter((r) => {
           const e = r.payload?.entry;
-          if (entryFilter === '1688-listing') return e === '1688-listing';
+          if (entryFilter === '1688-listing') return e === '1688-listing' || r.payload?.mode === '1688';
           // listing-page：必须明确写了 listing-page；老数据/没有 entry 字段的不显示在改款页
           if (entryFilter === 'listing-page') return e === 'listing-page';
           // collect-page：明确 collect-page，或老数据（兼容历史记录）
