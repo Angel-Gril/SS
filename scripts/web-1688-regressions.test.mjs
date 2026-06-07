@@ -45,3 +45,18 @@ test('dashboard and main listing page expose 1688 workflow entry points', () => 
   assert.match(listingPage, /router\.push\('\/collect\/1688'\)/);
   assert.match(listingPage, /router\.push\('\/listing\/1688'\)/);
 });
+
+test('1688 listing preparation exposes Ozon category mapping fields', () => {
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(listingPage, /ozonCategoryId:\s*string/);
+  assert.match(listingPage, /ozonTypeId:\s*string/);
+  assert.match(listingPage, /missing_ozon_category_id:\s*'待补 Ozon 分类ID'/);
+  assert.match(listingPage, /missing_ozon_type_id:\s*'待补 Ozon 类型ID'/);
+  assert.match(listingPage, /if\s*\(!item\.ozonCategoryId\.trim\(\)\)\s*issues\.push\('missing_ozon_category_id'\)/);
+  assert.match(listingPage, /if\s*\(!item\.ozonTypeId\.trim\(\)\)\s*issues\.push\('missing_ozon_type_id'\)/);
+  assert.match(listingPage, /ozonCategoryId:\s*item\.ozonCategoryId/);
+  assert.match(listingPage, /ozonTypeId:\s*item\.ozonTypeId/);
+  assert.match(listingPage, /Ozon 分类ID/);
+  assert.match(listingPage, /Ozon 类型ID/);
+});

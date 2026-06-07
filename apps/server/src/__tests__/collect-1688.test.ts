@@ -293,6 +293,8 @@ describe('1688 collect helpers', () => {
         supplierYears: 6,
         monthlySales: 3000,
         categoryPath: '鞋类 > 男鞋 > 运动鞋',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
         grossWeightGrams: 650,
         lengthMm: 320,
         widthMm: 220,
@@ -329,6 +331,8 @@ describe('1688 collect helpers', () => {
       supplierYears: 6,
       monthlySales: 3000,
       categoryPath: '鞋类 > 男鞋 > 运动鞋',
+      ozonCategoryId: '17031663',
+      ozonTypeId: '971234',
       grossWeightGrams: 650,
       lengthMm: 320,
       widthMm: 220,
@@ -411,6 +415,8 @@ describe('1688 collect helpers', () => {
         preparedTitleRu: 'Мужские кроссовки',
         targetPriceCny: '199.90',
         listingNotes: '图片需要处理',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
       },
     );
 
@@ -421,10 +427,36 @@ describe('1688 collect helpers', () => {
       preparedTitleRu: 'Мужские кроссовки',
       targetPriceCny: '199.9',
       listingNotes: '图片需要处理',
-      categoryMappingStatus: 'deferred_until_listing',
+      ozonCategoryId: 17031663,
+      ozonTypeId: 971234,
+      categoryMappingStatus: 'manual_ready',
       listingPreparationStatus: 'ready',
     });
     expect(metadata).not.toHaveProperty('listingPreparationIssues');
+  });
+
+  it('keeps 1688 preparation drafts until Ozon category and type are supplied', () => {
+    expect(getAlibaba1688PreparationIssues({
+      preparedTitleRu: 'Мужские кроссовки',
+      targetPriceCny: '199',
+    }, { hasImages: true })).toEqual(['missing_ozon_category_id', 'missing_ozon_type_id']);
+
+    const metadata = buildAlibaba1688PreparationMetadata(
+      { sourceKind: 'alibaba1688', categoryMappingStatus: 'deferred_until_listing' },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+      },
+      { hasImages: true },
+    );
+
+    expect(metadata).toMatchObject({
+      preparedTitleRu: 'Мужские кроссовки',
+      targetPriceCny: '199',
+      listingPreparationStatus: 'draft',
+      listingPreparationIssues: ['missing_ozon_category_id', 'missing_ozon_type_id'],
+      categoryMappingStatus: 'deferred_until_listing',
+    });
   });
 
   it('saves 1688 source repairs during listing preparation without executing mapping', () => {
@@ -440,6 +472,8 @@ describe('1688 collect helpers', () => {
         targetPriceCny: '199',
         description: '补充后的货源详情',
         attributesText: '材质：网布\n颜色：黑色',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
       } as any,
       { hasImages: true },
     );
@@ -454,7 +488,9 @@ describe('1688 collect helpers', () => {
       description: '补充后的货源详情',
       attributes: { 材质: '网布', 颜色: '黑色' },
       sourceDataIssues: [],
-      categoryMappingStatus: 'deferred_until_listing',
+      ozonCategoryId: 17031663,
+      ozonTypeId: 971234,
+      categoryMappingStatus: 'manual_ready',
       listingPreparationStatus: 'ready',
     });
   });
@@ -470,23 +506,29 @@ describe('1688 collect helpers', () => {
         preparedTitleRu: '   ',
         targetPriceCny: 0,
         listingNotes: '',
+        ozonCategoryId: '',
+        ozonTypeId: '',
       },
     );
 
     expect(metadata).toMatchObject({
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'draft',
-      listingPreparationIssues: ['missing_prepared_title_ru', 'missing_target_price_cny'],
+      listingPreparationIssues: ['missing_prepared_title_ru', 'missing_target_price_cny', 'missing_ozon_category_id', 'missing_ozon_type_id'],
     });
     expect(metadata).not.toHaveProperty('preparedTitleRu');
     expect(metadata).not.toHaveProperty('targetPriceCny');
     expect(metadata).not.toHaveProperty('listingNotes');
+    expect(metadata).not.toHaveProperty('ozonCategoryId');
+    expect(metadata).not.toHaveProperty('ozonTypeId');
   });
 
   it('keeps 1688 preparation drafts when the prepared title still contains Chinese text', () => {
     expect(getAlibaba1688PreparationIssues({
       preparedTitleRu: '男士 кроссовки',
       targetPriceCny: '199',
+      ozonCategoryId: '17031663',
+      ozonTypeId: '971234',
     })).toEqual(['prepared_title_contains_cjk']);
 
     const metadata = buildAlibaba1688PreparationMetadata(
@@ -494,15 +536,19 @@ describe('1688 collect helpers', () => {
       {
         preparedTitleRu: '男士 кроссовки',
         targetPriceCny: '199',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
       },
     );
 
     expect(metadata).toMatchObject({
       preparedTitleRu: '男士 кроссовки',
       targetPriceCny: '199',
+      ozonCategoryId: 17031663,
+      ozonTypeId: 971234,
       listingPreparationStatus: 'draft',
       listingPreparationIssues: ['prepared_title_contains_cjk'],
-      categoryMappingStatus: 'deferred_until_listing',
+      categoryMappingStatus: 'manual_ready',
     });
   });
 
@@ -512,6 +558,8 @@ describe('1688 collect helpers', () => {
       {
         preparedTitleRu: 'Мужские кроссовки',
         targetPriceCny: '199',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
       },
       { hasImages: false },
     );
@@ -519,9 +567,11 @@ describe('1688 collect helpers', () => {
     expect(metadata).toMatchObject({
       preparedTitleRu: 'Мужские кроссовки',
       targetPriceCny: '199',
+      ozonCategoryId: 17031663,
+      ozonTypeId: 971234,
       listingPreparationStatus: 'draft',
       listingPreparationIssues: ['missing_source_images'],
-      categoryMappingStatus: 'deferred_until_listing',
+      categoryMappingStatus: 'manual_ready',
     });
   });
 
@@ -591,6 +641,8 @@ describe('1688 collect helpers', () => {
       {
         preparedTitleRu: 'Мужские кроссовки',
         targetPriceCny: '199',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
       },
       { hasImages: images.length > 0 },
     );
@@ -598,8 +650,10 @@ describe('1688 collect helpers', () => {
     expect(metadata).toMatchObject({
       preparedTitleRu: 'Мужские кроссовки',
       targetPriceCny: '199',
+      ozonCategoryId: 17031663,
+      ozonTypeId: 971234,
       listingPreparationStatus: 'ready',
-      categoryMappingStatus: 'deferred_until_listing',
+      categoryMappingStatus: 'manual_ready',
     });
     expect(metadata).not.toHaveProperty('listingPreparationIssues');
   });

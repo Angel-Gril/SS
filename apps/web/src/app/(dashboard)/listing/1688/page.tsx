@@ -62,6 +62,8 @@ interface Alibaba1688ListingItem {
   listingPreparationIssues: string[];
   preparedTitleRu: string;
   targetPriceCny: string;
+  ozonCategoryId: string;
+  ozonTypeId: string;
   listingNotes: string;
   ozonPriceCheckContext: OzonPriceCheckContext | null;
   priceCheckEstimate: PriceCheckEstimate | null;
@@ -201,6 +203,8 @@ function preparationIssueLabels(issues?: string[]) {
     missing_prepared_title_ru: '待补俄语标题',
     prepared_title_contains_cjk: '标题含中文',
     missing_target_price_cny: '待补目标售价',
+    missing_ozon_category_id: '待补 Ozon 分类ID',
+    missing_ozon_type_id: '待补 Ozon 类型ID',
     missing_source_images: '待补商品图片',
   };
   return (issues || []).map((issue) => labels[issue] || issue);
@@ -213,6 +217,8 @@ function currentPreparationIssues(item: Alibaba1688ListingItem) {
   if (!title) issues.push('missing_prepared_title_ru');
   else if (CJK_TEXT_RE.test(title)) issues.push('prepared_title_contains_cjk');
   if (!(Number.isFinite(targetPrice) && targetPrice > 0)) issues.push('missing_target_price_cny');
+  if (!item.ozonCategoryId.trim()) issues.push('missing_ozon_category_id');
+  if (!item.ozonTypeId.trim()) issues.push('missing_ozon_type_id');
   if (!validImageUrls(item.images).length) issues.push('missing_source_images');
   return issues;
 }
@@ -307,7 +313,7 @@ export default function Alibaba1688ListingPage() {
 
   function updateItem(
     id: string,
-    field: 'preparedTitleRu' | 'targetPriceCny' | 'listingNotes' | 'purchasePrice' | 'description',
+    field: 'preparedTitleRu' | 'targetPriceCny' | 'ozonCategoryId' | 'ozonTypeId' | 'listingNotes' | 'purchasePrice' | 'description',
     value: string,
   ) {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
@@ -395,6 +401,8 @@ export default function Alibaba1688ListingPage() {
         id: item.id,
         preparedTitleRu: item.preparedTitleRu,
         targetPriceCny: item.targetPriceCny,
+        ozonCategoryId: item.ozonCategoryId,
+        ozonTypeId: item.ozonTypeId,
         listingNotes: item.listingNotes,
         images: item.images,
         purchasePrice: item.purchasePrice,
@@ -675,6 +683,22 @@ export default function Alibaba1688ListingPage() {
                   value={item.purchasePrice || ''}
                   onChange={(e) => updateItem(item.id, 'purchasePrice', e.target.value)}
                   placeholder="25.80"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Ozon 分类ID</Label>
+                <Input
+                  value={item.ozonCategoryId}
+                  onChange={(e) => updateItem(item.id, 'ozonCategoryId', e.target.value)}
+                  placeholder="17031663"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Ozon 类型ID</Label>
+                <Input
+                  value={item.ozonTypeId}
+                  onChange={(e) => updateItem(item.id, 'ozonTypeId', e.target.value)}
+                  placeholder="971234"
                 />
               </div>
               <div className="space-y-1 md:col-span-2">

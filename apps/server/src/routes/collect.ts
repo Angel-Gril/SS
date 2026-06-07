@@ -240,6 +240,12 @@ function numericValue(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+function positiveIntegerValue(value: unknown): number | null {
+  const number = numericValue(value);
+  if (!(number != null && Number.isFinite(number) && number > 0)) return null;
+  return Math.trunc(number);
+}
+
 function buildPriceCheckEstimate(
   context: OzonPriceCheckContext,
   purchasePrice: unknown,
@@ -711,6 +717,8 @@ export function buildAlibaba1688ListingPrefill(item: {
     listingPreparationIssues: Array.isArray(meta.listingPreparationIssues) ? meta.listingPreparationIssues : [],
     preparedTitleRu: meta.preparedTitleRu || '',
     targetPriceCny: meta.targetPriceCny || '',
+    ozonCategoryId: meta.ozonCategoryId != null ? String(meta.ozonCategoryId) : '',
+    ozonTypeId: meta.ozonTypeId != null ? String(meta.ozonTypeId) : '',
     listingNotes: meta.listingNotes || '',
     ozonPriceCheckContext,
     priceCheckEstimate,
@@ -722,11 +730,15 @@ export function buildAlibaba1688ListingPrefill(item: {
 export function getAlibaba1688PreparationIssues(row: {
   preparedTitleRu?: string | null;
   targetPriceCny?: string | number | null;
+  ozonCategoryId?: string | number | null;
+  ozonTypeId?: string | number | null;
 }, source?: {
   hasImages?: boolean;
 }) {
   const title = String(row.preparedTitleRu || '').trim();
   const targetPrice = Number(row.targetPriceCny);
+  const ozonCategoryId = positiveIntegerValue(row.ozonCategoryId);
+  const ozonTypeId = positiveIntegerValue(row.ozonTypeId);
   const issues: string[] = [];
 
   if (!title) {
@@ -737,6 +749,12 @@ export function getAlibaba1688PreparationIssues(row: {
 
   if (!(Number.isFinite(targetPrice) && targetPrice > 0)) {
     issues.push('missing_target_price_cny');
+  }
+  if (!ozonCategoryId) {
+    issues.push('missing_ozon_category_id');
+  }
+  if (!ozonTypeId) {
+    issues.push('missing_ozon_type_id');
   }
   if (source && !source.hasImages) {
     issues.push('missing_source_images');
@@ -750,6 +768,8 @@ export function buildAlibaba1688PreparationMetadata(
   row: {
     preparedTitleRu?: string | null;
     targetPriceCny?: string | number | null;
+    ozonCategoryId?: string | number | null;
+    ozonTypeId?: string | number | null;
     listingNotes?: string | null;
     description?: string | null;
     attributes?: Record<string, unknown> | null;
@@ -765,11 +785,17 @@ export function buildAlibaba1688PreparationMetadata(
   const title = String(row.preparedTitleRu || '').trim();
   const notes = String(row.listingNotes || '').trim();
   const targetPrice = Number(row.targetPriceCny);
+  const ozonCategoryId = positiveIntegerValue(row.ozonCategoryId);
+  const ozonTypeId = positiveIntegerValue(row.ozonTypeId);
 
   if (title) meta.preparedTitleRu = title;
   else delete meta.preparedTitleRu;
   if (Number.isFinite(targetPrice) && targetPrice > 0) meta.targetPriceCny = String(targetPrice);
   else delete meta.targetPriceCny;
+  if (ozonCategoryId) meta.ozonCategoryId = ozonCategoryId;
+  else delete meta.ozonCategoryId;
+  if (ozonTypeId) meta.ozonTypeId = ozonTypeId;
+  else delete meta.ozonTypeId;
   if (notes) meta.listingNotes = notes;
   else delete meta.listingNotes;
   if (row.description !== undefined) {
@@ -795,7 +821,7 @@ export function buildAlibaba1688PreparationMetadata(
   meta.listingPreparationStatus = issues.length ? 'draft' : 'ready';
   if (issues.length) meta.listingPreparationIssues = issues;
   else delete meta.listingPreparationIssues;
-  meta.categoryMappingStatus = meta.categoryMappingStatus || 'deferred_until_listing';
+  meta.categoryMappingStatus = ozonCategoryId && ozonTypeId ? 'manual_ready' : 'deferred_until_listing';
 
   return meta;
 }
@@ -1071,6 +1097,8 @@ export async function collectRoutes(app: FastifyInstance) {
         id?: string;
         preparedTitleRu?: string;
         targetPriceCny?: string | number | null;
+        ozonCategoryId?: string | number | null;
+        ozonTypeId?: string | number | null;
         listingNotes?: string;
         images?: string[];
         purchasePrice?: string | number | null;
