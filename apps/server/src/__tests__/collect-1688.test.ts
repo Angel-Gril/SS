@@ -525,6 +525,35 @@ describe('1688 collect helpers', () => {
     expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  | https://img.example.com/tb-red.jpg | ozon-sku-red | 123456789 | seller-offer-red | taobao');
   });
 
+  it('hydrates missing variant source platforms from the collected item in listing prefill', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-taobao-legacy-variant',
+      title: '淘宝旧货源',
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-sku-red',
+          sourceSkuId: 'tb-sku-red',
+          ozonSku: 'ozon-sku-red',
+          attrs: { 规格: '红色' },
+          price: '19.9',
+        },
+      ],
+      metadata: { sourceKind: 'alibaba1688' },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(item.variants[0]).toMatchObject({
+      sourceSkuId: 'tb-sku-red',
+      sourcePlatform: 'taobao',
+    });
+    expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  |  | ozon-sku-red |  |  | taobao');
+  });
+
   it('serializes editable SKU text from the source SKU id before legacy sku', () => {
     const item = buildAlibaba1688ListingPrefill({
       id: 'collect-source-sku-1',

@@ -776,7 +776,13 @@ export function buildAlibaba1688ListingPrefill(item: {
   createdAt: Date;
 }) {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
-  const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+  const itemSourcePlatform = compactString(item.sourcePlatform) || '1688';
+  const variants = Array.isArray(item.variants)
+    ? (item.variants as any[]).map((variant) => {
+      if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return variant;
+      return compactString(variant.sourcePlatform) ? variant : { ...variant, sourcePlatform: itemSourcePlatform };
+    })
+    : [];
   const images = Array.isArray(item.images) ? item.images : [];
   const purchasePrice = item.purchasePrice?.toString() ?? null;
   const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
@@ -807,7 +813,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     id: item.id,
     title: item.title,
     sourceUrl: item.sourceUrl || null,
-    sourcePlatform: item.sourcePlatform || '1688',
+    sourcePlatform: itemSourcePlatform,
     sourceProductId: item.sourceProductId || null,
     purchasePrice,
     currency: item.currency || 'CNY',
