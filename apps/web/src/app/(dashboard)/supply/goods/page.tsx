@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { sourcePlatformLabel } from '@/lib/source-platforms';
 import { formatDate } from '@/lib/utils';
 
 interface SupplyItem {
@@ -26,16 +27,6 @@ interface SupplyItem {
   status: string;
   createdAt: string;
 }
-
-const PLATFORM_LABELS: Record<string, string> = {
-  '1688': '1688',
-  pinduoduo: '拼多多',
-  pdd: '拼多多',
-  taobao: '淘宝',
-  tmall: '天猫',
-  jd: '京东',
-  other: '其他',
-};
 
 export default function SupplyGoodsPage() {
   const [items, setItems] = useState<SupplyItem[]>([]);
@@ -123,7 +114,7 @@ export default function SupplyGoodsPage() {
                   </TableCell>
                   <TableCell>
                     {item.sourcePlatform ? (
-                      <Badge variant="outline">{PLATFORM_LABELS[item.sourcePlatform] || item.sourcePlatform}</Badge>
+                      <Badge variant="outline">{sourcePlatformLabel(item.sourcePlatform)}</Badge>
                     ) : '-'}
                   </TableCell>
                   <TableCell className="text-sm">{item.supplier || '-'}</TableCell>

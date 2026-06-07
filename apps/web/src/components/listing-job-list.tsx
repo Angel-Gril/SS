@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
+import { sourcePlatformLabel } from '@/lib/source-platforms';
 import { ListingJobDetailDialog } from './listing-job-detail-dialog';
 
 export type Status = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
@@ -199,7 +200,7 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
         <StatusBadge s={row.status} />
         {sourcePlatforms.length > 0 && (
           <span className="text-[11px] text-muted-foreground">
-            货源平台 {sourcePlatforms.join(' / ')}
+            货源平台 {sourcePlatforms.map(sourcePlatformLabel).join(' / ')}
           </span>
         )}
         {total > 0 && (

@@ -270,24 +270,43 @@ test('collect page gates listing actions by domestic supply platforms instead of
 test('supply goods management accepts all domestic supply platform labels', () => {
   const supplyRoute = readRepoFile('apps', 'server', 'src', 'routes', 'supply.ts');
   const supplyPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'supply', 'goods', 'page.tsx');
+  const sourcePlatformsLib = readRepoFile('apps', 'web', 'src', 'lib', 'source-platforms.ts');
 
   for (const platform of ['1688', 'pinduoduo', 'pdd', 'taobao', 'tmall', 'jd', 'other']) {
     assert.match(supplyRoute, new RegExp(`'${platform}'`));
-    assert.match(supplyPage, new RegExp(`${platform}:|'${platform}'`));
     assert.match(supplyPage, new RegExp(`<option value="${platform}">`));
+    assert.match(sourcePlatformsLib, new RegExp(`${platform}:|'${platform}'`));
   }
 
-  assert.match(supplyPage, /tmall:\s*'天猫'/);
-  assert.match(supplyPage, /jd:\s*'京东'/);
-  assert.match(supplyPage, /pdd:\s*'拼多多'/);
+  assert.match(sourcePlatformsLib, /tmall:\s*'天猫'/);
+  assert.match(sourcePlatformsLib, /jd:\s*'京东'/);
+  assert.match(sourcePlatformsLib, /pdd:\s*'拼多多'/);
+  assert.match(supplyPage, /import\s+\{\s*sourcePlatformLabel\s*\}\s+from\s+'@\/lib\/source-platforms'/);
+  assert.match(supplyPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
   assert.match(supplyPage, /placeholder="https:\/\/detail\.1688\.com\/offer\/\.\.\. \/ 淘宝 \/ 天猫 \/ 京东 \/ 拼多多商品链接"/);
+});
+
+test('supply and listing history views render source platform labels', () => {
+  const domesticSupplyPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'supply', 'domestic', 'page.tsx');
+  const listingJobList = readRepoFile('apps', 'web', 'src', 'components', 'listing-job-list.tsx');
+  const listingJobDetail = readRepoFile('apps', 'web', 'src', 'components', 'listing-job-detail-dialog.tsx');
+
+  for (const source of [domesticSupplyPage, listingJobList, listingJobDetail]) {
+    assert.match(source, /sourcePlatformLabel/);
+  }
+
+  assert.match(domesticSupplyPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.match(listingJobList, /sourcePlatforms\.map\(sourcePlatformLabel\)\.join\(' \/ '\)/);
+  assert.doesNotMatch(listingJobList, /sourcePlatforms\.join\(' \/ '\)/);
+  assert.match(listingJobDetail, /renderCodes\(sourcePlatforms,\s*sourcePlatformLabel\)/);
+  assert.match(listingJobDetail, /sourcePlatformLabel\(sourcePlatform\)/);
 });
 
 test('1688 collect page lists domestic supply records with real source platforms', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 
   assert.match(collect1688Page, /sourcePlatform:\s*string\s*\|\s*null/);
-  assert.match(collect1688Page, /function\s+sourcePlatformLabel\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
+  assert.match(collect1688Page, /import\s+\{\s*normalizeSourcePlatform,\s*sourcePlatformLabel\s*\}\s+from\s+'@\/lib\/source-platforms'/);
   assert.match(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'domestic-supply'/);
   assert.match(collect1688Page, /加载货源采集记录失败/);
   assert.match(collect1688Page, /请先选择货源采集记录/);
@@ -325,7 +344,7 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
 
   assert.match(listingPage, /sourcePlatform:\s*string\s*\|\s*null/);
-  assert.match(listingPage, /function\s+sourcePlatformLabel\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
+  assert.match(listingPage, /import\s+\{\s*normalizeSourcePlatform,\s*sourcePlatformLabel\s*\}\s+from\s+'@\/lib\/source-platforms'/);
   assert.match(listingPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
   assert.match(listingPage, /货源上架准备/);
   assert.match(listingPage, /返回货源采集上品/);

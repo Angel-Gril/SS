@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api';
+import { sourcePlatformLabel } from '@/lib/source-platforms';
 import { formatDate } from '@/lib/utils';
 
 interface SupplyItem {
@@ -125,7 +126,7 @@ export default function SupplyDomesticPage() {
                 <TableRow key={item.id}>
                   <TableCell className="font-medium text-sm max-w-xs truncate">{item.title}</TableCell>
                   <TableCell>
-                    {item.sourcePlatform ? <Badge variant="outline">{item.sourcePlatform}</Badge> : '-'}
+                    {item.sourcePlatform ? <Badge variant="outline">{sourcePlatformLabel(item.sourcePlatform)}</Badge> : '-'}
                   </TableCell>
                   <TableCell className="text-sm">{item.supplier || '-'}</TableCell>
                   <TableCell className="font-mono text-xs">{item.sku || '-'}</TableCell>

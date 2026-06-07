@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { sourcePlatformLabel } from '@/lib/source-platforms';
 import { StatusBadge, modeLabel, type Status, type JobRow } from './listing-job-list';
 
 interface PushItem {
@@ -69,11 +70,11 @@ export function ListingJobDetailDialog({
   const listingSources = data?.payload?.listingSources || [];
   const canRefresh = !!data && (data.payload?.entry === '1688-listing' || (data.status !== 'SUCCESS' && data.status !== 'FAILED'));
 
-  const renderCodes = (values: string[]) => (
+  const renderCodes = (values: string[], formatValue: (value: string) => string = (value) => value) => (
     values.length ? (
       <div className="flex flex-wrap gap-1">
         {values.map((value, i) => (
-          <code key={`${value}-${i}`} className="bg-muted px-1.5 py-0.5 rounded text-xs">{value}</code>
+          <code key={`${value}-${i}`} className="bg-muted px-1.5 py-0.5 rounded text-xs">{formatValue(value)}</code>
         ))}
       </div>
     ) : '—'
@@ -139,7 +140,7 @@ export function ListingJobDetailDialog({
               )}
               <div className="col-span-2">
                 <div className="text-muted-foreground mb-1">货源平台：</div>
-                {renderCodes(sourcePlatforms)}
+                {renderCodes(sourcePlatforms, sourcePlatformLabel)}
               </div>
               <div className="col-span-2">
                 <div className="text-muted-foreground mb-1">货源 SKU：</div>
@@ -193,6 +194,7 @@ export function ListingJobDetailDialog({
                       const txt = it.status === 'imported' ? '成功' : it.status === 'failed' ? '失败' : '处理中';
                       const img = data.payload?.offerImages?.[it.offer_id];
                       const source = listingSourceFor(it.offer_id, i);
+                      const sourcePlatform = sourceValue(source, 'sourcePlatform');
                       return (
                         <tr key={i} className="border-t">
                           <td className="px-3 py-2">
@@ -214,8 +216,8 @@ export function ListingJobDetailDialog({
                             {source ? (
                               <div className="space-y-1">
                                 <div className="flex flex-wrap gap-1">
-                                  {sourceValue(source, 'sourcePlatform') && (
-                                    <Badge variant="outline" className="text-[10px]">{sourceValue(source, 'sourcePlatform')}</Badge>
+                                  {sourcePlatform && (
+                                    <Badge variant="outline" className="text-[10px]">{sourcePlatformLabel(sourcePlatform)}</Badge>
                                   )}
                                   {sourceValue(source, 'sourceSkuId') && (
                                     <code className="bg-muted px-1.5 py-0.5 rounded text-[11px]">货源 {sourceValue(source, 'sourceSkuId')}</code>

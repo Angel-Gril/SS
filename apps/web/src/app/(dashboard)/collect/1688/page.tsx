@@ -12,6 +12,7 @@ import { toast } from '@/components/ui/use-toast';
 import { sourceDataIssueText } from '@/lib/1688-source-issues';
 import { api } from '@/lib/api';
 import { invalidImageUrls, splitImageInput, validImageUrls } from '@/lib/image-links';
+import { normalizeSourcePlatform, sourcePlatformLabel } from '@/lib/source-platforms';
 import { previewText } from '@/lib/text-preview';
 import { formatDate } from '@/lib/utils';
 
@@ -172,26 +173,6 @@ const preparationFilterOptions: Array<{ value: PreparationFilter; label: string 
   { value: 'draft', label: '准备草稿' },
   { value: 'ready', label: '准备完成' },
 ];
-
-const SOURCE_PLATFORM_LABELS: Record<string, string> = {
-  '1688': '1688',
-  taobao: '淘宝',
-  tmall: '天猫',
-  jd: '京东',
-  pinduoduo: '拼多多',
-  pdd: '拼多多',
-};
-
-const SOURCE_PLATFORM_VALUES = new Set(Object.keys(SOURCE_PLATFORM_LABELS));
-
-function sourcePlatformLabel(sourcePlatform?: string | null) {
-  return sourcePlatform ? SOURCE_PLATFORM_LABELS[sourcePlatform] || sourcePlatform : '货源';
-}
-
-function normalizeSourcePlatform(value?: string) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized && SOURCE_PLATFORM_VALUES.has(normalized) ? normalized : value || undefined;
-}
 
 function parseSkuSourceTrace(parts: string[]) {
   const legacyPlatform = normalizeSourcePlatform(parts[8]);
