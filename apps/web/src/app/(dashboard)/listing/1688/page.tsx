@@ -53,6 +53,7 @@ interface Alibaba1688ListingItem {
   listingNotes: string;
   ozonPriceCheckContext: OzonPriceCheckContext | null;
   priceCheckEstimate: PriceCheckEstimate | null;
+  priceSuggestion: PriceSuggestion | null;
   createdAt: string;
 }
 
@@ -69,6 +70,16 @@ interface PriceCheckEstimate {
   purchasePriceRub?: number | null;
   roughSpreadRub?: number | null;
   cnyPerRub?: number | null;
+}
+
+interface PriceSuggestion {
+  purchasePriceCny?: number | null;
+  costPlusTargetCny?: number | null;
+  ozonPriceRub?: number | null;
+  ozonPriceCny?: number | null;
+  cnyPerRub?: number | null;
+  recommendedTargetPriceCny?: number | null;
+  recommendationSource?: string | null;
 }
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
@@ -99,6 +110,20 @@ function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
   if (!Number.isFinite(spread) || !Number.isFinite(purchaseRub)) return '';
   const sign = spread > 0 ? '+' : '';
   return `核价粗差: ${sign}${spread.toFixed(2)} RUB · 采购折算 ${purchaseRub.toFixed(2)} RUB`;
+}
+
+function formatCny(value?: number | null) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  return `¥${number.toFixed(number % 1 === 0 ? 0 : 2)}`;
+}
+
+function suggestionSummary(suggestion?: PriceSuggestion | null) {
+  if (!suggestion) return '';
+  return [
+    suggestion.ozonPriceCny ? `Ozon折算 ${formatCny(suggestion.ozonPriceCny)}` : '',
+    suggestion.costPlusTargetCny ? `成本倍率 ${formatCny(suggestion.costPlusTargetCny)}` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function preparationStatusLabel(status?: string | null) {
@@ -192,6 +217,12 @@ export default function Alibaba1688ListingPage() {
 
   function updateItem(id: string, field: 'preparedTitleRu' | 'targetPriceCny' | 'listingNotes', value: string) {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  }
+
+  function applyTargetPrice(id: string, value?: number | null) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) return;
+    updateItem(id, 'targetPriceCny', String(number));
   }
 
   async function handleSave() {
@@ -325,6 +356,11 @@ export default function Alibaba1688ListingPage() {
                     {priceCheckEstimateText(item.priceCheckEstimate)}
                   </div>
                 )}
+                {suggestionSummary(item.priceSuggestion) && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    建议售价: {suggestionSummary(item.priceSuggestion)}
+                  </div>
+                )}
                 {sourceDimensionsText(item) && (
                   <div className="text-xs text-muted-foreground truncate">
                     {sourceDimensionsText(item)}
@@ -374,8 +410,32 @@ export default function Alibaba1688ListingPage() {
                 <Input
                   value={item.targetPriceCny}
                   onChange={(e) => updateItem(item.id, 'targetPriceCny', e.target.value)}
-                  placeholder="199"
+                  placeholder={item.priceSuggestion?.recommendedTargetPriceCny ? String(item.priceSuggestion.recommendedTargetPriceCny) : '199'}
                 />
+                {(item.priceSuggestion?.ozonPriceCny || item.priceSuggestion?.costPlusTargetCny) && (
+                  <div className="flex flex-wrap gap-1">
+                    {item.priceSuggestion?.ozonPriceCny && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => applyTargetPrice(item.id, item.priceSuggestion?.ozonPriceCny)}
+                      >
+                        填入Ozon折算 {formatCny(item.priceSuggestion.ozonPriceCny)}
+                      </Button>
+                    )}
+                    {item.priceSuggestion?.costPlusTargetCny && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => applyTargetPrice(item.id, item.priceSuggestion?.costPlusTargetCny)}
+                      >
+                        填入成本倍率 {formatCny(item.priceSuggestion.costPlusTargetCny)}
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="space-y-1 md:col-span-2">
                 <Label className="text-xs">上架备注</Label>

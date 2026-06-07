@@ -241,6 +241,39 @@ function buildPriceCheckEstimate(
   };
 }
 
+export function buildAlibaba1688PriceSuggestion(
+  context: ReturnType<typeof extractOzonPriceCheckContext>,
+  purchasePrice: unknown,
+  purchaseCurrency: unknown,
+) {
+  const purchase = numericValue(purchasePrice);
+  const sourceCurrency = String(purchaseCurrency || 'CNY').toUpperCase();
+  const cnyPerRub = 0.08;
+  const purchasePriceCny = sourceCurrency === 'CNY' && purchase != null && purchase > 0 ? purchase : null;
+  const costPlusTargetCny = purchasePriceCny != null ? calcPublishPrice(purchasePriceCny, 200, 0) : null;
+
+  const ozonPrice = numericValue(context?.price);
+  const ozonCurrency = String(context?.currency || 'RUB').toUpperCase();
+  const ozonPriceRub = ozonCurrency === 'RUB' && ozonPrice != null && ozonPrice > 0 ? ozonPrice : null;
+  const ozonPriceCny = ozonPriceRub != null ? Math.round(ozonPriceRub * cnyPerRub * 100) / 100 : null;
+
+  const recommendedTargetPriceCny = ozonPriceCny ?? costPlusTargetCny;
+  const recommendationSource = ozonPriceCny != null
+    ? 'ozon_price_check'
+    : costPlusTargetCny != null ? 'cost_plus_200pct' : 'none';
+
+  return {
+    purchasePriceCny,
+    costPlusTargetCny,
+    ozonPriceRub,
+    ozonPriceCny,
+    cnyPerRub,
+    recommendedTargetPriceCny,
+    recommendationSource,
+    note: 'rough_suggestion_only',
+  };
+}
+
 function exposeSupplyGoodsMetadata(metadata: unknown, purchasePrice?: unknown, purchaseCurrency?: unknown) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const meta = { ...(metadata as Record<string, any>) };
@@ -372,6 +405,17 @@ export function buildAlibaba1688ListingPrefill(item: {
 }) {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+  const ozonPriceCheckContext = extractOzonPriceCheckContext(meta);
+  const priceCheckEstimate = buildPriceCheckEstimate(
+    ozonPriceCheckContext,
+    item.purchasePrice?.toString(),
+    item.currency || 'CNY',
+  );
+  const priceSuggestion = buildAlibaba1688PriceSuggestion(
+    ozonPriceCheckContext,
+    item.purchasePrice?.toString(),
+    item.currency || 'CNY',
+  );
   return {
     id: item.id,
     title: item.title,
@@ -404,12 +448,9 @@ export function buildAlibaba1688ListingPrefill(item: {
     preparedTitleRu: meta.preparedTitleRu || '',
     targetPriceCny: meta.targetPriceCny || '',
     listingNotes: meta.listingNotes || '',
-    ozonPriceCheckContext: extractOzonPriceCheckContext(meta),
-    priceCheckEstimate: buildPriceCheckEstimate(
-      extractOzonPriceCheckContext(meta),
-      item.purchasePrice?.toString(),
-      item.currency || 'CNY',
-    ),
+    ozonPriceCheckContext,
+    priceCheckEstimate,
+    priceSuggestion,
     createdAt: item.createdAt.toISOString(),
   };
 }

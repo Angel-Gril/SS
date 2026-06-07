@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAlibaba1688PriceSuggestion,
   buildAlibaba1688CollectRecord,
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688PreparationMetadata,
@@ -167,7 +168,41 @@ describe('1688 collect helpers', () => {
         cnyPerRub: 0.08,
         note: 'rough_source_price_only',
       },
+      priceSuggestion: {
+        purchasePriceCny: 25.8,
+        costPlusTargetCny: 78,
+        ozonPriceRub: 1590,
+        ozonPriceCny: 127.2,
+        cnyPerRub: 0.08,
+        recommendedTargetPriceCny: 127.2,
+        recommendationSource: 'ozon_price_check',
+        note: 'rough_suggestion_only',
+      },
       createdAt: '2026-06-07T12:00:00.000Z',
+    });
+  });
+
+  it('builds 1688 listing price suggestions without writing preparation metadata', () => {
+    expect(buildAlibaba1688PriceSuggestion(
+      { title: 'Ozon item', productId: '123', sourceUrl: null, price: '1590', currency: 'RUB' },
+      '25.80',
+      'CNY',
+    )).toMatchObject({
+      purchasePriceCny: 25.8,
+      costPlusTargetCny: 78,
+      ozonPriceRub: 1590,
+      ozonPriceCny: 127.2,
+      recommendedTargetPriceCny: 127.2,
+      recommendationSource: 'ozon_price_check',
+    });
+
+    expect(buildAlibaba1688PriceSuggestion(null, '25.80', 'CNY')).toMatchObject({
+      purchasePriceCny: 25.8,
+      costPlusTargetCny: 78,
+      ozonPriceRub: null,
+      ozonPriceCny: null,
+      recommendedTargetPriceCny: 78,
+      recommendationSource: 'cost_plus_200pct',
     });
   });
 
