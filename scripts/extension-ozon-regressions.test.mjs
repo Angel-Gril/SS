@@ -102,6 +102,19 @@ test('1688 product pages expose a direct collect-to-ERP action', () => {
   assert.ok(collectScript.includes('offer\\/\\d+\\.html'));
 });
 
+test('1688 product extraction includes price and category fields for ERP records', () => {
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+
+  assert.match(collectScript, /priceSelectors/);
+  assert.match(collectScript, /categorySelectors/);
+  assert.match(collectScript, /function\s+pickPrice/);
+  assert.match(collectScript, /function\s+pickCategoryPath/);
+  assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
+  assert.match(collectScript, /categoryPath/);
+  assert.ok(collectScript.includes('[¥￥]'));
+  assert.ok(collectScript.includes('元|CNY|RMB'));
+});
+
 test('Ozon shop analytics sync falls back from charts table to what-to-sell data', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'background', 'collect-background.js');
 

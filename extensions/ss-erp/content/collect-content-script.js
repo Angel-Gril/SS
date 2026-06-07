@@ -857,6 +857,8 @@
       weightKeywords: [/克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".title-text", ".d-title"],
       shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name"],
+      priceSelectors: [".price", ".price-text", ".price-range", ".ma-ref-price", "[class*='price']", "[class*='Price']"],
+      categorySelectors: [".breadcrumb", ".bread-crumb", ".detail-breadcrumb", "[class*='breadcrumb']", "[class*='crumb']"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
     });
   }
@@ -975,6 +977,8 @@
     const grossWeightGrams = pickGrossWeight(context.pageText, context.sources, config.weightKeywords, skuItems);
     const images = pickImages(context.sources);
     const attributes = pickAttributes(context.sources);
+    const priceInfo = pickPrice(config.priceSelectors, context.sources, skuItems);
+    const categoryPath = pickCategoryPath(config.categorySelectors, context.sources);
 
     return {
       platform: context.platform,
@@ -982,6 +986,11 @@
       title,
       shopName,
       productId,
+      price: priceInfo.price,
+      priceText: priceInfo.priceText,
+      currency: priceInfo.currency,
+      categoryPath,
+      categoryName: categoryPath ? categoryPath.split(/\s*[>›/]\s*/).filter(Boolean).slice(-1)[0] || categoryPath : "",
       monthlySales,
       grossWeightGrams,
       skuCount,
@@ -991,6 +1000,8 @@
       debug: {
         pageState: context.pageState,
         productIdEvidence: productId ? "url/dom/json" : "",
+        priceCandidates: priceInfo.candidates,
+        categoryPathEvidence: categoryPath ? "dom/json" : "",
         monthlySalesCandidates: collectNumberCandidates(context.sources, /(month|sale|sold|trade|销量|成交|已售)/i).slice(0, 20),
         weightCandidates: collectNumberCandidates(context.sources, /(weight|gross|gram|克|斤|重量|毛重|净重)/i).slice(0, 20),
         rawSources: summarizeSources(context.sources)
@@ -1039,6 +1050,85 @@
     const candidates = collectNumberCandidates(sources, /(month|monthly|sale|sold|trade|销量|成交|已售|30d|30day)/i);
     const direct = candidates.find((item) => item.value != null && item.value >= 0);
     return direct ? direct.value : null;
+  }
+
+  function pickPrice(selectors, sources, skuItems) {
+    const domTexts = [];
+    for (const selector of selectors || []) {
+      document.querySelectorAll(selector).forEach((node) => {
+        const text = normalizeWhitespace(node.textContent || "");
+        if (text && /[¥￥元]\s*[0-9]|[0-9][0-9.,]*\s*(?:元|CNY|RMB)/i.test(text)) {
+          domTexts.push(text);
+        }
+      });
+      if (domTexts.length) break;
+    }
+
+    const stringCandidates = collectStringCandidates(sources, /(price|salePrice|finalPrice|discountPrice|promotionPrice|amount|价格|售价)$/i)
+      .slice(0, 30)
+      .map((item) => item.value);
+    const skuPrices = (Array.isArray(skuItems) ? skuItems : [])
+      .map((item) => item && item.price)
+      .filter((value) => Number.isFinite(Number(value)))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((value) => String(value));
+    const candidates = domTexts.concat(stringCandidates, skuPrices);
+
+    for (const text of candidates) {
+      const price = parsePriceValue(text);
+      if (price != null && price > 0) {
+        return {
+          price,
+          priceText: String(text),
+          currency: inferCurrencyFromPriceText(text),
+          candidates: candidates.slice(0, 10),
+        };
+      }
+    }
+
+    return { price: null, priceText: "", currency: "CNY", candidates: candidates.slice(0, 10) };
+  }
+
+  function parsePriceValue(input) {
+    if (input == null || input === "") return null;
+    if (typeof input === "number" && Number.isFinite(input)) return input;
+    const text = String(input).replace(/,/g, "").replace(/\s+/g, "");
+    const prefixMatch = text.match(/[¥￥]\s*([0-9]+(?:\.[0-9]+)?)/);
+    if (prefixMatch) return Number(prefixMatch[1]);
+    const suffixMatch = text.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:元|CNY|RMB)/i);
+    if (suffixMatch) return Number(suffixMatch[1]);
+    const numbers = Array.from(text.matchAll(/[0-9]+(?:\.[0-9]+)?/g))
+      .map((match) => Number(match[0]))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    return numbers.length ? Math.min(...numbers) : parseLooseNumber(text);
+  }
+
+  function inferCurrencyFromPriceText(text) {
+    const raw = String(text || "");
+    if (raw.includes("¥") || raw.includes("￥") || /(?:元|CNY|RMB)/i.test(raw)) return "CNY";
+    return "CNY";
+  }
+
+  function pickCategoryPath(selectors, sources) {
+    for (const selector of selectors || []) {
+      const node = document.querySelector(selector);
+      if (!node) continue;
+      const parts = Array.from(node.querySelectorAll("a, span, li"))
+        .map((item) => normalizeWhitespace(item.textContent || ""))
+        .filter((text) => text && text.length <= 80 && !/首页|主页|home/i.test(text));
+      if (parts.length >= 2) {
+        return Array.from(new Set(parts)).join(" > ");
+      }
+      const text = normalizeWhitespace(node.textContent || "");
+      if (text && text.length <= 300) {
+        return text.replace(/\s*[>›/]\s*/g, " > ");
+      }
+    }
+
+    const candidates = collectStringCandidates(sources, /(category|categoryPath|catName|catPath|breadcrumb|crumb|类目|分类)$/i)
+      .map((item) => item.value)
+      .filter((value) => value && value.length <= 300);
+    return candidates[0] || "";
   }
 
   function pickGrossWeight(pageText, sources, patterns, skuItems) {
