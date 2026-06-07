@@ -22,6 +22,7 @@ interface Alibaba1688Variant {
   stock?: number | null;
   minOrderQty?: number | null;
   grossWeightGrams?: number | null;
+  images?: string[] | null;
 }
 
 interface Alibaba1688ListingItem {
@@ -252,6 +253,10 @@ function variantMetaText(variant: Alibaba1688Variant) {
     variant.minOrderQty != null ? `起订 ${variant.minOrderQty}` : '',
     variant.grossWeightGrams != null ? `${variant.grossWeightGrams}g` : '',
   ].filter(Boolean).join(' · ');
+}
+
+function variantImageUrl(variant: Alibaba1688Variant) {
+  return validImageUrls(variant.images || [])[0] || '';
 }
 
 export default function Alibaba1688ListingPage() {
@@ -530,12 +535,22 @@ export default function Alibaba1688ListingPage() {
                 )}
                 {!!item.variants.length && (
                   <div className="mt-2 space-y-1">
-                    {item.variants.slice(0, 4).map((variant, index) => (
-                      <div key={`${variant.sku || 'sku'}-${index}`} className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-xs">
-                        <span className="min-w-0 truncate">{variantSpecText(variant)}</span>
-                        <span className="shrink-0 text-muted-foreground">{variantMetaText(variant)}</span>
-                      </div>
-                    ))}
+                    {item.variants.slice(0, 4).map((variant, index) => {
+                      const image = variantImageUrl(variant);
+                      return (
+                        <div key={`${variant.sku || 'sku'}-${index}`} className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-xs">
+                          <div className="min-w-0 flex items-center gap-2">
+                            {image && (
+                              <span aria-label="SKU 图片" className="h-8 w-8 shrink-0 overflow-hidden rounded border bg-muted/40">
+                                <img src={image} alt="" className="h-full w-full object-cover" />
+                              </span>
+                            )}
+                            <span className="min-w-0 truncate">{variantSpecText(variant)}</span>
+                          </div>
+                          <span className="shrink-0 text-muted-foreground">{variantMetaText(variant)}</span>
+                        </div>
+                      );
+                    })}
                     {item.variants.length > 4 && (
                       <div className="text-xs text-muted-foreground">还有 {item.variants.length - 4} 个 SKU 未展开显示</div>
                     )}
