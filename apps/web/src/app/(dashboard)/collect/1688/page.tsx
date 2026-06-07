@@ -144,6 +144,7 @@ function parseSkuText(text: string) {
         stock: parts[3] ? Number(parts[3]) : null,
         minOrderQty: parts[4] ? Number(parts[4]) : null,
         grossWeightGrams: parts[5] ? Number(parts[5]) : null,
+        imageUrl: parts[6] || undefined,
       };
     });
 }
@@ -529,7 +530,7 @@ export default function Collect1688Page() {
                 className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                 value={form.skuText}
                 onChange={(e) => update('skuText', e.target.value)}
-                placeholder={'skuId | 规格 | 价格 | 库存 | 起订量 | 毛重(g)\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650'}
+                placeholder={'skuId | 规格 | 价格 | 库存 | 起订量 | 毛重(g) | SKU图片URL\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg'}
               />
             </div>
             <div className="space-y-1 md:col-span-2">

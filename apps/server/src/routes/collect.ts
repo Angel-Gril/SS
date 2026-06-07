@@ -489,6 +489,9 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       ? variant.attrs as Record<string, unknown>
       : {};
     const specText = Object.values(attrs).map((value) => String(value || '').trim()).filter(Boolean).join(' / ');
+    const imageUrl = Array.isArray(variant?.images)
+      ? normalizeImageUrl(variant.images[0]) || ''
+      : '';
     return [
       variant?.sku || variant?.sourceSkuId || '',
       specText,
@@ -496,6 +499,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       variant?.stock ?? '',
       variant?.minOrderQty ?? '',
       variant?.grossWeightGrams ?? '',
+      imageUrl,
     ].map((value) => String(value || '')).join(' | ');
   }).join('\n');
 }

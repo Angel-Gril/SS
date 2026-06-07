@@ -238,7 +238,7 @@ describe('1688 collect helpers', () => {
       purchasePrice: { toString: () => '25.80' },
       currency: 'CNY',
       images: ['https://img.example.com/1.jpg'],
-      variants: [{ sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5' }],
+      variants: [{ sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5', images: ['https://img.example.com/sku-red.jpg'] }],
       notes: '货源备注',
       metadata: {
         description: '商品详情包含材质、适用场景和包装说明',
@@ -292,6 +292,7 @@ describe('1688 collect helpers', () => {
       logisticsText: '广东发货，快递费按地区计算',
       attributes: { 材质: '网布' },
       skuCount: 1,
+      skuText: 'sku-red-42 | 红色 / 42 | 26.5 |  |  |  | https://img.example.com/sku-red.jpg',
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'collected_only',
       listingPreparationIssues: ['missing_prepared_title_ru'],
