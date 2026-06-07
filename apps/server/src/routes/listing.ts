@@ -145,6 +145,41 @@ function invalidAlibaba1688ListingSourcePlatforms(
     } => !!item);
 }
 
+function invalidAlibaba1688ListingSourceProducts(
+  items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
+  supplyGoodsById: Map<string, { sourceProductId?: string | null; sku?: string | null }>,
+) {
+  return items
+    .map((item) => {
+      const source = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+        ? item.sourceTrace
+        : null;
+      const supplyGoodsId = source ? traceText(source, 'supplyGoodsId') : '';
+      const sourceProductId = source ? traceText(source, 'sourceProductId') : '';
+      const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
+      const collectedSourceProductIds = Array.from(new Set([
+        traceText(supplyGoods || {}, 'sourceProductId'),
+        traceText(supplyGoods || {}, 'sku'),
+      ].filter(Boolean)));
+      return supplyGoods && sourceProductId && collectedSourceProductIds.length > 0 && !collectedSourceProductIds.includes(sourceProductId)
+        ? {
+          offerId: item.offerId,
+          supplyGoodsId,
+          sourceProductId,
+          collectedSourceProductId: collectedSourceProductIds[0],
+          reason: 'source_product_mismatch',
+        }
+        : null;
+    })
+    .filter((item): item is {
+      offerId: string;
+      supplyGoodsId: string;
+      sourceProductId: string;
+      collectedSourceProductId: string;
+      reason: string;
+    } => !!item);
+}
+
 function sourceSkuIdsFromVariants(variants: unknown) {
   const sourceSkuIds = new Set<string>();
   if (!Array.isArray(variants)) return sourceSkuIds;
@@ -494,7 +529,7 @@ export async function listingRoutes(app: FastifyInstance) {
             userId,
             sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
           },
-          select: { id: true, sourcePlatform: true, variants: true },
+          select: { id: true, sourcePlatform: true, sourceProductId: true, sku: true, variants: true },
         })
         : [];
       const supplyGoodsById = new Map(supplyGoods.map((item) => [item.id, item] as const));
@@ -515,6 +550,14 @@ export async function listingRoutes(app: FastifyInstance) {
           code: 0,
           msg: '货源上架商品引用的货源平台与采集记录不一致',
           data: { invalidItems: invalidPlatformItems },
+        });
+      }
+      const invalidProductItems = invalidAlibaba1688ListingSourceProducts(items, supplyGoodsById);
+      if (invalidProductItems.length) {
+        return reply.status(400).send({
+          code: 0,
+          msg: '货源上架商品引用的货源商品与采集记录不一致',
+          data: { invalidItems: invalidProductItems },
         });
       }
       const invalidSkuItems = invalidAlibaba1688ListingSourceSkus(items, supplyGoodsById);
