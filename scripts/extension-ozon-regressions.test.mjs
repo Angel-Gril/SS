@@ -170,6 +170,9 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /allSources\.push\(\.\.\.embeddedJson\)/);
   assert.match(collectScript, /script\[type\*="json"\]/);
   assert.match(collectScript, /function\s+normalizeSkuAttrs/);
+  assert.match(collectScript, /function\s+pickSkuItemsFromDom/);
+  assert.match(collectScript, /pickSkuItemsFromDom\(\)/);
+  assert.match(collectScript, /\[data-sku-id\]/);
   assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
   assert.match(collectScript, /attributes,\s*description,/);
   assert.match(collectScript, /categoryPath/);

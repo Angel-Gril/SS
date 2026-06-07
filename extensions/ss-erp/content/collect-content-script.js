@@ -1787,7 +1787,7 @@
     skuArrays.sort((a, b) => b.score - a.score || b.value.length - a.value.length);
     const best = skuArrays[0];
     if (!best) {
-      return [];
+      return pickSkuItemsFromDom();
     }
 
     const normalized = best.value
@@ -1805,7 +1805,7 @@
       unique.push(item);
     });
 
-    return unique.slice(0, 200);
+    return unique.length ? unique.slice(0, 200) : pickSkuItemsFromDom();
   }
 
   function normalizeSkuItem(item) {
@@ -1885,6 +1885,48 @@
     });
 
     return output;
+  }
+
+  function pickSkuItemsFromDom() {
+    const nodes = document.querySelectorAll(
+      "[data-sku-id], [data-sku], [class*='sku'] button, [class*='sku'] li, [class*='Sku'] button, [class*='Sku'] li"
+    );
+    const items = [];
+    const seen = new Set();
+    nodes.forEach((node) => {
+      if (items.length >= 200) return;
+      const skuId = normalizeWhitespace(
+        node.getAttribute("data-sku-id") ||
+        node.getAttribute("data-sku") ||
+        node.getAttribute("data-id") ||
+        ""
+      );
+      const text = normalizeWhitespace(
+        node.getAttribute("title") ||
+        node.getAttribute("aria-label") ||
+        node.textContent ||
+        ""
+      );
+      const specText = text && text.length <= 80 ? text : "";
+      if (!skuId && !specText) return;
+      if (!skuId && /(加入|购买|收藏|客服|价格|库存|起订|查看|确定|取消|立即|购物车|采购|数量|批发)/.test(specText)) {
+        return;
+      }
+      const key = skuId || specText;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({
+        skuId: skuId || `dom-sku-${items.length + 1}`,
+        name: "",
+        attrs: specText ? { 规格: specText } : {},
+        specText,
+        price: null,
+        stock: null,
+        minOrderQty: null,
+        grossWeightGrams: null
+      });
+    });
+    return items;
   }
 
   function pickSkuCountFromDom() {
