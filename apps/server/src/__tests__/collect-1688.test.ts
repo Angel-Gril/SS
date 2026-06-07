@@ -7,6 +7,7 @@ import {
   exposeSupplyGoodsMetadata,
   getAlibaba1688SourceDataIssues,
   getAlibaba1688PreparationIssues,
+  normalizeAlibaba1688PreparationVariants,
   normalizeAlibaba1688PreparationImages,
   parseAttributeText,
   refreshAlibaba1688SourceDataIssues,
@@ -456,6 +457,28 @@ describe('1688 collect helpers', () => {
 
     expect(normalizeAlibaba1688PreparationImages(undefined, ['https://img.example.com/fallback.jpg'])).toEqual([
       'https://img.example.com/fallback.jpg',
+    ]);
+  });
+
+  it('normalizes 1688 preparation SKU repairs while preserving fallback variants', () => {
+    expect(normalizeAlibaba1688PreparationVariants(undefined, [
+      { sku: 'old-sku', attrs: { 规格: '旧规格' }, price: '18.5' },
+    ])).toEqual([
+      { sku: 'old-sku', attrs: { 规格: '旧规格' }, price: '18.5' },
+    ]);
+
+    expect(normalizeAlibaba1688PreparationVariants([
+      { skuId: 'sku-red-42', specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650 },
+    ])).toEqual([
+      {
+        sku: 'sku-red-42',
+        attrs: { 规格: '红色 / 42' },
+        price: '26.5',
+        stock: 120,
+        minOrderQty: 2,
+        grossWeightGrams: 650,
+        sourceSkuId: 'sku-red-42',
+      },
     ]);
   });
 

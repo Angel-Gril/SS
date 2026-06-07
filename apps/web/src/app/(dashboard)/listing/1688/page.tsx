@@ -33,6 +33,7 @@ interface Alibaba1688ListingItem {
   currency: string;
   images: string[];
   variants: Alibaba1688Variant[];
+  skuText: string;
   notes: string;
   supplierName: string | null;
   supplierLocation: string | null;
@@ -114,6 +115,29 @@ function parseAttributeText(text: string): Record<string, string> {
     if (key && value) output[key] = value;
   });
   return output;
+}
+
+function parseSkuText(text: string): Array<Alibaba1688Variant & { skuId: string; specText: string }> {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const parts = line.split(/[|\t]/).map((part) => part.trim());
+      const sku = parts[0] || `sku-${index + 1}`;
+      const specText = parts[1] || '';
+      const attrs: Record<string, string> = specText ? { 规格: specText } : {};
+      return {
+        sku,
+        skuId: sku,
+        attrs,
+        specText,
+        price: parts[2] || '',
+        stock: parts[3] ? Number(parts[3]) : null,
+        minOrderQty: parts[4] ? Number(parts[4]) : null,
+        grossWeightGrams: parts[5] ? Number(parts[5]) : null,
+      };
+    });
 }
 
 function supplierText(item: Alibaba1688ListingItem) {
@@ -279,6 +303,13 @@ export default function Alibaba1688ListingPage() {
     markItemDirty(id);
   }
 
+  function updateItemSkuText(id: string, value: string) {
+    setItems((prev) => prev.map((item) => (
+      item.id === id ? { ...item, skuText: value, variants: parseSkuText(value) } : item
+    )));
+    markItemDirty(id);
+  }
+
   function updateItemImages(id: string, value: string) {
     const images = splitImageInput(value);
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, images } : item)));
@@ -351,6 +382,7 @@ export default function Alibaba1688ListingPage() {
         purchasePrice: item.purchasePrice,
         description: item.description,
         attributesText: item.attributesText,
+        variants: parseSkuText(item.skuText),
       })),
     });
     setSaving(false);
@@ -668,6 +700,15 @@ export default function Alibaba1688ListingPage() {
                   value={item.attributesText || ''}
                   onChange={(e) => updateItemAttributes(item.id, e.target.value)}
                   placeholder={'材质：棉\n颜色：黑色\n风格：休闲'}
+                />
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label className="text-xs">SKU 明细</Label>
+                <textarea
+                  className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
+                  value={item.skuText || ''}
+                  onChange={(e) => updateItemSkuText(item.id, e.target.value)}
+                  placeholder={'skuId | 规格 | 价格 | 库存 | 起订量 | 毛重(g)\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650'}
                 />
               </div>
               <div className="space-y-1 md:col-span-2">

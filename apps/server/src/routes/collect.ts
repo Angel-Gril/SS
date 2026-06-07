@@ -419,6 +419,31 @@ function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
   });
 }
 
+export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown, fallbackVariants?: unknown) {
+  if (inputVariants === undefined) {
+    return Array.isArray(fallbackVariants) ? fallbackVariants as any[] : [];
+  }
+  if (!Array.isArray(inputVariants)) return [];
+  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>);
+}
+
+function formatAlibaba1688VariantText(variants: any[]): string {
+  return variants.map((variant) => {
+    const attrs = variant?.attrs && typeof variant.attrs === 'object' && !Array.isArray(variant.attrs)
+      ? variant.attrs as Record<string, unknown>
+      : {};
+    const specText = Object.values(attrs).map((value) => String(value || '').trim()).filter(Boolean).join(' / ');
+    return [
+      variant?.sku || variant?.sourceSkuId || '',
+      specText,
+      variant?.price ?? '',
+      variant?.stock ?? '',
+      variant?.minOrderQty ?? '',
+      variant?.grossWeightGrams ?? '',
+    ].map((value) => String(value || '')).join(' | ');
+  }).join('\n');
+}
+
 export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688CollectSchema>) {
   const offerIdFromUrl = String(input.sourceUrl || '').match(/offer\/(\d+)\.html/i)?.[1] || null;
   const offerId = compactString(input.offerId) || offerIdFromUrl || compactString(input.sku);
@@ -537,6 +562,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     currency: item.currency || 'CNY',
     images,
     variants,
+    skuText: formatAlibaba1688VariantText(variants),
     notes: item.notes || '',
     description: meta.description || '',
     supplierName: meta.supplierName || null,
@@ -926,6 +952,7 @@ export async function collectRoutes(app: FastifyInstance) {
         description?: string | null;
         attributes?: Record<string, unknown> | null;
         attributesText?: string | null;
+        variants?: Array<Record<string, unknown>> | null;
       }>;
     };
     const rows = (body?.items || []).filter((item) => item?.id).slice(0, 100);
@@ -950,6 +977,7 @@ export async function collectRoutes(app: FastifyInstance) {
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
       const nextImages = normalizeAlibaba1688PreparationImages(row.images, item.images);
+      const nextVariants = normalizeAlibaba1688PreparationVariants(row.variants, item.variants);
       const nextPurchasePriceRaw = row.purchasePrice !== undefined
         ? row.purchasePrice
         : item.purchasePrice?.toString();
@@ -963,7 +991,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const meta = refreshAlibaba1688SourceDataIssues(preparationMeta, {
         images: nextImages,
         purchasePrice: nextPurchasePrice,
-        variants: item.variants,
+        variants: nextVariants,
       });
 
       await prisma.supplyGoods.update({
@@ -972,6 +1000,7 @@ export async function collectRoutes(app: FastifyInstance) {
           metadata: meta as any,
           images: nextImages.length ? nextImages as any : null as any,
           purchasePrice: nextPurchasePrice,
+          variants: nextVariants.length ? nextVariants as any : null as any,
         },
       });
       saved++;
@@ -980,6 +1009,7 @@ export async function collectRoutes(app: FastifyInstance) {
       updatedItems.push(buildAlibaba1688ListingPrefill({
         ...item,
         images: nextImages,
+        variants: nextVariants,
         purchasePrice: nextPurchasePrice == null ? null : { toString: () => String(nextPurchasePrice) },
         metadata: meta,
       }));
