@@ -156,20 +156,28 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
   assert.match(serviceWorker, /chrome\.tabs\.create/);
 });
 
-test('1688 product pages expose a direct collect-to-ERP action', () => {
+test('domestic supply product pages expose a direct collect-to-ERP action', () => {
   const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
   const detailScript = manifest.content_scripts.find((entry) =>
     (entry.matches || []).includes('https://detail.1688.com/*')
+      && (entry.matches || []).includes('https://item.jd.com/*')
+      && (entry.matches || []).includes('https://item.taobao.com/*')
+      && (entry.matches || []).includes('https://detail.tmall.com/*')
       && (entry.js || []).includes('content/collect-content-script.js')
   );
 
-  assert.ok(detailScript, 'collect-content-script must be injected on 1688 detail pages');
+  assert.ok(detailScript, 'collect-content-script must be injected on domestic supply product pages');
+  assert.match(collectScript, /function\s+isDomesticSupplyProductPage\(\)/);
+  assert.match(collectScript, /if\s*\(!isDomesticSupplyProductPage\(\)\)\s*\{\s*return;\s*\}/);
   assert.match(collectScript, /initAlibaba1688CollectButton/);
   assert.match(collectScript, /采集到ERP/);
   assert.match(collectScript, /ozon-calc:collect-to-erp/);
   assert.ok(collectScript.includes('detail\\.1688\\.com'));
   assert.ok(collectScript.includes('offer\\/\\d+\\.html'));
+  assert.ok(collectScript.includes('item\\.jd\\.com\\/\\d+\\.html'));
+  assert.ok(collectScript.includes('item\\.taobao\\.com\\/item\\.htm'));
+  assert.ok(collectScript.includes('detail\\.tmall\\.com\\/item\\.htm'));
 });
 
 test('1688 product extraction includes price and category fields for ERP records', () => {

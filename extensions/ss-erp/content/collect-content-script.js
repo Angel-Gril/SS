@@ -406,6 +406,15 @@
     return /^https:\/\/detail\.1688\.com\/offer\/\d+\.html/i.test(location.href);
   }
 
+  function isDomesticSupplyProductPage() {
+    const platform = detectPlatform(location.hostname);
+    if (platform === "1688") return isAlibaba1688ProductPage();
+    if (platform === "jd") return /^https:\/\/item\.jd\.com\/\d+\.html/i.test(location.href);
+    if (platform === "taobao") return /^https:\/\/item\.taobao\.com\/item\.htm/i.test(location.href);
+    if (platform === "tmall") return /^https:\/\/detail\.tmall\.com\/item\.htm/i.test(location.href);
+    return false;
+  }
+
   function isAlibaba1688SearchPage() {
     return /^https:\/\/s\.1688\.com\//i.test(location.href);
   }
@@ -477,7 +486,7 @@
   }
 
   function initAlibaba1688CollectButton() {
-    if (!isAlibaba1688ProductPage()) {
+    if (!isDomesticSupplyProductPage()) {
       return;
     }
 
