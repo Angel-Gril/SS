@@ -13,7 +13,7 @@ interface PushItem {
   offer_id: string;
   product_id?: number;
   status: 'imported' | 'failed' | 'pending';
-  errors?: Array<{ code: string; message: string; field?: string }>;
+  errors?: Array<{ code?: string; message?: string; description?: string; field?: string; state?: string; level?: string }>;
 }
 
 interface DetailData {
@@ -67,6 +67,7 @@ export function ListingJobDetailDialog({
   const ozonProductIds = data?.payload?.ozonProductIds || [];
   const ozonOfferIds = data?.payload?.ozonOfferIds || [];
   const listingSources = data?.payload?.listingSources || [];
+  const canRefresh = !!data && (data.payload?.entry === '1688-listing' || (data.status !== 'SUCCESS' && data.status !== 'FAILED'));
 
   const renderCodes = (values: string[]) => (
     values.length ? (
@@ -87,6 +88,13 @@ export function ListingJobDetailDialog({
     return listingSources.find((source) => sourceValue(source, 'offerId') === offerId) || listingSources[index];
   }
 
+  function itemErrorText(item: PushItem) {
+    const messages = (item.errors || [])
+      .map((error) => error.message || error.description || error.code || error.field || '')
+      .filter(Boolean);
+    return messages.length ? messages.join('; ') : '—';
+  }
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-5xl max-h-[85vh] overflow-y-auto">
@@ -102,13 +110,26 @@ export function ListingJobDetailDialog({
               <div className="flex items-center gap-2"><span className="text-muted-foreground">状态：</span><StatusBadge s={data.status} /></div>
               <div><span className="text-muted-foreground">商品数：</span>{data.payload?.itemCount ?? '—'}</div>
               <div>
+                <span className="text-muted-foreground">成功数：</span>
+                <span className={data.payload?.importedCount ? 'text-emerald-600 font-medium' : ''}>
+                  {data.payload?.importedCount ?? 0}
+                </span>
+              </div>
+              <div>
                 <span className="text-muted-foreground">失败数：</span>
                 <span className={data.payload?.failedCount ? 'text-destructive font-medium' : ''}>
                   {data.payload?.failedCount ?? 0}
                 </span>
               </div>
+              <div>
+                <span className="text-muted-foreground">处理中：</span>
+                <span className={data.payload?.pendingCount ? 'text-amber-600 font-medium' : ''}>
+                  {data.payload?.pendingCount ?? 0}
+                </span>
+              </div>
               <div><span className="text-muted-foreground">提交时间：</span>{data.startedAt ? new Date(data.startedAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</div>
               <div><span className="text-muted-foreground">完成时间：</span>{data.finishedAt ? new Date(data.finishedAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</div>
+              <div><span className="text-muted-foreground">刷新时间：</span>{data.payload?.lastRefreshedAt ? new Date(data.payload.lastRefreshedAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</div>
               <div className="col-span-2"><span className="text-muted-foreground">OZON Task ID：</span><code className="bg-muted px-1.5 py-0.5 rounded text-xs">{data.payload?.taskId ?? '—'}</code></div>
               {mode && (
                 <div className="flex items-center gap-2">
@@ -145,9 +166,11 @@ export function ListingJobDetailDialog({
             )}
 
             <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing || data.status === 'SUCCESS' || data.status === 'FAILED'}>
+              <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing || !canRefresh}>
                 <RefreshCw className={`h-3.5 w-3.5 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
-                从 OZON 拉取最新状态
+                {data.payload?.entry === '1688-listing' && (data.status === 'SUCCESS' || data.status === 'FAILED')
+                  ? '重新拉取 Ozon 结果'
+                  : '从 OZON 拉取最新状态'}
               </Button>
             </div>
 
@@ -214,7 +237,7 @@ export function ListingJobDetailDialog({
                           </td>
                           <td className="px-3 py-2"><Badge className={`${cls} text-white text-[10px]`}>{txt}</Badge></td>
                           <td className="px-3 py-2 text-destructive break-all">
-                            {it.errors?.map((e) => e.message).join('; ') || '—'}
+                            {itemErrorText(it)}
                           </td>
                         </tr>
                       );

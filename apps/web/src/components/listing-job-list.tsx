@@ -28,6 +28,10 @@ export interface JobRow {
     itemCount?: number;
     sourceItemCount?: number;
     failedCount?: number;
+    importedCount?: number;
+    pendingCount?: number;
+    resultStatus?: 'submitted' | 'pending' | 'imported' | 'partial_failed' | 'failed';
+    lastRefreshedAt?: string;
   } | null;
   errorMessage: string | null;
   createdAt: string;
@@ -175,7 +179,8 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
   const offerIds = row.payload?.offerIds || [];
   const total = row.payload?.itemCount ?? 0;
   const failed = row.payload?.failedCount ?? 0;
-  const succeeded = total - failed;
+  const imported = row.payload?.importedCount ?? (row.status === 'SUCCESS' ? Math.max(0, total - failed) : 0);
+  const pending = row.payload?.pendingCount ?? 0;
   const mode = modeLabel(row.payload);
 
   return (
@@ -190,8 +195,15 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
         <StatusBadge s={row.status} />
         {total > 0 && (
           <span className="text-xs text-muted-foreground">
-            共 {total} {failed > 0 && <span className="text-destructive">· {failed} 失败</span>}
-            {succeeded > 0 && failed > 0 && <span className="text-emerald-600"> · {succeeded} 成功</span>}
+            共 {total}
+            {imported > 0 && <span className="text-emerald-600"> · {imported} 成功</span>}
+            {failed > 0 && <span className="text-destructive"> · {failed} 失败</span>}
+            {pending > 0 && <span className="text-amber-600"> · {pending} 处理中</span>}
+          </span>
+        )}
+        {row.payload?.lastRefreshedAt && (
+          <span className="text-[11px] text-muted-foreground">
+            刷新 {new Date(row.payload.lastRefreshedAt).toLocaleString('zh-CN', { hour12: false })}
           </span>
         )}
         <span className="ml-auto text-[11px] text-muted-foreground">
