@@ -18,5 +18,5 @@ export function sourcePlatformLabel(sourcePlatform?: string | null) {
 
 export function normalizeSourcePlatform(value?: string | null) {
   const normalized = value?.trim().toLowerCase();
-  return normalized && SOURCE_PLATFORM_VALUES.has(normalized) ? normalized : value || undefined;
+  return normalized && SOURCE_PLATFORM_VALUES.has(normalized) ? normalized : undefined;
 }

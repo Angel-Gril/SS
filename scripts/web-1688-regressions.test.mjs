@@ -308,6 +308,19 @@ test('supply and listing history views render source platform labels', () => {
   assert.match(listingJobDetail, /sourcePlatformLabel\(sourcePlatform\)/);
 });
 
+test('source platform normalization rejects Ozon trace ids in editable SKU rows', () => {
+  const sourcePlatformsLib = readRepoFile('apps', 'web', 'src', 'lib', 'source-platforms.ts');
+  const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(sourcePlatformsLib, /return\s+normalized\s+&&\s+SOURCE_PLATFORM_VALUES\.has\(normalized\)\s+\?\s+normalized\s+:\s+undefined/);
+  for (const source of [collect1688Page, listingPage]) {
+    assert.match(source, /const\s+legacyPlatform\s*=\s*normalizeSourcePlatform\(parts\[8\]\)/);
+    assert.match(source, /ozonProductId:\s*isLegacyPlatformColumn\s*\?\s*undefined\s*:\s*parts\[8\]\s*\|\|\s*undefined/);
+    assert.match(source, /sourcePlatform:\s*isLegacyPlatformColumn\s*\?\s*legacyPlatform\s*:\s*normalizeSourcePlatform\(parts\[10\]\)/);
+  }
+});
+
 test('1688 collect page lists domestic supply records with real source platforms', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 
