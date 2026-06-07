@@ -31,11 +31,27 @@ interface Alibaba1688ListingItem {
   preparedTitleRu: string;
   targetPriceCny: string;
   listingNotes: string;
+  ozonPriceCheckContext: OzonPriceCheckContext | null;
   createdAt: string;
+}
+
+interface OzonPriceCheckContext {
+  title?: string | null;
+  productId?: string | null;
+  sourceUrl?: string | null;
+  price?: string | null;
+  currency?: string | null;
 }
 
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
+}
+
+function priceCheckText(context?: OzonPriceCheckContext | null) {
+  if (!context) return '';
+  const title = context.title || context.productId || 'Ozon 商品';
+  const price = context.price ? `${context.price} ${context.currency || 'RUB'}` : '';
+  return price ? `${title} · 售价 ${price}` : title;
 }
 
 export default function Alibaba1688ListingPage() {
@@ -163,12 +179,28 @@ export default function Alibaba1688ListingPage() {
                 <div className="text-muted-foreground truncate">
                   {[item.supplierName, item.categoryPath, attrsText(item.attributes)].filter(Boolean).join(' · ') || '暂无供应商/类目/属性信息'}
                 </div>
-                {item.sourceUrl && (
-                  <Button variant="outline" size="sm" asChild>
-                    <a href={item.sourceUrl} target="_blank" rel="noreferrer">
-                      <ExternalLink className="h-4 w-4 mr-1" />源页
-                    </a>
-                  </Button>
+                {item.ozonPriceCheckContext && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    核价来源: {priceCheckText(item.ozonPriceCheckContext)}
+                  </div>
+                )}
+                {(item.sourceUrl || item.ozonPriceCheckContext?.sourceUrl) && (
+                  <div className="flex flex-wrap gap-2">
+                    {item.sourceUrl && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+                          <ExternalLink className="h-4 w-4 mr-1" />源页
+                        </a>
+                      </Button>
+                    )}
+                    {item.ozonPriceCheckContext?.sourceUrl && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={item.ozonPriceCheckContext.sourceUrl} target="_blank" rel="noreferrer">
+                          <ExternalLink className="h-4 w-4 mr-1" />Ozon
+                        </a>
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

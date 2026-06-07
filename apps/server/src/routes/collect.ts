@@ -173,6 +173,44 @@ function compactString(value: unknown): string | null {
   return text || null;
 }
 
+function compactHttpUrl(value: unknown): string | null {
+  const text = compactString(value);
+  if (!text || !/^https?:\/\//i.test(text)) return null;
+  return text;
+}
+
+function extractOzonPriceCheckContext(metadata: unknown) {
+  const meta = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, any>
+    : {};
+  const raw = meta.raw && typeof meta.raw === 'object' && !Array.isArray(meta.raw)
+    ? meta.raw as Record<string, any>
+    : {};
+  const source = meta.ozonPriceCheckContext || raw.priceCheckContext;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+
+  const title = compactString(source.title);
+  const productId = compactString(source.productId);
+  const sourceUrl = compactHttpUrl(source.sourceUrl);
+  if (!title && !productId && !sourceUrl) return null;
+
+  return {
+    title,
+    productId,
+    sourceUrl,
+    price: source.price != null && source.price !== '' ? String(source.price) : null,
+    currency: compactString(source.currency) || 'RUB',
+  };
+}
+
+function exposeSupplyGoodsMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const meta = { ...(metadata as Record<string, any>) };
+  const ozonPriceCheckContext = extractOzonPriceCheckContext(meta);
+  if (ozonPriceCheckContext) meta.ozonPriceCheckContext = ozonPriceCheckContext;
+  return meta;
+}
+
 function parseImageList(images?: string[], imageText?: string): string[] {
   const values = [
     ...(Array.isArray(images) ? images : []),
@@ -308,6 +346,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     preparedTitleRu: meta.preparedTitleRu || '',
     targetPriceCny: meta.targetPriceCny || '',
     listingNotes: meta.listingNotes || '',
+    ozonPriceCheckContext: extractOzonPriceCheckContext(meta),
     createdAt: item.createdAt.toISOString(),
   };
 }
@@ -467,6 +506,7 @@ export async function collectRoutes(app: FastifyInstance) {
           purchasePrice: r.purchasePrice?.toString() ?? null,
           originalPrice: r.originalPrice?.toString() ?? null,
           exchangeRateUsed: r.exchangeRateUsed?.toString() ?? null,
+          metadata: exposeSupplyGoodsMetadata(r.metadata),
         })),
       },
     };

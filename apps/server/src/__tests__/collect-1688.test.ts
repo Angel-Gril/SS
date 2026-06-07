@@ -94,6 +94,15 @@ describe('1688 collect helpers', () => {
         skuCount: 1,
         categoryMappingStatus: 'deferred_until_listing',
         listingPreparationStatus: 'collected_only',
+        raw: {
+          priceCheckContext: {
+            title: 'Ozon 男士运动鞋',
+            productId: '123456789',
+            sourceUrl: 'https://www.ozon.ru/product/test-123456789/',
+            price: '1590',
+            currency: 'RUB',
+          },
+        },
       },
       createdAt: new Date('2026-06-07T12:00:00.000Z'),
     });
@@ -112,6 +121,13 @@ describe('1688 collect helpers', () => {
       preparedTitleRu: '',
       targetPriceCny: '',
       listingNotes: '',
+      ozonPriceCheckContext: {
+        title: 'Ozon 男士运动鞋',
+        productId: '123456789',
+        sourceUrl: 'https://www.ozon.ru/product/test-123456789/',
+        price: '1590',
+        currency: 'RUB',
+      },
       createdAt: '2026-06-07T12:00:00.000Z',
     });
   });

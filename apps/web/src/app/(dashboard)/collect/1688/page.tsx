@@ -28,7 +28,16 @@ interface Collected1688Item {
     skuCount?: number;
     categoryMappingStatus?: string;
     listingPreparationStatus?: string | null;
+    ozonPriceCheckContext?: OzonPriceCheckContext | null;
   } | null;
+}
+
+interface OzonPriceCheckContext {
+  title?: string | null;
+  productId?: string | null;
+  sourceUrl?: string | null;
+  price?: string | null;
+  currency?: string | null;
 }
 
 interface FormState {
@@ -81,6 +90,13 @@ function preparationStatusLabel(status?: string | null) {
   if (status === 'draft') return '准备草稿';
   if (status === 'ready') return '准备完成';
   return '仅采集';
+}
+
+function priceCheckText(context?: OzonPriceCheckContext | null) {
+  if (!context) return '';
+  const title = context.title || context.productId || 'Ozon 商品';
+  const price = context.price ? `${context.price} ${context.currency || 'RUB'}` : '';
+  return price ? `${title} · 售价 ${price}` : title;
 }
 
 export default function Collect1688Page() {
@@ -331,11 +347,23 @@ export default function Collect1688Page() {
                         {[item.metadata?.supplierName, item.metadata?.categoryPath, attributePreview(item.metadata)].filter(Boolean).join(' · ')}
                       </div>
                     )}
+                    {item.metadata?.ozonPriceCheckContext && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        核价来源: {priceCheckText(item.metadata.ozonPriceCheckContext)}
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
                     <Button size="sm" onClick={() => goToPreparation([item.id])}>
                       <ArrowRight className="h-4 w-4 mr-1" />上架准备
                     </Button>
+                    {item.metadata?.ozonPriceCheckContext?.sourceUrl && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={item.metadata.ozonPriceCheckContext.sourceUrl} target="_blank" rel="noreferrer">
+                          <ExternalLink className="h-4 w-4 mr-1" />Ozon
+                        </a>
+                      </Button>
+                    )}
                     {item.sourceUrl && (
                       <Button variant="outline" size="sm" asChild>
                         <a href={item.sourceUrl} target="_blank" rel="noreferrer">
