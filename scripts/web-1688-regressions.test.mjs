@@ -277,8 +277,10 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.match(collect1688Page, /最近货源采集记录/);
   assert.match(collect1688Page, /暂无货源采集记录/);
   assert.match(collect1688Page, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.match(collect1688Page, /货源ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
   assert.doesNotMatch(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'1688'/);
   assert.doesNotMatch(collect1688Page, /<Badge variant="outline">1688<\/Badge>/);
+  assert.doesNotMatch(collect1688Page, /1688 Offer:/);
 });
 
 test('1688 collect page can create records for selected domestic source platforms', () => {

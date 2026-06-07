@@ -810,7 +810,7 @@ export default function Collect1688Page() {
                     </div>
                     <div className="text-xs text-muted-foreground flex gap-3 flex-wrap">
                       <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
-                      <span>1688 Offer: {item.sourceProductId || '-'}</span>
+                      <span>货源ID: {item.sourceProductId || '-'}</span>
                       <span>SKU: {item.metadata?.skuCount || 0}</span>
                       <span>{formatDate(item.createdAt)}</span>
                     </div>
