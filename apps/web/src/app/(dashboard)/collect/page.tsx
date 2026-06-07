@@ -13,6 +13,7 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { formatVariantAttrs } from '@/lib/ozon-attr-names';
+import { sourcePlatformLabel } from '@/lib/source-platforms';
 
 interface VariantSku {
   sku?: string;
@@ -710,7 +711,7 @@ export default function CollectPage() {
                             <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">源ID: {item.sourceProductId}</span>
                           )}
                           {item.sourcePlatform && (
-                            <Badge variant="outline" className="text-xs font-normal">{item.sourcePlatform}</Badge>
+                            <Badge variant="outline" className="text-xs font-normal">{sourcePlatformLabel(item.sourcePlatform)}</Badge>
                           )}
                           {(item.metadata?.titleNeedsReview || hasCjkText(item.metadata?.publishTitleRu || item.title)) && (
                             <Badge variant="destructive" className="text-xs font-normal">上架标题需检查</Badge>

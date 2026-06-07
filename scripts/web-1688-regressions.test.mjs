@@ -257,7 +257,9 @@ test('collect page gates listing actions by domestic supply platforms instead of
   const collectPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', 'page.tsx');
 
   assert.match(collectPage, /DOMESTIC_SUPPLY_SOURCE_PLATFORMS/);
+  assert.match(collectPage, /import\s+\{\s*sourcePlatformLabel\s*\}\s+from\s+'@\/lib\/source-platforms'/);
   assert.match(collectPage, /function\s+isDomesticSupplySourcePlatform\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
+  assert.match(collectPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
   assert.match(collectPage, /selectedHasDomesticSupply/);
   assert.match(collectPage, /selectedAllDomesticSupply/);
   assert.match(collectPage, /selectedItems\.some\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);
@@ -267,6 +269,7 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.doesNotMatch(collectPage, /selectedHasAlibaba1688/);
   assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);
   assert.doesNotMatch(collectPage, /sourcePlatform\s*===\s*'1688'/);
+  assert.doesNotMatch(collectPage, /\{item\.sourcePlatform\}<\/Badge>/);
 });
 
 test('supply goods management accepts all domestic supply platform labels', () => {
