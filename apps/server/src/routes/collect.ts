@@ -228,6 +228,42 @@ function compactString(value: unknown): string | null {
   return text || null;
 }
 
+function parseUrlLike(value: unknown): URL | null {
+  const text = compactString(value);
+  if (!text) return null;
+  try {
+    return new URL(text);
+  } catch {
+    try {
+      return new URL(`https://${text}`);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function extractDomesticSupplyProductIdFromUrl(sourceUrl: unknown, sourcePlatform?: unknown): string | null {
+  const text = compactString(sourceUrl);
+  if (!text) return null;
+  const url = parseUrlLike(text);
+  const queryKeys = ['offerId', 'offer_id', 'id', 'item_id', 'itemId', 'num_iid', 'sku', 'skuId', 'wareId', 'goods_id', 'goodsId'];
+  if (url) {
+    for (const key of queryKeys) {
+      const value = compactString(url.searchParams.get(key));
+      if (value) return value;
+    }
+    const pathMatch = url.pathname.match(/(?:^|\/)(\d{5,})(?:\.html)?$/i);
+    if (pathMatch?.[1]) return pathMatch[1];
+  }
+  const platform = compactString(sourcePlatform)?.toLowerCase();
+  if (platform === '1688' || /\.1688\.com/i.test(text)) {
+    const offerMatch = text.match(/\/offer\/(\d{5,})(?:\.html)?/i);
+    if (offerMatch?.[1]) return offerMatch[1];
+  }
+  const queryMatch = text.match(/[?&](?:offerId|offer_id|id|item_id|itemId|num_iid|sku|skuId|wareId|goods_id|goodsId)=([^&#]+)/i);
+  return queryMatch?.[1] ? decodeURIComponent(queryMatch[1]) : null;
+}
+
 const ALIBABA_1688_ACTIVE_LISTING_STATUSES = new Set(['submitted', 'pending', 'imported']);
 
 export function getAlibaba1688ListingStatus(item: { status?: string | null; metadata?: unknown }): string {
@@ -646,7 +682,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
 
 export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688CollectSchema>) {
   const sourcePlatform = compactString(input.sourcePlatform) || '1688';
-  const offerIdFromUrl = String(input.sourceUrl || '').match(/offer\/(\d+)\.html/i)?.[1] || null;
+  const offerIdFromUrl = extractDomesticSupplyProductIdFromUrl(input.sourceUrl, sourcePlatform);
   const offerId = compactString(input.offerId) || offerIdFromUrl || compactString(input.sku);
   const images = parseImageList(input.images, input.imageText);
   const attributes = {

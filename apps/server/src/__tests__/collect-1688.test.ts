@@ -168,6 +168,28 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('infers source product ids from domestic supply urls when no offer id is submitted', () => {
+    const cases = [
+      ['taobao', 'https://item.taobao.com/item.htm?id=998877', '998877'],
+      ['tmall', 'https://detail.tmall.com/item.htm?id=123456789', '123456789'],
+      ['jd', 'https://item.jd.com/100012043978.html', '100012043978'],
+      ['pinduoduo', 'https://mobile.yangkeduo.com/goods.html?goods_id=777888999', '777888999'],
+    ] as const;
+
+    for (const [sourcePlatform, sourceUrl, sourceProductId] of cases) {
+      const record = buildAlibaba1688CollectRecord({
+        title: `${sourcePlatform} 货源商品`,
+        sourcePlatform,
+        sourceUrl,
+        priceText: '¥19.90',
+      });
+
+      expect(record.sourceProductId).toBe(sourceProductId);
+      expect(record.sku).toBe(sourceProductId);
+      expect(record.metadata.offerId).toBe(sourceProductId);
+    }
+  });
+
   it('links 1688 source SKUs to the Ozon SKU from price-check context', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '核价货源',
