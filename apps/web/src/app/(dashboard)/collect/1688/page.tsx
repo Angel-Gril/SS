@@ -547,7 +547,7 @@ export default function Collect1688Page() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">1688 采集上品</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">货源采集上品</h1>
           <p className="text-sm text-muted-foreground mt-1">保存货源商品信息，类目映射、翻译和属性生成在上架准备阶段执行。</p>
         </div>
         <div className="flex flex-wrap gap-2 sm:justify-end">
@@ -576,7 +576,7 @@ export default function Collect1688Page() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">商品标题 *</Label>
-              <Input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="1688 商品标题" />
+              <Input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="货源商品标题" />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">货源平台</Label>
@@ -618,7 +618,7 @@ export default function Collect1688Page() {
               <Input value={form.monthlySales} onChange={(e) => update('monthlySales', e.target.value)} placeholder="3000" />
             </div>
             <div className="space-y-1 md:col-span-2">
-              <Label className="text-xs">1688 类目路径</Label>
+              <Label className="text-xs">货源类目路径</Label>
               <Input value={form.categoryPath} onChange={(e) => update('categoryPath', e.target.value)} placeholder="鞋类 > 男鞋 > 运动鞋" />
             </div>
           </div>
@@ -890,7 +890,7 @@ export default function Collect1688Page() {
                           </div>
                         ))}
                         {(item.metadata?.lastListingResultItems?.length || 0) > failedListingItems.length && (
-                          <div className="text-destructive/80">更多结果请查看 1688 上架记录详情</div>
+                          <div className="text-destructive/80">更多结果请查看货源上架记录详情</div>
                         )}
                       </div>
                     )}

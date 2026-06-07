@@ -600,7 +600,7 @@ export default function CollectPage() {
                       router.push(`/listing/1688?ids=${encodeURIComponent(ids)}`);
                     }}
                   >
-                    <ArrowRight className="h-4 w-4 mr-1" />1688上架准备
+                    <ArrowRight className="h-4 w-4 mr-1" />货源上架准备
                   </Button>
                 )}
                 <Button
@@ -608,7 +608,7 @@ export default function CollectPage() {
                   variant="outline"
                   onClick={() => {
                     if (selectedHasDomesticSupply) {
-                      toast({ title: '货源记录需要先走 1688 上架准备流程，不能使用 Ozon 改款入口', variant: 'destructive' });
+                      toast({ title: '货源记录需要先走货源上架准备流程，不能使用 Ozon 改款入口', variant: 'destructive' });
                       return;
                     }
                     handleGoToListing();

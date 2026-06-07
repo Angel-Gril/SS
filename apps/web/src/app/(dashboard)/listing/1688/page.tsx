@@ -635,13 +635,13 @@ export default function Alibaba1688ListingPage() {
     return (
       <div className="space-y-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">货源上架准备</h1>
           <p className="text-sm text-muted-foreground mt-1">暂无可准备的货源采集记录</p>
         </div>
         <Card>
           <CardContent className="py-12 text-center">
             <Button onClick={() => router.push('/collect/1688')}>
-              <ArrowLeft className="h-4 w-4 mr-1" />返回 1688 采集上品
+              <ArrowLeft className="h-4 w-4 mr-1" />返回货源采集上品
             </Button>
           </CardContent>
         </Card>
@@ -653,7 +653,7 @@ export default function Alibaba1688ListingPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">货源上架准备</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {ids.length ? `共 ${items.length} 件商品` : `最近 ${items.length} 条货源采集记录`} · 当前显示 {filteredItems.length} 条 · 待翻译 · 待类目映射 · 待属性生成
           </p>
@@ -992,7 +992,7 @@ export default function Alibaba1688ListingPage() {
         );
       })}
 
-      <ListingJobList entryFilter="1688-listing" title="1688 上架记录" limit={30} refreshToken={listingJobsRefreshToken} />
+      <ListingJobList entryFilter="1688-listing" title="货源上架记录" limit={30} refreshToken={listingJobsRefreshToken} />
     </div>
   );
 }

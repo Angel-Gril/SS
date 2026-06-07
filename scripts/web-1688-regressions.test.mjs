@@ -110,7 +110,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingPage, /source:\s*'1688-listing'/);
   assert.match(listingPage, /setListingJobsRefreshToken\(\(value\)\s*=>\s*value\s*\+\s*1\)/);
   assert.match(listingPage, /<ListingJobList\s+entryFilter="1688-listing"[\s\S]*refreshToken=\{listingJobsRefreshToken\}/);
-  assert.match(listingPage, /1688 上架记录/);
+  assert.match(listingPage, /货源上架记录/);
   assert.match(listingPage, /请选择目标店铺/);
   assert.match(listingPage, /提交到 Ozon/);
   assert.match(listingRoute, /source:\s*z\.enum\(\['1688-listing',\s*'manual-batch'\]\)\.optional\(\)/);
@@ -196,7 +196,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobList, /entryFilter\s*&&\s*entryFilter\s*!==\s*'collect-page'/);
   assert.match(listingJobList, /params\.set\('entry',\s*entryFilter\)/);
   assert.match(listingJobList, /if\s*\(entryFilter\s*===\s*'1688-listing'\)\s*return\s*e\s*===\s*'1688-listing'/);
-  assert.match(listingJobList, /text:\s*'1688 上架'/);
+  assert.match(listingJobList, /text:\s*'货源上架'/);
   assert.match(listingJobList, /const\s+sourcePlatforms\s*=\s*row\.payload\?\.sourcePlatforms\s*\|\|\s*\[\]/);
   assert.match(listingJobList, /货源平台/);
   assert.match(listingJobList, /货源 SKU/);
@@ -244,7 +244,7 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.match(collectPage, /selectedAllDomesticSupply/);
   assert.match(collectPage, /selectedItems\.some\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);
   assert.match(collectPage, /selectedItems\.every\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);
-  assert.match(collectPage, /货源记录需要先走 1688 上架准备流程/);
+  assert.match(collectPage, /货源记录需要先走货源上架准备流程/);
   assert.match(collectPage, /货源记录仅保存货源信息/);
   assert.doesNotMatch(collectPage, /selectedHasAlibaba1688/);
   assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);
@@ -274,6 +274,10 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.match(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'domestic-supply'/);
   assert.match(collect1688Page, /加载货源采集记录失败/);
   assert.match(collect1688Page, /请先选择货源采集记录/);
+  assert.match(collect1688Page, /货源采集上品/);
+  assert.match(collect1688Page, /货源商品标题/);
+  assert.match(collect1688Page, /货源类目路径/);
+  assert.match(collect1688Page, /更多结果请查看货源上架记录详情/);
   assert.match(collect1688Page, /最近货源采集记录/);
   assert.match(collect1688Page, /暂无货源采集记录/);
   assert.match(collect1688Page, /sourcePlatformLabel\(item\.sourcePlatform\)/);
@@ -281,6 +285,9 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.doesNotMatch(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'1688'/);
   assert.doesNotMatch(collect1688Page, /<Badge variant="outline">1688<\/Badge>/);
   assert.doesNotMatch(collect1688Page, /1688 Offer:/);
+  assert.doesNotMatch(collect1688Page, />1688 采集上品</);
+  assert.doesNotMatch(collect1688Page, /1688 商品标题/);
+  assert.doesNotMatch(collect1688Page, /1688 类目路径/);
 });
 
 test('1688 collect page can create records for selected domestic source platforms', () => {
@@ -303,6 +310,9 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.match(listingPage, /sourcePlatform:\s*string\s*\|\s*null/);
   assert.match(listingPage, /function\s+sourcePlatformLabel\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
   assert.match(listingPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.match(listingPage, /货源上架准备/);
+  assert.match(listingPage, /返回货源采集上品/);
+  assert.match(listingPage, /货源上架记录/);
   assert.match(listingPage, /货源ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
   assert.match(listingPage, /加载货源上架准备数据失败/);
   assert.match(listingPage, /已保存货源上架准备草稿/);
@@ -311,4 +321,7 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.match(listingPage, /当前筛选下暂无货源上架准备记录/);
   assert.doesNotMatch(listingPage, /<Badge variant="outline">1688<\/Badge>/);
   assert.doesNotMatch(listingPage, /1688 Offer:/);
+  assert.doesNotMatch(listingPage, />1688 上架准备</);
+  assert.doesNotMatch(listingPage, /返回 1688 采集上品/);
+  assert.doesNotMatch(listingPage, /1688 上架记录/);
 });

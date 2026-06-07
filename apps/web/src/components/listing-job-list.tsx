@@ -59,7 +59,7 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
 
   if (mode === '1688') {
     return {
-      text: '1688 上架',
+      text: '货源上架',
       cls: 'border-sky-300 text-sky-700 bg-sky-50 dark:bg-sky-950 dark:text-sky-300',
     };
   }
@@ -90,7 +90,7 @@ interface Props {
   accentEmerald?: boolean;
   // limit
   limit?: number;
-  // 外部动作完成后触发重新加载，比如提交新的 1688 上架任务后刷新记录列表
+  // 外部动作完成后触发重新加载，比如提交新的货源上架任务后刷新记录列表
   refreshToken?: number | string;
 }
 
