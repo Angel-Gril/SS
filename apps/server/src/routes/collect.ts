@@ -189,6 +189,30 @@ function compactString(value: unknown): string | null {
   return text || null;
 }
 
+const ALIBABA_1688_ACTIVE_LISTING_STATUSES = new Set(['submitted', 'pending', 'imported']);
+
+export function getAlibaba1688ListingStatus(item: { status?: string | null; metadata?: unknown }): string {
+  const meta = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+    ? item.metadata as Record<string, any>
+    : {};
+  const metadataStatus = compactString(meta.lastListingResultStatus) || compactString(meta.listingStatus);
+  if (metadataStatus) return metadataStatus;
+  if (item.status === 'listing_failed') return 'failed';
+  if (item.status === 'listed') return 'submitted';
+  return '';
+}
+
+export function canCreateAlibaba1688ListingDraft(item: { status?: string | null; metadata?: unknown }): boolean {
+  return !ALIBABA_1688_ACTIVE_LISTING_STATUSES.has(getAlibaba1688ListingStatus(item));
+}
+
+function getAlibaba1688ListingBlockedIssue(item: { status?: string | null; metadata?: unknown }): string | null {
+  const listingStatus = getAlibaba1688ListingStatus(item);
+  return ALIBABA_1688_ACTIVE_LISTING_STATUSES.has(listingStatus)
+    ? `listing_already_${listingStatus}`
+    : null;
+}
+
 function compactHttpUrl(value: unknown): string | null {
   const text = compactString(value);
   if (!text || !/^https?:\/\//i.test(text)) return null;
@@ -647,6 +671,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
 export function buildAlibaba1688ListingPrefill(item: {
   id: string;
   title: string;
+  status?: string | null;
   sourceUrl?: string | null;
   sourceProductId?: string | null;
   purchasePrice?: { toString(): string } | null;
@@ -684,6 +709,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     purchasePrice,
     item.currency || 'CNY',
   );
+  const listingStatus = getAlibaba1688ListingStatus(item);
   return {
     id: item.id,
     title: item.title,
@@ -715,6 +741,8 @@ export function buildAlibaba1688ListingPrefill(item: {
     categoryMappingStatus: meta.categoryMappingStatus || 'deferred_until_listing',
     listingPreparationStatus: meta.listingPreparationStatus || 'collected_only',
     listingPreparationIssues: Array.isArray(meta.listingPreparationIssues) ? meta.listingPreparationIssues : [],
+    listingStatus: listingStatus || null,
+    canCreateListingDraft: canCreateAlibaba1688ListingDraft(item),
     preparedTitleRu: meta.preparedTitleRu || '',
     targetPriceCny: meta.targetPriceCny || '',
     ozonCategoryId: meta.ozonCategoryId != null ? String(meta.ozonCategoryId) : '',
@@ -853,6 +881,7 @@ function buildAlibaba1688DraftOfferId(
 export function buildAlibaba1688OzonListingDraftItems(item: {
   id: string;
   title: string;
+  status?: string | null;
   sourceUrl?: string | null;
   sourceProductId?: string | null;
   purchasePrice?: { toString(): string } | null;
@@ -864,6 +893,12 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   createdAt: Date;
 }) {
   const prefill = buildAlibaba1688ListingPrefill(item);
+  const listingStatus = getAlibaba1688ListingStatus(item);
+  const blockedIssue = getAlibaba1688ListingBlockedIssue(item);
+  if (blockedIssue) {
+    return { items: [], issues: [blockedIssue], listingStatus };
+  }
+
   const baseImages = parseImageList(
     (Array.isArray(prefill.images) ? prefill.images : []).map((image) => String(image || '')),
   );
@@ -875,7 +910,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   }, { hasImages: baseImages.length > 0 });
 
   if (issues.length) {
-    return { items: [], issues };
+    return { items: [], issues, listingStatus };
   }
 
   const meta = (item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata))
@@ -933,7 +968,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     };
   });
 
-  return { items, issues: [] };
+  return { items, issues: [], listingStatus };
 }
 
 export async function collectRoutes(app: FastifyInstance) {
@@ -1313,9 +1348,12 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     if (blocked.length) {
+      const hasActiveListing = blocked.some((item) => item.issues.some((issue) => issue.startsWith('listing_already_')));
       return reply.status(400).send({
         code: 0,
-        msg: `${blocked.length} 条 1688 采集记录尚未完成上架准备`,
+        msg: hasActiveListing
+          ? `${blocked.length} 条 1688 采集记录已提交、导入中或已上架成功，不能重复生成草稿`
+          : `${blocked.length} 条 1688 采集记录尚未完成上架准备`,
         data: { items: draftItems, blocked },
       });
     }

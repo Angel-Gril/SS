@@ -61,6 +61,8 @@ interface Alibaba1688ListingItem {
   categoryMappingStatus: string;
   listingPreparationStatus: string;
   listingPreparationIssues: string[];
+  listingStatus: string | null;
+  canCreateListingDraft: boolean;
   preparedTitleRu: string;
   targetPriceCny: string;
   ozonCategoryId: string;
@@ -222,6 +224,27 @@ function preparationStatusLabel(status?: string | null) {
   if (status === 'ready') return '准备完成';
   if (status === 'draft') return '准备草稿';
   return '仅采集';
+}
+
+function listingStatusText(status?: string | null) {
+  if (status === 'imported') return '上架成功';
+  if (status === 'partial_failed') return '部分失败';
+  if (status === 'failed') return '上架失败';
+  if (status === 'pending') return '导入中';
+  if (status === 'submitted') return '已提交上架';
+  return '';
+}
+
+function listingStatusBadgeVariant(status?: string | null): 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' {
+  if (status === 'imported') return 'success';
+  if (status === 'partial_failed' || status === 'pending') return 'warning';
+  if (status === 'failed') return 'destructive';
+  return 'default';
+}
+
+function canCreateListingDraft(item: Alibaba1688ListingItem) {
+  const status = item.listingStatus || '';
+  return item.canCreateListingDraft !== false && status !== 'submitted' && status !== 'pending' && status !== 'imported';
 }
 
 function preparationIssueLabels(issues?: string[]) {
@@ -471,7 +494,7 @@ export default function Alibaba1688ListingPage() {
 
   function readyItemIds() {
     return items
-      .filter((item) => currentPreparationStatus(item) === 'ready')
+      .filter((item) => currentPreparationStatus(item) === 'ready' && canCreateListingDraft(item))
       .map((item) => item.id);
   }
 
@@ -482,7 +505,7 @@ export default function Alibaba1688ListingPage() {
     }
     const readyIds = readyItemIds();
     if (!readyIds.length) {
-      toast({ title: '没有准备完成的 1688 记录可生成上架草稿', variant: 'destructive' });
+      toast({ title: '没有可提交的准备完成记录；已提交、导入中或上架成功的记录不会重复生成草稿', variant: 'destructive' });
       return null;
     }
 
@@ -638,6 +661,10 @@ export default function Alibaba1688ListingPage() {
               <Badge variant={currentPreparationStatus(item) === 'ready' ? 'default' : 'outline'}>
                 {preparationStatusLabel(currentPreparationStatus(item))}
               </Badge>
+              {listingStatusText(item.listingStatus) && (
+                <Badge variant={listingStatusBadgeVariant(item.listingStatus)}>{listingStatusText(item.listingStatus)}</Badge>
+              )}
+              {!canCreateListingDraft(item) && <Badge variant="outline">不可重复提交</Badge>}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
