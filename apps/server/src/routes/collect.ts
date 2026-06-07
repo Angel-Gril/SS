@@ -158,6 +158,10 @@ function normalizeSourcePlatform(value: unknown): string | null {
   return normalizeProductId(value)?.toLowerCase() || null;
 }
 
+export function normalizeCollectSourcePlatform(value: unknown): string {
+  return normalizeSourcePlatform(value) || 'ozon';
+}
+
 export function getSupplyGoodsLookupId(item: { sourceProductId?: string | null; sku?: string | null }): string | null {
   return normalizeProductId(item.sourceProductId) || normalizeProductId(item.sku);
 }
@@ -1297,7 +1301,7 @@ export async function collectRoutes(app: FastifyInstance) {
         user: { connect: { id: userId } },
         title: d.title,
         sourceUrl: d.sourceUrl || null,
-        sourcePlatform: d.sourcePlatform || 'ozon',
+        sourcePlatform: normalizeCollectSourcePlatform(d.sourcePlatform),
         sourceProductId,
         sku: d.sku || sourceProductId,
         images: d.images || undefined,
@@ -1572,7 +1576,7 @@ export async function collectRoutes(app: FastifyInstance) {
             user: { connect: { id: userId } },
             title: item.title || '未命名商品',
             sourceUrl: item.sourceUrl || null,
-            sourcePlatform: item.sourcePlatform || 'ozon',
+            sourcePlatform: normalizeCollectSourcePlatform(item.sourcePlatform),
             sourceProductId,
             sku: item.sku || sourceProductId,
             images: item.images || undefined,

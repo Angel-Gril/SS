@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCollectSnapshot, buildCollectSnapshotWhere, getSupplyGoodsLookupId } from '../routes/collect.js';
+import { buildCollectSnapshot, buildCollectSnapshotWhere, getSupplyGoodsLookupId, normalizeCollectSourcePlatform } from '../routes/collect.js';
 
 describe('collect snapshot helpers', () => {
   it('prefers sourceProductId and falls back to legacy sku', () => {
@@ -39,6 +39,12 @@ describe('collect snapshot helpers', () => {
         { sku: { in: ['tb-123'] } },
       ],
     });
+  });
+
+  it('normalizes source platforms before storing collect records', () => {
+    expect(normalizeCollectSourcePlatform('OZON')).toBe('ozon');
+    expect(normalizeCollectSourcePlatform('Taobao')).toBe('taobao');
+    expect(normalizeCollectSourcePlatform(undefined)).toBe('ozon');
   });
 
   it('serializes ERP collect status for list-page overlays', () => {
