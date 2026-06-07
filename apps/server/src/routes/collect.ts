@@ -561,7 +561,10 @@ function normalize1688SkuItems(
   const defaultOzonProductId = compactString(context?.productId);
   const defaultOzonOfferId = compactString(context?.offerId);
   return items.slice(0, 200).map((item, index) => {
-    const sourcePlatform = normalizeSourcePlatform(item.sourcePlatform ?? item.platform) || defaultSourcePlatform;
+    const submittedSourcePlatform = normalizeSourcePlatform(item.sourcePlatform ?? item.platform);
+    const sourcePlatform = submittedSourcePlatform && isDomesticSupplySourcePlatform(submittedSourcePlatform)
+      ? submittedSourcePlatform
+      : defaultSourcePlatform;
     const fallbackSku = `${sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase()}-${index + 1}`;
     const explicitSourceSku = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.sourceSku ?? item.source_sku);
     const rawSku = compactString(item.skuId ?? item.sku_id ?? item.sku ?? item.specId ?? item.id);
