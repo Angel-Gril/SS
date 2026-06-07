@@ -897,7 +897,7 @@ export default function Collect1688Page() {
                     )}
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
-                    <Button size="sm" onClick={() => goToPreparation([item.id])}>
+                    <Button size="sm" onClick={() => goToPreparation([item.id])} disabled={!canSelectForListing(item)}>
                       <ArrowRight className="h-4 w-4 mr-1" />上架准备
                     </Button>
                     {item.metadata?.ozonPriceCheckContext?.sourceUrl && (
