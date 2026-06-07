@@ -29,7 +29,7 @@ describe('1688 collect helpers', () => {
       supplierYears: 6,
       attributesText: '材质：网布\n颜色: 黑色',
       skuItems: [
-        { skuId: 'sku-red-42', attrs: { 颜色: '红色', 尺码: '42' }, specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2 },
+        { skuId: 'sku-red-42', attrs: { 颜色: '红色', 尺码: '42' }, specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650 },
       ],
       description: '商品详情包含材质、适用场景和包装说明',
       monthlySales: 3000,
@@ -82,7 +82,7 @@ describe('1688 collect helpers', () => {
           price: '26.5',
           stock: 120,
           minOrderQty: 2,
-          grossWeightGrams: null,
+          grossWeightGrams: 650,
           sourceSkuId: 'sku-red-42',
         },
       ],
