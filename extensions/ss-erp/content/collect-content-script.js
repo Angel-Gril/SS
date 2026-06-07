@@ -1238,6 +1238,9 @@
       weightKeywords: [/商品毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".sku-name"],
       shopSelectors: [".popbox-inner .name", "#crumb-wrap a"],
+      priceSelectors: ["#jd-price", ".p-price", ".summary-price", "[class*='price']", "[class*='Price']"],
+      categorySelectors: ["#crumb-wrap", ".crumb", ".breadcrumb", "[class*='breadcrumb']", "[class*='crumb']"],
+      descriptionSelectors: ["#detail", ".detail-content", ".parameter2", "[class*='description']", "[class*='detail']"],
       productIdRegexes: [/\/(\d+)\.html/i]
     });
   }
@@ -1248,6 +1251,9 @@
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".ItemHeader--mainTitle", ".tb-main-title"],
       shopSelectors: [".shopName", ".ShopHeader--title"],
+      priceSelectors: [".tb-rmb-num", "[class*='Price']", "[class*='price']", "[class*='SalePrice']"],
+      categorySelectors: [".tb-breadcrumb", "[class*='breadcrumb']", "[class*='crumb']", "[class*='category']"],
+      descriptionSelectors: ["#description", ".attributes-list", "[class*='description']", "[class*='Description']", "[class*='desc']"],
       productIdRegexes: [/id=(\d+)/i]
     });
   }
@@ -1258,6 +1264,9 @@
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".ItemHeader--mainTitle", ".tb-detail-hd h1"],
       shopSelectors: [".shopName", ".slogo-shopname"],
+      priceSelectors: [".tm-price", ".tm-promo-price", "[class*='Price']", "[class*='price']", "[class*='SalePrice']"],
+      categorySelectors: [".tb-breadcrumb", ".crumb", "[class*='breadcrumb']", "[class*='category']"],
+      descriptionSelectors: ["#description", ".attributes-list", "[class*='description']", "[class*='Description']", "[class*='desc']"],
       productIdRegexes: [/id=(\d+)/i]
     });
   }
@@ -1268,6 +1277,9 @@
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", "[class*='goodsName']", "[class*='goods-name']", "[class*='GoodsName']"],
       shopSelectors: ["[class*='mallName']", "[class*='shopName']", "[class*='storeName']"],
+      priceSelectors: ["[class*='goodsPrice']", "[class*='GoodsPrice']", "[class*='price']", "[class*='Price']"],
+      categorySelectors: ["[class*='breadcrumb']", "[class*='crumb']", "[class*='category']", "[class*='Category']"],
+      descriptionSelectors: ["[class*='goodsDetail']", "[class*='GoodsDetail']", "[class*='description']", "[class*='detail']"],
       productIdRegexes: [/goods_id=(\d+)/i, /goodsId[=:/"]+(\d+)/i, /goods[_-]?id[=:/"]+(\d+)/i]
     });
   }

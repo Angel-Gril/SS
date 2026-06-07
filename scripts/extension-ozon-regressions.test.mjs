@@ -247,6 +247,24 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.ok(collectScript.includes('元|CNY|RMB'));
 });
 
+test('domestic supply extractors keep price category and description selectors', () => {
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const extractorNames = [
+    'extractJdProduct',
+    'extractTaobaoProduct',
+    'extractTmallProduct',
+    'extractPinduoduoProduct',
+  ];
+
+  for (const extractorName of extractorNames) {
+    const source = collectScript.match(new RegExp(`function\\s+${extractorName}\\(context\\)\\s*\\{[\\s\\S]*?\\n\\s*\\}\\n`));
+    assert.ok(source, `${extractorName} must exist`);
+    assert.match(source[0], /priceSelectors:\s*\[/, `${extractorName} must read visible purchase prices`);
+    assert.match(source[0], /categorySelectors:\s*\[/, `${extractorName} must read source category paths for later mapping`);
+    assert.match(source[0], /descriptionSelectors:\s*\[/, `${extractorName} must read source descriptions for later translation/listing`);
+  }
+});
+
 test('Ozon shop analytics sync falls back from charts table to what-to-sell data', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'background', 'collect-background.js');
 
