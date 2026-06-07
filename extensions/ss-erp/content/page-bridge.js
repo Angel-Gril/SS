@@ -6,11 +6,20 @@
     "__NEXT_DATA__",
     "__INITIAL_STATE__",
     "__INIT_DATA__",
+    "__GLOBAL_DATA__",
+    "__PAGE_DATA__",
+    "__PDP_DATA__",
+    "__STORE_DATA__",
     "__NUXT__",
     "__PRELOADED_STATE__",
     "__APP_DATA__",
     "pageData",
-    "globalData"
+    "globalData",
+    "offerDetailData",
+    "detailData",
+    "iDetailData",
+    "skuData",
+    "skuMap"
   ];
 
   function safeClone(value) {

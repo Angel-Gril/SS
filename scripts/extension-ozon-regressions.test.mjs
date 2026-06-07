@@ -149,6 +149,7 @@ test('1688 product pages expose a direct collect-to-ERP action', () => {
 
 test('1688 product extraction includes price and category fields for ERP records', () => {
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const pageBridge = readRepoFile('extensions', 'ss-erp', 'content', 'page-bridge.js');
 
   assert.match(collectScript, /priceSelectors/);
   assert.match(collectScript, /categorySelectors/);
@@ -187,6 +188,9 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /minOrderQty/);
   assert.match(collectScript, /logisticsText/);
   assert.match(collectScript, /customizationInfo/);
+  assert.match(pageBridge, /__GLOBAL_DATA__/);
+  assert.match(pageBridge, /offerDetailData/);
+  assert.match(pageBridge, /skuData/);
   assert.ok(collectScript.includes('[¥￥]'));
   assert.ok(collectScript.includes('元|CNY|RMB'));
 });
