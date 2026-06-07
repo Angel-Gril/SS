@@ -808,6 +808,42 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   };
 }
 
+const ALIBABA_1688_RECOLLECT_PRESERVED_METADATA_KEYS = [
+  'preparedTitleRu',
+  'targetPriceCny',
+  'ozonCategoryId',
+  'ozonTypeId',
+  'listingNotes',
+  'categoryMappingStatus',
+  'listingPreparationStatus',
+  'listingPreparationIssues',
+  'listingStatus',
+  'lastListingTaskId',
+  'lastListingJobId',
+  'lastListingShopId',
+  'lastListingOfferIds',
+  'lastListingSubmittedAt',
+  'lastListingRefreshedAt',
+  'lastListingResultStatus',
+  'lastListingFailedCount',
+  'lastListingImportedCount',
+  'lastListingPendingCount',
+  'lastListingResultItems',
+] as const;
+
+export function mergeAlibaba1688RecollectMetadata(existingMetadata: unknown, nextMetadata: Record<string, unknown>) {
+  const existing = existingMetadata && typeof existingMetadata === 'object' && !Array.isArray(existingMetadata)
+    ? existingMetadata as Record<string, unknown>
+    : {};
+  const merged = { ...nextMetadata };
+  for (const key of ALIBABA_1688_RECOLLECT_PRESERVED_METADATA_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(existing, key)) {
+      merged[key] = existing[key];
+    }
+  }
+  return merged;
+}
+
 export function buildAlibaba1688ListingPrefill(item: {
   id: string;
   title: string;
@@ -1374,27 +1410,51 @@ export async function collectRoutes(app: FastifyInstance) {
       titleNeedsReview: true,
     };
 
-    const item = await prisma.supplyGoods.create({
-      data: {
-        user: { connect: { id: userId } },
-        title: normalized.title,
-        sourceUrl: normalized.sourceUrl,
-        sourcePlatform: normalized.sourcePlatform,
-        sourceProductId: normalized.sourceProductId,
-        sku: normalized.sku,
-        images: normalized.images.length ? normalized.images : undefined,
-        purchasePrice: priceInfo.purchasePriceCny,
-        currency: 'CNY',
-        originalPrice: priceInfo.originalPrice,
-        originalCurrency: priceInfo.originalCurrency,
-        exchangeRateUsed: priceInfo.exchangeRateUsed,
-        priceNeedsReview: priceInfo.needsReview,
-        notes: normalized.notes,
-        metadata: metadata as any,
-        variants: normalized.variants.length ? (normalized.variants as any) : undefined,
-        status: 'collected',
-      },
-    });
+    const data = {
+      title: normalized.title,
+      sourceUrl: normalized.sourceUrl,
+      sourcePlatform: normalized.sourcePlatform,
+      sourceProductId: normalized.sourceProductId,
+      sku: normalized.sku,
+      images: normalized.images.length ? normalized.images : undefined,
+      purchasePrice: priceInfo.purchasePriceCny,
+      currency: 'CNY',
+      originalPrice: priceInfo.originalPrice,
+      originalCurrency: priceInfo.originalCurrency,
+      exchangeRateUsed: priceInfo.exchangeRateUsed,
+      priceNeedsReview: priceInfo.needsReview,
+      notes: normalized.notes,
+      metadata: metadata as any,
+      variants: normalized.variants.length ? (normalized.variants as any) : undefined,
+    };
+
+    const existing = normalized.sourceProductId
+      ? await prisma.supplyGoods.findFirst({
+        where: {
+          userId,
+          sourcePlatform: normalized.sourcePlatform,
+          sourceProductId: normalized.sourceProductId,
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+      : null;
+
+    const item = existing
+      ? await prisma.supplyGoods.update({
+        where: { id: existing.id },
+        data: {
+          ...data,
+          metadata: mergeAlibaba1688RecollectMetadata(existing.metadata, metadata) as any,
+          status: existing.status || 'collected',
+        },
+      })
+      : await prisma.supplyGoods.create({
+        data: {
+          user: { connect: { id: userId } },
+          ...data,
+          status: 'collected',
+        },
+      });
 
     return reply.send({
       code: 1,

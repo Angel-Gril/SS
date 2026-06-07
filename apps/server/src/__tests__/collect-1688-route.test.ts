@@ -1,0 +1,130 @@
+import Fastify from 'fastify';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const authenticateMock = vi.hoisted(() => vi.fn(async (request: any) => {
+  request.user = { userId: 'user-1', role: 'USER' };
+}));
+
+const supplyGoodsMock = vi.hoisted(() => ({
+  findFirst: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+}));
+
+const resolveCollectedPriceMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../lib/auth.js', () => ({
+  authenticate: authenticateMock,
+}));
+
+vi.mock('../lib/prisma.js', () => ({
+  prisma: {
+    supplyGoods: supplyGoodsMock,
+  },
+}));
+
+vi.mock('../services/collect-pricing.js', () => ({
+  resolveCollectedPrice: resolveCollectedPriceMock,
+}));
+
+import { collectRoutes } from '../routes/collect.js';
+
+describe('1688 collect route', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveCollectedPriceMock.mockResolvedValue({
+      purchasePriceCny: 21.9,
+      originalPrice: 21.9,
+      originalCurrency: 'CNY',
+      exchangeRateUsed: 1,
+      needsReview: false,
+    });
+    supplyGoodsMock.create.mockResolvedValue({ id: 'new-record' });
+    supplyGoodsMock.update.mockResolvedValue({ id: 'existing-record' });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('updates an existing source product collect record without resetting listing preparation metadata', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue({
+      id: 'existing-record',
+      status: 'listing_failed',
+      metadata: {
+        sourceKind: 'alibaba1688',
+        preparedTitleRu: 'Старое название',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        listingNotes: '人工确认过的上架草稿',
+        listingPreparationStatus: 'ready',
+        categoryMappingStatus: 'manual_ready',
+        lastListingResultStatus: 'partial_failed',
+        lastListingResultItems: [
+          { offerId: 'sstaobao-998877-tb-red', sourceSkuId: 'tb-red', status: 'failed' },
+        ],
+      },
+    });
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '淘宝更新货源商品',
+        sourcePlatform: 'taobao',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+        priceText: '¥21.90',
+        images: ['https://img.example.com/new-main.jpg'],
+        attributes: { 材质: '棉' },
+        skuItems: [
+          { sourceSkuId: 'tb-red', specText: '红色', price: '21.9', stock: 50, ozonSku: 'ozon-red' },
+        ],
+        description: '更新后的货源详情',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body).data.id).toBe('existing-record');
+    expect(supplyGoodsMock.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(supplyGoodsMock.create).not.toHaveBeenCalled();
+    expect(supplyGoodsMock.update).toHaveBeenCalledWith({
+      where: { id: 'existing-record' },
+      data: expect.objectContaining({
+        title: '淘宝更新货源商品',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        status: 'listing_failed',
+        metadata: expect.objectContaining({
+          sourceKind: 'alibaba1688',
+          description: '更新后的货源详情',
+          attributes: { 材质: '棉' },
+          priceText: '¥21.90',
+          preparedTitleRu: 'Старое название',
+          targetPriceCny: '199',
+          ozonCategoryId: 17031663,
+          ozonTypeId: 971234,
+          listingNotes: '人工确认过的上架草稿',
+          listingPreparationStatus: 'ready',
+          categoryMappingStatus: 'manual_ready',
+          lastListingResultStatus: 'partial_failed',
+          lastListingResultItems: [
+            { offerId: 'sstaobao-998877-tb-red', sourceSkuId: 'tb-red', status: 'failed' },
+          ],
+        }),
+      }),
+    });
+  });
+});
