@@ -288,7 +288,7 @@ function preparationIssueLabels(issues?: string[]) {
     missing_ozon_type_id: '待补 Ozon 类型ID',
     missing_source_images: '待补商品图片',
   };
-  return (issues || []).map((issue) => labels[issue] || issue);
+  return (issues || []).map((issue) => labels[issue] || sourceDataIssueLabels([issue])[0] || issue);
 }
 
 function currentPreparationIssues(item: Alibaba1688ListingItem) {
