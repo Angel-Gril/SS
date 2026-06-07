@@ -502,7 +502,6 @@ export default function Collect1688Page() {
     }
   }
 
-  const selectedCount = selectedIds.size;
   const filteredItems = useMemo(
     () => items.filter((item) => preparationFilter === 'all' || preparationStatus(item) === preparationFilter),
     [items, preparationFilter],
@@ -523,6 +522,13 @@ export default function Collect1688Page() {
   const validFormImages = useMemo(() => validImageUrls(formImageLinks), [formImageLinks]);
   const invalidFormImages = useMemo(() => invalidImageUrls(formImageLinks), [formImageLinks]);
   const selectableFilteredItems = useMemo(() => filteredItems.filter(canSelectForListing), [filteredItems]);
+  const selectedListingIds = useMemo(
+    () => items
+      .filter((item) => selectedIds.has(item.id) && canSelectForListing(item))
+      .map((item) => item.id),
+    [items, selectedIds],
+  );
+  const selectedCount = selectedListingIds.length;
 
   return (
     <div className="space-y-4">
@@ -533,7 +539,7 @@ export default function Collect1688Page() {
         </div>
         <div className="flex flex-wrap gap-2 sm:justify-end">
           {selectedCount > 0 && (
-            <Button size="sm" onClick={() => goToPreparation(Array.from(selectedIds))}>
+            <Button size="sm" onClick={() => goToPreparation(selectedListingIds)}>
               <ListChecks className="h-4 w-4 mr-1" />批量上架准备({selectedCount})
             </Button>
           )}

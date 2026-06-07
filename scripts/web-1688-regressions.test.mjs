@@ -337,7 +337,11 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.match(collect1688Page, /暂无货源采集记录/);
   assert.match(collect1688Page, /sourcePlatformLabel\(item\.sourcePlatform\)/);
   assert.match(collect1688Page, /货源ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
+  assert.match(collect1688Page, /const\s+selectedListingIds\s*=\s*useMemo\([\s\S]*?filter\(\(item\)\s*=>\s*selectedIds\.has\(item\.id\)\s*&&\s*canSelectForListing\(item\)\)[\s\S]*?map\(\(item\)\s*=>\s*item\.id\)/);
+  assert.match(collect1688Page, /const\s+selectedCount\s*=\s*selectedListingIds\.length/);
+  assert.match(collect1688Page, /goToPreparation\(selectedListingIds\)/);
   assert.match(collect1688Page, /<Button\s+size="sm"\s+onClick=\{\(\)\s*=>\s*goToPreparation\(\[item\.id\]\)\}\s+disabled=\{!canSelectForListing\(item\)\}/);
+  assert.doesNotMatch(collect1688Page, /goToPreparation\(Array\.from\(selectedIds\)\)/);
   assert.doesNotMatch(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'1688'/);
   assert.doesNotMatch(collect1688Page, /<Badge variant="outline">1688<\/Badge>/);
   assert.doesNotMatch(collect1688Page, /1688 Offer:/);
