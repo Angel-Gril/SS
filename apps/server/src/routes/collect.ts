@@ -754,7 +754,19 @@ export async function collectRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const body = request.body as { ids?: string[] };
     const ids = Array.from(new Set((body?.ids || []).map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 100);
-    if (!ids.length) return reply.status(400).send({ code: 0, msg: '缺少 ids' });
+    if (!ids.length) {
+      const items = await prisma.supplyGoods.findMany({
+        where: { userId, sourcePlatform: '1688' },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      });
+
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: items.map((item) => buildAlibaba1688ListingPrefill(item)),
+      });
+    }
 
     const items = await prisma.supplyGoods.findMany({
       where: { id: { in: ids }, userId },

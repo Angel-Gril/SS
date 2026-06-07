@@ -231,12 +231,8 @@ export default function Alibaba1688ListingPage() {
   const [items, setItems] = useState<Alibaba1688ListingItem[]>([]);
 
   useEffect(() => {
-    if (!ids.length) {
-      setLoading(false);
-      return;
-    }
     setLoading(true);
-    api.post<Alibaba1688ListingItem[]>('/api/collect/1688/prefill', { ids }).then((res) => {
+    api.post<Alibaba1688ListingItem[]>('/api/collect/1688/prefill', ids.length ? { ids } : {}).then((res) => {
       if (res.code === 1 && res.data) {
         setItems(res.data);
       } else {
@@ -308,12 +304,12 @@ export default function Alibaba1688ListingPage() {
     );
   }
 
-  if (!ids.length) {
+  if (!items.length) {
     return (
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
-          <p className="text-sm text-muted-foreground mt-1">未选择商品</p>
+          <p className="text-sm text-muted-foreground mt-1">暂无可准备的 1688 采集记录</p>
         </div>
         <Card>
           <CardContent className="py-12 text-center">
@@ -331,7 +327,9 @@ export default function Alibaba1688ListingPage() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
-          <p className="text-sm text-muted-foreground mt-1">共 {items.length} 件商品 · 待翻译 · 待类目映射 · 待属性生成</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {ids.length ? `共 ${items.length} 件商品` : `最近 ${items.length} 条 1688 采集记录`} · 待翻译 · 待类目映射 · 待属性生成
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={applySuggestedPricesToEmpty} disabled={!items.length}>
