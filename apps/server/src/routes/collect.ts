@@ -45,6 +45,7 @@ const collectSchema = z.object({
 
 const alibaba1688CollectSchema = z.object({
   title: z.string().min(1),
+  sourcePlatform: z.string().optional(),
   sourceUrl: z.string().optional(),
   offerId: z.string().optional(),
   sku: z.string().optional(),
@@ -614,6 +615,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
 }
 
 export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688CollectSchema>) {
+  const sourcePlatform = compactString(input.sourcePlatform) || '1688';
   const offerIdFromUrl = String(input.sourceUrl || '').match(/offer\/(\d+)\.html/i)?.[1] || null;
   const offerId = compactString(input.offerId) || offerIdFromUrl || compactString(input.sku);
   const images = parseImageList(input.images, input.imageText);
@@ -624,7 +626,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const ozonPriceCheckContext = extractOzonPriceCheckContext({ raw: input.raw ?? null });
   const skuItems = normalize1688SkuItems(
     input.skuItems?.length ? input.skuItems : input.variants,
-    { sourcePlatform: '1688', ozonPriceCheckContext },
+    { sourcePlatform, ozonPriceCheckContext },
   );
   const priceText = compactString(input.priceText ?? input.price);
   const supplierName = compactString(input.supplierName) || compactString(input.shopName);
@@ -650,7 +652,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   return {
     title: input.title.trim(),
     sourceUrl: compactString(input.sourceUrl),
-    sourcePlatform: '1688',
+    sourcePlatform,
     sourceProductId: offerId,
     sku: offerId,
     images,

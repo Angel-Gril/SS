@@ -109,6 +109,34 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('preserves explicit domestic source platforms in collected supply goods data', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      offerId: 'tb-998877',
+      priceText: '¥19.90',
+      images: ['https://img.example.com/tb-main.jpg'],
+      attributes: { 材质: '棉' },
+      skuItems: [
+        { skuId: 'tb-sku-red', specText: '红色', price: '19.9' },
+      ],
+      description: '淘宝商品详情',
+    });
+
+    expect(record).toMatchObject({
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      sku: 'tb-998877',
+      variants: [
+        expect.objectContaining({
+          sourceSkuId: 'tb-sku-red',
+          sourcePlatform: 'taobao',
+        }),
+      ],
+    });
+  });
+
   it('links 1688 source SKUs to the Ozon SKU from price-check context', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '核价货源',
