@@ -24,6 +24,7 @@ export interface JobRow {
     ozonOfferIds?: string[];
     offerIds?: string[];
     offerImages?: Record<string, string> | null;
+    listingSources?: Array<Record<string, unknown>>;
     itemCount?: number;
     sourceItemCount?: number;
     failedCount?: number;

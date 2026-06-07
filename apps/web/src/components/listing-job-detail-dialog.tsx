@@ -66,6 +66,7 @@ export function ListingJobDetailDialog({
   const ozonSkus = data?.payload?.ozonSkus || [];
   const ozonProductIds = data?.payload?.ozonProductIds || [];
   const ozonOfferIds = data?.payload?.ozonOfferIds || [];
+  const listingSources = data?.payload?.listingSources || [];
 
   const renderCodes = (values: string[]) => (
     values.length ? (
@@ -77,9 +78,18 @@ export function ListingJobDetailDialog({
     ) : '—'
   );
 
+  function sourceValue(source: Record<string, unknown> | undefined, key: string) {
+    const value = source?.[key];
+    return value == null ? '' : String(value).trim();
+  }
+
+  function listingSourceFor(offerId: string, index: number) {
+    return listingSources.find((source) => sourceValue(source, 'offerId') === offerId) || listingSources[index];
+  }
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl max-h-[85vh] overflow-y-auto">
         <DialogTitle>上架任务详情</DialogTitle>
         {loading || !data ? (
           <div className="py-10 text-center text-muted-foreground text-sm">
@@ -149,6 +159,7 @@ export function ListingJobDetailDialog({
                       <th className="text-left px-3 py-2 w-14">图</th>
                       <th className="text-left px-3 py-2">OFFER ID</th>
                       <th className="text-left px-3 py-2">PRODUCT ID</th>
+                      <th className="text-left px-3 py-2">来源追踪</th>
                       <th className="text-left px-3 py-2 w-20">状态</th>
                       <th className="text-left px-3 py-2">错误信息</th>
                     </tr>
@@ -158,6 +169,7 @@ export function ListingJobDetailDialog({
                       const cls = it.status === 'imported' ? 'bg-emerald-600' : it.status === 'failed' ? 'bg-destructive' : 'bg-amber-500';
                       const txt = it.status === 'imported' ? '成功' : it.status === 'failed' ? '失败' : '处理中';
                       const img = data.payload?.offerImages?.[it.offer_id];
+                      const source = listingSourceFor(it.offer_id, i);
                       return (
                         <tr key={i} className="border-t">
                           <td className="px-3 py-2">
@@ -175,6 +187,31 @@ export function ListingJobDetailDialog({
                           </td>
                           <td className="px-3 py-2"><code>{it.offer_id}</code></td>
                           <td className="px-3 py-2">{it.product_id || '-'}</td>
+                          <td className="px-3 py-2">
+                            {source ? (
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap gap-1">
+                                  {sourceValue(source, 'sourcePlatform') && (
+                                    <Badge variant="outline" className="text-[10px]">{sourceValue(source, 'sourcePlatform')}</Badge>
+                                  )}
+                                  {sourceValue(source, 'sourceSkuId') && (
+                                    <code className="bg-muted px-1.5 py-0.5 rounded text-[11px]">货源 {sourceValue(source, 'sourceSkuId')}</code>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {sourceValue(source, 'ozonSku') && (
+                                    <code className="bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-1.5 py-0.5 rounded text-[11px]">Ozon SKU {sourceValue(source, 'ozonSku')}</code>
+                                  )}
+                                  {sourceValue(source, 'ozonProductId') && (
+                                    <code className="bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-1.5 py-0.5 rounded text-[11px]">PID {sourceValue(source, 'ozonProductId')}</code>
+                                  )}
+                                  {sourceValue(source, 'ozonOfferId') && (
+                                    <code className="bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-1.5 py-0.5 rounded text-[11px]">Offer {sourceValue(source, 'ozonOfferId')}</code>
+                                  )}
+                                </div>
+                              </div>
+                            ) : '—'}
+                          </td>
                           <td className="px-3 py-2"><Badge className={`${cls} text-white text-[10px]`}>{txt}</Badge></td>
                           <td className="px-3 py-2 text-destructive break-all">
                             {it.errors?.map((e) => e.message).join('; ') || '—'}

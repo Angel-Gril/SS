@@ -89,9 +89,9 @@ export async function listingRoutes(app: FastifyInstance) {
         '/v3/product/import',
         { body: { items: ozonItems } },
       );
-      const listingSources = items
-        .map((item) => item.sourceTrace)
-        .filter((source): source is Record<string, unknown> => !!source);
+      const listingSources = items.flatMap((item) => (
+        item.sourceTrace ? [{ ...(item.sourceTrace as Record<string, unknown>), offerId: item.offerId }] : []
+      ));
       const traceValue = (source: Record<string, unknown>, key: string) => String(source[key] || '').trim();
       const traceValues = (key: string) => Array.from(new Set(
         listingSources

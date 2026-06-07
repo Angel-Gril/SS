@@ -88,7 +88,8 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /source:\s*z\.enum\(\['1688-listing',\s*'manual-batch'\]\)\.optional\(\)/);
   assert.match(listingRoute, /const\s+listingTaskEntrySchema\s*=\s*z\.enum\(\['1688-listing',\s*'listing-page',\s*'collect-page',\s*'manual-batch'\]\)/);
   assert.match(listingRoute, /sourceTrace:\s*z\.record\(z\.unknown\(\)\)\.optional\(\)/);
-  assert.match(listingRoute, /const\s+listingSources\s*=\s*items\s*\.map\(\(item\)\s*=>\s*item\.sourceTrace\)/);
+  assert.match(listingRoute, /const\s+listingSources\s*=\s*items\.flatMap\(\(item\)\s*=>\s*\(/);
+  assert.match(listingRoute, /\.\.\.\(item\.sourceTrace\s+as\s+Record<string,\s*unknown>\),\s*offerId:\s*item\.offerId/);
   assert.match(listingRoute, /entry:\s*source/);
   assert.match(listingRoute, /mode:\s*source\s*===\s*'1688-listing'\s*\?\s*'1688'\s*:\s*'batch'/);
   assert.match(listingRoute, /const\s+sourceSkus\s*=\s*traceValues\('sourceSkuId'\)/);
@@ -111,6 +112,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobList, /ozonSkus\?:\s*string\[\]/);
   assert.match(listingJobList, /ozonProductIds\?:\s*string\[\]/);
   assert.match(listingJobList, /ozonOfferIds\?:\s*string\[\]/);
+  assert.match(listingJobList, /listingSources\?:\s*Array<Record<string,\s*unknown>>/);
   assert.match(listingJobList, /new\s+URLSearchParams\(\{\s*limit:\s*String\(limit\)\s*\}\)/);
   assert.match(listingJobList, /entryFilter\s*&&\s*entryFilter\s*!==\s*'collect-page'/);
   assert.match(listingJobList, /params\.set\('entry',\s*entryFilter\)/);
@@ -123,4 +125,9 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobDetail, /Ozon SKU/);
   assert.match(listingJobDetail, /Ozon Product ID/);
   assert.match(listingJobDetail, /Ozon Offer ID/);
+  assert.match(listingJobDetail, /function\s+listingSourceFor\(offerId:\s*string,\s*index:\s*number\)/);
+  assert.match(listingJobDetail, /sourceValue\(source,\s*'offerId'\)\s*===\s*offerId/);
+  assert.match(listingJobDetail, /来源追踪/);
+  assert.match(listingJobDetail, /货源\s*\{sourceValue\(source,\s*'sourceSkuId'\)\}/);
+  assert.match(listingJobDetail, /PID\s*\{sourceValue\(source,\s*'ozonProductId'\)\}/);
 });
