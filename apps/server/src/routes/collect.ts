@@ -554,9 +554,12 @@ export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown,
       if (sku) fallbackBySku.set(sku, variant);
     }
   }
-  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform: '1688' }).map((variant) => {
+  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform: '1688' }).map((variant, index) => {
+    const rawInput = (inputVariants as Array<Record<string, unknown>>)[index] || {};
+    const hasExplicitSourcePlatform = !!compactString(rawInput.sourcePlatform ?? rawInput.platform);
     const fallback = fallbackBySku.get(variant.sku);
     const inherited = {
+      ...(fallback?.sourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallback.sourcePlatform } : {}),
       ...(fallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: fallback.ozonSku } : {}),
       ...(fallback?.ozonProductId && !(variant as any).ozonProductId ? { ozonProductId: fallback.ozonProductId } : {}),
       ...(fallback?.ozonOfferId && !(variant as any).ozonOfferId ? { ozonOfferId: fallback.ozonOfferId } : {}),

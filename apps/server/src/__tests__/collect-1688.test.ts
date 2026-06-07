@@ -661,6 +661,33 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
+  it('inherits existing source platform when editable SKU text omits the platform column', () => {
+    expect(normalizeAlibaba1688PreparationVariants([
+      { skuId: 'tb-sku-red', specText: '红色', price: '21.5' },
+    ], [
+      {
+        sku: 'tb-sku-red',
+        sourceSkuId: 'tb-sku-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-sku-red',
+        attrs: { 规格: '红色' },
+        price: '19.9',
+      },
+    ])).toEqual([
+      {
+        sku: 'tb-sku-red',
+        attrs: { 规格: '红色' },
+        price: '21.5',
+        stock: null,
+        minOrderQty: null,
+        grossWeightGrams: null,
+        sourceSkuId: 'tb-sku-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-sku-red',
+      },
+    ]);
+  });
+
   it('marks 1688 preparation ready after required images are supplied', () => {
     const images = normalizeAlibaba1688PreparationImages(['https://img.example.com/ready.jpg']);
     const metadata = buildAlibaba1688PreparationMetadata(
