@@ -8,6 +8,7 @@ import {
   getAlibaba1688PreparationIssues,
   normalizeAlibaba1688PreparationImages,
   parseAttributeText,
+  refreshAlibaba1688SourceDataIssues,
 } from '../routes/collect.js';
 
 describe('1688 collect helpers', () => {
@@ -116,6 +117,31 @@ describe('1688 collect helpers', () => {
       description: '商品详情',
       attributes: { 材质: '棉' },
     })).toEqual([]);
+  });
+
+  it('refreshes 1688 source data issues after preparation images change', () => {
+    const metadata = refreshAlibaba1688SourceDataIssues(
+      {
+        sourceKind: 'alibaba1688',
+        description: '商品详情',
+        attributes: { 材质: '棉' },
+        sourceDataIssues: ['missing_source_images'],
+        listingPreparationStatus: 'ready',
+      },
+      {
+        images: ['https://img.example.com/ready.jpg'],
+        purchasePrice: '25.80',
+        variants: [{ sku: 'sku-1' }],
+      },
+    );
+
+    expect(metadata).toMatchObject({
+      sourceKind: 'alibaba1688',
+      description: '商品详情',
+      attributes: { 材质: '棉' },
+      sourceDataIssues: [],
+      listingPreparationStatus: 'ready',
+    });
   });
 
   it('serializes 1688 collected records for listing preparation without executing mapping', () => {
