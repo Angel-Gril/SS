@@ -1639,7 +1639,17 @@ export async function collectRoutes(app: FastifyInstance) {
     }
     const invalid = items.filter((it) => !isDomesticSupplySourcePlatform(it.sourcePlatform));
     if (invalid.length) {
-      return reply.status(400).send({ code: 0, msg: '只能选择货源采集记录进入货源上架准备' });
+      return reply.status(400).send({
+        code: 0,
+        msg: '只能选择货源采集记录进入货源上架准备',
+        data: {
+          invalid: invalid.map((item) => ({
+            id: item.id,
+            title: item.title,
+            sourcePlatform: item.sourcePlatform,
+          })),
+        },
+      });
     }
 
     const byId = new Map(items.map((it) => [it.id, it]));

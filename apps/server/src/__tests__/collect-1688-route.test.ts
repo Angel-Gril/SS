@@ -335,6 +335,59 @@ describe('1688 collect route', () => {
     ]);
   });
 
+  it('reports invalid records when prefill payloads include Ozon collect records', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-record',
+        userId: 'user-1',
+        title: '淘宝货源',
+        sourcePlatform: 'taobao',
+        metadata: { sourceKind: 'alibaba1688' },
+        images: [],
+        variants: [],
+        createdAt: new Date('2026-06-07T12:00:00.000Z'),
+      },
+      {
+        id: 'ozon-record',
+        userId: 'user-1',
+        title: 'Ozon 采集记录',
+        sourcePlatform: 'ozon',
+        metadata: { sourceKind: 'ozon' },
+        images: [],
+        variants: [],
+        createdAt: new Date('2026-06-07T12:00:00.000Z'),
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688/prefill',
+      payload: {
+        ids: ['supply-record', 'ozon-record'],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '只能选择货源采集记录进入货源上架准备',
+      data: {
+        invalid: [
+          {
+            id: 'ozon-record',
+            title: 'Ozon 采集记录',
+            sourcePlatform: 'ozon',
+          },
+        ],
+      },
+    });
+  });
+
   it('rejects saving preparation for supply records that already have active listing results', async () => {
     supplyGoodsMock.findMany.mockResolvedValue([
       {
