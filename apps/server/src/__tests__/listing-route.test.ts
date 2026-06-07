@@ -583,4 +583,74 @@ describe('listing route', () => {
     expect(ozonRequestMock).not.toHaveBeenCalled();
     expect(syncJobMock.create).not.toHaveBeenCalled();
   });
+
+  it('rejects supply listing submissions whose source SKU belongs to a different collected source platform variant', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-domestic',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        sku: '998877',
+        variants: [
+          { sourceSkuId: 'shared-source-sku', sourcePlatform: '1688' },
+        ],
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-998877-shared-source-sku',
+            title: 'Товар с неверной платформой SKU',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/shared-source-sku.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'supply-domestic',
+              sourcePlatform: 'taobao',
+              sourceProductId: '998877',
+              sourceSkuId: 'shared-source-sku',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品引用的货源 SKU 不属于采集记录',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-998877-shared-source-sku',
+            supplyGoodsId: 'supply-domestic',
+            sourcePlatform: 'taobao',
+            sourceSkuId: 'shared-source-sku',
+            reason: 'source_sku_platform_mismatch',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
 });

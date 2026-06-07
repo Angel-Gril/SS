@@ -208,6 +208,25 @@ function sourceSkuVariants(variants: unknown, sourceSkuId: string) {
   });
 }
 
+function sourceSkuMatchStatus(variants: unknown, sourceSkuId: string, sourcePlatform: string) {
+  const collectedSourceSkuIds = sourceSkuIdsFromVariants(variants);
+  if (collectedSourceSkuIds.size === 0) {
+    return { hasCollectedSkus: false, hasSourceSku: true, platformMismatch: false };
+  }
+  if (!collectedSourceSkuIds.has(sourceSkuId)) {
+    return { hasCollectedSkus: true, hasSourceSku: false, platformMismatch: false };
+  }
+
+  const matchingVariants = sourceSkuVariants(variants, sourceSkuId);
+  const variantSourcePlatforms = Array.from(new Set(
+    matchingVariants.map((variant) => traceSourcePlatform(variant)).filter(Boolean),
+  ));
+  const platformMismatch = !!sourcePlatform
+    && variantSourcePlatforms.length > 0
+    && !variantSourcePlatforms.includes(sourcePlatform);
+  return { hasCollectedSkus: true, hasSourceSku: true, platformMismatch };
+}
+
 function ozonTraceValues(source: Record<string, unknown>) {
   return Object.fromEntries(
     OZON_TRACE_KEYS
@@ -233,10 +252,18 @@ function hasMatchingOzonTrace(source: Record<string, unknown>, variants: unknown
   ));
 }
 
+type InvalidAlibaba1688ListingSourceSkuItem = {
+  offerId: string;
+  supplyGoodsId: string;
+  sourceSkuId: string;
+  sourcePlatform: string | undefined;
+  reason: string;
+};
+
 function invalidAlibaba1688ListingSourceSkus(
   items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
   supplyGoodsById: Map<string, { variants?: unknown }>,
-) {
+): InvalidAlibaba1688ListingSourceSkuItem[] {
   return items
     .map((item) => {
       const source = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
@@ -244,13 +271,32 @@ function invalidAlibaba1688ListingSourceSkus(
         : null;
       const supplyGoodsId = source ? traceText(source, 'supplyGoodsId') : '';
       const sourceSkuId = source ? traceText(source, 'sourceSkuId') : '';
+      const sourcePlatform = source ? traceSourcePlatform(source) : '';
       const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
-      const collectedSourceSkuIds = sourceSkuIdsFromVariants(supplyGoods?.variants);
-      return supplyGoods && collectedSourceSkuIds.size > 0 && !collectedSourceSkuIds.has(sourceSkuId)
-        ? { offerId: item.offerId, supplyGoodsId, sourceSkuId, reason: 'invalid_source_sku_id' }
-        : null;
+      if (!supplyGoods) return null;
+      const matchStatus = sourceSkuMatchStatus(supplyGoods.variants, sourceSkuId, sourcePlatform);
+      if (!matchStatus.hasCollectedSkus) return null;
+      if (!matchStatus.hasSourceSku) {
+        return {
+          offerId: item.offerId,
+          supplyGoodsId,
+          sourceSkuId,
+          sourcePlatform: sourcePlatform || undefined,
+          reason: 'invalid_source_sku_id',
+        };
+      }
+      if (matchStatus.platformMismatch) {
+        return {
+          offerId: item.offerId,
+          supplyGoodsId,
+          sourceSkuId,
+          sourcePlatform: sourcePlatform || undefined,
+          reason: 'source_sku_platform_mismatch',
+        };
+      }
+      return null;
     })
-    .filter((item): item is { offerId: string; supplyGoodsId: string; sourceSkuId: string; reason: string } => !!item);
+    .filter((item): item is InvalidAlibaba1688ListingSourceSkuItem => !!item);
 }
 
 type InvalidAlibaba1688ListingOzonTraceItem = {
