@@ -33,8 +33,182 @@ const batchListSchema = z.object({
 
 const listingTaskEntrySchema = z.enum(['1688-listing', 'listing-page', 'collect-page', 'manual-batch']);
 
+type ListingImportItem = {
+  offer_id?: string | null;
+  product_id?: number | string | null;
+  status?: string | null;
+  errors?: Array<{
+    code?: string | null;
+    state?: string | null;
+    level?: string | null;
+    description?: string | null;
+    field?: string | null;
+  }> | null;
+};
+
+type ListingResultStatus = 'submitted' | 'pending' | 'imported' | 'partial_failed' | 'failed';
+
 function traceText(source: Record<string, unknown>, key: string) {
   return String(source[key] || '').trim();
+}
+
+function safeMetadata(metadata: unknown) {
+  return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...(metadata as Record<string, any>) }
+    : {};
+}
+
+function normalizeImportStatus(status: unknown) {
+  return String(status || '').trim().toLowerCase();
+}
+
+function isImportedStatus(status: unknown) {
+  return normalizeImportStatus(status) === 'imported';
+}
+
+function isFailedStatus(status: unknown) {
+  return normalizeImportStatus(status) === 'failed';
+}
+
+function isPendingStatus(status: unknown) {
+  const normalized = normalizeImportStatus(status);
+  return normalized !== 'imported' && normalized !== 'failed';
+}
+
+export function getListingResultStatus(importItems: ListingImportItem[]): ListingResultStatus {
+  const imported = importItems.filter((item) => isImportedStatus(item.status)).length;
+  const failed = importItems.filter((item) => isFailedStatus(item.status)).length;
+  const pending = importItems.filter((item) => isPendingStatus(item.status)).length;
+
+  if (pending > 0) return 'pending';
+  if (failed > 0 && imported > 0) return 'partial_failed';
+  if (failed > 0) return 'failed';
+  if (imported > 0) return 'imported';
+  return 'submitted';
+}
+
+function compactImportErrors(errors: ListingImportItem['errors']) {
+  if (!Array.isArray(errors)) return [];
+  return errors.slice(0, 5).map((error) => ({
+    code: String(error?.code || '').slice(0, 120),
+    state: String(error?.state || '').slice(0, 120),
+    level: String(error?.level || '').slice(0, 120),
+    field: String(error?.field || '').slice(0, 120),
+    description: String(error?.description || '').replace(/\s+/g, ' ').slice(0, 500),
+  }));
+}
+
+function compactImportResultItem(source: Record<string, unknown>, importItem: ListingImportItem | undefined) {
+  return {
+    offerId: traceText(source, 'offerId'),
+    productId: importItem?.product_id != null ? String(importItem.product_id) : null,
+    status: normalizeImportStatus(importItem?.status) || 'pending',
+    sourcePlatform: traceText(source, 'sourcePlatform') || null,
+    sourceProductId: traceText(source, 'sourceProductId') || null,
+    sourceSkuId: traceText(source, 'sourceSkuId') || null,
+    ozonSku: traceText(source, 'ozonSku') || null,
+    ozonProductId: traceText(source, 'ozonProductId') || null,
+    ozonOfferId: traceText(source, 'ozonOfferId') || null,
+    errors: compactImportErrors(importItem?.errors),
+  };
+}
+
+export function buildAlibaba1688ListingResultUpdates(params: {
+  payload: unknown;
+  importItems: ListingImportItem[];
+  taskId: number;
+  listingJobId: string;
+  shopId: string;
+  refreshedAt: string;
+}) {
+  const payload = safeMetadata(params.payload);
+  const listingSources = Array.isArray(payload.listingSources)
+    ? payload.listingSources.filter((source): source is Record<string, unknown> => (
+      !!source && typeof source === 'object' && !Array.isArray(source)
+    ))
+    : [];
+  const importByOfferId = new Map(
+    params.importItems
+      .map((item) => [String(item.offer_id || '').trim(), item] as const)
+      .filter(([offerId]) => !!offerId),
+  );
+  const grouped = new Map<string, Record<string, unknown>[]>();
+
+  for (const source of listingSources) {
+    if (traceText(source, 'sourcePlatform') !== '1688') continue;
+    const supplyGoodsId = traceText(source, 'supplyGoodsId');
+    const offerId = traceText(source, 'offerId');
+    if (!supplyGoodsId || !offerId) continue;
+    const sources = grouped.get(supplyGoodsId) || [];
+    sources.push(source);
+    grouped.set(supplyGoodsId, sources);
+  }
+
+  return Array.from(grouped.entries()).map(([supplyGoodsId, sources]) => {
+    const allResultItems = sources
+      .map((source) => compactImportResultItem(source, importByOfferId.get(traceText(source, 'offerId'))));
+    const importedCount = allResultItems.filter((item) => isImportedStatus(item.status)).length;
+    const failedCount = allResultItems.filter((item) => isFailedStatus(item.status)).length;
+    const pendingCount = allResultItems.filter((item) => isPendingStatus(item.status)).length;
+    const offerIds = Array.from(new Set(allResultItems.map((item) => item.offerId).filter(Boolean)));
+    const resultStatus = getListingResultStatus(allResultItems);
+
+    return {
+      supplyGoodsId,
+      taskId: params.taskId,
+      listingJobId: params.listingJobId,
+      shopId: params.shopId,
+      refreshedAt: params.refreshedAt,
+      resultStatus,
+      importedCount,
+      failedCount,
+      pendingCount,
+      offerIds,
+      resultItems: allResultItems.slice(0, 100),
+    };
+  });
+}
+
+export function applyAlibaba1688ListingResultMetadata(
+  metadata: unknown,
+  update: ReturnType<typeof buildAlibaba1688ListingResultUpdates>[number],
+) {
+  const meta = safeMetadata(metadata);
+  const history = Array.isArray(meta.listingTasks) ? meta.listingTasks : [];
+  const taskResult = {
+    taskId: update.taskId,
+    listingJobId: update.listingJobId,
+    shopId: update.shopId,
+    offerIds: update.offerIds,
+    refreshedAt: update.refreshedAt,
+    resultStatus: update.resultStatus,
+    importedCount: update.importedCount,
+    failedCount: update.failedCount,
+    pendingCount: update.pendingCount,
+    resultItems: update.resultItems,
+  };
+  const hasExistingTask = history.some((task: any) => Number(task?.taskId) === update.taskId);
+  const listingTasks = hasExistingTask
+    ? history.map((task: any) => (
+      Number(task?.taskId) === update.taskId ? { ...task, ...taskResult } : task
+    ))
+    : [taskResult, ...history];
+
+  return {
+    ...meta,
+    listingStatus: update.resultStatus,
+    lastListingTaskId: update.taskId,
+    lastListingJobId: update.listingJobId,
+    lastListingShopId: update.shopId,
+    lastListingOfferIds: update.offerIds,
+    lastListingRefreshedAt: update.refreshedAt,
+    lastListingResultStatus: update.resultStatus,
+    lastListingFailedCount: update.failedCount,
+    lastListingImportedCount: update.importedCount,
+    lastListingPendingCount: update.pendingCount,
+    lastListingResultItems: update.resultItems,
+    listingTasks: listingTasks.slice(0, 10),
+  };
 }
 
 function appendListingTaskHistory(
@@ -47,9 +221,7 @@ function appendListingTaskHistory(
     submittedAt: string;
   },
 ) {
-  const meta = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-    ? { ...(metadata as Record<string, any>) }
-    : {};
+  const meta = safeMetadata(metadata);
   const history = Array.isArray(meta.listingTasks) ? meta.listingTasks : [];
   return {
     ...meta,
@@ -303,21 +475,64 @@ export async function listingRoutes(app: FastifyInstance) {
     try {
       const info = await client.getImportInfo(Number(taskId));
       const total = info.items.length;
-      const failed = info.items.filter((i) => i.status === 'failed').length;
-      const pending = info.items.filter((i) => i.status === 'pending').length;
+      const failed = info.items.filter((i) => isFailedStatus(i.status)).length;
+      const imported = info.items.filter((i) => isImportedStatus(i.status)).length;
+      const pending = info.items.filter((i) => isPendingStatus(i.status)).length;
       const allDone = pending === 0;
 
-      const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
+      const newStatus = allDone ? (total > 0 && failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
+      const refreshedAt = new Date().toISOString();
+      const nextPayload = {
+        ...(job.payload as any),
+        itemCount: total,
+        failedCount: failed,
+        importedCount: imported,
+        pendingCount: pending,
+        resultStatus: getListingResultStatus(info.items),
+        lastRefreshedAt: refreshedAt,
+        items: info.items,
+      };
 
       const updated = await prisma.syncJob.update({
         where: { id: job.id },
         data: {
           status: newStatus,
           finishedAt: allDone ? new Date() : null,
-          payload: { ...(job.payload as any), itemCount: total, failedCount: failed, items: info.items },
+          payload: nextPayload,
           errorMessage: failed > 0 ? `${failed} 个商品上架失败` : null,
         },
       });
+      if ((job.payload as any)?.entry === '1688-listing') {
+        const resultUpdates = buildAlibaba1688ListingResultUpdates({
+          payload: nextPayload,
+          importItems: info.items,
+          taskId: Number(taskId),
+          listingJobId: job.id,
+          shopId: job.shopId,
+          refreshedAt,
+        });
+
+        if (resultUpdates.length) {
+          const supplyGoodsIds = resultUpdates.map((item) => item.supplyGoodsId);
+          const resultBySupplyGoodsId = new Map(resultUpdates.map((item) => [item.supplyGoodsId, item] as const));
+          const goods = await prisma.supplyGoods.findMany({
+            where: { id: { in: supplyGoodsIds }, userId, sourcePlatform: '1688' },
+            select: { id: true, metadata: true },
+          });
+
+          await Promise.all(goods.map((item) => {
+            const resultUpdate = resultBySupplyGoodsId.get(item.id);
+            if (!resultUpdate) return null;
+            return prisma.supplyGoods.update({
+              where: { id: item.id },
+              data: {
+                status: resultUpdate.resultStatus === 'failed' ? 'listing_failed' : 'listed',
+                metadata: applyAlibaba1688ListingResultMetadata(item.metadata, resultUpdate) as any,
+              },
+            });
+          }));
+        }
+      }
 
       return reply.send({
         code: 1,

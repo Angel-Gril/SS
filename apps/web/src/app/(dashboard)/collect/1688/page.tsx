@@ -65,6 +65,11 @@ interface Collected1688Item {
     lastListingJobId?: string | null;
     lastListingOfferIds?: string[];
     lastListingSubmittedAt?: string | null;
+    lastListingRefreshedAt?: string | null;
+    lastListingResultStatus?: string | null;
+    lastListingFailedCount?: number | string | null;
+    lastListingImportedCount?: number | string | null;
+    lastListingPendingCount?: number | string | null;
     ozonPriceCheckContext?: OzonPriceCheckContext | null;
     priceCheckEstimate?: PriceCheckEstimate | null;
   } | null;
@@ -184,10 +189,46 @@ function preparationStatusLabel(status?: string | null) {
   return '仅采集';
 }
 
-function listingStatusText(item: Collected1688Item) {
-  if (item.status === 'listed') return '已提交上架';
-  if (item.metadata?.listingStatus === 'submitted') return '已提交上架';
+function listingResultStatus(item: Collected1688Item) {
+  const metadataStatus = item.metadata?.lastListingResultStatus || item.metadata?.listingStatus;
+  if (metadataStatus) return metadataStatus;
+  if (item.status === 'listing_failed') return 'failed';
+  if (item.status === 'listed') return 'submitted';
   return '';
+}
+
+function listingStatusText(item: Collected1688Item) {
+  const status = listingResultStatus(item);
+  if (status === 'imported') return '上架成功';
+  if (status === 'partial_failed') return '部分失败';
+  if (status === 'failed') return '上架失败';
+  if (status === 'pending') return '导入中';
+  if (status === 'submitted') return '已提交上架';
+  return '';
+}
+
+function listingStatusBadgeVariant(item: Collected1688Item): 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' {
+  const status = listingResultStatus(item);
+  if (status === 'imported') return 'success';
+  if (status === 'partial_failed' || status === 'pending') return 'warning';
+  if (status === 'failed') return 'destructive';
+  return 'default';
+}
+
+function listingResultSummaryText(metadata?: Collected1688Item['metadata']) {
+  if (!metadata?.lastListingRefreshedAt) return '';
+  const imported = Number(metadata.lastListingImportedCount ?? 0);
+  const failed = Number(metadata.lastListingFailedCount ?? 0);
+  const pending = Number(metadata.lastListingPendingCount ?? 0);
+  const parts = [
+    Number.isFinite(imported) ? `成功 ${imported}` : '',
+    Number.isFinite(failed) ? `失败 ${failed}` : '',
+    Number.isFinite(pending) && pending > 0 ? `处理中 ${pending}` : '',
+  ].filter(Boolean);
+  return [
+    parts.length ? `Ozon 结果: ${parts.join(' / ')}` : 'Ozon 结果已刷新',
+    formatDate(metadata.lastListingRefreshedAt),
+  ].filter(Boolean).join(' · ');
 }
 
 function preparationStatus(item: Collected1688Item): PreparationFilter {
@@ -643,7 +684,7 @@ export default function Collect1688Page() {
                       <Badge variant="outline">1688</Badge>
                       <Badge variant="secondary">类目映射待上架</Badge>
                       <Badge variant="outline">{preparationStatusLabel(item.metadata?.listingPreparationStatus)}</Badge>
-                      {listingStatusText(item) && <Badge>{listingStatusText(item)}</Badge>}
+                      {listingStatusText(item) && <Badge variant={listingStatusBadgeVariant(item)}>{listingStatusText(item)}</Badge>}
                     </div>
                     <div className="text-xs text-muted-foreground flex gap-3 flex-wrap">
                       <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
@@ -704,6 +745,12 @@ export default function Collect1688Page() {
                         最近上架: Task {item.metadata.lastListingTaskId}
                         {item.metadata.lastListingOfferIds?.length ? ` · offer ${item.metadata.lastListingOfferIds.length} 个` : ''}
                         {item.metadata.lastListingSubmittedAt ? ` · ${formatDate(item.metadata.lastListingSubmittedAt)}` : ''}
+                        {item.metadata.lastListingRefreshedAt ? ` · 刷新 ${formatDate(item.metadata.lastListingRefreshedAt)}` : ''}
+                      </div>
+                    )}
+                    {listingResultSummaryText(item.metadata) && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        {listingResultSummaryText(item.metadata)}
                       </div>
                     )}
                     {priceCheckEstimateText(item.metadata?.priceCheckEstimate) && (
