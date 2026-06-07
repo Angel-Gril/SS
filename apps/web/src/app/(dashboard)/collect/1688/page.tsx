@@ -122,6 +122,35 @@ const preparationFilterOptions: Array<{ value: PreparationFilter; label: string 
   { value: 'ready', label: '准备完成' },
 ];
 
+function splitImageInput(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validImageUrls(images: string[]) {
+  const seen = new Set<string>();
+  return images.filter((image) => {
+    if (!isHttpUrl(image) || seen.has(image)) return false;
+    seen.add(image);
+    return true;
+  });
+}
+
+function invalidImageUrls(images: string[]) {
+  return images.filter((image) => !isHttpUrl(image));
+}
+
 function parseSkuText(text: string) {
   return text
     .split('\n')
@@ -355,6 +384,9 @@ export default function Collect1688Page() {
     return counts;
   }, [items]);
   const allVisibleSelected = filteredItems.length > 0 && filteredItems.every((item) => selectedIds.has(item.id));
+  const formImageLinks = useMemo(() => splitImageInput(form.imageText), [form.imageText]);
+  const validFormImages = useMemo(() => validImageUrls(formImageLinks), [formImageLinks]);
+  const invalidFormImages = useMemo(() => invalidImageUrls(formImageLinks), [formImageLinks]);
 
   return (
     <div className="space-y-4">
@@ -461,6 +493,32 @@ export default function Collect1688Page() {
                 onChange={(e) => update('imageText', e.target.value)}
                 placeholder="每行一个图片 URL"
               />
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{validFormImages.length ? `有效图片 ${validFormImages.length} 张` : '暂无有效图片'}</span>
+                {invalidFormImages.length > 0 && (
+                  <span className="text-amber-600">有 {invalidFormImages.length} 条无效链接</span>
+                )}
+              </div>
+              {validFormImages.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {validFormImages.slice(0, 8).map((image, index) => (
+                    <a
+                      key={`${image}-${index}`}
+                      href={image}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="h-12 w-12 rounded border bg-muted/40 overflow-hidden"
+                    >
+                      <img src={image} alt="" className="h-full w-full object-cover" />
+                    </a>
+                  ))}
+                  {validFormImages.length > 8 && (
+                    <div className="h-12 min-w-12 rounded border bg-muted/40 px-2 flex items-center justify-center text-xs text-muted-foreground">
+                      +{validFormImages.length - 8}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs">商品属性</Label>
