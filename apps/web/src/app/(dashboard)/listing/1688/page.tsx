@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
+import { sourceDataIssueLabels } from '@/lib/1688-source-issues';
 import { api } from '@/lib/api';
 import { invalidImageUrls, splitImageInput, validImageUrls } from '@/lib/image-links';
 import { previewText } from '@/lib/text-preview';
@@ -150,17 +151,6 @@ function preparationIssueLabels(issues?: string[]) {
     prepared_title_contains_cjk: '标题含中文',
     missing_target_price_cny: '待补目标售价',
     missing_source_images: '待补商品图片',
-  };
-  return (issues || []).map((issue) => labels[issue] || issue);
-}
-
-function sourceDataIssueLabels(issues?: string[]) {
-  const labels: Record<string, string> = {
-    missing_source_images: '缺图片',
-    missing_purchase_price: '缺采购价',
-    missing_sku_items: '缺SKU',
-    missing_description: '缺描述',
-    missing_attributes: '缺属性',
   };
   return (issues || []).map((issue) => labels[issue] || issue);
 }
