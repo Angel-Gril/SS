@@ -385,7 +385,7 @@ model SupplyGoods {
   title           String
   sourceUrl       String?  @map("source_url")
   sourcePlatform  String?  @map("source_platform")
-  sourceProductId String?  @map("source_product_id") // OZON SKU / product_id
+  sourceProductId String?  @map("source_product_id") // Source platform product ID (Ozon SKU/product_id, 1688 offer_id)
   supplier        String?
   purchasePrice   Decimal? @map("purchase_price") @db.Decimal(12, 2)
   currency        String   @default("CNY")
