@@ -831,6 +831,35 @@ const ALIBABA_1688_RECOLLECT_PRESERVED_METADATA_KEYS = [
   'lastListingResultItems',
 ] as const;
 
+const ALIBABA_1688_RECOLLECT_PRESERVE_WHEN_EMPTY_METADATA_KEYS = [
+  'priceText',
+  'description',
+  'categoryPath',
+  'supplierName',
+  'supplierLocation',
+  'supplierYears',
+  'monthlySales',
+  'grossWeightGrams',
+  'lengthMm',
+  'widthMm',
+  'heightMm',
+  'dimensionsText',
+  'minOrderQty',
+  'shippingInfo',
+  'logisticsText',
+  'customizationInfo',
+  'attributes',
+  'skuCount',
+] as const;
+
+function isEmptyRecollectMetadataValue(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === 'string') return !value.trim();
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length === 0;
+  return false;
+}
+
 export function mergeAlibaba1688RecollectMetadata(existingMetadata: unknown, nextMetadata: Record<string, unknown>) {
   const existing = existingMetadata && typeof existingMetadata === 'object' && !Array.isArray(existingMetadata)
     ? existingMetadata as Record<string, unknown>
@@ -838,6 +867,15 @@ export function mergeAlibaba1688RecollectMetadata(existingMetadata: unknown, nex
   const merged = { ...nextMetadata };
   for (const key of ALIBABA_1688_RECOLLECT_PRESERVED_METADATA_KEYS) {
     if (Object.prototype.hasOwnProperty.call(existing, key)) {
+      merged[key] = existing[key];
+    }
+  }
+  for (const key of ALIBABA_1688_RECOLLECT_PRESERVE_WHEN_EMPTY_METADATA_KEYS) {
+    if (
+      Object.prototype.hasOwnProperty.call(existing, key)
+      && isEmptyRecollectMetadataValue(merged[key])
+      && !isEmptyRecollectMetadataValue(existing[key])
+    ) {
       merged[key] = existing[key];
     }
   }
