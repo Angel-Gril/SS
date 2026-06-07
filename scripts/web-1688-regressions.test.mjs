@@ -132,8 +132,12 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /function\s+validateAlibaba1688ListingSourceTraces\(items:/);
   assert.match(listingRoute, /function\s+alibaba1688ListingSupplyGoodsIds\(items:/);
   assert.match(listingRoute, /function\s+invalidAlibaba1688ListingSupplyRecords\(/);
+  assert.match(listingRoute, /function\s+sourceSkuIdsFromVariants\(variants:\s*unknown\)/);
+  assert.match(listingRoute, /function\s+invalidAlibaba1688ListingSourceSkus\(/);
   assert.match(listingRoute, /source\s*===\s*'1688-listing'[\s\S]*validateAlibaba1688ListingSourceTraces\(items\)/);
   assert.match(listingRoute, /reason:\s*'missing_source_sku_id'/);
+  assert.match(listingRoute, /reason:\s*'invalid_source_sku_id'/);
+  assert.match(listingRoute, /货源上架商品引用的货源 SKU 不属于采集记录/);
   assert.match(listingRoute, /货源上架商品引用的采集记录不存在或不是货源记录/);
   assert.match(listingRoute, /货源上架商品缺少有效货源追踪，不能提交到 Ozon/);
   assert.match(listingRoute, /const\s+listingSources\s*=\s*items\.flatMap\(\(item\)\s*=>\s*\(/);

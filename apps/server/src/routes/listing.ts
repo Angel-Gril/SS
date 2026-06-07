@@ -111,6 +111,38 @@ function invalidAlibaba1688ListingSupplyRecords(
     .filter((item): item is { offerId: string; supplyGoodsId: string; reason: string } => !!item);
 }
 
+function sourceSkuIdsFromVariants(variants: unknown) {
+  const sourceSkuIds = new Set<string>();
+  if (!Array.isArray(variants)) return sourceSkuIds;
+  for (const variant of variants) {
+    if (!variant || typeof variant !== 'object' || Array.isArray(variant)) continue;
+    const record = variant as Record<string, unknown>;
+    const sourceSkuId = traceText(record, 'sourceSkuId') || traceText(record, 'sku');
+    if (sourceSkuId) sourceSkuIds.add(sourceSkuId);
+  }
+  return sourceSkuIds;
+}
+
+function invalidAlibaba1688ListingSourceSkus(
+  items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
+  supplyGoodsById: Map<string, { variants?: unknown }>,
+) {
+  return items
+    .map((item) => {
+      const source = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+        ? item.sourceTrace
+        : null;
+      const supplyGoodsId = source ? traceText(source, 'supplyGoodsId') : '';
+      const sourceSkuId = source ? traceText(source, 'sourceSkuId') : '';
+      const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
+      const collectedSourceSkuIds = sourceSkuIdsFromVariants(supplyGoods?.variants);
+      return supplyGoods && collectedSourceSkuIds.size > 0 && !collectedSourceSkuIds.has(sourceSkuId)
+        ? { offerId: item.offerId, supplyGoodsId, sourceSkuId, reason: 'invalid_source_sku_id' }
+        : null;
+    })
+    .filter((item): item is { offerId: string; supplyGoodsId: string; sourceSkuId: string; reason: string } => !!item);
+}
+
 function safeMetadata(metadata: unknown) {
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? { ...(metadata as Record<string, any>) }
@@ -352,18 +384,27 @@ export async function listingRoutes(app: FastifyInstance) {
             userId,
             sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
           },
-          select: { id: true },
+          select: { id: true, variants: true },
         })
         : [];
+      const supplyGoodsById = new Map(supplyGoods.map((item) => [item.id, item] as const));
       const invalidItems = invalidAlibaba1688ListingSupplyRecords(
         items,
-        new Set(supplyGoods.map((item) => item.id)),
+        new Set(supplyGoodsById.keys()),
       );
       if (invalidItems.length) {
         return reply.status(400).send({
           code: 0,
           msg: '货源上架商品引用的采集记录不存在或不是货源记录',
           data: { invalidItems },
+        });
+      }
+      const invalidSkuItems = invalidAlibaba1688ListingSourceSkus(items, supplyGoodsById);
+      if (invalidSkuItems.length) {
+        return reply.status(400).send({
+          code: 0,
+          msg: '货源上架商品引用的货源 SKU 不属于采集记录',
+          data: { invalidItems: invalidSkuItems },
         });
       }
     }
