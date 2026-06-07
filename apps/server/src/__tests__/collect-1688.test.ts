@@ -31,6 +31,7 @@ describe('1688 collect helpers', () => {
       skuItems: [
         { skuId: 'sku-red-42', attrs: { 颜色: '红色', 尺码: '42' }, specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2 },
       ],
+      description: '商品详情包含材质、适用场景和包装说明',
       monthlySales: 3000,
       grossWeightGrams: 650,
       lengthMm: 320,
@@ -54,6 +55,7 @@ describe('1688 collect helpers', () => {
       metadata: {
         sourceKind: 'alibaba1688',
         offerId: '734567890123',
+        description: '商品详情包含材质、适用场景和包装说明',
         categoryPath: '鞋类 > 男鞋 > 运动鞋',
         supplierName: '义乌某某工厂',
         supplierLocation: '浙江 金华',
@@ -99,6 +101,7 @@ describe('1688 collect helpers', () => {
       variants: [{ sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5' }],
       notes: '货源备注',
       metadata: {
+        description: '商品详情包含材质、适用场景和包装说明',
         supplierName: '义乌某某工厂',
         supplierLocation: '浙江 金华',
         supplierYears: 6,
@@ -134,6 +137,7 @@ describe('1688 collect helpers', () => {
       title: '男士运动鞋',
       sourceProductId: '734567890123',
       purchasePrice: '25.80',
+      description: '商品详情包含材质、适用场景和包装说明',
       supplierName: '义乌某某工厂',
       supplierLocation: '浙江 金华',
       supplierYears: 6,

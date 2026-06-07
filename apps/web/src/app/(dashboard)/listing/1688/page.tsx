@@ -36,6 +36,7 @@ interface Alibaba1688ListingItem {
   supplierLocation: string | null;
   supplierYears: number | string | null;
   monthlySales: number | string | null;
+  description: string | null;
   categoryPath: string | null;
   grossWeightGrams: number | string | null;
   lengthMm: number | string | null;
@@ -183,6 +184,12 @@ function sourcePackageText(item: Alibaba1688ListingItem) {
     item.monthlySales ? `月销 ${item.monthlySales}` : '',
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : '';
+}
+
+function descriptionPreview(text?: string | null) {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  return value.length > 160 ? `${value.slice(0, 160)}...` : value;
 }
 
 function variantSpecText(variant: Alibaba1688Variant) {
@@ -444,6 +451,11 @@ export default function Alibaba1688ListingPage() {
                 {item.logisticsText && (
                   <div className="text-xs text-muted-foreground truncate">
                     物流: {item.logisticsText}
+                  </div>
+                )}
+                {descriptionPreview(item.description) && (
+                  <div className="text-xs text-muted-foreground truncate">
+                    描述: {descriptionPreview(item.description)}
                   </div>
                 )}
                 {!!item.variants.length && (

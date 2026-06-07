@@ -37,6 +37,7 @@ interface Collected1688Item {
     supplierLocation?: string | null;
     supplierYears?: number | string | null;
     monthlySales?: number | string | null;
+    description?: string | null;
     categoryPath?: string | null;
     grossWeightGrams?: number | string | null;
     lengthMm?: number | string | null;
@@ -87,6 +88,7 @@ interface FormState {
   dimensionsText: string;
   minOrderQty: string;
   logisticsText: string;
+  description: string;
   attributesText: string;
   skuText: string;
   notes: string;
@@ -111,6 +113,7 @@ const emptyForm: FormState = {
   dimensionsText: '',
   minOrderQty: '',
   logisticsText: '',
+  description: '',
   attributesText: '',
   skuText: '',
   notes: '',
@@ -212,6 +215,12 @@ function sourcePackageText(metadata?: Collected1688Item['metadata']) {
     metadata.monthlySales ? `月销 ${metadata.monthlySales}` : '',
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : '';
+}
+
+function descriptionPreview(text?: string | null) {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  return value.length > 160 ? `${value.slice(0, 160)}...` : value;
 }
 
 function variantSpecText(variant: Alibaba1688Variant) {
@@ -322,6 +331,7 @@ export default function Collect1688Page() {
       dimensionsText: form.dimensionsText || undefined,
       minOrderQty: form.minOrderQty || undefined,
       logisticsText: form.logisticsText || undefined,
+      description: form.description || undefined,
       attributesText: form.attributesText || undefined,
       skuItems: form.skuText.trim() ? parseSkuText(form.skuText) : undefined,
       notes: form.notes || undefined,
@@ -453,6 +463,15 @@ export default function Collect1688Page() {
             <div className="space-y-1 md:col-span-4">
               <Label className="text-xs">物流说明</Label>
               <Input value={form.logisticsText} onChange={(e) => update('logisticsText', e.target.value)} placeholder="广东发货，快递费按地区计算" />
+            </div>
+            <div className="space-y-1 md:col-span-4">
+              <Label className="text-xs">商品描述</Label>
+              <textarea
+                className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                value={form.description}
+                onChange={(e) => update('description', e.target.value)}
+                placeholder="商品详情、包装说明、材质说明等"
+              />
             </div>
           </div>
 
@@ -616,6 +635,11 @@ export default function Collect1688Page() {
                     {item.metadata?.logisticsText && (
                       <div className="text-xs text-muted-foreground truncate">
                         物流: {item.metadata.logisticsText}
+                      </div>
+                    )}
+                    {descriptionPreview(item.metadata?.description) && (
+                      <div className="text-xs text-muted-foreground truncate">
+                        描述: {descriptionPreview(item.metadata?.description)}
                       </div>
                     )}
                     {!!item.variants?.length && (

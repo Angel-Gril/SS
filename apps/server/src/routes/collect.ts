@@ -362,8 +362,9 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const heightMm = Number(input.heightMm);
   const supplierYears = Number(input.supplierYears);
   const minOrderQty = Number(input.minOrderQty);
+  const description = compactString(input.description)?.slice(0, 2000) || null;
   const notes = [
-    input.description ? String(input.description).slice(0, 500) : '',
+    description ? description.slice(0, 500) : '',
     input.notes ? String(input.notes).slice(0, 500) : '',
   ].filter(Boolean).join('\n') || null;
 
@@ -381,6 +382,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
     metadata: {
       sourceKind: 'alibaba1688',
       offerId,
+      description,
       categoryPath: compactString(input.categoryPath),
       supplierName,
       supplierLocation: compactString(input.supplierLocation),
@@ -440,6 +442,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     images: Array.isArray(item.images) ? item.images : [],
     variants,
     notes: item.notes || '',
+    description: meta.description || '',
     supplierName: meta.supplierName || null,
     supplierLocation: meta.supplierLocation || null,
     supplierYears: Number.isFinite(Number(meta.supplierYears)) ? Number(meta.supplierYears) : null,
