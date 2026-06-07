@@ -98,9 +98,13 @@
     const allSources = collectDataSources(pageState);
     const pageText = normalizeWhitespace(document.body ? document.body.innerText : "");
     const jsonLd = parseJsonLd();
+    const embeddedJson = parseEmbeddedJsonData();
 
     if (jsonLd.length) {
       allSources.push(...jsonLd);
+    }
+    if (embeddedJson.length) {
+      allSources.push(...embeddedJson);
     }
 
     const extractor = PLATFORM_EXTRACTORS[platform] || extractGenericProduct;
@@ -109,7 +113,8 @@
       pageText,
       pageState,
       sources: allSources,
-      jsonLd
+      jsonLd,
+      embeddedJson
     });
 
     const warnings = [];
@@ -1119,6 +1124,35 @@
         }
       } catch (_error) {
         // ignore invalid blocks
+      }
+    });
+    return results;
+  }
+
+  function parseEmbeddedJsonData() {
+    const results = [];
+    const seen = new Set();
+    document.querySelectorAll('script[type*="json"], script[id*="__NEXT_DATA__"], script[id*="__INIT_DATA__"], script[id*="data"]').forEach((node) => {
+      if (results.length >= 20) {
+        return;
+      }
+      const type = String(node.getAttribute("type") || "").toLowerCase();
+      if (type.includes("ld+json")) {
+        return;
+      }
+      const text = (node.textContent || "").trim();
+      if (!text || text.length > 2_000_000 || seen.has(text)) {
+        return;
+      }
+      seen.add(text);
+
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object") {
+          results.push(parsed);
+        }
+      } catch (_error) {
+        // Ignore non-JSON inline scripts; page bridge covers known window globals.
       }
     });
     return results;
