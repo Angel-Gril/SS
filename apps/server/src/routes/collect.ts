@@ -586,7 +586,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       : '';
     const sourcePlatform = compactString(variant?.sourcePlatform);
     const values = [
-      variant?.sku || variant?.sourceSkuId || '',
+      variant?.sourceSkuId || variant?.sku || '',
       specText,
       variant?.price ?? '',
       variant?.stock ?? '',
