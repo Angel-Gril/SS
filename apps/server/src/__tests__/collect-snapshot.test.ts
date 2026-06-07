@@ -30,6 +30,17 @@ describe('collect snapshot helpers', () => {
     });
   });
 
+  it('allows domestic supply snapshot lookups across all source platforms', () => {
+    expect(buildCollectSnapshotWhere('user-1', ['supply-123'], 'domestic-supply')).toEqual({
+      userId: 'user-1',
+      sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
+      OR: [
+        { sourceProductId: { in: ['supply-123'] } },
+        { sku: { in: ['supply-123'] } },
+      ],
+    });
+  });
+
   it('normalizes explicit source platform snapshot lookups', () => {
     expect(buildCollectSnapshotWhere('user-1', ['tb-123'], 'Taobao')).toEqual({
       userId: 'user-1',
