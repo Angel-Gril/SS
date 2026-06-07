@@ -145,6 +145,13 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(collectPage, /已提交上架/);
   assert.match(collectPage, /lastListingRefreshedAt/);
   assert.match(collectPage, /lastListingResultStatus/);
+  assert.match(collectPage, /lastListingResultItems\?:\s*Array<\{/);
+  assert.match(collectPage, /function\s+listingResultFailureItems\(metadata\?:\s*Collected1688Item\['metadata'\]\)/);
+  assert.match(collectPage, /function\s+listingResultItemErrorText\(item:\s*ListingResultItem\)/);
+  assert.match(collectPage, /item\.metadata\?\.lastListingResultItems/);
+  assert.match(collectPage, /失败明细/);
+  assert.match(collectPage, /货源 SKU/);
+  assert.match(collectPage, /Ozon SKU/);
   assert.match(collectPage, /Ozon 结果:/);
   assert.match(collectPage, /lastListingTaskId/);
   assert.match(collectPage, /最近上架:\s*Task/);

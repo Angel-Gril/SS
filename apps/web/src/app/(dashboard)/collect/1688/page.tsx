@@ -70,10 +70,30 @@ interface Collected1688Item {
     lastListingFailedCount?: number | string | null;
     lastListingImportedCount?: number | string | null;
     lastListingPendingCount?: number | string | null;
+    lastListingResultItems?: Array<{
+      offerId?: string | null;
+      productId?: string | null;
+      status?: string | null;
+      sourcePlatform?: string | null;
+      sourceSkuId?: string | null;
+      ozonSku?: string | null;
+      ozonProductId?: string | null;
+      ozonOfferId?: string | null;
+      errors?: Array<{
+        code?: string | null;
+        state?: string | null;
+        level?: string | null;
+        field?: string | null;
+        description?: string | null;
+        message?: string | null;
+      }>;
+    }>;
     ozonPriceCheckContext?: OzonPriceCheckContext | null;
     priceCheckEstimate?: PriceCheckEstimate | null;
   } | null;
 }
+
+type ListingResultItem = NonNullable<NonNullable<Collected1688Item['metadata']>['lastListingResultItems']>[number];
 
 interface OzonPriceCheckContext {
   title?: string | null;
@@ -234,6 +254,26 @@ function listingResultSummaryText(metadata?: Collected1688Item['metadata']) {
     parts.length ? `Ozon 结果: ${parts.join(' / ')}` : 'Ozon 结果已刷新',
     formatDate(metadata.lastListingRefreshedAt),
   ].filter(Boolean).join(' · ');
+}
+
+function listingResultFailureItems(metadata?: Collected1688Item['metadata']) {
+  const items = Array.isArray(metadata?.lastListingResultItems) ? metadata.lastListingResultItems : [];
+  return items
+    .filter((item) => String(item.status || '').toLowerCase() === 'failed' || !!item.errors?.length)
+    .slice(0, 3);
+}
+
+function listingResultItemErrorText(item: ListingResultItem) {
+  const errors = Array.isArray(item.errors) ? item.errors : [];
+  const text = errors
+    .map((error) => [
+      error.field ? `字段 ${error.field}` : '',
+      error.code || error.state || '',
+      error.message || error.description || '',
+    ].filter(Boolean).join(': '))
+    .filter(Boolean)
+    .join('；');
+  return text || 'Ozon 未返回详细错误';
 }
 
 function preparationStatus(item: Collected1688Item): PreparationFilter {
@@ -672,7 +712,9 @@ export default function Collect1688Page() {
             <div className="py-10 text-center text-sm text-muted-foreground">当前筛选下暂无记录</div>
           ) : (
             <div className="space-y-3">
-              {filteredItems.map((item) => (
+              {filteredItems.map((item) => {
+                const failedListingItems = listingResultFailureItems(item.metadata);
+                return (
                 <div key={item.id} className="rounded-md border p-3 flex gap-3">
                   <div className="flex items-start pt-1">
                     <input
@@ -768,6 +810,25 @@ export default function Collect1688Page() {
                         {listingResultSummaryText(item.metadata)}
                       </div>
                     )}
+                    {failedListingItems.length > 0 && (
+                      <div className="rounded border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive space-y-1">
+                        <div className="font-medium">失败明细</div>
+                        {failedListingItems.map((resultItem, index) => (
+                          <div key={`${resultItem.offerId || resultItem.sourceSkuId || 'failed'}-${index}`} className="min-w-0">
+                            <div className="truncate">
+                              offer {resultItem.offerId || '-'}
+                              {resultItem.sourceSkuId ? ` · 货源 SKU ${resultItem.sourceSkuId}` : ''}
+                              {resultItem.ozonSku ? ` · Ozon SKU ${resultItem.ozonSku}` : ''}
+                              {resultItem.productId ? ` · Product ${resultItem.productId}` : ''}
+                            </div>
+                            <div className="truncate">{listingResultItemErrorText(resultItem)}</div>
+                          </div>
+                        ))}
+                        {(item.metadata?.lastListingResultItems?.length || 0) > failedListingItems.length && (
+                          <div className="text-destructive/80">更多结果请查看 1688 上架记录详情</div>
+                        )}
+                      </div>
+                    )}
                     {priceCheckEstimateText(item.metadata?.priceCheckEstimate) && (
                       <div className="text-xs text-muted-foreground truncate">
                         {priceCheckEstimateText(item.metadata?.priceCheckEstimate)}
@@ -812,7 +873,8 @@ export default function Collect1688Page() {
                     </Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
