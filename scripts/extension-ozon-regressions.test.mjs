@@ -228,7 +228,12 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /ozonSku\s*=\s*pickFirstValue\(item,\s*\["ozonSku",\s*"ozon_sku",\s*"targetOzonSku",\s*"target_ozon_sku",\s*"targetSku",\s*"ozonProductSku"\]\)/);
   assert.match(collectScript, /ozonProductId\s*=\s*pickFirstValue\(item,\s*\["ozonProductId",\s*"ozon_product_id",\s*"targetOzonProductId",\s*"target_ozon_product_id"\]\)/);
   assert.match(collectScript, /ozonOfferId\s*=\s*pickFirstValue\(item,\s*\["ozonOfferId",\s*"ozon_offer_id",\s*"targetOzonOfferId",\s*"target_ozon_offer_id"\]\)/);
-  assert.match(collectScript, /const\s+sourceSkuId\s*=\s*pickFirstValue\(item,\s*\["sourceSkuId",\s*"source_sku_id",\s*"sourceSku",\s*"source_sku",\s*"skuId",\s*"sku_id",\s*"id",\s*"offerId",\s*"specId",\s*"nameId"\]\)/);
+  assert.match(collectScript, /const\s+sourceSkuId\s*=\s*pickFirstValue\(item,\s*\["sourceSkuId",\s*"source_sku_id",\s*"sourceSku",\s*"source_sku",\s*"skuId",\s*"sku_id",\s*"specId",\s*"nameId",\s*"id",\s*"offerId"\]\)/);
+  const sourceSkuKeyMatch = collectScript.match(/const\s+sourceSkuId\s*=\s*pickFirstValue\(item,\s*\[([^\]]+)\]\)/);
+  assert.ok(sourceSkuKeyMatch, 'source SKU extractor key list must be visible');
+  const sourceSkuKeys = sourceSkuKeyMatch[1].match(/"([^"]+)"/g).map((value) => value.replace(/"/g, ''));
+  assert.ok(sourceSkuKeys.indexOf('specId') < sourceSkuKeys.indexOf('offerId'), 'variant specId must be tried before product offerId');
+  assert.ok(sourceSkuKeys.indexOf('nameId') < sourceSkuKeys.indexOf('offerId'), 'variant nameId must be tried before product offerId');
   assert.match(collectScript, /const\s+skuId\s*=\s*sourceSkuId/);
   assert.match(collectScript, /sourceSkuId:\s*sourceSkuId == null \? "" : String\(sourceSkuId\)/);
   assert.match(collectScript, /ozonSku:\s*ozonSku == null \? "" : String\(ozonSku\)/);
