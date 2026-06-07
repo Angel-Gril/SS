@@ -3,6 +3,7 @@ import {
   buildAlibaba1688CollectRecord,
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688PreparationMetadata,
+  getAlibaba1688PreparationIssues,
   parseAttributeText,
 } from '../routes/collect.js';
 
@@ -106,6 +107,7 @@ describe('1688 collect helpers', () => {
         skuCount: 1,
         categoryMappingStatus: 'deferred_until_listing',
         listingPreparationStatus: 'collected_only',
+        listingPreparationIssues: ['missing_prepared_title_ru'],
         raw: {
           priceCheckContext: {
             title: 'Ozon 男士运动鞋',
@@ -134,6 +136,7 @@ describe('1688 collect helpers', () => {
       skuCount: 1,
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'collected_only',
+      listingPreparationIssues: ['missing_prepared_title_ru'],
       preparedTitleRu: '',
       targetPriceCny: '',
       listingNotes: '',
@@ -180,8 +183,9 @@ describe('1688 collect helpers', () => {
       targetPriceCny: '199.9',
       listingNotes: '图片需要处理',
       categoryMappingStatus: 'deferred_until_listing',
-      listingPreparationStatus: 'draft',
+      listingPreparationStatus: 'ready',
     });
+    expect(metadata).not.toHaveProperty('listingPreparationIssues');
   });
 
   it('clears empty 1688 preparation draft fields while preserving deferred mapping state', () => {
@@ -201,9 +205,33 @@ describe('1688 collect helpers', () => {
     expect(metadata).toMatchObject({
       categoryMappingStatus: 'deferred_until_listing',
       listingPreparationStatus: 'draft',
+      listingPreparationIssues: ['missing_prepared_title_ru', 'missing_target_price_cny'],
     });
     expect(metadata).not.toHaveProperty('preparedTitleRu');
     expect(metadata).not.toHaveProperty('targetPriceCny');
     expect(metadata).not.toHaveProperty('listingNotes');
+  });
+
+  it('keeps 1688 preparation drafts when the prepared title still contains Chinese text', () => {
+    expect(getAlibaba1688PreparationIssues({
+      preparedTitleRu: '男士 кроссовки',
+      targetPriceCny: '199',
+    })).toEqual(['prepared_title_contains_cjk']);
+
+    const metadata = buildAlibaba1688PreparationMetadata(
+      { categoryMappingStatus: 'deferred_until_listing' },
+      {
+        preparedTitleRu: '男士 кроссовки',
+        targetPriceCny: '199',
+      },
+    );
+
+    expect(metadata).toMatchObject({
+      preparedTitleRu: '男士 кроссовки',
+      targetPriceCny: '199',
+      listingPreparationStatus: 'draft',
+      listingPreparationIssues: ['prepared_title_contains_cjk'],
+      categoryMappingStatus: 'deferred_until_listing',
+    });
   });
 });

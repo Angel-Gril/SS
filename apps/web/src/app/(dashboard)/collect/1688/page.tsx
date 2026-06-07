@@ -32,6 +32,7 @@ interface Collected1688Item {
     skuCount?: number;
     categoryMappingStatus?: string;
     listingPreparationStatus?: string | null;
+    listingPreparationIssues?: string[];
     ozonPriceCheckContext?: OzonPriceCheckContext | null;
     priceCheckEstimate?: PriceCheckEstimate | null;
   } | null;
@@ -102,6 +103,16 @@ function preparationStatusLabel(status?: string | null) {
   if (status === 'draft') return '准备草稿';
   if (status === 'ready') return '准备完成';
   return '仅采集';
+}
+
+function preparationIssueText(issues?: string[]) {
+  if (!issues?.length) return '';
+  const labels: Record<string, string> = {
+    missing_prepared_title_ru: '待补俄语标题',
+    prepared_title_contains_cjk: '标题含中文',
+    missing_target_price_cny: '待补目标售价',
+  };
+  return issues.map((issue) => labels[issue] || issue).join(' / ');
 }
 
 function priceCheckText(context?: OzonPriceCheckContext | null) {
@@ -392,6 +403,11 @@ export default function Collect1688Page() {
                     {sourceDimensionsText(item.metadata) && (
                       <div className="text-xs text-muted-foreground truncate">
                         {sourceDimensionsText(item.metadata)}
+                      </div>
+                    )}
+                    {preparationIssueText(item.metadata?.listingPreparationIssues) && (
+                      <div className="text-xs text-amber-600 truncate">
+                        准备缺项: {preparationIssueText(item.metadata?.listingPreparationIssues)}
                       </div>
                     )}
                   </div>

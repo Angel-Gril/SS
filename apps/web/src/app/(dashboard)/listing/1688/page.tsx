@@ -32,6 +32,7 @@ interface Alibaba1688ListingItem {
   skuCount: number;
   categoryMappingStatus: string;
   listingPreparationStatus: string;
+  listingPreparationIssues: string[];
   preparedTitleRu: string;
   targetPriceCny: string;
   listingNotes: string;
@@ -55,6 +56,8 @@ interface PriceCheckEstimate {
   cnyPerRub?: number | null;
 }
 
+const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
 }
@@ -73,6 +76,35 @@ function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {
   if (!Number.isFinite(spread) || !Number.isFinite(purchaseRub)) return '';
   const sign = spread > 0 ? '+' : '';
   return `核价粗差: ${sign}${spread.toFixed(2)} RUB · 采购折算 ${purchaseRub.toFixed(2)} RUB`;
+}
+
+function preparationStatusLabel(status?: string | null) {
+  if (status === 'ready') return '准备完成';
+  if (status === 'draft') return '准备草稿';
+  return '仅采集';
+}
+
+function preparationIssueLabels(issues?: string[]) {
+  const labels: Record<string, string> = {
+    missing_prepared_title_ru: '待补俄语标题',
+    prepared_title_contains_cjk: '标题含中文',
+    missing_target_price_cny: '待补目标售价',
+  };
+  return (issues || []).map((issue) => labels[issue] || issue);
+}
+
+function currentPreparationIssues(item: Alibaba1688ListingItem) {
+  const title = item.preparedTitleRu.trim();
+  const targetPrice = Number(item.targetPriceCny);
+  const issues: string[] = [];
+  if (!title) issues.push('missing_prepared_title_ru');
+  else if (CJK_TEXT_RE.test(title)) issues.push('prepared_title_contains_cjk');
+  if (!(Number.isFinite(targetPrice) && targetPrice > 0)) issues.push('missing_target_price_cny');
+  return issues;
+}
+
+function currentPreparationStatus(item: Alibaba1688ListingItem) {
+  return currentPreparationIssues(item).length ? 'draft' : 'ready';
 }
 
 function sourceDimensionsText(item: Alibaba1688ListingItem) {
@@ -118,7 +150,7 @@ export default function Alibaba1688ListingPage() {
   async function handleSave() {
     if (!items.length) return;
     setSaving(true);
-    const res = await api.post<{ saved: number }>('/api/collect/1688/save-preparation', {
+    const res = await api.post<{ saved: number; ready: number; draft: number }>('/api/collect/1688/save-preparation', {
       items: items.map((item) => ({
         id: item.id,
         preparedTitleRu: item.preparedTitleRu,
@@ -187,6 +219,9 @@ export default function Alibaba1688ListingPage() {
               <span className="truncate">{item.title}</span>
               <Badge variant="outline">1688</Badge>
               <Badge variant="secondary">类目映射待上架</Badge>
+              <Badge variant={currentPreparationStatus(item) === 'ready' ? 'default' : 'outline'}>
+                {preparationStatusLabel(currentPreparationStatus(item))}
+              </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -223,6 +258,15 @@ export default function Alibaba1688ListingPage() {
                 {sourceDimensionsText(item) && (
                   <div className="text-xs text-muted-foreground truncate">
                     {sourceDimensionsText(item)}
+                  </div>
+                )}
+                {preparationIssueLabels(currentPreparationIssues(item)).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {preparationIssueLabels(currentPreparationIssues(item)).map((label) => (
+                      <Badge key={label} variant="outline" className="text-amber-600 border-amber-300">
+                        {label}
+                      </Badge>
+                    ))}
                   </div>
                 )}
                 {(item.sourceUrl || item.ozonPriceCheckContext?.sourceUrl) && (

@@ -394,6 +394,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     skuCount: Number.isFinite(Number(meta.skuCount)) ? Number(meta.skuCount) : variants.length,
     categoryMappingStatus: meta.categoryMappingStatus || 'deferred_until_listing',
     listingPreparationStatus: meta.listingPreparationStatus || 'collected_only',
+    listingPreparationIssues: Array.isArray(meta.listingPreparationIssues) ? meta.listingPreparationIssues : [],
     preparedTitleRu: meta.preparedTitleRu || '',
     targetPriceCny: meta.targetPriceCny || '',
     listingNotes: meta.listingNotes || '',
@@ -405,6 +406,27 @@ export function buildAlibaba1688ListingPrefill(item: {
     ),
     createdAt: item.createdAt.toISOString(),
   };
+}
+
+export function getAlibaba1688PreparationIssues(row: {
+  preparedTitleRu?: string | null;
+  targetPriceCny?: string | number | null;
+}) {
+  const title = String(row.preparedTitleRu || '').trim();
+  const targetPrice = Number(row.targetPriceCny);
+  const issues: string[] = [];
+
+  if (!title) {
+    issues.push('missing_prepared_title_ru');
+  } else if (containsCjkText(title)) {
+    issues.push('prepared_title_contains_cjk');
+  }
+
+  if (!(Number.isFinite(targetPrice) && targetPrice > 0)) {
+    issues.push('missing_target_price_cny');
+  }
+
+  return issues;
 }
 
 export function buildAlibaba1688PreparationMetadata(
@@ -429,7 +451,10 @@ export function buildAlibaba1688PreparationMetadata(
   if (notes) meta.listingNotes = notes;
   else delete meta.listingNotes;
 
-  meta.listingPreparationStatus = 'draft';
+  const issues = getAlibaba1688PreparationIssues(row);
+  meta.listingPreparationStatus = issues.length ? 'draft' : 'ready';
+  if (issues.length) meta.listingPreparationIssues = issues;
+  else delete meta.listingPreparationIssues;
   meta.categoryMappingStatus = meta.categoryMappingStatus || 'deferred_until_listing';
 
   return meta;
@@ -707,6 +732,8 @@ export async function collectRoutes(app: FastifyInstance) {
 
     const byId = new Map(items.map((item) => [item.id, item]));
     let saved = 0;
+    let ready = 0;
+    let draft = 0;
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
       const meta = buildAlibaba1688PreparationMetadata(item.metadata, row);
@@ -716,9 +743,15 @@ export async function collectRoutes(app: FastifyInstance) {
         data: { metadata: meta as any },
       });
       saved++;
+      if (meta.listingPreparationStatus === 'ready') ready++;
+      else draft++;
     }
 
-    return reply.send({ code: 1, msg: `已保存 ${saved} 条 1688 上架准备草稿`, data: { saved } });
+    return reply.send({
+      code: 1,
+      msg: `已保存 ${saved} 条 1688 上架准备，${ready} 条准备完成，${draft} 条仍为草稿`,
+      data: { saved, ready, draft },
+    });
   });
 
   app.post('/batch', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
