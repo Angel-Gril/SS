@@ -34,6 +34,7 @@ interface Collected1688Item {
   title: string;
   status: string;
   sourceUrl: string | null;
+  sourcePlatform: string | null;
   sourceProductId: string | null;
   images: string[] | null;
   variants?: Alibaba1688Variant[] | null;
@@ -167,6 +168,19 @@ const preparationFilterOptions: Array<{ value: PreparationFilter; label: string 
   { value: 'draft', label: '准备草稿' },
   { value: 'ready', label: '准备完成' },
 ];
+
+const SOURCE_PLATFORM_LABELS: Record<string, string> = {
+  '1688': '1688',
+  taobao: '淘宝',
+  tmall: '天猫',
+  jd: '京东',
+  pinduoduo: '拼多多',
+  pdd: '拼多多',
+};
+
+function sourcePlatformLabel(sourcePlatform?: string | null) {
+  return sourcePlatform ? SOURCE_PLATFORM_LABELS[sourcePlatform] || sourcePlatform : '货源';
+}
 
 function parseSkuText(text: string) {
   return text
@@ -380,13 +394,13 @@ export default function Collect1688Page() {
 
   async function fetchRecent() {
     setLoading(true);
-    const params = new URLSearchParams({ sourcePlatform: '1688', limit: '20', offset: '0' });
+    const params = new URLSearchParams({ sourcePlatform: 'domestic-supply', limit: '20', offset: '0' });
     const res = await api.get<{ rows: Collected1688Item[] }>(`/api/collect?${params}`);
     if (res.code === 1 && res.data) {
       setItems(res.data.rows);
       setSelectedIds(new Set());
     } else {
-      toast({ title: res.msg || '加载 1688 采集记录失败', variant: 'destructive' });
+      toast({ title: res.msg || '加载货源采集记录失败', variant: 'destructive' });
     }
     setLoading(false);
   }
@@ -433,7 +447,7 @@ export default function Collect1688Page() {
   function goToPreparation(ids: string[]) {
     const normalized = ids.map((id) => id.trim()).filter(Boolean);
     if (!normalized.length) {
-      toast({ title: '请先选择 1688 采集记录', variant: 'destructive' });
+      toast({ title: '请先选择货源采集记录', variant: 'destructive' });
       return;
     }
     router.push(`/listing/1688?ids=${encodeURIComponent(normalized.join(','))}`);
@@ -679,7 +693,7 @@ export default function Collect1688Page() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle className="text-base">最近 1688 采集记录</CardTitle>
+            <CardTitle className="text-base">最近货源采集记录</CardTitle>
             {items.length > 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 <div className="flex flex-wrap gap-1">
@@ -716,7 +730,7 @@ export default function Collect1688Page() {
               <Loader2 className="h-5 w-5 animate-spin mr-2" />加载中
             </div>
           ) : items.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">暂无 1688 采集记录</div>
+            <div className="py-10 text-center text-sm text-muted-foreground">暂无货源采集记录</div>
           ) : filteredItems.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground">当前筛选下暂无记录</div>
           ) : (
@@ -747,7 +761,7 @@ export default function Collect1688Page() {
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h2 className="font-medium text-sm truncate max-w-[620px]">{item.title}</h2>
-                      <Badge variant="outline">1688</Badge>
+                      <Badge variant="outline">{sourcePlatformLabel(item.sourcePlatform)}</Badge>
                       <Badge variant="secondary">类目映射待上架</Badge>
                       <Badge variant="outline">{preparationStatusLabel(item.metadata?.listingPreparationStatus)}</Badge>
                       {listingStatusText(item) && <Badge variant={listingStatusBadgeVariant(item)}>{listingStatusText(item)}</Badge>}

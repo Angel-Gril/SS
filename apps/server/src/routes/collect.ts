@@ -176,6 +176,24 @@ export function buildCollectSnapshotWhere(userId: string, skus: string[], source
   };
 }
 
+export function buildCollectListWhere(userId: string, query: { status?: string; search?: string; sourcePlatform?: string }) {
+  const where: Record<string, unknown> = { userId };
+  if (query.status) where.status = query.status;
+  if (query.sourcePlatform === 'domestic-supply') {
+    where.sourcePlatform = { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST };
+  } else if (query.sourcePlatform) {
+    where.sourcePlatform = query.sourcePlatform;
+  }
+  if (query.search) {
+    where.OR = [
+      { title: { contains: query.search, mode: 'insensitive' } },
+      { sku: { contains: query.search, mode: 'insensitive' } },
+      { sourceProductId: { contains: query.search, mode: 'insensitive' } },
+    ];
+  }
+  return where;
+}
+
 export function buildCollectSnapshot(item: {
   id: string;
   title: string;
@@ -1156,16 +1174,7 @@ export async function collectRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const query = request.query as { status?: string; search?: string; sourcePlatform?: string; offset?: string; limit?: string };
 
-    const where: Record<string, unknown> = { userId };
-    if (query.status) where.status = query.status;
-    if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
-    if (query.search) {
-      where.OR = [
-        { title: { contains: query.search, mode: 'insensitive' } },
-        { sku: { contains: query.search, mode: 'insensitive' } },
-        { sourceProductId: { contains: query.search, mode: 'insensitive' } },
-      ];
-    }
+    const where = buildCollectListWhere(userId, query);
 
     const offset = Math.max(0, Number(query.offset) || 0);
     const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));

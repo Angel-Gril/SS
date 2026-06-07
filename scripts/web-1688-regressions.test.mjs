@@ -257,3 +257,18 @@ test('supply goods management accepts all domestic supply platform labels', () =
   assert.match(supplyPage, /jd:\s*'京东'/);
   assert.match(supplyPage, /pdd:\s*'拼多多'/);
 });
+
+test('1688 collect page lists domestic supply records with real source platforms', () => {
+  const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
+
+  assert.match(collect1688Page, /sourcePlatform:\s*string\s*\|\s*null/);
+  assert.match(collect1688Page, /function\s+sourcePlatformLabel\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
+  assert.match(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'domestic-supply'/);
+  assert.match(collect1688Page, /加载货源采集记录失败/);
+  assert.match(collect1688Page, /请先选择货源采集记录/);
+  assert.match(collect1688Page, /最近货源采集记录/);
+  assert.match(collect1688Page, /暂无货源采集记录/);
+  assert.match(collect1688Page, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.doesNotMatch(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'1688'/);
+  assert.doesNotMatch(collect1688Page, /<Badge variant="outline">1688<\/Badge>/);
+});

@@ -4,6 +4,7 @@ import {
   buildAlibaba1688CollectRecord,
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688OzonListingDraftItems,
+  buildCollectListWhere,
   buildAlibaba1688PreparationMetadata,
   exposeSupplyGoodsMetadata,
   getAlibaba1688SourceDataIssues,
@@ -31,6 +32,18 @@ describe('1688 collect helpers', () => {
       false,
       false,
     ]);
+  });
+
+  it('builds collect list filters for all domestic supply platforms', () => {
+    expect(buildCollectListWhere('user-1', { sourcePlatform: 'domestic-supply' })).toEqual({
+      userId: 'user-1',
+      sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
+    });
+    expect(buildCollectListWhere('user-1', { sourcePlatform: 'taobao', status: 'collected' })).toEqual({
+      userId: 'user-1',
+      status: 'collected',
+      sourcePlatform: 'taobao',
+    });
   });
 
   it('parses attribute text into a record', () => {
