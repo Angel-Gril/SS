@@ -850,6 +850,7 @@ const ALIBABA_1688_RECOLLECT_PRESERVE_WHEN_EMPTY_METADATA_KEYS = [
   'customizationInfo',
   'attributes',
   'skuCount',
+  'ozonPriceCheckContext',
 ] as const;
 
 function isEmptyRecollectMetadataValue(value: unknown): boolean {
@@ -880,6 +881,39 @@ export function mergeAlibaba1688RecollectMetadata(existingMetadata: unknown, nex
     }
   }
   return merged;
+}
+
+function alibaba1688VariantTraceKey(variant: unknown): string | null {
+  const item = variant && typeof variant === 'object' && !Array.isArray(variant)
+    ? variant as Record<string, unknown>
+    : {};
+  const sourceSkuId = compactString(item.sourceSkuId ?? item.sku);
+  if (!sourceSkuId) return null;
+  const sourcePlatform = normalizeDomesticSupplySourcePlatform(item.sourcePlatform, null) || '';
+  return `${sourcePlatform}:${sourceSkuId}`;
+}
+
+function mergeAlibaba1688RecollectVariants(nextVariants: unknown[], existingVariants: unknown[]) {
+  const existingByTraceKey = new Map<string, Record<string, unknown>>();
+  for (const variant of existingVariants) {
+    const key = alibaba1688VariantTraceKey(variant);
+    if (key && variant && typeof variant === 'object' && !Array.isArray(variant)) {
+      existingByTraceKey.set(key, variant as Record<string, unknown>);
+    }
+  }
+
+  return nextVariants.map((variant) => {
+    if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return variant;
+    const next = { ...(variant as Record<string, unknown>) };
+    const existing = existingByTraceKey.get(alibaba1688VariantTraceKey(next) || '');
+    if (!existing) return next;
+    for (const key of ['ozonSku', 'ozonProductId', 'ozonOfferId'] as const) {
+      if (!compactString(next[key]) && compactString(existing[key])) {
+        next[key] = existing[key];
+      }
+    }
+    return next;
+  });
 }
 
 export function buildAlibaba1688ListingPrefill(item: {
@@ -1512,8 +1546,12 @@ export async function collectRoutes(app: FastifyInstance) {
         mergedMetadata.skuCount = existingMeta.skuCount;
       }
 
+      if (normalized.variants.length && existingVariants.length) {
+        updateData.variants = mergeAlibaba1688RecollectVariants(normalized.variants, existingVariants) as any;
+      }
+
       const finalImages = normalized.images.length ? normalized.images : existingImages;
-      const finalVariants = normalized.variants.length ? normalized.variants : existingVariants;
+      const finalVariants = normalized.variants.length ? updateData.variants : existingVariants;
       const finalPurchasePrice = priceInfo.purchasePriceCny ?? (existing as any).purchasePrice?.toString?.() ?? (existing as any).purchasePrice;
       updateData.metadata = refreshAlibaba1688SourceDataIssues(mergedMetadata, {
         images: finalImages,

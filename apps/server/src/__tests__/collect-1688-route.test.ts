@@ -212,4 +212,73 @@ describe('1688 collect route', () => {
       sourceDataIssues: [],
     });
   });
+
+  it('preserves existing Ozon SKU trace when duplicate recollect variants omit price-check context', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue({
+      id: 'existing-price-check-record',
+      status: 'collected',
+      images: ['https://img.example.com/main.jpg'],
+      variants: [
+        {
+          sku: 'tb-red',
+          sourceSkuId: 'tb-red',
+          sourcePlatform: 'taobao',
+          ozonSku: 'ozon-red-old',
+          ozonProductId: 'ozon-product-old',
+          ozonOfferId: 'ozon-offer-old',
+          price: '19.9',
+        },
+      ],
+      purchasePrice: { toString: () => '19.90' },
+      metadata: {
+        sourceKind: 'alibaba1688',
+        ozonPriceCheckContext: {
+          sku: 'ozon-red-old',
+          ozonSku: 'ozon-red-old',
+          productId: 'ozon-product-old',
+          offerId: 'ozon-offer-old',
+        },
+      },
+    });
+    supplyGoodsMock.update.mockResolvedValue({ id: 'existing-price-check-record' });
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '淘宝重新采集保留 Ozon 追踪',
+        sourcePlatform: 'taobao',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+        priceText: '¥21.90',
+        skuItems: [
+          { sourceSkuId: 'tb-red', specText: '红色', price: '21.9', stock: 60 },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const updateData = supplyGoodsMock.update.mock.calls[0]?.[0]?.data;
+    expect(updateData.variants).toEqual([
+      expect.objectContaining({
+        sourceSkuId: 'tb-red',
+        sourcePlatform: 'taobao',
+        ozonSku: 'ozon-red-old',
+        ozonProductId: 'ozon-product-old',
+        ozonOfferId: 'ozon-offer-old',
+      }),
+    ]);
+    expect(updateData.metadata).toMatchObject({
+      ozonPriceCheckContext: {
+        sku: 'ozon-red-old',
+        ozonSku: 'ozon-red-old',
+        productId: 'ozon-product-old',
+        offerId: 'ozon-offer-old',
+      },
+    });
+  });
 });
