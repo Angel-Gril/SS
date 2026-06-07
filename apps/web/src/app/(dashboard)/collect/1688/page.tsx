@@ -184,6 +184,12 @@ function parseSkuSourceTrace(parts: string[]) {
   };
 }
 
+function parseOptionalSkuNumber(value: string | undefined) {
+  if (!value) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function parseSkuText(text: string) {
   return text
     .split('\n')
@@ -197,9 +203,9 @@ function parseSkuText(text: string) {
         sourceSkuId: parts[0] || `sku-${index + 1}`,
         specText: parts[1] || '',
         price: parts[2] || '',
-        stock: parts[3] ? Number(parts[3]) : null,
-        minOrderQty: parts[4] ? Number(parts[4]) : null,
-        grossWeightGrams: parts[5] ? Number(parts[5]) : null,
+        stock: parseOptionalSkuNumber(parts[3]),
+        minOrderQty: parseOptionalSkuNumber(parts[4]),
+        grossWeightGrams: parseOptionalSkuNumber(parts[5]),
         imageUrl: parts[6] || undefined,
         ozonSku: parts[7] || undefined,
         ozonProductId: sourceTrace.ozonProductId,

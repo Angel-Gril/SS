@@ -7,6 +7,7 @@ const authenticateMock = vi.hoisted(() => vi.fn(async (request: any) => {
 
 const supplyGoodsMock = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  findMany: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 }));
@@ -39,6 +40,7 @@ describe('1688 collect route', () => {
       exchangeRateUsed: 1,
       needsReview: false,
     });
+    supplyGoodsMock.findMany.mockResolvedValue([]);
     supplyGoodsMock.create.mockResolvedValue({ id: 'new-record' });
     supplyGoodsMock.update.mockResolvedValue({ id: 'existing-record' });
   });
@@ -331,5 +333,80 @@ describe('1688 collect route', () => {
         ozonOfferId: 'ozon-offer-legacy',
       }),
     ]);
+  });
+
+  it('rejects saving preparation for supply records that already have active listing results', async () => {
+    supplyGoodsMock.findMany.mockResolvedValue([
+      {
+        id: 'submitted-record',
+        userId: 'user-1',
+        title: '已提交的淘宝货源',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        images: ['https://img.example.com/main.jpg'],
+        variants: [
+          {
+            sku: 'tb-red',
+            sourceSkuId: 'tb-red',
+            sourcePlatform: 'taobao',
+            ozonSku: 'ozon-red',
+            price: '21.9',
+          },
+        ],
+        purchasePrice: { toString: () => '21.90' },
+        metadata: {
+          sourceKind: 'alibaba1688',
+          lastListingResultStatus: 'submitted',
+          listingPreparationStatus: 'ready',
+        },
+        createdAt: new Date('2026-06-07T12:00:00.000Z'),
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688/save-preparation',
+      payload: {
+        items: [
+          {
+            id: 'submitted-record',
+            preparedTitleRu: 'Уже отправленный товар',
+            targetPriceCny: '129',
+            ozonCategoryId: 17028922,
+            ozonTypeId: 93410,
+            variants: [
+              {
+                sourceSkuId: 'tb-red',
+                sourcePlatform: 'taobao',
+                ozonSku: 'ozon-red',
+                specText: '红色',
+                price: '21.9',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '已提交、导入中或已上架成功的货源采集记录不能重新保存上架准备',
+      data: {
+        blocked: [
+          {
+            id: 'submitted-record',
+            title: '已提交的淘宝货源',
+            issue: 'listing_already_submitted',
+          },
+        ],
+      },
+    });
+    expect(supplyGoodsMock.update).not.toHaveBeenCalled();
   });
 });

@@ -159,6 +159,12 @@ function parseSkuSourceTrace(parts: string[]) {
   };
 }
 
+function parseOptionalSkuNumber(value: string | undefined) {
+  if (!value) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
 }
@@ -195,9 +201,9 @@ function parseSkuText(text: string): Array<Alibaba1688Variant & { skuId: string;
         attrs,
         specText,
         price: parts[2] || '',
-        stock: parts[3] ? Number(parts[3]) : null,
-        minOrderQty: parts[4] ? Number(parts[4]) : null,
-        grossWeightGrams: parts[5] ? Number(parts[5]) : null,
+        stock: parseOptionalSkuNumber(parts[3]),
+        minOrderQty: parseOptionalSkuNumber(parts[4]),
+        grossWeightGrams: parseOptionalSkuNumber(parts[5]),
         imageUrl: parts[6] || undefined,
         ozonSku: parts[7] || undefined,
         ozonProductId: sourceTrace.ozonProductId,

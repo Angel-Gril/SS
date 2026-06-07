@@ -1661,6 +1661,20 @@ export async function collectRoutes(app: FastifyInstance) {
     if (items.some((item) => !isDomesticSupplySourcePlatform(item.sourcePlatform))) {
       return reply.status(400).send({ code: 0, msg: '只能保存货源采集记录的上架准备草稿' });
     }
+    const blockedActiveListingItems = items
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        issue: getAlibaba1688ListingBlockedIssue(item),
+      }))
+      .filter((item): item is { id: string; title: string; issue: string } => !!item.issue);
+    if (blockedActiveListingItems.length) {
+      return reply.status(400).send({
+        code: 0,
+        msg: '已提交、导入中或已上架成功的货源采集记录不能重新保存上架准备',
+        data: { blocked: blockedActiveListingItems },
+      });
+    }
 
     const byId = new Map(items.map((item) => [item.id, item]));
     let saved = 0;

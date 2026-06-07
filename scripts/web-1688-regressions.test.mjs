@@ -321,6 +321,23 @@ test('source platform normalization rejects Ozon trace ids in editable SKU rows'
   }
 });
 
+test('editable SKU rows normalize invalid numeric cells to null', () => {
+  const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  for (const source of [collect1688Page, listingPage]) {
+    assert.match(source, /function\s+parseOptionalSkuNumber\(value:\s*string\s*\|\s*undefined\)/);
+    assert.match(source, /const\s+number\s*=\s*Number\(value\)/);
+    assert.match(source, /Number\.isFinite\(number\)\s*\?\s*number\s*:\s*null/);
+    assert.match(source, /stock:\s*parseOptionalSkuNumber\(parts\[3\]\)/);
+    assert.match(source, /minOrderQty:\s*parseOptionalSkuNumber\(parts\[4\]\)/);
+    assert.match(source, /grossWeightGrams:\s*parseOptionalSkuNumber\(parts\[5\]\)/);
+    assert.doesNotMatch(source, /stock:\s*parts\[3\]\s*\?\s*Number\(parts\[3\]\)\s*:\s*null/);
+    assert.doesNotMatch(source, /minOrderQty:\s*parts\[4\]\s*\?\s*Number\(parts\[4\]\)\s*:\s*null/);
+    assert.doesNotMatch(source, /grossWeightGrams:\s*parts\[5\]\s*\?\s*Number\(parts\[5\]\)\s*:\s*null/);
+  }
+});
+
 test('1688 collect page lists domestic supply records with real source platforms', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 
