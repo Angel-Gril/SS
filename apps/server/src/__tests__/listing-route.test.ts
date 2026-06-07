@@ -364,6 +364,88 @@ describe('listing route', () => {
     expect(syncJobMock.create).not.toHaveBeenCalled();
   });
 
+  it('rejects supply listing submissions whose Ozon trace does not match the collected source SKU variant', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-domestic',
+        sourcePlatform: 'taobao',
+        variants: [
+          {
+            sourceSkuId: 'tb-shared',
+            sourcePlatform: 'taobao',
+            ozonSku: 'ozon-red',
+            ozonProductId: 'ozon-product-red',
+            ozonOfferId: 'seller-offer-red',
+          },
+          {
+            sourceSkuId: 'tb-shared',
+            sourcePlatform: 'taobao',
+            ozonSku: 'ozon-blue',
+            ozonProductId: 'ozon-product-blue',
+            ozonOfferId: 'seller-offer-blue',
+          },
+        ],
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-998877-tb-shared',
+            title: 'Товар с неверной связкой Ozon',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/tb-shared.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'supply-domestic',
+              sourcePlatform: 'taobao',
+              sourceProductId: '998877',
+              sourceSkuId: 'tb-shared',
+              ozonSku: 'ozon-green',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品引用的 Ozon 追踪不属于采集记录',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-998877-tb-shared',
+            supplyGoodsId: 'supply-domestic',
+            sourceSkuId: 'tb-shared',
+            ozonSku: 'ozon-green',
+            reason: 'invalid_ozon_trace',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
+
   it('rejects supply listing submissions whose source platform does not match the collected record', async () => {
     supplyGoodsMock.findMany.mockResolvedValueOnce([
       {

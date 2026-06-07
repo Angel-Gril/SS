@@ -157,6 +157,47 @@ function sourceSkuIdsFromVariants(variants: unknown) {
   return sourceSkuIds;
 }
 
+const OZON_TRACE_KEYS = ['ozonSku', 'ozonProductId', 'ozonOfferId'] as const;
+
+function variantRecords(variants: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(variants)) return [];
+  return variants.filter((variant): variant is Record<string, unknown> => (
+    !!variant && typeof variant === 'object' && !Array.isArray(variant)
+  ));
+}
+
+function sourceSkuVariants(variants: unknown, sourceSkuId: string) {
+  return variantRecords(variants).filter((variant) => {
+    const variantSourceSkuId = traceText(variant, 'sourceSkuId') || traceText(variant, 'sku');
+    return variantSourceSkuId === sourceSkuId;
+  });
+}
+
+function ozonTraceValues(source: Record<string, unknown>) {
+  return Object.fromEntries(
+    OZON_TRACE_KEYS
+      .map((key) => [key, traceText(source, key)] as const)
+      .filter(([, value]) => !!value),
+  ) as Partial<Record<typeof OZON_TRACE_KEYS[number], string>>;
+}
+
+function hasMatchingOzonTrace(source: Record<string, unknown>, variants: unknown) {
+  const sourceSkuId = traceText(source, 'sourceSkuId');
+  const submittedTrace = ozonTraceValues(source);
+  const submittedKeys = OZON_TRACE_KEYS.filter((key) => !!submittedTrace[key]);
+  if (!sourceSkuId || submittedKeys.length === 0) return true;
+
+  const matchingVariants = sourceSkuVariants(variants, sourceSkuId);
+  const comparableKeys = submittedKeys.filter((key) => (
+    matchingVariants.some((variant) => !!traceText(variant, key))
+  ));
+  if (comparableKeys.length === 0) return true;
+
+  return matchingVariants.some((variant) => (
+    comparableKeys.every((key) => traceText(variant, key) === submittedTrace[key])
+  ));
+}
+
 function invalidAlibaba1688ListingSourceSkus(
   items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
   supplyGoodsById: Map<string, { variants?: unknown }>,
@@ -175,6 +216,41 @@ function invalidAlibaba1688ListingSourceSkus(
         : null;
     })
     .filter((item): item is { offerId: string; supplyGoodsId: string; sourceSkuId: string; reason: string } => !!item);
+}
+
+type InvalidAlibaba1688ListingOzonTraceItem = {
+  offerId: string;
+  supplyGoodsId: string;
+  sourceSkuId: string;
+  ozonSku: string | undefined;
+  ozonProductId: string | undefined;
+  ozonOfferId: string | undefined;
+  reason: string;
+};
+
+function invalidAlibaba1688ListingOzonTraces(
+  items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
+  supplyGoodsById: Map<string, { variants?: unknown }>,
+): InvalidAlibaba1688ListingOzonTraceItem[] {
+  return items
+    .map((item) => {
+      const source = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+        ? item.sourceTrace
+        : null;
+      const supplyGoodsId = source ? traceText(source, 'supplyGoodsId') : '';
+      const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
+      if (!source || !supplyGoods || hasMatchingOzonTrace(source, supplyGoods.variants)) return null;
+      return {
+        offerId: item.offerId,
+        supplyGoodsId,
+        sourceSkuId: traceText(source, 'sourceSkuId'),
+        ozonSku: traceText(source, 'ozonSku') || undefined,
+        ozonProductId: traceText(source, 'ozonProductId') || undefined,
+        ozonOfferId: traceText(source, 'ozonOfferId') || undefined,
+        reason: 'invalid_ozon_trace',
+      };
+    })
+    .filter((item): item is InvalidAlibaba1688ListingOzonTraceItem => !!item);
 }
 
 function safeMetadata(metadata: unknown) {
@@ -447,6 +523,14 @@ export async function listingRoutes(app: FastifyInstance) {
           code: 0,
           msg: '货源上架商品引用的货源 SKU 不属于采集记录',
           data: { invalidItems: invalidSkuItems },
+        });
+      }
+      const invalidOzonTraceItems = invalidAlibaba1688ListingOzonTraces(items, supplyGoodsById);
+      if (invalidOzonTraceItems.length) {
+        return reply.status(400).send({
+          code: 0,
+          msg: '货源上架商品引用的 Ozon 追踪不属于采集记录',
+          data: { invalidItems: invalidOzonTraceItems },
         });
       }
     }
