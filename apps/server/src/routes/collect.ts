@@ -178,12 +178,22 @@ function normalizeDomesticSupplySourcePlatform(value: unknown, fallback: string 
     : fallback;
 }
 
+function normalizeCollectQuerySourcePlatform(value: unknown): string | null {
+  const sourcePlatform = normalizeSourcePlatform(value);
+  if (!sourcePlatform) return null;
+  if (sourcePlatform === 'ozon' || sourcePlatform === 'domestic-supply') return sourcePlatform;
+  return DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform) ? sourcePlatform : null;
+}
+
 export function buildCollectSnapshotWhere(userId: string, skus: string[], sourcePlatform?: unknown) {
-  const sourcePlatformValue = normalizeSourcePlatform(sourcePlatform) || 'ozon';
+  const sourcePlatformValue = normalizeCollectQuerySourcePlatform(sourcePlatform);
+  const resolvedSourcePlatform = sourcePlatformValue && sourcePlatformValue !== 'domestic-supply'
+    ? sourcePlatformValue
+    : 'ozon';
   const lookupSkus = Array.from(new Set(skus.map((sku) => normalizeProductId(sku)).filter((sku): sku is string => !!sku)));
   return {
     userId,
-    sourcePlatform: sourcePlatformValue,
+    sourcePlatform: resolvedSourcePlatform,
     OR: [
       { sourceProductId: { in: lookupSkus } },
       { sku: { in: lookupSkus } },
@@ -194,7 +204,7 @@ export function buildCollectSnapshotWhere(userId: string, skus: string[], source
 export function buildCollectListWhere(userId: string, query: { status?: string; search?: string; sourcePlatform?: string }) {
   const where: Record<string, unknown> = { userId };
   if (query.status) where.status = query.status;
-  const sourcePlatform = normalizeSourcePlatform(query.sourcePlatform);
+  const sourcePlatform = normalizeCollectQuerySourcePlatform(query.sourcePlatform);
   if (sourcePlatform === 'domestic-supply') {
     where.sourcePlatform = { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST };
   } else if (sourcePlatform) {

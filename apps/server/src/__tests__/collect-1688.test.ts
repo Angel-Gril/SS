@@ -5,6 +5,7 @@ import {
   buildAlibaba1688ListingPrefill,
   buildAlibaba1688OzonListingDraftItems,
   buildCollectListWhere,
+  buildCollectSnapshotWhere,
   buildAlibaba1688PreparationMetadata,
   exposeSupplyGoodsMetadata,
   getAlibaba1688SourceDataIssues,
@@ -43,6 +44,24 @@ describe('1688 collect helpers', () => {
       userId: 'user-1',
       status: 'collected',
       sourcePlatform: 'taobao',
+    });
+  });
+
+  it('ignores unsupported collect list source platform filters', () => {
+    expect(buildCollectListWhere('user-1', { sourcePlatform: 'ozon-product-123', status: 'collected' })).toEqual({
+      userId: 'user-1',
+      status: 'collected',
+    });
+  });
+
+  it('falls back to Ozon for unsupported collect snapshot source platform filters', () => {
+    expect(buildCollectSnapshotWhere('user-1', ['ozon-sku-42'], 'ozon-product-123')).toEqual({
+      userId: 'user-1',
+      sourcePlatform: 'ozon',
+      OR: [
+        { sourceProductId: { in: ['ozon-sku-42'] } },
+        { sku: { in: ['ozon-sku-42'] } },
+      ],
     });
   });
 
