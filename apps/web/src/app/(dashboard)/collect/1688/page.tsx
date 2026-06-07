@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, ExternalLink, ListChecks, Loader2, PackagePlus, RefreshCw, Save, ShoppingCart } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -91,6 +91,8 @@ interface FormState {
   notes: string;
 }
 
+type PreparationFilter = 'all' | 'collected_only' | 'draft' | 'ready';
+
 const emptyForm: FormState = {
   title: '',
   sourceUrl: '',
@@ -112,6 +114,13 @@ const emptyForm: FormState = {
   skuText: '',
   notes: '',
 };
+
+const preparationFilterOptions: Array<{ value: PreparationFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'collected_only', label: '仅采集' },
+  { value: 'draft', label: '准备草稿' },
+  { value: 'ready', label: '准备完成' },
+];
 
 function parseSkuText(text: string) {
   return text
@@ -148,6 +157,12 @@ function preparationStatusLabel(status?: string | null) {
   if (status === 'draft') return '准备草稿';
   if (status === 'ready') return '准备完成';
   return '仅采集';
+}
+
+function preparationStatus(item: Collected1688Item): PreparationFilter {
+  const status = item.metadata?.listingPreparationStatus;
+  if (status === 'draft' || status === 'ready') return status;
+  return 'collected_only';
 }
 
 function preparationIssueText(issues?: string[]) {
@@ -219,6 +234,7 @@ export default function Collect1688Page() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<Collected1688Item[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [preparationFilter, setPreparationFilter] = useState<PreparationFilter>('all');
 
   useEffect(() => {
     fetchRecent();
@@ -251,11 +267,24 @@ export default function Collect1688Page() {
   }
 
   function toggleAllVisible() {
-    if (items.length > 0 && items.every((item) => selectedIds.has(item.id))) {
-      setSelectedIds(new Set());
+    if (filteredItems.length > 0 && filteredItems.every((item) => selectedIds.has(item.id))) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredItems.forEach((item) => next.delete(item.id));
+        return next;
+      });
       return;
     }
-    setSelectedIds(new Set(items.map((item) => item.id)));
+    setSelectedIds((prev) => new Set([...prev, ...filteredItems.map((item) => item.id)]));
+  }
+
+  function selectReadyVisible() {
+    const readyIds = filteredItems.filter((item) => preparationStatus(item) === 'ready').map((item) => item.id);
+    if (!readyIds.length) {
+      toast({ title: '当前筛选下没有准备完成的记录' });
+      return;
+    }
+    setSelectedIds(new Set(readyIds));
   }
 
   function goToPreparation(ids: string[]) {
@@ -308,7 +337,23 @@ export default function Collect1688Page() {
   }
 
   const selectedCount = selectedIds.size;
-  const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.has(item.id));
+  const filteredItems = useMemo(
+    () => items.filter((item) => preparationFilter === 'all' || preparationStatus(item) === preparationFilter),
+    [items, preparationFilter],
+  );
+  const statusCounts = useMemo(() => {
+    const counts: Record<PreparationFilter, number> = {
+      all: items.length,
+      collected_only: 0,
+      draft: 0,
+      ready: 0,
+    };
+    items.forEach((item) => {
+      counts[preparationStatus(item)] += 1;
+    });
+    return counts;
+  }, [items]);
+  const allVisibleSelected = filteredItems.length > 0 && filteredItems.every((item) => selectedIds.has(item.id));
 
   return (
     <div className="space-y-4">
@@ -454,15 +499,32 @@ export default function Collect1688Page() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle className="text-base">最近 1688 采集记录</CardTitle>
             {items.length > 0 && (
-              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  onChange={toggleAllVisible}
-                  className="h-4 w-4 rounded"
-                />
-                全选当前页
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap gap-1">
+                  {preparationFilterOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      variant={preparationFilter === option.value ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setPreparationFilter(option.value)}
+                    >
+                      {option.label}({statusCounts[option.value]})
+                    </Button>
+                  ))}
+                </div>
+                <Button variant="outline" size="sm" onClick={selectReadyVisible}>
+                  选择准备完成
+                </Button>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                    className="h-4 w-4 rounded"
+                  />
+                  全选当前筛选
+                </label>
+              </div>
             )}
           </div>
         </CardHeader>
@@ -473,9 +535,11 @@ export default function Collect1688Page() {
             </div>
           ) : items.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground">暂无 1688 采集记录</div>
+          ) : filteredItems.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">当前筛选下暂无记录</div>
           ) : (
             <div className="space-y-3">
-              {items.map((item) => (
+              {filteredItems.map((item) => (
                 <div key={item.id} className="rounded-md border p-3 flex gap-3">
                   <div className="flex items-start pt-1">
                     <input
