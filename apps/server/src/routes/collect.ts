@@ -184,6 +184,14 @@ function compactHttpUrl(value: unknown): string | null {
   return text;
 }
 
+function normalizeImageUrl(value: unknown): string | null {
+  const text = compactString(value);
+  if (!text) return null;
+  if (text.startsWith('//')) return `https:${text}`;
+  if (/^https?:\/\//i.test(text)) return text;
+  return null;
+}
+
 function extractOzonPriceCheckContext(metadata: unknown) {
   const meta = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? metadata as Record<string, any>
@@ -316,8 +324,8 @@ function parseImageList(images?: string[], imageText?: string): string[] {
     ...(imageText ? imageText.split(/[\n,]/) : []),
   ];
   return Array.from(new Set(values
-    .map((item) => String(item || '').trim())
-    .filter((item) => /^https?:\/\//i.test(item))))
+    .map((item) => normalizeImageUrl(item))
+    .filter((item): item is string => !!item)))
     .slice(0, 30);
 }
 
@@ -408,6 +416,7 @@ function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
     const attrRecord = Object.keys(attrs).length
       ? Object.fromEntries(Object.entries(attrs).map(([key, value]) => [key, String(value || '')]).filter(([, value]) => value))
       : specText ? { 规格: specText } : {};
+    const images = normalize1688SkuImages(item);
     return {
       sku,
       attrs: attrRecord,
@@ -415,9 +424,39 @@ function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
       stock: Number.isFinite(Number(item.stock)) ? Number(item.stock) : null,
       minOrderQty: Number.isFinite(Number(item.minOrderQty)) ? Number(item.minOrderQty) : null,
       grossWeightGrams: Number.isFinite(Number(item.grossWeightGrams)) ? Number(item.grossWeightGrams) : null,
+      ...(images.length ? { images } : {}),
       sourceSkuId: sku,
     };
   });
+}
+
+function normalize1688SkuImages(item: Record<string, unknown>): string[] {
+  const arrayValues = [
+    ...(Array.isArray(item.images) ? item.images : []),
+    ...(Array.isArray(item.imageUrls) ? item.imageUrls : []),
+    ...(Array.isArray(item.skuImages) ? item.skuImages : []),
+    ...(Array.isArray(item.picUrls) ? item.picUrls : []),
+  ];
+  const directValues = [
+    item.imageUrl,
+    item.imgUrl,
+    item.picUrl,
+    item.skuImage,
+    item.skuImageUrl,
+    item.previewImage,
+    item.thumbUrl,
+    item.mainImage,
+  ];
+  const urls = [...arrayValues, ...directValues]
+    .map((value) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const record = value as Record<string, unknown>;
+        return normalizeImageUrl(record.url ?? record.src ?? record.imageUrl ?? record.imgUrl ?? record.picUrl);
+      }
+      return normalizeImageUrl(value);
+    })
+    .filter((value): value is string => !!value);
+  return Array.from(new Set(urls)).slice(0, 8);
 }
 
 export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown, fallbackVariants?: unknown) {
@@ -425,7 +464,23 @@ export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown,
     return Array.isArray(fallbackVariants) ? fallbackVariants as any[] : [];
   }
   if (!Array.isArray(inputVariants)) return [];
-  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>);
+  const fallbackBySku = new Map<string, any>();
+  if (Array.isArray(fallbackVariants)) {
+    for (const variant of fallbackVariants as any[]) {
+      const sku = compactString(variant?.sku ?? variant?.sourceSkuId);
+      if (sku) fallbackBySku.set(sku, variant);
+    }
+  }
+  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>).map((variant) => {
+    if (Array.isArray((variant as any).images) && (variant as any).images.length) {
+      return variant;
+    }
+    const fallback = fallbackBySku.get(variant.sku);
+    const fallbackImages = Array.isArray(fallback?.images)
+      ? parseImageList(fallback.images.map((item: unknown) => String(item || '')))
+      : [];
+    return fallbackImages.length ? { ...variant, images: fallbackImages } : variant;
+  });
 }
 
 function formatAlibaba1688VariantText(variants: any[]): string {

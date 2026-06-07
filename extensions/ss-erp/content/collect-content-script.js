@@ -1831,6 +1831,7 @@
     const minOrderQty = parseLooseNumber(pickFirstValue(item, ["minOrderQty", "minOrderQuantity", "minimumOrderQuantity", "moq", "beginAmount", "startQuantity"]));
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
+    const images = normalizeSkuImages(item);
 
     return {
       skuId: skuId == null ? "" : String(skuId),
@@ -1840,8 +1841,46 @@
       price,
       stock,
       minOrderQty,
-      grossWeightGrams
+      grossWeightGrams,
+      images
     };
+  }
+
+  function normalizeSkuImages(item) {
+    const imageKeys = ["image", "imageUrl", "imgUrl", "picUrl", "skuImage", "skuImageUrl", "previewImage", "thumbUrl", "mainImage"];
+    const arrayKeys = ["images", "imageUrls", "skuImages", "picUrls", "pictures", "photos"];
+    const candidates = [];
+    const directImage = pickFirstValue(item, imageKeys);
+    if (directImage != null) {
+      candidates.push(directImage);
+    }
+    arrayKeys.forEach((key) => {
+      const value = item && item[key];
+      if (Array.isArray(value)) {
+        candidates.push(...value);
+      }
+    });
+
+    const urls = [];
+    candidates.forEach((candidate) => {
+      const value = candidate && typeof candidate === "object"
+        ? pickFirstValue(candidate, ["url", "src", "imageUrl", "imgUrl", "picUrl"])
+        : candidate;
+      const url = normalizeSkuImageUrl(value);
+      if (url && !urls.includes(url)) {
+        urls.push(url);
+      }
+    });
+
+    return urls.slice(0, 8);
+  }
+
+  function normalizeSkuImageUrl(value) {
+    const text = String(value == null ? "" : value).trim();
+    if (!text) return "";
+    if (text.startsWith("//")) return `https:${text}`;
+    if (/^https?:\/\//i.test(text)) return text;
+    return "";
   }
 
   function normalizeSkuAttrs(item) {

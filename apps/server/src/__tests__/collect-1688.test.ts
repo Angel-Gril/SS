@@ -33,7 +33,17 @@ describe('1688 collect helpers', () => {
       supplierYears: 6,
       attributesText: '材质：网布\n颜色: 黑色',
       skuItems: [
-        { skuId: 'sku-red-42', attrs: { 颜色: '红色', 尺码: '42' }, specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650 },
+        {
+          skuId: 'sku-red-42',
+          attrs: { 颜色: '红色', 尺码: '42' },
+          specText: '红色 / 42',
+          price: '26.5',
+          stock: 120,
+          minOrderQty: 2,
+          grossWeightGrams: 650,
+          imageUrl: '//img.example.com/sku-red.jpg',
+          images: ['https://img.example.com/sku-red-2.jpg', 'not-a-url'],
+        },
       ],
       description: '商品详情包含材质、适用场景和包装说明',
       monthlySales: 3000,
@@ -88,6 +98,7 @@ describe('1688 collect helpers', () => {
           stock: 120,
           minOrderQty: 2,
           grossWeightGrams: 650,
+          images: ['https://img.example.com/sku-red-2.jpg', 'https://img.example.com/sku-red.jpg'],
           sourceSkuId: 'sku-red-42',
         },
       ],
@@ -491,7 +502,7 @@ describe('1688 collect helpers', () => {
     ]);
 
     expect(normalizeAlibaba1688PreparationVariants([
-      { skuId: 'sku-red-42', specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650 },
+      { skuId: 'sku-red-42', specText: '红色 / 42', price: '26.5', stock: 120, minOrderQty: 2, grossWeightGrams: 650, skuImageUrl: '//img.example.com/sku-red.jpg' },
     ])).toEqual([
       {
         sku: 'sku-red-42',
@@ -500,6 +511,24 @@ describe('1688 collect helpers', () => {
         stock: 120,
         minOrderQty: 2,
         grossWeightGrams: 650,
+        images: ['https://img.example.com/sku-red.jpg'],
+        sourceSkuId: 'sku-red-42',
+      },
+    ]);
+
+    expect(normalizeAlibaba1688PreparationVariants([
+      { skuId: 'sku-red-42', specText: '红色 / 42', price: '27.5' },
+    ], [
+      { sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5', images: ['https://img.example.com/existing-sku.jpg'] },
+    ])).toEqual([
+      {
+        sku: 'sku-red-42',
+        attrs: { 规格: '红色 / 42' },
+        price: '27.5',
+        stock: null,
+        minOrderQty: null,
+        grossWeightGrams: null,
+        images: ['https://img.example.com/existing-sku.jpg'],
         sourceSkuId: 'sku-red-42',
       },
     ]);
