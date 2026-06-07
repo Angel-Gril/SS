@@ -23,6 +23,7 @@ interface Alibaba1688Variant {
   minOrderQty?: number | null;
   grossWeightGrams?: number | null;
   images?: string[] | null;
+  imageUrl?: string | null;
 }
 
 interface Collected1688Item {
@@ -239,7 +240,7 @@ function variantMetaText(variant: Alibaba1688Variant) {
 }
 
 function variantImageUrl(variant: Alibaba1688Variant) {
-  return validImageUrls(variant.images || [])[0] || '';
+  return validImageUrls([...(variant.images || []), variant.imageUrl || ''])[0] || '';
 }
 
 export default function Collect1688Page() {
