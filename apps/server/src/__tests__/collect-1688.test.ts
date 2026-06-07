@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAlibaba1688CollectRecord, parseAttributeText } from '../routes/collect.js';
+import { buildAlibaba1688CollectRecord, buildAlibaba1688ListingPrefill, parseAttributeText } from '../routes/collect.js';
 
 describe('1688 collect helpers', () => {
   it('parses attribute text into a record', () => {
@@ -56,6 +56,46 @@ describe('1688 collect helpers', () => {
           sourceSkuId: 'sku-red-42',
         },
       ],
+    });
+  });
+
+  it('serializes 1688 collected records for listing preparation without executing mapping', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-1688-1',
+      title: '男士运动鞋',
+      sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/1.jpg'],
+      variants: [{ sku: 'sku-red-42', attrs: { 规格: '红色 / 42' }, price: '26.5' }],
+      notes: '货源备注',
+      metadata: {
+        supplierName: '义乌某某工厂',
+        categoryPath: '鞋类 > 男鞋 > 运动鞋',
+        attributes: { 材质: '网布' },
+        skuCount: 1,
+        categoryMappingStatus: 'deferred_until_listing',
+        listingPreparationStatus: 'collected_only',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(item).toMatchObject({
+      id: 'collect-1688-1',
+      title: '男士运动鞋',
+      sourceProductId: '734567890123',
+      purchasePrice: '25.80',
+      supplierName: '义乌某某工厂',
+      categoryPath: '鞋类 > 男鞋 > 运动鞋',
+      attributes: { 材质: '网布' },
+      skuCount: 1,
+      categoryMappingStatus: 'deferred_until_listing',
+      listingPreparationStatus: 'collected_only',
+      preparedTitleRu: '',
+      targetPriceCny: '',
+      listingNotes: '',
+      createdAt: '2026-06-07T12:00:00.000Z',
     });
   });
 });

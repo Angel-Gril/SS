@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ExternalLink, Loader2, PackagePlus, RefreshCw, Save, ShoppingCart } from 'lucide-react';
+import { ArrowRight, ExternalLink, Loader2, PackagePlus, RefreshCw, Save, ShoppingCart } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -267,6 +267,9 @@ export default function Collect1688Page() {
                     )}
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
+                    <Button size="sm" onClick={() => router.push(`/listing/1688?ids=${encodeURIComponent(item.id)}`)}>
+                      <ArrowRight className="h-4 w-4 mr-1" />上架准备
+                    </Button>
                     {item.sourceUrl && (
                       <Button variant="outline" size="sm" asChild>
                         <a href={item.sourceUrl} target="_blank" rel="noreferrer">

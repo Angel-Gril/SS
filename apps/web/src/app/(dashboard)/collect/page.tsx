@@ -552,6 +552,7 @@ export default function CollectPage() {
   const totalPages = Math.ceil(total / limit);
   const selectedItems = items.filter((i) => selectedIds.has(i.id));
   const selectedHasAlibaba1688 = selectedItems.some((i) => i.sourcePlatform === '1688');
+  const selectedAllAlibaba1688 = selectedItems.length > 0 && selectedItems.every((i) => i.sourcePlatform === '1688');
 
   return (
     <div className="space-y-4">
@@ -584,6 +585,18 @@ export default function CollectPage() {
                 <ImageIcon className="h-4 w-4 mr-1" />打水印
               </Button>
               <div className="flex items-center gap-2 ml-auto">
+                {selectedAllAlibaba1688 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const ids = selectedItems.map((i) => i.id).join(',');
+                      router.push(`/listing/1688?ids=${encodeURIComponent(ids)}`);
+                    }}
+                  >
+                    <ArrowRight className="h-4 w-4 mr-1" />1688上架准备
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"

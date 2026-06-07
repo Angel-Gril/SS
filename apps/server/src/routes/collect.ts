@@ -258,6 +258,46 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   };
 }
 
+export function buildAlibaba1688ListingPrefill(item: {
+  id: string;
+  title: string;
+  sourceUrl?: string | null;
+  sourceProductId?: string | null;
+  purchasePrice?: { toString(): string } | null;
+  currency?: string | null;
+  images?: unknown;
+  variants?: unknown;
+  notes?: string | null;
+  metadata?: unknown;
+  createdAt: Date;
+}) {
+  const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
+  const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+  return {
+    id: item.id,
+    title: item.title,
+    sourceUrl: item.sourceUrl || null,
+    sourceProductId: item.sourceProductId || null,
+    purchasePrice: item.purchasePrice?.toString() ?? null,
+    currency: item.currency || 'CNY',
+    images: Array.isArray(item.images) ? item.images : [],
+    variants,
+    notes: item.notes || '',
+    supplierName: meta.supplierName || null,
+    categoryPath: meta.categoryPath || null,
+    attributes: meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
+      ? meta.attributes
+      : {},
+    skuCount: Number.isFinite(Number(meta.skuCount)) ? Number(meta.skuCount) : variants.length,
+    categoryMappingStatus: meta.categoryMappingStatus || 'deferred_until_listing',
+    listingPreparationStatus: meta.listingPreparationStatus || 'collected_only',
+    preparedTitleRu: meta.preparedTitleRu || '',
+    targetPriceCny: meta.targetPriceCny || '',
+    listingNotes: meta.listingNotes || '',
+    createdAt: item.createdAt.toISOString(),
+  };
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -476,6 +516,83 @@ export async function collectRoutes(app: FastifyInstance) {
       msg: '1688 商品已保存到采集记录，类目映射将在上架时处理',
       data: { id: item.id },
     });
+  });
+
+  app.post('/1688/prefill', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const body = request.body as { ids?: string[] };
+    const ids = Array.from(new Set((body?.ids || []).map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 100);
+    if (!ids.length) return reply.status(400).send({ code: 0, msg: '缺少 ids' });
+
+    const items = await prisma.supplyGoods.findMany({
+      where: { id: { in: ids }, userId },
+    });
+    if (items.length !== ids.length) {
+      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在或无权限' });
+    }
+    const invalid = items.filter((it) => it.sourcePlatform !== '1688');
+    if (invalid.length) {
+      return reply.status(400).send({ code: 0, msg: '只能选择 1688 采集记录进入 1688 上架准备' });
+    }
+
+    const byId = new Map(items.map((it) => [it.id, it]));
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: ids.map((id) => buildAlibaba1688ListingPrefill(byId.get(id)!)),
+    });
+  });
+
+  app.post('/1688/save-preparation', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const body = request.body as {
+      items?: Array<{
+        id?: string;
+        preparedTitleRu?: string;
+        targetPriceCny?: string | number | null;
+        listingNotes?: string;
+      }>;
+    };
+    const rows = (body?.items || []).filter((item) => item?.id).slice(0, 100);
+    if (!rows.length) return reply.status(400).send({ code: 0, msg: '缺少要保存的商品' });
+
+    const ids = Array.from(new Set(rows.map((row) => String(row.id))));
+    const items = await prisma.supplyGoods.findMany({
+      where: { id: { in: ids }, userId },
+    });
+    if (items.length !== ids.length) {
+      return reply.status(404).send({ code: 0, msg: '部分采集记录不存在或无权限' });
+    }
+    if (items.some((item) => item.sourcePlatform !== '1688')) {
+      return reply.status(400).send({ code: 0, msg: '只能保存 1688 采集记录的上架准备草稿' });
+    }
+
+    const byId = new Map(items.map((item) => [item.id, item]));
+    let saved = 0;
+    for (const row of rows) {
+      const item = byId.get(String(row.id))!;
+
+      const meta: any = (item.metadata as any) || {};
+      const title = String(row.preparedTitleRu || '').trim();
+      const notes = String(row.listingNotes || '').trim();
+      const targetPrice = Number(row.targetPriceCny);
+      if (title) meta.preparedTitleRu = title;
+      else delete meta.preparedTitleRu;
+      if (Number.isFinite(targetPrice) && targetPrice > 0) meta.targetPriceCny = String(targetPrice);
+      else delete meta.targetPriceCny;
+      if (notes) meta.listingNotes = notes;
+      else delete meta.listingNotes;
+      meta.listingPreparationStatus = 'draft';
+      meta.categoryMappingStatus = meta.categoryMappingStatus || 'deferred_until_listing';
+
+      await prisma.supplyGoods.update({
+        where: { id: item.id },
+        data: { metadata: meta as any },
+      });
+      saved++;
+    }
+
+    return reply.send({ code: 1, msg: `已保存 ${saved} 条 1688 上架准备草稿`, data: { saved } });
   });
 
   app.post('/batch', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
