@@ -171,6 +171,13 @@ export function isDomesticSupplySourcePlatform(value: unknown): boolean {
   return !!sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform);
 }
 
+function normalizeDomesticSupplySourcePlatform(value: unknown, fallback: string | null = '1688'): string | null {
+  const sourcePlatform = normalizeSourcePlatform(value);
+  return sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform)
+    ? sourcePlatform
+    : fallback;
+}
+
 export function buildCollectSnapshotWhere(userId: string, skus: string[], sourcePlatform?: unknown) {
   const sourcePlatformValue = normalizeSourcePlatform(sourcePlatform) || 'ozon';
   const lookupSkus = Array.from(new Set(skus.map((sku) => normalizeProductId(sku)).filter((sku): sku is string => !!sku)));
@@ -555,16 +562,13 @@ function normalize1688SkuItems(
   } = {},
 ) {
   if (!Array.isArray(items)) return [];
-  const defaultSourcePlatform = normalizeSourcePlatform(options.sourcePlatform) || '1688';
+  const defaultSourcePlatform = normalizeDomesticSupplySourcePlatform(options.sourcePlatform) || '1688';
   const context = options.ozonPriceCheckContext;
   const defaultOzonSku = compactString(context?.sku ?? context?.ozonSku ?? context?.productId);
   const defaultOzonProductId = compactString(context?.productId);
   const defaultOzonOfferId = compactString(context?.offerId);
   return items.slice(0, 200).map((item, index) => {
-    const submittedSourcePlatform = normalizeSourcePlatform(item.sourcePlatform ?? item.platform);
-    const sourcePlatform = submittedSourcePlatform && isDomesticSupplySourcePlatform(submittedSourcePlatform)
-      ? submittedSourcePlatform
-      : defaultSourcePlatform;
+    const sourcePlatform = normalizeDomesticSupplySourcePlatform(item.sourcePlatform ?? item.platform, defaultSourcePlatform) || defaultSourcePlatform;
     const fallbackSku = `${sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase()}-${index + 1}`;
     const explicitSourceSku = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.sourceSku ?? item.source_sku);
     const rawSku = compactString(item.skuId ?? item.sku_id ?? item.sku ?? item.specId ?? item.id);
@@ -653,10 +657,7 @@ export function normalizeAlibaba1688PreparationVariants(
     return Array.isArray(fallbackVariants) ? fallbackVariants as any[] : [];
   }
   if (!Array.isArray(inputVariants)) return [];
-  const optionSourcePlatform = normalizeSourcePlatform(options.sourcePlatform);
-  const sourcePlatform = optionSourcePlatform && isDomesticSupplySourcePlatform(optionSourcePlatform)
-    ? optionSourcePlatform
-    : '1688';
+  const sourcePlatform = normalizeDomesticSupplySourcePlatform(options.sourcePlatform) || '1688';
   const fallbackBySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
@@ -668,10 +669,7 @@ export function normalizeAlibaba1688PreparationVariants(
     const rawInput = (inputVariants as Array<Record<string, unknown>>)[index] || {};
     const hasExplicitSourcePlatform = !!compactString(rawInput.sourcePlatform ?? rawInput.platform);
     const fallback = fallbackBySku.get(variant.sku);
-    const normalizedFallbackSourcePlatform = normalizeSourcePlatform(fallback?.sourcePlatform);
-    const fallbackSourcePlatform = normalizedFallbackSourcePlatform && isDomesticSupplySourcePlatform(normalizedFallbackSourcePlatform)
-      ? normalizedFallbackSourcePlatform
-      : null;
+    const fallbackSourcePlatform = normalizeDomesticSupplySourcePlatform(fallback?.sourcePlatform, null);
     const inherited = {
       ...(fallbackSourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallbackSourcePlatform } : {}),
       ...(fallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: fallback.ozonSku } : {}),
@@ -816,11 +814,11 @@ export function buildAlibaba1688ListingPrefill(item: {
   createdAt: Date;
 }) {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
-  const itemSourcePlatform = normalizeSourcePlatform(item.sourcePlatform) || '1688';
+  const itemSourcePlatform = normalizeDomesticSupplySourcePlatform(item.sourcePlatform) || '1688';
   const variants = Array.isArray(item.variants)
     ? (item.variants as any[]).map((variant) => {
       if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return variant;
-      return { ...variant, sourcePlatform: normalizeSourcePlatform(variant.sourcePlatform) || itemSourcePlatform };
+      return { ...variant, sourcePlatform: normalizeDomesticSupplySourcePlatform(variant.sourcePlatform, itemSourcePlatform) || itemSourcePlatform };
     })
     : [];
   const images = Array.isArray(item.images) ? item.images : [];
@@ -1120,11 +1118,11 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const allVariants = Array.isArray(prefill.variants) && prefill.variants.length
     ? prefill.variants as Array<Record<string, any>>
     : [null];
-  const itemSourcePlatform = normalizeSourcePlatform(prefill.sourcePlatform) || '1688';
+  const itemSourcePlatform = normalizeDomesticSupplySourcePlatform(prefill.sourcePlatform) || '1688';
   const variantEntries = allVariants.map((variant, index) => ({
     variant,
     index,
-    sourcePlatform: normalizeSourcePlatform(variant?.sourcePlatform) || itemSourcePlatform,
+    sourcePlatform: normalizeDomesticSupplySourcePlatform(variant?.sourcePlatform, itemSourcePlatform) || itemSourcePlatform,
     sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`,
   }));
   const offerIds = buildUniqueAlibaba1688DraftOfferIds(variantEntries.map((entry) => ({
@@ -1156,7 +1154,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     const stock = nonNegativeIntegerValue(variant?.stock) ?? 0;
     const sourceTrace: Record<string, unknown> = {
       supplyGoodsId: item.id,
-      sourcePlatform: normalizeSourcePlatform(variant?.sourcePlatform) || itemSourcePlatform,
+      sourcePlatform: normalizeDomesticSupplySourcePlatform(variant?.sourcePlatform, itemSourcePlatform) || itemSourcePlatform,
       sourceProductId: prefill.sourceProductId || null,
       sourceSkuId,
     };
