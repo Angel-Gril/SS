@@ -295,14 +295,15 @@ function normalizeCollectPayloadForEndpoint(payload) {
     return { path: '/api/collect', body: payload || {} };
   }
   const data = payload && typeof payload === 'object' ? payload : {};
+  const sourceProductId = data.sourceProductId || data.productId || data.offerId || data.sourceOfferId || data.itemId || data.goodsId || data.skuId || data.sourceSkuId || data.sku;
   return {
     path: '/api/collect/1688',
     body: {
       title: data.title,
       sourcePlatform: inferDomesticSupplyPlatform(data) || '1688',
       sourceUrl: data.sourceUrl || data.tabUrl,
-      offerId: data.offerId || data.sourceProductId || data.productId || data.sku,
-      sku: data.sourceProductId || data.sku || data.productId,
+      offerId: sourceProductId,
+      sku: sourceProductId,
       images: Array.isArray(data.images) ? data.images : undefined,
       price: data.price,
       priceText: data.priceText || data.price,

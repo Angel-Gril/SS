@@ -97,10 +97,12 @@ test('domestic supply extension collect payloads are routed to the dedicated col
     assert.match(source, /sourcePlatform\s*\|\|\s*data\.platform/);
     assert.match(source, /function\s+inferDomesticSupplyPlatform\(payload\)/);
     assert.match(source, /sourcePlatform:\s*inferDomesticSupplyPlatform\(data\)\s*\|\|\s*'1688'/);
-    assert.match(source, /offerId:\s*data\.offerId\s*\|\|\s*data\.sourceProductId\s*\|\|\s*data\.productId\s*\|\|\s*data\.sku/);
-    assert.match(source, /sku:\s*data\.sourceProductId\s*\|\|\s*data\.sku\s*\|\|\s*data\.productId/);
+    assert.match(source, /function\s+normalizeCollectPayload(?:ForEndpoint)?\([^)]*\)\s*\{[\s\S]*?(?:var|const)\s+sourceProductId\s*=\s*data\.sourceProductId\s*\|\|\s*data\.productId\s*\|\|\s*data\.offerId\s*\|\|\s*data\.sourceOfferId\s*\|\|\s*data\.itemId\s*\|\|\s*data\.goodsId\s*\|\|\s*data\.skuId\s*\|\|\s*data\.sourceSkuId\s*\|\|\s*data\.sku[\s\S]*?offerId:\s*sourceProductId/);
+    assert.match(source, /offerId:\s*sourceProductId/);
+    assert.match(source, /sku:\s*sourceProductId/);
     assert.doesNotMatch(source, /sourcePlatform:\s*data\.sourcePlatform\s*\|\|\s*data\.platform\s*\|\|\s*'1688'/);
     assert.doesNotMatch(source, /offerId:\s*data\.offerId\s*\|\|\s*data\.productId\s*\|\|\s*data\.sourceProductId\s*\|\|\s*data\.sku/);
+    assert.doesNotMatch(source, /sku:\s*data\.sourceProductId\s*\|\|\s*data\.sku\s*\|\|\s*data\.productId/);
     assert.match(source, /return\s+'taobao'/);
     assert.match(source, /return\s+'tmall'/);
     assert.match(source, /return\s+'jd'/);
