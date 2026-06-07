@@ -87,7 +87,24 @@ test('1688 extension collect payloads are routed to the dedicated collect endpoi
     assert.match(source, /minOrderQty/);
     assert.match(source, /shippingInfo/);
     assert.match(source, /customizationInfo/);
+    assert.match(source, /priceCheckContext/);
   }
+});
+
+test('Ozon product panel can start a 1688 price check workflow', () => {
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const serviceWorker = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+
+  assert.match(collectScript, /data-role="price-check-1688"/);
+  assert.match(collectScript, /1688核价/);
+  assert.match(collectScript, /ss-erp:start-1688-price-check/);
+  assert.match(collectScript, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
+  assert.match(collectScript, /buildPriceCheckSummary/);
+  assert.match(serviceWorker, /ss-erp:start-1688-price-check/);
+  assert.match(serviceWorker, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
+  assert.match(serviceWorker, /build1688SearchUrlFromOzonContext/);
+  assert.match(serviceWorker, /s\.1688\.com\/youyuan\/index\.htm/);
+  assert.match(serviceWorker, /chrome\.tabs\.create/);
 });
 
 test('1688 product pages expose a direct collect-to-ERP action', () => {

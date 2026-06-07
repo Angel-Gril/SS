@@ -54,6 +54,7 @@
           extractor: data.extractor || null,
           warnings: data.warnings || [],
           debug: data.debug || null,
+          priceCheckContext: data.priceCheckContext || null,
           collectedAt: data.collectedAt || null,
         },
       },

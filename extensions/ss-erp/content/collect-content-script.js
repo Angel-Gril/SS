@@ -5,6 +5,7 @@
   const PAGE_STATE_TIMEOUT_MS = 8000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
   const ALIBABA_1688_COLLECT_ID = "ss-erp-1688-collect-panel";
+  const OZON_1688_PRICE_CHECK_CONTEXT_KEY = "ss-erp:ozon-1688-price-check-context";
   let lastOzonUrl = "";
 
   injectPageBridge();
@@ -466,6 +467,10 @@
 
         try {
           const payload = await collectCurrentPage();
+          const priceCheckContext = await loadPriceCheckContext();
+          if (priceCheckContext) {
+            payload.priceCheckContext = priceCheckContext;
+          }
           const response = await sendRuntimeMessage({
             type: "ozon-calc:collect-to-erp",
             payload
@@ -486,6 +491,50 @@
         }
       });
 
+      const contextBox = document.createElement("div");
+      contextBox.style.cssText = [
+        "display:none",
+        "max-width:260px",
+        "border-radius:10px",
+        "background:#fff7ed",
+        "border:1px solid #fed7aa",
+        "box-shadow:0 8px 24px rgba(15,23,42,0.10)",
+        "color:#7c2d12",
+        "font-size:12px",
+        "line-height:1.45",
+        "padding:9px 10px",
+        "text-align:left"
+      ].join(";");
+
+      loadPriceCheckContext().then((context) => {
+        if (!context) return;
+        contextBox.style.display = "block";
+        contextBox.innerHTML = [
+          '<div style="font-weight:700;margin-bottom:4px;">Ozon 核价上下文</div>',
+          `<div style="font-weight:600;max-width:236px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(context.title || "")}">${escapeHtml(context.title || "未命名 Ozon 商品")}</div>`,
+          `<div style="margin-top:3px;color:#9a3412;">售价：${escapeHtml(formatPriceForContext(context.price, context.currency))}</div>`,
+          '<button type="button" data-role="price-check-calc" style="margin-top:7px;border:0;border-radius:7px;background:#ea580c;color:#fff;padding:6px 9px;cursor:pointer;font-size:12px;font-weight:700;">计算当前页采购价</button>'
+        ].join("");
+        const calc = contextBox.querySelector("[data-role='price-check-calc']");
+        if (calc) {
+          calc.addEventListener("click", async () => {
+            calc.disabled = true;
+            calc.textContent = "计算中...";
+            try {
+              const current = await collectCurrentPage();
+              const summary = buildPriceCheckSummary(context, current);
+              setStatus(summary, false);
+              calc.textContent = "已计算";
+            } catch (error) {
+              calc.disabled = false;
+              calc.textContent = "计算当前页采购价";
+              setStatus(error && error.message ? error.message : String(error), true);
+            }
+          });
+        }
+      }).catch(() => {});
+
+      panel.appendChild(contextBox);
       panel.appendChild(button);
       panel.appendChild(status);
       document.body.appendChild(panel);
@@ -595,6 +644,7 @@
             <div style="font-size:11px;color:rgba(255,255,255,0.72);margin-top:2px;">SKU ${productId}</div>
           </div>
           <div style="display:flex;gap:5px;">
+            <button type="button" data-role="price-check-1688" title="保存当前 Ozon 商品并打开 1688 搜索核价" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">1688核价</button>
             <button type="button" data-role="copy" title="复制数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">复制</button>
             <button type="button" data-role="refresh" title="刷新数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">刷新</button>
             <button type="button" data-role="collapse" style="border:0;background:rgba(255,255,255,0.12);color:#fff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;font-weight:700;transition:background 0.15s;">◀</button>
@@ -653,6 +703,35 @@
       }, 200);
     });
 
+    panel.querySelector("[data-role='price-check-1688']").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const btn = panel.querySelector("[data-role='price-check-1688']");
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "打开中...";
+      btn.style.background = "rgba(22,163,74,0.7)";
+      try {
+        const payload = await collectCurrentPage();
+        const context = buildOzonPriceCheckContext(payload, panel._ozonData, productId);
+        const response = await sendRuntimeMessage({
+          type: "ss-erp:start-1688-price-check",
+          payload: context
+        });
+        if (!response || !response.ok) {
+          throw new Error((response && (response.error || response.msg)) || "打开 1688 核价失败");
+        }
+        btn.textContent = "已打开";
+      } catch (error) {
+        btn.disabled = false;
+        btn.textContent = original;
+        btn.style.background = "rgba(255,255,255,0.18)";
+        const status = panel.querySelector("[data-role='status']");
+        if (status) {
+          status.textContent = error && error.message ? error.message : String(error);
+        }
+      }
+    });
+
     panel.querySelector("[data-role='copy']").addEventListener("click", (e) => {
       e.stopPropagation();
       const data = panel._ozonData;
@@ -682,6 +761,64 @@
     });
 
     return panel;
+  }
+
+  function buildOzonPriceCheckContext(payload, insights, productId) {
+    const item = insights && insights.item ? insights.item : {};
+    const images = Array.isArray(payload && payload.images) ? payload.images : [];
+    return {
+      sourcePlatform: "ozon",
+      productId: String((payload && payload.productId) || productId || ""),
+      title: String((payload && payload.title) || item.name || document.querySelector("h1")?.textContent || "").trim(),
+      price: payload && payload.price != null && payload.price !== "" ? payload.price : item.avgPrice,
+      currency: (payload && payload.currency) || "RUB",
+      images: images.slice(0, 8),
+      sourceUrl: (payload && payload.sourceUrl) || location.href,
+      avgPriceRub: item.avgPrice || null,
+      soldCount30d: item.soldCount || null,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  function loadPriceCheckContext() {
+    return new Promise((resolve) => {
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+        resolve(null);
+        return;
+      }
+      chrome.storage.local.get([OZON_1688_PRICE_CHECK_CONTEXT_KEY], (result) => {
+        const context = result && result[OZON_1688_PRICE_CHECK_CONTEXT_KEY];
+        if (!context || typeof context !== "object") {
+          resolve(null);
+          return;
+        }
+        const createdAt = Date.parse(context.createdAt || "");
+        if (Number.isFinite(createdAt) && Date.now() - createdAt > 24 * 60 * 60 * 1000) {
+          resolve(null);
+          return;
+        }
+        resolve(context);
+      });
+    });
+  }
+
+  function buildPriceCheckSummary(ozonContext, alibabaProduct) {
+    const ozonPrice = Number(ozonContext && ozonContext.price);
+    const ozonCurrency = String((ozonContext && ozonContext.currency) || "RUB").toUpperCase();
+    const purchasePrice = Number(alibabaProduct && alibabaProduct.price);
+    const purchaseCurrency = String((alibabaProduct && alibabaProduct.currency) || "CNY").toUpperCase();
+    const ozonText = formatPriceForContext(ozonContext && ozonContext.price, ozonCurrency);
+    const purchaseText = formatPriceForContext(alibabaProduct && alibabaProduct.price, purchaseCurrency);
+    if (Number.isFinite(ozonPrice) && Number.isFinite(purchasePrice) && ozonCurrency === purchaseCurrency) {
+      return `核价：Ozon ${ozonText} / 1688 ${purchaseText} / 差额 ${formatPriceForContext(ozonPrice - purchasePrice, ozonCurrency)}`;
+    }
+    return `核价：Ozon ${ozonText} / 1688采购 ${purchaseText}（币种不同，后续按汇率和费用核算利润）`;
+  }
+
+  function formatPriceForContext(price, currency) {
+    const value = Number(price);
+    const suffix = String(currency || "").toUpperCase() || "CNY";
+    return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)} ${suffix}` : `- ${suffix}`;
   }
 
   function fillOzonPanel(panel, data) {

@@ -27,6 +27,7 @@ const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
 const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
 const OZON_COMMISSION_SNAPSHOT_KEY = 'ozon-calculator:commission-snapshot';
 const OZON_FX_SNAPSHOT_KEY = 'ozon-calculator:fx-snapshot';
+const OZON_1688_PRICE_CHECK_CONTEXT_KEY = 'ss-erp:ozon-1688-price-check-context';
 const OZON_COMMISSION_API_URLS = [
   'https://global-help.ozon.com/document-manager-api/global-help/api/v3/document/public/by-path?path=%2Fcommissions%2Fozon-fees%2Fcommissions&lang=zh&childDocsRegion=CHN',
   'https://global-help.ozon.com/document-manager-api/global-help/api/v3/document/public/by-path?path=%2Fcommissions%2Fozon-fees%2Fcommissions&lang=en&childDocsRegion=CHN',
@@ -312,10 +313,39 @@ function normalizeCollectPayloadForEndpoint(payload) {
         extractor: data.extractor || null,
         warnings: data.warnings || [],
         debug: data.debug || null,
+        priceCheckContext: data.priceCheckContext || null,
         collectedAt: data.collectedAt || null,
       },
     },
   };
+}
+
+function normalizeOzonPriceCheckContext(payload) {
+  const data = payload && typeof payload === 'object' ? payload : {};
+  const images = Array.isArray(data.images)
+    ? data.images.map((url) => toText(url).trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 8)
+    : [];
+  return {
+    sourcePlatform: 'ozon',
+    productId: toText(data.productId).trim(),
+    title: toText(data.title).trim().slice(0, 300),
+    price: data.price != null && data.price !== '' ? data.price : null,
+    currency: toText(data.currency || 'RUB').trim().toUpperCase() || 'RUB',
+    images,
+    sourceUrl: normalizeEndpoint(data.sourceUrl),
+    avgPriceRub: data.avgPriceRub != null ? data.avgPriceRub : null,
+    soldCount30d: data.soldCount30d != null ? data.soldCount30d : null,
+    createdAt: safeIsoDate(data.createdAt || new Date().toISOString()),
+  };
+}
+
+function build1688SearchUrlFromOzonContext(context) {
+  const imageUrl = Array.isArray(context.images) ? context.images.find((url) => /^https?:\/\//i.test(url)) : '';
+  if (imageUrl) {
+    return 'https://s.1688.com/youyuan/index.htm?tab=imageSearch&imageAddress=' + encodeURIComponent(imageUrl);
+  }
+  const keyword = toText(context.title || context.productId || '').trim();
+  return 'https://s.1688.com/selloffer/offer_search.htm?keywords=' + encodeURIComponent(keyword || 'ozon');
 }
 
 function buildCaptureCounts(entries) {
@@ -734,6 +764,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return chrome.storage.local.set({ [OZON_CALC_ERP_QUEUE_KEY]: queue });
     }).then(() => {
       sendResponse({ ok: true });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:start-1688-price-check') {
+    Promise.resolve().then(() => {
+      const context = normalizeOzonPriceCheckContext(message.payload || {});
+      if (!context.title && !context.productId && !context.images.length) {
+        throw new Error('缺少 Ozon 商品信息，无法打开 1688 核价');
+      }
+      const url = build1688SearchUrlFromOzonContext(context);
+      return chrome.storage.local.set({ [OZON_1688_PRICE_CHECK_CONTEXT_KEY]: context }).then(() => (
+        chrome.tabs.create({ url, active: true })
+      )).then((tab) => {
+        sendResponse({ ok: true, url, tabId: tab && tab.id });
+      });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
