@@ -1678,8 +1678,19 @@ export async function collectRoutes(app: FastifyInstance) {
     if (items.length !== ids.length) {
       return reply.status(404).send({ code: 0, msg: '部分采集记录不存在或无权限' });
     }
-    if (items.some((item) => !isDomesticSupplySourcePlatform(item.sourcePlatform))) {
-      return reply.status(400).send({ code: 0, msg: '只能保存货源采集记录的上架准备草稿' });
+    const invalid = items.filter((item) => !isDomesticSupplySourcePlatform(item.sourcePlatform));
+    if (invalid.length) {
+      return reply.status(400).send({
+        code: 0,
+        msg: '只能保存货源采集记录的上架准备草稿',
+        data: {
+          invalid: invalid.map((item) => ({
+            id: item.id,
+            title: item.title,
+            sourcePlatform: item.sourcePlatform,
+          })),
+        },
+      });
     }
     const blockedActiveListingItems = items
       .map((item) => ({

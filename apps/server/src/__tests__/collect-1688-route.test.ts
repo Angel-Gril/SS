@@ -410,6 +410,69 @@ describe('1688 collect route', () => {
     expect(supplyGoodsMock.update).not.toHaveBeenCalled();
   });
 
+  it('reports invalid records when saving preparation payloads include Ozon collect records', async () => {
+    supplyGoodsMock.findMany.mockResolvedValue([
+      {
+        id: 'supply-record',
+        userId: 'user-1',
+        title: '淘宝货源',
+        sourcePlatform: 'taobao',
+        metadata: { sourceKind: 'alibaba1688' },
+      },
+      {
+        id: 'ozon-record',
+        userId: 'user-1',
+        title: 'Ozon 采集记录',
+        sourcePlatform: 'ozon',
+        metadata: { sourceKind: 'ozon' },
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688/save-preparation',
+      payload: {
+        items: [
+          {
+            id: 'supply-record',
+            preparedTitleRu: 'Товар Taobao',
+            targetPriceCny: '129',
+            ozonCategoryId: 17028922,
+            ozonTypeId: 93410,
+          },
+          {
+            id: 'ozon-record',
+            preparedTitleRu: 'Товар Ozon',
+            targetPriceCny: '199',
+            ozonCategoryId: 17028922,
+            ozonTypeId: 93410,
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '只能保存货源采集记录的上架准备草稿',
+      data: {
+        invalid: [
+          {
+            id: 'ozon-record',
+            title: 'Ozon 采集记录',
+            sourcePlatform: 'ozon',
+          },
+        ],
+      },
+    });
+    expect(supplyGoodsMock.update).not.toHaveBeenCalled();
+  });
+
   it('rejects listing draft generation when selected records include Ozon collect records', async () => {
     supplyGoodsMock.findMany.mockResolvedValueOnce([
       {
