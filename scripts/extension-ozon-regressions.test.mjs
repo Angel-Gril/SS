@@ -86,6 +86,22 @@ test('1688 extension collect payloads are routed to the dedicated collect endpoi
   }
 });
 
+test('1688 product pages expose a direct collect-to-ERP action', () => {
+  const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const detailScript = manifest.content_scripts.find((entry) =>
+    (entry.matches || []).includes('https://detail.1688.com/*')
+      && (entry.js || []).includes('content/collect-content-script.js')
+  );
+
+  assert.ok(detailScript, 'collect-content-script must be injected on 1688 detail pages');
+  assert.match(collectScript, /initAlibaba1688CollectButton/);
+  assert.match(collectScript, /采集到ERP/);
+  assert.match(collectScript, /ozon-calc:collect-to-erp/);
+  assert.ok(collectScript.includes('detail\\.1688\\.com'));
+  assert.ok(collectScript.includes('offer\\/\\d+\\.html'));
+});
+
 test('Ozon shop analytics sync falls back from charts table to what-to-sell data', () => {
   const source = readRepoFile('extensions', 'ss-erp', 'background', 'collect-background.js');
 

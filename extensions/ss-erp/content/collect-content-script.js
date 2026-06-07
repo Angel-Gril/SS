@@ -4,10 +4,12 @@
   const BRIDGE_ID = "spb-self-hosted-page-bridge";
   const PAGE_STATE_TIMEOUT_MS = 8000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
+  const ALIBABA_1688_COLLECT_ID = "ss-erp-1688-collect-panel";
   let lastOzonUrl = "";
 
   injectPageBridge();
   initOzonOverlay();
+  initAlibaba1688CollectButton();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.type !== "spb-self-hosted:collect-product") {
@@ -390,6 +392,110 @@
 
   function isOzonProductPage() {
     return /^https:\/\/(?:www\.)?ozon\.(?:ru|kz|by)\/product\//i.test(location.href);
+  }
+
+  function isAlibaba1688ProductPage() {
+    return /^https:\/\/detail\.1688\.com\/offer\/\d+\.html/i.test(location.href);
+  }
+
+  function initAlibaba1688CollectButton() {
+    if (!isAlibaba1688ProductPage()) {
+      return;
+    }
+
+    const render = () => {
+      if (document.getElementById(ALIBABA_1688_COLLECT_ID)) {
+        return;
+      }
+
+      const panel = document.createElement("section");
+      panel.id = ALIBABA_1688_COLLECT_ID;
+      panel.style.cssText = [
+        "position:fixed",
+        "right:18px",
+        "top:168px",
+        "z-index:2147483646",
+        "display:flex",
+        "flex-direction:column",
+        "gap:6px",
+        "align-items:flex-end",
+        "font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif"
+      ].join(";");
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "采集到ERP";
+      button.style.cssText = [
+        "border:0",
+        "border-radius:8px",
+        "background:#0f766e",
+        "color:#fff",
+        "box-shadow:0 8px 22px rgba(15,118,110,0.25)",
+        "font-size:13px",
+        "font-weight:700",
+        "line-height:1",
+        "padding:10px 12px",
+        "cursor:pointer"
+      ].join(";");
+
+      const status = document.createElement("div");
+      status.style.cssText = [
+        "display:none",
+        "max-width:220px",
+        "border-radius:8px",
+        "background:#fff",
+        "border:1px solid rgba(15,23,42,0.12)",
+        "box-shadow:0 8px 24px rgba(15,23,42,0.12)",
+        "color:#334155",
+        "font-size:12px",
+        "padding:7px 9px",
+        "text-align:right"
+      ].join(";");
+
+      function setStatus(text, isError) {
+        status.textContent = text || "";
+        status.style.display = text ? "block" : "none";
+        status.style.color = isError ? "#b91c1c" : "#334155";
+      }
+
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        button.style.opacity = "0.72";
+        button.textContent = "采集中...";
+        setStatus("", false);
+
+        try {
+          const payload = await collectCurrentPage();
+          const response = await sendRuntimeMessage({
+            type: "ozon-calc:collect-to-erp",
+            payload
+          });
+
+          if (!response || !response.ok) {
+            throw new Error((response && (response.error || response.msg)) || "采集失败");
+          }
+
+          button.textContent = "已采集";
+          button.style.background = "#16a34a";
+          setStatus("已保存到ERP采集记录", false);
+        } catch (error) {
+          button.disabled = false;
+          button.style.opacity = "1";
+          button.textContent = "采集到ERP";
+          setStatus(error && error.message ? error.message : String(error), true);
+        }
+      });
+
+      panel.appendChild(button);
+      panel.appendChild(status);
+      document.body.appendChild(panel);
+    };
+
+    if (document.body) {
+      render();
+    } else {
+      window.addEventListener("DOMContentLoaded", render, { once: true });
+    }
   }
 
   function parseOzonProductIdFromUrl(url) {
