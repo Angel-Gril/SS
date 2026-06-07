@@ -470,15 +470,29 @@ export function buildAlibaba1688ListingPrefill(item: {
 }) {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+  const images = Array.isArray(item.images) ? item.images : [];
+  const purchasePrice = item.purchasePrice?.toString() ?? null;
+  const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
+    ? meta.attributes as Record<string, unknown>
+    : {};
+  const sourceDataIssues = Array.isArray(meta.sourceDataIssues)
+    ? meta.sourceDataIssues
+    : getAlibaba1688SourceDataIssues({
+      images,
+      priceText: purchasePrice,
+      skuItems: variants,
+      description: meta.description,
+      attributes,
+    });
   const ozonPriceCheckContext = extractOzonPriceCheckContext(meta);
   const priceCheckEstimate = buildPriceCheckEstimate(
     ozonPriceCheckContext,
-    item.purchasePrice?.toString(),
+    purchasePrice,
     item.currency || 'CNY',
   );
   const priceSuggestion = buildAlibaba1688PriceSuggestion(
     ozonPriceCheckContext,
-    item.purchasePrice?.toString(),
+    purchasePrice,
     item.currency || 'CNY',
   );
   return {
@@ -486,9 +500,9 @@ export function buildAlibaba1688ListingPrefill(item: {
     title: item.title,
     sourceUrl: item.sourceUrl || null,
     sourceProductId: item.sourceProductId || null,
-    purchasePrice: item.purchasePrice?.toString() ?? null,
+    purchasePrice,
     currency: item.currency || 'CNY',
-    images: Array.isArray(item.images) ? item.images : [],
+    images,
     variants,
     notes: item.notes || '',
     description: meta.description || '',
@@ -504,11 +518,9 @@ export function buildAlibaba1688ListingPrefill(item: {
     dimensionsText: meta.dimensionsText || '',
     minOrderQty: Number.isFinite(Number(meta.minOrderQty)) ? Number(meta.minOrderQty) : null,
     logisticsText: meta.logisticsText || '',
-    attributes: meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
-      ? meta.attributes
-      : {},
+    attributes,
     skuCount: Number.isFinite(Number(meta.skuCount)) ? Number(meta.skuCount) : variants.length,
-    sourceDataIssues: Array.isArray(meta.sourceDataIssues) ? meta.sourceDataIssues : [],
+    sourceDataIssues,
     categoryMappingStatus: meta.categoryMappingStatus || 'deferred_until_listing',
     listingPreparationStatus: meta.listingPreparationStatus || 'collected_only',
     listingPreparationIssues: Array.isArray(meta.listingPreparationIssues) ? meta.listingPreparationIssues : [],

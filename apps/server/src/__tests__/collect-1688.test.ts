@@ -144,6 +144,34 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('infers 1688 source data issues for old listing preparation records', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-1688-old',
+      title: '旧货源记录',
+      sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+      sourceProductId: '734567890123',
+      purchasePrice: null,
+      currency: 'CNY',
+      images: [],
+      variants: [],
+      notes: null,
+      metadata: {
+        sourceKind: 'alibaba1688',
+        categoryMappingStatus: 'deferred_until_listing',
+        listingPreparationStatus: 'collected_only',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(item.sourceDataIssues).toEqual([
+      'missing_source_images',
+      'missing_purchase_price',
+      'missing_sku_items',
+      'missing_description',
+      'missing_attributes',
+    ]);
+  });
+
   it('serializes 1688 collected records for listing preparation without executing mapping', () => {
     const item = buildAlibaba1688ListingPrefill({
       id: 'collect-1688-1',
