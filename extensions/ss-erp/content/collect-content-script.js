@@ -508,12 +508,17 @@
 
       loadPriceCheckContext().then((context) => {
         if (!context) return;
+        const sourceLink = /^https?:\/\//i.test(String(context.sourceUrl || "")) ? String(context.sourceUrl) : "";
         contextBox.style.display = "block";
         contextBox.innerHTML = [
           '<div style="font-weight:700;margin-bottom:4px;">Ozon 核价上下文</div>',
           `<div style="font-weight:600;max-width:236px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(context.title || "")}">${escapeHtml(context.title || "未命名 Ozon 商品")}</div>`,
           `<div style="margin-top:3px;color:#9a3412;">售价：${escapeHtml(formatPriceForContext(context.price, context.currency))}</div>`,
-          '<button type="button" data-role="price-check-calc" style="margin-top:7px;border:0;border-radius:7px;background:#ea580c;color:#fff;padding:6px 9px;cursor:pointer;font-size:12px;font-weight:700;">计算当前页采购价</button>'
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;">',
+          '<button type="button" data-role="price-check-calc" style="border:0;border-radius:7px;background:#ea580c;color:#fff;padding:6px 9px;cursor:pointer;font-size:12px;font-weight:700;">计算当前页采购价</button>',
+          sourceLink ? `<a href="${escapeHtml(sourceLink)}" target="_blank" rel="noreferrer" style="border:1px solid #fdba74;border-radius:7px;background:#fff;color:#9a3412;padding:5px 8px;text-decoration:none;font-size:12px;font-weight:700;">打开Ozon</a>` : "",
+          '<button type="button" data-role="price-check-clear" style="border:1px solid #fdba74;border-radius:7px;background:#fff;color:#9a3412;padding:5px 8px;cursor:pointer;font-size:12px;font-weight:700;">清除</button>',
+          '</div>'
         ].join("");
         const calc = contextBox.querySelector("[data-role='price-check-calc']");
         if (calc) {
@@ -530,6 +535,15 @@
               calc.textContent = "计算当前页采购价";
               setStatus(error && error.message ? error.message : String(error), true);
             }
+          });
+        }
+        const clear = contextBox.querySelector("[data-role='price-check-clear']");
+        if (clear) {
+          clear.addEventListener("click", async () => {
+            clear.disabled = true;
+            await clearPriceCheckContext();
+            contextBox.remove();
+            setStatus("已清除 Ozon 核价上下文", false);
           });
         }
       }).catch(() => {});
@@ -799,6 +813,16 @@
         }
         resolve(context);
       });
+    });
+  }
+
+  function clearPriceCheckContext() {
+    return new Promise((resolve) => {
+      if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+        resolve();
+        return;
+      }
+      chrome.storage.local.remove([OZON_1688_PRICE_CHECK_CONTEXT_KEY], () => resolve());
     });
   }
 

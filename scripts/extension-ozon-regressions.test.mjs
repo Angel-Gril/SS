@@ -100,6 +100,8 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
   assert.match(collectScript, /ss-erp:start-1688-price-check/);
   assert.match(collectScript, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
   assert.match(collectScript, /buildPriceCheckSummary/);
+  assert.match(collectScript, /data-role="price-check-clear"/);
+  assert.match(collectScript, /clearPriceCheckContext/);
   assert.match(serviceWorker, /ss-erp:start-1688-price-check/);
   assert.match(serviceWorker, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
   assert.match(serviceWorker, /build1688SearchUrlFromOzonContext/);
