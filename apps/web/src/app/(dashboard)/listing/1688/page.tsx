@@ -34,6 +34,7 @@ interface Alibaba1688ListingItem {
   id: string;
   title: string;
   sourceUrl: string | null;
+  sourcePlatform: string | null;
   sourceProductId: string | null;
   purchasePrice: string | null;
   currency: string;
@@ -144,6 +145,19 @@ const preparationFilterOptions: Array<{ value: PreparationFilter; label: string 
   { value: 'draft', label: '待补资料' },
   { value: 'ready', label: '准备完成' },
 ];
+
+const SOURCE_PLATFORM_LABELS: Record<string, string> = {
+  '1688': '1688',
+  taobao: '淘宝',
+  tmall: '天猫',
+  jd: '京东',
+  pinduoduo: '拼多多',
+  pdd: '拼多多',
+};
+
+function sourcePlatformLabel(sourcePlatform?: string | null) {
+  return sourcePlatform ? SOURCE_PLATFORM_LABELS[sourcePlatform] || sourcePlatform : '货源';
+}
 
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
@@ -364,7 +378,7 @@ export default function Alibaba1688ListingPage() {
         setItems(res.data);
         setDirtyItemIds(new Set());
       } else {
-        toast({ title: res.msg || '加载 1688 上架准备数据失败', variant: 'destructive' });
+        toast({ title: res.msg || '加载货源上架准备数据失败', variant: 'destructive' });
       }
       setLoading(false);
     });
@@ -495,7 +509,7 @@ export default function Alibaba1688ListingPage() {
     });
     setSaving(false);
     if (res.code === 1) {
-      toast({ title: res.msg || '已保存 1688 上架准备草稿' });
+      toast({ title: res.msg || '已保存货源上架准备草稿' });
       if (res.data?.items?.length) {
         const updatedItems = new Map(res.data.items.map((item) => [item.id, item]));
         setItems((prev) => prev.map((item) => updatedItems.get(item.id) || item));
@@ -572,7 +586,7 @@ export default function Alibaba1688ListingPage() {
         items: draftItems,
       });
       if (res.code === 1) {
-        toast({ title: res.msg || `已提交 ${draftItems.length} 条 1688 上架草稿到 Ozon` });
+        toast({ title: res.msg || `已提交 ${draftItems.length} 条货源上架草稿到 Ozon` });
         markSubmittedListingItems(draftItems);
         setListingJobsRefreshToken((value) => value + 1);
       } else {
@@ -598,7 +612,7 @@ export default function Alibaba1688ListingPage() {
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
-          <p className="text-sm text-muted-foreground mt-1">暂无可准备的 1688 采集记录</p>
+          <p className="text-sm text-muted-foreground mt-1">暂无可准备的货源采集记录</p>
         </div>
         <Card>
           <CardContent className="py-12 text-center">
@@ -617,7 +631,7 @@ export default function Alibaba1688ListingPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688 上架准备</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {ids.length ? `共 ${items.length} 件商品` : `最近 ${items.length} 条 1688 采集记录`} · 当前显示 {filteredItems.length} 条 · 待翻译 · 待类目映射 · 待属性生成
+            {ids.length ? `共 ${items.length} 件商品` : `最近 ${items.length} 条货源采集记录`} · 当前显示 {filteredItems.length} 条 · 待翻译 · 待类目映射 · 待属性生成
           </p>
         </div>
         <div className="flex gap-2">
@@ -667,7 +681,7 @@ export default function Alibaba1688ListingPage() {
       {filteredItems.length === 0 && (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            当前筛选下暂无 1688 上架准备记录
+            当前筛选下暂无货源上架准备记录
           </CardContent>
         </Card>
       )}
@@ -683,7 +697,7 @@ export default function Alibaba1688ListingPage() {
             <CardTitle className="text-base flex items-center gap-2">
               <Tags className="h-4 w-4" />
               <span className="truncate">{item.title}</span>
-              <Badge variant="outline">1688</Badge>
+              <Badge variant="outline">{sourcePlatformLabel(item.sourcePlatform)}</Badge>
               <Badge variant="secondary">类目映射待上架</Badge>
               {dirtyItemIds.has(item.id) && <Badge variant="outline">未保存</Badge>}
               <Badge variant={currentPreparationStatus(item) === 'ready' ? 'default' : 'outline'}>
@@ -709,7 +723,7 @@ export default function Alibaba1688ListingPage() {
               <div className="min-w-0 flex-1 space-y-2 text-sm">
                 <div className="flex gap-3 flex-wrap text-muted-foreground">
                   <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
-                  <span>1688 Offer: {item.sourceProductId || '-'}</span>
+                  <span>货源ID: {item.sourceProductId || '-'}</span>
                   <span>SKU: {item.skuCount || item.variants.length}</span>
                   <span>{formatDate(item.createdAt)}</span>
                 </div>

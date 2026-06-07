@@ -450,6 +450,7 @@ describe('1688 collect helpers', () => {
     const item = buildAlibaba1688ListingPrefill({
       id: 'collect-taobao-1',
       title: '淘宝货源',
+      sourcePlatform: 'taobao',
       sourceProductId: 'tb-998877',
       purchasePrice: { toString: () => '19.90' },
       currency: 'CNY',
@@ -470,6 +471,7 @@ describe('1688 collect helpers', () => {
     });
 
     expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  | https://img.example.com/tb-red.jpg | ozon-sku-red | taobao');
+    expect(item.sourcePlatform).toBe('taobao');
   });
 
   it('serializes editable SKU text from the source SKU id before legacy sku', () => {

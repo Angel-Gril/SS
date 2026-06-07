@@ -272,3 +272,19 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.doesNotMatch(collect1688Page, /new\s+URLSearchParams\(\{\s*sourcePlatform:\s*'1688'/);
   assert.doesNotMatch(collect1688Page, /<Badge variant="outline">1688<\/Badge>/);
 });
+
+test('1688 listing preparation page shows real domestic source platforms', () => {
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(listingPage, /sourcePlatform:\s*string\s*\|\s*null/);
+  assert.match(listingPage, /function\s+sourcePlatformLabel\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
+  assert.match(listingPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.match(listingPage, /货源ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
+  assert.match(listingPage, /加载货源上架准备数据失败/);
+  assert.match(listingPage, /已保存货源上架准备草稿/);
+  assert.match(listingPage, /暂无可准备的货源采集记录/);
+  assert.match(listingPage, /最近 \$\{items\.length\} 条货源采集记录/);
+  assert.match(listingPage, /当前筛选下暂无货源上架准备记录/);
+  assert.doesNotMatch(listingPage, /<Badge variant="outline">1688<\/Badge>/);
+  assert.doesNotMatch(listingPage, /1688 Offer:/);
+});

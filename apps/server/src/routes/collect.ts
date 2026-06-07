@@ -719,6 +719,7 @@ export function buildAlibaba1688ListingPrefill(item: {
   title: string;
   status?: string | null;
   sourceUrl?: string | null;
+  sourcePlatform?: string | null;
   sourceProductId?: string | null;
   purchasePrice?: { toString(): string } | null;
   currency?: string | null;
@@ -760,6 +761,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     id: item.id,
     title: item.title,
     sourceUrl: item.sourceUrl || null,
+    sourcePlatform: item.sourcePlatform || '1688',
     sourceProductId: item.sourceProductId || null,
     purchasePrice,
     currency: item.currency || 'CNY',
