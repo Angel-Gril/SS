@@ -595,7 +595,7 @@ export default function Collect1688Page() {
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label className="text-xs">货源商品链接</Label>
-              <Input value={form.sourceUrl} onChange={(e) => update('sourceUrl', e.target.value)} placeholder="https://detail.1688.com/offer/... / 淘宝 / 京东商品链接" />
+              <Input value={form.sourceUrl} onChange={(e) => update('sourceUrl', e.target.value)} placeholder="https://detail.1688.com/offer/... / 淘宝 / 天猫 / 京东 / 拼多多商品链接" />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">采购价</Label>

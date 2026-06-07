@@ -280,6 +280,7 @@ test('supply goods management accepts all domestic supply platform labels', () =
   assert.match(supplyPage, /tmall:\s*'天猫'/);
   assert.match(supplyPage, /jd:\s*'京东'/);
   assert.match(supplyPage, /pdd:\s*'拼多多'/);
+  assert.match(supplyPage, /placeholder="https:\/\/detail\.1688\.com\/offer\/\.\.\. \/ 淘宝 \/ 天猫 \/ 京东 \/ 拼多多商品链接"/);
 });
 
 test('1688 collect page lists domestic supply records with real source platforms', () => {
@@ -317,7 +318,7 @@ test('1688 collect page can create records for selected domestic source platform
     assert.match(collect1688Page, new RegExp(`<option value="${platform}">`));
   }
   assert.match(collect1688Page, /<Label className="text-xs">货源商品链接<\/Label>/);
-  assert.match(collect1688Page, /placeholder="https:\/\/detail\.1688\.com\/offer\/\.\.\. \/ 淘宝 \/ 京东商品链接"/);
+  assert.match(collect1688Page, /placeholder="https:\/\/detail\.1688\.com\/offer\/\.\.\. \/ 淘宝 \/ 天猫 \/ 京东 \/ 拼多多商品链接"/);
 });
 
 test('1688 listing preparation page shows real domestic source platforms', () => {

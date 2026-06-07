@@ -218,7 +218,7 @@ function CreateSupplyDialog({ open, onClose, onCreated }: { open: boolean; onClo
           </div>
           <div className="space-y-1">
             <Label className="text-xs">源链接</Label>
-            <Input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="https://detail.1688.com/..." />
+            <Input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="https://detail.1688.com/offer/... / 淘宝 / 天猫 / 京东 / 拼多多商品链接" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
