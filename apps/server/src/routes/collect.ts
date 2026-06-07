@@ -154,12 +154,16 @@ function normalizeProductId(value: unknown): string | null {
   return text || null;
 }
 
+function normalizeSourcePlatform(value: unknown): string | null {
+  return normalizeProductId(value)?.toLowerCase() || null;
+}
+
 export function getSupplyGoodsLookupId(item: { sourceProductId?: string | null; sku?: string | null }): string | null {
   return normalizeProductId(item.sourceProductId) || normalizeProductId(item.sku);
 }
 
 export function isDomesticSupplySourcePlatform(value: unknown): boolean {
-  const sourcePlatform = compactString(value)?.toLowerCase();
+  const sourcePlatform = normalizeSourcePlatform(value);
   return !!sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform);
 }
 
@@ -179,10 +183,11 @@ export function buildCollectSnapshotWhere(userId: string, skus: string[], source
 export function buildCollectListWhere(userId: string, query: { status?: string; search?: string; sourcePlatform?: string }) {
   const where: Record<string, unknown> = { userId };
   if (query.status) where.status = query.status;
-  if (query.sourcePlatform === 'domestic-supply') {
+  const sourcePlatform = normalizeSourcePlatform(query.sourcePlatform);
+  if (sourcePlatform === 'domestic-supply') {
     where.sourcePlatform = { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST };
-  } else if (query.sourcePlatform) {
-    where.sourcePlatform = query.sourcePlatform;
+  } else if (sourcePlatform) {
+    where.sourcePlatform = sourcePlatform;
   }
   if (query.search) {
     where.OR = [
@@ -255,7 +260,7 @@ function extractDomesticSupplyProductIdFromUrl(sourceUrl: unknown, sourcePlatfor
     const pathMatch = url.pathname.match(/(?:^|\/)(\d{5,})(?:\.html)?$/i);
     if (pathMatch?.[1]) return pathMatch[1];
   }
-  const platform = compactString(sourcePlatform)?.toLowerCase();
+  const platform = normalizeSourcePlatform(sourcePlatform);
   if (platform === '1688' || /\.1688\.com/i.test(text)) {
     const offerMatch = text.match(/\/offer\/(\d{5,})(?:\.html)?/i);
     if (offerMatch?.[1]) return offerMatch[1];
@@ -534,13 +539,13 @@ function normalize1688SkuItems(
   } = {},
 ) {
   if (!Array.isArray(items)) return [];
-  const defaultSourcePlatform = compactString(options.sourcePlatform) || '1688';
+  const defaultSourcePlatform = normalizeSourcePlatform(options.sourcePlatform) || '1688';
   const context = options.ozonPriceCheckContext;
   const defaultOzonSku = compactString(context?.sku ?? context?.ozonSku ?? context?.productId);
   const defaultOzonProductId = compactString(context?.productId);
   const defaultOzonOfferId = compactString(context?.offerId);
   return items.slice(0, 200).map((item, index) => {
-    const sourcePlatform = compactString(item.sourcePlatform ?? item.platform) || defaultSourcePlatform;
+    const sourcePlatform = normalizeSourcePlatform(item.sourcePlatform ?? item.platform) || defaultSourcePlatform;
     const fallbackSku = `${sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase()}-${index + 1}`;
     const sku = compactString(item.skuId ?? item.sku ?? item.specId ?? item.id) || fallbackSku;
     const sourceSkuId = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.skuId ?? item.sku ?? item.specId ?? item.id) || sku;
@@ -627,7 +632,7 @@ export function normalizeAlibaba1688PreparationVariants(
     return Array.isArray(fallbackVariants) ? fallbackVariants as any[] : [];
   }
   if (!Array.isArray(inputVariants)) return [];
-  const sourcePlatform = compactString(options.sourcePlatform) || '1688';
+  const sourcePlatform = normalizeSourcePlatform(options.sourcePlatform) || '1688';
   const fallbackBySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
@@ -639,8 +644,9 @@ export function normalizeAlibaba1688PreparationVariants(
     const rawInput = (inputVariants as Array<Record<string, unknown>>)[index] || {};
     const hasExplicitSourcePlatform = !!compactString(rawInput.sourcePlatform ?? rawInput.platform);
     const fallback = fallbackBySku.get(variant.sku);
+    const fallbackSourcePlatform = normalizeSourcePlatform(fallback?.sourcePlatform);
     const inherited = {
-      ...(fallback?.sourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallback.sourcePlatform } : {}),
+      ...(fallbackSourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallbackSourcePlatform } : {}),
       ...(fallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: fallback.ozonSku } : {}),
       ...(fallback?.ozonProductId && !(variant as any).ozonProductId ? { ozonProductId: fallback.ozonProductId } : {}),
       ...(fallback?.ozonOfferId && !(variant as any).ozonOfferId ? { ozonOfferId: fallback.ozonOfferId } : {}),
@@ -687,7 +693,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
 }
 
 export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688CollectSchema>) {
-  const sourcePlatform = compactString(input.sourcePlatform) || '1688';
+  const sourcePlatform = normalizeSourcePlatform(input.sourcePlatform) || '1688';
   const offerIdFromUrl = extractDomesticSupplyProductIdFromUrl(input.sourceUrl, sourcePlatform);
   const offerId = compactString(input.offerId) || offerIdFromUrl || compactString(input.sku);
   const images = parseImageList(input.images, input.imageText);
@@ -777,11 +783,11 @@ export function buildAlibaba1688ListingPrefill(item: {
   createdAt: Date;
 }) {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
-  const itemSourcePlatform = compactString(item.sourcePlatform) || '1688';
+  const itemSourcePlatform = normalizeSourcePlatform(item.sourcePlatform) || '1688';
   const variants = Array.isArray(item.variants)
     ? (item.variants as any[]).map((variant) => {
       if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return variant;
-      return compactString(variant.sourcePlatform) ? variant : { ...variant, sourcePlatform: itemSourcePlatform };
+      return { ...variant, sourcePlatform: normalizeSourcePlatform(variant.sourcePlatform) || itemSourcePlatform };
     })
     : [];
   const images = Array.isArray(item.images) ? item.images : [];
@@ -1081,11 +1087,11 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   const allVariants = Array.isArray(prefill.variants) && prefill.variants.length
     ? prefill.variants as Array<Record<string, any>>
     : [null];
-  const itemSourcePlatform = compactString(prefill.sourcePlatform) || '1688';
+  const itemSourcePlatform = normalizeSourcePlatform(prefill.sourcePlatform) || '1688';
   const variantEntries = allVariants.map((variant, index) => ({
     variant,
     index,
-    sourcePlatform: compactString(variant?.sourcePlatform) || itemSourcePlatform,
+    sourcePlatform: normalizeSourcePlatform(variant?.sourcePlatform) || itemSourcePlatform,
     sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`,
   }));
   const offerIds = buildUniqueAlibaba1688DraftOfferIds(variantEntries.map((entry) => ({
@@ -1117,7 +1123,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     const stock = nonNegativeIntegerValue(variant?.stock) ?? 0;
     const sourceTrace: Record<string, unknown> = {
       supplyGoodsId: item.id,
-      sourcePlatform: compactString(variant?.sourcePlatform) || itemSourcePlatform,
+      sourcePlatform: normalizeSourcePlatform(variant?.sourcePlatform) || itemSourcePlatform,
       sourceProductId: prefill.sourceProductId || null,
       sourceSkuId,
     };
