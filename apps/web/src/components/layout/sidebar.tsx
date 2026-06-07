@@ -91,6 +91,7 @@ const navigation: NavItem[] = [
     icon: Upload,
     roles: ['ADMIN', 'USER'],
     children: [
+      { label: '1688采集上品', href: '/collect/1688' },
       { label: 'SKU批量采集', href: '/collect/batch' },
       { label: 'SKU采集跟卖', href: '/collect' },
       { label: 'SKU采集改款', href: '/listing' },

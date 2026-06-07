@@ -31,6 +31,30 @@ const collectSchema = z.object({
   sourceProductId: z.string().optional(),
 });
 
+const alibaba1688CollectSchema = z.object({
+  title: z.string().min(1),
+  sourceUrl: z.string().optional(),
+  offerId: z.string().optional(),
+  sku: z.string().optional(),
+  images: z.array(z.string()).optional(),
+  imageText: z.string().optional(),
+  price: z.union([z.string(), z.number()]).optional(),
+  priceText: z.string().optional(),
+  currency: z.string().optional(),
+  categoryPath: z.string().optional(),
+  shopName: z.string().optional(),
+  supplierName: z.string().optional(),
+  monthlySales: z.union([z.string(), z.number()]).optional(),
+  grossWeightGrams: z.union([z.string(), z.number()]).optional(),
+  attributes: z.record(z.string()).optional(),
+  attributesText: z.string().optional(),
+  skuItems: z.array(z.record(z.unknown())).optional(),
+  variants: z.array(z.record(z.unknown())).optional(),
+  description: z.string().optional(),
+  notes: z.string().optional(),
+  raw: z.unknown().optional(),
+});
+
 export function containsCjkText(value: unknown): boolean {
   return CJK_TEXT_RE.test(String(value || ''));
 }
@@ -138,6 +162,102 @@ export function buildCollectSnapshot(item: {
   };
 }
 
+function compactString(value: unknown): string | null {
+  const text = value == null ? '' : String(value).trim();
+  return text || null;
+}
+
+function parseImageList(images?: string[], imageText?: string): string[] {
+  const values = [
+    ...(Array.isArray(images) ? images : []),
+    ...(imageText ? imageText.split(/[\n,]/) : []),
+  ];
+  return Array.from(new Set(values
+    .map((item) => String(item || '').trim())
+    .filter((item) => /^https?:\/\//i.test(item))))
+    .slice(0, 30);
+}
+
+export function parseAttributeText(text?: string): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const line of String(text || '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/[:：]/);
+    if (parts.length < 2) continue;
+    const key = parts.shift()!.trim();
+    const value = parts.join(':').trim();
+    if (key && value) output[key] = value;
+  }
+  return output;
+}
+
+function normalize1688SkuItems(items?: Array<Record<string, unknown>>) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 200).map((item, index) => {
+    const sku = compactString(item.skuId ?? item.sku ?? item.specId ?? item.id) || `1688-${index + 1}`;
+    const attrs = item.attrs && typeof item.attrs === 'object' && !Array.isArray(item.attrs)
+      ? item.attrs as Record<string, unknown>
+      : {};
+    const specText = compactString(item.specText ?? item.specName ?? item.name);
+    const attrRecord = Object.keys(attrs).length
+      ? Object.fromEntries(Object.entries(attrs).map(([key, value]) => [key, String(value || '')]).filter(([, value]) => value))
+      : specText ? { 规格: specText } : {};
+    return {
+      sku,
+      attrs: attrRecord,
+      price: compactString(item.price ?? item.salePrice ?? item.finalPrice),
+      stock: Number.isFinite(Number(item.stock)) ? Number(item.stock) : null,
+      minOrderQty: Number.isFinite(Number(item.minOrderQty)) ? Number(item.minOrderQty) : null,
+      grossWeightGrams: Number.isFinite(Number(item.grossWeightGrams)) ? Number(item.grossWeightGrams) : null,
+      sourceSkuId: sku,
+    };
+  });
+}
+
+export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688CollectSchema>) {
+  const offerIdFromUrl = String(input.sourceUrl || '').match(/offer\/(\d+)\.html/i)?.[1] || null;
+  const offerId = compactString(input.offerId) || offerIdFromUrl || compactString(input.sku);
+  const images = parseImageList(input.images, input.imageText);
+  const attributes = {
+    ...parseAttributeText(input.attributesText),
+    ...(input.attributes || {}),
+  };
+  const skuItems = normalize1688SkuItems(input.skuItems?.length ? input.skuItems : input.variants);
+  const supplierName = compactString(input.supplierName) || compactString(input.shopName);
+  const weight = Number(input.grossWeightGrams);
+  const notes = [
+    input.description ? String(input.description).slice(0, 500) : '',
+    input.notes ? String(input.notes).slice(0, 500) : '',
+  ].filter(Boolean).join('\n') || null;
+
+  return {
+    title: input.title.trim(),
+    sourceUrl: compactString(input.sourceUrl),
+    sourcePlatform: '1688',
+    sourceProductId: offerId,
+    sku: offerId,
+    images,
+    priceText: compactString(input.priceText ?? input.price),
+    currency: compactString(input.currency) || 'CNY',
+    notes,
+    variants: skuItems,
+    metadata: {
+      sourceKind: 'alibaba1688',
+      offerId,
+      categoryPath: compactString(input.categoryPath),
+      supplierName,
+      monthlySales: input.monthlySales ?? null,
+      grossWeightGrams: Number.isFinite(weight) ? weight : null,
+      attributes,
+      skuCount: skuItems.length,
+      categoryMappingStatus: 'deferred_until_listing',
+      listingPreparationStatus: 'collected_only',
+      raw: input.raw ?? null,
+    },
+  };
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -229,10 +349,11 @@ export async function collectRoutes(app: FastifyInstance) {
 
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { status?: string; search?: string; offset?: string; limit?: string };
+    const query = request.query as { status?: string; search?: string; sourcePlatform?: string; offset?: string; limit?: string };
 
     const where: Record<string, unknown> = { userId };
     if (query.status) where.status = query.status;
+    if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
     if (query.search) {
       where.OR = [
         { title: { contains: query.search, mode: 'insensitive' } },
@@ -309,6 +430,52 @@ export async function collectRoutes(app: FastifyInstance) {
     });
 
     return reply.send({ code: 1, msg: '采集成功', data: { id: item.id } });
+  });
+
+  app.post('/1688', { bodyLimit: 5 * 1024 * 1024 }, async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = alibaba1688CollectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const normalized = buildAlibaba1688CollectRecord(parsed.data);
+    const priceInfo = await resolveCollectedPrice(normalized.priceText || undefined, normalized.currency, normalized.sourceUrl || undefined);
+    const metadata = {
+      ...normalized.metadata,
+      priceText: normalized.priceText,
+      originalCurrency: priceInfo.originalCurrency,
+      exchangeRateUsed: priceInfo.exchangeRateUsed,
+      titleNeedsReview: true,
+    };
+
+    const item = await prisma.supplyGoods.create({
+      data: {
+        user: { connect: { id: userId } },
+        title: normalized.title,
+        sourceUrl: normalized.sourceUrl,
+        sourcePlatform: normalized.sourcePlatform,
+        sourceProductId: normalized.sourceProductId,
+        sku: normalized.sku,
+        images: normalized.images.length ? normalized.images : undefined,
+        purchasePrice: priceInfo.purchasePriceCny,
+        currency: 'CNY',
+        originalPrice: priceInfo.originalPrice,
+        originalCurrency: priceInfo.originalCurrency,
+        exchangeRateUsed: priceInfo.exchangeRateUsed,
+        priceNeedsReview: priceInfo.needsReview,
+        notes: normalized.notes,
+        metadata: metadata as any,
+        variants: normalized.variants.length ? (normalized.variants as any) : undefined,
+        status: 'collected',
+      },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: '1688 商品已保存到采集记录，类目映射将在上架时处理',
+      data: { id: item.id },
+    });
   });
 
   app.post('/batch', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
@@ -682,6 +849,15 @@ export async function collectRoutes(app: FastifyInstance) {
 
     if (!items.length) {
       return reply.send({ code: 0, msg: '未找到有效商品' });
+    }
+
+    const alibabaItems = items.filter((it) => it.sourcePlatform === '1688');
+    if (alibabaItems.length) {
+      const sample = alibabaItems.slice(0, 3).map((it) => it.title).join('、');
+      return reply.status(400).send({
+        code: 0,
+        msg: `1688 采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖/复制接口。请先进入 1688 上架准备流程完成翻译、类目映射和属性生成：${sample}`,
+      });
     }
 
     // 货币校验：上架价格统一按 CNY 处理（店铺合同货币 CNY；后端不做汇率换算）

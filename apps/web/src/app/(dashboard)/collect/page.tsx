@@ -550,6 +550,8 @@ export default function CollectPage() {
   }
 
   const totalPages = Math.ceil(total / limit);
+  const selectedItems = items.filter((i) => selectedIds.has(i.id));
+  const selectedHasAlibaba1688 = selectedItems.some((i) => i.sourcePlatform === '1688');
 
   return (
     <div className="space-y-4">
@@ -582,10 +584,29 @@ export default function CollectPage() {
                 <ImageIcon className="h-4 w-4 mr-1" />打水印
               </Button>
               <div className="flex items-center gap-2 ml-auto">
-                <Button size="sm" variant="outline" onClick={handleGoToListing}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (selectedHasAlibaba1688) {
+                      toast({ title: '1688 记录需要先走 1688 上架准备流程，不能使用 Ozon 改款入口', variant: 'destructive' });
+                      return;
+                    }
+                    handleGoToListing();
+                  }}
+                >
                   <ArrowRight className="h-4 w-4 mr-1" />SKU 采集改款
                 </Button>
-                <Button size="sm" onClick={() => setShowPublishDialog(true)}>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (selectedHasAlibaba1688) {
+                      toast({ title: '1688 记录仅保存货源信息，上架前需要先完成翻译、类目映射和属性生成', variant: 'destructive' });
+                      return;
+                    }
+                    setShowPublishDialog(true);
+                  }}
+                >
                   <Upload className="h-4 w-4 mr-1" />一键上架OZON
                 </Button>
               </div>
