@@ -185,6 +185,7 @@ function parseSkuText(text: string): Array<Alibaba1688Variant & { skuId: string;
         grossWeightGrams: parts[5] ? Number(parts[5]) : null,
         imageUrl: parts[6] || undefined,
         ozonSku: parts[7] || undefined,
+        sourcePlatform: parts[8] || undefined,
       };
     });
 }
@@ -936,7 +937,7 @@ export default function Alibaba1688ListingPage() {
                   className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                   value={item.skuText || ''}
                   onChange={(e) => updateItemSkuText(item.id, e.target.value)}
-                  placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | SKU图片URL | Ozon SKU\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42'}
+                  placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | SKU图片URL | Ozon SKU | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | 1688'}
                 />
               </div>
               <div className="space-y-1 md:col-span-2">

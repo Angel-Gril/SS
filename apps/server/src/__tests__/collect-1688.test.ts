@@ -379,6 +379,32 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('serializes non-1688 source platforms in editable SKU text', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-taobao-1',
+      title: '淘宝货源',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-sku-red',
+          sourceSkuId: 'tb-sku-red',
+          sourcePlatform: 'taobao',
+          ozonSku: 'ozon-sku-red',
+          attrs: { 规格: '红色' },
+          price: '19.9',
+          images: ['https://img.example.com/tb-red.jpg'],
+        },
+      ],
+      metadata: { sourceKind: 'alibaba1688' },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(item.skuText).toBe('tb-sku-red | 红色 | 19.9 |  |  |  | https://img.example.com/tb-red.jpg | ozon-sku-red | taobao');
+  });
+
   it('builds 1688 listing price suggestions without writing preparation metadata', () => {
     expect(buildAlibaba1688PriceSuggestion(
       { title: 'Ozon item', productId: '123', sourceUrl: null, price: '1590', currency: 'RUB' },

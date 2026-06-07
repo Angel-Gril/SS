@@ -24,8 +24,10 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
     assert.match(source, /ozonSku\?:\s*string\s*\|\s*null/);
     assert.match(source, /imageUrl:\s*parts\[6\]\s*\|\|\s*undefined/);
     assert.match(source, /ozonSku:\s*parts\[7\]\s*\|\|\s*undefined/);
+    assert.match(source, /sourcePlatform:\s*parts\[8\]\s*\|\|\s*undefined/);
     assert.match(source, /SKU图片URL/);
     assert.match(source, /Ozon SKU/);
+    assert.match(source, /货源平台/);
     assert.match(source, /function\s+sourceSkuLabel\(variant:\s*Alibaba1688Variant\)/);
     assert.match(source, /variant\.sourcePlatform\s*\?\s*`\$\{variant\.sourcePlatform\}\s+SKU`\s*:\s*'货源SKU'/);
     assert.match(source, /variant\.sourceSkuId\s*\?\s*`\$\{sourceSkuLabel\(variant\)\}\s+\$\{variant\.sourceSkuId\}`/);

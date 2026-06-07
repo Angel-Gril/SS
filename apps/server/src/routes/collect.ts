@@ -581,7 +581,8 @@ function formatAlibaba1688VariantText(variants: any[]): string {
     const imageUrl = Array.isArray(variant?.images)
       ? normalizeImageUrl(variant.images[0]) || ''
       : '';
-    return [
+    const sourcePlatform = compactString(variant?.sourcePlatform);
+    const values = [
       variant?.sku || variant?.sourceSkuId || '',
       specText,
       variant?.price ?? '',
@@ -590,7 +591,9 @@ function formatAlibaba1688VariantText(variants: any[]): string {
       variant?.grossWeightGrams ?? '',
       imageUrl,
       variant?.ozonSku ?? '',
-    ].map((value) => String(value || '')).join(' | ');
+    ];
+    if (sourcePlatform && sourcePlatform !== '1688') values.push(sourcePlatform);
+    return values.map((value) => String(value || '')).join(' | ');
   }).join('\n');
 }
 
