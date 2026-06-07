@@ -1439,22 +1439,64 @@ export async function collectRoutes(app: FastifyInstance) {
       })
       : null;
 
-    const item = existing
-      ? await prisma.supplyGoods.update({
+    let item;
+    if (existing) {
+      const existingImages = Array.isArray((existing as any).images) ? (existing as any).images as unknown[] : [];
+      const existingVariants = Array.isArray((existing as any).variants) ? (existing as any).variants as unknown[] : [];
+      const existingMeta = (existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata))
+        ? existing.metadata as Record<string, any>
+        : {};
+      const updateData: Record<string, any> = { ...data };
+      const mergedMetadata = mergeAlibaba1688RecollectMetadata(existing.metadata, metadata);
+
+      if (!normalized.images.length && existingImages.length) delete updateData.images;
+      if (!normalized.variants.length && existingVariants.length) delete updateData.variants;
+      if (priceInfo.purchasePriceCny == null && (existing as any).purchasePrice != null) {
+        delete updateData.purchasePrice;
+        delete updateData.originalPrice;
+        delete updateData.originalCurrency;
+        delete updateData.exchangeRateUsed;
+        delete updateData.priceNeedsReview;
+      }
+      if (!compactString((normalized.metadata as any).description) && compactString(existingMeta.description)) {
+        mergedMetadata.description = existingMeta.description;
+      }
+      const nextAttributes = mergedMetadata.attributes && typeof mergedMetadata.attributes === 'object' && !Array.isArray(mergedMetadata.attributes)
+        ? mergedMetadata.attributes as Record<string, unknown>
+        : {};
+      const existingAttributes = existingMeta.attributes && typeof existingMeta.attributes === 'object' && !Array.isArray(existingMeta.attributes)
+        ? existingMeta.attributes as Record<string, unknown>
+        : {};
+      if (!Object.keys(nextAttributes).length && Object.keys(existingAttributes).length) {
+        mergedMetadata.attributes = existingAttributes;
+      }
+      if (!normalized.variants.length && Number.isFinite(Number(existingMeta.skuCount))) {
+        mergedMetadata.skuCount = existingMeta.skuCount;
+      }
+
+      const finalImages = normalized.images.length ? normalized.images : existingImages;
+      const finalVariants = normalized.variants.length ? normalized.variants : existingVariants;
+      const finalPurchasePrice = priceInfo.purchasePriceCny ?? (existing as any).purchasePrice?.toString?.() ?? (existing as any).purchasePrice;
+      updateData.metadata = refreshAlibaba1688SourceDataIssues(mergedMetadata, {
+        images: finalImages,
+        purchasePrice: finalPurchasePrice,
+        variants: finalVariants,
+      }) as any;
+      updateData.status = existing.status || 'collected';
+
+      item = await prisma.supplyGoods.update({
         where: { id: existing.id },
-        data: {
-          ...data,
-          metadata: mergeAlibaba1688RecollectMetadata(existing.metadata, metadata) as any,
-          status: existing.status || 'collected',
-        },
-      })
-      : await prisma.supplyGoods.create({
+        data: updateData,
+      });
+    } else {
+      item = await prisma.supplyGoods.create({
         data: {
           user: { connect: { id: userId } },
           ...data,
           status: 'collected',
         },
       });
+    }
 
     return reply.send({
       code: 1,

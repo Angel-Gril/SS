@@ -127,4 +127,59 @@ describe('1688 collect route', () => {
       }),
     });
   });
+
+  it('preserves existing complete source data when a duplicate recollect payload is incomplete', async () => {
+    resolveCollectedPriceMock.mockResolvedValueOnce({
+      purchasePriceCny: null,
+      originalPrice: null,
+      originalCurrency: null,
+      exchangeRateUsed: null,
+      needsReview: true,
+    });
+    supplyGoodsMock.findFirst.mockResolvedValue({
+      id: 'existing-complete-record',
+      status: 'collected',
+      images: ['https://img.example.com/old-main.jpg'],
+      variants: [
+        { sku: 'tb-red', sourceSkuId: 'tb-red', sourcePlatform: 'taobao', price: '19.9' },
+      ],
+      purchasePrice: { toString: () => '19.90' },
+      metadata: {
+        sourceKind: 'alibaba1688',
+        description: '旧的完整货源详情',
+        attributes: { 材质: '棉' },
+        sourceDataIssues: [],
+        skuCount: 1,
+      },
+    });
+    supplyGoodsMock.update.mockResolvedValue({ id: 'existing-complete-record' });
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '淘宝偶发缺字段货源商品',
+        sourcePlatform: 'taobao',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const updateData = supplyGoodsMock.update.mock.calls[0]?.[0]?.data;
+    expect(updateData).toBeTruthy();
+    expect(Object.prototype.hasOwnProperty.call(updateData, 'images')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(updateData, 'variants')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(updateData, 'purchasePrice')).toBe(false);
+    expect(updateData.metadata).toMatchObject({
+      description: '旧的完整货源详情',
+      attributes: { 材质: '棉' },
+      skuCount: 1,
+      sourceDataIssues: [],
+    });
+  });
 });
