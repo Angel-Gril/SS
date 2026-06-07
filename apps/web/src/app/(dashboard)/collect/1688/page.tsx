@@ -12,12 +12,22 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 
+interface Alibaba1688Variant {
+  sku?: string | null;
+  attrs?: Record<string, string> | null;
+  price?: string | number | null;
+  stock?: number | null;
+  minOrderQty?: number | null;
+  grossWeightGrams?: number | null;
+}
+
 interface Collected1688Item {
   id: string;
   title: string;
   sourceUrl: string | null;
   sourceProductId: string | null;
   images: string[] | null;
+  variants?: Alibaba1688Variant[] | null;
   purchasePrice: string | null;
   currency: string;
   createdAt: string;
@@ -185,6 +195,21 @@ function sourcePackageText(metadata?: Collected1688Item['metadata']) {
     metadata.monthlySales ? `月销 ${metadata.monthlySales}` : '',
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : '';
+}
+
+function variantSpecText(variant: Alibaba1688Variant) {
+  const attrs = variant.attrs || {};
+  const text = Object.values(attrs).filter(Boolean).join(' / ');
+  return text || variant.sku || '默认规格';
+}
+
+function variantMetaText(variant: Alibaba1688Variant) {
+  return [
+    variant.price != null && variant.price !== '' ? `¥${variant.price}` : '',
+    variant.stock != null ? `库存 ${variant.stock}` : '',
+    variant.minOrderQty != null ? `起订 ${variant.minOrderQty}` : '',
+    variant.grossWeightGrams != null ? `${variant.grossWeightGrams}g` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 export default function Collect1688Page() {
@@ -496,6 +521,19 @@ export default function Collect1688Page() {
                     {item.metadata?.logisticsText && (
                       <div className="text-xs text-muted-foreground truncate">
                         物流: {item.metadata.logisticsText}
+                      </div>
+                    )}
+                    {!!item.variants?.length && (
+                      <div className="mt-2 space-y-1">
+                        {item.variants.slice(0, 3).map((variant, index) => (
+                          <div key={`${variant.sku || 'sku'}-${index}`} className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-xs">
+                            <span className="min-w-0 truncate">{variantSpecText(variant)}</span>
+                            <span className="shrink-0 text-muted-foreground">{variantMetaText(variant)}</span>
+                          </div>
+                        ))}
+                        {item.variants.length > 3 && (
+                          <div className="text-xs text-muted-foreground">还有 {item.variants.length - 3} 个 SKU 未展开显示</div>
+                        )}
                       </div>
                     )}
                     {item.metadata?.ozonPriceCheckContext && (
