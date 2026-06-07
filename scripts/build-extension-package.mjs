@@ -37,6 +37,7 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://*.ozon.kz/*',
   'https://*.ozon.by/*',
   'https://detail.1688.com/*',
+  'https://s.1688.com/*',
   'https://trade.1688.com/*',
   'https://mobile.pinduoduo.com/*',
   'https://mobile.yangkeduo.com/*',

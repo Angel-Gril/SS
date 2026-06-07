@@ -117,6 +117,12 @@ test('domestic supply extension collect payloads are routed to the dedicated col
   }
 });
 
+test('cloud extension package keeps 1688 search permissions for price checks', () => {
+  const buildScript = readRepoFile('scripts', 'build-extension-package.mjs');
+
+  assert.match(buildScript, /'https:\/\/s\.1688\.com\/\*'/);
+});
+
 test('Ozon product panel can start a 1688 price check workflow', () => {
   const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
