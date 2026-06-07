@@ -581,11 +581,16 @@ function normalize1688SkuImages(item: Record<string, unknown>): string[] {
   return Array.from(new Set(urls)).slice(0, 8);
 }
 
-export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown, fallbackVariants?: unknown) {
+export function normalizeAlibaba1688PreparationVariants(
+  inputVariants?: unknown,
+  fallbackVariants?: unknown,
+  options: { sourcePlatform?: string | null } = {},
+) {
   if (inputVariants === undefined) {
     return Array.isArray(fallbackVariants) ? fallbackVariants as any[] : [];
   }
   if (!Array.isArray(inputVariants)) return [];
+  const sourcePlatform = compactString(options.sourcePlatform) || '1688';
   const fallbackBySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
@@ -593,7 +598,7 @@ export function normalizeAlibaba1688PreparationVariants(inputVariants?: unknown,
       if (sku) fallbackBySku.set(sku, variant);
     }
   }
-  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform: '1688' }).map((variant, index) => {
+  return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform }).map((variant, index) => {
     const rawInput = (inputVariants as Array<Record<string, unknown>>)[index] || {};
     const hasExplicitSourcePlatform = !!compactString(rawInput.sourcePlatform ?? rawInput.platform);
     const fallback = fallbackBySku.get(variant.sku);
@@ -1380,7 +1385,9 @@ export async function collectRoutes(app: FastifyInstance) {
     for (const row of rows) {
       const item = byId.get(String(row.id))!;
       const nextImages = normalizeAlibaba1688PreparationImages(row.images, item.images);
-      const nextVariants = normalizeAlibaba1688PreparationVariants(row.variants, item.variants);
+      const nextVariants = normalizeAlibaba1688PreparationVariants(row.variants, item.variants, {
+        sourcePlatform: item.sourcePlatform,
+      });
       const nextPurchasePriceRaw = row.purchasePrice !== undefined
         ? row.purchasePrice
         : item.purchasePrice?.toString();

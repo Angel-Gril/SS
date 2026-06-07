@@ -83,7 +83,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
 
   assert.match(collectRoute, /app\.post\('\/1688\/listing-drafts'/);
   assert.match(collectRoute, /buildAlibaba1688OzonListingDraftItems\(item\)/);
-  assert.match(collectRoute, /sourcePlatform:\s*'1688'/);
+  assert.match(collectRoute, /normalizeAlibaba1688PreparationVariants\(row\.variants,\s*item\.variants,\s*\{\s*sourcePlatform:\s*item\.sourcePlatform,\s*\}\)/);
   assert.match(collectRoute, /货源采集记录仅保存货源商品信息，不能走当前 Ozon 跟卖\/复制接口/);
   assert.match(listingPage, /Alibaba1688OzonListingDraftItem/);
   assert.match(listingPage, /\/api\/collect\/1688\/listing-drafts/);
