@@ -31,6 +31,8 @@ const batchListSchema = z.object({
   })).min(1).max(100),
 });
 
+const listingTaskEntrySchema = z.enum(['1688-listing', 'listing-page', 'collect-page', 'manual-batch']);
+
 export async function listingRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -143,7 +145,7 @@ export async function listingRoutes(app: FastifyInstance) {
 
   app.get('/tasks', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { shopId?: string; offset?: string; limit?: string };
+    const query = request.query as { shopId?: string; offset?: string; limit?: string; entry?: string };
 
     const userShops = await prisma.shop.findMany({
       where: { userId },
@@ -158,6 +160,10 @@ export async function listingRoutes(app: FastifyInstance) {
       shopId: query.shopId && shopIds.includes(query.shopId) ? query.shopId : { in: shopIds },
       type: 'PRODUCT_PUSH',
     };
+    const entry = listingTaskEntrySchema.safeParse(query.entry);
+    if (entry.success) {
+      where.payload = { path: ['entry'], equals: entry.data };
+    }
 
     const [total, rows] = await Promise.all([
       prisma.syncJob.count({ where: where as any }),

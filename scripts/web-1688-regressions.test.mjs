@@ -86,6 +86,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingPage, /请选择目标店铺/);
   assert.match(listingPage, /提交到 Ozon/);
   assert.match(listingRoute, /source:\s*z\.enum\(\['1688-listing',\s*'manual-batch'\]\)\.optional\(\)/);
+  assert.match(listingRoute, /const\s+listingTaskEntrySchema\s*=\s*z\.enum\(\['1688-listing',\s*'listing-page',\s*'collect-page',\s*'manual-batch'\]\)/);
   assert.match(listingRoute, /sourceTrace:\s*z\.record\(z\.unknown\(\)\)\.optional\(\)/);
   assert.match(listingRoute, /const\s+listingSources\s*=\s*items\s*\.map\(\(item\)\s*=>\s*item\.sourceTrace\)/);
   assert.match(listingRoute, /entry:\s*source/);
@@ -95,6 +96,7 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /const\s+ozonSkus\s*=\s*traceValues\('ozonSku'\)/);
   assert.match(listingRoute, /const\s+ozonProductIds\s*=\s*traceValues\('ozonProductId'\)/);
   assert.match(listingRoute, /const\s+ozonOfferIds\s*=\s*traceValues\('ozonOfferId'\)/);
+  assert.match(listingRoute, /where\.payload\s*=\s*\{\s*path:\s*\['entry'\],\s*equals:\s*entry\.data\s*\}/);
   assert.match(listingRoute, /sourceSkus,/);
   assert.match(listingRoute, /sourcePlatforms,/);
   assert.match(listingRoute, /ozonSkus,/);
@@ -109,6 +111,9 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingJobList, /ozonSkus\?:\s*string\[\]/);
   assert.match(listingJobList, /ozonProductIds\?:\s*string\[\]/);
   assert.match(listingJobList, /ozonOfferIds\?:\s*string\[\]/);
+  assert.match(listingJobList, /new\s+URLSearchParams\(\{\s*limit:\s*String\(limit\)\s*\}\)/);
+  assert.match(listingJobList, /entryFilter\s*&&\s*entryFilter\s*!==\s*'collect-page'/);
+  assert.match(listingJobList, /params\.set\('entry',\s*entryFilter\)/);
   assert.match(listingJobList, /if\s*\(entryFilter\s*===\s*'1688-listing'\)\s*return\s*e\s*===\s*'1688-listing'/);
   assert.match(listingJobList, /text:\s*'1688 上架'/);
   assert.match(listingJobList, /货源 SKU/);

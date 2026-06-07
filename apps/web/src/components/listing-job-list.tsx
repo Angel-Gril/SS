@@ -100,7 +100,9 @@ export function ListingJobList({
 
   async function load() {
     setLoading(true);
-    const res = await api.get<{ rows: JobRow[] }>(`/api/listing/tasks?limit=${limit}`);
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (entryFilter && entryFilter !== 'collect-page') params.set('entry', entryFilter);
+    const res = await api.get<{ rows: JobRow[] }>(`/api/listing/tasks?${params.toString()}`);
     if (res.code === 1 && res.data?.rows) {
       let filtered = res.data.rows;
       if (entryFilter) {
