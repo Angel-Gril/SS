@@ -111,6 +111,40 @@ function invalidAlibaba1688ListingSupplyRecords(
     .filter((item): item is { offerId: string; supplyGoodsId: string; reason: string } => !!item);
 }
 
+function invalidAlibaba1688ListingSourcePlatforms(
+  items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
+  supplyGoodsById: Map<string, { sourcePlatform?: string | null }>,
+) {
+  return items
+    .map((item) => {
+      const source = item.sourceTrace && typeof item.sourceTrace === 'object' && !Array.isArray(item.sourceTrace)
+        ? item.sourceTrace
+        : null;
+      const supplyGoodsId = source ? traceText(source, 'supplyGoodsId') : '';
+      const sourcePlatform = source ? traceSourcePlatform(source) : '';
+      const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
+      const collectedSourcePlatform = supplyGoods?.sourcePlatform
+        ? String(supplyGoods.sourcePlatform).trim().toLowerCase()
+        : '';
+      return supplyGoods && sourcePlatform && collectedSourcePlatform && sourcePlatform !== collectedSourcePlatform
+        ? {
+          offerId: item.offerId,
+          supplyGoodsId,
+          sourcePlatform,
+          collectedSourcePlatform,
+          reason: 'source_platform_mismatch',
+        }
+        : null;
+    })
+    .filter((item): item is {
+      offerId: string;
+      supplyGoodsId: string;
+      sourcePlatform: string;
+      collectedSourcePlatform: string;
+      reason: string;
+    } => !!item);
+}
+
 function sourceSkuIdsFromVariants(variants: unknown) {
   const sourceSkuIds = new Set<string>();
   if (!Array.isArray(variants)) return sourceSkuIds;
@@ -384,7 +418,7 @@ export async function listingRoutes(app: FastifyInstance) {
             userId,
             sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
           },
-          select: { id: true, variants: true },
+          select: { id: true, sourcePlatform: true, variants: true },
         })
         : [];
       const supplyGoodsById = new Map(supplyGoods.map((item) => [item.id, item] as const));
@@ -397,6 +431,14 @@ export async function listingRoutes(app: FastifyInstance) {
           code: 0,
           msg: '货源上架商品引用的采集记录不存在或不是货源记录',
           data: { invalidItems },
+        });
+      }
+      const invalidPlatformItems = invalidAlibaba1688ListingSourcePlatforms(items, supplyGoodsById);
+      if (invalidPlatformItems.length) {
+        return reply.status(400).send({
+          code: 0,
+          msg: '货源上架商品引用的货源平台与采集记录不一致',
+          data: { invalidItems: invalidPlatformItems },
         });
       }
       const invalidSkuItems = invalidAlibaba1688ListingSourceSkus(items, supplyGoodsById);

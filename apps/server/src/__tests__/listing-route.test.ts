@@ -291,7 +291,7 @@ describe('listing route', () => {
         userId: 'user-1',
         sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
       },
-      select: { id: true, variants: true },
+      select: { id: true, sourcePlatform: true, variants: true },
     });
     expect(ozonRequestMock).not.toHaveBeenCalled();
     expect(syncJobMock.create).not.toHaveBeenCalled();
@@ -356,6 +356,74 @@ describe('listing route', () => {
             supplyGoodsId: 'supply-domestic',
             sourceSkuId: 'tb-blue',
             reason: 'invalid_source_sku_id',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects supply listing submissions whose source platform does not match the collected record', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-domestic',
+        sourcePlatform: 'taobao',
+        variants: [
+          { sourceSkuId: 'tb-red', sourcePlatform: 'taobao' },
+        ],
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'ss1688-998877-tb-red',
+            title: 'Товар с неверной платформой',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/tb-red.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'supply-domestic',
+              sourcePlatform: '1688',
+              sourceProductId: '998877',
+              sourceSkuId: 'tb-red',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品引用的货源平台与采集记录不一致',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'ss1688-998877-tb-red',
+            supplyGoodsId: 'supply-domestic',
+            sourcePlatform: '1688',
+            collectedSourcePlatform: 'taobao',
+            reason: 'source_platform_mismatch',
           },
         ],
       },
