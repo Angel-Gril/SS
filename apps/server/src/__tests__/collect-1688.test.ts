@@ -190,7 +190,7 @@ describe('1688 collect helpers', () => {
     });
   });
 
-  it('uses the real source platform for fallback source SKU ids', () => {
+  it('uses the real source platform for fallback SKU row ids without inventing source SKU traces', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '淘宝无 SKU 货源商品',
       sourcePlatform: 'taobao',
@@ -203,7 +203,7 @@ describe('1688 collect helpers', () => {
     expect(record.variants).toEqual([
       expect.objectContaining({
         sku: 'taobao-1',
-        sourceSkuId: 'taobao-1',
+        sourceSkuId: '',
         sourcePlatform: 'taobao',
       }),
     ]);
@@ -223,7 +223,7 @@ describe('1688 collect helpers', () => {
     expect(record.variants).toEqual([
       expect.objectContaining({
         sku: 'taobao-1',
-        sourceSkuId: 'taobao-1',
+        sourceSkuId: '',
         sourcePlatform: 'taobao',
       }),
     ]);
@@ -267,12 +267,12 @@ describe('1688 collect helpers', () => {
     expect(tmallRecord).toMatchObject({
       sourcePlatform: 'tmall',
       sourceProductId: '123456789',
-      variants: [expect.objectContaining({ sourcePlatform: 'tmall', sourceSkuId: 'tmall-1' })],
+      variants: [expect.objectContaining({ sourcePlatform: 'tmall', sourceSkuId: '' })],
     });
     expect(taobaoRecord).toMatchObject({
       sourcePlatform: 'taobao',
       sourceProductId: '998877',
-      variants: [expect.objectContaining({ sourcePlatform: 'taobao', sourceSkuId: 'taobao-1' })],
+      variants: [expect.objectContaining({ sourcePlatform: 'taobao', sourceSkuId: '' })],
     });
   });
 
@@ -1865,5 +1865,120 @@ describe('1688 collect helpers', () => {
 
     expect(result.items).toEqual([]);
     expect(result.issues).toEqual(['missing_source_sku_ids']);
+  });
+
+  it('does not invent source SKU traces when collected SKU rows lack source IDs', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      priceText: '¥19.90',
+      images: ['https://img.example.com/main.jpg'],
+      skuItems: [
+        { specText: '红色', price: '19.9' },
+      ],
+      description: '货源详情',
+      attributes: { 材质: '棉' },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sku: 'taobao-1',
+        sourceSkuId: '',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
+  });
+
+  it('keeps editable row ids out of source SKU traces', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      priceText: '¥19.90',
+      images: ['https://img.example.com/main.jpg'],
+      skuItems: [
+        { skuId: 'row-1', specText: '红色', price: '19.9' },
+      ],
+      description: '货源详情',
+      attributes: { 材质: '棉' },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sku: 'row-1',
+        sourceSkuId: '',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
+  });
+
+  it('keeps generated source SKU placeholders out of source traces', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      priceText: '¥19.90',
+      images: ['https://img.example.com/main.jpg'],
+      skuItems: [
+        { sourceSkuId: 'row-1', sku: 'row-1', specText: '红色', price: '19.9' },
+      ],
+      description: '货源详情',
+      attributes: { 材质: '棉' },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sku: 'row-1',
+        sourceSkuId: '',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
+  });
+
+  it('preserves explicit platform-prefixed source SKU values', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      priceText: '¥19.90',
+      images: ['https://img.example.com/main.jpg'],
+      skuItems: [
+        { sourceSkuId: 'taobao-998877-1', specText: '红色', price: '19.9' },
+      ],
+      description: '货源详情',
+      attributes: { 材质: '棉' },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sku: 'taobao-998877-1',
+        sourceSkuId: 'taobao-998877-1',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
+  });
+
+  it('preserves platform-prefixed source SKU ids that are not generated row indexes', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      priceText: '¥19.90',
+      images: ['https://img.example.com/main.jpg'],
+      skuItems: [
+        { sourceSkuId: 'taobao-998877', specText: '红色', price: '19.9' },
+      ],
+      description: '货源详情',
+      attributes: { 材质: '棉' },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sku: 'taobao-998877',
+        sourceSkuId: 'taobao-998877',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
   });
 });

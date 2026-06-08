@@ -265,6 +265,23 @@ function compactString(value: unknown): string | null {
   return text || null;
 }
 
+function isGeneratedDomesticSupplySku(value: unknown): boolean {
+  const text = compactString(value);
+  if (!text) return false;
+  if (/^(?:row|sku|dom-sku)-\d+$/i.test(text)) return true;
+  const platformRowMatch = text.match(/^([a-z0-9_-]+)-(\d+)$/i);
+  if (!platformRowMatch) return false;
+  const rowNumber = Number(platformRowMatch[2]);
+  return rowNumber >= 1
+    && rowNumber <= 200
+    && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(platformRowMatch[1]!.toLowerCase());
+}
+
+function compactSourceSkuCandidate(value: unknown): string | null {
+  const text = compactString(value);
+  return text && !isGeneratedDomesticSupplySku(text) ? text : null;
+}
+
 function parseUrlLike(value: unknown): URL | null {
   const text = compactString(value);
   if (!text) return null;
@@ -591,10 +608,11 @@ function normalize1688SkuItems(
   return items.slice(0, 200).map((item, index) => {
     const sourcePlatform = normalizeDomesticSupplySourcePlatform(item.sourcePlatform ?? item.platform, defaultSourcePlatform) || defaultSourcePlatform;
     const fallbackSku = `${sanitizeOfferIdSegment(sourcePlatform, 'source').toLowerCase()}-${index + 1}`;
-    const explicitSourceSku = compactString(item.sourceSkuId ?? item.source_sku_id ?? item.sourceSku ?? item.source_sku);
-    const rawSku = compactString(item.skuId ?? item.sku_id ?? item.sku ?? item.specId ?? item.id);
-    const sku = explicitSourceSku || rawSku || fallbackSku;
-    const sourceSkuId = explicitSourceSku || rawSku || sku;
+    const explicitSourceSku = compactSourceSkuCandidate(item.sourceSkuId ?? item.source_sku_id ?? item.sourceSku ?? item.source_sku);
+    const sourceSkuCandidate = compactSourceSkuCandidate(item.skuId ?? item.sku_id ?? item.specId ?? item.nameId);
+    const displaySku = compactString(item.skuId ?? item.sku_id ?? item.sku ?? item.specId ?? item.nameId ?? item.id);
+    const sku = explicitSourceSku || displaySku || fallbackSku;
+    const sourceSkuId = explicitSourceSku || sourceSkuCandidate || '';
     const ozonSku = compactString(
       item.ozonSku
         ?? item.ozon_sku
