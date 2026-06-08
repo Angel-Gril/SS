@@ -2017,8 +2017,9 @@ export async function collectRoutes(app: FastifyInstance) {
 
     const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
     if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+    const isExistingDomesticSupply = isDomesticSupplySourcePlatform(item.sourcePlatform);
 
-    if (isDomesticSupplyCollectPayload(body)) {
+    if (!isExistingDomesticSupply && isDomesticSupplyCollectPayload(body)) {
       return reply.status(400).send({ code: 0, msg: DOMESTIC_SUPPLY_GENERIC_COLLECT_ERROR });
     }
 
@@ -2026,11 +2027,11 @@ export async function collectRoutes(app: FastifyInstance) {
     if (body.title !== undefined) data.title = String(body.title);
     if (body.purchasePrice !== undefined) data.purchasePrice = body.purchasePrice ? parseFloat(String(body.purchasePrice)) : null;
     if (body.currency !== undefined) data.currency = String(body.currency);
-    if (body.sku !== undefined) data.sku = String(body.sku);
+    if (!isExistingDomesticSupply && body.sku !== undefined) data.sku = String(body.sku);
     if (body.notes !== undefined) data.notes = body.notes ? String(body.notes).slice(0, 2000) : null;
     if (body.status !== undefined) data.status = String(body.status);
     if (body.images !== undefined) data.images = Array.isArray(body.images) ? body.images : null;
-    if (body.sourceUrl !== undefined) data.sourceUrl = body.sourceUrl ? String(body.sourceUrl) : null;
+    if (!isExistingDomesticSupply && body.sourceUrl !== undefined) data.sourceUrl = body.sourceUrl ? String(body.sourceUrl) : null;
     if (body.publishTitle !== undefined) {
       const meta: Record<string, unknown> = item.metadata && typeof item.metadata === 'object' ? { ...(item.metadata as any) } : {};
       const publishTitle = String(body.publishTitle || '').trim();

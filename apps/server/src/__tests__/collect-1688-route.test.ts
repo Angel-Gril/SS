@@ -356,6 +356,46 @@ describe('1688 collect route', () => {
     expect(supplyGoodsMock.update).not.toHaveBeenCalled();
   });
 
+  it('ignores generic sku and source url edits for existing domestic supply records', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue({
+      id: 'supply-record',
+      userId: 'user-1',
+      title: '淘宝货源记录',
+      sourcePlatform: 'taobao',
+      sourceProductId: '998877',
+      sku: null,
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      metadata: { sourceKind: 'domestic_supply' },
+    });
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/collect/supply-record',
+      payload: {
+        title: '更新后的淘宝货源记录',
+        sku: 'ozon-or-display-sku-should-not-save',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=changed',
+        purchasePrice: '29.90',
+        notes: '只允许保存普通备注',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const updateData = supplyGoodsMock.update.mock.calls[0]?.[0]?.data;
+    expect(updateData).toMatchObject({
+      title: '更新后的淘宝货源记录',
+      purchasePrice: 29.9,
+      notes: '只允许保存普通备注',
+    });
+    expect(updateData).not.toHaveProperty('sku');
+    expect(updateData).not.toHaveProperty('sourceUrl');
+  });
+
   it('preserves existing complete source data when a duplicate recollect payload is incomplete', async () => {
     resolveCollectedPriceMock.mockResolvedValueOnce({
       purchasePriceCny: null,
