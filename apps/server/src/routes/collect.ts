@@ -713,32 +713,37 @@ export function normalizeAlibaba1688PreparationVariants(
   }
   if (!Array.isArray(inputVariants)) return [];
   const sourcePlatform = normalizeDomesticSupplySourcePlatform(options.sourcePlatform) || '1688';
-  const fallbackBySku = new Map<string, any>();
+  const fallbackBySourceSku = new Map<string, any>();
+  const fallbackByDisplaySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
       const sourceSku = compactString(variant?.sourceSkuId);
-      const legacySku = compactString(variant?.sku);
-      if (sourceSku && !fallbackBySku.has(sourceSku)) fallbackBySku.set(sourceSku, variant);
-      if (legacySku && !fallbackBySku.has(legacySku)) fallbackBySku.set(legacySku, variant);
+      const displaySku = compactString(variant?.sku);
+      if (sourceSku && !fallbackBySourceSku.has(sourceSku)) fallbackBySourceSku.set(sourceSku, variant);
+      if (displaySku && !fallbackByDisplaySku.has(displaySku)) fallbackByDisplaySku.set(displaySku, variant);
     }
   }
   return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform }).map((variant, index) => {
     const rawInput = (inputVariants as Array<Record<string, unknown>>)[index] || {};
     const hasExplicitSourcePlatform = !!compactString(rawInput.sourcePlatform ?? rawInput.platform);
-    const fallback = fallbackBySku.get(variant.sku);
-    const fallbackSourcePlatform = normalizeDomesticSupplySourcePlatform(fallback?.sourcePlatform, null);
+    const sourceSkuId = compactString(variant.sourceSkuId);
+    const traceFallback = sourceSkuId ? fallbackBySourceSku.get(sourceSkuId) : undefined;
+    const displaySku = compactString(variant.sku);
+    const displayFallback = displaySku ? fallbackByDisplaySku.get(displaySku) : undefined;
+    const fallbackSourcePlatform = normalizeDomesticSupplySourcePlatform(traceFallback?.sourcePlatform, null);
     const inherited = {
       ...(fallbackSourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallbackSourcePlatform } : {}),
-      ...(fallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: fallback.ozonSku } : {}),
-      ...(fallback?.ozonProductId && !(variant as any).ozonProductId ? { ozonProductId: fallback.ozonProductId } : {}),
-      ...(fallback?.ozonOfferId && !(variant as any).ozonOfferId ? { ozonOfferId: fallback.ozonOfferId } : {}),
+      ...(traceFallback?.ozonSku && !(variant as any).ozonSku ? { ozonSku: traceFallback.ozonSku } : {}),
+      ...(traceFallback?.ozonProductId && !(variant as any).ozonProductId ? { ozonProductId: traceFallback.ozonProductId } : {}),
+      ...(traceFallback?.ozonOfferId && !(variant as any).ozonOfferId ? { ozonOfferId: traceFallback.ozonOfferId } : {}),
     };
     const nextVariant = Object.keys(inherited).length ? { ...variant, ...inherited } : variant;
     if (Array.isArray((nextVariant as any).images) && (nextVariant as any).images.length) {
       return nextVariant;
     }
-    const fallbackImages = Array.isArray(fallback?.images)
-      ? parseImageList(fallback.images.map((item: unknown) => String(item || '')))
+    const imageFallback = traceFallback || displayFallback;
+    const fallbackImages = Array.isArray(imageFallback?.images)
+      ? parseImageList(imageFallback.images.map((item: unknown) => String(item || '')))
       : [];
     return fallbackImages.length ? { ...nextVariant, images: fallbackImages } : nextVariant;
   });

@@ -2045,6 +2045,39 @@ describe('1688 collect helpers', () => {
     expect(item.sourceDataIssues).toEqual(['missing_source_sku_ids']);
   });
 
+  it('does not inherit Ozon trace during preparation from legacy display SKU matches', () => {
+    const variants = normalizeAlibaba1688PreparationVariants(
+      [
+        {
+          sku: 'display-row-red',
+          specText: '红色',
+          price: '19.90',
+        },
+      ],
+      [
+        {
+          sku: 'display-row-red',
+          ozonSku: 'ozon-legacy-red',
+          ozonProductId: 'ozon-product-legacy',
+          ozonOfferId: 'ozon-offer-legacy',
+          images: ['https://img.example.com/legacy-red.jpg'],
+        },
+      ],
+      { sourcePlatform: 'taobao' },
+    );
+
+    expect(variants).toEqual([
+      expect.objectContaining({
+        sku: 'display-row-red',
+        sourceSkuId: '',
+        sourcePlatform: 'taobao',
+      }),
+    ]);
+    expect(variants[0]).not.toHaveProperty('ozonSku');
+    expect(variants[0]).not.toHaveProperty('ozonProductId');
+    expect(variants[0]).not.toHaveProperty('ozonOfferId');
+  });
+
   it('does not invent source SKU traces when collected SKU rows lack source IDs', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '淘宝货源商品',
