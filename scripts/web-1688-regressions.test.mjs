@@ -396,7 +396,10 @@ test('editable SKU rows do not invent source SKU traces when the source SKU cell
   for (const source of [collect1688Page, listingPage]) {
     assert.match(source, /function\s+sourceSkuIdForEditableRow\(parts:\s*string\[\]\)/);
     assert.match(source, /const\s+sourceSkuId\s*=\s*sourceSkuIdForEditableRow\(parts\)/);
+    assert.match(source, /skuId:\s*sourceSkuId/);
     assert.match(source, /sourceSkuId:\s*sourceSkuId/);
+    assert.doesNotMatch(source, /skuId:\s*sourceSkuId\s*\|\|\s*`row-\$\{index \+ 1\}`/);
+    assert.doesNotMatch(source, /const\s+sku\s*=\s*sourceSkuId\s*\|\|\s*`row-\$\{index \+ 1\}`/);
     assert.doesNotMatch(source, /sourceSkuId:\s*parts\[0\]\s*\|\|\s*`sku-\$\{index \+ 1\}`/);
     assert.doesNotMatch(source, /const\s+sku\s*=\s*parts\[0\]\s*\|\|\s*`sku-\$\{index \+ 1\}`/);
   }

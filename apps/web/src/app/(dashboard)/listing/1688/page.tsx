@@ -206,12 +206,12 @@ function parseSkuText(text: string): Array<Alibaba1688Variant & { skuId: string;
       const parts = line.split(/[|\t]/).map((part) => part.trim());
       const sourceTrace = parseSkuSourceTrace(parts);
       const sourceSkuId = sourceSkuIdForEditableRow(parts);
-      const sku = sourceSkuId || `row-${index + 1}`;
+      const sku = sourceSkuId;
       const specText = parts[1] || '';
       const attrs: Record<string, string> = specText ? { 规格: specText } : {};
       return {
         sku,
-        skuId: sku,
+        skuId: sourceSkuId,
         sourceSkuId: sourceSkuId,
         attrs,
         specText,

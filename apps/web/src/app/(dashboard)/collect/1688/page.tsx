@@ -204,7 +204,7 @@ function parseSkuText(text: string) {
       const sourceTrace = parseSkuSourceTrace(parts);
       const sourceSkuId = sourceSkuIdForEditableRow(parts);
       return {
-        skuId: sourceSkuId || `row-${index + 1}`,
+        skuId: sourceSkuId,
         sourceSkuId: sourceSkuId,
         specText: parts[1] || '',
         price: parts[2] || '',
