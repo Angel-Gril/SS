@@ -172,8 +172,10 @@ export function normalizeCollectSourcePlatform(value: unknown): string {
   return normalizeSourcePlatform(value) || 'ozon';
 }
 
-export function getSupplyGoodsLookupId(item: { sourceProductId?: string | null; sku?: string | null }): string | null {
-  return normalizeProductId(item.sourceProductId) || normalizeProductId(item.sku);
+export function getSupplyGoodsLookupId(item: { sourcePlatform?: string | null; sourceProductId?: string | null; sku?: string | null }): string | null {
+  const sourceProductId = normalizeProductId(item.sourceProductId);
+  if (isDomesticSupplySourcePlatform(item.sourcePlatform)) return sourceProductId;
+  return sourceProductId || normalizeProductId(item.sku);
 }
 
 export function isDomesticSupplySourcePlatform(value: unknown): boolean {
@@ -211,6 +213,13 @@ export function buildCollectSnapshotWhere(userId: string, skus: string[], source
     ? { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST }
     : sourcePlatformValue || 'ozon';
   const lookupSkus = Array.from(new Set(skus.map((sku) => normalizeProductId(sku)).filter((sku): sku is string => !!sku)));
+  if (sourcePlatformValue === 'domestic-supply' || isDomesticSupplySourcePlatform(sourcePlatformValue)) {
+    return {
+      userId,
+      sourcePlatform: resolvedSourcePlatform,
+      sourceProductId: { in: lookupSkus },
+    };
+  }
   return {
     userId,
     sourcePlatform: resolvedSourcePlatform,
@@ -1477,6 +1486,7 @@ export async function collectRoutes(app: FastifyInstance) {
       where: buildCollectSnapshotWhere(userId, skus, body.sourcePlatform),
       select: {
         id: true,
+        sourcePlatform: true,
         sourceProductId: true,
         sku: true,
         title: true,

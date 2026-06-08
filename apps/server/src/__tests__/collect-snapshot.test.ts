@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { buildCollectSnapshot, buildCollectSnapshotWhere, getSupplyGoodsLookupId, normalizeCollectSourcePlatform } from '../routes/collect.js';
 
 describe('collect snapshot helpers', () => {
-  it('prefers sourceProductId and falls back to legacy sku', () => {
+  it('prefers sourceProductId and falls back to legacy sku for Ozon records', () => {
     expect(getSupplyGoodsLookupId({ sourceProductId: ' 123 ', sku: 'old' })).toBe('123');
     expect(getSupplyGoodsLookupId({ sourceProductId: null, sku: '456' })).toBe('456');
     expect(getSupplyGoodsLookupId({ sourceProductId: '', sku: '' })).toBeNull();
+  });
+
+  it('does not use source platform SKU as a domestic supply product lookup id', () => {
+    expect(getSupplyGoodsLookupId({ sourcePlatform: 'taobao', sourceProductId: ' 998877 ', sku: 'tb-red' })).toBe('998877');
+    expect(getSupplyGoodsLookupId({ sourcePlatform: '1688', sourceProductId: null, sku: 'sku-red-42' })).toBeNull();
+    expect(getSupplyGoodsLookupId({ sourcePlatform: 'jd', sourceProductId: '', sku: 'jd-sku-red' })).toBeNull();
   });
 
   it('limits Ozon list-page snapshot lookups to Ozon source records by default', () => {
@@ -23,10 +29,7 @@ describe('collect snapshot helpers', () => {
     expect(buildCollectSnapshotWhere('user-1', ['tb-123'], 'taobao')).toEqual({
       userId: 'user-1',
       sourcePlatform: 'taobao',
-      OR: [
-        { sourceProductId: { in: ['tb-123'] } },
-        { sku: { in: ['tb-123'] } },
-      ],
+      sourceProductId: { in: ['tb-123'] },
     });
   });
 
@@ -34,10 +37,7 @@ describe('collect snapshot helpers', () => {
     expect(buildCollectSnapshotWhere('user-1', ['supply-123'], 'domestic-supply')).toEqual({
       userId: 'user-1',
       sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
-      OR: [
-        { sourceProductId: { in: ['supply-123'] } },
-        { sku: { in: ['supply-123'] } },
-      ],
+      sourceProductId: { in: ['supply-123'] },
     });
   });
 
@@ -45,10 +45,7 @@ describe('collect snapshot helpers', () => {
     expect(buildCollectSnapshotWhere('user-1', ['tb-123'], 'Taobao')).toEqual({
       userId: 'user-1',
       sourcePlatform: 'taobao',
-      OR: [
-        { sourceProductId: { in: ['tb-123'] } },
-        { sku: { in: ['tb-123'] } },
-      ],
+      sourceProductId: { in: ['tb-123'] },
     });
   });
 
