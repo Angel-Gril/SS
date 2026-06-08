@@ -316,6 +316,9 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.match(collectPage, /selectedItems\.every\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);
   assert.match(collectPage, /货源记录需要先走货源上架准备流程/);
   assert.match(collectPage, /货源记录仅保存货源信息/);
+  assert.match(collectPage, /if\s*\(selectedHasDomesticSupply\)\s*\{\s*toast\(\{\s*title:\s*'货源记录不能使用 Ozon 补全信息入口，请走货源上架准备流程'/);
+  assert.match(collectPage, /!\s*selectedHasDomesticSupply\s*&&\s*\(/);
+  assert.match(collectPage, /从OZON补全信息/);
   assert.doesNotMatch(collectPage, /selectedHasAlibaba1688/);
   assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);
   assert.doesNotMatch(collectPage, /sourcePlatform\s*===\s*'1688'/);

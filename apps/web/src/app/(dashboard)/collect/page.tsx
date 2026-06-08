@@ -458,6 +458,13 @@ export default function CollectPage() {
 
   async function handleEnrich() {
     if (!selectedIds.size) { toast({ title: '请先选择商品', variant: 'destructive' }); return; }
+    const selectedHasDomesticSupply = items
+      .filter((i) => selectedIds.has(i.id))
+      .some((i) => isDomesticSupplySourcePlatform(i.sourcePlatform));
+    if (selectedHasDomesticSupply) {
+      toast({ title: '货源记录不能使用 Ozon 补全信息入口，请走货源上架准备流程', variant: 'destructive' });
+      return;
+    }
     setEnriching(true);
 
     const selected = items.filter((i) => selectedIds.has(i.id));
@@ -591,9 +598,11 @@ export default function CollectPage() {
               <span className="text-sm font-medium">已选 {selectedIds.size} 件</span>
               <Input placeholder="加价%" value={markupPct} onChange={(e) => setMarkupPct(e.target.value)} className="h-8 w-24" type="number" />
               <Button size="sm" variant="outline" onClick={handleBatchMarkup}>批量加价</Button>
-              <Button size="sm" variant="outline" onClick={() => setShowEnrichDialog(true)}>
-                <Sparkles className="h-4 w-4 mr-1" />从OZON补全信息
-              </Button>
+              {!selectedHasDomesticSupply && (
+                <Button size="sm" variant="outline" onClick={() => setShowEnrichDialog(true)}>
+                  <Sparkles className="h-4 w-4 mr-1" />从OZON补全信息
+                </Button>
+              )}
               <Button size="sm" variant="outline" onClick={() => setShowWatermarkDialog(true)}>
                 <ImageIcon className="h-4 w-4 mr-1" />打水印
               </Button>
