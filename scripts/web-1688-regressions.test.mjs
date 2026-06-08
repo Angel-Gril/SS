@@ -334,7 +334,12 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.match(collectPage, /itemIsDomesticSupply\s*\?\s*'货源商品ID'\s*:\s*'Ozon SKU \/ Product ID'/);
   assert.match(collectPage, /商品采集与上架/);
   assert.match(collectPage, /搜索商品名 \/ Ozon SKU \/ 货源商品ID/);
+  assert.match(collectPage, /所选商品缺少有效的 Ozon Product ID/);
+  assert.match(collectPage, /所选商品缺少可用于 Ozon 补全的 Product ID/);
+  assert.match(collectPage, /仅对 Ozon Product ID 为纯数字的商品有效/);
   assert.doesNotMatch(collectPage, /SKU采集跟卖/);
+  assert.doesNotMatch(collectPage, /所选商品无有效的数字 SKU/);
+  assert.doesNotMatch(collectPage, /仅对 SKU 为纯数字 product_id 的商品有效/);
   assert.doesNotMatch(collectPage, />SKU:\s*\{item\.sku\}<\/span>/);
   assert.doesNotMatch(collectPage, /selectedHasAlibaba1688/);
   assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);

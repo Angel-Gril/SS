@@ -383,7 +383,7 @@ export default function CollectPage() {
 
     if (!productIds.length) {
       setInheriting(false);
-      toast({ title: '所选商品无有效的数字 SKU（product_id）', variant: 'destructive' });
+      toast({ title: '所选商品缺少有效的 Ozon Product ID', variant: 'destructive' });
       return;
     }
 
@@ -474,7 +474,7 @@ export default function CollectPage() {
 
     if (!productIds.length) {
       setEnriching(false);
-      toast({ title: '所选商品无有效的数字 SKU', variant: 'destructive' });
+      toast({ title: '所选商品缺少可用于 Ozon 补全的 Product ID', variant: 'destructive' });
       return;
     }
 
@@ -1232,7 +1232,7 @@ export default function CollectPage() {
               </select>
             </div>
             <p className="text-xs text-muted-foreground">
-              将补全 {selectedIds.size} 件商品（仅对 SKU 为纯数字 product_id 的商品有效）
+              将补全 {selectedIds.size} 件商品（仅对 Ozon Product ID 为纯数字的商品有效）
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowEnrichDialog(false)}>取消</Button>
