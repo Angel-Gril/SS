@@ -1851,7 +1851,7 @@
   }
 
   function normalizeSkuItem(item) {
-    const sourceSkuId = pickFirstValue(item, ["sourceSkuId", "source_sku_id", "sourceSku", "source_sku", "skuId", "sku_id", "specId", "nameId", "id"]);
+    const sourceSkuId = pickFirstValue(item, ["sourceSkuId", "source_sku_id", "sourceSku", "source_sku", "skuId", "sku_id", "specId", "nameId"]);
     const skuId = sourceSkuId;
     const name = pickFirstValue(item, ["name", "title", "skuName", "sku_name", "displayName"]);
     const attrs = normalizeSkuAttrs(item);
@@ -2005,7 +2005,7 @@
       if (seen.has(key)) return;
       seen.add(key);
       items.push({
-        skuId: skuId || `dom-sku-${items.length + 1}`,
+        skuId: skuId || "",
         name: "",
         attrs: specText ? { 规格: specText } : {},
         specText,

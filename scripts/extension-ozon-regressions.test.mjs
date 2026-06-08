@@ -231,12 +231,13 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /ozonSku\s*=\s*pickFirstValue\(item,\s*\["ozonSku",\s*"ozon_sku",\s*"targetOzonSku",\s*"target_ozon_sku",\s*"targetSku",\s*"ozonProductSku"\]\)/);
   assert.match(collectScript, /ozonProductId\s*=\s*pickFirstValue\(item,\s*\["ozonProductId",\s*"ozon_product_id",\s*"targetOzonProductId",\s*"target_ozon_product_id"\]\)/);
   assert.match(collectScript, /ozonOfferId\s*=\s*pickFirstValue\(item,\s*\["ozonOfferId",\s*"ozon_offer_id",\s*"targetOzonOfferId",\s*"target_ozon_offer_id"\]\)/);
-  assert.match(collectScript, /const\s+sourceSkuId\s*=\s*pickFirstValue\(item,\s*\["sourceSkuId",\s*"source_sku_id",\s*"sourceSku",\s*"source_sku",\s*"skuId",\s*"sku_id",\s*"specId",\s*"nameId",\s*"id"\]\)/);
+  assert.match(collectScript, /const\s+sourceSkuId\s*=\s*pickFirstValue\(item,\s*\["sourceSkuId",\s*"source_sku_id",\s*"sourceSku",\s*"source_sku",\s*"skuId",\s*"sku_id",\s*"specId",\s*"nameId"\]\)/);
   const sourceSkuKeyMatch = collectScript.match(/const\s+sourceSkuId\s*=\s*pickFirstValue\(item,\s*\[([^\]]+)\]\)/);
   assert.ok(sourceSkuKeyMatch, 'source SKU extractor key list must be visible');
   const sourceSkuKeys = sourceSkuKeyMatch[1].match(/"([^"]+)"/g).map((value) => value.replace(/"/g, ''));
   assert.ok(sourceSkuKeys.includes('specId'), 'variant specId must be accepted as a source SKU trace');
   assert.ok(sourceSkuKeys.includes('nameId'), 'variant nameId must be accepted as a source SKU trace');
+  assert.ok(!sourceSkuKeys.includes('id'), 'generic row id must not be promoted to sourceSkuId');
   assert.ok(!sourceSkuKeys.includes('offerId'), 'product-level offerId must not be promoted to sourceSkuId');
   assert.match(collectScript, /const\s+skuId\s*=\s*sourceSkuId/);
   assert.match(collectScript, /sourceSkuId:\s*sourceSkuId == null \? "" : String\(sourceSkuId\)/);
@@ -246,6 +247,7 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /function\s+pickSkuItemsFromDom/);
   assert.match(collectScript, /pickSkuItemsFromDom\(\)/);
   assert.match(collectScript, /\[data-sku-id\]/);
+  assert.doesNotMatch(collectScript, /skuId:\s*skuId\s*\|\|\s*`dom-sku-\$\{items\.length \+ 1\}`/);
   assert.match(collectScript, /const\s+price\s*=\s*parseDecimalNumber\(pickFirstValue\(item,\s*\["price",\s*"salePrice",\s*"finalPrice",\s*"discountPrice",\s*"promotionPrice"\]\)\)/);
   assert.match(collectScript, /priceText:\s*priceInfo\.priceText/);
   assert.match(collectScript, /attributes,\s*description,/);
