@@ -27,6 +27,22 @@ export const sendSmsCodeSchema = z.object({
   turnstileToken: z.string().optional(),
 });
 
+export const resetPasswordSmsCodeSchema = z.object({
+  phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
+  turnstileToken: z.string().optional(),
+});
+
+export const resetPasswordSchema = z.object({
+  phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
+  smsCode: z.string({ required_error: '请输入 6 位验证码' }).regex(/^\d{6}$/, '请输入 6 位验证码'),
+  newPassword: z
+    .string()
+    .min(8, '密码至少 8 位')
+    .max(64, '密码最多 64 位')
+    .regex(/[a-zA-Z]/, '密码需包含字母')
+    .regex(/[0-9]/, '密码需包含数字'),
+});
+
 export const changePasswordSchema = z.object({
   oldPassword: z.string().min(1),
   newPassword: z
@@ -39,6 +55,8 @@ export const changePasswordSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type ResetPasswordSmsCodeInput = z.infer<typeof resetPasswordSmsCodeSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 export interface AuthUser {

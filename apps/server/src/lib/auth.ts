@@ -155,6 +155,18 @@ export async function removeSession(userId: string, token: string) {
   await redis.del(sessionKey);
 }
 
+export async function removeAllSessions(userId: string) {
+  const pattern = `session:${userId}:*`;
+  let cursor = '0';
+  do {
+    const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+    if (Array.isArray(keys) && keys.length > 0) {
+      await redis.del(...keys);
+    }
+    cursor = String(nextCursor);
+  } while (cursor !== '0');
+}
+
 const AUTH_COOKIE_NAME = 'sserp_token';
 const AUTH_COOKIE_SECURE =
   process.env.AUTH_COOKIE_SECURE !== undefined

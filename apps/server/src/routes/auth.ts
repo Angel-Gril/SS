@@ -1,13 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { registerSchema, loginSchema, sendSmsCodeSchema } from 'shared';
+import { registerSchema, loginSchema, sendSmsCodeSchema, resetPasswordSchema, resetPasswordSmsCodeSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
-import { signToken, storeSession, removeSession, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
+import { signToken, storeSession, removeSession, removeAllSessions, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { verifyTurnstile, sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 import { requiresAuthChallenges } from '../adapters/runtime-config.js';
 
 export async function authRoutes(app: FastifyInstance) {
+  const resetPasswordSmsMessage = '如果手机号已注册，验证码将发送至该号码';
+
   // 路由级频控：注册/登录 10 次/分钟
   await app.register(import('@fastify/rate-limit'), {
     max: 10,
@@ -164,6 +166,58 @@ export async function authRoutes(app: FastifyInstance) {
         },
       },
     });
+  });
+
+  // 发送密码重置短信验证码
+  app.post('/reset-password/sms-code', async (request, reply) => {
+    const parsed = resetPasswordSmsCodeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { phone, turnstileToken } = parsed.data;
+    if (requiresAuthChallenges() && !await verifyTurnstile(turnstileToken || '', request.ip)) {
+      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { phone } });
+    if (!existing || existing.status === 'SUSPENDED') {
+      return reply.send({ code: 1, msg: resetPasswordSmsMessage });
+    }
+
+    try {
+      await sendSmsCode(phone);
+    } catch (error: any) {
+      console.error(`[auth] reset password SMS send failed: ${error?.message || error}`);
+    }
+    return reply.send({ code: 1, msg: resetPasswordSmsMessage });
+  });
+
+  app.post('/reset-password', async (request, reply) => {
+    const parsed = resetPasswordSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { phone, smsCode, newPassword } = parsed.data;
+    if (!await verifySmsCode(phone, smsCode, { allowLocalBypass: false })) {
+      return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { phone } });
+    if (!user || user.status === 'SUSPENDED') {
+      return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    });
+    await removeAllSessions(user.id);
+    clearAuthCookie(reply);
+
+    return reply.send({ code: 1, msg: '密码已重置，请重新登录' });
   });
 
   app.post('/logout', { preHandler: [authenticate] }, async (request, reply) => {

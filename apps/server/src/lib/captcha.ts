@@ -74,8 +74,13 @@ export async function sendSmsCode(phone: string): Promise<{ ok: boolean; msg: st
   return { ok: true, msg: '验证码已发送' };
 }
 
-export async function verifySmsCode(phone: string, code: string): Promise<boolean> {
-  if (!requiresAuthChallenges()) {
+export async function verifySmsCode(
+  phone: string,
+  code: string,
+  options: { allowLocalBypass?: boolean } = {},
+): Promise<boolean> {
+  const allowLocalBypass = options.allowLocalBypass ?? true;
+  if (allowLocalBypass && !requiresAuthChallenges()) {
     return true;
   }
 
