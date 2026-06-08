@@ -169,6 +169,59 @@ describe('1688 collect route', () => {
     });
   });
 
+  it('accepts explicit sourceProductId for domestic supply records without using sku as product id', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue(null);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '淘宝显式货源商品 ID',
+        sourcePlatform: 'taobao',
+        sourceProductId: 'tb-product-998877',
+        sku: 'tb-display-row-should-not-be-product',
+        priceText: '¥19.90',
+        images: ['https://img.example.com/main.jpg'],
+        attributes: { 材质: '棉' },
+        skuItems: [
+          { sourceSkuId: 'tb-sku-red', specText: '红色', price: '19.9' },
+        ],
+        description: '淘宝货源详情',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(supplyGoodsMock.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        sourcePlatform: 'taobao',
+        sourceProductId: 'tb-product-998877',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(supplyGoodsMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourcePlatform: 'taobao',
+        sourceProductId: 'tb-product-998877',
+        sku: null,
+        variants: [
+          expect.objectContaining({
+            sourceSkuId: 'tb-sku-red',
+            sourcePlatform: 'taobao',
+          }),
+        ],
+        metadata: expect.objectContaining({
+          offerId: 'tb-product-998877',
+        }),
+      }),
+    });
+  });
+
   it('marks collected supply records with SKU rows missing source SKU ids as source-incomplete', async () => {
     supplyGoodsMock.findFirst.mockResolvedValue(null);
 

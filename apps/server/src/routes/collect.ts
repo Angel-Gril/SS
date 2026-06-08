@@ -50,6 +50,7 @@ const alibaba1688CollectSchema = z.object({
   title: z.string().min(1),
   sourcePlatform: z.string().optional(),
   sourceUrl: z.string().optional(),
+  sourceProductId: z.string().optional(),
   offerId: z.string().optional(),
   sku: z.string().optional(),
   images: z.array(z.string()).optional(),
@@ -782,7 +783,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
       : inferredSourcePlatform
   ) || '1688';
   const offerIdFromUrl = extractDomesticSupplyProductIdFromUrl(input.sourceUrl, sourcePlatform);
-  const offerId = compactString(input.offerId) || offerIdFromUrl;
+  const offerId = compactString(input.sourceProductId) || compactString(input.offerId) || offerIdFromUrl;
   const images = parseImageList(input.images, input.imageText);
   const attributes = {
     ...parseAttributeText(input.attributesText),
