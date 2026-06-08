@@ -10,6 +10,7 @@ import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const ALIBABA_1688_DESCRIPTION_LIMIT = 6000;
+const DOMESTIC_SUPPLY_SOURCE_KIND = 'domestic_supply';
 export const DOMESTIC_SUPPLY_SOURCE_PLATFORMS = new Set(['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']);
 export const DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST = Array.from(DOMESTIC_SUPPLY_SOURCE_PLATFORMS);
 
@@ -465,7 +466,7 @@ export function exposeSupplyGoodsMetadata(
     const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
       ? meta.attributes as Record<string, unknown>
       : {};
-    meta.sourceKind = meta.sourceKind || 'alibaba1688';
+    meta.sourceKind = meta.sourceKind || DOMESTIC_SUPPLY_SOURCE_KIND;
     meta.sourceDataIssues = getAlibaba1688SourceDataIssues({
       images: Array.isArray(source?.images) ? source.images : [],
       priceText: purchasePrice,
@@ -782,7 +783,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
     notes,
     variants: skuItems,
     metadata: {
-      sourceKind: 'alibaba1688',
+      sourceKind: DOMESTIC_SUPPLY_SOURCE_KIND,
       offerId,
       description,
       categoryPath: compactString(input.categoryPath),

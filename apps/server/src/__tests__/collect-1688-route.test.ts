@@ -110,7 +110,7 @@ describe('1688 collect route', () => {
         sourceProductId: '998877',
         status: 'listing_failed',
         metadata: expect.objectContaining({
-          sourceKind: 'alibaba1688',
+          sourceKind: 'domestic_supply',
           description: '更新后的货源详情',
           attributes: { 材质: '棉' },
           priceText: '¥21.90',

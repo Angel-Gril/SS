@@ -119,7 +119,7 @@ describe('1688 collect helpers', () => {
       priceText: '¥25.80',
       currency: 'CNY',
       metadata: {
-        sourceKind: 'alibaba1688',
+        sourceKind: 'domestic_supply',
         offerId: '734567890123',
         description: '商品详情包含材质、适用场景和包装说明',
         categoryPath: '鞋类 > 男鞋 > 运动鞋',
@@ -178,6 +178,9 @@ describe('1688 collect helpers', () => {
       sourcePlatform: 'taobao',
       sourceProductId: 'tb-998877',
       sku: 'tb-998877',
+      metadata: {
+        sourceKind: 'domestic_supply',
+      },
       variants: [
         expect.objectContaining({
           sourceSkuId: 'tb-sku-red',
@@ -406,7 +409,7 @@ describe('1688 collect helpers', () => {
     });
 
     expect(record.metadata).toMatchObject({
-      sourceKind: 'alibaba1688',
+      sourceKind: 'domestic_supply',
       sourceDataIssues: [
         'missing_source_images',
         'missing_purchase_price',
@@ -520,7 +523,7 @@ describe('1688 collect helpers', () => {
     });
 
     expect(metadata).toMatchObject({
-      sourceKind: 'alibaba1688',
+      sourceKind: 'domestic_supply',
       sourceDataIssues: [
         'missing_source_images',
         'missing_purchase_price',
