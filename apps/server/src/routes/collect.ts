@@ -900,7 +900,7 @@ function alibaba1688VariantTraceKey(variant: unknown): string | null {
   const item = variant && typeof variant === 'object' && !Array.isArray(variant)
     ? variant as Record<string, unknown>
     : {};
-  const sourceSkuId = compactString(item.sourceSkuId ?? item.sku);
+  const sourceSkuId = compactString(item.sourceSkuId);
   if (!sourceSkuId) return null;
   const sourcePlatform = normalizeDomesticSupplySourcePlatform(item.sourcePlatform, null) || '';
   return `${sourcePlatform}:${sourceSkuId}`;
@@ -915,7 +915,7 @@ function mergeAlibaba1688RecollectVariants(nextVariants: unknown[], existingVari
       const item = variant as Record<string, unknown>;
       existingByTraceKey.set(key, item);
       if (!normalizeDomesticSupplySourcePlatform(item.sourcePlatform, null)) {
-        const sourceSkuId = compactString(item.sourceSkuId ?? item.sku);
+        const sourceSkuId = compactString(item.sourceSkuId);
         if (sourceSkuId && !legacyExistingBySourceSku.has(sourceSkuId)) {
           legacyExistingBySourceSku.set(sourceSkuId, item);
         }
@@ -926,7 +926,7 @@ function mergeAlibaba1688RecollectVariants(nextVariants: unknown[], existingVari
   return nextVariants.map((variant) => {
     if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return variant;
     const next = { ...(variant as Record<string, unknown>) };
-    const sourceSkuId = compactString(next.sourceSkuId ?? next.sku);
+    const sourceSkuId = compactString(next.sourceSkuId);
     const existing = existingByTraceKey.get(alibaba1688VariantTraceKey(next) || '')
       || (sourceSkuId ? legacyExistingBySourceSku.get(sourceSkuId) : undefined);
     if (!existing) return next;
