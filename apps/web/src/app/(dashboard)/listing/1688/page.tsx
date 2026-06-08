@@ -743,7 +743,6 @@ export default function Alibaba1688ListingPage() {
       {filteredItems.map((item) => {
         const validImages = validImageUrls(item.images);
         const invalidImages = invalidImageUrls(item.images);
-        const sourceIssues = currentSourceDataIssues(item);
 
         return (
         <Card key={item.id}>
@@ -845,15 +844,6 @@ export default function Alibaba1688ListingPage() {
                 {preparationIssueLabels(currentPreparationIssues(item)).length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {preparationIssueLabels(currentPreparationIssues(item)).map((label) => (
-                      <Badge key={label} variant="outline" className="text-amber-600 border-amber-300">
-                        {label}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-                {sourceDataIssueLabels(sourceIssues).length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {sourceDataIssueLabels(sourceIssues).map((label) => (
                       <Badge key={label} variant="outline" className="text-amber-600 border-amber-300">
                         {label}
                       </Badge>

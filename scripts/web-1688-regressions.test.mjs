@@ -89,8 +89,8 @@ test('1688 listing preparation treats source data issues as draft blockers', () 
 
   assert.match(listingPage, /function\s+currentSourceDataIssues\(item:\s*Alibaba1688ListingItem\)/);
   assert.match(listingPage, /function\s+currentPreparationIssues\(item:\s*Alibaba1688ListingItem\)[\s\S]*?currentSourceDataIssues\(item\)[\s\S]*?issues\.includes\(issue\)[\s\S]*?issues\.push\(issue\)/);
-  assert.match(listingPage, /sourceDataIssueLabels\(sourceIssues\)/);
   assert.match(listingPage, /function\s+preparationIssueLabels\(issues\?:\s*string\[\]\)[\s\S]*?sourceDataIssueLabels\(\[issue\]\)/);
+  assert.doesNotMatch(listingPage, /sourceDataIssueLabels\(sourceIssues\)/);
 });
 
 test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
