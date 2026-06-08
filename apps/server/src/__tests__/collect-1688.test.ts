@@ -447,6 +447,7 @@ describe('1688 collect helpers', () => {
     expect(record.metadata).toMatchObject({
       sourceKind: 'domestic_supply',
       sourceDataIssues: [
+        'missing_source_product_id',
         'missing_source_images',
         'missing_purchase_price',
         'missing_sku_items',
@@ -458,6 +459,7 @@ describe('1688 collect helpers', () => {
     });
 
     expect(getAlibaba1688SourceDataIssues({
+      sourceProductId: '734567890123',
       images: ['https://img.example.com/1.jpg'],
       priceText: '¥25.80',
       skuItems: [{ sourceSkuId: 'sku-red-42' }],
@@ -466,12 +468,21 @@ describe('1688 collect helpers', () => {
     })).toEqual([]);
 
     expect(getAlibaba1688SourceDataIssues({
+      sourceProductId: 'tb-998877',
       images: ['https://img.example.com/1.jpg'],
       priceText: '¥25.80',
       skuItems: [{ sku: 'taobao-1', sourceSkuId: '' }],
       description: '商品详情',
       attributes: { 材质: '棉' },
     })).toEqual(['missing_source_sku_ids']);
+
+    expect(getAlibaba1688SourceDataIssues({
+      images: ['https://img.example.com/1.jpg'],
+      priceText: '¥25.80',
+      skuItems: [{ sourceSkuId: 'sku-red-42' }],
+      description: '商品详情',
+      attributes: { 材质: '棉' },
+    })).toEqual(['missing_source_product_id']);
   });
 
   it('preserves long 1688 source descriptions for later listing preparation', () => {
@@ -507,6 +518,7 @@ describe('1688 collect helpers', () => {
         listingPreparationStatus: 'ready',
       },
       {
+        sourceProductId: '734567890123',
         images: ['https://img.example.com/ready.jpg'],
         purchasePrice: '25.80',
         variants: [{ sourceSkuId: 'sku-red-42' }],
@@ -595,6 +607,7 @@ describe('1688 collect helpers', () => {
     expect(metadata).toMatchObject({
       sourceKind: 'domestic_supply',
       sourceDataIssues: [
+        'missing_source_product_id',
         'missing_source_images',
         'missing_purchase_price',
         'missing_sku_items',
@@ -613,6 +626,7 @@ describe('1688 collect helpers', () => {
       sourceDataIssues: [],
     }, {
       sourcePlatform: 'taobao',
+      sourceProductId: '998877',
       images: ['https://img.example.com/main.jpg'],
       purchasePrice: '19.90',
       purchaseCurrency: 'CNY',
@@ -970,6 +984,7 @@ describe('1688 collect helpers', () => {
       { hasImages: true },
     );
     const refreshed = refreshAlibaba1688SourceDataIssues(metadata, {
+      sourceProductId: '734567890123',
       images: ['https://img.example.com/ready.jpg'],
       purchasePrice: '25.80',
       variants: [{ sourceSkuId: 'sku-red-42' }],
@@ -1973,6 +1988,42 @@ describe('1688 collect helpers', () => {
 
     expect(result.items).toEqual([]);
     expect(result.issues).toEqual(['missing_source_sku_ids']);
+  });
+
+  it('does not generate Ozon draft items when the source product id is missing', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-missing-source-product-id',
+      title: '男士运动鞋',
+      sourcePlatform: '1688',
+      sourceProductId: null,
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sourceSkuId: 'sku-red-42',
+          sourcePlatform: '1688',
+          attrs: { color: 'red', size: '42' },
+          stock: 120,
+        },
+      ],
+      metadata: {
+        sourceKind: 'domestic_supply',
+        sourceDataIssues: [],
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.issues).toEqual(['missing_source_product_id']);
   });
 
   it('does not treat legacy variant sku as an explicit source SKU trace for draft items', () => {

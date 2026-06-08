@@ -356,6 +356,7 @@ function currentPreparationStatus(item: Alibaba1688ListingItem) {
 function currentSourceDataIssues(item: Alibaba1688ListingItem) {
   const issues: string[] = [];
   const purchasePrice = Number(String(item.purchasePrice || '').replace(/[^\d.]/g, ''));
+  if (!(item.sourceProductId || '').trim()) issues.push('missing_source_product_id');
   if (!validImageUrls(item.images).length) issues.push('missing_source_images');
   if (!(Number.isFinite(purchasePrice) && purchasePrice > 0)) issues.push('missing_purchase_price');
   if (!item.variants.length) issues.push('missing_sku_items');

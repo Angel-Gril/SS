@@ -475,6 +475,7 @@ export function exposeSupplyGoodsMetadata(
   metadata: unknown,
   source?: {
     sourcePlatform?: string | null;
+    sourceProductId?: string | null;
     images?: unknown;
     purchasePrice?: unknown;
     purchaseCurrency?: unknown;
@@ -496,6 +497,7 @@ export function exposeSupplyGoodsMetadata(
       : {};
     meta.sourceKind = meta.sourceKind || DOMESTIC_SUPPLY_SOURCE_KIND;
     const inferredSourceDataIssues = getAlibaba1688SourceDataIssues({
+      sourceProductId: source?.sourceProductId,
       images: Array.isArray(source?.images) ? source.images : [],
       priceText: purchasePrice,
       skuItems: Array.isArray(source?.variants) ? source.variants : [],
@@ -555,6 +557,7 @@ function formatAttributeText(attrs: Record<string, unknown>): string {
 }
 
 export function getAlibaba1688SourceDataIssues(input: {
+  sourceProductId?: unknown;
   images?: unknown[];
   priceText?: unknown;
   skuItems?: unknown[];
@@ -562,6 +565,7 @@ export function getAlibaba1688SourceDataIssues(input: {
   attributes?: Record<string, unknown>;
 }): string[] {
   const issues: string[] = [];
+  if (!compactString(input.sourceProductId)) issues.push('missing_source_product_id');
   if (!Array.isArray(input.images) || input.images.length === 0) issues.push('missing_source_images');
   if (!(numericValue(input.priceText) != null && numericValue(input.priceText)! > 0)) issues.push('missing_purchase_price');
   if (!Array.isArray(input.skuItems) || input.skuItems.length === 0) issues.push('missing_sku_items');
@@ -587,6 +591,7 @@ function mergeSourceDataIssues(existing: unknown, inferred: string[]) {
 export function refreshAlibaba1688SourceDataIssues(
   metadata: unknown,
   source: {
+    sourceProductId?: unknown;
     images?: unknown;
     purchasePrice?: unknown;
     variants?: unknown;
@@ -599,6 +604,7 @@ export function refreshAlibaba1688SourceDataIssues(
     ? meta.attributes as Record<string, unknown>
     : {};
   meta.sourceDataIssues = getAlibaba1688SourceDataIssues({
+    sourceProductId: source.sourceProductId,
     images: Array.isArray(source.images) ? source.images : [],
     priceText: source.purchasePrice,
     skuItems: Array.isArray(source.variants) ? source.variants : [],
@@ -809,6 +815,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
   const minOrderQty = Number(input.minOrderQty);
   const description = compactString(input.description)?.slice(0, ALIBABA_1688_DESCRIPTION_LIMIT) || null;
   const sourceDataIssues = getAlibaba1688SourceDataIssues({
+    sourceProductId: offerId,
     images,
     priceText,
     skuItems,
@@ -1007,6 +1014,7 @@ export function buildAlibaba1688ListingPrefill(item: {
     ? meta.attributes as Record<string, unknown>
     : {};
   const inferredSourceDataIssues = getAlibaba1688SourceDataIssues({
+      sourceProductId: item.sourceProductId,
       images,
       priceText: purchasePrice,
       skuItems: variants,
@@ -1333,13 +1341,17 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
   if (variantEntries.some((entry) => !entry.sourceSkuId)) {
     return { items: [], issues: ['missing_source_sku_ids'], listingStatus };
   }
+  const sourceProductId = compactString(prefill.sourceProductId);
+  if (!sourceProductId) {
+    return { items: [], issues: ['missing_source_product_id'], listingStatus };
+  }
   const draftVariantEntries = variantEntries.map((entry) => ({
     ...entry,
     sourceSkuId: entry.sourceSkuId as string,
   }));
   const offerIds = buildUniqueAlibaba1688DraftOfferIds(draftVariantEntries.map((entry) => ({
     sourcePlatform: entry.sourcePlatform,
-    sourceProductId: prefill.sourceProductId || item.id,
+    sourceProductId,
     sourceSkuId: entry.sourceSkuId,
     index: entry.index,
   })));
@@ -1370,7 +1382,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     const sourceTrace: Record<string, unknown> = {
       supplyGoodsId: item.id,
       sourcePlatform: normalizeDomesticSupplySourcePlatform(variant?.sourcePlatform, itemSourcePlatform) || itemSourcePlatform,
-      sourceProductId: prefill.sourceProductId || null,
+      sourceProductId,
       sourceSkuId,
     };
     const ozonSku = compactString(variant?.ozonSku);
@@ -1510,6 +1522,7 @@ export async function collectRoutes(app: FastifyInstance) {
           exchangeRateUsed: r.exchangeRateUsed?.toString() ?? null,
           metadata: exposeSupplyGoodsMetadata(r.metadata, {
             sourcePlatform: r.sourcePlatform,
+            sourceProductId: r.sourceProductId,
             images: r.images,
             purchasePrice: r.purchasePrice?.toString(),
             purchaseCurrency: r.currency,
@@ -1655,6 +1668,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const finalVariants = normalized.variants.length ? updateData.variants : existingVariants;
       const finalPurchasePrice = priceInfo.purchasePriceCny ?? (existing as any).purchasePrice?.toString?.() ?? (existing as any).purchasePrice;
       updateData.metadata = refreshAlibaba1688SourceDataIssues(mergedMetadata, {
+        sourceProductId: normalized.sourceProductId || existing.sourceProductId,
         images: finalImages,
         purchasePrice: finalPurchasePrice,
         variants: finalVariants,
@@ -1809,6 +1823,7 @@ export async function collectRoutes(app: FastifyInstance) {
         variants: nextVariants,
       });
       const meta = refreshAlibaba1688SourceDataIssues(preparationMeta, {
+        sourceProductId: item.sourceProductId,
         images: nextImages,
         purchasePrice: nextPurchasePrice,
         variants: nextVariants,
