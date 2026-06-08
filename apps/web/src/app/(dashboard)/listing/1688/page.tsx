@@ -763,7 +763,7 @@ export default function Alibaba1688ListingPage() {
               <Tags className="h-4 w-4" />
               <span className="truncate">{item.title}</span>
               <Badge variant="outline">{sourcePlatformLabel(item.sourcePlatform)}</Badge>
-              <Badge variant="secondary">类目映射待上架</Badge>
+              <Badge variant="secondary">待上架准备</Badge>
               {dirtyItemIds.has(item.id) && <Badge variant="outline">未保存</Badge>}
               <Badge variant={currentPreparationStatus(item) === 'ready' ? 'default' : 'outline'}>
                 {preparationStatusLabel(currentPreparationStatus(item))}
@@ -788,7 +788,7 @@ export default function Alibaba1688ListingPage() {
               <div className="min-w-0 flex-1 space-y-2 text-sm">
                 <div className="flex gap-3 flex-wrap text-muted-foreground">
                   <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
-                  <span>货源ID: {item.sourceProductId || '-'}</span>
+                  <span>货源商品ID: {item.sourceProductId || '-'}</span>
                   <span>货源 SKU: {item.skuCount || item.variants.length}</span>
                   <span>{formatDate(item.createdAt)}</span>
                 </div>
@@ -1007,7 +1007,7 @@ export default function Alibaba1688ListingPage() {
                   className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                   value={item.skuText || ''}
                   onChange={(e) => updateItemSkuText(item.id, e.target.value)}
-                  placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | 货源SKU图片URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
+                  placeholder={'货源 SKU ID | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | 货源 SKU 图片 URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
                 />
               </div>
               <div className="space-y-1 md:col-span-2">
