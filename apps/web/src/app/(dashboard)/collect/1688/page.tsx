@@ -190,6 +190,10 @@ function parseOptionalSkuNumber(value: string | undefined) {
   return Number.isFinite(number) ? number : null;
 }
 
+function sourceSkuIdForEditableRow(parts: string[]) {
+  return parts[0] || '';
+}
+
 function parseSkuText(text: string) {
   return text
     .split('\n')
@@ -198,9 +202,10 @@ function parseSkuText(text: string) {
     .map((line, index) => {
       const parts = line.split(/[|\t]/).map((part) => part.trim());
       const sourceTrace = parseSkuSourceTrace(parts);
+      const sourceSkuId = sourceSkuIdForEditableRow(parts);
       return {
-        skuId: parts[0] || `sku-${index + 1}`,
-        sourceSkuId: parts[0] || `sku-${index + 1}`,
+        skuId: sourceSkuId || `row-${index + 1}`,
+        sourceSkuId: sourceSkuId,
         specText: parts[1] || '',
         price: parts[2] || '',
         stock: parseOptionalSkuNumber(parts[3]),

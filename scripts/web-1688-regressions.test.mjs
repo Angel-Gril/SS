@@ -389,6 +389,19 @@ test('editable SKU rows normalize invalid numeric cells to null', () => {
   }
 });
 
+test('editable SKU rows do not invent source SKU traces when the source SKU cell is blank', () => {
+  const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  for (const source of [collect1688Page, listingPage]) {
+    assert.match(source, /function\s+sourceSkuIdForEditableRow\(parts:\s*string\[\]\)/);
+    assert.match(source, /const\s+sourceSkuId\s*=\s*sourceSkuIdForEditableRow\(parts\)/);
+    assert.match(source, /sourceSkuId:\s*sourceSkuId/);
+    assert.doesNotMatch(source, /sourceSkuId:\s*parts\[0\]\s*\|\|\s*`sku-\$\{index \+ 1\}`/);
+    assert.doesNotMatch(source, /const\s+sku\s*=\s*parts\[0\]\s*\|\|\s*`sku-\$\{index \+ 1\}`/);
+  }
+});
+
 test('1688 collect page lists domestic supply records with real source platforms', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 

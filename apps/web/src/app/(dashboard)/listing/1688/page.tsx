@@ -175,6 +175,10 @@ function parseOptionalSkuNumber(value: string | undefined) {
   return Number.isFinite(number) ? number : null;
 }
 
+function sourceSkuIdForEditableRow(parts: string[]) {
+  return parts[0] || '';
+}
+
 function attrsText(attrs: Record<string, string>) {
   return Object.entries(attrs).slice(0, 6).map(([key, value]) => `${key}: ${value}`).join(' / ');
 }
@@ -201,13 +205,14 @@ function parseSkuText(text: string): Array<Alibaba1688Variant & { skuId: string;
     .map((line, index) => {
       const parts = line.split(/[|\t]/).map((part) => part.trim());
       const sourceTrace = parseSkuSourceTrace(parts);
-      const sku = parts[0] || `sku-${index + 1}`;
+      const sourceSkuId = sourceSkuIdForEditableRow(parts);
+      const sku = sourceSkuId || `row-${index + 1}`;
       const specText = parts[1] || '';
       const attrs: Record<string, string> = specText ? { 规格: specText } : {};
       return {
         sku,
         skuId: sku,
-        sourceSkuId: sku,
+        sourceSkuId: sourceSkuId,
         attrs,
         specText,
         price: parts[2] || '',
