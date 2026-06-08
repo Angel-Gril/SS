@@ -776,7 +776,7 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
     sourceUrl: compactString(input.sourceUrl),
     sourcePlatform,
     sourceProductId: offerId,
-    sku: offerId,
+    sku: null,
     images,
     priceText,
     currency: compactString(input.currency) || 'CNY',

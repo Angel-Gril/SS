@@ -108,6 +108,7 @@ describe('1688 collect route', () => {
         title: '淘宝更新货源商品',
         sourcePlatform: 'taobao',
         sourceProductId: '998877',
+        sku: null,
         status: 'listing_failed',
         metadata: expect.objectContaining({
           sourceKind: 'domestic_supply',
@@ -126,6 +127,44 @@ describe('1688 collect route', () => {
             { offerId: 'sstaobao-998877-tb-red', sourceSkuId: 'tb-red', status: 'failed' },
           ],
         }),
+      }),
+    });
+  });
+
+  it('creates domestic supply collect records without copying the source product id into sku', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue(null);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '1688 新货源商品',
+        sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+        priceText: '¥25.80',
+        images: ['https://img.example.com/main.jpg'],
+        skuItems: [
+          { sourceSkuId: 'sku-red-42', specText: '红色 / 42', price: '25.8' },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(supplyGoodsMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourcePlatform: '1688',
+        sourceProductId: '734567890123',
+        sku: null,
+        variants: [
+          expect.objectContaining({
+            sourceSkuId: 'sku-red-42',
+            sourcePlatform: '1688',
+          }),
+        ],
       }),
     });
   });

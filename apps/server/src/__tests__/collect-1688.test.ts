@@ -114,7 +114,7 @@ describe('1688 collect helpers', () => {
       title: '男士运动鞋 透气网面',
       sourcePlatform: '1688',
       sourceProductId: '734567890123',
-      sku: '734567890123',
+      sku: null,
       images: ['https://img.example.com/1.jpg', 'https://img.example.com/2.jpg'],
       priceText: '¥25.80',
       currency: 'CNY',
@@ -177,7 +177,7 @@ describe('1688 collect helpers', () => {
     expect(record).toMatchObject({
       sourcePlatform: 'taobao',
       sourceProductId: 'tb-998877',
-      sku: 'tb-998877',
+      sku: null,
       metadata: {
         sourceKind: 'domestic_supply',
       },
@@ -246,7 +246,7 @@ describe('1688 collect helpers', () => {
       });
 
       expect(record.sourceProductId).toBe(sourceProductId);
-      expect(record.sku).toBe(sourceProductId);
+      expect(record.sku).toBeNull();
       expect(record.metadata.offerId).toBe(sourceProductId);
     }
   });
