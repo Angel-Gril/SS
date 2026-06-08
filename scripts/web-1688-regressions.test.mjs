@@ -474,12 +474,19 @@ test('1688 collect page can create records for selected domestic source platform
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 
   assert.match(collect1688Page, /sourcePlatform:\s*string;/);
+  assert.match(collect1688Page, /sourceProductId:\s*string;/);
   assert.match(collect1688Page, /sourcePlatform:\s*'1688'/);
+  assert.match(collect1688Page, /sourceProductId:\s*''/);
   assert.match(collect1688Page, /sourcePlatform:\s*form\.sourcePlatform/);
+  assert.match(collect1688Page, /sourceProductId:\s*form\.sourceProductId\s*\|\|\s*undefined/);
+  assert.doesNotMatch(collect1688Page, /sourceProductId:\s*form\.sku/);
+  assert.doesNotMatch(collect1688Page, /sku:\s*form\.sourceProductId/);
   assert.match(collect1688Page, /<Label className="text-xs">货源平台<\/Label>/);
   for (const platform of ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd']) {
     assert.match(collect1688Page, new RegExp(`<option value="${platform}">`));
   }
+  assert.match(collect1688Page, /<Label className="text-xs">货源商品ID<\/Label>/);
+  assert.match(collect1688Page, /placeholder="1688 offerId \/ 淘宝 itemId \/ 京东 wareId \/ 拼多多 goodsId"/);
   assert.match(collect1688Page, /<Label className="text-xs">货源商品链接<\/Label>/);
   assert.match(collect1688Page, /placeholder="https:\/\/detail\.1688\.com\/offer\/\.\.\. \/ 淘宝 \/ 天猫 \/ 京东 \/ 拼多多商品链接"/);
 });

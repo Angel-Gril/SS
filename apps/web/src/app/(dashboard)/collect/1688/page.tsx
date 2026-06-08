@@ -120,6 +120,7 @@ interface PriceCheckEstimate {
 interface FormState {
   title: string;
   sourcePlatform: string;
+  sourceProductId: string;
   sourceUrl: string;
   priceText: string;
   imageText: string;
@@ -146,6 +147,7 @@ type PreparationFilter = 'all' | 'collected_only' | 'draft' | 'ready';
 const emptyForm: FormState = {
   title: '',
   sourcePlatform: '1688',
+  sourceProductId: '',
   sourceUrl: '',
   priceText: '',
   imageText: '',
@@ -487,6 +489,7 @@ export default function Collect1688Page() {
     const res = await api.post<{ id: string }>('/api/collect/1688', {
       title: form.title,
       sourcePlatform: form.sourcePlatform,
+      sourceProductId: form.sourceProductId || undefined,
       sourceUrl: form.sourceUrl || undefined,
       priceText: form.priceText || undefined,
       imageText: form.imageText || undefined,
@@ -596,6 +599,10 @@ export default function Collect1688Page() {
                 <option value="pinduoduo">拼多多</option>
                 <option value="pdd">拼多多(PDD)</option>
               </select>
+            </div>
+            <div className="space-y-1 md:col-span-2">
+              <Label className="text-xs">货源商品ID</Label>
+              <Input value={form.sourceProductId} onChange={(e) => update('sourceProductId', e.target.value)} placeholder="1688 offerId / 淘宝 itemId / 京东 wareId / 拼多多 goodsId" />
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label className="text-xs">货源商品链接</Label>
