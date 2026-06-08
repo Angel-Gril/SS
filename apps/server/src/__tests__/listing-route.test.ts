@@ -77,6 +77,7 @@ describe('listing route', () => {
       {
         id: 'supply-domestic',
         sourcePlatform: 'taobao',
+        sourceProductId: '998877',
         variants: [
           { sourceSkuId: 'tb-red', sourcePlatform: 'taobao' },
         ],
@@ -312,7 +313,7 @@ describe('listing route', () => {
         userId: 'user-1',
         sourcePlatform: { in: ['1688', 'taobao', 'tmall', 'jd', 'pinduoduo', 'pdd'] },
       },
-      select: { id: true, sourcePlatform: true, sourceProductId: true, sku: true, variants: true },
+      select: { id: true, sourcePlatform: true, sourceProductId: true, variants: true },
     });
     expect(ozonRequestMock).not.toHaveBeenCalled();
     expect(syncJobMock.create).not.toHaveBeenCalled();
@@ -323,6 +324,7 @@ describe('listing route', () => {
       {
         id: 'supply-domestic',
         sourcePlatform: 'taobao',
+        sourceProductId: '998877',
         variants: [
           { sourceSkuId: 'tb-red', sourcePlatform: 'taobao' },
         ],
@@ -390,6 +392,7 @@ describe('listing route', () => {
       {
         id: 'supply-domestic',
         sourcePlatform: 'taobao',
+        sourceProductId: '998877',
         variants: [],
       },
     ]);
@@ -455,6 +458,7 @@ describe('listing route', () => {
       {
         id: 'supply-domestic',
         sourcePlatform: 'taobao',
+        sourceProductId: '998877',
         variants: [
           {
             sourceSkuId: 'tb-shared',
@@ -661,6 +665,75 @@ describe('listing route', () => {
             supplyGoodsId: 'supply-domestic',
             sourceProductId: 'wrong-product-id',
             collectedSourceProductId: '998877',
+            reason: 'source_product_mismatch',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
+
+  it('does not treat collected supply SKU as a source product id match', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-domestic',
+        sourcePlatform: 'taobao',
+        sourceProductId: null,
+        sku: 'tb-red',
+        variants: [
+          { sourceSkuId: 'tb-red', sourcePlatform: 'taobao' },
+        ],
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-tb-red-tb-red',
+            title: 'Товар с SKU вместо товара источника',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/tb-red.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'supply-domestic',
+              sourcePlatform: 'taobao',
+              sourceProductId: 'tb-red',
+              sourceSkuId: 'tb-red',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品引用的货源商品与采集记录不一致',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-tb-red-tb-red',
+            supplyGoodsId: 'supply-domestic',
+            sourceProductId: 'tb-red',
             reason: 'source_product_mismatch',
           },
         ],

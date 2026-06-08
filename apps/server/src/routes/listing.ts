@@ -147,7 +147,7 @@ function invalidAlibaba1688ListingSourcePlatforms(
 
 function invalidAlibaba1688ListingSourceProducts(
   items: Array<{ offerId: string; sourceTrace?: Record<string, unknown> }>,
-  supplyGoodsById: Map<string, { sourceProductId?: string | null; sku?: string | null }>,
+  supplyGoodsById: Map<string, { sourceProductId?: string | null }>,
 ) {
   return items
     .map((item) => {
@@ -157,16 +157,13 @@ function invalidAlibaba1688ListingSourceProducts(
       const supplyGoodsId = source ? traceText(source, 'supplyGoodsId') : '';
       const sourceProductId = source ? traceText(source, 'sourceProductId') : '';
       const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
-      const collectedSourceProductIds = Array.from(new Set([
-        traceText(supplyGoods || {}, 'sourceProductId'),
-        traceText(supplyGoods || {}, 'sku'),
-      ].filter(Boolean)));
-      return supplyGoods && sourceProductId && collectedSourceProductIds.length > 0 && !collectedSourceProductIds.includes(sourceProductId)
+      const collectedSourceProductId = traceText(supplyGoods || {}, 'sourceProductId');
+      return supplyGoods && sourceProductId && sourceProductId !== collectedSourceProductId
         ? {
           offerId: item.offerId,
           supplyGoodsId,
           sourceProductId,
-          collectedSourceProductId: collectedSourceProductIds[0],
+          collectedSourceProductId,
           reason: 'source_product_mismatch',
         }
         : null;
@@ -581,7 +578,7 @@ export async function listingRoutes(app: FastifyInstance) {
             userId,
             sourcePlatform: { in: DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST },
           },
-          select: { id: true, sourcePlatform: true, sourceProductId: true, sku: true, variants: true },
+          select: { id: true, sourcePlatform: true, sourceProductId: true, variants: true },
         })
         : [];
       const supplyGoodsById = new Map(supplyGoods.map((item) => [item.id, item] as const));

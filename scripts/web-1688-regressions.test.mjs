@@ -177,6 +177,8 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /function\s+isDomesticSupplySourcePlatform\(value:\s*unknown\)/);
   assert.match(listingRoute, /sourcePlatform:\s*\{\s*in:\s*DOMESTIC_SUPPLY_SOURCE_PLATFORMS_LIST\s*\}/);
   assert.match(listingRoute, /select:\s*\{\s*id:\s*true,\s*sourcePlatform:\s*true,\s*metadata:\s*true\s*\}/);
+  assert.match(listingRoute, /select:\s*\{\s*id:\s*true,\s*sourcePlatform:\s*true,\s*sourceProductId:\s*true,\s*variants:\s*true\s*\}/);
+  assert.doesNotMatch(listingRoute, /select:\s*\{\s*id:\s*true,\s*sourcePlatform:\s*true,\s*sourceProductId:\s*true,\s*sku:\s*true,\s*variants:\s*true\s*\}/);
   assert.match(listingRoute, /goods\.filter\(\(item\)\s*=>\s*isDomesticSupplySourcePlatform\(item\.sourcePlatform\)\)\.map/);
   assert.doesNotMatch(listingRoute, /id:\s*\{\s*in:\s*supplyGoodsIds\s*\},\s*userId,\s*sourcePlatform:\s*'1688'/);
   assert.match(listingRoute, /status:\s*'listed'/);
