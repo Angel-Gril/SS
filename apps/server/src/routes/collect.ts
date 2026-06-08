@@ -739,13 +739,13 @@ export function normalizeAlibaba1688PreparationVariants(
   if (!Array.isArray(inputVariants)) return [];
   const sourcePlatform = normalizeDomesticSupplySourcePlatform(options.sourcePlatform) || '1688';
   const fallbackBySourceSku = new Map<string, any>();
-  const fallbackByDisplaySku = new Map<string, any>();
+  const imageFallbackByDisplaySku = new Map<string, any>();
   if (Array.isArray(fallbackVariants)) {
     for (const variant of fallbackVariants as any[]) {
       const sourceSku = compactString(variant?.sourceSkuId);
       const displaySku = compactString(variant?.sku);
       if (sourceSku && !fallbackBySourceSku.has(sourceSku)) fallbackBySourceSku.set(sourceSku, variant);
-      if (displaySku && !fallbackByDisplaySku.has(displaySku)) fallbackByDisplaySku.set(displaySku, variant);
+      if (displaySku && !imageFallbackByDisplaySku.has(displaySku)) imageFallbackByDisplaySku.set(displaySku, variant);
     }
   }
   return normalize1688SkuItems(inputVariants as Array<Record<string, unknown>>, { sourcePlatform }).map((variant, index) => {
@@ -754,7 +754,6 @@ export function normalizeAlibaba1688PreparationVariants(
     const sourceSkuId = compactString(variant.sourceSkuId);
     const traceFallback = sourceSkuId ? fallbackBySourceSku.get(sourceSkuId) : undefined;
     const displaySku = compactString(variant.sku);
-    const displayFallback = displaySku ? fallbackByDisplaySku.get(displaySku) : undefined;
     const fallbackSourcePlatform = normalizeDomesticSupplySourcePlatform(traceFallback?.sourcePlatform, null);
     const inherited = {
       ...(fallbackSourcePlatform && !hasExplicitSourcePlatform ? { sourcePlatform: fallbackSourcePlatform } : {}),
@@ -766,7 +765,8 @@ export function normalizeAlibaba1688PreparationVariants(
     if (Array.isArray((nextVariant as any).images) && (nextVariant as any).images.length) {
       return nextVariant;
     }
-    const imageFallback = traceFallback || displayFallback;
+    const displayImageFallback = displaySku ? imageFallbackByDisplaySku.get(displaySku) : undefined;
+    const imageFallback = traceFallback || displayImageFallback;
     const fallbackImages = Array.isArray(imageFallback?.images)
       ? parseImageList(imageFallback.images.map((item: unknown) => String(item || '')))
       : [];

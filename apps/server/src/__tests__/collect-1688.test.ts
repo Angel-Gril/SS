@@ -2129,7 +2129,7 @@ describe('1688 collect helpers', () => {
     expect(item.sourceDataIssues).toEqual(['missing_source_sku_ids']);
   });
 
-  it('does not inherit Ozon trace during preparation from legacy display SKU matches', () => {
+  it('only uses legacy display SKU matches for image fallback during preparation', () => {
     const variants = normalizeAlibaba1688PreparationVariants(
       [
         {
@@ -2155,6 +2155,7 @@ describe('1688 collect helpers', () => {
         sku: 'display-row-red',
         sourceSkuId: '',
         sourcePlatform: 'taobao',
+        images: ['https://img.example.com/legacy-red.jpg'],
       }),
     ]);
     expect(variants[0]).not.toHaveProperty('ozonSku');
