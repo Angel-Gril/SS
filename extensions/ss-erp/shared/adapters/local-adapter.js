@@ -51,6 +51,7 @@
         title: data.title,
         sourcePlatform: inferDomesticSupplyPlatform(data) || '1688',
         sourceUrl: data.sourceUrl || data.tabUrl,
+        sourceProductId: sourceProductId,
         offerId: sourceProductId,
         images: Array.isArray(data.images) ? data.images : undefined,
         price: data.price,

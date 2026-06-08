@@ -99,7 +99,9 @@ test('domestic supply extension collect payloads are routed to the dedicated col
     assert.match(source, /sourcePlatform:\s*inferDomesticSupplyPlatform\(data\)\s*\|\|\s*'1688'/);
     assert.match(source, /function\s+domesticSupplySourceProductId\(data\)\s*\{[\s\S]*?data\.sourceProductId\s*\|\|\s*data\.productId\s*\|\|\s*data\.offerId\s*\|\|\s*data\.sourceOfferId\s*\|\|\s*data\.itemId\s*\|\|\s*data\.goodsId[\s\S]*?\}/);
     assert.match(source, /function\s+normalizeCollectPayload(?:ForEndpoint)?\([^)]*\)\s*\{[\s\S]*?(?:var|const)\s+sourceProductId\s*=\s*domesticSupplySourceProductId\(data\)[\s\S]*?offerId:\s*sourceProductId/);
+    assert.match(source, /sourceProductId:\s*sourceProductId/);
     assert.doesNotMatch(source, /sourceProductId\s*=\s*data\.sourceProductId\s*\|\|[^\n]*(?:data\.skuId|data\.sourceSkuId|data\.sku)/);
+    assert.doesNotMatch(source, /sourceProductId:\s*data\.(?:sku|sourceSkuId|skuId)/);
     assert.match(source, /offerId:\s*sourceProductId/);
     assert.doesNotMatch(source, /sku:\s*sourceProductId/);
     assert.doesNotMatch(source, /sourcePlatform:\s*data\.sourcePlatform\s*\|\|\s*data\.platform\s*\|\|\s*'1688'/);
