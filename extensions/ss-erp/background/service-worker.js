@@ -290,12 +290,17 @@ function normalizeCollectAttributeRecord(attributes) {
   }, {});
 }
 
+function domesticSupplySourceProductId(data) {
+  if (!data || typeof data !== 'object') return '';
+  return data.sourceProductId || data.productId || data.offerId || data.sourceOfferId || data.itemId || data.goodsId;
+}
+
 function normalizeCollectPayloadForEndpoint(payload) {
   if (!isDomesticSupplyCollectPayload(payload)) {
     return { path: '/api/collect', body: payload || {} };
   }
   const data = payload && typeof payload === 'object' ? payload : {};
-  const sourceProductId = data.sourceProductId || data.productId || data.offerId || data.sourceOfferId || data.itemId || data.goodsId || data.skuId || data.sourceSkuId || data.sku;
+  const sourceProductId = domesticSupplySourceProductId(data);
   return {
     path: '/api/collect/1688',
     body: {

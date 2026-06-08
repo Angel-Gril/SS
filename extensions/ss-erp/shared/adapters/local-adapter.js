@@ -34,12 +34,17 @@
     }, {});
   }
 
+  function domesticSupplySourceProductId(data) {
+    if (!data || typeof data !== 'object') return '';
+    return data.sourceProductId || data.productId || data.offerId || data.sourceOfferId || data.itemId || data.goodsId;
+  }
+
   function normalizeCollectPayload(payload) {
     if (!isDomesticSupplyPayload(payload)) {
       return { path: '/api/collect', body: payload || {} };
     }
     var data = payload && typeof payload === 'object' ? payload : {};
-    var sourceProductId = data.sourceProductId || data.productId || data.offerId || data.sourceOfferId || data.itemId || data.goodsId || data.skuId || data.sourceSkuId || data.sku;
+    var sourceProductId = domesticSupplySourceProductId(data);
     return {
       path: '/api/collect/1688',
       body: {
