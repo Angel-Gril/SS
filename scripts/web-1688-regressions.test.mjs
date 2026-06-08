@@ -353,6 +353,16 @@ test('source platform normalization rejects Ozon trace ids in editable SKU rows'
   }
 });
 
+test('domestic supply product id parsing does not promote sku fields', () => {
+  const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
+
+  assert.match(collectRoute, /const\s+queryKeys\s*=\s*\['offerId',\s*'offer_id',\s*'id',\s*'item_id',\s*'itemId',\s*'num_iid',\s*'wareId',\s*'goods_id',\s*'goodsId'\]/);
+  assert.doesNotMatch(collectRoute, /const\s+queryKeys\s*=\s*\[[^\]]*'sku'[^\]]*\]/);
+  assert.doesNotMatch(collectRoute, /const\s+queryKeys\s*=\s*\[[^\]]*'skuId'[^\]]*\]/);
+  assert.doesNotMatch(collectRoute, /\(\?:offerId\|offer_id\|id\|item_id\|itemId\|num_iid\|sku\|skuId\|wareId\|goods_id\|goodsId\)/);
+  assert.doesNotMatch(collectRoute, /const\s+offerId\s*=\s*compactString\(input\.offerId\)\s*\|\|\s*offerIdFromUrl\s*\|\|\s*compactString\(input\.sku\)/);
+});
+
 test('editable SKU rows normalize invalid numeric cells to null', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
