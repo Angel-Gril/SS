@@ -1997,6 +1997,10 @@ export async function collectRoutes(app: FastifyInstance) {
     const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
     if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
 
+    if (isDomesticSupplyCollectPayload(body)) {
+      return reply.status(400).send({ code: 0, msg: DOMESTIC_SUPPLY_GENERIC_COLLECT_ERROR });
+    }
+
     const data: Record<string, unknown> = {};
     if (body.title !== undefined) data.title = String(body.title);
     if (body.purchasePrice !== undefined) data.purchasePrice = body.purchasePrice ? parseFloat(String(body.purchasePrice)) : null;

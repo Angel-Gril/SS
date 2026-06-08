@@ -272,6 +272,37 @@ describe('1688 collect route', () => {
     expect(supplyGoodsMock.create).not.toHaveBeenCalled();
   });
 
+  it('rejects editing generic collect records into domestic supply source URLs', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue({
+      id: 'ozon-record',
+      userId: 'user-1',
+      title: 'Ozon 采集记录',
+      sourcePlatform: 'ozon',
+      sourceUrl: 'https://www.ozon.ru/product/test-123456789/',
+      metadata: { sourceKind: 'ozon' },
+    });
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/collect/ozon-record',
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源平台商品请使用货源采集入口',
+    });
+    expect(supplyGoodsMock.update).not.toHaveBeenCalled();
+  });
+
   it('preserves existing complete source data when a duplicate recollect payload is incomplete', async () => {
     resolveCollectedPriceMock.mockResolvedValueOnce({
       purchasePriceCny: null,
