@@ -19,7 +19,7 @@ export default function ListingLogsPage() {
             <ScrollText className="h-6 w-6" /> 上架日志
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            汇总 SKU 采集跟卖 + SKU 采集改款的所有上架任务，点击「详情」查看完整信息
+            汇总 商品采集与上架 + Ozon 采集改款的所有上架任务，点击「详情」查看完整信息
           </p>
         </div>
         <div className="flex items-center gap-1">

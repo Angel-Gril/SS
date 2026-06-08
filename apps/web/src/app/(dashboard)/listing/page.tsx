@@ -195,15 +195,15 @@ export default function ListingPage() {
     return (
       <div className="space-y-4">
         <div className="border-l-4 border-orange-500 pl-3 py-1 bg-orange-50/40 dark:bg-orange-950/20 rounded-r">
-          <h1 className="text-2xl font-semibold tracking-tight text-orange-700 dark:text-orange-400">SKU 采集改款</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-orange-700 dark:text-orange-400">Ozon 采集改款</h1>
           <p className="text-muted-foreground mt-1 text-sm">基于已采集的商品改款上架（独立新品，offer_id 自动新生成）</p>
         </div>
         <Card className="border-orange-200 dark:border-orange-900">
           <CardContent className="py-12 text-center text-muted-foreground space-y-3">
-            <p className="text-sm">请先到 SKU采集跟卖 选择要改款的商品，点击「SKU 采集改款」按钮跳转</p>
+            <p className="text-sm">请先到 商品采集与上架 选择要改款的 Ozon 商品，点击「Ozon 采集改款」按钮跳转</p>
             <div className="flex flex-wrap justify-center gap-2">
               <Button onClick={() => router.push('/collect')} className="bg-orange-600 hover:bg-orange-700 text-white">
-                <ArrowLeft className="h-4 w-4 mr-1" /> 去 SKU采集跟卖
+                <ArrowLeft className="h-4 w-4 mr-1" /> 去 商品采集与上架
               </Button>
               <Button variant="outline" onClick={() => router.push('/collect/1688')}>
                 货源采集上品
@@ -223,7 +223,7 @@ export default function ListingPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between border-l-4 border-orange-500 pl-3 py-1 bg-orange-50/40 dark:bg-orange-950/20 rounded-r">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-orange-700 dark:text-orange-400">SKU 采集改款</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-orange-700 dark:text-orange-400">Ozon 采集改款</h1>
           <p className="text-muted-foreground mt-1 text-sm">
             共 {items.length} 件商品 · 走商品复制路径（offer_id 自动新生成，对 OZON 是独立新品）
           </p>

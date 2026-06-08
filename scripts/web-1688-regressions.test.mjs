@@ -52,6 +52,7 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
 test('dashboard and main listing page expose domestic supply workflow entry points', () => {
   const dashboardPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'page.tsx');
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', 'page.tsx');
+  const listingLogsPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing-logs', 'page.tsx');
   const sidebar = readRepoFile('apps', 'web', 'src', 'components', 'layout', 'sidebar.tsx');
 
   assert.match(dashboardPage, /href="\/collect\/1688"/);
@@ -66,7 +67,16 @@ test('dashboard and main listing page expose domestic supply workflow entry poin
   assert.doesNotMatch(listingPage, /1688 采集上品|1688 上架准备/);
   assert.match(sidebar, /label:\s*'货源采集上品'/);
   assert.match(sidebar, /label:\s*'货源上架准备'/);
+  assert.match(sidebar, /label:\s*'商品采集与上架'/);
+  assert.match(sidebar, /label:\s*'Ozon 采集改款'/);
+  assert.match(listingPage, /Ozon 采集改款/);
+  assert.match(listingPage, /请先到 商品采集与上架 选择要改款的 Ozon 商品/);
+  assert.match(listingPage, /去 商品采集与上架/);
+  assert.match(listingLogsPage, /汇总 商品采集与上架 \+ Ozon 采集改款的所有上架任务/);
   assert.doesNotMatch(sidebar, /1688采集上品|1688上架准备/);
+  assert.doesNotMatch(sidebar, /SKU采集跟卖|SKU采集改款/);
+  assert.doesNotMatch(listingPage, /SKU采集跟卖|SKU 采集改款|SKU采集改款/);
+  assert.doesNotMatch(listingLogsPage, /SKU 采集跟卖|SKU 采集改款|SKU采集跟卖|SKU采集改款/);
 });
 
 test('1688 listing preparation exposes Ozon category mapping fields', () => {

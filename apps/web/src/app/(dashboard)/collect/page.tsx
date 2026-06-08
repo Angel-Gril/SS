@@ -630,7 +630,7 @@ export default function CollectPage() {
                     handleGoToListing();
                   }}
                 >
-                  <ArrowRight className="h-4 w-4 mr-1" />SKU 采集改款
+                  <ArrowRight className="h-4 w-4 mr-1" />Ozon 采集改款
                 </Button>
                 <Button
                   size="sm"
