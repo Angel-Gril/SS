@@ -1281,7 +1281,7 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     variant,
     index,
     sourcePlatform: normalizeDomesticSupplySourcePlatform(variant?.sourcePlatform, itemSourcePlatform) || itemSourcePlatform,
-    sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku),
+    sourceSkuId: compactString(variant?.sourceSkuId),
   }));
   if (variantEntries.some((entry) => !entry.sourceSkuId)) {
     return { items: [], issues: ['missing_source_sku_ids'], listingStatus };

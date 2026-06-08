@@ -1829,4 +1829,41 @@ describe('1688 collect helpers', () => {
     expect(result.items).toEqual([]);
     expect(result.issues).toEqual(['missing_source_sku_ids']);
   });
+
+  it('does not treat legacy variant sku as an explicit source SKU trace for draft items', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-taobao-legacy-sku-only',
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceProductId: 'tb-998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'tb-red',
+          sourcePlatform: 'taobao',
+          ozonSku: 'ozon-red',
+          attrs: { color: 'red' },
+          stock: 50,
+        },
+      ],
+      metadata: {
+        sourceKind: 'domestic_supply',
+        sourceDataIssues: [],
+        preparedTitleRu: 'Товар Taobao',
+        targetPriceCny: '129',
+        ozonCategoryId: 17028922,
+        ozonTypeId: 93410,
+        description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(result.items).toEqual([]);
+    expect(result.issues).toEqual(['missing_source_sku_ids']);
+  });
 });
