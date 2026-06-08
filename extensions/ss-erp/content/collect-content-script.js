@@ -1404,7 +1404,7 @@
     }
 
     return (
-      pickStringByKey(sources, /^(productId|offerId|itemId|goodsId|nmId|nmID)$/i) ||
+      pickStringByKey(sources, /^(productId|offerId|itemId|item_id|num_iid|numIid|wareId|ware_id|goodsId|goods_id|nmId|nmID)$/i) ||
       null
     );
   }

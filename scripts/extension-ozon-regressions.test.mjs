@@ -97,10 +97,10 @@ test('domestic supply extension collect payloads are routed to the dedicated col
     assert.match(source, /sourcePlatform\s*\|\|\s*data\.platform/);
     assert.match(source, /function\s+inferDomesticSupplyPlatform\(payload\)/);
     assert.match(source, /sourcePlatform:\s*inferDomesticSupplyPlatform\(data\)\s*\|\|\s*'1688'/);
-    assert.match(source, /function\s+domesticSupplySourceProductId\(data\)\s*\{[\s\S]*?data\.sourceProductId\s*\|\|\s*data\.productId\s*\|\|\s*data\.offerId\s*\|\|\s*data\.sourceOfferId\s*\|\|\s*data\.itemId\s*\|\|\s*data\.goodsId[\s\S]*?\}/);
+    assert.match(source, /function\s+domesticSupplySourceProductId\(data\)\s*\{[\s\S]*?data\.sourceProductId\s*\|\|\s*data\.productId\s*\|\|\s*data\.offerId\s*\|\|\s*data\.sourceOfferId\s*\|\|\s*data\.itemId\s*\|\|\s*data\.item_id\s*\|\|\s*data\.num_iid\s*\|\|\s*data\.numIid\s*\|\|\s*data\.wareId\s*\|\|\s*data\.ware_id\s*\|\|\s*data\.goodsId\s*\|\|\s*data\.goods_id[\s\S]*?\}/);
     assert.match(source, /function\s+normalizeCollectPayload(?:ForEndpoint)?\([^)]*\)\s*\{[\s\S]*?(?:var|const)\s+sourceProductId\s*=\s*domesticSupplySourceProductId\(data\)[\s\S]*?offerId:\s*sourceProductId/);
     assert.match(source, /sourceProductId:\s*sourceProductId/);
-    assert.doesNotMatch(source, /sourceProductId\s*=\s*data\.sourceProductId\s*\|\|[^\n]*(?:data\.skuId|data\.sourceSkuId|data\.sku)/);
+    assert.doesNotMatch(source, /return\s+data\.sourceProductId[^\n]*(?:data\.skuId|data\.sourceSkuId|data\.sku)(?:\s|\|\||;)/);
     assert.doesNotMatch(source, /sourceProductId:\s*data\.(?:sku|sourceSkuId|skuId)/);
     assert.match(source, /offerId:\s*sourceProductId/);
     assert.doesNotMatch(source, /sku:\s*sourceProductId/);
@@ -230,9 +230,15 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.match(collectScript, /allSources\.push\(\.\.\.embeddedJson\)/);
   assert.match(collectScript, /script\[type\*="json"\]/);
   assert.doesNotMatch(collectScript, /productId\|offerId\|itemId\|goodsId\|skuId\|nmId/);
-  assert.match(collectScript, /pickStringByKey\(sources,\s*\/\^\(productId\|offerId\|itemId\|goodsId\|nmId\|nmID\)\$\/i\)/);
-  assert.doesNotMatch(collectScript, /pickStringByKey\(sources,\s*\/\^\(productId\|offerId\|itemId\|goodsId\|nmId\|nmID\|id\)\$\/i\)/);
+  assert.match(collectScript, /pickStringByKey\(sources,\s*\/\^\(productId\|offerId\|itemId\|item_id\|num_iid\|numIid\|wareId\|ware_id\|goodsId\|goods_id\|nmId\|nmID\)\$\/i\)/);
   assert.doesNotMatch(collectScript, /pickStringByKey\(sources,\s*\/\^\([^)]*(?:sku|skuId|sourceSkuId|ozonSku|ozonProductId|ozonOfferId)[^)]*\)\$\/i\)/i);
+  const productIdKeyMatch = collectScript.match(/pickStringByKey\(sources,\s*\/\^\(([^)]+)\)\$\/i\)/);
+  assert.ok(productIdKeyMatch, 'product id extractor key list must be visible');
+  const productIdKeys = productIdKeyMatch[1].split('|');
+  assert.ok(!productIdKeys.includes('id'), 'generic id must not be promoted to sourceProductId');
+  for (const forbidden of ['sku', 'skuId', 'sourceSkuId', 'ozonSku', 'ozonProductId', 'ozonOfferId']) {
+    assert.ok(!productIdKeys.includes(forbidden), `${forbidden} must not be promoted to sourceProductId`);
+  }
   assert.match(collectScript, /function\s+normalizeSkuAttrs/);
   assert.match(collectScript, /function\s+normalizeSkuImages/);
   assert.match(collectScript, /\["image",\s*"imageUrl",\s*"imgUrl",\s*"picUrl",\s*"skuImage",\s*"skuImageUrl",\s*"previewImage",\s*"thumbUrl",\s*"mainImage"\]/);

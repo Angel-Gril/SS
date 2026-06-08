@@ -33,7 +33,18 @@
 
   function domesticSupplySourceProductId(data) {
     if (!data || typeof data !== 'object') return '';
-    return data.sourceProductId || data.productId || data.offerId || data.sourceOfferId || data.itemId || data.goodsId;
+    return data.sourceProductId
+      || data.productId
+      || data.offerId
+      || data.sourceOfferId
+      || data.itemId
+      || data.item_id
+      || data.num_iid
+      || data.numIid
+      || data.wareId
+      || data.ware_id
+      || data.goodsId
+      || data.goods_id;
   }
 
   function normalizeCollectPayload(payload) {
