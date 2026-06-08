@@ -183,7 +183,7 @@ function sourceSkuIdsFromVariants(variants: unknown) {
   for (const variant of variants) {
     if (!variant || typeof variant !== 'object' || Array.isArray(variant)) continue;
     const record = variant as Record<string, unknown>;
-    const sourceSkuId = traceText(record, 'sourceSkuId') || traceText(record, 'sku');
+    const sourceSkuId = traceText(record, 'sourceSkuId');
     if (sourceSkuId) sourceSkuIds.add(sourceSkuId);
   }
   return sourceSkuIds;
@@ -200,7 +200,7 @@ function variantRecords(variants: unknown): Record<string, unknown>[] {
 
 function sourceSkuVariants(variants: unknown, sourceSkuId: string) {
   return variantRecords(variants).filter((variant) => {
-    const variantSourceSkuId = traceText(variant, 'sourceSkuId') || traceText(variant, 'sku');
+    const variantSourceSkuId = traceText(variant, 'sourceSkuId');
     return variantSourceSkuId === sourceSkuId;
   });
 }

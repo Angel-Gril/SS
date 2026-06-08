@@ -146,6 +146,10 @@ test('1688 prepared listing drafts use a dedicated backend endpoint', () => {
   assert.match(listingRoute, /function\s+invalidAlibaba1688ListingSupplyRecords\(/);
   assert.match(listingRoute, /function\s+invalidAlibaba1688ListingSourcePlatforms\(/);
   assert.match(listingRoute, /function\s+sourceSkuIdsFromVariants\(variants:\s*unknown\)/);
+  assert.match(listingRoute, /const\s+sourceSkuId\s*=\s*traceText\(record,\s*'sourceSkuId'\)/);
+  assert.match(listingRoute, /const\s+variantSourceSkuId\s*=\s*traceText\(variant,\s*'sourceSkuId'\)/);
+  assert.doesNotMatch(listingRoute, /traceText\(record,\s*'sourceSkuId'\)\s*\|\|\s*traceText\(record,\s*'sku'\)/);
+  assert.doesNotMatch(listingRoute, /traceText\(variant,\s*'sourceSkuId'\)\s*\|\|\s*traceText\(variant,\s*'sku'\)/);
   assert.match(listingRoute, /function\s+invalidAlibaba1688ListingSourceSkus\(/);
   assert.match(listingRoute, /source\s*===\s*'1688-listing'[\s\S]*validateAlibaba1688ListingSourceTraces\(items\)/);
   assert.match(listingRoute, /reason:\s*'missing_source_sku_id'/);

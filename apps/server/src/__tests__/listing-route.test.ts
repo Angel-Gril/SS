@@ -387,6 +387,74 @@ describe('listing route', () => {
     expect(syncJobMock.create).not.toHaveBeenCalled();
   });
 
+  it('does not treat legacy variant sku as a collected source SKU trace', async () => {
+    supplyGoodsMock.findMany.mockResolvedValueOnce([
+      {
+        id: 'supply-domestic',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        variants: [
+          { sku: 'tb-red', sourcePlatform: 'taobao' },
+        ],
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(listingRoutes, { prefix: '/api/listing' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/listing/batch',
+      payload: {
+        shopId: 'shop-1',
+        source: '1688-listing',
+        items: [
+          {
+            offerId: 'sstaobao-998877-tb-red',
+            title: 'Товар со старым SKU',
+            description: 'Описание',
+            categoryId: 17028922,
+            typeId: 93410,
+            price: 129,
+            currency: 'CNY',
+            stock: 10,
+            images: ['https://img.example.com/tb-red.jpg'],
+            weight: 500,
+            height: 100,
+            depth: 100,
+            width: 100,
+            sourceTrace: {
+              supplyGoodsId: 'supply-domestic',
+              sourcePlatform: 'taobao',
+              sourceProductId: '998877',
+              sourceSkuId: 'tb-red',
+            },
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源上架商品引用的货源 SKU 不属于采集记录',
+      data: {
+        invalidItems: [
+          {
+            offerId: 'sstaobao-998877-tb-red',
+            supplyGoodsId: 'supply-domestic',
+            sourceSkuId: 'tb-red',
+            reason: 'invalid_source_sku_id',
+          },
+        ],
+      },
+    });
+    expect(ozonRequestMock).not.toHaveBeenCalled();
+    expect(syncJobMock.create).not.toHaveBeenCalled();
+  });
+
   it('rejects supply listing submissions when the collected record has no source SKU variants', async () => {
     supplyGoodsMock.findMany.mockResolvedValueOnce([
       {
