@@ -1059,6 +1059,7 @@ export function getAlibaba1688PreparationIssues(row: {
   ozonTypeId?: string | number | null;
 }, source?: {
   hasImages?: boolean;
+  variants?: unknown;
 }) {
   const title = String(row.preparedTitleRu || '').trim();
   const targetPrice = Number(row.targetPriceCny);
@@ -1084,6 +1085,13 @@ export function getAlibaba1688PreparationIssues(row: {
   if (source && !source.hasImages) {
     issues.push('missing_source_images');
   }
+  if (
+    source
+    && Array.isArray(source.variants)
+    && (source.variants.length === 0 || source.variants.some((variant: any) => !compactString(variant?.sourceSkuId)))
+  ) {
+    issues.push('missing_source_sku_ids');
+  }
 
   return issues;
 }
@@ -1102,6 +1110,7 @@ export function buildAlibaba1688PreparationMetadata(
   },
   source?: {
     hasImages?: boolean;
+    variants?: unknown;
   },
 ) {
   const meta: Record<string, any> = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
@@ -1777,6 +1786,7 @@ export async function collectRoutes(app: FastifyInstance) {
         : null;
       const preparationMeta = buildAlibaba1688PreparationMetadata(item.metadata, row, {
         hasImages: nextImages.length > 0,
+        variants: nextVariants,
       });
       const meta = refreshAlibaba1688SourceDataIssues(preparationMeta, {
         images: nextImages,

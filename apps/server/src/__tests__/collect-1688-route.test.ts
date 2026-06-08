@@ -610,6 +610,102 @@ describe('1688 collect route', () => {
     expect(supplyGoodsMock.update).not.toHaveBeenCalled();
   });
 
+  it('keeps saved preparation as draft when variants lack source SKU traces', async () => {
+    supplyGoodsMock.findMany.mockResolvedValue([
+      {
+        id: 'source-missing-sku',
+        userId: 'user-1',
+        title: '淘宝货源',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        images: ['https://img.example.com/main.jpg'],
+        variants: [
+          {
+            sku: 'taobao-1',
+            sourceSkuId: '',
+            sourcePlatform: 'taobao',
+            specText: '红色',
+            price: '21.9',
+          },
+        ],
+        purchasePrice: { toString: () => '21.90' },
+        metadata: {
+          sourceKind: 'domestic_supply',
+          listingPreparationStatus: 'collected_only',
+          categoryMappingStatus: 'deferred_until_listing',
+        },
+        createdAt: new Date('2026-06-07T12:00:00.000Z'),
+      },
+    ]);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688/save-preparation',
+      payload: {
+        items: [
+          {
+            id: 'source-missing-sku',
+            preparedTitleRu: 'Товар Taobao',
+            targetPriceCny: '129',
+            ozonCategoryId: 17028922,
+            ozonTypeId: 93410,
+            images: ['https://img.example.com/main.jpg'],
+            purchasePrice: '21.90',
+            description: 'Описание товара',
+            attributes: { Материал: 'текстиль' },
+            variants: [
+              {
+                specText: '红色',
+                price: '21.9',
+                sourcePlatform: 'taobao',
+                ozonSku: 'ozon-red',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 1,
+      data: {
+        saved: 1,
+        ready: 0,
+        draft: 1,
+        items: [
+          {
+            id: 'source-missing-sku',
+            listingPreparationStatus: 'draft',
+            listingPreparationIssues: ['missing_source_sku_ids'],
+          },
+        ],
+      },
+    });
+    expect(supplyGoodsMock.update).toHaveBeenCalledWith({
+      where: { id: 'source-missing-sku' },
+      data: expect.objectContaining({
+        variants: [
+          expect.objectContaining({
+            sku: 'taobao-1',
+            sourceSkuId: '',
+            sourcePlatform: 'taobao',
+          }),
+        ],
+        metadata: expect.objectContaining({
+          listingPreparationStatus: 'draft',
+          listingPreparationIssues: ['missing_source_sku_ids'],
+          sourceDataIssues: [],
+        }),
+      }),
+    });
+  });
+
   it('reports invalid records when saving preparation payloads include Ozon collect records', async () => {
     supplyGoodsMock.findMany.mockResolvedValue([
       {

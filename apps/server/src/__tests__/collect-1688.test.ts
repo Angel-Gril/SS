@@ -1164,6 +1164,61 @@ describe('1688 collect helpers', () => {
     expect(metadata).not.toHaveProperty('listingPreparationIssues');
   });
 
+  it('keeps 1688 preparation drafts when variants lack source SKU traces', () => {
+    const metadata = buildAlibaba1688PreparationMetadata(
+      { categoryMappingStatus: 'deferred_until_listing' },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
+      },
+      {
+        hasImages: true,
+        variants: [
+          {
+            sku: 'taobao-1',
+            sourceSkuId: '',
+            sourcePlatform: 'taobao',
+            ozonSku: 'ozon-red',
+          },
+        ],
+      } as any,
+    );
+
+    expect(metadata).toMatchObject({
+      preparedTitleRu: 'Мужские кроссовки',
+      targetPriceCny: '199',
+      ozonCategoryId: 17031663,
+      ozonTypeId: 971234,
+      listingPreparationStatus: 'draft',
+      listingPreparationIssues: ['missing_source_sku_ids'],
+      categoryMappingStatus: 'manual_ready',
+    });
+  });
+
+  it('keeps 1688 preparation drafts when no source variants are available', () => {
+    const metadata = buildAlibaba1688PreparationMetadata(
+      { categoryMappingStatus: 'deferred_until_listing' },
+      {
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: '17031663',
+        ozonTypeId: '971234',
+      },
+      {
+        hasImages: true,
+        variants: [],
+      },
+    );
+
+    expect(metadata).toMatchObject({
+      listingPreparationStatus: 'draft',
+      listingPreparationIssues: ['missing_source_sku_ids'],
+      categoryMappingStatus: 'manual_ready',
+    });
+  });
+
   it('keeps 1688 records out of Ozon listing drafts until preparation is ready', () => {
     const result = buildAlibaba1688OzonListingDraftItems({
       id: 'collect-1688-draft',
