@@ -130,6 +130,19 @@ test('cloud extension package keeps 1688 search permissions for price checks', (
   assert.match(buildScript, /'https:\/\/s\.1688\.com\/\*'/);
 });
 
+test('cloud extension package keeps mobile domestic supply page permissions', () => {
+  const buildScript = readRepoFile('scripts', 'build-extension-package.mjs');
+
+  for (const pattern of [
+    "'https://item.m.jd.com/*'",
+    "'https://mitem.jd.com/*'",
+    "'https://h5.m.taobao.com/*'",
+    "'https://detail.m.tmall.com/*'",
+  ]) {
+    assert.ok(buildScript.includes(pattern), `cloud package must keep ${pattern}`);
+  }
+});
+
 test('Ozon product panel can start a 1688 price check workflow', () => {
   const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');

@@ -45,8 +45,12 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://*.aliexpress.com/*',
   'https://www.wildberries.ru/*',
   'https://item.jd.com/*',
+  'https://item.m.jd.com/*',
+  'https://mitem.jd.com/*',
   'https://item.taobao.com/*',
+  'https://h5.m.taobao.com/*',
   'https://detail.tmall.com/*',
+  'https://detail.m.tmall.com/*',
 ];
 
 const CLOUD_ERP_MATCHES = [
