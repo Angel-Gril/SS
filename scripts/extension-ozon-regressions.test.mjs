@@ -150,6 +150,8 @@ test('Ozon product panel can start a 1688 price check workflow', () => {
   assert.match(collectScript, /ALIBABA_1688_PRICE_CHECK_SEARCH_ID/);
   assert.match(collectScript, /ss-erp:start-1688-price-check/);
   assert.match(collectScript, /OZON_1688_PRICE_CHECK_CONTEXT_KEY/);
+  assert.match(collectScript, /const\s+ozonSku\s*=\s*String\(\(payload\s*&&\s*\(payload\.sku\s*\|\|\s*payload\.ozonSku\)\)\s*\|\|\s*""\)\.trim\(\)/);
+  assert.doesNotMatch(collectScript, /const\s+ozonSku\s*=\s*String\(\(payload\s*&&\s*\(payload\.sku\s*\|\|\s*payload\.ozonSku\)\)\s*\|\|\s*resolvedProductId/);
   assert.match(collectScript, /ozonProductId:\s*resolvedProductId/);
   assert.match(collectScript, /ozonOfferId:\s*offerId\s*\|\|\s*null/);
   assert.match(collectScript, /buildPriceCheckSummary/);

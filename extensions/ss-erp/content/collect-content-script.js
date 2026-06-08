@@ -868,7 +868,7 @@
     const item = insights && insights.item ? insights.item : {};
     const images = Array.isArray(payload && payload.images) ? payload.images : [];
     const resolvedProductId = String((payload && payload.productId) || productId || "").trim();
-    const ozonSku = String((payload && (payload.sku || payload.ozonSku)) || resolvedProductId || "").trim();
+    const ozonSku = String((payload && (payload.sku || payload.ozonSku)) || "").trim();
     const offerId = String((payload && (payload.offerId || payload.offer_id)) || item.offerId || item.offer_id || "").trim();
     return {
       sourcePlatform: "ozon",
