@@ -517,15 +517,19 @@ export default function CollectPage() {
 
   async function handleSaveItem() {
     if (!editItemId) return;
+    const item = editItemId ? items.find((item) => item.id === editItemId) || null : null;
+    const isEditingDomesticSupply = isDomesticSupplySourcePlatform(item?.sourcePlatform);
     setSavingItem(true);
     const body: Record<string, unknown> = {
       title: editItemData.title,
       publishTitle: editItemData.publishTitle,
-      sku: editItemData.sku,
       currency: editItemData.currency,
-      sourceUrl: editItemData.sourceUrl,
       notes: editItemData.notes,
     };
+    if (!isEditingDomesticSupply) {
+      body.sku = editItemData.sku;
+      body.sourceUrl = editItemData.sourceUrl;
+    }
     if (editItemData.purchasePrice && !isNaN(parseFloat(editItemData.purchasePrice))) {
       body.purchasePrice = parseFloat(editItemData.purchasePrice);
     }
@@ -560,6 +564,8 @@ export default function CollectPage() {
   const selectedItems = items.filter((i) => selectedIds.has(i.id));
   const selectedHasDomesticSupply = selectedItems.some((i) => isDomesticSupplySourcePlatform(i.sourcePlatform));
   const selectedAllDomesticSupply = selectedItems.length > 0 && selectedItems.every((i) => isDomesticSupplySourcePlatform(i.sourcePlatform));
+  const editingItem = editItemId ? items.find((item) => item.id === editItemId) || null : null;
+  const editingIsDomesticSupply = isDomesticSupplySourcePlatform(editingItem?.sourcePlatform);
 
   return (
     <div className="space-y-4">
@@ -1243,10 +1249,17 @@ export default function CollectPage() {
               <p className="text-[11px] text-muted-foreground">商品标题可中文展示；上架标题不能含中文，否则后端会阻止上架。</p>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label className="text-xs">SKU</Label>
-                <Input value={editItemData.sku} onChange={(e) => setEditItemData({ ...editItemData, sku: e.target.value })} />
-              </div>
+              {editingIsDomesticSupply ? (
+                <div className="space-y-1">
+                  <Label className="text-xs">货源商品ID</Label>
+                  <Input value={editingItem?.sourceProductId || ''} disabled={editingIsDomesticSupply} className="bg-muted text-muted-foreground" />
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Label className="text-xs">Ozon SKU / Product ID</Label>
+                  <Input value={editItemData.sku} onChange={(e) => setEditItemData({ ...editItemData, sku: e.target.value })} />
+                </div>
+              )}
               <div className="space-y-1">
                 <Label className="text-xs">货币</Label>
                 <Input value="CNY（人民币）" disabled className="bg-muted text-muted-foreground" />
@@ -1260,10 +1273,17 @@ export default function CollectPage() {
                 onChange={(e) => setEditItemData({ ...editItemData, purchasePrice: e.target.value })}
               />
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">商品链接</Label>
-              <Input value={editItemData.sourceUrl} onChange={(e) => setEditItemData({ ...editItemData, sourceUrl: e.target.value })} placeholder="https://..." />
-            </div>
+            {editingIsDomesticSupply ? (
+              <div className="space-y-1">
+                <Label className="text-xs">商品链接</Label>
+                <Input value={editItemData.sourceUrl} disabled={editingIsDomesticSupply} className="bg-muted text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <Label className="text-xs">商品链接</Label>
+                <Input value={editItemData.sourceUrl} onChange={(e) => setEditItemData({ ...editItemData, sourceUrl: e.target.value })} placeholder="https://..." />
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-xs">备注</Label>
               <textarea

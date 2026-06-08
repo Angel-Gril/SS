@@ -322,6 +322,22 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.doesNotMatch(collectPage, /\{item\.sourcePlatform\}<\/Badge>/);
 });
 
+test('main collect item editor does not edit domestic supply records as generic skus', () => {
+  const collectPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', 'page.tsx');
+
+  assert.match(collectPage, /const\s+editingItem\s*=\s*editItemId\s*\?\s*items\.find\(\(item\)\s*=>\s*item\.id\s*===\s*editItemId\)\s*\|\|\s*null\s*:\s*null/);
+  assert.match(collectPage, /const\s+editingIsDomesticSupply\s*=\s*isDomesticSupplySourcePlatform\(editingItem\?\.sourcePlatform\)/);
+  assert.match(collectPage, /const\s+isEditingDomesticSupply\s*=\s*isDomesticSupplySourcePlatform\(item\?\.sourcePlatform\)/);
+  assert.match(collectPage, /if\s*\(!isEditingDomesticSupply\)\s*\{\s*body\.sku\s*=\s*editItemData\.sku;\s*body\.sourceUrl\s*=\s*editItemData\.sourceUrl;\s*\}/);
+  assert.match(collectPage, /editingIsDomesticSupply\s*\?\s*\(/);
+  assert.match(collectPage, /货源商品ID/);
+  assert.match(collectPage, /Ozon SKU \/ Product ID/);
+  assert.match(collectPage, /disabled=\{editingIsDomesticSupply\}/);
+  assert.doesNotMatch(collectPage, /sku:\s*editItemData\.sku/);
+  assert.doesNotMatch(collectPage, /sourceUrl:\s*editItemData\.sourceUrl/);
+  assert.doesNotMatch(collectPage, /<Label className="text-xs">SKU<\/Label>/);
+});
+
 test('supply goods management accepts all domestic supply platform labels', () => {
   const supplyRoute = readRepoFile('apps', 'server', 'src', 'routes', 'supply.ts');
   const supplyPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'supply', 'goods', 'page.tsx');
