@@ -29,7 +29,7 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
     assert.match(source, /ozonProductId:\s*sourceTrace\.ozonProductId/);
     assert.match(source, /ozonOfferId:\s*sourceTrace\.ozonOfferId/);
     assert.match(source, /sourcePlatform:\s*sourceTrace\.sourcePlatform/);
-    assert.match(source, /SKU图片URL/);
+    assert.match(source, /货源SKU图片URL/);
     assert.match(source, /Ozon SKU/);
     assert.match(source, /Ozon Product ID/);
     assert.match(source, /Ozon Offer ID/);
@@ -91,7 +91,8 @@ test('1688 listing preparation treats source data issues as draft blockers', () 
   assert.match(listingPage, /function\s+currentSourceDataIssues\(item:\s*Alibaba1688ListingItem\)/);
   assert.match(listingPage, /function\s+currentPreparationIssues\(item:\s*Alibaba1688ListingItem\)[\s\S]*?currentSourceDataIssues\(item\)[\s\S]*?issues\.includes\(issue\)[\s\S]*?issues\.push\(issue\)/);
   assert.match(listingPage, /function\s+preparationIssueLabels\(issues\?:\s*string\[\]\)[\s\S]*?sourceDataIssueLabels\(\[issue\]\)/);
-  assert.match(sourceIssuesLib, /missing_source_sku_ids:\s*'缺货源 SKU'/);
+  assert.match(sourceIssuesLib, /missing_sku_items:\s*'缺货源 SKU'/);
+  assert.match(sourceIssuesLib, /missing_source_sku_ids:\s*'缺货源 SKU ID'/);
   assert.doesNotMatch(listingPage, /sourceDataIssueLabels\(sourceIssues\)/);
 });
 
@@ -400,6 +401,12 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.match(collect1688Page, /暂无货源采集记录/);
   assert.match(collect1688Page, /sourcePlatformLabel\(item\.sourcePlatform\)/);
   assert.match(collect1688Page, /货源ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
+  assert.match(collect1688Page, /货源 SKU:\s*\{item\.metadata\?\.skuCount\s*\|\|\s*0\}/);
+  assert.match(collect1688Page, /<Label className="text-xs">货源 SKU 明细<\/Label>/);
+  assert.match(collect1688Page, /货源SKU图片URL/);
+  assert.doesNotMatch(collect1688Page, /<span>SKU:\s*\{item\.metadata\?\.skuCount\s*\|\|\s*0\}<\/span>/);
+  assert.doesNotMatch(collect1688Page, /<Label className="text-xs">SKU 明细<\/Label>/);
+  assert.doesNotMatch(collect1688Page, /[^货源]SKU图片URL/);
   assert.match(collect1688Page, /const\s+selectedListingIds\s*=\s*useMemo\([\s\S]*?filter\(\(item\)\s*=>\s*selectedIds\.has\(item\.id\)\s*&&\s*canSelectForListing\(item\)\)[\s\S]*?map\(\(item\)\s*=>\s*item\.id\)/);
   assert.match(collect1688Page, /const\s+selectedCount\s*=\s*selectedListingIds\.length/);
   assert.match(collect1688Page, /goToPreparation\(selectedListingIds\)/);
@@ -437,6 +444,9 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.match(listingPage, /返回货源采集上品/);
   assert.match(listingPage, /货源上架记录/);
   assert.match(listingPage, /货源ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
+  assert.match(listingPage, /货源 SKU:\s*\{item\.skuCount\s*\|\|\s*item\.variants\.length\}/);
+  assert.match(listingPage, /<Label className="text-xs">货源 SKU 明细<\/Label>/);
+  assert.match(listingPage, /货源SKU图片URL/);
   assert.match(listingPage, /加载货源上架准备数据失败/);
   assert.match(listingPage, /已保存货源上架准备草稿/);
   assert.match(listingPage, /暂无可准备的货源采集记录/);
@@ -447,6 +457,9 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.doesNotMatch(listingPage, />1688 上架准备</);
   assert.doesNotMatch(listingPage, /返回 1688 采集上品/);
   assert.doesNotMatch(listingPage, /1688 上架记录/);
+  assert.doesNotMatch(listingPage, /<span>SKU:\s*\{item\.skuCount\s*\|\|\s*item\.variants\.length\}<\/span>/);
+  assert.doesNotMatch(listingPage, /<Label className="text-xs">SKU 明细<\/Label>/);
+  assert.doesNotMatch(listingPage, /[^货源]SKU图片URL/);
 });
 
 test('1688 listing preparation page renders invalid collect record details from API errors', () => {

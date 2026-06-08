@@ -777,7 +777,7 @@ export default function Alibaba1688ListingPage() {
                 <div className="flex gap-3 flex-wrap text-muted-foreground">
                   <span>采购价: {item.purchasePrice ? `¥${item.purchasePrice}` : '未填写'}</span>
                   <span>货源ID: {item.sourceProductId || '-'}</span>
-                  <span>SKU: {item.skuCount || item.variants.length}</span>
+                  <span>货源 SKU: {item.skuCount || item.variants.length}</span>
                   <span>{formatDate(item.createdAt)}</span>
                 </div>
                 <div className="text-muted-foreground truncate">
@@ -990,12 +990,12 @@ export default function Alibaba1688ListingPage() {
                 />
               </div>
               <div className="space-y-1 md:col-span-2">
-                <Label className="text-xs">SKU 明细</Label>
+                <Label className="text-xs">货源 SKU 明细</Label>
                 <textarea
                   className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                   value={item.skuText || ''}
                   onChange={(e) => updateItemSkuText(item.id, e.target.value)}
-                  placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | SKU图片URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
+                  placeholder={'货源SKU | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | 货源SKU图片URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
                 />
               </div>
               <div className="space-y-1 md:col-span-2">
