@@ -308,7 +308,6 @@ function normalizeCollectPayloadForEndpoint(payload) {
       sourcePlatform: inferDomesticSupplyPlatform(data) || '1688',
       sourceUrl: data.sourceUrl || data.tabUrl,
       offerId: sourceProductId,
-      sku: sourceProductId,
       images: Array.isArray(data.images) ? data.images : undefined,
       price: data.price,
       priceText: data.priceText || data.price,

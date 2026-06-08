@@ -101,7 +101,7 @@ test('domestic supply extension collect payloads are routed to the dedicated col
     assert.match(source, /function\s+normalizeCollectPayload(?:ForEndpoint)?\([^)]*\)\s*\{[\s\S]*?(?:var|const)\s+sourceProductId\s*=\s*domesticSupplySourceProductId\(data\)[\s\S]*?offerId:\s*sourceProductId/);
     assert.doesNotMatch(source, /sourceProductId\s*=\s*data\.sourceProductId\s*\|\|[^\n]*(?:data\.skuId|data\.sourceSkuId|data\.sku)/);
     assert.match(source, /offerId:\s*sourceProductId/);
-    assert.match(source, /sku:\s*sourceProductId/);
+    assert.doesNotMatch(source, /sku:\s*sourceProductId/);
     assert.doesNotMatch(source, /sourcePlatform:\s*data\.sourcePlatform\s*\|\|\s*data\.platform\s*\|\|\s*'1688'/);
     assert.doesNotMatch(source, /offerId:\s*data\.offerId\s*\|\|\s*data\.productId\s*\|\|\s*data\.sourceProductId\s*\|\|\s*data\.sku/);
     assert.doesNotMatch(source, /sku:\s*data\.sourceProductId\s*\|\|\s*data\.sku\s*\|\|\s*data\.productId/);
