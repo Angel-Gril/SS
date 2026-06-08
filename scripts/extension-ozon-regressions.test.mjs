@@ -204,6 +204,34 @@ test('domestic supply product pages expose a direct collect-to-ERP action', () =
   assert.match(collectScript, /function\s+extractPinduoduoProduct/);
 });
 
+test('domestic supply product page detection covers common mobile and query URL forms', () => {
+  const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const detailScript = manifest.content_scripts.find((entry) =>
+    (entry.matches || []).includes('https://h5.m.taobao.com/*')
+      && (entry.matches || []).includes('https://item.m.jd.com/*')
+      && (entry.matches || []).includes('https://mitem.jd.com/*')
+      && (entry.matches || []).includes('https://mobile.pinduoduo.com/*')
+      && (entry.js || []).includes('content/collect-content-script.js')
+  );
+
+  assert.ok(detailScript, 'collect-content-script must be injected on common mobile supply product pages');
+  assert.match(collectScript, /function\s+currentUrlText\(\)/);
+  assert.match(collectScript, /if\s*\(platform === "jd"\)\s*return isJdProductPage\(\)/);
+  assert.match(collectScript, /if\s*\(platform === "taobao"\)\s*return isTaobaoProductPage\(\)/);
+  assert.match(collectScript, /if\s*\(platform === "tmall"\)\s*return isTmallProductPage\(\)/);
+  assert.match(collectScript, /if\s*\(platform === "pinduoduo"\)\s*return isPinduoduoProductPage\(\)/);
+  assert.match(collectScript, /function\s+isJdProductPage\(\)/);
+  assert.ok(collectScript.includes('item\\.m\\.jd\\.com'));
+  assert.ok(collectScript.includes('mitem\\.jd\\.com'));
+  assert.match(collectScript, /function\s+isTaobaoProductPage\(\)/);
+  assert.ok(collectScript.includes('h5\\.m\\.taobao\\.com'));
+  assert.match(collectScript, /function\s+isTmallProductPage\(\)/);
+  assert.ok(collectScript.includes('detail\\.m\\.tmall\\.com'));
+  assert.match(collectScript, /function\s+isPinduoduoProductPage\(\)/);
+  assert.match(collectScript, /goods_id\|goodsId/);
+});
+
 test('1688 product extraction includes price and category fields for ERP records', () => {
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
   const pageBridge = readRepoFile('extensions', 'ss-erp', 'content', 'page-bridge.js');

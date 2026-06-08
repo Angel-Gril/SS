@@ -406,13 +406,46 @@
     return /^https:\/\/detail\.1688\.com\/offer\/\d+\.html/i.test(location.href);
   }
 
+  function currentUrlText() {
+    return String(location.href || "");
+  }
+
+  function isJdProductPage() {
+    const url = currentUrlText();
+    return /^https:\/\/item\.jd\.com\/\d+\.html/i.test(url)
+      || /^https:\/\/item\.m\.jd\.com\/product\/\d+\.html/i.test(url)
+      || /^https:\/\/mitem\.jd\.com\/product\/\d+\.html/i.test(url)
+      || /[?&](?:wareId|sku|skuId)=\d{5,}/i.test(url);
+  }
+
+  function isTaobaoProductPage() {
+    const url = currentUrlText();
+    return /^https:\/\/item\.taobao\.com\/item\.htm/i.test(url)
+      || /^https:\/\/h5\.m\.taobao\.com\/awp\/core\/detail\.htm/i.test(url)
+      || /^https:\/\/h5\.m\.taobao\.com\/.*\/item\.htm/i.test(url)
+      || /taobao\.com\/.*[?&](?:id|itemId|item_id|num_iid)=\d{5,}/i.test(url);
+  }
+
+  function isTmallProductPage() {
+    const url = currentUrlText();
+    return /^https:\/\/detail\.tmall\.com\/item\.htm/i.test(url)
+      || /^https:\/\/detail\.m\.tmall\.com\/item\.htm/i.test(url)
+      || /tmall\.com\/.*[?&](?:id|itemId|item_id)=\d{5,}/i.test(url);
+  }
+
+  function isPinduoduoProductPage() {
+    const url = currentUrlText();
+    return /^https:\/\/mobile\.(?:pinduoduo|yangkeduo)\.com\/goods(?:\d+)?\.html/i.test(url)
+      || /(?:pinduoduo|yangkeduo)\.com\/.*[?&](?:goods_id|goodsId)=\d{5,}/i.test(url);
+  }
+
   function isDomesticSupplyProductPage() {
     const platform = detectPlatform(location.hostname);
     if (platform === "1688") return isAlibaba1688ProductPage();
-    if (platform === "jd") return /^https:\/\/item\.jd\.com\/\d+\.html/i.test(location.href);
-    if (platform === "taobao") return /^https:\/\/item\.taobao\.com\/item\.htm/i.test(location.href);
-    if (platform === "tmall") return /^https:\/\/detail\.tmall\.com\/item\.htm/i.test(location.href);
-    if (platform === "pinduoduo") return /^https:\/\/mobile\.(?:pinduoduo|yangkeduo)\.com\/goods(?:\d+)?\.html/i.test(location.href);
+    if (platform === "jd") return isJdProductPage();
+    if (platform === "taobao") return isTaobaoProductPage();
+    if (platform === "tmall") return isTmallProductPage();
+    if (platform === "pinduoduo") return isPinduoduoProductPage();
     return false;
   }
 
