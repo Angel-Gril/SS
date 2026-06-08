@@ -409,6 +409,14 @@ test('editable SKU rows do not invent source SKU traces when the source SKU cell
   }
 });
 
+test('listing prefill keeps display SKU out of editable source SKU column', () => {
+  const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
+
+  assert.match(collectRoute, /function\s+formatAlibaba1688VariantText\(variants:\s*any\[\]\)/);
+  assert.match(collectRoute, /const\s+values\s*=\s*\[\s*variant\?\.sourceSkuId\s*\|\|\s*''/);
+  assert.doesNotMatch(collectRoute, /variant\?\.sourceSkuId\s*\|\|\s*variant\?\.sku/);
+});
+
 test('1688 collect page lists domestic supply records with real source platforms', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 

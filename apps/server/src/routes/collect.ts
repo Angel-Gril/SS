@@ -756,7 +756,7 @@ function formatAlibaba1688VariantText(variants: any[]): string {
     const ozonProductId = compactString(variant?.ozonProductId);
     const ozonOfferId = compactString(variant?.ozonOfferId);
     const values = [
-      variant?.sourceSkuId || variant?.sku || '',
+      variant?.sourceSkuId || '',
       specText,
       variant?.price ?? '',
       variant?.stock ?? '',

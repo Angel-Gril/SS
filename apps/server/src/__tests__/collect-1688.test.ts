@@ -1976,6 +1976,39 @@ describe('1688 collect helpers', () => {
     expect(result.issues).toEqual(['missing_source_sku_ids']);
   });
 
+  it('does not place display SKU into the editable source SKU column for listing prefill', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-taobao-display-sku-only',
+      title: '淘宝货源商品',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      sourceProductId: '998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          sku: 'display-row-red',
+          sourceSkuId: '',
+          sourcePlatform: 'taobao',
+          attrs: { color: 'red' },
+          price: '19.90',
+          stock: 50,
+        },
+      ],
+      metadata: {
+        sourceKind: 'domestic_supply',
+        sourceDataIssues: [],
+        description: '货源详情',
+        attributes: { 材质: '棉' },
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    } as any);
+
+    expect(item.skuText.split('\n')[0]?.split('|')[0]?.trim()).toBe('');
+    expect(item.sourceDataIssues).toEqual(['missing_source_sku_ids']);
+  });
+
   it('does not invent source SKU traces when collected SKU rows lack source IDs', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '淘宝货源商品',
