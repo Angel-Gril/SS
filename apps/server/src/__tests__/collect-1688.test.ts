@@ -1793,4 +1793,40 @@ describe('1688 collect helpers', () => {
       },
     ]);
   });
+
+  it('does not generate Ozon draft items when collected variants lack source SKU traces', () => {
+    const result = buildAlibaba1688OzonListingDraftItems({
+      id: 'collect-1688-missing-source-sku',
+      title: '男士运动鞋',
+      sourcePlatform: '1688',
+      sourceProductId: '734567890123',
+      purchasePrice: { toString: () => '25.80' },
+      currency: 'CNY',
+      images: ['https://img.example.com/base.jpg'],
+      variants: [
+        {
+          attrs: { color: 'red', size: '42' },
+          sourcePlatform: '1688',
+          ozonSku: 'ozon-sku-42',
+          stock: 120,
+        },
+      ],
+      metadata: {
+        sourceKind: 'domestic_supply',
+        sourceDataIssues: [],
+        preparedTitleRu: 'Мужские кроссовки',
+        targetPriceCny: '199',
+        ozonCategoryId: 17031663,
+        ozonTypeId: 971234,
+        description: 'Описание товара',
+        attributes: { Материал: 'текстиль' },
+        categoryMappingStatus: 'manual_ready',
+        listingPreparationStatus: 'ready',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.issues).toEqual(['missing_source_sku_ids']);
+  });
 });

@@ -2,6 +2,7 @@ const SOURCE_DATA_ISSUE_LABELS: Record<string, string> = {
   missing_source_images: '缺图片',
   missing_purchase_price: '缺采购价',
   missing_sku_items: '缺SKU',
+  missing_source_sku_ids: '缺货源 SKU',
   missing_description: '缺描述',
   missing_attributes: '缺属性',
 };

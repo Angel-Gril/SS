@@ -1271,15 +1271,22 @@ export function buildAlibaba1688OzonListingDraftItems(item: {
     variant,
     index,
     sourcePlatform: normalizeDomesticSupplySourcePlatform(variant?.sourcePlatform, itemSourcePlatform) || itemSourcePlatform,
-    sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku) || compactString(prefill.sourceProductId) || `sku-${index + 1}`,
+    sourceSkuId: compactString(variant?.sourceSkuId ?? variant?.sku),
   }));
-  const offerIds = buildUniqueAlibaba1688DraftOfferIds(variantEntries.map((entry) => ({
+  if (variantEntries.some((entry) => !entry.sourceSkuId)) {
+    return { items: [], issues: ['missing_source_sku_ids'], listingStatus };
+  }
+  const draftVariantEntries = variantEntries.map((entry) => ({
+    ...entry,
+    sourceSkuId: entry.sourceSkuId as string,
+  }));
+  const offerIds = buildUniqueAlibaba1688DraftOfferIds(draftVariantEntries.map((entry) => ({
     sourcePlatform: entry.sourcePlatform,
     sourceProductId: prefill.sourceProductId || item.id,
     sourceSkuId: entry.sourceSkuId,
     index: entry.index,
   })));
-  const variantEntriesWithOfferIds = variantEntries.map((entry, index) => ({
+  const variantEntriesWithOfferIds = draftVariantEntries.map((entry, index) => ({
     ...entry,
     offerId: offerIds[index]!,
   }));

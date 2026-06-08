@@ -86,10 +86,12 @@ test('1688 listing preparation exposes Ozon category mapping fields', () => {
 
 test('1688 listing preparation treats source data issues as draft blockers', () => {
   const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+  const sourceIssuesLib = readRepoFile('apps', 'web', 'src', 'lib', '1688-source-issues.ts');
 
   assert.match(listingPage, /function\s+currentSourceDataIssues\(item:\s*Alibaba1688ListingItem\)/);
   assert.match(listingPage, /function\s+currentPreparationIssues\(item:\s*Alibaba1688ListingItem\)[\s\S]*?currentSourceDataIssues\(item\)[\s\S]*?issues\.includes\(issue\)[\s\S]*?issues\.push\(issue\)/);
   assert.match(listingPage, /function\s+preparationIssueLabels\(issues\?:\s*string\[\]\)[\s\S]*?sourceDataIssueLabels\(\[issue\]\)/);
+  assert.match(sourceIssuesLib, /missing_source_sku_ids:\s*'缺货源 SKU'/);
   assert.doesNotMatch(listingPage, /sourceDataIssueLabels\(sourceIssues\)/);
 });
 
