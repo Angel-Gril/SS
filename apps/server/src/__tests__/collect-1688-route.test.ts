@@ -222,6 +222,60 @@ describe('1688 collect route', () => {
     });
   });
 
+  it('accepts domestic platform product id aliases from collect payloads', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue(null);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '京东显式 wareId 货源商品',
+        sourcePlatform: 'jd',
+        wareId: 'jd-ware-100012043978',
+        sku: 'display-sku-should-not-be-product',
+        skuId: 'sku-id-should-not-be-product',
+        priceText: '¥59.90',
+        images: ['https://img.example.com/jd-main.jpg'],
+        attributes: { 材质: '棉' },
+        skuItems: [
+          { sourceSkuId: 'jd-sku-red', specText: '红色', price: '59.9' },
+        ],
+        description: '京东货源详情',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(supplyGoodsMock.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        sourcePlatform: 'jd',
+        sourceProductId: 'jd-ware-100012043978',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(supplyGoodsMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourcePlatform: 'jd',
+        sourceProductId: 'jd-ware-100012043978',
+        sku: null,
+        variants: [
+          expect.objectContaining({
+            sourceSkuId: 'jd-sku-red',
+            sourcePlatform: 'jd',
+          }),
+        ],
+        metadata: expect.objectContaining({
+          offerId: 'jd-ware-100012043978',
+        }),
+      }),
+    });
+  });
+
   it('marks collected supply records with SKU rows missing source SKU ids as source-incomplete', async () => {
     supplyGoodsMock.findFirst.mockResolvedValue(null);
 

@@ -251,6 +251,28 @@ describe('1688 collect helpers', () => {
     }
   });
 
+  it('accepts domestic platform product id aliases without using SKU fields as product ids', () => {
+    const cases = [
+      [{ sourcePlatform: 'jd', wareId: 'jd-ware-100012043978', sku: 'display-sku-should-not-win' }, 'jd-ware-100012043978'],
+      [{ sourcePlatform: 'jd', ware_id: 'jd-ware-snake-100012043978', skuId: 'sku-id-should-not-win' }, 'jd-ware-snake-100012043978'],
+      [{ sourcePlatform: 'taobao', num_iid: 'tb-num-iid-998877', sourceSkuId: 'source-sku-should-not-win' }, 'tb-num-iid-998877'],
+      [{ sourcePlatform: 'taobao', item_id: 'tb-item-snake-998877', sku: 'display-sku-should-not-win' }, 'tb-item-snake-998877'],
+      [{ sourcePlatform: 'pinduoduo', goods_id: 'pdd-goods-snake-777888999', sku: 'display-sku-should-not-win' }, 'pdd-goods-snake-777888999'],
+    ] as const;
+
+    for (const [input, expectedSourceProductId] of cases) {
+      const record = buildAlibaba1688CollectRecord({
+        title: '货源商品 ID 别名',
+        priceText: '¥19.90',
+        ...input,
+      } as any);
+
+      expect(record.sourceProductId).toBe(expectedSourceProductId);
+      expect(record.sku).toBeNull();
+      expect(record.metadata.offerId).toBe(expectedSourceProductId);
+    }
+  });
+
   it('infers domestic source platforms from URLs when submitted platform data is missing or invalid', () => {
     const tmallRecord = buildAlibaba1688CollectRecord({
       title: '天猫货源商品',

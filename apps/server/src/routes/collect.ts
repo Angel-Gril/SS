@@ -52,6 +52,14 @@ const alibaba1688CollectSchema = z.object({
   sourceUrl: z.string().optional(),
   sourceProductId: z.string().optional(),
   offerId: z.string().optional(),
+  itemId: z.string().optional(),
+  item_id: z.string().optional(),
+  num_iid: z.string().optional(),
+  numIid: z.string().optional(),
+  wareId: z.string().optional(),
+  ware_id: z.string().optional(),
+  goodsId: z.string().optional(),
+  goods_id: z.string().optional(),
   sku: z.string().optional(),
   images: z.array(z.string()).optional(),
   imageText: z.string().optional(),
@@ -794,7 +802,17 @@ export function buildAlibaba1688CollectRecord(input: z.infer<typeof alibaba1688C
       : inferredSourcePlatform
   ) || '1688';
   const offerIdFromUrl = extractDomesticSupplyProductIdFromUrl(input.sourceUrl, sourcePlatform);
-  const offerId = compactString(input.sourceProductId) || compactString(input.offerId) || offerIdFromUrl;
+  const submittedSourceProductId = compactString(input.sourceProductId)
+    || compactString(input.offerId)
+    || compactString(input.itemId)
+    || compactString(input.item_id)
+    || compactString(input.num_iid)
+    || compactString(input.numIid)
+    || compactString(input.wareId)
+    || compactString(input.ware_id)
+    || compactString(input.goodsId)
+    || compactString(input.goods_id);
+  const offerId = submittedSourceProductId || offerIdFromUrl;
   const images = parseImageList(input.images, input.imageText);
   const attributes = {
     ...parseAttributeText(input.attributesText),
