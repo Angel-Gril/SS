@@ -389,7 +389,7 @@ function extractOzonPriceCheckContext(metadata: unknown): OzonPriceCheckContext 
     title,
     productId,
     sku,
-    ozonSku: sku || productId,
+    ozonSku: sku,
     offerId,
     sourceUrl,
     price: source.price != null && source.price !== '' ? String(source.price) : null,
@@ -617,7 +617,7 @@ function normalize1688SkuItems(
   if (!Array.isArray(items)) return [];
   const defaultSourcePlatform = normalizeDomesticSupplySourcePlatform(options.sourcePlatform) || '1688';
   const context = options.ozonPriceCheckContext;
-  const defaultOzonSku = compactString(context?.sku ?? context?.ozonSku ?? context?.productId);
+  const defaultOzonSku = compactString(context?.sku ?? context?.ozonSku);
   const defaultOzonProductId = compactString(context?.productId);
   const defaultOzonOfferId = compactString(context?.offerId);
   return items.slice(0, 200).map((item, index) => {

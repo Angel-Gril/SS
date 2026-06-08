@@ -238,10 +238,16 @@ function supplierText(item: Alibaba1688ListingItem) {
 
 function priceCheckText(context?: OzonPriceCheckContext | null) {
   if (!context) return '';
-  const sku = context.sku || context.ozonSku || context.productId || '';
-  const title = context.title || sku || 'Ozon 商品';
+  const sku = context.sku || context.ozonSku || '';
+  const productId = context.productId || '';
+  const title = context.title || sku || productId || 'Ozon 商品';
   const price = context.price ? `${context.price} ${context.currency || 'RUB'}` : '';
-  return [title, sku ? `Ozon SKU ${sku}` : '', price ? `售价 ${price}` : ''].filter(Boolean).join(' · ');
+  return [
+    title,
+    sku ? `Ozon SKU ${sku}` : '',
+    !sku && productId ? `Ozon Product ID ${productId}` : '',
+    price ? `售价 ${price}` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function priceCheckEstimateText(estimate?: PriceCheckEstimate | null) {

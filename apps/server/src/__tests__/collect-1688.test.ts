@@ -342,6 +342,42 @@ describe('1688 collect helpers', () => {
     });
   });
 
+  it('does not use Ozon product IDs as Ozon SKU traces from price-check context', () => {
+    const record = buildAlibaba1688CollectRecord({
+      title: '核价货源无 Ozon SKU',
+      sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+      priceText: '¥25.80',
+      skuItems: [
+        { sourceSkuId: 'source-sku-black-xl', specText: '黑色 / XL', price: '25.8' },
+      ],
+      raw: {
+        priceCheckContext: {
+          title: 'Ozon 原商品',
+          productId: '123456789',
+          offerId: 'seller-offer-xl',
+          sourceUrl: 'https://www.ozon.ru/product/test-123456789/',
+          price: '1590',
+          currency: 'RUB',
+        },
+      },
+    });
+
+    expect(record.variants).toEqual([
+      expect.objectContaining({
+        sourceSkuId: 'source-sku-black-xl',
+        ozonProductId: '123456789',
+        ozonOfferId: 'seller-offer-xl',
+      }),
+    ]);
+    expect(record.variants[0]).not.toHaveProperty('ozonSku');
+    expect(record.metadata.ozonPriceCheckContext).toMatchObject({
+      productId: '123456789',
+      sku: null,
+      ozonSku: null,
+      offerId: 'seller-offer-xl',
+    });
+  });
+
   it('accepts ozonPriceCheckContext alias when collecting price-checked supply records', () => {
     const record = buildAlibaba1688CollectRecord({
       title: '核价货源别名',

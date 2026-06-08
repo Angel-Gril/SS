@@ -417,6 +417,24 @@ test('listing prefill keeps display SKU out of editable source SKU column', () =
   assert.doesNotMatch(collectRoute, /variant\?\.sourceSkuId\s*\|\|\s*variant\?\.sku/);
 });
 
+test('Ozon product id is not used as an Ozon SKU fallback', () => {
+  const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
+  const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(collectRoute, /ozonSku:\s*sku,/);
+  assert.match(collectRoute, /const\s+defaultOzonSku\s*=\s*compactString\(context\?\.sku\s*\?\?\s*context\?\.ozonSku\)/);
+  assert.doesNotMatch(collectRoute, /ozonSku:\s*sku\s*\|\|\s*productId/);
+  assert.doesNotMatch(collectRoute, /defaultOzonSku\s*=\s*compactString\([^\n]*context\?\.productId/);
+
+  for (const source of [collect1688Page, listingPage]) {
+    assert.match(source, /const\s+sku\s*=\s*context\.sku\s*\|\|\s*context\.ozonSku\s*\|\|\s*''/);
+    assert.match(source, /const\s+productId\s*=\s*context\.productId\s*\|\|\s*''/);
+    assert.match(source, /!sku\s*&&\s*productId\s*\?\s*`Ozon Product ID\s*\$\{productId\}`/);
+    assert.doesNotMatch(source, /const\s+sku\s*=\s*context\.sku\s*\|\|\s*context\.ozonSku\s*\|\|\s*context\.productId/);
+  }
+});
+
 test('1688 collect page lists domestic supply records with real source platforms', () => {
   const collect1688Page = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', '1688', 'page.tsx');
 
