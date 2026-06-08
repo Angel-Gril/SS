@@ -29,7 +29,7 @@ test('1688 collect and listing pages expose saved SKU images for review', () => 
     assert.match(source, /ozonProductId:\s*sourceTrace\.ozonProductId/);
     assert.match(source, /ozonOfferId:\s*sourceTrace\.ozonOfferId/);
     assert.match(source, /sourcePlatform:\s*sourceTrace\.sourcePlatform/);
-    assert.match(source, /货源 SKU 图片 URL/);
+    assert.match(source, /货源平台 SKU 图片 URL/);
     assert.match(source, /Ozon SKU/);
     assert.match(source, /Ozon Product ID/);
     assert.match(source, /Ozon Offer ID/);
@@ -498,12 +498,13 @@ test('1688 collect page lists domestic supply records with real source platforms
   assert.match(collect1688Page, /sourcePlatformLabel\(item\.sourcePlatform\)/);
   assert.match(collect1688Page, /货源商品ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
   assert.match(collect1688Page, /货源 SKU:\s*\{item\.metadata\?\.skuCount\s*\|\|\s*0\}/);
-  assert.match(collect1688Page, /<Label className="text-xs">货源 SKU 明细<\/Label>/);
-  assert.match(collect1688Page, /货源 SKU ID/);
-  assert.match(collect1688Page, /货源 SKU 图片 URL/);
+  assert.match(collect1688Page, /<Label className="text-xs">货源平台 SKU 明细<\/Label>/);
+  assert.match(collect1688Page, /货源平台 SKU ID/);
+  assert.match(collect1688Page, /货源平台 SKU 图片 URL/);
+  assert.match(collect1688Page, /货源平台 SKU ID[\s\S]*Ozon SKU[\s\S]*Ozon Product ID[\s\S]*Ozon Offer ID/);
   assert.match(collect1688Page, /<Badge variant="secondary">待上架准备<\/Badge>/);
   assert.doesNotMatch(collect1688Page, /<span>SKU:\s*\{item\.metadata\?\.skuCount\s*\|\|\s*0\}<\/span>/);
-  assert.doesNotMatch(collect1688Page, /<Label className="text-xs">SKU 明细<\/Label>/);
+  assert.doesNotMatch(collect1688Page, /<Label className="text-xs">(?:货源 )?SKU 明细<\/Label>/);
   assert.doesNotMatch(collect1688Page, /类目映射待上架/);
   assert.doesNotMatch(collect1688Page, /货源SKU图片URL/);
   assert.match(collect1688Page, /const\s+selectedListingIds\s*=\s*useMemo\([\s\S]*?filter\(\(item\)\s*=>\s*selectedIds\.has\(item\.id\)\s*&&\s*canSelectForListing\(item\)\)[\s\S]*?map\(\(item\)\s*=>\s*item\.id\)/);
@@ -551,9 +552,10 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.match(listingPage, /货源上架记录/);
   assert.match(listingPage, /货源商品ID:\s*\{item\.sourceProductId\s*\|\|\s*'-'\}/);
   assert.match(listingPage, /货源 SKU:\s*\{item\.skuCount\s*\|\|\s*item\.variants\.length\}/);
-  assert.match(listingPage, /<Label className="text-xs">货源 SKU 明细<\/Label>/);
-  assert.match(listingPage, /货源 SKU ID/);
-  assert.match(listingPage, /货源 SKU 图片 URL/);
+  assert.match(listingPage, /<Label className="text-xs">货源平台 SKU 明细<\/Label>/);
+  assert.match(listingPage, /货源平台 SKU ID/);
+  assert.match(listingPage, /货源平台 SKU 图片 URL/);
+  assert.match(listingPage, /货源平台 SKU ID[\s\S]*Ozon SKU[\s\S]*Ozon Product ID[\s\S]*Ozon Offer ID/);
   assert.match(listingPage, /<Badge variant="secondary">待上架准备<\/Badge>/);
   assert.match(listingPage, /加载货源上架准备数据失败/);
   assert.match(listingPage, /已保存货源上架准备草稿/);
@@ -568,7 +570,7 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.doesNotMatch(listingPage, /返回 1688 采集上品/);
   assert.doesNotMatch(listingPage, /1688 上架记录/);
   assert.doesNotMatch(listingPage, /<span>SKU:\s*\{item\.skuCount\s*\|\|\s*item\.variants\.length\}<\/span>/);
-  assert.doesNotMatch(listingPage, /<Label className="text-xs">SKU 明细<\/Label>/);
+  assert.doesNotMatch(listingPage, /<Label className="text-xs">(?:货源 )?SKU 明细<\/Label>/);
   assert.doesNotMatch(listingPage, /[^货源]SKU图片URL/);
 });
 

@@ -1003,12 +1003,12 @@ export default function Alibaba1688ListingPage() {
                 />
               </div>
               <div className="space-y-1 md:col-span-2">
-                <Label className="text-xs">货源 SKU 明细</Label>
+                <Label className="text-xs">货源平台 SKU 明细</Label>
                 <textarea
                   className="w-full h-24 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                   value={item.skuText || ''}
                   onChange={(e) => updateItemSkuText(item.id, e.target.value)}
-                  placeholder={'货源 SKU ID | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | 货源 SKU 图片 URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
+                  placeholder={'货源平台 SKU ID | 规格 | 采购价 | 库存 | 起订量 | 毛重(g) | 货源平台 SKU 图片 URL | Ozon SKU | Ozon Product ID | Ozon Offer ID | 货源平台\nsku-red-42 | 红色 / 42 | 26.5 | 120 | 2 | 650 | https://img.example.com/sku-red.jpg | ozon-sku-42 | ozon-product-42 | ozon-offer-42 | 1688'}
                 />
               </div>
               <div className="space-y-1 md:col-span-2">
