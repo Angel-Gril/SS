@@ -210,11 +210,9 @@ function sourceSkuVariants(variants: unknown, sourceSkuId: string) {
 
 function sourceSkuMatchStatus(variants: unknown, sourceSkuId: string, sourcePlatform: string) {
   const collectedSourceSkuIds = sourceSkuIdsFromVariants(variants);
-  if (collectedSourceSkuIds.size === 0) {
-    return { hasCollectedSkus: false, hasSourceSku: true, platformMismatch: false };
-  }
+  if (collectedSourceSkuIds.size === 0) return { hasSourceSku: false, platformMismatch: false };
   if (!collectedSourceSkuIds.has(sourceSkuId)) {
-    return { hasCollectedSkus: true, hasSourceSku: false, platformMismatch: false };
+    return { hasSourceSku: false, platformMismatch: false };
   }
 
   const matchingVariants = sourceSkuVariants(variants, sourceSkuId);
@@ -224,7 +222,7 @@ function sourceSkuMatchStatus(variants: unknown, sourceSkuId: string, sourcePlat
   const platformMismatch = !!sourcePlatform
     && variantSourcePlatforms.length > 0
     && !variantSourcePlatforms.includes(sourcePlatform);
-  return { hasCollectedSkus: true, hasSourceSku: true, platformMismatch };
+  return { hasSourceSku: true, platformMismatch };
 }
 
 function ozonTraceValues(source: Record<string, unknown>) {
@@ -275,7 +273,6 @@ function invalidAlibaba1688ListingSourceSkus(
       const supplyGoods = supplyGoodsId ? supplyGoodsById.get(supplyGoodsId) : null;
       if (!supplyGoods) return null;
       const matchStatus = sourceSkuMatchStatus(supplyGoods.variants, sourceSkuId, sourcePlatform);
-      if (!matchStatus.hasCollectedSkus) return null;
       if (!matchStatus.hasSourceSku) {
         return {
           offerId: item.offerId,
