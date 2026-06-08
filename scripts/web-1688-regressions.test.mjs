@@ -434,3 +434,17 @@ test('1688 listing preparation page shows real domestic source platforms', () =>
   assert.doesNotMatch(listingPage, /返回 1688 采集上品/);
   assert.doesNotMatch(listingPage, /1688 上架记录/);
 });
+
+test('1688 listing preparation page renders invalid collect record details from API errors', () => {
+  const listingPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'listing', '1688', 'page.tsx');
+
+  assert.match(listingPage, /interface\s+InvalidCollectRecord/);
+  assert.match(listingPage, /function\s+collectErrorToastTitle/);
+  assert.match(listingPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.match(listingPage, /api\.post<Alibaba1688ListingItem\[\],\s*CollectErrorData>\('\/api\/collect\/1688\/prefill'/);
+  assert.match(listingPage, /api\.post<\{\s*saved:\s*number;\s*ready:\s*number;\s*draft:\s*number;\s*items\?:\s*Alibaba1688ListingItem\[\]\s*\},\s*CollectErrorData>\('\/api\/collect\/1688\/save-preparation'/);
+  assert.match(listingPage, /api\.post<\{\s*items:\s*Alibaba1688OzonListingDraftItem\[\]\s*\},\s*CollectErrorData>\('\/api\/collect\/1688\/listing-drafts'/);
+  assert.doesNotMatch(listingPage, /toast\(\{\s*title:\s*res\.msg\s*\|\|\s*'加载货源上架准备数据失败'/);
+  assert.doesNotMatch(listingPage, /toast\(\{\s*title:\s*res\.msg\s*\|\|\s*'保存失败'/);
+  assert.doesNotMatch(listingPage, /toast\(\{\s*title:\s*res\.msg\s*\|\|\s*'生成上架草稿失败'/);
+});

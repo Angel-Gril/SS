@@ -131,6 +131,16 @@ interface Alibaba1688OzonListingDraftItem {
   sourceTrace?: Record<string, unknown>;
 }
 
+interface InvalidCollectRecord {
+  id?: string | null;
+  title?: string | null;
+  sourcePlatform?: string | null;
+}
+
+interface CollectErrorData {
+  invalid?: InvalidCollectRecord[];
+}
+
 function submittedSupplyGoodsIds(draftItems: Alibaba1688OzonListingDraftItem[]) {
   return new Set(
     draftItems
@@ -279,6 +289,27 @@ function canCreateListingDraft(item: Alibaba1688ListingItem) {
   return item.canCreateListingDraft !== false && status !== 'submitted' && status !== 'pending' && status !== 'imported';
 }
 
+function collectErrorToastTitle(message: string | undefined, fallback: string, data?: CollectErrorData) {
+  const title = message || fallback;
+  const invalid = data?.invalid || [];
+  if (!invalid.length) return title;
+
+  const details = invalid
+    .slice(0, 3)
+    .map((item) => {
+      const name = item.title || item.id || '未知记录';
+      return `${name}(${sourcePlatformLabel(item.sourcePlatform)})`;
+    })
+    .join(' / ');
+  const suffix = invalid.length > 3 ? ` 等 ${invalid.length} 条` : '';
+  return `${title}: ${details}${suffix}`;
+}
+
+function collectErrorData(data: unknown): CollectErrorData | undefined {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
+  return data as CollectErrorData;
+}
+
 function preparationIssueLabels(issues?: string[]) {
   const labels: Record<string, string> = {
     missing_prepared_title_ru: '待补俄语标题',
@@ -387,12 +418,15 @@ export default function Alibaba1688ListingPage() {
 
   useEffect(() => {
     setLoading(true);
-    api.post<Alibaba1688ListingItem[]>('/api/collect/1688/prefill', ids.length ? { ids } : {}).then((res) => {
+    api.post<Alibaba1688ListingItem[], CollectErrorData>('/api/collect/1688/prefill', ids.length ? { ids } : {}).then((res) => {
       if (res.code === 1 && res.data) {
         setItems(res.data);
         setDirtyItemIds(new Set());
       } else {
-        toast({ title: res.msg || '加载货源上架准备数据失败', variant: 'destructive' });
+        toast({
+          title: collectErrorToastTitle(res.msg, '加载货源上架准备数据失败', collectErrorData(res.data)),
+          variant: 'destructive',
+        });
       }
       setLoading(false);
     });
@@ -506,7 +540,7 @@ export default function Alibaba1688ListingPage() {
       return;
     }
     setSaving(true);
-    const res = await api.post<{ saved: number; ready: number; draft: number; items?: Alibaba1688ListingItem[] }>('/api/collect/1688/save-preparation', {
+    const res = await api.post<{ saved: number; ready: number; draft: number; items?: Alibaba1688ListingItem[] }, CollectErrorData>('/api/collect/1688/save-preparation', {
       items: dirtyItems.map((item) => ({
         id: item.id,
         preparedTitleRu: item.preparedTitleRu,
@@ -535,7 +569,10 @@ export default function Alibaba1688ListingPage() {
         });
       }
     } else {
-      toast({ title: res.msg || '保存失败', variant: 'destructive' });
+      toast({
+        title: collectErrorToastTitle(res.msg, '保存失败', collectErrorData(res.data)),
+        variant: 'destructive',
+      });
     }
   }
 
@@ -564,11 +601,14 @@ export default function Alibaba1688ListingPage() {
       return null;
     }
 
-    const res = await api.post<{ items: Alibaba1688OzonListingDraftItem[] }>('/api/collect/1688/listing-drafts', {
+    const res = await api.post<{ items: Alibaba1688OzonListingDraftItem[] }, CollectErrorData>('/api/collect/1688/listing-drafts', {
       ids: readyIds,
     });
     if (res.code === 1) return res.data?.items || [];
-    toast({ title: res.msg || '生成上架草稿失败', variant: 'destructive' });
+    toast({
+      title: collectErrorToastTitle(res.msg, '生成上架草稿失败', collectErrorData(res.data)),
+      variant: 'destructive',
+    });
     return null;
   }
 

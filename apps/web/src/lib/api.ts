@@ -39,12 +39,17 @@ export function apiUrl(path: string): string {
   return `${getApiBase()}${path}`;
 }
 
-export interface ApiResponse<T = unknown> {
-  code: number;
+export type ApiResponse<T = unknown, E = never> = {
+  code: 1;
   msg: string;
   data?: T;
   maintenance?: boolean;
-}
+} | {
+  code: 0;
+  msg: string;
+  data?: E;
+  maintenance?: boolean;
+};
 
 const TOKEN_KEY = 'sserp.token';
 
@@ -72,10 +77,10 @@ function redirectToLoginForCurrentPath() {
   }
 }
 
-export async function apiFetch<T = unknown>(
+export async function apiFetch<T = unknown, E = never>(
   path: string,
   options: RequestInit = {},
-): Promise<ApiResponse<T>> {
+): Promise<ApiResponse<T, E>> {
   const headers = new Headers(options.headers);
   if (options.body) headers.set('Content-Type', 'application/json');
 
@@ -94,18 +99,18 @@ export async function apiFetch<T = unknown>(
     try {
       const data = await res.json();
       if (data?.maintenance) {
-        return { code: 0, msg: data.msg || '系统维护中，请稍后再试', maintenance: true } as ApiResponse<T>;
+        return { code: 0, msg: data.msg || '系统维护中，请稍后再试', maintenance: true } as ApiResponse<T, E>;
       }
-      return { code: 0, msg: data?.msg || '服务暂不可用' } as ApiResponse<T>;
+      return { code: 0, msg: data?.msg || '服务暂不可用' } as ApiResponse<T, E>;
     } catch {
-      return { code: 0, msg: '系统维护中，请稍后再试' } as ApiResponse<T>;
+      return { code: 0, msg: '系统维护中，请稍后再试' } as ApiResponse<T, E>;
     }
   }
 
   try {
     return await res.json();
   } catch {
-    return { code: 0, msg: `服务器错误 (${res.status})` } as ApiResponse<T>;
+    return { code: 0, msg: `服务器错误 (${res.status})` } as ApiResponse<T, E>;
   }
 }
 
@@ -147,14 +152,14 @@ export async function apiDownload(
 }
 
 export const api = {
-  get: <T = unknown>(path: string) => apiFetch<T>(path, { method: 'GET' }),
-  post: <T = unknown>(path: string, body?: unknown) =>
-    apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
-  put: <T = unknown>(path: string, body?: unknown) =>
-    apiFetch<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
-  patch: <T = unknown>(path: string, body?: unknown) =>
-    apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }),
-  delete: <T = unknown>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
+  get: <T = unknown, E = never>(path: string) => apiFetch<T, E>(path, { method: 'GET' }),
+  post: <T = unknown, E = never>(path: string, body?: unknown) =>
+    apiFetch<T, E>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  put: <T = unknown, E = never>(path: string, body?: unknown) =>
+    apiFetch<T, E>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  patch: <T = unknown, E = never>(path: string, body?: unknown) =>
+    apiFetch<T, E>(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }),
+  delete: <T = unknown, E = never>(path: string) => apiFetch<T, E>(path, { method: 'DELETE' }),
   download: apiDownload,
 };
 
