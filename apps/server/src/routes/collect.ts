@@ -172,6 +172,16 @@ export function isDomesticSupplySourcePlatform(value: unknown): boolean {
   return !!sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform);
 }
 
+const DOMESTIC_SUPPLY_GENERIC_COLLECT_ERROR = '货源平台商品请使用货源采集入口';
+
+function isDomesticSupplyCollectPayload(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return isDomesticSupplySourcePlatform(item.sourcePlatform)
+    || normalizeSourcePlatform(item.sourcePlatform) === 'domestic-supply'
+    || !!inferDomesticSupplySourcePlatformFromUrl(item.sourceUrl);
+}
+
 function normalizeDomesticSupplySourcePlatform(value: unknown, fallback: string | null = '1688'): string | null {
   const sourcePlatform = normalizeSourcePlatform(value);
   return sourcePlatform && DOMESTIC_SUPPLY_SOURCE_PLATFORMS.has(sourcePlatform)
@@ -1471,6 +1481,10 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     const d = parsed.data;
+    if (isDomesticSupplyCollectPayload(d)) {
+      return reply.status(400).send({ code: 0, msg: DOMESTIC_SUPPLY_GENERIC_COLLECT_ERROR });
+    }
+
     const sourceProductId = normalizeProductId(d.sourceProductId || d.sku);
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const notes = [weightNote, d.description?.slice(0, 500)].filter(Boolean).join('\n') || null;
@@ -1845,6 +1859,9 @@ export async function collectRoutes(app: FastifyInstance) {
 
     if (!body?.items?.length) {
       return reply.status(400).send({ code: 0, msg: '请提供商品数据' });
+    }
+    if (body.items.some((item) => isDomesticSupplyCollectPayload(item))) {
+      return reply.status(400).send({ code: 0, msg: DOMESTIC_SUPPLY_GENERIC_COLLECT_ERROR });
     }
 
     let saved = 0;

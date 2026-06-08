@@ -169,6 +169,64 @@ describe('1688 collect route', () => {
     });
   });
 
+  it('rejects domestic supply payloads sent to the generic Ozon collect endpoint', async () => {
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect',
+      payload: {
+        title: '误入普通采集入口的淘宝货源',
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        sku: 'tb-source-red',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源平台商品请使用货源采集入口',
+    });
+    expect(resolveCollectedPriceMock).not.toHaveBeenCalled();
+    expect(supplyGoodsMock.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects domestic supply payloads sent to the generic Ozon batch collect endpoint', async () => {
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/batch',
+      payload: {
+        items: [
+          {
+            title: '误入批量采集入口的 1688 货源',
+            sourcePlatform: '1688',
+            sourceProductId: '734567890123',
+            sku: 'sku-red-42',
+            sourceUrl: 'https://detail.1688.com/offer/734567890123.html',
+          },
+        ],
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toMatchObject({
+      code: 0,
+      msg: '货源平台商品请使用货源采集入口',
+    });
+    expect(resolveCollectedPriceMock).not.toHaveBeenCalled();
+    expect(supplyGoodsMock.create).not.toHaveBeenCalled();
+  });
+
   it('preserves existing complete source data when a duplicate recollect payload is incomplete', async () => {
     resolveCollectedPriceMock.mockResolvedValueOnce({
       purchasePriceCny: null,
