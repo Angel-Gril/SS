@@ -308,6 +308,8 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.match(collectPage, /import\s+\{\s*sourcePlatformLabel\s*\}\s+from\s+'@\/lib\/source-platforms'/);
   assert.match(collectPage, /function\s+isDomesticSupplySourcePlatform\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
   assert.match(collectPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
+  assert.match(collectPage, /isDomesticSupplySourcePlatform\(item\.sourcePlatform\)\s*\?\s*'货源商品ID'\s*:\s*'Ozon Product ID'/);
+  assert.doesNotMatch(collectPage, /源ID:/);
   assert.match(collectPage, /selectedHasDomesticSupply/);
   assert.match(collectPage, /selectedAllDomesticSupply/);
   assert.match(collectPage, /selectedItems\.some\(\(i\)\s*=>\s*isDomesticSupplySourcePlatform\(i\.sourcePlatform\)\)/);

@@ -708,7 +708,9 @@ export default function CollectPage() {
                         <div className="flex items-center gap-2 flex-wrap">
                           {item.sku && <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">SKU: {item.sku}</span>}
                           {item.sourceProductId && item.sourceProductId !== item.sku && (
-                            <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">源ID: {item.sourceProductId}</span>
+                            <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                              {isDomesticSupplySourcePlatform(item.sourcePlatform) ? '货源商品ID' : 'Ozon Product ID'}: {item.sourceProductId}
+                            </span>
                           )}
                           {item.sourcePlatform && (
                             <Badge variant="outline" className="text-xs font-normal">{sourcePlatformLabel(item.sourcePlatform)}</Badge>
