@@ -23,7 +23,15 @@
     "detailData",
     "iDetailData",
     "skuData",
-    "skuMap"
+    "skuMap",
+    "skuInfoMap",
+    "skuInfo",
+    "skuCore",
+    "skuBase",
+    "skuProps",
+    "priceInfo",
+    "priceMap",
+    "skuPriceMap"
   ];
 
   function safeClone(value) {

@@ -1808,6 +1808,7 @@
 
   function pickSkuItems(sources) {
     const skuArrays = [];
+    const skuMaps = collectSkuMapCandidates(sources);
 
     sources.forEach((source) => {
       walkObject(source, [], (value, path) => {
@@ -1826,8 +1827,9 @@
       });
     });
 
-    skuArrays.sort((a, b) => b.score - a.score || b.value.length - a.value.length);
-    const best = skuArrays[0];
+    const candidates = skuArrays.concat(skuMaps);
+    candidates.sort((a, b) => b.score - a.score || b.value.length - a.value.length);
+    const best = candidates[0];
     if (!best) {
       return pickSkuItemsFromDom();
     }
@@ -1848,6 +1850,72 @@
     });
 
     return unique.length ? unique.slice(0, 200) : pickSkuItemsFromDom();
+  }
+
+  function collectSkuMapCandidates(sources) {
+    const skuMaps = [];
+    sources.forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!looksLikeSkuMap(value, pathText)) {
+          return;
+        }
+        const mapItems = normalizeSkuMapItems(value, pathText);
+        if (mapItems.length) {
+          skuMaps.push({
+            score: /(skuMap|skuInfoMap|skuInfo|skuCore|skuBase|skuProps|priceInfo|priceMap|skuPriceMap)/i.test(pathText) ? 6 : 4,
+            value: mapItems
+          });
+        }
+      });
+    });
+    return skuMaps;
+  }
+
+  function looksLikeSkuMap(value, pathText) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const entries = Object.entries(value).filter((entry) => (
+      entry[1] && typeof entry[1] === "object" && !Array.isArray(entry[1])
+    ));
+    if (!entries.length || entries.length > 600) {
+      return false;
+    }
+    const pathLooksLikeSkuMap = /(skuMap|skuInfoMap|skuInfo|skuCore|skuBase|skuProps|priceInfo|priceMap|skuPriceMap)/i.test(pathText);
+    const entryLooksLikeSku = entries.some(([key, item]) => {
+      const record = item || {};
+      const fieldText = Object.keys(record).join("|");
+      return /(?:sku|spec|prop|price|stock|quantity|库存|价格)/i.test(fieldText)
+        || /(?:^|[;:])\d{2,}(?:[;:]|$)/.test(String(key || ""));
+    });
+    return pathLooksLikeSkuMap && entryLooksLikeSku;
+  }
+
+  function normalizeSkuMapItems(mapValue, pathText) {
+    if (!mapValue || typeof mapValue !== "object" || Array.isArray(mapValue)) {
+      return [];
+    }
+    return Object.entries(mapValue).slice(0, 200).map(([rawKey, rawItem]) => {
+      const skuKey = normalizeWhitespace(rawKey);
+      if (!skuKey || !rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+        return null;
+      }
+      const item = rawItem;
+      const price = pickFirstValue(item, ["price", "salePrice", "finalPrice", "discountPrice", "promotionPrice", "skuPrice", "activityPrice", "normalPrice"]);
+      const stock = pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale", "skuStock"]);
+      const specText = pickFirstValue(item, ["spec", "specText", "specValue", "skuSpec", "attributeValue", "propertiesName", "propPath", "pv", "name", "title"]);
+      return {
+        ...item,
+        skuId: skuKey,
+        sourceSkuId: skuKey,
+        spec: specText || item.spec,
+        specText: specText || item.specText || "",
+        price: price ?? item.price,
+        stock: stock ?? item.stock,
+        _skuMapPath: pathText
+      };
+    }).filter(Boolean);
   }
 
   function normalizeSkuItem(item) {

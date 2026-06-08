@@ -285,6 +285,27 @@ test('1688 product extraction includes price and category fields for ERP records
   assert.ok(collectScript.includes('元|CNY|RMB'));
 });
 
+test('domestic supply extraction scans object SKU maps from page globals', () => {
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const pageBridge = readRepoFile('extensions', 'ss-erp', 'content', 'page-bridge.js');
+
+  for (const globalName of ['skuMap', 'skuInfoMap', 'skuCore', 'skuBase', 'skuProps', 'priceInfo']) {
+    assert.match(pageBridge, new RegExp(`"${globalName}"`));
+  }
+
+  assert.match(collectScript, /function\s+collectSkuMapCandidates\(sources\)/);
+  assert.match(collectScript, /function\s+normalizeSkuMapItems\(mapValue,\s*pathText\)/);
+  assert.match(collectScript, /function\s+looksLikeSkuMap\(value,\s*pathText\)/);
+  assert.match(collectScript, /const\s+skuMaps\s*=\s*\[\]/);
+  assert.match(collectScript, /const\s+mapItems\s*=\s*normalizeSkuMapItems\(value,\s*pathText\)/);
+  assert.match(collectScript, /skuMap|skuInfoMap|skuInfo|skuCore|skuBase|skuProps|priceInfo|priceMap|skuPriceMap/);
+  assert.match(collectScript, /sourceSkuId:\s*skuKey/);
+  assert.match(collectScript, /skuId:\s*skuKey/);
+  assert.match(collectScript, /normalizeSkuItem\(item\)/);
+  assert.doesNotMatch(collectScript, /sourceSkuId:\s*item\.id\s*\|\|\s*skuKey/);
+  assert.doesNotMatch(collectScript, /sourceSkuId:\s*item\.offerId\s*\|\|\s*skuKey/);
+});
+
 test('domestic supply extractors keep price category and description selectors', () => {
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
   const extractorNames = [
