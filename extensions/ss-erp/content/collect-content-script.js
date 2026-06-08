@@ -1274,7 +1274,7 @@
       priceSelectors: ["#jd-price", ".p-price", ".summary-price", "[class*='price']", "[class*='Price']"],
       categorySelectors: ["#crumb-wrap", ".crumb", ".breadcrumb", "[class*='breadcrumb']", "[class*='crumb']"],
       descriptionSelectors: ["#detail", ".detail-content", ".parameter2", "[class*='description']", "[class*='detail']"],
-      productIdRegexes: [/\/(\d+)\.html/i]
+      productIdRegexes: [/\/(\d+)\.html/i, /[?&](?:wareId|ware_id)=([0-9A-Za-z_-]{5,})/i]
     });
   }
 
@@ -1287,7 +1287,7 @@
       priceSelectors: [".tb-rmb-num", "[class*='Price']", "[class*='price']", "[class*='SalePrice']"],
       categorySelectors: [".tb-breadcrumb", "[class*='breadcrumb']", "[class*='crumb']", "[class*='category']"],
       descriptionSelectors: ["#description", ".attributes-list", "[class*='description']", "[class*='Description']", "[class*='desc']"],
-      productIdRegexes: [/id=(\d+)/i]
+      productIdRegexes: [/[?&](?:id|itemId|item_id|num_iid|numIid)=([0-9A-Za-z_-]{5,})/i]
     });
   }
 
@@ -1300,7 +1300,7 @@
       priceSelectors: [".tm-price", ".tm-promo-price", "[class*='Price']", "[class*='price']", "[class*='SalePrice']"],
       categorySelectors: [".tb-breadcrumb", ".crumb", "[class*='breadcrumb']", "[class*='category']"],
       descriptionSelectors: ["#description", ".attributes-list", "[class*='description']", "[class*='Description']", "[class*='desc']"],
-      productIdRegexes: [/id=(\d+)/i]
+      productIdRegexes: [/[?&](?:id|itemId|item_id|num_iid|numIid)=([0-9A-Za-z_-]{5,})/i]
     });
   }
 
@@ -1313,7 +1313,7 @@
       priceSelectors: ["[class*='goodsPrice']", "[class*='GoodsPrice']", "[class*='price']", "[class*='Price']"],
       categorySelectors: ["[class*='breadcrumb']", "[class*='crumb']", "[class*='category']", "[class*='Category']"],
       descriptionSelectors: ["[class*='goodsDetail']", "[class*='GoodsDetail']", "[class*='description']", "[class*='detail']"],
-      productIdRegexes: [/goods_id=(\d+)/i, /goodsId[=:/"]+(\d+)/i, /goods[_-]?id[=:/"]+(\d+)/i]
+      productIdRegexes: [/goods(?:_id|Id)?[=:/"]+(\d+)/i, /goods(\d{5,})\.html/i]
     });
   }
 

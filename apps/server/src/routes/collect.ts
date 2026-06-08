@@ -329,6 +329,8 @@ function extractDomesticSupplyProductIdFromUrl(sourceUrl: unknown, sourcePlatfor
     }
     const pathMatch = url.pathname.match(/(?:^|\/)(\d{5,})(?:\.html)?$/i);
     if (pathMatch?.[1]) return pathMatch[1];
+    const compactGoodsPathMatch = url.pathname.match(/(?:^|\/)goods(\d{5,})\.html$/i);
+    if (compactGoodsPathMatch?.[1]) return compactGoodsPathMatch[1];
   }
   const platform = normalizeSourcePlatform(sourcePlatform);
   if (platform === '1688' || /\.1688\.com/i.test(text)) {

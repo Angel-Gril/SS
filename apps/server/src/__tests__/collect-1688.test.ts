@@ -233,11 +233,19 @@ describe('1688 collect helpers', () => {
     const cases = [
       ['taobao', 'https://item.taobao.com/item.htm?id=998877', '998877'],
       ['taobao', 'https://item.taobao.com/item.htm?numIid=998878', '998878'],
+      ['taobao', 'https://h5.m.taobao.com/awp/core/detail.htm?itemId=998879', '998879'],
+      ['taobao', 'https://h5.m.taobao.com/awp/core/detail.htm?item_id=998880', '998880'],
       ['tmall', 'https://detail.tmall.com/item.htm?id=123456789', '123456789'],
+      ['tmall', 'https://detail.m.tmall.com/item.htm?itemId=123456790', '123456790'],
+      ['tmall', 'https://detail.m.tmall.com/item.htm?num_iid=123456791', '123456791'],
       ['jd', 'https://item.jd.com/100012043978.html', '100012043978'],
       ['jd', 'https://item.jd.com/product.htm?ware_id=100012043979', '100012043979'],
+      ['jd', 'https://item.m.jd.com/product/100012043980.html', '100012043980'],
+      ['jd', 'https://mitem.jd.com/product/100012043981.html', '100012043981'],
+      ['jd', 'https://item.m.jd.com/product/detail.htm?wareId=100012043982', '100012043982'],
       ['pinduoduo', 'https://mobile.yangkeduo.com/goods.html?goods_id=777888999', '777888999'],
       ['pinduoduo', 'https://mobile.yangkeduo.com/goods.html?goodsId=777888998', '777888998'],
+      ['pinduoduo', 'https://mobile.pinduoduo.com/goods777888997.html', '777888997'],
     ] as const;
 
     for (const [sourcePlatform, sourceUrl, sourceProductId] of cases) {

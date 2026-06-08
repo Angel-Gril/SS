@@ -232,6 +232,28 @@ test('domestic supply product page detection covers common mobile and query URL 
   assert.match(collectScript, /goods_id\|goodsId/);
 });
 
+test('domestic supply extractors read source product ids from mobile and query URL forms', () => {
+  const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+
+  const jdExtractor = collectScript.match(/function\s+extractJdProduct\(context\)\s*\{[\s\S]*?\n\s*\}\n/);
+  assert.ok(jdExtractor, 'JD extractor must exist');
+  assert.match(jdExtractor[0], /wareId\|ware_id/, 'JD extractor must read wareId query product ids');
+  assert.doesNotMatch(jdExtractor[0], /sourceSkuId|ozonSku/, 'JD source product id extraction must not use SKU trace keys');
+
+  const taobaoExtractor = collectScript.match(/function\s+extractTaobaoProduct\(context\)\s*\{[\s\S]*?\n\s*\}\n/);
+  assert.ok(taobaoExtractor, 'Taobao extractor must exist');
+  assert.match(taobaoExtractor[0], /id\|itemId\|item_id\|num_iid\|numIid/, 'Taobao extractor must read item id aliases');
+
+  const tmallExtractor = collectScript.match(/function\s+extractTmallProduct\(context\)\s*\{[\s\S]*?\n\s*\}\n/);
+  assert.ok(tmallExtractor, 'Tmall extractor must exist');
+  assert.match(tmallExtractor[0], /id\|itemId\|item_id\|num_iid\|numIid/, 'Tmall extractor must read item id aliases');
+
+  const pddExtractor = collectScript.match(/function\s+extractPinduoduoProduct\(context\)\s*\{[\s\S]*?\n\s*\}\n/);
+  assert.ok(pddExtractor, 'Pinduoduo extractor must exist');
+  assert.ok(pddExtractor[0].includes('goods(?:_id|Id)?'), 'Pinduoduo extractor must read query goods ids');
+  assert.ok(pddExtractor[0].includes('goods(\\d{5,})'), 'Pinduoduo extractor must read compact path goods ids');
+});
+
 test('1688 product extraction includes price and category fields for ERP records', () => {
   const collectScript = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
   const pageBridge = readRepoFile('extensions', 'ss-erp', 'content', 'page-bridge.js');
