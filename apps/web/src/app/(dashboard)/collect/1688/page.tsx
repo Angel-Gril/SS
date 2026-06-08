@@ -325,7 +325,7 @@ function preparationIssueText(issues?: string[]) {
     missing_target_price_cny: '待补目标售价',
     missing_source_images: '待补商品图片',
   };
-  return issues.map((issue) => labels[issue] || issue).join(' / ');
+  return issues.map((issue) => labels[issue] || sourceDataIssueText([issue]) || issue).join(' / ');
 }
 
 function priceCheckText(context?: OzonPriceCheckContext | null) {
