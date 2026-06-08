@@ -1851,7 +1851,7 @@
   }
 
   function normalizeSkuItem(item) {
-    const sourceSkuId = pickFirstValue(item, ["sourceSkuId", "source_sku_id", "sourceSku", "source_sku", "skuId", "sku_id", "specId", "nameId", "id", "offerId"]);
+    const sourceSkuId = pickFirstValue(item, ["sourceSkuId", "source_sku_id", "sourceSku", "source_sku", "skuId", "sku_id", "specId", "nameId", "id"]);
     const skuId = sourceSkuId;
     const name = pickFirstValue(item, ["name", "title", "skuName", "sku_name", "displayName"]);
     const attrs = normalizeSkuAttrs(item);
