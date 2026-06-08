@@ -232,9 +232,12 @@ describe('1688 collect helpers', () => {
   it('infers source product ids from domestic supply urls when no offer id is submitted', () => {
     const cases = [
       ['taobao', 'https://item.taobao.com/item.htm?id=998877', '998877'],
+      ['taobao', 'https://item.taobao.com/item.htm?numIid=998878', '998878'],
       ['tmall', 'https://detail.tmall.com/item.htm?id=123456789', '123456789'],
       ['jd', 'https://item.jd.com/100012043978.html', '100012043978'],
+      ['jd', 'https://item.jd.com/product.htm?ware_id=100012043979', '100012043979'],
       ['pinduoduo', 'https://mobile.yangkeduo.com/goods.html?goods_id=777888999', '777888999'],
+      ['pinduoduo', 'https://mobile.yangkeduo.com/goods.html?goodsId=777888998', '777888998'],
     ] as const;
 
     for (const [sourcePlatform, sourceUrl, sourceProductId] of cases) {

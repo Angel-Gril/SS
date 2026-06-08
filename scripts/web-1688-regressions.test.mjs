@@ -414,10 +414,11 @@ test('source platform normalization rejects Ozon trace ids in editable SKU rows'
 test('domestic supply product id parsing does not promote sku fields', () => {
   const collectRoute = readRepoFile('apps', 'server', 'src', 'routes', 'collect.ts');
 
-  assert.match(collectRoute, /const\s+queryKeys\s*=\s*\['offerId',\s*'offer_id',\s*'id',\s*'item_id',\s*'itemId',\s*'num_iid',\s*'wareId',\s*'goods_id',\s*'goodsId'\]/);
+  assert.match(collectRoute, /const\s+queryKeys\s*=\s*\['offerId',\s*'offer_id',\s*'id',\s*'item_id',\s*'itemId',\s*'num_iid',\s*'numIid',\s*'wareId',\s*'ware_id',\s*'goods_id',\s*'goodsId'\]/);
   assert.doesNotMatch(collectRoute, /const\s+queryKeys\s*=\s*\[[^\]]*'sku'[^\]]*\]/);
   assert.doesNotMatch(collectRoute, /const\s+queryKeys\s*=\s*\[[^\]]*'skuId'[^\]]*\]/);
-  assert.doesNotMatch(collectRoute, /\(\?:offerId\|offer_id\|id\|item_id\|itemId\|num_iid\|sku\|skuId\|wareId\|goods_id\|goodsId\)/);
+  assert.match(collectRoute, /\(\?:offerId\|offer_id\|id\|item_id\|itemId\|num_iid\|numIid\|wareId\|ware_id\|goods_id\|goodsId\)/);
+  assert.doesNotMatch(collectRoute, /\(\?:offerId\|offer_id\|id\|item_id\|itemId\|num_iid\|numIid\|sku\|skuId\|sourceSkuId\|wareId\|ware_id\|goods_id\|goodsId\)/);
   assert.doesNotMatch(collectRoute, /const\s+offerId\s*=\s*compactString\(input\.offerId\)\s*\|\|\s*offerIdFromUrl\s*\|\|\s*compactString\(input\.sku\)/);
 });
 

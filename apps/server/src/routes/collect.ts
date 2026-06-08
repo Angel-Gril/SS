@@ -321,7 +321,7 @@ function extractDomesticSupplyProductIdFromUrl(sourceUrl: unknown, sourcePlatfor
   const text = compactString(sourceUrl);
   if (!text) return null;
   const url = parseUrlLike(text);
-  const queryKeys = ['offerId', 'offer_id', 'id', 'item_id', 'itemId', 'num_iid', 'wareId', 'goods_id', 'goodsId'];
+  const queryKeys = ['offerId', 'offer_id', 'id', 'item_id', 'itemId', 'num_iid', 'numIid', 'wareId', 'ware_id', 'goods_id', 'goodsId'];
   if (url) {
     for (const key of queryKeys) {
       const value = compactString(url.searchParams.get(key));
@@ -335,7 +335,7 @@ function extractDomesticSupplyProductIdFromUrl(sourceUrl: unknown, sourcePlatfor
     const offerMatch = text.match(/\/offer\/(\d{5,})(?:\.html)?/i);
     if (offerMatch?.[1]) return offerMatch[1];
   }
-  const queryMatch = text.match(/[?&](?:offerId|offer_id|id|item_id|itemId|num_iid|wareId|goods_id|goodsId)=([^&#]+)/i);
+  const queryMatch = text.match(/[?&](?:offerId|offer_id|id|item_id|itemId|num_iid|numIid|wareId|ware_id|goods_id|goodsId)=([^&#]+)/i);
   return queryMatch?.[1] ? decodeURIComponent(queryMatch[1]) : null;
 }
 
