@@ -308,7 +308,7 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.match(collectPage, /import\s+\{\s*sourcePlatformLabel\s*\}\s+from\s+'@\/lib\/source-platforms'/);
   assert.match(collectPage, /function\s+isDomesticSupplySourcePlatform\(sourcePlatform\?:\s*string\s*\|\s*null\)/);
   assert.match(collectPage, /sourcePlatformLabel\(item\.sourcePlatform\)/);
-  assert.match(collectPage, /isDomesticSupplySourcePlatform\(item\.sourcePlatform\)\s*\?\s*'货源商品ID'\s*:\s*'Ozon Product ID'/);
+  assert.match(collectPage, /itemIsDomesticSupply\s*\?\s*'货源商品ID'\s*:\s*'Ozon SKU \/ Product ID'/);
   assert.doesNotMatch(collectPage, /源ID:/);
   assert.match(collectPage, /selectedHasDomesticSupply/);
   assert.match(collectPage, /selectedAllDomesticSupply/);
@@ -319,6 +319,13 @@ test('collect page gates listing actions by domestic supply platforms instead of
   assert.match(collectPage, /if\s*\(selectedHasDomesticSupply\)\s*\{\s*toast\(\{\s*title:\s*'货源记录不能使用 Ozon 补全信息入口，请走货源上架准备流程'/);
   assert.match(collectPage, /!\s*selectedHasDomesticSupply\s*&&\s*\(/);
   assert.match(collectPage, /从OZON补全信息/);
+  assert.match(collectPage, /const\s+itemIsDomesticSupply\s*=\s*isDomesticSupplySourcePlatform\(item\.sourcePlatform\)/);
+  assert.match(collectPage, /itemIsDomesticSupply\s*\?\s*item\.sourceProductId\s*:\s*\(item\.sku\s*\|\|\s*item\.sourceProductId\)/);
+  assert.match(collectPage, /itemIsDomesticSupply\s*\?\s*'货源商品ID'\s*:\s*'Ozon SKU \/ Product ID'/);
+  assert.match(collectPage, /商品采集与上架/);
+  assert.match(collectPage, /搜索商品名 \/ Ozon SKU \/ 货源商品ID/);
+  assert.doesNotMatch(collectPage, /SKU采集跟卖/);
+  assert.doesNotMatch(collectPage, />SKU:\s*\{item\.sku\}<\/span>/);
   assert.doesNotMatch(collectPage, /selectedHasAlibaba1688/);
   assert.doesNotMatch(collectPage, /selectedAllAlibaba1688/);
   assert.doesNotMatch(collectPage, /sourcePlatform\s*===\s*'1688'/);

@@ -578,7 +578,7 @@ export default function CollectPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">SKU采集跟卖</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">商品采集与上架</h1>
           <p className="text-muted-foreground text-sm mt-1">扩展采集 → 改价 → 一键上架到 OZON</p>
         </div>
         <div className="flex gap-2">
@@ -659,7 +659,7 @@ export default function CollectPage() {
               <option value="listed">已上架</option>
             </select>
             <form className="flex gap-2 flex-1 max-w-sm" onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }}>
-              <Input placeholder="搜索商品名 / SKU" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="h-9" />
+              <Input placeholder="搜索商品名 / Ozon SKU / 货源商品ID" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="h-9" />
               <Button type="submit" size="sm" variant="outline"><Search className="h-4 w-4" /></Button>
             </form>
             <div className="flex items-center gap-2 ml-auto">
@@ -675,11 +675,15 @@ export default function CollectPage() {
           ) : items.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p>暂无数据，使用扩展采集或批量导入SKU</p>
+              <p>暂无数据，使用扩展采集或批量导入商品标识</p>
             </div>
           ) : (
             <div className="space-y-3">
-              {items.map((item) => (
+              {items.map((item) => {
+                const itemIsDomesticSupply = isDomesticSupplySourcePlatform(item.sourcePlatform);
+                const primaryItemId = itemIsDomesticSupply ? item.sourceProductId : (item.sku || item.sourceProductId);
+                const primaryItemIdLabel = itemIsDomesticSupply ? '货源商品ID' : 'Ozon SKU / Product ID';
+                return (
                 <div
                   key={item.id}
                   className={`relative rounded-lg border p-3 sm:p-4 transition-colors ${selectedIds.has(item.id) ? 'border-primary/50 bg-primary/5' : 'hover:bg-muted/30'}`}
@@ -721,10 +725,9 @@ export default function CollectPage() {
                           )}
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          {item.sku && <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">SKU: {item.sku}</span>}
-                          {item.sourceProductId && item.sourceProductId !== item.sku && (
+                          {primaryItemId && (
                             <span className="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                              {isDomesticSupplySourcePlatform(item.sourcePlatform) ? '货源商品ID' : 'Ozon Product ID'}: {item.sourceProductId}
+                              {primaryItemIdLabel}: {primaryItemId}
                             </span>
                           )}
                           {item.sourcePlatform && (
@@ -875,7 +878,8 @@ export default function CollectPage() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
           {totalPages > 1 && (
