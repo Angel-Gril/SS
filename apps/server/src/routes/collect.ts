@@ -563,6 +563,13 @@ export function getAlibaba1688SourceDataIssues(input: {
   if (!Array.isArray(input.images) || input.images.length === 0) issues.push('missing_source_images');
   if (!(numericValue(input.priceText) != null && numericValue(input.priceText)! > 0)) issues.push('missing_purchase_price');
   if (!Array.isArray(input.skuItems) || input.skuItems.length === 0) issues.push('missing_sku_items');
+  else if (input.skuItems.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return true;
+    const record = item as Record<string, unknown>;
+    return !compactSourceSkuCandidate(record.sourceSkuId ?? record.source_sku_id ?? record.sourceSku ?? record.source_sku ?? record.skuId ?? record.sku_id ?? record.specId ?? record.nameId);
+  })) {
+    issues.push('missing_source_sku_ids');
+  }
   if (!String(input.description || '').trim()) issues.push('missing_description');
   if (!input.attributes || Object.keys(input.attributes).length === 0) issues.push('missing_attributes');
   return issues;

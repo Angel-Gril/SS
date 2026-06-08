@@ -424,10 +424,18 @@ describe('1688 collect helpers', () => {
     expect(getAlibaba1688SourceDataIssues({
       images: ['https://img.example.com/1.jpg'],
       priceText: '¥25.80',
-      skuItems: [{ skuId: 'sku-1' }],
+      skuItems: [{ sourceSkuId: 'sku-red-42' }],
       description: '商品详情',
       attributes: { 材质: '棉' },
     })).toEqual([]);
+
+    expect(getAlibaba1688SourceDataIssues({
+      images: ['https://img.example.com/1.jpg'],
+      priceText: '¥25.80',
+      skuItems: [{ sku: 'taobao-1', sourceSkuId: '' }],
+      description: '商品详情',
+      attributes: { 材质: '棉' },
+    })).toEqual(['missing_source_sku_ids']);
   });
 
   it('preserves long 1688 source descriptions for later listing preparation', () => {
@@ -465,7 +473,7 @@ describe('1688 collect helpers', () => {
       {
         images: ['https://img.example.com/ready.jpg'],
         purchasePrice: '25.80',
-        variants: [{ sku: 'sku-1' }],
+        variants: [{ sourceSkuId: 'sku-red-42' }],
       },
     );
 
@@ -882,7 +890,7 @@ describe('1688 collect helpers', () => {
     const refreshed = refreshAlibaba1688SourceDataIssues(metadata, {
       images: ['https://img.example.com/ready.jpg'],
       purchasePrice: '25.80',
-      variants: [{ sku: 'sku-1' }],
+      variants: [{ sourceSkuId: 'sku-red-42' }],
     });
 
     expect(refreshed).toMatchObject({
@@ -1943,6 +1951,7 @@ describe('1688 collect helpers', () => {
         sourcePlatform: 'taobao',
       }),
     ]);
+    expect(record.metadata.sourceDataIssues).toEqual(['missing_source_sku_ids']);
   });
 
   it('keeps editable row ids out of source SKU traces', () => {

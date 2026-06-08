@@ -169,6 +169,51 @@ describe('1688 collect route', () => {
     });
   });
 
+  it('marks collected supply records with SKU rows missing source SKU ids as source-incomplete', async () => {
+    supplyGoodsMock.findFirst.mockResolvedValue(null);
+
+    const app = Fastify();
+    await app.register(collectRoutes, { prefix: '/api/collect' });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/collect/1688',
+      payload: {
+        title: '淘宝无货源 SKU ID 商品',
+        sourcePlatform: 'taobao',
+        sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+        priceText: '¥19.90',
+        images: ['https://img.example.com/main.jpg'],
+        attributes: { 材质: '棉' },
+        skuItems: [
+          { specText: '红色', price: '19.9' },
+        ],
+        description: '货源详情',
+      },
+    });
+
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(supplyGoodsMock.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourcePlatform: 'taobao',
+        sourceProductId: '998877',
+        variants: [
+          expect.objectContaining({
+            sku: 'taobao-1',
+            sourceSkuId: '',
+            sourcePlatform: 'taobao',
+          }),
+        ],
+        metadata: expect.objectContaining({
+          sourceDataIssues: ['missing_source_sku_ids'],
+          listingPreparationStatus: 'collected_only',
+        }),
+      }),
+    });
+  });
+
   it('rejects domestic supply payloads sent to the generic Ozon collect endpoint', async () => {
     const app = Fastify();
     await app.register(collectRoutes, { prefix: '/api/collect' });
@@ -700,7 +745,7 @@ describe('1688 collect route', () => {
         metadata: expect.objectContaining({
           listingPreparationStatus: 'draft',
           listingPreparationIssues: ['missing_source_sku_ids'],
-          sourceDataIssues: [],
+          sourceDataIssues: ['missing_source_sku_ids'],
         }),
       }),
     });
