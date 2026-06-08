@@ -89,6 +89,8 @@ test('1688 listing preparation treats source data issues as draft blockers', () 
   const sourceIssuesLib = readRepoFile('apps', 'web', 'src', 'lib', '1688-source-issues.ts');
 
   assert.match(listingPage, /function\s+currentSourceDataIssues\(item:\s*Alibaba1688ListingItem\)/);
+  assert.match(listingPage, /item\.variants\.some\(\(variant\)\s*=>\s*!\(variant\.sourceSkuId\s*\|\|\s*''\)\.trim\(\)\)/);
+  assert.match(listingPage, /issues\.push\('missing_source_sku_ids'\)/);
   assert.match(listingPage, /function\s+currentPreparationIssues\(item:\s*Alibaba1688ListingItem\)[\s\S]*?currentSourceDataIssues\(item\)[\s\S]*?issues\.includes\(issue\)[\s\S]*?issues\.push\(issue\)/);
   assert.match(listingPage, /function\s+preparationIssueLabels\(issues\?:\s*string\[\]\)[\s\S]*?sourceDataIssueLabels\(\[issue\]\)/);
   assert.match(sourceIssuesLib, /missing_sku_items:\s*'缺货源 SKU'/);

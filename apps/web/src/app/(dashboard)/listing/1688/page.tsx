@@ -353,6 +353,7 @@ function currentSourceDataIssues(item: Alibaba1688ListingItem) {
   if (!validImageUrls(item.images).length) issues.push('missing_source_images');
   if (!(Number.isFinite(purchasePrice) && purchasePrice > 0)) issues.push('missing_purchase_price');
   if (!item.variants.length) issues.push('missing_sku_items');
+  else if (item.variants.some((variant) => !(variant.sourceSkuId || '').trim())) issues.push('missing_source_sku_ids');
   if (!String(item.description || '').trim()) issues.push('missing_description');
   if (!item.attributes || Object.keys(item.attributes).length === 0) issues.push('missing_attributes');
   return issues;
