@@ -489,18 +489,19 @@ export function exposeSupplyGoodsMetadata(
   if (ozonPriceCheckContext) meta.ozonPriceCheckContext = ozonPriceCheckContext;
   const priceCheckEstimate = buildPriceCheckEstimate(ozonPriceCheckContext, purchasePrice, purchaseCurrency);
   if (priceCheckEstimate) meta.priceCheckEstimate = priceCheckEstimate;
-  if (isDomesticSupplySourcePlatform(source?.sourcePlatform) && !Array.isArray(meta.sourceDataIssues)) {
+  if (isDomesticSupplySourcePlatform(source?.sourcePlatform)) {
     const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
       ? meta.attributes as Record<string, unknown>
       : {};
     meta.sourceKind = meta.sourceKind || DOMESTIC_SUPPLY_SOURCE_KIND;
-    meta.sourceDataIssues = getAlibaba1688SourceDataIssues({
+    const inferredSourceDataIssues = getAlibaba1688SourceDataIssues({
       images: Array.isArray(source?.images) ? source.images : [],
       priceText: purchasePrice,
       skuItems: Array.isArray(source?.variants) ? source.variants : [],
       description: meta.description,
       attributes,
     });
+    meta.sourceDataIssues = mergeSourceDataIssues(meta.sourceDataIssues, inferredSourceDataIssues);
   }
   return meta;
 }
@@ -573,6 +574,13 @@ export function getAlibaba1688SourceDataIssues(input: {
   if (!String(input.description || '').trim()) issues.push('missing_description');
   if (!input.attributes || Object.keys(input.attributes).length === 0) issues.push('missing_attributes');
   return issues;
+}
+
+function mergeSourceDataIssues(existing: unknown, inferred: string[]) {
+  return Array.from(new Set([
+    ...(Array.isArray(existing) ? existing.map((issue) => compactString(issue)).filter((issue): issue is string => !!issue) : []),
+    ...inferred,
+  ]));
 }
 
 export function refreshAlibaba1688SourceDataIssues(
@@ -992,15 +1000,14 @@ export function buildAlibaba1688ListingPrefill(item: {
   const attributes = meta.attributes && typeof meta.attributes === 'object' && !Array.isArray(meta.attributes)
     ? meta.attributes as Record<string, unknown>
     : {};
-  const sourceDataIssues = Array.isArray(meta.sourceDataIssues)
-    ? meta.sourceDataIssues
-    : getAlibaba1688SourceDataIssues({
+  const inferredSourceDataIssues = getAlibaba1688SourceDataIssues({
       images,
       priceText: purchasePrice,
       skuItems: variants,
       description: meta.description,
       attributes,
     });
+  const sourceDataIssues = mergeSourceDataIssues(meta.sourceDataIssues, inferredSourceDataIssues);
   const ozonPriceCheckContext = extractOzonPriceCheckContext(meta);
   const priceCheckEstimate = buildPriceCheckEstimate(
     ozonPriceCheckContext,

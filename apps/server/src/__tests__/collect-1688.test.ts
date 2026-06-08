@@ -514,6 +514,32 @@ describe('1688 collect helpers', () => {
     ]);
   });
 
+  it('repairs stale empty source data issues when old listing records lack source SKU traces', () => {
+    const item = buildAlibaba1688ListingPrefill({
+      id: 'collect-taobao-old-empty-issues',
+      title: '旧淘宝货源记录',
+      sourcePlatform: 'taobao',
+      sourceUrl: 'https://item.taobao.com/item.htm?id=998877',
+      sourceProductId: '998877',
+      purchasePrice: { toString: () => '19.90' },
+      currency: 'CNY',
+      images: ['https://img.example.com/main.jpg'],
+      variants: [{ sku: 'taobao-1', sourceSkuId: '', sourcePlatform: 'taobao', price: '19.9' }],
+      notes: null,
+      metadata: {
+        sourceKind: 'domestic_supply',
+        description: '旧商品详情',
+        attributes: { 材质: '棉' },
+        sourceDataIssues: [],
+        categoryMappingStatus: 'deferred_until_listing',
+        listingPreparationStatus: 'collected_only',
+      },
+      createdAt: new Date('2026-06-07T12:00:00.000Z'),
+    });
+
+    expect(item.sourceDataIssues).toEqual(['missing_source_sku_ids']);
+  });
+
   it('infers source data issues for old domestic supply collect list records', () => {
     const source = {
       images: [],
@@ -541,6 +567,26 @@ describe('1688 collect helpers', () => {
       ],
     });
     expect(taobaoMetadata).toMatchObject(metadata as Record<string, unknown>);
+  });
+
+  it('repairs stale empty source data issues for old domestic supply collect list records', () => {
+    const metadata = exposeSupplyGoodsMetadata({
+      sourceKind: 'domestic_supply',
+      description: '旧商品详情',
+      attributes: { 材质: '棉' },
+      sourceDataIssues: [],
+    }, {
+      sourcePlatform: 'taobao',
+      images: ['https://img.example.com/main.jpg'],
+      purchasePrice: '19.90',
+      purchaseCurrency: 'CNY',
+      variants: [{ sku: 'taobao-1', sourceSkuId: '', sourcePlatform: 'taobao' }],
+    });
+
+    expect(metadata).toMatchObject({
+      sourceKind: 'domestic_supply',
+      sourceDataIssues: ['missing_source_sku_ids'],
+    });
   });
 
   it('serializes 1688 collected records for listing preparation without executing mapping', () => {
