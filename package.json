@@ -16,7 +16,7 @@
     "db:studio": "pnpm --filter server db:studio",
     "db:seed": "pnpm --filter server db:seed",
     "preflight": "node scripts/preflight.mjs",
-    "test:repo": "node --no-warnings --test scripts/commission-rates.test.mjs scripts/extension-ozon-regressions.test.mjs scripts/windows-package-config.test.mjs apps/web/src/lib/onboarding.test.mjs apps/web/src/lib/collect-1688.test.mjs apps/web/src/lib/dashboard-business.test.mjs apps/web/src/lib/listing-prices.test.mjs apps/web/src/lib/supply-goods.test.mjs",
+    "test:repo": "node --no-warnings --test scripts/commission-rates.test.mjs scripts/extension-ozon-regressions.test.mjs scripts/windows-package-config.test.mjs apps/web/src/lib/onboarding.test.mjs apps/web/src/lib/collect-1688.test.mjs apps/web/src/lib/category-mapping-targets.test.mjs apps/web/src/lib/dashboard-business.test.mjs apps/web/src/lib/listing-prices.test.mjs apps/web/src/lib/supply-goods.test.mjs",
     "env:check": "node scripts/validate-env.mjs",
     "smoke:remote": "pnpm --filter server smoke:remote",
     "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",

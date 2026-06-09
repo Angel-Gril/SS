@@ -11,6 +11,11 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import {
+  buildOzonCategoryTargetFormPatch,
+  searchOzonCategoryTargets,
+  type OzonCategoryTarget,
+} from '@/lib/category-mapping-targets';
 import { formatDate } from '@/lib/utils';
 
 interface CategoryMapping {
@@ -32,6 +37,13 @@ interface CategoryMapping {
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+interface Shop {
+  id: string;
+  name: string;
+  platform: string;
+  status?: string | null;
 }
 
 const emptyForm = {
@@ -69,8 +81,16 @@ export default function CategoryMappingPage() {
   const [editing, setEditing] = useState<CategoryMapping | null>(null);
   const [form, setForm] = useState<MappingForm>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [ozonShops, setOzonShops] = useState<Shop[]>([]);
+  const [targetShopId, setTargetShopId] = useState('');
+  const [targetCategoryTree, setTargetCategoryTree] = useState<unknown[]>([]);
+  const [targetCategoryLoadedShopId, setTargetCategoryLoadedShopId] = useState('');
+  const [targetCategoryQuery, setTargetCategoryQuery] = useState('');
+  const [targetCategoryLoading, setTargetCategoryLoading] = useState(false);
+  const targetCategoryResults = searchOzonCategoryTargets(targetCategoryTree, targetCategoryQuery, { limit: 20 });
 
   useEffect(() => { fetchRows(); }, [search, sourcePlatform]);
+  useEffect(() => { fetchShops(); }, []);
 
   async function fetchRows() {
     setLoading(true);
@@ -82,6 +102,15 @@ export default function CategoryMappingPage() {
     setLoading(false);
   }
 
+  async function fetchShops() {
+    const res = await api.get<Shop[]>('/api/shops');
+    if (res.code === 1 && res.data) {
+      const shops = res.data.filter((shop) => shop.platform === 'OZON');
+      setOzonShops(shops);
+      if (!targetShopId && shops[0]) setTargetShopId(shops[0].id);
+    }
+  }
+
   function updateForm(key: keyof MappingForm, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
@@ -89,6 +118,7 @@ export default function CategoryMappingPage() {
   function openCreate() {
     setEditing(null);
     setForm({ ...emptyForm, sourcePlatform });
+    setTargetCategoryQuery('');
     setDialogOpen(true);
   }
 
@@ -109,7 +139,30 @@ export default function CategoryMappingPage() {
       defaultHeightMm: row.defaultHeightMm ? String(row.defaultHeightMm) : '',
       notes: row.notes || '',
     });
+    setTargetCategoryQuery(row.targetCategoryName || row.targetCategoryPath || '');
     setDialogOpen(true);
+  }
+
+  async function fetchTargetCategories() {
+    if (!targetShopId) {
+      toast({ title: '请先选择 OZON 店铺', variant: 'destructive' });
+      return;
+    }
+    setTargetCategoryLoading(true);
+    const res = await api.get<unknown[]>(`/api/listing/categories?shopId=${encodeURIComponent(targetShopId)}`);
+    setTargetCategoryLoading(false);
+    if (res.code === 1 && Array.isArray(res.data)) {
+      setTargetCategoryTree(res.data);
+      setTargetCategoryLoadedShopId(targetShopId);
+    } else {
+      toast({ title: res.msg || '获取 OZON 类目失败', variant: 'destructive' });
+    }
+  }
+
+  function selectTargetCategory(target: OzonCategoryTarget) {
+    const patch = buildOzonCategoryTargetFormPatch(target);
+    setForm((prev) => ({ ...prev, ...patch }));
+    setTargetCategoryQuery(target.label);
   }
 
   function buildPayload() {
@@ -353,6 +406,70 @@ export default function CategoryMappingPage() {
               <Field label="来源类目名称" value={form.sourceCategoryName} onChange={(value) => updateForm('sourceCategoryName', value)} placeholder="手机壳" />
             </div>
             <Field label="来源类目路径" value={form.sourceCategoryPath} onChange={(value) => updateForm('sourceCategoryPath', value)} placeholder="数码配件 > 手机配件 > 手机壳" />
+
+            <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,220px)_1fr]">
+                <div className="space-y-1">
+                  <Label className="text-xs">OZON 店铺</Label>
+                  <select
+                    value={targetShopId}
+                    onChange={(event) => {
+                      setTargetShopId(event.target.value);
+                      setTargetCategoryTree([]);
+                      setTargetCategoryLoadedShopId('');
+                    }}
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    {ozonShops.length === 0 ? (
+                      <option value="">暂无 OZON 店铺</option>
+                    ) : (
+                      ozonShops.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)
+                    )}
+                  </select>
+                </div>
+                <form
+                  className="space-y-1"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    fetchTargetCategories();
+                  }}
+                >
+                  <Label className="text-xs">OZON 类目搜索</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={targetCategoryQuery}
+                      onChange={(event) => setTargetCategoryQuery(event.target.value)}
+                      placeholder="俄文名称 / category ID / type ID"
+                      className="h-9"
+                    />
+                    <Button type="submit" size="sm" variant="outline" disabled={targetCategoryLoading || !targetShopId}>
+                      {targetCategoryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </form>
+              </div>
+              {targetCategoryLoadedShopId ? (
+                targetCategoryResults.length > 0 ? (
+                  <div className="max-h-56 overflow-y-auto rounded-md border bg-background">
+                    {targetCategoryResults.map((target) => (
+                      <button
+                        key={`${target.categoryId}:${target.typeId}`}
+                        type="button"
+                        onClick={() => selectTargetCategory(target)}
+                        className="flex w-full items-start justify-between gap-3 border-b px-3 py-2 text-left last:border-b-0 hover:bg-muted/60"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium">{target.label}</span>
+                          <span className="mt-1 block font-mono text-xs text-muted-foreground">category {target.categoryId} / type {target.typeId}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border bg-background px-3 py-6 text-center text-sm text-muted-foreground">暂无匹配类目</div>
+                )
+              ) : null}
+            </div>
 
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="OZON 类目 ID *" value={form.targetCategoryId} onChange={(value) => updateForm('targetCategoryId', value)} type="number" />
