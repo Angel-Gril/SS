@@ -250,6 +250,84 @@ describe('1688 supply pricing and import routes', () => {
     await app.close();
   });
 
+  it('persists Ozon source context when a 1688 item comes from extension image search', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.create.mockResolvedValue({
+      id: 'goods-ozon-source',
+      userId: 'user-1',
+      title: '透明手机壳',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '20' },
+      currency: 'CNY',
+      sku: 'SKU-1688-1',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '透明手机壳',
+        sourceCategoryName: '手机壳',
+        supplier: '义乌供应商',
+        sku: 'SKU-1688-1',
+        images: ['https://cbu01.alicdn.com/img/offer.jpg'],
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+        metadata: {
+          sourceOzonProductId: '987654321',
+          ozonSourceContext: {
+            productId: '987654321',
+            title: 'Ozon 透明手机壳',
+            sourceUrl: 'https://www.ozon.ru/product/case-987654321/',
+            imageUrl: 'https://cdn.ozon.ru/main.jpg',
+            images: ['https://cdn.ozon.ru/main.jpg'],
+            categoryName: '手机壳',
+            brand: 'Brand X',
+            weightG: 480,
+            lengthMm: 200,
+            widthMm: 120,
+            heightMm: 30,
+            savedAt: '2026-06-09T08:00:00.000Z',
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.supplyGoods.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          sourceOzonProductId: '987654321',
+          ozonSourceContext: expect.objectContaining({
+            productId: '987654321',
+            title: 'Ozon 透明手机壳',
+            imageUrl: 'https://cdn.ozon.ru/main.jpg',
+            categoryName: '手机壳',
+          }),
+          pricingInput: expect.objectContaining({
+            metadata: expect.any(Object),
+          }),
+        }),
+      }),
+    });
+    await app.close();
+  });
+
   it('updates an existing 1688 supply item instead of creating duplicates for the same source product', async () => {
     const app = await buildSupplyApp();
     prismaMock.supplyGoods.findFirst.mockResolvedValue({

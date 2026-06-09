@@ -230,6 +230,10 @@ function Supply1688Summary({ summary }: { summary: NonNullable<ReturnType<typeof
         <Badge variant={summary.hasMapping ? 'success' : 'warning'}>{summary.hasMapping ? '已映射' : '待映射'}</Badge>
         <span className="text-muted-foreground">{summary.mappingText}</span>
       </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={summary.hasOzonSource ? 'success' : 'outline'}>{summary.hasOzonSource ? 'Ozon来源' : '无来源'}</Badge>
+        <span className="text-muted-foreground">{summary.ozonSourceText}</span>
+      </div>
     </div>
   );
 }

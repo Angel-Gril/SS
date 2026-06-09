@@ -24,6 +24,7 @@ const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
 const OZON_CALC_ERP_PUSH_HISTORY_KEY = 'ozon-calc:erp-push-history';
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
 const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
+const SS_ERP_OZON_1688_CONTEXT_KEY = 'ss-erp:ozon-1688-context';
 const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
 const OZON_COMMISSION_SNAPSHOT_KEY = 'ozon-calculator:commission-snapshot';
 const OZON_FX_SNAPSHOT_KEY = 'ozon-calculator:fx-snapshot';
@@ -281,6 +282,47 @@ function buildErpCollectPageUrl(apiBaseUrl, sku) {
   const targetUrl = webBase + '/collect';
   const cleanSku = toText(sku).trim();
   return cleanSku ? targetUrl + '?search=' + encodeURIComponent(cleanSku) : targetUrl;
+}
+
+function normalizeOzon1688Context(value) {
+  const input = value && typeof value === 'object' ? value : {};
+  const images = Array.isArray(input.images)
+    ? input.images.map((item) => toText(item).trim()).filter(Boolean).slice(0, 10)
+    : [];
+  const imageUrl = toText(input.imageUrl || images[0]).trim();
+  if (imageUrl && images.indexOf(imageUrl) < 0) {
+    images.unshift(imageUrl);
+  }
+  return {
+    productId: toText(input.productId || input.sku).trim(),
+    title: toText(input.title).trim().slice(0, 300),
+    sourceUrl: toText(input.sourceUrl).trim(),
+    sourceHost: toText(input.sourceHost).trim(),
+    imageUrl,
+    images,
+    categoryName: toText(input.categoryName).trim(),
+    brand: toText(input.brand).trim(),
+    price: input.price != null ? input.price : '',
+    currency: toText(input.currency || 'RUB').trim(),
+    weightG: input.weightG != null ? input.weightG : '',
+    lengthMm: input.lengthMm != null ? input.lengthMm : '',
+    widthMm: input.widthMm != null ? input.widthMm : '',
+    heightMm: input.heightMm != null ? input.heightMm : '',
+    savedAt: safeIsoDate(input.savedAt),
+  };
+}
+
+function build1688ImageSearchUrl(context) {
+  const normalized = normalizeOzon1688Context(context);
+  const url = new URL('https://s.1688.com/selloffer/offer_search.htm');
+  if (normalized.imageUrl) {
+    url.searchParams.set('imageAddress', normalized.imageUrl);
+  }
+  if (normalized.title) {
+    url.searchParams.set('keywords', normalized.title.slice(0, 80));
+  }
+  url.searchParams.set('ssErpSource', 'ozon');
+  return url.toString();
 }
 
 function buildCaptureCounts(entries) {
@@ -835,6 +877,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return chrome.tabs.create({ url: targetUrl }).then(() => {
         sendResponse({ ok: true, url: targetUrl });
       });
+    }).catch((error) => {
+      sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:open-1688-image-search') {
+    const context = normalizeOzon1688Context(message.ozonSourceContext || message.context || {});
+    const targetUrl = build1688ImageSearchUrl(context);
+    if (!context.imageUrl) {
+      sendResponse({ ok: false, msg: '缺少 Ozon 商品主图，无法打开 1688 以图搜' });
+      return false;
+    }
+    chrome.storage.local.set({ [SS_ERP_OZON_1688_CONTEXT_KEY]: context }).then(() => {
+      return chrome.tabs.create({ url: targetUrl });
+    }).then(() => {
+      sendResponse({ ok: true, url: targetUrl });
     }).catch((error) => {
       sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
     });

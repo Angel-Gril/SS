@@ -4,6 +4,8 @@
   const BRIDGE_ID = "spb-self-hosted-page-bridge";
   const PAGE_STATE_TIMEOUT_MS = 8000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
+  const SS_ERP_OZON_1688_CONTEXT_KEY = "ss-erp:ozon-1688-context";
+  const OZON_1688_CONTEXT_TTL_MS = 2 * 60 * 60 * 1000;
   let lastOzonUrl = "";
 
   injectPageBridge();
@@ -167,8 +169,23 @@
     });
   }
 
-  function normalize1688PanelProduct(data) {
+  function loadOzon1688Context() {
+    return getLocalStorageValue([SS_ERP_OZON_1688_CONTEXT_KEY]).then((result) => {
+      const context = result[SS_ERP_OZON_1688_CONTEXT_KEY];
+      return isRecentOzon1688Context(context) ? context : null;
+    });
+  }
+
+  function isRecentOzon1688Context(context) {
+    if (!context || typeof context !== "object") return false;
+    const savedAt = Date.parse(context.savedAt || context.createdAt || "");
+    if (!Number.isFinite(savedAt)) return false;
+    return Date.now() - savedAt <= OZON_1688_CONTEXT_TTL_MS;
+  }
+
+  function normalize1688PanelProduct(data, ozonSourceContext) {
     const product = data && typeof data === "object" ? data : {};
+    const ozonContext = ozonSourceContext && typeof ozonSourceContext === "object" ? ozonSourceContext : null;
     const skuItems = Array.isArray(product.skuItems) ? product.skuItems : [];
     const firstSku = skuItems.find((item) => numberFromText(item && item.price, 0) > 0) || null;
     const images = Array.isArray(product.images) ? product.images.filter(Boolean) : [];
@@ -182,7 +199,7 @@
       title: product.title || product.name || document.title || "未命名1688商品",
       sourceProductId: product.sourceProductId || product.productId || product.offerId || extract1688ProductIdFromUrl(product.sourceUrl || location.href),
       sourceCategoryId: product.sourceCategoryId || product.categoryId || "",
-      sourceCategoryName: product.sourceCategoryName || product.categoryName || product.category || "",
+      sourceCategoryName: product.sourceCategoryName || (ozonSourceContext && ozonSourceContext.categoryName) || product.categoryName || product.category || "",
       sourceCategoryPath: product.sourceCategoryPath || product.categoryPath || "",
       supplier: product.supplier || product.shopName || product.sellerName || "",
       sku: product.sku || product.sourceProductId || product.productId || extract1688ProductIdFromUrl(product.sourceUrl || location.href),
@@ -197,6 +214,8 @@
       logisticsFeeCny: numberFromText(product.logisticsFeeCny, 0),
       exchangeRateRubToCny: numberFromText(product.exchangeRateRubToCny, 0.08),
       targetMarginPct: numberFromText(product.targetMarginPct, 30),
+      sourceOzonProductId: ozonContext && ozonContext.productId ? String(ozonContext.productId) : "",
+      ozonSourceContext: ozonContext,
       collectedAt: product.collectedAt || new Date().toISOString(),
     };
   }
@@ -229,6 +248,10 @@
       logisticsFeeCny: numberFromText(field("logisticsFeeCny", product.logisticsFeeCny), 0),
       exchangeRateRubToCny: numberFromText(field("exchangeRateRubToCny", product.exchangeRateRubToCny), 0.08),
       targetMarginPct: numberFromText(field("targetMarginPct", product.targetMarginPct), 30),
+      metadata: product.ozonSourceContext ? {
+        sourceOzonProductId: product.sourceOzonProductId || product.ozonSourceContext.productId,
+        ozonSourceContext: product.ozonSourceContext,
+      } : undefined,
     };
   }
 
@@ -398,6 +421,7 @@
       '      <div class="ss-erp-1688-product-meta">ID ' + escapeHtml(product.sourceProductId || "-") + ' · ' + escapeHtml(product.supplier || "未识别供应商") + '</div>',
       '    </div>',
       '  </div>',
+      build1688OzonContext(product.ozonSourceContext),
       '  <div class="ss-erp-1688-grid">',
       build1688Field("purchasePriceCny", "采购价 CNY", product.purchasePriceCny, "0.01"),
       build1688Field("domesticShippingCny", "国内运费", product.domesticShippingCny, "0.01"),
@@ -423,6 +447,23 @@
     return root;
   }
 
+  function build1688OzonContext(ozonSourceContext) {
+    if (!ozonSourceContext) return "";
+    const title = ozonSourceContext.title || "Ozon 商品";
+    const productId = ozonSourceContext.productId || "-";
+    const category = ozonSourceContext.categoryName || "未识别类目";
+    const image = Array.isArray(ozonSourceContext.images) && ozonSourceContext.images[0] ? ozonSourceContext.images[0] : "";
+    return [
+      '<div class="ss-erp-1688-ozon-context" data-ss-erp-1688-ozon-context>',
+      image ? '  <img src="' + escapeHtml(image) + '" alt="">' : '  <div></div>',
+      '  <div>',
+      '    <div class="ss-erp-1688-ozon-title">来自 Ozon 以图搜：' + escapeHtml(title) + '</div>',
+      '    <div class="ss-erp-1688-ozon-meta">SKU ' + escapeHtml(productId) + ' · ' + escapeHtml(category) + '</div>',
+      '  </div>',
+      '</div>',
+    ].join("");
+  }
+
   function build1688Field(name, label, value, step) {
     return [
       '<div class="ss-erp-1688-field">',
@@ -436,8 +477,9 @@
     if (!is1688DetailPage() || window.SS_ERP_1688_PRICING_PANEL) return;
     window.SS_ERP_1688_PRICING_PANEL = { status: "initializing" };
     try {
+      const ozonSourceContext = await loadOzon1688Context();
       const data = await collectCurrentPage();
-      const product = normalize1688PanelProduct(data);
+      const product = normalize1688PanelProduct(data, ozonSourceContext);
       const panel = render1688PricingPanel(product);
       document.body.appendChild(panel);
       load1688LogisticsQuote(panel, product).catch((error) => {
@@ -811,6 +853,7 @@
             <div style="font-size:11px;color:rgba(255,255,255,0.72);margin-top:2px;">SKU ${productId}</div>
           </div>
           <div style="display:flex;gap:5px;">
+            <button type="button" data-role="search-1688" title="用主图去 1688 搜同款" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">搜1688</button>
             <button type="button" data-role="copy" title="复制数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">复制</button>
             <button type="button" data-role="refresh" title="刷新数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">刷新</button>
             <button type="button" data-role="collapse" style="border:0;background:rgba(255,255,255,0.12);color:#fff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;font-weight:700;transition:background 0.15s;">◀</button>
@@ -869,6 +912,11 @@
       }, 200);
     });
 
+    panel.querySelector("[data-role='search-1688']").addEventListener("click", (e) => {
+      e.stopPropagation();
+      open1688ImageSearchFromOzon(panel);
+    });
+
     panel.querySelector("[data-role='copy']").addEventListener("click", (e) => {
       e.stopPropagation();
       const data = panel._ozonData;
@@ -898,6 +946,80 @@
     });
 
     return panel;
+  }
+
+  function buildOzon1688SearchContext(data) {
+    const payload = data && typeof data === "object" ? data : {};
+    const item = payload.item || {};
+    const detail = payload.detail || {};
+    const specs = payload.specs || {};
+    const imageCandidates = []
+      .concat(item.image || [])
+      .concat(item.imageUrl || [])
+      .concat(item.photo || [])
+      .concat(detail.primaryImage || [])
+      .concat(Array.isArray(detail.images) ? detail.images : [])
+      .concat(Array.isArray(item.images) ? item.images : []);
+    const images = imageCandidates.filter((image, index, source) => {
+      return typeof image === "string" && image && source.indexOf(image) === index;
+    });
+    return {
+      productId: String(item.sku || item.productId || payload.productId || parseOzonProductIdFromUrl(location.href) || ""),
+      title: item.title || item.name || detail.name || document.title || "",
+      sourceUrl: location.href,
+      sourceHost: location.hostname,
+      imageUrl: images[0] || "",
+      images,
+      categoryName: item.category3 || item.category || item.category1 || detail.category || "",
+      brand: item.brand || detail.brand || "",
+      price: item.avgPrice || item.price || item.minSellerPrice || "",
+      currency: item.currency || "RUB",
+      weightG: specs.weightGrams || specs.productWeightGrams || item.weightGrams || "",
+      lengthMm: specs.lengthMm || "",
+      widthMm: specs.widthMm || "",
+      heightMm: specs.heightMm || "",
+      savedAt: new Date().toISOString(),
+    };
+  }
+
+  async function open1688ImageSearchFromOzon(panel) {
+    const button = panel && panel.querySelector("[data-role='search-1688']");
+    const originalText = button ? button.textContent : "";
+    try {
+      const ozonSourceContext = buildOzon1688SearchContext(panel && panel._ozonData);
+      if (!ozonSourceContext.imageUrl) {
+        throw new Error("当前 Ozon 商品没有可用主图，无法以图搜索 1688");
+      }
+      if (button) {
+        button.disabled = true;
+        button.textContent = "打开中";
+      }
+      const response = await sendRuntimeMessage({
+        type: "ss-erp:open-1688-image-search",
+        ozonSourceContext,
+      });
+      if (!response || !response.ok) {
+        throw new Error((response && (response.msg || response.error)) || "打开 1688 搜索失败");
+      }
+      if (button) {
+        button.textContent = "已打开";
+      }
+    } catch (error) {
+      const status = panel && panel.querySelector("[data-role='status']");
+      if (status) {
+        status.textContent = error && error.message ? error.message : String(error);
+      }
+      if (button) {
+        button.textContent = "失败";
+      }
+    } finally {
+      if (button) {
+        setTimeout(() => {
+          button.disabled = false;
+          button.textContent = originalText || "搜1688";
+        }, 1600);
+      }
+    }
   }
 
   function fillOzonPanel(panel, data) {

@@ -427,6 +427,7 @@ Data flow:
 - 2026-06-09: Improved `货源管理` visibility by adding tested 1688 metadata summaries that show saved核价 status, suggested CNY/RUB price, estimated margin, and matched Ozon category/type in both desktop rows and mobile cards.
 - 2026-06-09: Product direction correction from user review: the ERP `/collect/1688` page should be treated as manual fallback/debug entry only. The primary 1688 collection and pricing workflow belongs in the Chrome extension on Ozon/1688 pages: Ozon image-search-to-1688 pricing, 1688 detail-page collection, and ERP persistence of full source product data plus pricing metadata.
 - 2026-06-09: Started extension-first 1688 workflow by injecting a `SS ERP 1688核价采集` panel on `detail.1688.com` pages. The panel reads current page product data, lets the operator adjust cost/logistics/pricing inputs, calls ERP `/api/supply/1688/preview`, and saves through `/api/supply/1688/import`. ERP dashboard copy/sidebar now labels `/collect/1688` as `1688手工补录` fallback rather than the primary collection flow.
+- 2026-06-09: Continued the extension-first Ozon→1688 workflow by adding an `搜1688` action on Ozon product pages. The extension stores the current Ozon SKU/title/category/main image/dimensions as local context, opens 1688 image search, shows that Ozon source context inside the 1688 pricing panel, carries the context into `/api/supply/1688/import`, and surfaces the linked Ozon source in `货源管理` summaries.
 
 **Test scenarios:**
 - Test expectation: depends on each resumed task; add or update tests per behavior touched.

@@ -170,6 +170,40 @@ test('1688 pricing panel prefills logistics fee from synced Ozon logistics snaps
   assert.match(content, /命中物流/);
 });
 
+test('Ozon product panel opens 1688 image search with current Ozon context', () => {
+  const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const worker = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+
+  assert.match(content, /function\s+buildOzon1688SearchContext/);
+  assert.match(content, /function\s+open1688ImageSearchFromOzon/);
+  assert.match(content, /data-role="search-1688"/);
+  assert.match(content, /ss-erp:open-1688-image-search/);
+  assert.match(content, /ozonSourceContext/);
+  assert.match(content, /images\[0\]/);
+
+  assert.match(worker, /const\s+SS_ERP_OZON_1688_CONTEXT_KEY\s*=\s*'ss-erp:ozon-1688-context'/);
+  assert.match(worker, /function\s+build1688ImageSearchUrl/);
+  assert.match(worker, /message\.type\s*===\s*'ss-erp:open-1688-image-search'/);
+  assert.match(worker, /chrome\.storage\.local\.set\(\{\s*\[SS_ERP_OZON_1688_CONTEXT_KEY\]:\s*context\s*\}\)/);
+  assert.match(worker, /chrome\.tabs\.create\(\{\s*url:\s*targetUrl\s*\}\)/);
+  assert.match(worker, /s\.1688\.com\/selloffer\/offer_search\.htm/);
+});
+
+test('1688 pricing panel shows the Ozon source context saved before image search', () => {
+  const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const css = readRepoFile('extensions', 'ss-erp', 'content', 'collect-1688-panel.css');
+
+  assert.match(content, /SS_ERP_OZON_1688_CONTEXT_KEY\s*=\s*"ss-erp:ozon-1688-context"/);
+  assert.match(content, /function\s+loadOzon1688Context/);
+  assert.match(content, /function\s+isRecentOzon1688Context/);
+  assert.match(content, /ozonSourceContext/);
+  assert.match(content, /data-ss-erp-1688-ozon-context/);
+  assert.match(content, /来自 Ozon 以图搜/);
+  assert.match(content, /sourceCategoryName:\s*product\.sourceCategoryName\s*\|\|\s*\(ozonSourceContext/);
+  assert.match(content, /sourceOzonProductId/);
+  assert.match(css, /ss-erp-1688-ozon-context/);
+});
+
 test('extension runtime detection clears stale cloud mode when runtime endpoint is unavailable', async () => {
   const { runtime, storage } = loadRuntimeModeHarness({
     storage: {

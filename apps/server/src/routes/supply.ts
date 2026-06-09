@@ -38,6 +38,26 @@ const import1688Schema = z.object({
   logisticsFeeCny: z.coerce.number().default(0),
   exchangeRateRubToCny: z.coerce.number(),
   targetMarginPct: z.coerce.number().default(30),
+  metadata: z.object({
+    sourceOzonProductId: z.string().trim().optional(),
+    ozonSourceContext: z.object({
+      productId: z.string().trim().optional(),
+      title: z.string().trim().max(500).optional(),
+      sourceUrl: z.string().url().optional().or(z.literal('')),
+      sourceHost: z.string().trim().optional(),
+      imageUrl: z.string().url().optional().or(z.literal('')),
+      images: z.array(z.string().url()).max(20).optional(),
+      categoryName: z.string().trim().optional(),
+      brand: z.string().trim().optional(),
+      price: z.union([z.string(), z.number()]).optional(),
+      currency: z.string().trim().optional(),
+      weightG: z.union([z.string(), z.number()]).optional(),
+      lengthMm: z.union([z.string(), z.number()]).optional(),
+      widthMm: z.union([z.string(), z.number()]).optional(),
+      heightMm: z.union([z.string(), z.number()]).optional(),
+      savedAt: z.string().trim().optional(),
+    }).optional(),
+  }).optional(),
 });
 
 function extract1688ProductId(sourceUrl?: string | null): string | null {
@@ -83,6 +103,22 @@ function buildMappedCategoryMetadata(mapping: any) {
     defaultLengthMm: mapping.defaultLengthMm,
     defaultWidthMm: mapping.defaultWidthMm,
     defaultHeightMm: mapping.defaultHeightMm,
+  };
+}
+
+function buildOzonSourceMetadata(input: z.infer<typeof import1688Schema>) {
+  const metadata = input.metadata || {};
+  const context = metadata.ozonSourceContext;
+  if (!metadata.sourceOzonProductId && !context) return {};
+  const productId = metadata.sourceOzonProductId || context?.productId || null;
+  return {
+    sourceOzonProductId: productId,
+    ozonSourceContext: context
+      ? {
+          ...context,
+          productId: context.productId || productId || undefined,
+        }
+      : null,
   };
 }
 
@@ -259,10 +295,12 @@ export async function supplyRoutes(app: FastifyInstance) {
     const mapping = await resolveCategoryMappingFor1688(userId, parsed.data);
     const sourceProductId = parsed.data.sourceProductId || extract1688ProductId(parsed.data.sourceUrl);
     const mappedCategory = buildMappedCategoryMetadata(mapping);
+    const ozonSourceMetadata = buildOzonSourceMetadata(parsed.data);
     const metadata: Prisma.InputJsonObject = {
       sourceCategoryId: parsed.data.sourceCategoryId || null,
       sourceCategoryName: parsed.data.sourceCategoryName || null,
       sourceCategoryPath: parsed.data.sourceCategoryPath || null,
+      ...(toPrismaJson(ozonSourceMetadata) as Prisma.InputJsonObject),
       mappedCategory: mappedCategory ? toPrismaJson(mappedCategory) : null,
       pricingInput: toPrismaJson(parsed.data),
       pricing: toPrismaJson(pricing),

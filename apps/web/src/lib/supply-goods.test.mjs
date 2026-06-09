@@ -16,14 +16,21 @@ test('builds pricing and mapping summary for a 1688 supply good', () => {
         targetTypeId: 95841,
         targetCategoryName: 'Чехлы',
       },
+      sourceOzonProductId: '987654321',
+      ozonSourceContext: {
+        title: 'Ozon 透明手机壳',
+        categoryName: '手机壳',
+      },
     },
   });
 
   assert.deepEqual(summary, {
     hasPricing: true,
     hasMapping: true,
+    hasOzonSource: true,
     pricingText: '建议 ¥73 / ₽913 · 利润率 30.1%',
     mappingText: 'Ozon 17028711 / type 95841 · Чехлы',
+    ozonSourceText: '来自 Ozon 987654321 · Ozon 透明手机壳 · 手机壳',
   });
 });
 
@@ -36,8 +43,10 @@ test('shows missing pricing and mapping for a 1688 supply good without import me
   assert.deepEqual(summary, {
     hasPricing: false,
     hasMapping: false,
+    hasOzonSource: false,
     pricingText: '未生成核价',
     mappingText: '未命中类目映射',
+    ozonSourceText: '未关联 Ozon 来源',
   });
 });
 
