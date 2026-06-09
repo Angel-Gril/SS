@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
+import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
+import { calculate1688Pricing } from '../lib/1688-pricing.js';
+import { normalizeCategoryMappingInput, selectBestCategoryMapping } from '../lib/category-mapping.js';
 import { prisma } from '../lib/prisma.js';
 
 const createSchema = z.object({
@@ -16,15 +19,295 @@ const createSchema = z.object({
   notes: z.string().optional(),
 });
 
+const import1688Schema = z.object({
+  sourceUrl: z.string().url().optional().or(z.literal('')),
+  title: z.string().min(1).max(500),
+  sourceProductId: z.string().optional(),
+  sourceCategoryId: z.string().optional(),
+  sourceCategoryName: z.string().optional(),
+  sourceCategoryPath: z.string().optional(),
+  supplier: z.string().optional(),
+  sku: z.string().optional(),
+  images: z.array(z.string()).optional(),
+  notes: z.string().optional(),
+  purchasePriceCny: z.coerce.number(),
+  domesticShippingCny: z.coerce.number().default(0),
+  weightG: z.coerce.number().default(0),
+  packageFeeCny: z.coerce.number().default(0),
+  commissionPct: z.coerce.number().default(12),
+  logisticsFeeCny: z.coerce.number().default(0),
+  exchangeRateRubToCny: z.coerce.number(),
+  targetMarginPct: z.coerce.number().default(30),
+});
+
+function extract1688ProductId(sourceUrl?: string | null): string | null {
+  if (!sourceUrl) return null;
+  const match = sourceUrl.match(/\/offer\/(\d+)\.html/i) || sourceUrl.match(/[?&](?:offerId|id)=(\d+)/i);
+  return match?.[1] ?? null;
+}
+
+async function resolveCategoryMappingFor1688(userId: string, input: {
+  sourceCategoryId?: string | null;
+  sourceCategoryName?: string | null;
+  sourceCategoryPath?: string | null;
+}) {
+  if (!input.sourceCategoryId && !input.sourceCategoryName && !input.sourceCategoryPath) return null;
+
+  const mappings = await prisma.categoryMapping.findMany({
+    where: {
+      OR: [{ userId }, { userId: null }],
+      sourcePlatform: '1688',
+    } as any,
+    orderBy: [{ userId: 'desc' }, { updatedAt: 'desc' }],
+  });
+
+  return selectBestCategoryMapping(mappings as any, {
+    userId,
+    sourcePlatform: '1688',
+    sourceCategoryId: input.sourceCategoryId,
+    sourceCategoryName: input.sourceCategoryName,
+    sourceCategoryPath: input.sourceCategoryPath,
+  }) as any;
+}
+
+function buildMappedCategoryMetadata(mapping: any) {
+  if (!mapping) return null;
+  return {
+    mappingId: mapping.id,
+    targetPlatform: mapping.targetPlatform,
+    targetCategoryId: mapping.targetCategoryId,
+    targetTypeId: mapping.targetTypeId,
+    targetCategoryName: mapping.targetCategoryName,
+    targetCategoryPath: mapping.targetCategoryPath,
+    defaultWeightG: mapping.defaultWeightG,
+    defaultLengthMm: mapping.defaultLengthMm,
+    defaultWidthMm: mapping.defaultWidthMm,
+    defaultHeightMm: mapping.defaultHeightMm,
+  };
+}
+
+function toPrismaJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+async function findExisting1688SupplyGood(userId: string, sourceProductId: string | null) {
+  if (!sourceProductId) return null;
+  return prisma.supplyGoods.findFirst({
+    where: {
+      userId,
+      sourcePlatform: '1688',
+      sourceProductId,
+    },
+  });
+}
+
 export async function supplyRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
+  app.get('/category-mappings', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const query = request.query as { sourcePlatform?: string; search?: string };
+    const where: Record<string, unknown> = {
+      OR: [{ userId }, { userId: null }],
+    };
+
+    if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
+    if (query.search) {
+      where.AND = [
+        {
+          OR: [
+            { sourceCategoryId: { contains: query.search, mode: 'insensitive' } },
+            { sourceCategoryName: { contains: query.search, mode: 'insensitive' } },
+            { sourceCategoryPath: { contains: query.search, mode: 'insensitive' } },
+            { targetCategoryName: { contains: query.search, mode: 'insensitive' } },
+            { targetCategoryPath: { contains: query.search, mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
+
+    const rows = await prisma.categoryMapping.findMany({
+      where: where as any,
+      orderBy: [{ userId: 'desc' }, { updatedAt: 'desc' }],
+    });
+
+    return reply.send({ code: 1, msg: 'ok', data: rows });
+  });
+
+  app.get('/category-mappings/lookup', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const query = request.query as {
+      sourcePlatform?: string;
+      sourceCategoryId?: string;
+      sourceCategoryName?: string;
+      sourceCategoryPath?: string;
+    };
+    const sourcePlatform = query.sourcePlatform || '1688';
+
+    const rows = await prisma.categoryMapping.findMany({
+      where: {
+        OR: [{ userId }, { userId: null }],
+        sourcePlatform,
+      } as any,
+      orderBy: [{ userId: 'desc' }, { updatedAt: 'desc' }],
+    });
+    const mapping = selectBestCategoryMapping(rows as any, {
+      userId,
+      sourcePlatform,
+      sourceCategoryId: query.sourceCategoryId,
+      sourceCategoryName: query.sourceCategoryName,
+      sourceCategoryPath: query.sourceCategoryPath,
+    });
+
+    return reply.send({ code: 1, msg: 'ok', data: mapping });
+  });
+
+  app.post('/category-mappings', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = normalizeCategoryMappingInput(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const mapping = await prisma.categoryMapping.create({
+      data: {
+        userId,
+        ...parsed.data,
+      },
+    });
+
+    return reply.send({ code: 1, msg: '类目映射已创建', data: mapping });
+  });
+
+  app.put('/category-mappings/:id', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const parsed = normalizeCategoryMappingInput(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const existing = await prisma.categoryMapping.findFirst({ where: { id, userId } });
+    if (!existing) return reply.status(404).send({ code: 0, msg: '类目映射不存在' });
+
+    const updated = await prisma.categoryMapping.update({
+      where: { id },
+      data: parsed.data,
+    });
+
+    return reply.send({ code: 1, msg: '已更新', data: updated });
+  });
+
+  app.delete('/category-mappings/:id', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+
+    const existing = await prisma.categoryMapping.findFirst({ where: { id, userId } });
+    if (!existing) return reply.status(404).send({ code: 0, msg: '类目映射不存在' });
+
+    await prisma.categoryMapping.delete({ where: { id } });
+    return reply.send({ code: 1, msg: '已删除' });
+  });
+
+  app.post('/1688/preview', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = import1688Schema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const pricing = calculate1688Pricing(parsed.data);
+    if (!pricing.ok) {
+      return reply.status(400).send({ code: 0, msg: pricing.errors[0] ?? '核价参数错误', data: { pricing } });
+    }
+
+    const mapping = await resolveCategoryMappingFor1688(userId, parsed.data);
+    const sourceProductId = parsed.data.sourceProductId || extract1688ProductId(parsed.data.sourceUrl);
+    const existing = await findExisting1688SupplyGood(userId, sourceProductId);
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: {
+        sourceProductId,
+        saveMode: existing ? 'update' : 'create',
+        existingSupplyGood: existing
+          ? {
+              id: existing.id,
+              title: existing.title,
+              sourceProductId: existing.sourceProductId,
+              updatedAt: existing.updatedAt,
+            }
+          : null,
+        pricing,
+        mapping,
+      },
+    });
+  });
+
+  app.post('/1688/import', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = import1688Schema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const pricing = calculate1688Pricing(parsed.data);
+    if (!pricing.ok) {
+      return reply.status(400).send({ code: 0, msg: pricing.errors[0] ?? '核价参数错误', data: { pricing } });
+    }
+
+    const mapping = await resolveCategoryMappingFor1688(userId, parsed.data);
+    const sourceProductId = parsed.data.sourceProductId || extract1688ProductId(parsed.data.sourceUrl);
+    const mappedCategory = buildMappedCategoryMetadata(mapping);
+    const metadata: Prisma.InputJsonObject = {
+      sourceCategoryId: parsed.data.sourceCategoryId || null,
+      sourceCategoryName: parsed.data.sourceCategoryName || null,
+      sourceCategoryPath: parsed.data.sourceCategoryPath || null,
+      mappedCategory: mappedCategory ? toPrismaJson(mappedCategory) : null,
+      pricingInput: toPrismaJson(parsed.data),
+      pricing: toPrismaJson(pricing),
+    };
+    const data = {
+      title: parsed.data.title,
+      sourceUrl: parsed.data.sourceUrl || null,
+      sourcePlatform: '1688',
+      sourceProductId,
+      supplier: parsed.data.supplier || null,
+      purchasePrice: parsed.data.purchasePriceCny,
+      currency: 'CNY',
+      sku: parsed.data.sku || sourceProductId,
+      images: parsed.data.images || undefined,
+      notes: parsed.data.notes || null,
+      metadata,
+    };
+
+    const existing = await findExisting1688SupplyGood(userId, sourceProductId);
+
+    if (existing) {
+      const item = await prisma.supplyGoods.update({
+        where: { id: existing.id },
+        data,
+      });
+      return reply.send({ code: 1, msg: '1688货源已更新', data: item });
+    }
+
+    const item = await prisma.supplyGoods.create({
+      data: {
+        user: { connect: { id: userId } },
+        ...data,
+      },
+    });
+
+    return reply.send({ code: 1, msg: '1688货源已保存', data: item });
+  });
+
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { search?: string; status?: string; offset?: string; limit?: string };
+    const query = request.query as { search?: string; status?: string; sourcePlatform?: string; offset?: string; limit?: string; sort?: string };
 
     const where: Record<string, unknown> = { userId };
     if (query.status) where.status = query.status;
+    if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
     if (query.search) {
       where.OR = [
         { title: { contains: query.search, mode: 'insensitive' } },
@@ -36,13 +319,15 @@ export async function supplyRoutes(app: FastifyInstance) {
     const offset = Math.max(0, Number(query.offset) || 0);
     const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));
 
+    const orderBy = query.sort === 'updatedAt' ? { updatedAt: 'desc' as const } : { createdAt: 'desc' as const };
+
     const [total, rows] = await Promise.all([
       prisma.supplyGoods.count({ where: where as any }),
       prisma.supplyGoods.findMany({
         where: where as any,
         skip: offset,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
       }),
     ]);
 

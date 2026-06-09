@@ -16,6 +16,7 @@ interface TopbarProps {
   user: AuthUser;
   collapsed: boolean;
   onToggle: () => void;
+  onMobileMenu?: () => void;
 }
 
 interface NotifItem {
@@ -28,7 +29,7 @@ interface NotifItem {
   createdAt: string;
 }
 
-export function Topbar({ user, onToggle }: TopbarProps) {
+export function Topbar({ user, onToggle, onMobileMenu }: TopbarProps) {
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
@@ -82,15 +83,18 @@ export function Topbar({ user, onToggle }: TopbarProps) {
   }
 
   return (
-    <header className="h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center justify-between px-4 shrink-0 sticky top-0 z-30">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={onToggle}>
+    <header className="h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center justify-between gap-2 px-3 md:px-4 shrink-0 sticky top-0 z-30">
+      <div className="flex min-w-0 items-center gap-2 md:gap-3">
+        <Button variant="ghost" size="icon" onClick={onMobileMenu || onToggle} className="lg:hidden" title="打开导航">
+          <Menu className="h-5 w-5" />
+        </Button>
+        <Button variant="ghost" size="icon" onClick={onToggle} className="hidden lg:inline-flex" title="折叠菜单">
           <Menu className="h-5 w-5" />
         </Button>
         <GlobalSearch />
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-1 sm:gap-2">
         <span className="text-sm text-muted-foreground hidden sm:inline">
           余额: <span className="font-medium text-foreground">{formatCurrency(user.balance)}</span>
         </span>
@@ -101,7 +105,7 @@ export function Topbar({ user, onToggle }: TopbarProps) {
 
         <ExtensionTokenDialog
           trigger={
-            <Button variant="ghost" size="icon" title="扩展连接 Token">
+            <Button variant="ghost" size="icon" title="扩展连接 Token" className="hidden sm:inline-flex">
               <Key className="h-4.5 w-4.5" />
             </Button>
           }
@@ -157,13 +161,14 @@ export function Topbar({ user, onToggle }: TopbarProps) {
           variant="ghost"
           size="icon"
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          className="hidden sm:inline-flex"
         >
           <Sun className="h-4.5 w-4.5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
           <Moon className="absolute h-4.5 w-4.5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
         </Button>
 
-        <div className="flex items-center gap-2 ml-2 pl-2 border-l">
-          <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+        <div className="flex items-center gap-1 sm:gap-2 ml-1 sm:ml-2 sm:pl-2 sm:border-l">
+          <div className="hidden h-8 w-8 rounded-full bg-primary/10 sm:flex items-center justify-center">
             <User className="h-4 w-4 text-primary" />
           </div>
           <div className="hidden md:flex flex-col leading-tight">

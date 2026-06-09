@@ -1,0 +1,397 @@
+import Fastify from 'fastify';
+import cookie from '@fastify/cookie';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { signToken } from '../lib/auth.js';
+import { supplyRoutes } from '../routes/supply.js';
+
+const prismaMock = vi.hoisted(() => ({
+  user: {
+    findUnique: vi.fn(),
+  },
+  supplyGoods: {
+    count: vi.fn(),
+    findMany: vi.fn(),
+    create: vi.fn(),
+    findFirst: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
+  categoryMapping: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
+}));
+
+const redisMock = vi.hoisted(() => ({
+  exists: vi.fn(),
+}));
+
+vi.mock('../lib/prisma.js', () => ({ prisma: prismaMock }));
+vi.mock('../lib/redis.js', () => ({ redis: redisMock }));
+
+async function buildSupplyApp() {
+  const app = Fastify({ logger: false });
+  await app.register(cookie);
+  await app.register(supplyRoutes, { prefix: '/api/supply' });
+  await app.ready();
+  return app;
+}
+
+function authHeader() {
+  return {
+    authorization: `Bearer ${signToken({ userId: 'user-1', role: 'USER' })}`,
+  };
+}
+
+const mapping = {
+  id: 'mapping-1',
+  userId: 'user-1',
+  sourcePlatform: '1688',
+  sourceCategoryId: null,
+  sourceCategoryName: '手机壳',
+  sourceCategoryPath: null,
+  targetPlatform: 'ozon',
+  targetCategoryId: 17028711,
+  targetTypeId: 95841,
+  targetCategoryName: 'Чехлы',
+  targetCategoryPath: null,
+  defaultWeightG: 300,
+  defaultLengthMm: 200,
+  defaultWidthMm: 120,
+  defaultHeightMm: 30,
+  notes: null,
+  createdAt: new Date('2026-06-08T00:00:00.000Z'),
+  updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  redisMock.exists.mockResolvedValue(1);
+  prismaMock.user.findUnique.mockResolvedValue({
+    id: 'user-1',
+    parentId: null,
+    accountCode: '101',
+    status: 'ACTIVE',
+    isSuperAdmin: false,
+    role: 'USER',
+  });
+  prismaMock.supplyGoods.findFirst.mockResolvedValue(null);
+  prismaMock.categoryMapping.findMany.mockResolvedValue([mapping]);
+});
+
+describe('1688 supply pricing and import routes', () => {
+  it('previews 1688 pricing and matching category mapping without saving', async () => {
+    const app = await buildSupplyApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/preview',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '透明手机壳',
+        sourceCategoryName: '手机壳',
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        sourceProductId: '123456789',
+        pricing: {
+          ok: true,
+          suggestedSalePriceCny: 73,
+          suggestedSalePriceRub: 913,
+        },
+        mapping: {
+          id: 'mapping-1',
+          targetCategoryId: 17028711,
+          targetTypeId: 95841,
+        },
+      },
+    });
+    expect(prismaMock.supplyGoods.create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('previews when a 1688 item will update an existing supply good', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.findFirst.mockResolvedValue({
+      id: 'goods-existing',
+      userId: 'user-1',
+      title: '透明手机壳旧版',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      updatedAt: new Date('2026-06-09T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/preview',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '透明手机壳新版',
+        sourceCategoryName: '手机壳',
+        purchasePriceCny: 22,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        sourceProductId: '123456789',
+        saveMode: 'update',
+        existingSupplyGood: {
+          id: 'goods-existing',
+          title: '透明手机壳旧版',
+          sourceProductId: '123456789',
+        },
+      },
+    });
+    expect(prismaMock.supplyGoods.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        sourcePlatform: '1688',
+        sourceProductId: '123456789',
+      },
+    });
+    expect(prismaMock.supplyGoods.create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('imports a 1688 item into supply goods with pricing and mapping metadata', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.create.mockResolvedValue({
+      id: 'goods-1',
+      userId: 'user-1',
+      title: '透明手机壳',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '20' },
+      currency: 'CNY',
+      sku: 'SKU-1688-1',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '透明手机壳',
+        sourceCategoryName: '手机壳',
+        supplier: '义乌供应商',
+        sku: 'SKU-1688-1',
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ code: 1, data: { id: 'goods-1' } });
+    expect(prismaMock.supplyGoods.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        user: { connect: { id: 'user-1' } },
+        title: '透明手机壳',
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        sourcePlatform: '1688',
+        sourceProductId: '123456789',
+        supplier: '义乌供应商',
+        purchasePrice: 20,
+        currency: 'CNY',
+        sku: 'SKU-1688-1',
+        metadata: expect.objectContaining({
+          sourceCategoryName: '手机壳',
+          mappedCategory: expect.objectContaining({
+            mappingId: 'mapping-1',
+            targetCategoryId: 17028711,
+            targetTypeId: 95841,
+          }),
+          pricing: expect.objectContaining({
+            suggestedSalePriceCny: 73,
+            suggestedSalePriceRub: 913,
+          }),
+        }),
+      }),
+    });
+    await app.close();
+  });
+
+  it('updates an existing 1688 supply item instead of creating duplicates for the same source product', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.findFirst.mockResolvedValue({
+      id: 'goods-existing',
+      userId: 'user-1',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+    });
+    prismaMock.supplyGoods.update.mockResolvedValue({
+      id: 'goods-existing',
+      userId: 'user-1',
+      title: '透明手机壳新版',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '22' },
+      currency: 'CNY',
+      sku: 'SKU-1688-1',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-09T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '透明手机壳新版',
+        sourceCategoryName: '手机壳',
+        supplier: '义乌供应商',
+        sku: 'SKU-1688-1',
+        purchasePriceCny: 22,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      msg: '1688货源已更新',
+      data: { id: 'goods-existing' },
+    });
+    expect(prismaMock.supplyGoods.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        sourcePlatform: '1688',
+        sourceProductId: '123456789',
+      },
+    });
+    expect(prismaMock.supplyGoods.update).toHaveBeenCalledWith({
+      where: { id: 'goods-existing' },
+      data: expect.objectContaining({
+        title: '透明手机壳新版',
+        purchasePrice: 22,
+        metadata: expect.objectContaining({
+          pricing: expect.objectContaining({ ok: true }),
+        }),
+      }),
+    });
+    expect(prismaMock.supplyGoods.create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('lists 1688 supply goods by updated time when requested', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.count.mockResolvedValue(2);
+    prismaMock.supplyGoods.findMany.mockResolvedValue([
+      {
+        id: 'goods-newer-update',
+        userId: 'user-1',
+        title: '刚更新的 1688 货源',
+        sourceUrl: 'https://detail.1688.com/offer/222.html',
+        sourcePlatform: '1688',
+        sourceProductId: '222',
+        supplier: null,
+        purchasePrice: { toString: () => '22' },
+        currency: 'CNY',
+        sku: '222',
+        metadata: {},
+        status: 'active',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-09T00:00:00.000Z'),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/supply?sourcePlatform=1688&limit=8&sort=updatedAt',
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        total: 2,
+        rows: [
+          {
+            id: 'goods-newer-update',
+            purchasePrice: '22',
+            updatedAt: '2026-06-09T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+    expect(prismaMock.supplyGoods.findMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', sourcePlatform: '1688' },
+      skip: 0,
+      take: 8,
+      orderBy: { updatedAt: 'desc' },
+    });
+    await app.close();
+  });
+
+  it('rejects invalid 1688 pricing input', async () => {
+    const app = await buildSupplyApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/preview',
+      headers: authHeader(),
+      payload: {
+        title: '无效商品',
+        purchasePriceCny: -1,
+        exchangeRateRubToCny: 0,
+        targetMarginPct: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 0 });
+    expect(prismaMock.supplyGoods.create).not.toHaveBeenCalled();
+    await app.close();
+  });
+});

@@ -30,9 +30,16 @@ export default function AdminIntegrationsPage() {
     setLoading(false);
   }
 
-  async function testIntegration(key: 'turnstile' | 'sms' | 'oss' | 'sentry') {
+  async function testIntegration(key: 'turnstile' | 'sms' | 'oss' | 'sentry' | 'email') {
+    let payload: Record<string, string> = {};
+    if (key === 'email') {
+      const to = window.prompt('请输入接收测试邮件的邮箱');
+      if (!to) return;
+      payload = { to };
+    }
+
     setTestingKey(key);
-    const res = await api.post<{ errorCodes?: string[] }>(`/api/admin/system-status/test/${key}`, {});
+    const res = await api.post<{ errorCodes?: string[] }>(`/api/admin/system-status/test/${key}`, payload);
     setTestingKey(null);
     if (res.code === 1) {
       toast({ title: `${key} 测试通过`, description: res.msg });
@@ -73,7 +80,7 @@ export default function AdminIntegrationsPage() {
               check={c}
               testing={testingKey === c.key}
               onTest={
-                c.key === 'turnstile' || c.key === 'sms' || c.key === 'oss' || c.key === 'sentry'
+                c.key === 'turnstile' || c.key === 'sms' || c.key === 'oss' || c.key === 'sentry' || c.key === 'email'
                   ? () => testIntegration(c.key as any)
                   : undefined
               }

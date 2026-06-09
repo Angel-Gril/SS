@@ -76,8 +76,16 @@ export async function authRoutes(app: FastifyInstance) {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const accountCode = await generateAccountCode(null);
+    const consentAcceptedAt = new Date();
     const user = await prisma.user.create({
-      data: { phone, passwordHash, nickname: nickname || `用户${phone.slice(-4)}`, accountCode },
+      data: {
+        phone,
+        passwordHash,
+        nickname: nickname || `用户${phone.slice(-4)}`,
+        accountCode,
+        termsAcceptedAt: consentAcceptedAt,
+        privacyAcceptedAt: consentAcceptedAt,
+      },
     });
 
     const token = signToken({ userId: user.id, role: user.role });

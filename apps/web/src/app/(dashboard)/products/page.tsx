@@ -205,7 +205,7 @@ function ProductsPageInner() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">商品管理</h1>
           <p className="text-muted-foreground mt-1">查看、编辑价格/库存，批量操作商品</p>
@@ -218,7 +218,7 @@ function ProductsPageInner() {
             <select
               value={shopId}
               onChange={(e) => { setShopId(e.target.value); setPage(0); setSelected(new Set()); }}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm sm:w-auto"
             >
               <option value="">全部店铺</option>
               {shops.map((s) => (
@@ -230,7 +230,7 @@ function ProductsPageInner() {
               <select
                 value={selectedWarehouseId || ''}
                 onChange={(e) => setSelectedWarehouseId(e.target.value ? Number(e.target.value) : null)}
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm sm:w-auto"
               >
                 <option value="">默认仓库</option>
                 {warehouses.map((w) => (
@@ -239,7 +239,7 @@ function ProductsPageInner() {
               </select>
             )}
 
-            <form onSubmit={handleSearch} className="flex items-center gap-2 flex-1 max-w-md">
+            <form onSubmit={handleSearch} className="flex w-full items-center gap-2 sm:max-w-md sm:flex-1">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -252,7 +252,7 @@ function ProductsPageInner() {
               <Button type="submit" size="sm" variant="outline">搜索</Button>
             </form>
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
               <Button
                 size="sm"
                 variant="outline"
@@ -277,12 +277,12 @@ function ProductsPageInner() {
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 刷新
               </Button>
-              <span className="text-sm text-muted-foreground">共 {total} 件商品</span>
+              <span className="ml-auto text-sm text-muted-foreground">共 {total} 件商品</span>
             </div>
           </div>
 
           {selectedCount > 0 && (
-            <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-md">
+            <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/50 p-2">
               <span className="text-sm font-medium">已选 {selectedCount} 件</span>
               <Button size="sm" variant="outline" onClick={() => setBatchPriceOpen(true)}>
                 <DollarSign className="h-3.5 w-3.5" /> 批量改价
@@ -316,6 +316,8 @@ function ProductsPageInner() {
               暂无商品。请先在店铺管理中执行同步。
             </div>
           ) : (
+            <>
+            <div className="hidden lg:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -447,6 +449,32 @@ function ProductsPageInner() {
                 ))}
               </TableBody>
             </Table>
+            </div>
+            <div className="divide-y lg:hidden">
+              {products.map((p) => (
+                <ProductMobileCard
+                  key={p.id}
+                  product={p}
+                  selected={selected.has(p.id)}
+                  editingPrice={editingPrice}
+                  editingStock={editingStock}
+                  priceValue={priceValue}
+                  stockValue={stockValue}
+                  onToggleSelected={() => toggleSelect(p.id)}
+                  onPreview={() => setPreviewProductId(p.id)}
+                  onEdit={() => setDetailProductId(p.id)}
+                  onStartPriceEdit={() => { setEditingPrice(p.id); setPriceValue(p.price || ''); }}
+                  onStartStockEdit={() => { setEditingStock(p.id); setStockValue(String(p.stock)); }}
+                  onPriceValueChange={setPriceValue}
+                  onStockValueChange={setStockValue}
+                  onSavePrice={() => savePrice(p.id)}
+                  onSaveStock={() => saveStock(p.id)}
+                  onCancelPrice={() => setEditingPrice(null)}
+                  onCancelStock={() => setEditingStock(null)}
+                />
+              ))}
+            </div>
+            </>
           )}
 
           {totalPages > 1 && (
@@ -511,6 +539,172 @@ function ProductImage({ src }: { src?: string }) {
       className="h-11 w-11 rounded-md border object-cover bg-muted"
       onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
     />
+  );
+}
+
+function ProductMobileCard({
+  product,
+  selected,
+  editingPrice,
+  editingStock,
+  priceValue,
+  stockValue,
+  onToggleSelected,
+  onPreview,
+  onEdit,
+  onStartPriceEdit,
+  onStartStockEdit,
+  onPriceValueChange,
+  onStockValueChange,
+  onSavePrice,
+  onSaveStock,
+  onCancelPrice,
+  onCancelStock,
+}: {
+  product: Product;
+  selected: boolean;
+  editingPrice: string | null;
+  editingStock: string | null;
+  priceValue: string;
+  stockValue: string;
+  onToggleSelected: () => void;
+  onPreview: () => void;
+  onEdit: () => void;
+  onStartPriceEdit: () => void;
+  onStartStockEdit: () => void;
+  onPriceValueChange: (value: string) => void;
+  onStockValueChange: (value: string) => void;
+  onSavePrice: () => void;
+  onSaveStock: () => void;
+  onCancelPrice: () => void;
+  onCancelStock: () => void;
+}) {
+  const commission = product.price
+    ? product.commissionRate
+      ? `${(Number(product.price) * Number(product.commissionRate) / 100).toFixed(2)} (${product.commissionRate}%)`
+      : `${(Number(product.price) * 0.15).toFixed(2)} ~`
+    : '-';
+
+  return (
+    <div className={`space-y-4 p-4 ${selected ? 'bg-muted/30' : ''}`}>
+      <div className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelected}
+          className="mt-1 rounded border-gray-300"
+          aria-label="选择商品"
+        />
+        <button type="button" onClick={onPreview} className="shrink-0">
+          <ProductImage src={product.images?.[0]} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={onPreview}
+            className="line-clamp-2 text-left text-sm font-medium leading-5 hover:text-primary hover:underline"
+          >
+            {product.title}
+          </button>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {product.sku && <span className="font-mono">SKU: {product.sku}</span>}
+            {product.offerId && <span className="font-mono">{product.offerId}</span>}
+          </div>
+        </div>
+        <StatusBadge status={product.status} visibility={product.visibility} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 rounded-md border bg-muted/20 p-3 text-sm">
+        <div>
+          <div className="text-xs text-muted-foreground">买家价</div>
+          {editingPrice === product.id ? (
+            <div className="mt-1 flex items-center gap-1">
+              <Input
+                className="h-8 text-xs"
+                value={priceValue}
+                onChange={(e) => onPriceValueChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onSavePrice();
+                  if (e.key === 'Escape') onCancelPrice();
+                }}
+                autoFocus
+              />
+              <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={onSavePrice}>
+                <Check className="h-3.5 w-3.5 text-emerald-600" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={onCancelPrice}>
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="mt-1 inline-flex max-w-full items-center gap-1 font-medium tabular-nums hover:text-primary"
+              onClick={onStartPriceEdit}
+            >
+              <span className="truncate">{product.price ? `${product.price} ${product.currency || 'USD'}` : '-'}</span>
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+
+        <div>
+          <div className="text-xs text-muted-foreground">库存</div>
+          {editingStock === product.id ? (
+            <div className="mt-1 flex items-center gap-1">
+              <Input
+                type="number"
+                className="h-8 text-xs"
+                value={stockValue}
+                onChange={(e) => onStockValueChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onSaveStock();
+                  if (e.key === 'Escape') onCancelStock();
+                }}
+                autoFocus
+              />
+              <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={onSaveStock}>
+                <Check className="h-3.5 w-3.5 text-emerald-600" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={onCancelStock}>
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="mt-1 inline-flex items-center gap-1 font-medium tabular-nums hover:text-primary"
+              onClick={onStartStockEdit}
+            >
+              <span className={product.stock <= 0 ? 'text-destructive' : ''}>{product.stock}</span>
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+
+        <div>
+          <div className="text-xs text-muted-foreground">折扣前价</div>
+          <div className="mt-1 tabular-nums text-muted-foreground">
+            {product.oldPrice ? `${product.oldPrice} ${product.currency || 'USD'}` : '-'}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground">佣金</div>
+          <div className="mt-1 tabular-nums text-muted-foreground">{commission}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button size="sm" variant="outline" onClick={onPreview}>
+          <Package className="h-3.5 w-3.5" />
+          预览
+        </Button>
+        <Button size="sm" variant="outline" onClick={onEdit}>
+          <Pencil className="h-3.5 w-3.5" />
+          编辑
+        </Button>
+      </div>
+    </div>
   );
 }
 

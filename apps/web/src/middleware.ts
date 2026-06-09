@@ -6,6 +6,7 @@ const USER_HOSTNAME = process.env.NEXT_PUBLIC_USER_HOSTNAME || 'app.ss-erp.com';
 const MARKETING_HOSTNAME = 'ss-erp.com';
 const WWW_MARKETING_HOSTNAME = 'www.ss-erp.com';
 const MARKETING_HOSTNAMES = [MARKETING_HOSTNAME, WWW_MARKETING_HOSTNAME];
+const LOCAL_HOSTNAMES = ['localhost', '127.0.0.1'];
 
 function hostMatches(host: string, configured: string): boolean {
   if (!configured) return false;
@@ -85,6 +86,9 @@ export function middleware(request: NextRequest) {
       return redirectToHost(request, USER_HOSTNAME, pathname);
     }
   } else if (pathname === '/landing') {
+    if (LOCAL_HOSTNAMES.includes(normalizedHost)) {
+      return NextResponse.next();
+    }
     return redirectTo(request, '/login');
   }
 

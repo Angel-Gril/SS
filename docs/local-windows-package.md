@@ -22,7 +22,7 @@
 | --- | --- | --- |
 | 运行模式 | `RUNTIME_MODE=local` | `RUNTIME_MODE=cloud` |
 | API | `http://127.0.0.1:3001` | 线上域名 `/api/*` |
-| Web | `http://127.0.0.1:3000` | `app.ss-erp.com` / `admin.ss-erp.com` |
+| Web | `http://127.0.0.1:3003` | `app.ss-erp.com` / `admin.ss-erp.com` |
 | 图片存储 | `IMAGE_STORAGE_BACKEND=local` | `IMAGE_STORAGE_BACKEND=oss` 或后台 `upload_*` |
 | 注册短信 | local 模式绕过短信验证码 | 真实短信 provider |
 | Turnstile | local 模式不校验 | 登录/短信发码需要校验 |
@@ -38,7 +38,7 @@
 - PostgreSQL：主数据库，必须可连接。
 - Redis：缓存、会话和 BullMQ 队列。代码支持 `REDIS_DISABLED=1` 做最小本地运行，但队列类 Worker 能力会受限。
 - Node 和 pnpm：运行 Web、API、Worker 和脚本。
-- Web：Next.js，默认 `127.0.0.1:3000`。
+- Web：Next.js，默认 `127.0.0.1:3003`。
 - API：Fastify，默认 `127.0.0.1:3001`。
 - Worker：现有 API 进程可内嵌启动部分 worker，也可以用 `src/worker.ts` 单独启动。
 
@@ -248,7 +248,7 @@ SS_ERP_NODE_EXE=""
 - 执行 Prisma migration。
 - 启动 API：`node apps/server/dist/index.js`。
 - 启动 Web：`node apps/web/standalone/**/server.js`。
-- 打开 `http://127.0.0.1:3000`。
+- 打开 `http://127.0.0.1:3003`。
 
 停止：
 
@@ -401,7 +401,7 @@ pnpm verify:extension
 1. Chrome 打开扩展程序页面。
 2. 开启开发者模式。
 3. 加载 `build/extensions/ss-erp-local`。
-4. 打开本机 Web：`http://127.0.0.1:3000`。
+4. 打开本机 Web：`http://127.0.0.1:3003`。
 5. 登录本机账号，在 Web 的“扩展连接”入口生成 30 天扩展 Token。
 6. 打开扩展设置页，ERP 后端地址填 `http://127.0.0.1:3001`，Token 填本机生成的 Token。
 

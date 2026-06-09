@@ -138,6 +138,29 @@ export function buildCollectSnapshot(item: {
   };
 }
 
+function positiveNumberOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function resolveClonePrefillDefaults(metadata: unknown) {
+  const meta = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, any>;
+  const mappedCategory = (
+    meta.mappedCategory && typeof meta.mappedCategory === 'object'
+      ? meta.mappedCategory
+      : {}
+  ) as Record<string, unknown>;
+
+  return {
+    categoryId: positiveNumberOrNull(meta.descriptionCategoryId) ?? positiveNumberOrNull(mappedCategory.targetCategoryId),
+    typeId: positiveNumberOrNull(meta.typeId) ?? positiveNumberOrNull(mappedCategory.targetTypeId),
+    weightG: positiveNumberOrNull(meta.weightG) ?? positiveNumberOrNull(mappedCategory.defaultWeightG) ?? 500,
+    lengthMm: positiveNumberOrNull(meta.lengthMm) ?? positiveNumberOrNull(mappedCategory.defaultLengthMm) ?? 100,
+    widthMm: positiveNumberOrNull(meta.widthMm) ?? positiveNumberOrNull(mappedCategory.defaultWidthMm) ?? 100,
+    heightMm: positiveNumberOrNull(meta.heightMm) ?? positiveNumberOrNull(mappedCategory.defaultHeightMm) ?? 100,
+  };
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -542,6 +565,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
     const data = items.map((it) => {
       const meta = (it.metadata as any) || {};
+      const defaults = resolveClonePrefillDefaults(meta);
       const variants = Array.isArray(it.variants) ? (it.variants as any[]) : [];
       const sourceImages = meta.watermarkedImages?.length
         ? meta.watermarkedImages
@@ -565,12 +589,12 @@ export async function collectRoutes(app: FastifyInstance) {
         publishTitle: meta.publishTitleRu || null,
         titleNeedsReview: !!meta.titleNeedsReview || containsCjkText(resolvePublishName(it)),
         modelId: it.modelId,
-        categoryId: meta.descriptionCategoryId || null,
-        typeId: meta.typeId || null,
-        weightG: meta.weightG || 500,
-        lengthMm: meta.lengthMm || 100,
-        widthMm: meta.widthMm || 100,
-        heightMm: meta.heightMm || 100,
+        categoryId: defaults.categoryId,
+        typeId: defaults.typeId,
+        weightG: defaults.weightG,
+        lengthMm: defaults.lengthMm,
+        widthMm: defaults.widthMm,
+        heightMm: defaults.heightMm,
         hasOzonAttributes: Array.isArray(meta.ozonAttributes) && meta.ozonAttributes.length > 0,
       };
     });

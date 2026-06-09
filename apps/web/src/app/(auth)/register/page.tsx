@@ -42,10 +42,18 @@ export default function RegisterPage() {
     register,
     handleSubmit,
     getValues,
+    setValue,
+    watch,
     formState: { errors },
   } = useForm<RegisterInput>({
     resolver: zodResolver(registerFormSchema),
+    defaultValues: {
+      termsAccepted: false,
+      privacyAccepted: false,
+    },
   });
+  const termsAccepted = watch('termsAccepted');
+  const privacyAccepted = watch('privacyAccepted');
 
   function startCountdown() {
     setCountdown(60);
@@ -179,6 +187,41 @@ export default function RegisterPage() {
               />
               {errors.password && (
                 <p className="text-xs text-destructive">{errors.password.message}</p>
+              )}
+            </div>
+            <div className="space-y-2 rounded-md border p-3">
+              <label className="flex items-start gap-2 text-sm leading-5">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300"
+                  checked={!!termsAccepted}
+                  onChange={(event) => setValue('termsAccepted', event.target.checked, { shouldValidate: true })}
+                />
+                <span>
+                  我已阅读并同意{' '}
+                  <a href="/terms" target="_blank" className="text-primary hover:underline">
+                    用户服务协议
+                  </a>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm leading-5">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300"
+                  checked={!!privacyAccepted}
+                  onChange={(event) => setValue('privacyAccepted', event.target.checked, { shouldValidate: true })}
+                />
+                <span>
+                  我已阅读并同意{' '}
+                  <a href="/privacy" target="_blank" className="text-primary hover:underline">
+                    隐私政策
+                  </a>
+                </span>
+              </label>
+              {(errors.termsAccepted || errors.privacyAccepted) && (
+                <p className="text-xs text-destructive">
+                  {errors.termsAccepted?.message || errors.privacyAccepted?.message}
+                </p>
               )}
             </div>
             {!IS_LOCAL_RUNTIME && (

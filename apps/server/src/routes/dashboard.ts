@@ -51,6 +51,51 @@ export async function dashboardRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get('/business-status', async (request) => {
+    const { userId } = (request as any).user;
+    const supplyWhere = { userId, sourcePlatform: '1688' };
+    const mappingWhere = {
+      OR: [{ userId }, { userId: null }],
+      sourcePlatform: '1688',
+    } as const;
+
+    const [supplyGoodCount, latestSupplyGood, mappingCount, latestMapping] = await Promise.all([
+      prisma.supplyGoods.count({ where: supplyWhere }),
+      prisma.supplyGoods.findFirst({
+        where: supplyWhere,
+        orderBy: { updatedAt: 'desc' },
+        select: { id: true, title: true, sourceProductId: true, updatedAt: true },
+      }),
+      prisma.categoryMapping.count({ where: mappingWhere as any }),
+      prisma.categoryMapping.findFirst({
+        where: mappingWhere as any,
+        orderBy: [{ userId: 'desc' }, { updatedAt: 'desc' }],
+        select: {
+          id: true,
+          sourceCategoryName: true,
+          targetCategoryId: true,
+          targetTypeId: true,
+          updatedAt: true,
+        },
+      }),
+    ]);
+
+    return {
+      code: 1,
+      msg: 'ok',
+      data: {
+        collect1688: {
+          supplyGoodCount,
+          latestSupplyGood,
+        },
+        categoryMapping: {
+          mappingCount,
+          latestMapping,
+        },
+      },
+    };
+  });
+
   app.get('/order-trend', async (request) => {
     const { userId } = (request as any).user;
     const query = request.query as { days?: string };

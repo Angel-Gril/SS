@@ -1,193 +1,325 @@
-'use client';
-
+import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
 import {
-  Store,
-  ShoppingCart,
-  Truck,
+  ArrowRight,
   BarChart3,
-  Image as ImageIcon,
-  Shield,
-  Package,
-  Users,
   Database,
-  CheckCircle2,
+  Image as ImageIcon,
+  Layers3,
+  Package,
+  ShieldCheck,
+  ShoppingCart,
+  Store,
+  Truck,
+  Users,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
-const appOrigin = process.env.NEXT_PUBLIC_USER_HOSTNAME
+export const metadata: Metadata = {
+  title: '松鼠跨境 ERP - OZON 跨境卖家工作台',
+  description: '面向 OZON 跨境卖家的 ERP 系统，覆盖商品采集、图片处理、上架、订单同步、物流、财务和团队协作。',
+  openGraph: {
+    title: '松鼠跨境 ERP',
+    description: '从商品采集到订单履约，把 OZON 跨境运营集中到一个工作台。',
+    type: 'website',
+    locale: 'zh_CN',
+  },
+};
+
+const userOrigin = process.env.NEXT_PUBLIC_USER_HOSTNAME
   ? `https://${process.env.NEXT_PUBLIC_USER_HOSTNAME}`
   : '';
-const loginHref = `${appOrigin}/login`;
-const registerHref = `${appOrigin}/register`;
+const loginHref = `${userOrigin}/login`;
+const registerHref = `${userOrigin}/register`;
+
+const workflow = [
+  { label: '采集商品', value: '1,248', tone: 'text-emerald-600' },
+  { label: '待处理订单', value: '86', tone: 'text-amber-600' },
+  { label: '今日利润', value: '¥12,430', tone: 'text-sky-600' },
+];
+
+const features = [
+  {
+    icon: Package,
+    title: '商品采集与上架',
+    text: '浏览器扩展从 OZON 和供应链页面采集商品、图片、属性和价格，沉淀到商品池后批量处理。',
+  },
+  {
+    icon: ImageIcon,
+    title: '图片处理与对象存储',
+    text: '水印、压缩、格式转换和 R2/OSS 存储统一配置，避免图片链路散落在本地文件夹里。',
+  },
+  {
+    icon: ShoppingCart,
+    title: '订单同步与履约',
+    text: '多店铺订单集中处理，支持物流跟踪、扫码出入库、打印代理和仓库指令协作。',
+  },
+  {
+    icon: BarChart3,
+    title: '财务与利润统计',
+    text: '保留成本快照、汇率、佣金、物流费用和订单收入，按月统计利润和异常成本。',
+  },
+  {
+    icon: Users,
+    title: '账号与团队协作',
+    text: '根账号、子账号、供应商、服务标签和操作审计放在同一权限体系里管理。',
+  },
+  {
+    icon: ShieldCheck,
+    title: '上线运维基础',
+    text: '健康检查、配置中心、备份脚本、扩展包校验和本地 Windows 包路线已经纳入工程流程。',
+  },
+];
+
+const comparison = [
+  ['商品数据', '表格复制、图片散落', '扩展采集，商品池统一处理'],
+  ['订单处理', '多后台切换，人工对账', '同步订单、物流、财务口径'],
+  ['图片链路', '本地文件夹和手工水印', '水印模板、压缩、对象存储'],
+  ['团队协作', '账号共用、权限不清', '子账号、供应商、审计日志'],
+];
+
+const workflowSteps: Array<[string, string, LucideIcon]> = [
+  ['01', '采集', Package],
+  ['02', '处理图片', ImageIcon],
+  ['03', '上架', Layers3],
+  ['04', '履约统计', Truck],
+];
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto flex items-center justify-between px-4 py-4">
+    <main className="min-h-screen bg-[#fbfaf8] text-slate-950">
+      <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-[#fbfaf8]/90 backdrop-blur">
+        <nav className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
+          <Link href="/" className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-md bg-slate-950 text-sm font-bold text-white">
+              SS
+            </span>
+            <span className="font-semibold">松鼠跨境 ERP</span>
+          </Link>
+          <div className="hidden items-center gap-7 text-sm text-slate-600 md:flex">
+            <a href="#workflow" className="hover:text-slate-950">流程</a>
+            <a href="#features" className="hover:text-slate-950">功能</a>
+            <a href="#security" className="hover:text-slate-950">部署</a>
+          </div>
           <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
-              <span className="text-lg font-bold text-primary-foreground">SS</span>
-            </div>
-            <span className="text-lg font-semibold">松鼠跨境 ERP</span>
+            <Link href={loginHref}>
+              <Button variant="ghost" className="h-9 px-3">登录</Button>
+            </Link>
+            <Link href={registerHref}>
+              <Button className="h-9 px-4">注册试用</Button>
+            </Link>
           </div>
-          <div className="flex items-center gap-3">
-            <Link href={loginHref}><Button variant="ghost">登录系统</Button></Link>
-            <Link href={registerHref}><Button>申请试用</Button></Link>
-          </div>
-        </div>
+        </nav>
       </header>
 
-      <section className="container mx-auto px-4 py-16 lg:py-24">
-        <div className="mx-auto max-w-4xl space-y-6 text-center">
-          <div className="mb-4 inline-block rounded-full bg-primary/10 px-3 py-1 text-sm font-medium text-primary">
+      <section className="mx-auto grid max-w-7xl items-center gap-10 px-4 pb-14 pt-12 sm:px-6 lg:grid-cols-[0.9fr_1.1fr] lg:px-8 lg:pb-20 lg:pt-16">
+        <div className="space-y-7">
+          <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-sm text-slate-600 shadow-sm">
+            <Store className="h-4 w-4 text-primary" />
             为 OZON 跨境卖家设计
           </div>
-          <h1 className="text-4xl font-bold tracking-tight lg:text-6xl">
-            从手工表格到系统化运营<br />
-            <span className="text-primary">一站式 ERP 工作台</span>
-          </h1>
-          <p className="mx-auto max-w-2xl text-lg text-muted-foreground lg:text-xl">
-            商品采集、图片处理、上架、订单同步、物流处理、财务统计，集中在一个系统里完成。
-            适合从手工表格迁移到系统化运营的中小团队。
-          </p>
-          <div className="flex items-center justify-center gap-4 pt-6">
-            <Link href={registerHref}><Button size="lg" className="h-12 px-8">申请试用</Button></Link>
-            <Link href={loginHref}><Button size="lg" variant="outline" className="h-12 px-8">登录 ERP</Button></Link>
+          <div className="space-y-5">
+            <h1 className="max-w-2xl text-4xl font-semibold tracking-normal text-slate-950 sm:text-5xl lg:text-6xl">
+              松鼠跨境 ERP
+            </h1>
+            <p className="max-w-xl text-lg leading-8 text-slate-600">
+              从商品采集、图片处理、上架到订单履约，把跨境运营团队每天反复处理的表格和后台切换，收进一个可维护的工作台。
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Link href={registerHref}>
+              <Button size="lg" className="h-12 w-full gap-2 px-6 sm:w-auto">
+                注册试用 <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+            <Link href={loginHref}>
+              <Button size="lg" variant="outline" className="h-12 w-full border-slate-300 bg-white px-6 sm:w-auto">
+                登录 ERP
+              </Button>
+            </Link>
+          </div>
+          <div className="grid max-w-xl grid-cols-3 gap-3 pt-2">
+            {workflow.map((item) => (
+              <div key={item.label} className="border-l border-slate-200 pl-4">
+                <div className={`text-xl font-semibold ${item.tone}`}>{item.value}</div>
+                <div className="mt-1 text-xs text-slate-500">{item.label}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="mx-auto mt-16 max-w-5xl">
-          <div className="flex aspect-video items-center justify-center rounded-lg border bg-muted/50">
-            <div className="space-y-2 text-center">
-              <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">ERP 工作台截图</p>
+        <ErpPreview />
+      </section>
+
+      <section id="workflow" className="border-y border-slate-200 bg-white">
+        <div className="mx-auto grid max-w-7xl gap-10 px-4 py-14 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:px-8">
+          <div className="space-y-3">
+            <h2 className="text-2xl font-semibold tracking-normal">把运营动作串成一条线</h2>
+            <p className="text-slate-600">
+              商品、图片、订单、物流和财务不再分散在不同文件里，关键数据沿着实际履约流程流动。
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            {workflowSteps.map(([num, label, Icon]) => (
+              <div key={String(label)} className="rounded-md border border-slate-200 bg-[#fbfaf8] p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-400">{String(num)}</span>
+                  <Icon className="h-5 w-5 text-primary" />
+                </div>
+                <div className="mt-8 font-medium">{String(label)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="features" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+        <div className="mb-10 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+          <div className="space-y-3">
+            <h2 className="text-3xl font-semibold tracking-normal">核心能力</h2>
+            <p className="max-w-2xl text-slate-600">围绕 OZON 卖家从选品到履约的日常工作，优先解决高频、重复、容易出错的环节。</p>
+          </div>
+          <Link href={registerHref} className="text-sm font-medium text-primary hover:underline">
+            开始配置店铺
+          </Link>
+        </div>
+        <div className="grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 md:grid-cols-2 lg:grid-cols-3">
+          {features.map(({ icon: Icon, title, text }) => (
+            <article key={title} className="bg-white p-6">
+              <Icon className="h-6 w-6 text-primary" />
+              <h3 className="mt-5 font-semibold">{title}</h3>
+              <p className="mt-3 text-sm leading-6 text-slate-600">{text}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="bg-slate-950 text-white">
+        <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+          <div className="grid gap-10 lg:grid-cols-[0.85fr_1.15fr]">
+            <div className="space-y-4">
+              <h2 className="text-3xl font-semibold tracking-normal">从表格迁移到系统</h2>
+              <p className="text-slate-300">
+                不是再做一个看板，而是把重复操作、口径不一致和多人协作的问题收敛到稳定流程里。
+              </p>
+            </div>
+            <div className="overflow-hidden rounded-lg border border-white/10">
+              <div className="grid grid-cols-3 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                <span>环节</span>
+                <span>手工方式</span>
+                <span>松鼠跨境 ERP</span>
+              </div>
+              {comparison.map(([area, manual, erp]) => (
+                <div key={area} className="grid grid-cols-3 border-t border-white/10 px-4 py-4 text-sm">
+                  <span className="font-medium text-white">{area}</span>
+                  <span className="text-slate-400">{manual}</span>
+                  <span className="text-slate-200">{erp}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       </section>
 
-      <section className="border-t bg-muted/30">
-        <div className="container mx-auto px-4 py-16">
-          <div className="mb-12 text-center">
-            <h2 className="mb-3 text-3xl font-bold">手工管理的痛点</h2>
-            <p className="text-muted-foreground">你是否也遇到这些问题？</p>
+      <section id="security" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">
+        <div className="grid gap-8 lg:grid-cols-3">
+          <div className="space-y-3">
+            <h2 className="text-3xl font-semibold tracking-normal">部署和安全边界清楚</h2>
+            <p className="text-slate-600">云端 SaaS 与 Windows 本地版分别推进，不把密钥和数据链路混在浏览器里。</p>
           </div>
-          <div className="mx-auto grid max-w-6xl gap-6 md:grid-cols-2 lg:grid-cols-4">
-            <PainPoint title="表格管理混乱" desc="多个 Excel 文件分散，找数据费时费力" />
-            <PainPoint title="多店铺订单处理慢" desc="手动切换店铺后台，订单处理效率低" />
-            <PainPoint title="图片处理重复劳动" desc="每次上架都要手动打水印、压缩、上传" />
-            <PainPoint title="财务对账分散" desc="物流单号、仓库、OZON 账单分散在不同地方" />
-          </div>
+          {[
+            ['云端 SaaS', '单 VPS 起步，支持 PostgreSQL、Redis、R2/OSS、Nginx 和 Cloudflare。'],
+            ['本地 Windows 版', 'Portable 与 runtime-assisted 两条打包路线，适合离线或内网使用。'],
+          ].map(([title, text]) => (
+            <div key={title} className="rounded-lg border border-slate-200 bg-white p-6">
+              <Database className="h-6 w-6 text-primary" />
+              <h3 className="mt-5 font-semibold">{title}</h3>
+              <p className="mt-3 text-sm leading-6 text-slate-600">{text}</p>
+            </div>
+          ))}
         </div>
       </section>
 
-      <section className="container mx-auto px-4 py-16">
-        <div className="mb-12 text-center">
-          <h2 className="mb-3 text-3xl font-bold">核心能力</h2>
-          <p className="text-muted-foreground">围绕 OZON 卖家全流程的工具集</p>
-        </div>
-        <div className="mx-auto grid max-w-6xl gap-8 md:grid-cols-2 lg:grid-cols-3">
-          <Feature icon={Package} title="商品采集与上架" desc="浏览器扩展采集 1688/淘宝/拼多多商品，自动提取标题、属性、图片。支持批量打水印、一键上架 OZON。" />
-          <Feature icon={ImageIcon} title="图片水印与存储" desc="内置水印模板，支持 R2/OSS/本地存储。图片自动压缩、格式转换，减少存储成本。" />
-          <Feature icon={Store} title="OZON 店铺同步" desc="多店铺统一管理，自动同步商品、订单、库存。支持子账号权限分级。" />
-          <Feature icon={ShoppingCart} title="订单与物流处理" desc="订单自动拉取，批量打单、发货跟踪。支持扫码出库、仓库指令、第三方代理对接。" />
-          <Feature icon={BarChart3} title="财务与利润统计" desc="OZON 账单同步、成本快照、月度利润统计。支持多币种汇率、费用模板。" />
-          <Feature icon={Users} title="团队协作与权限" desc="子账号管理、角色权限、操作审计。适合多人协作的中小团队。" />
-        </div>
-      </section>
-
-      <section className="border-t bg-muted/30">
-        <div className="container mx-auto px-4 py-16">
-          <div className="mb-12 text-center">
-            <h2 className="mb-3 text-3xl font-bold">部署方式</h2>
-            <p className="text-muted-foreground">云端 SaaS 或本地私有化部署</p>
-          </div>
-          <div className="mx-auto grid max-w-4xl gap-8 md:grid-cols-2">
-            <DeploymentOption title="云端 SaaS" features={['无需安装，注册即用', 'Cloudflare 全球加速', '自动备份与更新', '按需付费，灵活扩展']} cta="申请试用" ctaLink={registerHref} />
-            <DeploymentOption title="本地离线版" features={['数据完全自主可控', '支持内网部署', '一次性买断授权', '提供技术支持']} cta="联系部署" ctaLink={registerHref} variant="outline" />
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-8 text-sm text-slate-500 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
+          <span>© 2026 松鼠跨境 ERP</span>
+          <div className="flex gap-5">
+            <Link href="/terms" className="hover:text-slate-950">用户服务协议</Link>
+            <Link href="/privacy" className="hover:text-slate-950">隐私政策</Link>
+            <Link href={loginHref} className="hover:text-slate-950">登录系统</Link>
           </div>
         </div>
-      </section>
-
-      <section className="container mx-auto px-4 py-16">
-        <div className="mb-12 text-center">
-          <h2 className="mb-3 text-3xl font-bold">安全与稳定</h2>
-          <p className="text-muted-foreground">企业级安全防护</p>
-        </div>
-        <div className="mx-auto grid max-w-6xl gap-6 md:grid-cols-2 lg:grid-cols-4">
-          <SecurityFeature icon={Shield} title="Cloudflare 防护" />
-          <SecurityFeature icon={Database} title="R2 对象存储" />
-          <SecurityFeature icon={CheckCircle2} title="数据备份" />
-          <SecurityFeature icon={Truck} title="物流链路跟踪" />
-        </div>
-      </section>
-    </div>
+      </footer>
+    </main>
   );
 }
 
-function PainPoint({ title, desc }: { title: string; desc: string }) {
+function ErpPreview() {
   return (
-    <div className="space-y-2 rounded-lg border bg-card p-6">
-      <div className="font-semibold text-destructive">{title}</div>
-      <p className="text-sm text-muted-foreground">{desc}</p>
-    </div>
-  );
-}
-
-function Feature({ icon: Icon, title, desc }: { icon: React.ElementType; title: string; desc: string }) {
-  return (
-    <div className="space-y-4 rounded-lg border bg-card p-6">
-      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-        <Icon className="h-6 w-6 text-primary" />
+    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xl shadow-slate-200/80">
+      <div className="rounded-lg border border-slate-200 bg-slate-50">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-red-400" />
+            <span className="h-3 w-3 rounded-full bg-amber-400" />
+            <span className="h-3 w-3 rounded-full bg-emerald-400" />
+          </div>
+          <div className="text-xs text-slate-400">app.ss-erp.com/orders</div>
+        </div>
+        <div className="grid min-h-[420px] grid-cols-[120px_1fr] sm:grid-cols-[160px_1fr]">
+          <aside className="border-r border-slate-200 bg-slate-950 p-3 text-white">
+            <div className="mb-5 flex items-center gap-2 text-sm font-semibold">
+              <span className="flex h-7 w-7 items-center justify-center rounded bg-primary text-xs">SS</span>
+              ERP
+            </div>
+            {['订单', '商品', '采集', '仓库', '财务'].map((item, index) => (
+              <div
+                key={item}
+                className={`mb-1 rounded px-3 py-2 text-xs ${index === 0 ? 'bg-white text-slate-950' : 'text-slate-400'}`}
+              >
+                {item}
+              </div>
+            ))}
+          </aside>
+          <div className="p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold">订单工作台</div>
+                <div className="text-xs text-slate-500">OZON 多店铺履约状态</div>
+              </div>
+              <div className="rounded bg-primary px-3 py-2 text-xs font-medium text-white">同步订单</div>
+            </div>
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              {[
+                ['待发货', '42'],
+                ['异常物流', '7'],
+                ['今日收入', '₽184k'],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="text-xs text-slate-500">{label}</div>
+                  <div className="mt-2 text-xl font-semibold">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+              {[
+                ['#9281', 'Moscow', '待打单', '¥84.20'],
+                ['#9278', 'Kazan', '已出库', '¥126.90'],
+                ['#9274', 'SPB', '待揽收', '¥63.10'],
+                ['#9269', 'Perm', '异常', '¥214.50'],
+              ].map(([order, city, status, profit]) => (
+                <div key={order} className="grid grid-cols-4 border-b border-slate-100 px-3 py-3 text-xs last:border-0">
+                  <span className="font-medium">{order}</span>
+                  <span className="text-slate-500">{city}</span>
+                  <span className={status === '异常' ? 'text-red-600' : 'text-slate-600'}>{status}</span>
+                  <span className="text-right font-medium">{profit}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
-      <div>
-        <div className="mb-2 text-lg font-semibold">{title}</div>
-        <p className="text-sm leading-relaxed text-muted-foreground">{desc}</p>
-      </div>
-    </div>
-  );
-}
-
-function DeploymentOption({
-  title,
-  features,
-  cta,
-  ctaLink,
-  variant = 'default',
-}: {
-  title: string;
-  features: string[];
-  cta: string;
-  ctaLink: string;
-  variant?: 'default' | 'outline';
-}) {
-  return (
-    <div className="space-y-6 rounded-lg border bg-card p-8">
-      <h3 className="text-2xl font-bold">{title}</h3>
-      <ul className="space-y-3">
-        {features.map((feature) => (
-          <li key={feature} className="flex items-start gap-3">
-            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
-            <span className="text-sm text-muted-foreground">{feature}</span>
-          </li>
-        ))}
-      </ul>
-      <Link href={ctaLink}>
-        <Button variant={variant} className="w-full" size="lg">{cta}</Button>
-      </Link>
-    </div>
-  );
-}
-
-function SecurityFeature({ icon: Icon, title }: { icon: React.ElementType; title: string }) {
-  return (
-    <div className="flex flex-col items-center space-y-3 rounded-lg border bg-card p-6 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-        <Icon className="h-6 w-6 text-primary" />
-      </div>
-      <div className="font-medium">{title}</div>
     </div>
   );
 }

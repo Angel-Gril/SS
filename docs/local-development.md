@@ -189,7 +189,7 @@ $env:SMOKE_VPS_DEPLOY_DIR='/opt/ss-erp/app'
 ```bash
 $env:SMOKE_EXPECT_RUNTIME='local'
 $env:SMOKE_BASE_URL='http://127.0.0.1:3001'
-$env:SMOKE_WEB_BASE_URL='http://127.0.0.1:3000'
+$env:SMOKE_WEB_BASE_URL='http://127.0.0.1:3003'
 pnpm --filter server smoke:live
 ```
 
@@ -494,7 +494,7 @@ DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 
 现阶段不需要 1Panel，也不需要 K8s。VPS 优化先围绕可观测、可回滚、低暴露面做：
 
-- API 和 Web 只监听 `127.0.0.1:3001` / `127.0.0.1:3000`，公网只开放 `80/443`。
+- API 和 Web 只监听 `127.0.0.1:3001` / `127.0.0.1:3003`，公网只开放 `80/443`。
 - PostgreSQL 和 Redis 只允许本机访问。
 - UFW 默认拒绝入站，只允许 SSH、HTTP、HTTPS。
 - Nginx 反代启用 Cloudflare 真实 IP 还原和源站保护。

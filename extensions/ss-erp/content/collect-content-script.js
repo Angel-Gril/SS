@@ -8,6 +8,7 @@
 
   injectPageBridge();
   initOzonOverlay();
+  init1688PricingPanel();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.type !== "spb-self-hosted:collect-product") {
@@ -125,6 +126,327 @@
       sourceHost: location.hostname,
       collectedAt: new Date().toISOString()
     };
+  }
+
+  function is1688DetailPage() {
+    return /(^|\.)1688\.com$/i.test(location.hostname) && /\/offer\/\d+\.html/i.test(location.pathname);
+  }
+
+  function extract1688ProductIdFromUrl(url) {
+    const match = String(url || "").match(/\/offer\/(\d+)\.html/i) || String(url || "").match(/[?&](?:offerId|id)=(\d+)/i);
+    return match && match[1] ? match[1] : "";
+  }
+
+  function numberFromText(value, fallback) {
+    if (value == null || value === "") return fallback;
+    const text = String(value).replace(/,/g, ".");
+    const match = text.match(/-?\d+(?:\.\d+)?/);
+    const number = Number(match ? match[0] : text);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  function formatPanelMoney(value, prefix) {
+    const number = numberFromText(value, NaN);
+    if (!Number.isFinite(number)) return "-";
+    return (prefix || "") + String(Math.round(number * 100) / 100);
+  }
+
+  function getErpConnection() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("ss_erp_connection", function (data) {
+        resolve(data.ss_erp_connection || {});
+      });
+    });
+  }
+
+  function getLocalStorageValue(keys) {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(keys, function (data) {
+        resolve(data || {});
+      });
+    });
+  }
+
+  function normalize1688PanelProduct(data) {
+    const product = data && typeof data === "object" ? data : {};
+    const skuItems = Array.isArray(product.skuItems) ? product.skuItems : [];
+    const firstSku = skuItems.find((item) => numberFromText(item && item.price, 0) > 0) || null;
+    const images = Array.isArray(product.images) ? product.images.filter(Boolean) : [];
+    const purchasePrice = numberFromText(product.purchasePriceCny || product.purchasePrice || product.price, 0)
+      || numberFromText(firstSku && firstSku.price, 0);
+
+    return {
+      sourcePlatform: "1688",
+      sourceUrl: product.sourceUrl || location.href,
+      sourceHost: product.sourceHost || location.hostname,
+      title: product.title || product.name || document.title || "未命名1688商品",
+      sourceProductId: product.sourceProductId || product.productId || product.offerId || extract1688ProductIdFromUrl(product.sourceUrl || location.href),
+      sourceCategoryId: product.sourceCategoryId || product.categoryId || "",
+      sourceCategoryName: product.sourceCategoryName || product.categoryName || product.category || "",
+      sourceCategoryPath: product.sourceCategoryPath || product.categoryPath || "",
+      supplier: product.supplier || product.shopName || product.sellerName || "",
+      sku: product.sku || product.sourceProductId || product.productId || extract1688ProductIdFromUrl(product.sourceUrl || location.href),
+      images,
+      notes: product.description || "",
+      skuItems,
+      purchasePriceCny: purchasePrice,
+      domesticShippingCny: numberFromText(product.domesticShippingCny, 0),
+      weightG: numberFromText(product.weightG || product.grossWeightGrams || product.weight, 0),
+      packageFeeCny: numberFromText(product.packageFeeCny, 0),
+      commissionPct: numberFromText(product.commissionPct, 12),
+      logisticsFeeCny: numberFromText(product.logisticsFeeCny, 0),
+      exchangeRateRubToCny: numberFromText(product.exchangeRateRubToCny, 0.08),
+      targetMarginPct: numberFromText(product.targetMarginPct, 30),
+      collectedAt: product.collectedAt || new Date().toISOString(),
+    };
+  }
+
+  function build1688ImportPayload(product, root) {
+    function field(name, fallback) {
+      const node = root && root.querySelector('[data-ss-erp-1688-field="' + name + '"]');
+      return node ? node.value : fallback;
+    }
+
+    return {
+      sourcePlatform: "1688",
+      sourceUrl: product.sourceUrl,
+      sourceHost: product.sourceHost,
+      title: product.title,
+      sourceProductId: product.sourceProductId || undefined,
+      sourceCategoryId: product.sourceCategoryId || undefined,
+      sourceCategoryName: product.sourceCategoryName || undefined,
+      sourceCategoryPath: product.sourceCategoryPath || undefined,
+      supplier: product.supplier || undefined,
+      sku: product.sku || product.sourceProductId || undefined,
+      images: product.images && product.images.length ? product.images : undefined,
+      notes: product.notes || undefined,
+      skuItems: product.skuItems,
+      purchasePriceCny: numberFromText(field("purchasePriceCny", product.purchasePriceCny), 0),
+      domesticShippingCny: numberFromText(field("domesticShippingCny", product.domesticShippingCny), 0),
+      weightG: numberFromText(field("weightG", product.weightG), 0),
+      packageFeeCny: numberFromText(field("packageFeeCny", product.packageFeeCny), 0),
+      commissionPct: numberFromText(field("commissionPct", product.commissionPct), 12),
+      logisticsFeeCny: numberFromText(field("logisticsFeeCny", product.logisticsFeeCny), 0),
+      exchangeRateRubToCny: numberFromText(field("exchangeRateRubToCny", product.exchangeRateRubToCny), 0.08),
+      targetMarginPct: numberFromText(field("targetMarginPct", product.targetMarginPct), 30),
+    };
+  }
+
+  async function call1688Erp(path, payload) {
+    const conn = await getErpConnection();
+    if (!conn.baseUrl || !conn.token) {
+      throw new Error("请先在扩展设置中配置 ERP 地址和 Token");
+    }
+    const res = await fetch(String(conn.baseUrl).replace(/\/$/, "") + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + conn.token,
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.code !== 1) {
+      throw new Error(data.msg || ("ERP 请求失败：" + res.status));
+    }
+    return data;
+  }
+
+  function set1688PanelStatus(root, message, tone) {
+    const node = root && root.querySelector("[data-ss-erp-1688-summary]");
+    if (!node) return;
+    node.className = "ss-erp-1688-summary" + (tone ? " " + tone : "");
+    node.textContent = message;
+  }
+
+  function set1688LogisticsHint(root, message, tone) {
+    const node = root && root.querySelector("[data-ss-erp-1688-logistics-hint]");
+    if (!node) return;
+    node.className = "ss-erp-1688-logistics-hint" + (tone ? " " + tone : "");
+    node.textContent = message;
+  }
+
+  async function load1688LogisticsQuote(root, product) {
+    const engine = window.OZON_CALC_RULE_ENGINE;
+    if (!engine || typeof engine.buildServiceQuote !== "function" || typeof engine.resolveBestQuote !== "function") {
+      set1688LogisticsHint(root, "物流规则引擎未加载，可手工填写国际物流费。", "warning");
+      return null;
+    }
+
+    const result = await getLocalStorageValue(["ozon-calc:config-snapshot"]);
+    const snapshot = result["ozon-calc:config-snapshot"] || {};
+    const selectedServiceIds = snapshot.userConfig && Array.isArray(snapshot.userConfig.selectedServiceIds)
+      ? snapshot.userConfig.selectedServiceIds
+      : [];
+    const ruleSnapshot = snapshot.ruleSnapshot || { services: [] };
+    const services = Array.isArray(ruleSnapshot.services) ? ruleSnapshot.services : [];
+
+    if (!selectedServiceIds.length || !services.length) {
+      set1688LogisticsHint(root, "未同步 Ozon 物流模板，可先在 Ozon 核价面板同步配置。", "warning");
+      return null;
+    }
+
+    const input = {
+      weightG: numberFromText(product.weightG, 0),
+      priceRMB: numberFromText(product.purchasePriceCny, 0),
+      fxRate: numberFromText(product.exchangeRateRubToCny, 0.08),
+      lenCm: numberFromText(product.lengthCm || product.lengthMm / 10, 0),
+      widCm: numberFromText(product.widthCm || product.widthMm / 10, 0),
+      hgtCm: numberFromText(product.heightCm || product.heightMm / 10, 0),
+      hasBattery: false,
+    };
+    const quotes = [];
+
+    selectedServiceIds.forEach((serviceId) => {
+      const ruleProfiles = services.filter((rule) => rule && rule.serviceId === serviceId);
+      const serviceRule = ruleProfiles[0] || null;
+      const quote = engine.buildServiceQuote({
+        id: serviceId,
+        providerId: serviceRule && serviceRule.providerId,
+        displayName: serviceRule && serviceRule.displayName ? serviceRule.displayName : serviceId,
+        carrierName: serviceRule && serviceRule.carrierName,
+        priority: serviceRule && serviceRule.priority,
+      }, ruleProfiles, input);
+      if (quote && quote.available) {
+        quotes.push(quote);
+      }
+    });
+
+    const best = engine.resolveBestQuote(quotes, snapshot.userConfig && snapshot.userConfig.resolutionMode || "lowest_cost", selectedServiceIds);
+    if (!best) {
+      set1688LogisticsHint(root, "当前重量/售价未命中已同步物流模板，可手工填写国际物流费。", "warning");
+      return null;
+    }
+
+    const field = root && root.querySelector('[data-ss-erp-1688-field="logisticsFeeCny"]');
+    if (field && !(numberFromText(field.value, 0) > 0)) {
+      field.value = String(Math.round(numberFromText(best.shippingCost, 0) * 100) / 100);
+    }
+    product.logisticsFeeCny = numberFromText(field && field.value, best.shippingCost);
+    set1688LogisticsHint(root, "命中物流：" + best.displayName + " · 运费 ¥" + formatPanelMoney(best.shippingCost, "") + " · " + (best.reason || ""), "success");
+    return best;
+  }
+
+  function set1688PanelBusy(root, busy) {
+    if (!root) return;
+    root.querySelectorAll("button[data-ss-erp-1688-action]").forEach((button) => {
+      button.disabled = !!busy;
+    });
+  }
+
+  function render1688PricingResult(root, data) {
+    const preview = data && data.data ? data.data : {};
+    const pricing = preview.pricing || {};
+    const mapping = preview.mapping || null;
+    const saveMode = preview.saveMode === "update" ? "更新已有货源" : "创建新货源";
+    const parts = [
+      saveMode,
+      "建议售价 " + formatPanelMoney(pricing.suggestedSalePriceCny, "¥") + " / " + formatPanelMoney(pricing.suggestedSalePriceRub, "₽"),
+      "预计利润 " + formatPanelMoney(pricing.estimatedProfitCny, "¥"),
+      "利润率 " + formatPanelMoney(pricing.estimatedMarginPct, "") + "%",
+      mapping ? ("类目映射 Ozon " + mapping.targetCategoryId + " / type " + mapping.targetTypeId) : "未命中类目映射",
+    ];
+    set1688PanelStatus(root, parts.join(" · "), "success");
+  }
+
+  async function preview1688Pricing(root, product) {
+    set1688PanelBusy(root, true);
+    set1688PanelStatus(root, "正在调用 ERP 核价...", "");
+    try {
+      const payload = build1688ImportPayload(product, root);
+      const data = await call1688Erp("/api/supply/1688/preview", payload);
+      render1688PricingResult(root, data);
+    } catch (error) {
+      set1688PanelStatus(root, error && error.message ? error.message : String(error), "error");
+    } finally {
+      set1688PanelBusy(root, false);
+    }
+  }
+
+  async function import1688SupplyGood(root, product) {
+    set1688PanelBusy(root, true);
+    set1688PanelStatus(root, "正在保存 1688 商品到 ERP...", "");
+    try {
+      const payload = build1688ImportPayload(product, root);
+      const data = await call1688Erp("/api/supply/1688/import", payload);
+      set1688PanelStatus(root, data.msg || "1688 商品已保存到 ERP", "success");
+    } catch (error) {
+      set1688PanelStatus(root, error && error.message ? error.message : String(error), "error");
+    } finally {
+      set1688PanelBusy(root, false);
+    }
+  }
+
+  function render1688PricingPanel(product) {
+    const root = document.createElement("div");
+    root.id = "ss-erp-1688-panel";
+    root.setAttribute("data-ss-erp-1688-panel", "ready");
+    const image = product.images && product.images[0] ? product.images[0] : "";
+    root.innerHTML = [
+      '<div class="ss-erp-1688-head">',
+      '  <div>',
+      '    <div class="ss-erp-1688-title">SS ERP 1688核价采集</div>',
+      '    <div class="ss-erp-1688-subtitle">扩展主流程：读取当前 1688 商品，按 ERP 计价配置核价并保存货源。</div>',
+      '  </div>',
+      '  <button type="button" class="ss-erp-1688-close" data-ss-erp-1688-close>×</button>',
+      '</div>',
+      '<div class="ss-erp-1688-body">',
+      '  <div class="ss-erp-1688-product">',
+      image ? '    <img src="' + escapeHtml(image) + '" alt="">' : '    <div></div>',
+      '    <div>',
+      '      <div class="ss-erp-1688-product-name">' + escapeHtml(product.title) + '</div>',
+      '      <div class="ss-erp-1688-product-meta">ID ' + escapeHtml(product.sourceProductId || "-") + ' · ' + escapeHtml(product.supplier || "未识别供应商") + '</div>',
+      '    </div>',
+      '  </div>',
+      '  <div class="ss-erp-1688-grid">',
+      build1688Field("purchasePriceCny", "采购价 CNY", product.purchasePriceCny, "0.01"),
+      build1688Field("domesticShippingCny", "国内运费", product.domesticShippingCny, "0.01"),
+      build1688Field("weightG", "重量 g", product.weightG, "1"),
+      build1688Field("packageFeeCny", "包装费", product.packageFeeCny, "0.01"),
+      build1688Field("commissionPct", "Ozon佣金 %", product.commissionPct, "0.1"),
+      build1688Field("logisticsFeeCny", "国际物流费", product.logisticsFeeCny, "0.01"),
+      build1688Field("exchangeRateRubToCny", "RUB->CNY", product.exchangeRateRubToCny, "0.0001"),
+      build1688Field("targetMarginPct", "目标利润率 %", product.targetMarginPct, "0.1"),
+      '  </div>',
+      '  <div class="ss-erp-1688-actions">',
+      '    <button type="button" data-ss-erp-1688-action="preview">核价</button>',
+      '    <button type="button" data-ss-erp-1688-action="collect">采集到ERP</button>',
+      '  </div>',
+      '  <div class="ss-erp-1688-logistics-hint" data-ss-erp-1688-logistics-hint>正在读取 Ozon 物流配置...</div>',
+      '  <div class="ss-erp-1688-summary" data-ss-erp-1688-summary>已读取页面商品信息，可先核价再采集。</div>',
+      '</div>',
+    ].join("");
+
+    root.querySelector("[data-ss-erp-1688-close]").addEventListener("click", () => root.remove());
+    root.querySelector('[data-ss-erp-1688-action="preview"]').addEventListener("click", () => preview1688Pricing(root, product));
+    root.querySelector('[data-ss-erp-1688-action="collect"]').addEventListener("click", () => import1688SupplyGood(root, product));
+    return root;
+  }
+
+  function build1688Field(name, label, value, step) {
+    return [
+      '<div class="ss-erp-1688-field">',
+      '  <label>' + escapeHtml(label) + '</label>',
+      '  <input type="number" step="' + escapeHtml(step) + '" data-ss-erp-1688-field="' + escapeHtml(name) + '" value="' + escapeHtml(String(value == null ? "" : value)) + '">',
+      '</div>',
+    ].join("");
+  }
+
+  async function init1688PricingPanel() {
+    if (!is1688DetailPage() || window.SS_ERP_1688_PRICING_PANEL) return;
+    window.SS_ERP_1688_PRICING_PANEL = { status: "initializing" };
+    try {
+      const data = await collectCurrentPage();
+      const product = normalize1688PanelProduct(data);
+      const panel = render1688PricingPanel(product);
+      document.body.appendChild(panel);
+      load1688LogisticsQuote(panel, product).catch((error) => {
+        set1688LogisticsHint(panel, error && error.message ? error.message : String(error), "warning");
+      });
+      window.SS_ERP_1688_PRICING_PANEL = { status: "ready", product };
+    } catch (error) {
+      window.SS_ERP_1688_PRICING_PANEL = { status: "error", error: error && error.message ? error.message : String(error) };
+    }
   }
 
   async function collectOzonViaApi() {

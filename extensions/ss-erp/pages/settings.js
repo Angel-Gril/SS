@@ -933,6 +933,49 @@
     return conn;
   }
 
+  function formatRuntimeMode(mode) {
+    return mode === 'cloud' ? 'cloud 云端' : 'local 本地';
+  }
+
+  function formatRuntimeCapabilities(runtime) {
+    var capabilities = runtime && runtime.capabilities ? runtime.capabilities : {};
+    var imageMode = capabilities.presignedUpload
+      ? 'OSS 预签名直传'
+      : (capabilities.imageUpload === 'ozon-cdn' ? 'OZON CDN / 中转' : '本地上传');
+    var taskMode = capabilities.queuedTasks ? '服务端队列' : '直接提交';
+    return [
+      '运行模式: ' + formatRuntimeMode(runtime && runtime.mode),
+      '图片上传: ' + imageMode,
+      '任务模式: ' + taskMode,
+    ].join('；');
+  }
+
+  function cacheRuntimeConfig(runtime) {
+    if (!runtime || !runtime.mode) return;
+    chrome.storage.local.set({
+      'ozon-calc:runtime-mode': runtime.mode === 'cloud' ? 'cloud' : 'local',
+      'ozon-calc:runtime-capabilities': runtime.capabilities || {},
+      'ozon-calc:runtime-sync-status': {
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        mode: runtime.mode === 'cloud' ? 'cloud' : 'local',
+        source: runtime.source || 'settings-test',
+      },
+    });
+  }
+
+  function fetchErpRuntime(conn) {
+    return fetch(conn.baseUrl + '/api/extension/runtime', {
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + conn.token },
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.code === 1 && d.data) return d.data;
+      throw new Error(d.msg || 'runtime 读取失败');
+    });
+  }
+
   on(testErpBtn, 'click', function () {
     var conn = saveErpConfig();
     if (!conn.baseUrl || !conn.token) {
@@ -947,8 +990,14 @@
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.code === 1 && d.data) {
-        erpStatusNode.textContent = '连接成功: ' + (d.data.nickname || d.data.phone);
-        erpStatusNode.style.color = '#16a34a';
+        return fetchErpRuntime(conn).then(function (runtime) {
+          cacheRuntimeConfig(runtime);
+          erpStatusNode.textContent = '连接成功: ' + (d.data.nickname || d.data.phone) + '；' + formatRuntimeCapabilities(runtime);
+          erpStatusNode.style.color = '#16a34a';
+        }).catch(function (runtimeError) {
+          erpStatusNode.textContent = '连接成功: ' + (d.data.nickname || d.data.phone) + '；运行模式: 未获取（' + runtimeError.message + '）';
+          erpStatusNode.style.color = '#ca8a04';
+        });
       } else {
         erpStatusNode.textContent = '连接失败: ' + (d.msg || '未知错误');
         erpStatusNode.style.color = '#dc2626';

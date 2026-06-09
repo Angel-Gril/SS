@@ -83,7 +83,7 @@ if ($DryRun) {
     Write-Host "- local extension package: extension/"
     Write-Host "- runtime/node from: $nodeRuntimeText"
     Write-Host "- runtime/pgsql from: $pgRuntimeText"
-    Write-Host "- config.json defaults: Web 3000, API 3001, PostgreSQL 5433, REDIS_DISABLED=1, RUN_WORKERS=0"
+    Write-Host "- config.json defaults: Web 3003, API 3001, PostgreSQL 5433, REDIS_DISABLED=1, RUN_WORKERS=0"
     Write-Host "- user data dirs: data/pgsql, data/uploads, data/watermarked, data/resized, data/backups"
     Write-Host ""
     Write-Host "No Redis runtime, Docker, cloud service, R2/OSS, SMS or Turnstile dependency is included." -ForegroundColor Cyan
@@ -111,7 +111,7 @@ if (-not $SkipBuild) {
     $env:NEXT_STANDALONE = "1"
     $env:NEXT_PUBLIC_RUNTIME_MODE = "local"
     $env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:3001"
-    $env:NEXT_PUBLIC_WEB_BASE_URL = "http://127.0.0.1:3000"
+    $env:NEXT_PUBLIC_WEB_BASE_URL = "http://127.0.0.1:3003"
     $env:NEXT_PUBLIC_TURNSTILE_SITE_KEY = ""
     $env:NEXT_PUBLIC_ADMIN_HOSTNAME = ""
     $env:NEXT_PUBLIC_USER_HOSTNAME = ""
@@ -239,7 +239,7 @@ SS ERP Local Runtime Package v$Version
 Start:
 1. Extract this directory.
 2. Double-click start.bat.
-3. Open http://127.0.0.1:3000 if the browser does not open automatically.
+3. Open http://127.0.0.1:3003 if the browser does not open automatically.
 
 Stop:
 - Double-click stop.bat.

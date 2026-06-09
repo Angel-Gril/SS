@@ -155,12 +155,12 @@ function Set-SSLocalEnvDefaults {
     Set-SSEnvDefault "SERVER_HOST" "127.0.0.1"
     Set-SSEnvDefault "SERVER_PORT" "3001"
     Set-SSEnvDefault "NEXT_PUBLIC_API_BASE_URL" "http://127.0.0.1:3001"
-    Set-SSEnvDefault "NEXT_PUBLIC_WEB_BASE_URL" "http://127.0.0.1:3000"
+    Set-SSEnvDefault "NEXT_PUBLIC_WEB_BASE_URL" "http://127.0.0.1:3003"
     Set-SSEnvDefault "LOCAL_BASE_URL" "http://127.0.0.1:3001"
     Set-SSEnvDefault "IMAGE_STORAGE_BACKEND" "local"
     Set-SSEnvDefault "SMS_PROVIDER" "console"
     Set-SSEnvDefault "AUTH_COOKIE_SECURE" "false"
-    Set-SSEnvDefault "CORS_ORIGIN" "http://127.0.0.1:3000,http://localhost:3000"
+    Set-SSEnvDefault "CORS_ORIGIN" "http://127.0.0.1:3003,http://localhost:3003"
     Set-SSEnvDefault "CORS_EXTENSION_ORIGINS" "chrome-extension://*"
 
     $nodeRuntime = Get-SSNodeRuntimePath
@@ -580,7 +580,7 @@ function New-SSRuntimeConfigFile {
     param([string]$Path)
 
     $config = [ordered]@{
-        webPort = 3000
+        webPort = 3003
         serverPort = 3001
         pgPort = 5433
         databaseName = "ss_erp"
@@ -588,7 +588,7 @@ function New-SSRuntimeConfigFile {
         jwtSecret = New-SSRandomHex 32
         encryptionKey = New-SSRandomHex 32
         setupToken = New-SSRandomHex 16
-        corsOrigin = "http://127.0.0.1:3000,http://localhost:3000"
+        corsOrigin = "http://127.0.0.1:3003,http://localhost:3003"
         redisDisabled = $true
         runWorkers = $false
         uploadDir = "data/uploads"
@@ -625,7 +625,7 @@ function Import-SSRuntimeConfig {
 
     $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     $configDir = Split-Path -Path $path -Parent
-    $webPort = [int](Get-SSObjectValue $config "webPort" 3000)
+    $webPort = [int](Get-SSObjectValue $config "webPort" 3003)
     $serverPort = [int](Get-SSObjectValue $config "serverPort" 3001)
     $pgPort = [int](Get-SSObjectValue $config "pgPort" 5433)
     $databaseName = [string](Get-SSObjectValue $config "databaseName" "ss_erp")

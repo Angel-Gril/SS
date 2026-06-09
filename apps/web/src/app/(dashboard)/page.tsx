@@ -1,12 +1,20 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Store, ShoppingCart, Package, TrendingUp, Loader2 } from 'lucide-react';
+import { Calculator, GitBranch, ListPlus, Store, ShoppingCart, Package, TrendingUp, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatCurrency, convertToCny } from '@/lib/utils';
 import { OrderChart } from '@/components/dashboard/order-chart';
 import { NoticeList } from '@/components/dashboard/notice-list';
+import { OnboardingGuide } from '@/components/dashboard/onboarding-guide';
+import type { OnboardingStatus } from '@/lib/onboarding';
+import {
+  buildDashboardBusinessActions,
+  getDashboardBusinessActionMeta,
+  type DashboardBusinessAction,
+  type DashboardBusinessStatus,
+} from '@/lib/dashboard-business';
 
 interface DashboardStats {
   shopCount: number;
@@ -18,13 +26,21 @@ interface DashboardStats {
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
+  const [businessStatus, setBusinessStatus] = useState<DashboardBusinessStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const businessActions = buildDashboardBusinessActions();
 
   useEffect(() => {
-    api.get<DashboardStats>('/api/dashboard/stats').then((res) => {
-      if (res.code === 1 && res.data) setStats(res.data);
-      setLoading(false);
-    });
+    Promise.all([
+      api.get<DashboardStats>('/api/dashboard/stats'),
+      api.get<OnboardingStatus>('/api/user/onboarding-status'),
+      api.get<DashboardBusinessStatus>('/api/dashboard/business-status'),
+    ]).then(([statsRes, onboardingRes, businessRes]) => {
+      if (statsRes.code === 1 && statsRes.data) setStats(statsRes.data);
+      if (onboardingRes.code === 1 && onboardingRes.data) setOnboarding(onboardingRes.data);
+      if (businessRes.code === 1 && businessRes.data) setBusinessStatus(businessRes.data);
+    }).finally(() => setLoading(false));
   }, []);
 
   if (loading) {
@@ -49,6 +65,8 @@ export default function DashboardPage() {
         <StatCard title="今日销售额" value={formatCurrency(convertToCny(stats?.todayRevenue ?? '0', 'RUB'), 'CNY')} icon={TrendingUp} description="估算汇率换算" />
       </div>
 
+      {onboarding && !onboarding.completed && <OnboardingGuide status={onboarding} />}
+
       <div className="grid gap-4 md:grid-cols-3">
         <div className="md:col-span-2">
           <OrderChart />
@@ -58,13 +76,16 @@ export default function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">快速操作</CardTitle>
+          <CardTitle className="text-base">业务工作台</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <QuickAction label="绑定店铺" href="/shops/ozon" />
-          <QuickAction label="同步商品" href="/products" />
-          <QuickAction label="处理订单" href="/orders" />
-          <QuickAction label="批量上架" href="/listing" />
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {businessActions.map((action) => (
+            <BusinessActionCard
+              key={action.key}
+              action={action}
+              meta={getDashboardBusinessActionMeta(action, businessStatus)}
+            />
+          ))}
         </CardContent>
       </Card>
     </div>
@@ -88,10 +109,27 @@ function StatCard({ title, value, icon: Icon, description, highlight }: {
   );
 }
 
-function QuickAction({ label, href }: { label: string; href: string }) {
+const ACTION_ICONS = {
+  calculator: Calculator,
+  mapping: GitBranch,
+  package: Package,
+  listing: ListPlus,
+} satisfies Record<DashboardBusinessAction['icon'], React.ElementType>;
+
+function BusinessActionCard({ action, meta }: { action: DashboardBusinessAction; meta: string }) {
+  const Icon = ACTION_ICONS[action.icon];
   return (
-    <a href={href} className="flex items-center justify-center h-12 rounded-md border border-dashed text-sm text-muted-foreground hover:border-primary hover:text-primary transition-colors">
-      {label}
+    <a href={action.href} className="block rounded-md border p-4 transition-colors hover:border-primary hover:bg-primary/5">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="font-medium">{action.label}</div>
+          <p className="mt-1 text-sm leading-5 text-muted-foreground">{action.description}</p>
+          <div className="mt-3 rounded-md bg-muted px-2.5 py-1.5 text-xs text-muted-foreground">{meta}</div>
+        </div>
+      </div>
     </a>
   );
 }

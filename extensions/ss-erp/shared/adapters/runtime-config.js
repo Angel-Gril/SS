@@ -19,6 +19,8 @@
       ozonCdnDirect: true,
       serverSideUpload: false,
       queuedTasks: false,
+      cookieSync: true,
+      presignedUpload: false,
     },
   };
 

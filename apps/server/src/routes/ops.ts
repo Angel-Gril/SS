@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
+import { getQueueOverview } from '../lib/queue-monitor.js';
 
 const DEFAULT_STATUS_PATH = '/var/backups/ss-erp/backup-status.json';
 
@@ -30,5 +31,10 @@ export async function opsRoutes(app: FastifyInstance) {
         msg: `读取备份状态失败: ${e?.message?.slice(0, 200) || 'unknown'}`,
       });
     }
+  });
+
+  app.get('/queues', async (_request, reply) => {
+    const overview = await getQueueOverview();
+    return reply.send({ code: 1, data: overview });
   });
 }

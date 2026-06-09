@@ -132,6 +132,10 @@ function validateCloudR2(env) {
   warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
   warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
   warnIfMissing(env, 'SMS_PROVIDER');
+  warnIfMissing(env, 'EMAIL_PROVIDER');
+  if (isSet(env.EMAIL_PROVIDER)) {
+    expectOneOf(env, 'EMAIL_PROVIDER', ['resend', 'console']);
+  }
   if (env.SMS_PROVIDER === 'tencent') {
     for (const key of [
       'SMS_TENCENT_SECRET_ID',
@@ -144,6 +148,10 @@ function validateCloudR2(env) {
       requireValue(env, key);
     }
   }
+  if (env.EMAIL_PROVIDER === 'resend') {
+    requireValue(env, 'EMAIL_FROM');
+    requireValue(env, 'EMAIL_API_KEY');
+  }
 }
 
 function validateLocal(env) {
@@ -153,6 +161,10 @@ function validateLocal(env) {
   if (isSet(env.NEXT_PUBLIC_RUNTIME_MODE)) expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'local');
   if (isSet(env.SMS_PROVIDER) && env.SMS_PROVIDER !== 'console') {
     warn(`local profile usually uses SMS_PROVIDER=console, got ${env.SMS_PROVIDER}`);
+  }
+  if (isSet(env.EMAIL_PROVIDER) && env.EMAIL_PROVIDER !== 'console') {
+    expectOneOf(env, 'EMAIL_PROVIDER', ['resend', 'console']);
+    warn(`local profile usually uses EMAIL_PROVIDER=console, got ${env.EMAIL_PROVIDER}`);
   }
 }
 

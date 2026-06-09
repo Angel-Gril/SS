@@ -8,6 +8,8 @@ import { authRoutes } from '../routes/auth.js';
 const prismaMock = vi.hoisted(() => ({
   user: {
     count: vi.fn(),
+    create: vi.fn(),
+    findMany: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
   },
@@ -25,6 +27,7 @@ const runtimeConfigMock = vi.hoisted(() => ({
 
 const redisMock = vi.hoisted(() => ({
   get: vi.fn(),
+  set: vi.fn(),
   incr: vi.fn(),
   expire: vi.fn(),
   del: vi.fn(),
@@ -51,11 +54,13 @@ beforeEach(() => {
   captchaMock.verifyTurnstile.mockResolvedValue(true);
   captchaMock.sendSmsCode.mockResolvedValue({ ok: true, msg: '验证码已发送' });
     captchaMock.verifySmsCode.mockResolvedValue(true);
-    redisMock.get.mockResolvedValue(null);
-    redisMock.incr.mockResolvedValue(1);
-    redisMock.expire.mockResolvedValue(1);
-    redisMock.del.mockResolvedValue(1);
+  redisMock.get.mockResolvedValue(null);
+  redisMock.set.mockResolvedValue('OK');
+  redisMock.incr.mockResolvedValue(1);
+  redisMock.expire.mockResolvedValue(1);
+  redisMock.del.mockResolvedValue(1);
   redisMock.scan.mockResolvedValue(['0', []]);
+  prismaMock.user.findMany.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -227,6 +232,66 @@ describe('auth password reset', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 0, msg: '验证码错误或已过期' });
     expect(prismaMock.user.update).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('auth registration legal consent', () => {
+  it('rejects registration without terms and privacy consent', async () => {
+    const app = await buildAuthApp();
+    prismaMock.user.findUnique.mockResolvedValue(null);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        phone: '13800138000',
+        password: 'Passw0rd123',
+        smsCode: '123456',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 0, msg: '请先阅读并同意用户服务协议和隐私政策' });
+    expect(prismaMock.user.create).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('records terms and privacy consent timestamps when registering', async () => {
+    const app = await buildAuthApp();
+    prismaMock.user.findUnique.mockResolvedValue(null);
+    prismaMock.user.create.mockResolvedValue({
+      id: 'user-1',
+      phone: '13800138000',
+      nickname: '用户8000',
+      avatar: null,
+      role: 'USER',
+      status: 'ACTIVE',
+      balance: { toString: () => '0' },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        phone: '13800138000',
+        password: 'Passw0rd123',
+        smsCode: '123456',
+        termsAccepted: true,
+        privacyAccepted: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(prismaMock.user.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        phone: '13800138000',
+        termsAcceptedAt: expect.any(Date),
+        privacyAcceptedAt: expect.any(Date),
+      }),
+    });
+    const created = prismaMock.user.create.mock.calls[0]?.[0].data;
+    expect(created?.termsAcceptedAt).toBe(created?.privacyAcceptedAt);
     await app.close();
   });
 });

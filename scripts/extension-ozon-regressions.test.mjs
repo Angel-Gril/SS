@@ -3,11 +3,40 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function readRepoFile(...parts) {
   return readFileSync(join(root, ...parts), 'utf8');
+}
+
+function loadRuntimeModeHarness({ storage = {}, fetchImpl } = {}) {
+  const source = readRepoFile('extensions', 'ss-erp', 'shared', 'erp-adapter', 'runtime-mode.js');
+  const sets = [];
+  const context = {
+    console: { log() {}, warn() {} },
+    AbortSignal: { timeout: () => ({}) },
+    fetch: fetchImpl || (async () => ({ ok: false, json: async () => ({}) })),
+    chrome: {
+      storage: {
+        local: {
+          async get(keys) {
+            const result = {};
+            for (const key of keys) result[key] = storage[key];
+            return result;
+          },
+          async set(value) {
+            sets.push(value);
+            Object.assign(storage, value);
+          },
+        },
+      },
+    },
+  };
+  context.self = context;
+  vm.runInNewContext(source, context, { filename: 'runtime-mode.js' });
+  return { runtime: context.self.SS_ERP_RUNTIME, storage, sets };
 }
 
 test('Ozon list overlay scans current list widgets and retries transient data failures quickly', () => {
@@ -82,6 +111,133 @@ test('Ozon shop analytics sync falls back from charts table to what-to-sell data
   assert.match(source, /OZON_ENDPOINTS\.analytics/);
   assert.match(source, /analyticsSource/);
   assert.doesNotMatch(source, /不再依赖\s+what_to_sell\/data\/v3/);
+});
+
+test('1688 ERP collect adapter posts normalized payloads to supply import without changing Ozon collect path', () => {
+  const adapter = readRepoFile('extensions', 'ss-erp', 'shared', 'erp-adapter', 'collect-product.js');
+  const localAdapter = readRepoFile('extensions', 'ss-erp', 'shared', 'adapters', 'local-adapter.js');
+  const cloudAdapter = readRepoFile('extensions', 'ss-erp', 'shared', 'adapters', 'cloud-adapter.js');
+
+  for (const source of [adapter, localAdapter, cloudAdapter]) {
+    assert.match(source, /function\s+is1688CollectPayload/);
+    assert.match(source, /function\s+normalize1688ImportPayload/);
+    assert.match(source, /\/api\/supply\/1688\/import/);
+    assert.match(source, /purchasePriceCny/);
+    assert.match(source, /exchangeRateRubToCny/);
+    assert.match(source, /sourceCategoryName/);
+  }
+
+  assert.match(adapter, /var\s+path\s*=\s*is1688CollectPayload\(payload\)\s*\?\s*'\/api\/supply\/1688\/import'\s*:\s*'\/api\/collect'/);
+  assert.match(localAdapter, /return\s+this\.request\(resolveCollectPath\(payload\)/);
+  assert.match(cloudAdapter, /return\s+this\.request\(resolveCollectPath\(payload\)/);
+  assert.match(adapter, /normalizeCollectPayload\(payload\)/);
+  assert.match(localAdapter, /normalizeCollectPayload\(payload\)/);
+  assert.match(cloudAdapter, /normalizeCollectPayload\(payload\)/);
+});
+
+test('1688 detail pages render extension pricing and collect workflow as the primary entry', () => {
+  const manifest = readRepoFile('extensions', 'ss-erp', 'manifest.json');
+  const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const css = readRepoFile('extensions', 'ss-erp', 'content', 'collect-1688-panel.css');
+
+  assert.match(manifest, /content\/collect-1688-panel\.css/);
+  assert.match(content, /function\s+init1688PricingPanel/);
+  assert.match(content, /function\s+render1688PricingPanel/);
+  assert.match(content, /function\s+preview1688Pricing/);
+  assert.match(content, /function\s+import1688SupplyGood/);
+  assert.match(content, /\/api\/supply\/1688\/preview/);
+  assert.match(content, /\/api\/supply\/1688\/import/);
+  assert.match(content, /data-ss-erp-1688-action="preview"/);
+  assert.match(content, /data-ss-erp-1688-action="collect"/);
+  assert.match(content, /SS_ERP_1688_PRICING_PANEL/);
+  assert.match(content, /sourcePlatform:\s*"1688"/);
+  assert.match(css, /#ss-erp-1688-panel/);
+  assert.match(css, /ss-erp-1688-summary/);
+});
+
+test('1688 pricing panel prefills logistics fee from synced Ozon logistics snapshot', () => {
+  const manifest = readRepoFile('extensions', 'ss-erp', 'manifest.json');
+  const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+
+  assert.match(manifest, /shared\/calculator-core\/rule-engine\.js[\s\S]*content\/collect-content-script\.js/);
+  assert.match(content, /function\s+load1688LogisticsQuote/);
+  assert.match(content, /ozon-calc:config-snapshot/);
+  assert.match(content, /const\s+engine\s*=\s*window\.OZON_CALC_RULE_ENGINE/);
+  assert.match(content, /engine\.buildServiceQuote/);
+  assert.match(content, /engine\.resolveBestQuote/);
+  assert.match(content, /logisticsFeeCny/);
+  assert.match(content, /data-ss-erp-1688-logistics-hint/);
+  assert.match(content, /命中物流/);
+});
+
+test('extension runtime detection clears stale cloud mode when runtime endpoint is unavailable', async () => {
+  const { runtime, storage } = loadRuntimeModeHarness({
+    storage: {
+      'ozon-calc:erp-endpoint': 'http://127.0.0.1:3001/api/collect',
+      'ozon-calc:erp-token': 'token-1',
+      'ozon-calc:runtime-mode': 'cloud',
+      'ozon-calc:runtime-capabilities': {
+        imageUpload: 'oss',
+        sync: 'queue',
+        ozonCdnDirect: false,
+        serverSideUpload: true,
+        queuedTasks: true,
+      },
+    },
+    fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ code: 0 }) }),
+  });
+
+  await runtime.syncRuntimeMode();
+
+  assert.equal(storage['ozon-calc:runtime-mode'], 'local');
+  assert.deepEqual(JSON.parse(JSON.stringify(storage['ozon-calc:runtime-capabilities'])), {
+    imageUpload: 'local',
+    sync: 'direct',
+    ozonCdnDirect: true,
+    serverSideUpload: false,
+    queuedTasks: false,
+    cookieSync: true,
+    presignedUpload: false,
+  });
+  assert.equal(storage['ozon-calc:runtime-sync-status'].ok, false);
+  assert.equal(storage['ozon-calc:runtime-sync-status'].fallbackMode, 'local');
+});
+
+test('extension settings connection test displays server runtime mode and capabilities', () => {
+  const settings = readRepoFile('extensions', 'ss-erp', 'pages', 'settings.js');
+
+  assert.match(settings, /\/api\/extension\/runtime/);
+  assert.match(settings, /formatRuntimeMode/);
+  assert.match(settings, /formatRuntimeCapabilities/);
+  assert.match(settings, /运行模式/);
+  assert.match(settings, /图片上传/);
+  assert.match(settings, /任务模式/);
+});
+
+test('Ozon list overlay uses ERP batch snapshots for collected actions without blocking Premium fallback', () => {
+  const overlay = readRepoFile('extensions', 'ss-erp', 'content', 'ozon-list-overlay.js');
+  const worker = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+  const collectPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'collect', 'page.tsx');
+
+  assert.match(overlay, /COLLECT_SNAPSHOT_TTL_MS\s*=\s*60\s*\*\s*1000/);
+  assert.match(overlay, /const\s+collectSnapshotCache\s*=\s*new Map/);
+  assert.match(overlay, /function\s+queueCollectSnapshot/);
+  assert.match(overlay, /function\s+fetchCollectSnapshots/);
+  assert.match(overlay, /type:\s*'ss-erp:query-collect-batch-snapshot'/);
+  assert.match(overlay, /function\s+renderCollectActions/);
+  assert.match(overlay, /ss-erp-open-btn/);
+  assert.match(overlay, /ss-erp-recollect-btn/);
+  assert.match(overlay, /查看 ERP/);
+  assert.match(overlay, /重采集/);
+  assert.match(overlay, /ERP 未连接|采集状态未知/);
+
+  assert.match(worker, /function\s+resolveErpWebBaseUrl/);
+  assert.match(worker, /ss-erp:open-erp-collect/);
+  assert.match(worker, /url\.port\s*=\s*'3003'/);
+  assert.match(worker, /chrome\.tabs\.create\(\{\s*url:\s*targetUrl\s*\}\)/);
+
+  assert.match(collectPage, /useSearchParams/);
+  assert.match(collectPage, /initialSearch/);
 });
 
 test('production sources and extension package do not contain competitor brand markers', () => {

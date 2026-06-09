@@ -6,6 +6,7 @@ import { api, tokenStore } from '@/lib/api';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
 import { AnnouncementPopup } from '@/components/announcement-popup';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { AuthUser } from 'shared';
 
 /** USER 切到 warehouse 端时，按 STAFF 视角渲染（菜单/拦截/默认页都共用 STAFF 规则）*/
@@ -58,6 +59,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -119,14 +121,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen flex bg-background">
-      <Sidebar collapsed={collapsed} pathname={pathname} role={effRole} isSuperAdmin={user.isSuperAdmin} />
+      <Sidebar
+        collapsed={collapsed}
+        pathname={pathname}
+        role={effRole}
+        isSuperAdmin={user.isSuperAdmin}
+        className="hidden lg:flex"
+      />
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="left" className="w-[86vw] max-w-80 p-0">
+          <SheetHeader className="sr-only">
+            <SheetTitle>导航菜单</SheetTitle>
+          </SheetHeader>
+          <Sidebar
+            collapsed={false}
+            pathname={pathname}
+            role={effRole}
+            isSuperAdmin={user.isSuperAdmin}
+            className="static h-full w-full border-r-0"
+            onNavigate={() => setMobileNavOpen(false)}
+          />
+        </SheetContent>
+      </Sheet>
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar
           user={user}
           collapsed={collapsed}
           onToggle={() => setCollapsed(!collapsed)}
+          onMobileMenu={() => setMobileNavOpen(true)}
         />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-4 md:p-6">{children}</main>
       </div>
       <AnnouncementPopup />
     </div>

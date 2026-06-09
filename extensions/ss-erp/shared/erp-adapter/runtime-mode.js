@@ -3,12 +3,57 @@
 
 const RUNTIME_MODE_KEY = 'ozon-calc:runtime-mode';
 const RUNTIME_CAPABILITIES_KEY = 'ozon-calc:runtime-capabilities';
+const RUNTIME_SYNC_STATUS_KEY = 'ozon-calc:runtime-sync-status';
+
+const DEFAULT_LOCAL_CAPABILITIES = {
+  imageUpload: 'local',
+  sync: 'direct',
+  ozonCdnDirect: true,
+  serverSideUpload: false,
+  queuedTasks: false,
+  cookieSync: true,
+  presignedUpload: false,
+};
 
 function normalizeErpBaseUrl(value) {
   var text = String(value || '').trim();
   if (!text) return '';
   text = text.replace(/\/+$/, '');
   return text.replace(/\/api\/.*$/, '');
+}
+
+function runtimeStatus(ok, details) {
+  return {
+    ok: Boolean(ok),
+    checkedAt: new Date().toISOString(),
+    ...(details || {}),
+  };
+}
+
+function normalizeRuntimeCapabilities(config) {
+  if (!config || !config.capabilities) return DEFAULT_LOCAL_CAPABILITIES;
+  var mode = config.mode === 'cloud' ? 'cloud' : 'local';
+  var capabilities = config.capabilities || {};
+  return {
+    imageUpload: capabilities.imageUpload || (mode === 'cloud' ? 'oss' : 'local'),
+    sync: capabilities.sync || (mode === 'cloud' ? 'queue' : 'direct'),
+    ozonCdnDirect: capabilities.ozonCdnDirect === true,
+    serverSideUpload: capabilities.serverSideUpload === true,
+    queuedTasks: capabilities.queuedTasks === true,
+    cookieSync: capabilities.cookieSync === true,
+    presignedUpload: capabilities.presignedUpload === true,
+  };
+}
+
+async function writeLocalRuntimeFallback(reason) {
+  await chrome.storage.local.set({
+    [RUNTIME_MODE_KEY]: 'local',
+    [RUNTIME_CAPABILITIES_KEY]: DEFAULT_LOCAL_CAPABILITIES,
+    [RUNTIME_SYNC_STATUS_KEY]: runtimeStatus(false, {
+      reason: reason || 'runtime-unavailable',
+      fallbackMode: 'local',
+    }),
+  });
 }
 
 async function fetchRuntimeConfig(endpoint, token) {
@@ -36,27 +81,26 @@ async function syncRuntimeMode() {
   const token = String(result['ozon-calc:erp-token'] || conn.token || '').trim();
 
   if (!endpoint || !token) {
-    await chrome.storage.local.set({
-      [RUNTIME_MODE_KEY]: 'local',
-      [RUNTIME_CAPABILITIES_KEY]: {
-        imageUpload: 'local',
-        sync: 'direct',
-        ozonCdnDirect: true,
-        serverSideUpload: false,
-        queuedTasks: false,
-      },
-    });
+    await writeLocalRuntimeFallback('missing-endpoint-or-token');
     return;
   }
 
   const config = await fetchRuntimeConfig(endpoint, token);
   if (config) {
+    var mode = config.mode === 'cloud' ? 'cloud' : 'local';
     await chrome.storage.local.set({
-      [RUNTIME_MODE_KEY]: config.mode,
-      [RUNTIME_CAPABILITIES_KEY]: config.capabilities,
+      [RUNTIME_MODE_KEY]: mode,
+      [RUNTIME_CAPABILITIES_KEY]: normalizeRuntimeCapabilities(config),
+      [RUNTIME_SYNC_STATUS_KEY]: runtimeStatus(true, {
+        mode,
+        source: config.source || 'runtime-endpoint',
+      }),
     });
-    console.log('[SS ERP] runtime mode:', config.mode);
+    console.log('[SS ERP] runtime mode:', mode);
+    return;
   }
+
+  await writeLocalRuntimeFallback('runtime-endpoint-unavailable');
 }
 
 // 导出给 service-worker 使用
@@ -64,6 +108,8 @@ if (typeof self !== 'undefined') {
   self.SS_ERP_RUNTIME = {
     RUNTIME_MODE_KEY,
     RUNTIME_CAPABILITIES_KEY,
+    RUNTIME_SYNC_STATUS_KEY,
+    DEFAULT_LOCAL_CAPABILITIES,
     syncRuntimeMode,
     fetchRuntimeConfig,
     normalizeErpBaseUrl,

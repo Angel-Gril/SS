@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { buildSupplyGoods1688Summary } from '@/lib/supply-goods';
 import { formatDate } from '@/lib/utils';
 
 interface SupplyItem {
@@ -25,6 +26,7 @@ interface SupplyItem {
   mappedProductId: string | null;
   status: string;
   createdAt: string;
+  metadata: unknown;
 }
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -62,85 +64,150 @@ export default function SupplyGoodsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">货源管理</h1>
           <p className="text-muted-foreground text-sm mt-1">管理采购货源、供应商信息和价格对比</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button onClick={() => setCreateOpen(true)} className="w-full sm:w-auto">
           <Plus className="h-4 w-4" /> 添加货源
         </Button>
       </div>
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center gap-3">
-            <form className="flex gap-2 flex-1 max-w-sm" onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <form className="flex gap-2 sm:flex-1 sm:max-w-sm" onSubmit={(e) => { e.preventDefault(); setSearch(searchInput); setPage(0); }}>
               <Input placeholder="搜索商品名 / 供应商 / SKU" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="h-9" />
               <Button type="submit" size="sm" variant="outline"><Search className="h-4 w-4" /></Button>
             </form>
-            <span className="text-sm text-muted-foreground ml-auto">共 {total} 条</span>
+            <span className="text-sm text-muted-foreground sm:ml-auto">共 {total} 条</span>
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>商品名称</TableHead>
-                <TableHead>来源平台</TableHead>
-                <TableHead>供应商</TableHead>
-                <TableHead>SKU</TableHead>
-                <TableHead className="text-right">采购价</TableHead>
-                <TableHead>添加时间</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-10"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
-              ) : items.length === 0 ? (
+          <div className="hidden md:block">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
-                    <Package className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    暂无货源。点击"添加货源"录入采购信息。
-                  </TableCell>
+                  <TableHead>商品名称</TableHead>
+                  <TableHead>来源平台</TableHead>
+                  <TableHead>供应商</TableHead>
+                  <TableHead>SKU</TableHead>
+                  <TableHead className="text-right">采购价</TableHead>
+                  <TableHead>1688核价</TableHead>
+                  <TableHead>添加时间</TableHead>
+                  <TableHead className="text-right">操作</TableHead>
                 </TableRow>
-              ) : items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell className="font-medium text-sm max-w-xs">
-                    <div className="truncate">{item.title}</div>
-                    {item.sourceUrl && (
-                      <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline inline-flex items-center gap-0.5 mt-0.5">
-                        查看源链接 <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {item.sourcePlatform ? (
-                      <Badge variant="outline">{PLATFORM_LABELS[item.sourcePlatform] || item.sourcePlatform}</Badge>
-                    ) : '-'}
-                  </TableCell>
-                  <TableCell className="text-sm">{item.supplier || '-'}</TableCell>
-                  <TableCell className="font-mono text-xs">{item.sku || '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {item.purchasePrice ? `${item.currency} ${item.purchasePrice}` : '-'}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDelete(item.id)}>
-                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow><TableCell colSpan={8} className="text-center py-10"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+                ) : items.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                      <Package className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      暂无货源。点击"添加货源"录入采购信息。
+                    </TableCell>
+                  </TableRow>
+                ) : items.map((item) => {
+                  const summary = buildSupplyGoods1688Summary(item);
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell className="font-medium text-sm max-w-xs">
+                        <div className="truncate">{item.title}</div>
+                        {item.sourceUrl && (
+                          <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline inline-flex items-center gap-0.5 mt-0.5">
+                            查看源链接 <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {item.sourcePlatform ? (
+                          <Badge variant="outline">{PLATFORM_LABELS[item.sourcePlatform] || item.sourcePlatform}</Badge>
+                        ) : '-'}
+                      </TableCell>
+                      <TableCell className="text-sm">{item.supplier || '-'}</TableCell>
+                      <TableCell className="font-mono text-xs">{item.sku || '-'}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {item.purchasePrice ? `${item.currency} ${item.purchasePrice}` : '-'}
+                      </TableCell>
+                      <TableCell className="min-w-[220px]">
+                        {summary ? <Supply1688Summary summary={summary} /> : <span className="text-xs text-muted-foreground">-</span>}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDelete(item.id)}>
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="md:hidden">
+            {loading ? (
+              <div className="py-10 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></div>
+            ) : items.length === 0 ? (
+              <div className="py-12 text-center text-muted-foreground">
+                <Package className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                暂无货源。点击"添加货源"录入采购信息。
+              </div>
+            ) : (
+              <div className="divide-y">
+                {items.map((item) => {
+                  const summary = buildSupplyGoods1688Summary(item);
+                  return (
+                    <div key={item.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium text-sm leading-5 break-words">{item.title}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            {item.sourcePlatform ? <Badge variant="outline">{PLATFORM_LABELS[item.sourcePlatform] || item.sourcePlatform}</Badge> : null}
+                            <span className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</span>
+                          </div>
+                        </div>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => handleDelete(item.id)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <div className="text-xs text-muted-foreground">供应商</div>
+                          <div className="mt-0.5 truncate">{item.supplier || '-'}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-muted-foreground">SKU</div>
+                          <div className="mt-0.5 truncate font-mono text-xs">{item.sku || '-'}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-muted-foreground">采购价</div>
+                          <div className="mt-0.5 font-medium tabular-nums">{item.purchasePrice ? `${item.currency} ${item.purchasePrice}` : '-'}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-muted-foreground">映射商品</div>
+                          <div className="mt-0.5 truncate">{item.mappedProductId || '-'}</div>
+                        </div>
+                      </div>
+                      {summary && <Supply1688Summary summary={summary} />}
+                      {item.sourceUrl && (
+                        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                          查看源链接 <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {totalPages > 1 && (
-            <div className="flex items-center justify-between px-6 py-3 border-t">
+            <div className="flex flex-col gap-3 px-4 py-3 border-t sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <span className="text-sm text-muted-foreground">第 {page + 1} / {totalPages} 页</span>
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</Button>
-                <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>下一页</Button>
+                <Button size="sm" variant="outline" className="flex-1 sm:flex-none" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</Button>
+                <Button size="sm" variant="outline" className="flex-1 sm:flex-none" disabled={page >= totalPages - 1} onClick={() => setPage(page + 1)}>下一页</Button>
               </div>
             </div>
           )}
@@ -148,6 +215,21 @@ export default function SupplyGoodsPage() {
       </Card>
 
       <CreateSupplyDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={() => { setCreateOpen(false); fetchData(); }} />
+    </div>
+  );
+}
+
+function Supply1688Summary({ summary }: { summary: NonNullable<ReturnType<typeof buildSupplyGoods1688Summary>> }) {
+  return (
+    <div className="space-y-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={summary.hasPricing ? 'success' : 'outline'}>{summary.hasPricing ? '已核价' : '待核价'}</Badge>
+        <span className="text-muted-foreground">{summary.pricingText}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={summary.hasMapping ? 'success' : 'warning'}>{summary.hasMapping ? '已映射' : '待映射'}</Badge>
+        <span className="text-muted-foreground">{summary.mappingText}</span>
+      </div>
     </div>
   );
 }
@@ -185,7 +267,7 @@ function CreateSupplyDialog({ open, onClose, onCreated }: { open: boolean; onClo
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>添加货源</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1">

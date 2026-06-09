@@ -166,7 +166,7 @@ Start here:
 3. Edit: .env.local-windows
 4. Run: .\scripts\windows-local\start.ps1
    Optional with bundled PostgreSQL runtime: .\scripts\windows-local\start.ps1 -UseRuntimePostgres
-5. Open: http://127.0.0.1:3000
+5. Open: http://127.0.0.1:3003
 
 Docs:
 - docs/local-windows-package.md

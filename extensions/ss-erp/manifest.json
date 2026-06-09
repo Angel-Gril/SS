@@ -108,7 +108,11 @@
       ],
       "js": [
         "shared/currency/price-currency.js",
+        "shared/calculator-core/rule-engine.js",
         "content/collect-content-script.js"
+      ],
+      "css": [
+        "content/collect-1688-panel.css"
       ],
       "run_at": "document_idle"
     },

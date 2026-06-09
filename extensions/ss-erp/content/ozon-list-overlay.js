@@ -6,7 +6,7 @@
 //   4. SS ERP 缓存（其他用户已提交的数据）
 //   5. 实在拿不到的字段显示 "--"，不阻塞卡片渲染
 // 设计原则：
-//   - 不主动请求 ERP 检测采集状态，避免给服务器加负担。点击采集失败再显示原因。
+//   - 采集状态只走批量快照，失败时降级为未知状态，不阻塞列表卡片。
 //   - 进入视口自动加载 Premium 数据，不等用户展开。
 
 (function () {
@@ -30,16 +30,22 @@
   const PREMIUM_TTL_MS = 10 * 60 * 1000;
   const PREMIUM_FAILURE_TTL_MS = 90 * 1000;
   const PREMIUM_CONCURRENCY = 3;
+  const COLLECT_SNAPSHOT_TTL_MS = 60 * 1000;
+  const COLLECT_SNAPSHOT_BATCH_DELAY_MS = 120;
   const CARD_SCAN_FAST_MS = 500;
   const CARD_SCAN_SLOW_MS = 2000;
   const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
 
   // === 工具：缓存 ===
   const premiumCache = new Map();  // sku -> { data, ts }
+  const collectSnapshotCache = new Map(); // sku -> { data, ts }
   const failedPremiumCache = new Map(); // sku -> ts
   const inFlightPremium = new Map(); // sku -> Promise
   const premiumQueue = [];
+  const pendingCollectSnapshotSkus = new Set();
+  const collectSnapshotSubscribers = new Map();
   let activePremiumRequests = 0;
+  let collectSnapshotTimer = null;
   let overlayIdCounter = 0;
   let activeExpandedPanel = null;
   let expandedPanelListenersInstalled = false;
@@ -274,6 +280,76 @@
     });
   }
 
+  function getCollectSnapshot(sku) {
+    return getCached(collectSnapshotCache, sku, COLLECT_SNAPSHOT_TTL_MS);
+  }
+
+  function setCollectSnapshot(sku, data) {
+    setCached(collectSnapshotCache, sku, data || { collected: false });
+  }
+
+  function subscribeCollectSnapshot(sku, callback) {
+    if (!collectSnapshotSubscribers.has(sku)) {
+      collectSnapshotSubscribers.set(sku, new Set());
+    }
+    collectSnapshotSubscribers.get(sku).add(callback);
+    return () => {
+      const subscribers = collectSnapshotSubscribers.get(sku);
+      if (!subscribers) return;
+      subscribers.delete(callback);
+      if (!subscribers.size) collectSnapshotSubscribers.delete(sku);
+    };
+  }
+
+  function notifyCollectSnapshot(sku) {
+    const subscribers = collectSnapshotSubscribers.get(sku);
+    if (!subscribers || !subscribers.size) return;
+    const snapshot = getCollectSnapshot(sku);
+    subscribers.forEach((callback) => {
+      try { callback(snapshot); } catch (e) {}
+    });
+  }
+
+  function queueCollectSnapshot(sku, force) {
+    if (!sku) return;
+    if (!force && getCollectSnapshot(sku)) return;
+    pendingCollectSnapshotSkus.add(sku);
+    if (collectSnapshotTimer) return;
+    collectSnapshotTimer = setTimeout(() => {
+      collectSnapshotTimer = null;
+      fetchCollectSnapshots();
+    }, COLLECT_SNAPSHOT_BATCH_DELAY_MS);
+  }
+
+  async function fetchCollectSnapshots() {
+    const skus = Array.from(pendingCollectSnapshotSkus).slice(0, 100);
+    pendingCollectSnapshotSkus.clear();
+    if (!skus.length) return;
+
+    const resp = await send(
+      { type: 'ss-erp:query-collect-batch-snapshot', skus },
+      12000,
+    );
+
+    if (!resp || !resp.ok) {
+      skus.forEach((sku) => {
+        setCollectSnapshot(sku, {
+          collected: false,
+          unavailable: true,
+          error: (resp && (resp.msg || resp.error)) || 'ERP 未连接',
+        });
+        notifyCollectSnapshot(sku);
+      });
+      return;
+    }
+
+    const rows = resp.data || {};
+    skus.forEach((sku) => {
+      setCollectSnapshot(sku, rows[sku] || { collected: false });
+      notifyCollectSnapshot(sku);
+    });
+  }
+
   // === 公开 API：拉商品基础信息（含销量/卖家等可选字段）===
   // 通过 background 聚合 seller-analytics、公开 entrypoint 和 ERP 缓存；失败时保持基础卡片。
   async function fetchPublicProduct(sku) {
@@ -445,13 +521,14 @@
       '  <span class="ss-erp-status-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;border:1px solid #fdba74">加载中…</span>',
       '</div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
-      '<div class="ss-erp-actions" style="display:flex;gap:6px">',
-      '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
+      '<div class="ss-erp-actions" style="display:flex;gap:6px;align-items:flex-start">',
+      '  <div class="ss-erp-collect-actions" style="display:flex;flex:1;min-width:0"></div>',
       '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #fdba74;border-radius:6px;background:#fff7ed;color:#c2410c;cursor:pointer;font-size:11px">展开</button>',
       '</div>',
     ].join('');
 
     renderMetrics(wrap, sku, dom, null);
+    renderCollectActions(wrap, sku, dom, null);
     return wrap;
   }
 
@@ -644,6 +721,37 @@
     }
   }
 
+  function renderCollectActions(wrap, sku, dom, snapshot) {
+    const actions = wrap.querySelector('.ss-erp-collect-actions');
+    if (!actions) return;
+
+    if (snapshot && snapshot.collected) {
+      const statusText = snapshot.listed ? '已上架' : '已采集';
+      const priceText = snapshot.price ? ' · 成本 ¥' + escapeHtml(snapshot.price) : '';
+      const lastText = snapshot.lastCollectedAt ? ' · ' + escapeHtml(formatDate(snapshot.lastCollectedAt)) : '';
+      actions.innerHTML = [
+        '<div style="display:flex;flex-direction:column;gap:5px;min-width:0;flex:1">',
+        `  <div class="ss-erp-collect-status" title="${escapeHtml(snapshot.title || dom.title || sku)}" style="font-size:10px;color:#047857;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${statusText}${priceText}${lastText}</div>`,
+        '  <div style="display:flex;gap:5px;min-width:0">',
+        '    <button class="ss-erp-open-btn" type="button" style="flex:1;padding:5px 7px;border:1px solid #10b981;border-radius:6px;background:#ecfdf5;color:#047857;cursor:pointer;font-size:11px;font-weight:600">查看 ERP</button>',
+        '    <button class="ss-erp-recollect-btn" type="button" style="padding:5px 7px;border:1px solid #fdba74;border-radius:6px;background:#fff;color:#c2410c;cursor:pointer;font-size:11px;font-weight:600">重采集</button>',
+        '  </div>',
+        '</div>',
+      ].join('');
+      return;
+    }
+
+    const statusText = snapshot && snapshot.unavailable
+      ? ('ERP 未连接：' + truncate(snapshot.error || '查询失败', 18))
+      : '采集状态未知';
+    actions.innerHTML = [
+      '<div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1">',
+      '  <button class="ss-erp-collect-btn" type="button" style="width:100%;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
+      `  <span class="ss-erp-collect-status" style="font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(statusText)}</span>`,
+      '</div>',
+    ].join('');
+  }
+
   function metricCell(label, value, locked) {
     return [
       '<div style="background:#fff;border:1px solid #fed7aa;border-radius:6px;padding:5px 8px;display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden">',
@@ -703,6 +811,44 @@
     return f;
   }
 
+  async function collectSkuToErp(sku, dom, button) {
+    button.disabled = true;
+    const oldText = button.textContent;
+    const oldBackground = button.style.background;
+    const oldBorderColor = button.style.borderColor;
+    button.textContent = '采集中…';
+    button.style.opacity = '0.7';
+
+    const resp = await send({ type: 'ss-erp:collect-product', sku, url: dom.url }, 60000);
+
+    if (resp && resp.ok) {
+      setCollectSnapshot(sku, {
+        collected: true,
+        sourceProductId: sku,
+        sku,
+        title: dom.title || sku,
+        sourceUrl: dom.url || null,
+        lastCollectedAt: new Date().toISOString(),
+        pendingRefresh: true,
+      });
+      notifyCollectSnapshot(sku);
+      queueCollectSnapshot(sku, true);
+      return;
+    }
+
+    button.disabled = false;
+    button.textContent = '✗ ' + (resp && resp.msg ? truncate(resp.msg, 12) : '失败');
+    button.style.background = '#ef4444';
+    button.style.borderColor = '#ef4444';
+    setTimeout(() => {
+      if (!button.isConnected) return;
+      button.textContent = oldText;
+      button.style.background = oldBackground;
+      button.style.borderColor = oldBorderColor;
+      button.style.opacity = '1';
+    }, 4000);
+  }
+
   // === 注入卡片 + 绑定事件 ===
   async function attachOverlay(target) {
     const card = resolveProductCardTarget(target);
@@ -729,8 +875,16 @@
 
     wrap.addEventListener('click', (e) => e.stopPropagation());
 
-    const collectBtn = wrap.querySelector('.ss-erp-collect-btn');
     const expandBtn = wrap.querySelector('.ss-erp-expand-btn');
+
+    const unsubscribeSnapshot = subscribeCollectSnapshot(sku, (snapshot) => {
+      if (!wrap.isConnected) {
+        unsubscribeSnapshot();
+        return;
+      }
+      renderCollectActions(wrap, sku, dom, snapshot);
+    });
+    queueCollectSnapshot(sku);
 
     expandBtn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -746,32 +900,28 @@
       setExpandedPanelOpen(wrap, expanded, expandBtn, willOpen);
     });
 
-    collectBtn.addEventListener('click', async (e) => {
+    wrap.addEventListener('click', async (e) => {
+      const collectBtn = e.target && e.target.closest ? e.target.closest('.ss-erp-collect-btn, .ss-erp-recollect-btn') : null;
+      const openBtn = e.target && e.target.closest ? e.target.closest('.ss-erp-open-btn') : null;
+      if (!collectBtn && !openBtn) return;
+
       e.preventDefault();
       e.stopPropagation();
-      collectBtn.disabled = true;
-      const oldText = collectBtn.textContent;
-      collectBtn.textContent = '采集中…';
-      collectBtn.style.opacity = '0.7';
 
-      const resp = await send({ type: 'ss-erp:collect-product', sku, url: dom.url }, 60000);
-
-      if (resp && resp.ok) {
-        collectBtn.textContent = '✓ 已采集';
-        collectBtn.style.background = '#10b981';
-        collectBtn.style.borderColor = '#10b981';
-      } else {
-        collectBtn.disabled = false;
-        collectBtn.textContent = '✗ ' + (resp && resp.msg ? truncate(resp.msg, 12) : '失败');
-        collectBtn.style.background = '#ef4444';
-        collectBtn.style.borderColor = '#ef4444';
-        setTimeout(() => {
-          collectBtn.textContent = oldText;
-          collectBtn.style.background = '#f97316';
-          collectBtn.style.borderColor = '#f97316';
-          collectBtn.style.opacity = '1';
-        }, 4000);
+      if (openBtn) {
+        openBtn.disabled = true;
+        const oldText = openBtn.textContent;
+        openBtn.textContent = '打开中…';
+        const resp = await send({ type: 'ss-erp:open-erp-collect', sku }, 8000);
+        if (!resp || !resp.ok) {
+          openBtn.disabled = false;
+          openBtn.textContent = truncate((resp && (resp.msg || resp.error)) || '打开失败', 12);
+          setTimeout(() => { if (openBtn.isConnected) openBtn.textContent = oldText; }, 2500);
+        }
+        return;
       }
+
+      await collectSkuToErp(sku, dom, collectBtn);
     });
 
     // 进入视口后自动加载 Premium 数据，不等用户展开

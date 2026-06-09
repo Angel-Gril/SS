@@ -257,6 +257,32 @@ function normalizeEndpoint(value) {
   }
 }
 
+function resolveErpWebBaseUrl(apiBaseUrl) {
+  const normalized = normalizeEndpoint(apiBaseUrl);
+  if (!normalized) return '';
+  try {
+    const url = new URL(normalized);
+    const host = url.hostname.toLowerCase();
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    if ((host === '127.0.0.1' || host === 'localhost') && url.port === '3001') {
+      url.port = '3003';
+    }
+    return url.toString().replace(/\/$/, '');
+  } catch (error) {
+    return normalized.replace(/\/api\/.*$/, '').replace(/\/$/, '');
+  }
+}
+
+function buildErpCollectPageUrl(apiBaseUrl, sku) {
+  const webBase = resolveErpWebBaseUrl(apiBaseUrl);
+  if (!webBase) return '';
+  const targetUrl = webBase + '/collect';
+  const cleanSku = toText(sku).trim();
+  return cleanSku ? targetUrl + '?search=' + encodeURIComponent(cleanSku) : targetUrl;
+}
+
 function buildCaptureCounts(entries) {
   const counts = { seller: 0, official: 0, sellerProducts: 0, all: Array.isArray(entries) ? entries.length : 0 };
   (Array.isArray(entries) ? entries : []).forEach((entry) => {
@@ -791,6 +817,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, msg: parsed.msg || '查询失败' });
         }
       }));
+    }).catch((error) => {
+      sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:open-erp-collect') {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, 'ss_erp_connection']).then((result) => {
+      const legacyConn = result.ss_erp_connection || {};
+      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY] || legacyConn.baseUrl);
+      const targetUrl = buildErpCollectPageUrl(baseEndpoint, message.sku);
+      if (!targetUrl) {
+        sendResponse({ ok: false, msg: '未配置 ERP' });
+        return null;
+      }
+      return chrome.tabs.create({ url: targetUrl }).then(() => {
+        sendResponse({ ok: true, url: targetUrl });
+      });
     }).catch((error) => {
       sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
     });

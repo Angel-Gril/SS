@@ -5,6 +5,7 @@ import { authenticate, clearAuthContextCache, requireRole } from '../lib/auth.js
 import { prisma } from '../lib/prisma.js';
 import { generateAccountCode, nextAdminCode, nextSuperAdminCode } from '../lib/account-code.js';
 import { logAudit, extractRequestMeta } from '../lib/audit-log.js';
+import { buildAuditLogQuery } from '../lib/audit-log-query.js';
 
 const createTagSchema = z.object({
   name: z.string().min(1, '标签名称不能为空'),
@@ -102,6 +103,32 @@ async function ensureNotRemovingLastActiveSuperAdmin(
 export async function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireRole('ADMIN'));
+
+  // GET /api/admin/audit-logs — 查询审计日志
+  app.get('/audit-logs', async (request, reply) => {
+    const parsed = buildAuditLogQuery(request.query as any);
+    if (!parsed.ok) {
+      return reply.status(400).send({ code: 0, msg: parsed.message });
+    }
+    const { offset, limit, where } = parsed.value;
+
+    const [total, rows] = await Promise.all([
+      prisma.auditLog.count({ where }),
+      prisma.auditLog.findMany({
+        where,
+        skip: offset,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          actor: {
+            select: { id: true, phone: true, nickname: true, accountCode: true },
+          },
+        },
+      }),
+    ]);
+
+    return reply.send({ code: 1, msg: 'ok', data: { total, rows } });
+  });
 
   // GET /api/admin/service-tags — 获取所有标签配置
   app.get('/service-tags', async (_request, reply) => {

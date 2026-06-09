@@ -22,6 +22,8 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
+import { OnboardingGuide } from '@/components/dashboard/onboarding-guide';
+import type { OnboardingStatus } from '@/lib/onboarding';
 
 interface Order {
   id: string;
@@ -202,6 +204,7 @@ export default function OrdersPage() {
   const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [pipelineActive, setPipelineActive] = useState<string | null>(null);
   const [serviceTags, setServiceTags] = useState<ServiceTag[]>([]);
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [tagDialogOrder, setTagDialogOrder] = useState<Order | null>(null);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
@@ -241,6 +244,9 @@ export default function OrdersPage() {
     loadPipeline();
     api.get<ServiceTag[]>('/api/orders/service-tags').then((res) => {
       if (res.code === 1 && res.data) setServiceTags(res.data);
+    });
+    api.get<OnboardingStatus>('/api/user/onboarding-status').then((res) => {
+      if (res.code === 1 && res.data) setOnboarding(res.data);
     });
   }, [loadPipeline]);
 
@@ -357,12 +363,12 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">订单管理</h1>
           <p className="text-muted-foreground mt-1">查看和处理所有平台订单</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => handleSync(false)} disabled={syncing}>
             {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {syncing ? '同步中...' : '同步订单'}
@@ -384,6 +390,10 @@ export default function OrdersPage() {
           </Button>
         </div>
       </div>
+
+      {onboarding && !onboarding.completed && (
+        <OnboardingGuide status={onboarding} onSync={() => handleSync(false)} syncing={syncing} />
+      )}
 
       {stats && (
         <div className="grid gap-4 md:grid-cols-4">
@@ -471,7 +481,7 @@ export default function OrdersPage() {
             <select
               value={shopId}
               onChange={(e) => { setShopId(e.target.value); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm sm:w-auto"
             >
               <option value="">全部店铺</option>
               {shops.map((s) => (
@@ -483,7 +493,7 @@ export default function OrdersPage() {
               type="date"
               value={startDate}
               onChange={(e) => { setStartDate(e.target.value); setPage(0); }}
-              className="h-9 w-36"
+              className="h-9 flex-1 sm:w-36 sm:flex-none"
               title="开始日期"
             />
             <span className="text-muted-foreground text-sm">至</span>
@@ -491,15 +501,15 @@ export default function OrdersPage() {
               type="date"
               value={endDate}
               onChange={(e) => { setEndDate(e.target.value); setPage(0); }}
-              className="h-9 w-36"
+              className="h-9 flex-1 sm:w-36 sm:flex-none"
               title="结束日期"
             />
 
-            <form onSubmit={handleSearch} className="flex items-center gap-1 flex-1 max-w-md">
+            <form onSubmit={handleSearch} className="flex w-full items-center gap-1 sm:max-w-md sm:flex-1">
               <select
                 value={searchField}
                 onChange={(e) => setSearchField(e.target.value as any)}
-                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                className="h-9 w-[104px] rounded-md border border-input bg-background px-2 text-sm"
                 title="搜索范围"
               >
                 <option value="all">全字段</option>
@@ -528,7 +538,7 @@ export default function OrdersPage() {
             <select
               value={serviceTagId}
               onChange={(e) => { setServiceTagId(e.target.value); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm sm:w-auto"
               title="按服务标签筛选"
             >
               <option value="">全部标签</option>
@@ -540,7 +550,7 @@ export default function OrdersPage() {
             <select
               value={shipmentUrgency}
               onChange={(e) => { setShipmentUrgency(e.target.value as any); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm sm:flex-none"
               title="发货截止"
             >
               <option value="">发货截止</option>
@@ -553,7 +563,7 @@ export default function OrdersPage() {
             <select
               value={hasTracking}
               onChange={(e) => { setHasTracking(e.target.value as any); setPage(0); }}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm sm:flex-none"
               title="物流单号"
             >
               <option value="">物流单号</option>
@@ -591,6 +601,8 @@ export default function OrdersPage() {
               暂无订单数据。请先同步订单。
             </div>
           ) : (
+            <>
+            <div className="hidden lg:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -815,6 +827,24 @@ export default function OrdersPage() {
                 })}
               </TableBody>
             </Table>
+            </div>
+            <div className="divide-y lg:hidden">
+              {orders.map((order) => (
+                <OrderMobileCard
+                  key={order.id}
+                  order={order}
+                  serviceTags={serviceTags}
+                  selected={selectedOrders.has(order.id)}
+                  onToggleSelected={() => toggleOrderSelection(order.id)}
+                  onShowDetail={() => setDetailOrderId(order.id)}
+                  onShip={() => setShipOrder(order)}
+                  onPrintLabel={() => setLabelOrder(order)}
+                  onCancel={() => setCancelOrder(order)}
+                  onTag={() => setTagDialogOrder(order)}
+                />
+              ))}
+            </div>
+            </>
           )}
 
           {totalPages > 1 && (
@@ -866,6 +896,191 @@ export default function OrdersPage() {
         onClose={() => setBatchTagDialogOpen(false)}
         onSuccess={() => { setBatchTagDialogOpen(false); setSelectedOrders(new Set()); loadOrders(); }}
       />
+    </div>
+  );
+}
+
+function OrderMobileCard({
+  order,
+  serviceTags,
+  selected,
+  onToggleSelected,
+  onShowDetail,
+  onShip,
+  onPrintLabel,
+  onCancel,
+  onTag,
+}: {
+  order: Order;
+  serviceTags: ServiceTag[];
+  selected: boolean;
+  onToggleSelected: () => void;
+  onShowDetail: () => void;
+  onShip: () => void;
+  onPrintLabel: () => void;
+  onCancel: () => void;
+  onTag: () => void;
+}) {
+  const canShip = order.status === 'awaiting_packaging' || order.status === 'awaiting_deliver';
+  const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
+  const orderTags = order.serviceTags || [];
+  const amount = formatOrderAmount(order.totalAmount, order.currency, order.totalAmountCny);
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelected}
+          className="mt-1 rounded border-input"
+          aria-label="选择订单"
+        />
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            className="block max-w-full truncate text-left font-mono text-sm font-medium hover:text-primary hover:underline"
+            onClick={onShowDetail}
+          >
+            {order.postingNumber || order.platformOrderId}
+          </button>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge variant="outline">{order.shop.platform}</Badge>
+            <span className="truncate">{order.shop.name}</span>
+            <span>{formatDate(order.createdAt)}</span>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-sm font-semibold tabular-nums" title={`原币 ${amount.original}${amount.isApprox ? '（估算汇率）' : ''}`}>
+            {amount.display}
+          </div>
+          {order.currency !== 'CNY' ? (
+            <div className="text-xs text-muted-foreground">{amount.isApprox ? '≈ ' : ''}{amount.original}</div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="rounded-md border bg-muted/20 p-3">
+        {order.items && Array.isArray(order.items) ? (
+          <ProductImagePreview items={order.items as any[]} />
+        ) : (
+          <span className="text-sm text-muted-foreground">无商品明细</span>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <OrderStatusBadge status={order.status} />
+        <ShipmentCountdownMini shipmentDate={order.shipmentDate} status={order.status} />
+        {orderTags.map((tagId) => {
+          const tag = serviceTags.find((t) => t.id === tagId);
+          if (!tag) return null;
+          return (
+            <span
+              key={tagId}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
+              style={{ backgroundColor: tag.color + '20', color: tag.color }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
+              {tag.name}
+            </span>
+          );
+        })}
+        <button
+          type="button"
+          onClick={onTag}
+          className="inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
+        >
+          <Tag className="h-3 w-3" />
+          标签
+        </button>
+      </div>
+
+      <OrderTrackingSummary order={order} />
+
+      <div className="grid grid-cols-3 gap-2">
+        <Button size="sm" variant="outline" disabled={!canShip} onClick={onShip}>
+          <Send className="h-3.5 w-3.5" />
+          发货
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!order.postingNumber || order.shop.platform !== 'OZON'}
+          onClick={onPrintLabel}
+        >
+          <Printer className="h-3.5 w-3.5" />
+          面单
+        </Button>
+        <Button size="sm" variant="outline" disabled={!canCancel} onClick={onCancel}>
+          <Ban className="h-3.5 w-3.5" />
+          取消
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function OrderTrackingSummary({ order }: { order: Order }) {
+  const meta = describeSubstatus(order.subStatus);
+  const showStatus = order.subStatus && meta.phase !== 'unknown';
+  const latestTime = order.deliveringDate || order.shipmentDate || order.inProcessAt;
+  const formattedTime = latestTime ? new Date(latestTime).toLocaleString('zh-CN', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).replace(/\//g, '.') : null;
+  const hasDomesticTracking = !!order.domesticTrackingNumber;
+  const hasInternationalTracking = !!order.trackingNumber;
+
+  if (!showStatus && !hasDomesticTracking && !hasInternationalTracking) {
+    return <div className="text-xs text-muted-foreground">暂无物流信息</div>;
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border bg-background p-3 text-xs">
+      {showStatus && (
+        <div>
+          <div className="font-medium">{meta.text}</div>
+          {formattedTime && <div className="text-muted-foreground">{formattedTime}</div>}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+        {hasDomesticTracking && (
+          <a
+            href={`https://global.cainiao.com/detail.htm?mailNoList=${encodeURIComponent(order.domesticTrackingNumber!)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-0.5 rounded border bg-background px-1.5 py-0.5 hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+          >
+            菜鸟国际
+            <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        )}
+        {hasInternationalTracking && (
+          <>
+            <a
+              href={`https://tracking.ozon.ru/?track=${encodeURIComponent(order.trackingNumber!)}&local=zh-Hans`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 rounded border bg-background px-1.5 py-0.5 hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+            >
+              OZON Track
+              <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+            <a
+              href={`https://t.17track.net/zh-cn#nums=${encodeURIComponent(order.trackingNumber!)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 rounded border bg-background px-1.5 py-0.5 hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+            >
+              17TRACK
+              <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          </>
+        )}
+      </div>
     </div>
   );
 }

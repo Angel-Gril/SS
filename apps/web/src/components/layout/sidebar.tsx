@@ -91,6 +91,8 @@ const navigation: NavItem[] = [
     icon: Upload,
     roles: ['ADMIN', 'USER'],
     children: [
+      { label: '1688手工补录', href: '/collect/1688' },
+      { label: '类目映射', href: '/collect/category-mapping' },
       { label: 'SKU批量采集', href: '/collect/batch' },
       { label: 'SKU采集跟卖', href: '/collect' },
       { label: 'SKU采集改款', href: '/listing' },
@@ -140,7 +142,8 @@ const navigation: NavItem[] = [
       { label: '系统设置', href: '/admin/settings', superAdminOnly: true },
       { label: '接口与集成', href: '/admin/integrations', superAdminOnly: true },
       { label: '安全设置', href: '/admin/security', superAdminOnly: true },
-      { label: '运维状态', href: '/admin/ops', superAdminOnly: true },
+      { label: '运维与队列', href: '/admin/ops', superAdminOnly: true },
+      { label: '审计日志', href: '/admin/audit-logs' },
       { label: '公告管理', href: '/admin/announcements' },
       { label: '服务标签设置', href: '/admin/service-tags' },
       { label: '费用模板', href: '/admin/fee-templates' },
@@ -171,6 +174,7 @@ const navigation: NavItem[] = [
     icon: User,
     roles: ['USER'],
     children: [
+      { label: '账号安全', href: '/settings/security' },
       { label: '员工管理', href: '/settings/staff' },
       { label: '子账号管理', href: '/settings/sub-accounts' },
     ],
@@ -182,9 +186,11 @@ interface SidebarProps {
   pathname: string;
   role: UserRole;
   isSuperAdmin?: boolean;
+  className?: string;
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: SidebarProps) {
+export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false, className, onNavigate }: SidebarProps) {
   const [isHovered, setIsHovered] = useState(false);
   const visibleNav = navigation
     .filter((item) => !item.roles || item.roles.includes(role))
@@ -205,6 +211,7 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
       className={cn(
         'h-screen sticky top-0 flex flex-col transition-all duration-300 border-r glass-effect',
         shouldExpand ? 'w-64' : collapsed ? 'w-16' : 'w-64',
+        className,
       )}
       onMouseEnter={() => {
         if (collapsed) {
@@ -235,7 +242,13 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
       </div>
       <nav className="flex-1 overflow-y-auto scrollbar-thin py-4 px-2">
         {visibleNav.map((item) => (
-          <NavGroup key={item.label} item={item} collapsed={collapsed && !shouldExpand} pathname={pathname} />
+          <NavGroup
+            key={item.label}
+            item={item}
+            collapsed={collapsed && !shouldExpand}
+            pathname={pathname}
+            onNavigate={onNavigate}
+          />
         ))}
       </nav>
     </aside>
@@ -246,10 +259,12 @@ function NavGroup({
   item,
   collapsed,
   pathname,
+  onNavigate,
 }: {
   item: NavItem;
   collapsed: boolean;
   pathname: string;
+  onNavigate?: () => void;
 }) {
   const hasChildren = !!item.children?.length;
   const isActive = item.href === pathname || item.children?.some((c) => pathname.startsWith(c.href));
@@ -263,6 +278,7 @@ function NavGroup({
     return (
       <Link
         href={item.href!}
+        onClick={onNavigate}
         className={cn(
           'dock-item flex items-center gap-3 px-4 py-3 mb-1 rounded-xl text-sm font-medium transition-all',
           pathname === item.href
@@ -309,6 +325,7 @@ function NavGroup({
             <Link
               key={child.href}
               href={child.href}
+              onClick={onNavigate}
               className={cn(
                 'dock-item block px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
                 pathname === child.href

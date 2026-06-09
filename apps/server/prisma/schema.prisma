@@ -82,6 +82,8 @@ model User {
   isSuperAdmin Boolean @default(false) @map("is_super_admin")
   providerFee  Decimal?   @map("provider_fee") @db.Decimal(10, 2)
   platformFee  Decimal?   @map("platform_fee") @db.Decimal(10, 2)
+  termsAcceptedAt DateTime? @map("terms_accepted_at")
+  privacyAcceptedAt DateTime? @map("privacy_accepted_at")
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
   lastLoginAt  DateTime?  @map("last_login_at")
@@ -96,6 +98,7 @@ model User {
   announcementReads    AnnouncementRead[]
   auditLogs    AuditLog[]
   ozonAnalyticsCaches OzonAnalyticsCache[]
+  categoryMappings CategoryMapping[]
 
   @@index([parentId])
   @@map("users")
@@ -410,6 +413,35 @@ model SupplyGoods {
   @@index([userId, status, createdAt])
   @@index([userId, sourceProductId])
   @@map("supply_goods")
+}
+
+// 来源平台类目到 OZON 类目/type 的映射。userId=null 表示全局默认，用户自定义优先。
+model CategoryMapping {
+  id                 String   @id @default(cuid())
+  userId             String?  @map("user_id")
+  user               User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourcePlatform     String   @map("source_platform")
+  sourceCategoryId   String?  @map("source_category_id")
+  sourceCategoryName String?  @map("source_category_name")
+  sourceCategoryPath String?  @map("source_category_path")
+  targetPlatform     String   @default("ozon") @map("target_platform")
+  targetCategoryId   Int      @map("target_category_id")
+  targetTypeId       Int      @map("target_type_id")
+  targetCategoryName String?  @map("target_category_name")
+  targetCategoryPath String?  @map("target_category_path")
+  defaultWeightG     Int?     @map("default_weight_g")
+  defaultLengthMm    Int?     @map("default_length_mm")
+  defaultWidthMm     Int?     @map("default_width_mm")
+  defaultHeightMm    Int?     @map("default_height_mm")
+  notes              String?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([sourcePlatform, sourceCategoryId])
+  @@index([sourcePlatform, sourceCategoryName])
+  @@index([targetPlatform, targetCategoryId, targetTypeId])
+  @@map("category_mappings")
 }
 
 model SyncJob {

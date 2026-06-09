@@ -57,6 +57,7 @@ import { opsRoutes } from './routes/ops.js';
 import { isAllowedCorsOrigin } from './lib/cors.js';
 import { registerMaintenanceHook } from './lib/maintenance.js';
 import { getLocalAssetDir } from './lib/local-assets.js';
+import { registerAuditHook } from './lib/audit-log.js';
 
 const app = Fastify({
   bodyLimit: 1 * 1024 * 1024,
@@ -87,6 +88,7 @@ await app.register(rateLimit, {
   timeWindow: '1 minute',
 });
 registerMaintenanceHook(app);
+registerAuditHook(app);
 
 app.addHook('onClose', async () => {
   await prisma.$disconnect();

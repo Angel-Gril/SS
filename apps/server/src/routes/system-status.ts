@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
 import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
 import { getConfig } from '../config/system-config-schema.js';
+import { sendEmail } from '../lib/email/index.js';
 
 interface ConfiguredCheck {
   key: string;
@@ -17,6 +19,10 @@ function envIsSet(name: string): boolean {
   const v = process.env[name];
   return typeof v === 'string' && v.trim().length > 0;
 }
+
+const emailTestSchema = z.object({
+  to: z.string().trim().email('请输入有效的收件邮箱'),
+});
 
 async function getUploadOssDiagnostic() {
   const [
@@ -80,6 +86,16 @@ export async function systemStatusRoutes(app: FastifyInstance) {
         ].join('；');
 
     const checks: ConfiguredCheck[] = [
+      {
+        key: 'email',
+        label: '邮件服务',
+        configured:
+          process.env.EMAIL_PROVIDER === 'resend' &&
+          envIsSet('EMAIL_FROM') &&
+          envIsSet('EMAIL_API_KEY'),
+        source: 'env',
+        detail: process.env.EMAIL_PROVIDER === 'console' ? '当前为 console（仅开发）' : (process.env.EMAIL_PROVIDER || '未配置'),
+      },
       {
         key: 'sms',
         label: '短信服务',
@@ -210,6 +226,36 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       return reply.send({ code: 1, msg: '腾讯云 SMS 配置已加载，凭证字段齐全（实际发送需触发注册流程）' });
     } catch (e: any) {
       return reply.send({ code: 0, msg: e?.message || '加载失败' });
+    }
+  });
+
+  app.post('/test/email', async (request, reply) => {
+    const parsed = emailTestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    try {
+      const result = await sendEmail({
+        to: parsed.data.to,
+        subject: 'SS ERP 邮件服务测试',
+        text: '这是一封 SS ERP 邮件服务配置测试。如果您收到本邮件，说明当前邮件 provider 可以正常发送系统邮件。',
+        html: [
+          '<!doctype html>',
+          '<html><body style="font-family:Arial,sans-serif;color:#172033;line-height:1.6">',
+          '<h2 style="margin:0 0 12px">SS ERP 邮件服务测试</h2>',
+          '<p>如果您收到本邮件，说明当前邮件 provider 可以正常发送系统邮件。</p>',
+          '<p style="color:#64748b;font-size:12px;margin-top:24px">SS ERP 系统通知</p>',
+          '</body></html>',
+        ].join(''),
+      });
+
+      if (!result.ok) {
+        return reply.send({ code: 0, msg: result.err || '邮件服务测试失败' });
+      }
+      return reply.send({ code: 1, msg: '邮件服务测试已发送', data: { bizId: result.bizId ?? null } });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: e?.message || '邮件服务测试失败' });
     }
   });
 
