@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Package, Loader2, Plus, Search, Trash2, ExternalLink } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Package, Loader2, Plus, Search, Trash2, ExternalLink, ListPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -34,6 +35,7 @@ const PLATFORM_LABELS: Record<string, string> = {
 };
 
 export default function SupplyGoodsPage() {
+  const router = useRouter();
   const [items, setItems] = useState<SupplyItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -58,6 +60,10 @@ export default function SupplyGoodsPage() {
     const res = await api.delete(`/api/supply/${id}`);
     if (res.code === 1) { toast({ title: '已删除' }); fetchData(); }
     else toast({ title: res.msg, variant: 'destructive' });
+  }
+
+  function goToListing(id: string) {
+    router.push(`/listing?ids=${encodeURIComponent(id)}`);
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -136,9 +142,16 @@ export default function SupplyGoodsPage() {
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</TableCell>
                       <TableCell className="text-right">
-                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDelete(item.id)}>
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          {item.sourcePlatform === '1688' && (
+                            <Button size="icon" variant="ghost" className="h-7 w-7" title="去 Ozon 上架" onClick={() => goToListing(item.id)}>
+                              <ListPlus className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          <Button size="icon" variant="ghost" className="h-7 w-7" title="删除" onClick={() => handleDelete(item.id)}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -168,9 +181,16 @@ export default function SupplyGoodsPage() {
                             <span className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</span>
                           </div>
                         </div>
-                        <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => handleDelete(item.id)}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        <div className="flex shrink-0 gap-1">
+                          {item.sourcePlatform === '1688' && (
+                            <Button size="icon" variant="ghost" className="h-8 w-8" title="去 Ozon 上架" onClick={() => goToListing(item.id)}>
+                              <ListPlus className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button size="icon" variant="ghost" className="h-8 w-8" title="删除" onClick={() => handleDelete(item.id)}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
@@ -225,6 +245,12 @@ function Supply1688Summary({ summary }: { summary: NonNullable<ReturnType<typeof
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge variant={summary.hasPricing ? 'success' : 'outline'}>{summary.hasPricing ? '已核价' : '待核价'}</Badge>
         <span className="text-muted-foreground">{summary.pricingText}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={summary.skuPricingText.startsWith('SKU') ? 'success' : 'outline'}>
+          {summary.skuPricingText.startsWith('SKU') ? 'SKU核价' : '待SKU'}
+        </Badge>
+        <span className="text-muted-foreground">{summary.skuPricingText}</span>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <Badge variant={summary.hasMapping ? 'success' : 'warning'}>{summary.hasMapping ? '已映射' : '待映射'}</Badge>

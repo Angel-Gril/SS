@@ -328,6 +328,69 @@ describe('1688 supply pricing and import routes', () => {
     await app.close();
   });
 
+  it('persists per-sku pricing metadata for 1688 variants', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.create.mockResolvedValue({
+      id: 'goods-sku-pricing',
+      userId: 'user-1',
+      title: '多规格手机壳',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '20' },
+      currency: 'CNY',
+      sku: '123456789',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '多规格手机壳',
+        sourceCategoryName: '手机壳',
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+        skuItems: [
+          { skuId: 'red', specText: '红色', price: 18, grossWeightGrams: 420 },
+          { skuId: 'blue', specText: '蓝色', price: 25, grossWeightGrams: 650 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.supplyGoods.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          pricing: expect.objectContaining({
+            skuPricing: [
+              expect.objectContaining({ skuId: 'red', suggestedSalePriceCny: 69 }),
+              expect.objectContaining({ skuId: 'blue', suggestedSalePriceCny: 81 }),
+            ],
+            skuSummary: expect.objectContaining({
+              count: 2,
+              minSuggestedSalePriceCny: 69,
+              maxSuggestedSalePriceCny: 81,
+            }),
+          }),
+        }),
+      }),
+    });
+    await app.close();
+  });
+
   it('updates an existing 1688 supply item instead of creating duplicates for the same source product', async () => {
     const app = await buildSupplyApp();
     prismaMock.supplyGoods.findFirst.mockResolvedValue({

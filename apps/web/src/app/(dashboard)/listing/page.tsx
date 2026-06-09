@@ -13,6 +13,7 @@ import { api } from '@/lib/api';
 import { ImageManager } from '@/components/image-manager';
 import { ListingJobList } from '@/components/listing-job-list';
 import { formatVariantAttrs } from '@/lib/ozon-attr-names';
+import { buildListingPriceOverrides, getListingVariantPriceKey } from '@/lib/listing-prices';
 
 interface Shop { id: string; name: string; platform: string; }
 
@@ -22,6 +23,16 @@ interface VariantData {
   price?: string | null;
   stock?: number;
   images?: string[];
+  suggestedSalePriceCny?: number | null;
+  suggestedSalePriceRub?: number | null;
+}
+
+interface SkuPricingData {
+  skuId?: string | null;
+  name?: string | null;
+  specText?: string | null;
+  suggestedSalePriceCny?: number | null;
+  suggestedSalePriceRub?: number | null;
 }
 
 interface CloneItem {
@@ -29,9 +40,16 @@ interface CloneItem {
   title: string;
   description: string;
   sku: string | null;
+  sourcePlatform?: string | null;
   sourceUrl: string | null;
   purchasePrice: string | null;
   currency: string;
+  publishPriceCny?: number | null;
+  suggestedSalePriceCny?: number | null;
+  suggestedSalePriceRub?: number | null;
+  sourceOzonProductId?: string | null;
+  ozonSourceContext?: { title?: string; categoryName?: string; productId?: string } | null;
+  skuPricing?: SkuPricingData[];
   images: string[];
   variants: VariantData[];
   modelId: string | null;
@@ -62,6 +80,7 @@ export default function ListingPage() {
   const [inheritCategory, setInheritCategory] = useState(true);
   const [followBrand, setFollowBrand] = useState(false);
   const [watermarkTemplates, setWatermarkTemplates] = useState<WatermarkTemplate[]>([]);
+  const [editedVariantPriceKeys, setEditedVariantPriceKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api.get<Shop[]>('/api/shops').then((res) => {
@@ -96,7 +115,15 @@ export default function ListingPage() {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, [field]: value } : it)));
   }
 
+  function updatePublishPrice(id: string, value: string) {
+    const price = Number(value);
+    updateItem(id, 'publishPriceCny', Number.isFinite(price) && price > 0 ? price : null);
+  }
+
   function updateVariant(itemId: string, variantSku: string, field: 'price' | 'stock', value: string | number) {
+    if (field === 'price') {
+      setEditedVariantPriceKeys((prev) => new Set(prev).add(getListingVariantPriceKey(itemId, variantSku)));
+    }
     setItems((prev) => prev.map((it) => {
       if (it.id !== itemId) return it;
       return {
@@ -136,6 +163,7 @@ export default function ListingPage() {
 
     setSubmitting(true);
     try {
+      const priceOverrides = buildListingPriceOverrides(items, { editedVariantPriceKeys });
       // 1. 先把改动写回 supplyGoods
       for (const it of items) {
         await api.post('/api/collect/save-customization', {
@@ -163,6 +191,7 @@ export default function ListingPage() {
         mode: 'clone',
         followBrand,
         source: 'listing-page',
+        ...(Object.keys(priceOverrides).length ? { priceOverrides } : {}),
       });
       if (res.code === 1) {
         toast({ title: '已提交上架任务，请到本页底部「改款上架记录」查看进度' });
@@ -274,9 +303,11 @@ export default function ListingPage() {
         return (
           <Card key={item.id}>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm flex items-center gap-2">
+              <CardTitle className="text-sm flex flex-wrap items-center gap-2">
                 <span className="text-muted-foreground">源 SKU:</span>
                 <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{item.sku || '—'}</code>
+                {item.sourcePlatform === '1688' && <Badge variant="success">1688核价</Badge>}
+                {item.sourceOzonProductId && <Badge variant="outline">Ozon来源 {item.sourceOzonProductId}</Badge>}
                 {item.modelId && <Badge variant="secondary">model_id: {item.modelId}</Badge>}
                 {hasVariants && <Badge variant="outline">{item.variants.length} 个变体（N合1上架）</Badge>}
                 {!item.hasOzonAttributes && <Badge variant="destructive">⚠ 缺 OZON 属性，建议先「从OZON补全信息」</Badge>}
@@ -284,7 +315,7 @@ export default function ListingPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {/* 标题 + 采购价 */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div className="space-y-1 md:col-span-2">
                   <Label className="text-xs">商品标题 * (将作为 OZON name)</Label>
                   <Input
@@ -306,7 +337,35 @@ export default function ListingPage() {
                     className="h-8 text-sm bg-muted"
                   />
                 </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">上架价 (CNY)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    value={item.publishPriceCny ?? ''}
+                    onChange={(e) => updatePublishPrice(item.id, e.target.value)}
+                    placeholder={item.suggestedSalePriceCny ? String(item.suggestedSalePriceCny) : item.purchasePrice || ''}
+                    className="h-8 text-sm"
+                  />
+                  {item.suggestedSalePriceRub && (
+                    <p className="text-[10px] text-muted-foreground">1688建议 ₽{item.suggestedSalePriceRub}</p>
+                  )}
+                </div>
               </div>
+
+              {(item.ozonSourceContext?.title || item.skuPricing?.length) && (
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  {item.ozonSourceContext?.title && (
+                    <div className="truncate">Ozon来源：{item.ozonSourceContext.title}{item.ozonSourceContext.categoryName ? ` · ${item.ozonSourceContext.categoryName}` : ''}</div>
+                  )}
+                  {item.skuPricing?.length ? (
+                    <div className="mt-1 truncate">
+                      SKU核价：{item.skuPricing.slice(0, 3).map((sku) => `${sku.specText || sku.name || sku.skuId || 'SKU'} ¥${sku.suggestedSalePriceCny}`).join(' / ')}
+                      {item.skuPricing.length > 3 ? ` 等 ${item.skuPricing.length} 个` : ''}
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               {/* 分类/类型 ID */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -420,7 +479,7 @@ export default function ListingPage() {
                           <tr>
                             <th className="text-left px-2 py-1.5">SKU</th>
                             <th className="text-left px-2 py-1.5">变体属性</th>
-                            <th className="text-left px-2 py-1.5 w-32">价格 (源, CNY)</th>
+                            <th className="text-left px-2 py-1.5 w-32">上架价 (CNY)</th>
                             <th className="text-left px-2 py-1.5 w-24">库存</th>
                           </tr>
                         </thead>
@@ -436,8 +495,11 @@ export default function ListingPage() {
                                   value={v.price ?? ''}
                                   onChange={(e) => updateVariant(item.id, v.sku, 'price', e.target.value)}
                                   className="h-7 text-xs"
-                                  placeholder="留空走全局加价"
+                                  placeholder={v.suggestedSalePriceCny ? String(v.suggestedSalePriceCny) : '留空走全局加价'}
                                 />
+                                {v.suggestedSalePriceRub && (
+                                  <div className="mt-0.5 text-[10px] text-muted-foreground">建议 ₽{v.suggestedSalePriceRub}</div>
+                                )}
                               </td>
                               <td className="px-2 py-1.5">
                                 <Input

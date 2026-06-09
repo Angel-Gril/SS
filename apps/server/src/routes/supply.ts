@@ -38,6 +38,13 @@ const import1688Schema = z.object({
   logisticsFeeCny: z.coerce.number().default(0),
   exchangeRateRubToCny: z.coerce.number(),
   targetMarginPct: z.coerce.number().default(30),
+  skuItems: z.array(z.object({
+    skuId: z.string().optional(),
+    name: z.string().optional(),
+    specText: z.string().optional(),
+    price: z.union([z.string(), z.number()]).optional().nullable(),
+    grossWeightGrams: z.union([z.string(), z.number()]).optional().nullable(),
+  })).max(200).optional(),
   metadata: z.object({
     sourceOzonProductId: z.string().trim().optional(),
     ozonSourceContext: z.object({

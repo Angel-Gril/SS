@@ -62,10 +62,15 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   return attrText ? `${base} ${attrText}`.slice(0, 200) : base.slice(0, 200);
 }
 
-function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
+function getPersistedPublishVariants(item: { variants?: unknown }): Record<string, any>[] {
+  const variants = Array.isArray(item.variants) ? item.variants as Record<string, any>[] : [];
+  return variants.filter((variant) => !is1688PricingVariant(variant));
+}
+
+function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; sourcePlatform?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
   const bad: string[] = [];
   for (const item of items) {
-    const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
+    const variants = getPersistedPublishVariants(item);
     if (!variants.length) {
       const name = resolvePublishName(item);
       if (!name || containsCjkText(name)) bad.push(`${item.sku || item.id}: ${name || '空标题'}`);
@@ -143,8 +148,45 @@ function positiveNumberOrNull(value: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function objectOrNull(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+}
+
+export function getItemOverridePrice(overrides: Record<string | number, unknown> | undefined): number | null {
+  if (!overrides) return null;
+  const raw = overrides._base ?? overrides.base ?? overrides.item ?? overrides[''];
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.ceil(value) : null;
+}
+
+export function getFirstVariantOverridePrice(overrides: Record<string | number, unknown> | undefined): number | null {
+  if (!overrides) return null;
+  for (const [key, raw] of Object.entries(overrides)) {
+    if (['_base', 'base', 'item', ''].includes(key)) continue;
+    const value = Number(raw);
+    if (Number.isFinite(value) && value > 0) return Math.ceil(value);
+  }
+  return null;
+}
+
+export function getOzonListingSourceProductId(item: { sourcePlatform?: string | null; sku?: string | null; metadata?: unknown }): string | null {
+  const meta = objectOrNull(item.metadata) || {};
+  const context = objectOrNull(meta.ozonSourceContext) || {};
+  const ozonSourceProductId = normalizeProductId(meta.sourceOzonProductId)
+    || normalizeProductId(context.productId);
+  if (ozonSourceProductId) return ozonSourceProductId;
+  if (item.sourcePlatform === '1688') return null;
+  return normalizeProductId(item.sku);
+}
+
+function has1688SkuPricing(item: { sourcePlatform?: string | null; metadata?: unknown }): boolean {
+  const meta = objectOrNull(item.metadata) || {};
+  const pricing = objectOrNull(meta.pricing) || {};
+  return item.sourcePlatform === '1688' && Array.isArray(pricing.skuPricing) && pricing.skuPricing.length > 0;
+}
+
 export function resolveClonePrefillDefaults(metadata: unknown) {
-  const meta = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, any>;
+  const meta = objectOrNull(metadata) || {};
   const mappedCategory = (
     meta.mappedCategory && typeof meta.mappedCategory === 'object'
       ? meta.mappedCategory
@@ -159,6 +201,113 @@ export function resolveClonePrefillDefaults(metadata: unknown) {
     widthMm: positiveNumberOrNull(meta.widthMm) ?? positiveNumberOrNull(mappedCategory.defaultWidthMm) ?? 100,
     heightMm: positiveNumberOrNull(meta.heightMm) ?? positiveNumberOrNull(mappedCategory.defaultHeightMm) ?? 100,
   };
+}
+
+function build1688ListingPrefill(meta: Record<string, any>) {
+  const pricing = objectOrNull(meta.pricing) || {};
+  const ozonSourceContext = objectOrNull(meta.ozonSourceContext);
+  const sourceOzonProductId = normalizeProductId(meta.sourceOzonProductId)
+    || normalizeProductId(ozonSourceContext?.productId);
+  const suggestedSalePriceCny = positiveNumberOrNull(pricing.suggestedSalePriceCny);
+
+  return {
+    sourceOzonProductId,
+    ozonSourceContext,
+    suggestedSalePriceCny,
+    suggestedSalePriceRub: positiveNumberOrNull(pricing.suggestedSalePriceRub),
+    publishPriceCny: suggestedSalePriceCny,
+    skuPricing: Array.isArray(pricing.skuPricing) ? pricing.skuPricing : [],
+    skuSummary: objectOrNull(pricing.skuSummary),
+  };
+}
+
+function normalizedMatchKey(value: unknown): string | null {
+  const text = value == null ? '' : String(value).trim().toLowerCase();
+  return text || null;
+}
+
+function buildSkuPricingLookup(skuPricing: unknown): Map<string, Record<string, any>> {
+  const map = new Map<string, Record<string, any>>();
+  if (!Array.isArray(skuPricing)) return map;
+
+  for (const item of skuPricing) {
+    const pricing = objectOrNull(item);
+    const suggestedPrice = positiveNumberOrNull(pricing?.suggestedSalePriceCny);
+    if (!pricing || !suggestedPrice) continue;
+    for (const key of [pricing.skuId, pricing.name, pricing.specText]) {
+      const normalized = normalizedMatchKey(key);
+      if (normalized && !map.has(normalized)) map.set(normalized, pricing);
+    }
+  }
+  return map;
+}
+
+function findSkuPricingForVariant(variant: Record<string, any>, lookup: Map<string, Record<string, any>>): Record<string, any> | null {
+  if (!lookup.size) return null;
+  const attrs = objectOrNull(variant.attrs) || {};
+  const candidates = [
+    variant.sku,
+    variant.skuId,
+    variant.sourceProductId,
+    variant.ozonProductId,
+    variant.productId,
+    variant.name,
+    variant.specText,
+    ...Object.values(attrs),
+    Object.values(attrs).filter(Boolean).join(' / '),
+  ];
+
+  for (const candidate of candidates) {
+    const key = normalizedMatchKey(candidate);
+    if (key && lookup.has(key)) return lookup.get(key)!;
+  }
+  return null;
+}
+
+function build1688PricingVariants(skuPricing: unknown): Record<string, any>[] {
+  if (!Array.isArray(skuPricing)) return [];
+  const variants: Record<string, any>[] = [];
+  for (const [idx, item] of skuPricing.entries()) {
+    const pricing = objectOrNull(item);
+    const suggestedSalePriceCny = positiveNumberOrNull(pricing?.suggestedSalePriceCny);
+    if (!pricing || !suggestedSalePriceCny) continue;
+    const sku = String(pricing.skuId || pricing.name || pricing.specText || `1688-sku-${idx + 1}`).trim();
+    if (!sku) continue;
+    const specText = String(pricing.specText || pricing.name || sku).trim();
+    variants.push({
+      sku,
+      attrs: specText ? { '1688规格': specText } : {},
+      price: String(suggestedSalePriceCny),
+      stock: 0,
+      images: [],
+      source: '1688-pricing',
+      suggestedSalePriceCny,
+      suggestedSalePriceRub: positiveNumberOrNull(pricing.suggestedSalePriceRub),
+    });
+  }
+  return variants;
+}
+
+function is1688PricingVariant(variant: unknown): boolean {
+  return objectOrNull(variant)?.source === '1688-pricing';
+}
+
+function getListingVariants(item: { sourcePlatform?: string | null; variants?: unknown; metadata?: unknown }): Record<string, any>[] {
+  const variants = Array.isArray(item.variants) ? item.variants as Record<string, any>[] : [];
+  if (variants.length) return variants;
+  const meta = objectOrNull(item.metadata) || {};
+  const pricing = objectOrNull(meta.pricing) || {};
+  return item.sourcePlatform === '1688' ? build1688PricingVariants(pricing.skuPricing) : [];
+}
+
+function getVariantSourceProductId(item: { sourcePlatform?: string | null; sku?: string | null; metadata?: unknown }, variant: Record<string, any>): string | null {
+  if (is1688PricingVariant(variant)) return getOzonListingSourceProductId(item);
+  const explicitSourceProductId = normalizeProductId(variant.sourceProductId)
+    || normalizeProductId(variant.ozonProductId)
+    || normalizeProductId(variant.productId);
+  if (explicitSourceProductId) return explicitSourceProductId;
+  if (item.sourcePlatform === '1688') return null;
+  return normalizeProductId(variant.sku);
 }
 
 export async function collectRoutes(app: FastifyInstance) {
@@ -566,7 +715,9 @@ export async function collectRoutes(app: FastifyInstance) {
     const data = items.map((it) => {
       const meta = (it.metadata as any) || {};
       const defaults = resolveClonePrefillDefaults(meta);
-      const variants = Array.isArray(it.variants) ? (it.variants as any[]) : [];
+      const listingPrefill = build1688ListingPrefill(meta);
+      const skuPricingLookup = buildSkuPricingLookup(listingPrefill.skuPricing);
+      const variants = getListingVariants(it);
       const sourceImages = meta.watermarkedImages?.length
         ? meta.watermarkedImages
         : Array.isArray(it.images) ? (it.images as string[]) : [];
@@ -575,17 +726,28 @@ export async function collectRoutes(app: FastifyInstance) {
         title: it.title,
         description: it.notes || '',
         sku: it.sku,
+        sourcePlatform: it.sourcePlatform,
         sourceUrl: it.sourceUrl,
         purchasePrice: it.purchasePrice ? String(it.purchasePrice) : null,
         currency: it.currency,
         images: sourceImages,
-        variants: variants.map((v) => ({
-          sku: v.sku,
-          attrs: v.attrs || {},
-          price: v.price || null,
-          stock: v.stock || 0,
-          images: v.images || [],
-        })),
+        variants: variants.map((v) => {
+          const skuPricing = findSkuPricingForVariant(v, skuPricingLookup);
+          const suggestedSalePriceCny = positiveNumberOrNull(skuPricing?.suggestedSalePriceCny)
+            ?? positiveNumberOrNull(v.suggestedSalePriceCny);
+          const suggestedSalePriceRub = positiveNumberOrNull(skuPricing?.suggestedSalePriceRub)
+            ?? positiveNumberOrNull(v.suggestedSalePriceRub);
+          return {
+            sku: v.sku,
+            attrs: v.attrs || {},
+            price: suggestedSalePriceCny ? String(suggestedSalePriceCny) : v.price || null,
+            stock: v.stock || 0,
+            images: v.images || [],
+            source: v.source || null,
+            suggestedSalePriceCny,
+            suggestedSalePriceRub,
+          };
+        }),
         publishTitle: meta.publishTitleRu || null,
         titleNeedsReview: !!meta.titleNeedsReview || containsCjkText(resolvePublishName(it)),
         modelId: it.modelId,
@@ -596,6 +758,7 @@ export async function collectRoutes(app: FastifyInstance) {
         widthMm: defaults.widthMm,
         heightMm: defaults.heightMm,
         hasOzonAttributes: Array.isArray(meta.ozonAttributes) && meta.ozonAttributes.length > 0,
+        ...listingPrefill,
       };
     });
 
@@ -751,18 +914,22 @@ export async function collectRoutes(app: FastifyInstance) {
       const fallbackItems = noAttrs
         .flatMap((item) => {
           const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
-          const priceWithMarkup = calcPublishPrice(basePriceCny, markupPct, markupAmount);
-          const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
           const itemOverrides = body.priceOverrides?.[item.id] || {};
+          const itemOverridePrice = getItemOverridePrice(itemOverrides);
+          const priceWithMarkup = itemOverridePrice ?? calcPublishPrice(basePriceCny, markupPct, markupAmount);
+          const ozonVariants = getPersistedPublishVariants(item);
           // variants[].price 是采集时的原币价（如 RUB），需要按采集时存的汇率换算 CNY
           const fxRate = item.originalCurrency && item.originalCurrency !== 'CNY' && item.exchangeRateUsed
             ? Number(item.exchangeRateUsed)
             : null;
 
           // 无 variants：保持原行为（1 条）
-          if (!variants.length) {
-            const sourceSku = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
+          if (!ozonVariants.length) {
+            const sourceProductId = getOzonListingSourceProductId(item);
+            const sourceSku = sourceProductId && /^\d+$/.test(sourceProductId) ? Number(sourceProductId) : null;
             if (!sourceSku) return [];
+            const skuOverridePrice = has1688SkuPricing(item) ? getFirstVariantOverridePrice(itemOverrides) : null;
+            const fallbackPrice = skuOverridePrice ?? itemOverridePrice ?? priceWithMarkup;
             const offerId = `f${Date.now().toString(36)}${randomSuffix(4)}`;
             const firstImg = Array.isArray(item.images) && item.images.length ? String(item.images[0]) : '';
             if (firstImg) fallbackOfferImages[offerId] = firstImg;
@@ -770,17 +937,18 @@ export async function collectRoutes(app: FastifyInstance) {
               sku: sourceSku,
               name: resolvePublishName(item),
               offer_id: offerId,
-              price: String(priceWithMarkup),
-              old_price: String(Math.ceil(priceWithMarkup * 1.2)),
+              price: String(fallbackPrice),
+              old_price: String(Math.ceil(fallbackPrice * 1.2)),
               currency_code: 'CNY',
               vat: '0',
             }];
           }
 
           // 有 variants：每个 sub-SKU 一条跟卖（每个变体本身就是独立的 OZON product_id）
-          return variants
+          return ozonVariants
             .map((v, idx) => {
-              const subSourceSku = v.sku && /^\d+$/.test(String(v.sku)) ? Number(v.sku) : null;
+              const sourceProductId = getVariantSourceProductId(item, v);
+              const subSourceSku = sourceProductId && /^\d+$/.test(sourceProductId) ? Number(sourceProductId) : null;
               if (!subSourceSku) return null;
               const overridePrice = getVariantOverridePrice(itemOverrides, v, idx);
               let subPrice: number;
@@ -943,7 +1111,8 @@ export async function collectRoutes(app: FastifyInstance) {
     {
       // 优先从本地 metadata 读取 ozonAttributes（扩展采集时已存储）
       for (const item of items) {
-        const pid = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
+        const listingSourceProductId = getOzonListingSourceProductId(item);
+        const pid = listingSourceProductId && /^\d+$/.test(listingSourceProductId) ? Number(listingSourceProductId) : null;
         if (!pid) continue;
         const meta = item.metadata as any;
         if (meta?.ozonAttributes?.length) {
@@ -960,7 +1129,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
       // 本地没有的，回退 Seller API（仅自家商品能查到）
       const missingIds = items
-        .map((it) => it.sku)
+        .map((it) => getOzonListingSourceProductId(it))
         .filter((s): s is string => !!s && /^\d+$/.test(s))
         .map(Number)
         .filter((id) => !cloneAttrsByProductId.has(id));
@@ -1008,8 +1177,11 @@ export async function collectRoutes(app: FastifyInstance) {
     try {
       const nested = await Promise.all(items.map(async (item) => {
       const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
-      const priceWithMarkup = calcPublishPrice(basePriceCny, markupPct, markupAmount);
-      const sourceProductId = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
+      const itemOverrides = body.priceOverrides?.[item.id] || {};
+      const itemOverridePrice = getItemOverridePrice(itemOverrides);
+      const priceWithMarkup = itemOverridePrice ?? calcPublishPrice(basePriceCny, markupPct, markupAmount);
+      const listingSourceProductId = getOzonListingSourceProductId(item);
+      const sourceProductId = listingSourceProductId && /^\d+$/.test(listingSourceProductId) ? Number(listingSourceProductId) : null;
       const cloned = sourceProductId ? cloneAttrsByProductId.get(sourceProductId) : undefined;
       const meta = item.metadata as any;
       const categoryId = body.categoryId || meta?.descriptionCategoryId;
@@ -1022,16 +1194,18 @@ export async function collectRoutes(app: FastifyInstance) {
       // 已加水印时，变体不能再走自己的源图（变体 images 是 OZON 缩略图，没水印）
       const watermarkApplied = !!meta?.watermarkedImages?.length;
 
-      const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+      const variants = getPersistedPublishVariants(item);
       // 无 variants：保持原行为（1 个 item）
       if (!variants.length) {
+        const skuOverridePrice = has1688SkuPricing(item) ? getFirstVariantOverridePrice(itemOverrides) : null;
+        const singleItemPrice = skuOverridePrice ?? itemOverridePrice ?? priceWithMarkup;
         return [{
           name: resolvePublishName(item),
           offer_id: buildOfferId(item.sku, `import-${item.id}`),
           description_category_id: categoryId,
           type_id: typeId,
-          price: String(priceWithMarkup),
-          old_price: String(Math.ceil(priceWithMarkup * 1.2)),
+          price: String(singleItemPrice),
+          old_price: String(Math.ceil(singleItemPrice * 1.2)),
           vat: '0',
           currency_code: 'CNY',
           dimension_unit: 'mm',
@@ -1049,7 +1223,6 @@ export async function collectRoutes(app: FastifyInstance) {
       // 有 variants：每个 sub-SKU 展开为一条 import item
       // model_id 字段不主动声明，依赖 OZON 后端按源 model 自动归组（待实测验证）
       console.log(`[publish-ozon variants] item=${item.id} model=${item.modelId || 'none'} expand to ${variants.length} sub-SKUs`);
-      const itemOverrides = body.priceOverrides?.[item.id] || {};
       const subItems = await Promise.all(variants.map(async (v: any, idx: number) => {
         // 价格优先级：前端单独覆盖（CNY） > 整组 priceWithMarkup（CNY）
         // v.price 是采集自源平台的原始币种（RUB），不能直接 ×markup 上架
@@ -1061,7 +1234,7 @@ export async function collectRoutes(app: FastifyInstance) {
           : (Array.isArray(v.images) && v.images.length ? v.images : baseRawImages);
         const subImages = subImagesRaw === baseRawImages ? baseImages : await resolveImageUrls(subImagesRaw, body.shopId, userId);
         const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
-        const subName = resolvePublishName(item, subAttrs);
+        const subName = resolvePublishName(item, is1688PricingVariant(v) ? undefined : subAttrs);
 
         // === 优先用每个变体自己的 ozonAttributes（扩展端 Step 2 抓的）===
         // 没有时退化用 cloned（来自源 SKU 的共用属性）

@@ -125,6 +125,8 @@ test('1688 ERP collect adapter posts normalized payloads to supply import withou
     assert.match(source, /purchasePriceCny/);
     assert.match(source, /exchangeRateRubToCny/);
     assert.match(source, /sourceCategoryName/);
+    assert.match(source, /skuItems:\s*Array\.isArray\(payload\.skuItems\)/);
+    assert.match(source, /metadata:\s*payload\.metadata/);
   }
 
   assert.match(adapter, /var\s+path\s*=\s*is1688CollectPayload\(payload\)\s*\?\s*'\/api\/supply\/1688\/import'\s*:\s*'\/api\/collect'/);

@@ -60,4 +60,47 @@ describe('1688 pricing helper', () => {
       targetMarginPct: 95,
     }).errors).toContain('目标利润率不能高于 90%');
   });
+
+  it('calculates per-sku pricing when 1688 variants have different prices and weights', () => {
+    const result = calculate1688Pricing({
+      purchasePriceCny: 20,
+      domesticShippingCny: 5,
+      weightG: 500,
+      packageFeeCny: 2,
+      commissionPct: 12,
+      logisticsFeeCny: 18,
+      exchangeRateRubToCny: 0.08,
+      targetMarginPct: 30,
+      skuItems: [
+        { skuId: 'red', specText: '红色', price: 18, grossWeightGrams: 420 },
+        { skuId: 'blue', specText: '蓝色', price: 25, grossWeightGrams: 650 },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.skuPricing).toHaveLength(2);
+    expect(result.skuPricing?.[0]).toMatchObject({
+      skuId: 'red',
+      specText: '红色',
+      purchasePriceCny: 18,
+      normalizedWeightG: 420,
+      suggestedSalePriceCny: 69,
+      suggestedSalePriceRub: 863,
+    });
+    expect(result.skuPricing?.[1]).toMatchObject({
+      skuId: 'blue',
+      specText: '蓝色',
+      purchasePriceCny: 25,
+      normalizedWeightG: 650,
+      suggestedSalePriceCny: 81,
+      suggestedSalePriceRub: 1013,
+    });
+    expect(result.skuSummary).toMatchObject({
+      count: 2,
+      minSuggestedSalePriceCny: 69,
+      maxSuggestedSalePriceCny: 81,
+      minSuggestedSalePriceRub: 863,
+      maxSuggestedSalePriceRub: 1013,
+    });
+  });
 });

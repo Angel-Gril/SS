@@ -7,6 +7,13 @@ export interface Calculate1688PricingInput {
   logisticsFeeCny?: number;
   exchangeRateRubToCny: number;
   targetMarginPct?: number;
+  skuItems?: Array<{
+    skuId?: string | null;
+    name?: string | null;
+    specText?: string | null;
+    price?: string | number | null;
+    grossWeightGrams?: string | number | null;
+  }>;
 }
 
 export interface PricingCostLine {
@@ -27,6 +34,28 @@ export interface Calculate1688PricingResult {
   estimatedProfitCny: number;
   estimatedMarginPct: number;
   costLines: PricingCostLine[];
+  skuPricing?: SkuPricingResult[];
+  skuSummary?: SkuPricingSummary;
+}
+
+export interface SkuPricingResult {
+  skuId: string;
+  name: string;
+  specText: string;
+  purchasePriceCny: number;
+  normalizedWeightG: number;
+  suggestedSalePriceCny: number;
+  suggestedSalePriceRub: number;
+  estimatedProfitCny: number;
+  estimatedMarginPct: number;
+}
+
+export interface SkuPricingSummary {
+  count: number;
+  minSuggestedSalePriceCny: number;
+  maxSuggestedSalePriceCny: number;
+  minSuggestedSalePriceRub: number;
+  maxSuggestedSalePriceRub: number;
 }
 
 const DEFAULT_WEIGHT_G = 500;
@@ -42,6 +71,92 @@ function roundMoney(value: number): number {
 
 function ceilCny(value: number): number {
   return Math.ceil(value + 0.01);
+}
+
+function calculateValidPricing(input: Required<Pick<Calculate1688PricingInput,
+  'purchasePriceCny' | 'domesticShippingCny' | 'weightG' | 'packageFeeCny' | 'commissionPct' | 'logisticsFeeCny' | 'exchangeRateRubToCny' | 'targetMarginPct'
+>> & { normalizedWeightG: number }) {
+  const costLines: PricingCostLine[] = [
+    { key: 'purchase', label: '1688采购价', amountCny: roundMoney(Math.max(0, input.purchasePriceCny)) },
+    { key: 'domestic_shipping', label: '国内运费', amountCny: roundMoney(Math.max(0, input.domesticShippingCny)) },
+    { key: 'package', label: '包装费', amountCny: roundMoney(Math.max(0, input.packageFeeCny)) },
+    { key: 'logistics', label: '跨境物流费', amountCny: roundMoney(Math.max(0, input.logisticsFeeCny)) },
+  ];
+  const totalBaseCostCny = roundMoney(costLines.reduce((sum, line) => sum + line.amountCny, 0));
+  const targetMarginRate = input.targetMarginPct / 100;
+  const commissionRate = input.commissionPct / 100;
+  const preCommissionTargetPrice = totalBaseCostCny / (1 - targetMarginRate);
+  const suggestedSalePriceCny = ceilCny(preCommissionTargetPrice * (1 + commissionRate));
+  const suggestedSalePriceRub = Math.ceil(suggestedSalePriceCny / input.exchangeRateRubToCny);
+  const estimatedCommissionCny = roundMoney(suggestedSalePriceCny * commissionRate);
+  const estimatedProfitCny = roundMoney(suggestedSalePriceCny - totalBaseCostCny - estimatedCommissionCny);
+  const estimatedMarginPct = suggestedSalePriceCny > 0
+    ? roundMoney((estimatedProfitCny / suggestedSalePriceCny) * 100)
+    : 0;
+
+  return {
+    costLines,
+    totalBaseCostCny,
+    suggestedSalePriceCny,
+    suggestedSalePriceRub,
+    estimatedCommissionCny,
+    estimatedProfitCny,
+    estimatedMarginPct,
+  };
+}
+
+function buildSkuPricing(input: Calculate1688PricingInput, shared: {
+  domesticShippingCny: number;
+  packageFeeCny: number;
+  commissionPct: number;
+  logisticsFeeCny: number;
+  exchangeRateRubToCny: number;
+  targetMarginPct: number;
+  normalizedWeightG: number;
+}): { skuPricing?: SkuPricingResult[]; skuSummary?: SkuPricingSummary } {
+  const skuPricing = (input.skuItems || [])
+    .map((item) => {
+      const purchasePriceCny = toNumber(item.price, 0);
+      if (purchasePriceCny <= 0) return null;
+      const normalizedWeightG = Math.round(toNumber(item.grossWeightGrams, shared.normalizedWeightG)) || shared.normalizedWeightG;
+      const pricing = calculateValidPricing({
+        purchasePriceCny,
+        domesticShippingCny: shared.domesticShippingCny,
+        weightG: normalizedWeightG,
+        normalizedWeightG,
+        packageFeeCny: shared.packageFeeCny,
+        commissionPct: shared.commissionPct,
+        logisticsFeeCny: shared.logisticsFeeCny,
+        exchangeRateRubToCny: shared.exchangeRateRubToCny,
+        targetMarginPct: shared.targetMarginPct,
+      });
+      return {
+        skuId: String(item.skuId || ''),
+        name: String(item.name || ''),
+        specText: String(item.specText || ''),
+        purchasePriceCny: roundMoney(purchasePriceCny),
+        normalizedWeightG,
+        suggestedSalePriceCny: pricing.suggestedSalePriceCny,
+        suggestedSalePriceRub: pricing.suggestedSalePriceRub,
+        estimatedProfitCny: pricing.estimatedProfitCny,
+        estimatedMarginPct: pricing.estimatedMarginPct,
+      };
+    })
+    .filter((item): item is SkuPricingResult => !!item);
+
+  if (!skuPricing.length) return {};
+  const cnyPrices = skuPricing.map((item) => item.suggestedSalePriceCny);
+  const rubPrices = skuPricing.map((item) => item.suggestedSalePriceRub);
+  return {
+    skuPricing,
+    skuSummary: {
+      count: skuPricing.length,
+      minSuggestedSalePriceCny: Math.min(...cnyPrices),
+      maxSuggestedSalePriceCny: Math.max(...cnyPrices),
+      minSuggestedSalePriceRub: Math.min(...rubPrices),
+      maxSuggestedSalePriceRub: Math.max(...rubPrices),
+    },
+  };
 }
 
 export function calculate1688Pricing(input: Calculate1688PricingInput): Calculate1688PricingResult {
@@ -71,13 +186,17 @@ export function calculate1688Pricing(input: Calculate1688PricingInput): Calculat
     warnings.push('未填写重量，已按 500g 估算');
   }
 
-  const costLines: PricingCostLine[] = [
-    { key: 'purchase', label: '1688采购价', amountCny: roundMoney(Math.max(0, purchasePriceCny)) },
-    { key: 'domestic_shipping', label: '国内运费', amountCny: roundMoney(Math.max(0, domesticShippingCny)) },
-    { key: 'package', label: '包装费', amountCny: roundMoney(Math.max(0, packageFeeCny)) },
-    { key: 'logistics', label: '跨境物流费', amountCny: roundMoney(Math.max(0, logisticsFeeCny)) },
-  ];
-  const totalBaseCostCny = roundMoney(costLines.reduce((sum, line) => sum + line.amountCny, 0));
+  const basePricing = calculateValidPricing({
+    purchasePriceCny,
+    domesticShippingCny,
+    weightG: normalizedWeightG,
+    normalizedWeightG,
+    packageFeeCny,
+    commissionPct,
+    logisticsFeeCny,
+    exchangeRateRubToCny: exchangeRateRubToCny || 1,
+    targetMarginPct,
+  });
 
   if (errors.length > 0) {
     return {
@@ -85,38 +204,38 @@ export function calculate1688Pricing(input: Calculate1688PricingInput): Calculat
       errors,
       warnings,
       normalizedWeightG,
-      totalBaseCostCny,
+      totalBaseCostCny: basePricing.totalBaseCostCny,
       suggestedSalePriceCny: 0,
       suggestedSalePriceRub: 0,
       estimatedCommissionCny: 0,
       estimatedProfitCny: 0,
       estimatedMarginPct: 0,
-      costLines,
+      costLines: basePricing.costLines,
     };
   }
 
-  const targetMarginRate = targetMarginPct / 100;
-  const commissionRate = commissionPct / 100;
-  const preCommissionTargetPrice = totalBaseCostCny / (1 - targetMarginRate);
-  const suggestedSalePriceCny = ceilCny(preCommissionTargetPrice * (1 + commissionRate));
-  const suggestedSalePriceRub = Math.ceil(suggestedSalePriceCny / exchangeRateRubToCny);
-  const estimatedCommissionCny = roundMoney(suggestedSalePriceCny * commissionRate);
-  const estimatedProfitCny = roundMoney(suggestedSalePriceCny - totalBaseCostCny - estimatedCommissionCny);
-  const estimatedMarginPct = suggestedSalePriceCny > 0
-    ? roundMoney((estimatedProfitCny / suggestedSalePriceCny) * 100)
-    : 0;
+  const sku = buildSkuPricing(input, {
+    domesticShippingCny,
+    packageFeeCny,
+    commissionPct,
+    logisticsFeeCny,
+    exchangeRateRubToCny,
+    targetMarginPct,
+    normalizedWeightG,
+  });
 
   return {
     ok: true,
     errors,
     warnings,
     normalizedWeightG,
-    totalBaseCostCny,
-    suggestedSalePriceCny,
-    suggestedSalePriceRub,
-    estimatedCommissionCny,
-    estimatedProfitCny,
-    estimatedMarginPct,
-    costLines,
+    totalBaseCostCny: basePricing.totalBaseCostCny,
+    suggestedSalePriceCny: basePricing.suggestedSalePriceCny,
+    suggestedSalePriceRub: basePricing.suggestedSalePriceRub,
+    estimatedCommissionCny: basePricing.estimatedCommissionCny,
+    estimatedProfitCny: basePricing.estimatedProfitCny,
+    estimatedMarginPct: basePricing.estimatedMarginPct,
+    costLines: basePricing.costLines,
+    ...sku,
   };
 }

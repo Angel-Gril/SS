@@ -8,6 +8,7 @@ export interface SupplyGoods1688Summary {
   hasMapping: boolean;
   hasOzonSource: boolean;
   pricingText: string;
+  skuPricingText: string;
   mappingText: string;
   ozonSourceText: string;
 }
@@ -34,6 +35,13 @@ export function buildSupplyGoods1688Summary(item: SupplyGoodsListItem): SupplyGo
   const priceRub = asDisplayNumber(pricing?.suggestedSalePriceRub);
   const margin = asDisplayNumber(pricing?.estimatedMarginPct);
   const hasPricing = !!(priceCny && priceRub && margin);
+  const skuSummary = asRecord(pricing?.skuSummary);
+  const skuCount = asDisplayNumber(skuSummary?.count);
+  const minSkuCny = asDisplayNumber(skuSummary?.minSuggestedSalePriceCny);
+  const maxSkuCny = asDisplayNumber(skuSummary?.maxSuggestedSalePriceCny);
+  const minSkuRub = asDisplayNumber(skuSummary?.minSuggestedSalePriceRub);
+  const maxSkuRub = asDisplayNumber(skuSummary?.maxSuggestedSalePriceRub);
+  const hasSkuPricing = !!(skuCount && minSkuCny && maxSkuCny && minSkuRub && maxSkuRub);
 
   const targetCategoryId = asDisplayNumber(mappedCategory?.targetCategoryId);
   const targetTypeId = asDisplayNumber(mappedCategory?.targetTypeId);
@@ -57,6 +65,7 @@ export function buildSupplyGoods1688Summary(item: SupplyGoodsListItem): SupplyGo
     hasMapping,
     hasOzonSource,
     pricingText: hasPricing ? `建议 ¥${priceCny} / ₽${priceRub} · 利润率 ${margin}%` : '未生成核价',
+    skuPricingText: hasSkuPricing ? `SKU ${skuCount} 个 · ¥${minSkuCny}-${maxSkuCny} / ₽${minSkuRub}-${maxSkuRub}` : '未生成 SKU 核价',
     mappingText: hasMapping
       ? `Ozon ${targetCategoryId} / type ${targetTypeId}${targetCategoryName ? ` · ${targetCategoryName}` : ''}`
       : '未命中类目映射',

@@ -10,6 +10,13 @@ test('builds pricing and mapping summary for a 1688 supply good', () => {
         suggestedSalePriceCny: 73,
         suggestedSalePriceRub: 913,
         estimatedMarginPct: 30.1,
+        skuSummary: {
+          count: 2,
+          minSuggestedSalePriceCny: 69,
+          maxSuggestedSalePriceCny: 81,
+          minSuggestedSalePriceRub: 863,
+          maxSuggestedSalePriceRub: 1013,
+        },
       },
       mappedCategory: {
         targetCategoryId: 17028711,
@@ -29,6 +36,7 @@ test('builds pricing and mapping summary for a 1688 supply good', () => {
     hasMapping: true,
     hasOzonSource: true,
     pricingText: '建议 ¥73 / ₽913 · 利润率 30.1%',
+    skuPricingText: 'SKU 2 个 · ¥69-81 / ₽863-1013',
     mappingText: 'Ozon 17028711 / type 95841 · Чехлы',
     ozonSourceText: '来自 Ozon 987654321 · Ozon 透明手机壳 · 手机壳',
   });
@@ -45,6 +53,7 @@ test('shows missing pricing and mapping for a 1688 supply good without import me
     hasMapping: false,
     hasOzonSource: false,
     pricingText: '未生成核价',
+    skuPricingText: '未生成 SKU 核价',
     mappingText: '未命中类目映射',
     ozonSourceText: '未关联 Ozon 来源',
   });

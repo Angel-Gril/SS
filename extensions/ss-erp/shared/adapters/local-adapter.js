@@ -50,6 +50,7 @@
       sku: payload.sku || sourceProductId || undefined,
       images: Array.isArray(payload.images) ? payload.images : undefined,
       notes: payload.notes || payload.description || undefined,
+      skuItems: Array.isArray(payload.skuItems) ? payload.skuItems : undefined,
       purchasePriceCny: purchasePrice,
       domesticShippingCny: toNumber(payload.domesticShippingCny, 0),
       weightG: weightG,
@@ -58,6 +59,7 @@
       logisticsFeeCny: toNumber(payload.logisticsFeeCny, 0),
       exchangeRateRubToCny: toNumber(payload.exchangeRateRubToCny, 0.08),
       targetMarginPct: toNumber(payload.targetMarginPct, 30),
+      metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : undefined,
     };
   }
 
