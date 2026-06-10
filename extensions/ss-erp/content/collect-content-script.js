@@ -552,10 +552,79 @@
       const payload = build1688ImportPayload(product, root);
       const data = await call1688Erp("/api/supply/1688/import", payload);
       set1688PanelStatus(root, data.msg || "1688 商品已保存到 ERP", "success");
+      render1688PostImportActions(root, product, data);
     } catch (error) {
       set1688PanelStatus(root, error && error.message ? error.message : String(error), "error");
     } finally {
       set1688PanelBusy(root, false);
+    }
+  }
+
+  function render1688PostImportActions(root, product, importResponse) {
+    if (!root) return;
+    const existing = root.querySelector("[data-ss-erp-1688-post-import]");
+    if (existing) existing.remove();
+    const supplyGood = importResponse && importResponse.data ? importResponse.data : {};
+    const hasOzonContext = Boolean(product && product.ozonSourceContext);
+    const wrap = document.createElement("div");
+    wrap.className = "ss-erp-1688-post-import";
+    wrap.setAttribute("data-ss-erp-1688-post-import", "ready");
+    wrap.innerHTML = [
+      hasOzonContext ? '<button type="button" data-ss-erp-1688-action="return-ozon">返回Ozon</button>' : "",
+      '<button type="button" data-ss-erp-1688-action="open-erp-good">查看ERP货源</button>',
+    ].filter(Boolean).join("");
+
+    const summary = root.querySelector("[data-ss-erp-1688-summary]");
+    if (summary && summary.parentNode) {
+      summary.parentNode.insertBefore(wrap, summary.nextSibling);
+    } else {
+      root.appendChild(wrap);
+    }
+
+    const returnButton = wrap.querySelector('[data-ss-erp-1688-action="return-ozon"]');
+    if (returnButton) {
+      returnButton.addEventListener("click", () => returnToOzonSource(root, product));
+    }
+    const erpButton = wrap.querySelector('[data-ss-erp-1688-action="open-erp-good"]');
+    if (erpButton) {
+      erpButton.addEventListener("click", () => open1688ErpSupplyGood(root, product, supplyGood));
+    }
+  }
+
+  async function returnToOzonSource(root, product) {
+    const ozonSourceContext = product && product.ozonSourceContext ? product.ozonSourceContext : null;
+    if (!ozonSourceContext) {
+      set1688PanelStatus(root, "当前 1688 商品没有 Ozon 来源上下文。", "error");
+      return;
+    }
+    try {
+      const response = await sendRuntimeMessage({
+        type: "ss-erp:return-to-ozon-source",
+        ozonSourceContext,
+      });
+      if (!response || !response.ok) {
+        throw new Error((response && (response.msg || response.error)) || "返回 Ozon 失败");
+      }
+      set1688PanelStatus(root, "已切回 Ozon 来源页。", "success");
+    } catch (error) {
+      set1688PanelStatus(root, error && error.message ? error.message : String(error), "error");
+    }
+  }
+
+  async function open1688ErpSupplyGood(root, product, supplyGood) {
+    const item = supplyGood && typeof supplyGood === "object" ? supplyGood : {};
+    try {
+      const response = await sendRuntimeMessage({
+        type: "ss-erp:open-erp-supply-good",
+        supplyGoodId: item.id || "",
+        sku: item.sku || product.sku || product.sourceProductId || "",
+      });
+      if (!response || !response.ok) {
+        throw new Error((response && (response.msg || response.error)) || "打开 ERP 货源失败");
+      }
+      set1688PanelStatus(root, "已打开 ERP 货源管理。", "success");
+    } catch (error) {
+      set1688PanelStatus(root, error && error.message ? error.message : String(error), "error");
     }
   }
 

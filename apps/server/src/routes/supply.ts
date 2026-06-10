@@ -398,9 +398,10 @@ export async function supplyRoutes(app: FastifyInstance) {
 
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { search?: string; status?: string; sourcePlatform?: string; offset?: string; limit?: string; sort?: string };
+    const query = request.query as { id?: string; search?: string; status?: string; sourcePlatform?: string; offset?: string; limit?: string; sort?: string };
 
     const where: Record<string, unknown> = { userId };
+    if (query.id) where.id = query.id;
     if (query.status) where.status = query.status;
     if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
     if (query.search) {

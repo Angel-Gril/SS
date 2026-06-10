@@ -279,6 +279,45 @@ test('1688 pricing panel shows the Ozon source context saved before image search
   assert.match(css, /ss-erp-1688-ozon-context/);
 });
 
+test('1688 import exposes post-save actions for returning to Ozon and opening ERP goods', () => {
+  const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const worker = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+  const css = readRepoFile('extensions', 'ss-erp', 'content', 'collect-1688-panel.css');
+  const supplyGoodsPage = readRepoFile('apps', 'web', 'src', 'app', '(dashboard)', 'supply', 'goods', 'page.tsx');
+
+  assert.match(content, /function\s+render1688PostImportActions/);
+  assert.match(content, /function\s+returnToOzonSource/);
+  assert.match(content, /function\s+open1688ErpSupplyGood/);
+  assert.match(content, /render1688PostImportActions\(root,\s*product,\s*data\)/);
+  assert.match(content, /data-ss-erp-1688-post-import/);
+  assert.match(content, /data-ss-erp-1688-action="return-ozon"/);
+  assert.match(content, /data-ss-erp-1688-action="open-erp-good"/);
+  assert.match(content, /type:\s*"ss-erp:return-to-ozon-source"/);
+  assert.match(content, /type:\s*"ss-erp:open-erp-supply-good"/);
+
+  assert.match(worker, /function\s+focusOzonSourceTab/);
+  assert.match(worker, /function\s+buildErpSupplyGoodPageUrl/);
+  assert.match(worker, /const\s+chromeTabId\s*=\s*sender\s*&&\s*sender\.tab/);
+  assert.match(worker, /context\.sourceTabId\s*=\s*chromeTabId/);
+  assert.match(worker, /message\.type\s*===\s*'ss-erp:return-to-ozon-source'/);
+  assert.match(worker, /message\.type\s*===\s*'ss-erp:open-erp-supply-good'/);
+  assert.match(worker, /chrome\.tabs\.get\(tabId\)/);
+  assert.match(worker, /chrome\.tabs\.update\(tabId,\s*\{\s*active:\s*true\s*\}\)/);
+  assert.match(worker, /chrome\.windows\.update\(tab\.windowId,\s*\{\s*focused:\s*true\s*\}\)/);
+  assert.match(worker, /chrome\.tabs\.create\(\{\s*url:\s*sourceUrl\s*\}\)/);
+  assert.match(worker, /\/supply\/goods/);
+  assert.match(worker, /url\.searchParams\.set\('id'/);
+
+  assert.match(supplyGoodsPage, /useSearchParams/);
+  assert.match(supplyGoodsPage, /const\s+idParam\s*=\s*searchParams\.get\('id'\)/);
+  assert.match(supplyGoodsPage, /const\s+initialSearch\s*=\s*searchParams\.get\('search'\)/);
+  assert.match(supplyGoodsPage, /if\s*\(idParam\)\s*params\.set\('id',\s*idParam\)/);
+
+  assert.match(css, /ss-erp-1688-post-import/);
+  assert.match(css, /button\[data-ss-erp-1688-action="return-ozon"\]/);
+  assert.match(css, /button\[data-ss-erp-1688-action="open-erp-good"\]/);
+});
+
 test('extension runtime detection clears stale cloud mode when runtime endpoint is unavailable', async () => {
   const { runtime, storage } = loadRuntimeModeHarness({
     storage: {

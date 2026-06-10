@@ -304,7 +304,7 @@ The implementation should normalize each platform into one source-product shape:
 **Verification:**
 - Taobao/Tmall and PDD detail pages can be collected into ERP as source goods using the same normalized metadata shape.
 
-- [ ] **Unit 5: Ozon Return And Linked Candidate UX**
+- [x] **Unit 5: Ozon Return And Linked Candidate UX**
 
 **Goal:** Make the search-to-source-to-Ozon loop explicit so operators can save a source product and return to the originating Ozon product.
 
@@ -339,6 +339,9 @@ The implementation should normalize each platform into one source-product shape:
 
 **Verification:**
 - Operators can complete the full Ozon-to-source-to-ERP-to-Ozon loop from the extension.
+- Implemented in local/test extension on 2026-06-10 with post-import actions on the 1688 panel, source Ozon tab focusing, saved Ozon URL fallback when the original tab is closed, ERP supply-good deep links, and `/supply/goods?id=...` filtering.
+- Verified with `pnpm --filter server test -- src/__tests__/supply-1688.test.ts`, `node --test scripts/extension-ozon-regressions.test.mjs`, `node --check extensions/ss-erp/content/collect-content-script.js`, `node --check extensions/ss-erp/background/service-worker.js`, `pnpm test:repo`, `pnpm typecheck`, `pnpm build:extension:local`, `pnpm --filter web build`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
+- Remaining manual QA: reload `build/extensions/ss-erp-local`, start from an Ozon product, open 1688 image search, save a real 1688 item, then test `返回Ozon` and `查看ERP货源` in the live browser session.
 
 - [ ] **Unit 6: Category Mapping Completeness**
 

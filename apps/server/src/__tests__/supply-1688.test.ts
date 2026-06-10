@@ -706,6 +706,59 @@ describe('1688 supply pricing and import routes', () => {
     await app.close();
   });
 
+  it('filters supply goods by exact id for extension post-import deep links', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.count.mockResolvedValue(1);
+    prismaMock.supplyGoods.findMany.mockResolvedValue([
+      {
+        id: 'goods-target',
+        userId: 'user-1',
+        title: '刚保存的 1688 货源',
+        sourceUrl: 'https://detail.1688.com/offer/333.html',
+        sourcePlatform: '1688',
+        sourceProductId: '333',
+        supplier: null,
+        purchasePrice: { toString: () => '33' },
+        currency: 'CNY',
+        sku: '333',
+        metadata: {},
+        status: 'active',
+        createdAt: new Date('2026-06-10T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-10T00:00:00.000Z'),
+      },
+    ]);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/supply?id=goods-target&limit=20',
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        total: 1,
+        rows: [
+          {
+            id: 'goods-target',
+            purchasePrice: '33',
+          },
+        ],
+      },
+    });
+    expect(prismaMock.supplyGoods.count).toHaveBeenCalledWith({
+      where: { userId: 'user-1', id: 'goods-target' },
+    });
+    expect(prismaMock.supplyGoods.findMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', id: 'goods-target' },
+      skip: 0,
+      take: 20,
+      orderBy: { createdAt: 'desc' },
+    });
+    await app.close();
+  });
+
   it('rejects invalid 1688 pricing input', async () => {
     const app = await buildSupplyApp();
 

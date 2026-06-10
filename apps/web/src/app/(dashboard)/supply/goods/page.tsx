@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Package, Loader2, Plus, Search, Trash2, ExternalLink, ListPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -36,20 +36,24 @@ const PLATFORM_LABELS: Record<string, string> = {
 
 export default function SupplyGoodsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const idParam = searchParams.get('id') || '';
+  const initialSearch = searchParams.get('search') || '';
   const [items, setItems] = useState<SupplyItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState(initialSearch);
+  const [searchInput, setSearchInput] = useState(initialSearch);
   const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const limit = 20;
 
-  useEffect(() => { fetchData(); }, [search, page]);
+  useEffect(() => { fetchData(); }, [idParam, search, page]);
 
   async function fetchData() {
     setLoading(true);
     const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit) });
+    if (idParam) params.set('id', idParam);
     if (search) params.set('search', search);
     const res = await api.get<{ total: number; rows: SupplyItem[] }>(`/api/supply?${params}`);
     if (res.code === 1 && res.data) { setItems(res.data.rows); setTotal(res.data.total); }

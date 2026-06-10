@@ -289,6 +289,44 @@ function buildErpCollectPageUrl(apiBaseUrl, sku) {
   return cleanSku ? targetUrl + '?search=' + encodeURIComponent(cleanSku) : targetUrl;
 }
 
+function buildErpSupplyGoodPageUrl(apiBaseUrl, supplyGoodId, sku) {
+  const webBase = resolveErpWebBaseUrl(apiBaseUrl);
+  if (!webBase) return '';
+  const url = new URL(webBase + '/supply/goods');
+  const cleanId = toText(supplyGoodId).trim();
+  const cleanSku = toText(sku).trim();
+  if (cleanId) {
+    url.searchParams.set('id', cleanId);
+  } else if (cleanSku) {
+    url.searchParams.set('search', cleanSku);
+  }
+  return url.toString();
+}
+
+async function focusOzonSourceTab(sourceTabId, fallbackSourceUrl) {
+  const tabId = Number(sourceTabId);
+  const sourceUrl = toText(fallbackSourceUrl).trim();
+  if (Number.isFinite(tabId) && tabId > 0) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && tab.id != null) {
+        await chrome.tabs.update(tabId, { active: true });
+        if (tab.windowId != null && chrome.windows && typeof chrome.windows.update === 'function') {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+        return { mode: 'focused', tabId, url: tab.url || sourceUrl };
+      }
+    } catch (error) {
+      // The Ozon tab may have been closed; fall through to URL fallback.
+    }
+  }
+  if (sourceUrl) {
+    await chrome.tabs.create({ url: sourceUrl });
+    return { mode: 'opened', url: sourceUrl };
+  }
+  throw new Error('缺少 Ozon 来源页，无法返回');
+}
+
 function normalizeOzon1688Context(value) {
   const input = value && typeof value === 'object' ? value : {};
   const images = Array.isArray(input.images)
@@ -313,6 +351,7 @@ function normalizeOzon1688Context(value) {
     lengthMm: input.lengthMm != null ? input.lengthMm : '',
     widthMm: input.widthMm != null ? input.widthMm : '',
     heightMm: input.heightMm != null ? input.heightMm : '',
+    sourceTabId: input.sourceTabId != null ? Number(input.sourceTabId) || null : null,
     savedAt: safeIsoDate(input.savedAt),
   };
 }
@@ -1007,15 +1046,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'ss-erp:return-to-ozon-source') {
+    const context = normalizeOzon1688Context(message.ozonSourceContext || message.context || {});
+    focusOzonSourceTab(message.sourceTabId || context.sourceTabId, message.sourceUrl || context.sourceUrl).then((result) => {
+      sendResponse(Object.assign({ ok: true }, result));
+    }).catch((error) => {
+      sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:open-erp-supply-good') {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, 'ss_erp_connection']).then((result) => {
+      const legacyConn = result.ss_erp_connection || {};
+      const baseEndpoint = normalizeEndpoint(result[OZON_CALC_ERP_ENDPOINT_KEY] || legacyConn.baseUrl);
+      const targetUrl = buildErpSupplyGoodPageUrl(baseEndpoint, message.supplyGoodId || message.id, message.sku);
+      if (!targetUrl) {
+        sendResponse({ ok: false, msg: '未配置 ERP' });
+        return null;
+      }
+      return chrome.tabs.create({ url: targetUrl }).then(() => {
+        sendResponse({ ok: true, url: targetUrl });
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, msg: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === 'ss-erp:open-1688-image-search') {
     const context = normalizeOzon1688Context(message.ozonSourceContext || message.context || {});
+    const chromeTabId = sender && sender.tab ? sender.tab.id : null;
+    context.sourceTabId = chromeTabId;
     const fallbackUrl = build1688ImageSearchUrl(context);
     if (!context.imageUrl) {
       sendResponse({ ok: false, msg: '缺少 Ozon 商品主图，无法打开 1688 以图搜' });
       return false;
     }
     createSourceSearchJob('1688', context, {
-      sourceTabId: sender && sender.tab ? sender.tab.id : null,
+      sourceTabId: chromeTabId,
       fallbackUrl,
     }).then(({ job, jobs }) => {
       const targetUrl = buildSourceSearchUrl(job);
