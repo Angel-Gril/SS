@@ -22,6 +22,8 @@ test('builds pricing and mapping summary for a 1688 supply good', () => {
         targetCategoryId: 17028711,
         targetTypeId: 95841,
         targetCategoryName: 'Чехлы',
+        matchType: 'sourceCategoryPath',
+        scope: 'user',
       },
       sourceOzonProductId: '987654321',
       ozonSourceContext: {
@@ -37,9 +39,26 @@ test('builds pricing and mapping summary for a 1688 supply good', () => {
     hasOzonSource: true,
     pricingText: '建议 ¥73 / ₽913 · 利润率 30.1%',
     skuPricingText: 'SKU 2 个 · ¥69-81 / ₽863-1013',
-    mappingText: 'Ozon 17028711 / type 95841 · Чехлы',
+    mappingText: 'Ozon 17028711 / type 95841 · Чехлы · 路径匹配 · 我的映射',
     ozonSourceText: '来自 Ozon 987654321 · Ozon 透明手机壳 · 手机壳',
   });
+});
+
+test('shows global id mapping match details for a 1688 supply good', () => {
+  const summary = buildSupplyGoods1688Summary({
+    sourcePlatform: '1688',
+    metadata: {
+      mappedCategory: {
+        targetCategoryId: 17028711,
+        targetTypeId: 95841,
+        matchType: 'sourceCategoryId',
+        scope: 'global',
+      },
+    },
+  });
+
+  assert.equal(summary?.hasMapping, true);
+  assert.equal(summary?.mappingText, 'Ozon 17028711 / type 95841 · ID匹配 · 全局默认');
 });
 
 test('shows missing pricing and mapping for a 1688 supply good without import metadata', () => {

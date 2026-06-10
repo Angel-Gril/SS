@@ -77,8 +77,8 @@ export function selectBestCategoryMapping<T extends CategoryMappingLike>(
       else if (mapping.userId !== null) return null;
 
       if (sourceCategoryId && normalizeId(mapping.sourceCategoryId) === sourceCategoryId) score += 30;
-      else if (sourceCategoryName && normalizeText(mapping.sourceCategoryName) === sourceCategoryName) score += 20;
-      else if (sourceCategoryPath && normalizeText(mapping.sourceCategoryPath) === sourceCategoryPath) score += 10;
+      else if (sourceCategoryPath && normalizeText(mapping.sourceCategoryPath) === sourceCategoryPath) score += 20;
+      else if (sourceCategoryName && normalizeText(mapping.sourceCategoryName) === sourceCategoryName) score += 10;
       else return null;
 
       return { mapping, score };

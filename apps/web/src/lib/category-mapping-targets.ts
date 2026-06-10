@@ -47,37 +47,49 @@ export function flattenOzonCategoryTargets(tree: unknown): OzonCategoryTarget[] 
 
   const targets: OzonCategoryTarget[] = [];
 
-  function walk(nodes: unknown[], parentPath: string[]) {
+  function walk(
+    nodes: unknown[],
+    parentPath: string[],
+    inheritedCategory: { id: number | null; name: string; path: string },
+  ) {
     for (const item of nodes) {
       const node = asNode(item);
       if (!node || node.disabled) continue;
 
-      const categoryId = positiveNumber(node.description_category_id);
+      const ownCategoryId = positiveNumber(node.description_category_id);
       const typeId = positiveNumber(node.type_id);
-      const categoryName = cleanText(node.category_name);
+      const ownCategoryName = cleanText(node.category_name);
       const typeName = cleanText(node.type_name);
-      const categoryPathParts = categoryName ? [...parentPath, categoryName] : parentPath;
+      const categoryPathParts = ownCategoryName ? [...parentPath, ownCategoryName] : parentPath;
       const categoryPath = categoryPathParts.join(' > ');
+      const categoryId = ownCategoryId ?? inheritedCategory.id;
+      const categoryName = ownCategoryName || inheritedCategory.name;
+      const targetCategoryPath = categoryPath || inheritedCategory.path;
+      const categoryForChildren = {
+        id: categoryId,
+        name: categoryName,
+        path: targetCategoryPath,
+      };
 
       if (categoryId && typeId) {
-        const labelBase = categoryPath || `category ${categoryId}`;
+        const labelBase = targetCategoryPath || `category ${categoryId}`;
         targets.push({
           categoryId,
           typeId,
           categoryName,
           typeName,
-          categoryPath,
+          categoryPath: targetCategoryPath,
           label: typeName ? `${labelBase} / ${typeName}` : `${labelBase} / type ${typeId}`,
         });
       }
 
       if (Array.isArray(node.children)) {
-        walk(node.children, categoryPathParts);
+        walk(node.children, categoryPathParts, categoryForChildren);
       }
     }
   }
 
-  walk(tree, []);
+  walk(tree, [], { id: null, name: '', path: '' });
   return targets;
 }
 

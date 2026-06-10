@@ -23,6 +23,19 @@ function asDisplayNumber(value: unknown): string | null {
   return String(number);
 }
 
+function getCategoryMatchLabel(value: unknown): string {
+  if (value === 'sourceCategoryId') return 'ID匹配';
+  if (value === 'sourceCategoryPath') return '路径匹配';
+  if (value === 'sourceCategoryName') return '名称匹配';
+  return '';
+}
+
+function getCategoryScopeLabel(value: unknown): string {
+  if (value === 'user') return '我的映射';
+  if (value === 'global') return '全局默认';
+  return '';
+}
+
 export function buildSupplyGoods1688Summary(item: SupplyGoodsListItem): SupplyGoods1688Summary | null {
   if (item.sourcePlatform !== '1688') return null;
 
@@ -47,6 +60,11 @@ export function buildSupplyGoods1688Summary(item: SupplyGoodsListItem): SupplyGo
   const targetTypeId = asDisplayNumber(mappedCategory?.targetTypeId);
   const targetCategoryName = typeof mappedCategory?.targetCategoryName === 'string' ? mappedCategory.targetCategoryName : '';
   const hasMapping = !!(targetCategoryId && targetTypeId);
+  const mappingDetails = [
+    targetCategoryName,
+    getCategoryMatchLabel(mappedCategory?.matchType),
+    getCategoryScopeLabel(mappedCategory?.scope),
+  ].filter(Boolean);
 
   const sourceOzonProductId = typeof metadata?.sourceOzonProductId === 'string'
     ? metadata.sourceOzonProductId
@@ -67,7 +85,7 @@ export function buildSupplyGoods1688Summary(item: SupplyGoodsListItem): SupplyGo
     pricingText: hasPricing ? `建议 ¥${priceCny} / ₽${priceRub} · 利润率 ${margin}%` : '未生成核价',
     skuPricingText: hasSkuPricing ? `SKU ${skuCount} 个 · ¥${minSkuCny}-${maxSkuCny} / ₽${minSkuRub}-${maxSkuRub}` : '未生成 SKU 核价',
     mappingText: hasMapping
-      ? `Ozon ${targetCategoryId} / type ${targetTypeId}${targetCategoryName ? ` · ${targetCategoryName}` : ''}`
+      ? `Ozon ${targetCategoryId} / type ${targetTypeId}${mappingDetails.length ? ` · ${mappingDetails.join(' · ')}` : ''}`
       : '未命中类目映射',
     ozonSourceText: hasOzonSource ? `来自 ${ozonParts.join(' · ')}` : '未关联 Ozon 来源',
   };

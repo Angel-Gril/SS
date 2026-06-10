@@ -119,10 +119,61 @@ async function resolveCategoryMappingFor1688(userId: string, input: {
   }) as any;
 }
 
-function buildMappedCategoryMetadata(mapping: any) {
+function normalizedCategoryText(value: string | null | undefined): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizedCategoryId(value: string | null | undefined): string {
+  return String(value || '').trim();
+}
+
+function buildCategoryMappingMatchMetadata(mapping: any, userId: string, input: {
+  sourceCategoryId?: string | null;
+  sourceCategoryName?: string | null;
+  sourceCategoryPath?: string | null;
+}) {
+  const sourceCategoryId = normalizedCategoryId(input.sourceCategoryId);
+  const sourceCategoryName = normalizedCategoryText(input.sourceCategoryName);
+  const sourceCategoryPath = normalizedCategoryText(input.sourceCategoryPath);
+
+  if (sourceCategoryId && normalizedCategoryId(mapping.sourceCategoryId) === sourceCategoryId) {
+    return {
+      matchType: 'sourceCategoryId',
+      matchValue: String(input.sourceCategoryId || mapping.sourceCategoryId || '').trim(),
+      scope: mapping.userId === userId ? 'user' : 'global',
+    };
+  }
+  if (sourceCategoryPath && normalizedCategoryText(mapping.sourceCategoryPath) === sourceCategoryPath) {
+    return {
+      matchType: 'sourceCategoryPath',
+      matchValue: String(input.sourceCategoryPath || mapping.sourceCategoryPath || '').trim(),
+      scope: mapping.userId === userId ? 'user' : 'global',
+    };
+  }
+  if (sourceCategoryName && normalizedCategoryText(mapping.sourceCategoryName) === sourceCategoryName) {
+    return {
+      matchType: 'sourceCategoryName',
+      matchValue: String(input.sourceCategoryName || mapping.sourceCategoryName || '').trim(),
+      scope: mapping.userId === userId ? 'user' : 'global',
+    };
+  }
+
+  return {
+    matchType: 'unknown',
+    matchValue: null,
+    scope: mapping.userId === userId ? 'user' : 'global',
+  };
+}
+
+function buildMappedCategoryMetadata(mapping: any, userId: string, input: {
+  sourceCategoryId?: string | null;
+  sourceCategoryName?: string | null;
+  sourceCategoryPath?: string | null;
+}) {
   if (!mapping) return null;
   return {
     mappingId: mapping.id,
+    ...buildCategoryMappingMatchMetadata(mapping, userId, input),
     targetPlatform: mapping.targetPlatform,
     targetCategoryId: mapping.targetCategoryId,
     targetTypeId: mapping.targetTypeId,
@@ -349,7 +400,7 @@ export async function supplyRoutes(app: FastifyInstance) {
 
     const mapping = await resolveCategoryMappingFor1688(userId, parsed.data);
     const sourceProductId = parsed.data.sourceProductId || extract1688ProductId(parsed.data.sourceUrl);
-    const mappedCategory = buildMappedCategoryMetadata(mapping);
+    const mappedCategory = buildMappedCategoryMetadata(mapping, userId, parsed.data);
     const ozonSourceMetadata = buildOzonSourceMetadata(parsed.data);
     const sourceDetails = build1688SourceDetailsMetadata(parsed.data);
     const metadata: Prisma.InputJsonObject = {

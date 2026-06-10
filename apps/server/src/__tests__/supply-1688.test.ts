@@ -250,6 +250,82 @@ describe('1688 supply pricing and import routes', () => {
     await app.close();
   });
 
+  it('persists category mapping match details for path-based 1688 imports', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.categoryMapping.findMany.mockResolvedValue([
+      {
+        ...mapping,
+        id: 'name-match',
+        sourceCategoryName: '手机壳',
+        sourceCategoryPath: null,
+        targetCategoryId: 111,
+        targetTypeId: 222,
+      },
+      {
+        ...mapping,
+        id: 'path-match',
+        sourceCategoryName: null,
+        sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+        targetCategoryId: 333,
+        targetTypeId: 444,
+      },
+    ]);
+    prismaMock.supplyGoods.create.mockResolvedValue({
+      id: 'goods-path-mapping',
+      userId: 'user-1',
+      title: '路径映射手机壳',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '20' },
+      currency: 'CNY',
+      sku: '123456789',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '路径映射手机壳',
+        sourceCategoryName: '手机壳',
+        sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+        supplier: '义乌供应商',
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.supplyGoods.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          mappedCategory: expect.objectContaining({
+            mappingId: 'path-match',
+            targetCategoryId: 333,
+            targetTypeId: 444,
+            matchType: 'sourceCategoryPath',
+            matchValue: '数码配件 > 手机配件 > 手机壳',
+            scope: 'user',
+          }),
+        }),
+      }),
+    });
+    await app.close();
+  });
+
   it('persists Ozon source context when a 1688 item comes from extension image search', async () => {
     const app = await buildSupplyApp();
     prismaMock.supplyGoods.create.mockResolvedValue({

@@ -343,7 +343,7 @@ The implementation should normalize each platform into one source-product shape:
 - Verified with `pnpm --filter server test -- src/__tests__/supply-1688.test.ts`, `node --test scripts/extension-ozon-regressions.test.mjs`, `node --check extensions/ss-erp/content/collect-content-script.js`, `node --check extensions/ss-erp/background/service-worker.js`, `pnpm test:repo`, `pnpm typecheck`, `pnpm build:extension:local`, `pnpm --filter web build`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
 - Remaining manual QA: reload `build/extensions/ss-erp-local`, start from an Ozon product, open 1688 image search, save a real 1688 item, then test `返回Ozon` and `查看ERP货源` in the live browser session.
 
-- [ ] **Unit 6: Category Mapping Completeness**
+- [x] **Unit 6: Category Mapping Completeness**
 
 **Goal:** Improve mapping from source categories to Ozon category/type/default attributes so saved source products are useful for listing.
 
@@ -381,6 +381,10 @@ The implementation should normalize each platform into one source-product shape:
 
 **Verification:**
 - Saved source goods show mapping status, and Ozon listing prefill uses mapped category/type when available.
+- Implemented on 2026-06-10 with source category match specificity changed to `ID > path > name` within the same ownership scope, while keeping user-owned mappings ahead of global mappings.
+- 1688 import metadata now stores mapping match details (`matchType`, `matchValue`, `scope`) so the ERP goods list can show whether the saved mapping came from source ID, full path, or leaf name, and whether it was a user mapping or global default.
+- Ozon category target flattening now supports type-only child nodes by inheriting the parent `description_category_id`, which makes the category mapping page more reliable with Ozon category trees.
+- Verified with `pnpm --filter server test -- src/__tests__/category-mapping.test.ts src/__tests__/supply-category-mapping.test.ts src/__tests__/supply-1688.test.ts`, `node --test apps/web/src/lib/supply-goods.test.mjs apps/web/src/lib/category-mapping-targets.test.mjs`, `pnpm --filter server test`, `pnpm test:repo`, `pnpm typecheck`, `pnpm --filter web build`, `pnpm build:extension:local`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
 
 - [ ] **Unit 7: Export From ERP Source Records**
 

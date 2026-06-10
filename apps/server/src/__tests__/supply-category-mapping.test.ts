@@ -162,6 +162,54 @@ describe('supply category mapping routes', () => {
     await app.close();
   });
 
+  it('looks up a source path mapping before a loose leaf name mapping', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.categoryMapping.findMany.mockResolvedValue([
+      {
+        id: 'name-match',
+        userId: 'user-1',
+        sourcePlatform: '1688',
+        sourceCategoryId: null,
+        sourceCategoryName: '手机壳',
+        sourceCategoryPath: null,
+        targetCategoryId: 1,
+        targetTypeId: 2,
+      },
+      {
+        id: 'path-match',
+        userId: 'user-1',
+        sourcePlatform: '1688',
+        sourceCategoryId: null,
+        sourceCategoryName: null,
+        sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+        targetCategoryId: 3,
+        targetTypeId: 4,
+      },
+    ]);
+
+    const params = new URLSearchParams({
+      sourcePlatform: '1688',
+      sourceCategoryName: '手机壳',
+      sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/supply/category-mappings/lookup?${params}`,
+      headers: authHeader(),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        id: 'path-match',
+        targetCategoryId: 3,
+        targetTypeId: 4,
+      },
+    });
+    await app.close();
+  });
+
   it('rejects updates to another user mapping', async () => {
     const app = await buildSupplyApp();
     prismaMock.categoryMapping.findFirst.mockResolvedValue(null);

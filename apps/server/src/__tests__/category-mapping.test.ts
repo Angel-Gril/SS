@@ -55,6 +55,63 @@ describe('category mapping helpers', () => {
     }))?.toEqual(byId);
   });
 
+  it('matches by source category path before falling back to leaf category name', () => {
+    const byName = {
+      id: 'name-match',
+      userId: 'user-1',
+      sourcePlatform: '1688',
+      sourceCategoryId: null,
+      sourceCategoryName: '手机壳',
+      sourceCategoryPath: null,
+      targetCategoryId: 111,
+      targetTypeId: 222,
+    };
+    const byPath = {
+      ...byName,
+      id: 'path-match',
+      sourceCategoryName: null,
+      sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+      targetCategoryId: 333,
+      targetTypeId: 444,
+    };
+
+    expect(selectBestCategoryMapping([byName, byPath], {
+      userId: 'user-1',
+      sourcePlatform: '1688',
+      sourceCategoryName: '手机壳',
+      sourceCategoryPath: ' 数码配件 > 手机配件 > 手机壳 ',
+    }))?.toEqual(byPath);
+  });
+
+  it('keeps user-owned mapping ahead of a global path mapping', () => {
+    const globalPath = {
+      id: 'global-path',
+      userId: null,
+      sourcePlatform: '1688',
+      sourceCategoryId: null,
+      sourceCategoryName: null,
+      sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+      targetCategoryId: 111,
+      targetTypeId: 222,
+    };
+    const userName = {
+      ...globalPath,
+      id: 'user-name',
+      userId: 'user-1',
+      sourceCategoryName: '手机壳',
+      sourceCategoryPath: null,
+      targetCategoryId: 333,
+      targetTypeId: 444,
+    };
+
+    expect(selectBestCategoryMapping([globalPath, userName], {
+      userId: 'user-1',
+      sourcePlatform: '1688',
+      sourceCategoryName: '手机壳',
+      sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+    }))?.toEqual(userName);
+  });
+
   it('normalizes allowed mapping input and rejects missing source and target fields', () => {
     const parsed = normalizeCategoryMappingInput({
       sourcePlatform: '1688',

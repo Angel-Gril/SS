@@ -66,6 +66,59 @@ test('flattens Ozon category tree into selectable category/type targets', () => 
   ]);
 });
 
+test('inherits parent Ozon category id for child type nodes', () => {
+  const targets = flattenOzonCategoryTargets([
+    {
+      description_category_id: 300,
+      category_name: 'Электроника',
+      children: [
+        {
+          description_category_id: 310,
+          category_name: 'Аксессуары',
+          children: [
+            {
+              type_id: 701,
+              type_name: 'Чехлы для смартфонов',
+              children: [],
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(targets, [
+    {
+      categoryId: 310,
+      typeId: 701,
+      categoryName: 'Аксессуары',
+      typeName: 'Чехлы для смартфонов',
+      categoryPath: 'Электроника > Аксессуары',
+      label: 'Электроника > Аксессуары / Чехлы для смартфонов',
+    },
+  ]);
+});
+
+test('searches Ozon type-only child targets by type name', () => {
+  const tree = [
+    {
+      description_category_id: 310,
+      category_name: 'Аксессуары',
+      children: [
+        {
+          type_id: 701,
+          type_name: 'Чехлы для смартфонов',
+        },
+      ],
+    },
+  ];
+
+  assert.deepEqual(
+    searchOzonCategoryTargets(tree, 'смартфонов').map((target) => `${target.categoryId}:${target.typeId}`),
+    ['310:701'],
+  );
+});
+
 test('searches Ozon category targets by Russian name and numeric IDs', () => {
   assert.deepEqual(
     searchOzonCategoryTargets(categoryTree, 'чехлы').map((target) => target.typeId),
