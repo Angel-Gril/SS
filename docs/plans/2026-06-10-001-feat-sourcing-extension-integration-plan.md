@@ -386,7 +386,7 @@ The implementation should normalize each platform into one source-product shape:
 - Ozon category target flattening now supports type-only child nodes by inheriting the parent `description_category_id`, which makes the category mapping page more reliable with Ozon category trees.
 - Verified with `pnpm --filter server test -- src/__tests__/category-mapping.test.ts src/__tests__/supply-category-mapping.test.ts src/__tests__/supply-1688.test.ts`, `node --test apps/web/src/lib/supply-goods.test.mjs apps/web/src/lib/category-mapping-targets.test.mjs`, `pnpm --filter server test`, `pnpm test:repo`, `pnpm typecheck`, `pnpm --filter web build`, `pnpm build:extension:local`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
 
-- [ ] **Unit 7: Export From ERP Source Records**
+- [x] **Unit 7: Export From ERP Source Records**
 
 **Goal:** Replace isolated old-plugin export records with ERP-backed sourcing export.
 
@@ -420,6 +420,10 @@ The implementation should normalize each platform into one source-product shape:
 
 **Verification:**
 - The user can export ERP-saved source records without relying on the old standalone extension storage.
+- Implemented on 2026-06-10 with `/api/supply/export` exporting current user's `SupplyGoods` records as UTF-8 BOM CSV, using the same `id/search/status/sourcePlatform` filters as the ERP goods list.
+- Export columns now include source identity, supplier/SKU/cost, Ozon source context, source category, mapped Ozon category/type, mapping match/scope, suggested CNY/RUB pricing, SKU suggested price ranges, dimensions, weight, and timestamps.
+- The ERP `货源管理` page now has a `导出货源` action that downloads the filtered ERP-backed export through the shared API helper. Extension-side standalone export remains deferred as a convenience layer on top of the same schema.
+- Verified with `pnpm --filter server test -- src/__tests__/supply-export.test.ts`, `node --test apps/web/src/lib/supply-export.test.mjs`, `node --test scripts/extension-ozon-regressions.test.mjs`, `pnpm --filter server test`, `pnpm test:repo`, `pnpm --filter web build`, and `pnpm typecheck`.
 
 ## System-Wide Impact
 

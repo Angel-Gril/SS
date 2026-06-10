@@ -407,6 +407,9 @@ test('1688 import exposes post-save actions for returning to Ozon and opening ER
   assert.match(supplyGoodsPage, /const\s+idParam\s*=\s*searchParams\.get\('id'\)/);
   assert.match(supplyGoodsPage, /const\s+initialSearch\s*=\s*searchParams\.get\('search'\)/);
   assert.match(supplyGoodsPage, /if\s*\(idParam\)\s*params\.set\('id',\s*idParam\)/);
+  assert.match(supplyGoodsPage, /buildSupplyGoodsExportPath/);
+  assert.match(supplyGoodsPage, /api\.download\(/);
+  assert.match(supplyGoodsPage, /导出货源/);
 
   assert.match(css, /ss-erp-1688-post-import/);
   assert.match(css, /button\[data-ss-erp-1688-action="return-ozon"\]/);

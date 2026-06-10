@@ -232,6 +232,161 @@ function toPrismaJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
+function escapeCsv(value: unknown): string {
+  if (value == null) return '';
+  const str = value instanceof Date ? formatCsvDate(value) : stringifyCell(value);
+  if (/[",\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function stringifyCell(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value instanceof Date) return formatCsvDate(value);
+  if (typeof value === 'object' && typeof (value as { toString?: unknown }).toString === 'function') {
+    const text = (value as { toString: () => string }).toString();
+    return text === '[object Object]' ? '' : text;
+  }
+  return String(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function formatCsvDate(value: unknown): string {
+  const date = value instanceof Date ? value : new Date(String(value || ''));
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function categoryMatchLabel(value: unknown): string {
+  if (value === 'sourceCategoryId') return 'ID匹配';
+  if (value === 'sourceCategoryPath') return '路径匹配';
+  if (value === 'sourceCategoryName') return '名称匹配';
+  return '';
+}
+
+function categoryScopeLabel(value: unknown): string {
+  if (value === 'user') return '我的映射';
+  if (value === 'global') return '全局默认';
+  return '';
+}
+
+function rangeCell(min: unknown, max: unknown): string {
+  const minText = stringifyCell(min);
+  const maxText = stringifyCell(max);
+  if (minText && maxText) return minText === maxText ? minText : `${minText}-${maxText}`;
+  return minText || maxText;
+}
+
+function buildSupplyExportRows(rows: any[]) {
+  const header = [
+    '商品名',
+    '来源平台',
+    '来源商品ID',
+    '来源URL',
+    '供应商',
+    'SKU',
+    '采购价',
+    '币种',
+    '状态',
+    'Ozon来源商品ID',
+    'Ozon标题',
+    'Ozon类目',
+    '来源类目ID',
+    '来源类目名称',
+    '来源类目路径',
+    '映射目标类目ID',
+    '映射目标类型ID',
+    '映射目标类目名称',
+    '映射目标类目路径',
+    '映射方式',
+    '映射范围',
+    '建议售价CNY',
+    '建议售价RUB',
+    '利润率',
+    'SKU数量',
+    'SKU建议价区间CNY',
+    'SKU建议价区间RUB',
+    '长度mm',
+    '宽度mm',
+    '高度mm',
+    '重量g',
+    '创建时间',
+    '更新时间',
+  ];
+
+  return [
+    header,
+    ...rows.map((item) => {
+      const metadata = asRecord(item.metadata);
+      const ozonSourceContext = asRecord(metadata?.ozonSourceContext);
+      const mappedCategory = asRecord(metadata?.mappedCategory);
+      const pricing = asRecord(metadata?.pricing);
+      const skuSummary = asRecord(pricing?.skuSummary);
+      const sourceDetails = asRecord(metadata?.sourceDetails);
+      const dimensions = asRecord(sourceDetails?.dimensions);
+      const sourceOzonProductId = stringifyCell(metadata?.sourceOzonProductId) || stringifyCell(ozonSourceContext?.productId);
+
+      return [
+        item.title,
+        item.sourcePlatform,
+        item.sourceProductId,
+        item.sourceUrl,
+        item.supplier,
+        item.sku,
+        item.purchasePrice,
+        item.currency,
+        item.status,
+        sourceOzonProductId,
+        ozonSourceContext?.title,
+        ozonSourceContext?.categoryName,
+        metadata?.sourceCategoryId,
+        metadata?.sourceCategoryName,
+        metadata?.sourceCategoryPath,
+        mappedCategory?.targetCategoryId,
+        mappedCategory?.targetTypeId,
+        mappedCategory?.targetCategoryName,
+        mappedCategory?.targetCategoryPath,
+        categoryMatchLabel(mappedCategory?.matchType),
+        categoryScopeLabel(mappedCategory?.scope),
+        pricing?.suggestedSalePriceCny,
+        pricing?.suggestedSalePriceRub,
+        pricing?.estimatedMarginPct,
+        skuSummary?.count,
+        rangeCell(skuSummary?.minSuggestedSalePriceCny, skuSummary?.maxSuggestedSalePriceCny),
+        rangeCell(skuSummary?.minSuggestedSalePriceRub, skuSummary?.maxSuggestedSalePriceRub),
+        dimensions?.lengthMm,
+        dimensions?.widthMm,
+        dimensions?.heightMm,
+        pricing?.normalizedWeightG,
+        formatCsvDate(item.createdAt),
+        formatCsvDate(item.updatedAt),
+      ];
+    }),
+  ];
+}
+
+function buildSupplyWhere(userId: string, query: { id?: string; search?: string; status?: string; sourcePlatform?: string }) {
+  const where: Record<string, unknown> = { userId };
+  if (query.id) where.id = query.id;
+  if (query.status) where.status = query.status;
+  if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
+  if (query.search) {
+    where.OR = [
+      { title: { contains: query.search, mode: 'insensitive' } },
+      { supplier: { contains: query.search, mode: 'insensitive' } },
+      { sku: { contains: query.search, mode: 'insensitive' } },
+      { sourceProductId: { contains: query.search, mode: 'insensitive' } },
+    ];
+  }
+  return where;
+}
+
 async function findExisting1688SupplyGood(userId: string, sourceProductId: string | null) {
   if (!sourceProductId) return null;
   return prisma.supplyGoods.findFirst({
@@ -447,21 +602,29 @@ export async function supplyRoutes(app: FastifyInstance) {
     return reply.send({ code: 1, msg: '1688货源已保存', data: item });
   });
 
+  app.get('/export', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const query = request.query as { id?: string; search?: string; status?: string; sourcePlatform?: string };
+    const rows = await prisma.supplyGoods.findMany({
+      where: buildSupplyWhere(userId, query) as any,
+      orderBy: { updatedAt: 'desc' },
+      take: 10000,
+    });
+
+    const csvRows = buildSupplyExportRows(rows as any[])
+      .map((row) => row.map(escapeCsv).join(','));
+    const csv = '﻿' + csvRows.join('\r\n');
+
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="supply_goods_${new Date().toISOString().slice(0, 10)}.csv"`);
+    return reply.send(csv);
+  });
+
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
     const query = request.query as { id?: string; search?: string; status?: string; sourcePlatform?: string; offset?: string; limit?: string; sort?: string };
 
-    const where: Record<string, unknown> = { userId };
-    if (query.id) where.id = query.id;
-    if (query.status) where.status = query.status;
-    if (query.sourcePlatform) where.sourcePlatform = query.sourcePlatform;
-    if (query.search) {
-      where.OR = [
-        { title: { contains: query.search, mode: 'insensitive' } },
-        { supplier: { contains: query.search, mode: 'insensitive' } },
-        { sku: { contains: query.search, mode: 'insensitive' } },
-      ];
-    }
+    const where = buildSupplyWhere(userId, query);
 
     const offset = Math.max(0, Number(query.offset) || 0);
     const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));

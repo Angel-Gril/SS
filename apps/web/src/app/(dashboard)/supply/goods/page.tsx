@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Package, Loader2, Plus, Search, Trash2, ExternalLink, ListPlus } from 'lucide-react';
+import { Package, Loader2, Plus, Search, Trash2, ExternalLink, ListPlus, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { buildSupplyGoods1688Summary } from '@/lib/supply-goods';
+import { buildSupplyGoodsExportFilename, buildSupplyGoodsExportPath } from '@/lib/supply-export';
 import { formatDate } from '@/lib/utils';
 
 interface SupplyItem {
@@ -46,6 +47,7 @@ export default function SupplyGoodsPage() {
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const limit = 20;
 
   useEffect(() => { fetchData(); }, [idParam, search, page]);
@@ -70,6 +72,18 @@ export default function SupplyGoodsPage() {
     router.push(`/listing?ids=${encodeURIComponent(id)}`);
   }
 
+  async function handleExport() {
+    setExporting(true);
+    const result = await api.download(
+      buildSupplyGoodsExportPath({ id: idParam, search }),
+      buildSupplyGoodsExportFilename(),
+    );
+    setExporting(false);
+
+    if (result.ok) toast({ title: '货源导出已开始' });
+    else toast({ title: result.msg, variant: 'destructive' });
+  }
+
   const totalPages = Math.ceil(total / limit);
 
   return (
@@ -79,9 +93,15 @@ export default function SupplyGoodsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">货源管理</h1>
           <p className="text-muted-foreground text-sm mt-1">管理采购货源、供应商信息和价格对比</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)} className="w-full sm:w-auto">
-          <Plus className="h-4 w-4" /> 添加货源
-        </Button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <Button variant="outline" onClick={handleExport} disabled={exporting} className="w-full sm:w-auto">
+            {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            导出货源
+          </Button>
+          <Button onClick={() => setCreateOpen(true)} className="w-full sm:w-auto">
+            <Plus className="h-4 w-4" /> 添加货源
+          </Button>
+        </div>
       </div>
 
       <Card>
