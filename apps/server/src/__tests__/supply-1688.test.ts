@@ -391,6 +391,91 @@ describe('1688 supply pricing and import routes', () => {
     await app.close();
   });
 
+  it('uses and persists per-sku logistics fees for 1688 variant pricing', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.create.mockResolvedValue({
+      id: 'goods-sku-logistics',
+      userId: 'user-1',
+      title: '多重量手机壳',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '20' },
+      currency: 'CNY',
+      sku: '123456789',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '多重量手机壳',
+        sourceCategoryName: '手机壳',
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+        skuItems: [
+          { skuId: 'light', specText: '轻款', price: 18, grossWeightGrams: 300, logisticsFeeCny: 12 },
+          { skuId: 'heavy', specText: '重款', price: 25, grossWeightGrams: 900, logisticsFeeCny: 30 },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.supplyGoods.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          sourceDetails: expect.objectContaining({
+            skuItems: [
+              expect.objectContaining({ skuId: 'light', logisticsFeeCny: 12 }),
+              expect.objectContaining({ skuId: 'heavy', logisticsFeeCny: 30 }),
+            ],
+          }),
+          pricingInput: expect.objectContaining({
+            skuItems: [
+              expect.objectContaining({ skuId: 'light', logisticsFeeCny: 12 }),
+              expect.objectContaining({ skuId: 'heavy', logisticsFeeCny: 30 }),
+            ],
+          }),
+          pricing: expect.objectContaining({
+            skuPricing: [
+              expect.objectContaining({
+                skuId: 'light',
+                logisticsFeeCny: 12,
+                totalBaseCostCny: 37,
+                suggestedSalePriceCny: 60,
+              }),
+              expect.objectContaining({
+                skuId: 'heavy',
+                logisticsFeeCny: 30,
+                totalBaseCostCny: 62,
+                suggestedSalePriceCny: 100,
+              }),
+            ],
+            skuSummary: expect.objectContaining({
+              count: 2,
+              minSuggestedSalePriceCny: 60,
+              maxSuggestedSalePriceCny: 100,
+            }),
+          }),
+        }),
+      }),
+    });
+    await app.close();
+  });
+
   it('preserves rich 1688 detail fields for SKU mapping and export', async () => {
     const app = await buildSupplyApp();
     prismaMock.supplyGoods.create.mockResolvedValue({

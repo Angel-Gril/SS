@@ -233,6 +233,7 @@
         const stock = item ? parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"])) : null;
         const imageUrl = item ? pickSkuImageUrl(item) : "";
         const attributes = item ? normalize1688SkuAttributes(item.attributes || item.props || item.skuAttributes || item.specAttrs) : {};
+        const logisticsFeeCny = item ? parseLooseNumber(pickFirstValue(item, ["logisticsFeeCny", "internationalLogisticsFeeCny", "shippingCostCny"])) : null;
         const grossWeightGrams = item ? item.grossWeightGrams : null;
         return {
           skuId,
@@ -241,6 +242,7 @@
           price,
           stock,
           imageUrl,
+          logisticsFeeCny,
           grossWeightGrams,
           attributes,
         };
@@ -320,6 +322,17 @@
       return node ? node.value : fallback;
     }
 
+    const logisticsFeeCny = numberFromText(field("logisticsFeeCny", product.logisticsFeeCny), 0);
+    const autoLogisticsFeeCny = numberFromText(product.autoLogisticsFeeCny, 0);
+    const keepSkuLogisticsFees = !(autoLogisticsFeeCny > 0) || Math.abs(logisticsFeeCny - autoLogisticsFeeCny) < 0.01;
+    const skuItems = normalize1688SkuItemsForImport(product.skuItems).map((item) => {
+      if (keepSkuLogisticsFees) return item;
+      return {
+        ...item,
+        logisticsFeeCny: null,
+      };
+    });
+
     return {
       sourcePlatform: "1688",
       sourceUrl: product.sourceUrl,
@@ -333,7 +346,7 @@
       sku: product.sku || product.sourceProductId || undefined,
       images: product.images && product.images.length ? product.images : undefined,
       notes: product.notes || undefined,
-      skuItems: normalize1688SkuItemsForImport(product.skuItems),
+      skuItems,
       attributes: product.attributes && product.attributes.length ? product.attributes : undefined,
       priceTiers: product.priceTiers && product.priceTiers.length ? product.priceTiers : undefined,
       detailImages: product.detailImages && product.detailImages.length ? product.detailImages : undefined,
@@ -345,7 +358,7 @@
       heightMm: product.heightMm || undefined,
       packageFeeCny: numberFromText(field("packageFeeCny", product.packageFeeCny), 0),
       commissionPct: numberFromText(field("commissionPct", product.commissionPct), 12),
-      logisticsFeeCny: numberFromText(field("logisticsFeeCny", product.logisticsFeeCny), 0),
+      logisticsFeeCny,
       exchangeRateRubToCny: numberFromText(field("exchangeRateRubToCny", product.exchangeRateRubToCny), 0.08),
       targetMarginPct: numberFromText(field("targetMarginPct", product.targetMarginPct), 30),
       metadata: {
@@ -448,9 +461,52 @@
     if (field && !(numberFromText(field.value, 0) > 0)) {
       field.value = String(Math.round(numberFromText(best.shippingCost, 0) * 100) / 100);
     }
+    product.autoLogisticsFeeCny = Math.round(numberFromText(best.shippingCost, 0) * 100) / 100;
     product.logisticsFeeCny = numberFromText(field && field.value, best.shippingCost);
+    product.skuItems = build1688SkuLogisticsFees(product, services, selectedServiceIds, snapshot, input);
     set1688LogisticsHint(root, "命中物流：" + best.displayName + " · 运费 ¥" + formatPanelMoney(best.shippingCost, "") + " · " + (best.reason || ""), "success");
     return best;
+  }
+
+  function build1688SkuLogisticsFees(product, services, selectedServiceIds, snapshot, baseInput) {
+    const engine = window.OZON_CALC_RULE_ENGINE;
+    if (!engine || typeof engine.buildServiceQuote !== "function" || typeof engine.resolveBestQuote !== "function") {
+      return product.skuItems || [];
+    }
+
+    return (Array.isArray(product.skuItems) ? product.skuItems : []).map((item) => {
+      const skuWeightG = numberFromText(item && item.grossWeightGrams, numberFromText(baseInput && baseInput.weightG, 0));
+      const skuPriceCny = numberFromText(item && item.price, numberFromText(baseInput && baseInput.priceRMB, 0));
+      if (!(skuWeightG > 0)) return item;
+
+      const skuInput = {
+        ...baseInput,
+        weightG: skuWeightG,
+        priceRMB: skuPriceCny,
+      };
+      const quotes = [];
+      selectedServiceIds.forEach((serviceId) => {
+        const ruleProfiles = services.filter((rule) => rule && rule.serviceId === serviceId);
+        const serviceRule = ruleProfiles[0] || null;
+        const quote = engine.buildServiceQuote({
+          id: serviceId,
+          providerId: serviceRule && serviceRule.providerId,
+          displayName: serviceRule && serviceRule.displayName ? serviceRule.displayName : serviceId,
+          carrierName: serviceRule && serviceRule.carrierName,
+          priority: serviceRule && serviceRule.priority,
+        }, ruleProfiles, skuInput);
+        if (quote && quote.available) {
+          quotes.push(quote);
+        }
+      });
+
+      const best = engine.resolveBestQuote(quotes, snapshot.userConfig && snapshot.userConfig.resolutionMode || "lowest_cost", selectedServiceIds);
+      if (!best) return item;
+      return {
+        ...item,
+        logisticsFeeCny: Math.round(numberFromText(best.shippingCost, 0) * 100) / 100,
+      };
+    });
   }
 
   function set1688PanelBusy(root, busy) {
@@ -1768,6 +1824,7 @@
     const price = parseLooseNumber(pickFirstValue(item, ["price", "salePrice", "finalPrice", "discountPrice", "promotionPrice"]));
     const stock = parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"]));
     const imageUrl = pickSkuImageUrl(item);
+    const logisticsFeeCny = parseLooseNumber(pickFirstValue(item, ["logisticsFeeCny", "internationalLogisticsFeeCny", "shippingCostCny"]));
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
     const attributes = normalize1688SkuAttributes(item.attributes || item.props || item.skuAttributes || item.specAttrs);
@@ -1779,6 +1836,7 @@
       price,
       stock,
       imageUrl,
+      logisticsFeeCny,
       grossWeightGrams,
       attributes
     };

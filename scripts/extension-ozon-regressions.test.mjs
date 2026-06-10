@@ -164,7 +164,10 @@ test('1688 detail import preserves rich SKU fields and source details', () => {
   assert.match(content, /function\s+normalize1688SkuItemsForImport/);
   assert.match(content, /function\s+normalize1688SkuAttributes/);
   assert.match(content, /function\s+build1688SourceDetailsMetadata/);
-  assert.match(content, /skuItems:\s*normalize1688SkuItemsForImport\(product\.skuItems\)/);
+  assert.match(content, /const\s+skuItems\s*=\s*normalize1688SkuItemsForImport\(product\.skuItems\)\.map\(\(item\)\s*=>/);
+  assert.match(content, /const\s+keepSkuLogisticsFees\s*=\s*!\(autoLogisticsFeeCny\s*>\s*0\)\s*\|\|\s*Math\.abs\(logisticsFeeCny\s*-\s*autoLogisticsFeeCny\)\s*<\s*0\.01/);
+  assert.match(content, /logisticsFeeCny:\s*null/);
+  assert.match(content, /skuItems,/);
   assert.match(content, /attributes:\s*product\.attributes/);
   assert.match(content, /priceTiers:\s*product\.priceTiers/);
   assert.match(content, /detailImages:\s*product\.detailImages/);
@@ -175,11 +178,13 @@ test('1688 detail import preserves rich SKU fields and source details', () => {
   assert.match(content, /stock,\s*\n\s*imageUrl,/);
   assert.match(content, /const\s+imageUrl\s*=\s*item\s*\?\s*pickSkuImageUrl\(item\)\s*:\s*""/);
   assert.match(content, /const\s+attributes\s*=\s*item\s*\?\s*normalize1688SkuAttributes\(item\.attributes\s*\|\|\s*item\.props\s*\|\|\s*item\.skuAttributes\s*\|\|\s*item\.specAttrs\)\s*:\s*\{\}/);
-  assert.match(content, /grossWeightGrams,\s*\n\s*attributes,/);
+  assert.match(content, /const\s+logisticsFeeCny\s*=\s*item\s*\?\s*parseLooseNumber\(pickFirstValue\(item,\s*\["logisticsFeeCny",\s*"internationalLogisticsFeeCny",\s*"shippingCostCny"\]\)\)\s*:\s*null/);
+  assert.match(content, /imageUrl,\s*\n\s*logisticsFeeCny,\s*\n\s*grossWeightGrams,\s*\n\s*attributes,/);
   assert.match(content, /function\s+normalizeSkuItem/);
   assert.match(content, /const\s+imageUrl\s*=\s*pickSkuImageUrl\(item\)/);
   assert.match(content, /const\s+attributes\s*=\s*normalize1688SkuAttributes\(item\.attributes\s*\|\|\s*item\.props\s*\|\|\s*item\.skuAttributes\s*\|\|\s*item\.specAttrs\)/);
-  assert.match(content, /stock,\s*\n\s*imageUrl,\s*\n\s*grossWeightGrams,\s*\n\s*attributes/);
+  assert.match(content, /const\s+logisticsFeeCny\s*=\s*parseLooseNumber\(pickFirstValue\(item,\s*\["logisticsFeeCny",\s*"internationalLogisticsFeeCny",\s*"shippingCostCny"\]\)\)/);
+  assert.match(content, /stock,\s*\n\s*imageUrl,\s*\n\s*logisticsFeeCny,\s*\n\s*grossWeightGrams,\s*\n\s*attributes/);
   assert.match(content, /sourceDetails:\s*build1688SourceDetailsMetadata\(product\)/);
   assert.match(content, /function\s+extract1688RichDetails/);
   assert.match(content, /function\s+find1688OfferDetail/);
@@ -205,6 +210,9 @@ test('1688 pricing panel prefills logistics fee from synced Ozon logistics snaps
   assert.match(content, /engine\.buildServiceQuote/);
   assert.match(content, /engine\.resolveBestQuote/);
   assert.match(content, /logisticsFeeCny/);
+  assert.match(content, /function\s+build1688SkuLogisticsFees/);
+  assert.match(content, /product\.skuItems\s*=\s*build1688SkuLogisticsFees\(product,\s*services,\s*selectedServiceIds,\s*snapshot,\s*input\)/);
+  assert.match(content, /weightG:\s*skuWeightG/);
   assert.match(content, /data-ss-erp-1688-logistics-hint/);
   assert.match(content, /命中物流/);
 });

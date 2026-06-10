@@ -62,6 +62,7 @@ const import1688Schema = z.object({
     price: z.union([z.string(), z.number()]).optional().nullable(),
     stock: z.union([z.string(), z.number()]).optional().nullable(),
     imageUrl: z.string().optional(),
+    logisticsFeeCny: z.union([z.string(), z.number()]).optional().nullable(),
     grossWeightGrams: z.union([z.string(), z.number()]).optional().nullable(),
     attributes: skuAttributesSchema.optional(),
   }).passthrough()).max(200).optional(),

@@ -12,6 +12,7 @@ export interface Calculate1688PricingInput {
     name?: string | null;
     specText?: string | null;
     price?: string | number | null;
+    logisticsFeeCny?: string | number | null;
     grossWeightGrams?: string | number | null;
   }>;
 }
@@ -43,7 +44,9 @@ export interface SkuPricingResult {
   name: string;
   specText: string;
   purchasePriceCny: number;
+  logisticsFeeCny: number;
   normalizedWeightG: number;
+  totalBaseCostCny: number;
   suggestedSalePriceCny: number;
   suggestedSalePriceRub: number;
   estimatedProfitCny: number;
@@ -61,6 +64,7 @@ export interface SkuPricingSummary {
 const DEFAULT_WEIGHT_G = 500;
 
 function toNumber(value: unknown, fallback = 0): number {
+  if (value == null || value === '') return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -119,6 +123,7 @@ function buildSkuPricing(input: Calculate1688PricingInput, shared: {
       const purchasePriceCny = toNumber(item.price, 0);
       if (purchasePriceCny <= 0) return null;
       const normalizedWeightG = Math.round(toNumber(item.grossWeightGrams, shared.normalizedWeightG)) || shared.normalizedWeightG;
+      const logisticsFeeCny = toNumber(item.logisticsFeeCny, shared.logisticsFeeCny);
       const pricing = calculateValidPricing({
         purchasePriceCny,
         domesticShippingCny: shared.domesticShippingCny,
@@ -126,7 +131,7 @@ function buildSkuPricing(input: Calculate1688PricingInput, shared: {
         normalizedWeightG,
         packageFeeCny: shared.packageFeeCny,
         commissionPct: shared.commissionPct,
-        logisticsFeeCny: shared.logisticsFeeCny,
+        logisticsFeeCny,
         exchangeRateRubToCny: shared.exchangeRateRubToCny,
         targetMarginPct: shared.targetMarginPct,
       });
@@ -135,7 +140,9 @@ function buildSkuPricing(input: Calculate1688PricingInput, shared: {
         name: String(item.name || ''),
         specText: String(item.specText || ''),
         purchasePriceCny: roundMoney(purchasePriceCny),
+        logisticsFeeCny: roundMoney(Math.max(0, logisticsFeeCny)),
         normalizedWeightG,
+        totalBaseCostCny: pricing.totalBaseCostCny,
         suggestedSalePriceCny: pricing.suggestedSalePriceCny,
         suggestedSalePriceRub: pricing.suggestedSalePriceRub,
         estimatedProfitCny: pricing.estimatedProfitCny,

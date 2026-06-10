@@ -223,7 +223,7 @@ The implementation should normalize each platform into one source-product shape:
 - Verified with `node --test scripts/extension-ozon-regressions.test.mjs`, `pnpm --filter server test -- src/__tests__/supply-1688.test.ts`, `pnpm test:repo`, `pnpm typecheck`, `pnpm build:extension:local`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
 - Remaining manual QA: load `build/extensions/ss-erp-local` in the logged-in browser and test several real 1688 detail pages because live page globals and 1688 cookies vary by account/session.
 
-- [ ] **Unit 3: SKU-Level Pricing Refinement**
+- [x] **Unit 3: SKU-Level Pricing Refinement**
 
 **Goal:** Make pricing useful at SKU level, not only product level.
 
@@ -259,6 +259,9 @@ The implementation should normalize each platform into one source-product shape:
 
 **Verification:**
 - Saved source goods show meaningful SKU pricing summaries and listing prefill uses the right prices.
+- Implemented in local/test extension and ERP pricing on 2026-06-10 with SKU-level purchase price, weight, `logisticsFeeCny`, `totalBaseCostCny`, suggested CNY/RUB prices, and min/max SKU pricing summaries.
+- The 1688 extension panel now calculates SKU-level logistics fees from the synced Ozon logistics snapshot when SKU weights are available, while preserving the operator's manual product-level logistics override by clearing stale automatic SKU logistics fees on submit.
+- Verified with `pnpm --filter server test -- src/__tests__/1688-pricing.test.ts src/__tests__/supply-1688.test.ts`, `node --test scripts/extension-ozon-regressions.test.mjs`, `node --check extensions/ss-erp/content/collect-content-script.js`, `pnpm test:repo`, `pnpm typecheck`, `pnpm build:extension:local`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
 
 - [ ] **Unit 4: Taobao/Tmall And PDD Source Collectors**
 

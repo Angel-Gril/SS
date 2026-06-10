@@ -103,4 +103,44 @@ describe('1688 pricing helper', () => {
       maxSuggestedSalePriceRub: 1013,
     });
   });
+
+  it('uses per-sku logistics fee when supplied for 1688 variant pricing', () => {
+    const result = calculate1688Pricing({
+      purchasePriceCny: 20,
+      domesticShippingCny: 5,
+      weightG: 500,
+      packageFeeCny: 2,
+      commissionPct: 12,
+      logisticsFeeCny: 18,
+      exchangeRateRubToCny: 0.08,
+      targetMarginPct: 30,
+      skuItems: [
+        { skuId: 'light', specText: '轻款', price: 18, grossWeightGrams: 300, logisticsFeeCny: 12 },
+        { skuId: 'heavy', specText: '重款', price: 25, grossWeightGrams: 900, logisticsFeeCny: 30 },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.skuPricing?.[0]).toMatchObject({
+      skuId: 'light',
+      logisticsFeeCny: 12,
+      totalBaseCostCny: 37,
+      suggestedSalePriceCny: 60,
+      suggestedSalePriceRub: 750,
+    });
+    expect(result.skuPricing?.[1]).toMatchObject({
+      skuId: 'heavy',
+      logisticsFeeCny: 30,
+      totalBaseCostCny: 62,
+      suggestedSalePriceCny: 100,
+      suggestedSalePriceRub: 1250,
+    });
+    expect(result.skuSummary).toMatchObject({
+      count: 2,
+      minSuggestedSalePriceCny: 60,
+      maxSuggestedSalePriceCny: 100,
+      minSuggestedSalePriceRub: 750,
+      maxSuggestedSalePriceRub: 1250,
+    });
+  });
 });
