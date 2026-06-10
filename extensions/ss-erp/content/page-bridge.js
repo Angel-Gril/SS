@@ -3,12 +3,18 @@
   const RESPONSE_DIRECTION = "spb-self-hosted:bridge";
   const GLOBAL_NAMES = [
     "rawData",
+    "__GLOBAL_DATA__",
+    "__GLOBAL_DATA",
     "__NEXT_DATA__",
     "__INITIAL_STATE__",
     "__INIT_DATA__",
+    "__detail_data__",
+    "__page_data__",
     "__NUXT__",
     "__PRELOADED_STATE__",
     "__APP_DATA__",
+    "detailData",
+    "detailContext",
     "pageData",
     "globalData"
   ];

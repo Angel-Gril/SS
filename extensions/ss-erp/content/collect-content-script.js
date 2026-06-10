@@ -183,10 +183,98 @@
     return Date.now() - savedAt <= OZON_1688_CONTEXT_TTL_MS;
   }
 
+  function normalize1688SkuAttributes(value) {
+    const attrs = {};
+    if (!value) return attrs;
+
+    if (Array.isArray(value)) {
+      value.slice(0, 20).forEach((row, index) => {
+        if (row == null || row === "") return;
+        if (typeof row !== "object") {
+          attrs["属性" + (index + 1)] = String(row);
+          return;
+        }
+        const name = pickFirstValue(row, ["name", "key", "attrName", "propName", "title"]);
+        const attrValue = pickFirstValue(row, ["value", "attrValue", "text", "content", "propValue", "valueName"]);
+        if (name && attrValue != null && attrValue !== "") {
+          attrs[String(name)] = typeof attrValue === "object" ? JSON.stringify(attrValue).slice(0, 300) : attrValue;
+        }
+      });
+      return attrs;
+    }
+
+    if (typeof value === "object") {
+      Object.keys(value).slice(0, 20).forEach((key) => {
+        const item = value[key];
+        if (item == null || item === "") return;
+        attrs[String(key)] = typeof item === "object" ? JSON.stringify(item).slice(0, 300) : item;
+      });
+    }
+    return attrs;
+  }
+
+  function pickSkuImageUrl(item) {
+    const direct = pickFirstValue(item, ["imageUrl", "imgUrl", "skuImageUrl", "picUrl", "pictureUrl", "thumbUrl", "image", "img", "src", "url"]);
+    if (typeof direct === "string") return normalizeImageUrl(direct);
+    if (direct && typeof direct === "object") {
+      const nested = pickFirstValue(direct, ["url", "src", "imageUrl", "imgUrl"]);
+      if (typeof nested === "string") return normalizeImageUrl(nested);
+    }
+    return "";
+  }
+
+  function normalize1688SkuItemsForImport(items) {
+    return (Array.isArray(items) ? items : [])
+      .map((item) => {
+        const skuId = item && item.skuId != null ? String(item.skuId) : "";
+        const name = item && item.name != null ? String(item.name) : "";
+        const specText = item && item.specText != null ? String(item.specText) : "";
+        const price = item ? item.price : null;
+        const stock = item ? parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"])) : null;
+        const imageUrl = item ? pickSkuImageUrl(item) : "";
+        const attributes = item ? normalize1688SkuAttributes(item.attributes || item.props || item.skuAttributes || item.specAttrs) : {};
+        const grossWeightGrams = item ? item.grossWeightGrams : null;
+        return {
+          skuId,
+          name,
+          specText,
+          price,
+          stock,
+          imageUrl,
+          grossWeightGrams,
+          attributes,
+        };
+      })
+      .filter((item) => item.skuId || item.name || item.specText || item.price != null)
+      .slice(0, 200);
+  }
+
+  function normalize1688DetailImages(value) {
+    return (Array.isArray(value) ? value : [])
+      .map((item) => String(item || "").trim())
+      .filter((item) => /^https?:\/\//i.test(item))
+      .slice(0, 100);
+  }
+
+  function build1688SourceDetailsMetadata(product) {
+    const details = {};
+    if (Array.isArray(product.attributes) && product.attributes.length) details.attributes = product.attributes.slice(0, 100);
+    if (Array.isArray(product.priceTiers) && product.priceTiers.length) details.priceTiers = product.priceTiers.slice(0, 50);
+    if (Array.isArray(product.detailImages) && product.detailImages.length) details.detailImages = product.detailImages.slice(0, 100);
+    const dimensions = {};
+    if (numberFromText(product.lengthMm, 0) > 0) dimensions.lengthMm = numberFromText(product.lengthMm, 0);
+    if (numberFromText(product.widthMm, 0) > 0) dimensions.widthMm = numberFromText(product.widthMm, 0);
+    if (numberFromText(product.heightMm, 0) > 0) dimensions.heightMm = numberFromText(product.heightMm, 0);
+    if (Object.keys(dimensions).length) details.dimensions = dimensions;
+    const skuItems = normalize1688SkuItemsForImport(product.skuItems);
+    if (skuItems.length) details.skuItems = skuItems;
+    return Object.keys(details).length ? details : null;
+  }
+
   function normalize1688PanelProduct(data, ozonSourceContext) {
     const product = data && typeof data === "object" ? data : {};
     const ozonContext = ozonSourceContext && typeof ozonSourceContext === "object" ? ozonSourceContext : null;
-    const skuItems = Array.isArray(product.skuItems) ? product.skuItems : [];
+    const skuItems = normalize1688SkuItemsForImport(product.skuItems);
     const firstSku = skuItems.find((item) => numberFromText(item && item.price, 0) > 0) || null;
     const images = Array.isArray(product.images) ? product.images.filter(Boolean) : [];
     const purchasePrice = numberFromText(product.purchasePriceCny || product.purchasePrice || product.price, 0)
@@ -206,9 +294,15 @@
       images,
       notes: product.description || "",
       skuItems,
+      attributes: Array.isArray(product.attributes) ? product.attributes.slice(0, 100) : [],
+      priceTiers: Array.isArray(product.priceTiers) ? product.priceTiers.slice(0, 50) : [],
+      detailImages: normalize1688DetailImages(product.detailImages),
       purchasePriceCny: purchasePrice,
       domesticShippingCny: numberFromText(product.domesticShippingCny, 0),
       weightG: numberFromText(product.weightG || product.grossWeightGrams || product.weight, 0),
+      lengthMm: numberFromText(product.lengthMm || product.length, 0),
+      widthMm: numberFromText(product.widthMm || product.width, 0),
+      heightMm: numberFromText(product.heightMm || product.height, 0),
       packageFeeCny: numberFromText(product.packageFeeCny, 0),
       commissionPct: numberFromText(product.commissionPct, 12),
       logisticsFeeCny: numberFromText(product.logisticsFeeCny, 0),
@@ -239,19 +333,28 @@
       sku: product.sku || product.sourceProductId || undefined,
       images: product.images && product.images.length ? product.images : undefined,
       notes: product.notes || undefined,
-      skuItems: product.skuItems,
+      skuItems: normalize1688SkuItemsForImport(product.skuItems),
+      attributes: product.attributes && product.attributes.length ? product.attributes : undefined,
+      priceTiers: product.priceTiers && product.priceTiers.length ? product.priceTiers : undefined,
+      detailImages: product.detailImages && product.detailImages.length ? product.detailImages : undefined,
       purchasePriceCny: numberFromText(field("purchasePriceCny", product.purchasePriceCny), 0),
       domesticShippingCny: numberFromText(field("domesticShippingCny", product.domesticShippingCny), 0),
       weightG: numberFromText(field("weightG", product.weightG), 0),
+      lengthMm: product.lengthMm || undefined,
+      widthMm: product.widthMm || undefined,
+      heightMm: product.heightMm || undefined,
       packageFeeCny: numberFromText(field("packageFeeCny", product.packageFeeCny), 0),
       commissionPct: numberFromText(field("commissionPct", product.commissionPct), 12),
       logisticsFeeCny: numberFromText(field("logisticsFeeCny", product.logisticsFeeCny), 0),
       exchangeRateRubToCny: numberFromText(field("exchangeRateRubToCny", product.exchangeRateRubToCny), 0.08),
       targetMarginPct: numberFromText(field("targetMarginPct", product.targetMarginPct), 30),
-      metadata: product.ozonSourceContext ? {
-        sourceOzonProductId: product.sourceOzonProductId || product.ozonSourceContext.productId,
-        ozonSourceContext: product.ozonSourceContext,
-      } : undefined,
+      metadata: {
+        sourceDetails: build1688SourceDetailsMetadata(product),
+        ...(product.ozonSourceContext ? {
+          sourceOzonProductId: product.sourceOzonProductId || product.ozonSourceContext.productId,
+          ozonSourceContext: product.ozonSourceContext,
+        } : {}),
+      },
     };
   }
 
@@ -1190,13 +1293,218 @@
   }
 
   function extract1688Product(context) {
-    return buildProductResult(context, {
+    const base = buildProductResult(context, {
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /近30天成交[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".title-text", ".d-title"],
       shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
     });
+    return Object.assign(base, extract1688RichDetails(context));
+  }
+
+  function extract1688RichDetails(context) {
+    const found = find1688OfferDetail(context);
+    const offerDetail = found.offerDetail;
+    const globalData = found.globalData;
+    const category = pick1688CategoryPath(offerDetail, globalData, context && context.jsonLd);
+    const price = pick1688PriceTiers(offerDetail, context && context.pageText);
+    const detailImages = pick1688DetailImages(context);
+    const attributes = pickAttributes(context.sources);
+    const dimensions = pick1688Dimensions(context, attributes);
+    return {
+      sourceCategoryId: category.sourceCategoryId || "",
+      sourceCategoryName: category.sourceCategoryName || "",
+      sourceCategoryPath: category.sourceCategoryPath || "",
+      priceTiers: price.priceTiers,
+      purchasePriceCny: price.standardPriceCny || 0,
+      newUserPriceCny: price.newUserPriceCny || 0,
+      detailImages,
+      lengthMm: dimensions.lengthMm || 0,
+      widthMm: dimensions.widthMm || 0,
+      heightMm: dimensions.heightMm || 0,
+    };
+  }
+
+  function find1688OfferDetail(context) {
+    const sources = context && Array.isArray(context.sources) ? context.sources : [];
+    const queue = sources.map((source) => ({ globalData: source, node: source, depth: 0 }));
+    const seen = new Set();
+    let scanned = 0;
+    while (queue.length && scanned < 500) {
+      const current = queue.shift();
+      const node = current && current.node;
+      if (!node || typeof node !== "object" || seen.has(node)) continue;
+      seen.add(node);
+      scanned += 1;
+
+      if (node.offerDetail && typeof node.offerDetail === "object") {
+        return { globalData: current.globalData, offerDetail: node.offerDetail };
+      }
+      if (node.subject && (node.priceModel || node.skuModel || node.productAttribute)) {
+        return { globalData: current.globalData, offerDetail: node };
+      }
+      if (node.data && node.data.offerDetail && typeof node.data.offerDetail === "object") {
+        return { globalData: current.globalData, offerDetail: node.data.offerDetail };
+      }
+
+      if (current.depth >= 4) continue;
+      Object.keys(node).slice(0, 80).forEach((key) => {
+        const value = node[key];
+        if (value && typeof value === "object") {
+          queue.push({ globalData: current.globalData, node: value, depth: current.depth + 1 });
+        }
+      });
+    }
+    return { globalData: sources[0] || null, offerDetail: null };
+  }
+
+  function pick1688PriceTiers(offerDetail, pageText) {
+    const priceTiers = [];
+    let standardPriceCny = 0;
+    let newUserPriceCny = 0;
+
+    function addTier(raw) {
+      if (!raw || typeof raw !== "object") return;
+      const minQuantity = Math.max(1, parseLooseNumber(raw.beginAmount || raw.minQuantity || raw.minQty || raw.startQuantity || raw.quantity || raw.amount || raw.count || 1) || 1);
+      const price = numberFromText(raw.price || raw.value || raw.salePrice || raw.discountPrice || raw.promotionPrice, 0);
+      if (price > 0) priceTiers.push({ minQuantity, price });
+    }
+
+    const priceModel = offerDetail && offerDetail.priceModel;
+    if (priceModel && typeof priceModel === "object") {
+      (priceModel.originalPrices || []).forEach(addTier);
+      if (priceTiers.length) standardPriceCny = priceTiers[0].price;
+      if (!priceTiers.length) (priceModel.currentPrices || []).forEach(addTier);
+      if (!standardPriceCny && priceTiers.length) standardPriceCny = priceTiers[0].price;
+      if (Array.isArray(priceModel.newUserPrices) && priceModel.newUserPrices.length) {
+        newUserPriceCny = numberFromText(priceModel.newUserPrices[0].price, 0);
+      }
+      const activityPrice = numberFromText(priceModel.activityPrice, 0);
+      if (activityPrice > 0 && (!newUserPriceCny || activityPrice < newUserPriceCny)) newUserPriceCny = activityPrice;
+    }
+
+    if (!priceTiers.length) {
+      const text = String(pageText || "").replace(/[¥￥]\s*\n\s*(\d+)\s*\n\s*\.(\d+)/g, "¥$1.$2");
+      const tierPattern = /([≥>=]?\s*\d+)\s*件[^\n¥￥]{0,30}[\n\s]*[¥￥]\s*(\d+(?:\.\d{1,2})?)/g;
+      let match;
+      while ((match = tierPattern.exec(text)) !== null) {
+        const minQuantity = Math.max(1, parseLooseNumber(match[1]) || 1);
+        const price = numberFromText(match[2], 0);
+        if (price > 0) priceTiers.push({ minQuantity, price });
+      }
+      const newUserMatch = text.slice(Math.max(0, text.indexOf("新人价")), text.indexOf("新人价") >= 0 ? text.indexOf("新人价") + 80 : 0).match(/[¥￥]\s*(\d+(?:\.\d{1,2})?)/);
+      if (newUserMatch) newUserPriceCny = numberFromText(newUserMatch[1], 0);
+    }
+
+    const unique = [];
+    const seen = new Set();
+    priceTiers
+      .filter((tier) => tier.price > 0)
+      .sort((a, b) => a.minQuantity - b.minQuantity)
+      .forEach((tier) => {
+        const key = tier.minQuantity + ":" + tier.price;
+        if (seen.has(key)) return;
+        seen.add(key);
+        unique.push(tier);
+      });
+    if (!standardPriceCny && unique.length) standardPriceCny = unique[0].price;
+    return { priceTiers: unique.slice(0, 50), standardPriceCny, newUserPriceCny };
+  }
+
+  function pick1688CategoryPath(offerDetail, globalData, jsonLd) {
+    let sourceCategoryId = "";
+    let sourceCategoryPath = "";
+    if (offerDetail && typeof offerDetail === "object") {
+      sourceCategoryId = offerDetail.categoryId ? String(offerDetail.categoryId) : "";
+      sourceCategoryPath = toCategoryPathText(offerDetail.categoryPath || offerDetail.categoryNamePath || offerDetail.categoryName);
+    }
+    if (!sourceCategoryId && globalData && typeof globalData === "object") {
+      sourceCategoryId = String(globalData.industryId || globalData.categoryId || globalData.cat || "");
+    }
+    if (!sourceCategoryPath && globalData && typeof globalData === "object") {
+      const categoryInfo = globalData.categoryInfo || globalData.category || (globalData.data && globalData.data.categoryInfo);
+      if (categoryInfo) {
+        sourceCategoryPath = toCategoryPathText(categoryInfo.categoryPath || categoryInfo.categoryName);
+        if (!sourceCategoryId && categoryInfo.categoryId) sourceCategoryId = String(categoryInfo.categoryId);
+      }
+    }
+    if (!sourceCategoryPath) {
+      sourceCategoryPath = Array.from(document.querySelectorAll("[class*=crumb] a, [class*=breadcrumb] a, [class*=Breadcrumb] a, [class*=category-path] a, [class*=CategoryPath] a, nav a"))
+        .map((node) => normalizeWhitespace(node.textContent || ""))
+        .filter((text) => text && text.length < 30 && !/首页|home|1688/i.test(text))
+        .slice(0, 8)
+        .join(" > ");
+    }
+    if (!sourceCategoryPath && Array.isArray(jsonLd)) {
+      const withCategory = jsonLd.find((item) => item && item.category);
+      if (withCategory) sourceCategoryPath = String(withCategory.category);
+    }
+    const parts = sourceCategoryPath.split(/\s*>\s*/).filter(Boolean);
+    return {
+      sourceCategoryId,
+      sourceCategoryPath,
+      sourceCategoryName: parts.length ? parts[parts.length - 1] : sourceCategoryPath,
+    };
+  }
+
+  function toCategoryPathText(value) {
+    if (!value) return "";
+    if (Array.isArray(value)) {
+      return value.map((item) => item && (item.categoryName || item.name || item.title || item.text) || "").filter(Boolean).join(" > ");
+    }
+    return String(value);
+  }
+
+  function pick1688Dimensions(context, attributes) {
+    const candidates = [];
+    (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
+      if (attr && /(尺寸|规格|大小|长宽高|dimension|size)/i.test(String(attr.name || ""))) {
+        candidates.push(String(attr.value || ""));
+      }
+    });
+    candidates.push(String(context && context.pageText || ""));
+    for (const candidate of candidates) {
+      const parsed = parse1688Dimensions(candidate);
+      if (parsed) return parsed;
+    }
+    return { lengthMm: 0, widthMm: 0, heightMm: 0 };
+  }
+
+  function parse1688Dimensions(text) {
+    const match = String(text || "").match(/(\d+(?:\.\d+)?)\s*(?:x|×|\*)\s*(\d+(?:\.\d+)?)\s*(?:x|×|\*)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米|m|米)?/i);
+    if (!match) return null;
+    const unit = String(match[4] || "mm").toLowerCase();
+    let factor = 1;
+    if (unit === "cm" || unit === "厘米") factor = 10;
+    if (unit === "m" || unit === "米") factor = 1000;
+    return {
+      lengthMm: Math.round(Number(match[1]) * factor),
+      widthMm: Math.round(Number(match[2]) * factor),
+      heightMm: Math.round(Number(match[3]) * factor),
+    };
+  }
+
+  function pick1688DetailImages(context) {
+    const imageSet = new Set();
+    document.querySelectorAll("[class*=detail-content] img, [class*=desc] img, [class*=description] img, [class*=offer-detail] img, .d-content img").forEach((img) => {
+      const src = normalizeImageUrl(img.getAttribute("data-src") || img.getAttribute("data-lazyload-src") || img.currentSrc || img.src);
+      if (src) imageSet.add(src);
+    });
+    collectStringCandidates(context && context.sources || [], /(detail|desc|description|content|image|img|photo|picture)/i)
+      .slice(0, 200)
+      .forEach((item) => {
+        const src = normalizeImageUrl(item.value);
+        if (src) imageSet.add(src);
+      });
+    return Array.from(imageSet).slice(0, 100);
+  }
+
+  function normalizeImageUrl(value) {
+    const text = String(value || "").trim();
+    if (/^\/\//.test(text)) return location.protocol + text;
+    if (/^https?:\/\//i.test(text)) return text;
+    return "";
   }
 
   function extractTemuProduct(context) {
@@ -1459,8 +1767,10 @@
       .join(" / ");
     const price = parseLooseNumber(pickFirstValue(item, ["price", "salePrice", "finalPrice", "discountPrice", "promotionPrice"]));
     const stock = parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"]));
+    const imageUrl = pickSkuImageUrl(item);
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
+    const attributes = normalize1688SkuAttributes(item.attributes || item.props || item.skuAttributes || item.specAttrs);
 
     return {
       skuId: skuId == null ? "" : String(skuId),
@@ -1468,7 +1778,9 @@
       specText,
       price,
       stock,
-      grossWeightGrams
+      imageUrl,
+      grossWeightGrams,
+      attributes
     };
   }
 

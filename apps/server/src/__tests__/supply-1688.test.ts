@@ -391,6 +391,112 @@ describe('1688 supply pricing and import routes', () => {
     await app.close();
   });
 
+  it('preserves rich 1688 detail fields for SKU mapping and export', async () => {
+    const app = await buildSupplyApp();
+    prismaMock.supplyGoods.create.mockResolvedValue({
+      id: 'goods-rich-detail',
+      userId: 'user-1',
+      title: '富字段多规格手机壳',
+      sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+      sourcePlatform: '1688',
+      sourceProductId: '123456789',
+      supplier: '义乌供应商',
+      purchasePrice: { toString: () => '20' },
+      currency: 'CNY',
+      sku: '123456789',
+      metadata: {},
+      status: 'active',
+      createdAt: new Date('2026-06-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/supply/1688/import',
+      headers: authHeader(),
+      payload: {
+        sourceUrl: 'https://detail.1688.com/offer/123456789.html',
+        title: '富字段多规格手机壳',
+        sourceCategoryId: '1042954',
+        sourceCategoryName: '手机壳',
+        sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+        supplier: '义乌供应商',
+        purchasePriceCny: 20,
+        domesticShippingCny: 5,
+        weightG: 500,
+        lengthMm: 210,
+        widthMm: 130,
+        heightMm: 25,
+        packageFeeCny: 2,
+        commissionPct: 12,
+        logisticsFeeCny: 18,
+        exchangeRateRubToCny: 0.08,
+        targetMarginPct: 30,
+        attributes: [
+          { name: '材质', value: 'TPU' },
+          { name: '风格', value: '透明' },
+        ],
+        priceTiers: [
+          { minQuantity: 2, price: 18.5 },
+          { minQuantity: 100, price: 16.8 },
+        ],
+        detailImages: ['https://img.alicdn.com/detail-1.jpg'],
+        skuItems: [
+          {
+            skuId: 'red-64',
+            name: '红色 64G',
+            specText: '颜色:红色 / 型号:64G',
+            price: 18,
+            stock: 120,
+            imageUrl: 'https://img.alicdn.com/red.jpg',
+            grossWeightGrams: 420,
+            attributes: { 颜色: '红色', 型号: '64G' },
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prismaMock.supplyGoods.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          sourceCategoryId: '1042954',
+          sourceCategoryPath: '数码配件 > 手机配件 > 手机壳',
+          sourceDetails: expect.objectContaining({
+            attributes: [
+              { name: '材质', value: 'TPU' },
+              { name: '风格', value: '透明' },
+            ],
+            priceTiers: [
+              { minQuantity: 2, price: 18.5 },
+              { minQuantity: 100, price: 16.8 },
+            ],
+            detailImages: ['https://img.alicdn.com/detail-1.jpg'],
+            dimensions: { lengthMm: 210, widthMm: 130, heightMm: 25 },
+            skuItems: [
+              expect.objectContaining({
+                skuId: 'red-64',
+                stock: 120,
+                imageUrl: 'https://img.alicdn.com/red.jpg',
+                attributes: { 颜色: '红色', 型号: '64G' },
+              }),
+            ],
+          }),
+          pricingInput: expect.objectContaining({
+            skuItems: [
+              expect.objectContaining({
+                stock: 120,
+                imageUrl: 'https://img.alicdn.com/red.jpg',
+                attributes: { 颜色: '红色', 型号: '64G' },
+              }),
+            ],
+          }),
+        }),
+      }),
+    });
+    await app.close();
+  });
+
   it('updates an existing 1688 supply item instead of creating duplicates for the same source product', async () => {
     const app = await buildSupplyApp();
     prismaMock.supplyGoods.findFirst.mockResolvedValue({

@@ -19,6 +19,17 @@ const createSchema = z.object({
   notes: z.string().optional(),
 });
 
+const richTextValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const sourceAttributeSchema = z.object({
+  name: z.string(),
+  value: richTextValueSchema.optional(),
+}).passthrough();
+const priceTierSchema = z.object({
+  minQuantity: z.union([z.string(), z.number()]).optional().nullable(),
+  price: z.union([z.string(), z.number()]).optional().nullable(),
+}).passthrough();
+const skuAttributesSchema = z.record(z.string(), richTextValueSchema);
+
 const import1688Schema = z.object({
   sourceUrl: z.string().url().optional().or(z.literal('')),
   title: z.string().min(1).max(500),
@@ -33,18 +44,27 @@ const import1688Schema = z.object({
   purchasePriceCny: z.coerce.number(),
   domesticShippingCny: z.coerce.number().default(0),
   weightG: z.coerce.number().default(0),
+  lengthMm: z.coerce.number().optional(),
+  widthMm: z.coerce.number().optional(),
+  heightMm: z.coerce.number().optional(),
   packageFeeCny: z.coerce.number().default(0),
   commissionPct: z.coerce.number().default(12),
   logisticsFeeCny: z.coerce.number().default(0),
   exchangeRateRubToCny: z.coerce.number(),
   targetMarginPct: z.coerce.number().default(30),
+  attributes: z.array(sourceAttributeSchema).max(100).optional(),
+  priceTiers: z.array(priceTierSchema).max(50).optional(),
+  detailImages: z.array(z.string()).max(100).optional(),
   skuItems: z.array(z.object({
     skuId: z.string().optional(),
     name: z.string().optional(),
     specText: z.string().optional(),
     price: z.union([z.string(), z.number()]).optional().nullable(),
+    stock: z.union([z.string(), z.number()]).optional().nullable(),
+    imageUrl: z.string().optional(),
     grossWeightGrams: z.union([z.string(), z.number()]).optional().nullable(),
-  })).max(200).optional(),
+    attributes: skuAttributesSchema.optional(),
+  }).passthrough()).max(200).optional(),
   metadata: z.object({
     sourceOzonProductId: z.string().trim().optional(),
     ozonSourceContext: z.object({
@@ -64,6 +84,7 @@ const import1688Schema = z.object({
       heightMm: z.union([z.string(), z.number()]).optional(),
       savedAt: z.string().trim().optional(),
     }).optional(),
+    sourceDetails: z.unknown().optional(),
   }).optional(),
 });
 
@@ -127,6 +148,32 @@ function buildOzonSourceMetadata(input: z.infer<typeof import1688Schema>) {
         }
       : null,
   };
+}
+
+function compactObject<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined && item !== null && item !== '')
+  ) as Partial<T>;
+}
+
+function build1688SourceDetailsMetadata(input: z.infer<typeof import1688Schema>) {
+  const dimensions = compactObject({
+    lengthMm: input.lengthMm,
+    widthMm: input.widthMm,
+    heightMm: input.heightMm,
+  });
+  const providedDetails = input.metadata?.sourceDetails && typeof input.metadata.sourceDetails === 'object' && !Array.isArray(input.metadata.sourceDetails)
+    ? input.metadata.sourceDetails as Record<string, unknown>
+    : {};
+  const details = compactObject({
+    ...providedDetails,
+    attributes: input.attributes && input.attributes.length ? input.attributes : undefined,
+    priceTiers: input.priceTiers && input.priceTiers.length ? input.priceTiers : undefined,
+    detailImages: input.detailImages && input.detailImages.length ? input.detailImages : undefined,
+    dimensions: Object.keys(dimensions).length ? dimensions : undefined,
+    skuItems: input.skuItems && input.skuItems.length ? input.skuItems : undefined,
+  });
+  return Object.keys(details).length ? details : null;
 }
 
 function toPrismaJson(value: unknown): Prisma.InputJsonValue {
@@ -303,12 +350,14 @@ export async function supplyRoutes(app: FastifyInstance) {
     const sourceProductId = parsed.data.sourceProductId || extract1688ProductId(parsed.data.sourceUrl);
     const mappedCategory = buildMappedCategoryMetadata(mapping);
     const ozonSourceMetadata = buildOzonSourceMetadata(parsed.data);
+    const sourceDetails = build1688SourceDetailsMetadata(parsed.data);
     const metadata: Prisma.InputJsonObject = {
       sourceCategoryId: parsed.data.sourceCategoryId || null,
       sourceCategoryName: parsed.data.sourceCategoryName || null,
       sourceCategoryPath: parsed.data.sourceCategoryPath || null,
       ...(toPrismaJson(ozonSourceMetadata) as Prisma.InputJsonObject),
       mappedCategory: mappedCategory ? toPrismaJson(mappedCategory) : null,
+      sourceDetails: sourceDetails ? toPrismaJson(sourceDetails) : null,
       pricingInput: toPrismaJson(parsed.data),
       pricing: toPrismaJson(pricing),
     };

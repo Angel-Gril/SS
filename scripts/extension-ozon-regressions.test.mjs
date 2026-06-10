@@ -157,6 +157,43 @@ test('1688 detail pages render extension pricing and collect workflow as the pri
   assert.match(css, /ss-erp-1688-summary/);
 });
 
+test('1688 detail import preserves rich SKU fields and source details', () => {
+  const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
+  const pageBridge = readRepoFile('extensions', 'ss-erp', 'content', 'page-bridge.js');
+
+  assert.match(content, /function\s+normalize1688SkuItemsForImport/);
+  assert.match(content, /function\s+normalize1688SkuAttributes/);
+  assert.match(content, /function\s+build1688SourceDetailsMetadata/);
+  assert.match(content, /skuItems:\s*normalize1688SkuItemsForImport\(product\.skuItems\)/);
+  assert.match(content, /attributes:\s*product\.attributes/);
+  assert.match(content, /priceTiers:\s*product\.priceTiers/);
+  assert.match(content, /detailImages:\s*product\.detailImages/);
+  assert.match(content, /lengthMm:\s*numberFromText\(product\.lengthMm/);
+  assert.match(content, /widthMm:\s*numberFromText\(product\.widthMm/);
+  assert.match(content, /heightMm:\s*numberFromText\(product\.heightMm/);
+  assert.match(content, /pickFirstValue\(item,\s*\["stock",\s*"stockNum",\s*"canBookCount",\s*"quantity",\s*"qty",\s*"amountOnSale"\]\)/);
+  assert.match(content, /stock,\s*\n\s*imageUrl,/);
+  assert.match(content, /const\s+imageUrl\s*=\s*item\s*\?\s*pickSkuImageUrl\(item\)\s*:\s*""/);
+  assert.match(content, /const\s+attributes\s*=\s*item\s*\?\s*normalize1688SkuAttributes\(item\.attributes\s*\|\|\s*item\.props\s*\|\|\s*item\.skuAttributes\s*\|\|\s*item\.specAttrs\)\s*:\s*\{\}/);
+  assert.match(content, /grossWeightGrams,\s*\n\s*attributes,/);
+  assert.match(content, /function\s+normalizeSkuItem/);
+  assert.match(content, /const\s+imageUrl\s*=\s*pickSkuImageUrl\(item\)/);
+  assert.match(content, /const\s+attributes\s*=\s*normalize1688SkuAttributes\(item\.attributes\s*\|\|\s*item\.props\s*\|\|\s*item\.skuAttributes\s*\|\|\s*item\.specAttrs\)/);
+  assert.match(content, /stock,\s*\n\s*imageUrl,\s*\n\s*grossWeightGrams,\s*\n\s*attributes/);
+  assert.match(content, /sourceDetails:\s*build1688SourceDetailsMetadata\(product\)/);
+  assert.match(content, /function\s+extract1688RichDetails/);
+  assert.match(content, /function\s+find1688OfferDetail/);
+  assert.match(content, /function\s+pick1688PriceTiers/);
+  assert.match(content, /function\s+pick1688CategoryPath/);
+  assert.match(content, /function\s+pick1688Dimensions/);
+  assert.match(content, /function\s+pick1688DetailImages/);
+  assert.match(content, /Object\.assign\(base,\s*extract1688RichDetails\(context\)\)/);
+  assert.match(pageBridge, /"__GLOBAL_DATA__"/);
+  assert.match(pageBridge, /"detailData"/);
+  assert.match(pageBridge, /"__detail_data__"/);
+  assert.match(pageBridge, /"detailContext"/);
+});
+
 test('1688 pricing panel prefills logistics fee from synced Ozon logistics snapshot', () => {
   const manifest = readRepoFile('extensions', 'ss-erp', 'manifest.json');
   const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');

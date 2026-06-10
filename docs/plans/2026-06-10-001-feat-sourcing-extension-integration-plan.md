@@ -177,7 +177,7 @@ The implementation should normalize each platform into one source-product shape:
 - Verified with `node --test scripts/extension-ozon-regressions.test.mjs`, `pnpm build:extension:local`, `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`, `pnpm test:repo`, and `pnpm typecheck`.
 - Remaining manual QA: test on a logged-in 1688 browser session because MTOP image upload depends on 1688 page cookies/runtime.
 
-- [ ] **Unit 2: Rich 1688 Detail Collector**
+- [x] **Unit 2: Rich 1688 Detail Collector**
 
 **Goal:** Port the stronger 1688 parser behavior into SS ERP's collector and normalize it to the ERP import schema.
 
@@ -219,6 +219,9 @@ The implementation should normalize each platform into one source-product shape:
 
 **Verification:**
 - A real 1688 detail page can show richer SKU/detail data in the extension panel and save it to ERP.
+- Implemented in local/test extension on 2026-06-10 with `offerDetail` discovery, price tiers, source category path, detail images, dimensions, SKU `attributes`/`stock`/`imageUrl` preservation, and bounded `metadata.sourceDetails` persistence.
+- Verified with `node --test scripts/extension-ozon-regressions.test.mjs`, `pnpm --filter server test -- src/__tests__/supply-1688.test.ts`, `pnpm test:repo`, `pnpm typecheck`, `pnpm build:extension:local`, and `EXTENSION_DIR=build/extensions/ss-erp-local pnpm verify:extension`.
+- Remaining manual QA: load `build/extensions/ss-erp-local` in the logged-in browser and test several real 1688 detail pages because live page globals and 1688 cookies vary by account/session.
 
 - [ ] **Unit 3: SKU-Level Pricing Refinement**
 
