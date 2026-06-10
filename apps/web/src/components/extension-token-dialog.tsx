@@ -7,7 +7,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, getApiBase } from '@/lib/api';
+import { buildExtensionConnectionMessage } from '@/lib/extension-connection';
 
 interface ExtensionTokenDialogProps {
   trigger?: React.ReactNode;
@@ -19,6 +20,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [expiresAt, setExpiresAt] = useState('');
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [autoConnecting, setAutoConnecting] = useState(false);
 
   async function generateToken() {
     setLoading(true);
@@ -38,7 +40,56 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const erpUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  function sendExtensionMessage(message: unknown): Promise<{ ok: boolean; error?: string; msg?: string }> {
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined') {
+        resolve({ ok: false, error: '当前环境无法连接扩展' });
+        return;
+      }
+
+      const requestId = `extension-connect-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const timer = window.setTimeout(() => {
+        window.removeEventListener('message', handleMessage);
+        resolve({ ok: false, error: '扩展未响应，请确认已安装并启用 SS ERP 本地扩展' });
+      }, 5000);
+
+      function handleMessage(event: MessageEvent) {
+        if (event.source !== window) return;
+        const data = event.data;
+        if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
+
+        window.clearTimeout(timer);
+        window.removeEventListener('message', handleMessage);
+        resolve(data.response || { ok: false, error: '扩展没有返回结果' });
+      }
+
+      window.addEventListener('message', handleMessage);
+      window.postMessage({ direction: 'ss-erp:to-extension', requestId, message }, '*');
+    });
+  }
+
+  async function autoConnectExtension() {
+    const currentToken = token;
+    if (!currentToken) {
+      toast({ title: 'Token 还未生成，请稍后再试', variant: 'destructive' });
+      return;
+    }
+
+    setAutoConnecting(true);
+    const response = await sendExtensionMessage(buildExtensionConnectionMessage({
+      apiBaseUrl: getApiBase(),
+      token: currentToken,
+    }));
+    setAutoConnecting(false);
+
+    if (response.ok) {
+      toast({ title: '扩展已连接到当前 ERP' });
+    } else {
+      toast({ title: response.error || response.msg || '扩展连接失败', variant: 'destructive' });
+    }
+  }
+
+  const erpUrl = typeof window !== 'undefined' ? getApiBase() : '';
 
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (o && !token) generateToken(); }}>
@@ -58,7 +109,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            把下面的 ERP 地址和 Token 填入 Chrome 扩展的设置面板，扩展即可向当前 ERP 推送采集数据、店铺分析和经营图表。本地 Windows 版使用本机 API Token，不需要云端 Token。
+            可一键把当前 ERP 地址和 Token 写入 Chrome 扩展。本地版会连接本机 API，扩展即可向当前 ERP 推送采集数据、店铺分析和经营图表。
           </p>
 
           <div className="space-y-2">
@@ -100,12 +151,17 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
             )}
           </div>
 
+          <Button onClick={autoConnectExtension} disabled={loading || autoConnecting || !token} className="w-full">
+            {autoConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Key className="h-4 w-4" />}
+            自动写入扩展配置
+          </Button>
+
           <div className="text-xs text-muted-foreground bg-muted/50 rounded-md p-3 space-y-1">
             <p className="font-medium text-foreground">使用说明</p>
             <ol className="list-decimal list-inside space-y-0.5">
-              <li>打开 Chrome 扩展 SS ERP 设置面板</li>
-              <li>ERP 地址使用当前页面显示的地址；本地版通常是 http://127.0.0.1:3001</li>
-              <li>填入上面的 Token</li>
+              <li>优先点击“自动写入扩展配置”</li>
+              <li>如果扩展未响应，再打开 Chrome 扩展设置面板手动填写</li>
+              <li>本地版 ERP 地址通常是 http://127.0.0.1:3001 或 http://localhost:3001</li>
               <li>保存后即可在 OZON / 1688 等页面采集推送</li>
             </ol>
           </div>
