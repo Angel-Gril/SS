@@ -166,6 +166,9 @@ run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; np
 log "Building server and web"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm --filter server build && pnpm --filter web build"
 
+log "Building cloud extension package"
+run_in_dir "$NEXT_DIR" "pnpm build:extension:cloud && STRICT_EXTENSION_CHECK=1 EXTENSION_DIR=build/extensions/ss-erp-cloud pnpm verify:extension"
+
 rollback() {
   log "Rolling back app dir"
   systemctl stop "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
