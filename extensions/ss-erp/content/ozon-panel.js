@@ -92,13 +92,33 @@
   }
 
   function parsePrice(text) {
-    var cleaned = String(text || '').replace(/[^\d.,]/g, '').replace(',', '.');
-    var match = cleaned.match(/\d+(?:\.\d+)?/);
-    return match ? Number(match[0]) : 0;
+    var match = String(text || '')
+      .replace(/[\u00a0\u202f]/g, ' ')
+      .match(/[-+]?\d[\d\s.,']*/);
+    if (!match) return 0;
+    var cleaned = match[0].replace(/[\s']/g, '');
+    if (!cleaned || !/\d/.test(cleaned)) return 0;
+    var comma = cleaned.lastIndexOf(',');
+    var dot = cleaned.lastIndexOf('.');
+    if (comma >= 0 && dot >= 0) {
+      cleaned = comma > dot
+        ? cleaned.replace(/\./g, '').replace(',', '.')
+        : cleaned.replace(/,/g, '');
+    } else if (comma >= 0) {
+      var commaDecimals = cleaned.length - comma - 1;
+      cleaned = commaDecimals > 0 && commaDecimals <= 2
+        ? cleaned.replace(',', '.')
+        : cleaned.replace(/,/g, '');
+    } else if (dot >= 0) {
+      var dotDecimals = cleaned.length - dot - 1;
+      if (!(dotDecimals > 0 && dotDecimals <= 2)) cleaned = cleaned.replace(/\./g, '');
+    }
+    var number = Number(cleaned);
+    return Number.isFinite(number) ? number : 0;
   }
 
   function extractPriceValuesNearText(text) {
-    var matches = String(text || '').match(/(?:[¥￥₽₸$€]\s*\d[\d\s.,]*|\d[\d\s.,]*\s*(?:[¥￥₽₸$€]|Br|BYN|RUB|KZT|CNY|RMB|USD|EUR))/gi) || [];
+    var matches = String(text || '').match(/(?:[¥￥₽₸$€]\s*\d[\d\s.,']*|\d[\d\s.,']*\s*(?:[¥￥₽₸$€]|人民币|日元|元|卢布|руб\.?|Br|BYN|RUB|KZT|CNY|RMB|USD|EUR))/gi) || [];
     return matches.map(function (item) {
       return parsePrice(item);
     }).filter(function (item) {
@@ -153,15 +173,24 @@
 
   function detectCurrency(text, fallbackCurrency) {
     var source = String(text || '').toUpperCase();
-    if (source.indexOf('¥') >= 0 || source.indexOf('￥') >= 0 || source.indexOf('CNY') >= 0 || source.indexOf('RMB') >= 0) return 'CNY';
-    if (source.indexOf('₽') >= 0 || source.indexOf('RUB') >= 0) return 'RUB';
-    return String(fallbackCurrency || 'RUB').toUpperCase();
+    if (source.indexOf('¥') >= 0 || source.indexOf('￥') >= 0 || source.indexOf('CNY') >= 0 || source.indexOf('RMB') >= 0 || /人民币|日元|元/.test(source)) return 'CNY';
+    if (source.indexOf('₽') >= 0 || source.indexOf('RUB') >= 0 || /РУБ|卢布/i.test(source)) return 'RUB';
+    if (source.indexOf('₸') >= 0 || source.indexOf('KZT') >= 0 || /\bТГ\b/i.test(source)) return 'KZT';
+    if (source.indexOf('BYN') >= 0 || /\bBR\b/i.test(source)) return 'BYN';
+    if (source.indexOf('$') >= 0 || source.indexOf('USD') >= 0) return 'USD';
+    if (source.indexOf('€') >= 0 || source.indexOf('EUR') >= 0) return 'EUR';
+    var fallback = String(fallbackCurrency || '').trim().toUpperCase();
+    if (fallback === 'RMB' || fallback === '￥' || fallback === '¥' || fallback === '元' || fallback === '日元' || fallback === '人民币') return 'CNY';
+    if (fallback === '₽' || fallback === 'RUB' || fallback === 'РУБ' || fallback === '卢布') return 'RUB';
+    if (fallback === '₸') return 'KZT';
+    if (fallback === 'BR') return 'BYN';
+    return fallback;
   }
 
   function extractPriceBundle(htmlText, visiblePriceText, fallbackCurrency) {
     var html = String(htmlText || '');
     var currentText = String(visiblePriceText || '');
-    var currency = detectCurrency(currentText || html, fallbackCurrency);
+    var currency = detectCurrency(currentText, '') || detectCurrency(fallbackCurrency, '') || detectCurrency(html, '') || 'RUB';
 
     function parseCandidate(text) {
       return parsePrice(text);
@@ -494,7 +523,7 @@
   function extractPriceBundle(htmlText, visiblePriceText, fallbackCurrency) {
     var html = String(htmlText || '');
     var currentText = String(visiblePriceText || '');
-    var currency = detectCurrency(currentText || html, fallbackCurrency);
+    var currency = detectCurrency(currentText, '') || detectCurrency(fallbackCurrency, '') || detectCurrency(html, '') || 'RUB';
 
     function parseCandidate(text) {
       return parsePrice(text);
@@ -569,10 +598,10 @@
 
   function detectCurrency(text, fallbackCurrency) {
     var source = String(text || '').toUpperCase();
-    if (source.indexOf('¥') >= 0 || source.indexOf('￥') >= 0 || source.indexOf('CNY') >= 0 || source.indexOf('RMB') >= 0) {
+    if (source.indexOf('¥') >= 0 || source.indexOf('￥') >= 0 || source.indexOf('CNY') >= 0 || source.indexOf('RMB') >= 0 || /人民币|日元|元/.test(source)) {
       return 'CNY';
     }
-    if (source.indexOf('₽') >= 0 || source.indexOf('RUB') >= 0) {
+    if (source.indexOf('₽') >= 0 || source.indexOf('RUB') >= 0 || /РУБ|卢布/i.test(source)) {
       return 'RUB';
     }
     if (source.indexOf('₸') >= 0 || source.indexOf('KZT') >= 0 || /\bТГ\b/i.test(source)) {
@@ -587,7 +616,12 @@
     if (source.indexOf('€') >= 0 || source.indexOf('EUR') >= 0) {
       return 'EUR';
     }
-    return String(fallbackCurrency || 'RUB').toUpperCase();
+    var fallback = String(fallbackCurrency || '').trim().toUpperCase();
+    if (fallback === 'RMB' || fallback === '￥' || fallback === '¥' || fallback === '元' || fallback === '日元' || fallback === '人民币') return 'CNY';
+    if (fallback === '₽' || fallback === 'RUB' || fallback === 'РУБ' || fallback === '卢布') return 'RUB';
+    if (fallback === '₸') return 'KZT';
+    if (fallback === 'BR') return 'BYN';
+    return fallback;
   }
 
   function readStateData(prefix) {

@@ -8,10 +8,16 @@
     const fab = document.createElement('button');
     fab.id = 'ozon-calc-fab';
     fab.type = 'button';
+    fab.classList.add('notranslate');
+    fab.setAttribute('translate', 'no');
+    fab.setAttribute('lang', 'zh-CN');
     fab.textContent = '算价';
 
     const drawer = document.createElement('aside');
     drawer.id = 'ozon-calc-drawer';
+    drawer.classList.add('notranslate');
+    drawer.setAttribute('translate', 'no');
+    drawer.setAttribute('lang', 'zh-CN');
     drawer.innerHTML = [
       '<div class="ozon-calc-header">',
       '  <div class="ozon-calc-brand-mark">算</div>',
