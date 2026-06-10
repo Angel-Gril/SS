@@ -10,6 +10,8 @@ const cases = [
   ['50.16 CNY', 'RUB', { price: '50.16', currency: 'CNY' }],
   ['￥50.16', 'RUB', { price: '50.16', currency: 'CNY' }],
   ['50.16 RMB', 'RUB', { price: '50.16', currency: 'CNY' }],
+  ['1,384.66 日元', 'RUB', { price: '1384.66', currency: 'CNY' }],
+  ['每件1384.66元', 'RUB', { price: '1384.66', currency: 'CNY' }],
   ['Итого в CNY', 'RUB', { price: null, currency: 'CNY' }],
   ['309 ₽', null, { price: '309', currency: 'RUB' }],
   ['12 345 ₸', null, { price: '12345', currency: 'KZT' }],

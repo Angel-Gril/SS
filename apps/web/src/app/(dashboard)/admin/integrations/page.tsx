@@ -71,7 +71,7 @@ interface ExtensionRelease {
   version: string;
   targets: {
     cloud: { filename: string; downloadUrl: string };
-    local: { filename: string; downloadUrl: string };
+    local?: { filename: string; downloadUrl: string };
   };
 }
 
@@ -163,7 +163,7 @@ export default function AdminIntegrationsPage() {
 
 function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null }) {
   const cloudHref = toAppHref(release?.targets.cloud.downloadUrl || '/api/extensions/download/cloud');
-  const localHref = toAppHref(release?.targets.local.downloadUrl || '/api/extensions/download/local');
+  const localHref = release?.targets.local ? toAppHref(release.targets.local.downloadUrl) : '';
   const publicDownloadHref = toAppHref('/download');
   return (
     <Card>
@@ -186,7 +186,7 @@ function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null })
       <CardContent className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
         <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
           <InfoLine label="云端扩展包" value={release?.targets.cloud.filename || 'ss-erp-cloud.zip'} />
-          <InfoLine label="本地扩展包" value={release?.targets.local.filename || 'ss-erp-local.zip'} />
+          <InfoLine label="本地扩展包" value={release?.targets.local?.filename || '暂未发布'} />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button asChild size="sm" className="gap-1.5">
@@ -195,12 +195,14 @@ function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null })
               下载云端包
             </a>
           </Button>
-          <Button asChild size="sm" variant="outline" className="gap-1.5">
-            <a href={localHref}>
-              <Download className="h-3.5 w-3.5" />
-              下载本地包
-            </a>
-          </Button>
+          {localHref && (
+            <Button asChild size="sm" variant="outline" className="gap-1.5">
+              <a href={localHref}>
+                <Download className="h-3.5 w-3.5" />
+                下载本地包
+              </a>
+            </Button>
+          )}
           <Button asChild size="sm" variant="ghost" className="gap-1.5">
             <a href={publicDownloadHref}>
               <ExternalLink className="h-3.5 w-3.5" />

@@ -11,103 +11,45 @@ interface ZipEntry {
   mtime: Date;
 }
 
-const CLOUD_HOST_PERMISSIONS = [
-  'https://ss-erp.com/*',
-  'https://*.ss-erp.com/*',
-  'https://seller.ozon.ru/*',
-  'https://globalcalculator.ozon.ru/*',
-  'https://docs.ozon.ru/*',
-  'https://docs.ozon.com/*',
-  'https://open.er-api.com/*',
-  'https://*.ozon.ru/*',
-  'https://*.ozon.kz/*',
-  'https://*.ozon.by/*',
-  'https://detail.1688.com/*',
-  'https://trade.1688.com/*',
-  'https://mobile.pinduoduo.com/*',
-  'https://www.temu.com/*',
-  'https://*.aliexpress.com/*',
-  'https://www.wildberries.ru/*',
-  'https://item.jd.com/*',
-  'https://item.taobao.com/*',
-  'https://detail.tmall.com/*',
-];
-
-const CLOUD_ERP_MATCHES = [
-  'https://ss-erp.com/*',
-  'https://*.ss-erp.com/*',
-];
-
-const CLOUD_WEB_RESOURCE_MATCHES = [
-  ...CLOUD_ERP_MATCHES,
-  'https://seller.ozon.ru/*',
-  'https://globalcalculator.ozon.ru/*',
-  'https://*.ozon.ru/*',
-  'https://*.ozon.kz/*',
-  'https://*.ozon.by/*',
-];
-
-function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
+interface BuiltManifest {
+  version?: string;
 }
 
-function stripLocalAndBroad(values: string[]): string[] {
-  return unique(values.filter((value) => (
-    value !== '<all_urls>' &&
-    value !== 'file:///*' &&
-    !value.includes('localhost') &&
-    !value.includes('127.0.0.1') &&
-    !value.includes('120.55.61.146')
-  )));
+interface ExtensionReleaseTarget {
+  filename: string;
+  downloadUrl: string;
 }
 
-function getExtensionSourceDir(): string {
+function findExtensionBuildRoot(): string | null {
   const candidates = [
-    path.resolve(process.cwd(), '../../extensions/ss-erp'),
-    path.resolve(process.cwd(), 'extensions/ss-erp'),
+    path.resolve(process.cwd(), '../../build/extensions'),
+    path.resolve(process.cwd(), 'build/extensions'),
   ];
-  const found = candidates.find((candidate) => existsSync(path.join(candidate, 'manifest.json')));
+  return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
+function getExtensionBuildRoot(): string {
+  const found = findExtensionBuildRoot();
   if (!found) {
-    throw new Error(`扩展源码目录不存在：${candidates.join(' 或 ')}`);
+    throw new Error('扩展构建目录不存在：build/extensions');
   }
   return found;
 }
 
-function transformManifest(raw: Buffer, target: ExtensionTarget): Buffer {
-  const manifest = JSON.parse(raw.toString('utf8'));
-  if (target === 'cloud') {
-    manifest.name = `${manifest.name} (Cloud)`;
-    manifest.short_name = 'SS ERP Cloud';
-    manifest.host_permissions = CLOUD_HOST_PERMISSIONS;
-    manifest.externally_connectable = {
-      ...(manifest.externally_connectable || {}),
-      matches: CLOUD_ERP_MATCHES,
-    };
-    manifest.content_scripts = (manifest.content_scripts || [])
-      .map((script: any) => {
-        const next = { ...script };
-        const js = script.js || [];
-        if (js.includes('content/calculator-sync-bridge.js')) {
-          return null;
-        }
-        if (js.includes('content/erp-collect-bridge.js')) {
-          next.matches = CLOUD_ERP_MATCHES;
-        } else {
-          next.matches = stripLocalAndBroad(script.matches || []);
-        }
-        if (next.exclude_matches) next.exclude_matches = stripLocalAndBroad(next.exclude_matches);
-        return next.matches.length ? next : null;
-      })
-      .filter(Boolean);
-    manifest.web_accessible_resources = (manifest.web_accessible_resources || []).map((group: any) => ({
-      ...group,
-      matches: CLOUD_WEB_RESOURCE_MATCHES,
-    }));
-  } else {
-    manifest.name = `${manifest.name} (Local)`;
-    manifest.short_name = 'SS ERP Local';
-  }
-  return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+function getExtensionBuildDir(target: ExtensionTarget): string {
+  return path.join(getExtensionBuildRoot(), `ss-erp-${target}`);
+}
+
+async function readOptionalBuiltManifest(target: ExtensionTarget): Promise<BuiltManifest | null> {
+  const buildRoot = findExtensionBuildRoot();
+  if (!buildRoot) return null;
+  const manifestPath = path.join(buildRoot, `ss-erp-${target}`, 'manifest.json');
+  if (!existsSync(manifestPath)) return null;
+  return JSON.parse(await readFile(manifestPath, 'utf8')) as BuiltManifest;
+}
+
+function extensionZipPath(target: ExtensionTarget, version: string): string {
+  return path.join(getExtensionBuildRoot(), `ss-erp-${target}-${version}.zip`);
 }
 
 async function listFiles(root: string, dir = ''): Promise<string[]> {
@@ -127,25 +69,24 @@ async function listFiles(root: string, dir = ''): Promise<string[]> {
 }
 
 async function buildExtensionEntries(target: ExtensionTarget): Promise<{ entries: ZipEntry[]; version: string }> {
-  const sourceDir = getExtensionSourceDir();
-  const files = await listFiles(sourceDir);
+  const buildDir = getExtensionBuildDir(target);
+  const manifestPath = path.join(buildDir, 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    throw new Error(`扩展 ${target} 构建产物不存在，请先运行 pnpm package:extension:${target}`);
+  }
+  const files = await listFiles(buildDir);
   const rootName = `ss-erp-${target}`;
-  let version = '0.0.0';
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as BuiltManifest;
+  const version = manifest.version || '0.0.0';
   const entries: ZipEntry[] = [];
 
   for (const relative of files) {
-    const absolute = path.join(sourceDir, relative);
+    const absolute = path.join(buildDir, relative);
     const fileStat = await stat(absolute);
     const normalizedRelative = relative.split(path.sep).join('/');
-    let data = await readFile(absolute);
-    if (normalizedRelative === 'manifest.json') {
-      const rawManifest = JSON.parse(data.toString('utf8'));
-      version = rawManifest.version || version;
-      data = transformManifest(data, target);
-    }
     entries.push({
       name: `${rootName}/${normalizedRelative}`,
-      data,
+      data: await readFile(absolute),
       mtime: fileStat.mtime,
     });
   }
@@ -269,23 +210,36 @@ function parseTarget(raw: string): ExtensionTarget | null {
 
 export async function extensionDownloadRoutes(app: FastifyInstance) {
   app.get('/latest', async (_request, reply) => {
-    const sourceDir = getExtensionSourceDir();
-    const manifest = JSON.parse(await readFile(path.join(sourceDir, 'manifest.json'), 'utf8'));
-    const version = manifest.version || '0.0.0';
+    const cloudManifest = await readOptionalBuiltManifest('cloud');
+    if (!cloudManifest) {
+      return reply.status(404).send({
+        code: 0,
+        msg: '云端扩展构建产物不存在，请先运行 pnpm package:extension:cloud',
+      });
+    }
+
+    const cloudVersion = cloudManifest.version || '0.0.0';
+    const targets: Partial<Record<ExtensionTarget, ExtensionReleaseTarget>> = {
+      cloud: {
+        filename: `ss-erp-cloud-${cloudVersion}.zip`,
+        downloadUrl: '/api/extensions/download/cloud',
+      },
+    };
+
+    const localManifest = await readOptionalBuiltManifest('local');
+    if (localManifest) {
+      const localVersion = localManifest.version || '0.0.0';
+      targets.local = {
+        filename: `ss-erp-local-${localVersion}.zip`,
+        downloadUrl: '/api/extensions/download/local',
+      };
+    }
+
     return reply.send({
       code: 1,
       data: {
-        version,
-        targets: {
-          cloud: {
-            filename: `ss-erp-cloud-${version}.zip`,
-            downloadUrl: '/api/extensions/download/cloud',
-          },
-          local: {
-            filename: `ss-erp-local-${version}.zip`,
-            downloadUrl: '/api/extensions/download/local',
-          },
-        },
+        version: cloudVersion,
+        targets,
       },
     });
   });
@@ -296,9 +250,20 @@ export async function extensionDownloadRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: 'target must be cloud or local' });
     }
 
-    const { entries, version } = await buildExtensionEntries(target);
-    const zip = createZip(entries);
+    let build;
+    try {
+      build = await buildExtensionEntries(target);
+    } catch (error) {
+      return reply.status(404).send({
+        code: 0,
+        msg: error instanceof Error ? error.message : `扩展 ${target} 构建产物不存在`,
+      });
+    }
+
+    const { entries, version } = build;
     const filename = `ss-erp-${target}-${version}.zip`;
+    const prebuiltZipPath = extensionZipPath(target, version);
+    const zip = existsSync(prebuiltZipPath) ? await readFile(prebuiltZipPath) : createZip(entries);
 
     reply.header('Content-Type', 'application/zip');
     reply.header('Content-Disposition', `attachment; filename="${filename}"`);

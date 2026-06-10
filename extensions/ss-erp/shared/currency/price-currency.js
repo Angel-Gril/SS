@@ -10,16 +10,18 @@
   function normalizeCurrencyCode(value) {
     var text = value == null ? '' : String(value).trim().toUpperCase();
     if (!text) return null;
-    if (text === 'RMB') return 'CNY';
+    if (text === 'RMB' || text === '￥' || text === '¥' || text === '元' || text === '人民币' || text === '日元') return 'CNY';
+    if (text === '₽' || text === 'РУБ' || text === '卢布') return 'RUB';
+    if (text === '₸') return 'KZT';
+    if (text === 'BR') return 'BYN';
     return text;
   }
 
   function detectCurrencyFromText(text, fallbackCurrency) {
     var raw = text == null ? '' : String(text);
-    var upper = raw.toUpperCase();
 
-    if (/[¥￥]/.test(raw) || /\b(?:CNY|RMB)\b/i.test(raw) || /人民币/.test(raw)) return 'CNY';
-    if (raw.indexOf('₽') >= 0 || /\bRUB\b/i.test(raw) || /(?:^|[\s\d])руб\.?/i.test(raw)) return 'RUB';
+    if (/[¥￥]/.test(raw) || /\b(?:CNY|RMB)\b/i.test(raw) || /人民币|日元|(?:^|[\s\d])元/.test(raw)) return 'CNY';
+    if (raw.indexOf('₽') >= 0 || /\bRUB\b/i.test(raw) || /(?:^|[\s\d])руб\.?/i.test(raw) || /卢布/.test(raw)) return 'RUB';
     if (raw.indexOf('₸') >= 0 || /\bKZT\b/i.test(raw) || /тенге/i.test(raw)) return 'KZT';
     if (/\bBYN\b/i.test(raw)) return 'BYN';
     if (raw.indexOf('$') >= 0 || /\bUSD\b/i.test(raw)) return 'USD';

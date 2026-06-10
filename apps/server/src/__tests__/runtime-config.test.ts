@@ -39,6 +39,9 @@ describe('runtime config', () => {
   it('uses configured user hostname as cloud upload proxy base url', () => {
     vi.stubEnv('RUNTIME_MODE', 'cloud');
     vi.stubEnv('NEXT_PUBLIC_USER_HOSTNAME', 'app.example.com');
+    vi.stubEnv('LOCAL_BASE_URL', '');
+    vi.stubEnv('PUBLIC_API_BASE_URL', '');
+    vi.stubEnv('NEXT_PUBLIC_API_BASE_URL', '');
 
     expect(getRuntimeConfig().localBaseUrl).toBe('https://app.example.com');
   });

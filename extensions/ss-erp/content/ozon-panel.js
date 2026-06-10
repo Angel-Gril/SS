@@ -84,6 +84,10 @@
   function getVisibleText(selectors) {
     for (var index = 0; index < selectors.length; index += 1) {
       var nodes = document.querySelectorAll(selectors[index]);
+      if (!nodes.length && typeof document.querySelector === 'function') {
+        var fallbackNode = document.querySelector(selectors[index]);
+        nodes = fallbackNode ? [fallbackNode] : [];
+      }
       for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
         var node = nodes[nodeIndex];
         if (!node || isInjectedExtensionNode(node)) continue;
@@ -99,13 +103,33 @@
   }
 
   function parsePrice(text) {
-    var cleaned = String(text || '').replace(/[^\d.,]/g, '').replace(',', '.');
-    var match = cleaned.match(/\d+(?:\.\d+)?/);
-    return match ? Number(match[0]) : 0;
+    var match = String(text || '')
+      .replace(/[\u00a0\u202f]/g, ' ')
+      .match(/[-+]?\d[\d\s.,']*/);
+    if (!match) return 0;
+    var cleaned = match[0].replace(/[\s']/g, '');
+    if (!cleaned || !/\d/.test(cleaned)) return 0;
+    var comma = cleaned.lastIndexOf(',');
+    var dot = cleaned.lastIndexOf('.');
+    if (comma >= 0 && dot >= 0) {
+      cleaned = comma > dot
+        ? cleaned.replace(/\./g, '').replace(',', '.')
+        : cleaned.replace(/,/g, '');
+    } else if (comma >= 0) {
+      var commaDecimals = cleaned.length - comma - 1;
+      cleaned = commaDecimals > 0 && commaDecimals <= 2
+        ? cleaned.replace(',', '.')
+        : cleaned.replace(/,/g, '');
+    } else if (dot >= 0) {
+      var dotDecimals = cleaned.length - dot - 1;
+      if (!(dotDecimals > 0 && dotDecimals <= 2)) cleaned = cleaned.replace(/\./g, '');
+    }
+    var number = Number(cleaned);
+    return Number.isFinite(number) ? number : 0;
   }
 
   function extractPriceValuesNearText(text) {
-    var matches = String(text || '').match(/(?:[¥￥₽₸$€]\s*\d[\d\s.,]*|\d[\d\s.,]*\s*(?:[¥￥₽₸$€]|Br|BYN|RUB|KZT|CNY|RMB|USD|EUR))/gi) || [];
+    var matches = String(text || '').match(/(?:[¥￥₽₸$€]\s*\d[\d\s.,']*|\d[\d\s.,']*\s*(?:[¥￥₽₸$€]|人民币|日元|元|卢布|руб\.?|Br|BYN|RUB|KZT|CNY|RMB|USD|EUR))/gi) || [];
     return matches.map(function (item) {
       return parsePrice(item);
     }).filter(function (item) {
@@ -116,8 +140,8 @@
   function normalizeCurrencyCode(value) {
     var text = String(value || '').trim().toUpperCase();
     if (!text) return '';
-    if (text === 'RMB' || text === '￥' || text === '¥') return 'CNY';
-    if (text === '₽' || text === 'RUR') return 'RUB';
+    if (text === 'RMB' || text === '￥' || text === '¥' || text === '元' || text === '日元' || text === '人民币') return 'CNY';
+    if (text === '₽' || text === 'RUR' || text === 'РУБ' || text === '卢布') return 'RUB';
     if (text === '₸') return 'KZT';
     if (text === 'BR') return 'BYN';
     return /^(CNY|RUB|KZT|BYN|USD|EUR)$/.test(text) ? text : '';
@@ -127,8 +151,8 @@
     var raw = String(text || '');
     var source = raw.toUpperCase();
     // Chrome Translate may render Ozon's yuan symbol as "日元"; this Ozon flow treats that source price as CNY.
-    if (raw.indexOf('¥') >= 0 || raw.indexOf('￥') >= 0 || /\b(?:CNY|RMB)\b/i.test(raw) || raw.indexOf('人民币') >= 0 || raw.indexOf('日元') >= 0) return 'CNY';
-    if (raw.indexOf('₽') >= 0 || /\b(?:RUB|RUR)\b/i.test(raw) || /(?:^|[\s\d])руб\.?/i.test(raw)) return 'RUB';
+    if (raw.indexOf('¥') >= 0 || raw.indexOf('￥') >= 0 || /\b(?:CNY|RMB)\b/i.test(raw) || /人民币|日元|(?:^|[\s\d])元/.test(raw)) return 'CNY';
+    if (raw.indexOf('₽') >= 0 || /\b(?:RUB|RUR)\b/i.test(raw) || /(?:^|[\s\d])руб\.?/i.test(raw) || /卢布/.test(raw)) return 'RUB';
     if (raw.indexOf('₸') >= 0 || /\bKZT\b/i.test(raw) || /тенге/i.test(raw) || /\bТГ\b/i.test(source)) return 'KZT';
     if (/\bBYN\b/i.test(raw) || /\bBR\b/i.test(raw)) return 'BYN';
     if (raw.indexOf('$') >= 0 || /\bUSD\b/i.test(raw)) return 'USD';
@@ -152,11 +176,11 @@
     return '';
   }
 
-  function resolvePriceCurrency(semantic, visiblePriceText, fallbackCurrency) {
+  function resolvePriceCurrency(semantic, visiblePriceText, fallbackCurrency, htmlText) {
     return detectCurrencyToken(visiblePriceText)
       || normalizeCurrencyCode(fallbackCurrency)
       || normalizeCurrencyCode(semantic && semantic.currency)
-      || detectCurrencyToken(visiblePriceText)
+      || detectCurrencyToken(htmlText)
       || 'RUB';
   }
 
@@ -246,7 +270,7 @@
 
     // Priority 1: structured data-state JSON (immune to browser translation)
     var semantic = extractSemanticPricesFromDataState();
-    var currency = resolvePriceCurrency(semantic, currentText, fallbackCurrency);
+    var currency = resolvePriceCurrency(semantic, currentText, fallbackCurrency, html);
 
     // Priority 2: text search (only as fallback, breaks when page is translated)
     var bankPrices = findPricesBefore('с Ozon Банком', 1);
@@ -579,7 +603,7 @@
 
     // Priority 1: structured data-state JSON (immune to browser translation)
     var semantic = extractSemanticPricesFromDataState();
-    var currency = resolvePriceCurrency(semantic, currentText, fallbackCurrency);
+    var currency = resolvePriceCurrency(semantic, currentText, fallbackCurrency, html);
 
     // Priority 2: text search (only as fallback, breaks when page is translated)
     var bankPrices = findPricesBefore('с Ozon Банком', 1);
