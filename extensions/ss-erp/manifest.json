@@ -97,6 +97,16 @@
     },
     {
       "matches": [
+        "https://s.1688.com/*",
+        "https://*.1688.com/*"
+      ],
+      "js": [
+        "content/source-search-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://detail.1688.com/*",
         "https://www.temu.com/*",
         "https://*.aliexpress.com/*",
@@ -177,6 +187,7 @@
         "pages/config-import.js",
         "content/capture-page-hook.js",
         "content/page-bridge.js",
+        "content/source-search-1688-page.js",
         "shared/capture-bridge/captured-har-store.js",
         "shared/seller-products/seller-products-export.js",
         "shared/official-freight/official-freight-export.js",

@@ -175,6 +175,9 @@ test('1688 pricing panel prefills logistics fee from synced Ozon logistics snaps
 test('Ozon product panel opens 1688 image search with current Ozon context', () => {
   const content = readRepoFile('extensions', 'ss-erp', 'content', 'collect-content-script.js');
   const worker = readRepoFile('extensions', 'ss-erp', 'background', 'service-worker.js');
+  const manifest = readRepoFile('extensions', 'ss-erp', 'manifest.json');
+  const sourceSearchContent = readRepoFile('extensions', 'ss-erp', 'content', 'source-search-content.js');
+  const sourceSearch1688Page = readRepoFile('extensions', 'ss-erp', 'content', 'source-search-1688-page.js');
 
   assert.match(content, /function\s+buildOzon1688SearchContext/);
   assert.match(content, /function\s+open1688ImageSearchFromOzon/);
@@ -184,11 +187,36 @@ test('Ozon product panel opens 1688 image search with current Ozon context', () 
   assert.match(content, /images\[0\]/);
 
   assert.match(worker, /const\s+SS_ERP_OZON_1688_CONTEXT_KEY\s*=\s*'ss-erp:ozon-1688-context'/);
+  assert.match(worker, /const\s+SS_ERP_SOURCE_SEARCH_JOBS_KEY\s*=\s*'ss-erp:sourcing-search-jobs'/);
+  assert.match(worker, /const\s+SS_ERP_SOURCE_SEARCH_MAX_TOTAL_IMAGE_BYTES/);
+  assert.match(worker, /function\s+pruneSourceSearchJobs/);
+  assert.match(worker, /function\s+measureSourceSearchJobBytes/);
+  assert.match(worker, /function\s+createSourceSearchJob/);
+  assert.match(worker, /function\s+buildSourceSearchUrl/);
+  assert.match(worker, /function\s+fetchImageForSourceSearch/);
+  assert.match(worker, /totalBytes\s*\+\s*jobBytes\s*>\s*SS_ERP_SOURCE_SEARCH_MAX_TOTAL_IMAGE_BYTES/);
   assert.match(worker, /function\s+build1688ImageSearchUrl/);
   assert.match(worker, /message\.type\s*===\s*'ss-erp:open-1688-image-search'/);
-  assert.match(worker, /chrome\.storage\.local\.set\(\{\s*\[SS_ERP_OZON_1688_CONTEXT_KEY\]:\s*context\s*\}\)/);
+  assert.match(worker, /chrome\.storage\.local\.set\(\{\s*\[SS_ERP_OZON_1688_CONTEXT_KEY\]:\s*context/);
+  assert.match(worker, /createSourceSearchJob\('1688'/);
   assert.match(worker, /chrome\.tabs\.create\(\{\s*url:\s*targetUrl\s*\}\)/);
+  assert.match(worker, /ssErpSourceSearch/);
+  assert.match(worker, /s\.1688\.com\/youyuan\/index\.htm/);
   assert.match(worker, /s\.1688\.com\/selloffer\/offer_search\.htm/);
+
+  assert.match(manifest, /content\/source-search-content\.js/);
+  assert.match(manifest, /content\/source-search-1688-page\.js/);
+  assert.match(sourceSearchContent, /SS_ERP_SOURCE_SEARCH_JOBS_KEY\s*=\s*"ss-erp:sourcing-search-jobs"/);
+  assert.match(sourceSearchContent, /source-search-1688-page\.js/);
+  assert.match(sourceSearchContent, /ss-erp-source-search-content/);
+  assert.match(sourceSearchContent, /fallbackUrl/);
+  assert.match(sourceSearchContent, /return\s+injectPageBridge\(\)\.then\(\(\)\s*=>\s*\{/);
+  assert.match(sourceSearchContent, /script\.onload\s*=\s*\(\)\s*=>\s*resolve\(\)/);
+  assert.match(sourceSearchContent, /script\.onerror\s*=\s*\(\)\s*=>\s*reject/);
+  assert.match(sourceSearch1688Page, /ss-erp-source-search-content/);
+  assert.match(sourceSearch1688Page, /imageBase64ToImageId/);
+  assert.match(sourceSearch1688Page, /mtop\.relationrecommend\.WirelessRecommend\.recommend/);
+  assert.match(sourceSearch1688Page, /imageIdList/);
 });
 
 test('1688 pricing panel shows the Ozon source context saved before image search', () => {
