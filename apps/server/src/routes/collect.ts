@@ -62,6 +62,78 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   return attrText ? `${base} ${attrText}`.slice(0, 200) : base.slice(0, 200);
 }
 
+function metadataRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function normalizePublishImageList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const image = String(raw || '').trim();
+    if (!image || seen.has(image)) continue;
+    seen.add(image);
+    out.push(image);
+  }
+  return out;
+}
+
+function mergePublishImageLists(...lists: unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const image of normalizePublishImageList(list)) {
+      if (seen.has(image)) continue;
+      seen.add(image);
+      out.push(image);
+    }
+  }
+  return out;
+}
+
+function sameStringList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function hasAppliedWatermark(item: { metadata?: unknown }): boolean {
+  return metadataRecord(item.metadata).watermarkApplied === true;
+}
+
+export function resolveBasePublishImages(
+  item: { images?: unknown; metadata?: unknown },
+  clonedImages?: unknown,
+): string[] {
+  const meta = metadataRecord(item.metadata);
+  const customOrWatermarked = normalizePublishImageList(meta.watermarkedImages);
+  if (customOrWatermarked.length) return customOrWatermarked;
+  const cloned = normalizePublishImageList(clonedImages);
+  if (cloned.length) return cloned;
+  return normalizePublishImageList(item.images);
+}
+
+export function resolveVariantPublishImages(
+  item: { images?: unknown; metadata?: unknown },
+  variant: { images?: unknown },
+  baseImages: string[],
+): string[] {
+  if (hasAppliedWatermark(item)) return baseImages;
+  const variantImages = normalizePublishImageList(variant.images);
+  return variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages;
+}
+
+export function recordOfferPublishImages(
+  offerImageLists: Record<string, string[]>,
+  offerImages: Record<string, string>,
+  offerId: string,
+  images: unknown,
+): void {
+  const normalizedImages = normalizePublishImageList(images);
+  if (!offerId || !normalizedImages.length) return;
+  offerImageLists[offerId] = normalizedImages;
+  offerImages[offerId] = normalizedImages[0]!;
+}
+
 function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
   const bad: string[] = [];
   for (const item of items) {
@@ -612,7 +684,8 @@ export async function collectRoutes(app: FastifyInstance) {
       if (publishTitle) meta.publishTitleRu = publishTitle;
       else delete meta.publishTitleRu;
     }
-    // images 优先级最高路径：写到 watermarkedImages，让 publish-ozon 用这个版本
+    // 历史字段名叫 watermarkedImages；这里实际表示改款表单确认后的商品级发布图片。
+    // publish-ozon 会把变体封面排在它前面，避免多 SKU 主图被商品级图片覆盖。
     if (body.images?.length) meta.watermarkedImages = body.images;
 
     const updateData: any = { metadata: meta };
@@ -724,6 +797,7 @@ export async function collectRoutes(app: FastifyInstance) {
       // 收集 fallback：每个 SupplyGoods 如果有 variants[]，展开为 N 个跟卖 item；否则保持单 SKU
       const fallbackTrace: { offerId: string; sourceItemId: string; sourceVariantSku: string; variantAttrs: any }[] = [];
       const fallbackOfferImages: Record<string, string> = {};
+      const fallbackOfferImageLists: Record<string, string[]> = {};
       const fallbackItems = noAttrs
         .flatMap((item) => {
           const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
@@ -740,8 +814,8 @@ export async function collectRoutes(app: FastifyInstance) {
             const sourceSku = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
             if (!sourceSku) return [];
             const offerId = `f${Date.now().toString(36)}${randomSuffix(4)}`;
-            const firstImg = Array.isArray(item.images) && item.images.length ? String(item.images[0]) : '';
-            if (firstImg) fallbackOfferImages[offerId] = firstImg;
+            const rawImages = resolveBasePublishImages(item);
+            recordOfferPublishImages(fallbackOfferImageLists, fallbackOfferImages, offerId, rawImages);
             return [{
               sku: sourceSku,
               name: resolvePublishName(item),
@@ -754,6 +828,7 @@ export async function collectRoutes(app: FastifyInstance) {
           }
 
           // 有 variants：每个 sub-SKU 一条跟卖（每个变体本身就是独立的 OZON product_id）
+          const baseRawImages = resolveBasePublishImages(item);
           return variants
             .map((v, idx) => {
               const subSourceSku = v.sku && /^\d+$/.test(String(v.sku)) ? Number(v.sku) : null;
@@ -779,10 +854,8 @@ export async function collectRoutes(app: FastifyInstance) {
                 sourceVariantSku: String(v.sku),
                 variantAttrs: v.attrs || null,
               });
-              const variantImg = Array.isArray(v.images) && v.images.length ? String(v.images[0]) : '';
-              const itemImg = Array.isArray(item.images) && item.images.length ? String(item.images[0]) : '';
-              const firstImg = variantImg || itemImg;
-              if (firstImg) fallbackOfferImages[offerId] = firstImg;
+              const rawImages = resolveVariantPublishImages(item, v, baseRawImages);
+              recordOfferPublishImages(fallbackOfferImageLists, fallbackOfferImages, offerId, rawImages);
               const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined;
               const subTitle = resolvePublishName(item, subAttrs);
               return {
@@ -817,11 +890,7 @@ export async function collectRoutes(app: FastifyInstance) {
               const info = await client.getImportInfo(fallbackTaskId);
               for (const it of info.items || []) {
                 if (it.product_id && it.status === 'imported') {
-                  const matchedItem = noAttrs.find((ni) => fallbackItems.some((fi) => fi && fi.offer_id === it.offer_id));
-                  const matchedMeta = matchedItem ? (matchedItem.metadata as any) : null;
-                  const rawImages = matchedMeta?.watermarkedImages?.length
-                    ? matchedMeta.watermarkedImages
-                    : matchedItem && Array.isArray(matchedItem.images) ? (matchedItem.images as string[]) : [];
+                  const rawImages = it.offer_id ? fallbackOfferImageLists[String(it.offer_id)] || [] : [];
                   if (rawImages.length) {
                     const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId);
                     await client.importProductPictures({ product_id: it.product_id, images: resolvedImages });
@@ -991,12 +1060,8 @@ export async function collectRoutes(app: FastifyInstance) {
       const categoryId = body.categoryId || meta?.descriptionCategoryId;
       const typeId = body.typeId || meta?.typeId;
       const dims = getItemDimensions(item);
-      const baseRawImages: string[] = meta?.watermarkedImages?.length
-        ? meta.watermarkedImages
-        : cloned?.images?.length ? cloned.images : (Array.isArray(item.images) ? (item.images as string[]) : []);
+      const baseRawImages = resolveBasePublishImages(item, cloned?.images);
       const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
-      // 已加水印时，变体不能再走自己的源图（变体 images 是 OZON 缩略图，没水印）
-      const watermarkApplied = !!meta?.watermarkedImages?.length;
 
       const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
       // 无 variants：保持原行为（1 个 item）
@@ -1032,10 +1097,10 @@ export async function collectRoutes(app: FastifyInstance) {
         const overridePrice = getVariantOverridePrice(itemOverrides, v, idx);
         const subPrice = overridePrice ?? priceWithMarkup;
         const subSku = v.sku ? String(v.sku) : `${item.sku || item.id}-v${idx}`;
-        const subImagesRaw: string[] = watermarkApplied
-          ? baseRawImages
-          : (Array.isArray(v.images) && v.images.length ? v.images : baseRawImages);
-        const subImages = subImagesRaw === baseRawImages ? baseImages : await resolveImageUrls(subImagesRaw, body.shopId, userId);
+        const subImagesRaw = resolveVariantPublishImages(item, v, baseRawImages);
+        const subImages = sameStringList(subImagesRaw, baseRawImages)
+          ? baseImages
+          : await resolveImageUrls(subImagesRaw, body.shopId, userId);
         const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
         const subName = resolvePublishName(item, subAttrs);
 
