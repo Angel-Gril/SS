@@ -775,6 +775,7 @@
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /近30天成交[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".title-text", ".d-title"],
+      priceSelectors: [".price", ".price-text", ".offer-price", "[class*='Price']", "[class*='price']"],
       shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
     });
@@ -855,6 +856,7 @@
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".ItemHeader--mainTitle", ".tb-main-title"],
+      priceSelectors: [".Price--priceText", ".priceText", ".tb-rmb-num", "[class*='priceText']", "[class*='Price']", "[class*='price']"],
       shopSelectors: [".shopName", ".ShopHeader--title"],
       productIdRegexes: [/id=(\d+)/i]
     });
@@ -865,6 +867,7 @@
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".ItemHeader--mainTitle", ".tb-detail-hd h1"],
+      priceSelectors: [".Price--priceText", ".tm-price", ".tb-rmb-num", "[class*='priceText']", "[class*='Price']", "[class*='price']"],
       shopSelectors: [".shopName", ".slogo-shopname"],
       productIdRegexes: [/id=(\d+)/i]
     });
@@ -908,6 +911,7 @@
     const title = pickTitle(config.titleSelectors, context.sources);
     const shopName = pickFirstDomText(config.shopSelectors) || pickStringByKey(context.sources, /(shopName|sellerName|companyName|storeName|supplierName)$/i);
     const productId = pickProductId(config.productIdRegexes, context.sources);
+    const sourcePrice = pickSourcePrice(context, config);
     const monthlySales = pickMonthlySales(context.pageText, context.sources, config.monthlySalesKeywords);
     const skuItems = pickSkuItems(context.sources);
     const skuCount = skuItems.length || pickSkuCountFromDom();
@@ -921,6 +925,10 @@
       title,
       shopName,
       productId,
+      price: sourcePrice.price != null ? sourcePrice.price : "",
+      priceText: sourcePrice.text || "",
+      priceCny: sourcePrice.price != null ? Number(sourcePrice.price) : null,
+      currency: sourcePrice.currency || "CNY",
       monthlySales,
       grossWeightGrams,
       skuCount,
@@ -935,6 +943,80 @@
         rawSources: summarizeSources(context.sources)
       }
     };
+  }
+
+  function pickSourcePrice(context, config) {
+    const domText = pickFirstDomText(config.priceSelectors || []);
+    const sourceText = pickPriceTextFromSources(context.sources);
+    const text = normalizePriceDisplay(domText || sourceText || "");
+    const parsed = parsePriceWithCurrencySafe(text || sourceText, "CNY");
+    if (parsed.price != null && parsed.price !== "") {
+      return {
+        price: Number(parsed.price),
+        currency: parsed.currency || "CNY",
+        text: text || sourceText || String(parsed.price)
+      };
+    }
+
+    const skuItems = pickSkuItems(context.sources);
+    const skuPrice = skuItems
+      .map((item) => item.price)
+      .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b)[0];
+    if (skuPrice != null) {
+      return {
+        price: skuPrice,
+        currency: "CNY",
+        text: "¥" + formatMoney(skuPrice)
+      };
+    }
+
+    return { price: null, currency: "CNY", text: "" };
+  }
+
+  function pickPriceTextFromSources(sources) {
+    const candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const lastKey = path[path.length - 1] || "";
+        if (!/(price|amount|promotion|sale|discount|range|价格|价)/i.test(String(lastKey))) return;
+        if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+          candidates.push({ score: scorePricePath(path), text: String(value), price: value });
+          return;
+        }
+        if (typeof value === "string") {
+          const text = normalizeWhitespace(value);
+          const parsed = parsePriceWithCurrencySafe(text, "CNY");
+          if (parsed.price != null && parsed.price !== "") {
+            candidates.push({ score: scorePricePath(path), text, price: Number(parsed.price) });
+          }
+        }
+      });
+    });
+    candidates.sort((a, b) => b.score - a.score || a.price - b.price);
+    return candidates.length ? candidates[0].text : "";
+  }
+
+  function scorePricePath(path) {
+    const text = path.join(".").toLowerCase();
+    let score = 0;
+    if (/promotion|discount|sale|current|actual|priceRange|range|offer|trade/.test(text)) score += 4;
+    if (/price|价格|价/.test(text)) score += 3;
+    if (/market|original|origin|old|retail|划线/.test(text)) score -= 5;
+    if (/count|stock|quantity|sold|salecount|volume/.test(text)) score -= 4;
+    return score;
+  }
+
+  function normalizePriceDisplay(value) {
+    const text = normalizeWhitespace(value);
+    if (!text) return "";
+    const range = text.match(/[¥￥]?\s*\d[\d.,]*\s*(?:-|~|—|–|至|到)\s*[¥￥]?\s*\d[\d.,]*/);
+    if (range) return range[0].replace(/\s+/g, " ").trim();
+    const withCurrency = text.match(/[¥￥]\s*\d[\d.,]*/);
+    if (withCurrency) return withCurrency[0].replace(/\s+/g, "");
+    const yuan = text.match(/\d[\d.,]*\s*元/);
+    if (yuan) return yuan[0].replace(/\s+/g, "");
+    return text;
   }
 
   function pickTitle(selectors, sources) {
@@ -1284,6 +1366,11 @@
     if (unit === "k") value *= 1000;
     if (unit === "m") value *= 1000000;
     return Math.round(value);
+  }
+
+  function formatMoney(value) {
+    if (value == null || !Number.isFinite(Number(value))) return "";
+    return Number(value).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
   }
 
   function convertWeightToGrams(value, unitHint) {

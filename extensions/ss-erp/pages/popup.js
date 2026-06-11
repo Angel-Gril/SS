@@ -2,6 +2,13 @@
   'use strict';
 
   var SYNC_STORAGE_KEY = 'ss_erp_sync_times';
+  var SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
+  var SOURCE_SEARCH_PLATFORM_OPTIONS = [
+    { platform: '1688', label: '1688' },
+    { platform: 'pdd', label: 'PDD' },
+    { platform: 'taobao', label: '淘宝' }
+  ];
+  var DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd'];
   var STALE_THRESHOLD = 24 * 60 * 60 * 1000;
 
   var erpStatusRow = document.getElementById('erpStatus');
@@ -21,9 +28,11 @@
   var primaryActionHint = document.getElementById('primaryActionHint');
   var primaryActionBtn = document.getElementById('primaryActionBtn');
   var secondaryActionBtn = document.getElementById('secondaryActionBtn');
+  var sourceSearchPlatformPrefs = document.getElementById('sourceSearchPlatformPrefs');
   var primaryActionStatus = document.getElementById('primaryActionStatus');
   var primaryActionState = { type: 'loading', tab: null, productId: '' };
   var secondaryActionState = { type: 'hidden' };
+  var sourceSearchPlatformSelection = DEFAULT_SOURCE_SEARCH_PLATFORMS.slice();
 
   var manifest = chrome.runtime.getManifest();
   if (versionText) versionText.textContent = 'v' + (manifest.version || '1.0.0');
@@ -58,6 +67,67 @@
     secondaryActionBtn.hidden = hidden;
     secondaryActionBtn.disabled = hidden || Boolean(action && action.disabled);
     secondaryActionBtn.textContent = action && action.buttonText ? action.buttonText : '找同款';
+    renderSourceSearchPlatformPrefs(action && action.type === 'searchSourcesByImage');
+  }
+
+  function normalizeSourceSearchPlatforms(value) {
+    var allowed = {};
+    SOURCE_SEARCH_PLATFORM_OPTIONS.forEach(function (option) {
+      allowed[option.platform] = true;
+    });
+    var selected = [];
+    (Array.isArray(value) ? value : []).forEach(function (item) {
+      var platform = String(item || '').trim().toLowerCase();
+      if (platform === 'ali1688') platform = '1688';
+      if (platform === 'pinduoduo') platform = 'pdd';
+      if (platform === 'tb') platform = 'taobao';
+      if (allowed[platform] && selected.indexOf(platform) < 0) selected.push(platform);
+    });
+    return selected.length ? selected : DEFAULT_SOURCE_SEARCH_PLATFORMS.slice();
+  }
+
+  function getSourceSearchPlatformInput(platform) {
+    return document.querySelector('[data-source-search-platform="' + platform + '"]');
+  }
+
+  function renderSourceSearchPlatformPrefs(visible) {
+    if (!sourceSearchPlatformPrefs) return;
+    sourceSearchPlatformPrefs.hidden = !visible;
+    SOURCE_SEARCH_PLATFORM_OPTIONS.forEach(function (option) {
+      var input = getSourceSearchPlatformInput(option.platform);
+      if (input) input.checked = sourceSearchPlatformSelection.indexOf(option.platform) >= 0;
+    });
+  }
+
+  function loadSourceSearchPlatformPrefs() {
+    chrome.storage.local.get([SOURCE_SEARCH_PLATFORM_PREFS_KEY], function (result) {
+      sourceSearchPlatformSelection = normalizeSourceSearchPlatforms(result[SOURCE_SEARCH_PLATFORM_PREFS_KEY]);
+      renderSourceSearchPlatformPrefs(secondaryActionState.type === 'searchSourcesByImage');
+    });
+  }
+
+  function getSelectedSourceSearchPlatforms() {
+    var selected = [];
+    SOURCE_SEARCH_PLATFORM_OPTIONS.forEach(function (option) {
+      var input = getSourceSearchPlatformInput(option.platform);
+      if (input && input.checked) selected.push(option.platform);
+    });
+    return selected;
+  }
+
+  function saveSourceSearchPlatformPrefs(event) {
+    var selected = getSelectedSourceSearchPlatforms();
+    if (!selected.length) {
+      if (event && event.target) event.target.checked = true;
+      setActionStatus('至少保留一个核价网站', 'fail');
+      return;
+    }
+    sourceSearchPlatformSelection = selected;
+    chrome.storage.local.set({ [SOURCE_SEARCH_PLATFORM_PREFS_KEY]: selected });
+    setActionStatus('已保存核价网站：' + selected.map(function (platform) {
+      var option = SOURCE_SEARCH_PLATFORM_OPTIONS.find(function (item) { return item.platform === platform; });
+      return option ? option.label : platform;
+    }).join(' / '), 'ok');
   }
 
   function setStatus(row, connected, label) {
@@ -556,11 +626,12 @@
         title: product.title || primaryActionState.tab && primaryActionState.tab.title || '',
         url: product.sourceUrl || primaryActionState.tab && primaryActionState.tab.url || ''
       };
-      var platformPayloads = [
-        { platform: '1688' },
-        { platform: 'pdd' },
-        { platform: 'taobao' }
-      ];
+      var selectedPlatforms = getSelectedSourceSearchPlatforms();
+      if (!selectedPlatforms.length) throw new Error('请至少选择一个核价网站');
+      sourceSearchPlatformSelection = selectedPlatforms.slice();
+      var platformPayloads = selectedPlatforms.map(function (platform) {
+        return { platform: platform };
+      });
       var results = await Promise.all(platformPayloads.map(function (item) {
         return sendRuntimeMessageAsync({
           type: 'ss-erp:image-search-create',
@@ -583,7 +654,11 @@
       results.forEach(function (jobResponse) {
         chrome.tabs.create({ url: jobResponse.url });
       });
-      setActionStatus('已打开 1688 / PDD / 淘宝找货源', 'ok');
+      var openedLabels = selectedPlatforms.map(function (platform) {
+        var option = SOURCE_SEARCH_PLATFORM_OPTIONS.find(function (item) { return item.platform === platform; });
+        return option ? option.label : platform;
+      });
+      setActionStatus('已打开 ' + openedLabels.join(' / ') + ' 找货源', 'ok');
     } catch (error) {
       setActionStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
@@ -1042,6 +1117,11 @@
   if (secondaryActionBtn) {
     secondaryActionBtn.addEventListener('click', runSecondaryAction);
   }
+  SOURCE_SEARCH_PLATFORM_OPTIONS.forEach(function (option) {
+    var input = getSourceSearchPlatformInput(option.platform);
+    if (input) input.addEventListener('change', saveSourceSearchPlatformPrefs);
+  });
+  loadSourceSearchPlatformPrefs();
   configurePrimaryAction();
   checkErpConnection();
   checkOzonLogin();

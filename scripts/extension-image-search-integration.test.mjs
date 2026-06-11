@@ -89,6 +89,31 @@ assert.match(
   /searchSourcesByImage/,
   'popup should route the secondary action to multi-platform image search on Ozon product pages',
 );
+assert.match(
+  popupHtml,
+  /id=["']sourceSearchPlatformPrefs["']/,
+  'popup should expose compact source platform preferences for costing search',
+);
+assert.match(
+  popupJs,
+  /SOURCE_SEARCH_PLATFORM_PREFS_KEY\s*=\s*['"]ss-erp:source-search-platforms['"]/,
+  'popup should persist source search platform preferences',
+);
+assert.match(
+  popupJs,
+  /loadSourceSearchPlatformPrefs/,
+  'popup should load saved source search platform preferences',
+);
+assert.match(
+  popupJs,
+  /saveSourceSearchPlatformPrefs/,
+  'popup should save source search platform preferences when changed',
+);
+assert.match(
+  popupJs,
+  /getSelectedSourceSearchPlatforms/,
+  'popup should build search jobs from selected source platforms',
+);
 for (const platform of ['1688', 'pdd', 'taobao']) {
   assert.match(
     popupJs,

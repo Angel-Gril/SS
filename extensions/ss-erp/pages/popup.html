@@ -148,6 +148,34 @@
     }
     .secondary-action[hidden] { display: none; }
 
+    .source-platform-prefs {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .source-platform-prefs[hidden] { display: none; }
+    .source-platform-prefs > span {
+      flex-shrink: 0;
+      font-weight: 650;
+    }
+    .source-platform-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-height: 18px;
+      color: #374151;
+      cursor: pointer;
+      user-select: none;
+    }
+    .source-platform-label input {
+      width: 13px;
+      height: 13px;
+      accent-color: var(--brand);
+    }
+
     .action-status {
       min-height: 16px;
       color: var(--muted);
@@ -327,6 +355,12 @@
       <div class="primary-hint" id="primaryActionHint">正在判断当前标签页适合执行的操作。</div>
       <button class="primary-action" id="primaryActionBtn" type="button" disabled>请稍候</button>
       <button class="secondary-action" id="secondaryActionBtn" type="button" hidden>找同款</button>
+      <div class="source-platform-prefs" id="sourceSearchPlatformPrefs" hidden>
+        <span>核价网站</span>
+        <label class="source-platform-label"><input id="sourceSearchPlatform1688" type="checkbox" data-source-search-platform="1688" />1688</label>
+        <label class="source-platform-label"><input id="sourceSearchPlatformPdd" type="checkbox" data-source-search-platform="pdd" />PDD</label>
+        <label class="source-platform-label"><input id="sourceSearchPlatformTaobao" type="checkbox" data-source-search-platform="taobao" />淘宝</label>
+      </div>
       <div class="action-status" id="primaryActionStatus"></div>
     </section>
 

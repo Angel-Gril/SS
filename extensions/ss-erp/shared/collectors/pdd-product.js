@@ -158,11 +158,16 @@
 
   function parsePddMoney(value, key) {
     if (value == null || value === '') return null;
-    var raw = String(value).replace(/[^\d.]/g, '');
+    var text = String(value);
+    var raw = text.replace(/[^\d.]/g, '');
     if (!raw) return null;
     var num = Number(raw);
     if (!Number.isFinite(num)) return null;
-    var likelyCents = /fen|cent/i.test(String(key || '')) || (Number.isInteger(num) && num >= 100);
+    if (raw.indexOf('.') >= 0 || /[￥¥元]/.test(text)) return roundMoney(num);
+    var keyText = String(key || '');
+    var explicitCents = /fen|cent|priceCent|priceInCent/i.test(keyText)
+      || /^(minNormalPrice|minGroupPrice|min_normal_price|min_group_price|normalPrice|groupPrice|normal_price|group_price|marketPrice)$/i.test(keyText);
+    var likelyCents = explicitCents || (/^(price|salePrice)$/i.test(keyText) && Number.isInteger(num) && num >= 1000);
     return likelyCents ? roundMoney(num / 100) : roundMoney(num);
   }
 

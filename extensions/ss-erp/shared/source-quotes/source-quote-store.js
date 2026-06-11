@@ -141,6 +141,7 @@
   function inferPriceSource(product) {
     var skuItems = product && Array.isArray(product.skuItems) ? product.skuItems : [];
     var skuPrice = skuItems.length ? skuItems[0].price : null;
+    if (product && product.price && typeof product.price === 'object' && product.price.value != null) return product.price.value;
     return product && (
       product.priceCny
       || product.costCny
@@ -159,8 +160,9 @@
     var productId = inferSourceProductId(product, url);
     var priceSource = inferPriceSource(product);
     var priceValue = parsePrice(priceSource);
-    var currency = normalizeCurrency(product.currency || product.priceCurrency, 'CNY');
-    var priceText = toText(product.priceText).trim() || (priceValue ? priceValue + ' ' + currency : '');
+    var priceObject = product.price && typeof product.price === 'object' ? product.price : {};
+    var currency = normalizeCurrency(product.currency || product.priceCurrency || priceObject.currency, 'CNY');
+    var priceText = toText(product.priceText || priceObject.text).trim() || (priceValue ? priceValue + ' ' + currency : '');
     return {
       platform: platform,
       productId: productId,

@@ -67,4 +67,18 @@ assert.match(csv, /1628675309/);
 assert.match(csv, /733344455566/);
 assert.match(csv, /13\.5/);
 
+const objectPriceQuote = api.normalizeQuote({
+  ozon: quote.ozon,
+  sourceProduct: {
+    sourcePlatform: 'taobao',
+    productId: '99887766',
+    sourceUrl: 'https://item.taobao.com/item.htm?id=99887766',
+    price: { value: 19.9, currency: 'CNY', text: '¥19.90' },
+  },
+}, null, { now });
+
+assert.equal(objectPriceQuote.source.price.value, 19.9);
+assert.equal(objectPriceQuote.source.price.currency, 'CNY');
+assert.equal(objectPriceQuote.costCny, 19.9);
+
 console.log('PASS source quote store');

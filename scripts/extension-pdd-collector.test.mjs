@@ -115,4 +115,23 @@ assert.deepEqual(result.variants, [
 ]);
 assert.equal(result.debug.rawSources[0].keys.includes('goods'), true);
 
+const yuanPriceResult = api.extractPddProduct({
+  platform: 'pdd',
+  sources: [{
+    goods: {
+      goodsID: '987654321',
+      goodsName: '整箱采购商品',
+      price: 108,
+      topGallery: [{ url: 'https://img.pddpic.com/product/main-800x800.jpeg' }],
+    },
+  }],
+  pageText: '整箱采购商品 ¥108',
+  url: 'https://pifa.pinduoduo.com/goods/detail?goods_id=987654321',
+  host: 'pifa.pinduoduo.com',
+});
+
+assert.equal(yuanPriceResult.price, '108', 'PDD yuan integer prices should not be treated as cents');
+assert.equal(yuanPriceResult.priceText, '¥108');
+assert.equal(yuanPriceResult.priceCny, 108);
+
 console.log('PASS PDD extension collector');
