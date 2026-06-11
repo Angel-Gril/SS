@@ -15,6 +15,7 @@
   var allCountNode = document.getElementById('allCount');
   var openSettingsBtn = document.getElementById('openSettingsBtn');
   var versionText = document.getElementById('versionText');
+  var exportSourceQuotesBtn = document.getElementById('exportSourceQuotesBtn');
   var activePageLabel = document.getElementById('activePageLabel');
   var primaryActionTitle = document.getElementById('primaryActionTitle');
   var primaryActionHint = document.getElementById('primaryActionHint');
@@ -286,6 +287,49 @@
     } else {
       chrome.tabs.create({ url: chrome.runtime.getURL('pages/settings.html') });
     }
+  }
+
+  function downloadExportResponse(response, fallbackFilename, callback) {
+    if (!response || !response.ok) {
+      callback({ ok: false, error: response && response.error ? response.error : '导出失败' });
+      return;
+    }
+    var content = response.content == null ? '' : String(response.content);
+    var blob = new Blob([content], { type: response.mimeType || 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    chrome.downloads.download({
+      url: url,
+      filename: response.filename || fallbackFilename,
+      saveAs: true
+    }, function () {
+      var runtimeError = chrome.runtime.lastError;
+      window.setTimeout(function () {
+        URL.revokeObjectURL(url);
+      }, 1000);
+      if (runtimeError) {
+        callback({ ok: false, error: formatRuntimeError(runtimeError.message) });
+        return;
+      }
+      callback({ ok: true, count: response.count || 0 });
+    });
+  }
+
+  function exportSourceQuotes() {
+    if (!exportSourceQuotesBtn) return;
+    exportSourceQuotesBtn.disabled = true;
+    exportSourceQuotesBtn.textContent = '导出中...';
+    setActionStatus('', '');
+    sendRuntimeMessage({ type: 'ss-erp:source-quote-export' }, function (response) {
+      downloadExportResponse(response, 'ss-erp-source-quotes.csv', function (result) {
+        exportSourceQuotesBtn.disabled = false;
+        exportSourceQuotesBtn.textContent = '导出';
+        if (result && result.ok) {
+          setActionStatus('已导出核价记录：' + (result.count || 0) + ' 条', 'ok');
+          return;
+        }
+        setActionStatus((result && result.error) || '导出核价记录失败', 'fail');
+      });
+    });
   }
 
   function collectOzonToErp() {
@@ -800,6 +844,10 @@
       e.preventDefault();
       openSettings();
     });
+  }
+
+  if (exportSourceQuotesBtn) {
+    exportSourceQuotesBtn.addEventListener('click', exportSourceQuotes);
   }
 
   // Cookie sync button

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const ozonPanel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
+const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
 
 assert.match(
   popupJs,
@@ -19,6 +20,21 @@ assert.match(
   popupJs,
   /buttonText:\s*['"]采集到 ERP['"]/,
   'source pages should still keep one compact ERP collect action',
+);
+assert.match(
+  popupHtml,
+  /id=["']exportSourceQuotesBtn["']/,
+  'popup maintenance area should expose a source quote export action',
+);
+assert.match(
+  popupJs,
+  /type:\s*['"]ss-erp:source-quote-export['"]/,
+  'popup should request source quote CSV export from the service worker',
+);
+assert.match(
+  popupJs,
+  /chrome\.downloads\.download/,
+  'popup should download source quote export content through the downloads API',
 );
 assert.doesNotMatch(
   popupJs,
