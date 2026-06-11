@@ -838,7 +838,14 @@ export async function shopRoutes(app: FastifyInstance) {
   app.get('/:id/products', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const query = request.query as { offset?: string; limit?: string; search?: string; warehouseId?: string };
+    const query = request.query as {
+      offset?: string;
+      limit?: string;
+      search?: string;
+      warehouseId?: string;
+      warehouseInStock?: string;
+      statusFilter?: string;
+    };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId } });
     if (!shop) {
@@ -849,15 +856,38 @@ export async function shopRoutes(app: FastifyInstance) {
     const limit = Math.min(200, Math.max(1, Number(query.limit) || 20));
     const search = query.search?.trim();
     const warehouseId = query.warehouseId && /^\d+$/.test(query.warehouseId) ? query.warehouseId : null;
+    const warehouseInStock = warehouseId && query.warehouseInStock === '1';
+    const statusFilter = ['current', 'archived', 'missing', 'all'].includes(query.statusFilter || '')
+      ? query.statusFilter!
+      : 'current';
 
-    const where: Record<string, unknown> = { shopId: id };
+    const andFilters: Record<string, unknown>[] = [];
     if (search) {
-      where.OR = [
+      andFilters.push({ OR: [
         { title: { contains: search, mode: 'insensitive' } },
         { sku: { contains: search, mode: 'insensitive' } },
         { offerId: { contains: search, mode: 'insensitive' } },
-      ];
+      ] });
     }
+    if (statusFilter === 'current') {
+      andFilters.push({
+        NOT: [
+          { visibility: { in: ['ARCHIVED', 'archived', 'MISSING', 'missing'] } },
+          { syncStatus: { in: ['MISSING', 'missing'] } },
+        ],
+      });
+    } else if (statusFilter === 'archived') {
+      andFilters.push({ visibility: { in: ['ARCHIVED', 'archived'] } });
+    } else if (statusFilter === 'missing') {
+      andFilters.push({
+        OR: [
+          { visibility: { in: ['MISSING', 'missing'] } },
+          { syncStatus: { in: ['MISSING', 'missing'] } },
+        ],
+      });
+    }
+    const where: Record<string, unknown> = { shopId: id };
+    if (andFilters.length) where.AND = andFilters;
 
     const productSelect = {
       id: true,
@@ -877,15 +907,23 @@ export async function shopRoutes(app: FastifyInstance) {
       commissionRate: true,
       minPrice: true,
       variants: true,
+      ozonCreatedAt: true,
+      ozonUpdatedAt: true,
+      lastOzonSyncAt: true,
+      createdAt: true,
       updatedAt: true,
     };
+    const productOrderBy = [
+      { ozonCreatedAt: { sort: 'desc' as const, nulls: 'last' as const } },
+      { createdAt: 'desc' as const },
+    ];
 
     let total: number;
     let rows: any[];
-    if (warehouseId) {
+    if (warehouseInStock) {
       const allRows = await prisma.product.findMany({
         where: where as any,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: productOrderBy,
         select: productSelect,
       });
       const filtered = allRows.filter((row) => {
@@ -901,7 +939,7 @@ export async function shopRoutes(app: FastifyInstance) {
           where: where as any,
           skip: offset,
           take: limit,
-          orderBy: { updatedAt: 'desc' },
+          orderBy: productOrderBy,
           select: productSelect,
         }),
       ]);
@@ -928,6 +966,8 @@ export async function shopRoutes(app: FastifyInstance) {
             warehouseStock,
           };
         }),
+        lastSyncAt: shop.lastSyncAt,
+        statusFilter,
       },
     });
   });

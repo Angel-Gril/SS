@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { calculateBatchPrice } from '../services/product-pricing.js';
+import { getProductMutationBlockReason, resolveOzonBatchUpdateResults } from '../services/product-operations.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -65,6 +66,10 @@ export async function productRoutes(app: FastifyInstance) {
     if (product.shop.platform !== 'OZON') {
       return reply.send({ code: 0, msg: '暂只支持 OZON 商品价格修改' });
     }
+    const blockReason = getProductMutationBlockReason(product);
+    if (blockReason) {
+      return reply.send({ code: 0, msg: blockReason });
+    }
 
     const client = new OzonClient({
       clientId: product.shop.clientId!,
@@ -82,9 +87,9 @@ export async function productRoutes(app: FastifyInstance) {
         min_price: minPrice,
         currency_code: product.currency || 'CNY',
       }]);
-      const item = (result as any)?.result?.[0];
-      if (item && !item.updated && item.errors?.length) {
-        return reply.send({ code: 0, msg: `OZON 拒绝更新价格: ${JSON.stringify(item.errors)}` });
+      const updateResult = resolveOzonBatchUpdateResults(result, 1);
+      if (updateResult.errors.length) {
+        return reply.send({ code: 0, msg: `OZON 拒绝更新价格: ${updateResult.errors[0]!.message}` });
       }
     } catch (e: any) {
       return reply.send({ code: 0, msg: `OZON 价格同步失败: ${e.message}` });
@@ -115,6 +120,10 @@ export async function productRoutes(app: FastifyInstance) {
     }
     if (product.shop.platform !== 'OZON') {
       return reply.send({ code: 0, msg: '暂只支持 OZON 库存修改' });
+    }
+    const blockReason = getProductMutationBlockReason(product, { requireOfferId: true });
+    if (blockReason) {
+      return reply.send({ code: 0, msg: blockReason });
     }
 
     const client = new OzonClient({
@@ -184,9 +193,10 @@ export async function productRoutes(app: FastifyInstance) {
         stock,
         warehouse_id: warehouseId,
       }]);
-      const errors = (result as any)?.result?.filter((r: any) => r.errors?.length);
-      if (errors?.length) {
-        const errCode = errors[0].errors[0]?.code || '';
+      const updateResult = resolveOzonBatchUpdateResults(result, 1);
+      if (updateResult.errors.length) {
+        const errors = (result as any)?.result?.filter((r: any) => r.errors?.length);
+        const errCode = errors?.[0]?.errors?.[0]?.code || '';
         if (errCode === 'TOO_MANY_REQUESTS') {
           return reply.send({ code: 0, msg: '库存更新过于频繁，请等待30秒后重试' });
         }
@@ -226,7 +236,7 @@ export async function productRoutes(app: FastifyInstance) {
           } catch { /* retry failed, fall through to error */ }
           return reply.send({ code: 0, msg: '仓库状态异常，已尝试自动切换但未找到可用仓库。请在 OZON 卖家后台确认仓库状态' });
         }
-        return reply.send({ code: 0, msg: `OZON 拒绝更新库存: ${JSON.stringify(errors[0].errors)}` });
+        return reply.send({ code: 0, msg: `OZON 拒绝更新库存: ${updateResult.errors[0]!.message}` });
       }
     } catch (e: any) {
       const errMsg = e.message || '未知错误';
@@ -262,6 +272,12 @@ export async function productRoutes(app: FastifyInstance) {
     if (owned.length === 0) {
       return reply.send({ code: 0, msg: '没有可操作的商品' });
     }
+    const blocked = owned
+      .map((product) => ({ product, reason: getProductMutationBlockReason(product) }))
+      .filter((item) => item.reason);
+    if (blocked.length) {
+      return reply.send({ code: 0, msg: `有 ${blocked.length} 件商品不可改价：${blocked[0]!.reason}` });
+    }
 
     const shopGroups = new Map<string, typeof owned>();
     for (const p of owned) {
@@ -271,6 +287,7 @@ export async function productRoutes(app: FastifyInstance) {
     }
 
     let updated = 0;
+    const failures: { productId: string; offerId: string | null; error: string }[] = [];
     for (const [, group] of shopGroups) {
       const shop = group[0]!.shop;
       const client = new OzonClient({
@@ -303,9 +320,20 @@ export async function productRoutes(app: FastifyInstance) {
         };
       });
 
-      await client.updatePrices(priceItems);
+      let updateResult;
+      try {
+        updateResult = resolveOzonBatchUpdateResults(await client.updatePrices(priceItems), prepared.length);
+      } catch (e: any) {
+        return reply.send({ code: 0, msg: `OZON 价格同步失败: ${e.message}` });
+      }
 
-      for (const { product, price, oldPrice } of prepared) {
+      for (const error of updateResult.errors) {
+        const failed = prepared[error.index];
+        if (failed) failures.push({ productId: failed.product.id, offerId: failed.product.offerId, error: error.message });
+      }
+
+      for (const index of updateResult.successfulIndexes) {
+        const { product, price, oldPrice } = prepared[index]!;
         await prisma.product.update({
           where: { id: product.id },
           data: { price: parseFloat(price), oldPrice: oldPrice ? parseFloat(oldPrice) : null },
@@ -315,10 +343,15 @@ export async function productRoutes(app: FastifyInstance) {
     }
 
     if (!updated) {
-      return reply.send({ code: 0, msg: '没有可计算新价格的商品，请确认选中商品已有当前价格' });
+      const reason = failures[0]?.error || '没有可计算新价格的商品，请确认选中商品已有当前价格';
+      return reply.send({ code: 0, msg: reason });
     }
 
-    return reply.send({ code: 1, msg: `成功更新 ${updated} 件商品价格` });
+    return reply.send({
+      code: 1,
+      msg: failures.length ? `成功更新 ${updated} 件商品价格，${failures.length} 件被 OZON 拒绝` : `成功更新 ${updated} 件商品价格`,
+      data: failures.length ? { failures: failures.slice(0, 20) } : undefined,
+    });
   });
 
   app.post('/batch-stock', async (request, reply) => {
@@ -337,6 +370,12 @@ export async function productRoutes(app: FastifyInstance) {
     if (owned.length === 0) {
       return reply.send({ code: 0, msg: '没有可操作的商品' });
     }
+    const blocked = owned
+      .map((product) => ({ product, reason: getProductMutationBlockReason(product, { requireOfferId: true }) }))
+      .filter((item) => item.reason);
+    if (blocked.length) {
+      return reply.send({ code: 0, msg: `有 ${blocked.length} 件商品不可改库存：${blocked[0]!.reason}` });
+    }
 
     const shopGroups = new Map<string, typeof owned>();
     for (const p of owned) {
@@ -346,6 +385,7 @@ export async function productRoutes(app: FastifyInstance) {
     }
 
     let updated = 0;
+    const failures: { productId: string; offerId: string | null; error: string }[] = [];
     for (const [, group] of shopGroups) {
       const shop = group[0]!.shop;
       const client = new OzonClient({
@@ -365,9 +405,16 @@ export async function productRoutes(app: FastifyInstance) {
 
       try {
         const result = await client.updateStock(stockItems);
-        const errors = (result as any)?.result?.filter((r: any) => r.errors?.length);
-        if (errors?.length) {
-          return reply.send({ code: 0, msg: `OZON 拒绝更新库存: ${JSON.stringify(errors[0].errors).slice(0, 300)}` });
+        const updateResult = resolveOzonBatchUpdateResults(result, stockItems.length);
+        for (const error of updateResult.errors) {
+          const failed = group[error.index];
+          if (failed) failures.push({ productId: failed.id, offerId: failed.offerId, error: error.message });
+        }
+        for (const index of updateResult.successfulIndexes) {
+          const p = group[index]!;
+          const item = parsed.data.items.find((i) => i.productId === p.id)!;
+          await prisma.product.update({ where: { id: p.id }, data: { stock: item.stock } });
+          updated++;
         }
       } catch (e: any) {
         const errMsg = e?.message ? String(e.message) : '未知错误';
@@ -378,15 +425,17 @@ export async function productRoutes(app: FastifyInstance) {
           : errMsg;
         return reply.send({ code: 0, msg: `OZON 库存同步失败: ${hint}` });
       }
-
-      for (const p of group) {
-        const item = parsed.data.items.find((i) => i.productId === p.id)!;
-        await prisma.product.update({ where: { id: p.id }, data: { stock: item.stock } });
-        updated++;
-      }
     }
 
-    return reply.send({ code: 1, msg: `成功更新 ${updated} 件商品库存` });
+    if (!updated) {
+      return reply.send({ code: 0, msg: failures[0]?.error || '没有商品库存更新成功' });
+    }
+
+    return reply.send({
+      code: 1,
+      msg: failures.length ? `成功更新 ${updated} 件商品库存，${failures.length} 件被 OZON 拒绝` : `成功更新 ${updated} 件商品库存`,
+      data: failures.length ? { failures: failures.slice(0, 20) } : undefined,
+    });
   });
 
   app.post('/archive', async (request, reply) => {
@@ -428,10 +477,10 @@ export async function productRoutes(app: FastifyInstance) {
       }
     }
 
-    const status = parsed.data.archive ? 'archived' : 'active';
+    const status = parsed.data.archive ? 'ARCHIVED' : 'VISIBLE';
     await prisma.product.updateMany({
       where: { id: { in: owned.map((p) => p.id) } },
-      data: { visibility: status },
+      data: { visibility: status, syncStatus: 'SYNCED' },
     });
 
     return reply.send({
@@ -620,7 +669,14 @@ export async function productRoutes(app: FastifyInstance) {
     }
 
     const products = await prisma.product.findMany({
-      where: { shopId, platformProductId: { not: null } },
+      where: {
+        shopId,
+        platformProductId: { not: null },
+        NOT: [
+          { visibility: { in: ['ARCHIVED', 'archived', 'MISSING', 'missing'] } },
+          { syncStatus: { in: ['MISSING', 'missing'] } },
+        ],
+      },
       select: { id: true, title: true, offerId: true, platformProductId: true, stock: true, sku: true },
     });
 
@@ -689,6 +745,10 @@ export async function productRoutes(app: FastifyInstance) {
       shopId: body.shopId,
       platformProductId: { not: null },
       offerId: { not: null },
+      NOT: [
+        { visibility: { in: ['ARCHIVED', 'archived', 'MISSING', 'missing'] } },
+        { syncStatus: { in: ['MISSING', 'missing'] } },
+      ],
     };
     if (body.productIds?.length) {
       where.id = { in: body.productIds };

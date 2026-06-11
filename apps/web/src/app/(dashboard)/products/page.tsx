@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import {
   Search, RefreshCw, Loader2, ImageOff, Pencil, Check, X,
   Archive, ArchiveRestore, Package, DollarSign, Boxes, Upload, AlertTriangle,
-  Save, ImageIcon, Trash2, Plus,
+  Save, ImageIcon, Trash2, Plus, Clock,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -44,7 +44,18 @@ interface Product {
   categoryId: string | null;
   commissionRate: string | null;
   minPrice: string | null;
+  ozonCreatedAt: string | null;
+  ozonUpdatedAt: string | null;
+  lastOzonSyncAt: string | null;
+  createdAt: string;
   updatedAt: string;
+}
+
+interface ProductListResponse {
+  total: number;
+  rows: Product[];
+  lastSyncAt: string | null;
+  statusFilter: ProductStatusFilter;
 }
 
 interface Shop {
@@ -59,6 +70,7 @@ interface OzonWarehouse {
 }
 
 type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
+type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
 
 const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: string; placeholder: string }[] = [
   { value: 'set', label: '统一价', inputLabel: '新价格 (RUB)', placeholder: '输入统一价格' },
@@ -80,6 +92,24 @@ function calculateProductBatchPreview(price: unknown, mode: BatchPriceMode, rawV
 
 function formatRubPrice(value: number | null): string {
   return value == null ? '-' : `${value.toFixed(2)} RUB`;
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function isProductMutable(product: Product): boolean {
+  const visibility = String(product.visibility || '').toUpperCase();
+  const syncStatus = String(product.syncStatus || '').toUpperCase();
+  return !!product.platformProductId && visibility !== 'ARCHIVED' && visibility !== 'MISSING' && syncStatus !== 'MISSING';
 }
 
 // PLACEHOLDER_INNER_COMPONENT
@@ -108,7 +138,11 @@ function ProductsPageInner() {
   const [stockSyncOpen, setStockSyncOpen] = useState(false);
   const [warehouses, setWarehouses] = useState<OzonWarehouse[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
+  const [warehouseInStockOnly, setWarehouseInStockOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>('current');
   const [syncingCommissions, setSyncingCommissions] = useState(false);
+  const [syncingProducts, setSyncingProducts] = useState(false);
+  const [lastProductSyncAt, setLastProductSyncAt] = useState<string | null>(null);
 
   const limit = 20;
 
@@ -135,19 +169,22 @@ function ProductsPageInner() {
     const params = new URLSearchParams({
       offset: String(page * limit),
       limit: String(limit),
+      statusFilter,
     });
     if (search) params.set('search', search);
     if (selectedWarehouseId) params.set('warehouseId', String(selectedWarehouseId));
+    if (selectedWarehouseId && warehouseInStockOnly) params.set('warehouseInStock', '1');
 
-    const res = await api.get<{ total: number; rows: Product[] }>(
+    const res = await api.get<ProductListResponse>(
       `/api/shops/${shopId}/products?${params}`,
     );
     if (res.code === 1 && res.data) {
       setProducts(res.data.rows);
       setTotal(res.data.total);
+      setLastProductSyncAt(res.data.lastSyncAt);
     }
     setLoading(false);
-  }, [shopId, page, search, selectedWarehouseId]);
+  }, [shopId, page, search, selectedWarehouseId, warehouseInStockOnly, statusFilter]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -229,6 +266,20 @@ function ProductsPageInner() {
     }
   }
 
+  async function handleSyncProducts() {
+    if (!shopId) return;
+    setSyncingProducts(true);
+    const res = await api.post(`/api/shops/${shopId}/sync-products`);
+    setSyncingProducts(false);
+    if (res.code === 1) {
+      toast({ title: 'OZON 同步任务已创建', description: '列表会先刷新本地数据，OZON 处理中的新品可能需要稍后再刷新。' });
+      loadProducts();
+      window.setTimeout(loadProducts, 8000);
+    } else {
+      toast({ title: res.msg, variant: 'destructive' });
+    }
+  }
+
   const totalPages = Math.ceil(total / limit);
   const selectedCount = selected.size;
 
@@ -246,7 +297,13 @@ function ProductsPageInner() {
           <div className="flex items-center gap-3 flex-wrap">
             <select
               value={shopId}
-              onChange={(e) => { setShopId(e.target.value); setPage(0); setSelected(new Set()); }}
+              onChange={(e) => {
+                setShopId(e.target.value);
+                setPage(0);
+                setSelected(new Set());
+                setSelectedWarehouseId(null);
+                setWarehouseInStockOnly(false);
+              }}
               className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             >
               <option value="">全部店铺</option>
@@ -258,14 +315,42 @@ function ProductsPageInner() {
             {warehouses.length > 1 && (
               <select
                 value={selectedWarehouseId || ''}
-                onChange={(e) => { setSelectedWarehouseId(e.target.value ? Number(e.target.value) : null); setPage(0); }}
+                onChange={(e) => {
+                  const nextWarehouseId = e.target.value ? Number(e.target.value) : null;
+                  setSelectedWarehouseId(nextWarehouseId);
+                  setWarehouseInStockOnly(false);
+                  setPage(0);
+                }}
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
-                <option value="">全部仓库库存</option>
+                <option value="">查看总库存</option>
                 {warehouses.map((w) => (
                   <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
                 ))}
               </select>
+            )}
+
+            <select
+              value={statusFilter}
+              onChange={(e) => { setStatusFilter(e.target.value as ProductStatusFilter); setPage(0); setSelected(new Set()); }}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="current">当前商品</option>
+              <option value="archived">已归档</option>
+              <option value="missing">同步缺失</option>
+              <option value="all">全部记录</option>
+            </select>
+
+            {selectedWarehouseId && (
+              <label className="inline-flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={warehouseInStockOnly}
+                  onChange={(e) => { setWarehouseInStockOnly(e.target.checked); setPage(0); }}
+                  className="rounded border-gray-300"
+                />
+                仅看该仓有库存
+              </label>
             )}
 
             <form onSubmit={handleSearch} className="flex items-center gap-2 flex-1 max-w-md">
@@ -282,6 +367,16 @@ function ProductsPageInner() {
             </form>
 
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSyncProducts}
+                disabled={!shopId || syncingProducts}
+                title="从 OZON 同步当前商品、状态、库存和上架时间"
+              >
+                {syncingProducts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                同步 OZON
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -304,10 +399,15 @@ function ProductsPageInner() {
               </Button>
               <Button size="sm" variant="outline" onClick={loadProducts} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-                刷新
+                刷新本页
               </Button>
-              <span className="text-sm text-muted-foreground">共 {total} 件商品</span>
+              <span className="text-sm text-muted-foreground">共 {total} 件</span>
             </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Clock className="h-3.5 w-3.5" />
+            <span>最后同步：{lastProductSyncAt ? formatDateTime(lastProductSyncAt) : '从未同步'}</span>
           </div>
 
           {selectedCount > 0 && (
@@ -363,12 +463,15 @@ function ProductsPageInner() {
                   <TableHead className="text-right">折扣前价</TableHead>
                   <TableHead className="text-right">佣金</TableHead>
                   <TableHead className="text-right">库存</TableHead>
+                  <TableHead>上架时间</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className="w-16">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((p) => (
+                {products.map((p) => {
+                  const mutable = isProductMutable(p);
+                  return (
                   <TableRow key={p.id} className={selected.has(p.id) ? 'bg-muted/30' : ''}>
                     <TableCell>
                       <input
@@ -412,8 +515,15 @@ function ProductsPageInner() {
                         </div>
                       ) : (
                         <div
-                          className="group cursor-pointer inline-flex items-center gap-1"
-                          onClick={() => { setEditingPrice(p.id); setPriceValue(p.price || ''); }}
+                          className={`group inline-flex items-center gap-1 ${mutable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                          onClick={() => {
+                            if (!mutable) {
+                              toast({ title: '商品不可操作，请先同步并确认仍在售', variant: 'destructive' });
+                              return;
+                            }
+                            setEditingPrice(p.id);
+                            setPriceValue(p.price || '');
+                          }}
                         >
                           <span className="tabular-nums font-medium">{p.price ? `${p.price} ${p.currency || 'USD'}` : '-'}</span>
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
@@ -458,8 +568,15 @@ function ProductsPageInner() {
                         </div>
                       ) : (
                         <div
-                          className="group cursor-pointer inline-flex items-center gap-1"
-                          onClick={() => { setEditingStock(p.id); setStockValue(String(p.stock)); }}
+                          className={`group inline-flex items-center gap-1 ${mutable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                          onClick={() => {
+                            if (!mutable) {
+                              toast({ title: '商品不可操作，请先同步并确认仍在售', variant: 'destructive' });
+                              return;
+                            }
+                            setEditingStock(p.id);
+                            setStockValue(String(p.warehouseStock ?? p.stock));
+                          }}
                         >
                           <span className={`tabular-nums font-medium ${(p.warehouseStock ?? p.stock) <= 0 ? 'text-destructive' : ''}`}>
                             {p.warehouseStock ?? p.stock}
@@ -468,10 +585,14 @@ function ProductsPageInner() {
                         </div>
                       )}
                     </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {formatDateTime(p.ozonCreatedAt || p.createdAt)}
+                    </TableCell>
                     <TableCell>
                       <StatusBadge
                         status={p.status}
                         visibility={p.visibility}
+                        syncStatus={p.syncStatus}
                         ozonStatusName={p.ozonStatusName}
                         ozonStatusDescription={p.ozonStatusDescription}
                         ozonModerateStatus={p.ozonModerateStatus}
@@ -481,7 +602,8 @@ function ProductsPageInner() {
                       <button type="button" onClick={() => setDetailProductId(p.id)} className="text-xs text-primary hover:underline">编辑</button>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -555,23 +677,30 @@ function ProductImage({ src }: { src?: string }) {
 function StatusBadge({
   status,
   visibility,
+  syncStatus,
   ozonStatusName,
   ozonStatusDescription,
   ozonModerateStatus,
 }: {
   status: string | null;
   visibility: string | null;
+  syncStatus?: string | null;
   ozonStatusName?: string | null;
   ozonStatusDescription?: string | null;
   ozonModerateStatus?: string | null;
 }) {
   const visibilityKey = String(visibility || '').toLowerCase();
+  const syncKey = String(syncStatus || '').toLowerCase();
+  if (visibilityKey === 'missing' || syncKey === 'missing') {
+    return <Badge variant="destructive" title="最近一次同步时 OZON 当前商品列表未返回该商品">同步缺失</Badge>;
+  }
   if (visibilityKey === 'archived') return <Badge variant="secondary">已下架</Badge>;
   const label = ozonStatusName || ozonStatusDescription || status || '-';
   const key = `${status || ''} ${ozonStatusName || ''} ${ozonStatusDescription || ''} ${ozonModerateStatus || ''}`.toLowerCase();
   if (key.includes('failed') || key.includes('reject') || key.includes('ошиб') || key.includes('отклон')) {
     return <Badge variant="destructive" title={ozonStatusDescription || undefined}>{label}</Badge>;
   }
+
   if (key.includes('moder') || key.includes('модерац') || key.includes('провер')) {
     return <Badge variant="warning" title={ozonStatusDescription || undefined}>{label}</Badge>;
   }

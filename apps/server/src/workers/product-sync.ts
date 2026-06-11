@@ -6,20 +6,28 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { buildProductSyncMeta } from '../services/product-sync-metadata.js';
+import type { ProductSyncJobOptions } from '../services/post-publish-sync.js';
+import { getMissingPlatformProductIds, parseOzonDate } from '../services/product-sync-state.js';
 
 const QUEUE_NAME = 'product-sync';
 
 export const productSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 
-export async function addProductSyncJob(shopId: string) {
+export async function addProductSyncJob(shopId: string, options: ProductSyncJobOptions = {}) {
   if (redisDisabled) {
     // Redis 不在时直接同步执行，避免前端转圈
-    runProductSyncInline(shopId).catch((e) => {
-      console.error(`[ProductSync inline] shop ${shopId} failed:`, e.message);
-    });
+    const run = () => {
+      runProductSyncInline(shopId).catch((e) => {
+        console.error(`[ProductSync inline] shop ${shopId} failed:`, e.message);
+      });
+    };
+    if (options.delayMs && options.delayMs > 0) setTimeout(run, options.delayMs);
+    else run();
     return { id: 'inline-' + Date.now() };
   }
   return productSyncQueue!.add('sync', { shopId }, {
+    delay: options.delayMs,
+    jobId: options.jobId,
     attempts: 3,
     backoff: { type: 'exponential', delay: 5000 },
     removeOnComplete: 50,
@@ -59,6 +67,8 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
   let lastId = '';
   let totalSynced = 0;
   const batchSize = 100;
+  const syncStartedAt = new Date();
+  const syncedPlatformProductIds = new Set<string>();
 
   while (true) {
     const list = await client.getProductList({ last_id: lastId || undefined, limit: batchSize });
@@ -77,6 +87,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
     }
 
     for (const info of details) {
+      syncedPlatformProductIds.add(String(info.id));
       const warehouseStocks = stockDetailsByProductId.get(String(info.id)) || [];
       const totalStock = warehouseStocks.length
         ? warehouseStocks.reduce((sum, s) => sum + (Number(s.present) || 0) + (Number(s.reserved) || 0), 0)
@@ -102,6 +113,9 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           visibility: info.is_archived ? 'ARCHIVED' : info.stocks?.has_stock ? 'VISIBLE' : 'HIDDEN',
           variants: syncMeta as any,
           syncStatus: 'SYNCED',
+          ozonCreatedAt: parseOzonDate(info.created_at),
+          ozonUpdatedAt: parseOzonDate(info.updated_at),
+          lastOzonSyncAt: syncStartedAt,
         },
         update: {
           title: info.name,
@@ -116,6 +130,9 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           visibility: info.is_archived ? 'ARCHIVED' : info.stocks?.has_stock ? 'VISIBLE' : 'HIDDEN',
           variants: syncMeta as any,
           syncStatus: 'SYNCED',
+          ozonCreatedAt: parseOzonDate(info.created_at),
+          ozonUpdatedAt: parseOzonDate(info.updated_at),
+          lastOzonSyncAt: syncStartedAt,
         },
       });
       totalSynced++;
@@ -126,6 +143,27 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
     await sleep(1000);
   }
 
+  const localProducts = await prisma.product.findMany({
+    where: { shopId, platformProductId: { not: null } },
+    select: { platformProductId: true },
+  });
+  const missingPlatformProductIds = getMissingPlatformProductIds(
+    localProducts.map((p) => p.platformProductId),
+    syncedPlatformProductIds,
+  );
+  if (missingPlatformProductIds.length) {
+    await prisma.product.updateMany({
+      where: { shopId, platformProductId: { in: missingPlatformProductIds } },
+      data: {
+        visibility: 'MISSING',
+        syncStatus: 'MISSING',
+        status: 'missing',
+        stock: 0,
+        lastOzonSyncAt: syncStartedAt,
+      },
+    });
+  }
+
   await prisma.shop.update({
     where: { id: shopId },
     data: { lastSyncAt: new Date() },
@@ -134,7 +172,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
   // Sync commission rates after product sync
   try {
     const allProducts = await prisma.product.findMany({
-      where: { shopId, platformProductId: { not: null } },
+      where: { shopId, platformProductId: { in: Array.from(syncedPlatformProductIds) } },
       select: { id: true, platformProductId: true },
     });
     const allProductIds = allProducts.map((p) => Number(p.platformProductId));

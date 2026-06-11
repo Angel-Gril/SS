@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildProductSyncMeta, getOzonStatusDisplay, getWarehouseStock } from '../services/product-sync-metadata.js';
 
 describe('product sync metadata helpers', () => {
-  it('keeps Ozon status fields and warehouse stock details for product list display', () => {
+  it('translates Ozon status fields and keeps warehouse stock details for product list display', () => {
     const meta = buildProductSyncMeta({
       statuses: {
         status: 'price_sent',
@@ -16,12 +16,38 @@ describe('product sync metadata helpers', () => {
     ]);
 
     expect(getOzonStatusDisplay(meta, 'price_sent')).toEqual({
-      name: 'В продаже',
-      description: 'Готов к продаже',
-      moderateStatus: 'approved',
+      name: '在售',
+      description: '准备出库',
+      moderateStatus: '审核通过',
     });
     expect(getWarehouseStock(meta, 10)).toBe(4);
     expect(getWarehouseStock(meta, 20)).toBe(2);
     expect(getWarehouseStock(meta, 30)).toBeNull();
+  });
+
+  it('returns zero for a warehouse that exists but has no stock', () => {
+    const meta = buildProductSyncMeta({ statuses: { status: 'price_sent' } }, [
+      { warehouse_id: 10, present: 0, reserved: 0 },
+    ]);
+
+    expect(getWarehouseStock(meta, 10)).toBe(0);
+  });
+
+  it('falls back to Chinese labels for raw Ozon lifecycle states', () => {
+    expect(getOzonStatusDisplay({ ozonStatus: { status: 'price_sent' } }, 'price_sent')).toEqual({
+      name: '价格已发送',
+      description: null,
+      moderateStatus: null,
+    });
+    expect(getOzonStatusDisplay({ ozonStatus: { status: 'archived' } }, 'archived')).toEqual({
+      name: '已归档',
+      description: null,
+      moderateStatus: null,
+    });
+    expect(getOzonStatusDisplay({}, 'MISSING')).toEqual({
+      name: 'Ozon 当前列表未返回',
+      description: null,
+      moderateStatus: null,
+    });
   });
 });
