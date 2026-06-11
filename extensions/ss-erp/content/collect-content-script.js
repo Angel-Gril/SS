@@ -127,6 +127,45 @@
     };
   }
 
+  function getPriceCurrencyApi() {
+    return globalThis.SS_ERP_PRICE_CURRENCY || {};
+  }
+
+  function parsePriceWithCurrencySafe(text, fallback) {
+    const priceCurrency = getPriceCurrencyApi();
+    if (typeof priceCurrency.parsePriceWithCurrency === "function") {
+      return priceCurrency.parsePriceWithCurrency(text, fallback);
+    }
+    return {
+      price: text ? String(text).replace(/[^\d.,]/g, "").replace(",", ".") : null,
+      currency: fallback || null,
+    };
+  }
+
+  function detectCurrencyFromTextSafe(text, fallback) {
+    const priceCurrency = getPriceCurrencyApi();
+    if (typeof priceCurrency.detectCurrencyFromText === "function") {
+      return priceCurrency.detectCurrencyFromText(text, fallback);
+    }
+    const raw = text == null ? "" : String(text);
+    if (raw.indexOf("¥") >= 0 || raw.indexOf("￥") >= 0 || /\b(?:CNY|RMB)\b/i.test(raw)) return "CNY";
+    if (raw.indexOf("₽") >= 0 || /\bRUB\b/i.test(raw)) return "RUB";
+    if (raw.indexOf("₸") >= 0 || /\bKZT\b/i.test(raw)) return "KZT";
+    if (/\bBYN\b/i.test(raw)) return "BYN";
+    return fallback || null;
+  }
+
+  function fallbackCurrencyByHostSafe(host) {
+    const priceCurrency = getPriceCurrencyApi();
+    if (typeof priceCurrency.fallbackCurrencyByHost === "function") {
+      return priceCurrency.fallbackCurrencyByHost(host);
+    }
+    const value = String(host || "").toLowerCase();
+    if (value.includes("ozon.kz")) return "KZT";
+    if (value.includes("ozon.by")) return "BYN";
+    return "RUB";
+  }
+
   async function collectOzonViaApi() {
     const productId = parseOzonProductIdFromUrl(location.href);
     if (!productId) {
@@ -151,26 +190,6 @@
     for (const key of Object.keys(states)) {
       try { widgets.push({ key, state: JSON.parse(states[key]) }); } catch (e) {}
     }
-
-    const priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
-    const parsePriceWithCurrency = priceCurrency.parsePriceWithCurrency || ((text, fallback) => ({
-      price: text ? String(text).replace(/[^\d.,]/g, "").replace(",", ".") : null,
-      currency: fallback || null,
-    }));
-    const detectCurrencyFromText = priceCurrency.detectCurrencyFromText || ((text, fallback) => {
-      const raw = text == null ? "" : String(text);
-      if (raw.indexOf("¥") >= 0 || raw.indexOf("￥") >= 0 || /\b(?:CNY|RMB)\b/i.test(raw)) return "CNY";
-      if (raw.indexOf("₽") >= 0 || /\bRUB\b/i.test(raw)) return "RUB";
-      if (raw.indexOf("₸") >= 0 || /\bKZT\b/i.test(raw)) return "KZT";
-      if (/\bBYN\b/i.test(raw)) return "BYN";
-      return fallback || null;
-    });
-    const fallbackCurrencyByHost = priceCurrency.fallbackCurrencyByHost || ((host) => {
-      const value = String(host || "").toLowerCase();
-      if (value.includes("ozon.kz")) return "KZT";
-      if (value.includes("ozon.by")) return "BYN";
-      return "RUB";
-    });
 
     let currency = null;
     let priceString = null;
@@ -205,19 +224,19 @@
         const ro = st.originalPrice || st.priceWithoutDiscount || st.oldPrice;
         if (typeof rp === "string") {
           priceString = rp;
-          const parsed = parsePriceWithCurrency(rp, currency || st.currency);
+          const parsed = parsePriceWithCurrencySafe(rp, currency || st.currency);
           price = parsed.price;
           currency = parsed.currency || currency;
         }
         if (typeof ro === "string") {
-          const parsedOld = parsePriceWithCurrency(ro, currency || st.currency);
+          const parsedOld = parsePriceWithCurrencySafe(ro, currency || st.currency);
           oldPrice = parsedOld.price;
           currency = currency || parsedOld.currency;
         }
-        currency = detectCurrencyFromText(st.disclaimerPriceHeader, currency || st.currency);
+        currency = detectCurrencyFromTextSafe(st.disclaimerPriceHeader, currency || st.currency);
         if (Array.isArray(st.disclaimerPriceBodyRs)) {
           for (const row of st.disclaimerPriceBodyRs) {
-            currency = detectCurrencyFromText(row && row.content, currency);
+            currency = detectCurrencyFromTextSafe(row && row.content, currency);
           }
         }
       }
@@ -244,10 +263,10 @@
       }
     }
 
-    currency = detectCurrencyFromText(priceString, currency);
+    currency = detectCurrencyFromTextSafe(priceString, currency);
 
     if (!currency) {
-      currency = fallbackCurrencyByHost(location.hostname);
+      currency = fallbackCurrencyByHostSafe(location.hostname);
     }
 
     for (const a of attributes) {
@@ -255,7 +274,7 @@
     }
 
     // 占位：抽取 model_id + variants[]（结构未知，先 dump 全量 widgetStates 到 console 供二次完善）
-    const variantsResult = extractOzonVariants(widgets, productId);
+    const variantsResult = extractOzonVariants(widgets, productId, currency);
     if (variantsResult.dump) {
       console.log("[ss-erp] OZON widgetStates dump (variants 解析占位):", variantsResult.dump);
     }
@@ -288,7 +307,7 @@
 
   // 占位实现：扫描 widgetStates 找 model_id 和 variants 候选 widget
   // 当前阶段输出 console dump，等用户在真实多变体页面跑一次后，把 widget key + 字段路径补完即可
-  function extractOzonVariants(widgets, currentProductId) {
+  function extractOzonVariants(widgets, currentProductId, currency) {
     const candidateKeys = [];
     let modelId = null;
     let variants = [];
@@ -310,7 +329,7 @@
               const text = v.data && Array.isArray(v.data.textRs) && v.data.textRs[0] ? v.data.textRs[0].content : null;
               const cover = v.data && v.data.coverImage ? v.data.coverImage : null;
               const priceText = v.data && v.data.price ? v.data.price : null;
-              const parsedPrice = parsePriceWithCurrency(priceText, currency);
+              const parsedPrice = parsePriceWithCurrencySafe(priceText, currency);
               return {
                 sku: String(v.sku),
                 attrs: aspectName ? { [aspectName]: text || String(v.sku) } : (text ? { variant: text } : {}),
@@ -393,7 +412,8 @@
   }
 
   function parseOzonProductIdFromUrl(url) {
-    const match = String(url || "").split("?")[0].match(/-([0-9]{6,})\/?$/i);
+    const path = String(url || "").split(/[?#]/)[0];
+    const match = path.match(/(?:-|\/)([0-9]{6,})\/?$/i);
     return match ? match[1] : "";
   }
 
@@ -689,6 +709,7 @@
 
   const PLATFORM_EXTRACTORS = {
     "1688": extract1688Product,
+    pdd: extractPddPageProduct,
     temu: extractTemuProduct,
     aliexpress: extractAliExpressProduct,
     wb: extractWildberriesProduct,
@@ -702,6 +723,7 @@
   function detectPlatform(hostname) {
     const host = (hostname || "").toLowerCase();
     if (host.includes("1688.com")) return "1688";
+    if (host.includes("pinduoduo.com") || host.includes("yangkeduo.com")) return "pdd";
     if (host.includes("temu.com")) return "temu";
     if (host.includes("aliexpress.com")) return "aliexpress";
     if (host.includes("wildberries.ru")) return "wb";
@@ -755,6 +777,26 @@
       titleSelectors: ["h1", ".title-text", ".d-title"],
       shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
+    });
+  }
+
+  function extractPddPageProduct(context) {
+    const collector = globalThis.SS_ERP_PDD_PRODUCT_COLLECTOR;
+    if (collector && typeof collector.extractPddProduct === "function") {
+      return collector.extractPddProduct({
+        ...context,
+        url: location.href,
+        host: location.hostname,
+        documentTitle: document.title || ""
+      });
+    }
+
+    return buildProductResult(context, {
+      monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
+      weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
+      titleSelectors: ["h1", "[class*=goods-name]", "[class*=goodsName]", ".goods-title"],
+      shopSelectors: ["[class*=store-name]", "[class*=shop-name]", ".mall-name"],
+      productIdRegexes: [/goods_id=(\d+)/i, /goods\/(\d+)/i]
     });
   }
 

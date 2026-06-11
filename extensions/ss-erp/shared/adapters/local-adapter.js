@@ -43,7 +43,8 @@
 
     // 本地模式：采集直接推到本地 API
     async submitCollect(payload) {
-      return this.request('/api/collect', {
+      const path = payload && Array.isArray(payload.items) ? '/api/collect/batch' : '/api/collect';
+      return this.request(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

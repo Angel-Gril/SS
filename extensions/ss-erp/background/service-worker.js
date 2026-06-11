@@ -18,6 +18,9 @@ const OZON_CALC_SYNC_CHANNEL = 'ozon-calc:sync-config';
 const OZON_CALC_ERP_QUEUE_KEY = 'ozon-calc:erp-queue';
 const OZON_CALC_CAPTURE_ENTRIES_KEY = 'ozon-calc:capture-har-entries';
 const OZON_CALC_PRODUCT_POOL_KEY = 'ozon-calc:product-pool';
+const SS_ERP_SOURCE_CANDIDATES_KEY = 'ss-erp:source-candidates';
+const SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY = 'ss-erp:source-candidate-context';
+const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
@@ -44,6 +47,7 @@ const OZON_FX_API_URL = 'https://open.er-api.com/v6/latest/CNY';
 const OZON_CALC_CAPTURE_LIMIT = 200;
 const OZON_CALC_VISIBLE_SNAPSHOT_LIMIT = 50;
 const OZON_CALC_ERP_PUSH_HISTORY_LIMIT = 20;
+const SS_ERP_SOURCE_CANDIDATE_CONTEXT_TTL_MS = 6 * 60 * 60 * 1000;
 
 try {
   importScripts('../shared/capture-bridge/captured-har-store.js');
@@ -55,6 +59,18 @@ try {
   importScripts('../shared/product-pool/product-pool-store.js');
 } catch (error) {
   console.warn('[ozon-calc] product pool store import failed', error);
+}
+
+try {
+  importScripts('../shared/source-candidates/source-candidate-store.js');
+} catch (error) {
+  console.warn('[SS ERP] source candidate store import failed', error);
+}
+
+try {
+  importScripts('../shared/source-search/image-search-job.js');
+} catch (error) {
+  console.warn('[SS ERP] image search job helper import failed', error);
 }
 
 try {
@@ -526,6 +542,131 @@ function appendErpPushHistory(result, item) {
   return chrome.storage.local.set({ [OZON_CALC_ERP_PUSH_HISTORY_KEY]: next }).then(() => historyItem);
 }
 
+function normalizeSourceCandidateContext(payload, now) {
+  const store = globalThis.SS_ERP_SOURCE_CANDIDATE_STORE;
+  if (!store || typeof store.normalizeOzonProduct !== 'function') {
+    throw new Error('source candidate store 未加载');
+  }
+  const ozon = store.normalizeOzonProduct(payload && typeof payload === 'object' ? payload : {}, { now });
+  if (!ozon.productId && !ozon.url) {
+    throw new Error('缺少 Ozon 商品上下文');
+  }
+  return {
+    ozon,
+    savedAt: safeIsoDate(now),
+  };
+}
+
+function getFreshSourceCandidateContext(result) {
+  const context = result && result[SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY];
+  if (!context || typeof context !== 'object' || !context.ozon) return null;
+  const savedAt = new Date(context.savedAt || '').getTime();
+  if (!Number.isFinite(savedAt) || Date.now() - savedAt > SS_ERP_SOURCE_CANDIDATE_CONTEXT_TTL_MS) return null;
+  return context;
+}
+
+function firstText(values) {
+  for (const value of values) {
+    const text = toText(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function getHostnameFromUrl(value) {
+  try {
+    return new URL(toText(value)).hostname.toLowerCase();
+  } catch (_error) {
+    return '';
+  }
+}
+
+function normalizeSourcePlatformForCollect(product) {
+  const sourceUrl = firstText([product.sourceUrl, product.tabUrl, product.url]);
+  const host = firstText([product.sourceHost, getHostnameFromUrl(sourceUrl)]).toLowerCase();
+  const raw = firstText([product.sourcePlatform, product.platform, host]).toLowerCase();
+  const haystack = [raw, host, sourceUrl.toLowerCase()].join(' ');
+  if (haystack.includes('1688')) return '1688';
+  if (haystack.includes('pinduoduo') || haystack.includes('yangkeduo') || /\bpdd\b/.test(haystack)) return 'pdd';
+  if (haystack.includes('tmall') || haystack.includes('天猫')) return 'tmall';
+  if (haystack.includes('taobao') || haystack.includes('淘宝')) return 'taobao';
+  return firstText([product.sourcePlatform, product.platform]) || 'source';
+}
+
+function normalizeCollectImages(product) {
+  const values = [];
+  function append(value) {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(append);
+      return;
+    }
+    const text = toText(value).trim();
+    if (/^https?:\/\//i.test(text) && !values.includes(text)) values.push(text);
+  }
+  append(product.images);
+  append(product.imageUrls);
+  append(product.mainImage);
+  append(product.imageUrl);
+  return values.slice(0, 50);
+}
+
+function normalizeSourceProductForErpCollect(product) {
+  const source = product && typeof product === 'object' ? product : {};
+  const sourceUrl = firstText([source.sourceUrl, source.tabUrl, source.url]);
+  const title = firstText([source.title, source.titleZh, source.name, source.tabTitle]) || '未命名商品';
+  const sourceProductId = firstText([
+    source.sourceProductId,
+    source.productId,
+    source.goodsId,
+    source.offerId,
+    source.sku,
+  ]);
+  const priceText = firstText([source.priceText, source.price, source.priceCny]);
+  const item = {
+    ...source,
+    title,
+    publishTitle: '',
+    sourceTitleRaw: firstText([source.sourceTitleRaw, source.title, source.titleZh, source.name]) || title,
+    sourceLocale: firstText([source.sourceLocale]) || 'zh-CN',
+    sourceUrl,
+    sourcePlatform: normalizeSourcePlatformForCollect(source),
+    sourceProductId: sourceProductId || undefined,
+    sku: firstText([source.sku, sourceProductId]) || undefined,
+    images: normalizeCollectImages(source),
+    priceText,
+    currency: firstText([source.currency]) || 'CNY',
+  };
+  if (!item.price && priceText) item.price = priceText;
+  if (!item.weightG && source.grossWeightGrams) item.weightG = source.grossWeightGrams;
+  return item;
+}
+
+async function notifyErpCollectCompleted(collected, errorCount) {
+  try {
+    let bridgeMatches = ['http://localhost/*', 'https://localhost/*', 'http://127.0.0.1/*', 'https://127.0.0.1/*'];
+    try {
+      const mf = chrome.runtime.getManifest();
+      const bridge = (mf.content_scripts || []).find((cs) => {
+        return Array.isArray(cs.js) && cs.js.indexOf('content/erp-collect-bridge.js') >= 0;
+      });
+      if (bridge && Array.isArray(bridge.matches) && bridge.matches.length) {
+        bridgeMatches = bridge.matches.filter((match) => /^https?:/.test(match));
+      }
+    } catch (_error) {}
+    const erpTabs = await chrome.tabs.query({ url: bridgeMatches });
+    for (const tab of erpTabs) {
+      try {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'ss-erp:collect-completed',
+          collected: Number(collected) || 0,
+          errorCount: Number(errorCount) || 0,
+        });
+      } catch (_error) {}
+    }
+  } catch (_error) {}
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
@@ -882,6 +1023,136 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ok: true,
         count: products.length,
         products,
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-candidate-context-save') {
+    Promise.resolve().then(() => {
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const context = normalizeSourceCandidateContext(payload.ozon || payload, payload.now || new Date().toISOString());
+      return chrome.storage.local.set({ [SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY]: context }).then(() => {
+        sendResponse({ ok: true, context });
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-candidate-context-get') {
+    chrome.storage.local.get([SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY]).then((result) => {
+      const context = getFreshSourceCandidateContext(result);
+      if (!context && result[SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY]) {
+        chrome.storage.local.remove([SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY]).catch(() => {});
+      }
+      sendResponse({ ok: true, context });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:collect-source-to-erp') {
+    Promise.resolve().then(async () => {
+      if (!self.SS_ERP_CLIENT || typeof self.SS_ERP_CLIENT.submitCollect !== 'function') {
+        throw new Error('ERP 适配器未加载，请重新加载扩展后重试');
+      }
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const rawItems = Array.isArray(payload.items)
+        ? payload.items
+        : [payload.product || payload.sourceProduct || payload.item || payload].filter((item) => item && typeof item === 'object');
+      if (!rawItems.length) throw new Error('缺少货源商品数据');
+      const items = rawItems.map(normalizeSourceProductForErpCollect);
+      const data = await self.SS_ERP_CLIENT.submitCollect({ items: items });
+      if (!data || data.code !== 1) {
+        throw new Error((data && data.msg) || 'ERP 采集失败');
+      }
+      const saved = Number(data.data && data.data.saved) || items.length;
+      const errors = data.data && Array.isArray(data.data.errors) ? data.data.errors : [];
+      notifyErpCollectCompleted(saved, errors.length);
+      sendResponse({ ok: true, data, saved, errorCount: errors.length });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-candidate-upsert') {
+    chrome.storage.local.get([SS_ERP_SOURCE_CANDIDATES_KEY, SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY]).then((result) => {
+      const store = globalThis.SS_ERP_SOURCE_CANDIDATE_STORE;
+      if (!store || typeof store.upsertCandidateSet !== 'function') {
+        throw new Error('source candidate store 未加载');
+      }
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const context = payload.ozon ? null : getFreshSourceCandidateContext(result);
+      const ozon = payload.ozon || (context && context.ozon);
+      if (!ozon) {
+        sendResponse({ ok: false, error: '没有最近的 Ozon 商品上下文' });
+        return null;
+      }
+      const existing = Array.isArray(result[SS_ERP_SOURCE_CANDIDATES_KEY]) ? result[SS_ERP_SOURCE_CANDIDATES_KEY] : [];
+      const nextSets = store.upsertCandidateSet(existing, ozon, payload.sourceProduct || {}, {
+        now: payload.now || new Date().toISOString(),
+      });
+      const normalizedOzon = store.normalizeOzonProduct(ozon);
+      const candidateSet = nextSets.find((item) => item && item.key === normalizedOzon.key) || null;
+      return chrome.storage.local.set({ [SS_ERP_SOURCE_CANDIDATES_KEY]: nextSets }).then(() => {
+        sendResponse({
+          ok: true,
+          count: nextSets.length,
+          candidateCount: candidateSet && Array.isArray(candidateSet.candidates) ? candidateSet.candidates.length : 0,
+          candidateSet,
+        });
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-candidate-list') {
+    chrome.storage.local.get([SS_ERP_SOURCE_CANDIDATES_KEY]).then((result) => {
+      const store = globalThis.SS_ERP_SOURCE_CANDIDATE_STORE;
+      const sets = Array.isArray(result[SS_ERP_SOURCE_CANDIDATES_KEY]) ? result[SS_ERP_SOURCE_CANDIDATES_KEY] : [];
+      const ozon = message.ozon || message.productId || '';
+      const filtered = ozon && store && typeof store.listCandidatesForOzon === 'function'
+        ? store.listCandidatesForOzon(sets, ozon)
+        : sets;
+      sendResponse({
+        ok: true,
+        count: filtered.length,
+        sets: filtered,
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:image-search-create') {
+    chrome.storage.local.get([SS_ERP_IMAGE_SEARCH_JOBS_KEY]).then((result) => {
+      const helper = globalThis.SS_ERP_IMAGE_SEARCH_JOB;
+      if (!helper || typeof helper.createImageSearchJob !== 'function') {
+        throw new Error('image search job helper 未加载');
+      }
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const existingJobs = result[SS_ERP_IMAGE_SEARCH_JOBS_KEY] && typeof result[SS_ERP_IMAGE_SEARCH_JOBS_KEY] === 'object'
+        ? result[SS_ERP_IMAGE_SEARCH_JOBS_KEY]
+        : {};
+      const created = helper.createImageSearchJob(existingJobs, Object.assign({}, payload, {
+        platform: payload.platform || '1688',
+      }));
+      return chrome.storage.local.set({ [SS_ERP_IMAGE_SEARCH_JOBS_KEY]: created.jobs }).then(() => {
+        sendResponse({
+          ok: true,
+          token: created.token,
+          url: created.url,
+          platform: payload.platform || '1688',
+        });
       });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

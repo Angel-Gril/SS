@@ -7,17 +7,18 @@
   <style>
     :root {
       --brand: #e8722a;
-      --brand-dark: #c45a1a;
-      --brand-soft: #fef3ec;
-      --brand-line: #f5c9a8;
-      --green: #16a34a;
+      --brand-dark: #b85018;
+      --brand-soft: #fff5ed;
+      --brand-line: #f2c8a8;
+      --green: #159947;
       --red: #dc2626;
-      --orange: #ea580c;
-      --text: #1a1a1a;
+      --orange: #d97706;
+      --text: #18181b;
       --muted: #6b7280;
       --line: #e5e7eb;
       --surface: #ffffff;
-      --surface-2: #f9fafb;
+      --surface-2: #f8fafc;
+      --surface-3: #f3f4f6;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -34,172 +35,364 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 14px 16px;
-      background: linear-gradient(135deg, #fef3ec 0%, #fde8d8 100%);
-      border-bottom: 1px solid var(--brand-line);
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--brand-soft), #fff);
     }
 
     .logo {
-      width: 32px; height: 32px;
+      width: 32px;
+      height: 32px;
       border-radius: 8px;
-      background: linear-gradient(135deg, #f59e0b, var(--brand));
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px;
-      box-shadow: 0 2px 8px rgba(232, 114, 42, 0.3);
+      background: var(--brand);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
     }
 
+    .header-text { flex: 1; min-width: 0; }
     .header-text h1 {
-      font-size: 14px; font-weight: 700; color: var(--brand-dark);
+      font-size: 14px;
+      line-height: 18px;
+      font-weight: 750;
+      color: var(--brand-dark);
     }
     .header-text .sub {
-      font-size: 10px; color: var(--brand-dark); opacity: 0.7; margin-top: 2px;
+      font-size: 10px;
+      line-height: 14px;
+      color: var(--muted);
+      margin-top: 1px;
     }
 
     .section {
       padding: 12px 16px;
       border-bottom: 1px solid var(--line);
     }
-    .section:last-of-type { border-bottom: none; }
 
-    .section-title {
-      font-size: 10px; font-weight: 700; color: var(--muted);
-      text-transform: uppercase; letter-spacing: 0.5px;
-      margin-bottom: 8px;
+    .page-chip {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--surface-3);
+      color: #374151;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .primary-card {
+      display: grid;
+      gap: 8px;
+    }
+
+    .primary-title {
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 780;
+      margin-top: 2px;
+    }
+
+    .primary-hint {
+      min-height: 32px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 16px;
+    }
+
+    .primary-action {
+      width: 100%;
+      height: 38px;
+      border: 0;
+      border-radius: 7px;
+      background: var(--brand);
+      color: #fff;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+      cursor: pointer;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+    .primary-action:hover { opacity: 0.92; }
+    .primary-action:active { transform: translateY(1px); }
+    .primary-action:disabled {
+      cursor: default;
+      opacity: 0.62;
+      transform: none;
+    }
+
+    .secondary-action {
+      width: 100%;
+      height: 32px;
+      border: 1px solid var(--brand-line);
+      border-radius: 7px;
+      background: var(--brand-soft);
+      color: var(--brand-dark);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 750;
+      cursor: pointer;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+    }
+    .secondary-action:hover { opacity: 0.92; }
+    .secondary-action:active { transform: translateY(1px); }
+    .secondary-action:disabled {
+      cursor: default;
+      opacity: 0.62;
+      transform: none;
+    }
+    .secondary-action[hidden] { display: none; }
+
+    .action-status {
+      min-height: 16px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .action-status.ok { color: var(--green); font-weight: 650; }
+    .action-status.fail { color: var(--red); font-weight: 650; }
+
+    .status-grid {
+      display: grid;
+      gap: 7px;
     }
 
     .status-row {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 20px;
     }
     .dot {
-      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--red);
     }
-    .dot-green { background: var(--green); box-shadow: 0 0 4px rgba(22,163,74,0.4); }
-    .dot-red { background: var(--red); box-shadow: 0 0 4px rgba(220,38,38,0.3); }
-    .dot-orange { background: var(--orange); box-shadow: 0 0 4px rgba(234,88,12,0.3); }
+    .dot-green { background: var(--green); }
+    .dot-red { background: var(--red); }
+    .status-label {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-value {
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: right;
+    }
 
-    .status-label { font-size: 12px; font-weight: 500; flex: 1; }
-    .status-value { font-size: 11px; color: var(--muted); }
-    .status-value.warn { color: var(--orange); font-weight: 600; }
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    .metric {
+      padding: 7px 6px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface-2);
+      text-align: center;
+    }
+    .metric strong {
+      display: block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 17px;
+      line-height: 20px;
+    }
+    .metric span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 12px;
+    }
 
-    .sync-row {
-      display: flex; align-items: center; gap: 8px;
-      padding: 8px 0;
+    details.maintenance {
       border-bottom: 1px solid var(--line);
     }
-    .sync-row:last-child { border-bottom: none; }
+    details.maintenance summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 11px 16px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #374151;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    details.maintenance summary::-webkit-details-marker { display: none; }
+    details.maintenance summary::after {
+      content: "展开";
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+    }
+    details.maintenance[open] summary::after { content: "收起"; }
 
-    .sync-info { flex: 1; }
-    .sync-name { font-size: 12px; font-weight: 600; }
+    .maintenance-body {
+      padding: 0 16px 12px;
+    }
+
+    .sync-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+    }
+    .sync-info { flex: 1; min-width: 0; }
+    .sync-name { font-size: 12px; font-weight: 650; }
     .sync-time { font-size: 10px; color: var(--muted); margin-top: 2px; }
     .sync-time.warn { color: var(--orange); }
 
     .btn {
-      height: 28px; padding: 0 12px;
-      border: none; border-radius: 6px;
-      font-family: inherit; font-size: 11px; font-weight: 600;
-      cursor: pointer; white-space: nowrap;
+      height: 28px;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
     }
     .btn-primary {
-      background: linear-gradient(135deg, #f59e0b, var(--brand));
-      color: #fff;
-      box-shadow: 0 2px 6px rgba(232,114,42,0.25);
+      border-color: var(--brand-line);
+      background: var(--brand-soft);
+      color: var(--brand-dark);
     }
-    .btn-primary:hover { opacity: 0.9; }
-    .btn-secondary {
-      background: var(--surface-2);
+
+    .field {
+      width: 100%;
+      height: 28px;
       border: 1px solid var(--line);
-      color: var(--text);
+      border-radius: 6px;
+      padding: 0 8px;
+      font: inherit;
+      font-size: 11px;
+      background: #fff;
+    }
+    .field + .field { margin-top: 6px; }
+    .help-text {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 14px;
     }
 
     .footer {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       padding: 10px 16px;
       background: var(--surface-2);
-      border-top: 1px solid var(--line);
     }
     .footer-link {
-      font-size: 11px; color: var(--brand); font-weight: 600;
-      cursor: pointer; text-decoration: none;
+      color: var(--brand-dark);
+      font-size: 11px;
+      font-weight: 750;
+      text-decoration: none;
+      cursor: pointer;
     }
-    .footer-version { font-size: 10px; color: var(--muted); }
+    .footer-version { color: var(--muted); font-size: 10px; }
   </style>
 </head>
 <body>
   <header class="header">
-    <div class="logo">🐿</div>
+    <div class="logo">SS</div>
     <div class="header-text">
       <h1>松鼠跨境助手</h1>
-      <div class="sub">SS ERP · OZON 一站式工具</div>
+      <div class="sub">核价、采集、货源整理</div>
     </div>
   </header>
 
-  <section class="section">
-    <div class="section-title">连接状态</div>
-    <div class="status-row" id="erpStatus">
-      <span class="dot dot-red"></span>
-      <span class="status-label">ERP 后端</span>
-      <span class="status-value">检测中...</span>
-    </div>
-    <div class="status-row" id="ozonStatus">
-      <span class="dot dot-red"></span>
-      <span class="status-label">OZON 卖家后台</span>
-      <span class="status-value">检测中...</span>
-    </div>
-  </section>
+  <main>
+    <section class="section primary-card">
+      <span class="page-chip" id="activePageLabel">识别当前页面...</span>
+      <div class="primary-title" id="primaryActionTitle">准备中</div>
+      <div class="primary-hint" id="primaryActionHint">正在判断当前标签页适合执行的操作。</div>
+      <button class="primary-action" id="primaryActionBtn" type="button" disabled>请稍候</button>
+      <button class="secondary-action" id="secondaryActionBtn" type="button" hidden>找同款</button>
+      <div class="action-status" id="primaryActionStatus"></div>
+    </section>
 
-  <section class="section">
-    <div class="section-title">数据同步</div>
-    <div class="sync-row">
-      <div class="sync-info">
-        <div class="sync-name">店铺分析</div>
-        <div class="sync-time" id="analyticsSyncTime">未同步</div>
+    <section class="section status-grid">
+      <div class="status-row" id="erpStatus">
+        <span class="dot dot-red"></span>
+        <span class="status-label">ERP 后端</span>
+        <span class="status-value">检测中...</span>
       </div>
-      <button class="btn btn-primary" id="syncAnalyticsBtn" type="button">同步</button>
-    </div>
-    <div class="sync-row">
-      <div class="sync-info">
-        <div class="sync-name">经营图表</div>
-        <div class="sync-time" id="graphsSyncTime">未同步</div>
+      <div class="status-row" id="ozonStatus">
+        <span class="dot dot-red"></span>
+        <span class="status-label">OZON 卖家后台</span>
+        <span class="status-value">检测中...</span>
       </div>
-      <button class="btn btn-primary" id="syncGraphsBtn" type="button">同步</button>
-    </div>
-    <div class="sync-row">
-      <div class="sync-info">
-        <div class="sync-name">OZON Cookie</div>
-        <div class="sync-time" id="cookieSyncTime">未同步</div>
-      </div>
-      <button class="btn btn-primary" id="syncCookieBtn" type="button">同步</button>
-    </div>
-    <div style="padding:6px 0;">
-      <select id="cookieShopSelect" style="width:100%;height:26px;border:1px solid var(--line);border-radius:4px;padding:0 6px;font-size:11px;background:var(--surface);">
-        <option value="">— 选择目标店铺 —</option>
-      </select>
-      <input id="cookieCompanyIdInput" type="text" placeholder="可选：留空自动识别当前 seller 店铺"
-        style="width:100%;height:26px;border:1px solid var(--line);border-radius:4px;padding:0 6px;font-size:11px;margin-top:4px;background:var(--surface);" />
-      <div style="font-size:9px;color:var(--muted);margin-top:3px;line-height:1.4;">
-        在 seller.ozon.ru 切到目标店铺后点击同步；仅自动识别失败时手动填写 company_id
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="section">
-    <div class="section-title">计算器配置</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
-      <div style="text-align:center;padding:6px;background:var(--surface-2);border-radius:6px;border:1px solid var(--line);">
-        <div style="font-size:18px;font-weight:800;font-family:monospace;" id="sellerCount">0</div>
-        <div style="font-size:9px;color:var(--muted);margin-top:2px;">后台物流</div>
+    <section class="section">
+      <div class="metric-row">
+        <div class="metric">
+          <strong id="sellerCount">0</strong>
+          <span>后台物流</span>
+        </div>
+        <div class="metric">
+          <strong id="selectedCount">0</strong>
+          <span>我的物流</span>
+        </div>
+        <div class="metric">
+          <strong id="allCount">0</strong>
+          <span>数据记录</span>
+        </div>
       </div>
-      <div style="text-align:center;padding:6px;background:var(--surface-2);border-radius:6px;border:1px solid var(--line);">
-        <div style="font-size:18px;font-weight:800;font-family:monospace;" id="selectedCount">0</div>
-        <div style="font-size:9px;color:var(--muted);margin-top:2px;">我的物流</div>
+    </section>
+
+    <details class="maintenance">
+      <summary>同步与维护</summary>
+      <div class="maintenance-body">
+        <div class="sync-row">
+          <div class="sync-info">
+            <div class="sync-name">OZON Cookie</div>
+            <div class="sync-time" id="cookieSyncTime">未同步</div>
+          </div>
+          <button class="btn btn-primary" id="syncCookieBtn" type="button">同步</button>
+        </div>
+        <select class="field" id="cookieShopSelect">
+          <option value="">选择目标店铺</option>
+        </select>
+        <input class="field" id="cookieCompanyIdInput" type="text" placeholder="可选：留空自动识别当前 seller 店铺" />
+        <div class="help-text">在 seller.ozon.ru 切到目标店铺后同步；仅自动识别失败时手动填写 company_id。</div>
+
+        <div class="sync-row">
+          <div class="sync-info">
+            <div class="sync-name">店铺分析</div>
+            <div class="sync-time" id="analyticsSyncTime">未同步</div>
+          </div>
+          <button class="btn" id="syncAnalyticsBtn" type="button">同步</button>
+        </div>
+        <div class="sync-row">
+          <div class="sync-info">
+            <div class="sync-name">经营图表</div>
+            <div class="sync-time" id="graphsSyncTime">未同步</div>
+          </div>
+          <button class="btn" id="syncGraphsBtn" type="button">同步</button>
+        </div>
       </div>
-      <div style="text-align:center;padding:6px;background:var(--surface-2);border-radius:6px;border:1px solid var(--line);">
-        <div style="font-size:18px;font-weight:800;font-family:monospace;" id="allCount">0</div>
-        <div style="font-size:9px;color:var(--muted);margin-top:2px;">数据记录</div>
-      </div>
-    </div>
-  </section>
+    </details>
+  </main>
 
   <footer class="footer">
     <a class="footer-link" id="openSettingsBtn">完整设置</a>

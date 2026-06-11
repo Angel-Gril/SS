@@ -31,7 +31,8 @@
 
     // 云端模式：采集推送到云端队列
     async submitCollect(payload) {
-      return this.request('/api/collect', {
+      const path = payload && Array.isArray(payload.items) ? '/api/collect/batch' : '/api/collect';
+      return this.request(path, {
         method: 'POST',
         body: JSON.stringify(payload),
       });

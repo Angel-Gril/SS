@@ -1,0 +1,170 @@
+# SS ERP 扩展开发与整合计划
+
+本文是当前版 Chrome 扩展的开发主文档。历史分析仍保存在 `docs/archive/`，但后续扩展整合、核价、采集和货源比价的判断以本文为准。
+
+## 当前结论
+
+扩展继续做成一个 `SS ERP - 松鼠跨境卖家助手`，不要拆成多个独立扩展。
+
+原因：
+
+- 核价、采集、货源比价、Ozon Cookie、ERP Token、汇率和物流配置共用同一套身份与数据。
+- 拆成多个扩展会重复申请权限、重复配置 ERP 地址和 Token，也会让用户不知道该点哪个入口。
+- 当前代码已经在 `extensions/ss-erp` 内整合了 Ozon 面板、计算器核心、ERP 推送和物流桥接，继续扩展成本最低。
+
+UI 上需要拆模块，而不是拆扩展：
+
+- 核价助手：Ozon 商品页和列表页核价、利润、汇率、物流方案。
+- 采集助手：当前页商品采集，支持 Ozon、1688、淘宝/天猫、PDD。
+- 货源比价：从 Ozon 主图发起 1688/PDD/淘宝搜图，国内货源先进入 ERP 上品列表，再做比价和上架加工。
+- 设置/同步：ERP 连接、Ozon Cookie、店铺分析、配置同步。
+
+Popup 不做按钮墙。第一屏只根据当前页面露出一个最可能需要的主动作：
+
+- Ozon 商品页：主按钮“采集到 ERP”，下方仅露出一个上下文次级动作“找同款”。
+- 1688/PDD/淘宝/天猫货源页：采集货源到 ERP。
+- seller.ozon.ru：同步 Cookie。
+- 其他页面：打开设置或提示当前页不支持。
+
+Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤能力，不在 popup 首屏平铺按钮。搜图只保留一个“找同款”入口，平台桥接在后台按能力逐步接入；Cookie、店铺分析、经营图表放在 popup 的“同步与维护”折叠区中。
+
+## 旧扩展资产盘点
+
+| 来源 | 有价值能力 | 当前迁移状态 | 下一步 |
+| --- | --- | --- | --- |
+| `D:\AI Agent\Work\LS\AliPrice - TB以图搜同款 Beta` | 截图搜同款、右键菜单、快捷键、页面翻译类 UX | 第三方打包代码，直接复用价值低 | 只参考搜图入口和交互，不迁移核心代码 |
+| `D:\AI Agent\Work\LS\ozon-selection-capture` | Ozon 商品采集、Ozon 主图到 1688/PDD/淘宝搜图、待生成记录、XLS 导出 | Ozon 基础采集已被当前扩展覆盖；1688 主图搜图桥已迁入；候选池只作为 Ozon 上下文辅助 | PDD/淘宝搜图继续挂到同一个“找同款”入口，XLS 导出改为备用能力 |
+| `D:\AI Agent\Work\LS\test-extension` | 1688/淘宝/PDD 商品详情采集器，SKU、图片、价格、尺寸、库存提取较完整 | 当前扩展已有 1688/淘宝基础采集；PDD 商品采集第一版已接入 | 用真实 PDD 页面回归，再对齐 1688/淘宝字段质量 |
+| `D:\AI Agent\Work\LS\旧自研插件` | Ozon 面板、seller 分析接口、1688/PDD 物流、ERP 配置页、旧 API 参考 | 大部分已迁入 `extensions/ss-erp` | 继续保留 API 参考，避免重复移植已完成模块 |
+
+## 当前 `extensions/ss-erp` 状态
+
+已完成：
+
+- Ozon 商品页数据面板和列表页信息注入。
+- Ozon public/seller 数据聚合，支持推送到 ERP `/api/collect/batch`。
+- 计算器核心、佣金、汇率、物流数据和配置同步。
+- 1688/PDD 物流查询桥接。
+- 1688、淘宝/天猫、PDD 等页面的基础商品采集脚本。
+- ERP 连接配置、Ozon Cookie 同步、店铺分析同步。
+- Popup 已收敛为一个智能主动作，连接状态和计算器数据保留在首屏，Cookie/店铺分析/经营图表同步放进“同步与维护”折叠区。
+- Ozon 商品页“找同款”已接入 1688 主图搜图第一版：popup 采集当前商品主图并转码，service worker 创建搜图任务，1688 页面桥调用 MTOP 获取 imageId 并跳转结果。
+- 1688/PDD/淘宝/天猫货源页主动作已改为直接写入 ERP `/api/collect/batch`，采集成功后提示“已进入 ERP 上品列表”，并通知已打开的 ERP 采集页刷新。
+- 候选货源本地池保留为辅助能力：在 Ozon 商品页打开扩展会记住 6 小时上下文，但不再作为国内货源采集的主保存路径。
+- Ozon 列表页注入样式以 `ss-erp-cloud-1.0.17` 的稳定商品信息卡为基准：保留原有列表卡片布局、采集按钮、展开按钮和展开态样式，不再未经确认重做列表页视觉结构。
+
+当前可加载目录：
+
+- 本地版：`D:\AI Agent\Work\QE\SS ERP\build\extensions\ss-erp-local`
+- 云端版：`D:\AI Agent\Work\QE\SS ERP\build\extensions\ss-erp-cloud`
+- 源码目录：`D:\AI Agent\Work\QE\SS ERP\extensions\ss-erp`
+
+建议 Chrome 平时只加载 `build\extensions\ss-erp-local` 或 `build\extensions\ss-erp-cloud`，不要同时加载源码目录和 build 目录，否则会出现看起来“退回旧版本”的混合表现。
+
+部分完成：
+
+- Popup 当前支持按页面识别 Ozon 商品采集、Ozon 到 1688 找同款、国内货源采集到 ERP、seller Cookie 同步；PDD/淘宝搜图还未接入同一个“找同款”入口。
+- 1688 和淘宝/天猫能采集基础数据，但还需要对齐旧 `test-extension` 的 SKU、阶梯价、重量尺寸和图片提取质量。
+- Ozon 到 ERP 采集链路可用，国内货源到 ERP 上品列表链路已接通，但翻译、类目映射、属性映射和改款上架前的字段检查还未完整收口。
+
+缺口：
+
+- PDD 商品详情采集已接入第一版，但还需要真实页面回归 `mobile.pinduoduo.com`、`mobile.yangkeduo.com`、`pifa.pinduoduo.com` 的实际字段结构。
+- Ozon 主图发起 1688 搜图已迁入；PDD/淘宝搜图桥还未迁入当前扩展。
+- ERP 中针对国内货源的翻译、Ozon 类目映射、属性映射、图片处理和水印流程还需要继续做成稳定上架链路。
+- 旧 `ozon-selection-capture` 的待生成记录目前还是独立 XLS 思路，尚未映射到 ERP 数据模型。
+
+## 目标产品流程
+
+1. Ozon 商品页打开扩展或页面面板。
+2. 用户可以直接核价，看到售价、汇率、佣金、物流、利润和建议采购价。
+3. 用户点击以图搜货源，扩展用 Ozon 主图打开 1688/PDD/淘宝搜图结果。
+4. 用户在 1688/PDD/淘宝/天猫货源详情页点击采集，扩展读取采购价、SKU、规格、库存、图片、重量尺寸和链接。
+5. 国内货源直接写入 ERP `/collect` 上品列表，保留中文源标题并标记需要翻译/审核，不把中文标题当作 Ozon 上架标题。
+6. ERP 继续完成标题/描述翻译、Ozon 类目/type 映射、属性映射、图片处理和水印，然后通过 `/api/collect/publish-ozon` 上架到 Ozon。
+
+## MVP 收口范围
+
+第一轮只做能跑通的主链路：
+
+- Popup 使用当前页智能主动作，不平铺多个按钮。已完成第一版：Ozon 商品页采集到 ERP，1688/PDD/淘宝/天猫采集货源到 ERP，seller.ozon.ru 同步 Cookie。
+- Manifest 接入 PDD 商品详情采集页面。第一版已完成，覆盖 `*.pinduoduo.com` 和 `*.yangkeduo.com`。
+- 从 `test-extension` 迁移 PDD 采集器到共享采集模块。第一版已完成：`extensions/ss-erp/shared/collectors/pdd-product.js`。
+- 国内货源采集主路径复用 ERP `/api/collect/batch`，统一进入 `/collect`；`sourceCandidate` 只保留为 Ozon 上下文和比价辅助数据结构。
+- 从 Ozon 商品页发起搜图任务，迁移 `ozon-selection-capture` 的图片上传桥接。1688 第一版已完成，PDD/淘宝待接入同一个入口。
+- ERP 后续补齐翻译、类目映射、属性映射和改款上架前检查；如果要做“一对多候选货源比价”，再新增专门候选货源 endpoint。
+
+## 实现优先级
+
+1. 文档和边界：本文档、模块划分、当前状态清单。
+2. PDD 商品采集：补 manifest 匹配、迁移提取器、统一字段到现有采集 payload。第一版已完成，待真实页面回归。
+3. Popup 智能主动作：首屏只保留一个当前页动作，维护动作折叠收起。第一版已完成。
+4. 搜图桥接：迁移 1688/PDD/淘宝上传与结果页跳转，但入口必须接在 Ozon 商品页主动作后或页面面板里，不能新增成多个常驻按钮。1688 第一版已完成。
+5. 国内货源入 ERP：1688/PDD/淘宝/天猫商品页采集后直接写入 ERP `/collect`。已完成第一版。
+6. 比价与 ERP 上架加工：把采购价、运费、汇率、佣金、翻译、类目映射和属性映射结果写入 ERP，并进入 Ozon 上架链路。
+
+## 验证清单
+
+每次改扩展后至少执行：
+
+```bash
+pnpm verify:extension
+```
+
+本轮新增的 Ozon 回归测试：
+
+```bash
+node --test scripts/extension-ozon-variant-currency-scope.test.mjs
+node --test scripts/extension-ozon-list-overlay-ui.test.mjs
+```
+
+国内货源采集进入 ERP 的回归测试：
+
+```bash
+node --test scripts/extension-source-collect-to-erp.test.mjs
+node --test scripts/extension-erp-submit-collect-routing.test.mjs
+```
+
+涉及具体平台能力时，需要手工验证：
+
+- Ozon 商品页：面板加载、商品采集、推送 ERP、核价结果。
+- Ozon 列表页：信息卡注入不阻塞页面滚动。
+- 1688 商品页：标题、价格、SKU、图片、重量尺寸。
+- 淘宝/天猫商品页：标题、价格、SKU、图片。
+- PDD 商品页：标题、价格、SKU、图片、库存。
+- 1688/PDD/淘宝搜图结果页：图片上传、跳转、错误提示。
+- ERP 页面：采集完成通知、`/collect` 上品列表记录可见。
+
+PDD 采集器单测：
+
+```bash
+node --test scripts/extension-pdd-collector.test.mjs
+```
+
+搜图与候选货源辅助能力相关单测：
+
+```bash
+node --test scripts/extension-source-candidate-store.test.mjs
+node --test scripts/extension-image-search-job.test.mjs
+node --test scripts/extension-image-search-integration.test.mjs
+```
+
+## 暂不做
+
+- 暂不拆成多个扩展。
+- 暂不把后端密钥、OSS/R2 密钥或 Cloudflare Token 放进扩展。
+- 暂不把 Premium 模拟作为用户可见卖点；相关代码只在明确需要和合规可接受时保留。
+- 暂不把 XLS 作为主流程，最多保留为导出备份。
+
+## 待确认问题
+
+- 是否需要新增“一对多候选货源/比价记录”接口；当前国内货源主链路已复用 `/api/collect/batch`。
+- ERP `/collect` 是否需要增加更明显的“待翻译/待类目映射/待属性映射”筛选和批处理视图。
+- PDD 目标页面范围：`mobile.pinduoduo.com`、`mobile.yangkeduo.com`、`pifa.pinduoduo.com` 是否都要支持商品详情采集。
+
+## 2026-06-11 调试记录
+
+- `parsePriceWithCurrency is not defined` 的根因是 Ozon 变体解析函数引用了 `collectOzonViaApi()` 内部的局部价格解析变量。已改为顶层安全 helper，并把 `currency` 显式传给 `extractOzonVariants()`。
+- 列表页 UI 误改的直接原因是把“不要 popup 按钮墙”的要求错误套到了 Ozon 列表页 overlay。已按 `C:\Users\550W\Downloads\ss-erp-cloud-1.0.17\ss-erp-cloud\content\ozon-list-overlay.js` 恢复稳定样式，并新增静态测试防止再次回到误改的轻量详情样式。
+- 云端版比本地版更容易读到 Ozon 列表 Premium 数据，通常是因为云端能走 ERP 缓存/线上授权链路；本地版依赖本机后端、Token、Cookie、seller 授权和本地缓存状态。两版前端采集原理一致，但后端数据链路和缓存命中率不一定一致。
+- 国内货源采集没有出现在 ERP 的根因是 popup 原先调用 `ss-erp:source-candidate-upsert`，只写入扩展本地 `chrome.storage.local`。现已改为 `ss-erp:collect-source-to-erp`，service worker 通过 `SS_ERP_CLIENT.submitCollect({ items })` 写入 ERP `/api/collect/batch`，local/cloud 适配器会按 `items` 自动走批量采集接口。

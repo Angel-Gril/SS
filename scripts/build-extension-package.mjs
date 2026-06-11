@@ -35,9 +35,13 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://*.ozon.ru/*',
   'https://*.ozon.kz/*',
   'https://*.ozon.by/*',
+  'https://s.1688.com/*',
+  'https://*.1688.com/*',
   'https://detail.1688.com/*',
   'https://trade.1688.com/*',
   'https://mobile.pinduoduo.com/*',
+  'https://*.pinduoduo.com/*',
+  'https://*.yangkeduo.com/*',
   'https://www.temu.com/*',
   'https://*.aliexpress.com/*',
   'https://www.wildberries.ru/*',
@@ -58,6 +62,8 @@ const CLOUD_WEB_RESOURCE_MATCHES = [
   'https://*.ozon.ru/*',
   'https://*.ozon.kz/*',
   'https://*.ozon.by/*',
+  'https://s.1688.com/*',
+  'https://*.1688.com/*',
 ];
 
 function unique(values) {

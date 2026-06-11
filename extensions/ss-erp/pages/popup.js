@@ -15,12 +15,48 @@
   var allCountNode = document.getElementById('allCount');
   var openSettingsBtn = document.getElementById('openSettingsBtn');
   var versionText = document.getElementById('versionText');
+  var activePageLabel = document.getElementById('activePageLabel');
+  var primaryActionTitle = document.getElementById('primaryActionTitle');
+  var primaryActionHint = document.getElementById('primaryActionHint');
+  var primaryActionBtn = document.getElementById('primaryActionBtn');
+  var secondaryActionBtn = document.getElementById('secondaryActionBtn');
+  var primaryActionStatus = document.getElementById('primaryActionStatus');
+  var primaryActionState = { type: 'loading', tab: null, productId: '' };
+  var secondaryActionState = { type: 'hidden' };
 
   var manifest = chrome.runtime.getManifest();
   if (versionText) versionText.textContent = 'v' + (manifest.version || '1.0.0');
 
   function setText(node, text) {
     if (node) node.textContent = text == null ? '' : String(text);
+  }
+
+  function setActionStatus(text, kind) {
+    if (!primaryActionStatus) return;
+    primaryActionStatus.textContent = text || '';
+    primaryActionStatus.className = 'action-status' + (kind ? ' ' + kind : '');
+  }
+
+  function setPrimaryAction(state) {
+    primaryActionState = state || { type: 'unsupported', tab: null, productId: '' };
+    setText(activePageLabel, primaryActionState.label || '当前页面');
+    setText(primaryActionTitle, primaryActionState.title || '当前页面暂不支持');
+    setText(primaryActionHint, primaryActionState.hint || '');
+    if (primaryActionBtn) {
+      primaryActionBtn.disabled = Boolean(primaryActionState.disabled);
+      primaryActionBtn.textContent = primaryActionState.buttonText || '打开设置';
+    }
+    setSecondaryAction(primaryActionState.secondaryAction || null);
+    setActionStatus('', '');
+  }
+
+  function setSecondaryAction(action) {
+    secondaryActionState = action || { type: 'hidden' };
+    if (!secondaryActionBtn) return;
+    var hidden = !action || action.type === 'hidden';
+    secondaryActionBtn.hidden = hidden;
+    secondaryActionBtn.disabled = hidden || Boolean(action && action.disabled);
+    secondaryActionBtn.textContent = action && action.buttonText ? action.buttonText : '找同款';
   }
 
   function setStatus(row, connected, label) {
@@ -70,6 +106,416 @@
       });
     } catch (error) {
       callback({ ok: false, error: formatRuntimeError(error && error.message ? error.message : String(error)) });
+    }
+  }
+
+  function getActiveTab(callback) {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      callback(tabs && tabs.length ? tabs[0] : null);
+    });
+  }
+
+  function getHost(url) {
+    try {
+      return new URL(url || '').hostname.toLowerCase();
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function parseOzonProductId(url) {
+    var path = String(url || '').split(/[?#]/)[0];
+    var match = path.match(/(?:-|\/)([0-9]{6,})\/?$/i);
+    return match ? match[1] : '';
+  }
+
+  function isOzonProductUrl(url) {
+    return /^https:\/\/(?:www\.)?ozon\.(?:ru|kz|by)\/product\//i.test(String(url || ''));
+  }
+
+  function detectSourcePlatform(host) {
+    if (host.indexOf('1688.com') >= 0) return '1688';
+    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'PDD';
+    if (host.indexOf('taobao.com') >= 0) return '淘宝';
+    if (host.indexOf('tmall.com') >= 0) return '天猫';
+    return '';
+  }
+
+  function buildOzonCandidateContext(tab, productId) {
+    return {
+      productId: productId || parseOzonProductId(tab && tab.url),
+      title: tab && tab.title ? tab.title : '',
+      url: tab && tab.url ? tab.url : ''
+    };
+  }
+
+  function rememberOzonCandidateContext(tab, productId) {
+    var ozon = buildOzonCandidateContext(tab, productId);
+    if (!ozon.productId && !ozon.url) return;
+    sendRuntimeMessage({
+      type: 'ss-erp:source-candidate-context-save',
+      payload: { ozon: ozon }
+    }, function (response) {
+      if (!response || !response.ok) {
+        console.warn('[popup] source candidate context save failed:', response && response.error);
+      }
+    });
+  }
+
+  function updateSourceContextHint(host) {
+    sendRuntimeMessage({ type: 'ss-erp:source-candidate-context-get' }, function (response) {
+      if (!response || !response.ok || primaryActionState.type !== 'collectSourcePage') return;
+      var ozon = response.context && response.context.ozon;
+      if (ozon && (ozon.productId || ozon.title)) {
+        var label = ozon.productId ? ('Ozon ' + ozon.productId) : String(ozon.title).slice(0, 16);
+        setText(primaryActionHint, host + ' · 将关联 ' + label);
+      } else {
+        setText(primaryActionHint, host + ' · 先在 Ozon 商品页打开扩展可自动关联');
+      }
+    });
+  }
+
+  function configurePrimaryAction() {
+    getActiveTab(function (tab) {
+      var url = tab && tab.url ? tab.url : '';
+      var host = getHost(url);
+      var sourcePlatform = detectSourcePlatform(host);
+
+      if (!tab || !url) {
+        setPrimaryAction({
+          type: 'unsupported',
+          label: '未识别页面',
+          title: '打开设置',
+          hint: '未读取到当前标签页。',
+          buttonText: '打开设置'
+        });
+        return;
+      }
+
+      if (isOzonProductUrl(url)) {
+        var productId = parseOzonProductId(url);
+        rememberOzonCandidateContext(tab, productId);
+        setPrimaryAction({
+          type: 'collectOzonToErp',
+          tab: tab,
+          productId: productId,
+          label: 'Ozon 商品页',
+          title: '采集到 ERP',
+          hint: productId ? ('SKU ' + productId + ' · 货源将自动关联') : '未识别 SKU',
+          buttonText: '采集到 ERP',
+          disabled: !productId,
+          secondaryAction: {
+            type: 'search1688ByImage',
+            tab: tab,
+            productId: productId,
+            buttonText: '找同款',
+            disabled: !productId
+          }
+        });
+        return;
+      }
+
+      if (sourcePlatform) {
+        setPrimaryAction({
+          type: 'collectSourcePage',
+          tab: tab,
+          label: sourcePlatform + ' 货源页',
+          title: '采集货源',
+          hint: host,
+          buttonText: '采集货源'
+        });
+        updateSourceContextHint(host);
+        return;
+      }
+
+      if (host === 'seller.ozon.ru') {
+        setPrimaryAction({
+          type: 'syncCookie',
+          tab: tab,
+          label: 'Ozon Seller',
+          title: '同步 Cookie',
+          hint: '当前店铺认证',
+          buttonText: '同步 Cookie'
+        });
+        return;
+      }
+
+      setPrimaryAction({
+        type: 'unsupported',
+        tab: tab,
+        label: '普通页面',
+        title: '打开设置',
+        hint: host || 'chrome 页面',
+        buttonText: '打开设置'
+      });
+    });
+  }
+
+  function setPrimaryButtonBusy(text) {
+    if (!primaryActionBtn) return;
+    primaryActionBtn.disabled = true;
+    primaryActionBtn.textContent = text || '处理中...';
+  }
+
+  function restorePrimaryButton() {
+    if (!primaryActionBtn) return;
+    primaryActionBtn.disabled = Boolean(primaryActionState.disabled);
+    primaryActionBtn.textContent = primaryActionState.buttonText || '打开设置';
+  }
+
+  function setSecondaryButtonBusy(text) {
+    if (!secondaryActionBtn) return;
+    secondaryActionBtn.disabled = true;
+    secondaryActionBtn.textContent = text || '处理中...';
+  }
+
+  function restoreSecondaryButton() {
+    if (!secondaryActionBtn || secondaryActionBtn.hidden) return;
+    secondaryActionBtn.disabled = Boolean(secondaryActionState.disabled);
+    secondaryActionBtn.textContent = secondaryActionState.buttonText || '找同款';
+  }
+
+  function openSettings() {
+    if (chrome.runtime.openOptionsPage) {
+      chrome.runtime.openOptionsPage();
+    } else {
+      chrome.tabs.create({ url: chrome.runtime.getURL('pages/settings.html') });
+    }
+  }
+
+  function collectOzonToErp() {
+    if (!primaryActionState.productId) {
+      setActionStatus('未识别 Ozon SKU', 'fail');
+      return;
+    }
+    rememberOzonCandidateContext(primaryActionState.tab, primaryActionState.productId);
+    setPrimaryButtonBusy('采集中...');
+    setActionStatus('', '');
+    sendRuntimeMessage({
+      type: 'spb-self-hosted:fetch-ozon-product-to-erp',
+      productIds: [primaryActionState.productId]
+    }, function (response) {
+      restorePrimaryButton();
+      if (response && response.ok) {
+        var count = response.data && response.data.collected ? response.data.collected : 1;
+        setActionStatus('已采集 ' + count + ' 件商品', 'ok');
+      } else {
+        setActionStatus((response && response.error) || '采集失败', 'fail');
+      }
+    });
+  }
+
+  function submitSourceToErp(sourceProduct, callback) {
+    sendRuntimeMessage({
+      type: 'ss-erp:collect-source-to-erp',
+      payload: { product: sourceProduct || {} }
+    }, callback);
+  }
+
+  function collectSourcePage() {
+    setPrimaryButtonBusy('采集中...');
+    setActionStatus('', '');
+    sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {
+      restorePrimaryButton();
+      if (response && response.ok) {
+        var data = response.data || {};
+        var baseStatus = data.title ? ('已采集：' + String(data.title).slice(0, 18)) : '已采集当前货源页';
+        submitSourceToErp(data, function (erpResponse) {
+          if (erpResponse && erpResponse.ok) {
+            setActionStatus(baseStatus + '，已进入 ERP 上品列表', 'ok');
+            return;
+          }
+          var error = erpResponse && erpResponse.error ? erpResponse.error : '';
+          setActionStatus(baseStatus + '，写入 ERP 失败：' + (error || '未知错误'), 'fail');
+        });
+      } else {
+        setActionStatus((response && response.error) || '采集失败', 'fail');
+      }
+    });
+  }
+
+  function sendRuntimeMessageAsync(message) {
+    return new Promise(function (resolve) {
+      sendRuntimeMessage(message, resolve);
+    });
+  }
+
+  function pickSearchImage(product) {
+    var images = product && Array.isArray(product.images) ? product.images : [];
+    for (var index = 0; index < images.length; index += 1) {
+      var imageUrl = String(images[index] || '').trim();
+      if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+    }
+    return '';
+  }
+
+  async function fetchImageBlob(imageUrl) {
+    var response = await fetch(imageUrl, { credentials: 'omit' });
+    if (!response.ok) {
+      throw new Error('读取 Ozon 主图失败：HTTP ' + response.status);
+    }
+    var blob = await response.blob();
+    if (!/^image\//i.test(blob.type || '')) {
+      throw new Error('Ozon 主图响应不是图片');
+    }
+    return blob;
+  }
+
+  async function imageBlobToSearchImageData(blob, options) {
+    options = options || {};
+    if (!blob || !blob.size) {
+      throw new Error('Ozon 主图为空，无法以图搜图');
+    }
+    if (!window.createImageBitmap) {
+      var fallbackDataUrl = await blobToDataUrl(blob);
+      return {
+        imageBase64: stripDataUrlPrefix(fallbackDataUrl),
+        imagePreviewDataUrl: fallbackDataUrl,
+        imageSize: ''
+      };
+    }
+
+    var bitmap = await createImageBitmap(blob);
+    var maxSize = options.maxSize || 360;
+    var quality = options.quality || 0.86;
+    var scale = bitmap.width > maxSize && bitmap.height > maxSize
+      ? Math.min(maxSize / bitmap.width, maxSize / bitmap.height)
+      : 1;
+    var width = Math.max(1, Math.round(bitmap.width * scale));
+    var height = Math.max(1, Math.round(bitmap.height * scale));
+    var canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    var context = canvas.getContext('2d');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(bitmap, 0, 0, width, height);
+    if (bitmap.close) bitmap.close();
+    if (canvasLooksBlank(context, width, height)) {
+      throw new Error('识别到的 Ozon 主图疑似为空白或占位图，请刷新 Ozon 商品页后重试');
+    }
+    var previewDataUrl = canvas.toDataURL('image/jpeg', quality);
+    return {
+      imageBase64: stripDataUrlPrefix(previewDataUrl),
+      imagePreviewDataUrl: previewDataUrl,
+      imageSize: width + 'x' + height
+    };
+  }
+
+  function canvasLooksBlank(context, width, height) {
+    var sampleSize = 32;
+    var stepX = Math.max(1, Math.floor(width / sampleSize));
+    var stepY = Math.max(1, Math.floor(height / sampleSize));
+    var min = 255;
+    var max = 0;
+    var total = 0;
+    var count = 0;
+    var nonWhite = 0;
+
+    for (var y = 0; y < height; y += stepY) {
+      for (var x = 0; x < width; x += stepX) {
+        var data = context.getImageData(x, y, 1, 1).data;
+        var value = Math.round((data[0] + data[1] + data[2]) / 3);
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+        total += value;
+        count += 1;
+        if (data[0] < 246 || data[1] < 246 || data[2] < 246) nonWhite += 1;
+      }
+    }
+
+    var average = count ? total / count : 255;
+    return nonWhite < 3 && (max - min) < 8 && average > 245;
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result || '')); };
+      reader.onerror = function () { reject(new Error('读取 Ozon 主图失败')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function stripDataUrlPrefix(dataUrl) {
+    var base64 = String(dataUrl || '').replace(/^data:.*;base64,/i, '');
+    if (!base64) {
+      throw new Error('Ozon 主图转码失败，无法以图搜图');
+    }
+    return base64;
+  }
+
+  async function search1688ByImage() {
+    if (!primaryActionState.productId) {
+      setActionStatus('未识别 Ozon SKU', 'fail');
+      return;
+    }
+    rememberOzonCandidateContext(primaryActionState.tab, primaryActionState.productId);
+    setSecondaryButtonBusy('准备中...');
+    setActionStatus('', '');
+
+    try {
+      var collectResponse = await sendRuntimeMessageAsync({ type: 'spb-self-hosted:collect-current-tab' });
+      if (!collectResponse || !collectResponse.ok) {
+        throw new Error((collectResponse && collectResponse.error) || '采集 Ozon 商品失败');
+      }
+      var product = collectResponse.data || {};
+      var imageUrl = pickSearchImage(product);
+      if (!imageUrl) {
+        throw new Error('当前 Ozon 商品没有可用于搜图的主图');
+      }
+      setSecondaryButtonBusy('转图中...');
+      var imageData = await imageBlobToSearchImageData(await fetchImageBlob(imageUrl), {
+        maxSize: 360,
+        quality: 0.86
+      });
+      setSecondaryButtonBusy('打开中...');
+      var jobResponse = await sendRuntimeMessageAsync({
+        type: 'ss-erp:image-search-create',
+        payload: {
+          platform: '1688',
+          imageUrl: imageUrl,
+          imageBase64: imageData.imageBase64,
+          imagePreviewDataUrl: imageData.imagePreviewDataUrl,
+          imageSize: imageData.imageSize,
+          ozon: {
+            productId: product.productId || primaryActionState.productId,
+            title: product.title || primaryActionState.tab && primaryActionState.tab.title || '',
+            url: product.sourceUrl || primaryActionState.tab && primaryActionState.tab.url || ''
+          }
+        }
+      });
+      if (!jobResponse || !jobResponse.ok || !jobResponse.url) {
+        throw new Error((jobResponse && jobResponse.error) || '创建搜图任务失败');
+      }
+      chrome.tabs.create({ url: jobResponse.url });
+      setActionStatus('已打开 1688 找同款', 'ok');
+    } catch (error) {
+      setActionStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      restoreSecondaryButton();
+    }
+  }
+
+  function runPrimaryAction() {
+    if (primaryActionState.type === 'collectOzonToErp') {
+      collectOzonToErp();
+      return;
+    }
+    if (primaryActionState.type === 'collectSourcePage') {
+      collectSourcePage();
+      return;
+    }
+    if (primaryActionState.type === 'syncCookie' && syncCookieBtn) {
+      syncCookieBtn.click();
+      return;
+    }
+    openSettings();
+  }
+
+  function runSecondaryAction() {
+    if (secondaryActionState.type === 'search1688ByImage') {
+      search1688ByImage();
     }
   }
 
@@ -307,11 +753,7 @@
   if (openSettingsBtn) {
     openSettingsBtn.addEventListener('click', function (e) {
       e.preventDefault();
-      if (chrome.runtime.openOptionsPage) {
-        chrome.runtime.openOptionsPage();
-      } else {
-        chrome.tabs.create({ url: chrome.runtime.getURL('pages/settings.html') });
-      }
+      openSettings();
     });
   }
 
@@ -449,6 +891,9 @@
         }, function (response) {
           if (response && response.ok) {
             syncCookieBtn.textContent = 'OK';
+            if (primaryActionState.type === 'syncCookie') {
+              setActionStatus('Cookie 已同步', 'ok');
+            }
             if (cookieCompanyIdInput && response.data && response.data.companyId) {
               cookieCompanyIdInput.value = '';
               cookieCompanyIdInput.dataset.source = '';
@@ -465,6 +910,9 @@
           } else {
             syncCookieBtn.textContent = '失败';
             console.warn('[popup] cookie sync failed:', response && response.error);
+            if (primaryActionState.type === 'syncCookie') {
+              setActionStatus((response && response.error) || '同步失败', 'fail');
+            }
             if (response && response.error) alert('同步失败: ' + response.error);
           }
           setTimeout(function () { syncCookieBtn.textContent = '同步'; syncCookieBtn.disabled = false; }, 2000);
@@ -482,6 +930,13 @@
   }
 
   // Init
+  if (primaryActionBtn) {
+    primaryActionBtn.addEventListener('click', runPrimaryAction);
+  }
+  if (secondaryActionBtn) {
+    secondaryActionBtn.addEventListener('click', runSecondaryAction);
+  }
+  configurePrimaryAction();
   checkErpConnection();
   checkOzonLogin();
   loadSyncTimes();

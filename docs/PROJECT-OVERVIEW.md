@@ -48,6 +48,7 @@ Fastify API (apps/server) ---- PostgreSQL
 Chrome Extension (extensions/ss-erp)
         |
         +---- OZON public/seller pages
+        +---- 1688 / PDD / Taobao source pages
         +---- SS ERP API
 ```
 
@@ -173,6 +174,7 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-e
 - [Service 层指南](service-layer-guide.md)
 - [前端通用组件](common-components-guide.md)
 - [TanStack Query 指南](tanstack-query-guide.md)
+- [扩展开发与整合计划](extension-development.md)
 - [历史文档归档](archive/)
 
 ## 当前不做的事

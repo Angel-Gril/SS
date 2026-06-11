@@ -1,4 +1,4 @@
-// SS ERP Ozon 列表页增强 - 企鹅店长式商品信息卡片
+// SS ERP Ozon 列表页增强
 // 数据来源（多层降级）：
 //   1. DOM 提取（标题/价格/评分/评论/图片/SKU）
 //   2. OZON 公开 entrypoint API（销量/卖家/库存等，无需登录）
@@ -14,20 +14,35 @@
   window.__SS_ERP_LIST_OVERLAY__ = true;
 
   const PROCESSED_ATTR = 'data-ss-erp-overlay';
+  const SKU_ATTR = 'data-ss-erp-overlay-sku';
   const CARD_CLASS = 'ss-erp-overlay-card';
+  const PORTAL_ATTR = 'data-ss-erp-portal';
   const CARD_SELECTORS = [
     '[data-widget="searchResultsV2"] [data-index]',
     '[data-widget="skuShelfGoods"] [data-index]',
+    '[data-widget="skuGridSimple"] [data-index]',
     '[data-widget="skuGrid"] [data-index]',
     '[data-widget="tileGridDesktop"] [data-index]',
     '[data-widget="tileGrid"] [data-index]',
+    '#layoutPage [data-index]',
   ];
 
   const PREMIUM_TTL_MS = 10 * 60 * 1000;
+  const PREMIUM_FAILURE_TTL_MS = 90 * 1000;
+  const PREMIUM_CONCURRENCY = 3;
+  const CARD_SCAN_FAST_MS = 500;
+  const CARD_SCAN_SLOW_MS = 2000;
+  const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
 
   // === 工具：缓存 ===
   const premiumCache = new Map();  // sku -> { data, ts }
-  const failedPremiumCache = new Map(); // sku -> ts （失败 30 分钟内不再请求）
+  const failedPremiumCache = new Map(); // sku -> ts
+  const inFlightPremium = new Map(); // sku -> Promise
+  const premiumQueue = [];
+  let activePremiumRequests = 0;
+  let overlayIdCounter = 0;
+  let activeExpandedPanel = null;
+  let expandedPanelListenersInstalled = false;
 
   function getCached(map, key, ttl) {
     const hit = map.get(key);
@@ -43,6 +58,30 @@
     map.set(key, { data, ts: Date.now() });
   }
 
+  function enqueuePremiumRequest(task) {
+    return new Promise((resolve) => {
+      premiumQueue.push({ task, resolve });
+      drainPremiumQueue();
+    });
+  }
+
+  function drainPremiumQueue() {
+    while (activePremiumRequests < PREMIUM_CONCURRENCY && premiumQueue.length) {
+      const next = premiumQueue.shift();
+      activePremiumRequests += 1;
+      Promise.resolve()
+        .then(next.task)
+        .then(
+          (value) => next.resolve(value),
+          () => next.resolve(null),
+        )
+        .finally(() => {
+          activePremiumRequests -= 1;
+          drainPremiumQueue();
+        });
+    }
+  }
+
   // === 工具：DOM 解析 ===
   function isProductPage() {
     const href = location.href;
@@ -51,12 +90,95 @@
     return /ozon\.(ru|kz|by)/.test(href);
   }
 
+  function extractSkuFromHref(href) {
+    if (!href) return null;
+    const text = String(href);
+    const m = text.match(/\/product\/[^/?#]*-(\d+)(?:[/?#]|$)/) || text.match(/\/product\/(\d+)(?:[/?#]|$)/);
+    return m ? m[1] : null;
+  }
+
+  function getProductLinks(root) {
+    if (!root || !root.querySelectorAll) return [];
+    const links = [];
+    if (root.matches && root.matches('a[href*="/product/"]')) links.push(root);
+    root.querySelectorAll('a[href*="/product/"]').forEach((link) => links.push(link));
+    return links;
+  }
+
+  function collectDistinctProductSkus(root) {
+    const skus = new Set();
+    getProductLinks(root).forEach((link) => {
+      const sku = extractSkuFromHref(link.getAttribute('href') || '');
+      if (sku) skus.add(sku);
+    });
+    return skus;
+  }
+
+  function countDistinctProductSkus(root) {
+    return collectDistinctProductSkus(root).size;
+  }
+
+  function findSingleSkuAncestor(link, boundary) {
+    let best = null;
+    let el = link && link.parentElement;
+
+    while (el && el !== document.body && el !== document.documentElement) {
+      const skuCount = countDistinctProductSkus(el);
+      if (skuCount === 1) best = el;
+      if (skuCount > 1) break;
+      if (el === boundary) break;
+      el = el.parentElement;
+    }
+
+    return best;
+  }
+
+  function resolveProductCardTarget(candidate, link) {
+    const target = link ? findSingleSkuAncestor(link, candidate) : candidate;
+    if (!target || countDistinctProductSkus(target) !== 1) return null;
+    return target;
+  }
+
+  function collectProductCardTargets(candidate) {
+    const skuCount = countDistinctProductSkus(candidate);
+    if (skuCount === 0) return [];
+    if (skuCount === 1) {
+      const target = resolveProductCardTarget(candidate);
+      return target ? [target] : [];
+    }
+
+    const targetsBySku = new Map();
+    getProductLinks(candidate).forEach((link) => {
+      const sku = extractSkuFromHref(link.getAttribute('href') || '');
+      if (!sku) return;
+
+      const target = resolveProductCardTarget(candidate, link);
+      if (!target) return;
+
+      const existing = targetsBySku.get(sku);
+      if (!existing || target.contains(existing)) targetsBySku.set(sku, target);
+    });
+
+    return Array.from(new Set(targetsBySku.values()));
+  }
+
+  function addProductCardTarget(targets, target) {
+    const sku = extractSku(target);
+    if (!sku) return;
+
+    for (const existing of Array.from(targets)) {
+      if (extractSku(existing) !== sku) continue;
+      if (existing.contains(target)) return;
+      if (target.contains(existing)) targets.delete(existing);
+    }
+
+    targets.add(target);
+  }
+
   function extractSku(card) {
     const link = card.querySelector('a[href*="/product/"]');
     if (!link) return null;
-    const href = link.getAttribute('href') || '';
-    const m = href.match(/\/product\/[^/]*-(\d+)/) || href.match(/\/product\/(\d+)/);
-    return m ? m[1] : null;
+    return extractSkuFromHref(link.getAttribute('href') || '');
   }
 
   function extractCardData(card) {
@@ -159,20 +281,31 @@
     if (cached) return cached;
 
     const failTs = failedPremiumCache.get(sku);
-    if (failTs && Date.now() - failTs < 30 * 60 * 1000) return null;
+    if (failTs && Date.now() - failTs < PREMIUM_FAILURE_TTL_MS) return null;
+    if (inFlightPremium.has(sku)) return inFlightPremium.get(sku);
 
-    const resp = await send(
-      { type: 'spb-self-hosted:aggregate-product-insights', productId: sku },
-      20000,
-    );
-    if (!resp || !resp.ok || !resp.item) {
-      failedPremiumCache.set(sku, Date.now());
-      return null;
-    }
+    const request = enqueuePremiumRequest(async () => {
+      const resp = await send(
+        { type: 'spb-self-hosted:aggregate-product-insights', productId: sku },
+        20000,
+      );
+      return resp;
+    }).then((resp) => {
+      if (!resp || !resp.ok || !resp.item) {
+        failedPremiumCache.set(sku, Date.now());
+        return null;
+      }
 
-    const data = Object.assign({}, resp.item, { _sources: resp.sources || [] });
-    setCached(premiumCache, sku, data);
-    return data;
+      const data = Object.assign({}, resp.item, { _sources: resp.sources || [] });
+      setCached(premiumCache, sku, data);
+      failedPremiumCache.delete(sku);
+      return data;
+    }).finally(() => {
+      inFlightPremium.delete(sku);
+    });
+
+    inFlightPremium.set(sku, request);
+    return request;
   }
 
   // === 字段提取（聚合接口扁平格式 + 兼容旧的 item/_insightsItem 嵌套）===
@@ -301,7 +434,9 @@
       'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
       'box-sizing:border-box',
       'width:100%',
-      'overflow:hidden',
+      'position:relative',
+      'z-index:1',
+      'overflow:visible',
     ].join(';');
 
     wrap.innerHTML = [
@@ -314,11 +449,150 @@
       '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
       '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #fdba74;border-radius:6px;background:#fff7ed;color:#c2410c;cursor:pointer;font-size:11px">展开</button>',
       '</div>',
-      '<div class="ss-erp-expanded" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #fdba74"></div>',
     ].join('');
 
     renderMetrics(wrap, sku, dom, null);
     return wrap;
+  }
+
+  function getExpandedPanel(wrap) {
+    return wrap && wrap.__ssErpExpandedPanel ? wrap.__ssErpExpandedPanel : null;
+  }
+
+  function createExpandedPortal(wrap, sku) {
+    const expanded = document.createElement('div');
+    const anchorId = `ss-erp-overlay-${Date.now()}-${++overlayIdCounter}`;
+
+    wrap.setAttribute('data-ss-erp-overlay-id', anchorId);
+    expanded.className = 'ss-erp-expanded';
+    expanded.setAttribute(PORTAL_ATTR, '1');
+    expanded.setAttribute('data-ss-erp-anchor-id', anchorId);
+    expanded.setAttribute('data-ss-erp-sku', sku);
+    expanded.setAttribute('aria-hidden', 'true');
+    expanded.style.cssText = [
+      'display:none',
+      'position:fixed',
+      'left:8px',
+      'top:8px',
+      'z-index:2147483000',
+      'box-sizing:border-box',
+      'padding:8px 10px',
+      'border:1px solid #fdba74',
+      'border-radius:8px',
+      'background:#fff7ed',
+      'box-shadow:0 10px 24px rgba(15,23,42,0.18)',
+      'max-height:min(520px,70vh)',
+      'overflow:auto',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    ].join(';');
+    expanded.addEventListener('click', (e) => e.stopPropagation());
+
+    document.body.appendChild(expanded);
+    wrap.__ssErpExpandedPanel = expanded;
+    return expanded;
+  }
+
+  function removeExpandedPortal(wrap) {
+    const expanded = getExpandedPanel(wrap);
+    if (!expanded) return;
+
+    if (activeExpandedPanel && activeExpandedPanel.expanded === expanded) {
+      activeExpandedPanel = null;
+    }
+    expanded.remove();
+    wrap.__ssErpExpandedPanel = null;
+  }
+
+  function cleanupDetachedExpandedPanels() {
+    document.querySelectorAll(`.ss-erp-expanded[${PORTAL_ATTR}="1"]`).forEach((expanded) => {
+      const anchorId = expanded.getAttribute('data-ss-erp-anchor-id');
+      if (anchorId && document.querySelector(`[data-ss-erp-overlay-id="${anchorId}"]`)) return;
+
+      if (activeExpandedPanel && activeExpandedPanel.expanded === expanded) {
+        activeExpandedPanel = null;
+      }
+      expanded.remove();
+    });
+  }
+
+  function positionExpandedPanel(wrap, expanded) {
+    if (!wrap || !wrap.isConnected || !expanded) return;
+
+    const rect = wrap.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 6;
+    const viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    const viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+    const maxViewportWidth = Math.max(160, viewportWidth - viewportPadding * 2);
+    const width = Math.max(220, Math.min(rect.width, maxViewportWidth));
+    const leftLimit = viewportWidth - width - viewportPadding;
+    const left = Math.max(viewportPadding, Math.min(rect.left, leftLimit));
+    const spaceBelow = viewportHeight - rect.bottom - gap - viewportPadding;
+    const spaceAbove = rect.top - gap - viewportPadding;
+    const openBelow = spaceBelow >= 180 || spaceBelow >= spaceAbove;
+    const availableHeight = Math.max(140, openBelow ? spaceBelow : spaceAbove);
+    const maxHeight = Math.min(520, availableHeight);
+    const top = openBelow
+      ? Math.max(viewportPadding, rect.bottom + gap)
+      : Math.max(viewportPadding, rect.top - gap - maxHeight);
+
+    expanded.style.width = `${Math.round(width)}px`;
+    expanded.style.left = `${Math.round(left)}px`;
+    expanded.style.top = `${Math.round(top)}px`;
+    expanded.style.maxHeight = `${Math.round(maxHeight)}px`;
+  }
+
+  function closeActiveExpandedPanel(exceptExpanded) {
+    if (!activeExpandedPanel || activeExpandedPanel.expanded === exceptExpanded) return;
+
+    const current = activeExpandedPanel;
+    activeExpandedPanel = null;
+    if (current.expanded && current.expanded.isConnected) {
+      current.expanded.style.display = 'none';
+      current.expanded.setAttribute('aria-hidden', 'true');
+    }
+    if (current.expandBtn) current.expandBtn.textContent = '展开';
+    if (current.wrap) {
+      current.wrap.classList.remove('ss-erp-overlay-card-expanded');
+      current.wrap.style.zIndex = '1';
+    }
+  }
+
+  function repositionActiveExpandedPanel() {
+    if (!activeExpandedPanel) return;
+    if (!activeExpandedPanel.wrap || !activeExpandedPanel.wrap.isConnected) {
+      closeActiveExpandedPanel();
+      return;
+    }
+    positionExpandedPanel(activeExpandedPanel.wrap, activeExpandedPanel.expanded);
+  }
+
+  function ensureExpandedPanelListeners() {
+    if (expandedPanelListenersInstalled) return;
+    expandedPanelListenersInstalled = true;
+
+    window.addEventListener('scroll', repositionActiveExpandedPanel, true);
+    window.addEventListener('resize', repositionActiveExpandedPanel);
+    document.addEventListener('click', () => closeActiveExpandedPanel());
+  }
+
+  function setExpandedPanelOpen(wrap, expanded, expandBtn, isOpen) {
+    if (!expanded) return;
+
+    if (isOpen) {
+      closeActiveExpandedPanel(expanded);
+      ensureExpandedPanelListeners();
+      positionExpandedPanel(wrap, expanded);
+      activeExpandedPanel = { wrap, expanded, expandBtn };
+    } else if (activeExpandedPanel && activeExpandedPanel.expanded === expanded) {
+      activeExpandedPanel = null;
+    }
+
+    expanded.style.display = isOpen ? 'block' : 'none';
+    expanded.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    if (expandBtn) expandBtn.textContent = isOpen ? '收起' : '展开';
+    wrap.classList.toggle('ss-erp-overlay-card-expanded', isOpen);
+    wrap.style.zIndex = isOpen ? '2147483000' : '1';
   }
 
   function renderMetrics(wrap, sku, dom, premium) {
@@ -362,10 +636,11 @@
       metricCell('重量', weight == null ? '--' : weight + 'g', weight == null),
     ].join('');
 
-    const expanded = wrap.querySelector('.ss-erp-expanded');
-    if (expanded.style.display !== 'none' || expanded.getAttribute('data-rendered') === '1') {
+    const expanded = getExpandedPanel(wrap);
+    if (expanded && (expanded.style.display !== 'none' || expanded.getAttribute('data-rendered') === '1')) {
       expanded.innerHTML = renderExpandedFields(sku, dom, premium);
       expanded.setAttribute('data-rendered', '1');
+      if (expanded.style.display !== 'none') positionExpandedPanel(wrap, expanded);
     }
   }
 
@@ -429,35 +704,46 @@
   }
 
   // === 注入卡片 + 绑定事件 ===
-  async function attachOverlay(card) {
-    if (card.getAttribute(PROCESSED_ATTR)) return;
+  async function attachOverlay(target) {
+    const card = resolveProductCardTarget(target);
+    if (!card) return;
+
     const sku = extractSku(card);
     if (!sku) return;
+    const existingSku = card.getAttribute(SKU_ATTR);
+    if (card.getAttribute(PROCESSED_ATTR) && existingSku === sku && card.querySelector(`.${CARD_CLASS}`)) return;
+
+    const oldWrap = card.querySelector(`.${CARD_CLASS}`);
+    if (oldWrap) {
+      removeExpandedPortal(oldWrap);
+      oldWrap.remove();
+    }
+
     card.setAttribute(PROCESSED_ATTR, '1');
+    card.setAttribute(SKU_ATTR, sku);
 
     const dom = extractCardData(card);
     const wrap = buildCard(sku, dom);
+    const expanded = createExpandedPortal(wrap, sku);
     insertOverlay(card, wrap);
 
     wrap.addEventListener('click', (e) => e.stopPropagation());
 
     const collectBtn = wrap.querySelector('.ss-erp-collect-btn');
     const expandBtn = wrap.querySelector('.ss-erp-expand-btn');
-    const expanded = wrap.querySelector('.ss-erp-expanded');
 
     expandBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const isOpen = expanded.style.display !== 'none';
-      expanded.style.display = isOpen ? 'none' : 'block';
-      expandBtn.textContent = isOpen ? '展开' : '收起';
+      const willOpen = expanded.style.display === 'none';
       // 展开时若数据已加载则立即渲染
-      if (!isOpen) {
+      if (willOpen) {
         const cached = premiumCache.get(sku);
         const premium = cached ? cached.data : null;
         expanded.innerHTML = renderExpandedFields(sku, dom, premium);
         expanded.setAttribute('data-rendered', '1');
       }
+      setExpandedPanelOpen(wrap, expanded, expandBtn, willOpen);
     });
 
     collectBtn.addEventListener('click', async (e) => {
@@ -511,13 +797,22 @@
 
   function scan() {
     if (!isProductPage()) return;
+    cleanupDetachedExpandedPanels();
     const io = ensureIntersectionObserver();
+    const targets = new Set();
+
     CARD_SELECTORS.forEach((sel) => {
-      document.querySelectorAll(sel).forEach((card) => {
-        if (card.getAttribute(PROCESSED_ATTR)) return;
-        if (io) io.observe(card);
-        else attachOverlay(card);
+      document.querySelectorAll(sel).forEach((candidate) => {
+        collectProductCardTargets(candidate).forEach((target) => addProductCardTarget(targets, target));
       });
+    });
+
+    targets.forEach((target) => {
+      const sku = extractSku(target);
+      if (!sku) return;
+      if (target.getAttribute(PROCESSED_ATTR) && target.getAttribute(SKU_ATTR) === sku && target.querySelector(`.${CARD_CLASS}`)) return;
+      if (io) io.observe(target);
+      else attachOverlay(target);
     });
   }
 
@@ -533,9 +828,23 @@
 
   function init() {
     if (!isProductPage()) return;
+    const startedAt = Date.now();
     scan();
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.body, { childList: true, subtree: true });
+    startPeriodicScan(startedAt);
+  }
+
+  function startPeriodicScan(startedAt) {
+    function tick() {
+      if (!isProductPage()) return;
+      if (document.visibilityState === 'visible') scan();
+      const delay = Date.now() - startedAt < CARD_SCAN_FAST_UNTIL_MS
+        ? CARD_SCAN_FAST_MS
+        : CARD_SCAN_SLOW_MS;
+      setTimeout(tick, delay);
+    }
+    setTimeout(tick, CARD_SCAN_FAST_MS);
   }
 
   if (document.readyState === 'loading') {

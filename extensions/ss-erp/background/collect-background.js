@@ -330,7 +330,8 @@ function isOzonProductUrl(url) {
 }
 
 function parseOzonProductId(url) {
-  const match = String(url || "").split("?")[0].match(/-([0-9]{6,})\/?$/i);
+  const path = String(url || "").split(/[?#]/)[0];
+  const match = path.match(/(?:-|\/)([0-9]{6,})\/?$/i);
   return match ? match[1] : "";
 }
 
