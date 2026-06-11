@@ -6,6 +6,7 @@ import {
   recordOfferPublishImages,
   removeVariantsBySkus,
   resolveBasePublishImages,
+  resolvePublishOfferId,
   resolvePublishName,
   resolveVariantPublishImages,
 } from '../routes/collect.js';
@@ -137,5 +138,28 @@ describe('collect publish helpers', () => {
       { sku: 'green', attrs: { Color: 'green' } },
       { attrs: { Color: 'no sku' } },
     ]);
+  });
+
+  it('uses custom publish offer ids before randomization', () => {
+    expect(resolvePublishOfferId({
+      sourceSku: '3399297127',
+      fallback: 'import-item-1',
+      customOfferId: 'my-custom-offer',
+      randomizeEnabled: true,
+      randomOfferIdEnabled: true,
+      userRandomOfferId: true,
+      suffixFactory: () => 'rand01',
+    })).toBe('my-custom-offer');
+  });
+
+  it('keeps offer ids unique when user disables random offer ids', () => {
+    expect(resolvePublishOfferId({
+      sourceSku: '3399297127',
+      fallback: 'import-item-1',
+      randomizeEnabled: true,
+      randomOfferIdEnabled: true,
+      userRandomOfferId: false,
+      suffixFactory: () => 'safe',
+    })).toBe('3399297127-safe');
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -19,9 +19,20 @@ const adminLoginSchema = z.object({
 
 type AdminLoginInput = z.infer<typeof adminLoginSchema>;
 
+function resolveUserLoginHref(hostname: string): string {
+  return hostname === 'admin.ss-erp.com' ? 'https://app.ss-erp.com/login' : '/login';
+}
+
 export default function AdminLoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [userLoginHref, setUserLoginHref] = useState('/login');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setUserLoginHref(resolveUserLoginHref(window.location.hostname));
+    }
+  }, []);
 
   const {
     register,
@@ -93,7 +104,7 @@ export default function AdminLoginPage() {
             </Button>
             <p className="text-center text-xs text-muted-foreground">
               用户登录请访问{' '}
-              <a href="/login" className="text-primary hover:underline">
+              <a href={userLoginHref} className="text-primary hover:underline">
                 普通登录页
               </a>
             </p>

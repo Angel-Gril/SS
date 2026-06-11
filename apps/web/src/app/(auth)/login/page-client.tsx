@@ -31,16 +31,25 @@ const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
   smsRateLimitSeconds: 60,
 };
 
+function resolveAdminLoginHref(hostname: string): string {
+  return hostname === 'app.ss-erp.com' ? 'https://admin.ss-erp.com/admin/login' : '/admin/login';
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileError, setTurnstileError] = useState('');
   const [challengeConfig, setChallengeConfig] = useState<AuthChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
+  const [adminLoginHref, setAdminLoginHref] = useState('/admin/login');
   const turnstileRef = useRef<TurnstileInstance | null>(null);
   const needsTurnstile = challengeConfig.runtimeMode === 'cloud' && challengeConfig.turnstileEnabled;
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setAdminLoginHref(resolveAdminLoginHref(window.location.hostname));
+    }
+
     (async () => {
       try {
         const challengeRes = await api.get<AuthChallengeConfig>('/api/auth/challenge-config');
@@ -229,6 +238,12 @@ export default function LoginPage() {
               还没有账号？{' '}
               <a href="/register" className="text-primary hover:underline">
                 立即注册
+              </a>
+            </p>
+            <p className="text-center text-xs text-muted-foreground">
+              管理员账号？{' '}
+              <a href={adminLoginHref} className="text-primary hover:underline">
+                切换管理员登录
               </a>
             </p>
           </form>

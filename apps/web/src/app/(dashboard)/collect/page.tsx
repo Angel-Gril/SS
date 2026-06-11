@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShoppingCart, Loader2, Search, Trash2, ExternalLink, Upload, Edit2, Save, ArrowRight, Download, Sparkles, Image as ImageIcon, Layers, ChevronDown, ChevronUp } from 'lucide-react';
+import { ShoppingCart, Loader2, Search, Trash2, ExternalLink, Upload, Edit2, Save, ArrowRight, Download, Sparkles, Image as ImageIcon, Layers, ChevronDown, ChevronUp, KeyRound, Shuffle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +20,7 @@ interface VariantSku {
   price?: number | string | null;
   images?: string[];
   stock?: number | null;
+  publishOfferId?: string | null;
 }
 
 interface CollectedItem {
@@ -67,6 +68,14 @@ function formatPreviewPrice(value: number | null): string {
 
 interface Shop { id: string; name: string; platform: string; }
 
+interface RandomizeConfig {
+  enabled: boolean;
+  randomOfferId: boolean;
+  dimensionJitterMm?: number;
+  dimensionMinMm?: number;
+  weightBuckets?: string;
+}
+
 export default function CollectPage() {
   const router = useRouter();
   const [items, setItems] = useState<CollectedItem[]>([]);
@@ -94,12 +103,15 @@ export default function CollectPage() {
   const [publishMarkupAmount, setPublishMarkupAmount] = useState('0');
   const [publishMode, setPublishMode] = useState<'follow' | 'clone'>('clone');
   const [publishFollowBrand, setPublishFollowBrand] = useState(true);
+  const [pricePreviewExpanded, setPricePreviewExpanded] = useState(false);
+  const [randomizeConfig, setRandomizeConfig] = useState<RandomizeConfig | null>(null);
+  const [randomOfferIdEnabled, setRandomOfferIdEnabled] = useState(true);
   const [inheriting, setInheriting] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [enrichShopId, setEnrichShopId] = useState('');
   const [showEnrichDialog, setShowEnrichDialog] = useState(false);
   const [editItemId, setEditItemId] = useState<string | null>(null);
-  const [editItemData, setEditItemData] = useState({ title: '', publishTitle: '', sku: '', purchasePrice: '', currency: 'CNY', sourceUrl: '', notes: '' });
+  const [editItemData, setEditItemData] = useState({ title: '', publishTitle: '', publishOfferId: '', sku: '', purchasePrice: '', currency: 'CNY', sourceUrl: '', notes: '' });
   const [savingItem, setSavingItem] = useState(false);
   const [editImagesId, setEditImagesId] = useState<string | null>(null);
   const [editImagesText, setEditImagesText] = useState('');
@@ -115,6 +127,8 @@ export default function CollectPage() {
   const [extFetchResults, setExtFetchResults] = useState<any[] | null>(null);
   const [expandedVariantIds, setExpandedVariantIds] = useState<Set<string>>(new Set());
   const [variantPriceOverrides, setVariantPriceOverrides] = useState<Record<string, Record<string, string>>>({});
+  const [offerIdOverrides, setOfferIdOverrides] = useState<Record<string, string>>({});
+  const [variantOfferIdOverrides, setVariantOfferIdOverrides] = useState<Record<string, Record<string, string>>>({});
   const [selectedVariantSkus, setSelectedVariantSkus] = useState<Record<string, string[]>>({});
   const [extFetchErrors, setExtFetchErrors] = useState<string[]>([]);
   const [showWatermarkDialog, setShowWatermarkDialog] = useState(false);
@@ -132,7 +146,7 @@ export default function CollectPage() {
   const limit = 20;
 
   useEffect(() => { fetchData(); }, [search, page, statusFilter]);
-  useEffect(() => { loadShops(); loadWmTemplates(); }, []);
+  useEffect(() => { loadShops(); loadWmTemplates(); loadRandomizeConfig(); }, []);
 
   // 监听扩展 popup/侧栏采集完成的广播（content-script erp-collect-bridge 转发过来）
   useEffect(() => {
@@ -172,6 +186,14 @@ export default function CollectPage() {
   async function loadShops() {
     const res = await api.get<Shop[]>('/api/shops');
     if (res.code === 1 && res.data) setShops(res.data);
+  }
+
+  async function loadRandomizeConfig() {
+    const res = await api.get<RandomizeConfig>('/api/collect/randomize-config');
+    if (res.code === 1 && res.data) {
+      setRandomizeConfig(res.data);
+      setRandomOfferIdEnabled(res.data.enabled && res.data.randomOfferId);
+    }
   }
 
   async function fetchData() {
@@ -216,6 +238,16 @@ export default function CollectPage() {
       else delete next[itemId];
       return next;
     });
+    setVariantOfferIdOverrides((prev) => {
+      const perItem = prev[itemId];
+      if (!perItem) return prev;
+      const next = { ...prev };
+      const updated = { ...perItem };
+      skus.forEach((sku) => delete updated[sku]);
+      if (Object.keys(updated).length) next[itemId] = updated;
+      else delete next[itemId];
+      return next;
+    });
   }
 
   function toggleVariantSelect(itemId: string, sku: string | undefined, checked: boolean) {
@@ -238,6 +270,27 @@ export default function CollectPage() {
       const next = { ...prev };
       if (checked && skus.length) next[item.id] = skus;
       else delete next[item.id];
+      return next;
+    });
+  }
+
+  function setOfferIdOverride(itemId: string, value: string) {
+    setOfferIdOverrides((prev) => {
+      const next = { ...prev };
+      if (value.trim()) next[itemId] = value;
+      else delete next[itemId];
+      return next;
+    });
+  }
+
+  function setVariantOfferIdOverride(itemId: string, variantKey: string, value: string) {
+    setVariantOfferIdOverrides((prev) => {
+      const next = { ...prev };
+      const perItem = { ...(next[itemId] || {}) };
+      if (value.trim()) perItem[variantKey] = value;
+      else delete perItem[variantKey];
+      if (Object.keys(perItem).length) next[itemId] = perItem;
+      else delete next[itemId];
       return next;
     });
   }
@@ -404,6 +457,20 @@ export default function CollectPage() {
       if (Object.keys(cleaned).length) priceOverrides[id] = cleaned;
     }
 
+    const offerIds: Record<string, string> = {};
+    const variantOfferIds: Record<string, Record<string, string>> = {};
+    for (const id of selectedIds) {
+      const offerId = offerIdOverrides[id]?.trim();
+      if (offerId) offerIds[id] = offerId;
+      const variantOverrides = variantOfferIdOverrides[id] || {};
+      const cleanedVariants = Object.fromEntries(
+        Object.entries(variantOverrides)
+          .map(([sku, value]) => [sku, value.trim()])
+          .filter(([, value]) => value),
+      );
+      if (Object.keys(cleanedVariants).length) variantOfferIds[id] = cleanedVariants;
+    }
+
     const res = await api.post('/api/collect/publish-ozon', {
       ids: Array.from(selectedIds),
       shopId: publishShopId,
@@ -417,8 +484,11 @@ export default function CollectPage() {
       markupAmount: Number(publishMarkupAmount) || 0,
       mode: publishMode,
       followBrand: publishFollowBrand,
+      randomOfferId: randomOfferIdEnabled,
       source: 'collect-page',
       ...(Object.keys(priceOverrides).length ? { priceOverrides } : {}),
+      ...(Object.keys(offerIds).length ? { offerIds } : {}),
+      ...(Object.keys(variantOfferIds).length ? { variantOfferIds } : {}),
     });
     setPublishing(false);
     if (res.code === 1) {
@@ -576,6 +646,7 @@ export default function CollectPage() {
     setEditItemData({
       title: item.title,
       publishTitle: item.metadata?.publishTitleRu || '',
+      publishOfferId: item.metadata?.publishOfferId || '',
       sku: item.sku || '',
       purchasePrice: item.purchasePrice || '',
       currency: item.currency || 'CNY',
@@ -590,6 +661,7 @@ export default function CollectPage() {
     const body: Record<string, unknown> = {
       title: editItemData.title,
       publishTitle: editItemData.publishTitle,
+      publishOfferId: editItemData.publishOfferId,
       sku: editItemData.sku,
       currency: editItemData.currency,
       sourceUrl: editItemData.sourceUrl,
@@ -633,10 +705,16 @@ export default function CollectPage() {
       return item.variants.map((variant, idx) => {
         const variantKey = variant.sku || String(idx);
         const manualPrice = parsePositiveNumber(variantPriceOverrides[item.id]?.[variantKey]);
+        const offerOverride = variantOfferIdOverrides[item.id]?.[variantKey] || '';
         return {
           key: `${item.id}-${variantKey}`,
+          itemId: item.id,
+          variantKey,
+          isVariant: true,
           title: (variant.attrs && Object.keys(variant.attrs).length ? formatVariantAttrs(variant.attrs) : '') || item.title,
           sku: variant.sku || item.sku || '',
+          savedOfferId: variant.publishOfferId || '',
+          offerOverride,
           basePrice,
           finalPrice: manualPrice ? Math.ceil(manualPrice) : calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
           manual: !!manualPrice,
@@ -645,13 +723,36 @@ export default function CollectPage() {
     }
     return [{
       key: item.id,
+      itemId: item.id,
+      variantKey: '',
+      isVariant: false,
       title: item.title,
       sku: item.sku || '',
+      savedOfferId: item.metadata?.publishOfferId || '',
+      offerOverride: offerIdOverrides[item.id] || '',
       basePrice,
       finalPrice: calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
       manual: false,
     }];
   });
+  const publishPreviewPrices = publishPreviewRows
+    .map((row) => row.finalPrice)
+    .filter((price): price is number => typeof price === 'number' && Number.isFinite(price));
+  const publishPreviewMin = publishPreviewPrices.length ? Math.min(...publishPreviewPrices) : null;
+  const publishPreviewMax = publishPreviewPrices.length ? Math.max(...publishPreviewPrices) : null;
+  const publishFormulaText = `售价=原价×(1+${Number(publishMarkup) || 200}%)+${Number(publishMarkupAmount) || 0}`;
+  const randomizeEnabled = !!randomizeConfig?.enabled;
+  const randomOfferIdAvailable = !!(randomizeConfig?.enabled && randomizeConfig.randomOfferId);
+  const visiblePublishPreviewRows = pricePreviewExpanded ? publishPreviewRows : publishPreviewRows.slice(0, 4);
+  const hiddenPublishPreviewCount = Math.max(0, publishPreviewRows.length - visiblePublishPreviewRows.length);
+
+  function getOfferPreviewText(row: typeof publishPreviewRows[number]): string {
+    const explicit = row.offerOverride || row.savedOfferId;
+    if (explicit) return explicit;
+    if (randomOfferIdAvailable && randomOfferIdEnabled && row.sku) return `${row.sku}-随机`;
+    if (row.sku) return `${row.sku}-后缀`;
+    return '系统生成';
+  }
 
   return (
     <div className="space-y-4">
@@ -975,11 +1076,12 @@ export default function CollectPage() {
       </Card>
 
       <Dialog open={showPublishDialog} onOpenChange={setShowPublishDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-5xl overflow-hidden p-0">
+          <DialogHeader className="px-6 pt-6">
             <DialogTitle>一键上架到 OZON</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="grid max-h-[82vh] grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="space-y-4 overflow-y-auto px-6 pb-6">
             {/* 选中商品的图片预览 */}
             {selectedIds.size > 0 && (
               <div className="rounded-md border p-2 bg-muted/30">
@@ -1105,31 +1207,28 @@ export default function CollectPage() {
                 <p className="text-xs text-muted-foreground">卖价 = 采购价 × (1 + 加价%/100) + 固定加价；变体单独填写价格时按最终售价处理</p>
               </div>
             </div>
-            {publishPreviewRows.length > 0 && (
-              <div className="rounded-md border bg-muted/30 p-2">
-                <div className="mb-1 flex items-center justify-between text-xs font-medium">
-                  <span>最终上品价格预览</span>
-                  <span className="text-muted-foreground">售价=原价×(1+{Number(publishMarkup) || 200}%)+{Number(publishMarkupAmount) || 0}</span>
-                </div>
-                <div className="max-h-40 space-y-1 overflow-y-auto">
-                  {publishPreviewRows.slice(0, 12).map((row) => (
-                    <div key={row.key} className="grid grid-cols-[1fr_auto] gap-2 rounded bg-background/70 px-2 py-1 text-xs">
-                      <div className="min-w-0">
-                        <div className="truncate">{row.title}</div>
-                        <div className="font-mono text-[10px] text-muted-foreground truncate">{row.sku || '-'}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-semibold tabular-nums">{formatPreviewPrice(row.finalPrice)}</div>
-                        <div className="text-[10px] text-muted-foreground">
-                          {row.manual ? '手动最终售价' : `原价 ${formatPreviewPrice(row.basePrice)}`}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {publishPreviewRows.length > 12 && (
-                  <div className="pt-1 text-[10px] text-muted-foreground">还有 {publishPreviewRows.length - 12} 个 SKU 未展示</div>
-                )}
+            {randomizeEnabled && (
+              <div className="rounded-md border bg-muted/20 p-3">
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={randomOfferIdEnabled}
+                    onChange={(e) => setRandomOfferIdEnabled(e.target.checked)}
+                    disabled={!randomOfferIdAvailable}
+                    className="mt-0.5 h-4 w-4 rounded"
+                  />
+                  <span className="space-y-1">
+                    <span className="flex items-center gap-1 text-sm font-medium">
+                      <Shuffle className="h-3.5 w-3.5" /> 随机货号
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      默认基于源 SKU 生成随机 offer_id。右侧明细填写货号时，会优先使用手动值。
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      尺寸浮动 ±{randomizeConfig?.dimensionJitterMm ?? 0}mm，最小 {randomizeConfig?.dimensionMinMm ?? 0}mm；重量分档 {randomizeConfig?.weightBuckets || '未配置'}。
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
             <p className="text-xs text-muted-foreground">将上架 {selectedIds.size} 件商品到 OZON（货币: CNY）</p>
@@ -1140,6 +1239,95 @@ export default function CollectPage() {
                 确认上架
               </Button>
             </div>
+          </div>
+            <aside className="border-t bg-muted/20 px-4 py-4 lg:border-l lg:border-t-0 overflow-y-auto">
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">价格与货号</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {publishPreviewRows.length} 个上架 SKU
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-xs"
+                    onClick={() => setPricePreviewExpanded((value) => !value)}
+                    disabled={!publishPreviewRows.length}
+                  >
+                    {pricePreviewExpanded ? '收起' : '展开'}
+                    {pricePreviewExpanded ? <ChevronUp className="ml-1 h-3.5 w-3.5" /> : <ChevronDown className="ml-1 h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border bg-background p-3">
+                    <p className="text-[11px] text-muted-foreground">最低售价</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums">{formatPreviewPrice(publishPreviewMin)}</p>
+                  </div>
+                  <div className="rounded-md border bg-background p-3">
+                    <p className="text-[11px] text-muted-foreground">最高售价</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums">{formatPreviewPrice(publishPreviewMax)}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-md border bg-background p-3">
+                  <div className="text-xs font-medium">{publishFormulaText}</div>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    变体价格框填写后按最终售价处理，不再二次加价。
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  {visiblePublishPreviewRows.length ? (
+                    visiblePublishPreviewRows.map((row) => (
+                      <div key={row.key} className="rounded-md border bg-background p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="line-clamp-1 text-xs font-medium">{row.title}</div>
+                            <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                              <span className="font-mono">{row.sku || '无源SKU'}</span>
+                              {row.isVariant && <span>变体</span>}
+                              {row.manual && <span>手动价</span>}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-sm font-semibold tabular-nums">
+                            {formatPreviewPrice(row.finalPrice)}
+                          </div>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          <Label className="text-[11px] text-muted-foreground">上架货号 offer_id</Label>
+                          <Input
+                            value={row.offerOverride}
+                            onChange={(e) => {
+                              if (row.isVariant) setVariantOfferIdOverride(row.itemId, row.variantKey, e.target.value);
+                              else setOfferIdOverride(row.itemId, e.target.value);
+                            }}
+                            placeholder={row.savedOfferId || getOfferPreviewText(row)}
+                            className="h-8 font-mono text-xs"
+                          />
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-md border bg-background p-4 text-center text-xs text-muted-foreground">
+                      选择商品后显示价格和货号
+                    </div>
+                  )}
+                  {hiddenPublishPreviewCount > 0 && (
+                    <button
+                      type="button"
+                      className="w-full rounded-md border border-dashed bg-background px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => setPricePreviewExpanded(true)}
+                    >
+                      还有 {hiddenPublishPreviewCount} 个 SKU，点击展开
+                    </button>
+                  )}
+                </div>
+              </div>
+            </aside>
           </div>
         </DialogContent>
       </Dialog>
@@ -1377,6 +1565,21 @@ export default function CollectPage() {
                 <Label className="text-xs">货币</Label>
                 <Input value="CNY（人民币）" disabled className="bg-muted text-muted-foreground" />
               </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs flex items-center gap-1">
+                <KeyRound className="h-3.5 w-3.5" />
+                上架货号 offer_id
+              </Label>
+              <Input
+                value={editItemData.publishOfferId}
+                onChange={(e) => setEditItemData({ ...editItemData, publishOfferId: e.target.value })}
+                placeholder="留空则上架时自动随机或追加后缀"
+                className="font-mono"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                源 SKU 用于采集定位；offer_id 是发布到 OZON 的货号，可手动覆盖。
+              </p>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">采购价</Label>

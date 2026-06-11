@@ -134,6 +134,35 @@ export function recordOfferPublishImages(
   offerImages[offerId] = normalizedImages[0]!;
 }
 
+export function resolvePublishOfferId(input: {
+  sourceSku?: unknown;
+  fallback: string;
+  customOfferId?: unknown;
+  randomizeEnabled: boolean;
+  randomOfferIdEnabled: boolean;
+  userRandomOfferId?: boolean;
+  suffixFactory?: () => string;
+}): string {
+  const custom = String(input.customOfferId || '').trim();
+  if (custom) return custom;
+
+  const sourceSku = String(input.sourceSku || '').trim();
+  if (
+    sourceSku &&
+    input.randomizeEnabled &&
+    input.randomOfferIdEnabled &&
+    input.userRandomOfferId !== false
+  ) {
+    return randomOfferIdFrom(sourceSku);
+  }
+
+  if (sourceSku) {
+    const suffix = input.suffixFactory ? input.suffixFactory() : randomSuffix(4);
+    return `${sourceSku}-${suffix}`;
+  }
+  return input.fallback;
+}
+
 export function removeVariantsBySkus(variantsInput: unknown, skusInput: unknown[]): {
   variants: any[];
   removed: number;
@@ -319,6 +348,9 @@ export async function collectRoutes(app: FastifyInstance) {
       data: {
         enabled: cfg.enabled,
         randomOfferId: cfg.randomOfferId,
+        dimensionJitterMm: cfg.dimensionJitterMm,
+        dimensionMinMm: cfg.dimensionMinMm,
+        weightBuckets: cfg.weightBuckets.map(([min, max]) => `${min}-${max}`).join(','),
       },
     };
   });
@@ -515,11 +547,18 @@ export async function collectRoutes(app: FastifyInstance) {
     if (body.status !== undefined) data.status = String(body.status);
     if (body.images !== undefined) data.images = Array.isArray(body.images) ? body.images : null;
     if (body.sourceUrl !== undefined) data.sourceUrl = body.sourceUrl ? String(body.sourceUrl) : null;
-    if (body.publishTitle !== undefined) {
+    if (body.publishTitle !== undefined || body.publishOfferId !== undefined) {
       const meta: Record<string, unknown> = item.metadata && typeof item.metadata === 'object' ? { ...(item.metadata as any) } : {};
-      const publishTitle = String(body.publishTitle || '').trim();
-      if (publishTitle) meta.publishTitleRu = publishTitle;
-      else delete meta.publishTitleRu;
+      if (body.publishTitle !== undefined) {
+        const publishTitle = String(body.publishTitle || '').trim();
+        if (publishTitle) meta.publishTitleRu = publishTitle;
+        else delete meta.publishTitleRu;
+      }
+      if (body.publishOfferId !== undefined) {
+        const publishOfferId = String(body.publishOfferId || '').trim();
+        if (publishOfferId) meta.publishOfferId = publishOfferId;
+        else delete meta.publishOfferId;
+      }
       data.metadata = meta as any;
     }
 
@@ -693,6 +732,7 @@ export async function collectRoutes(app: FastifyInstance) {
         lengthMm: meta.lengthMm || 100,
         widthMm: meta.widthMm || 100,
         heightMm: meta.heightMm || 100,
+        publishOfferId: meta.publishOfferId || null,
         hasOzonAttributes: Array.isArray(meta.ozonAttributes) && meta.ozonAttributes.length > 0,
       };
     });
@@ -715,7 +755,8 @@ export async function collectRoutes(app: FastifyInstance) {
       categoryId?: number;
       typeId?: number;
       publishTitle?: string;
-      variants?: Array<{ sku: string; price?: string; stock?: number }>;
+      publishOfferId?: string;
+      variants?: Array<{ sku: string; price?: string; stock?: number; publishOfferId?: string }>;
     };
     if (!body?.id) return reply.status(400).send({ code: 0, msg: '缺少 id' });
 
@@ -734,6 +775,11 @@ export async function collectRoutes(app: FastifyInstance) {
       if (publishTitle) meta.publishTitleRu = publishTitle;
       else delete meta.publishTitleRu;
     }
+    if (body.publishOfferId !== undefined) {
+      const publishOfferId = String(body.publishOfferId || '').trim();
+      if (publishOfferId) meta.publishOfferId = publishOfferId;
+      else delete meta.publishOfferId;
+    }
     // 历史字段名叫 watermarkedImages；这里实际表示改款表单确认后的商品级发布图片。
     // publish-ozon 会把变体封面排在它前面，避免多 SKU 主图被商品级图片覆盖。
     if (body.images?.length) meta.watermarkedImages = body.images;
@@ -748,7 +794,16 @@ export async function collectRoutes(app: FastifyInstance) {
       const overrideMap = new Map(body.variants.map((v) => [v.sku, v]));
       updateData.variants = oldVariants.map((v) => {
         const o = overrideMap.get(v.sku);
-        return o ? { ...v, ...(o.price !== undefined ? { price: o.price } : {}), ...(o.stock !== undefined ? { stock: o.stock } : {}) } : v;
+        if (!o) return v;
+        const next = { ...v };
+        if (o.price !== undefined) next.price = o.price;
+        if (o.stock !== undefined) next.stock = o.stock;
+        if (o.publishOfferId !== undefined) {
+          const publishOfferId = String(o.publishOfferId || '').trim();
+          if (publishOfferId) next.publishOfferId = publishOfferId;
+          else delete next.publishOfferId;
+        }
+        return next;
       });
     }
 
@@ -777,6 +832,8 @@ export async function collectRoutes(app: FastifyInstance) {
       randomOfferId?: boolean;
       warehouseId?: number;
       priceOverrides?: Record<string, Record<string | number, number>>;
+      offerIds?: Record<string, string>;
+      variantOfferIds?: Record<string, Record<string | number, string>>;
       source?: 'collect-page' | 'listing-page';
     };
 
@@ -838,6 +895,33 @@ export async function collectRoutes(app: FastifyInstance) {
     const markupAmount = Number(body.markupAmount) || 0;
     const mode = body.mode === 'clone' ? 'clone' : 'follow';
     const followBrand = body.followBrand !== false;
+    const randomizeCfg = await getRandomizeConfig();
+    const userPrefersRandomOfferId = body.randomOfferId !== false;
+
+    function getItemCustomOfferId(item: any): unknown {
+      const meta = item.metadata as any;
+      return body.offerIds?.[item.id] ?? meta?.publishOfferId;
+    }
+
+    function getVariantCustomOfferId(item: any, variant: any, index: number): unknown {
+      const variantMap = body.variantOfferIds?.[item.id] || {};
+      const sku = variant?.sku != null ? String(variant.sku) : '';
+      return (sku ? variantMap[sku] : undefined)
+        ?? variantMap[index]
+        ?? variantMap[String(index)]
+        ?? variant?.publishOfferId;
+    }
+
+    function buildOfferId(sourceSku: string | null | undefined, fallback: string, customOfferId?: unknown): string {
+      return resolvePublishOfferId({
+        sourceSku,
+        fallback,
+        customOfferId,
+        randomizeEnabled: randomizeCfg.enabled,
+        randomOfferIdEnabled: randomizeCfg.randomOfferId,
+        userRandomOfferId: userPrefersRandomOfferId,
+      });
+    }
 
     // ====== Fallback: 没属性的商品走 import-by-sku（继承源卡片）======
     let fallbackTaskId: number | null = null;
@@ -863,7 +947,7 @@ export async function collectRoutes(app: FastifyInstance) {
           if (!variants.length) {
             const sourceSku = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
             if (!sourceSku) return [];
-            const offerId = `f${Date.now().toString(36)}${randomSuffix(4)}`;
+            const offerId = buildOfferId(item.sku, `f${Date.now().toString(36)}${randomSuffix(4)}`, getItemCustomOfferId(item));
             const rawImages = resolveBasePublishImages(item);
             recordOfferPublishImages(fallbackOfferImageLists, fallbackOfferImages, offerId, rawImages);
             return [{
@@ -897,7 +981,7 @@ export async function collectRoutes(app: FastifyInstance) {
                   ? calcPublishPrice(subBaseCny, markupPct, markupAmount)
                   : priceWithMarkup;
               }
-              const offerId = `f${Date.now().toString(36)}${randomSuffix(4)}`;
+              const offerId = buildOfferId(String(v.sku), `f${Date.now().toString(36)}${randomSuffix(4)}`, getVariantCustomOfferId(item, v, idx));
               fallbackTrace.push({
                 offerId,
                 sourceItemId: item.id,
@@ -1010,7 +1094,6 @@ export async function collectRoutes(app: FastifyInstance) {
 
     // 跟卖和复制都走 /v3/product/import：创建新卡片但属性/图片继承源商品
     // 区别仅在 offer_id 命名策略：跟卖用 {sku}-{rand}，复制用 {sku}-{rand}（与企鹅店长一致）
-    const randomizeCfg = await getRandomizeConfig();
     function getItemDimensions(item: any) {
       const meta = item.metadata as any;
       const baseWeight = meta?.weightG || body.weight || 500;
@@ -1027,14 +1110,6 @@ export async function collectRoutes(app: FastifyInstance) {
         width: jitterDimensionMm(baseWidth, randomizeCfg.dimensionJitterMm, randomizeCfg.dimensionMinMm) ?? baseWidth,
       };
     }
-    function buildOfferId(sourceSku: string | null | undefined, fallback: string): string {
-      const userPrefersRandom = body.randomOfferId !== false;
-      if (randomizeCfg.enabled && randomizeCfg.randomOfferId && userPrefersRandom && sourceSku) {
-        return randomOfferIdFrom(sourceSku);
-      }
-      return sourceSku ? `${sourceSku}-${randomSuffix(4)}` : fallback;
-    }
-
     const cloneAttrsByProductId = new Map<number, { description: string; attributes: { id: number; complex_id?: number; values: { value: string; dictionary_value_id?: number }[] }[]; images: string[] }>();
     {
       // 优先从本地 metadata 读取 ozonAttributes（扩展采集时已存储）
@@ -1119,7 +1194,7 @@ export async function collectRoutes(app: FastifyInstance) {
       if (!variants.length) {
         return [{
           name: resolvePublishName(item),
-          offer_id: buildOfferId(item.sku, `import-${item.id}`),
+          offer_id: buildOfferId(item.sku, `import-${item.id}`, getItemCustomOfferId(item)),
           description_category_id: categoryId,
           type_id: typeId,
           price: String(priceWithMarkup),
@@ -1172,7 +1247,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
         return {
           name: subName,
-          offer_id: buildOfferId(subSku, `${subSku}-${randomSuffix(4)}`),
+          offer_id: buildOfferId(subSku, `${subSku}-${randomSuffix(4)}`, getVariantCustomOfferId(item, v, idx)),
           description_category_id: categoryId,
           type_id: typeId,
           price: String(subPrice),

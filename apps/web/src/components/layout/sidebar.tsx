@@ -266,19 +266,10 @@ function NavGroup({
   const hasChildren = !!item.children?.length;
   const isActive = item.href === pathname || item.children?.some((c) => pathname.startsWith(c.href));
   const [open, setOpen] = useState(isActive);
-  const [isHovered, setIsHovered] = useState(false);
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 鼠标悬停自动展开子菜单
-  const shouldOpen = open || isHovered;
-  function clearCloseTimer() {
-    if (closeTimerRef.current) {
-      clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
-  }
-
-  useEffect(() => () => clearCloseTimer(), []);
+  useEffect(() => {
+    if (isActive) setOpen(true);
+  }, [isActive]);
 
   if (!hasChildren) {
     return (
@@ -299,21 +290,7 @@ function NavGroup({
   }
 
   return (
-    <div
-      className="mb-1"
-      onMouseEnter={() => {
-        if (!collapsed) {
-          clearCloseTimer();
-          setIsHovered(true);
-        }
-      }}
-      onMouseLeave={() => {
-        if (!collapsed) {
-          clearCloseTimer();
-          closeTimerRef.current = setTimeout(() => setIsHovered(false), 700);
-        }
-      }}
-    >
+    <div className="mb-1">
       <button
         onClick={() => setOpen(!open)}
         className={cn(
@@ -329,12 +306,12 @@ function NavGroup({
           <>
             <span className="flex-1 text-left">{item.label}</span>
             <ChevronDown
-              className={cn('h-3.5 w-3.5 transition-transform', shouldOpen && 'rotate-180')}
+              className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')}
             />
           </>
         )}
       </button>
-      {!collapsed && shouldOpen && (
+      {!collapsed && open && (
         <div className="ml-4 pl-4 border-l-2 border-orange-200 dark:border-orange-900/50 space-y-1 mt-1">
           {item.children!.map((child) => (
             <Link
