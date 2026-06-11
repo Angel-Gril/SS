@@ -96,10 +96,6 @@ function sameStringList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function hasAppliedWatermark(item: { metadata?: unknown }): boolean {
-  return metadataRecord(item.metadata).watermarkApplied === true;
-}
-
 export function resolveBasePublishImages(
   item: { images?: unknown; metadata?: unknown },
   clonedImages?: unknown,
@@ -117,7 +113,6 @@ export function resolveVariantPublishImages(
   variant: { images?: unknown },
   baseImages: string[],
 ): string[] {
-  if (hasAppliedWatermark(item)) return baseImages;
   const variantImages = normalizePublishImageList(variant.images);
   return variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages;
 }
