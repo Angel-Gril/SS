@@ -5,7 +5,37 @@ import vm from 'node:vm';
 const priceCurrencyScript = fs.readFileSync('extensions/ss-erp/shared/currency/price-currency.js', 'utf8');
 const collectScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 
-async function collectWithPage({ url, title, bodyText, selectors, pageState }) {
+function makeMockElement({ text = '', className = '', attrs = {}, value = '', children = [] }) {
+  return {
+    textContent: text,
+    innerText: text,
+    className,
+    value,
+    children,
+    classList: {
+      contains(name) {
+        return String(className || '').split(/\s+/).includes(name);
+      },
+    },
+    getAttribute(name) {
+      if (name === 'class') return className;
+      if (name === 'value') return value;
+      return attrs[name] || '';
+    },
+    hasAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(attrs, name);
+    },
+    querySelectorAll(selector) {
+      if (/input|button|\[role/.test(selector)) return children;
+      return [];
+    },
+    closest() {
+      return this;
+    },
+  };
+}
+
+async function collectWithPage({ url, title, bodyText, selectors, queryAll, pageState }) {
   let messageListener = null;
   const windowListeners = {};
   const document = {
@@ -25,7 +55,9 @@ async function collectWithPage({ url, title, bodyText, selectors, pageState }) {
       const value = selectors && selectors[selector];
       return value ? { textContent: value } : null;
     },
-    querySelectorAll() {
+    querySelectorAll(selector) {
+      if (typeof queryAll === 'function') return queryAll(selector);
+      if (queryAll && queryAll[selector]) return queryAll[selector];
       return [];
     },
     addEventListener() {},
@@ -97,7 +129,7 @@ async function collectWithPage({ url, title, bodyText, selectors, pageState }) {
 const aliResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/733344455566.html',
   title: '1688 detail',
-  bodyText: '起批价 ¥12.80 近30天成交 1200',
+  bodyText: '起批价 ¥12.80 近30天成交 1200 运费 ¥6 起',
   selectors: {
     h1: '1688 同款货源',
     '.price': '¥12.80 - ¥15.50',
@@ -114,9 +146,45 @@ const aliResponse = await collectWithPage({
 });
 
 assert.equal(aliResponse.ok, true);
-assert.equal(aliResponse.data.priceCny, 12.8);
+assert.equal(aliResponse.data.priceCny, 15.5);
 assert.equal(aliResponse.data.priceText, '¥12.80 - ¥15.50');
+assert.equal(aliResponse.data.priceSourceType, 'rangeHigh');
+assert.equal(aliResponse.data.shippingCny, 6);
+assert.equal(aliResponse.data.totalCostCny, 21.5);
 assert.equal(aliResponse.data.currency, 'CNY');
+
+const selectedSkuResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/1032907994887.html',
+  title: '1688 selected sku detail',
+  bodyText: '¥98.00 ~ ¥134.10 1个起批 运费 ¥0 起',
+  selectors: {
+    h1: '鱼缸过滤制氧一体机',
+    '.price': '¥98.00 ~ ¥134.10',
+  },
+  queryAll(selector) {
+    if (!/(sku|Sku|spec|Spec|\bli\b|\btr\b|role="row")/.test(selector)) return [];
+    return [
+      makeMockElement({ text: '颜色 大号过滤制氧一体 ¥98 库存413个', className: 'sku-row selected' }),
+      makeMockElement({ text: '颜色 特大号过滤制氧一体 ¥134.10 库存254个', className: 'sku-row' }),
+    ];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '1032907994887',
+        subject: '鱼缸过滤制氧一体机',
+      },
+    },
+  },
+});
+
+assert.equal(selectedSkuResponse.ok, true);
+assert.equal(selectedSkuResponse.data.priceCny, 98);
+assert.equal(selectedSkuResponse.data.priceText, '¥98');
+assert.equal(selectedSkuResponse.data.priceSourceType, 'selectedSku');
+assert.equal(selectedSkuResponse.data.selectedSku.price, 98);
+assert.equal(selectedSkuResponse.data.shippingCny, 0);
+assert.equal(selectedSkuResponse.data.totalCostCny, 98);
 
 const taobaoResponse = await collectWithPage({
   url: 'https://item.taobao.com/item.htm?id=99887766',

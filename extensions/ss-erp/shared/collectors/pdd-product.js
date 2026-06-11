@@ -43,6 +43,8 @@
       ''
     );
     var priceNumber = pickPddPrice(goods) != null ? pickPddPrice(goods) : pickPddPrice(globals);
+    var shipping = pickPddShipping(goods, globals, pageText);
+    var totalCostCny = priceNumber != null ? roundMoney(priceNumber + (Number(shipping.value) || 0)) : null;
     var images = pickPddImages(goods, sources);
     var grossWeightGrams = pickPddWeight(goods, pageText);
     var dimensions = pickDimensions(goods, pageText);
@@ -70,6 +72,10 @@
       price: priceNumber != null ? formatMoney(priceNumber) : '',
       priceText: priceNumber != null ? '¥' + formatMoney(priceNumber) : '',
       currency: 'CNY',
+      shippingCny: shipping.value,
+      shippingText: shipping.text,
+      shippingFree: shipping.free,
+      totalCostCny: totalCostCny,
       grossWeightGrams: grossWeightGrams,
       weightG: grossWeightGrams,
       lengthMm: dimensions.lengthMm,
@@ -166,9 +172,34 @@
     if (raw.indexOf('.') >= 0 || /[￥¥元]/.test(text)) return roundMoney(num);
     var keyText = String(key || '');
     var explicitCents = /fen|cent|priceCent|priceInCent/i.test(keyText)
-      || /^(minNormalPrice|minGroupPrice|min_normal_price|min_group_price|normalPrice|groupPrice|normal_price|group_price|marketPrice)$/i.test(keyText);
+      || /^(minNormalPrice|minGroupPrice|min_normal_price|min_group_price|normalPrice|groupPrice|normal_price|group_price|marketPrice|freightFee|freight_fee|shippingFee|shipping_fee|postage|deliveryFee|delivery_fee)$/i.test(keyText);
     var likelyCents = explicitCents || (/^(price|salePrice)$/i.test(keyText) && Number.isInteger(num) && num >= 1000);
     return likelyCents ? roundMoney(num / 100) : roundMoney(num);
+  }
+
+  function pickPddShipping(goods, globals, pageText) {
+    var direct = pickFirstEntry(goods, ['freightFee', 'freight_fee', 'shippingFee', 'shipping_fee', 'postage', 'deliveryFee', 'delivery_fee'])
+      || pickFirstEntry(globals, ['freightFee', 'freight_fee', 'shippingFee', 'shipping_fee', 'postage', 'deliveryFee', 'delivery_fee']);
+    if (direct) {
+      var parsed = parsePddMoney(direct.value, direct.key);
+      if (parsed != null) {
+        return { value: parsed, text: '¥' + formatMoney(parsed), free: parsed === 0 };
+      }
+    }
+
+    var text = normalizeWhitespace(pageText || '');
+    var label = text.search(/运费|快递|配送|邮费|shipping|freight/i);
+    if (label < 0) return { value: 0, text: '', free: false };
+    var contextSample = text.slice(Math.max(0, label - 40), label + 120);
+    var sample = text.slice(label, label + 120);
+    if (/包邮|免邮|免运费|卖家承担运费|free shipping/i.test(contextSample)) {
+      return { value: 0, text: '包邮', free: true };
+    }
+    var match = sample.match(/(?:¥|￥|RMB|CNY)?\s*(\d[\d.,]*)(?:\s*(?:元|¥|￥|RMB|CNY))?/i);
+    if (!match) return { value: 0, text: sample, free: false };
+    var amount = parsePddMoney(match[1], 'shippingText');
+    if (amount == null) return { value: 0, text: sample, free: false };
+    return { value: amount, text: sample, free: amount === 0 };
   }
 
   function pickPddImages(goods, sources) {

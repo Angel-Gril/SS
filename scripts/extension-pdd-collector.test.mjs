@@ -62,6 +62,8 @@ assert.equal(result.shopName, '松鼠百货源头店');
 assert.equal(result.price, '12.99');
 assert.equal(result.priceText, '¥12.99');
 assert.equal(result.currency, 'CNY');
+assert.equal(result.shippingCny, 0);
+assert.equal(result.totalCostCny, 12.99);
 assert.equal(result.grossWeightGrams, 650);
 assert.equal(result.weightG, 650);
 assert.equal(result.lengthMm, 300);
@@ -125,7 +127,7 @@ const yuanPriceResult = api.extractPddProduct({
       topGallery: [{ url: 'https://img.pddpic.com/product/main-800x800.jpeg' }],
     },
   }],
-  pageText: '整箱采购商品 ¥108',
+  pageText: '整箱采购商品 ¥108 运费 ¥5',
   url: 'https://pifa.pinduoduo.com/goods/detail?goods_id=987654321',
   host: 'pifa.pinduoduo.com',
 });
@@ -133,5 +135,7 @@ const yuanPriceResult = api.extractPddProduct({
 assert.equal(yuanPriceResult.price, '108', 'PDD yuan integer prices should not be treated as cents');
 assert.equal(yuanPriceResult.priceText, '¥108');
 assert.equal(yuanPriceResult.priceCny, 108);
+assert.equal(yuanPriceResult.shippingCny, 5);
+assert.equal(yuanPriceResult.totalCostCny, 113);
 
 console.log('PASS PDD extension collector');

@@ -1374,7 +1374,10 @@
     var source = quote && quote.source || {};
     var platform = source.platform ? String(source.platform).toUpperCase() : '货源';
     var sku = source.sku ? (' SKU ' + source.sku) : '';
-    return '已从 ' + platform + sku + ' 回填采购价：¥ ' + formatMoney(quote && quote.costCny);
+    var shipping = source.shippingFee && Number(source.shippingFee.value) > 0
+      ? ('（商品 ¥ ' + formatMoney(source.price && source.price.value) + ' + 运费 ¥ ' + formatMoney(source.shippingFee.value) + '）')
+      : '';
+    return '已从 ' + platform + sku + ' 回填采购价：¥ ' + formatMoney(quote && quote.costCny) + shipping;
   }
 
   function applySourceQuoteToPanel(quote, options) {

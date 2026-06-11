@@ -62,7 +62,7 @@ assert.equal(listed.length, 1);
 assert.equal(listed[0].source.sku, 'red-l');
 
 const csv = api.exportQuotesAsCsv(quotes);
-assert.match(csv, /ozonProductId,ozonUrl,ozonTitle,ozonSalePrice,sourcePlatform,sourceProductId,sourceSku,sourceUrl,sourceTitle,costCny,sourcePriceText,status,createdAt,updatedAt/);
+assert.match(csv, /ozonProductId,ozonUrl,ozonTitle,ozonSalePrice,sourcePlatform,sourceProductId,sourceSku,sourceUrl,sourceTitle,costCny,sourceUnitPrice,sourceShippingCny,sourcePriceText,status,createdAt,updatedAt/);
 assert.match(csv, /1628675309/);
 assert.match(csv, /733344455566/);
 assert.match(csv, /13\.5/);
@@ -80,5 +80,26 @@ const objectPriceQuote = api.normalizeQuote({
 assert.equal(objectPriceQuote.source.price.value, 19.9);
 assert.equal(objectPriceQuote.source.price.currency, 'CNY');
 assert.equal(objectPriceQuote.costCny, 19.9);
+
+const shippingQuote = api.normalizeQuote({
+  ozon: quote.ozon,
+  sourceProduct: {
+    sourcePlatform: '1688',
+    productId: '1032907994887',
+    sourceUrl: 'https://detail.1688.com/offer/1032907994887.html',
+    priceCny: 98,
+    priceText: '¥98',
+    shippingCny: 6,
+    shippingText: '运费 ¥6 起',
+    totalCostCny: 104,
+    selectedSku: { skuId: 'large-filter', name: '大号过滤制氧一体', price: 98 },
+  },
+}, null, { now });
+
+assert.equal(shippingQuote.source.price.value, 98);
+assert.equal(shippingQuote.source.shippingFee.value, 6);
+assert.equal(shippingQuote.source.totalCostCny, 104);
+assert.equal(shippingQuote.source.sku, 'large-filter');
+assert.equal(shippingQuote.costCny, 104);
 
 console.log('PASS source quote store');

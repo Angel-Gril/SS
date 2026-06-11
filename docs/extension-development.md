@@ -181,3 +181,5 @@ node --test scripts/extension-image-search-integration.test.mjs
 - 列表页 UI 误改的直接原因是把“不要 popup 按钮墙”的要求错误套到了 Ozon 列表页 overlay。已按 `C:\Users\550W\Downloads\ss-erp-cloud-1.0.17\ss-erp-cloud\content\ozon-list-overlay.js` 恢复稳定样式，并新增静态测试防止再次回到误改的轻量详情样式。
 - 云端版比本地版更容易读到 Ozon 列表 Premium 数据，通常是因为云端能走 ERP 缓存/线上授权链路；本地版依赖本机后端、Token、Cookie、seller 授权和本地缓存状态。两版前端采集原理一致，但后端数据链路和缓存命中率不一定一致。
 - 国内货源采集没有出现在 ERP 的根因是 popup 原先调用 `ss-erp:source-candidate-upsert`，只写入扩展本地 `chrome.storage.local`。现已改为 `ss-erp:collect-source-to-erp`，service worker 通过 `SS_ERP_CLIENT.submitCollect({ items })` 写入 ERP `/api/collect/batch`，local/cloud 适配器会按 `items` 自动走批量采集接口。
+- 国内货源核价采购成本已改为保守策略：1688/淘宝/天猫优先识别已选 SKU 行价格；未选 SKU 且页面展示价格区间时取高价；同时采集国内运费字段，`source.price` 保留商品单价，`source.shippingFee` 保留运费，回填到 Ozon 面板的 `costCny` 使用 `商品单价 + 国内运费`。PDD 继续优先普通价字段，并补充运费和总成本字段。
+- 旧 `D:\AI Agent\Work\LS\ozon-selection-capture` 的国内货源逻辑是 DOM 文本估算 `商品价 + 运费 - 首单减免`，可参考运费识别，但没有准确绑定 1688 选中 SKU；当前扩展不扣新人/首单优惠，避免核价偏低。

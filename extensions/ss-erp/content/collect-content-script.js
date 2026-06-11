@@ -912,6 +912,10 @@
     const shopName = pickFirstDomText(config.shopSelectors) || pickStringByKey(context.sources, /(shopName|sellerName|companyName|storeName|supplierName)$/i);
     const productId = pickProductId(config.productIdRegexes, context.sources);
     const sourcePrice = pickSourcePrice(context, config);
+    const sourceShipping = pickSourceShipping(context);
+    const totalCostCny = sourcePrice.price != null
+      ? roundMoney(Number(sourcePrice.price) + (Number(sourceShipping.value) || 0))
+      : null;
     const monthlySales = pickMonthlySales(context.pageText, context.sources, config.monthlySalesKeywords);
     const skuItems = pickSkuItems(context.sources);
     const skuCount = skuItems.length || pickSkuCountFromDom();
@@ -929,6 +933,13 @@
       priceText: sourcePrice.text || "",
       priceCny: sourcePrice.price != null ? Number(sourcePrice.price) : null,
       currency: sourcePrice.currency || "CNY",
+      priceSourceType: sourcePrice.sourceType || "",
+      selectedSku: sourcePrice.selectedSku || null,
+      shippingCny: sourceShipping.value != null ? Number(sourceShipping.value) : null,
+      shippingText: sourceShipping.text || "",
+      shippingFree: Boolean(sourceShipping.free),
+      shippingSourceType: sourceShipping.sourceType || "",
+      totalCostCny,
       monthlySales,
       grossWeightGrams,
       skuCount,
@@ -946,15 +957,19 @@
   }
 
   function pickSourcePrice(context, config) {
+    const selectedSkuPrice = pickSelectedSkuPriceFromDom();
+    if (selectedSkuPrice) return selectedSkuPrice;
+
     const domText = pickFirstDomText(config.priceSelectors || []);
     const sourceText = pickPriceTextFromSources(context.sources);
     const text = normalizePriceDisplay(domText || sourceText || "");
-    const parsed = parsePriceWithCurrencySafe(text || sourceText, "CNY");
+    const parsed = parseSourcePriceText(text || sourceText, "CNY");
     if (parsed.price != null && parsed.price !== "") {
       return {
-        price: Number(parsed.price),
+        price: roundMoney(Number(parsed.price)),
         currency: parsed.currency || "CNY",
-        text: text || sourceText || String(parsed.price)
+        text: text || sourceText || String(parsed.price),
+        sourceType: parsed.sourceType || "dom"
       };
     }
 
@@ -967,11 +982,167 @@
       return {
         price: skuPrice,
         currency: "CNY",
-        text: "¥" + formatMoney(skuPrice)
+        text: "¥" + formatMoney(skuPrice),
+        sourceType: "skuMinFallback"
       };
     }
 
-    return { price: null, currency: "CNY", text: "" };
+    return { price: null, currency: "CNY", text: "", sourceType: "" };
+  }
+
+  function pickSelectedSkuPriceFromDom() {
+    const rows = collectDomSkuPriceRows();
+    if (!rows.length) return null;
+
+    const selected = rows.find((row) => row.selected && row.price > 0);
+    if (selected) {
+      return {
+        price: selected.price,
+        currency: "CNY",
+        text: selected.priceText,
+        sourceType: "selectedSku",
+        selectedSku: selected
+      };
+    }
+
+    if (rows.length >= 2) {
+      const max = rows.slice().sort((a, b) => b.price - a.price)[0];
+      if (max && max.price > 0) {
+        return {
+          price: max.price,
+          currency: "CNY",
+          text: max.priceText,
+          sourceType: "skuMaxFallback",
+          selectedSku: null
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function collectDomSkuPriceRows() {
+    if (typeof document === "undefined" || !document.querySelectorAll) return [];
+    const selectors = [
+      "[class*='sku'], [class*='Sku'], [class*='spec'], [class*='Spec'], [class*='offer'], [class*='Offer'], [class*='sale'], [class*='Sale'], [class*='amount'], [class*='Amount'], li, tr, [role='row']"
+    ];
+    const rows = [];
+    const seen = new Set();
+
+    selectors.forEach((selector) => {
+      Array.from(document.querySelectorAll(selector) || []).slice(0, 600).forEach((node) => {
+        if (!node || seen.has(node)) return;
+        seen.add(node);
+        const text = normalizeWhitespace(node.innerText || node.textContent || "");
+        if (!text || text.length > 320) return;
+        if (!/[¥￥]\s*\d|\d[\d.,]*\s*元/.test(text)) return;
+        if (!/(库存|现货|起批|件|个|颜色|尺码|规格|型号|sku|SKU)/.test(text)) return;
+        const price = extractSkuRowPrice(text);
+        if (!(price > 0)) return;
+        const selected = isSelectedSkuNode(node) || hasPositiveQuantity(node);
+        rows.push({
+          skuId: pickNodeAttribute(node, ["data-sku-id", "data-sku", "sku-id", "data-id"]) || "",
+          name: cleanupSkuRowName(text),
+          specText: cleanupSkuRowName(text),
+          price,
+          priceText: "¥" + formatMoney(price),
+          selected,
+          attrs: cleanupSkuRowName(text) ? { spec: cleanupSkuRowName(text) } : {}
+        });
+      });
+    });
+
+    return dedupeSkuRows(rows);
+  }
+
+  function dedupeSkuRows(rows) {
+    const unique = [];
+    const seen = new Set();
+    rows.forEach((row) => {
+      const key = [row.skuId, row.name, row.price].join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      unique.push(row);
+    });
+    return unique;
+  }
+
+  function pickNodeAttribute(node, names) {
+    for (const name of names || []) {
+      if (node && typeof node.getAttribute === "function") {
+        const value = node.getAttribute(name);
+        if (value) return normalizeWhitespace(value);
+      }
+    }
+    return "";
+  }
+
+  function isSelectedSkuNode(node) {
+    const className = String((node && (node.className || (node.getAttribute && node.getAttribute("class")))) || "");
+    if (/(^|\s)(selected|active|checked|current|is-selected|isActive)(\s|$)/i.test(className)) return true;
+    if (node && typeof node.getAttribute === "function") {
+      const aria = node.getAttribute("aria-selected");
+      const dataSelected = node.getAttribute("data-selected") || node.getAttribute("selected");
+      if (String(aria).toLowerCase() === "true" || String(dataSelected).toLowerCase() === "true") return true;
+    }
+    return false;
+  }
+
+  function hasPositiveQuantity(node) {
+    const controls = [];
+    if (node && typeof node.querySelectorAll === "function") {
+      controls.push(...Array.from(node.querySelectorAll("input, [role='spinbutton'], [contenteditable='true']") || []));
+    }
+    if (node) controls.push(node);
+    return controls.some((control) => {
+      const raw = control && (control.value != null ? control.value : (control.getAttribute && control.getAttribute("value")));
+      const number = Number(String(raw == null ? "" : raw).replace(/[^\d.-]/g, ""));
+      return Number.isFinite(number) && number > 0;
+    });
+  }
+
+  function extractSkuRowPrice(text) {
+    const matches = String(text || '').match(/[¥￥]\s*\d[\d.,]*/g);
+    if (!matches || !matches.length) return null;
+    const values = matches
+      .map((item) => parseMoneyNumber(item))
+      .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+    return values.length ? roundMoney(values[0]) : null;
+  }
+
+  function cleanupSkuRowName(text) {
+    return normalizeWhitespace(text)
+      .replace(/[¥￥]\s*\d[\d.,]*/g, " ")
+      .replace(/库存\s*\d+\s*[个件]?/g, " ")
+      .replace(/[-+]\s*\d+\s*[-+]?/g, " ")
+      .replace(/\b\d+\b/g, " ")
+      .replace(/颜色|尺码|规格|型号/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function parseSourcePriceText(text, fallbackCurrency) {
+    const normalized = normalizeWhitespace(text || "");
+    const range = normalized.match(/[¥￥]?\s*\d[\d.,]*\s*(?:-|~|—|–|至|到)\s*[¥￥]?\s*\d[\d.,]*/);
+    if (range) {
+      const values = range[0]
+        .split(/(?:-|~|—|–|至|到)/)
+        .map((part) => parseMoneyNumber(part))
+        .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+      if (values.length) {
+        return {
+          price: Math.max(...values),
+          currency: detectCurrencyFromTextSafe(normalized, fallbackCurrency),
+          sourceType: "rangeHigh"
+        };
+      }
+    }
+    const parsed = parsePriceWithCurrencySafe(normalized, fallbackCurrency);
+    return {
+      price: parsed.price != null && parsed.price !== "" ? Number(parsed.price) : null,
+      currency: parsed.currency || fallbackCurrency || "CNY",
+      sourceType: "dom"
+    };
   }
 
   function pickPriceTextFromSources(sources) {
@@ -1005,6 +1176,79 @@
     if (/market|original|origin|old|retail|划线/.test(text)) score -= 5;
     if (/count|stock|quantity|sold|salecount|volume/.test(text)) score -= 4;
     return score;
+  }
+
+  function pickSourceShipping(context) {
+    const textHit = pickShippingFromText(context && context.pageText);
+    if (textHit.value != null) return textHit;
+    const sourceHit = pickShippingFromSources(context && context.sources);
+    if (sourceHit.value != null) return sourceHit;
+    return { value: 0, currency: "CNY", text: "", free: false, sourceType: "missing" };
+  }
+
+  function pickShippingFromText(value) {
+    const text = normalizeWhitespace(value || "");
+    const labelMatch = text.match(/运费|快递|配送|邮费|shipping|freight/i);
+    if (!labelMatch) return { value: null, currency: "CNY", text: "", free: false, sourceType: "" };
+    const start = Math.max(0, labelMatch.index - 40);
+    const sample = text.slice(start, labelMatch.index + 120);
+    if (/包邮|免邮|免运费|卖家承担运费|free shipping/i.test(sample)) {
+      return { value: 0, currency: "CNY", text: "包邮", free: true, sourceType: "text" };
+    }
+    const amount = parseMoneyNearLabel(sample, /运费|快递|配送|邮费|shipping|freight/i);
+    if (amount != null) {
+      return {
+        value: roundMoney(amount),
+        currency: "CNY",
+        text: sample,
+        free: amount === 0,
+        sourceType: "text"
+      };
+    }
+    return { value: null, currency: "CNY", text: sample, free: false, sourceType: "" };
+  }
+
+  function pickShippingFromSources(sources) {
+    const candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const keyText = path.join(".").toLowerCase();
+        if (!/(freight|shipping|postage|delivery|logistics|express|运费|邮费|快递|配送)/i.test(keyText)) return;
+        if (!/(fee|price|amount|cost|money|fare|运费|邮费|价|费)/i.test(keyText)) return;
+        const price = parseMoneyNumber(value);
+        if (price == null || price < 0) return;
+        candidates.push({ price, text: String(value), score: /freight|shipping|postage|运费|邮费/i.test(keyText) ? 2 : 1 });
+      });
+    });
+    candidates.sort((a, b) => b.score - a.score || a.price - b.price);
+    if (!candidates.length) return { value: null, currency: "CNY", text: "", free: false, sourceType: "" };
+    return {
+      value: roundMoney(candidates[0].price),
+      currency: "CNY",
+      text: candidates[0].text,
+      free: candidates[0].price === 0,
+      sourceType: "json"
+    };
+  }
+
+  function parseMoneyNearLabel(text, labelRegex) {
+    const normalized = normalizeWhitespace(text || "");
+    const index = normalized.search(labelRegex);
+    const sample = index >= 0 ? normalized.slice(index, index + 80) : normalized;
+    const direct = sample.match(/(?:¥|￥|RMB|CNY)?\s*\d[\d.,]*(?:\s*(?:元|¥|￥|RMB|CNY))?/i);
+    if (!direct) return null;
+    return parseMoneyNumber(direct[0]);
+  }
+
+  function parseMoneyNumber(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return roundMoney(value);
+    const parsed = parsePriceWithCurrencySafe(String(value == null ? "" : value), "CNY");
+    const number = Number(parsed.price);
+    return Number.isFinite(number) ? roundMoney(number) : null;
+  }
+
+  function roundMoney(value) {
+    return Math.round(Number(value) * 100) / 100;
   }
 
   function normalizePriceDisplay(value) {

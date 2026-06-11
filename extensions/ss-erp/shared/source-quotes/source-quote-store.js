@@ -121,6 +121,9 @@
   }
 
   function inferSourceSku(product) {
+    var selected = product && product.selectedSku && typeof product.selectedSku === 'object' ? product.selectedSku : null;
+    var selectedSku = toText(selected && (selected.skuId || selected.sku || selected.id || selected.name || selected.specText)).trim();
+    if (selectedSku) return selectedSku;
     var direct = toText(product && (product.sourceSku || product.sku || product.skuId || product.selectedSkuId)).trim();
     if (direct) return direct;
     var skuItems = product && Array.isArray(product.skuItems) ? product.skuItems : [];
@@ -129,6 +132,10 @@
   }
 
   function inferSkuAttributes(product) {
+    var selected = product && product.selectedSku && typeof product.selectedSku === 'object' ? product.selectedSku : null;
+    if (selected && selected.attrs && typeof selected.attrs === 'object' && !Array.isArray(selected.attrs)) return Object.assign({}, selected.attrs);
+    var selectedText = toText(selected && (selected.name || selected.specText || selected.spec)).trim();
+    if (selectedText) return { spec: selectedText };
     var attrs = product && (product.selectedSkuAttributes || product.skuAttributes);
     if (attrs && typeof attrs === 'object' && !Array.isArray(attrs)) return Object.assign({}, attrs);
     var skuItems = product && Array.isArray(product.skuItems) ? product.skuItems : [];
@@ -139,6 +146,8 @@
   }
 
   function inferPriceSource(product) {
+    var selected = product && product.selectedSku && typeof product.selectedSku === 'object' ? product.selectedSku : null;
+    if (selected && selected.price != null) return selected.price;
     var skuItems = product && Array.isArray(product.skuItems) ? product.skuItems : [];
     var skuPrice = skuItems.length ? skuItems[0].price : null;
     if (product && product.price && typeof product.price === 'object' && product.price.value != null) return product.price.value;
@@ -152,6 +161,42 @@
     );
   }
 
+  function normalizeShippingFee(product, existing) {
+    product = product && typeof product === 'object' ? product : {};
+    existing = existing && typeof existing === 'object' ? existing : {};
+    var objectValue = product.shippingFee && typeof product.shippingFee === 'object' ? product.shippingFee : {};
+    var source = objectValue.value != null
+      ? objectValue.value
+      : (
+        product.shippingCny
+        || product.freightCny
+        || product.freightFee
+        || product.shippingFee
+        || product.shippingText
+        || product.freightText
+      );
+    var hasExplicitZero = source === 0 || source === '0' || source === '¥0' || source === '￥0';
+    var value = parsePrice(source);
+    if (!value && !hasExplicitZero && existing.shippingFee && existing.shippingFee.value) value = parsePrice(existing.shippingFee.value);
+    var currency = normalizeCurrency(product.shippingCurrency || objectValue.currency || product.currency || 'CNY', 'CNY');
+    var text = toText(product.shippingText || product.freightText || objectValue.text || (value ? value + ' ' + currency : '')).trim();
+    return {
+      value: hasExplicitZero ? 0 : value,
+      currency: currency,
+      text: text,
+      free: Boolean(product.shippingFree || objectValue.free || hasExplicitZero || value === 0)
+    };
+  }
+
+  function inferTotalCostCny(product, priceValue, shippingValue) {
+    product = product && typeof product === 'object' ? product : {};
+    var explicit = product.totalCostCny || product.purchaseCostCny || product.landedCostCny;
+    if (explicit != null && explicit !== '') return parsePrice(explicit);
+    var price = parsePrice(priceValue);
+    var shipping = parsePrice(shippingValue);
+    return Math.round((price + shipping) * 100) / 100;
+  }
+
   function normalizeSourceProduct(product, existing) {
     product = product && typeof product === 'object' ? product : {};
     existing = existing && typeof existing === 'object' ? existing : {};
@@ -163,6 +208,8 @@
     var priceObject = product.price && typeof product.price === 'object' ? product.price : {};
     var currency = normalizeCurrency(product.currency || product.priceCurrency || priceObject.currency, 'CNY');
     var priceText = toText(product.priceText || priceObject.text).trim() || (priceValue ? priceValue + ' ' + currency : '');
+    var shippingFee = normalizeShippingFee(product, existing);
+    var totalCostCny = inferTotalCostCny(product, priceValue, shippingFee.value);
     return {
       platform: platform,
       productId: productId,
@@ -176,6 +223,9 @@
         currency: currency,
         text: priceText
       },
+      shippingFee: shippingFee,
+      totalCostCny: totalCostCny,
+      priceSourceType: toText(product.priceSourceType || existing.priceSourceType).trim(),
       images: uniqueUrls(product.images || product.imageUrls || (product.image ? [product.image] : existing.images)),
       skuItems: Array.isArray(product.skuItems) ? product.skuItems.slice(0, 100) : (Array.isArray(existing.skuItems) ? existing.skuItems : []),
       grossWeightGrams: Number(product.grossWeightGrams || product.weightG || existing.grossWeightGrams) || null,
@@ -200,7 +250,7 @@
     var ozon = normalizeOzonProduct(payload.ozon || payload.ozonProduct || (existing && existing.ozon) || {}, { now: now });
     var source = normalizeSourceProduct(payload.sourceProduct || payload.source || payload.product || payload, existing && existing.source);
     var key = payload.key || buildQuoteKey(ozon, source);
-    var costCny = parsePrice(payload.costCny || source.price.value);
+    var costCny = parsePrice(payload.costCny || source.totalCostCny || source.price.value);
     return {
       key: key,
       status: toText(payload.status || 'selected_for_costing').trim() || 'selected_for_costing',
@@ -262,6 +312,8 @@
       'sourceUrl',
       'sourceTitle',
       'costCny',
+      'sourceUnitPrice',
+      'sourceShippingCny',
       'sourcePriceText',
       'status',
       'createdAt',
@@ -281,6 +333,8 @@
         source.url,
         source.title,
         quote && quote.costCny,
+        source.price && source.price.value,
+        source.shippingFee && source.shippingFee.value,
         source.price && source.price.text,
         quote && quote.status,
         quote && quote.createdAt,
