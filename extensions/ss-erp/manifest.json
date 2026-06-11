@@ -131,6 +131,25 @@
     },
     {
       "matches": [
+        "https://pifa.pinduoduo.com/*"
+      ],
+      "js": [
+        "content/source-search-pdd.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.taobao.com/*",
+        "https://s.taobao.com/*"
+      ],
+      "js": [
+        "content/source-search-taobao.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://www.ozon.ru/*",
         "https://www.ozon.kz/*",
         "https://www.ozon.by/*"
@@ -191,6 +210,8 @@
         "content/capture-page-hook.js",
         "content/page-bridge.js",
         "content/source-search-1688-page.js",
+        "content/source-search-pdd-page.js",
+        "content/source-search-taobao-page.js",
         "shared/capture-bridge/captured-har-store.js",
         "shared/seller-products/seller-products-export.js",
         "shared/official-freight/official-freight-export.js",

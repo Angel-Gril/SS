@@ -39,6 +39,7 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://*.1688.com/*',
   'https://detail.1688.com/*',
   'https://trade.1688.com/*',
+  'https://pifa.pinduoduo.com/*',
   'https://mobile.pinduoduo.com/*',
   'https://*.pinduoduo.com/*',
   'https://*.yangkeduo.com/*',
@@ -46,6 +47,8 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://*.aliexpress.com/*',
   'https://www.wildberries.ru/*',
   'https://item.jd.com/*',
+  'https://www.taobao.com/*',
+  'https://s.taobao.com/*',
   'https://item.taobao.com/*',
   'https://detail.tmall.com/*',
 ];
@@ -64,6 +67,9 @@ const CLOUD_WEB_RESOURCE_MATCHES = [
   'https://*.ozon.by/*',
   'https://s.1688.com/*',
   'https://*.1688.com/*',
+  'https://pifa.pinduoduo.com/*',
+  'https://www.taobao.com/*',
+  'https://s.taobao.com/*',
 ];
 
 function unique(values) {

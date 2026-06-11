@@ -23,6 +23,7 @@ const SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY = 'ss-erp:source-candidate-context';
 const SS_ERP_SOURCE_QUOTES_KEY = 'ss-erp:source-quotes';
 const SS_ERP_SOURCE_QUOTE_PENDING_KEY = 'ss-erp:source-quote-pending';
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
+let imageSearchJobsQueue = Promise.resolve();
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
@@ -755,6 +756,12 @@ async function notifyErpCollectCompleted(collected, errorCount) {
   } catch (_error) {}
 }
 
+function enqueueImageSearchJob(task) {
+  const run = imageSearchJobsQueue.then(() => task());
+  imageSearchJobsQueue = run.catch(() => {});
+  return run;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
@@ -1317,7 +1324,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ss-erp:image-search-create') {
-    chrome.storage.local.get([SS_ERP_IMAGE_SEARCH_JOBS_KEY]).then((result) => {
+    enqueueImageSearchJob(() => chrome.storage.local.get([SS_ERP_IMAGE_SEARCH_JOBS_KEY]).then((result) => {
       const helper = globalThis.SS_ERP_IMAGE_SEARCH_JOB;
       if (!helper || typeof helper.createImageSearchJob !== 'function') {
         throw new Error('image search job helper 未加载');
@@ -1337,7 +1344,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           platform: payload.platform || '1688',
         });
       });
-    }).catch((error) => {
+    })).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
     return true;

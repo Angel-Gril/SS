@@ -6,6 +6,8 @@ const api = helper.default || helper.SS_ERP_IMAGE_SEARCH_JOB || globalThis.SS_ER
 assert.ok(api, 'image search job helper should be exported');
 assert.equal(typeof api.createImageSearchJob, 'function', 'createImageSearchJob should be exported');
 assert.equal(typeof api.build1688SearchUrl, 'function', 'build1688SearchUrl should be exported');
+assert.equal(typeof api.buildPddSearchUrl, 'function', 'buildPddSearchUrl should be exported');
+assert.equal(typeof api.buildTaobaoSearchUrl, 'function', 'buildTaobaoSearchUrl should be exported');
 
 const now = Date.parse('2026-06-11T08:00:00.000Z');
 const existingJobs = {
@@ -45,6 +47,26 @@ assert.equal(result.jobs['img-test-token'].platform, '1688');
 assert.equal(result.jobs['img-test-token'].imageBase64, 'base64-image');
 assert.equal(result.jobs['img-test-token'].ozon.productId, '1628675309');
 assert.equal(result.jobs['img-test-token'].createdAt, now);
+
+const pddResult = api.createImageSearchJob({}, {
+  platform: 'pdd',
+  imageBase64: 'base64-image',
+}, {
+  now,
+  token: 'img-pdd-token',
+});
+assert.equal(pddResult.url, 'https://pifa.pinduoduo.com/search#ssErpImageSearch=pdd&ssErpImageSearchToken=img-pdd-token');
+assert.equal(pddResult.jobs['img-pdd-token'].platform, 'pdd');
+
+const taobaoResult = api.createImageSearchJob({}, {
+  platform: 'taobao',
+  imageBase64: 'base64-image',
+}, {
+  now,
+  token: 'img-taobao-token',
+});
+assert.equal(taobaoResult.url, 'https://www.taobao.com/#ssErpImageSearch=taobao&ssErpImageSearchToken=img-taobao-token');
+assert.equal(taobaoResult.jobs['img-taobao-token'].platform, 'taobao');
 
 assert.throws(
   () => api.createImageSearchJob({}, { platform: '1688', imageBase64: '' }, { token: 'bad' }),

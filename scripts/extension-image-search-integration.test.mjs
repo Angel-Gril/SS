@@ -21,6 +21,11 @@ assert.match(
   /ss-erp:image-search-create/,
   'service worker should expose an image search create message',
 );
+assert.match(
+  serviceWorker,
+  /enqueueImageSearchJob/,
+  'service worker should serialize concurrent image search job creation',
+);
 
 const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];
 const searchBridge = contentScripts.find((entry) => {
@@ -34,10 +39,39 @@ assert.ok(
   '1688 image search bridge should run on 1688 search pages',
 );
 
+const pddBridge = contentScripts.find((entry) => {
+  const scripts = Array.isArray(entry.js) ? entry.js : [];
+  return scripts.includes('content/source-search-pdd.js');
+});
+assert.ok(pddBridge, 'manifest should register the PDD image search content bridge');
+assert.ok(
+  pddBridge.matches.includes('https://pifa.pinduoduo.com/*'),
+  'PDD image search bridge should run on pifa.pinduoduo.com',
+);
+
+const taobaoBridge = contentScripts.find((entry) => {
+  const scripts = Array.isArray(entry.js) ? entry.js : [];
+  return scripts.includes('content/source-search-taobao.js');
+});
+assert.ok(taobaoBridge, 'manifest should register the Taobao image search content bridge');
+assert.ok(
+  taobaoBridge.matches.includes('https://www.taobao.com/*')
+    && taobaoBridge.matches.includes('https://s.taobao.com/*'),
+  'Taobao image search bridge should run on Taobao search pages',
+);
+
 const resources = (manifest.web_accessible_resources || []).flatMap((entry) => entry.resources || []);
 assert.ok(
   resources.includes('content/source-search-1688-page.js'),
   '1688 page bridge should be web accessible for MAIN-world injection',
+);
+assert.ok(
+  resources.includes('content/source-search-pdd-page.js'),
+  'PDD page bridge should be web accessible for MAIN-world injection',
+);
+assert.ok(
+  resources.includes('content/source-search-taobao-page.js'),
+  'Taobao page bridge should be web accessible for MAIN-world injection',
 );
 
 assert.match(
@@ -52,8 +86,20 @@ assert.equal(
 );
 assert.match(
   popupJs,
-  /search1688ByImage/,
-  'popup should route the secondary action to 1688 image search on Ozon product pages',
+  /searchSourcesByImage/,
+  'popup should route the secondary action to multi-platform image search on Ozon product pages',
+);
+for (const platform of ['1688', 'pdd', 'taobao']) {
+  assert.match(
+    popupJs,
+    new RegExp("platform:\\s*['\"]" + platform + "['\"]"),
+    `popup should create an image search job for ${platform}`,
+  );
+}
+assert.match(
+  popupJs,
+  /Promise\.all/,
+  'popup should open multiple source image-search tabs from one action',
 );
 assert.doesNotMatch(
   popupHtml,

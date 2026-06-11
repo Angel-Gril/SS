@@ -206,7 +206,7 @@
           buttonText: '采集到 ERP',
           disabled: !productId,
           secondaryAction: {
-            type: 'search1688ByImage',
+            type: 'searchSourcesByImage',
             tab: tab,
             productId: productId,
             buttonText: '核价找货源',
@@ -526,7 +526,7 @@
     return base64;
   }
 
-  async function search1688ByImage() {
+  async function searchSourcesByImage() {
     if (!primaryActionState.productId) {
       setActionStatus('未识别 Ozon SKU', 'fail');
       return;
@@ -551,26 +551,39 @@
         quality: 0.86
       });
       setSecondaryButtonBusy('打开中...');
-      var jobResponse = await sendRuntimeMessageAsync({
-        type: 'ss-erp:image-search-create',
-        payload: {
-          platform: '1688',
-          imageUrl: imageUrl,
-          imageBase64: imageData.imageBase64,
-          imagePreviewDataUrl: imageData.imagePreviewDataUrl,
-          imageSize: imageData.imageSize,
-          ozon: {
-            productId: product.productId || primaryActionState.productId,
-            title: product.title || primaryActionState.tab && primaryActionState.tab.title || '',
-            url: product.sourceUrl || primaryActionState.tab && primaryActionState.tab.url || ''
+      var ozon = {
+        productId: product.productId || primaryActionState.productId,
+        title: product.title || primaryActionState.tab && primaryActionState.tab.title || '',
+        url: product.sourceUrl || primaryActionState.tab && primaryActionState.tab.url || ''
+      };
+      var platformPayloads = [
+        { platform: '1688' },
+        { platform: 'pdd' },
+        { platform: 'taobao' }
+      ];
+      var results = await Promise.all(platformPayloads.map(function (item) {
+        return sendRuntimeMessageAsync({
+          type: 'ss-erp:image-search-create',
+          payload: {
+            platform: item.platform,
+            imageUrl: imageUrl,
+            imageBase64: imageData.imageBase64,
+            imagePreviewDataUrl: imageData.imagePreviewDataUrl,
+            imageSize: imageData.imageSize,
+            ozon: ozon
           }
-        }
+        });
+      }));
+      var failed = results.find(function (jobResponse) {
+        return !jobResponse || !jobResponse.ok || !jobResponse.url;
       });
-      if (!jobResponse || !jobResponse.ok || !jobResponse.url) {
-        throw new Error((jobResponse && jobResponse.error) || '创建搜图任务失败');
+      if (failed) {
+        throw new Error((failed && failed.error) || '创建搜图任务失败');
       }
-      chrome.tabs.create({ url: jobResponse.url });
-      setActionStatus('已打开 1688 找同款', 'ok');
+      results.forEach(function (jobResponse) {
+        chrome.tabs.create({ url: jobResponse.url });
+      });
+      setActionStatus('已打开 1688 / PDD / 淘宝找货源', 'ok');
     } catch (error) {
       setActionStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
@@ -599,8 +612,8 @@
   }
 
   function runSecondaryAction() {
-    if (secondaryActionState.type === 'search1688ByImage') {
-      search1688ByImage();
+    if (secondaryActionState.type === 'searchSourcesByImage') {
+      searchSourcesByImage();
       return;
     }
     if (secondaryActionState.type === 'collectSourcePage') {

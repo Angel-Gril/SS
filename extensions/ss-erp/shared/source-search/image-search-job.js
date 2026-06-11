@@ -60,9 +60,29 @@
     return url.toString();
   }
 
+  function buildPddSearchUrl(token) {
+    var url = new URL('https://pifa.pinduoduo.com/search');
+    url.hash = new URLSearchParams({
+      ssErpImageSearch: 'pdd',
+      ssErpImageSearchToken: token,
+    }).toString();
+    return url.toString();
+  }
+
+  function buildTaobaoSearchUrl(token) {
+    var url = new URL('https://www.taobao.com/');
+    url.hash = new URLSearchParams({
+      ssErpImageSearch: 'taobao',
+      ssErpImageSearchToken: token,
+    }).toString();
+    return url.toString();
+  }
+
   function buildSearchUrl(platform, token) {
     var normalized = normalizePlatform(platform);
     if (normalized === '1688') return build1688SearchUrl(token);
+    if (normalized === 'pdd') return buildPddSearchUrl(token);
+    if (normalized === 'taobao') return buildTaobaoSearchUrl(token);
     throw new Error('暂不支持该搜图平台');
   }
 
@@ -96,6 +116,8 @@
   return {
     createImageSearchJob: createImageSearchJob,
     build1688SearchUrl: build1688SearchUrl,
+    buildPddSearchUrl: buildPddSearchUrl,
+    buildTaobaoSearchUrl: buildTaobaoSearchUrl,
     pruneImageSearchJobs: pruneImageSearchJobs,
   };
 });
