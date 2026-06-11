@@ -4,6 +4,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { calculateBatchPrice } from '../services/product-pricing.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -13,7 +14,7 @@ const updatePriceSchema = z.object({
 
 const updateStockSchema = z.object({
   stock: z.number().int().min(0),
-  warehouseId: z.number().int().optional(),
+  warehouseId: z.number().int().positive().optional(),
 });
 
 const batchPriceSchema = z.object({
@@ -21,15 +22,21 @@ const batchPriceSchema = z.object({
     productId: z.string(),
     price: z.string().min(1),
     oldPrice: z.string().optional(),
-  })).min(1).max(100),
-});
+  })).min(1).max(100).optional(),
+  productIds: z.array(z.string()).min(1).max(100).optional(),
+  mode: z.enum(['set', 'multiply', 'discount', 'increase']).optional(),
+  value: z.coerce.number().optional(),
+}).refine((data) => {
+  if (data.items?.length) return true;
+  return !!data.productIds?.length && !!data.mode && data.value !== undefined;
+}, '请提供价格数据');
 
 const batchStockSchema = z.object({
   items: z.array(z.object({
     productId: z.string(),
     stock: z.number().int().min(0),
   })).min(1).max(100),
-  warehouseId: z.number().int(),
+  warehouseId: z.number().int().positive('请选择有效仓库'),
 });
 
 const archiveSchema = z.object({
@@ -245,8 +252,9 @@ export async function productRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
+    const requestedIds = parsed.data.items?.map((i) => i.productId) ?? parsed.data.productIds ?? [];
     const products = await prisma.product.findMany({
-      where: { id: { in: parsed.data.items.map((i) => i.productId) } },
+      where: { id: { in: requestedIds } },
       include: { shop: { select: { id: true, userId: true, platform: true, clientId: true, apiKeyEncrypted: true } } },
     });
 
@@ -270,25 +278,44 @@ export async function productRoutes(app: FastifyInstance) {
         apiKey: decrypt(shop.apiKeyEncrypted),
       });
 
-      const priceItems = group.map((p) => {
-        const item = parsed.data.items.find((i) => i.productId === p.id)!;
+      const prepared = group.map((p) => {
+        const item = parsed.data.items?.find((i) => i.productId === p.id);
+        const price = item?.price ?? calculateBatchPrice(p.price?.toString() ?? null, {
+          mode: parsed.data.mode || 'set',
+          value: parsed.data.value ?? 0,
+        });
+        if (!price) return null;
         return {
-          product_id: Number(p.platformProductId),
-          price: item.price,
-          old_price: item.oldPrice || item.price,
+          product: p,
+          price,
+          oldPrice: item?.oldPrice || price,
+        };
+      }).filter((item): item is NonNullable<typeof item> => item !== null);
+
+      if (!prepared.length) continue;
+
+      const priceItems = prepared.map(({ product, price, oldPrice }) => {
+        return {
+          product_id: Number(product.platformProductId),
+          price,
+          old_price: oldPrice,
+          currency_code: product.currency || 'CNY',
         };
       });
 
       await client.updatePrices(priceItems);
 
-      for (const p of group) {
-        const item = parsed.data.items.find((i) => i.productId === p.id)!;
+      for (const { product, price, oldPrice } of prepared) {
         await prisma.product.update({
-          where: { id: p.id },
-          data: { price: parseFloat(item.price), oldPrice: item.oldPrice ? parseFloat(item.oldPrice) : null },
+          where: { id: product.id },
+          data: { price: parseFloat(price), oldPrice: oldPrice ? parseFloat(oldPrice) : null },
         });
         updated++;
       }
+    }
+
+    if (!updated) {
+      return reply.send({ code: 0, msg: '没有可计算新价格的商品，请确认选中商品已有当前价格' });
     }
 
     return reply.send({ code: 1, msg: `成功更新 ${updated} 件商品价格` });
@@ -336,7 +363,21 @@ export async function productRoutes(app: FastifyInstance) {
         };
       });
 
-      await client.updateStock(stockItems);
+      try {
+        const result = await client.updateStock(stockItems);
+        const errors = (result as any)?.result?.filter((r: any) => r.errors?.length);
+        if (errors?.length) {
+          return reply.send({ code: 0, msg: `OZON 拒绝更新库存: ${JSON.stringify(errors[0].errors).slice(0, 300)}` });
+        }
+      } catch (e: any) {
+        const errMsg = e?.message ? String(e.message) : '未知错误';
+        const hint = errMsg.includes('warehouse') || errMsg.includes('Warehouse')
+          ? '仓库配置异常，请在仓库管理中重新同步仓库'
+          : errMsg.includes('401') || errMsg.includes('403')
+          ? 'API 密钥无效或已过期'
+          : errMsg;
+        return reply.send({ code: 0, msg: `OZON 库存同步失败: ${hint}` });
+      }
 
       for (const p of group) {
         const item = parsed.data.items.find((i) => i.productId === p.id)!;

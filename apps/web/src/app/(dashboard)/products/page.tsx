@@ -36,6 +36,10 @@ interface Product {
   images: string[] | null;
   status: string | null;
   visibility: string | null;
+  ozonStatusName?: string | null;
+  ozonStatusDescription?: string | null;
+  ozonModerateStatus?: string | null;
+  warehouseStock?: number | null;
   syncStatus: string | null;
   categoryId: string | null;
   commissionRate: string | null;
@@ -52,6 +56,30 @@ interface Shop {
 interface OzonWarehouse {
   warehouse_id: number;
   name: string;
+}
+
+type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
+
+const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: string; placeholder: string }[] = [
+  { value: 'set', label: '统一价', inputLabel: '新价格 (RUB)', placeholder: '输入统一价格' },
+  { value: 'multiply', label: '倍率', inputLabel: '价格倍率', placeholder: '例如 2 表示翻倍' },
+  { value: 'discount', label: '折扣', inputLabel: '折扣比例 %', placeholder: '例如 30 表示降价30%' },
+  { value: 'increase', label: '加价%', inputLabel: '加价比例 %', placeholder: '例如 20 表示涨价20%' },
+];
+
+function calculateProductBatchPreview(price: unknown, mode: BatchPriceMode, rawValue: string): number | null {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (mode === 'set') return Math.round(value * 100) / 100;
+  const base = Number(price);
+  if (!Number.isFinite(base) || base <= 0) return null;
+  if (mode === 'multiply') return Math.round(base * value * 100) / 100;
+  if (mode === 'discount') return value >= 100 ? null : Math.round(base * (1 - value / 100) * 100) / 100;
+  return Math.round(base * (1 + value / 100) * 100) / 100;
+}
+
+function formatRubPrice(value: number | null): string {
+  return value == null ? '-' : `${value.toFixed(2)} RUB`;
 }
 
 // PLACEHOLDER_INNER_COMPONENT
@@ -109,6 +137,7 @@ function ProductsPageInner() {
       limit: String(limit),
     });
     if (search) params.set('search', search);
+    if (selectedWarehouseId) params.set('warehouseId', String(selectedWarehouseId));
 
     const res = await api.get<{ total: number; rows: Product[] }>(
       `/api/shops/${shopId}/products?${params}`,
@@ -118,7 +147,7 @@ function ProductsPageInner() {
       setTotal(res.data.total);
     }
     setLoading(false);
-  }, [shopId, page, search]);
+  }, [shopId, page, search, selectedWarehouseId]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -229,10 +258,10 @@ function ProductsPageInner() {
             {warehouses.length > 1 && (
               <select
                 value={selectedWarehouseId || ''}
-                onChange={(e) => setSelectedWarehouseId(e.target.value ? Number(e.target.value) : null)}
+                onChange={(e) => { setSelectedWarehouseId(e.target.value ? Number(e.target.value) : null); setPage(0); }}
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
-                <option value="">默认仓库</option>
+                <option value="">全部仓库库存</option>
                 {warehouses.map((w) => (
                   <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
                 ))}
@@ -432,14 +461,22 @@ function ProductsPageInner() {
                           className="group cursor-pointer inline-flex items-center gap-1"
                           onClick={() => { setEditingStock(p.id); setStockValue(String(p.stock)); }}
                         >
-                          <span className={`tabular-nums font-medium ${p.stock <= 0 ? 'text-destructive' : ''}`}>
-                            {p.stock}
+                          <span className={`tabular-nums font-medium ${(p.warehouseStock ?? p.stock) <= 0 ? 'text-destructive' : ''}`}>
+                            {p.warehouseStock ?? p.stock}
                           </span>
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
                         </div>
                       )}
                     </TableCell>
-                    <TableCell><StatusBadge status={p.status} visibility={p.visibility} /></TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        status={p.status}
+                        visibility={p.visibility}
+                        ozonStatusName={p.ozonStatusName}
+                        ozonStatusDescription={p.ozonStatusDescription}
+                        ozonModerateStatus={p.ozonModerateStatus}
+                      />
+                    </TableCell>
                     <TableCell>
                       <button type="button" onClick={() => setDetailProductId(p.id)} className="text-xs text-primary hover:underline">编辑</button>
                     </TableCell>
@@ -465,6 +502,7 @@ function ProductsPageInner() {
         open={batchPriceOpen}
         onOpenChange={setBatchPriceOpen}
         productIds={Array.from(selected)}
+        products={products.filter((product) => selected.has(product.id))}
         onSuccess={() => { setSelected(new Set()); loadProducts(); }}
       />
       <BatchStockDialog
@@ -514,39 +552,82 @@ function ProductImage({ src }: { src?: string }) {
   );
 }
 
-function StatusBadge({ status, visibility }: { status: string | null; visibility: string | null }) {
-  if (visibility === 'archived') return <Badge variant="secondary">已下架</Badge>;
-  if (status === 'price_sent') return <Badge variant="success">在售</Badge>;
-  if (status === 'processed') return <Badge variant="success">已处理</Badge>;
-  if (status === 'moderating') return <Badge variant="warning">审核中</Badge>;
-  if (status === 'failed_moderation') return <Badge variant="destructive">审核失败</Badge>;
-  return <Badge variant="secondary">{status || '-'}</Badge>;
+function StatusBadge({
+  status,
+  visibility,
+  ozonStatusName,
+  ozonStatusDescription,
+  ozonModerateStatus,
+}: {
+  status: string | null;
+  visibility: string | null;
+  ozonStatusName?: string | null;
+  ozonStatusDescription?: string | null;
+  ozonModerateStatus?: string | null;
+}) {
+  const visibilityKey = String(visibility || '').toLowerCase();
+  if (visibilityKey === 'archived') return <Badge variant="secondary">已下架</Badge>;
+  const label = ozonStatusName || ozonStatusDescription || status || '-';
+  const key = `${status || ''} ${ozonStatusName || ''} ${ozonStatusDescription || ''} ${ozonModerateStatus || ''}`.toLowerCase();
+  if (key.includes('failed') || key.includes('reject') || key.includes('ошиб') || key.includes('отклон')) {
+    return <Badge variant="destructive" title={ozonStatusDescription || undefined}>{label}</Badge>;
+  }
+  if (key.includes('moder') || key.includes('модерац') || key.includes('провер')) {
+    return <Badge variant="warning" title={ozonStatusDescription || undefined}>{label}</Badge>;
+  }
+  if (key.includes('price_sent') || key.includes('processed') || key.includes('sale') || key.includes('прода') || key.includes('готов')) {
+    return <Badge variant="success" title={ozonStatusDescription || undefined}>{label}</Badge>;
+  }
+  return <Badge variant="secondary" title={ozonStatusDescription || undefined}>{label}</Badge>;
 }
 
-function BatchPriceDialog({ open, onOpenChange, productIds, onSuccess }: {
+function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   productIds: string[];
+  products: Product[];
   onSuccess: () => void;
 }) {
   const [value, setValue] = useState('');
+  const [mode, setMode] = useState<BatchPriceMode>('set');
   const [submitting, setSubmitting] = useState(false);
+  const activeMode = BATCH_PRICE_MODES.find((item) => item.value === mode) || BATCH_PRICE_MODES[0]!;
+  const previewRows = products.map((product) => ({
+    product,
+    current: Number(product.price),
+    next: calculateProductBatchPreview(product.price, mode, value),
+  }));
+  const hasValidInput = previewRows.some((row) => row.next != null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!value.trim()) return;
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) return;
+    if (mode === 'discount' && numericValue >= 100) {
+      toast({ title: '折扣比例必须小于 100%', variant: 'destructive' });
+      return;
+    }
     setSubmitting(true);
 
-    const items = productIds.map((id) => ({
-      productId: id,
-      price: value,
-    }));
+    const payload = mode === 'set'
+      ? {
+          items: productIds.map((id) => ({
+            productId: id,
+            price: numericValue.toFixed(2),
+          })),
+        }
+      : {
+          productIds,
+          mode,
+          value: numericValue,
+        };
 
-    const res = await api.post('/api/products/batch-price', { items });
+    const res = await api.post('/api/products/batch-price', payload);
     setSubmitting(false);
     if (res.code === 1) {
       toast({ title: res.msg });
       setValue('');
+      setMode('set');
       onOpenChange(false);
       onSuccess();
     } else {
@@ -559,24 +640,59 @@ function BatchPriceDialog({ open, onOpenChange, productIds, onSuccess }: {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>批量修改价格</DialogTitle>
-          <DialogDescription>将为选中的 {productIds.length} 件商品设置新价格</DialogDescription>
+          <DialogDescription>将为选中的 {productIds.length} 件商品计算并同步新价格</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-4 gap-2">
+            {BATCH_PRICE_MODES.map((item) => (
+              <Button
+                key={item.value}
+                type="button"
+                size="sm"
+                variant={mode === item.value ? 'default' : 'outline'}
+                onClick={() => setMode(item.value)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
           <div className="space-y-2">
-            <Label>新价格 (RUB)</Label>
+            <Label>{activeMode.inputLabel}</Label>
             <Input
               type="number"
               step="0.01"
               min="0"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="输入统一价格"
+              placeholder={activeMode.placeholder}
               required
             />
           </div>
+          {value.trim() && (
+            <div className="rounded-md border bg-muted/30 p-2">
+              <div className="mb-1 text-xs font-medium">价格变更预览</div>
+              <div className="max-h-44 space-y-1 overflow-y-auto text-xs">
+                {previewRows.slice(0, 10).map(({ product, current, next }) => (
+                  <div key={product.id} className="grid grid-cols-[1fr_auto] gap-3 rounded bg-background/70 px-2 py-1">
+                    <div className="min-w-0">
+                      <div className="truncate">{product.title}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground truncate">{product.offerId || product.sku || '-'}</div>
+                    </div>
+                    <div className="text-right tabular-nums">
+                      <div>{Number.isFinite(current) ? current.toFixed(2) : '-'} → {formatRubPrice(next)}</div>
+                      {next == null && <div className="text-[10px] text-destructive">缺少有效当前价</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {previewRows.length > 10 && (
+                <div className="pt-1 text-[10px] text-muted-foreground">还有 {previewRows.length - 10} 件未展示</div>
+              )}
+            </div>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="submit" disabled={submitting}>
+            <Button type="submit" disabled={submitting || !hasValidInput}>
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
               确认修改
             </Button>
@@ -599,16 +715,16 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (warehouses.length > 0 && !warehouseId) {
-      setWarehouseId(String(warehouses[0]!.warehouse_id));
-    }
-  }, [warehouses]);
+    if (!open) return;
+    setWarehouseId(warehouses[0] ? String(warehouses[0].warehouse_id) : '');
+  }, [open, warehouses]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const stock = parseInt(value);
     if (isNaN(stock) || stock < 0) return;
-    if (!warehouseId) {
+    const selectedWarehouse = Number(warehouseId);
+    if (!Number.isInteger(selectedWarehouse) || selectedWarehouse <= 0) {
       toast({ title: '请选择仓库', variant: 'destructive' });
       return;
     }
@@ -617,7 +733,7 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
     const items = productIds.map((id) => ({ productId: id, stock }));
     const res = await api.post('/api/products/batch-stock', {
       items,
-      warehouseId: Number(warehouseId),
+      warehouseId: selectedWarehouse,
     });
     setSubmitting(false);
     if (res.code === 1) {
@@ -629,6 +745,7 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
       toast({ title: res.msg, variant: 'destructive' });
     }
   }
+  const canSubmit = !!value.trim() && !!warehouseId && warehouses.length > 0 && !submitting;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -643,12 +760,17 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
             <select
               value={warehouseId}
               onChange={(e) => setWarehouseId(e.target.value)}
+              disabled={!warehouses.length || submitting}
               className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
             >
+              {!warehouses.length && <option value="">仓库加载中或未同步</option>}
               {warehouses.map((w) => (
                 <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
               ))}
             </select>
+            {!warehouses.length && (
+              <p className="text-xs text-muted-foreground">请先刷新仓库或等待仓库列表加载完成</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label>新库存数量</Label>
@@ -663,7 +785,7 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="submit" disabled={submitting}>
+            <Button type="submit" disabled={!canSubmit}>
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
               确认修改
             </Button>

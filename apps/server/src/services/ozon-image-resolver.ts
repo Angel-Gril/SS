@@ -6,6 +6,16 @@ function previewUrl(value: string): string {
   return value.length > 120 ? `${value.slice(0, 117)}...` : value;
 }
 
+type ImageFetch = (
+  url: string,
+  init?: { method?: string; redirect?: 'follow' | 'error' | 'manual'; signal?: AbortSignal },
+) => Promise<{
+  ok: boolean;
+  status: number;
+  url: string;
+  headers: { get(name: string): string | null };
+}>;
+
 function isPrivateHostname(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost') || host === '::1') return true;
@@ -49,6 +59,47 @@ export function normalizeOzonPublishImageUrl(raw: string): string {
   }
 
   return url.href;
+}
+
+export async function diagnoseOzonImageUrl(
+  url: string,
+  fetchImpl: ImageFetch = fetch as ImageFetch,
+): Promise<{
+  ok: boolean;
+  status?: number;
+  contentType?: string | null;
+  contentLength?: string | null;
+  finalUrl?: string;
+  error?: string;
+}> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetchImpl(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
+    return {
+      ok: res.ok && String(res.headers.get('content-type') || '').toLowerCase().startsWith('image/'),
+      status: res.status,
+      contentType: res.headers.get('content-type'),
+      contentLength: res.headers.get('content-length'),
+      finalUrl: res.url || url,
+    };
+  } catch (e: any) {
+    return {
+      ok: false,
+      error: e?.name === 'AbortError' ? 'timeout' : (e?.message ? String(e.message) : 'unknown error'),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function queueOzonImageDiagnostic(url: string, source: string) {
+  if (process.env.NODE_ENV === 'test') return;
+  void diagnoseOzonImageUrl(url).then((diag) => {
+    const msg = `[ozon-image] ${source} status=${diag.status ?? 'ERR'} contentType=${diag.contentType || '-'} contentLength=${diag.contentLength || '-'} finalUrl=${previewUrl(diag.finalUrl || url)}${diag.error ? ` error=${diag.error}` : ''}`;
+    if (diag.ok) console.log(msg);
+    else console.warn(msg);
+  });
 }
 
 function localPathFromUrl(raw: string): string | null {
@@ -107,9 +158,13 @@ export async function resolveImageUrls(
       const filename = img.split('/').pop() || 'img.jpg';
       const category = img.startsWith('/watermarked/') ? 'watermarked' : 'raw';
       const result = await backend.uploadBuffer(buf, filename, undefined, { category, ownerId });
-      resolved.push(normalizeOzonPublishImageUrl(result.url));
+      const normalized = normalizeOzonPublishImageUrl(result.url);
+      resolved.push(normalized);
+      queueOzonImageDiagnostic(normalized, category);
     } else {
-      resolved.push(normalizeOzonPublishImageUrl(img));
+      const normalized = normalizeOzonPublishImageUrl(img);
+      resolved.push(normalized);
+      queueOzonImageDiagnostic(normalized, 'source');
     }
   }
   return resolved;

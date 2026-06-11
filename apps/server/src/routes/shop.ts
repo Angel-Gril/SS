@@ -4,6 +4,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { getOzonStatusDisplay, getWarehouseStock } from '../services/product-sync-metadata.js';
 
 const createShopSchema = z.object({
   platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']),
@@ -837,7 +838,7 @@ export async function shopRoutes(app: FastifyInstance) {
   app.get('/:id/products', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const query = request.query as { offset?: string; limit?: string; search?: string };
+    const query = request.query as { offset?: string; limit?: string; search?: string; warehouseId?: string };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId } });
     if (!shop) {
@@ -847,6 +848,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const offset = Math.max(0, Number(query.offset) || 0);
     const limit = Math.min(200, Math.max(1, Number(query.limit) || 20));
     const search = query.search?.trim();
+    const warehouseId = query.warehouseId && /^\d+$/.test(query.warehouseId) ? query.warehouseId : null;
 
     const where: Record<string, unknown> = { shopId: id };
     if (search) {
@@ -857,47 +859,75 @@ export async function shopRoutes(app: FastifyInstance) {
       ];
     }
 
-    const [total, rows] = await Promise.all([
-      prisma.product.count({ where: where as any }),
-      prisma.product.findMany({
+    const productSelect = {
+      id: true,
+      platformProductId: true,
+      sku: true,
+      offerId: true,
+      title: true,
+      price: true,
+      oldPrice: true,
+      currency: true,
+      stock: true,
+      images: true,
+      status: true,
+      visibility: true,
+      syncStatus: true,
+      categoryId: true,
+      commissionRate: true,
+      minPrice: true,
+      variants: true,
+      updatedAt: true,
+    };
+
+    let total: number;
+    let rows: any[];
+    if (warehouseId) {
+      const allRows = await prisma.product.findMany({
         where: where as any,
-        skip: offset,
-        take: limit,
         orderBy: { updatedAt: 'desc' },
-        select: {
-          id: true,
-          platformProductId: true,
-          sku: true,
-          offerId: true,
-          title: true,
-          price: true,
-          oldPrice: true,
-          currency: true,
-          stock: true,
-          images: true,
-          status: true,
-          visibility: true,
-          syncStatus: true,
-          categoryId: true,
-          commissionRate: true,
-          minPrice: true,
-          updatedAt: true,
-        },
-      }),
-    ]);
+        select: productSelect,
+      });
+      const filtered = allRows.filter((row) => {
+        const stock = getWarehouseStock(row.variants, warehouseId);
+        return stock != null && stock > 0;
+      });
+      total = filtered.length;
+      rows = filtered.slice(offset, offset + limit);
+    } else {
+      [total, rows] = await Promise.all([
+        prisma.product.count({ where: where as any }),
+        prisma.product.findMany({
+          where: where as any,
+          skip: offset,
+          take: limit,
+          orderBy: { updatedAt: 'desc' },
+          select: productSelect,
+        }),
+      ]);
+    }
 
     return reply.send({
       code: 1,
       msg: 'ok',
       data: {
         total,
-        rows: rows.map((r) => ({
-          ...r,
-          price: r.price?.toString() ?? null,
-          oldPrice: r.oldPrice?.toString() ?? null,
-          commissionRate: r.commissionRate?.toString() ?? null,
-          minPrice: r.minPrice?.toString() ?? null,
-        })),
+        rows: rows.map((r) => {
+          const { variants, ...rest } = r;
+          const statusDisplay = getOzonStatusDisplay(variants, r.status);
+          const warehouseStock = warehouseId ? getWarehouseStock(variants, warehouseId) : null;
+          return {
+            ...rest,
+            price: r.price?.toString() ?? null,
+            oldPrice: r.oldPrice?.toString() ?? null,
+            commissionRate: r.commissionRate?.toString() ?? null,
+            minPrice: r.minPrice?.toString() ?? null,
+            ozonStatusName: statusDisplay.name,
+            ozonStatusDescription: statusDisplay.description,
+            ozonModerateStatus: statusDisplay.moderateStatus,
+            warehouseStock,
+          };
+        }),
       },
     });
   });

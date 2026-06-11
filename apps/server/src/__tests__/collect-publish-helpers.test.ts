@@ -4,6 +4,7 @@ import {
   containsCjkText,
   getVariantOverridePrice,
   recordOfferPublishImages,
+  removeVariantsBySkus,
   resolveBasePublishImages,
   resolvePublishName,
   resolveVariantPublishImages,
@@ -51,7 +52,7 @@ describe('collect publish helpers', () => {
     ]);
   });
 
-  it('uses item-level watermarked images for variants after watermarks are actually applied', () => {
+  it('keeps variant cover images first even after item-level watermarks are applied', () => {
     const item = {
       images: ['https://cdn.example.com/parent.jpg'],
       metadata: {
@@ -63,7 +64,40 @@ describe('collect publish helpers', () => {
 
     expect(resolveVariantPublishImages(item, {
       images: ['https://cdn.example.com/variant.jpg'],
-    }, baseImages)).toEqual(['/watermarked/item-1.jpg']);
+    }, baseImages)).toEqual([
+      'https://cdn.example.com/variant.jpg',
+      '/watermarked/item-1.jpg',
+    ]);
+  });
+
+  it('keeps the robot cleaner color variant images distinct through publish selection', () => {
+    const item = {
+      images: ['https://ir.ozone.ru/s3/multimedia-1-i/10240533378.jpg'],
+      metadata: {
+        watermarkApplied: true,
+        watermarkedImages: ['/watermarked/cmq9luvfn004h5obkwe0ogi5c_0_e81563ca.jpg'],
+      },
+    };
+    const variants = [
+      {
+        sku: '3399297127',
+        attrs: { 'Цвет': 'светло-розовый' },
+        images: ['https://ir.ozone.ru/s3/multimedia-1-i/wc140/10240533378.jpg'],
+      },
+      {
+        sku: '3440462580',
+        attrs: { 'Цвет': 'черный матовый' },
+        images: ['https://ir.ozone.ru/s3/multimedia-1-k/wc140/9357818888.jpg'],
+      },
+    ];
+    const baseImages = resolveBasePublishImages(item);
+    const sourceVariantCovers = variants.map((variant) => variant.images[0]);
+    const selectedImages = variants.map((variant) => resolveVariantPublishImages(item, variant, baseImages));
+
+    expect(new Set(sourceVariantCovers).size).toBe(2);
+    expect(selectedImages.map((images) => images[0])).toEqual(sourceVariantCovers);
+    expect(new Set(selectedImages.map((images) => images[0])).size).toBe(2);
+    expect(selectedImages.every((images) => images[1] === '/watermarked/cmq9luvfn004h5obkwe0ogi5c_0_e81563ca.jpg')).toBe(true);
   });
 
   it('records fallback upload images by offer id while keeping the first image for job previews', () => {
@@ -87,5 +121,21 @@ describe('collect publish helpers', () => {
       'offer-blue': 'https://cdn.example.com/variant-blue.jpg',
       'offer-red': 'https://cdn.example.com/variant-red.jpg',
     });
+  });
+
+  it('removes multiple collected variants by sku and reports missing skus', () => {
+    const result = removeVariantsBySkus([
+      { sku: 'blue', attrs: { Color: 'blue' } },
+      { sku: 'red', attrs: { Color: 'red' } },
+      { sku: 'green', attrs: { Color: 'green' } },
+      { attrs: { Color: 'no sku' } },
+    ], ['red', 'blue', 'missing', 'red']);
+
+    expect(result.removed).toBe(2);
+    expect(result.missingSkus).toEqual(['missing']);
+    expect(result.variants).toEqual([
+      { sku: 'green', attrs: { Color: 'green' } },
+      { attrs: { Color: 'no sku' } },
+    ]);
   });
 });

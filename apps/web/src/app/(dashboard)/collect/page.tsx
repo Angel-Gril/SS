@@ -48,6 +48,23 @@ function hasCjkText(value?: string | null) {
   return /[\u3400-\u9fff]/.test(String(value || ''));
 }
 
+function parsePositiveNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
+}
+
+function calcPublishPreviewPrice(baseCny: unknown, markupPct: unknown, markupAmount: unknown): number | null {
+  const base = parsePositiveNumber(baseCny);
+  if (base == null) return null;
+  const pct = Number(markupPct);
+  const fixed = Number(markupAmount);
+  return Math.max(1, Math.ceil(base * (1 + (Number.isFinite(pct) ? pct : 200) / 100) + (Number.isFinite(fixed) ? fixed : 0)));
+}
+
+function formatPreviewPrice(value: number | null): string {
+  return value == null ? '-' : `¥${value}`;
+}
+
 interface Shop { id: string; name: string; platform: string; }
 
 export default function CollectPage() {
@@ -98,6 +115,7 @@ export default function CollectPage() {
   const [extFetchResults, setExtFetchResults] = useState<any[] | null>(null);
   const [expandedVariantIds, setExpandedVariantIds] = useState<Set<string>>(new Set());
   const [variantPriceOverrides, setVariantPriceOverrides] = useState<Record<string, Record<string, string>>>({});
+  const [selectedVariantSkus, setSelectedVariantSkus] = useState<Record<string, string[]>>({});
   const [extFetchErrors, setExtFetchErrors] = useState<string[]>([]);
   const [showWatermarkDialog, setShowWatermarkDialog] = useState(false);
   const [watermarking, setWatermarking] = useState(false);
@@ -172,24 +190,82 @@ export default function CollectPage() {
     else toast({ title: res.msg || '删除失败', variant: 'destructive' });
   }
 
+  function getSelectedVariantSkus(itemId: string) {
+    return selectedVariantSkus[itemId] || [];
+  }
+
+  function getSelectableVariantSkus(item: CollectedItem) {
+    return (item.variants || []).map((v) => v.sku).filter((sku): sku is string => !!sku);
+  }
+
+  function clearVariantLocalState(itemId: string, skus: string[]) {
+    setSelectedVariantSkus((prev) => {
+      const next = { ...prev };
+      const remaining = (next[itemId] || []).filter((sku) => !skus.includes(sku));
+      if (remaining.length) next[itemId] = remaining;
+      else delete next[itemId];
+      return next;
+    });
+    setVariantPriceOverrides((prev) => {
+      const perItem = prev[itemId];
+      if (!perItem) return prev;
+      const next = { ...prev };
+      const updated = { ...perItem };
+      skus.forEach((sku) => delete updated[sku]);
+      if (Object.keys(updated).length) next[itemId] = updated;
+      else delete next[itemId];
+      return next;
+    });
+  }
+
+  function toggleVariantSelect(itemId: string, sku: string | undefined, checked: boolean) {
+    if (!sku) return;
+    setSelectedVariantSkus((prev) => {
+      const current = new Set(prev[itemId] || []);
+      if (checked) current.add(sku);
+      else current.delete(sku);
+      const next = { ...prev };
+      const values = Array.from(current);
+      if (values.length) next[itemId] = values;
+      else delete next[itemId];
+      return next;
+    });
+  }
+
+  function toggleAllVariants(item: CollectedItem, checked: boolean) {
+    const skus = getSelectableVariantSkus(item);
+    setSelectedVariantSkus((prev) => {
+      const next = { ...prev };
+      if (checked && skus.length) next[item.id] = skus;
+      else delete next[item.id];
+      return next;
+    });
+  }
+
   async function handleDeleteVariant(itemId: string, sku?: string) {
     if (!sku) { toast({ title: '该变体缺少 SKU，无法删除', variant: 'destructive' }); return; }
     if (!window.confirm(`确认删除变体 SKU ${sku}？`)) return;
     const res = await api.delete(`/api/collect/${itemId}/variants/${encodeURIComponent(sku)}`);
     if (res.code === 1) {
       toast({ title: '已删除变体' });
-      setVariantPriceOverrides((prev) => {
-        const next = { ...prev };
-        if (next[itemId]) {
-          const perItem = { ...next[itemId] };
-          delete perItem[sku];
-          next[itemId] = perItem;
-        }
-        return next;
-      });
+      clearVariantLocalState(itemId, [sku]);
       fetchData();
     } else {
       toast({ title: res.msg || '删除变体失败', variant: 'destructive' });
+    }
+  }
+
+  async function handleBatchDeleteVariants(item: CollectedItem) {
+    const skus = getSelectedVariantSkus(item.id);
+    if (!skus.length) { toast({ title: '请先选择要删除的变体', variant: 'destructive' }); return; }
+    if (!window.confirm(`确认删除选中的 ${skus.length} 个变体？`)) return;
+    const res = await api.post<{ removed?: number; missingSkus?: string[] }>(`/api/collect/${item.id}/variants/batch-delete`, { skus });
+    if (res.code === 1) {
+      clearVariantLocalState(item.id, skus);
+      toast({ title: res.msg || `已删除 ${skus.length} 个变体` });
+      fetchData();
+    } else {
+      toast({ title: res.msg || '批量删除变体失败', variant: 'destructive' });
     }
   }
 
@@ -550,49 +626,77 @@ export default function CollectPage() {
   }
 
   const totalPages = Math.ceil(total / limit);
+  const selectedPublishItems = items.filter((item) => selectedIds.has(item.id));
+  const publishPreviewRows = selectedPublishItems.flatMap((item) => {
+    const basePrice = parsePositiveNumber(item.purchasePrice);
+    if (item.variants?.length) {
+      return item.variants.map((variant, idx) => {
+        const variantKey = variant.sku || String(idx);
+        const manualPrice = parsePositiveNumber(variantPriceOverrides[item.id]?.[variantKey]);
+        return {
+          key: `${item.id}-${variantKey}`,
+          title: (variant.attrs && Object.keys(variant.attrs).length ? formatVariantAttrs(variant.attrs) : '') || item.title,
+          sku: variant.sku || item.sku || '',
+          basePrice,
+          finalPrice: manualPrice ? Math.ceil(manualPrice) : calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
+          manual: !!manualPrice,
+        };
+      });
+    }
+    return [{
+      key: item.id,
+      title: item.title,
+      sku: item.sku || '',
+      basePrice,
+      finalPrice: calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
+      manual: false,
+    }];
+  });
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">SKU采集跟卖</h1>
-          <p className="text-muted-foreground text-sm mt-1">扩展采集 → 改价 → 一键上架到 OZON</p>
+      <div className="sticky top-0 z-20 -mx-2 border-b bg-background/95 px-2 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">SKU采集跟卖</h1>
+            <p className="text-muted-foreground text-sm mt-1">扩展采集 → 改价 → 一键上架到 OZON</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="default" size="sm" onClick={() => setShowExtFetch(true)}>
+              <Download className="h-4 w-4 mr-1" />扩展采集
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowOzonFetch(true)}>
+              <Download className="h-4 w-4 mr-1" />OZON采集(自家)
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="default" size="sm" onClick={() => setShowExtFetch(true)}>
-            <Download className="h-4 w-4 mr-1" />扩展采集
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowOzonFetch(true)}>
-            <Download className="h-4 w-4 mr-1" />OZON采集(自家)
-          </Button>
-        </div>
-      </div>
 
-      {selectedIds.size > 0 && (
-        <Card className="border-orange-200 bg-orange-50/50">
-          <CardContent className="pt-3 pb-3">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-sm font-medium">已选 {selectedIds.size} 件</span>
-              <Input placeholder="加价%" value={markupPct} onChange={(e) => setMarkupPct(e.target.value)} className="h-8 w-24" type="number" />
-              <Button size="sm" variant="outline" onClick={handleBatchMarkup}>批量加价</Button>
-              <Button size="sm" variant="outline" onClick={() => setShowEnrichDialog(true)}>
-                <Sparkles className="h-4 w-4 mr-1" />从OZON补全信息
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setShowWatermarkDialog(true)}>
-                <ImageIcon className="h-4 w-4 mr-1" />打水印
-              </Button>
-              <div className="flex items-center gap-2 ml-auto">
-                <Button size="sm" variant="outline" onClick={handleGoToListing}>
-                  <ArrowRight className="h-4 w-4 mr-1" />SKU 采集改款
+        {selectedIds.size > 0 && (
+          <Card className="mt-3 border-orange-200 bg-orange-50/80 shadow-sm">
+            <CardContent className="pt-3 pb-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-sm font-medium">已选 {selectedIds.size} 件</span>
+                <Input placeholder="加价%" value={markupPct} onChange={(e) => setMarkupPct(e.target.value)} className="h-8 w-24" type="number" />
+                <Button size="sm" variant="outline" onClick={handleBatchMarkup}>批量加价</Button>
+                <Button size="sm" variant="outline" onClick={() => setShowEnrichDialog(true)}>
+                  <Sparkles className="h-4 w-4 mr-1" />从OZON补全信息
                 </Button>
-                <Button size="sm" onClick={() => setShowPublishDialog(true)}>
-                  <Upload className="h-4 w-4 mr-1" />一键上架OZON
+                <Button size="sm" variant="outline" onClick={() => setShowWatermarkDialog(true)}>
+                  <ImageIcon className="h-4 w-4 mr-1" />打水印
                 </Button>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Button size="sm" variant="outline" onClick={handleGoToListing}>
+                    <ArrowRight className="h-4 w-4 mr-1" />SKU 采集改款
+                  </Button>
+                  <Button size="sm" onClick={() => setShowPublishDialog(true)}>
+                    <Upload className="h-4 w-4 mr-1" />一键上架OZON
+                  </Button>
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
       {/* CARD LIST */}
       <Card>
         <CardHeader className="pb-3">
@@ -768,18 +872,56 @@ export default function CollectPage() {
                   </div>
                   {item.variants && item.variants.length > 0 && expandedVariantIds.has(item.id) && (
                     <div className="mt-3 pt-3 border-t border-dashed">
-                      <div className="text-xs text-muted-foreground mb-2 flex items-center gap-2">
-                        <Layers className="h-3 w-3" />
-                        变体明细（共 {item.variants.length} 个 SKU{item.modelId ? `，model ${item.modelId}` : ''}）
-                      </div>
+                      {(() => {
+                        const selectableSkus = getSelectableVariantSkus(item);
+                        const selectedSkus = getSelectedVariantSkus(item.id);
+                        const allSelected = selectableSkus.length > 0 && selectedSkus.length === selectableSkus.length;
+                        return (
+                          <div className="text-xs text-muted-foreground mb-2 flex items-center gap-2 flex-wrap">
+                            <Layers className="h-3 w-3" />
+                            <span className="mr-auto">变体明细（共 {item.variants.length} 个 SKU{item.modelId ? `，model ${item.modelId}` : ''}）</span>
+                            {selectableSkus.length > 0 && (
+                              <>
+                                <label className="inline-flex items-center gap-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={allSelected}
+                                    onChange={(e) => toggleAllVariants(item, e.target.checked)}
+                                    className="h-3.5 w-3.5 rounded"
+                                  />
+                                  全选变体
+                                </label>
+                                {selectedSkus.length > 0 && (
+                                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleBatchDeleteVariants(item)}>
+                                    <Trash2 className="h-3.5 w-3.5 mr-1 text-destructive" />
+                                    删除选中({selectedSkus.length})
+                                  </Button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div className="space-y-1.5">
                         {item.variants.map((v, idx) => {
                           const attrText = (v.attrs && Object.keys(v.attrs).length ? formatVariantAttrs(v.attrs) : '')
                             || (v.sku || `变体 #${idx + 1}`);
                           const variantKey = v.sku || String(idx);
                           const overrideValue = variantPriceOverrides[item.id]?.[variantKey] ?? '';
+                          const selected = !!v.sku && getSelectedVariantSkus(item.id).includes(v.sku);
                           return (
                             <div key={idx} className="flex items-center gap-2 text-xs px-2 py-1.5 rounded bg-muted/40">
+                              {v.sku ? (
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={(e) => toggleVariantSelect(item.id, v.sku, e.target.checked)}
+                                  className="h-3.5 w-3.5 rounded shrink-0"
+                                  title="选择变体"
+                                />
+                              ) : (
+                                <span className="h-3.5 w-3.5 shrink-0" />
+                              )}
                               {v.images?.[0] && (
                                 <img src={v.images[0]} alt="" className="h-8 w-8 rounded object-cover border shrink-0" />
                               )}
@@ -963,6 +1105,33 @@ export default function CollectPage() {
                 <p className="text-xs text-muted-foreground">卖价 = 采购价 × (1 + 加价%/100) + 固定加价；变体单独填写价格时按最终售价处理</p>
               </div>
             </div>
+            {publishPreviewRows.length > 0 && (
+              <div className="rounded-md border bg-muted/30 p-2">
+                <div className="mb-1 flex items-center justify-between text-xs font-medium">
+                  <span>最终上品价格预览</span>
+                  <span className="text-muted-foreground">售价=原价×(1+{Number(publishMarkup) || 200}%)+{Number(publishMarkupAmount) || 0}</span>
+                </div>
+                <div className="max-h-40 space-y-1 overflow-y-auto">
+                  {publishPreviewRows.slice(0, 12).map((row) => (
+                    <div key={row.key} className="grid grid-cols-[1fr_auto] gap-2 rounded bg-background/70 px-2 py-1 text-xs">
+                      <div className="min-w-0">
+                        <div className="truncate">{row.title}</div>
+                        <div className="font-mono text-[10px] text-muted-foreground truncate">{row.sku || '-'}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold tabular-nums">{formatPreviewPrice(row.finalPrice)}</div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {row.manual ? '手动最终售价' : `原价 ${formatPreviewPrice(row.basePrice)}`}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {publishPreviewRows.length > 12 && (
+                  <div className="pt-1 text-[10px] text-muted-foreground">还有 {publishPreviewRows.length - 12} 个 SKU 未展示</div>
+                )}
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">将上架 {selectedIds.size} 件商品到 OZON（货币: CNY）</p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowPublishDialog(false)}>取消</Button>

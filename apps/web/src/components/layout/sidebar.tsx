@@ -19,7 +19,7 @@ import {
   User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type UserRole = 'ADMIN' | 'USER' | 'STAFF';
 
@@ -187,6 +187,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: SidebarProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const visibleNav = navigation
     .filter((item) => !item.roles || item.roles.includes(role))
     .map((item) => {
@@ -200,6 +201,14 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
 
   // 当侧边栏折叠时，鼠标悬停自动展开
   const shouldExpand = collapsed && isHovered;
+  function clearCloseTimer() {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }
+
+  useEffect(() => () => clearCloseTimer(), []);
 
   return (
     <aside
@@ -209,12 +218,14 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
       )}
       onMouseEnter={() => {
         if (collapsed) {
+          clearCloseTimer();
           setIsHovered(true);
         }
       }}
       onMouseLeave={() => {
         if (collapsed) {
-          setIsHovered(false);
+          clearCloseTimer();
+          closeTimerRef.current = setTimeout(() => setIsHovered(false), 700);
         }
       }}
     >
@@ -256,9 +267,18 @@ function NavGroup({
   const isActive = item.href === pathname || item.children?.some((c) => pathname.startsWith(c.href));
   const [open, setOpen] = useState(isActive);
   const [isHovered, setIsHovered] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 鼠标悬停自动展开子菜单
   const shouldOpen = open || isHovered;
+  function clearCloseTimer() {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }
+
+  useEffect(() => () => clearCloseTimer(), []);
 
   if (!hasChildren) {
     return (
@@ -281,8 +301,18 @@ function NavGroup({
   return (
     <div
       className="mb-1"
-      onMouseEnter={() => !collapsed && setIsHovered(true)}
-      onMouseLeave={() => !collapsed && setIsHovered(false)}
+      onMouseEnter={() => {
+        if (!collapsed) {
+          clearCloseTimer();
+          setIsHovered(true);
+        }
+      }}
+      onMouseLeave={() => {
+        if (!collapsed) {
+          clearCloseTimer();
+          closeTimerRef.current = setTimeout(() => setIsHovered(false), 700);
+        }
+      }}
     >
       <button
         onClick={() => setOpen(!open)}

@@ -7,6 +7,7 @@ import { randomSuffix, chunkArray } from '../lib/util.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
+import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 
@@ -29,6 +30,10 @@ const collectSchema = z.object({
   weightG: z.number().optional(),
   sku: z.string().optional(),
   sourceProductId: z.string().optional(),
+});
+
+const batchDeleteVariantsSchema = z.object({
+  skus: z.array(z.string().min(1)).min(1).max(100),
 });
 
 export function containsCjkText(value: unknown): boolean {
@@ -96,10 +101,6 @@ function sameStringList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function hasAppliedWatermark(item: { metadata?: unknown }): boolean {
-  return metadataRecord(item.metadata).watermarkApplied === true;
-}
-
 export function resolveBasePublishImages(
   item: { images?: unknown; metadata?: unknown },
   clonedImages?: unknown,
@@ -117,7 +118,6 @@ export function resolveVariantPublishImages(
   variant: { images?: unknown },
   baseImages: string[],
 ): string[] {
-  if (hasAppliedWatermark(item)) return baseImages;
   const variantImages = normalizePublishImageList(variant.images);
   return variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages;
 }
@@ -132,6 +132,30 @@ export function recordOfferPublishImages(
   if (!offerId || !normalizedImages.length) return;
   offerImageLists[offerId] = normalizedImages;
   offerImages[offerId] = normalizedImages[0]!;
+}
+
+export function removeVariantsBySkus(variantsInput: unknown, skusInput: unknown[]): {
+  variants: any[];
+  removed: number;
+  missingSkus: string[];
+} {
+  const variants = Array.isArray(variantsInput) ? variantsInput as any[] : [];
+  const skus = Array.from(new Set(
+    skusInput.map((sku) => String(sku || '').trim()).filter(Boolean),
+  ));
+  const skuSet = new Set(skus);
+  const found = new Set<string>();
+  const next = variants.filter((variant) => {
+    const sku = String(variant?.sku || '').trim();
+    if (!sku || !skuSet.has(sku)) return true;
+    found.add(sku);
+    return false;
+  });
+  return {
+    variants: next,
+    removed: variants.length - next.length,
+    missingSkus: skus.filter((sku) => !found.has(sku)),
+  };
 }
 
 function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
@@ -503,6 +527,34 @@ export async function collectRoutes(app: FastifyInstance) {
     return reply.send({ code: 1, msg: '已更新' });
   });
 
+  app.post('/:id/variants/batch-delete', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const parsed = batchDeleteVariantsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+
+    const result = removeVariantsBySkus(item.variants, parsed.data.skus);
+    if (!result.removed) {
+      return reply.status(404).send({ code: 0, msg: '未找到要删除的变体 SKU', data: { missingSkus: result.missingSkus } });
+    }
+
+    await prisma.supplyGoods.update({
+      where: { id },
+      data: { variants: result.variants.length ? (result.variants as any) : null as any },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: `已删除 ${result.removed} 个变体`,
+      data: { count: result.variants.length, removed: result.removed, missingSkus: result.missingSkus },
+    });
+  });
+
   app.delete('/:id/variants/:sku', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id, sku } = request.params as { id: string; sku: string };
@@ -510,19 +562,17 @@ export async function collectRoutes(app: FastifyInstance) {
     const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
     if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
 
-    const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
-    const before = variants.length;
-    const next = variants.filter((v) => String(v?.sku || '') !== String(sku));
-    if (next.length === before) {
+    const result = removeVariantsBySkus(item.variants, [sku]);
+    if (!result.removed) {
       return reply.status(404).send({ code: 0, msg: '未找到该变体 SKU' });
     }
 
     await prisma.supplyGoods.update({
       where: { id },
-      data: { variants: next.length ? (next as any) : null as any },
+      data: { variants: result.variants.length ? (result.variants as any) : null as any },
     });
 
-    return reply.send({ code: 1, msg: '已删除变体', data: { count: next.length } });
+    return reply.send({ code: 1, msg: '已删除变体', data: { count: result.variants.length } });
   });
 
   app.post('/batch-price', async (request, reply) => {
@@ -930,6 +980,7 @@ export async function collectRoutes(app: FastifyInstance) {
               },
             },
           });
+          void enqueueProductSyncAfterPublish(body.shopId, 'collect-publish-fallback');
         } catch (e: any) {
           const detailMsg = getOzonPublishErrorMessage(e);
           fallbackError = detailMsg;
@@ -1373,6 +1424,7 @@ export async function collectRoutes(app: FastifyInstance) {
           },
         },
       });
+      void enqueueProductSyncAfterPublish(body.shopId, 'collect-publish');
 
       for (const item of items) {
         await prisma.supplyGoods.update({ where: { id: item.id }, data: { status: 'listed' } });

@@ -442,7 +442,7 @@
     wrap.innerHTML = [
       '<div class="ss-erp-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">',
       '  <span style="font-weight:700;color:#c2410c;font-size:13px">SS ERP</span>',
-      '  <span class="ss-erp-status-pill" style="font-size:10px;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;border:1px solid #fdba74">加载中…</span>',
+      '  <span class="ss-erp-status-pill" style="display:none">加载中…</span>',
       '</div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
       '<div class="ss-erp-actions" style="display:flex;gap:6px">',

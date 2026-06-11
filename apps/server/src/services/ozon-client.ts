@@ -163,6 +163,20 @@ export class OzonClient {
     return res.items;
   }
 
+  async getProductStocks(productIds: number[]): Promise<OzonProductStockInfo[]> {
+    const out: OzonProductStockInfo[] = [];
+    for (let i = 0; i < productIds.length; i += 100) {
+      const batch = productIds.slice(i, i + 100);
+      const res = await this.request<{ items?: OzonProductStockInfo[]; result?: { items?: OzonProductStockInfo[] } }>(
+        '/v4/product/info/stocks',
+        { body: { filter: { product_id: batch }, limit: batch.length } },
+      );
+      out.push(...(res.items ?? res.result?.items ?? []));
+      if (i + 100 < productIds.length) await sleep(500);
+    }
+    return out;
+  }
+
   async getWarehouseList(): Promise<OzonWarehouse[]> {
     const res = await this.request<{ warehouses: OzonWarehouse[] }>('/v2/warehouse/list', {
       body: {},
@@ -672,6 +686,17 @@ export interface OzonProductInfo {
   };
   is_archived: boolean;
   updated_at?: string;
+}
+
+export interface OzonProductStockInfo {
+  product_id: number;
+  offer_id?: string;
+  stocks: {
+    present?: number;
+    reserved?: number;
+    warehouse_id?: number;
+    warehouse_name?: string;
+  }[];
 }
 
 export interface OzonWarehouse {

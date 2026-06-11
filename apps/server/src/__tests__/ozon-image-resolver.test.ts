@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
+import { diagnoseOzonImageUrl, normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
 
 describe('ozon image resolver', () => {
   it('normalizes public image URLs before publishing', () => {
@@ -23,5 +23,28 @@ describe('ozon image resolver', () => {
     await expect(resolveImageUrls(['', '  ', 'https://cdn.example.com/a.jpg'], 'shop-1')).resolves.toEqual([
       'https://cdn.example.com/a.jpg',
     ]);
+  });
+
+  it('diagnoses whether a public image URL is fetchable by status and content type', async () => {
+    const result = await diagnoseOzonImageUrl('https://cdn.example.com/a.jpg', async () => ({
+      ok: true,
+      status: 200,
+      url: 'https://cdn.example.com/final.jpg',
+      headers: {
+        get(name: string) {
+          if (name === 'content-type') return 'image/jpeg';
+          if (name === 'content-length') return '1200';
+          return null;
+        },
+      },
+    }) as any);
+
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      contentType: 'image/jpeg',
+      contentLength: '1200',
+      finalUrl: 'https://cdn.example.com/final.jpg',
+    });
   });
 });

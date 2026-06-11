@@ -4,6 +4,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
@@ -95,6 +96,7 @@ export async function listingRoutes(app: FastifyInstance) {
           payload: { taskId: result.result.task_id, itemCount: items.length },
         },
       });
+      void enqueueProductSyncAfterPublish(shopId, 'listing-batch');
 
       return reply.send({
         code: 1,

@@ -5,6 +5,7 @@ import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
+import { buildProductSyncMeta } from '../services/product-sync-metadata.js';
 
 const QUEUE_NAME = 'product-sync';
 
@@ -65,10 +66,23 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
 
     const productIds = list.items.map((i) => i.product_id);
     const details = await client.getProductInfoList(productIds);
+    const stockDetailsByProductId = new Map<string, any[]>();
+    try {
+      const stockDetails = await client.getProductStocks(productIds);
+      for (const item of stockDetails) {
+        stockDetailsByProductId.set(String(item.product_id), item.stocks || []);
+      }
+    } catch (e: any) {
+      console.warn(`[ProductSync] Warehouse stock detail sync failed for shop ${shopId}:`, e.message?.slice(0, 200));
+    }
 
     for (const info of details) {
-      const totalStock = info.stocks?.stocks?.reduce((sum, s) => sum + s.present, 0) ?? 0;
+      const warehouseStocks = stockDetailsByProductId.get(String(info.id)) || [];
+      const totalStock = warehouseStocks.length
+        ? warehouseStocks.reduce((sum, s) => sum + (Number(s.present) || 0) + (Number(s.reserved) || 0), 0)
+        : info.stocks?.stocks?.reduce((sum, s) => sum + s.present, 0) ?? 0;
       const modelId = info.model_info?.model_id ? String(info.model_info.model_id) : null;
+      const syncMeta = buildProductSyncMeta(info, warehouseStocks);
       await prisma.product.upsert({
         where: { shopId_platformProductId: { shopId, platformProductId: String(info.id) } },
         create: {
@@ -86,6 +100,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           modelId,
           status: info.statuses?.status || null,
           visibility: info.is_archived ? 'ARCHIVED' : info.stocks?.has_stock ? 'VISIBLE' : 'HIDDEN',
+          variants: syncMeta as any,
           syncStatus: 'SYNCED',
         },
         update: {
@@ -99,6 +114,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           modelId,
           status: info.statuses?.status || null,
           visibility: info.is_archived ? 'ARCHIVED' : info.stocks?.has_stock ? 'VISIBLE' : 'HIDDEN',
+          variants: syncMeta as any,
           syncStatus: 'SYNCED',
         },
       });
