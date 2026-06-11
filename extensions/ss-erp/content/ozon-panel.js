@@ -1370,6 +1370,73 @@
     });
   }
 
+  function buildSourceQuoteMessage(quote) {
+    var source = quote && quote.source || {};
+    var platform = source.platform ? String(source.platform).toUpperCase() : '货源';
+    var sku = source.sku ? (' SKU ' + source.sku) : '';
+    return '已从 ' + platform + sku + ' 回填采购价：¥ ' + formatMoney(quote && quote.costCny);
+  }
+
+  function applySourceQuoteToPanel(quote, options) {
+    if (!quote || typeof quote !== 'object') return false;
+    var cost = Number(quote.costCny || quote.cost || quote.source && quote.source.price && quote.source.price.value) || 0;
+    if (!(cost > 0)) return false;
+    quote.costCny = Math.round(cost * 100) / 100;
+    var state = ensurePanelState();
+    if (state.appliedSourceQuoteKey === quote.key && Math.abs((Number(state.inputs.cost) || 0) - quote.costCny) < 0.000001) {
+      return false;
+    }
+    state.inputs.cost = quote.costCny;
+    state.appliedSourceQuoteKey = quote.key || ('source-quote:' + quote.costCny);
+    state.sourceQuote = quote;
+    state.actionMessage = buildSourceQuoteMessage(quote);
+
+    var drawer = document.getElementById('ozon-calc-drawer');
+    var input = drawer ? drawer.querySelector('input[data-field="cost"]') : null;
+    if (input) input.value = String(quote.costCny);
+    if (options && options.inputCard) syncInputFieldValue(options.inputCard, 'cost', quote.costCny, true);
+    if (options && options.suppressCompute) {
+      return true;
+    }
+    if (drawer && drawer.classList.contains('open') && options && typeof options.compute === 'function') {
+      options.compute();
+    } else if (drawer && drawer.classList.contains('open')) {
+      var computeButton = drawer.querySelector('[data-action="compute"]');
+      if (computeButton) computeButton.click();
+    }
+    return true;
+  }
+
+  function requestPendingSourceQuote(product, onApplied) {
+    var ozon = {
+      productId: product && product.productId || parseProductIdFromUrl(window.location.href),
+      title: product && product.title || document.title || '',
+      url: window.location.href
+    };
+    return sendRuntimeMessage({
+      type: 'ss-erp:source-quote-pending-get',
+      payload: { ozon: ozon }
+    }).then(function (response) {
+      var quote = response && response.ok ? response.quote : null;
+      var applied = applySourceQuoteToPanel(quote, { suppressCompute: true });
+      if (applied) {
+        clearPendingSourceQuote(quote);
+        if (typeof onApplied === 'function') onApplied(quote);
+      }
+      return applied;
+    }).catch(function () {
+      return false;
+    });
+  }
+
+  function clearPendingSourceQuote(quote) {
+    if (!quote || !quote.key) return;
+    sendRuntimeMessage({
+      type: 'ss-erp:source-quote-pending-clear',
+      payload: { key: quote.key }
+    }).catch(function () {});
+  }
+
 
   function getCapturedHar(mode) {
     return sendRuntimeMessage({
@@ -1950,6 +2017,11 @@
       compute();
     });
 
+    requestPendingSourceQuote(product, function () {
+      syncInputFieldValue(inputCard, 'cost', state.inputs.cost, true);
+      compute();
+    });
+
     var collectButton = computeCard.querySelector('[data-action="collect-product"]');
     if (collectButton) {
       collectButton.addEventListener('click', function () {
@@ -1993,6 +2065,10 @@
         refreshAutoPriceFromProduct(state, inputCard);
         maybeAutoSyncMarketData(state, inputCard, compute);
         updateDimensionInputVisibility();
+        if (state.sourceQuote && !state.lastResult) {
+          syncInputFieldValue(inputCard, 'cost', state.inputs.cost, true);
+          compute();
+        }
       }).catch(function () {
         configCard.innerHTML = '<h3>配置状态</h3><div class="ozon-calc-muted">读取插件配置失败。</div>';
       });
@@ -2033,10 +2109,23 @@
     }
   }
 
+  if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage && !window.__SS_ERP_SOURCE_QUOTE_LISTENER__) {
+    window.__SS_ERP_SOURCE_QUOTE_LISTENER__ = true;
+    chrome.runtime.onMessage.addListener(function (message, _sender, sendResponse) {
+      if (!message || message.type !== 'ss-erp:source-quote-apply') return false;
+      var quote = message.quote || message.payload && message.payload.quote || null;
+      var applied = applySourceQuoteToPanel(quote);
+      if (applied) clearPendingSourceQuote(quote);
+      if (typeof sendResponse === 'function') sendResponse({ ok: true, applied: applied });
+      return false;
+    });
+  }
+
   window.OZON_CALC_OZON_PANEL = {
     ensurePanelState,
     collectPageProduct,
     attachOfficialSample,
+    applySourceQuoteToPanel,
     renderDrawerContent,
   };
 }());

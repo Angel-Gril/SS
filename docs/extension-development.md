@@ -19,21 +19,21 @@ UI 上需要拆模块，而不是拆扩展：
 - 货源比价：从 Ozon 主图发起 1688/PDD/淘宝搜图，国内货源先进入 ERP 上品列表，再做比价和上架加工。
 - 设置/同步：ERP 连接、Ozon Cookie、店铺分析、配置同步。
 
-Popup 不做按钮墙。第一屏只根据当前页面露出一个最可能需要的主动作：
+Popup 不做按钮墙。第一屏只根据当前页面露出一个最可能需要的主动作，最多再露出一个上下文次动作：
 
-- Ozon 商品页：主按钮“采集到 ERP”，下方仅露出一个上下文次级动作“找同款”。
-- 1688/PDD/淘宝/天猫货源页：采集货源到 ERP。
+- Ozon 商品页：主按钮“采集到 ERP”，下方仅露出一个上下文次级动作“核价找货源”。
+- 1688/PDD/淘宝/天猫货源页：主按钮“核价”，次按钮“采集到 ERP”。
 - seller.ozon.ru：同步 Cookie。
 - 其他页面：打开设置或提示当前页不支持。
 
-Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤能力，不在 popup 首屏平铺按钮。搜图只保留一个“找同款”入口，平台桥接在后台按能力逐步接入；Cookie、店铺分析、经营图表放在 popup 的“同步与维护”折叠区中。
+Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤能力，不在 popup 首屏平铺按钮。搜图只保留一个“核价找货源”入口，平台桥接在后台按能力逐步接入；Cookie、店铺分析、经营图表放在 popup 的“同步与维护”折叠区中。
 
 ## 旧扩展资产盘点
 
 | 来源 | 有价值能力 | 当前迁移状态 | 下一步 |
 | --- | --- | --- | --- |
 | `D:\AI Agent\Work\LS\AliPrice - TB以图搜同款 Beta` | 截图搜同款、右键菜单、快捷键、页面翻译类 UX | 第三方打包代码，直接复用价值低 | 只参考搜图入口和交互，不迁移核心代码 |
-| `D:\AI Agent\Work\LS\ozon-selection-capture` | Ozon 商品采集、Ozon 主图到 1688/PDD/淘宝搜图、待生成记录、XLS 导出 | Ozon 基础采集已被当前扩展覆盖；1688 主图搜图桥已迁入；候选池只作为 Ozon 上下文辅助 | PDD/淘宝搜图继续挂到同一个“找同款”入口，XLS 导出改为备用能力 |
+| `D:\AI Agent\Work\LS\ozon-selection-capture` | Ozon 商品采集、Ozon 主图到 1688/PDD/淘宝搜图、待生成记录、XLS 导出 | Ozon 基础采集已被当前扩展覆盖；1688 主图搜图桥已迁入；候选池只作为 Ozon 上下文辅助 | PDD/淘宝搜图继续挂到同一个“核价找货源”入口，XLS 导出改为备用能力 |
 | `D:\AI Agent\Work\LS\test-extension` | 1688/淘宝/PDD 商品详情采集器，SKU、图片、价格、尺寸、库存提取较完整 | 当前扩展已有 1688/淘宝基础采集；PDD 商品采集第一版已接入 | 用真实 PDD 页面回归，再对齐 1688/淘宝字段质量 |
 | `D:\AI Agent\Work\LS\旧自研插件` | Ozon 面板、seller 分析接口、1688/PDD 物流、ERP 配置页、旧 API 参考 | 大部分已迁入 `extensions/ss-erp` | 继续保留 API 参考，避免重复移植已完成模块 |
 
@@ -51,6 +51,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 - Ozon 商品页“找同款”已接入 1688 主图搜图第一版：popup 采集当前商品主图并转码，service worker 创建搜图任务，1688 页面桥调用 MTOP 获取 imageId 并跳转结果。
 - 1688/PDD/淘宝/天猫货源页主动作已改为直接写入 ERP `/api/collect/batch`，采集成功后提示“已进入 ERP 上品列表”，并通知已打开的 ERP 采集页刷新。
 - 候选货源本地池保留为辅助能力：在 Ozon 商品页打开扩展会记住 6 小时上下文，但不再作为国内货源采集的主保存路径。
+- 国内货源核价闭环已接入第一版：Ozon 商品页点“核价找货源”会保存 Ozon 上下文并打开 1688 以图搜同款；在 1688/PDD/淘宝/天猫货源详情页点“核价”会记录 `Ozon SKU/链接/售价`、`货源平台/链接/SKU/采购价`，切回 Ozon 商品页，并把采购价回填到核价面板的“采购”输入框。记录保存在扩展本地 `ss-erp:source-quotes`，可通过后台消息导出 CSV，后续再接 ERP 导出入口。
 - Ozon 列表页注入样式以 `ss-erp-cloud-1.0.17` 的稳定商品信息卡为基准：保留原有列表卡片布局、采集按钮、展开按钮和展开态样式，不再未经确认重做列表页视觉结构。
 
 当前可加载目录：
@@ -63,7 +64,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 
 部分完成：
 
-- Popup 当前支持按页面识别 Ozon 商品采集、Ozon 到 1688 找同款、国内货源采集到 ERP、seller Cookie 同步；PDD/淘宝搜图还未接入同一个“找同款”入口。
+- Popup 当前支持按页面识别 Ozon 商品采集、Ozon 到 1688 找同款核价、国内货源核价回填、国内货源采集到 ERP、seller Cookie 同步；PDD/淘宝搜图还未接入同一个“核价找货源”入口。
 - 1688 和淘宝/天猫能采集基础数据，但还需要对齐旧 `test-extension` 的 SKU、阶梯价、重量尺寸和图片提取质量。
 - Ozon 到 ERP 采集链路可用，国内货源到 ERP 上品列表链路已接通，但翻译、类目映射、属性映射和改款上架前的字段检查还未完整收口。
 
@@ -79,18 +80,21 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 1. Ozon 商品页打开扩展或页面面板。
 2. 用户可以直接核价，看到售价、汇率、佣金、物流、利润和建议采购价。
 3. 用户点击以图搜货源，扩展用 Ozon 主图打开 1688/PDD/淘宝搜图结果。
-4. 用户在 1688/PDD/淘宝/天猫货源详情页点击采集，扩展读取采购价、SKU、规格、库存、图片、重量尺寸和链接。
-5. 国内货源直接写入 ERP `/collect` 上品列表，保留中文源标题并标记需要翻译/审核，不把中文标题当作 Ozon 上架标题。
+4. 用户在 1688/PDD/淘宝/天猫货源详情页有两个清晰动作：
+   - 点“核价”：记录货源 SKU、货源链接、采购价、Ozon SKU、Ozon 链接和售价，自动回到 Ozon 商品页，把采购价填入核价面板并重新计算。
+   - 点“采集到 ERP”：读取标题、价格、SKU、规格、库存、图片、重量尺寸、属性和链接，同步到 ERP `/collect` 自助上品列表。
+5. 国内货源采集进入 ERP 后，保留中文源标题并标记需要翻译/审核，不把中文标题当作 Ozon 上架标题。
 6. ERP 继续完成标题/描述翻译、Ozon 类目/type 映射、属性映射、图片处理和水印，然后通过 `/api/collect/publish-ozon` 上架到 Ozon。
 
 ## MVP 收口范围
 
 第一轮只做能跑通的主链路：
 
-- Popup 使用当前页智能主动作，不平铺多个按钮。已完成第一版：Ozon 商品页采集到 ERP，1688/PDD/淘宝/天猫采集货源到 ERP，seller.ozon.ru 同步 Cookie。
+- Popup 使用当前页智能主动作，不平铺多个按钮。已完成第一版：Ozon 商品页采集到 ERP，Ozon 商品页核价找货源，1688/PDD/淘宝/天猫货源核价回填，1688/PDD/淘宝/天猫采集货源到 ERP，seller.ozon.ru 同步 Cookie。
 - Manifest 接入 PDD 商品详情采集页面。第一版已完成，覆盖 `*.pinduoduo.com` 和 `*.yangkeduo.com`。
 - 从 `test-extension` 迁移 PDD 采集器到共享采集模块。第一版已完成：`extensions/ss-erp/shared/collectors/pdd-product.js`。
 - 国内货源采集主路径复用 ERP `/api/collect/batch`，统一进入 `/collect`；`sourceCandidate` 只保留为 Ozon 上下文和比价辅助数据结构。
+- 国内货源核价主路径使用 `sourceQuote`：它记录已选择的真实货源、采购价、货源 SKU 和 Ozon SKU，并负责回填 Ozon 核价面板；它不替代国内货源采集入 ERP。
 - 从 Ozon 商品页发起搜图任务，迁移 `ozon-selection-capture` 的图片上传桥接。1688 第一版已完成，PDD/淘宝待接入同一个入口。
 - ERP 后续补齐翻译、类目映射、属性映射和改款上架前检查；如果要做“一对多候选货源比价”，再新增专门候选货源 endpoint。
 
@@ -123,6 +127,13 @@ node --test scripts/extension-ozon-list-overlay-ui.test.mjs
 ```bash
 node --test scripts/extension-source-collect-to-erp.test.mjs
 node --test scripts/extension-erp-submit-collect-routing.test.mjs
+```
+
+国内货源核价回填的回归测试：
+
+```bash
+node --test scripts/extension-source-quote-store.test.mjs
+node --test scripts/extension-source-quote-flow.test.mjs
 ```
 
 涉及具体平台能力时，需要手工验证：

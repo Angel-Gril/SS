@@ -164,13 +164,13 @@
 
   function updateSourceContextHint(host) {
     sendRuntimeMessage({ type: 'ss-erp:source-candidate-context-get' }, function (response) {
-      if (!response || !response.ok || primaryActionState.type !== 'collectSourcePage') return;
+      if (!response || !response.ok || primaryActionState.type !== 'quoteSourcePage') return;
       var ozon = response.context && response.context.ozon;
       if (ozon && (ozon.productId || ozon.title)) {
         var label = ozon.productId ? ('Ozon ' + ozon.productId) : String(ozon.title).slice(0, 16);
-        setText(primaryActionHint, host + ' · 将关联 ' + label);
+        setText(primaryActionHint, host + ' · 核价将回填 ' + label);
       } else {
-        setText(primaryActionHint, host + ' · 先在 Ozon 商品页打开扩展可自动关联');
+        setText(primaryActionHint, host + ' · 先在 Ozon 商品页点“核价找货源”建立关联');
       }
     });
   }
@@ -208,7 +208,7 @@
             type: 'search1688ByImage',
             tab: tab,
             productId: productId,
-            buttonText: '找同款',
+            buttonText: '核价找货源',
             disabled: !productId
           }
         });
@@ -217,12 +217,17 @@
 
       if (sourcePlatform) {
         setPrimaryAction({
-          type: 'collectSourcePage',
+          type: 'quoteSourcePage',
           tab: tab,
           label: sourcePlatform + ' 货源页',
-          title: '采集货源',
+          title: '货源核价',
           hint: host,
-          buttonText: '采集货源'
+          buttonText: '核价',
+          secondaryAction: {
+            type: 'collectSourcePage',
+            tab: tab,
+            buttonText: '采集到 ERP'
+          }
         });
         updateSourceContextHint(host);
         return;
@@ -312,11 +317,20 @@
     }, callback);
   }
 
-  function collectSourcePage() {
-    setPrimaryButtonBusy('采集中...');
+  function collectSourcePage(options) {
+    var useSecondary = options && options.secondary;
+    if (useSecondary) {
+      setSecondaryButtonBusy('采集中...');
+    } else {
+      setPrimaryButtonBusy('采集中...');
+    }
     setActionStatus('', '');
     sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {
-      restorePrimaryButton();
+      if (useSecondary) {
+        restoreSecondaryButton();
+      } else {
+        restorePrimaryButton();
+      }
       if (response && response.ok) {
         var data = response.data || {};
         var baseStatus = data.title ? ('已采集：' + String(data.title).slice(0, 18)) : '已采集当前货源页';
@@ -331,6 +345,29 @@
       } else {
         setActionStatus((response && response.error) || '采集失败', 'fail');
       }
+    });
+  }
+
+  function quoteSourcePage() {
+    setPrimaryButtonBusy('核价中...');
+    setActionStatus('', '');
+    sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {
+      if (!response || !response.ok) {
+        restorePrimaryButton();
+        setActionStatus((response && response.error) || '读取货源页失败', 'fail');
+        return;
+      }
+      sendRuntimeMessage({
+        type: 'ss-erp:source-quote-save',
+        payload: { sourceProduct: response.data || {} }
+      }, function (quoteResponse) {
+        restorePrimaryButton();
+        if (quoteResponse && quoteResponse.ok) {
+          setActionStatus('已记录采购价，正在回填 Ozon 核价面板', 'ok');
+          return;
+        }
+        setActionStatus((quoteResponse && quoteResponse.error) || '核价记录失败', 'fail');
+      });
     });
   }
 
@@ -506,6 +543,10 @@
       collectSourcePage();
       return;
     }
+    if (primaryActionState.type === 'quoteSourcePage') {
+      quoteSourcePage();
+      return;
+    }
     if (primaryActionState.type === 'syncCookie' && syncCookieBtn) {
       syncCookieBtn.click();
       return;
@@ -516,6 +557,10 @@
   function runSecondaryAction() {
     if (secondaryActionState.type === 'search1688ByImage') {
       search1688ByImage();
+      return;
+    }
+    if (secondaryActionState.type === 'collectSourcePage') {
+      collectSourcePage({ secondary: true });
     }
   }
 

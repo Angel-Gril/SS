@@ -20,6 +20,8 @@ const OZON_CALC_CAPTURE_ENTRIES_KEY = 'ozon-calc:capture-har-entries';
 const OZON_CALC_PRODUCT_POOL_KEY = 'ozon-calc:product-pool';
 const SS_ERP_SOURCE_CANDIDATES_KEY = 'ss-erp:source-candidates';
 const SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY = 'ss-erp:source-candidate-context';
+const SS_ERP_SOURCE_QUOTES_KEY = 'ss-erp:source-quotes';
+const SS_ERP_SOURCE_QUOTE_PENDING_KEY = 'ss-erp:source-quote-pending';
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
@@ -65,6 +67,12 @@ try {
   importScripts('../shared/source-candidates/source-candidate-store.js');
 } catch (error) {
   console.warn('[SS ERP] source candidate store import failed', error);
+}
+
+try {
+  importScripts('../shared/source-quotes/source-quote-store.js');
+} catch (error) {
+  console.warn('[SS ERP] source quote store import failed', error);
 }
 
 try {
@@ -563,6 +571,86 @@ function getFreshSourceCandidateContext(result) {
   const savedAt = new Date(context.savedAt || '').getTime();
   if (!Number.isFinite(savedAt) || Date.now() - savedAt > SS_ERP_SOURCE_CANDIDATE_CONTEXT_TTL_MS) return null;
   return context;
+}
+
+function getSourceQuoteStore() {
+  const store = globalThis.SS_ERP_SOURCE_QUOTE_STORE;
+  if (!store || typeof store.normalizeQuote !== 'function' || typeof store.upsertQuote !== 'function') {
+    throw new Error('source quote store 未加载');
+  }
+  return store;
+}
+
+function normalizeSourceQuoteFromPayload(payload, context, existingQuote) {
+  const store = getSourceQuoteStore();
+  const raw = payload && typeof payload === 'object' ? payload : {};
+  const ozon = raw.ozon || raw.ozonProduct || (context && context.ozon);
+  if (!ozon) {
+    throw new Error('没有最近的 Ozon 商品上下文，请先在 Ozon 商品页点击“核价找货源”');
+  }
+  const sourceProduct = raw.sourceProduct || raw.source || raw.product || {};
+  return store.normalizeQuote({
+    ozon,
+    sourceProduct,
+    status: raw.status || 'selected_for_costing',
+    costCny: raw.costCny,
+  }, existingQuote || null, { now: raw.now || new Date().toISOString() });
+}
+
+function normalizeComparableUrl(value) {
+  return toText(value).trim().split('#')[0].replace(/\/+$/, '');
+}
+
+function ozonQuoteMatchesTab(quote, tabUrl) {
+  const ozon = quote && quote.ozon || {};
+  const url = normalizeComparableUrl(tabUrl);
+  if (!url) return false;
+  if (ozon.url && normalizeComparableUrl(ozon.url) === url) return true;
+  if (ozon.productId && new RegExp('(?:-|/)' + ozon.productId + '(?:/|$)').test(url)) return true;
+  return false;
+}
+
+async function notifyOzonTabToApplySourceQuote(quote) {
+  if (!quote || !quote.ozon || !quote.ozon.url) return;
+  let targetTab = null;
+  try {
+    const tabs = await chrome.tabs.query({
+      url: [
+        'https://*.ozon.ru/product/*',
+        'https://*.ozon.kz/product/*',
+        'https://*.ozon.by/product/*'
+      ]
+    });
+    targetTab = (tabs || []).find((tab) => tab && ozonQuoteMatchesTab(quote, tab.url));
+  } catch (_error) {}
+
+  if (targetTab && targetTab.id != null) {
+    try {
+      await chrome.tabs.update(targetTab.id, { active: true });
+      if (targetTab.windowId != null) await chrome.windows.update(targetTab.windowId, { focused: true });
+    } catch (_error) {}
+    try {
+      await chrome.tabs.sendMessage(targetTab.id, {
+        type: 'ss-erp:source-quote-apply',
+        quote,
+      });
+    } catch (_error) {}
+    return;
+  }
+
+  try {
+    const created = await chrome.tabs.create({ url: quote.ozon.url, active: true });
+    if (created && created.id != null) {
+      setTimeout(() => {
+        try {
+          chrome.tabs.sendMessage(created.id, {
+            type: 'ss-erp:source-quote-apply',
+            quote,
+          }).catch(() => {});
+        } catch (_error) {}
+      }, 1200);
+    }
+  } catch (_error) {}
 }
 
 function firstText(values) {
@@ -1075,6 +1163,101 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const errors = data.data && Array.isArray(data.data.errors) ? data.data.errors : [];
       notifyErpCollectCompleted(saved, errors.length);
       sendResponse({ ok: true, data, saved, errorCount: errors.length });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-quote-save') {
+    Promise.resolve().then(async () => {
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const result = await chrome.storage.local.get([SS_ERP_SOURCE_QUOTES_KEY, SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY]);
+      const context = payload.ozon || payload.ozonProduct ? null : getFreshSourceCandidateContext(result);
+      const existingQuotes = Array.isArray(result[SS_ERP_SOURCE_QUOTES_KEY]) ? result[SS_ERP_SOURCE_QUOTES_KEY] : [];
+      const quoteProbe = normalizeSourceQuoteFromPayload(payload, context, null);
+      const existingQuote = existingQuotes.find((item) => item && item.key === quoteProbe.key) || null;
+      const quote = normalizeSourceQuoteFromPayload(payload, context, existingQuote);
+      const store = getSourceQuoteStore();
+      const quotes = store.upsertQuote(existingQuotes, quote);
+      await chrome.storage.local.set({
+        [SS_ERP_SOURCE_QUOTES_KEY]: quotes,
+        [SS_ERP_SOURCE_QUOTE_PENDING_KEY]: quote,
+      });
+      await notifyOzonTabToApplySourceQuote(quote);
+      sendResponse({
+        ok: true,
+        quote,
+        quoteCount: quotes.length,
+        ozonUrl: quote.ozon && quote.ozon.url || '',
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-quote-pending-get') {
+    chrome.storage.local.get([SS_ERP_SOURCE_QUOTE_PENDING_KEY]).then((result) => {
+      const store = getSourceQuoteStore();
+      const quote = result[SS_ERP_SOURCE_QUOTE_PENDING_KEY] || null;
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const ozon = payload.ozon || payload.product || payload.productId || '';
+      const matched = quote && (!ozon || store.quoteMatchesOzon(quote, ozon)) ? quote : null;
+      sendResponse({ ok: true, quote: matched });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-quote-pending-clear') {
+    chrome.storage.local.get([SS_ERP_SOURCE_QUOTE_PENDING_KEY]).then((result) => {
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const pending = result[SS_ERP_SOURCE_QUOTE_PENDING_KEY] || null;
+      const requestedKey = toText(payload.key || message.key).trim();
+      if (!pending || (requestedKey && pending.key !== requestedKey)) {
+        sendResponse({ ok: true, cleared: false });
+        return null;
+      }
+      return chrome.storage.local.remove([SS_ERP_SOURCE_QUOTE_PENDING_KEY]).then(() => {
+        sendResponse({ ok: true, cleared: true });
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-quote-list') {
+    chrome.storage.local.get([SS_ERP_SOURCE_QUOTES_KEY]).then((result) => {
+      const store = getSourceQuoteStore();
+      const quotes = Array.isArray(result[SS_ERP_SOURCE_QUOTES_KEY]) ? result[SS_ERP_SOURCE_QUOTES_KEY] : [];
+      const ozon = message.ozon || message.productId || '';
+      const filtered = ozon ? store.listQuotesForOzon(quotes, ozon) : quotes;
+      sendResponse({
+        ok: true,
+        count: filtered.length,
+        quotes: filtered,
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:source-quote-export') {
+    chrome.storage.local.get([SS_ERP_SOURCE_QUOTES_KEY]).then((result) => {
+      const store = getSourceQuoteStore();
+      const quotes = Array.isArray(result[SS_ERP_SOURCE_QUOTES_KEY]) ? result[SS_ERP_SOURCE_QUOTES_KEY] : [];
+      sendResponse({
+        ok: true,
+        format: 'csv',
+        filename: 'ss-erp-source-quotes.csv',
+        mimeType: 'text/csv;charset=utf-8',
+        content: store.exportQuotesAsCsv(quotes),
+        count: quotes.length,
+      });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
