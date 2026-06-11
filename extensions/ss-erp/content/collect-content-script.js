@@ -957,6 +957,9 @@
   }
 
   function pickSourcePrice(context, config) {
+    const selectedOrderSummaryPrice = pickSelectedOrderSummaryPrice(context);
+    if (selectedOrderSummaryPrice) return selectedOrderSummaryPrice;
+
     const selectedSkuPrice = pickSelectedSkuPriceFromDom();
     if (selectedSkuPrice) return selectedSkuPrice;
 
@@ -988,6 +991,65 @@
     }
 
     return { price: null, currency: "CNY", text: "", sourceType: "" };
+  }
+
+  function pickSelectedOrderSummaryPrice(context) {
+    const summary = pickSelectedOrderSummary(context && context.pageText);
+    if (!summary) return null;
+    return {
+      price: summary.unitPrice,
+      currency: "CNY",
+      text: "¥" + formatMoney(summary.unitPrice),
+      sourceType: "selectedOrderSummary",
+      selectedSku: {
+        skuId: "",
+        name: "",
+        specText: "",
+        price: summary.unitPrice,
+        priceText: "¥" + formatMoney(summary.unitPrice),
+        selected: true,
+        quantity: summary.quantity,
+        productAmount: summary.productAmount,
+        attrs: {}
+      }
+    };
+  }
+
+  function pickSelectedOrderSummary(value) {
+    const text = normalizeWhitespace(value || "");
+    if (!text) return null;
+
+    const selectedRegex = /已选\s*(\d+)\s*款\s*(\d+)\s*(?:个|件|只|台)?/g;
+    let selectedMatch = null;
+    let match;
+    while ((match = selectedRegex.exec(text))) {
+      selectedMatch = match;
+    }
+    if (!selectedMatch) return null;
+
+    const selectedKinds = Number(selectedMatch[1]);
+    const quantity = Number(selectedMatch[2]);
+    if (selectedKinds !== 1 || !(quantity > 0)) return null;
+
+    const sample = text.slice(selectedMatch.index, selectedMatch.index + 260);
+    if (!/(商品金额|货品金额|商品总额|小计|合计)/.test(sample)) return null;
+
+    const productAmount = parseMoneyNearLabel(sample, /商品金额|货品金额|商品总额|小计|合计/i);
+    if (!(productAmount > 0)) return null;
+
+    let shipping = parseMoneyNearLabel(sample, /另需运费|运费|快递|配送|邮费|shipping|freight/i);
+    const shippingFree = /包邮|免邮|免运费|卖家承担运费|free shipping/i.test(sample);
+    if (shipping == null && shippingFree) shipping = 0;
+
+    return {
+      selectedKinds,
+      quantity,
+      productAmount: roundMoney(productAmount),
+      unitPrice: roundMoney(productAmount / quantity),
+      shipping: shipping != null ? roundMoney(shipping) : null,
+      shippingFree,
+      sample
+    };
   }
 
   function pickSelectedSkuPriceFromDom() {
@@ -1179,6 +1241,17 @@
   }
 
   function pickSourceShipping(context) {
+    const summary = pickSelectedOrderSummary(context && context.pageText);
+    if (summary && summary.shipping != null) {
+      return {
+        value: summary.shipping,
+        currency: "CNY",
+        text: summary.sample,
+        free: summary.shippingFree || summary.shipping === 0,
+        sourceType: "selectedOrderSummary"
+      };
+    }
+
     const textHit = pickShippingFromText(context && context.pageText);
     if (textHit.value != null) return textHit;
     const sourceHit = pickShippingFromSources(context && context.sources);

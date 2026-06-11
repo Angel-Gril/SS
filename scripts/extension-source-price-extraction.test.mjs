@@ -186,6 +186,34 @@ assert.equal(selectedSkuResponse.data.selectedSku.price, 98);
 assert.equal(selectedSkuResponse.data.shippingCny, 0);
 assert.equal(selectedSkuResponse.data.totalCostCny, 98);
 
+const selectedOrderSummaryResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/858352817684.html',
+  title: '1688 selected order summary detail',
+  bodyText: '¥10.80 ~ ¥14.50 2个起批 运费 ¥4.5 起 016白色英文款 ¥13.5 库存99965个 - 1 + 已选1款1个 商品金额： ¥13.50 另需运费（预估）： ¥4.5 48小时发货',
+  selectors: {
+    h1: '扫地机器人批发智能家用吸拖扫地机器人充电吸尘器',
+    '.price': '¥10.80 ~ ¥14.50',
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '858352817684',
+        subject: '扫地机器人批发智能家用吸拖扫地机器人充电吸尘器',
+        priceRange: '10.80-14.50',
+      },
+    },
+  },
+});
+
+assert.equal(selectedOrderSummaryResponse.ok, true);
+assert.equal(selectedOrderSummaryResponse.data.priceCny, 13.5);
+assert.equal(selectedOrderSummaryResponse.data.priceText, '¥13.5');
+assert.equal(selectedOrderSummaryResponse.data.priceSourceType, 'selectedOrderSummary');
+assert.equal(selectedOrderSummaryResponse.data.selectedSku.price, 13.5);
+assert.equal(selectedOrderSummaryResponse.data.selectedSku.quantity, 1);
+assert.equal(selectedOrderSummaryResponse.data.shippingCny, 4.5);
+assert.equal(selectedOrderSummaryResponse.data.totalCostCny, 18);
+
 const taobaoResponse = await collectWithPage({
   url: 'https://item.taobao.com/item.htm?id=99887766',
   title: 'Taobao detail',
