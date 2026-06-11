@@ -129,6 +129,9 @@ echo "[deploy] Building server and web"
 pnpm --filter server build
 pnpm --filter web build
 
+echo "[deploy] Building cloud extension package"
+pnpm package:extension:cloud
+
 PREVIOUS_RELEASE="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
 echo "[deploy] Switching current symlink"
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
