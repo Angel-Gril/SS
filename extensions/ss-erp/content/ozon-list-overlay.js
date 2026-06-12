@@ -274,6 +274,29 @@
     });
   }
 
+  function rememberSourceErrors(sku, errors) {
+    if (!Array.isArray(errors) || !errors.length) return;
+    try {
+      const bucket = globalThis.__SS_ERP_LIST_OVERLAY_SOURCE_ERRORS__ || {};
+      bucket[String(sku)] = { errors, ts: Date.now() };
+      globalThis.__SS_ERP_LIST_OVERLAY_SOURCE_ERRORS__ = bucket;
+      if (globalThis.localStorage && localStorage.getItem('ss_erp_debug_list_overlay') === '1') {
+        console.debug('[SS ERP] Ozon list insight source errors:', sku, errors);
+      }
+    } catch (e) {}
+  }
+
+  function hasDisplayablePremiumData(data) {
+    if (!data || typeof data !== 'object') return false;
+    return Object.keys(data).some((key) => {
+      if (!key || key[0] === '_') return false;
+      const value = data[key];
+      if (value == null || value === '') return false;
+      if (Array.isArray(value)) return value.length > 0;
+      return true;
+    });
+  }
+
   // === 公开 API：拉商品基础信息（含销量/卖家等可选字段）===
   // 通过 background 聚合 seller-analytics、公开 entrypoint 和 ERP 缓存；失败时保持基础卡片。
   async function fetchPublicProduct(sku) {
@@ -293,10 +316,22 @@
     }).then((resp) => {
       if (!resp || !resp.ok || !resp.item) {
         failedPremiumCache.set(sku, Date.now());
+        rememberSourceErrors(sku, [{
+          source: 'extension',
+          error: (resp && (resp.error || resp.msg)) || '详细数据请求失败',
+        }]);
         return null;
       }
 
-      const data = Object.assign({}, resp.item, { _sources: resp.sources || [] });
+      const data = Object.assign({}, resp.item, {
+        _sources: resp.sources || [],
+        _sourceErrors: resp.sourceErrors || resp.errors || [],
+      });
+      rememberSourceErrors(sku, data._sourceErrors);
+      if (!hasDisplayablePremiumData(data)) {
+        failedPremiumCache.set(sku, Date.now());
+        return null;
+      }
       setCached(premiumCache, sku, data);
       failedPremiumCache.delete(sku);
       return data;
@@ -316,7 +351,14 @@
     if (i && i[key] != null) return i[key];
     return null;
   }
-  function pickSales(p) { const v = pickFlat(p, 'soldCount'); return v == null ? null : Number(v) || 0; }
+  function pickFirstFlat(p, keys) {
+    for (const key of keys) {
+      const value = pickFlat(p, key);
+      if (value != null && value !== '') return value;
+    }
+    return null;
+  }
+  function pickSales(p) { const v = pickFirstFlat(p, ['soldCount', 'monthlySales', 'orderedUnits']); return v == null ? null : Number(v) || 0; }
   function pickGmv(p) { const v = pickFlat(p, 'soldSum'); return v == null ? null : Math.round(Number(v)); }
   function pickAddCart(p) { const v = pickFlat(p, 'convToCartPdp'); return v == null ? null : (Number(v) * 100).toFixed(1); }
   function pickViews(p) { const v = pickFlat(p, 'views'); return v == null ? null : Number(v); }
@@ -326,19 +368,19 @@
   function pickMinPrice(p) { const v = pickFlat(p, 'minSellerPrice'); return v == null ? null : Math.round(Number(v)); }
   function pickDeliveryDays(p) { return pickFlat(p, 'avgDeliveryDays'); }
   function pickSalesDynamics(p) { const v = pickFlat(p, 'salesDynamics'); return v == null ? null : Number(v).toFixed(1); }
-  function pickWeight(p) { return pickFlat(p, 'weightGrams'); }
+  function pickWeight(p) { return pickFirstFlat(p, ['weightGrams', 'grossWeightGrams', 'weightG', 'weight']); }
   function pickDims(p) {
-    const l = pickFlat(p, 'lengthMm');
-    const w = pickFlat(p, 'widthMm');
-    const h = pickFlat(p, 'heightMm');
+    const dims = pickFlat(p, 'dimensionsMm');
+    const l = pickFlat(p, 'lengthMm') || pickFlat(p, 'depth') || (dims && (dims.length || dims.depth));
+    const w = pickFlat(p, 'widthMm') || (dims && dims.width);
+    const h = pickFlat(p, 'heightMm') || (dims && dims.height);
     if (l == null && w == null && h == null) return null;
     return `${l || '?'}×${w || '?'}×${h || '?'}`;
   }
   function pickCreateDate(p) {
-    const v = pickFlat(p, 'nullableCreateDate');
+    const v = pickFirstFlat(p, ['nullableCreateDate', 'createDate', 'createdAt', 'publishedAt']);
     return v ? formatDate(v) : null;
   }
-
   // === 工具：格式化 ===
   function formatNum(n) {
     if (n == null) return '--';
@@ -601,22 +643,22 @@
 
     // 数据源徽章（替代原本的 ERP 状态徽章——不再依赖 ERP 检测）
     const sources = (premium && premium._sources) ? premium._sources : [];
-    if (sources.includes('seller-analytics')) {
+    if (pill && sources.includes('seller-analytics')) {
       pill.textContent = 'Premium';
       pill.style.background = '#ffedd5';
       pill.style.color = '#c2410c';
       pill.style.borderColor = '#fdba74';
-    } else if (sources.includes('public-entrypoint')) {
+    } else if (pill && sources.includes('public-entrypoint')) {
       pill.textContent = '公开数据';
       pill.style.background = '#fef3c7';
       pill.style.color = '#92400e';
       pill.style.borderColor = '#fcd34d';
-    } else if (sources.includes('erp-cache')) {
+    } else if (pill && sources.includes('erp-cache')) {
       pill.textContent = 'ERP 缓存';
       pill.style.background = '#f5f5f4';
       pill.style.color = '#57534e';
       pill.style.borderColor = '#d6d3d1';
-    } else if (premium === null) {
+    } else if (pill && premium === null) {
       pill.textContent = '基础';
       pill.style.background = '#f1f5f9';
       pill.style.color = '#64748b';

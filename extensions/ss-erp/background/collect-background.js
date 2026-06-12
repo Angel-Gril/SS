@@ -1367,11 +1367,32 @@ async function getOzonPublicTab() {
  *
  * 返回格式：{ ok: true, item: {...扁平字段...}, sources: [...] }
  */
+function recordInsightSourceError(sourceErrors, source, error) {
+  const message = normalizeErrorMessage(error).slice(0, 300);
+  if (!message) return;
+  sourceErrors.push({ source, error: message });
+}
+
+function hasInsightValue(value) {
+  return value != null && value !== "" && !(Array.isArray(value) && value.length === 0);
+}
+
+function shouldFetchPublicProductFallback(item) {
+  return !hasInsightValue(item.title)
+    || !hasInsightValue(item.brand)
+    || !hasInsightValue(item.category)
+    || !hasInsightValue(item.category3)
+    || !hasInsightValue(item.images)
+    || !hasInsightValue(item.variants)
+    || !hasInsightValue(item.modelId);
+}
+
 async function aggregateOzonProductInsights(productId) {
   const sku = String(productId || "").trim();
   if (!sku) return { ok: false, error: "缺少 productId" };
 
   const sources = [];
+  const sourceErrors = [];
   let item = {};
 
   // 来源 1：seller-analytics（仅当登录 + 有 Premium 时成功）
@@ -1397,6 +1418,8 @@ async function aggregateOzonProductInsights(productId) {
         salesSchema: analytics.item.salesSchema,
         nullableCreateDate: analytics.item.nullableCreateDate,
       });
+    } else {
+      recordInsightSourceError(sourceErrors, "seller-analytics", "seller.ozon.ru 未返回该 SKU 的分析数据");
     }
     if (analytics && analytics.specs) {
       Object.assign(item, {
@@ -1406,14 +1429,16 @@ async function aggregateOzonProductInsights(productId) {
         widthMm: analytics.specs.widthMm,
         heightMm: analytics.specs.heightMm,
       });
+    } else if (analytics && analytics.item) {
+      recordInsightSourceError(sourceErrors, "seller-detail", "seller.ozon.ru 未返回该 SKU 的重量/尺寸明细");
     }
   } catch (e) {
-    // 静默降级：seller 未登录、无 Premium、或接口拒绝时不影响后续
+    recordInsightSourceError(sourceErrors, "seller-analytics", e);
   }
 
   // 来源 2：OZON 公开 entrypoint API（widgetStates 提取）
-  // 只在 seller-analytics 没拿到数据时调用，节省带宽
-  if (!item.soldCount && !item.sellerName) {
+  // seller 只返回部分字段时，也用公开接口补商品基础信息。
+  if (shouldFetchPublicProductFallback(item)) {
     try {
       const pub = await fetchOzonProductViaTab(sku);
       if (pub && pub.ok && pub.data) {
@@ -1433,9 +1458,11 @@ async function aggregateOzonProductInsights(productId) {
           attributes: d.attributes,
           description: d.description,
         });
+      } else {
+        recordInsightSourceError(sourceErrors, "public-entrypoint", (pub && pub.error) || "OZON 公开商品接口无数据");
       }
     } catch (e) {
-      // 静默
+      recordInsightSourceError(sourceErrors, "public-entrypoint", e);
     }
   }
 
@@ -1457,11 +1484,17 @@ async function aggregateOzonProductInsights(productId) {
               item[k] = j.data.metrics[k];
             }
           }
+        } else if (j && j.code === 0 && j.msg && !/无缓存/.test(String(j.msg))) {
+          recordInsightSourceError(sourceErrors, "erp-cache", j.msg);
         }
+      } else {
+        recordInsightSourceError(sourceErrors, "erp-cache", "HTTP " + r.status);
       }
+    } else {
+      recordInsightSourceError(sourceErrors, "erp-cache", "扩展未配置 ERP 连接或 Token，无法读取缓存");
     }
   } catch (e) {
-    // 静默
+    recordInsightSourceError(sourceErrors, "erp-cache", e);
   }
 
   // 如果拿到了 seller-analytics 数据，回写 ERP 缓存让其他用户复用
@@ -1478,7 +1511,7 @@ async function aggregateOzonProductInsights(productId) {
     } catch (e) {}
   }
 
-  return { ok: true, item, sources };
+  return { ok: true, item, sources, sourceErrors };
 }
 
 async function getStoredErpConnection() {
