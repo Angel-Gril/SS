@@ -6,6 +6,7 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { calculateBatchPrice } from '../services/product-pricing.js';
 import { getProductMutationBlockReason, resolveOzonBatchUpdateResults } from '../services/product-operations.js';
+import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -893,7 +894,7 @@ export async function productRoutes(app: FastifyInstance) {
 
     const updateData: any = {
       attributes: found.attributes as any,
-      images: found.images as any,
+      images: resolveOzonProductImages(info || {}, found) as any,
     };
     if (info) {
       if (info.name) updateData.title = info.name;

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildProductSyncMeta, getOzonStatusDisplay, getWarehouseStock } from '../services/product-sync-metadata.js';
+import {
+  buildProductSyncMeta,
+  getOzonStatusDisplay,
+  getWarehouseStock,
+  resolveOzonProductImages,
+} from '../services/product-sync-metadata.js';
 
 describe('product sync metadata helpers', () => {
   it('translates Ozon status fields and keeps warehouse stock details for product list display', () => {
@@ -19,6 +24,7 @@ describe('product sync metadata helpers', () => {
       name: '在售',
       description: '准备出库',
       moderateStatus: '审核通过',
+      tone: 'success',
     });
     expect(getWarehouseStock(meta, 10)).toBe(4);
     expect(getWarehouseStock(meta, 20)).toBe(2);
@@ -38,16 +44,47 @@ describe('product sync metadata helpers', () => {
       name: '价格已发送',
       description: null,
       moderateStatus: null,
+      tone: 'info',
     });
     expect(getOzonStatusDisplay({ ozonStatus: { status: 'archived' } }, 'archived')).toEqual({
       name: '已归档',
       description: null,
       moderateStatus: null,
+      tone: 'muted',
     });
     expect(getOzonStatusDisplay({}, 'MISSING')).toEqual({
       name: 'Ozon 当前列表未返回',
       description: null,
       moderateStatus: null,
+      tone: 'danger',
     });
+  });
+
+  it('puts the Ozon SKU primary image first before shared product images', () => {
+    expect(resolveOzonProductImages({
+      primary_image: 'https://cdn.example.com/sku-blue.jpg',
+      images: [
+        'https://cdn.example.com/shared-model.jpg',
+        'https://cdn.example.com/detail.jpg',
+      ],
+    }, {
+      images: [
+        'https://cdn.example.com/sku-blue.jpg',
+        'https://cdn.example.com/attr-detail.jpg',
+      ],
+    })).toEqual([
+      'https://cdn.example.com/sku-blue.jpg',
+      'https://cdn.example.com/attr-detail.jpg',
+      'https://cdn.example.com/shared-model.jpg',
+      'https://cdn.example.com/detail.jpg',
+    ]);
+  });
+
+  it('falls back to attribute images when product info has no primary image', () => {
+    expect(resolveOzonProductImages({
+      images: ['https://cdn.example.com/shared-model.jpg'],
+    }, {
+      images: ['https://cdn.example.com/sku-red.jpg'],
+    })[0]).toBe('https://cdn.example.com/sku-red.jpg');
   });
 });

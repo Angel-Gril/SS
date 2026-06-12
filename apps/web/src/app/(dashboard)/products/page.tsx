@@ -39,6 +39,7 @@ interface Product {
   ozonStatusName?: string | null;
   ozonStatusDescription?: string | null;
   ozonModerateStatus?: string | null;
+  ozonStatusTone?: OzonStatusTone | null;
   warehouseStock?: number | null;
   syncStatus: string | null;
   categoryId: string | null;
@@ -71,6 +72,7 @@ interface OzonWarehouse {
 
 type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
 type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
+type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
 
 const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: string; placeholder: string }[] = [
   { value: 'set', label: '统一价', inputLabel: '新价格 (RUB)', placeholder: '输入统一价格' },
@@ -596,6 +598,7 @@ function ProductsPageInner() {
                         ozonStatusName={p.ozonStatusName}
                         ozonStatusDescription={p.ozonStatusDescription}
                         ozonModerateStatus={p.ozonModerateStatus}
+                        ozonStatusTone={p.ozonStatusTone}
                       />
                     </TableCell>
                     <TableCell>
@@ -681,6 +684,7 @@ function StatusBadge({
   ozonStatusName,
   ozonStatusDescription,
   ozonModerateStatus,
+  ozonStatusTone,
 }: {
   status: string | null;
   visibility: string | null;
@@ -688,6 +692,7 @@ function StatusBadge({
   ozonStatusName?: string | null;
   ozonStatusDescription?: string | null;
   ozonModerateStatus?: string | null;
+  ozonStatusTone?: OzonStatusTone | null;
 }) {
   const visibilityKey = String(visibility || '').toLowerCase();
   const syncKey = String(syncStatus || '').toLowerCase();
@@ -696,6 +701,9 @@ function StatusBadge({
   }
   if (visibilityKey === 'archived') return <Badge variant="secondary">已下架</Badge>;
   const label = ozonStatusName || ozonStatusDescription || status || '-';
+  if (ozonStatusTone) {
+    return <Badge variant={getStatusBadgeVariant(ozonStatusTone)} title={ozonStatusDescription || undefined}>{label}</Badge>;
+  }
   const key = `${status || ''} ${ozonStatusName || ''} ${ozonStatusDescription || ''} ${ozonModerateStatus || ''}`.toLowerCase();
   if (key.includes('failed') || key.includes('reject') || key.includes('ошиб') || key.includes('отклон')) {
     return <Badge variant="destructive" title={ozonStatusDescription || undefined}>{label}</Badge>;
@@ -708,6 +716,14 @@ function StatusBadge({
     return <Badge variant="success" title={ozonStatusDescription || undefined}>{label}</Badge>;
   }
   return <Badge variant="secondary" title={ozonStatusDescription || undefined}>{label}</Badge>;
+}
+
+function getStatusBadgeVariant(tone: OzonStatusTone): 'success' | 'warning' | 'destructive' | 'secondary' | 'default' {
+  if (tone === 'success') return 'success';
+  if (tone === 'warning') return 'warning';
+  if (tone === 'danger') return 'destructive';
+  if (tone === 'info') return 'default';
+  return 'secondary';
 }
 
 function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess }: {

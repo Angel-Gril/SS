@@ -963,6 +963,7 @@ export async function shopRoutes(app: FastifyInstance) {
             ozonStatusName: statusDisplay.name,
             ozonStatusDescription: statusDisplay.description,
             ozonModerateStatus: statusDisplay.moderateStatus,
+            ozonStatusTone: statusDisplay.tone,
             warehouseStock,
           };
         }),

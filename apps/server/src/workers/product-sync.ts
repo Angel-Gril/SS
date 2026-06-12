@@ -5,7 +5,7 @@ import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
-import { buildProductSyncMeta } from '../services/product-sync-metadata.js';
+import { buildProductSyncMeta, resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import type { ProductSyncJobOptions } from '../services/post-publish-sync.js';
 import { getMissingPlatformProductIds, parseOzonDate } from '../services/product-sync-state.js';
 
@@ -76,6 +76,18 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
 
     const productIds = list.items.map((i) => i.product_id);
     const details = await client.getProductInfoList(productIds);
+    const attributesByProductId = new Map<string, any>();
+    try {
+      const attributes = await client.getProductInfoAttributes({
+        product_id: productIds.map(String),
+        limit: productIds.length,
+      });
+      for (const item of attributes) {
+        attributesByProductId.set(String(item.id), item);
+      }
+    } catch (e: any) {
+      console.warn(`[ProductSync] Product attribute image sync failed for shop ${shopId}:`, e.message?.slice(0, 200));
+    }
     const stockDetailsByProductId = new Map<string, any[]>();
     try {
       const stockDetails = await client.getProductStocks(productIds);
@@ -94,6 +106,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
         : info.stocks?.stocks?.reduce((sum, s) => sum + s.present, 0) ?? 0;
       const modelId = info.model_info?.model_id ? String(info.model_info.model_id) : null;
       const syncMeta = buildProductSyncMeta(info, warehouseStocks);
+      const images = resolveOzonProductImages(info, attributesByProductId.get(String(info.id)));
       await prisma.product.upsert({
         where: { shopId_platformProductId: { shopId, platformProductId: String(info.id) } },
         create: {
@@ -107,7 +120,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           oldPrice: info.old_price ? parseFloat(info.old_price) : null,
           currency: info.currency_code || 'RUB',
           stock: totalStock,
-          images: info.images || [],
+          images,
           modelId,
           status: info.statuses?.status || null,
           visibility: info.is_archived ? 'ARCHIVED' : info.stocks?.has_stock ? 'VISIBLE' : 'HIDDEN',
@@ -124,7 +137,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           oldPrice: info.old_price ? parseFloat(info.old_price) : null,
           currency: info.currency_code || 'RUB',
           stock: totalStock,
-          images: info.images || [],
+          images,
           modelId,
           status: info.statuses?.status || null,
           visibility: info.is_archived ? 'ARCHIVED' : info.stocks?.has_stock ? 'VISIBLE' : 'HIDDEN',
