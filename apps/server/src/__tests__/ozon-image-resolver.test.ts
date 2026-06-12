@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { diagnoseOzonImageUrl, normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
+import {
+  diagnoseOzonImageUrl,
+  normalizeOzonPublishImageUrl,
+  resolveImageUrls,
+  waitForOzonImageReady,
+} from '../services/ozon-image-resolver.js';
 
 describe('ozon image resolver', () => {
   it('normalizes public image URLs before publishing', () => {
@@ -55,5 +60,61 @@ describe('ozon image resolver', () => {
       contentLength: '1200',
       finalUrl: 'https://cdn.example.com/final.jpg',
     });
+  });
+
+  it('falls back to GET when HEAD does not expose an image response', async () => {
+    const methods: string[] = [];
+    const result = await diagnoseOzonImageUrl('https://cdn.example.com/a.jpg', async (_url, init) => {
+      methods.push(init?.method || 'GET');
+      if (init?.method === 'HEAD') {
+        return {
+          ok: false,
+          status: 405,
+          url: 'https://cdn.example.com/a.jpg',
+          headers: { get: () => null },
+        } as any;
+      }
+      return {
+        ok: true,
+        status: 206,
+        url: 'https://cdn.example.com/a.jpg',
+        headers: {
+          get(name: string) {
+            if (name === 'content-type') return 'image/webp';
+            if (name === 'content-length') return '20';
+            return null;
+          },
+        },
+      } as any;
+    });
+
+    expect(methods).toEqual(['HEAD', 'GET']);
+    expect(result.ok).toBe(true);
+    expect(result.contentType).toBe('image/webp');
+  });
+
+  it('retries public image readiness before handing uploaded images to Ozon', async () => {
+    let attempts = 0;
+    const result = await waitForOzonImageReady('https://cdn.example.com/a.jpg', {
+      attempts: 3,
+      delayMs: 0,
+      fetchImpl: async () => {
+        attempts += 1;
+        return {
+          ok: attempts === 3,
+          status: attempts === 3 ? 200 : 404,
+          url: 'https://cdn.example.com/a.jpg',
+          headers: {
+            get(name: string) {
+              if (attempts === 3 && name === 'content-type') return 'image/jpeg';
+              return null;
+            },
+          },
+        } as any;
+      },
+    });
+
+    expect(attempts).toBe(3);
+    expect(result.ok).toBe(true);
   });
 });

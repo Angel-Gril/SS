@@ -18,6 +18,12 @@ export interface ProductSyncMeta {
 
 export type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
 
+export function normalizeOzonSku(value: unknown): string | null {
+  const sku = String(value ?? '').trim();
+  if (!sku || sku === '0') return null;
+  return sku;
+}
+
 const OZON_STATUS_LABELS: Record<string, string> = {
   price_sent: '价格已发送',
   active: '在售',

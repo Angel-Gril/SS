@@ -13,6 +13,7 @@ import {
   resolvePublishOfferId,
   resolvePublishName,
   resolveVariantPublishImages,
+  setVariantWatermarkedImages,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -137,6 +138,54 @@ describe('collect publish helpers', () => {
     }, baseImages)).toEqual([
       'https://cdn.example.com/variant.jpg',
       '/watermarked/item-1.jpg',
+    ]);
+  });
+
+  it('uses variant-specific watermarked images as publish covers when available', () => {
+    const item = {
+      images: ['https://cdn.example.com/parent.jpg'],
+      metadata: {
+        watermarkApplied: true,
+        watermarkedImages: ['/watermarked/parent.jpg'],
+      },
+    };
+    const baseImages = resolveBasePublishImages(item);
+
+    expect(resolveVariantPublishImages(item, {
+      images: ['https://cdn.example.com/variant.jpg'],
+      watermarkedImages: ['/watermarked/variant.jpg'],
+    }, baseImages)).toEqual([
+      '/watermarked/variant.jpg',
+      '/watermarked/parent.jpg',
+    ]);
+  });
+
+  it('stores watermarked image lists on the matching collected variants', () => {
+    const variants = setVariantWatermarkedImages([
+      { sku: 'blue', attrs: { Color: 'blue' }, images: ['https://cdn.example.com/blue.jpg'] },
+      { sku: 'red', attrs: { Color: 'red' }, images: ['https://cdn.example.com/red.jpg'] },
+      { sku: 'green', attrs: { Color: 'green' }, images: ['https://cdn.example.com/green.jpg'] },
+    ], {
+      blue: ['/watermarked/blue.jpg'],
+      red: ['/watermarked/red.jpg', '/watermarked/red-detail.jpg'],
+    });
+
+    expect(variants).toEqual([
+      {
+        sku: 'blue',
+        attrs: { Color: 'blue' },
+        images: ['https://cdn.example.com/blue.jpg'],
+        watermarkedImages: ['/watermarked/blue.jpg'],
+        watermarkApplied: true,
+      },
+      {
+        sku: 'red',
+        attrs: { Color: 'red' },
+        images: ['https://cdn.example.com/red.jpg'],
+        watermarkedImages: ['/watermarked/red.jpg', '/watermarked/red-detail.jpg'],
+        watermarkApplied: true,
+      },
+      { sku: 'green', attrs: { Color: 'green' }, images: ['https://cdn.example.com/green.jpg'] },
     ]);
   });
 

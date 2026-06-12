@@ -74,12 +74,40 @@ type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
 type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
 type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
 
+const PRODUCT_FILTERS_STORAGE_KEY = 'ss-erp:products:filters';
+
 const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: string; placeholder: string }[] = [
   { value: 'set', label: '统一价', inputLabel: '新价格 (RUB)', placeholder: '输入统一价格' },
   { value: 'multiply', label: '倍率', inputLabel: '价格倍率', placeholder: '例如 2 表示翻倍' },
   { value: 'discount', label: '折扣', inputLabel: '折扣比例 %', placeholder: '例如 30 表示降价30%' },
   { value: 'increase', label: '加价%', inputLabel: '加价比例 %', placeholder: '例如 20 表示涨价20%' },
 ];
+
+function readStoredProductFilters(): {
+  shopId?: string;
+  warehouseId?: number | null;
+  warehouseInStockOnly?: boolean;
+  statusFilter?: ProductStatusFilter;
+} {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PRODUCT_FILTERS_STORAGE_KEY);
+    if (!raw) return {};
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const statusFilter = ['current', 'archived', 'missing', 'all'].includes(String(data.statusFilter || ''))
+      ? data.statusFilter as ProductStatusFilter
+      : undefined;
+    const warehouseId = Number(data.warehouseId);
+    return {
+      shopId: typeof data.shopId === 'string' ? data.shopId : undefined,
+      warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : null,
+      warehouseInStockOnly: typeof data.warehouseInStockOnly === 'boolean' ? data.warehouseInStockOnly : undefined,
+      statusFilter,
+    };
+  } catch {
+    return {};
+  }
+}
 
 function calculateProductBatchPreview(price: unknown, mode: BatchPriceMode, rawValue: string): number | null {
   const value = Number(rawValue);
@@ -114,6 +142,11 @@ function isProductMutable(product: Product): boolean {
   return !!product.platformProductId && visibility !== 'ARCHIVED' && visibility !== 'MISSING' && syncStatus !== 'MISSING';
 }
 
+function getDisplaySku(product: { sku?: string | null }): string | null {
+  const sku = String(product.sku || '').trim();
+  return sku && sku !== '0' ? sku : null;
+}
+
 // PLACEHOLDER_INNER_COMPONENT
 
 function ProductsPageInner() {
@@ -142,6 +175,7 @@ function ProductsPageInner() {
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [warehouseInStockOnly, setWarehouseInStockOnly] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>('current');
+  const [filtersRestored, setFiltersRestored] = useState(false);
   const [syncingCommissions, setSyncingCommissions] = useState(false);
   const [syncingProducts, setSyncingProducts] = useState(false);
   const [lastProductSyncAt, setLastProductSyncAt] = useState<string | null>(null);
@@ -149,10 +183,25 @@ function ProductsPageInner() {
   const limit = 20;
 
   useEffect(() => {
+    const stored = readStoredProductFilters();
+    if (!initialShopId && stored.shopId) setShopId(stored.shopId);
+    if (stored.warehouseId) {
+      setSelectedWarehouseId(stored.warehouseId);
+      setWarehouseInStockOnly(stored.warehouseInStockOnly ?? true);
+    } else if (typeof stored.warehouseInStockOnly === 'boolean') {
+      setWarehouseInStockOnly(stored.warehouseInStockOnly);
+    }
+    if (stored.statusFilter) setStatusFilter(stored.statusFilter);
+    setFiltersRestored(true);
+  }, []);
+
+  useEffect(() => {
     api.get<Shop[]>('/api/shops').then((res) => {
       if (res.code === 1 && res.data) {
         setShops(res.data);
-        if (!shopId && res.data.length > 0) setShopId(res.data[0]!.id);
+        if (res.data.length > 0 && (!shopId || !res.data.some((shop) => shop.id === shopId))) {
+          setShopId(res.data[0]!.id);
+        }
       }
     });
   }, []);
@@ -160,13 +209,31 @@ function ProductsPageInner() {
   useEffect(() => {
     if (shopId) {
       api.get<OzonWarehouse[]>(`/api/products/warehouses/${shopId}`).then((res) => {
-        if (res.code === 1 && res.data) setWarehouses(res.data);
+        if (res.code === 1 && res.data) {
+          setWarehouses(res.data);
+          setSelectedWarehouseId((current) => {
+            if (!current || res.data!.some((warehouse) => warehouse.warehouse_id === current)) return current;
+            setWarehouseInStockOnly(false);
+            return null;
+          });
+        }
       });
     }
   }, [shopId]);
 
+  useEffect(() => {
+    if (!filtersRestored) return;
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(PRODUCT_FILTERS_STORAGE_KEY, JSON.stringify({
+      shopId,
+      warehouseId: selectedWarehouseId,
+      warehouseInStockOnly,
+      statusFilter,
+    }));
+  }, [filtersRestored, shopId, selectedWarehouseId, warehouseInStockOnly, statusFilter]);
+
   const loadProducts = useCallback(async () => {
-    if (!shopId) return;
+    if (!filtersRestored || !shopId) return;
     setLoading(true);
     const params = new URLSearchParams({
       offset: String(page * limit),
@@ -186,7 +253,7 @@ function ProductsPageInner() {
       setLastProductSyncAt(res.data.lastSyncAt);
     }
     setLoading(false);
-  }, [shopId, page, search, selectedWarehouseId, warehouseInStockOnly, statusFilter]);
+  }, [filtersRestored, shopId, page, search, selectedWarehouseId, warehouseInStockOnly, statusFilter]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -320,12 +387,12 @@ function ProductsPageInner() {
                 onChange={(e) => {
                   const nextWarehouseId = e.target.value ? Number(e.target.value) : null;
                   setSelectedWarehouseId(nextWarehouseId);
-                  setWarehouseInStockOnly(false);
+                  setWarehouseInStockOnly(!!nextWarehouseId);
                   setPage(0);
                 }}
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
-                <option value="">查看总库存</option>
+                <option value="">全部仓库（总库存）</option>
                 {warehouses.map((w) => (
                   <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
                 ))}
@@ -473,6 +540,7 @@ function ProductsPageInner() {
               <TableBody>
                 {products.map((p) => {
                   const mutable = isProductMutable(p);
+                  const displaySku = getDisplaySku(p);
                   return (
                   <TableRow key={p.id} className={selected.has(p.id) ? 'bg-muted/30' : ''}>
                     <TableCell>
@@ -494,7 +562,7 @@ function ProductsPageInner() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       <div className="space-y-0.5">
-                        {p.sku && <div>SKU: {p.sku}</div>}
+                        {displaySku ? <div>SKU: {displaySku}</div> : <div className="text-muted-foreground">Ozon SKU 待生成</div>}
                         {p.offerId && <div className="text-muted-foreground">{p.offerId}</div>}
                       </div>
                     </TableCell>
@@ -989,7 +1057,7 @@ function ProductPreviewDialog({ productId, onClose, onEdit }: {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm border rounded-md p-3 bg-muted/30">
               <div><span className="text-muted-foreground text-xs">价格</span><p className="font-medium">{detail.price ? `${detail.price} ${detail.currency}` : '—'}</p></div>
               <div><span className="text-muted-foreground text-xs">库存</span><p className="font-medium">{detail.stock ?? 0}</p></div>
-              <div><span className="text-muted-foreground text-xs">SKU</span><p className="font-mono text-xs">{detail.sku || '—'}</p></div>
+              <div><span className="text-muted-foreground text-xs">SKU</span><p className="font-mono text-xs">{getDisplaySku(detail) || '待生成'}</p></div>
               <div><span className="text-muted-foreground text-xs">Offer ID</span><p className="font-mono text-xs">{detail.offerId || '—'}</p></div>
             </div>
 
@@ -1295,7 +1363,7 @@ function ProductDetailDialog({ productId, onClose, onUpdated, warehouses: parent
                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant="secondary" className="text-[10px]">{detail.platform}</Badge>
                   <span>{detail.shopName}</span>
-                  {detail.sku && <span>SKU: {detail.sku}</span>}
+                  {getDisplaySku(detail) ? <span>SKU: {getDisplaySku(detail)}</span> : <span>Ozon SKU 待生成</span>}
                   {detail.offerId && <span>Offer: {detail.offerId}</span>}
                   <StatusBadge status={detail.status} visibility={detail.visibility} />
                 </div>

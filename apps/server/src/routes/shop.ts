@@ -4,7 +4,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
-import { getOzonStatusDisplay, getWarehouseStock } from '../services/product-sync-metadata.js';
+import { getOzonStatusDisplay, getWarehouseStock, normalizeOzonSku } from '../services/product-sync-metadata.js';
 import {
   normalizePromotionActions,
   normalizePromotionProducts,
@@ -1076,6 +1076,7 @@ export async function shopRoutes(app: FastifyInstance) {
           const warehouseStock = warehouseId ? getWarehouseStock(variants, warehouseId) : null;
           return {
             ...rest,
+            sku: normalizeOzonSku(r.sku),
             price: r.price?.toString() ?? null,
             oldPrice: r.oldPrice?.toString() ?? null,
             commissionRate: r.commissionRate?.toString() ?? null,

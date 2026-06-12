@@ -149,6 +149,16 @@ function sameStringList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function normalizeWatermarkOutputPaths(paths: string[]): string[] {
+  return paths.map((p) => {
+    if (p.startsWith('/watermarked/') || p.startsWith('/uploads/')) return p;
+    // 兼容历史数据：剥离 http://localhost:port 前缀
+    const m = p.match(/^https?:\/\/localhost(?::\d+)?(\/.*)$/);
+    if (m) return m[1]!;
+    return p;
+  });
+}
+
 function positiveInt(value: unknown): number | null {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
@@ -205,11 +215,31 @@ export function resolveBasePublishImages(
 
 export function resolveVariantPublishImages(
   item: { images?: unknown; metadata?: unknown },
-  variant: { images?: unknown },
+  variant: { images?: unknown; watermarkedImages?: unknown },
   baseImages: string[],
 ): string[] {
-  const variantImages = normalizePublishImageList(variant.images);
+  const variantWatermarkedImages = normalizePublishImageList(variant.watermarkedImages);
+  const variantImages = variantWatermarkedImages.length
+    ? variantWatermarkedImages
+    : normalizePublishImageList(variant.images);
   return variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages;
+}
+
+export function setVariantWatermarkedImages(
+  variantsInput: unknown,
+  watermarkedBySku: Record<string, unknown>,
+): any[] {
+  const variants = Array.isArray(variantsInput) ? variantsInput as any[] : [];
+  return variants.map((variant) => {
+    const sku = String(variant?.sku || '').trim();
+    const watermarkedImages = sku ? normalizePublishImageList(watermarkedBySku[sku]) : [];
+    if (!watermarkedImages.length) return variant;
+    return {
+      ...variant,
+      watermarkedImages,
+      watermarkApplied: true,
+    };
+  });
 }
 
 export function recordOfferPublishImages(
@@ -2120,30 +2150,47 @@ export async function collectRoutes(app: FastifyInstance) {
 
     for (const item of items) {
       const images = Array.isArray(item.images) ? (item.images as string[]) : [];
-      if (!images.length) {
+      const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
+      const existingMeta = (item.metadata as any) || {};
+      const updateData: any = {};
+      let itemProcessed = false;
+
+      if (images.length) {
+        const result = await processItemWatermarks(images, item.id, config);
+        failed += result.failed;
+
+        // 存相对路径 /watermarked/xxx.jpg。发布时由 resolveImageUrls 上传到存储后端转为公网 URL。
+        // 不要存 http://localhost:3001/... — OZON 拉不到本地服务。
+        const relPaths = normalizeWatermarkOutputPaths(result.watermarkedImages);
+        updateData.metadata = { ...existingMeta, watermarkedImages: relPaths, watermarkApplied: true };
+        itemProcessed = true;
+      }
+
+      const variantWatermarkedBySku: Record<string, string[]> = {};
+      for (let idx = 0; idx < variants.length; idx += 1) {
+        const variant = variants[idx]!;
+        const sku = String(variant?.sku || '').trim();
+        const variantImages = Array.isArray(variant?.images) ? variant.images as string[] : [];
+        if (!sku || !variantImages.length) continue;
+
+        const result = await processItemWatermarks(variantImages, `${item.id}_v${idx}`, config);
+        failed += result.failed;
+        variantWatermarkedBySku[sku] = normalizeWatermarkOutputPaths(result.watermarkedImages);
+        itemProcessed = true;
+      }
+
+      if (!itemProcessed) {
         failed++;
         continue;
       }
 
-      const result = await processItemWatermarks(images, item.id, config);
-      failed += result.failed;
+      if (Object.keys(variantWatermarkedBySku).length) {
+        updateData.variants = setVariantWatermarkedImages(variants, variantWatermarkedBySku) as any;
+      }
 
-      // 存相对路径 /watermarked/xxx.jpg。发布时由 resolveImageUrls 上传到存储后端转为公网 URL。
-      // 不要存 http://localhost:3001/... — OZON 拉不到本地服务。
-      const relPaths = result.watermarkedImages.map((p) => {
-        if (p.startsWith('/watermarked/') || p.startsWith('/uploads/')) return p;
-        // 兼容历史数据：剥离 http://localhost:port 前缀
-        const m = p.match(/^https?:\/\/localhost(?::\d+)?(\/.*)$/);
-        if (m) return m[1]!;
-        return p;
-      });
-
-      const existingMeta = (item.metadata as any) || {};
       await prisma.supplyGoods.update({
         where: { id: item.id },
-        data: {
-          metadata: { ...existingMeta, watermarkedImages: relPaths, watermarkApplied: true },
-        },
+        data: updateData,
       });
       processed++;
     }

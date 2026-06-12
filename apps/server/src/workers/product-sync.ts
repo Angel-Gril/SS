@@ -5,7 +5,7 @@ import { registerWorker } from '../lib/worker-registry.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
-import { buildProductSyncMeta, resolveOzonProductImages } from '../services/product-sync-metadata.js';
+import { buildProductSyncMeta, normalizeOzonSku, resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import type { ProductSyncJobOptions } from '../services/post-publish-sync.js';
 import { getMissingPlatformProductIds, parseOzonDate } from '../services/product-sync-state.js';
 
@@ -107,12 +107,13 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
       const modelId = info.model_info?.model_id ? String(info.model_info.model_id) : null;
       const syncMeta = buildProductSyncMeta(info, warehouseStocks);
       const images = resolveOzonProductImages(info, attributesByProductId.get(String(info.id)));
+      const ozonSku = normalizeOzonSku(info.sku);
       await prisma.product.upsert({
         where: { shopId_platformProductId: { shopId, platformProductId: String(info.id) } },
         create: {
           shopId,
           platformProductId: String(info.id),
-          sku: String(info.sku),
+          sku: ozonSku,
           offerId: info.offer_id,
           title: info.name,
           description: info.description || '',
@@ -131,6 +132,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           lastOzonSyncAt: syncStartedAt,
         },
         update: {
+          sku: ozonSku,
           title: info.name,
           description: info.description || undefined,
           price: info.price ? parseFloat(info.price) : null,

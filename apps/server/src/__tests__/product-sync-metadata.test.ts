@@ -3,6 +3,7 @@ import {
   buildProductSyncMeta,
   getOzonStatusDisplay,
   getWarehouseStock,
+  normalizeOzonSku,
   resolveOzonProductImages,
 } from '../services/product-sync-metadata.js';
 
@@ -86,5 +87,11 @@ describe('product sync metadata helpers', () => {
     }, {
       images: ['https://cdn.example.com/sku-red.jpg'],
     })[0]).toBe('https://cdn.example.com/sku-red.jpg');
+  });
+
+  it('treats Ozon sku 0 as not generated yet', () => {
+    expect(normalizeOzonSku(0)).toBeNull();
+    expect(normalizeOzonSku('0')).toBeNull();
+    expect(normalizeOzonSku(' 12345 ')).toBe('12345');
   });
 });

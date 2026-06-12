@@ -8,7 +8,12 @@ function previewUrl(value: string): string {
 
 type ImageFetch = (
   url: string,
-  init?: { method?: string; redirect?: 'follow' | 'error' | 'manual'; signal?: AbortSignal },
+  init?: {
+    method?: string;
+    redirect?: 'follow' | 'error' | 'manual';
+    signal?: AbortSignal;
+    headers?: Record<string, string>;
+  },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -84,14 +89,24 @@ export async function diagnoseOzonImageUrl(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetchImpl(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
-    return {
+    const toDiag = (res: Awaited<ReturnType<ImageFetch>>) => ({
       ok: res.ok && String(res.headers.get('content-type') || '').toLowerCase().startsWith('image/'),
       status: res.status,
       contentType: res.headers.get('content-type'),
       contentLength: res.headers.get('content-length'),
       finalUrl: res.url || url,
-    };
+    });
+
+    const head = toDiag(await fetchImpl(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal }));
+    if (head.ok) return head;
+
+    const get = toDiag(await fetchImpl(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { range: 'bytes=0-0' },
+    }));
+    return get.ok ? get : head;
   } catch (e: any) {
     return {
       ok: false,
@@ -100,6 +115,33 @@ export async function diagnoseOzonImageUrl(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function waitForOzonImageReady(
+  url: string,
+  options: {
+    attempts?: number;
+    delayMs?: number;
+    fetchImpl?: ImageFetch;
+  } = {},
+): Promise<Awaited<ReturnType<typeof diagnoseOzonImageUrl>>> {
+  const attempts = Math.max(1, options.attempts ?? 3);
+  const delayMs = Math.max(0, options.delayMs ?? 400);
+  let lastDiag: Awaited<ReturnType<typeof diagnoseOzonImageUrl>> | null = null;
+  const fetchImpl = options.fetchImpl || (fetch as ImageFetch);
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    lastDiag = await diagnoseOzonImageUrl(url, fetchImpl);
+    if (lastDiag.ok) return lastDiag;
+    if (attempt < attempts && delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw new Error(
+    `图片已上传但公网暂不可读，OZON 可能下载失败: ${previewUrl(url)} ` +
+    `(status=${lastDiag?.status ?? 'ERR'}, type=${lastDiag?.contentType || '-'}${lastDiag?.error ? `, error=${lastDiag.error}` : ''})`,
+  );
 }
 
 function queueOzonImageDiagnostic(url: string, source: string) {
@@ -168,6 +210,7 @@ export async function resolveImageUrls(
       const category = img.startsWith('/watermarked/') ? 'watermarked' : 'raw';
       const result = await backend.uploadBuffer(buf, filename, undefined, { category, ownerId });
       const normalized = normalizeOzonPublishImageUrl(result.url);
+      await waitForOzonImageReady(normalized);
       resolved.push(normalized);
       queueOzonImageDiagnostic(normalized, category);
     } else {
