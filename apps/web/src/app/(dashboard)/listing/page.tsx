@@ -157,11 +157,10 @@ export default function ListingPage() {
       const res = await api.post<{ taskId?: string }>('/api/collect/publish-ozon', {
         ids: items.map((it) => it.id),
         shopId,
-        categoryId: items[0]!.categoryId || 0,
-        typeId: items[0]!.typeId || 0,
         markupPct: Number(markupPct) || 0,
         mode: 'clone',
         followBrand,
+        useItemCategory: true,
         source: 'listing-page',
       });
       if (res.code === 1) {

@@ -3,9 +3,12 @@ import {
   calcPublishPrice,
   containsCjkText,
   getVariantOverridePrice,
+  groupPublishItemsByCategory,
+  hasOwnPublishCategory,
   recordOfferPublishImages,
   removeVariantsBySkus,
   resolveBasePublishImages,
+  resolveItemPublishCategory,
   resolvePublishOfferId,
   resolvePublishName,
   resolveVariantPublishImages,
@@ -28,6 +31,56 @@ describe('collect publish helpers', () => {
       metadata: { publishTitleRu: 'Чехол для iPad' },
     }, { Цвет: 'серый' });
     expect(name).toBe('Чехол для iPad серый');
+  });
+
+  it('prefers each collected item category over batch fallback category', () => {
+    expect(resolveItemPublishCategory({
+      metadata: { descriptionCategoryId: 17028706, typeId: 95913 },
+    }, 17028922, 97111)).toEqual({
+      categoryId: 17028706,
+      typeId: 95913,
+    });
+
+    expect(resolveItemPublishCategory({
+      metadata: {},
+    }, 17028922, 97111)).toEqual({
+      categoryId: 17028922,
+      typeId: 97111,
+    });
+  });
+
+  it('detects whether an item has its own complete publish category', () => {
+    expect(hasOwnPublishCategory({
+      metadata: { descriptionCategoryId: 17028706, typeId: 95913 },
+    })).toBe(true);
+    expect(hasOwnPublishCategory({
+      metadata: { descriptionCategoryId: 17028706 },
+    })).toBe(false);
+    expect(hasOwnPublishCategory({
+      metadata: {},
+    })).toBe(false);
+  });
+
+  it('groups publish payload items by their own category and type', () => {
+    const groups = groupPublishItemsByCategory([
+      { offer_id: 'toy-brown', description_category_id: 17028706, type_id: 95913 },
+      { offer_id: 'toy-pink', description_category_id: 17028706, type_id: 95913 },
+      { offer_id: 'hair-band', description_category_id: 17028922, type_id: 97111 },
+    ]);
+
+    expect(groups.map((group) => ({
+      categoryId: group.categoryId,
+      typeId: group.typeId,
+      offers: group.items.map((item: any) => item.offer_id),
+    }))).toEqual([{
+      categoryId: 17028706,
+      typeId: 95913,
+      offers: ['toy-brown', 'toy-pink'],
+    }, {
+      categoryId: 17028922,
+      typeId: 97111,
+      offers: ['hair-band'],
+    }]);
   });
 
   it('prefers sku-based variant price overrides while keeping index fallback', () => {

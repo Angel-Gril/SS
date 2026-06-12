@@ -106,6 +106,7 @@ export default function CollectPage() {
   const [pricePreviewExpanded, setPricePreviewExpanded] = useState(false);
   const [randomizeConfig, setRandomizeConfig] = useState<RandomizeConfig | null>(null);
   const [randomOfferIdEnabled, setRandomOfferIdEnabled] = useState(true);
+  const [publishUseItemCategory, setPublishUseItemCategory] = useState(false);
   const [inheriting, setInheriting] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [enrichShopId, setEnrichShopId] = useState('');
@@ -485,6 +486,7 @@ export default function CollectPage() {
       mode: publishMode,
       followBrand: publishFollowBrand,
       randomOfferId: randomOfferIdEnabled,
+      useItemCategory: publishUseItemCategory,
       source: 'collect-page',
       ...(Object.keys(priceOverrides).length ? { priceOverrides } : {}),
       ...(Object.keys(offerIds).length ? { offerIds } : {}),
@@ -545,6 +547,28 @@ export default function CollectPage() {
       return;
     }
 
+    const selectedBySku = new Map(selected.map((item) => [String(item.sku || ''), item]));
+    let inheritedCount = 0;
+    for (const row of res.data) {
+      if (!row?.ok) continue;
+      const item = selectedBySku.get(String(row.productId || ''));
+      if (!item) continue;
+      const categoryId = Number(row.descriptionCategoryId) || 0;
+      const typeId = Number(row.typeId) || 0;
+      if (!categoryId && !typeId && !row.weight && !row.height && !row.width && !row.depth) continue;
+      await api.post('/api/collect/save-customization', {
+        id: item.id,
+        ...(categoryId ? { categoryId } : {}),
+        ...(typeId ? { typeId } : {}),
+        ...(row.weight ? { weightG: Number(row.weight) } : {}),
+        ...(row.depth ? { lengthMm: Number(row.depth) } : {}),
+        ...(row.width ? { widthMm: Number(row.width) } : {}),
+        ...(row.height ? { heightMm: Number(row.height) } : {}),
+      });
+      if (categoryId && typeId) inheritedCount++;
+    }
+
+    setPublishUseItemCategory(inheritedCount > 0);
     if (first.descriptionCategoryId) setPublishCategoryId(String(first.descriptionCategoryId));
     if (first.weight) setPublishWeight(String(first.weight));
     if (first.height) setPublishHeight(String(first.height));
@@ -554,7 +578,7 @@ export default function CollectPage() {
     if (first.typeId) {
       setPublishTypeId(String(first.typeId));
       setInheriting(false);
-      toast({ title: '已从源商品继承属性（通过扩展）' });
+      toast({ title: inheritedCount > 1 ? `已分别继承 ${inheritedCount} 件商品的源分类/尺寸` : '已从源商品继承属性（通过扩展）' });
       return;
     }
 
@@ -567,18 +591,18 @@ export default function CollectPage() {
       if (typeRes.code === 1 && typeRes.data?.autoTypeId) {
         setPublishTypeId(String(typeRes.data.autoTypeId));
         setInheriting(false);
-        toast({ title: '已从源商品继承属性（含自动匹配 type_id）' });
+        toast({ title: inheritedCount > 1 ? `已分别继承 ${inheritedCount} 件商品的源分类/尺寸` : '已从源商品继承属性（含自动匹配 type_id）' });
         return;
       } else if (typeRes.code === 1 && typeRes.data?.types?.length) {
         setPublishTypeId(String(typeRes.data.types[0]!.typeId));
         setInheriting(false);
-        toast({ title: `已继承分类，type_id 有 ${typeRes.data.types.length} 个选项，已选第一个` });
+        toast({ title: inheritedCount > 1 ? `已分别继承 ${inheritedCount} 件商品的源分类/尺寸` : `已继承分类，type_id 有 ${typeRes.data.types.length} 个选项，已选第一个` });
         return;
       }
     }
 
     setInheriting(false);
-    toast({ title: '已继承分类/重量/尺寸，type_id 需手动从分类树获取' });
+    toast({ title: inheritedCount > 1 ? `已分别继承 ${inheritedCount} 件商品的源分类/尺寸，部分 type_id 需补齐` : '已继承分类/重量/尺寸，type_id 需手动从分类树获取' });
   }
 
   function handleGoToListing() {
@@ -789,7 +813,7 @@ export default function CollectPage() {
                   <Button size="sm" variant="outline" onClick={handleGoToListing}>
                     <ArrowRight className="h-4 w-4 mr-1" />SKU 采集改款
                   </Button>
-                  <Button size="sm" onClick={() => setShowPublishDialog(true)}>
+                  <Button size="sm" onClick={() => { setPublishUseItemCategory(false); setShowPublishDialog(true); }}>
                     <Upload className="h-4 w-4 mr-1" />一键上架OZON
                   </Button>
                 </div>
@@ -1167,12 +1191,14 @@ export default function CollectPage() {
 
             <div className="space-y-2">
               <Label>OZON 分类 ID *</Label>
-              <Input value={publishCategoryId} onChange={(e) => setPublishCategoryId(e.target.value)} placeholder="description_category_id" type="number" />
+              <Input value={publishCategoryId} onChange={(e) => { setPublishUseItemCategory(false); setPublishCategoryId(e.target.value); }} placeholder="description_category_id" type="number" />
             </div>
             <div className="space-y-2">
               <Label>OZON 类型 ID (type_id) *</Label>
-              <Input value={publishTypeId} onChange={(e) => setPublishTypeId(e.target.value)} placeholder="从分类树获取的 type_id" type="number" />
-              <p className="text-xs text-muted-foreground">点击上方按钮自动从 OZON 源商品继承，或手动从分类树获取（最后一级）</p>
+              <Input value={publishTypeId} onChange={(e) => { setPublishUseItemCategory(false); setPublishTypeId(e.target.value); }} placeholder="从分类树获取的 type_id" type="number" />
+              <p className="text-xs text-muted-foreground">
+                {publishUseItemCategory ? '已按每个商品自己的源分类上架；缺少源分类的商品会被服务端拦截。' : '点击上方按钮自动从 OZON 源商品继承，或手动从分类树获取（最后一级）'}
+              </p>
             </div>
             <div className="grid grid-cols-4 gap-2">
               <div className="space-y-1">

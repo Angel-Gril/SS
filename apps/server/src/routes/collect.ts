@@ -101,6 +101,48 @@ function sameStringList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function positiveInt(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+export function resolveItemPublishCategory(
+  item: { metadata?: unknown },
+  fallbackCategoryId?: unknown,
+  fallbackTypeId?: unknown,
+  preferItemCategory = true,
+): { categoryId: number; typeId: number } {
+  const meta = metadataRecord(item.metadata);
+  const itemCategoryId = positiveInt(meta.descriptionCategoryId);
+  const itemTypeId = positiveInt(meta.typeId);
+  const fallbackCategory = positiveInt(fallbackCategoryId);
+  const fallbackType = positiveInt(fallbackTypeId);
+  return {
+    categoryId: (preferItemCategory ? itemCategoryId : fallbackCategory) ?? itemCategoryId ?? fallbackCategory ?? 0,
+    typeId: (preferItemCategory ? itemTypeId : fallbackType) ?? itemTypeId ?? fallbackType ?? 0,
+  };
+}
+
+export function hasOwnPublishCategory(item: { metadata?: unknown }): boolean {
+  const meta = metadataRecord(item.metadata);
+  return !!positiveInt(meta.descriptionCategoryId) && !!positiveInt(meta.typeId);
+}
+
+export function groupPublishItemsByCategory<T extends { description_category_id?: unknown; type_id?: unknown }>(
+  items: T[],
+): Array<{ categoryId: number; typeId: number; items: T[] }> {
+  const groups = new Map<string, { categoryId: number; typeId: number; items: T[] }>();
+  for (const item of items) {
+    const categoryId = positiveInt(item.description_category_id) ?? 0;
+    const typeId = positiveInt(item.type_id) ?? 0;
+    const key = `${categoryId}:${typeId}`;
+    const group = groups.get(key);
+    if (group) group.items.push(item);
+    else groups.set(key, { categoryId, typeId, items: [item] });
+  }
+  return Array.from(groups.values());
+}
+
 export function resolveBasePublishImages(
   item: { images?: unknown; metadata?: unknown },
   clonedImages?: unknown,
@@ -816,8 +858,8 @@ export async function collectRoutes(app: FastifyInstance) {
     const body = request.body as {
       ids: string[];
       shopId: string;
-      categoryId: number;
-      typeId: number;
+      categoryId?: number;
+      typeId?: number;
       price?: string;
       stock?: number;
       weight?: number;
@@ -830,21 +872,16 @@ export async function collectRoutes(app: FastifyInstance) {
       mode?: 'follow' | 'clone';
       followBrand?: boolean;
       randomOfferId?: boolean;
+      useItemCategory?: boolean;
       warehouseId?: number;
       priceOverrides?: Record<string, Record<string | number, number>>;
       offerIds?: Record<string, string>;
       variantOfferIds?: Record<string, Record<string | number, string>>;
-      source?: 'collect-page' | 'listing-page';
+      source?: 'collect-page' | 'listing-page' | 'batch-collect-page';
     };
 
     if (!body?.ids?.length || !body.shopId) {
       return reply.status(400).send({ code: 0, msg: '请选择商品和目标店铺' });
-    }
-    if (!body.categoryId) {
-      return reply.status(400).send({ code: 0, msg: '请选择商品分类（categoryId 必填）' });
-    }
-    if (!body.typeId) {
-      return reply.status(400).send({ code: 0, msg: '请选择商品类型（typeId 必填）' });
     }
 
     const shop = await prisma.shop.findFirst({ where: { id: body.shopId, userId } });
@@ -895,6 +932,21 @@ export async function collectRoutes(app: FastifyInstance) {
     const markupAmount = Number(body.markupAmount) || 0;
     const mode = body.mode === 'clone' ? 'clone' : 'follow';
     const followBrand = body.followBrand !== false;
+    const preferItemCategory = body.useItemCategory === true || body.source === 'listing-page';
+    if (withAttrs.length) {
+      const missingCategoryItems = withAttrs.filter((item) => {
+        if (preferItemCategory) return !hasOwnPublishCategory(item);
+        const category = resolveItemPublishCategory(item, body.categoryId, body.typeId, preferItemCategory);
+        return !category.categoryId || !category.typeId;
+      });
+      if (missingCategoryItems.length) {
+        const sample = missingCategoryItems.slice(0, 3).map((item) => item.sku || item.title || item.id).join('、');
+        return reply.status(400).send({
+          code: 0,
+          msg: `${missingCategoryItems.length} 件商品缺少独立 OZON 分类/类型 ID（${sample}）。请先点击“从源商品继承分类/重量/尺寸”，或手动补齐后再上架。`,
+        });
+      }
+    }
     const randomizeCfg = await getRandomizeConfig();
     const userPrefersRandomOfferId = body.randomOfferId !== false;
 
@@ -1182,9 +1234,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const priceWithMarkup = calcPublishPrice(basePriceCny, markupPct, markupAmount);
       const sourceProductId = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
       const cloned = sourceProductId ? cloneAttrsByProductId.get(sourceProductId) : undefined;
-      const meta = item.metadata as any;
-      const categoryId = body.categoryId || meta?.descriptionCategoryId;
-      const typeId = body.typeId || meta?.typeId;
+      const { categoryId, typeId } = resolveItemPublishCategory(item, body.categoryId, body.typeId, preferItemCategory);
       const dims = getItemDimensions(item);
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
       const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
@@ -1277,165 +1327,150 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.send({ code: 0, msg: `图片处理失败: ${e.message?.slice(0, 400) || '未知错误'}` });
     }
 
-    // 查询目标分类的必填属性，补全缺失的制造商/品牌
-    try {
-      const categoryAttrs = await client.getDescriptionCategoryAttributes({
-        description_category_id: body.categoryId,
-        type_id: body.typeId,
-        language: 'DEFAULT',
-      });
-      const allAttrs = categoryAttrs;
-      const requiredAttrs = allAttrs.filter((a) => a.is_required);
-      // 字典缓存：一次上品任务里同分类同属性只查一次（每个字典可能上千条值）
-      const attrDictCache = new Map<string, { id: number; value: string; info: string; picture: string }[]>();
-      const MANUFACTURER_NAMES = /производитель|manufacturer/i;
-      const BRAND_NAMES = /бренд|brand/i;
+    // 按每个 payload item 自己的类目补属性，避免批量多类目上架时第一类目污染整批。
+    const attrDictCache = new Map<string, { id: number; value: string; info: string; picture: string }[]>();
+    const MANUFACTURER_NAMES = /производитель|manufacturer/i;
+    const BRAND_NAMES = /бренд|brand/i;
+    for (const group of groupPublishItemsByCategory(importItems)) {
+      try {
+        const categoryAttrs = await client.getDescriptionCategoryAttributes({
+          description_category_id: group.categoryId,
+          type_id: group.typeId,
+          language: 'DEFAULT',
+        });
+        const allAttrs = categoryAttrs;
+        const requiredAttrs = allAttrs.filter((a) => a.is_required);
 
-      // 找品牌属性（不管是否 required，Ozon 实际都强制要求）
-      const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
-      const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
+        const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
+        const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
 
-      console.log(`[publish-ozon] category attrs: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}`);
+        console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}`);
 
-      // 预查品牌字典，找到 "Без бренда" 的真实 dictionary_value_id
-      let noBrandDictId: number | null = null;
-      if (brandAttrDef) {
-        try {
-          const brandValues = await client.getAttributeValues({
-            description_category_id: body.categoryId,
-            type_id: body.typeId,
-            attribute_id: brandAttrDef.id,
+        let noBrandDictId: number | null = null;
+        if (brandAttrDef) {
+          try {
+            const brandValues = await client.getAttributeValues({
+              description_category_id: group.categoryId,
+              type_id: group.typeId,
+              attribute_id: brandAttrDef.id,
+            });
+            const noBrand = brandValues.find((v) => /без бренда/i.test(v.value));
+            if (noBrand) {
+              noBrandDictId = noBrand.id;
+              console.log(`[publish-ozon] found "Без бренда" dict_id=${noBrandDictId} for attr ${brandAttrDef.id} category=${group.categoryId}/${group.typeId}`);
+            } else {
+              console.warn(`[publish-ozon] "Без бренда" not found in brand dictionary (${brandValues.length} values) category=${group.categoryId}/${group.typeId}`);
+            }
+          } catch (e: any) {
+            console.warn(`[publish-ozon] failed to query brand dictionary category=${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 150));
+          }
+        }
+
+        for (const importItem of group.items) {
+          if (!importItem.attributes) importItem.attributes = [];
+          // 深拷贝 cloned.attributes，避免多个 sub-SKU 共用同一个数组引用导致互相污染
+          importItem.attributes = importItem.attributes.map((a: any) => ({
+            ...a,
+            values: Array.isArray(a.values) ? a.values.map((v: any) => ({ ...v })) : a.values,
+          }));
+
+          const MERGE_ATTR_ID = 8292;
+          const mergeValue = importItem._sourceModelId || `model-${importItem._sourceItemId || 'group'}`;
+          importItem.attributes = importItem.attributes.filter((a: any) => a.id !== MERGE_ATTR_ID);
+          importItem.attributes.push({
+            id: MERGE_ATTR_ID,
+            complex_id: 0,
+            values: [{ value: String(mergeValue), dictionary_value_id: 0 }],
           });
-          const noBrand = brandValues.find((v) => /без бренда/i.test(v.value));
-          if (noBrand) {
-            noBrandDictId = noBrand.id;
-            console.log(`[publish-ozon] found "Без бренда" dict_id=${noBrandDictId} for attr ${brandAttrDef.id}`);
+
+          const COLOR_NAME_ATTR_ID = 10097;
+          importItem.attributes = importItem.attributes.filter((a: any) => a.id !== COLOR_NAME_ATTR_ID);
+          importItem.attributes.push({
+            id: COLOR_NAME_ATTR_ID,
+            complex_id: 0,
+            values: [{ value: String(importItem.offer_id), dictionary_value_id: 0 }],
+          });
+
+          const existingIds = new Set(importItem.attributes.map((a: any) => a.id));
+
+          if (brandAttrDef && !existingIds.has(brandAttrDef.id) && noBrandDictId) {
+            importItem.attributes.push({ id: brandAttrDef.id, complex_id: 0, values: [{ value: 'Без бренда', dictionary_value_id: noBrandDictId }] });
+            console.log(`[publish-ozon] injected "Без бренда" (dict_id=${noBrandDictId}) for attr ${brandAttrDef.id} category=${group.categoryId}/${group.typeId}`);
+          }
+
+          if (mfrAttrDef && !existingIds.has(mfrAttrDef.id)) {
+            const placeholder = `manufacturer-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
+            importItem.attributes.push({ id: mfrAttrDef.id, complex_id: 0, values: [{ value: placeholder, dictionary_value_id: 0 }] });
+            console.log(`[publish-ozon] injected manufacturer placeholder for attr ${mfrAttrDef.id} (${mfrAttrDef.name}) category=${group.categoryId}/${group.typeId}`);
+          }
+
+          const variantAttrs: Record<string, string> = importItem._variantAttrs || {};
+          if (importItem._hasOwnAttrs) {
+            console.log(`[publish-ozon variant] offer=${importItem.offer_id} already has its own ozonAttributes; skip _variantAttrs dict replace`);
           } else {
-            console.warn(`[publish-ozon] "Без бренда" not found in brand dictionary (${brandValues.length} values)`);
-          }
-        } catch (e: any) {
-          console.warn('[publish-ozon] failed to query brand dictionary:', e.message?.slice(0, 150));
-        }
-      }
-
-      for (const importItem of importItems) {
-        if (!importItem.attributes) importItem.attributes = [];
-        // 深拷贝 cloned.attributes，避免多个 sub-SKU 共用同一个数组引用导致互相污染
-        importItem.attributes = importItem.attributes.map((a: any) => ({
-          ...a,
-          values: Array.isArray(a.values) ? a.values.map((v: any) => ({ ...v })) : a.values,
-        }));
-
-        // === 关键：合并/区分逻辑（OZON 同卡片合并要求 颜色/尺码/颜色名称 至少一个不同）===
-        // 1) attr 8292 "合并至一张卡片"：同 model 共用，让 OZON 把 sub-SKU 合并到一张卡片
-        const MERGE_ATTR_ID = 8292;
-        const mergeValue = importItem._sourceModelId || `model-${importItem._sourceItemId || 'group'}`;
-        importItem.attributes = importItem.attributes.filter((a: any) => a.id !== MERGE_ATTR_ID);
-        importItem.attributes.push({
-          id: MERGE_ATTR_ID,
-          complex_id: 0,
-          values: [{ value: String(mergeValue), dictionary_value_id: 0 }],
-        });
-        // 2) attr 10097 "颜色名称"：每个 sub-SKU 唯一，作为变体合并的"区分锚"
-        // 即使商品颜色（10096）相同 + 俄罗斯尺码（4295）相同，颜色名称不同 OZON 也允许合并
-        const COLOR_NAME_ATTR_ID = 10097;
-        importItem.attributes = importItem.attributes.filter((a: any) => a.id !== COLOR_NAME_ATTR_ID);
-        importItem.attributes.push({
-          id: COLOR_NAME_ATTR_ID,
-          complex_id: 0,
-          values: [{ value: String(importItem.offer_id), dictionary_value_id: 0 }],
-        });
-
-        const existingIds = new Set(importItem.attributes.map((a: any) => a.id));
-
-        // 品牌：不管 is_required，只要缺失就注入
-        if (brandAttrDef && !existingIds.has(brandAttrDef.id) && noBrandDictId) {
-          importItem.attributes.push({ id: brandAttrDef.id, complex_id: 0, values: [{ value: 'Без бренда', dictionary_value_id: noBrandDictId }] });
-          console.log(`[publish-ozon] injected "Без бренда" (dict_id=${noBrandDictId}) for attr ${brandAttrDef.id}`);
-        }
-
-        // 制造商：仅 required 时注入
-        if (mfrAttrDef && !existingIds.has(mfrAttrDef.id)) {
-          const placeholder = `manufacturer-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
-          importItem.attributes.push({ id: mfrAttrDef.id, complex_id: 0, values: [{ value: placeholder, dictionary_value_id: 0 }] });
-          console.log(`[publish-ozon] injected manufacturer placeholder for attr ${mfrAttrDef.id} (${mfrAttrDef.name})`);
-        }
-
-        // 变体属性：把 _variantAttrs (例如 {Цвет: "42687"}) 注入到对应 attribute_id 上
-        // 这一步是为了让 OZON 把同 model 下的多个 sub-SKU 合并成一个商品卡片
-        // 如果该变体已经有自己的 ozonAttributes（_hasOwnAttrs），则跳过此处稀疏字典替换，避免覆盖 OZON 直接返回的正确值
-        const variantAttrs: Record<string, string> = importItem._variantAttrs || {};
-        if (importItem._hasOwnAttrs) {
-          console.log(`[publish-ozon variant] offer=${importItem.offer_id} already has its own ozonAttributes; skip _variantAttrs dict replace`);
-        } else {
-        for (const [aspectName, aspectValue] of Object.entries(variantAttrs)) {
-          if (!aspectValue) continue;
-          // 模糊匹配 aspectName → categoryAttr.name（OZON 可能写 "Цвет" 也可能写 "Цвет товара"）
-          const aspectLower = aspectName.toLowerCase();
-          const attrDef = allAttrs.find((a) => a.name && a.name.toLowerCase() === aspectLower)
-            || allAttrs.find((a) => a.name && a.name.toLowerCase().includes(aspectLower))
-            || allAttrs.find((a) => a.name && aspectLower.includes(a.name.toLowerCase()));
-          if (!attrDef) {
-            console.warn(`[publish-ozon variant] aspect "${aspectName}" not found in category attrs (offer ${importItem.offer_id})`);
-            continue;
-          }
-
-          // 字典型属性：必须传正确的 dictionary_value_id（传 0 + value 文本会被 OZON 拒绝
-          // "Проверьте значение. В личном кабинете выберите вариант из списка"）
-          let dictValueId = 0;
-          let resolvedValue = String(aspectValue); // 字典命中时改用字典里的标准值
-          if (attrDef.dictionary_id && attrDef.dictionary_id > 0) {
-            try {
-              const dictKey = `${body.categoryId}:${body.typeId}:${attrDef.id}`;
-              if (!attrDictCache.has(dictKey)) {
-                const values = await client.getAttributeValues({
-                  description_category_id: body.categoryId,
-                  type_id: body.typeId,
-                  attribute_id: attrDef.id,
-                  language: 'DEFAULT',
-                  limit: 5000,
-                });
-                attrDictCache.set(dictKey, values);
+            for (const [aspectName, aspectValue] of Object.entries(variantAttrs)) {
+              if (!aspectValue) continue;
+              const aspectLower = aspectName.toLowerCase();
+              const attrDef = allAttrs.find((a) => a.name && a.name.toLowerCase() === aspectLower)
+                || allAttrs.find((a) => a.name && a.name.toLowerCase().includes(aspectLower))
+                || allAttrs.find((a) => a.name && aspectLower.includes(a.name.toLowerCase()));
+              if (!attrDef) {
+                console.warn(`[publish-ozon variant] aspect "${aspectName}" not found in category attrs ${group.categoryId}/${group.typeId} (offer ${importItem.offer_id})`);
+                continue;
               }
-              const dict = attrDictCache.get(dictKey)!;
-              const targetLower = String(aspectValue).toLowerCase().trim();
-              // 提取开头数字（"56 RU / 3XL" → "56"），用于尺码类字段精确匹配
-              const numMatch = targetLower.match(/^(\d+)/);
-              const numToken = numMatch ? numMatch[1] : null;
-              // 优先级：精确匹配 > 数字精确匹配 > 字典值是 target 子串（短的优先匹配长的）> 倒包含
-              const hit = dict.find((v) => v.value && v.value.toLowerCase() === targetLower)
-                || (numToken ? dict.find((v) => v.value && v.value === numToken) : null)
-                || dict.find((v) => v.value && v.value.toLowerCase().includes(targetLower))
-                || dict.find((v) => v.value && targetLower.includes(v.value.toLowerCase()) && v.value.length >= 2); // 至少 2 字符避免误中"5"
-              if (hit) {
-                dictValueId = hit.id;
-                resolvedValue = hit.value;
-                console.log(`[publish-ozon variant] dict hit: attr#${attrDef.id} "${aspectValue}" → id=${hit.id} value="${hit.value}"`);
-              } else {
-                console.warn(`[publish-ozon variant] dict miss: attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" not in ${dict.length} dict entries — keep cloned value`);
+
+              let dictValueId = 0;
+              let resolvedValue = String(aspectValue);
+              if (attrDef.dictionary_id && attrDef.dictionary_id > 0) {
+                try {
+                  const dictKey = `${group.categoryId}:${group.typeId}:${attrDef.id}`;
+                  if (!attrDictCache.has(dictKey)) {
+                    const values = await client.getAttributeValues({
+                      description_category_id: group.categoryId,
+                      type_id: group.typeId,
+                      attribute_id: attrDef.id,
+                      language: 'DEFAULT',
+                      limit: 5000,
+                    });
+                    attrDictCache.set(dictKey, values);
+                  }
+                  const dict = attrDictCache.get(dictKey)!;
+                  const targetLower = String(aspectValue).toLowerCase().trim();
+                  const numMatch = targetLower.match(/^(\d+)/);
+                  const numToken = numMatch ? numMatch[1] : null;
+                  const hit = dict.find((v) => v.value && v.value.toLowerCase() === targetLower)
+                    || (numToken ? dict.find((v) => v.value && v.value === numToken) : null)
+                    || dict.find((v) => v.value && v.value.toLowerCase().includes(targetLower))
+                    || dict.find((v) => v.value && targetLower.includes(v.value.toLowerCase()) && v.value.length >= 2);
+                  if (hit) {
+                    dictValueId = hit.id;
+                    resolvedValue = hit.value;
+                    console.log(`[publish-ozon variant] dict hit: attr#${attrDef.id} "${aspectValue}" -> id=${hit.id} value="${hit.value}" category=${group.categoryId}/${group.typeId}`);
+                  } else {
+                    console.warn(`[publish-ozon variant] dict miss: attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" not in ${dict.length} dict entries; keep cloned value`);
+                  }
+                } catch (e: any) {
+                  console.warn(`[publish-ozon variant] failed to query dict for attr#${attrDef.id} category=${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 150));
+                }
               }
-            } catch (e: any) {
-              console.warn(`[publish-ozon variant] failed to query dict for attr#${attrDef.id}:`, e.message?.slice(0, 150));
+
+              if (attrDef.dictionary_id && attrDef.dictionary_id > 0 && dictValueId === 0) {
+                console.warn(`[publish-ozon variant] skip replace attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" because dict miss; keep cloned value`);
+                continue;
+              }
+              importItem.attributes = importItem.attributes.filter((a: any) => a.id !== attrDef.id);
+              importItem.attributes.push({
+                id: attrDef.id,
+                complex_id: 0,
+                values: [{ value: resolvedValue, dictionary_value_id: dictValueId }],
+              });
+              console.log(`[publish-ozon variant] offer=${importItem.offer_id} attr#${attrDef.id}(${attrDef.name})="${aspectValue}" dict=${attrDef.dictionary_id} dict_value_id=${dictValueId} category=${group.categoryId}/${group.typeId}`);
             }
           }
-
-          // 字典查询失败（dictValueId=0）时保留 cloned 值，避免替换为空字典 ID 触发 OZON 拒绝
-          if (attrDef.dictionary_id && attrDef.dictionary_id > 0 && dictValueId === 0) {
-            console.warn(`[publish-ozon variant] skip replace attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" because dict miss; keep cloned value`);
-            continue;
-          }
-          importItem.attributes = importItem.attributes.filter((a: any) => a.id !== attrDef.id);
-          importItem.attributes.push({
-            id: attrDef.id,
-            complex_id: 0,
-            values: [{ value: resolvedValue, dictionary_value_id: dictValueId }],
-          });
-          console.log(`[publish-ozon variant] offer=${importItem.offer_id} attr#${attrDef.id}(${attrDef.name})="${aspectValue}" dict=${attrDef.dictionary_id} dict_value_id=${dictValueId}`);
         }
-        } // 关闭 if(_hasOwnAttrs) ... else
+      } catch (e: any) {
+        console.warn(`[publish-ozon] failed to query category attributes ${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 200));
       }
-    } catch (e: any) {
-      console.warn('[publish-ozon] failed to query category attributes:', e.message?.slice(0, 200));
     }
 
     const firstItem = importItems[0];

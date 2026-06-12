@@ -18,7 +18,7 @@ interface BatchItem {
   images: string[] | null;
   purchasePrice: string | null;
   status: string;
-  metadata?: { watermarkApplied?: boolean; ozonAttributes?: any[] } | null;
+  metadata?: { watermarkApplied?: boolean; ozonAttributes?: any[]; descriptionCategoryId?: number; typeId?: number } | null;
 }
 interface ParsedLine { sku: string; targetPrice: number | null; raw: string; }
 
@@ -78,6 +78,7 @@ export default function BatchCollectPage() {
   const [publishMarkup, setPublishMarkup] = useState('30');
   const [publishing, setPublishing] = useState(false);
   const [inheriting, setInheriting] = useState(false);
+  const [publishUseItemCategory, setPublishUseItemCategory] = useState(false);
 
   const [randomizeAvailable, setRandomizeAvailable] = useState(false);
   const [randomOfferIdEnabled, setRandomOfferIdEnabled] = useState(true);
@@ -191,6 +192,33 @@ export default function BatchCollectPage() {
     }
     const first = res.data.find((d: any) => d.ok && d.descriptionCategoryId);
     if (!first) { setInheriting(false); toast({ title: '未能获取分类属性', variant: 'destructive' }); return; }
+
+    const collectedBySku = new Map(collected.map((item) => [String(item.sku || ''), item]));
+    let inheritedCount = 0;
+    for (const row of res.data) {
+      if (!row?.ok) continue;
+      const item = collectedBySku.get(String(row.productId || ''));
+      if (!item) continue;
+      const categoryId = Number(row.descriptionCategoryId) || 0;
+      const typeId = Number(row.typeId) || 0;
+      if (!categoryId && !typeId && !row.weight && !row.height && !row.width && !row.depth) continue;
+      await api.post('/api/collect/save-customization', {
+        id: item.id,
+        ...(categoryId ? { categoryId } : {}),
+        ...(typeId ? { typeId } : {}),
+        ...(row.weight ? { weightG: Number(row.weight) } : {}),
+        ...(row.depth ? { lengthMm: Number(row.depth) } : {}),
+        ...(row.width ? { widthMm: Number(row.width) } : {}),
+        ...(row.height ? { heightMm: Number(row.height) } : {}),
+      });
+      if (categoryId && typeId) inheritedCount++;
+    }
+
+    setPublishUseItemCategory(inheritedCount > 0);
+    if (inheritedCount > 0) {
+      const refreshed = await fetchCollectedBySkus(productIds);
+      if (refreshed.length) setCollected(refreshed);
+    }
     if (first.descriptionCategoryId) setPublishCategoryId(String(first.descriptionCategoryId));
     if (first.weight) setPublishWeight(String(first.weight));
     if (first.height) setPublishHeight(String(first.height));
@@ -207,7 +235,7 @@ export default function BatchCollectPage() {
       else if (typeRes.code === 1 && typeRes.data?.types?.length) setPublishTypeId(String(typeRes.data.types[0].typeId));
     }
     setInheriting(false);
-    toast({ title: '已继承源商品分类/重量/尺寸' });
+    toast({ title: inheritedCount > 1 ? `已分别继承 ${inheritedCount} 件商品的源分类/尺寸` : '已继承源商品分类/重量/尺寸' });
   }
 
   async function handlePublish() {
@@ -231,6 +259,7 @@ export default function BatchCollectPage() {
       mode: publishMode,
       followBrand,
       randomOfferId: randomizeAvailable ? randomOfferIdEnabled : undefined,
+      useItemCategory: publishUseItemCategory,
       source: 'batch-collect-page',
     });
     setPublishing(false);
@@ -410,6 +439,7 @@ export default function BatchCollectPage() {
                       {item.purchasePrice && <span className="text-[11px] text-primary tabular-nums">RMB {item.purchasePrice}</span>}
                       {item.metadata?.watermarkApplied && <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-600 px-1 py-0">水印</Badge>}
                       {item.metadata?.ozonAttributes && <Badge variant="outline" className="text-[10px] border-orange-300 text-orange-600 px-1 py-0">属性</Badge>}
+                      {item.metadata?.descriptionCategoryId && item.metadata?.typeId && <Badge variant="outline" className="text-[10px] border-green-300 text-green-700 px-1 py-0">源分类</Badge>}
                     </div>
                   </div>
                   <button
@@ -462,13 +492,16 @@ export default function BatchCollectPage() {
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label className="text-xs">分类 ID *</Label>
-                  <Input value={publishCategoryId} onChange={(e) => setPublishCategoryId(e.target.value)} type="number" className="h-8 text-sm" placeholder="description_category_id" />
+                  <Input value={publishCategoryId} onChange={(e) => { setPublishUseItemCategory(false); setPublishCategoryId(e.target.value); }} type="number" className="h-8 text-sm" placeholder="description_category_id" />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">类型 ID *</Label>
-                  <Input value={publishTypeId} onChange={(e) => setPublishTypeId(e.target.value)} type="number" className="h-8 text-sm" placeholder="type_id" />
+                  <Input value={publishTypeId} onChange={(e) => { setPublishUseItemCategory(false); setPublishTypeId(e.target.value); }} type="number" className="h-8 text-sm" placeholder="type_id" />
                 </div>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                {publishUseItemCategory ? '已按每个 SKU 自己的源分类上架；缺少源分类的 SKU 会被服务端拦截。' : '多个不同类目的 SKU 请先点击继承，避免整批使用同一分类。'}
+              </p>
 
               <div className="grid grid-cols-4 gap-2">
                 <div className="space-y-1">
