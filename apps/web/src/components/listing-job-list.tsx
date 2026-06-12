@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
+import { explainOzonError, formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { ListingJobDetailDialog } from './listing-job-detail-dialog';
 
 export type Status = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
@@ -155,6 +156,7 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
   const failed = row.payload?.failedCount ?? 0;
   const succeeded = total - failed;
   const mode = modeLabel(row.payload);
+  const errorHint = row.errorMessage ? explainOzonError(row.errorMessage) : null;
 
   return (
     <div className="rounded-lg border p-3 sm:p-4 transition-colors hover:bg-muted/30 space-y-2.5">
@@ -234,8 +236,11 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
 
       {/* 错误信息 */}
       {row.errorMessage && (
-        <div className="text-[11px] text-destructive bg-destructive/10 border border-destructive/30 rounded px-2 py-1 break-all">
-          {row.errorMessage}
+        <div className="text-[11px] text-destructive bg-destructive/10 border border-destructive/30 rounded px-2 py-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {errorHint && <Badge variant="outline" className="text-[10px] border-destructive/30">{errorHint.label}</Badge>}
+            <span className="break-words">{formatOzonErrorMessage(row.errorMessage)}</span>
+          </div>
         </div>
       )}
     </div>

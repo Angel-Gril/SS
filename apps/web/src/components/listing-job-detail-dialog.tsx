@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { explainOzonError, explainOzonErrors, formatOzonErrorMessage, type OzonErrorHint } from 'shared/ozon-error-hints';
 import { StatusBadge, modeLabel, type Status, type JobRow } from './listing-job-list';
 
 interface PushItem {
@@ -61,6 +62,7 @@ export function ListingJobDetailDialog({
   }, [jobId]);
 
   const mode = data ? modeLabel(data.payload) : null;
+  const jobErrorHint = data?.error ? explainOzonError(data.error) : null;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -105,7 +107,10 @@ export function ListingJobDetailDialog({
 
             {data.error && (
               <div className="border border-destructive/30 bg-destructive/10 rounded-md px-3 py-2 text-destructive text-xs">
-                {data.error}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {jobErrorHint && <Badge variant="outline" className="text-[10px] border-destructive/30">{jobErrorHint.label}</Badge>}
+                  <span>{formatOzonErrorMessage(data.error)}</span>
+                </div>
               </div>
             )}
 
@@ -133,6 +138,11 @@ export function ListingJobDetailDialog({
                       const cls = it.status === 'imported' ? 'bg-emerald-600' : it.status === 'failed' ? 'bg-destructive' : 'bg-amber-500';
                       const txt = it.status === 'imported' ? '成功' : it.status === 'failed' ? '失败' : '处理中';
                       const img = data.payload?.offerImages?.[it.offer_id];
+                      const hints = Array.from(new Map((it.errors || [])
+                        .map((error) => explainOzonError(error))
+                        .filter((hint): hint is OzonErrorHint => !!hint)
+                        .map((hint) => [hint.code, hint])).values());
+                      const messages = explainOzonErrors(it.errors || []);
                       return (
                         <tr key={i} className="border-t">
                           <td className="px-3 py-2">
@@ -151,8 +161,23 @@ export function ListingJobDetailDialog({
                           <td className="px-3 py-2"><code>{it.offer_id}</code></td>
                           <td className="px-3 py-2">{it.product_id || '-'}</td>
                           <td className="px-3 py-2"><Badge className={`${cls} text-white text-[10px]`}>{txt}</Badge></td>
-                          <td className="px-3 py-2 text-destructive break-all">
-                            {it.errors?.map((e) => e.message).join('; ') || '—'}
+                          <td className="px-3 py-2 text-destructive">
+                            {messages.length ? (
+                              <div className="space-y-1">
+                                {hints.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {hints.map((hint) => (
+                                      <Badge key={hint.code} variant="outline" className="text-[10px] border-destructive/30">
+                                        {hint.label}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="space-y-0.5 break-words">
+                                  {messages.map((message, index) => <div key={index}>{message}</div>)}
+                                </div>
+                              </div>
+                            ) : '—'}
                           </td>
                         </tr>
                       );
