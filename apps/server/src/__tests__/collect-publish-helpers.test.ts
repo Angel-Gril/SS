@@ -5,6 +5,7 @@ import {
   getVariantOverridePrice,
   groupPublishItemsByCategory,
   hasOwnPublishCategory,
+  hasSuspiciousPublishName,
   recordOfferPublishImages,
   removeVariantsBySkus,
   resolveBasePublishImages,
@@ -23,6 +24,11 @@ describe('collect publish helpers', () => {
   it('detects Chinese text in publish names', () => {
     expect(containsCjkText('Чехол для iPad')).toBe(false);
     expect(containsCjkText('保护套 для iPad')).toBe(true);
+  });
+
+  it('flags repeated keyword spam titles before Ozon rejects the card', () => {
+    expect(hasSuspiciousPublishName('Автовизитка, автовизитка в машину, номер телефона в автомобиль')).toBe(true);
+    expect(hasSuspiciousPublishName('Защитный чехол для AirPods Pro 3 вязание')).toBe(false);
   });
 
   it('uses Russian publish title from metadata before display title', () => {
@@ -145,11 +151,12 @@ describe('collect publish helpers', () => {
       },
     ];
     const baseImages = resolveBasePublishImages(item);
-    const sourceVariantCovers = variants.map((variant) => variant.images[0]);
     const selectedImages = variants.map((variant) => resolveVariantPublishImages(item, variant, baseImages));
 
-    expect(new Set(sourceVariantCovers).size).toBe(2);
-    expect(selectedImages.map((images) => images[0])).toEqual(sourceVariantCovers);
+    expect(selectedImages.map((images) => images[0])).toEqual([
+      'https://ir.ozone.ru/s3/multimedia-1-i/10240533378.jpg',
+      'https://ir.ozone.ru/s3/multimedia-1-k/9357818888.jpg',
+    ]);
     expect(new Set(selectedImages.map((images) => images[0])).size).toBe(2);
     expect(selectedImages.every((images) => images[1] === '/watermarked/cmq9luvfn004h5obkwe0ogi5c_0_e81563ca.jpg')).toBe(true);
   });

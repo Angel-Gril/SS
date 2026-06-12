@@ -6,6 +6,15 @@ describe('ozon image resolver', () => {
     expect(normalizeOzonPublishImageUrl(' //cdn.example.com/a b.jpg ')).toBe('https://cdn.example.com/a%20b.jpg');
   });
 
+  it('upgrades Ozon resized thumbnail URLs to original image URLs before publishing', () => {
+    expect(normalizeOzonPublishImageUrl('https://ir.ozone.ru/s3/multimedia-1-f/wc140/10231611531.jpg')).toBe(
+      'https://ir.ozone.ru/s3/multimedia-1-f/10231611531.jpg',
+    );
+    expect(normalizeOzonPublishImageUrl('https://ir-2.ozonstatic.cn/s3/multimedia-1-f/wc140/10231611531.jpg')).toBe(
+      'https://ir-2.ozonstatic.cn/s3/multimedia-1-f/10231611531.jpg',
+    );
+  });
+
   it('rejects local and private image URLs before OZON import', () => {
     expect(() => normalizeOzonPublishImageUrl('http://localhost:3001/uploads/a.jpg')).toThrow('不是公网地址');
     expect(() => normalizeOzonPublishImageUrl('http://127.0.0.1:3001/uploads/a.jpg')).toThrow('不是公网地址');

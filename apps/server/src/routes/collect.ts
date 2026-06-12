@@ -5,7 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { getRandomizeConfig, randomOfferIdFrom, jitterDimensionMm, bucketWeightG } from '../lib/randomize.js';
 import { randomSuffix, chunkArray } from '../lib/util.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
-import { resolveImageUrls } from '../services/ozon-image-resolver.js';
+import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 
@@ -38,6 +38,26 @@ const batchDeleteVariantsSchema = z.object({
 
 export function containsCjkText(value: unknown): boolean {
   return CJK_TEXT_RE.test(String(value || ''));
+}
+
+const TITLE_STOP_WORDS = new Set(['для', 'в', 'на', 'и', 'с', 'со', 'по', 'из', 'от', 'к']);
+
+export function hasSuspiciousPublishName(value: unknown): boolean {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const words = text
+    .toLocaleLowerCase('ru-RU')
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !TITLE_STOP_WORDS.has(word));
+
+  if (words.length < 2) return false;
+  for (let i = 0; i < words.length - 1; i += 1) {
+    if (words[i] === words[i + 1]) return true;
+  }
+  const first = words[0];
+  return !!first && words.slice(1, 5).includes(first);
 }
 
 export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
@@ -76,8 +96,16 @@ function normalizePublishImageList(value: unknown): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of value) {
-    const image = String(raw || '').trim();
-    if (!image || seen.has(image)) continue;
+    let image = String(raw || '').trim();
+    if (!image) continue;
+    if (/^(https?:)?\/\//i.test(image)) {
+      try {
+        image = normalizeOzonPublishImageUrl(image);
+      } catch {
+        // Keep the original value so the publish resolver can return the existing validation error.
+      }
+    }
+    if (seen.has(image)) continue;
     seen.add(image);
     out.push(image);
   }
@@ -230,23 +258,30 @@ export function removeVariantsBySkus(variantsInput: unknown, skusInput: unknown[
 }
 
 function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
-  const bad: string[] = [];
+  const unsafe: string[] = [];
+  const suspicious: string[] = [];
   for (const item of items) {
     const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
     if (!variants.length) {
       const name = resolvePublishName(item);
-      if (!name || containsCjkText(name)) bad.push(`${item.sku || item.id}: ${name || '空标题'}`);
+      if (!name || containsCjkText(name)) unsafe.push(`${item.sku || item.id}: ${name || '空标题'}`);
+      else if (hasSuspiciousPublishName(name)) suspicious.push(`${item.sku || item.id}: ${name}`);
       continue;
     }
     for (const v of variants) {
       const attrs = v?.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined;
       const name = resolvePublishName(item, attrs);
-      if (!name || containsCjkText(name)) bad.push(`${v?.sku || item.sku || item.id}: ${name || '空标题'}`);
+      if (!name || containsCjkText(name)) unsafe.push(`${v?.sku || item.sku || item.id}: ${name || '空标题'}`);
+      else if (hasSuspiciousPublishName(name)) suspicious.push(`${v?.sku || item.sku || item.id}: ${name}`);
     }
   }
-  if (bad.length) {
-    const sample = bad.slice(0, 3).join('；');
+  if (unsafe.length) {
+    const sample = unsafe.slice(0, 3).join('；');
     throw new Error(`上架标题包含中文或为空，OZON 可能无法识别。请先补采俄文标题或编辑上架标题：${sample}`);
+  }
+  if (suspicious.length) {
+    const sample = suspicious.slice(0, 3).join('；');
+    throw new Error(`上架标题疑似重复堆词，OZON 可能会判定“名称中有无意义文本或语法错误”。请先在采集改款里精简标题：${sample}`);
   }
 }
 

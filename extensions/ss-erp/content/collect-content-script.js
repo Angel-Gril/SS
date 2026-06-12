@@ -166,6 +166,22 @@
     return "RUB";
   }
 
+  function normalizeOzonCollectedImageUrl(raw) {
+    let text = String(raw || "").trim();
+    if (!text) return "";
+    if (text.startsWith("//")) text = "https:" + text;
+    try {
+      const url = new URL(text);
+      const host = url.hostname.toLowerCase();
+      if (host.endsWith(".ozone.ru") || host.endsWith(".ozon.ru") || host.endsWith(".ozonstatic.cn")) {
+        url.pathname = url.pathname.replace(/\/(?:wc|w|h|c)\d+(?:x\d+)?(?=\/)/i, "");
+      }
+      return url.href;
+    } catch (e) {
+      return text;
+    }
+  }
+
   async function collectOzonViaApi() {
     const productId = parseOzonProductIdFromUrl(location.href);
     if (!productId) {
@@ -215,7 +231,7 @@
         if (Array.isArray(src)) {
           for (const img of src) {
             const u = typeof img === "string" ? img : (img && (img.src || img.url || img.originalUrl));
-            if (typeof u === "string" && u.startsWith("http")) images.push(u);
+            if (typeof u === "string" && u.startsWith("http")) images.push(normalizeOzonCollectedImageUrl(u));
           }
         }
       }
@@ -328,6 +344,7 @@
             .map((v) => {
               const text = v.data && Array.isArray(v.data.textRs) && v.data.textRs[0] ? v.data.textRs[0].content : null;
               const cover = v.data && v.data.coverImage ? v.data.coverImage : null;
+              const normalizedCover = cover ? normalizeOzonCollectedImageUrl(cover) : "";
               const priceText = v.data && v.data.price ? v.data.price : null;
               const parsedPrice = parsePriceWithCurrencySafe(priceText, currency);
               return {
@@ -337,7 +354,7 @@
                 priceCurrency: parsedPrice.currency || currency || null,
                 priceText: priceText,
                 ozonInternalPrice: typeof v.price === "number" ? v.price : null,
-                images: cover ? [cover] : [],
+                images: normalizedCover ? [normalizedCover] : [],
                 availability: v.availability || null,
                 active: !!v.active,
                 title: v.data && v.data.title ? v.data.title : null,
@@ -1494,7 +1511,7 @@
     document.querySelectorAll("img").forEach((img) => {
       const src = img.currentSrc || img.src || "";
       if (/^https?:\/\//i.test(src) && src.length < 1000) {
-        imageSet.add(src);
+        imageSet.add(normalizeOzonCollectedImageUrl(src));
       }
     });
 
@@ -1503,7 +1520,7 @@
       .forEach((item) => {
         const value = item.value;
         if (/^https?:\/\//i.test(value)) {
-          imageSet.add(value);
+          imageSet.add(normalizeOzonCollectedImageUrl(value));
         }
       });
 

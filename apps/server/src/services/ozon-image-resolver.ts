@@ -30,6 +30,11 @@ function isPrivateHostname(hostname: string): boolean {
   return host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:');
 }
 
+function isOzonImageHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host.endsWith('.ozone.ru') || host.endsWith('.ozon.ru') || host.endsWith('.ozonstatic.cn');
+}
+
 export function normalizeOzonPublishImageUrl(raw: string): string {
   let text = String(raw || '').trim();
   if (!text) {
@@ -56,6 +61,10 @@ export function normalizeOzonPublishImageUrl(raw: string): string {
     throw new Error(
       `图片 URL 不是公网地址，OZON 无法拉取: ${previewUrl(text)}。请配置 OSS/OZON CDN，或设置环境变量 LOCAL_BASE_URL 为公网 HTTPS 域名`,
     );
+  }
+
+  if (isOzonImageHostname(url.hostname)) {
+    url.pathname = url.pathname.replace(/\/(?:wc|w|h|c)\d+(?:x\d+)?(?=\/)/i, '');
   }
 
   return url.href;
