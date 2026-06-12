@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import { Loader2, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, ShoppingCart, Package, BarChart3, LineChart, Tag, Percent, WarehouseIcon } from 'lucide-react';
+import { Loader2, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, ShoppingCart, Package, BarChart3, LineChart, Tag, Percent, WarehouseIcon, RefreshCw, Megaphone, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -14,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { toast } from '@/components/ui/use-toast';
 
 interface Shop {
   id: string;
@@ -73,7 +75,7 @@ interface AnalyticsData {
 
 type SortKey = 'soldCount' | 'soldSum' | 'convToCartPdp' | 'views' | 'stock' | 'avgPrice';
 
-type ActiveTab = 'what_to_sell' | 'graphs';
+type ActiveTab = 'what_to_sell' | 'graphs' | 'promotions';
 
 interface GraphsSnapshotData {
   type: 'graphs';
@@ -112,6 +114,32 @@ interface GraphsSnapshot {
   totalSales: string | null;
   totalOrders: number | null;
   syncedAt: string;
+}
+
+interface PromotionAction {
+  id: number;
+  title: string;
+  dateStart: string | null;
+  dateEnd: string | null;
+  participatingProductsCount: number;
+  potentialProductsCount: number;
+  status: 'active' | 'upcoming' | 'finished' | 'unknown';
+}
+
+interface PromotionProduct {
+  productId: number;
+  title: string;
+  offerId: string | null;
+  image: string | null;
+  price: string | null;
+  actionPrice: string | null;
+  maxActionPrice: string | null;
+  stock: number | null;
+}
+
+interface PromotionProductsData {
+  products: PromotionProduct[];
+  total: number;
 }
 
 function SortableHead({ label, sortKey, currentKey, dir, onSort }: {
@@ -633,6 +661,313 @@ function GraphsTab({ shopId }: { shopId: string }) {
   );
 }
 
+function formatPromotionDate(value: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function PromotionStatusBadge({ status }: { status: PromotionAction['status'] }) {
+  if (status === 'active') return <Badge variant="success">进行中</Badge>;
+  if (status === 'upcoming') return <Badge variant="warning">即将开始</Badge>;
+  if (status === 'finished') return <Badge variant="secondary">已结束</Badge>;
+  return <Badge variant="outline">未知</Badge>;
+}
+
+function parseActionIdInput(value: string): number | null {
+  const matches = value.match(/\d+/g);
+  const raw = matches?.[matches.length - 1];
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function PromotionsTab({ shopId }: { shopId: string }) {
+  const [actions, setActions] = useState<PromotionAction[]>([]);
+  const [selectedActionId, setSelectedActionId] = useState<number | null>(null);
+  const [actionInput, setActionInput] = useState('');
+  const [productsData, setProductsData] = useState<PromotionProductsData | null>(null);
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<number>>(new Set());
+  const [loadingActions, setLoadingActions] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function loadActions() {
+    if (!shopId) return;
+    setLoadingActions(true);
+    const res = await api.get<{ actions: PromotionAction[] }>(`/api/shops/${shopId}/promotions/actions`);
+    setLoadingActions(false);
+    if (res.code !== 1) {
+      setActions([]);
+      toast({ title: res.msg || '促销活动读取失败', variant: 'destructive' });
+      return;
+    }
+    const nextActions = res.data?.actions || [];
+    setActions(nextActions);
+    const preferred = nextActions.find((action) => action.participatingProductsCount > 0) || nextActions[0];
+    if (preferred) {
+      setSelectedActionId(preferred.id);
+      setActionInput(String(preferred.id));
+    } else {
+      setSelectedActionId(null);
+      setProductsData(null);
+      setSelectedProductIds(new Set());
+    }
+  }
+
+  async function loadProducts(actionId = selectedActionId) {
+    if (!shopId || !actionId) return;
+    setLoadingProducts(true);
+    setSelectedProductIds(new Set());
+    const res = await api.get<PromotionProductsData>(`/api/shops/${shopId}/promotions/actions/${actionId}/products?limit=100&offset=0`);
+    setLoadingProducts(false);
+    if (res.code !== 1) {
+      setProductsData(null);
+      toast({ title: res.msg || '活动商品读取失败', variant: 'destructive' });
+      return;
+    }
+    setProductsData(res.data || { products: [], total: 0 });
+  }
+
+  useEffect(() => {
+    setActions([]);
+    setSelectedActionId(null);
+    setActionInput('');
+    setProductsData(null);
+    setSelectedProductIds(new Set());
+    loadActions();
+  }, [shopId]);
+
+  useEffect(() => {
+    if (selectedActionId) loadProducts(selectedActionId);
+  }, [selectedActionId]);
+
+  function toggleProduct(productId: number) {
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    const products = productsData?.products || [];
+    if (!products.length) return;
+    setSelectedProductIds((prev) => (
+      prev.size === products.length ? new Set() : new Set(products.map((product) => product.productId))
+    ));
+  }
+
+  async function deactivateSelected() {
+    if (!shopId || !selectedActionId || !selectedProductIds.size) return;
+    setSubmitting(true);
+    const res = await api.post<{
+      successCount: number;
+      failureCount: number;
+      failures: Array<{ productId: number; message: string }>;
+    }>(`/api/shops/${shopId}/promotions/actions/${selectedActionId}/deactivate-products`, {
+      productIds: Array.from(selectedProductIds),
+    });
+    setSubmitting(false);
+    if (res.code !== 1) {
+      toast({ title: res.msg || '移出活动失败', variant: 'destructive' });
+      return;
+    }
+    toast({ title: res.msg || '已提交' });
+    setSelectedProductIds(new Set());
+    await loadProducts(selectedActionId);
+  }
+
+  const selectedAction = actions.find((action) => action.id === selectedActionId) || null;
+  const products = productsData?.products || [];
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="pt-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div className="grid gap-3 sm:grid-cols-[minmax(220px,360px)_minmax(180px,260px)]">
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">活动</span>
+                <select
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={selectedActionId || ''}
+                  onChange={(e) => {
+                    const nextId = Number(e.target.value);
+                    setSelectedActionId(nextId || null);
+                    if (nextId) setActionInput(String(nextId));
+                  }}
+                  disabled={loadingActions}
+                >
+                  <option value="">选择活动</option>
+                  {actions.map((action) => (
+                    <option key={action.id} value={action.id}>
+                      {action.title} ({action.id})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">活动 ID / 链接</span>
+                <input
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={actionInput}
+                  onChange={(e) => setActionInput(e.target.value)}
+                  placeholder="197747"
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadActions}
+                disabled={loadingActions}
+                className="gap-1"
+              >
+                {loadingActions ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                刷新活动
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const actionId = parseActionIdInput(actionInput);
+                  if (!actionId) {
+                    toast({ title: '活动 ID 无效', variant: 'destructive' });
+                    return;
+                  }
+                  setSelectedActionId(actionId);
+                  loadProducts(actionId);
+                }}
+                className="gap-1"
+              >
+                <Megaphone className="h-4 w-4" />
+                加载活动
+              </Button>
+              {selectedActionId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => window.open(`https://seller.ozon.ru/app/highlights/${selectedActionId}`, '_blank')}
+                  className="gap-1"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Ozon
+                </Button>
+              )}
+            </div>
+          </div>
+          {selectedAction && (
+            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+              <PromotionStatusBadge status={selectedAction.status} />
+              <span>{formatPromotionDate(selectedAction.dateStart)} - {formatPromotionDate(selectedAction.dateEnd)}</span>
+              <span>已参与 {selectedAction.participatingProductsCount}</span>
+              <span>可加入 {selectedAction.potentialProductsCount}</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-base">活动商品</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">共 {productsData?.total ?? products.length} 件</p>
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!selectedProductIds.size || submitting}
+            onClick={deactivateSelected}
+          >
+            {submitting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+            移出活动 ({selectedProductIds.size})
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loadingProducts ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : !selectedActionId ? (
+            <div className="py-12 text-center">
+              <Megaphone className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
+              <p className="text-muted-foreground">请选择促销活动</p>
+            </div>
+          ) : !products.length ? (
+            <div className="py-12 text-center">
+              <Megaphone className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
+              <p className="text-muted-foreground">暂无已参与商品</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300"
+                        checked={products.length > 0 && selectedProductIds.size === products.length}
+                        onChange={toggleAll}
+                      />
+                    </TableHead>
+                    <TableHead className="w-[64px]">图片</TableHead>
+                    <TableHead className="min-w-[260px]">商品</TableHead>
+                    <TableHead>Product ID</TableHead>
+                    <TableHead className="text-right">原价</TableHead>
+                    <TableHead className="text-right">活动价</TableHead>
+                    <TableHead className="text-right">最高活动价</TableHead>
+                    <TableHead className="text-right">库存</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {products.map((product) => (
+                    <TableRow key={product.productId} className={selectedProductIds.has(product.productId) ? 'bg-muted/30' : ''}>
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          className="rounded border-gray-300"
+                          checked={selectedProductIds.has(product.productId)}
+                          onChange={() => toggleProduct(product.productId)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {product.image ? (
+                          <img src={product.image} alt="" className="h-10 w-10 rounded object-cover border" />
+                        ) : (
+                          <div className="h-10 w-10 rounded border bg-muted flex items-center justify-center">
+                            <Package className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="max-w-[360px]">
+                        <div className="line-clamp-2 text-sm font-medium" title={product.title}>{product.title}</div>
+                        {product.offerId && <div className="text-xs text-muted-foreground font-mono">{product.offerId}</div>}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{product.productId}</TableCell>
+                      <TableCell className="text-right tabular-nums">{product.price || '-'}</TableCell>
+                      <TableCell className="text-right tabular-nums">{product.actionPrice || '-'}</TableCell>
+                      <TableCell className="text-right tabular-nums">{product.maxActionPrice || '-'}</TableCell>
+                      <TableCell className="text-right tabular-nums">{product.stock ?? '-'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function ShopAnalyticsContent() {
   const [shops, setShops] = useState<Shop[]>([]);
   const [selectedShopId, setSelectedShopId] = useState<string>('');
@@ -747,10 +1082,22 @@ function ShopAnalyticsContent() {
         >
           经营图表 (Graphs)
         </button>
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'promotions'
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+          onClick={() => setActiveTab('promotions')}
+        >
+          促销活动
+        </button>
       </div>
 
       {activeTab === 'graphs' && selectedShopId ? (
         <GraphsTab shopId={selectedShopId} />
+      ) : activeTab === 'promotions' && selectedShopId ? (
+        <PromotionsTab shopId={selectedShopId} />
       ) : (
         <>
       {analytics?.latest && (

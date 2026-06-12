@@ -126,6 +126,29 @@ export class OzonClient {
     return { name: res.company.name };
   }
 
+  async getPromotionActions(): Promise<unknown> {
+    return this.request('/v1/actions', { body: {} });
+  }
+
+  async getPromotionProducts(actionId: number, params: { limit?: number; offset?: number } = {}): Promise<unknown> {
+    return this.request('/v1/actions/products', {
+      body: {
+        action_id: actionId,
+        limit: params.limit ?? 100,
+        offset: params.offset ?? 0,
+      },
+    });
+  }
+
+  async deactivatePromotionProducts(actionId: number, productIds: number[]): Promise<unknown> {
+    return this.request('/v1/actions/products/deactivate', {
+      body: {
+        action_id: actionId,
+        product_ids: productIds,
+      },
+    });
+  }
+
   async getProductList(params: {
     last_id?: string;
     limit?: number;

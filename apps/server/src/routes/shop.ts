@@ -5,6 +5,11 @@ import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { getOzonStatusDisplay, getWarehouseStock } from '../services/product-sync-metadata.js';
+import {
+  normalizePromotionActions,
+  normalizePromotionProducts,
+  summarizePromotionDeactivateResult,
+} from '../services/product-promotions.js';
 
 const createShopSchema = z.object({
   platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']),
@@ -19,6 +24,15 @@ const updateShopSchema = z.object({
   clientId: z.string().min(1).optional(),
   apiKey: z.string().min(1).optional(),
   apiSecret: z.string().optional(),
+});
+
+const promotionProductsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+const deactivatePromotionProductsSchema = z.object({
+  productIds: z.array(z.coerce.number().int().positive()).min(1).max(100),
 });
 
 export async function shopRoutes(app: FastifyInstance) {
@@ -638,6 +652,112 @@ export async function shopRoutes(app: FastifyInstance) {
       msg: '同步任务已创建',
       data: { jobId: job.id },
     });
+  });
+
+  app.get('/:id/promotions/actions', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+
+    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+    if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 促销活动' });
+    if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接确保店铺状态正常' });
+
+    try {
+      const client = new OzonClient({ clientId: shop.clientId!, apiKey: decrypt(shop.apiKeyEncrypted) });
+      const raw = await client.getPromotionActions();
+      return reply.send({ code: 1, msg: 'ok', data: { actions: normalizePromotionActions(raw) } });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: `OZON 促销活动读取失败: ${e.message}` });
+    }
+  });
+
+  app.get('/:id/promotions/actions/:actionId/products', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id, actionId } = request.params as { id: string; actionId: string };
+    const parsed = promotionProductsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const numericActionId = Number(actionId);
+    if (!Number.isInteger(numericActionId) || numericActionId <= 0) {
+      return reply.status(400).send({ code: 0, msg: '活动 ID 无效' });
+    }
+
+    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+    if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 促销活动' });
+    if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接确保店铺状态正常' });
+
+    try {
+      const client = new OzonClient({ clientId: shop.clientId!, apiKey: decrypt(shop.apiKeyEncrypted) });
+      const raw = await client.getPromotionProducts(numericActionId, {
+        limit: parsed.data.limit,
+        offset: parsed.data.offset,
+      });
+      const preliminary = normalizePromotionProducts(raw);
+      const localProducts = preliminary.products.length
+        ? await prisma.product.findMany({
+          where: {
+            shopId: shop.id,
+            platformProductId: { in: preliminary.products.map((product) => String(product.productId)) },
+          },
+          select: { platformProductId: true, title: true, offerId: true, images: true },
+        })
+        : [];
+      const localByProductId = new Map(localProducts.map((product) => [String(product.platformProductId), product]));
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: normalizePromotionProducts(raw, localByProductId),
+      });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: `OZON 活动商品读取失败: ${e.message}` });
+    }
+  });
+
+  app.post('/:id/promotions/actions/:actionId/deactivate-products', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id, actionId } = request.params as { id: string; actionId: string };
+    const parsed = deactivatePromotionProductsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const numericActionId = Number(actionId);
+    if (!Number.isInteger(numericActionId) || numericActionId <= 0) {
+      return reply.status(400).send({ code: 0, msg: '活动 ID 无效' });
+    }
+
+    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+    if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 促销活动' });
+    if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接确保店铺状态正常' });
+
+    try {
+      const client = new OzonClient({ clientId: shop.clientId!, apiKey: decrypt(shop.apiKeyEncrypted) });
+      const raw = await client.deactivatePromotionProducts(numericActionId, parsed.data.productIds);
+      const summary = summarizePromotionDeactivateResult(raw, parsed.data.productIds);
+      if (summary.successCount > 0) {
+        const { addProductSyncJob } = await import('../workers/product-sync.js');
+        await addProductSyncJob(shop.id, {
+          jobId: `post-promotion-deactivate-${shop.id}-${numericActionId}-${Date.now()}`,
+          delayMs: 5000,
+        }).catch((error: any) => {
+          console.warn(`[promotions] failed to queue product sync for shop=${shop.id}:`, error?.message || error);
+        });
+      }
+      return reply.send({
+        code: summary.failureCount && !summary.successCount ? 0 : 1,
+        msg: summary.failureCount
+          ? `已移出 ${summary.successCount} 件，${summary.failureCount} 件失败`
+          : `已移出 ${summary.successCount} 件商品`,
+        data: summary,
+      });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: `OZON 移出促销活动失败: ${e.message}` });
+    }
   });
 
   // 接收扩展推送的分析数据
