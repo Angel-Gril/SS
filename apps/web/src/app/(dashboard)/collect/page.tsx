@@ -66,6 +66,68 @@ function formatPreviewPrice(value: number | null): string {
   return value == null ? '-' : `¥${value}`;
 }
 
+function cleanPublishPreviewName(value: unknown): string {
+  const text = String(value || '')
+    .normalize('NFKC')
+    .replace(/[\s,;:|/]+/g, ' ')
+    .trim();
+  if (!text) return '';
+
+  const words: string[] = [];
+  let previousKey = '';
+  for (const rawWord of text.split(/\s+/)) {
+    const word = rawWord.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    if (!word) continue;
+    const key = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
+    if (key && key === previousKey) continue;
+    words.push(word);
+    previousKey = key || '';
+  }
+  return words.join(' ').trim();
+}
+
+function resolvePublishPreviewName(item: CollectedItem, variantAttrs?: Record<string, string>) {
+  const meta = item.metadata || {};
+  const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
+  const attrText = variantAttrs && Object.keys(variantAttrs).length ? Object.values(variantAttrs).filter(Boolean).join(' ') : '';
+  const raw = (attrText ? `${base} ${attrText}` : base).replace(/\s+/g, ' ').trim();
+  const name = cleanPublishPreviewName(raw).slice(0, 200);
+  return { name, optimized: !!raw && name !== raw.slice(0, 200) };
+}
+
+function normalizePreviewImages(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const images: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const image = String(raw || '').trim();
+    if (!image || seen.has(image)) continue;
+    seen.add(image);
+    images.push(image);
+  }
+  return images;
+}
+
+function mergePreviewImages(...lists: unknown[]): string[] {
+  const images: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const image of normalizePreviewImages(list)) {
+      if (seen.has(image)) continue;
+      seen.add(image);
+      images.push(image);
+    }
+  }
+  return images;
+}
+
+function resolvePublishPreviewImages(item: CollectedItem, variant?: VariantSku): string[] {
+  const meta = item.metadata || {};
+  const baseImages = normalizePreviewImages(meta.watermarkedImages?.length ? meta.watermarkedImages : item.images);
+  if (meta.watermarkApplied) return baseImages;
+  return variant?.images?.length ? mergePreviewImages(variant.images, baseImages) : baseImages;
+}
+
 interface Shop { id: string; name: string; platform: string; }
 
 interface RandomizeConfig {
@@ -104,6 +166,7 @@ export default function CollectPage() {
   const [publishMode, setPublishMode] = useState<'follow' | 'clone'>('clone');
   const [publishFollowBrand, setPublishFollowBrand] = useState(true);
   const [pricePreviewExpanded, setPricePreviewExpanded] = useState(false);
+  const [publishDiagnosticsExpanded, setPublishDiagnosticsExpanded] = useState(false);
   const [randomizeConfig, setRandomizeConfig] = useState<RandomizeConfig | null>(null);
   const [randomOfferIdEnabled, setRandomOfferIdEnabled] = useState(true);
   const [publishUseItemCategory, setPublishUseItemCategory] = useState(false);
@@ -723,40 +786,70 @@ export default function CollectPage() {
 
   const totalPages = Math.ceil(total / limit);
   const selectedPublishItems = items.filter((item) => selectedIds.has(item.id));
+
+  function resolvePreviewCategory(item: CollectedItem) {
+    const meta = item.metadata || {};
+    const itemCategoryId = parsePositiveNumber(meta.descriptionCategoryId);
+    const itemTypeId = parsePositiveNumber(meta.typeId);
+    const fallbackCategoryId = parsePositiveNumber(publishCategoryId);
+    const fallbackTypeId = parsePositiveNumber(publishTypeId);
+    return {
+      categoryId: publishUseItemCategory ? itemCategoryId ?? fallbackCategoryId : fallbackCategoryId ?? itemCategoryId,
+      typeId: publishUseItemCategory ? itemTypeId ?? fallbackTypeId : fallbackTypeId ?? itemTypeId,
+    };
+  }
+
   const publishPreviewRows = selectedPublishItems.flatMap((item) => {
     const basePrice = parsePositiveNumber(item.purchasePrice);
+    const category = resolvePreviewCategory(item);
     if (item.variants?.length) {
       return item.variants.map((variant, idx) => {
         const variantKey = variant.sku || String(idx);
         const manualPrice = parsePositiveNumber(variantPriceOverrides[item.id]?.[variantKey]);
         const offerOverride = variantOfferIdOverrides[item.id]?.[variantKey] || '';
+        const previewName = resolvePublishPreviewName(item, variant.attrs);
+        const previewImages = resolvePublishPreviewImages(item, variant);
         return {
           key: `${item.id}-${variantKey}`,
           itemId: item.id,
           variantKey,
           isVariant: true,
           title: (variant.attrs && Object.keys(variant.attrs).length ? formatVariantAttrs(variant.attrs) : '') || item.title,
+          publishName: previewName.name,
+          titleOptimized: previewName.optimized,
           sku: variant.sku || item.sku || '',
           savedOfferId: variant.publishOfferId || '',
           offerOverride,
           basePrice,
           finalPrice: manualPrice ? Math.ceil(manualPrice) : calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
           manual: !!manualPrice,
+          categoryId: category.categoryId,
+          typeId: category.typeId,
+          imageCount: previewImages.length,
+          mainImage: previewImages[0] || '',
         };
       });
     }
+    const previewName = resolvePublishPreviewName(item);
+    const previewImages = resolvePublishPreviewImages(item);
     return [{
       key: item.id,
       itemId: item.id,
       variantKey: '',
       isVariant: false,
       title: item.title,
+      publishName: previewName.name,
+      titleOptimized: previewName.optimized,
       sku: item.sku || '',
       savedOfferId: item.metadata?.publishOfferId || '',
       offerOverride: offerIdOverrides[item.id] || '',
       basePrice,
       finalPrice: calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
       manual: false,
+      categoryId: category.categoryId,
+      typeId: category.typeId,
+      imageCount: previewImages.length,
+      mainImage: previewImages[0] || '',
     }];
   });
   const publishPreviewPrices = publishPreviewRows
@@ -769,6 +862,9 @@ export default function CollectPage() {
   const randomOfferIdAvailable = !!(randomizeConfig?.enabled && randomizeConfig.randomOfferId);
   const visiblePublishPreviewRows = pricePreviewExpanded ? publishPreviewRows : publishPreviewRows.slice(0, 4);
   const hiddenPublishPreviewCount = Math.max(0, publishPreviewRows.length - visiblePublishPreviewRows.length);
+  const optimizedTitleCount = publishPreviewRows.filter((row) => row.titleOptimized).length;
+  const missingImageCount = publishPreviewRows.filter((row) => row.imageCount <= 0).length;
+  const missingCategoryCount = publishPreviewRows.filter((row) => !row.categoryId || !row.typeId).length;
 
   function getOfferPreviewText(row: typeof publishPreviewRows[number]): string {
     const explicit = row.offerOverride || row.savedOfferId;
@@ -1306,6 +1402,27 @@ export default function CollectPage() {
                   </p>
                 </div>
 
+                <div className="rounded-md border bg-background p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium">上架检查</div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        标题优化 {optimizedTitleCount} 个 · 图片缺失 {missingImageCount} 个 · 类目缺失 {missingCategoryCount} 个
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 shrink-0 px-2 text-xs"
+                      onClick={() => setPublishDiagnosticsExpanded((value) => !value)}
+                      disabled={!publishPreviewRows.length}
+                    >
+                      {publishDiagnosticsExpanded ? '收起详情' : '查看详情'}
+                    </Button>
+                  </div>
+                </div>
+
                 <div className="space-y-2">
                   {visiblePublishPreviewRows.length ? (
                     visiblePublishPreviewRows.map((row) => (
@@ -1317,6 +1434,7 @@ export default function CollectPage() {
                               <span className="font-mono">{row.sku || '无源SKU'}</span>
                               {row.isVariant && <span>变体</span>}
                               {row.manual && <span>手动价</span>}
+                              {row.titleOptimized && <span className="text-amber-600">标题已优化</span>}
                             </div>
                           </div>
                           <div className="shrink-0 text-sm font-semibold tabular-nums">
@@ -1335,6 +1453,24 @@ export default function CollectPage() {
                             className="h-8 font-mono text-xs"
                           />
                         </div>
+                        {publishDiagnosticsExpanded && (
+                          <div className="mt-2 rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">
+                            <div className="line-clamp-2">
+                              <span className="text-foreground">标题：</span>{row.publishName || '-'}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                              <span>类目 {row.categoryId || '-'}</span>
+                              <span>type {row.typeId || '-'}</span>
+                              <span>图片 {row.imageCount} 张</span>
+                            </div>
+                            {row.mainImage && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <img src={row.mainImage} alt="" className="h-9 w-9 rounded border object-cover" />
+                                <span className="line-clamp-1 min-w-0 font-mono">{row.mainImage}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))
                   ) : (

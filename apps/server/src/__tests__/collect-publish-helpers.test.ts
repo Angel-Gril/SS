@@ -39,6 +39,16 @@ describe('collect publish helpers', () => {
     expect(name).toBe('Чехол для iPad серый');
   });
 
+  it('deduplicates repeated color words when appending variant attributes to publish names', () => {
+    const name = resolvePublishName({
+      title: 'Панама Zara черный',
+      metadata: {},
+    }, { Цвет: 'черный сапфир' });
+
+    expect(name).toBe('Панама Zara черный сапфир');
+    expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
   it('prefers each collected item category over batch fallback category', () => {
     expect(resolveItemPublishCategory({
       metadata: { descriptionCategoryId: 17028706, typeId: 95913 },

@@ -60,6 +60,26 @@ export function hasSuspiciousPublishName(value: unknown): boolean {
   return !!first && words.slice(1, 5).includes(first);
 }
 
+export function cleanPublishName(value: unknown): string {
+  const text = String(value || '')
+    .normalize('NFKC')
+    .replace(/[\s,;:|/]+/g, ' ')
+    .trim();
+  if (!text) return '';
+
+  const words: string[] = [];
+  let previousKey = '';
+  for (const rawWord of text.split(/\s+/)) {
+    const word = rawWord.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    if (!word) continue;
+    const key = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
+    if (key && key === previousKey) continue;
+    words.push(word);
+    previousKey = key || '';
+  }
+  return words.join(' ').trim();
+}
+
 export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
   const base = Number.isFinite(baseCny) && baseCny > 0 ? baseCny : 100;
   const pct = Number.isFinite(markupPct) ? markupPct : 200;
@@ -84,7 +104,7 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
   const attrText = variantAttrs && Object.keys(variantAttrs).length ? Object.values(variantAttrs).filter(Boolean).join(' ') : '';
-  return attrText ? `${base} ${attrText}`.slice(0, 200) : base.slice(0, 200);
+  return cleanPublishName(attrText ? `${base} ${attrText}` : base).slice(0, 200);
 }
 
 function metadataRecord(value: unknown): Record<string, any> {
