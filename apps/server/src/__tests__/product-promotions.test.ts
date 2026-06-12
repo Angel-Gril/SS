@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OzonClient } from '../services/ozon-client.js';
 import {
   normalizePromotionActions,
   normalizePromotionProducts,
@@ -6,6 +7,28 @@ import {
 } from '../services/product-promotions.js';
 
 describe('product promotions helpers', () => {
+  it('requests Ozon promotion actions with the read-only GET endpoint shape', async () => {
+    type RequestOptions = NonNullable<Parameters<OzonClient['request']>[1]>;
+
+    class RecordingOzonClient extends OzonClient {
+      calls: Array<{ path: string; options: RequestOptions }> = [];
+
+      override async request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
+        this.calls.push({ path, options });
+        return { result: [] } as T;
+      }
+    }
+
+    const client = new RecordingOzonClient({ clientId: 'client', apiKey: 'key' });
+
+    await client.getPromotionActions();
+
+    expect(client.calls).toEqual([{
+      path: '/v1/actions',
+      options: { method: 'GET' },
+    }]);
+  });
+
   it('normalizes Ozon promotion actions from common response shapes', () => {
     const dateStart = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const dateEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();

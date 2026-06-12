@@ -794,7 +794,7 @@ function PromotionsTab({ shopId }: { shopId: string }) {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div className="grid gap-3 sm:grid-cols-[minmax(220px,360px)_minmax(180px,260px)]">
               <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">活动</span>
+                <span className="text-xs text-muted-foreground">Ozon 活动列表</span>
                 <select
                   className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={selectedActionId || ''}
@@ -805,7 +805,7 @@ function PromotionsTab({ shopId }: { shopId: string }) {
                   }}
                   disabled={loadingActions}
                 >
-                  <option value="">选择活动</option>
+                  <option value="">自动同步后选择活动</option>
                   {actions.map((action) => (
                     <option key={action.id} value={action.id}>
                       {action.title} ({action.id})
@@ -814,12 +814,12 @@ function PromotionsTab({ shopId }: { shopId: string }) {
                 </select>
               </label>
               <label className="space-y-1">
-                <span className="text-xs text-muted-foreground">活动 ID / 链接</span>
+                <span className="text-xs text-muted-foreground">备用 ID / Ozon 链接</span>
                 <input
                   className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
                   value={actionInput}
                   onChange={(e) => setActionInput(e.target.value)}
-                  placeholder="197747"
+                  placeholder="粘贴 seller.ozon.ru 活动链接或活动 ID"
                 />
               </label>
             </div>
@@ -848,7 +848,7 @@ function PromotionsTab({ shopId }: { shopId: string }) {
                 className="gap-1"
               >
                 <Megaphone className="h-4 w-4" />
-                加载活动
+                定位活动
               </Button>
               {selectedActionId && (
                 <Button

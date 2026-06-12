@@ -127,7 +127,7 @@ export class OzonClient {
   }
 
   async getPromotionActions(): Promise<unknown> {
-    return this.request('/v1/actions', { body: {} });
+    return this.request('/v1/actions', { method: 'GET' });
   }
 
   async getPromotionProducts(actionId: number, params: { limit?: number; offset?: number } = {}): Promise<unknown> {
