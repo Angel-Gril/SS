@@ -1259,7 +1259,7 @@ export async function collectRoutes(app: FastifyInstance) {
                     continue;
                   }
                   try {
-                    const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId, { preferOzonCdn: true });
+                    const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId);
                     await client.importProductPictures({ product_id: it.product_id, images: resolvedImages });
                     recordPictureUploadDiagnostic(fallbackPictureUploads, {
                       offerId,
@@ -1438,7 +1438,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const { categoryId, typeId } = resolveItemPublishCategory(item, body.categoryId, body.typeId, preferItemCategory);
       const dims = getItemDimensions(item);
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
-      const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId, { preferOzonCdn: true });
+      const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
 
       const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
       // 无 variants：保持原行为（1 个 item）
@@ -1481,7 +1481,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const subImagesRaw = resolveVariantPublishImages(item, v, baseRawImages);
         const subImages = sameStringList(subImagesRaw, baseRawImages)
           ? baseImages
-          : await resolveImageUrls(subImagesRaw, body.shopId, userId, { preferOzonCdn: true });
+          : await resolveImageUrls(subImagesRaw, body.shopId, userId);
         const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
         const subName = resolvePublishName(item, subAttrs);
 
