@@ -14,6 +14,13 @@ describe('ozon error hints', () => {
   });
 
   it('recognizes common Ozon listing validation errors', () => {
+    expect(explainOzonError({
+      code: 'updating_with_seller_sku',
+      message: 'Ozon changed the human-readable wording',
+    })).toMatchObject({
+      code: 'OZON_SKU_OFFER_CONFLICT',
+      label: '重复跟卖/源 SKU 与货号冲突',
+    });
     expect(explainOzonError('Не удалось скачать изображение по ссылке')).toMatchObject({
       code: 'OZON_IMAGE_DOWNLOAD_FAILED',
       label: '图片下载异常',

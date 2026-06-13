@@ -73,6 +73,23 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
   return { text, cls };
 }
 
+function isFallbackPictureJob(payload: JobRow['payload']): boolean {
+  return payload?.source === 'collect-publish-fallback' || payload?.mode === 'follow-by-sku';
+}
+
+function needsRemoteRefresh(row: JobRow): boolean {
+  const pictureUploadStatus = row.payload?.pictureUploadStatus;
+  const pictureUploads = row.payload?.pictureUploads || [];
+  return row.status === 'RUNNING'
+    || pictureUploadStatus === 'pending'
+    || (
+      row.status === 'SUCCESS'
+      && isFallbackPictureJob(row.payload)
+      && !pictureUploadStatus
+      && pictureUploads.length === 0
+    );
+}
+
 interface Props {
   // 按上架来源过滤：'listing-page' = 改款页发起；'collect-page' = 采集跟卖页发起
   entryFilter?: 'collect-page' | 'listing-page' | null;
@@ -127,6 +144,22 @@ export function ListingJobList({
     load();
   }, [entryFilter, modeFilter, limit]);
 
+  useEffect(() => {
+    const refreshTargets = rows.filter(needsRemoteRefresh).slice(0, 5);
+    if (!refreshTargets.length) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      await Promise.allSettled(
+        refreshTargets.map((row) => api.post(`/api/listing/tasks/${row.id}/refresh`, {})),
+      );
+      if (!cancelled) await load();
+    }, 15000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [rows]);
+
   const accent = accentEmerald ? 'border-emerald-200 dark:border-emerald-900' : '';
   const iconColor = accentEmerald ? 'text-emerald-600' : 'text-muted-foreground';
 
@@ -172,6 +205,9 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
   const succeeded = total - failed;
   const mode = modeLabel(row.payload);
   const errorHint = row.errorMessage ? explainOzonError(row.errorMessage) : null;
+  const pictureUploadStatus = row.payload?.pictureUploadStatus;
+  const picturePendingCount = row.payload?.pictureUploadPendingCount ?? 0;
+  const pictureFailedCount = (row.payload?.pictureUploadFailedCount ?? 0) + (row.payload?.pictureUploadSkippedCount ?? 0);
 
   return (
     <div className="rounded-lg border p-3 sm:p-4 transition-colors hover:bg-muted/30 space-y-2.5">
@@ -183,6 +219,21 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
         </div>
         <Badge variant="outline" className={`text-[10px] ${mode.cls}`}>{mode.text}</Badge>
         <StatusBadge s={row.status} />
+        {pictureUploadStatus === 'pending' && (
+          <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300">
+            图片补传中{picturePendingCount ? ` ${picturePendingCount}` : ''}
+          </Badge>
+        )}
+        {pictureUploadStatus === 'failed' && (
+          <Badge variant="outline" className="text-[10px] border-destructive/40 text-destructive">
+            图片补传异常{pictureFailedCount ? ` ${pictureFailedCount}` : ''}
+          </Badge>
+        )}
+        {pictureUploadStatus === 'success' && (
+          <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950 dark:text-emerald-300">
+            图片已补传
+          </Badge>
+        )}
         {total > 0 && (
           <span className="text-xs text-muted-foreground">
             共 {total} {failed > 0 && <span className="text-destructive">· {failed} 失败</span>}

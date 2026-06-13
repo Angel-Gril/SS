@@ -3,6 +3,7 @@ import {
   calcPublishPrice,
   containsCjkText,
   getVariantOverridePrice,
+  findFallbackRecreateConflicts,
   groupPublishItemsByCategory,
   hasOwnPublishCategory,
   hasSuspiciousPublishName,
@@ -359,6 +360,57 @@ describe('collect publish helpers', () => {
     ]);
     expect(plan.pendingCount).toBe(0);
     expect(plan.skipped).toEqual([]);
+  });
+
+  it('detects fallback recreate conflicts before resubmitting the same source sku to Ozon', () => {
+    const conflicts = findFallbackRecreateConflicts([
+      {
+        id: 'source-airpods-case',
+        sku: '4045687993',
+        status: 'listed',
+        variants: [{ sku: '4045686426' }],
+      },
+      {
+        id: 'source-earbud-case',
+        sku: '3399297127',
+        status: 'active',
+        variants: [{ sku: '3440462580' }],
+      },
+    ], [
+      {
+        id: 'old-job',
+        status: 'SUCCESS',
+        payload: {
+          taskId: 4797195807,
+          mode: 'follow-by-sku',
+          sourceSkus: ['3399297127'],
+        },
+      },
+      {
+        id: 'failed-job',
+        status: 'FAILED',
+        payload: {
+          taskId: 4797718192,
+          mode: 'follow-by-sku',
+          sourceSkus: ['4045687993'],
+        },
+      },
+    ]);
+
+    expect(conflicts).toEqual([
+      {
+        itemId: 'source-airpods-case',
+        sku: '4045687993',
+        reason: 'listed',
+      },
+      {
+        itemId: 'source-earbud-case',
+        sku: '3399297127',
+        reason: 'existing_job',
+        jobId: 'old-job',
+        taskId: 4797195807,
+      },
+    ]);
   });
 
   it('does not plan fallback picture uploads for offers that were already uploaded', () => {

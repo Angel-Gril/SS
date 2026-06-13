@@ -430,6 +430,85 @@ export function planFallbackPictureUploads(
   return { operations, skipped, pendingCount, offerImageLists };
 }
 
+export type FallbackRecreateConflict = {
+  itemId: string;
+  sku: string;
+  reason: 'listed' | 'existing_job';
+  jobId?: string;
+  taskId?: number;
+};
+
+function collectFallbackSourceSkus(item: { sku?: unknown; variants?: unknown }): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: unknown) => {
+    const sku = String(value || '').trim();
+    if (!sku || seen.has(sku)) return;
+    seen.add(sku);
+    out.push(sku);
+  };
+  push(item.sku);
+  const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
+  for (const variant of variants) push(variant?.sku);
+  return out;
+}
+
+export function findFallbackRecreateConflicts(
+  itemsInput: unknown,
+  jobsInput: unknown = [],
+): FallbackRecreateConflict[] {
+  const items = Array.isArray(itemsInput) ? itemsInput as any[] : [];
+  const jobs = Array.isArray(jobsInput) ? jobsInput as any[] : [];
+  const jobBySourceSku = new Map<string, { jobId?: string; taskId?: number }>();
+  const jobBySourceItemId = new Map<string, { jobId?: string; taskId?: number }>();
+
+  for (const job of jobs) {
+    const status = String(job?.status || '').toUpperCase();
+    if (status && status !== 'SUCCESS' && status !== 'RUNNING') continue;
+    const payload = metadataRecord(job?.payload);
+    if (payload.source !== 'collect-publish-fallback' && payload.mode !== 'follow-by-sku') continue;
+    const jobRef = {
+      ...(job?.id ? { jobId: String(job.id) } : {}),
+      ...(positiveInt(payload.taskId) ? { taskId: positiveInt(payload.taskId)! } : {}),
+    };
+    for (const sku of normalizePublishImageList(payload.sourceSkus)) {
+      if (!jobBySourceSku.has(sku)) jobBySourceSku.set(sku, jobRef);
+    }
+    for (const itemId of normalizePublishImageList(payload.sourceItemIds)) {
+      if (!jobBySourceItemId.has(itemId)) jobBySourceItemId.set(itemId, jobRef);
+    }
+    const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];
+    for (const trace of traces) {
+      const sourceItemId = String(trace?.sourceItemId || '').trim();
+      const sourceVariantSku = String(trace?.sourceVariantSku || '').trim();
+      if (sourceItemId && !jobBySourceItemId.has(sourceItemId)) jobBySourceItemId.set(sourceItemId, jobRef);
+      if (sourceVariantSku && !jobBySourceSku.has(sourceVariantSku)) jobBySourceSku.set(sourceVariantSku, jobRef);
+    }
+  }
+
+  const conflicts: FallbackRecreateConflict[] = [];
+  for (const item of items) {
+    const itemId = String(item?.id || '').trim();
+    if (!itemId) continue;
+    const skus = collectFallbackSourceSkus(item);
+    const displaySku = skus[0] || itemId;
+    if (String(item?.status || '').toLowerCase() === 'listed') {
+      conflicts.push({ itemId, sku: displaySku, reason: 'listed' });
+      continue;
+    }
+    const sourceItemJob = jobBySourceItemId.get(itemId);
+    if (sourceItemJob) {
+      conflicts.push({ itemId, sku: displaySku, reason: 'existing_job', ...sourceItemJob });
+      continue;
+    }
+    const sourceSkuJob = skus.map((sku) => jobBySourceSku.get(sku)).find(Boolean);
+    if (sourceSkuJob) {
+      conflicts.push({ itemId, sku: displaySku, reason: 'existing_job', ...sourceSkuJob });
+    }
+  }
+  return conflicts;
+}
+
 export function resolvePublishOfferId(input: {
   sourceSku?: unknown;
   fallback: string;
@@ -1139,6 +1218,7 @@ export async function collectRoutes(app: FastifyInstance) {
       offerIds?: Record<string, string>;
       variantOfferIds?: Record<string, Record<string | number, string>>;
       source?: 'collect-page' | 'listing-page' | 'batch-collect-page';
+      forceRecreate?: boolean;
     };
 
     if (!body?.ids?.length || !body.shopId) {
@@ -1205,6 +1285,33 @@ export async function collectRoutes(app: FastifyInstance) {
         return reply.status(400).send({
           code: 0,
           msg: `${missingCategoryItems.length} 件商品缺少独立 OZON 分类/类型 ID（${sample}）。请先点击“从源商品继承分类/重量/尺寸”，或手动补齐后再上架。`,
+        });
+      }
+    }
+    if (noAttrs.length && body.forceRecreate !== true) {
+      const recentFallbackJobs = await prisma.syncJob.findMany({
+        where: {
+          shopId: body.shopId,
+          type: 'PRODUCT_PUSH',
+          status: { in: ['RUNNING', 'SUCCESS'] },
+        },
+        select: { id: true, status: true, payload: true },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      });
+      const recreateConflicts = findFallbackRecreateConflicts(noAttrs, recentFallbackJobs);
+      if (recreateConflicts.length) {
+        const sample = recreateConflicts
+          .slice(0, 5)
+          .map((conflict) => conflict.taskId ? `${conflict.sku}(任务 ${conflict.taskId})` : conflict.sku)
+          .join('、');
+        return reply.status(409).send({
+          code: 0,
+          msg: `${recreateConflicts.length} 件跟卖商品已上架/已提交过（${sample}）。Ozon 会拒绝同一源 SKU 再用新货号重复创建，这不是图片采集问题；如果只是图片没补完，请到“上架日志”打开上一次成功任务并刷新补传图片。`,
+          data: {
+            code: 'FALLBACK_RECREATE_BLOCKED',
+            conflicts: recreateConflicts,
+          },
         });
       }
     }
@@ -1401,6 +1508,7 @@ export async function collectRoutes(app: FastifyInstance) {
                 followBrand,
                 warehouseId: body.warehouseId ?? null,
                 offerIds: fallbackItems.map((i) => i.offer_id),
+                sourceItemIds: noAttrs.map((i) => i.id),
                 sourceSkus: noAttrs.map((i) => i.sku).filter(Boolean),
                 offerImages: Object.keys(fallbackOfferImages).length ? fallbackOfferImages : null,
                 offerImageLists: Object.keys(fallbackOfferImageLists).length ? fallbackOfferImageLists : null,

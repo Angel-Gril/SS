@@ -86,6 +86,19 @@ const OZON_ERROR_RULES: ErrorRule[] = [
     ],
   },
   {
+    code: 'OZON_SKU_OFFER_CONFLICT',
+    label: '重复跟卖/源 SKU 与货号冲突',
+    message: 'Ozon 判断源 SKU 和新货号不属于同一个商品。通常是同一源 SKU 已经上架过，请不要重复创建；请到上架日志打开上一次成功任务刷新补传图片，或先在 Ozon 归档/删除旧货号后再重新上架。',
+    severity: 'error',
+    patterns: [
+      /updating_with_seller_sku/i,
+      /sku.*артикул[а-я\s]*продавц[а-я\s]*.*разн[а-я\s]*товар/i,
+      /артикул[а-я\s]*продавц[а-я\s]*.*sku.*разн[а-я\s]*товар/i,
+      /specify\s+only\s+the\s+target\s+sku/i,
+      /sku.*seller.*(article|offer).*different.*product/i,
+    ],
+  },
+  {
     code: 'OZON_CATEGORY_TYPE_MISMATCH',
     label: '类目/类型不匹配',
     message: 'description_category_id 和 type_id 不匹配。请重新从源商品继承分类/类型，或选择同一类目下的正确 type_id。',
@@ -157,6 +170,16 @@ function rawErrorMessage(error: unknown): string {
   return String(record.message ?? record.description ?? record.error ?? record.code ?? '').trim();
 }
 
+function rawErrorSearchText(error: unknown): string {
+  if (typeof error === 'string') return error.trim();
+  if (!error || typeof error !== 'object') return '';
+  const record = error as Record<string, unknown>;
+  return [record.code, record.message, record.description, record.error]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 function rawErrorField(error: unknown): string {
   if (!error || typeof error !== 'object') return '';
   const record = error as Record<string, unknown>;
@@ -164,7 +187,7 @@ function rawErrorField(error: unknown): string {
 }
 
 export function explainOzonError(error: unknown): OzonErrorHint | null {
-  const message = rawErrorMessage(error);
+  const message = rawErrorSearchText(error);
   if (!message) return null;
   for (const rule of OZON_ERROR_RULES) {
     if (rule.patterns.some((pattern) => pattern.test(message))) {
