@@ -21,6 +21,17 @@ export interface JobRow {
     sourceSkus?: string[];
     offerIds?: string[];
     offerImages?: Record<string, string> | null;
+    pictureUploads?: Array<{
+      offerId: string;
+      productId?: number | null;
+      status: 'uploaded' | 'failed' | 'skipped';
+      imageCount: number;
+      resolvedCount: number;
+      firstImage?: string;
+      message?: string;
+    }> | null;
+    pictureUploadFailedCount?: number;
+    pictureUploadError?: string | null;
     itemCount?: number;
     sourceItemCount?: number;
     failedCount?: number;

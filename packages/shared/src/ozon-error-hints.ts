@@ -39,6 +39,18 @@ const OZON_ERROR_RULES: ErrorRule[] = [
     ],
   },
   {
+    code: 'OZON_IMAGE_RESOLUTION_INVALID',
+    label: '图片分辨率不符合要求',
+    message: '图片像素分辨率不符合 Ozon 要求。请换用源商品原图或重新采集/打水印后再上架，避免使用缩略图。',
+    severity: 'error',
+    patterns: [
+      /(изображ|картин).*(разрешени|размер).*не\s+соответств/i,
+      /разрешени[а-я\s]*(изображ|картин)/i,
+      /(image|picture).*(resolution|pixel|dimension).*(invalid|too\s+small|not\s+meet|not\s+match)/i,
+      /(resolution|pixel).*(image|picture).*(invalid|too\s+small|not\s+meet|not\s+match)/i,
+    ],
+  },
+  {
     code: 'OZON_REQUIRED_ATTRIBUTE_MISSING',
     label: '必填属性缺失',
     message: 'Ozon 要求的必填属性没有填完整。请补齐类目必填属性后重新上架。',
@@ -82,6 +94,17 @@ const OZON_ERROR_RULES: ErrorRule[] = [
       /description[_\s-]?category[_\s-]?id.*type[_\s-]?id/i,
       /category.*type.*(mismatch|not\s+match|does\s+not\s+match)/i,
       /(категор[а-я]*).*(тип|type)/i,
+    ],
+  },
+  {
+    code: 'OZON_TITLE_QUALITY_INVALID',
+    label: '标题疑似无意义或语法错误',
+    message: 'Ozon 认为商品标题存在堆词、无意义文本或语法问题。请在采集改款里精简标题，保留商品名、品牌/型号和关键规格。',
+    severity: 'error',
+    patterns: [
+      /(названи[а-я]*).*(бессмыслен|грамматическ|ошиб)/i,
+      /(title|name).*(meaningless|grammar|grammatical|spam)/i,
+      /(meaningless|grammar|grammatical|spam).*(title|name)/i,
     ],
   },
   {

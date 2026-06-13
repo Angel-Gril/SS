@@ -63,6 +63,9 @@ export function ListingJobDetailDialog({
 
   const mode = data ? modeLabel(data.payload) : null;
   const jobErrorHint = data?.error ? explainOzonError(data.error) : null;
+  const pictureUploads = data?.payload?.pictureUploads || [];
+  const pictureProblemCount = pictureUploads.filter((it) => it.status !== 'uploaded').length
+    + (data?.payload?.pictureUploadError ? 1 : 0);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -120,6 +123,60 @@ export function ListingJobDetailDialog({
                 从 OZON 拉取最新状态
               </Button>
             </div>
+
+            {(pictureUploads.length > 0 || data.payload?.pictureUploadError) && (
+              <div className="border rounded-md overflow-hidden">
+                <div className="px-3 py-2 bg-muted flex items-center justify-between">
+                  <div className="font-medium">图片补传诊断</div>
+                  <Badge variant={pictureProblemCount ? 'destructive' : 'outline'} className="text-[10px]">
+                    {pictureProblemCount ? `${pictureProblemCount} 个异常` : '正常'}
+                  </Badge>
+                </div>
+                {data.payload?.pictureUploadError && (
+                  <div className="px-3 py-2 text-xs text-destructive border-t break-words">
+                    {data.payload.pictureUploadError}
+                  </div>
+                )}
+                {pictureUploads.length > 0 && (
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/70">
+                      <tr>
+                        <th className="text-left px-3 py-2">OFFER ID</th>
+                        <th className="text-left px-3 py-2">PRODUCT ID</th>
+                        <th className="text-left px-3 py-2 w-20">状态</th>
+                        <th className="text-left px-3 py-2">图片</th>
+                        <th className="text-left px-3 py-2">原因</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pictureUploads.map((it, i) => {
+                        const label = it.status === 'uploaded' ? '已补传' : it.status === 'skipped' ? '未补传' : '失败';
+                        const badgeClass = it.status === 'uploaded' ? 'bg-emerald-600' : it.status === 'skipped' ? 'bg-amber-500' : 'bg-destructive';
+                        return (
+                          <tr key={`${it.offerId}-${i}`} className="border-t">
+                            <td className="px-3 py-2"><code>{it.offerId}</code></td>
+                            <td className="px-3 py-2">{it.productId || '-'}</td>
+                            <td className="px-3 py-2"><Badge className={`${badgeClass} text-white text-[10px]`}>{label}</Badge></td>
+                            <td className="px-3 py-2">
+                              {it.firstImage ? (
+                                <button
+                                  type="button"
+                                  className="text-left underline-offset-2 hover:underline"
+                                  onClick={() => window.open(it.firstImage, '_blank')}
+                                >
+                                  {it.imageCount} 张 / 已解析 {it.resolvedCount} 张
+                                </button>
+                              ) : `${it.imageCount} 张 / 已解析 ${it.resolvedCount} 张`}
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground break-words">{it.message || '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
 
             {data.payload?.items && data.payload.items.length > 0 && (
               <div className="border rounded-md overflow-hidden">

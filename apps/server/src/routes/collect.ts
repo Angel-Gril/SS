@@ -107,6 +107,23 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   return cleanPublishName(attrText ? `${base} ${attrText}` : base).slice(0, 200);
 }
 
+export function syncOzonTitleAttribute<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  title: string,
+): Array<T | { id: number; complex_id: number; values: { value: string }[] }> {
+  const cleanTitle = cleanPublishName(title).slice(0, 200);
+  const attrs = Array.isArray(attributes) ? attributes.filter((attr) => Number(attr.id) !== 4180) : [];
+  if (!cleanTitle) return attrs;
+  return [
+    ...attrs,
+    {
+      id: 4180,
+      complex_id: 0,
+      values: [{ value: cleanTitle }],
+    },
+  ];
+}
+
 function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
@@ -252,6 +269,40 @@ export function recordOfferPublishImages(
   if (!offerId || !normalizedImages.length) return;
   offerImageLists[offerId] = normalizedImages;
   offerImages[offerId] = normalizedImages[0]!;
+}
+
+export function recordPictureUploadDiagnostic(
+  diagnostics: any[],
+  entry: {
+    offerId: unknown;
+    productId?: unknown;
+    status: 'uploaded' | 'failed' | 'skipped';
+    rawImages?: unknown;
+    resolvedImages?: unknown;
+    error?: unknown;
+    message?: unknown;
+  },
+): void {
+  const offerId = String(entry.offerId || '').trim();
+  if (!offerId) return;
+  const rawImages = normalizePublishImageList(entry.rawImages);
+  const resolvedImages = normalizePublishImageList(entry.resolvedImages);
+  const productId = positiveInt(entry.productId);
+  const error = entry.error as any;
+  const message = String(
+    entry.message
+    || (error?.message ? error.message : '')
+    || (typeof entry.error === 'string' ? entry.error : ''),
+  ).trim();
+  diagnostics.push({
+    offerId,
+    productId,
+    status: entry.status,
+    imageCount: rawImages.length,
+    resolvedCount: resolvedImages.length,
+    ...(rawImages[0] ? { firstImage: rawImages[0] } : {}),
+    ...(message ? { message: message.slice(0, 300) } : {}),
+  });
 }
 
 export function resolvePublishOfferId(input: {
@@ -1069,6 +1120,8 @@ export async function collectRoutes(app: FastifyInstance) {
       const fallbackTrace: { offerId: string; sourceItemId: string; sourceVariantSku: string; variantAttrs: any }[] = [];
       const fallbackOfferImages: Record<string, string> = {};
       const fallbackOfferImageLists: Record<string, string[]> = {};
+      const fallbackPictureUploads: any[] = [];
+      let fallbackPictureUploadError: string | null = null;
       const fallbackItems = noAttrs
         .flatMap((item) => {
           const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
@@ -1161,16 +1214,44 @@ export async function collectRoutes(app: FastifyInstance) {
               const info = await client.getImportInfo(fallbackTaskId);
               for (const it of info.items || []) {
                 if (it.product_id && it.status === 'imported') {
-                  const rawImages = it.offer_id ? fallbackOfferImageLists[String(it.offer_id)] || [] : [];
-                  if (rawImages.length) {
+                  const offerId = String(it.offer_id || '');
+                  const rawImages = offerId ? fallbackOfferImageLists[offerId] || [] : [];
+                  if (!rawImages.length) {
+                    recordPictureUploadDiagnostic(fallbackPictureUploads, {
+                      offerId,
+                      productId: it.product_id,
+                      status: 'skipped',
+                      rawImages,
+                      message: '该 offer 没有可上传图片，可能采集阶段没有拿到图片',
+                    });
+                    continue;
+                  }
+                  try {
                     const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId);
                     await client.importProductPictures({ product_id: it.product_id, images: resolvedImages });
+                    recordPictureUploadDiagnostic(fallbackPictureUploads, {
+                      offerId,
+                      productId: it.product_id,
+                      status: 'uploaded',
+                      rawImages,
+                      resolvedImages,
+                    });
                     console.log(`[publish-ozon fallback] uploaded ${resolvedImages.length} images for product_id=${it.product_id}`);
+                  } catch (e: any) {
+                    recordPictureUploadDiagnostic(fallbackPictureUploads, {
+                      offerId,
+                      productId: it.product_id,
+                      status: 'failed',
+                      rawImages,
+                      error: e,
+                    });
+                    console.warn(`[publish-ozon fallback] pictures upload failed for offer=${offerId}:`, e.message?.slice(0, 150));
                   }
                 }
               }
             } catch (e: any) {
-              console.warn(`[publish-ozon fallback] pictures upload failed:`, e.message?.slice(0, 150));
+              fallbackPictureUploadError = e.message?.slice(0, 300) || '图片补传状态读取失败';
+              console.warn(`[publish-ozon fallback] pictures upload status failed:`, fallbackPictureUploadError);
             }
           }
 
@@ -1197,6 +1278,9 @@ export async function collectRoutes(app: FastifyInstance) {
                 offerIds: fallbackItems.map((i) => i.offer_id),
                 sourceSkus: noAttrs.map((i) => i.sku).filter(Boolean),
                 offerImages: Object.keys(fallbackOfferImages).length ? fallbackOfferImages : null,
+                pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
+                pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
+                pictureUploadError: fallbackPictureUploadError,
                 variantTrace: fallbackTrace.length ? fallbackTrace : null,
               },
             },
@@ -1327,8 +1411,12 @@ export async function collectRoutes(app: FastifyInstance) {
       const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
       // 无 variants：保持原行为（1 个 item）
       if (!variants.length) {
+        const itemName = resolvePublishName(item);
+        const itemAttrs = cloned?.attributes?.length
+          ? syncOzonTitleAttribute(cloned.attributes, itemName)
+          : [];
         return [{
-          name: resolvePublishName(item),
+          name: itemName,
           offer_id: buildOfferId(item.sku, `import-${item.id}`, getItemCustomOfferId(item)),
           description_category_id: categoryId,
           type_id: typeId,
@@ -1344,7 +1432,7 @@ export async function collectRoutes(app: FastifyInstance) {
           width: dims.width,
           images: baseImages,
           ...(cloned?.description ? { description: cloned.description } : {}),
-          ...(cloned?.attributes?.length ? { attributes: cloned.attributes } : {}),
+          ...(itemAttrs.length ? { attributes: itemAttrs } : {}),
         }];
       }
 
@@ -1373,6 +1461,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const finalAttrs = variantAttrs && variantAttrs.length
           ? variantAttrs
           : (cloned?.attributes || []);
+        const publishAttrs = finalAttrs.length ? syncOzonTitleAttribute(finalAttrs, subName) : [];
 
         // 维度：每个变体自己的 > 整组 dims
         const subWeight = (typeof v.weight === 'number' && v.weight > 0) ? v.weight : dims.weight;
@@ -1397,7 +1486,7 @@ export async function collectRoutes(app: FastifyInstance) {
           width: subWidth,
           images: subImages,
           ...(cloned?.description ? { description: cloned.description } : {}),
-          ...(finalAttrs.length ? { attributes: finalAttrs } : {}),
+          ...(publishAttrs.length ? { attributes: publishAttrs } : {}),
           // 自定义字段：变体属性（颜色/尺码等），等真实数据回流后映射成 OZON 真实 attribute_id
           _variantAttrs: subAttrs,
           _sourceItemId: item.id,

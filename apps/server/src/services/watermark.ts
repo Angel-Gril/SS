@@ -24,8 +24,24 @@ export interface WatermarkConfig {
   scale?: number; // 图片水印占原图宽度百分比 0-100
 }
 
+export function normalizeWatermarkSourceUrl(url: string): string {
+  const text = String(url || '').trim();
+  if (!/^(https?:)?\/\//i.test(text)) return text;
+  try {
+    const parsed = new URL(text.startsWith('//') ? `https:${text}` : text);
+    const host = parsed.hostname.toLowerCase();
+    if (host.endsWith('.ozone.ru') || host.endsWith('.ozon.ru') || host.endsWith('.ozonstatic.cn')) {
+      parsed.pathname = parsed.pathname.replace(/\/(?:wc|w|h|c)\d+(?:x\d+)?(?=\/)/i, '');
+    }
+    return parsed.href;
+  } catch {
+    return text;
+  }
+}
+
 async function fetchImageBuffer(url: string): Promise<Buffer> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  const sourceUrl = normalizeWatermarkSourceUrl(url);
+  const res = await fetch(sourceUrl, { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch image: HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }

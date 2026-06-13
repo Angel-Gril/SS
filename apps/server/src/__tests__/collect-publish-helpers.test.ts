@@ -6,6 +6,7 @@ import {
   groupPublishItemsByCategory,
   hasOwnPublishCategory,
   hasSuspiciousPublishName,
+  recordPictureUploadDiagnostic,
   recordOfferPublishImages,
   removeVariantsBySkus,
   resolveBasePublishImages,
@@ -14,6 +15,7 @@ import {
   resolvePublishName,
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
+  syncOzonTitleAttribute,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -48,6 +50,28 @@ describe('collect publish helpers', () => {
 
     expect(name).toBe('Панама Zara черный сапфир');
     expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
+  it('replaces cloned Ozon title attribute with the final cleaned publish name', () => {
+    const attrs = syncOzonTitleAttribute([
+      {
+        id: 4180,
+        complex_id: 0,
+        values: [{ value: 'Автовизитка, автовизитка в машину, номер телефона в автомобиль' }],
+      },
+      {
+        id: 85,
+        complex_id: 0,
+        values: [{ value: 'Без бренда', dictionary_value_id: 97021 }],
+      },
+    ], 'Автовизитка ретро для автомобиля');
+
+    expect(attrs.filter((attr) => attr.id === 4180)).toEqual([{
+      id: 4180,
+      complex_id: 0,
+      values: [{ value: 'Автовизитка ретро для автомобиля' }],
+    }]);
+    expect(attrs.find((attr) => attr.id === 85)?.values[0]?.value).toBe('Без бренда');
   });
 
   it('prefers each collected item category over batch fallback category', () => {
@@ -241,6 +265,45 @@ describe('collect publish helpers', () => {
       'offer-blue': 'https://cdn.example.com/variant-blue.jpg',
       'offer-red': 'https://cdn.example.com/variant-red.jpg',
     });
+  });
+
+  it('records picture upload diagnostics without leaking the whole image list', () => {
+    const diagnostics: any[] = [];
+
+    recordPictureUploadDiagnostic(diagnostics, {
+      offerId: 'offer-blue',
+      productId: 123,
+      status: 'uploaded',
+      rawImages: ['/watermarked/blue.jpg', '/watermarked/blue-detail.jpg'],
+      resolvedImages: ['https://assets.example.com/blue.jpg', 'https://assets.example.com/blue-detail.jpg'],
+    });
+    recordPictureUploadDiagnostic(diagnostics, {
+      offerId: 'offer-red',
+      productId: 124,
+      status: 'failed',
+      rawImages: ['/watermarked/red.jpg'],
+      error: new Error('图片已上传但公网暂不可读，OZON 可能下载失败'),
+    });
+
+    expect(diagnostics).toEqual([
+      {
+        offerId: 'offer-blue',
+        productId: 123,
+        status: 'uploaded',
+        imageCount: 2,
+        resolvedCount: 2,
+        firstImage: '/watermarked/blue.jpg',
+      },
+      {
+        offerId: 'offer-red',
+        productId: 124,
+        status: 'failed',
+        imageCount: 1,
+        resolvedCount: 0,
+        firstImage: '/watermarked/red.jpg',
+        message: '图片已上传但公网暂不可读，OZON 可能下载失败',
+      },
+    ]);
   });
 
   it('removes multiple collected variants by sku and reports missing skus', () => {
