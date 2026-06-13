@@ -121,6 +121,22 @@
     },
     {
       "matches": [
+        "https://detail.1688.com/*"
+      ],
+      "js": [
+        "shared/calculator-core/profit-engine.js",
+        "shared/calculator-core/rule-engine.js",
+        "shared/commission/commission-rates.js",
+        "shared/currency/fx-rates.js",
+        "content/source-costing-panel.js"
+      ],
+      "css": [
+        "content/source-costing-panel.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://s.1688.com/*",
         "https://*.1688.com/*"
       ],

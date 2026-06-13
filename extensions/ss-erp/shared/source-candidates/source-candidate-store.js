@@ -78,6 +78,13 @@
         value: parsePrice(product.price || product.currentPriceValue || product.pagePriceValue),
         currency: normalizeCurrency(product.currency || product.pagePriceCurrency, 'RUB')
       },
+      pagePriceValue: parsePrice(product.pagePriceValue || product.price || product.currentPriceValue),
+      pagePriceCurrency: normalizeCurrency(product.pagePriceCurrency || product.currency, 'RUB'),
+      currentPriceValue: parsePrice(product.currentPriceValue || product.pagePriceValue || product.price),
+      weightG: Number(product.weightG || product.grossWeightGrams) || 0,
+      categoryHints: Array.isArray(product.categoryHints)
+        ? product.categoryHints.map(toText).filter(Boolean).slice(0, 8)
+        : [product.categoryName, product.title, product.sourceTitleRaw].map(toText).filter(Boolean).slice(0, 8),
       capturedAt: safeIsoDate(product.capturedAt || options.now)
     };
   }

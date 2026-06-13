@@ -1191,7 +1191,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         [SS_ERP_SOURCE_QUOTES_KEY]: quotes,
         [SS_ERP_SOURCE_QUOTE_PENDING_KEY]: quote,
       });
-      await notifyOzonTabToApplySourceQuote(quote);
+      if (!payload.suppressOzonApply) {
+        await notifyOzonTabToApplySourceQuote(quote);
+      }
       sendResponse({
         ok: true,
         quote,

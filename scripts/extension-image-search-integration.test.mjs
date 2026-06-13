@@ -5,6 +5,7 @@ const manifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', '
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
 const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
+const sourceCostingPanelJs = fs.readFileSync('extensions/ss-erp/content/source-costing-panel.js', 'utf8');
 
 assert.match(
   serviceWorker,
@@ -37,6 +38,65 @@ assert.ok(
   searchBridge.matches.includes('https://s.1688.com/*')
     && searchBridge.matches.includes('https://*.1688.com/*'),
   '1688 image search bridge should run on 1688 search pages',
+);
+
+const sourceCostingPanel = contentScripts.find((entry) => {
+  const scripts = Array.isArray(entry.js) ? entry.js : [];
+  return scripts.includes('content/source-costing-panel.js');
+});
+assert.ok(sourceCostingPanel, 'manifest should register the source costing panel');
+assert.ok(
+  sourceCostingPanel.matches.includes('https://detail.1688.com/*'),
+  'source costing panel should run on 1688 detail pages',
+);
+assert.ok(
+  sourceCostingPanel.css.includes('content/source-costing-panel.css'),
+  'source costing panel should include its CSS',
+);
+for (const script of [
+  'shared/calculator-core/profit-engine.js',
+  'shared/calculator-core/rule-engine.js',
+  'shared/commission/commission-rates.js',
+  'shared/currency/fx-rates.js',
+]) {
+  assert.ok(
+    sourceCostingPanel.js.includes(script),
+    `source costing panel should load ${script} on 1688 detail pages`,
+  );
+  assert.ok(
+    sourceCostingPanel.js.indexOf(script) < sourceCostingPanel.js.indexOf('content/source-costing-panel.js'),
+    `${script} should load before the 1688 costing panel`,
+  );
+}
+assert.match(
+  sourceCostingPanelJs,
+  /spb-self-hosted:collect-current-tab/,
+  'source costing panel should collect 1688 data through the existing background tab collector',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /ozon-calculator:status/,
+  'source costing panel should read the Ozon calculator snapshot before computing',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /runCosting/,
+  'source costing panel should run calculator logic directly on 1688 pages',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /OZON_CALC_RULE_ENGINE\.buildServiceQuote/,
+  'source costing panel should reuse the shared logistics rule engine',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /OZON_CALC_PROFIT_ENGINE\.enrichQuote/,
+  'source costing panel should reuse the shared profit engine',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /重新核价/,
+  'source costing panel primary action should be recalculating, not saving',
 );
 
 const pddBridge = contentScripts.find((entry) => {

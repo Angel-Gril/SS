@@ -5,6 +5,7 @@ const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const ozonPanel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
 const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
+const sourceCostingPanel = fs.readFileSync('extensions/ss-erp/content/source-costing-panel.js', 'utf8');
 
 assert.match(
   popupJs,
@@ -64,6 +65,11 @@ assert.match(
 );
 assert.match(
   serviceWorker,
+  /suppressOzonApply/,
+  'service worker should allow 1688 page quotes to be saved without switching back to Ozon',
+);
+assert.match(
+  serviceWorker,
   /message\.type\s*===\s*['"]ss-erp:source-quote-pending-clear['"]/,
   'service worker should allow the Ozon panel to clear an applied pending quote',
 );
@@ -87,6 +93,36 @@ assert.match(
   ozonPanel,
   /state\.inputs\.cost\s*=\s*quote\.costCny/,
   'Ozon panel should fill the purchase cost from the selected source quote',
+);
+assert.match(
+  sourceCostingPanel,
+  /suppressOzonApply:\s*true/,
+  '1688 costing panel should save quotes without forcing an Ozon tab switch',
+);
+assert.match(
+  popupJs,
+  /ozon:\s*ozon/,
+  'Ozon source-search context should use the collected Ozon product snapshot',
+);
+assert.match(
+  popupJs,
+  /price:\s*\{\s*value:\s*product\.pagePriceValue/,
+  'Ozon source-search context should persist the collected sale price for 1688-side costing',
+);
+assert.match(
+  popupJs,
+  /weightG:\s*product\.weightG/,
+  'Ozon source-search context should persist the collected weight for 1688-side costing',
+);
+assert.match(
+  sourceCostingPanel,
+  /data-action="run-costing"/,
+  '1688 costing panel should expose a primary in-page recalculation action',
+);
+assert.doesNotMatch(
+  sourceCostingPanel,
+  /class="primary" data-action="save-quote">保存核价/,
+  'saving a quote must not remain the primary 1688 page action',
 );
 
 console.log('PASS source quote flow wiring');

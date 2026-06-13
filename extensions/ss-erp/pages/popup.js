@@ -212,16 +212,23 @@
     return '';
   }
 
-  function buildOzonCandidateContext(tab, productId) {
+  function buildOzonCandidateContext(tab, productId, product) {
+    product = product && typeof product === 'object' ? product : {};
     return {
-      productId: productId || parseOzonProductId(tab && tab.url),
-      title: tab && tab.title ? tab.title : '',
-      url: tab && tab.url ? tab.url : ''
+      productId: product.productId || productId || parseOzonProductId(tab && tab.url),
+      title: product.title || product.sourceTitleRaw || (tab && tab.title ? tab.title : ''),
+      url: product.sourceUrl || (tab && tab.url ? tab.url : ''),
+      price: { value: product.pagePriceValue || product.price || product.currentPriceValue || 0, currency: product.pagePriceCurrency || product.currency || 'RUB' },
+      currentPriceValue: product.currentPriceValue || product.pagePriceValue || product.price || 0,
+      pagePriceValue: product.pagePriceValue || product.price || 0,
+      pagePriceCurrency: product.pagePriceCurrency || product.currency || 'RUB',
+      weightG: product.weightG || product.grossWeightGrams || 0,
+      categoryHints: [product.categoryName, product.title, product.sourceTitleRaw].filter(Boolean)
     };
   }
 
-  function rememberOzonCandidateContext(tab, productId) {
-    var ozon = buildOzonCandidateContext(tab, productId);
+  function rememberOzonCandidateContext(tab, productId, product) {
+    var ozon = buildOzonCandidateContext(tab, productId, product);
     if (!ozon.productId && !ozon.url) return;
     sendRuntimeMessage({
       type: 'ss-erp:source-candidate-context-save',
@@ -621,11 +628,8 @@
         quality: 0.86
       });
       setSecondaryButtonBusy('打开中...');
-      var ozon = {
-        productId: product.productId || primaryActionState.productId,
-        title: product.title || primaryActionState.tab && primaryActionState.tab.title || '',
-        url: product.sourceUrl || primaryActionState.tab && primaryActionState.tab.url || ''
-      };
+      var ozon = buildOzonCandidateContext(primaryActionState.tab, primaryActionState.productId, product);
+      rememberOzonCandidateContext(primaryActionState.tab, primaryActionState.productId, product);
       var selectedPlatforms = getSelectedSourceSearchPlatforms();
       if (!selectedPlatforms.length) throw new Error('请至少选择一个核价网站');
       sourceSearchPlatformSelection = selectedPlatforms.slice();
