@@ -68,9 +68,20 @@ export function ListingJobDetailDialog({
   const pictureProblemCount = pictureUploads.filter((it) => it.status !== 'uploaded').length
     + (data?.payload?.pictureUploadError ? 1 : 0);
   const pictureUploadStatus = data?.payload?.pictureUploadStatus;
-  const shouldAutoRefresh = !!data && (data.status === 'RUNNING' || pictureUploadStatus === 'pending');
+  const isFallbackPictureJob = data?.payload?.source === 'collect-publish-fallback' || data?.payload?.mode === 'follow-by-sku';
+  const needsLegacyFallbackPictureRefresh = !!data
+    && isFallbackPictureJob
+    && data.status === 'SUCCESS'
+    && !pictureUploadStatus
+    && pictureUploads.length === 0;
+  const shouldAutoRefresh = !!data && (
+    data.status === 'RUNNING'
+    || pictureUploadStatus === 'pending'
+    || needsLegacyFallbackPictureRefresh
+  );
   const canManualRefresh = !!data && (
     data.status !== 'SUCCESS'
+    || isFallbackPictureJob
     || pictureUploadStatus === 'pending'
     || pictureUploadStatus === 'failed'
   );

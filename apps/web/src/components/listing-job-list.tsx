@@ -16,6 +16,7 @@ export interface JobRow {
   status: Status;
   payload: {
     taskId?: number;
+    source?: string;
     mode?: 'follow' | 'clone' | 'follow-by-sku';
     entry?: 'collect-page' | 'listing-page';
     sourceSkus?: string[];
