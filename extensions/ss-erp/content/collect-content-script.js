@@ -985,15 +985,18 @@
     if (selectedSkuPrice) return selectedSkuPrice;
 
     const domText = pickFirstDomText(config.priceSelectors || []);
+    const visibleRange = context && context.platform === "1688" ? pickVisiblePriceRange(context.pageText) : null;
     const sourceText = pickPriceTextFromSources(context.sources);
-    const text = normalizePriceDisplay(domText || sourceText || "");
+    const trustedSourceText = sourceText && isTrustedSourcePriceText(sourceText, visibleRange) ? sourceText : "";
+    const visibleRangeText = visibleRange ? visibleRange.text : "";
+    const text = normalizePriceDisplay(domText || trustedSourceText || visibleRangeText || "");
     const parsed = parseSourcePriceText(text || sourceText, "CNY");
     if (parsed.price != null && parsed.price !== "") {
       return {
         price: roundMoney(Number(parsed.price)),
         currency: parsed.currency || "CNY",
         text: text || sourceText || String(parsed.price),
-        sourceType: parsed.sourceType || "dom"
+        sourceType: !domText && !trustedSourceText && visibleRangeText ? "visibleRangeHigh" : (parsed.sourceType || "dom")
       };
     }
 
@@ -1012,6 +1015,39 @@
     }
 
     return { price: null, currency: "CNY", text: "", sourceType: "" };
+  }
+
+  function pickVisiblePriceRange(pageText) {
+    const text = normalizeWhitespace(pageText || "");
+    if (!text) return null;
+    const matches = text.match(/[¥￥]?\s*\d[\d.,]*\s*(?:-|~|—|–|至|到)\s*[¥￥]?\s*\d[\d.,]*/g) || [];
+    for (const raw of matches.slice(0, 20)) {
+      const values = raw
+        .split(/(?:-|~|—|–|至|到)/)
+        .map((part) => parseMoneyNumber(part))
+        .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+      if (values.length >= 2) {
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        if (max > 0 && max >= min) {
+          return { min, max, text: raw.replace(/\s+/g, " ").trim() };
+        }
+      }
+    }
+    return null;
+  }
+
+  function isTrustedSourcePriceText(sourceText, visibleRange) {
+    if (!visibleRange) return true;
+    const parsed = parseSourcePriceText(sourceText, "CNY");
+    const price = Number(parsed && parsed.price) || 0;
+    if (!(price > 0)) return false;
+    const min = Number(visibleRange.min) || 0;
+    const max = Number(visibleRange.max) || 0;
+    if (!(max > 0)) return true;
+    const toleranceHigh = Math.max(max * 1.2, max + 20);
+    const toleranceLow = Math.max(0, min * 0.5);
+    return price >= toleranceLow && price <= toleranceHigh;
   }
 
   function pickSelectedOrderSummaryPrice(context) {
