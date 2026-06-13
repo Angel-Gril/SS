@@ -30,7 +30,10 @@ export interface JobRow {
       firstImage?: string;
       message?: string;
     }> | null;
+    pictureUploadStatus?: 'pending' | 'success' | 'failed';
     pictureUploadFailedCount?: number;
+    pictureUploadSkippedCount?: number;
+    pictureUploadPendingCount?: number;
     pictureUploadError?: string | null;
     itemCount?: number;
     sourceItemCount?: number;

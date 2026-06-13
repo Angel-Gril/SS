@@ -9,6 +9,7 @@ import {
   recordPictureUploadDiagnostic,
   recordOfferPublishImages,
   removeVariantsBySkus,
+  planFallbackPictureUploads,
   resolveBasePublishImages,
   resolveItemPublishCategory,
   resolvePublishOfferId,
@@ -314,6 +315,71 @@ describe('collect publish helpers', () => {
         message: '图片已上传但公网暂不可读，OZON 可能下载失败',
       },
     ]);
+  });
+
+  it('plans delayed fallback picture uploads from stored variant trace when product ids appear later', () => {
+    const plan = planFallbackPictureUploads({
+      source: 'collect-publish-fallback',
+      variantTrace: [
+        {
+          offerId: '4045686426-4PLI',
+          sourceItemId: 'source-airpods-case',
+          sourceVariantSku: '4045686426',
+        },
+      ],
+      pictureUploads: null,
+    }, [
+      {
+        offer_id: '4045686426-4PLI',
+        product_id: 5069515076,
+        status: 'imported',
+      },
+    ], [
+      {
+        id: 'source-airpods-case',
+        images: ['https://ir.ozone.ru/s3/multimedia-1-8/wc140/9978274340.jpg'],
+        variants: [
+          {
+            sku: '4045686426',
+            images: ['https://ir.ozone.ru/s3/multimedia-1-e/wc140/9976738478.jpg'],
+          },
+        ],
+      },
+    ]);
+
+    expect(plan.operations).toEqual([
+      {
+        offerId: '4045686426-4PLI',
+        productId: 5069515076,
+        rawImages: [
+          'https://ir.ozone.ru/s3/multimedia-1-e/9976738478.jpg',
+          'https://ir.ozone.ru/s3/multimedia-1-8/9978274340.jpg',
+        ],
+      },
+    ]);
+    expect(plan.pendingCount).toBe(0);
+    expect(plan.skipped).toEqual([]);
+  });
+
+  it('does not plan fallback picture uploads for offers that were already uploaded', () => {
+    const plan = planFallbackPictureUploads({
+      source: 'collect-publish-fallback',
+      offerImageLists: {
+        'offer-done': ['https://cdn.example.com/done.jpg'],
+      },
+      pictureUploads: [
+        { offerId: 'offer-done', status: 'uploaded' },
+      ],
+    }, [
+      {
+        offer_id: 'offer-done',
+        product_id: 1001,
+        status: 'imported',
+      },
+    ], []);
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.pendingCount).toBe(0);
   });
 
   it('removes multiple collected variants by sku and reports missing skus', () => {

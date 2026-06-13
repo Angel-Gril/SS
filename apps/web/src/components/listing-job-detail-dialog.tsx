@@ -37,21 +37,22 @@ export function ListingJobDetailDialog({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  async function load() {
-    setLoading(true);
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     const res = await api.get<DetailData>(`/api/listing/tasks/${jobId}`);
     if (res.code === 1 && res.data) setData(res.data);
     setLoading(false);
   }
 
-  async function refresh() {
+  async function refresh(silent = false) {
+    if (refreshing) return;
     setRefreshing(true);
     const res = await api.post<{ status: Status }>(`/api/listing/tasks/${jobId}/refresh`, {});
     if (res.code === 1) {
-      toast({ title: '已从 OZON 拉取最新状态' });
-      await load();
+      if (!silent) toast({ title: '已从 OZON 拉取最新状态' });
+      await load(silent);
       onRefreshed();
-    } else {
+    } else if (!silent) {
       toast({ title: res.msg || '刷新失败', variant: 'destructive' });
     }
     setRefreshing(false);
@@ -66,6 +67,21 @@ export function ListingJobDetailDialog({
   const pictureUploads = data?.payload?.pictureUploads || [];
   const pictureProblemCount = pictureUploads.filter((it) => it.status !== 'uploaded').length
     + (data?.payload?.pictureUploadError ? 1 : 0);
+  const pictureUploadStatus = data?.payload?.pictureUploadStatus;
+  const shouldAutoRefresh = !!data && (data.status === 'RUNNING' || pictureUploadStatus === 'pending');
+  const canManualRefresh = !!data && (
+    data.status !== 'SUCCESS'
+    || pictureUploadStatus === 'pending'
+    || pictureUploadStatus === 'failed'
+  );
+
+  useEffect(() => {
+    if (!shouldAutoRefresh || refreshing) return;
+    const timer = window.setTimeout(() => {
+      void refresh(true);
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [jobId, shouldAutoRefresh, refreshing, data?.payload?.pictureUploadPendingCount]);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -118,7 +134,7 @@ export function ListingJobDetailDialog({
             )}
 
             <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing || data.status === 'SUCCESS' || data.status === 'FAILED'}>
+              <Button variant="outline" size="sm" onClick={() => refresh(false)} disabled={refreshing || !canManualRefresh}>
                 <RefreshCw className={`h-3.5 w-3.5 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
                 从 OZON 拉取最新状态
               </Button>

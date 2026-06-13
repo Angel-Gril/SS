@@ -337,6 +337,99 @@ export function recordPictureUploadDiagnostic(
   });
 }
 
+export function planFallbackPictureUploads(
+  payloadInput: unknown,
+  importItemsInput: unknown,
+  sourceItemsInput: unknown,
+): {
+  operations: { offerId: string; productId: number; rawImages: string[] }[];
+  skipped: { offerId: string; productId: number; rawImages: string[]; message: string }[];
+  pendingCount: number;
+  offerImageLists: Record<string, string[]>;
+} {
+  const payload = metadataRecord(payloadInput);
+  const importItems = Array.isArray(importItemsInput) ? importItemsInput as any[] : [];
+  const sourceItems = Array.isArray(sourceItemsInput) ? sourceItemsInput as any[] : [];
+  const sourceById = new Map<string, any>();
+  for (const item of sourceItems) {
+    const id = String(item?.id || '').trim();
+    if (id) sourceById.set(id, item);
+  }
+  const offerImageLists: Record<string, string[]> = {};
+
+  const explicitLists = metadataRecord(payload.offerImageLists);
+  for (const [offerId, images] of Object.entries(explicitLists)) {
+    const normalized = normalizePublishImageList(images);
+    if (offerId && normalized.length) offerImageLists[offerId] = normalized;
+  }
+
+  const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];
+  for (const trace of traces) {
+    const offerId = String(trace?.offerId || '').trim();
+    if (!offerId || offerImageLists[offerId]?.length) continue;
+    const sourceItem = sourceById.get(String(trace?.sourceItemId || '').trim());
+    if (!sourceItem) continue;
+    const baseImages = resolveBasePublishImages(sourceItem);
+    const variants = Array.isArray(sourceItem.variants) ? sourceItem.variants as any[] : [];
+    const sourceVariantSku = String(trace?.sourceVariantSku || '').trim();
+    const variant = sourceVariantSku
+      ? variants.find((v) => String(v?.sku || '').trim() === sourceVariantSku)
+      : null;
+    const rawImages = variant
+      ? resolveVariantPublishImages(sourceItem, variant, baseImages)
+      : baseImages;
+    if (rawImages.length) offerImageLists[offerId] = rawImages;
+  }
+
+  const firstImages = metadataRecord(payload.offerImages);
+  for (const [offerId, image] of Object.entries(firstImages)) {
+    if (offerImageLists[offerId]?.length) continue;
+    const normalized = normalizePublishImageList([image]);
+    if (offerId && normalized.length) offerImageLists[offerId] = normalized;
+  }
+
+  const uploadedOffers = new Set(
+    (Array.isArray(payload.pictureUploads) ? payload.pictureUploads as any[] : [])
+      .filter((entry) => String(entry?.status || '') === 'uploaded')
+      .map((entry) => String(entry?.offerId || '').trim())
+      .filter(Boolean),
+  );
+
+  const operations: { offerId: string; productId: number; rawImages: string[] }[] = [];
+  const skipped: { offerId: string; productId: number; rawImages: string[]; message: string }[] = [];
+  let pendingCount = 0;
+
+  for (const item of importItems) {
+    const offerId = String(item?.offer_id || item?.offerId || '').trim();
+    if (!offerId || uploadedOffers.has(offerId)) continue;
+    const productId = positiveInt(item?.product_id ?? item?.productId);
+    const status = String(item?.status || '').toLowerCase();
+    if (!productId) {
+      if (!status || status === 'pending') pendingCount += 1;
+      continue;
+    }
+    if (status === 'pending') {
+      pendingCount += 1;
+      continue;
+    }
+    if (status === 'failed') continue;
+
+    const rawImages = offerImageLists[offerId] || [];
+    if (!rawImages.length) {
+      skipped.push({
+        offerId,
+        productId,
+        rawImages,
+        message: '该 offer 没有可上传图片，可能采集阶段没有拿到图片',
+      });
+      continue;
+    }
+    operations.push({ offerId, productId, rawImages });
+  }
+
+  return { operations, skipped, pendingCount, offerImageLists };
+}
+
 export function resolvePublishOfferId(input: {
   sourceSku?: unknown;
   fallback: string;
@@ -1310,8 +1403,14 @@ export async function collectRoutes(app: FastifyInstance) {
                 offerIds: fallbackItems.map((i) => i.offer_id),
                 sourceSkus: noAttrs.map((i) => i.sku).filter(Boolean),
                 offerImages: Object.keys(fallbackOfferImages).length ? fallbackOfferImages : null,
+                offerImageLists: Object.keys(fallbackOfferImageLists).length ? fallbackOfferImageLists : null,
                 pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
                 pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
+                pictureUploadStatus: fallbackPictureUploadError
+                  ? 'failed'
+                  : fallbackPictureUploads.length
+                    ? (fallbackPictureUploads.some((it) => it.status === 'failed' || it.status === 'skipped') ? 'failed' : 'success')
+                    : 'pending',
                 pictureUploadError: fallbackPictureUploadError,
                 variantTrace: fallbackTrace.length ? fallbackTrace : null,
               },

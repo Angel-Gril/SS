@@ -6,6 +6,8 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { summarizeOzonImportItems } from '../services/ozon-import-status.js';
+import { resolveImageUrls } from '../services/ozon-image-resolver.js';
+import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
@@ -30,6 +32,57 @@ const batchListSchema = z.object({
     })).optional(),
   })).min(1).max(100),
 });
+
+function isFallbackPictureUploadJob(payload: Record<string, any>): boolean {
+  return payload.source === 'collect-publish-fallback' || payload.mode === 'follow-by-sku';
+}
+
+function mergePictureUploadDiagnostics(existingInput: unknown, next: any[]): any[] {
+  const existing = Array.isArray(existingInput) ? existingInput as any[] : [];
+  if (!next.length) return existing;
+  const nextOfferIds = new Set(next.map((entry) => String(entry?.offerId || '')).filter(Boolean));
+  return [
+    ...existing.filter((entry) => !nextOfferIds.has(String(entry?.offerId || ''))),
+    ...next,
+  ];
+}
+
+function summarizePictureUploadDiagnostics(diagnosticsInput: unknown, pendingCount: number): {
+  status: 'pending' | 'success' | 'failed';
+  failedCount: number;
+  skippedCount: number;
+  pendingCount: number;
+  errorMessage: string | null;
+} {
+  const diagnostics = Array.isArray(diagnosticsInput) ? diagnosticsInput as any[] : [];
+  const failedCount = diagnostics.filter((entry) => entry?.status === 'failed').length;
+  const skippedCount = diagnostics.filter((entry) => entry?.status === 'skipped').length;
+  if (failedCount || skippedCount) {
+    return {
+      status: 'failed',
+      failedCount,
+      skippedCount,
+      pendingCount,
+      errorMessage: `图片补传未完成：失败 ${failedCount} 个，缺图 ${skippedCount} 个`,
+    };
+  }
+  if (pendingCount > 0) {
+    return {
+      status: 'pending',
+      failedCount,
+      skippedCount,
+      pendingCount,
+      errorMessage: `图片补传等待 OZON 生成 product_id：剩余 ${pendingCount} 个`,
+    };
+  }
+  return {
+    status: 'success',
+    failedCount,
+    skippedCount,
+    pendingCount,
+    errorMessage: null,
+  };
+}
 
 export async function listingRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -198,16 +251,95 @@ export async function listingRoutes(app: FastifyInstance) {
     try {
       const info = await client.getImportInfo(Number(taskId));
       const { total, failed, allDone } = summarizeOzonImportItems(info.items);
+      const payload = (job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload))
+        ? job.payload as Record<string, any>
+        : {};
+      let nextPayload: Record<string, any> = {
+        ...payload,
+        itemCount: total,
+        failedCount: failed,
+        items: info.items,
+      };
+      let pictureErrorMessage: string | null = null;
+
+      if (isFallbackPictureUploadJob(payload)) {
+        const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];
+        const sourceItemIds = Array.from(new Set(
+          traces
+            .map((trace) => String(trace?.sourceItemId || '').trim())
+            .filter(Boolean),
+        ));
+        const sourceItems = sourceItemIds.length
+          ? await prisma.supplyGoods.findMany({
+            where: {
+              id: { in: sourceItemIds },
+              userId: job.shop.userId,
+            },
+          })
+          : [];
+        const plan = planFallbackPictureUploads(payload, info.items, sourceItems);
+        const pictureDiagnostics: any[] = [];
+
+        for (const skipped of plan.skipped) {
+          recordPictureUploadDiagnostic(pictureDiagnostics, {
+            offerId: skipped.offerId,
+            productId: skipped.productId,
+            status: 'skipped',
+            rawImages: skipped.rawImages,
+            message: skipped.message,
+          });
+        }
+
+        for (const operation of plan.operations) {
+          try {
+            const resolvedImages = await resolveImageUrls(operation.rawImages, job.shopId, job.shop.userId);
+            await client.importProductPictures({ product_id: operation.productId, images: resolvedImages });
+            recordPictureUploadDiagnostic(pictureDiagnostics, {
+              offerId: operation.offerId,
+              productId: operation.productId,
+              status: 'uploaded',
+              rawImages: operation.rawImages,
+              resolvedImages,
+            });
+          } catch (e: any) {
+            recordPictureUploadDiagnostic(pictureDiagnostics, {
+              offerId: operation.offerId,
+              productId: operation.productId,
+              status: 'failed',
+              rawImages: operation.rawImages,
+              error: e,
+            });
+          }
+        }
+
+        const mergedDiagnostics = mergePictureUploadDiagnostics(payload.pictureUploads, pictureDiagnostics);
+        const pictureSummary = summarizePictureUploadDiagnostics(mergedDiagnostics, plan.pendingCount);
+        pictureErrorMessage = pictureSummary.errorMessage;
+        nextPayload = {
+          ...nextPayload,
+          offerImageLists: Object.keys(plan.offerImageLists).length ? plan.offerImageLists : payload.offerImageLists ?? null,
+          pictureUploads: mergedDiagnostics.length ? mergedDiagnostics : null,
+          pictureUploadStatus: pictureSummary.status,
+          pictureUploadFailedCount: pictureSummary.failedCount,
+          pictureUploadSkippedCount: pictureSummary.skippedCount,
+          pictureUploadPendingCount: pictureSummary.pendingCount,
+          pictureUploadError: pictureSummary.errorMessage,
+        };
+      }
 
       const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
+      const finalStatus = pictureErrorMessage
+        ? (allDone && nextPayload.pictureUploadStatus === 'failed' ? 'FAILED' : 'RUNNING')
+        : newStatus;
+      const errorMessage = pictureErrorMessage || (failed > 0 ? `${failed} 个商品上架失败` : null);
 
       const updated = await prisma.syncJob.update({
         where: { id: job.id },
         data: {
-          status: newStatus,
-          finishedAt: allDone ? new Date() : null,
-          payload: { ...(job.payload as any), itemCount: total, failedCount: failed, items: info.items },
-          errorMessage: failed > 0 ? `${failed} 个商品上架失败` : null,
+          status: finalStatus,
+          finishedAt: allDone && finalStatus !== 'RUNNING' ? new Date() : null,
+          payload: nextPayload,
+          errorMessage,
         },
       });
 
