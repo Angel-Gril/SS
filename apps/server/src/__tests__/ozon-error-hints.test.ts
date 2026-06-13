@@ -18,6 +18,14 @@ describe('ozon error hints', () => {
       code: 'OZON_IMAGE_DOWNLOAD_FAILED',
       label: '图片下载异常',
     });
+    expect(explainOzonError('Мы не смогли скачать картинку — ваше хранилище изображений вернуло ошибку')).toMatchObject({
+      code: 'OZON_IMAGE_DOWNLOAD_FAILED',
+      label: '图片下载异常',
+    });
+    expect(explainOzonError('Не удалось скачать фото по ссылке')).toMatchObject({
+      code: 'OZON_IMAGE_DOWNLOAD_FAILED',
+      label: '图片下载异常',
+    });
     expect(explainOzonError('Разрешение изображения не соответствует требованиям')).toMatchObject({
       code: 'OZON_IMAGE_RESOLUTION_INVALID',
       label: '图片分辨率不符合要求',

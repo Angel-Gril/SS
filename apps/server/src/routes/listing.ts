@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
+import { summarizeOzonImportItems } from '../services/ozon-import-status.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
@@ -196,10 +197,7 @@ export async function listingRoutes(app: FastifyInstance) {
 
     try {
       const info = await client.getImportInfo(Number(taskId));
-      const total = info.items.length;
-      const failed = info.items.filter((i) => i.status === 'failed').length;
-      const pending = info.items.filter((i) => i.status === 'pending').length;
-      const allDone = pending === 0;
+      const { total, failed, allDone } = summarizeOzonImportItems(info.items);
 
       const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
 

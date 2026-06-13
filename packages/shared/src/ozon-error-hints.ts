@@ -33,7 +33,8 @@ const OZON_ERROR_RULES: ErrorRule[] = [
     message: 'Ozon 无法下载商品图片。请检查图片链接是否公网可访问、是否过期、是否被防盗链拦截，必要时重新上传图片后再上架。',
     severity: 'error',
     patterns: [
-      /(не\s+удалось|не\s+получится|ошибк[а-я]*).*(скач|загруз).*(изображ|картин)/i,
+      /(не\s+удалось|не\s+получится|не\s+смогли|ошибк[а-я]*).*(скач|загруз).*(изображ|картин|фото)/i,
+      /(скач|загруз).*(изображ|картин|фото).*(ошибк|не\s+удалось|не\s+смогли)/i,
       /(image|picture).*(download|fetch|load).*(fail|error|unable)/i,
       /(failed|unable).*(download|fetch|load).*(image|picture)/i,
     ],

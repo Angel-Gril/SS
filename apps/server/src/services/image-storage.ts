@@ -439,6 +439,10 @@ async function buildOzonCdnBackend(shopId: string): Promise<OzonCdnBackend> {
   return new OzonCdnBackend({ ...auth, relayUrl: rc.ozonCdnRelayUrl });
 }
 
+export async function getOzonCdnStorageBackend(shopId: string): Promise<ImageStorageBackend> {
+  return buildOzonCdnBackend(shopId);
+}
+
 async function buildOssBackend(): Promise<OssBackend> {
   const rc = await getRuntimeConfigForStorage();
   if (!rc.oss) {

@@ -52,6 +52,16 @@ describe('collect publish helpers', () => {
     expect(hasSuspiciousPublishName(name)).toBe(false);
   });
 
+  it('turns repeated keyword spam titles into short publish names with variant color', () => {
+    const name = resolvePublishName({
+      title: 'Автовизитка, автовизитка в машину, номер телефона в автомобиль,Ретро-парковочная плата для автомобиля',
+      metadata: {},
+    }, { Цвет: 'коричнево-красный' });
+
+    expect(name).toBe('Автовизитка для автомобиля коричнево-красный цвет');
+    expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
   it('replaces cloned Ozon title attribute with the final cleaned publish name', () => {
     const attrs = syncOzonTitleAttribute([
       {

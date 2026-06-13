@@ -80,6 +80,36 @@ export function cleanPublishName(value: unknown): string {
   return words.join(' ').trim();
 }
 
+function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false): string {
+  if (!variantAttrs || !Object.keys(variantAttrs).length) return '';
+  const parts: string[] = [];
+  for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
+    const value = cleanPublishName(rawValue);
+    if (!value) continue;
+    if (includeColorLabel && /цвет|color/i.test(rawName)) parts.push(`${value} цвет`);
+    else parts.push(value);
+  }
+  return cleanPublishName(parts.join(' '));
+}
+
+function shortenSpammyPublishName(base: string, variantText: string): string {
+  const cleanBase = cleanPublishName(base);
+  if (/автовизитк/i.test(cleanBase)) {
+    return cleanPublishName(`Автовизитка для автомобиля ${variantText}`);
+  }
+
+  if (!hasSuspiciousPublishName(cleanBase)) {
+    return cleanPublishName(`${cleanBase} ${variantText}`);
+  }
+
+  const phrase = String(base || '')
+    .split(/[,;|]+/)
+    .map((part) => cleanPublishName(part))
+    .find((part) => part && !containsCjkText(part) && part.length >= 4);
+  const fallback = cleanBase.split(/\s+/).slice(0, 5).join(' ');
+  return cleanPublishName(`${phrase || fallback} ${variantText}`);
+}
+
 export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
   const base = Number.isFinite(baseCny) && baseCny > 0 ? baseCny : 100;
   const pct = Number.isFinite(markupPct) ? markupPct : 200;
@@ -103,8 +133,10 @@ export function getVariantOverridePrice(
 export function resolvePublishName(item: { title?: string | null; metadata?: unknown }, variantAttrs?: Record<string, string>): string {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
-  const attrText = variantAttrs && Object.keys(variantAttrs).length ? Object.values(variantAttrs).filter(Boolean).join(' ') : '';
-  return cleanPublishName(attrText ? `${base} ${attrText}` : base).slice(0, 200);
+  const cleanBase = cleanPublishName(base);
+  const shouldShorten = /автовизитк/i.test(cleanBase) || hasSuspiciousPublishName(cleanBase);
+  const attrText = normalizeVariantTitleParts(variantAttrs, shouldShorten);
+  return shortenSpammyPublishName(base, attrText).slice(0, 200);
 }
 
 export function syncOzonTitleAttribute<T extends { id: number; complex_id?: number; values: any[] }>(
@@ -1227,7 +1259,7 @@ export async function collectRoutes(app: FastifyInstance) {
                     continue;
                   }
                   try {
-                    const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId);
+                    const resolvedImages = await resolveImageUrls(rawImages, body.shopId, userId, { preferOzonCdn: true });
                     await client.importProductPictures({ product_id: it.product_id, images: resolvedImages });
                     recordPictureUploadDiagnostic(fallbackPictureUploads, {
                       offerId,
@@ -1406,7 +1438,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const { categoryId, typeId } = resolveItemPublishCategory(item, body.categoryId, body.typeId, preferItemCategory);
       const dims = getItemDimensions(item);
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
-      const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
+      const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId, { preferOzonCdn: true });
 
       const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
       // 无 variants：保持原行为（1 个 item）
@@ -1449,7 +1481,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const subImagesRaw = resolveVariantPublishImages(item, v, baseRawImages);
         const subImages = sameStringList(subImagesRaw, baseRawImages)
           ? baseImages
-          : await resolveImageUrls(subImagesRaw, body.shopId, userId);
+          : await resolveImageUrls(subImagesRaw, body.shopId, userId, { preferOzonCdn: true });
         const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
         const subName = resolvePublishName(item, subAttrs);
 
