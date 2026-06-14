@@ -121,7 +121,9 @@
     },
     {
       "matches": [
-        "https://detail.1688.com/*"
+        "https://detail.1688.com/*",
+        "https://*.pinduoduo.com/*",
+        "https://*.yangkeduo.com/*"
       ],
       "js": [
         "shared/calculator-core/profit-engine.js",

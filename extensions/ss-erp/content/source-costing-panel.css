@@ -44,6 +44,12 @@
   padding: 12px 14px;
   border-bottom: 1px solid rgba(234, 88, 12, 0.16);
   background: linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(239, 246, 255, 0.9));
+  cursor: move;
+  user-select: none;
+}
+
+#ss-erp-source-costing-panel.dragging {
+  opacity: 0.96;
 }
 
 .ss-erp-source-mark {

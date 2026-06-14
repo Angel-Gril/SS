@@ -220,6 +220,7 @@ const aliVisibleRangeGuardResponse = await collectWithPage({
   bodyText: '舒坦福制氧机家用氧气机老人吸氧机 ¥298.00 ~ ¥678.00 1台起批 包邮 高配款 ¥430 库存7590台 标准款 ¥350 库存9803台 基础款 ¥298 库存4545台',
   selectors: {
     h1: '舒坦福制氧机家用氧气机老人吸氧机',
+    '.price': '¥3580',
   },
   pageState: {
     knownGlobals: {
@@ -238,6 +239,36 @@ assert.equal(aliVisibleRangeGuardResponse.data.priceCny, 678);
 assert.notEqual(aliVisibleRangeGuardResponse.data.priceCny, 3580);
 assert.equal(aliVisibleRangeGuardResponse.data.priceSourceType, 'visibleRangeHigh');
 assert.equal(aliVisibleRangeGuardResponse.data.totalCostCny, 678);
+
+const aliVisibleRangeGuardDomResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/700797177324.html',
+  title: '1688 oxygen concentrator sku row detail',
+  bodyText: '舒坦福制氧机家用氧气机老人吸氧机 ¥298.00 ~ ¥678.00 1台起批 包邮 高配款 ¥430 库存7590台 标准款 ¥350 库存9803台 基础款 ¥298 库存4545台',
+  selectors: {
+    h1: '舒坦福制氧机家用氧气机老人吸氧机',
+  },
+  queryAll(selector) {
+    if (!/(sku|Sku|spec|Spec|\bli\b|\btr\b|role="row")/.test(selector)) return [];
+    return [
+      makeMockElement({ text: '颜色 内部异常价格 ¥3580 库存7590台', className: 'sku-row selected' }),
+      makeMockElement({ text: '颜色 标准款 ¥350 库存9803台', className: 'sku-row' }),
+    ];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '700797177324',
+        subject: '舒坦福制氧机家用氧气机老人吸氧机',
+      },
+    },
+  },
+});
+
+assert.equal(aliVisibleRangeGuardDomResponse.ok, true);
+assert.equal(aliVisibleRangeGuardDomResponse.data.priceCny, 678);
+assert.notEqual(aliVisibleRangeGuardDomResponse.data.priceCny, 3580);
+assert.equal(aliVisibleRangeGuardDomResponse.data.priceSourceType, 'visibleRangeHigh');
+assert.equal(aliVisibleRangeGuardDomResponse.data.totalCostCny, 678);
 
 const taobaoResponse = await collectWithPage({
   url: 'https://item.taobao.com/item.htm?id=99887766',

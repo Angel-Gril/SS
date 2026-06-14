@@ -50,6 +50,11 @@ assert.ok(
   'source costing panel should run on 1688 detail pages',
 );
 assert.ok(
+  sourceCostingPanel.matches.includes('https://*.pinduoduo.com/*')
+    && sourceCostingPanel.matches.includes('https://*.yangkeduo.com/*'),
+  'source costing panel should run on PDD source pages',
+);
+assert.ok(
   sourceCostingPanel.css.includes('content/source-costing-panel.css'),
   'source costing panel should include its CSS',
 );
@@ -97,6 +102,36 @@ assert.match(
   sourceCostingPanelJs,
   /重新核价/,
   'source costing panel primary action should be recalculating, not saving',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /detectSourcePlatform/,
+  'source costing panel should detect the current source platform',
+);
+assert.doesNotMatch(
+  sourceCostingPanelJs,
+  /\^https:\\\/\\\/detail\\\.1688\\\.com\\\//,
+  'source costing panel should not be hard-gated to only 1688 detail pages',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /PANEL_POSITION_KEY\s*=\s*['"]ss-erp:source-costing-panel-position['"]/,
+  'source costing panel should persist its dragged position',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /pointerdown/,
+  'source costing panel header should start dragging with pointer events',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /pointermove/,
+  'source costing panel should move while dragged',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /chrome\.storage\.local\.set/,
+  'source costing panel should save dragged position in extension storage',
 );
 
 const pddBridge = contentScripts.find((entry) => {

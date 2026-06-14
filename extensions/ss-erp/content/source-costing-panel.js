@@ -3,6 +3,8 @@
 
   var PANEL_ID = 'ss-erp-source-costing-panel';
   var FAB_ID = 'ss-erp-source-costing-fab';
+  var PANEL_POSITION_KEY = 'ss-erp:source-costing-panel-position';
+  var SOURCE_PLATFORM = detectSourcePlatform(location.href);
   var state = {
     context: null,
     product: null,
@@ -31,11 +33,27 @@
   if (window.__ssErpSourceCostingPanelLoaded) return;
   window.__ssErpSourceCostingPanelLoaded = true;
 
-  if (!/^https:\/\/detail\.1688\.com\//i.test(location.href)) return;
+  if (!SOURCE_PLATFORM) return;
 
   renderShell();
   refreshAll();
   window.setInterval(refreshProductOnly, 2500);
+
+  function detectSourcePlatform(url) {
+    var host = '';
+    try {
+      host = new URL(url || location.href).hostname.toLowerCase();
+    } catch (_error) {
+      host = String(location.hostname || '').toLowerCase();
+    }
+    if (host === 'detail.1688.com') return '1688';
+    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'PDD';
+    return '';
+  }
+
+  function platformLabel() {
+    return SOURCE_PLATFORM || '货源';
+  }
 
   function sendRuntimeMessage(message) {
     return new Promise(function (resolve, reject) {
@@ -66,14 +84,14 @@
     fab.id = FAB_ID;
     fab.type = 'button';
     fab.textContent = '核';
-    fab.title = '1688 货源核价';
+    fab.title = platformLabel() + ' 货源核价';
 
     var panel = document.createElement('aside');
     panel.id = PANEL_ID;
     panel.innerHTML = [
       '<div class="ss-erp-source-head">',
       '  <div class="ss-erp-source-mark">核</div>',
-      '  <div class="ss-erp-source-title"><strong>1688 货源核价</strong><span data-role="context-title">读取 Ozon 关联...</span></div>',
+      '  <div class="ss-erp-source-title"><strong>' + escapeHtml(platformLabel()) + ' 货源核价</strong><span data-role="context-title">读取 Ozon 关联...</span></div>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="refresh" title="刷新">↻</button>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="close" title="收起">×</button>',
       '</div>',
@@ -94,6 +112,8 @@
 
     document.documentElement.appendChild(fab);
     document.documentElement.appendChild(panel);
+    restorePanelPosition(panel);
+    bindPanelDrag(panel);
 
     fab.addEventListener('click', function () {
       panel.classList.toggle('open');
@@ -107,8 +127,77 @@
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
   }
 
+  function restorePanelPosition(panel) {
+    if (!panel || typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+    chrome.storage.local.get([PANEL_POSITION_KEY], function (result) {
+      var position = result && result[PANEL_POSITION_KEY];
+      if (!position || typeof position !== 'object') return;
+      var left = Number(position.left);
+      var top = Number(position.top);
+      if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+      setPanelPosition(panel, left, top);
+    });
+  }
+
+  function bindPanelDrag(panel) {
+    var header = panel && panel.querySelector('.ss-erp-source-head');
+    if (!header) return;
+    var drag = null;
+    header.addEventListener('pointerdown', function (event) {
+      if (event.button !== 0 || (event.target && event.target.closest && event.target.closest('button'))) return;
+      var rect = panel.getBoundingClientRect();
+      drag = {
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top
+      };
+      panel.classList.add('dragging');
+      if (header.setPointerCapture) header.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    header.addEventListener('pointermove', function (event) {
+      if (!drag) return;
+      setPanelPosition(panel, drag.left + event.clientX - drag.startX, drag.top + event.clientY - drag.startY);
+    });
+    header.addEventListener('pointerup', function (event) {
+      if (!drag) return;
+      drag = null;
+      panel.classList.remove('dragging');
+      try { header.releasePointerCapture(event.pointerId); } catch (_error) {}
+      persistPanelPosition(panel);
+    });
+    header.addEventListener('pointercancel', function () {
+      drag = null;
+      panel.classList.remove('dragging');
+      persistPanelPosition(panel);
+    });
+  }
+
+  function setPanelPosition(panel, left, top) {
+    var rect = panel.getBoundingClientRect();
+    var width = rect.width || 390;
+    var height = Math.min(rect.height || 520, window.innerHeight - 24);
+    var nextLeft = Math.max(8, Math.min(window.innerWidth - width - 8, left));
+    var nextTop = Math.max(8, Math.min(window.innerHeight - height - 8, top));
+    panel.style.left = Math.round(nextLeft) + 'px';
+    panel.style.top = Math.round(nextTop) + 'px';
+    panel.style.right = 'auto';
+  }
+
+  function persistPanelPosition(panel) {
+    if (!panel || typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+    var rect = panel.getBoundingClientRect();
+    chrome.storage.local.set({
+      [PANEL_POSITION_KEY]: {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top)
+      }
+    });
+  }
+
   async function refreshAll() {
-    setStatus('读取 Ozon 关联和当前 1688 成本...', '');
+    setStatus('读取 Ozon 关联和当前 ' + platformLabel() + ' 成本...', '');
     await Promise.all([refreshContext(), refreshCalculatorStatus(), refreshProductOnly()]);
     hydrateInputs();
     renderContent();
@@ -144,7 +233,7 @@
         renderContent();
         return;
       }
-      setStatus((response && response.error) || '读取当前 1688 商品失败', 'fail');
+      setStatus((response && response.error) || '读取当前 ' + platformLabel() + ' 商品失败', 'fail');
     } finally {
       state.collecting = false;
     }
@@ -184,7 +273,7 @@
     ].join('');
 
     sourceCard.innerHTML = [
-      '<h3>当前 1688 货源</h3>',
+      '<h3>当前 ' + escapeHtml(platformLabel()) + ' 货源</h3>',
       '<div class="ss-erp-source-row"><span>单价</span><b>¥ ' + formatMoney(product.priceCny || product.price) + '</b></div>',
       '<div class="ss-erp-source-row"><span>运费</span><b>¥ ' + formatMoney(product.shippingCny) + '</b></div>',
       '<div class="ss-erp-source-row"><span>SKU</span><b>' + escapeHtml((product.selectedSku && (product.selectedSku.specText || product.selectedSku.name || product.selectedSku.skuId)) || product.sku || product.productId || '-') + '</b></div>',
@@ -302,7 +391,7 @@
       hydrateInputs();
       computeCosting();
       renderContent();
-      setStatus('已按当前 1688 SKU 成本重新核价。', 'ok');
+      setStatus('已按当前 ' + platformLabel() + ' SKU 成本重新核价。', 'ok');
     } catch (error) {
       state.result = null;
       renderContent();
@@ -321,7 +410,7 @@
     if (!selectedServiceIds.length) throw new Error('未同步 Ozon 物流配置，无法正式核价。');
     if (!window.OZON_CALC_RULE_ENGINE || !window.OZON_CALC_PROFIT_ENGINE) throw new Error('计算器引擎未加载，请重新加载扩展。');
     if (!(state.inputs.priceRMB > 0)) throw new Error('缺少 Ozon 售价，请手动填写售价后重新核价。');
-    if (!(state.inputs.cost > 0)) throw new Error('缺少当前 1688 采购成本，请先选择 SKU 或刷新页面。');
+    if (!(state.inputs.cost > 0)) throw new Error('缺少当前 ' + platformLabel() + ' 采购成本，请先选择 SKU 或刷新页面。');
     if (!(state.inputs.weightG > 0)) throw new Error('缺少商品重量，请手动填写重量后重新核价。');
 
     var ruleSnapshot = snapshot.ruleSnapshot || { services: [] };
@@ -410,7 +499,7 @@
       return;
     }
     if (!state.product) {
-      setStatus('当前 1688 商品还未读取完成。', 'fail');
+      setStatus('当前 ' + platformLabel() + ' 商品还未读取完成。', 'fail');
       return;
     }
 
@@ -427,7 +516,7 @@
         }
       });
       if (!response || !response.ok) throw new Error(response && response.error || '保存失败');
-      setStatus('已保存核价，可继续查看其它 1688 候选。', 'ok');
+      setStatus('已保存核价，可继续查看其它 ' + platformLabel() + ' 候选。', 'ok');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
@@ -439,7 +528,7 @@
   async function collectToErp() {
     if (state.busy) return;
     if (!state.product) {
-      setStatus('当前 1688 商品还未读取完成。', 'fail');
+      setStatus('当前 ' + platformLabel() + ' 商品还未读取完成。', 'fail');
       return;
     }
     state.busy = true;

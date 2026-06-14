@@ -978,32 +978,33 @@
   }
 
   function pickSourcePrice(context, config) {
+    const visibleRange = context && context.platform === "1688" ? pickVisiblePriceRange(context.pageText) : null;
     const selectedOrderSummaryPrice = pickSelectedOrderSummaryPrice(context);
-    if (selectedOrderSummaryPrice) return selectedOrderSummaryPrice;
+    if (selectedOrderSummaryPrice && isTrustedPriceValue(selectedOrderSummaryPrice.price, visibleRange)) return selectedOrderSummaryPrice;
 
     const selectedSkuPrice = pickSelectedSkuPriceFromDom();
-    if (selectedSkuPrice) return selectedSkuPrice;
+    if (selectedSkuPrice && isTrustedPriceValue(selectedSkuPrice.price, visibleRange)) return selectedSkuPrice;
 
     const domText = pickFirstDomText(config.priceSelectors || []);
-    const visibleRange = context && context.platform === "1688" ? pickVisiblePriceRange(context.pageText) : null;
     const sourceText = pickPriceTextFromSources(context.sources);
+    const trustedDomText = domText && isTrustedSourcePriceText(domText, visibleRange) ? domText : "";
     const trustedSourceText = sourceText && isTrustedSourcePriceText(sourceText, visibleRange) ? sourceText : "";
     const visibleRangeText = visibleRange ? visibleRange.text : "";
-    const text = normalizePriceDisplay(domText || trustedSourceText || visibleRangeText || "");
+    const text = normalizePriceDisplay(trustedDomText || trustedSourceText || visibleRangeText || "");
     const parsed = parseSourcePriceText(text || sourceText, "CNY");
-    if (parsed.price != null && parsed.price !== "") {
+    if (parsed.price != null && parsed.price !== "" && isTrustedPriceValue(parsed.price, visibleRange)) {
       return {
         price: roundMoney(Number(parsed.price)),
         currency: parsed.currency || "CNY",
         text: text || sourceText || String(parsed.price),
-        sourceType: !domText && !trustedSourceText && visibleRangeText ? "visibleRangeHigh" : (parsed.sourceType || "dom")
+        sourceType: !trustedDomText && !trustedSourceText && visibleRangeText ? "visibleRangeHigh" : (parsed.sourceType || "dom")
       };
     }
 
     const skuItems = pickSkuItems(context.sources);
     const skuPrice = skuItems
       .map((item) => item.price)
-      .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0)
+      .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0 && isTrustedPriceValue(value, visibleRange))
       .sort((a, b) => a - b)[0];
     if (skuPrice != null) {
       return {
@@ -1040,7 +1041,12 @@
   function isTrustedSourcePriceText(sourceText, visibleRange) {
     if (!visibleRange) return true;
     const parsed = parseSourcePriceText(sourceText, "CNY");
-    const price = Number(parsed && parsed.price) || 0;
+    return isTrustedPriceValue(parsed && parsed.price, visibleRange);
+  }
+
+  function isTrustedPriceValue(value, visibleRange) {
+    if (!visibleRange) return true;
+    const price = Number(value) || 0;
     if (!(price > 0)) return false;
     const min = Number(visibleRange.min) || 0;
     const max = Number(visibleRange.max) || 0;
