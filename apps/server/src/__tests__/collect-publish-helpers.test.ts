@@ -413,6 +413,48 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('blocks duplicate fallback submits while the first submit is still creating products', () => {
+    const conflicts = findFallbackRecreateConflicts([
+      {
+        id: 'source-fan',
+        sku: '4403275408',
+        status: 'listing_pending',
+        variants: [{ sku: '4403257754' }],
+      },
+      {
+        id: 'source-speaker',
+        sku: '3399297127',
+        status: 'collected',
+        variants: [{ sku: '3440462580' }],
+      },
+    ], [
+      {
+        id: 'pending-job',
+        status: 'RUNNING',
+        payload: {
+          source: 'collect-publish-fallback',
+          mode: 'follow-by-sku',
+          sourceItemIds: ['source-speaker'],
+          sourceSkus: ['3399297127'],
+        },
+      },
+    ]);
+
+    expect(conflicts).toEqual([
+      {
+        itemId: 'source-fan',
+        sku: '4403275408',
+        reason: 'listed',
+      },
+      {
+        itemId: 'source-speaker',
+        sku: '3399297127',
+        reason: 'existing_job',
+        jobId: 'pending-job',
+      },
+    ]);
+  });
+
   it('does not plan fallback picture uploads for offers that were already uploaded', () => {
     const plan = planFallbackPictureUploads({
       source: 'collect-publish-fallback',
