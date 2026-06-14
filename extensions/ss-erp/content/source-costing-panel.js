@@ -26,8 +26,10 @@
     unavailable: [],
     busy: false,
     collecting: false,
+    autoComputing: false,
     initializedInputs: false,
-    lastCostSignature: ''
+    lastCostSignature: '',
+    lastProductSignature: ''
   };
 
   if (window.__ssErpSourceCostingPanelLoaded) return;
@@ -37,7 +39,9 @@
 
   renderShell();
   refreshAll();
-  window.setInterval(refreshProductOnly, 2500);
+  window.setInterval(function () {
+    refreshProductOnly({ auto: true });
+  }, 1000);
 
   function detectSourcePlatform(url) {
     var host = '';
@@ -127,6 +131,11 @@
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
   }
 
+  function openPanel() {
+    var panel = document.getElementById(PANEL_ID);
+    if (panel) panel.classList.add('open');
+  }
+
   function restorePanelPosition(panel) {
     if (!panel || typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
     chrome.storage.local.get([PANEL_POSITION_KEY], function (result) {
@@ -201,6 +210,8 @@
     await Promise.all([refreshContext(), refreshCalculatorStatus(), refreshProductOnly()]);
     hydrateInputs();
     renderContent();
+    if (state.context && state.context.ozon) openPanel();
+    tryAutoCosting();
   }
 
   async function refreshContext() {
@@ -228,15 +239,34 @@
     try {
       var response = await collectCurrentSourceProduct();
       if (response && response.ok) {
+        var nextProduct = response.data || null;
+        var nextSignature = buildProductSignature(nextProduct);
+        var changed = Boolean(nextSignature && nextSignature !== state.lastProductSignature);
         state.product = response.data || null;
+        if (nextSignature) state.lastProductSignature = nextSignature;
         hydrateInputs();
         renderContent();
+        if (state.context && state.context.ozon) openPanel();
+        if (changed && !options.skipAuto) tryAutoCosting();
         return;
       }
       setStatus((response && response.error) || '读取当前 ' + platformLabel() + ' 商品失败', 'fail');
     } finally {
       state.collecting = false;
     }
+  }
+
+  function buildProductSignature(product) {
+    product = product && typeof product === 'object' ? product : {};
+    var selected = product.selectedSku && typeof product.selectedSku === 'object' ? product.selectedSku : {};
+    return [
+      product.productId || product.sourceProductId || product.url || '',
+      selected.skuId || selected.name || selected.specText || product.sku || '',
+      selected.quantity || '',
+      product.priceCny || product.price || '',
+      product.shippingCny || '',
+      product.totalCostCny || ''
+    ].join('|');
   }
 
   function renderContent() {
@@ -385,7 +415,7 @@
     setStatus('读取当前 SKU 并重新核价...', '');
     try {
       await refreshCalculatorStatus();
-      await refreshProductOnly({ force: true });
+      await refreshProductOnly({ force: true, skipAuto: true });
       var panel = document.getElementById(PANEL_ID);
       syncInputsFromDom(panel && panel.querySelector('[data-role="input-card"]'));
       hydrateInputs();
@@ -399,6 +429,36 @@
     } finally {
       state.busy = false;
       renderContent();
+    }
+  }
+
+  async function tryAutoCosting() {
+    if (state.autoComputing || state.busy) return;
+    if (!state.context || !state.context.ozon || !state.product) return;
+    var cost = Number(state.product.totalCostCny || state.product.priceCny || state.product.price) || 0;
+    if (!(cost > 0)) return;
+
+    state.autoComputing = true;
+    try {
+      if (!state.calculatorStatus) await refreshCalculatorStatus();
+      var snapshot = state.calculatorStatus && state.calculatorStatus.snapshot || {};
+      var selectedServiceIds = snapshot.userConfig && Array.isArray(snapshot.userConfig.selectedServiceIds)
+        ? snapshot.userConfig.selectedServiceIds
+        : [];
+      if (!selectedServiceIds.length) {
+        setStatus('未同步 Ozon 物流配置，无法正式核价。', 'fail');
+        return;
+      }
+      hydrateInputs();
+      computeCosting();
+      renderContent();
+      setStatus('已随当前 ' + platformLabel() + ' SKU 自动刷新核价。', 'ok');
+    } catch (error) {
+      state.result = null;
+      renderContent();
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      state.autoComputing = false;
     }
   }
 

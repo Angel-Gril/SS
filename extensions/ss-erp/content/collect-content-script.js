@@ -986,11 +986,11 @@
   }
 
   function pickSourcePrice(context, config) {
-    const visibleRange = context && context.platform === "1688" ? pickVisiblePriceRange(context.pageText) : null;
+    const visibleRange = context && context.platform === "1688" ? (pickVisiblePriceRange(context.pageText) || pickVisibleSkuPriceRangeFromDom(context.pageText)) : null;
     const selectedOrderSummaryPrice = pickSelectedOrderSummaryPrice(context);
     if (selectedOrderSummaryPrice && isTrustedPriceValue(selectedOrderSummaryPrice.price, visibleRange)) return selectedOrderSummaryPrice;
 
-    const selectedSkuPrice = pickSelectedSkuPriceFromDom();
+    const selectedSkuPrice = pickSelectedSkuPriceFromDom(context && context.pageText);
     if (selectedSkuPrice && isTrustedPriceValue(selectedSkuPrice.price, visibleRange)) return selectedSkuPrice;
 
     const domText = pickFirstDomText(config.priceSelectors || []);
@@ -1031,6 +1031,7 @@
     if (!text) return null;
     const matches = text.match(/[¥￥]?\s*\d[\d.,]*\s*(?:-|~|—|–|至|到)\s*[¥￥]?\s*\d[\d.,]*/g) || [];
     for (const raw of matches.slice(0, 20)) {
+      if (!/[¥￥元]/.test(raw) && !/\d+\.\d{1,2}\s*(?:-|~|—|–|至|到)\s*\d+\.\d{1,2}/.test(raw)) continue;
       const values = raw
         .split(/(?:-|~|—|–|至|到)/)
         .map((part) => parseMoneyNumber(part))
@@ -1044,6 +1045,18 @@
       }
     }
     return null;
+  }
+
+  function pickVisibleSkuPriceRangeFromDom(pageText) {
+    const rows = collectDomSkuPriceRows(pageText);
+    const prices = rows
+      .map((row) => row.price)
+      .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0)
+      .sort((a, b) => a - b);
+    if (!prices.length) return null;
+    const min = prices[0];
+    const max = prices[prices.length - 1];
+    return { min, max, text: "¥" + formatMoney(min) + " ~ ¥" + formatMoney(max) };
   }
 
   function isTrustedSourcePriceText(sourceText, visibleRange) {
@@ -1128,8 +1141,8 @@
     };
   }
 
-  function pickSelectedSkuPriceFromDom() {
-    const rows = collectDomSkuPriceRows();
+  function pickSelectedSkuPriceFromDom(pageText) {
+    const rows = collectDomSkuPriceRows(pageText);
     if (!rows.length) return null;
 
     const selected = rows.find((row) => row.selected && row.price > 0);
@@ -1143,8 +1156,9 @@
       };
     }
 
-    if (rows.length >= 2) {
-      const max = rows.slice().sort((a, b) => b.price - a.price)[0];
+    const fallbackRows = rows.filter((row) => row.source !== "text");
+    if (fallbackRows.length >= 2) {
+      const max = fallbackRows.slice().sort((a, b) => b.price - a.price)[0];
       if (max && max.price > 0) {
         return {
           price: max.price,
@@ -1159,38 +1173,83 @@
     return null;
   }
 
-  function collectDomSkuPriceRows() {
-    if (typeof document === "undefined" || !document.querySelectorAll) return [];
+  function collectDomSkuPriceRows(pageText) {
     const selectors = [
       "[class*='sku'], [class*='Sku'], [class*='spec'], [class*='Spec'], [class*='offer'], [class*='Offer'], [class*='sale'], [class*='Sale'], [class*='amount'], [class*='Amount'], li, tr, [role='row']"
     ];
     const rows = [];
     const seen = new Set();
 
-    selectors.forEach((selector) => {
-      Array.from(document.querySelectorAll(selector) || []).slice(0, 600).forEach((node) => {
-        if (!node || seen.has(node)) return;
-        seen.add(node);
-        const text = normalizeWhitespace(node.innerText || node.textContent || "");
-        if (!text || text.length > 320) return;
-        if (!/[¥￥]\s*\d|\d[\d.,]*\s*元/.test(text)) return;
-        if (!/(库存|现货|起批|件|个|颜色|尺码|规格|型号|sku|SKU)/.test(text)) return;
-        const price = extractSkuRowPrice(text);
-        if (!(price > 0)) return;
-        const selected = isSelectedSkuNode(node) || hasPositiveQuantity(node);
-        rows.push({
-          skuId: pickNodeAttribute(node, ["data-sku-id", "data-sku", "sku-id", "data-id"]) || "",
-          name: cleanupSkuRowName(text),
-          specText: cleanupSkuRowName(text),
-          price,
-          priceText: "¥" + formatMoney(price),
-          selected,
-          attrs: cleanupSkuRowName(text) ? { spec: cleanupSkuRowName(text) } : {}
+    if (typeof document !== "undefined" && document.querySelectorAll) {
+      selectors.forEach((selector) => {
+        Array.from(document.querySelectorAll(selector) || []).slice(0, 600).forEach((node) => {
+          if (!node || seen.has(node)) return;
+          seen.add(node);
+          const text = normalizeWhitespace(node.innerText || node.textContent || "");
+          if (!text || text.length > 320) return;
+          if (!/[¥￥]\s*\d|\d[\d.,]*\s*元/.test(text)) return;
+          if (!/(库存|现货|起批|件|个|颜色|尺码|规格|型号|sku|SKU)/.test(text)) return;
+          const price = extractSkuRowPrice(text);
+          if (!(price > 0)) return;
+          const quantity = extractSkuRowQuantity(text) || extractControlQuantity(node);
+          const selected = isSelectedSkuNode(node) || quantity > 0;
+          rows.push(buildSkuRow({
+            skuId: pickNodeAttribute(node, ["data-sku-id", "data-sku", "sku-id", "data-id"]) || "",
+            text,
+            price,
+            selected,
+            quantity,
+            source: "dom"
+          }));
         });
       });
-    });
+    }
+
+    rows.push(...collectSkuPriceRowsFromText(pageText));
 
     return dedupeSkuRows(rows);
+  }
+
+  function collectSkuPriceRowsFromText(pageText) {
+    const text = normalizeWhitespace(pageText || "");
+    if (!text) return [];
+    const priceMatches = Array.from(text.matchAll(/[¥￥]\s*\d[\d.,]*/g));
+    const rows = [];
+    priceMatches.slice(0, 80).forEach((match, index) => {
+      const price = parseMoneyNumber(match[0]);
+      if (!(price > 0)) return;
+      const start = Math.max(0, match.index - 80);
+      const nextIndex = priceMatches[index + 1] ? priceMatches[index + 1].index : text.length;
+      const end = Math.min(text.length, nextIndex);
+      const sample = text.slice(start, end);
+      if (!/(库存|现货|颜色|尺码|规格|型号|sku|SKU|(?:-|−|－)\s*\d+\s*\+)/.test(sample)) return;
+      const quantity = extractSkuRowQuantity(sample);
+      rows.push(buildSkuRow({
+        skuId: "",
+        text: sample,
+        price,
+        selected: quantity > 0,
+        quantity,
+        source: "text"
+      }));
+    });
+    return rows;
+  }
+
+  function buildSkuRow(input) {
+    const text = input && input.text ? input.text : "";
+    const name = cleanupSkuRowName(text);
+    return {
+      skuId: input.skuId || "",
+      name,
+      specText: name,
+      price: input.price,
+      priceText: "¥" + formatMoney(input.price),
+      selected: Boolean(input.selected),
+      quantity: Number(input.quantity) || 0,
+      source: input.source || "dom",
+      attrs: name ? { spec: name } : {}
+    };
   }
 
   function dedupeSkuRows(rows) {
@@ -1226,17 +1285,26 @@
     return false;
   }
 
-  function hasPositiveQuantity(node) {
+  function extractControlQuantity(node) {
     const controls = [];
     if (node && typeof node.querySelectorAll === "function") {
       controls.push(...Array.from(node.querySelectorAll("input, [role='spinbutton'], [contenteditable='true']") || []));
     }
     if (node) controls.push(node);
-    return controls.some((control) => {
+    const values = controls.map((control) => {
       const raw = control && (control.value != null ? control.value : (control.getAttribute && control.getAttribute("value")));
       const number = Number(String(raw == null ? "" : raw).replace(/[^\d.-]/g, ""));
-      return Number.isFinite(number) && number > 0;
-    });
+      return Number.isFinite(number) && number > 0 ? number : 0;
+    }).filter((value) => value > 0);
+    return values.length ? values[0] : 0;
+  }
+
+  function extractSkuRowQuantity(text) {
+    const matches = Array.from(String(text || "").matchAll(/(?:-|−|－)\s*(\d+)\s*\+/g));
+    if (!matches.length) return 0;
+    const last = matches[matches.length - 1];
+    const quantity = Number(last && last[1]);
+    return Number.isFinite(quantity) && quantity > 0 ? quantity : 0;
   }
 
   function extractSkuRowPrice(text) {

@@ -305,6 +305,40 @@ assert.equal(aliSelectedTwoPiecesResponse.data.selectedSku.productAmount, 980);
 assert.equal(aliSelectedTwoPiecesResponse.data.shippingCny, 0);
 assert.equal(aliSelectedTwoPiecesResponse.data.totalCostCny, 490);
 
+const aliSelectedSkuStepperResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/1030901231971.html',
+  title: '1688 oxygen generator selected stepper detail',
+  bodyText: '负离子家用氧吧插电款老人吸氧机高原氧气机 DF-010-1标准款 ¥440 库存141件 - 0 + DF-010-1升级款 ¥490 库存56件 - 1 + 包邮',
+  selectors: {
+    h1: '负离子家用氧吧插电款老人吸氧机高原氧气机',
+  },
+  queryAll(selector) {
+    if (!/(sku|Sku|spec|Spec|\bli\b|\btr\b|role="row")/.test(selector)) return [];
+    return [
+      makeMockElement({ text: '颜色 DF-010-1标准款 ¥440 库存141件 - 0 +', className: 'sku-row' }),
+      makeMockElement({ text: '颜色 DF-010-1升级款 ¥490 库存56件 - 1 +', className: 'sku-row' }),
+    ];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '1030901231971',
+        subject: '负离子家用氧吧插电款老人吸氧机高原氧气机',
+        price: 10,
+        shippingFee: 1,
+      },
+    },
+  },
+});
+
+assert.equal(aliSelectedSkuStepperResponse.ok, true);
+assert.equal(aliSelectedSkuStepperResponse.data.priceCny, 490);
+assert.equal(aliSelectedSkuStepperResponse.data.priceText, '¥490');
+assert.equal(aliSelectedSkuStepperResponse.data.priceSourceType, 'selectedSku');
+assert.equal(aliSelectedSkuStepperResponse.data.selectedSku.quantity, 1);
+assert.equal(aliSelectedSkuStepperResponse.data.shippingCny, 0);
+assert.equal(aliSelectedSkuStepperResponse.data.totalCostCny, 490);
+
 const taobaoResponse = await collectWithPage({
   url: 'https://item.taobao.com/item.htm?id=99887766',
   title: 'Taobao detail',

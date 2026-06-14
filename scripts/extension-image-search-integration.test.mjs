@@ -133,6 +133,16 @@ assert.match(
   /chrome\.storage\.local\.set/,
   'source costing panel should save dragged position in extension storage',
 );
+assert.match(
+  sourceCostingPanelJs,
+  /tryAutoCosting/,
+  'source costing panel should automatically recompute when the selected source SKU changes',
+);
+assert.match(
+  sourceCostingPanelJs,
+  /openPanel/,
+  'source costing panel should automatically expand when an Ozon source context is available',
+);
 
 const pddBridge = contentScripts.find((entry) => {
   const scripts = Array.isArray(entry.js) ? entry.js : [];
