@@ -138,8 +138,11 @@ export async function waitForOzonImageReady(
     }
   }
 
+  const rateLimitedHint = lastDiag?.status === 429
+    ? '（图片代理或上游限流，请稍后重试；如频繁出现，优先检查 /api/cdn 图片代理限流或 R2/CDN 访问策略）'
+    : '';
   throw new Error(
-    `图片已上传但公网暂不可读，OZON 可能下载失败: ${previewUrl(url)} ` +
+    `图片已上传但公网暂不可读${rateLimitedHint}，OZON 可能下载失败: ${previewUrl(url)} ` +
     `(status=${lastDiag?.status ?? 'ERR'}, type=${lastDiag?.contentType || '-'}${lastDiag?.error ? `, error=${lastDiag.error}` : ''})`,
   );
 }

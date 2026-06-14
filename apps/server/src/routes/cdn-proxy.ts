@@ -33,6 +33,12 @@ const ALLOWED_PREFIXES = [
   'resized/',
 ];
 
+const CDN_PROXY_RATE_LIMIT = {
+  max: 5000,
+  timeWindow: '1 minute',
+  groupId: 'cdn-proxy',
+};
+
 let refererCheckCache: { value: boolean; expiresAt: number } | null = null;
 
 async function isRefererCheckEnabled(): Promise<boolean> {
@@ -109,7 +115,11 @@ function normalizeHost(value: string): string | null {
 }
 
 export async function cdnProxyRoutes(app: FastifyInstance) {
-  app.get('/cdn/*', async (request, reply) => {
+  app.get('/cdn/*', {
+    config: {
+      rateLimit: CDN_PROXY_RATE_LIMIT,
+    },
+  }, async (request, reply) => {
     const path = (request.params as any)['*'] as string;
     const objectKey = normalizeObjectKey(path || '');
     if (!objectKey) {

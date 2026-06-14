@@ -117,4 +117,22 @@ describe('ozon image resolver', () => {
     expect(attempts).toBe(3);
     expect(result.ok).toBe(true);
   });
+
+  it('explains rate-limited public image checks clearly', async () => {
+    await expect(waitForOzonImageReady('https://app.ss-erp.com/api/cdn/users/u/raw/a.jpg', {
+      attempts: 1,
+      delayMs: 0,
+      fetchImpl: async () => ({
+        ok: false,
+        status: 429,
+        url: 'https://app.ss-erp.com/api/cdn/users/u/raw/a.jpg',
+        headers: {
+          get(name: string) {
+            if (name === 'content-type') return 'application/json';
+            return null;
+          },
+        },
+      }) as any,
+    })).rejects.toThrow('图片代理或上游限流');
+  });
 });
