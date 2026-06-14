@@ -13,6 +13,7 @@ import {
   recordOfferPublishImages,
   removeVariantsBySkus,
   planFallbackPictureUploads,
+  resolveOzonDictionaryAttributeValues,
   resolveBasePublishImages,
   resolveItemPublishCategory,
   resolvePublishOfferId,
@@ -86,6 +87,35 @@ describe('collect publish helpers', () => {
       values: [{ value: 'Автовизитка ретро для автомобиля' }],
     }]);
     expect(attrs.find((attr) => attr.id === 85)?.values[0]?.value).toBe('Без бренда');
+  });
+
+  it('keeps composite Ozon dictionary values as multiple values instead of collapsing to the first color', () => {
+    const dict = [
+      { id: 101, value: 'бирюзовый' },
+      { id: 102, value: 'салатовый' },
+      { id: 103, value: 'лазурный' },
+    ];
+
+    expect(resolveOzonDictionaryAttributeValues('бирюзовый, салатовый', dict)).toEqual({
+      values: [
+        { value: 'бирюзовый', dictionary_value_id: 101 },
+        { value: 'салатовый', dictionary_value_id: 102 },
+      ],
+      matched: true,
+      matchType: 'split',
+    });
+  });
+
+  it('uses raw composite text instead of cloned stale values when an Ozon dictionary value is incomplete', () => {
+    const result = resolveOzonDictionaryAttributeValues('бирюзовый, редкий оттенок', [
+      { id: 101, value: 'бирюзовый' },
+    ]);
+
+    expect(result).toEqual({
+      values: [{ value: 'бирюзовый, редкий оттенок', dictionary_value_id: 0 }],
+      matched: false,
+      matchType: 'text-fallback',
+    });
   });
 
   it('prefers each collected item category over batch fallback category', () => {

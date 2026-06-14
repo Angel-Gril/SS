@@ -342,32 +342,16 @@
       if (/^webAspects/.test(key) && state && Array.isArray(state.aspects) && state.aspects.length) {
         const aspect = state.aspects[0];
         aspectName = aspect.aspectName || aspect.aspectKey || null;
-        if (Array.isArray(aspect.variants)) {
-          variants = aspect.variants
-            .filter((v) => v && v.sku)
-            .map((v) => {
-              const text = v.data && Array.isArray(v.data.textRs) && v.data.textRs[0] ? v.data.textRs[0].content : null;
-              const cover = v.data && v.data.coverImage ? v.data.coverImage : null;
-              const normalizedCover = cover ? normalizeOzonCollectedImageUrl(cover) : "";
-              const priceText = v.data && v.data.price ? v.data.price : null;
-              const parsedPrice = parsePriceWithCurrencySafe(priceText, currency);
-              return {
-                sku: String(v.sku),
-                attrs: aspectName ? { [aspectName]: text || String(v.sku) } : (text ? { variant: text } : {}),
-                price: parsedPrice.price || (typeof v.price === "number" ? v.price : null),
-                priceCurrency: parsedPrice.currency || currency || null,
-                priceText: priceText,
-                ozonInternalPrice: typeof v.price === "number" ? v.price : null,
-                images: normalizedCover ? [normalizedCover] : [],
-                availability: v.availability || null,
-                active: !!v.active,
-                title: v.data && v.data.title ? v.data.title : null,
-                link: v.link || null,
-              };
-            });
-          const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
-          if (specHelper && typeof specHelper.enrichOzonVariants === "function") {
-            variants = specHelper.enrichOzonVariants(variants);
+        const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+        if (specHelper && typeof specHelper.buildOzonVariantsFromWebAspects === "function") {
+          const parsedVariants = specHelper.buildOzonVariantsFromWebAspects(state, {
+            normalizeImage: normalizeOzonCollectedImageUrl,
+            parsePriceText: (priceText) => parsePriceWithCurrencySafe(priceText, currency),
+          });
+          if (typeof specHelper.mergeOzonVariantLists === "function") {
+            variants = specHelper.mergeOzonVariantLists(variants, parsedVariants).variants;
+          } else {
+            variants = parsedVariants;
           }
         }
         // OZON 没暴露 model_id，用 from_sku（当前 product_id）作为分组标识

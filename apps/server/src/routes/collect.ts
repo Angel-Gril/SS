@@ -206,6 +206,106 @@ export function syncOzonTitleAttribute<T extends { id: number; complex_id?: numb
   ];
 }
 
+type OzonDictionaryEntry = { id: number; value?: string | null };
+type OzonResolvedAttributeValue = { value: string; dictionary_value_id: number };
+
+export function resolveOzonDictionaryAttributeValues(
+  rawValue: unknown,
+  dict: OzonDictionaryEntry[],
+): { values: OzonResolvedAttributeValue[]; matched: boolean; matchType: 'exact' | 'split' | 'partial' | 'text-fallback' | 'empty' } {
+  const text = String(rawValue || '').trim();
+  if (!text) return { values: [], matched: false, matchType: 'empty' };
+
+  const entries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
+  const exact = findOzonDictionaryEntry(entries, text, false);
+  if (exact) {
+    return { values: [toOzonResolvedAttributeValue(exact)], matched: true, matchType: 'exact' };
+  }
+
+  const parts = splitOzonCompositeDictionaryValue(text);
+  if (parts.length > 1) {
+    const resolvedParts = parts.map((part) => findOzonDictionaryEntry(entries, part, true));
+    if (resolvedParts.every(Boolean)) {
+      const seen = new Set<number>();
+      const values = resolvedParts
+        .filter((entry): entry is OzonDictionaryEntry => !!entry)
+        .map(toOzonResolvedAttributeValue)
+        .filter((value) => {
+          if (seen.has(value.dictionary_value_id)) return false;
+          seen.add(value.dictionary_value_id);
+          return true;
+        });
+      return { values, matched: true, matchType: 'split' };
+    }
+
+    return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
+  }
+
+  const partial = findOzonDictionaryEntry(entries, text, true);
+  if (partial) {
+    return { values: [toOzonResolvedAttributeValue(partial)], matched: true, matchType: 'partial' };
+  }
+
+  return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
+}
+
+function toOzonResolvedAttributeValue(entry: OzonDictionaryEntry): OzonResolvedAttributeValue {
+  return {
+    value: String(entry.value || '').trim(),
+    dictionary_value_id: Number(entry.id),
+  };
+}
+
+function normalizeOzonDictionaryText(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitOzonCompositeDictionaryValue(value: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawPart of value.split(/\s*(?:,|;|\+|，|、|；|&)\s*/u)) {
+    const part = rawPart.trim();
+    const key = normalizeOzonDictionaryText(part);
+    if (!part || !key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(part);
+  }
+  return out;
+}
+
+function findOzonDictionaryEntry(
+  dict: OzonDictionaryEntry[],
+  rawTarget: string,
+  allowLooseMatch: boolean,
+): OzonDictionaryEntry | null {
+  const target = normalizeOzonDictionaryText(rawTarget);
+  if (!target) return null;
+
+  const exact = dict.find((entry) => normalizeOzonDictionaryText(entry.value) === target);
+  if (exact) return exact;
+
+  const numToken = target.match(/^(\d+)/)?.[1];
+  if (numToken) {
+    const numeric = dict.find((entry) => normalizeOzonDictionaryText(entry.value) === numToken);
+    if (numeric) return numeric;
+  }
+
+  if (!allowLooseMatch) return null;
+  return dict.find((entry) => {
+    const value = normalizeOzonDictionaryText(entry.value);
+    return value && value.includes(target);
+  }) || dict.find((entry) => {
+    const value = normalizeOzonDictionaryText(entry.value);
+    return value.length >= 2 && target.includes(value);
+  }) || null;
+}
+
 function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
@@ -1941,67 +2041,59 @@ export async function collectRoutes(app: FastifyInstance) {
           }
 
           const variantAttrs: Record<string, string> = importItem._variantAttrs || {};
-          if (importItem._hasOwnAttrs) {
-            console.log(`[publish-ozon variant] offer=${importItem.offer_id} already has its own ozonAttributes; skip _variantAttrs dict replace`);
-          } else {
-            for (const [aspectName, aspectValue] of Object.entries(variantAttrs)) {
-              if (!aspectValue) continue;
-              const aspectLower = aspectName.toLowerCase();
-              const attrDef = allAttrs.find((a) => a.name && a.name.toLowerCase() === aspectLower)
-                || allAttrs.find((a) => a.name && a.name.toLowerCase().includes(aspectLower))
-                || allAttrs.find((a) => a.name && aspectLower.includes(a.name.toLowerCase()));
-              if (!attrDef) {
-                console.warn(`[publish-ozon variant] aspect "${aspectName}" not found in category attrs ${group.categoryId}/${group.typeId} (offer ${importItem.offer_id})`);
-                continue;
-              }
-
-              let dictValueId = 0;
-              let resolvedValue = String(aspectValue);
-              if (attrDef.dictionary_id && attrDef.dictionary_id > 0) {
-                try {
-                  const dictKey = `${group.categoryId}:${group.typeId}:${attrDef.id}`;
-                  if (!attrDictCache.has(dictKey)) {
-                    const values = await client.getAttributeValues({
-                      description_category_id: group.categoryId,
-                      type_id: group.typeId,
-                      attribute_id: attrDef.id,
-                      language: 'DEFAULT',
-                      limit: 5000,
-                    });
-                    attrDictCache.set(dictKey, values);
-                  }
-                  const dict = attrDictCache.get(dictKey)!;
-                  const targetLower = String(aspectValue).toLowerCase().trim();
-                  const numMatch = targetLower.match(/^(\d+)/);
-                  const numToken = numMatch ? numMatch[1] : null;
-                  const hit = dict.find((v) => v.value && v.value.toLowerCase() === targetLower)
-                    || (numToken ? dict.find((v) => v.value && v.value === numToken) : null)
-                    || dict.find((v) => v.value && v.value.toLowerCase().includes(targetLower))
-                    || dict.find((v) => v.value && targetLower.includes(v.value.toLowerCase()) && v.value.length >= 2);
-                  if (hit) {
-                    dictValueId = hit.id;
-                    resolvedValue = hit.value;
-                    console.log(`[publish-ozon variant] dict hit: attr#${attrDef.id} "${aspectValue}" -> id=${hit.id} value="${hit.value}" category=${group.categoryId}/${group.typeId}`);
-                  } else {
-                    console.warn(`[publish-ozon variant] dict miss: attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" not in ${dict.length} dict entries; keep cloned value`);
-                  }
-                } catch (e: any) {
-                  console.warn(`[publish-ozon variant] failed to query dict for attr#${attrDef.id} category=${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 150));
-                }
-              }
-
-              if (attrDef.dictionary_id && attrDef.dictionary_id > 0 && dictValueId === 0) {
-                console.warn(`[publish-ozon variant] skip replace attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" because dict miss; keep cloned value`);
-                continue;
-              }
-              importItem.attributes = importItem.attributes.filter((a: any) => a.id !== attrDef.id);
-              importItem.attributes.push({
-                id: attrDef.id,
-                complex_id: 0,
-                values: [{ value: resolvedValue, dictionary_value_id: dictValueId }],
-              });
-              console.log(`[publish-ozon variant] offer=${importItem.offer_id} attr#${attrDef.id}(${attrDef.name})="${aspectValue}" dict=${attrDef.dictionary_id} dict_value_id=${dictValueId} category=${group.categoryId}/${group.typeId}`);
+          if (importItem._hasOwnAttrs && Object.keys(variantAttrs).length) {
+            console.log(`[publish-ozon variant] offer=${importItem.offer_id} has own ozonAttributes; override variable aspects from collected webAspects`);
+          }
+          for (const [aspectName, aspectValue] of Object.entries(variantAttrs)) {
+            if (!aspectValue) continue;
+            const aspectLower = aspectName.toLowerCase();
+            const attrDef = allAttrs.find((a) => a.name && a.name.toLowerCase() === aspectLower)
+              || allAttrs.find((a) => a.name && a.name.toLowerCase().includes(aspectLower))
+              || allAttrs.find((a) => a.name && aspectLower.includes(a.name.toLowerCase()));
+            if (!attrDef) {
+              console.warn(`[publish-ozon variant] aspect "${aspectName}" not found in category attrs ${group.categoryId}/${group.typeId} (offer ${importItem.offer_id})`);
+              continue;
             }
+
+            let resolvedValues: { value: string; dictionary_value_id: number }[] = [{
+              value: String(aspectValue),
+              dictionary_value_id: 0,
+            }];
+            let matchLabel = 'text';
+            if (attrDef.dictionary_id && attrDef.dictionary_id > 0) {
+              try {
+                const dictKey = `${group.categoryId}:${group.typeId}:${attrDef.id}`;
+                if (!attrDictCache.has(dictKey)) {
+                  const values = await client.getAttributeValues({
+                    description_category_id: group.categoryId,
+                    type_id: group.typeId,
+                    attribute_id: attrDef.id,
+                    language: 'DEFAULT',
+                    limit: 5000,
+                  });
+                  attrDictCache.set(dictKey, values);
+                }
+                const dict = attrDictCache.get(dictKey)!;
+                const resolved = resolveOzonDictionaryAttributeValues(aspectValue, dict);
+                if (resolved.values.length) resolvedValues = resolved.values;
+                matchLabel = resolved.matchType;
+                if (resolved.matched) {
+                  console.log(`[publish-ozon variant] dict ${resolved.matchType}: attr#${attrDef.id} "${aspectValue}" -> ${resolvedValues.map((value) => `${value.dictionary_value_id}:${value.value}`).join(', ')} category=${group.categoryId}/${group.typeId}`);
+                } else {
+                  console.warn(`[publish-ozon variant] dict miss: attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" not fully matched in ${dict.length} entries; send collected text instead of cloned value`);
+                }
+              } catch (e: any) {
+                console.warn(`[publish-ozon variant] failed to query dict for attr#${attrDef.id} category=${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 150));
+              }
+            }
+
+            importItem.attributes = importItem.attributes.filter((a: any) => a.id !== attrDef.id);
+            importItem.attributes.push({
+              id: attrDef.id,
+              complex_id: 0,
+              values: resolvedValues,
+            });
+            console.log(`[publish-ozon variant] offer=${importItem.offer_id} attr#${attrDef.id}(${attrDef.name})="${aspectValue}" dict=${attrDef.dictionary_id} match=${matchLabel} values=${resolvedValues.length} category=${group.categoryId}/${group.typeId}`);
           }
         }
       } catch (e: any) {

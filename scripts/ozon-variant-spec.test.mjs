@@ -60,6 +60,69 @@ test('fills only missing Ozon variant spec attrs', () => {
   );
 });
 
+test('builds Ozon variants from all webAspects without collapsing composite colors', () => {
+  const helpers = loadHelpers();
+
+  const variants = helpers.buildOzonVariantsFromWebAspects({
+    aspects: [
+      {
+        aspectName: 'Цвет',
+        variants: [
+          {
+            sku: '3461699244',
+            link: '/product/qiwu-forma-dlya-lda-4-yach-1-sht-3461699244/?from_sku=2404317485',
+            active: true,
+            availability: 'inStock',
+            data: {
+              textRs: [{ type: 'text', content: 'бирюзовый, салатовый' }],
+              coverImage: 'https://ir.ozone.ru/s3/multimedia-1-x/wc140/11428663785.jpg',
+              price: '54,40 ¥',
+              title: 'QIWU Форма для льда, 4 яч, 1 шт',
+            },
+            price: 577,
+          },
+        ],
+      },
+      {
+        aspectName: 'Количество ячеек, шт',
+        variants: [
+          {
+            sku: '3461699244',
+            data: { textRs: [{ type: 'text', content: '4' }] },
+          },
+        ],
+      },
+      {
+        aspectName: 'Количество в упаковке, шт',
+        variants: [
+          {
+            sku: '3461699244',
+            data: { textRs: [{ type: 'text', content: '1' }] },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(plain(variants), [
+    {
+      sku: '3461699244',
+      attrs: {
+        'Цвет': 'бирюзовый, салатовый',
+        'Количество ячеек, шт': '4',
+        'Количество в упаковке, шт': '1',
+      },
+      priceText: '54,40 ¥',
+      ozonInternalPrice: 577,
+      images: ['https://ir.ozone.ru/s3/multimedia-1-x/wc140/11428663785.jpg'],
+      availability: 'inStock',
+      active: true,
+      title: 'QIWU Форма для льда, 4 яч, 1 шт',
+      link: '/product/qiwu-forma-dlya-lda-4-yach-1-sht-3461699244/?from_sku=2404317485',
+    },
+  ]);
+});
+
 test('merges recursively discovered Ozon variants by real sku without losing attrs', () => {
   const helpers = loadHelpers();
 

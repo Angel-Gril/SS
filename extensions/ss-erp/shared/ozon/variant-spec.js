@@ -60,6 +60,61 @@
     });
   }
 
+  function readOzonRichTextContent(data) {
+    if (!data || typeof data !== 'object') return '';
+    if (Array.isArray(data.textRs)) {
+      const hit = data.textRs.find((item) => item && item.content != null && String(item.content).trim());
+      if (hit) return String(hit.content).trim();
+    }
+    if (data.searchableText != null && String(data.searchableText).trim()) {
+      return String(data.searchableText).trim();
+    }
+    return '';
+  }
+
+  function buildOzonVariantsFromWebAspects(state, options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const aspects = state && Array.isArray(state.aspects) ? state.aspects : [];
+    const bySku = new Map();
+
+    aspects.forEach((aspect) => {
+      const dimName = aspect && (aspect.aspectName || aspect.aspectKey);
+      const variants = aspect && Array.isArray(aspect.variants) ? aspect.variants : [];
+      if (!dimName) return;
+
+      variants.forEach((rawVariant) => {
+        const sku = normalizeSku(rawVariant && rawVariant.sku);
+        if (!sku) return;
+        const text = readOzonRichTextContent(rawVariant.data) || sku;
+        const cover = rawVariant.data && rawVariant.data.coverImage ? String(rawVariant.data.coverImage).trim() : '';
+        const image = cover && typeof opts.normalizeImage === 'function' ? opts.normalizeImage(cover) : cover;
+        const priceText = rawVariant.data && rawVariant.data.price ? String(rawVariant.data.price) : null;
+        const parsedPrice = priceText && typeof opts.parsePriceText === 'function'
+          ? opts.parsePriceText(priceText)
+          : null;
+        const next = {
+          sku,
+          attrs: { [dimName]: text },
+          ...(parsedPrice && parsedPrice.price ? { price: parsedPrice.price } : {}),
+          ...(parsedPrice && parsedPrice.currency ? { priceCurrency: parsedPrice.currency } : {}),
+          ...(priceText ? { priceText } : {}),
+          ...(typeof rawVariant.price === 'number' ? { ozonInternalPrice: rawVariant.price } : {}),
+          images: image ? [image] : [],
+          ...(rawVariant.availability ? { availability: rawVariant.availability } : {}),
+          ...(rawVariant.active === true ? { active: true } : rawVariant.active === false ? { active: false } : {}),
+          ...(rawVariant.data && rawVariant.data.title ? { title: rawVariant.data.title } : {}),
+          ...(rawVariant.link ? { link: rawVariant.link } : {}),
+        };
+
+        const existing = bySku.get(sku);
+        if (existing) mergeVariantInto(existing, next);
+        else bySku.set(sku, cloneVariant(next));
+      });
+    });
+
+    return enrichOzonVariants(Array.from(bySku.values()));
+  }
+
   function normalizeSku(value) {
     const text = String(value || '').trim();
     return /^\d{5,}$/.test(text) ? text : '';
@@ -234,6 +289,7 @@
     parseOzonVariantSpecFromText,
     enrichOzonVariantAttrs,
     enrichOzonVariants,
+    buildOzonVariantsFromWebAspects,
     extractOzonProductIdFromLink,
     mergeOzonVariantLists,
     collectOzonVariantDiscoveryRefs,
