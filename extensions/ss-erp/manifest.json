@@ -115,6 +115,7 @@
       "js": [
         "shared/currency/price-currency.js",
         "shared/collectors/pdd-product.js",
+        "shared/ozon/variant-spec.js",
         "content/collect-content-script.js"
       ],
       "run_at": "document_idle"

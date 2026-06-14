@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   calcPublishPrice,
   containsCjkText,
+  enrichOzonVariantAttrsFromLink,
+  enrichOzonVariantSpecs,
   getVariantOverridePrice,
   findFallbackRecreateConflicts,
   groupPublishItemsByCategory,
@@ -140,6 +142,52 @@ describe('collect publish helpers', () => {
     expect(getVariantOverridePrice({ '3378860669': '188.2', 0: 123 }, { sku: '3378860669' }, 0)).toBe(189);
     expect(getVariantOverridePrice({ 1: '77.1' }, { sku: 'missing' }, 1)).toBe(78);
     expect(getVariantOverridePrice({ missing: '0' }, { sku: 'missing' }, 0)).toBeNull();
+  });
+
+  it('fills missing Ozon variant cells and pack specs from collected variant links', () => {
+    expect(enrichOzonVariantAttrsFromLink(
+      { 'Цвет': 'желтый' },
+      { link: '/product/qiwu-forma-dlya-lda-4-yach-1-sht-4038902924/?from_sku=2404317485' },
+    )).toEqual({
+      'Цвет': 'желтый',
+      'Количество ячеек, шт': '4',
+      'Количество в упаковке, шт': '1',
+    });
+
+    expect(enrichOzonVariantAttrsFromLink(
+      { 'Цвет': 'желтый, красный', 'Количество в упаковке, шт': '2' },
+      { link: '/product/qiwu-forma-dlya-lda-6-yach-2-sht-3978217968/?from_sku=2404317485' },
+    )).toEqual({
+      'Цвет': 'желтый, красный',
+      'Количество ячеек, шт': '6',
+      'Количество в упаковке, шт': '2',
+    });
+  });
+
+  it('enriches stored Ozon variants before publish without changing sku count', () => {
+    const variants = enrichOzonVariantSpecs([
+      {
+        sku: '4038902924',
+        attrs: { 'Цвет': 'желтый' },
+        link: '/product/qiwu-forma-dlya-lda-4-yach-1-sht-4038902924/?from_sku=2404317485',
+      },
+      {
+        sku: '3939870178',
+        attrs: { 'Количество ячеек, шт': '12' },
+        link: '/product/qiwu-forma-dlya-lda-12-yach-1-sht-3939870178/?from_sku=2404317485',
+      },
+    ]);
+
+    expect(variants).toHaveLength(2);
+    expect(variants[0]!.attrs).toEqual({
+      'Цвет': 'желтый',
+      'Количество ячеек, шт': '4',
+      'Количество в упаковке, шт': '1',
+    });
+    expect(variants[1]!.attrs).toEqual({
+      'Количество ячеек, шт': '12',
+      'Количество в упаковке, шт': '1',
+    });
   });
 
   it('keeps variant cover images first when listing multi-variant items without applied watermarks', () => {

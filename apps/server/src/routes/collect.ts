@@ -130,6 +130,56 @@ export function getVariantOverridePrice(
   return Number.isFinite(value) && value > 0 ? Math.ceil(value) : null;
 }
 
+const OZON_CELL_ATTR_NAME = 'Количество ячеек, шт';
+const OZON_PACK_ATTR_NAME = 'Количество в упаковке, шт';
+
+export function parseOzonVariantSpecFromText(value: unknown): { cells: string; pack: string } | null {
+  let text = String(value || '');
+  try {
+    text = decodeURIComponent(text);
+  } catch {
+    // Keep the raw value if it is not valid URI-encoded text.
+  }
+  if (!text) return null;
+
+  const slugMatch = text.match(/(?:^|[-/_\s])(\d{1,5})[-_\s]*(?:yach|iach|яч)[-_\s]*(\d{1,4})[-_\s]*(?:sht|шт)(?:[-/_\s?&]|$)/i);
+  if (slugMatch?.[1] && slugMatch[2]) return { cells: slugMatch[1], pack: slugMatch[2] };
+
+  const ruMatch = text.match(/(?:^|[^\d])(\d{1,5})\s*(?:яч|ячеек|ячейки|ячейк)[^\d]{0,20}(\d{1,4})\s*(?:шт|штук)(?:[^\d]|$)/i);
+  if (ruMatch?.[1] && ruMatch[2]) return { cells: ruMatch[1], pack: ruMatch[2] };
+
+  return null;
+}
+
+function parseOzonVariantSpecFromVariant(variant: { link?: unknown; url?: unknown; title?: unknown; name?: unknown }): { cells: string; pack: string } | null {
+  return parseOzonVariantSpecFromText(variant.link)
+    || parseOzonVariantSpecFromText(variant.url)
+    || parseOzonVariantSpecFromText(variant.title)
+    || parseOzonVariantSpecFromText(variant.name);
+}
+
+export function enrichOzonVariantAttrsFromLink(
+  attrs: unknown,
+  variant: { link?: unknown; url?: unknown; title?: unknown; name?: unknown },
+): Record<string, string> {
+  const next: Record<string, string> = attrs && typeof attrs === 'object' && !Array.isArray(attrs)
+    ? { ...(attrs as Record<string, string>) }
+    : {};
+  const spec = parseOzonVariantSpecFromVariant(variant);
+  if (!spec) return next;
+
+  if (spec.cells && !String(next[OZON_CELL_ATTR_NAME] || '').trim()) next[OZON_CELL_ATTR_NAME] = spec.cells;
+  if (spec.pack && !String(next[OZON_PACK_ATTR_NAME] || '').trim()) next[OZON_PACK_ATTR_NAME] = spec.pack;
+  return next;
+}
+
+export function enrichOzonVariantSpecs<T extends { attrs?: unknown; link?: unknown; url?: unknown; title?: unknown; name?: unknown }>(variants: T[]): T[] {
+  return variants.map((variant) => ({
+    ...variant,
+    attrs: enrichOzonVariantAttrsFromLink(variant.attrs, variant),
+  }));
+}
+
 export function resolvePublishName(item: { title?: string | null; metadata?: unknown }, variantAttrs?: Record<string, string>): string {
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
@@ -1093,7 +1143,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
     const data = items.map((it) => {
       const meta = (it.metadata as any) || {};
-      const variants = Array.isArray(it.variants) ? (it.variants as any[]) : [];
+      const variants = enrichOzonVariantSpecs(Array.isArray(it.variants) ? (it.variants as any[]) : []);
       const sourceImages = meta.watermarkedImages?.length
         ? meta.watermarkedImages
         : Array.isArray(it.images) ? (it.images as string[]) : [];
@@ -1370,7 +1420,7 @@ export async function collectRoutes(app: FastifyInstance) {
         .flatMap((item) => {
           const basePriceCny = parseFloat(body.price || item.purchasePrice?.toString() || '100');
           const priceWithMarkup = calcPublishPrice(basePriceCny, markupPct, markupAmount);
-          const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+          const variants = enrichOzonVariantSpecs(Array.isArray(item.variants) ? (item.variants as any[]) : []);
           const itemOverrides = body.priceOverrides?.[item.id] || {};
           // variants[].price 是采集时的原币价（如 RUB），需要按采集时存的汇率换算 CNY
           const fxRate = item.originalCurrency && item.originalCurrency !== 'CNY' && item.exchangeRateUsed
@@ -1720,7 +1770,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
       const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
 
-      const variants = Array.isArray(item.variants) ? (item.variants as any[]) : [];
+      const variants = enrichOzonVariantSpecs(Array.isArray(item.variants) ? (item.variants as any[]) : []);
       // 无 variants：保持原行为（1 个 item）
       if (!variants.length) {
         const itemName = resolvePublishName(item);

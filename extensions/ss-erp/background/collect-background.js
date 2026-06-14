@@ -278,6 +278,50 @@ function withTimeout(promise, timeoutMs) {
   });
 }
 
+function enrichCollectedOzonVariants(variants) {
+  const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+  if (specHelper && typeof specHelper.enrichOzonVariants === "function") {
+    return specHelper.enrichOzonVariants(variants);
+  }
+  return variants;
+}
+
+function mergeCollectedOzonVariantLists(baseVariants, incomingVariants) {
+  const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+  if (specHelper && typeof specHelper.mergeOzonVariantLists === "function") {
+    return specHelper.mergeOzonVariantLists(baseVariants, incomingVariants);
+  }
+  return {
+    variants: Array.isArray(baseVariants) ? baseVariants : [],
+    addedCount: 0,
+    mergedCount: 0,
+  };
+}
+
+function collectOzonVariantDiscoveryRefs(variants, options) {
+  const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+  if (specHelper && typeof specHelper.collectOzonVariantDiscoveryRefs === "function") {
+    return specHelper.collectOzonVariantDiscoveryRefs(variants, options);
+  }
+  return [];
+}
+
+function attachOzonVariantDiscoveryDiagnostics(productData, diagnostics) {
+  if (!productData || !diagnostics) return;
+  const currentDump = productData.widgetStatesDump && typeof productData.widgetStatesDump === "object"
+    ? productData.widgetStatesDump
+    : {};
+  productData.widgetStatesDump = {
+    ...currentDump,
+    recursiveVariantDiscovery: diagnostics,
+  };
+}
+
+function normalizeOzonDiscoveryId(value) {
+  const text = String(value || "").trim();
+  return /^\d{5,}$/.test(text) ? text : "";
+}
+
 async function getCurrentTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs.length) {
@@ -306,6 +350,9 @@ async function collectFromCurrentTab() {
     tabTitle: tab.title || "",
     tabUrl: tab.url || response.data.sourceUrl || ""
   };
+  if (Array.isArray(payload.variants)) {
+    payload.variants = enrichCollectedOzonVariants(payload.variants);
+  }
 
   const ozonProductId = parseOzonProductId(payload.sourceUrl || payload.tabUrl || "");
   if (isOzonProductUrl(payload.sourceUrl || payload.tabUrl || "") && ozonProductId) {
@@ -1529,7 +1576,33 @@ async function getStoredErpConnection() {
   };
 }
 
-async function fetchOzonProductViaTab(productId) {
+function normalizeOzonProductPathForFetch(link, fallbackProductId) {
+  const raw = String(link || "").trim();
+  let path = "";
+  if (raw) {
+    try {
+      const url = new URL(raw, "https://www.ozon.ru");
+      if (/^\/product\//i.test(url.pathname)) {
+        path = url.pathname + url.search;
+      }
+    } catch (e) {}
+  }
+  if (!path) {
+    const pid = normalizeOzonDiscoveryId(fallbackProductId);
+    if (!pid) return "";
+    path = "/product/" + pid + "/";
+  }
+
+  try {
+    const url = new URL(path, "https://www.ozon.ru");
+    url.searchParams.set("language", "ru");
+    return url.pathname + url.search;
+  } catch (e) {
+    return path.indexOf("?") >= 0 ? path + "&language=ru" : path + "?language=ru";
+  }
+}
+
+async function fetchOzonProductViaTab(productId, productPath) {
   var tab = await getOzonPublicTab();
   if (!tab || !tab.id) {
     return { ok: false, error: "请先打开 www.ozon.ru 任意页面（需要登录状态）" };
@@ -1538,7 +1611,7 @@ async function fetchOzonProductViaTab(productId) {
   // 临时把 ozon.ru 上跟语言相关的 cookie 都改成 ru，采集结束后恢复，避免用户中文界面导致返回中文翻译版
   var savedCookies = await switchOzonLanguageCookies("ru");
   try {
-    return await doFetchOzonProductViaTab(tab, productId);
+    return await doFetchOzonProductViaTab(tab, productId, productPath);
   } finally {
     await restoreOzonLanguageCookies(savedCookies);
   }
@@ -1606,12 +1679,12 @@ function cookieUrl(c) {
   return protocol + host + c.path;
 }
 
-async function doFetchOzonProductViaTab(tab, productId) {
+async function doFetchOzonProductViaTab(tab, productId, productPath) {
   var results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    args: [String(productId)],
-    func: async (pid) => {
+    args: [String(productId), String(productPath || "")],
+    func: async (pid, requestedPath) => {
       var priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
       var parsePriceWithCurrency = priceCurrency.parsePriceWithCurrency || function (text, fallback) {
         return {
@@ -1635,7 +1708,8 @@ async function doFetchOzonProductViaTab(tab, productId) {
       };
 
       // 强制俄语：language=ru 放进内嵌 url，避免被中文 cookie 覆盖
-      var encodedPath = encodeURIComponent("/product/" + pid + "/?language=ru");
+      var productPath = requestedPath || ("/product/" + pid + "/?language=ru");
+      var encodedPath = encodeURIComponent(productPath);
       var primaryUrl = "/api/entrypoint-api.bx/page/json/v2?url=" + encodedPath;
       var fallbackUrl = "/api/composer-api.bx/page/json/v2?url=" + encodedPath;
 
@@ -1987,7 +2061,150 @@ async function doFetchOzonProductViaTab(tab, productId) {
   if (!result) {
     return { ok: false, error: "脚本未返回结果，请确认 ozon.ru 页面已完全加载" };
   }
+  if (result.ok && result.data && Array.isArray(result.data.variants)) {
+    result.data.variants = enrichCollectedOzonVariants(result.data.variants);
+  }
   return result;
+}
+
+async function discoverOzonVariantsRecursively(productData, rootProductId, options = {}) {
+  if (!productData || !Array.isArray(productData.variants) || productData.variants.length === 0) {
+    return productData;
+  }
+
+  const maxPages = Number.isFinite(Number(options.maxPages)) ? Number(options.maxPages) : 120;
+  const maxDepth = Number.isFinite(Number(options.maxDepth)) ? Number(options.maxDepth) : 3;
+  const delayMs = Number.isFinite(Number(options.delayMs)) ? Number(options.delayMs) : 350;
+  const rootSku = normalizeOzonDiscoveryId(rootProductId || productData.productId);
+  const visitedSkus = new Set(rootSku ? [rootSku] : []);
+  const visitedProductIds = new Set(rootSku ? [rootSku] : []);
+  const queuedKeys = new Set();
+  const diagnostics = {
+    enabled: true,
+    rootProductId: String(rootProductId || productData.productId || ""),
+    initialVariantCount: productData.variants.length,
+    visitedPageCount: 0,
+    queuedPageCount: 0,
+    addedVariantCount: 0,
+    mergedVariantCount: 0,
+    finalVariantCount: productData.variants.length,
+    maxPages,
+    maxDepth,
+    maxReached: false,
+    errors: [],
+  };
+
+  const queue = collectOzonVariantDiscoveryRefs(productData.variants, {
+    excludeSkus: rootSku ? [rootSku] : [],
+    seenSkus: Array.from(visitedSkus),
+    seenProductIds: Array.from(visitedProductIds),
+    limit: maxPages,
+  }).map((ref) => ({ ...ref, depth: 1 }));
+
+  queue.forEach((ref) => queuedKeys.add(ref.fetchId || ref.sku || ref.productId));
+  diagnostics.queuedPageCount = queue.length;
+
+  const tab = await getOzonPublicTab();
+  if (!tab || !tab.id) {
+    diagnostics.errors.push({ error: "请先打开 www.ozon.ru 任意页面（需要登录状态）" });
+    attachOzonVariantDiscoveryDiagnostics(productData, diagnostics);
+    return productData;
+  }
+
+  const savedCookies = await switchOzonLanguageCookies("ru");
+  try {
+    while (queue.length > 0 && diagnostics.visitedPageCount < maxPages) {
+      const ref = queue.shift();
+      if (!ref || ref.depth > maxDepth) continue;
+
+      const fetchId = normalizeOzonDiscoveryId(ref.fetchId || ref.sku || ref.productId);
+      const sku = normalizeOzonDiscoveryId(ref.sku || fetchId);
+      const productId = normalizeOzonDiscoveryId(ref.productId || fetchId);
+      const visitKey = fetchId || sku || productId;
+      if (!visitKey) continue;
+      if (sku) {
+        if (visitedSkus.has(sku)) continue;
+      } else if (productId && visitedProductIds.has(productId)) {
+        continue;
+      }
+
+      visitedSkus.add(sku || visitKey);
+      visitedProductIds.add(productId || visitKey);
+      diagnostics.visitedPageCount += 1;
+
+      try {
+        const productPath = normalizeOzonProductPathForFetch(ref.link, fetchId);
+        const result = await doFetchOzonProductViaTab(tab, fetchId, productPath);
+        if (!result.ok || !result.data) {
+          if (diagnostics.errors.length < 10) {
+            diagnostics.errors.push({
+              fetchId,
+              error: result.error || "OZON 变体页公开数据获取失败",
+            });
+          }
+        } else {
+          const incomingVariants = Array.isArray(result.data.variants) ? result.data.variants : [];
+          if (incomingVariants.length > 0) {
+            const merged = mergeCollectedOzonVariantLists(productData.variants, incomingVariants);
+            productData.variants = enrichCollectedOzonVariants(merged.variants);
+            diagnostics.addedVariantCount += merged.addedCount || 0;
+            diagnostics.mergedVariantCount += merged.mergedCount || 0;
+
+            const nextRefs = collectOzonVariantDiscoveryRefs(incomingVariants, {
+              excludeSkus: rootSku ? [rootSku] : [],
+              seenSkus: Array.from(visitedSkus),
+              seenProductIds: Array.from(visitedProductIds),
+              limit: Math.max(0, maxPages - diagnostics.visitedPageCount),
+            });
+            nextRefs.forEach((nextRef) => {
+              const nextFetchId = normalizeOzonDiscoveryId(nextRef.fetchId || nextRef.sku || nextRef.productId);
+              if (!nextFetchId || queuedKeys.has(nextFetchId)) return;
+              queuedKeys.add(nextFetchId);
+              queue.push({ ...nextRef, depth: ref.depth + 1 });
+            });
+            diagnostics.queuedPageCount = Math.max(diagnostics.queuedPageCount, queuedKeys.size);
+          }
+        }
+      } catch (error) {
+        if (diagnostics.errors.length < 10) {
+          diagnostics.errors.push({
+            fetchId,
+            error: normalizeErrorMessage(error).slice(0, 160),
+          });
+        }
+      }
+
+      if (delayMs > 0 && queue.length > 0 && diagnostics.visitedPageCount < maxPages) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  } finally {
+    await restoreOzonLanguageCookies(savedCookies);
+  }
+
+  diagnostics.maxReached = queue.length > 0 && diagnostics.visitedPageCount >= maxPages;
+  diagnostics.finalVariantCount = Array.isArray(productData.variants) ? productData.variants.length : 0;
+  attachOzonVariantDiscoveryDiagnostics(productData, diagnostics);
+  return productData;
+}
+
+async function completeOzonProductVariantsForCollection(productData, productId) {
+  if (!productData || !Array.isArray(productData.variants) || productData.variants.length === 0) {
+    return productData;
+  }
+  try {
+    return await discoverOzonVariantsRecursively(productData, productId);
+  } catch (error) {
+    attachOzonVariantDiscoveryDiagnostics(productData, {
+      enabled: true,
+      rootProductId: String(productId || ""),
+      initialVariantCount: productData.variants.length,
+      finalVariantCount: productData.variants.length,
+      failed: true,
+      error: normalizeErrorMessage(error).slice(0, 200),
+    });
+    return productData;
+  }
 }
 
 async function collectOzonProductsToErp(productIds) {
@@ -2020,6 +2237,7 @@ async function collectOzonProductsToErp(productIds) {
     }
 
     const productData = r.data;
+    await completeOzonProductVariantsForCollection(productData, pid);
 
     if (sellerCompanyId) {
       try {
@@ -2412,6 +2630,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const productId = message.productId;
         if (!productId) return { ok: false, error: "缺少 productId" };
         const fetchResult = await fetchOzonProductViaTab(productId);
+        if (fetchResult && fetchResult.ok && fetchResult.data) {
+          await completeOzonProductVariantsForCollection(fetchResult.data, productId);
+        }
         return fetchResult;
       }
 
@@ -2436,6 +2657,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         for (let i = 0; i < productIds.length; i++) {
           const pid = productIds[i];
           const r = await fetchOzonProductViaTab(pid);
+          if (r && r.ok && r.data) {
+            await completeOzonProductVariantsForCollection(r.data, pid);
+          }
           batchResults.push(r);
           if (i < productIds.length - 1) {
             await new Promise((resolve) => setTimeout(resolve, 800));

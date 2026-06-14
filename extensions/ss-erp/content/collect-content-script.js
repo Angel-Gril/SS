@@ -362,8 +362,13 @@
                 availability: v.availability || null,
                 active: !!v.active,
                 title: v.data && v.data.title ? v.data.title : null,
+                link: v.link || null,
               };
             });
+          const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+          if (specHelper && typeof specHelper.enrichOzonVariants === "function") {
+            variants = specHelper.enrichOzonVariants(variants);
+          }
         }
         // OZON 没暴露 model_id，用 from_sku（当前 product_id）作为分组标识
         if (aspect.aspectModalInfo && aspect.aspectModalInfo.link) {
