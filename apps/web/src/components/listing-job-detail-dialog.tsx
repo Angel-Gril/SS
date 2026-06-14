@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { explainOzonError, explainOzonErrors, formatOzonErrorMessage, type OzonErrorHint } from 'shared/ozon-error-hints';
+import { isFallbackPictureJob, resolveListingPictureStage, type ListingPictureStageTone } from 'shared/listing-picture-stage';
 import { StatusBadge, modeLabel, type Status, type JobRow } from './listing-job-list';
 
 interface PushItem {
@@ -26,6 +27,36 @@ interface DetailData {
   payload: (JobRow['payload'] & { items?: PushItem[] }) | null;
   shopName: string;
   platform: string;
+}
+
+function pictureStageClass(tone: ListingPictureStageTone): string {
+  switch (tone) {
+    case 'success':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200';
+    case 'warning':
+      return 'border-amber-200 bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200';
+    case 'error':
+      return 'border-destructive/30 bg-destructive/10 text-destructive';
+    case 'info':
+      return 'border-blue-200 bg-blue-50 text-blue-800 dark:bg-blue-950 dark:text-blue-200';
+    default:
+      return 'border-muted bg-muted/50 text-muted-foreground';
+  }
+}
+
+function pictureStageBadgeClass(tone: ListingPictureStageTone): string {
+  switch (tone) {
+    case 'success':
+      return 'border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950 dark:text-emerald-300';
+    case 'warning':
+      return 'border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300';
+    case 'error':
+      return 'border-destructive/40 text-destructive';
+    case 'info':
+      return 'border-blue-300 text-blue-700 bg-blue-50 dark:bg-blue-950 dark:text-blue-300';
+    default:
+      return 'border-muted-foreground/30 text-muted-foreground';
+  }
 }
 
 export function ListingJobDetailDialog({
@@ -68,9 +99,18 @@ export function ListingJobDetailDialog({
   const pictureProblemCount = pictureUploads.filter((it) => it.status !== 'uploaded').length
     + (data?.payload?.pictureUploadError ? 1 : 0);
   const pictureUploadStatus = data?.payload?.pictureUploadStatus;
-  const isFallbackPictureJob = data?.payload?.source === 'collect-publish-fallback' || data?.payload?.mode === 'follow-by-sku';
+  const pictureStage = data
+    ? resolveListingPictureStage({ status: data.status, payload: data.payload })
+    : null;
+  const fallbackPictureJob = isFallbackPictureJob(data?.payload);
+  const showPictureStage = !!pictureStage && (
+    fallbackPictureJob
+    || !!pictureUploadStatus
+    || pictureUploads.length > 0
+    || !!data?.payload?.pictureUploadError
+  );
   const needsLegacyFallbackPictureRefresh = !!data
-    && isFallbackPictureJob
+    && fallbackPictureJob
     && data.status === 'SUCCESS'
     && !pictureUploadStatus
     && pictureUploads.length === 0;
@@ -81,7 +121,7 @@ export function ListingJobDetailDialog({
   );
   const canManualRefresh = !!data && (
     data.status !== 'SUCCESS'
-    || isFallbackPictureJob
+    || fallbackPictureJob
     || pictureUploadStatus === 'pending'
     || pictureUploadStatus === 'failed'
   );
@@ -117,6 +157,17 @@ export function ListingJobDetailDialog({
               <div><span className="text-muted-foreground">提交时间：</span>{data.startedAt ? new Date(data.startedAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</div>
               <div><span className="text-muted-foreground">完成时间：</span>{data.finishedAt ? new Date(data.finishedAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</div>
               <div className="col-span-2"><span className="text-muted-foreground">OZON Task ID：</span><code className="bg-muted px-1.5 py-0.5 rounded text-xs">{data.payload?.taskId ?? '—'}</code></div>
+              {showPictureStage && pictureStage.code !== 'not_applicable' && (
+                <div className={`col-span-2 rounded-md border px-3 py-2 ${pictureStageClass(pictureStage.tone)}`}>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-muted-foreground">图片阶段：</span>
+                    <Badge variant="outline" className={`text-[10px] ${pictureStageBadgeClass(pictureStage.tone)}`}>
+                      {pictureStage.label}{pictureStage.countLabel ? ` ${pictureStage.countLabel}` : ''}
+                    </Badge>
+                    <span className="text-xs">{pictureStage.description}</span>
+                  </div>
+                </div>
+              )}
               {mode && (
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">模式：</span>
@@ -155,8 +206,11 @@ export function ListingJobDetailDialog({
               <div className="border rounded-md overflow-hidden">
                 <div className="px-3 py-2 bg-muted flex items-center justify-between">
                   <div className="font-medium">图片补传诊断</div>
-                  <Badge variant={pictureProblemCount ? 'destructive' : 'outline'} className="text-[10px]">
-                    {pictureProblemCount ? `${pictureProblemCount} 个异常` : '正常'}
+                  <Badge
+                    variant={pictureProblemCount ? 'destructive' : 'outline'}
+                    className={`text-[10px] ${!pictureProblemCount && pictureStage ? pictureStageBadgeClass(pictureStage.tone) : ''}`}
+                  >
+                    {pictureProblemCount ? `${pictureProblemCount} 个异常` : (pictureStage?.label || '正常')}
                   </Badge>
                 </div>
                 {data.payload?.pictureUploadError && (

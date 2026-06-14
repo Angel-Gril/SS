@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
 import { explainOzonError, formatOzonErrorMessage } from 'shared/ozon-error-hints';
+import { isFallbackPictureJob, resolveListingPictureStage, type ListingPictureStageTone } from 'shared/listing-picture-stage';
 import { ListingJobDetailDialog } from './listing-job-detail-dialog';
 
 export type Status = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
@@ -73,10 +74,6 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
   return { text, cls };
 }
 
-function isFallbackPictureJob(payload: JobRow['payload']): boolean {
-  return payload?.source === 'collect-publish-fallback' || payload?.mode === 'follow-by-sku';
-}
-
 function needsRemoteRefresh(row: JobRow): boolean {
   const pictureUploadStatus = row.payload?.pictureUploadStatus;
   const pictureUploads = row.payload?.pictureUploads || [];
@@ -88,6 +85,21 @@ function needsRemoteRefresh(row: JobRow): boolean {
       && !pictureUploadStatus
       && pictureUploads.length === 0
     );
+}
+
+function pictureStageBadgeClass(tone: ListingPictureStageTone): string {
+  switch (tone) {
+    case 'success':
+      return 'border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950 dark:text-emerald-300';
+    case 'warning':
+      return 'border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300';
+    case 'error':
+      return 'border-destructive/40 text-destructive';
+    case 'info':
+      return 'border-blue-300 text-blue-700 bg-blue-50 dark:bg-blue-950 dark:text-blue-300';
+    default:
+      return 'border-muted-foreground/30 text-muted-foreground';
+  }
 }
 
 interface Props {
@@ -205,9 +217,10 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
   const succeeded = total - failed;
   const mode = modeLabel(row.payload);
   const errorHint = row.errorMessage ? explainOzonError(row.errorMessage) : null;
-  const pictureUploadStatus = row.payload?.pictureUploadStatus;
-  const picturePendingCount = row.payload?.pictureUploadPendingCount ?? 0;
-  const pictureFailedCount = (row.payload?.pictureUploadFailedCount ?? 0) + (row.payload?.pictureUploadSkippedCount ?? 0);
+  const pictureStage = resolveListingPictureStage({ status: row.status, payload: row.payload });
+  const showPictureStage = isFallbackPictureJob(row.payload)
+    || pictureStage.code === 'picture_failed'
+    || pictureStage.code === 'waiting_product_id';
 
   return (
     <div className="rounded-lg border p-3 sm:p-4 transition-colors hover:bg-muted/30 space-y-2.5">
@@ -219,19 +232,9 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
         </div>
         <Badge variant="outline" className={`text-[10px] ${mode.cls}`}>{mode.text}</Badge>
         <StatusBadge s={row.status} />
-        {pictureUploadStatus === 'pending' && (
-          <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950 dark:text-amber-300">
-            图片补传中{picturePendingCount ? ` ${picturePendingCount}` : ''}
-          </Badge>
-        )}
-        {pictureUploadStatus === 'failed' && (
-          <Badge variant="outline" className="text-[10px] border-destructive/40 text-destructive">
-            图片补传异常{pictureFailedCount ? ` ${pictureFailedCount}` : ''}
-          </Badge>
-        )}
-        {pictureUploadStatus === 'success' && (
-          <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950 dark:text-emerald-300">
-            图片已补传
+        {showPictureStage && (
+          <Badge variant="outline" className={`text-[10px] ${pictureStageBadgeClass(pictureStage.tone)}`}>
+            {pictureStage.label}{pictureStage.countLabel ? ` ${pictureStage.countLabel}` : ''}
           </Badge>
         )}
         {total > 0 && (
