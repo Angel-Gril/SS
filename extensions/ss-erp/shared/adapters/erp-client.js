@@ -16,6 +16,7 @@
       async request() { return { code: 0, msg: 'adapter not loaded' }; },
       async syncCookie() { return { code: 0, msg: 'adapter not loaded' }; },
       async submitCollect() { return { code: 0, msg: 'adapter not loaded' }; },
+      async syncSourceCandidateQuote() { return { code: 0, msg: 'adapter not loaded' }; },
       async uploadImage() { return { code: 0, msg: 'adapter not loaded' }; },
     };
   }
@@ -33,6 +34,13 @@
     async submitCollect(payload) {
       const adapter = await getAdapter();
       return adapter.submitCollect(payload);
+    },
+    async syncSourceCandidateQuote(payload) {
+      const adapter = await getAdapter();
+      if (typeof adapter.syncSourceCandidateQuote === 'function') {
+        return adapter.syncSourceCandidateQuote(payload);
+      }
+      return { code: 0, msg: 'adapter does not support source candidate quote sync' };
     },
     async uploadImage(file) {
       const adapter = await getAdapter();

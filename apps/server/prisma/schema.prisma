@@ -90,6 +90,8 @@ model User {
   balanceLogs  BalanceLog[]
   sessions     Session[]
   supplyGoods  SupplyGoods[]
+  sourceCandidates SourceCandidate[]
+  sourceQuotes SourceQuote[]
   account      UserAccount?
   rechargeOrders RechargeOrder[] @relation("RechargeOrderUser")
   reviewedRechargeOrders RechargeOrder[] @relation("RechargeOrderReviewer")
@@ -411,12 +413,84 @@ model SupplyGoods {
   status          String   @default("active")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
+  sourceCandidates SourceCandidate[]
+  sourceQuotes     SourceQuote[]
 
   @@index([userId])
   @@index([status])
   @@index([userId, status, createdAt])
   @@index([userId, sourceProductId])
   @@map("supply_goods")
+}
+
+model SourceCandidate {
+  id              String       @id @default(cuid())
+  userId          String       @map("user_id")
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key             String
+  ozonProductId   String?      @map("ozon_product_id")
+  ozonUrl         String?      @map("ozon_url")
+  ozonTitle       String?      @map("ozon_title")
+  ozonPrice       Decimal?     @map("ozon_price") @db.Decimal(12, 2)
+  ozonCurrency    String       @default("RUB") @map("ozon_currency")
+  supplyGoodsId   String?      @map("supply_goods_id")
+  supplyGoods     SupplyGoods? @relation(fields: [supplyGoodsId], references: [id], onDelete: SetNull)
+  sourcePlatform  String       @map("source_platform")
+  sourceProductId String?      @map("source_product_id")
+  sourceSku       String?      @map("source_sku")
+  sourceUrl       String?      @map("source_url")
+  sourceTitle     String?      @map("source_title")
+  sourceShopName  String?      @map("source_shop_name")
+  sourcePrice     Decimal?     @map("source_price") @db.Decimal(12, 2)
+  sourceShipping  Decimal?     @map("source_shipping") @db.Decimal(12, 2)
+  sourceTotalCost Decimal?     @map("source_total_cost") @db.Decimal(12, 2)
+  metadata        Json?
+  quotes          SourceQuote[]
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@unique([userId, key])
+  @@index([userId, ozonProductId])
+  @@index([userId, sourcePlatform, sourceProductId])
+  @@index([supplyGoodsId])
+  @@map("source_candidates")
+}
+
+model SourceQuote {
+  id                String           @id @default(cuid())
+  userId            String           @map("user_id")
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  candidateId       String?          @map("candidate_id")
+  candidate         SourceCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  supplyGoodsId     String?          @map("supply_goods_id")
+  supplyGoods       SupplyGoods?     @relation(fields: [supplyGoodsId], references: [id], onDelete: SetNull)
+  key               String
+  status            String           @default("selected_for_costing")
+  ozonProductId     String?          @map("ozon_product_id")
+  ozonUrl           String?          @map("ozon_url")
+  ozonTitle         String?          @map("ozon_title")
+  ozonPrice         Decimal?         @map("ozon_price") @db.Decimal(12, 2)
+  ozonCurrency      String           @default("RUB") @map("ozon_currency")
+  sourcePlatform    String           @map("source_platform")
+  sourceProductId   String?          @map("source_product_id")
+  sourceSku         String?          @map("source_sku")
+  sourceUrl         String?          @map("source_url")
+  sourceTitle       String?          @map("source_title")
+  costCny           Decimal?         @map("cost_cny") @db.Decimal(12, 2)
+  sourceUnitPrice   Decimal?         @map("source_unit_price") @db.Decimal(12, 2)
+  sourceShippingCny Decimal?         @map("source_shipping_cny") @db.Decimal(12, 2)
+  profitCny         Decimal?         @map("profit_cny") @db.Decimal(12, 2)
+  marginPct         Decimal?         @map("margin_pct") @db.Decimal(10, 2)
+  quotePayload      Json?            @map("quote_payload")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  @@unique([userId, key])
+  @@index([userId, ozonProductId])
+  @@index([userId, sourcePlatform, sourceProductId])
+  @@index([candidateId])
+  @@index([supplyGoodsId])
+  @@map("source_quotes")
 }
 
 model SyncJob {

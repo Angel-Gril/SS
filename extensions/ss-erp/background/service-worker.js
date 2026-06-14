@@ -654,6 +654,25 @@ async function notifyOzonTabToApplySourceQuote(quote) {
   } catch (_error) {}
 }
 
+async function syncSourceCandidateQuote(quote) {
+  if (!self.SS_ERP_CLIENT || typeof self.SS_ERP_CLIENT.syncSourceCandidateQuote !== 'function') {
+    return { ok: false, error: 'ERP 适配器未加载，请重新加载扩展后重试' };
+  }
+  try {
+    const data = await self.SS_ERP_CLIENT.syncSourceCandidateQuote({
+      ozon: quote && quote.ozon,
+      sourceProduct: quote && quote.source,
+      quote,
+    });
+    if (!data || data.code !== 1) {
+      return { ok: false, error: (data && data.msg) || 'ERP 同步失败' };
+    }
+    return { ok: true, data: data.data || null };
+  } catch (error) {
+    return { ok: false, error: error && error.message ? error.message : String(error) };
+  }
+}
+
 function firstText(values) {
   for (const value of values) {
     const text = toText(value).trim();
@@ -711,7 +730,10 @@ function normalizeSourceProductForErpCollect(product) {
     source.offerId,
     source.sku,
   ]);
-  const priceText = firstText([source.priceText, source.price, source.priceCny]);
+  const unitPriceText = firstText([source.priceText, source.price, source.priceCny]);
+  const purchaseCostText = firstText([source.totalCostCny, source.purchaseCostCny, source.landedCostCny, unitPriceText]);
+  const selectedSku = source.selectedSku && typeof source.selectedSku === 'object' ? source.selectedSku : null;
+  const selectedSkuText = selectedSku ? firstText([selectedSku.skuId, selectedSku.sku, selectedSku.id, selectedSku.name, selectedSku.specText]) : '';
   const item = {
     ...source,
     title,
@@ -721,12 +743,21 @@ function normalizeSourceProductForErpCollect(product) {
     sourceUrl,
     sourcePlatform: normalizeSourcePlatformForCollect(source),
     sourceProductId: sourceProductId || undefined,
-    sku: firstText([source.sku, sourceProductId]) || undefined,
+    sku: firstText([selectedSkuText, source.sku, sourceProductId]) || undefined,
     images: normalizeCollectImages(source),
-    priceText,
+    price: purchaseCostText,
+    priceText: purchaseCostText,
+    unitPriceText,
+    shippingCny: source.shippingCny != null ? source.shippingCny : source.freightCny,
+    totalCostCny: source.totalCostCny != null ? source.totalCostCny : source.purchaseCostCny,
+    selectedSku: selectedSku || undefined,
+    skuItems: Array.isArray(source.skuItems) ? source.skuItems.slice(0, 100) : undefined,
+    variants: Array.isArray(source.variants) && source.variants.length
+      ? source.variants.slice(0, 100)
+      : (Array.isArray(source.skuItems) ? source.skuItems.slice(0, 100) : undefined),
+    priceSourceType: source.priceSourceType,
     currency: firstText([source.currency]) || 'CNY',
   };
-  if (!item.price && priceText) item.price = priceText;
   if (!item.weightG && source.grossWeightGrams) item.weightG = source.grossWeightGrams;
   return item;
 }
@@ -1191,6 +1222,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         [SS_ERP_SOURCE_QUOTES_KEY]: quotes,
         [SS_ERP_SOURCE_QUOTE_PENDING_KEY]: quote,
       });
+      const erpSync = await syncSourceCandidateQuote(quote);
       if (!payload.suppressOzonApply) {
         await notifyOzonTabToApplySourceQuote(quote);
       }
@@ -1198,6 +1230,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ok: true,
         quote,
         quoteCount: quotes.length,
+        erpSync,
         ozonUrl: quote.ozon && quote.ozon.url || '',
       });
     }).catch((error) => {

@@ -51,6 +51,14 @@
       });
     },
 
+    async syncSourceCandidateQuote(payload) {
+      return this.request('/api/source-candidates/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    },
+
     // 本地模式：图片走本地上传或 OZON CDN
     async uploadImage(file) {
       const dataUrl = await fileToDataUrl(file);

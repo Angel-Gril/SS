@@ -38,6 +38,13 @@
       });
     },
 
+    async syncSourceCandidateQuote(payload) {
+      return this.request('/api/source-candidates/sync', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+
     // 云端模式：图片走 OSS 预签名上传
     async uploadImage(file) {
       const presignRes = await this.request('/api/images/presign', {

@@ -589,7 +589,11 @@
         }
       });
       if (!response || !response.ok) throw new Error(response && response.error || '保存失败');
-      setStatus('已保存为该 Ozon 商品的货源候选。', 'ok');
+      if (response.erpSync && response.erpSync.ok === false) {
+        setStatus('本地已保存，ERP 同步失败：' + (response.erpSync.error || '未知错误'), 'fail');
+      } else {
+        setStatus('已保存货源候选并同步到 ERP。', 'ok');
+      }
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {

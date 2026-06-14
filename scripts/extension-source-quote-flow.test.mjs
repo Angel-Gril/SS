@@ -6,6 +6,9 @@ const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-work
 const ozonPanel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
 const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
 const sourceCostingPanel = fs.readFileSync('extensions/ss-erp/content/source-costing-panel.js', 'utf8');
+const serviceWorkerSource = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+const localAdapterSource = fs.readFileSync('extensions/ss-erp/shared/adapters/local-adapter.js', 'utf8');
+const cloudAdapterSource = fs.readFileSync('extensions/ss-erp/shared/adapters/cloud-adapter.js', 'utf8');
 
 assert.match(
   popupJs,
@@ -57,6 +60,21 @@ assert.match(
   serviceWorker,
   /message\.type\s*===\s*['"]ss-erp:source-quote-save['"]/,
   'service worker should handle saving quote records',
+);
+assert.match(
+  serviceWorkerSource,
+  /syncSourceCandidateQuote/,
+  'saving a source quote should attempt to sync the candidate and quote to ERP',
+);
+assert.match(
+  localAdapterSource,
+  /\/api\/source-candidates\/sync/,
+  'local adapter should send source candidate quote sync payloads to ERP',
+);
+assert.match(
+  cloudAdapterSource,
+  /\/api\/source-candidates\/sync/,
+  'cloud adapter should send source candidate quote sync payloads to ERP',
 );
 assert.match(
   serviceWorker,

@@ -849,6 +849,13 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.manufacturerName) metadata.manufacturerName = item.manufacturerName;
         if (item.brandName) metadata.brandName = item.brandName;
         if (item.priceText) metadata.priceText = String(item.priceText);
+        if (item.unitPriceText) metadata.unitPriceText = String(item.unitPriceText);
+        if (item.shippingCny !== undefined) metadata.shippingCny = item.shippingCny;
+        if (item.totalCostCny !== undefined) metadata.totalCostCny = item.totalCostCny;
+        if (item.priceSourceType) metadata.priceSourceType = String(item.priceSourceType);
+        if (item.selectedSku) metadata.selectedSku = item.selectedSku;
+        if (item.skuItems) metadata.skuItems = Array.isArray(item.skuItems) ? item.skuItems.slice(0, 100) : item.skuItems;
+        if (item.rawSourceProduct) metadata.rawSourceProduct = item.rawSourceProduct;
         // 调试用：未识别的 widget 全量 dump（扩展占位阶段使用）
         if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
 

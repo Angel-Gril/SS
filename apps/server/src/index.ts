@@ -58,6 +58,7 @@ import { extensionDownloadRoutes } from './routes/extensions.js';
 import { announcementRoutes } from './routes/announcements.js';
 import { systemStatusRoutes } from './routes/system-status.js';
 import { opsRoutes } from './routes/ops.js';
+import { sourceCandidateRoutes } from './routes/source-candidates.js';
 import { isAllowedCorsOrigin } from './lib/cors.js';
 import { registerMaintenanceHook } from './lib/maintenance.js';
 
@@ -181,6 +182,7 @@ await app.register(extensionDownloadRoutes, { prefix: '/api/extensions' });
 await app.register(announcementRoutes, { prefix: '/api/announcements' });
 await app.register(systemStatusRoutes, { prefix: '/api/admin/system-status' });
 await app.register(opsRoutes, { prefix: '/api/admin/ops' });
+await app.register(sourceCandidateRoutes, { prefix: '/api/source-candidates' });
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';
