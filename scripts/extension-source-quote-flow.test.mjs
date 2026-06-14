@@ -100,6 +100,11 @@ assert.match(
   '1688 costing panel should save quotes without forcing an Ozon tab switch',
 );
 assert.match(
+  sourceCostingPanel,
+  /type:\s*['"]ss-erp:source-candidate-upsert['"]/,
+  '1688 costing panel should also save the current source product into the Ozon candidate pool',
+);
+assert.match(
   popupJs,
   /ozon:\s*ozon/,
   'Ozon source-search context should use the collected Ozon product snapshot',
@@ -123,6 +128,11 @@ assert.doesNotMatch(
   sourceCostingPanel,
   /class="primary" data-action="save-quote">保存核价/,
   'saving a quote must not remain the primary 1688 page action',
+);
+assert.match(
+  sourceCostingPanel,
+  /data-action="save-quote"[^>]*>保存货源候选/,
+  '1688 costing panel should name the saved record as a source candidate, not a generic save action',
 );
 
 console.log('PASS source quote flow wiring');

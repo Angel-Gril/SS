@@ -87,15 +87,15 @@
     var fab = document.createElement('button');
     fab.id = FAB_ID;
     fab.type = 'button';
-    fab.textContent = '核';
-    fab.title = platformLabel() + ' 货源核价';
+    fab.textContent = '算';
+    fab.title = 'Ozon 计算器 · ' + platformLabel() + ' 货源核价';
 
     var panel = document.createElement('aside');
     panel.id = PANEL_ID;
     panel.innerHTML = [
       '<div class="ss-erp-source-head">',
-      '  <div class="ss-erp-source-mark">核</div>',
-      '  <div class="ss-erp-source-title"><strong>' + escapeHtml(platformLabel()) + ' 货源核价</strong><span data-role="context-title">读取 Ozon 关联...</span></div>',
+      '  <div class="ss-erp-source-mark">算</div>',
+      '  <div class="ss-erp-source-title"><strong>ozon计算器</strong><span data-role="context-title">' + escapeHtml(platformLabel()) + '货源核价 · 读取关联...</span></div>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="refresh" title="刷新">↻</button>',
       '  <button type="button" class="ss-erp-source-icon-btn" data-action="close" title="收起">×</button>',
       '</div>',
@@ -106,9 +106,9 @@
       '  <section class="ss-erp-source-section" data-role="input-card"></section>',
       '  <section class="ss-erp-source-section" data-role="result-card"></section>',
       '  <div class="ss-erp-source-actions">',
-      '    <button type="button" class="primary" data-action="run-costing">重新核价</button>',
-      '    <button type="button" data-action="save-quote">保存候选</button>',
-      '    <button type="button" data-action="collect-erp">采集到 ERP</button>',
+      '    <button type="button" class="primary" data-action="run-costing">重新计算</button>',
+      '    <button type="button" class="secondary" data-action="save-quote" title="保存当前 SKU 为该 Ozon 商品的货源候选">保存货源候选</button>',
+      '    <button type="button" class="secondary" data-action="collect-erp" title="采集当前货源商品到 ERP">采集货源到ERP</button>',
       '  </div>',
       '  <div class="ss-erp-source-status" data-role="status"></div>',
       '</div>'
@@ -185,7 +185,7 @@
 
   function setPanelPosition(panel, left, top) {
     var rect = panel.getBoundingClientRect();
-    var width = rect.width || 390;
+    var width = rect.width || 460;
     var height = Math.min(rect.height || 520, window.innerHeight - 24);
     var nextLeft = Math.max(8, Math.min(window.innerWidth - width - 8, left));
     var nextTop = Math.max(8, Math.min(window.innerHeight - height - 8, top));
@@ -288,12 +288,12 @@
     var cost = Number(product.totalCostCny || product.priceCny || product.price) || 0;
     if (titleNode) {
       titleNode.textContent = ozon && (ozon.productId || ozon.title)
-        ? ('关联 Ozon ' + (ozon.productId || String(ozon.title).slice(0, 18)))
-        : '未关联 Ozon 商品';
+        ? (platformLabel() + '货源核价 · 关联 Ozon ' + (ozon.productId || String(ozon.title).slice(0, 18)))
+        : (platformLabel() + '货源核价 · 未关联 Ozon 商品');
     }
 
     ozonCard.innerHTML = [
-      '<h3>关联 Ozon 商品</h3>',
+      '<h3>Ozon 商品</h3>',
       ozon ? [
         '<div class="ss-erp-source-row"><span>SKU</span><b>' + escapeHtml(ozon.productId || '-') + '</b></div>',
         '<div class="ss-erp-source-row"><span>Ozon售价</span><b>' + formatOzonPrice(ozon) + '</b></div>',
@@ -316,7 +316,10 @@
     bindInputEvents(inputCard);
     if (runButton) runButton.disabled = !ozon || state.busy;
     if (saveButton) saveButton.disabled = !ozon || !(cost > 0) || state.busy;
-    if (collectButton) collectButton.disabled = !product.title || state.busy;
+    if (collectButton) {
+      collectButton.disabled = !product.title || state.busy;
+      collectButton.title = '采集当前 ' + platformLabel() + ' 货源商品到 ERP';
+    }
   }
 
   function hydrateInputs() {
@@ -412,7 +415,7 @@
     }
     state.busy = true;
     renderContent();
-    setStatus('读取当前 SKU 并重新核价...', '');
+    setStatus('读取当前 SKU 并重新计算...', '');
     try {
       await refreshCalculatorStatus();
       await refreshProductOnly({ force: true, skipAuto: true });
@@ -421,7 +424,7 @@
       hydrateInputs();
       computeCosting();
       renderContent();
-      setStatus('已按当前 ' + platformLabel() + ' SKU 成本重新核价。', 'ok');
+      setStatus('已按当前 ' + platformLabel() + ' SKU 成本重新计算。', 'ok');
     } catch (error) {
       state.result = null;
       renderContent();
@@ -535,7 +538,7 @@
   function buildResultCardHtml() {
     if (!state.result || !state.result.best) {
       var unavailable = state.unavailable && state.unavailable.length ? ('<div class="ss-erp-source-muted">未命中原因：' + escapeHtml(state.unavailable[0].reason) + '</div>') : '';
-      return '<h3>核价结果</h3><div class="ss-erp-source-muted">填写/确认售价、成本、重量后点击“重新核价”。</div>' + unavailable;
+      return '<h3>核价结果</h3><div class="ss-erp-source-muted">填写/确认售价、成本、重量后点击“重新计算”。</div>' + unavailable;
     }
     var best = state.result.best;
     var tone = Number(best.profit) >= 0 ? 'ok' : 'fail';
@@ -565,18 +568,28 @@
 
     state.busy = true;
     renderContent();
-    setStatus('保存核价记录...', '');
+    setStatus('保存货源候选...', '');
     try {
+      var candidateResponse = await sendRuntimeMessage({
+        type: 'ss-erp:source-candidate-upsert',
+        payload: {
+          ozon: state.context.ozon,
+          sourceProduct: state.product
+        }
+      });
+      if (!candidateResponse || !candidateResponse.ok) throw new Error(candidateResponse && candidateResponse.error || '保存候选失败');
+
       var response = await sendRuntimeMessage({
         type: 'ss-erp:source-quote-save',
         payload: {
           ozon: state.context.ozon,
           sourceProduct: state.product,
+          costCny: state.inputs.cost || state.product.totalCostCny || state.product.priceCny || state.product.price,
           suppressOzonApply: true
         }
       });
       if (!response || !response.ok) throw new Error(response && response.error || '保存失败');
-      setStatus('已保存核价，可继续查看其它 ' + platformLabel() + ' 候选。', 'ok');
+      setStatus('已保存为该 Ozon 商品的货源候选。', 'ok');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
@@ -593,14 +606,14 @@
     }
     state.busy = true;
     renderContent();
-    setStatus('写入 ERP 上品列表...', '');
+    setStatus('采集当前 ' + platformLabel() + ' 货源到 ERP...', '');
     try {
       var response = await sendRuntimeMessage({
         type: 'ss-erp:collect-source-to-erp',
         payload: { product: state.product }
       });
       if (!response || !response.ok) throw new Error(response && response.error || '写入失败');
-      setStatus('已采集到 ERP 上品列表。', 'ok');
+      setStatus('已采集当前 ' + platformLabel() + ' 货源到 ERP。', 'ok');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
