@@ -270,6 +270,41 @@ assert.notEqual(aliVisibleRangeGuardDomResponse.data.priceCny, 3580);
 assert.equal(aliVisibleRangeGuardDomResponse.data.priceSourceType, 'visibleRangeHigh');
 assert.equal(aliVisibleRangeGuardDomResponse.data.totalCostCny, 678);
 
+const aliSelectedTwoPiecesResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/1030901231971.html',
+  title: '1688 oxygen generator selected quantity detail',
+  bodyText: '负离子家用氧吧插电款老人吸氧机高原氧气机 ¥440.00 ~ ¥490.00 2件起批 包邮 DF-010-1标准款 ¥440 库存141件 - 0 + DF-010-1升级款 ¥490 库存56件 - 2 + 已选1款2件 商品金额： ¥980.00 包邮 24小时发货',
+  selectors: {
+    h1: '负离子家用氧吧插电款老人吸氧机高原氧气机',
+  },
+  queryAll(selector) {
+    if (!/(sku|Sku|spec|Spec|\bli\b|\btr\b|role="row")/.test(selector)) return [];
+    return [
+      makeMockElement({ text: '颜色 DF-010-1标准款 ¥440 库存141件', className: 'sku-row', children: [makeMockElement({ value: '0' })] }),
+      makeMockElement({ text: '颜色 DF-010-1升级款 ¥490 库存56件', className: 'sku-row', children: [makeMockElement({ value: '2' })] }),
+    ];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '1030901231971',
+        subject: '负离子家用氧吧插电款老人吸氧机高原氧气机',
+        price: 10,
+        shippingFee: 1,
+      },
+    },
+  },
+});
+
+assert.equal(aliSelectedTwoPiecesResponse.ok, true);
+assert.equal(aliSelectedTwoPiecesResponse.data.priceCny, 490);
+assert.equal(aliSelectedTwoPiecesResponse.data.priceText, '¥490');
+assert.equal(aliSelectedTwoPiecesResponse.data.priceSourceType, 'selectedOrderSummary');
+assert.equal(aliSelectedTwoPiecesResponse.data.selectedSku.quantity, 2);
+assert.equal(aliSelectedTwoPiecesResponse.data.selectedSku.productAmount, 980);
+assert.equal(aliSelectedTwoPiecesResponse.data.shippingCny, 0);
+assert.equal(aliSelectedTwoPiecesResponse.data.totalCostCny, 490);
+
 const taobaoResponse = await collectWithPage({
   url: 'https://item.taobao.com/item.htm?id=99887766',
   title: 'Taobao detail',

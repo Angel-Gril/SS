@@ -933,7 +933,15 @@
     const shopName = pickFirstDomText(config.shopSelectors) || pickStringByKey(context.sources, /(shopName|sellerName|companyName|storeName|supplierName)$/i);
     const productId = pickProductId(config.productIdRegexes, context.sources);
     const sourcePrice = pickSourcePrice(context, config);
-    const sourceShipping = pickSourceShipping(context);
+    const sourceShipping = sourcePrice.sourceType === "selectedOrderSummary" && sourcePrice.shippingCny != null
+      ? {
+          value: sourcePrice.shippingCny,
+          currency: "CNY",
+          text: sourcePrice.shippingText || "",
+          free: Boolean(sourcePrice.shippingFree || sourcePrice.shippingCny === 0),
+          sourceType: "selectedOrderSummary"
+        }
+      : pickSourceShipping(context);
     const totalCostCny = sourcePrice.price != null
       ? roundMoney(Number(sourcePrice.price) + (Number(sourceShipping.value) || 0))
       : null;
@@ -1064,6 +1072,9 @@
       currency: "CNY",
       text: "¥" + formatMoney(summary.unitPrice),
       sourceType: "selectedOrderSummary",
+      shippingCny: summary.shipping != null ? summary.shipping : (summary.shippingFree ? 0 : null),
+      shippingText: summary.sample,
+      shippingFree: summary.shippingFree,
       selectedSku: {
         skuId: "",
         name: "",
@@ -1073,6 +1084,8 @@
         selected: true,
         quantity: summary.quantity,
         productAmount: summary.productAmount,
+        shippingCny: summary.shipping != null ? summary.shipping : (summary.shippingFree ? 0 : null),
+        shippingFree: summary.shippingFree,
         attrs: {}
       }
     };
@@ -1314,6 +1327,15 @@
         sourceType: "selectedOrderSummary"
       };
     }
+    if (summary && summary.shippingFree) {
+      return {
+        value: 0,
+        currency: "CNY",
+        text: summary.sample,
+        free: true,
+        sourceType: "selectedOrderSummary"
+      };
+    }
 
     const textHit = pickShippingFromText(context && context.pageText);
     if (textHit.value != null) return textHit;
@@ -1324,6 +1346,9 @@
 
   function pickShippingFromText(value) {
     const text = normalizeWhitespace(value || "");
+    if (/包邮|免邮|免运费|卖家承担运费|free shipping/i.test(text)) {
+      return { value: 0, currency: "CNY", text: "包邮", free: true, sourceType: "text" };
+    }
     const labelMatch = text.match(/运费|快递|配送|邮费|shipping|freight/i);
     if (!labelMatch) return { value: null, currency: "CNY", text: "", free: false, sourceType: "" };
     const start = Math.max(0, labelMatch.index - 40);
@@ -1370,6 +1395,7 @@
   function parseMoneyNearLabel(text, labelRegex) {
     const normalized = normalizeWhitespace(text || "");
     const index = normalized.search(labelRegex);
+    if (index < 0) return null;
     const sample = index >= 0 ? normalized.slice(index, index + 80) : normalized;
     const direct = sample.match(/(?:¥|￥|RMB|CNY)?\s*\d[\d.,]*(?:\s*(?:元|¥|￥|RMB|CNY))?/i);
     if (!direct) return null;
