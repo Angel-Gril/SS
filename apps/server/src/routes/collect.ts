@@ -10,6 +10,7 @@ import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+const DESCRIPTION_MAX_LENGTH = 5000;
 
 const collectSchema = z.object({
   title: z.string().min(1),
@@ -63,51 +64,175 @@ export function hasSuspiciousPublishName(value: unknown): boolean {
 export function cleanPublishName(value: unknown): string {
   const text = String(value || '')
     .normalize('NFKC')
-    .replace(/[\s,;:|/]+/g, ' ')
+    .replace(/[;:|/]+/g, ', ')
+    .replace(/\s*([,.])\s*/g, '$1 ')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/([,.]){2,}/g, '$1')
+    .replace(/[,.]\s*$/g, '')
     .trim();
   if (!text) return '';
 
   const words: string[] = [];
   let previousKey = '';
   for (const rawWord of text.split(/\s+/)) {
-    const word = rawWord.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    const word = rawWord
+      .replace(/^[^\p{L}\p{N}]+/gu, '')
+      .replace(/[^\p{L}\p{N},.-]+$/gu, '');
     if (!word) continue;
     const key = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
     if (key && key === previousKey) continue;
     words.push(word);
     previousKey = key || '';
   }
-  return words.join(' ').trim();
+  return words.join(' ')
+    .replace(/\s+([,.])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .replace(/[,.]\s*$/g, '')
+    .trim();
 }
 
-function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false): string {
-  if (!variantAttrs || !Object.keys(variantAttrs).length) return '';
+function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false): string[] {
+  if (!variantAttrs || !Object.keys(variantAttrs).length) return [];
   const parts: string[] = [];
+  const seen = new Set<string>();
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     const value = cleanPublishName(rawValue);
     if (!value) continue;
-    if (includeColorLabel && /цвет|color/i.test(rawName)) parts.push(`${value} цвет`);
-    else parts.push(value);
+    const part = includeColorLabel && /цвет|color/i.test(rawName) ? cleanPublishName(`${value} цвет`) : value;
+    const key = part.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    parts.push(part);
   }
-  return cleanPublishName(parts.join(' '));
+  return parts.slice(0, 4);
 }
 
-function shortenSpammyPublishName(base: string, variantText: string): string {
+function wordKeys(value: string): string[] {
+  return cleanPublishName(value)
+    .split(/\s+/)
+    .map((word) => word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, ''))
+    .filter(Boolean);
+}
+
+function compactRepeatedPublishBase(base: string): string {
+  const words = cleanPublishName(base).split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const word of words) {
+    const key = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
+    if (key.length > 2 && !TITLE_STOP_WORDS.has(key) && seen.has(key) && out.length >= 3) break;
+    out.push(word);
+    if (key.length > 2 && !TITLE_STOP_WORDS.has(key)) seen.add(key);
+    if (out.length >= 9) break;
+  }
+  return cleanPublishName(out.join(' '));
+}
+
+function compactPublishBaseName(base: string): string {
+  const cleanBase = cleanPublishName(base);
+  if (!cleanBase) return '';
+  if (!hasSuspiciousPublishName(cleanBase) && cleanBase.length <= 90) return cleanBase;
+
+  const segment = String(base || '')
+    .split(/[,;|]+/)
+    .map((part) => compactRepeatedPublishBase(part))
+    .find((part) => part && !containsCjkText(part) && part.length >= 4);
+  return segment || compactRepeatedPublishBase(cleanBase);
+}
+
+function removeLeadingVariantOverlap(base: string, part: string): string {
+  const baseKeys = wordKeys(base);
+  const tokens = cleanPublishName(part).split(/\s+/).filter(Boolean);
+  while (tokens.length && baseKeys.length) {
+    const tokenKey = tokens[0]!.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
+    const lastBaseKey = baseKeys[baseKeys.length - 1];
+    if (!tokenKey || tokenKey !== lastBaseKey) break;
+    tokens.shift();
+    baseKeys.pop();
+  }
+  return cleanPublishName(tokens.join(' '));
+}
+
+function appendVariantTitleParts(base: string, parts: string[]): string {
+  const cleanBase = compactPublishBaseName(base);
+  if (!parts.length) return cleanBase;
+  const nextParts = parts
+    .map((part) => removeLeadingVariantOverlap(cleanBase, part))
+    .filter(Boolean);
+  if (!nextParts.length) return cleanBase;
+  const usePunctuation = nextParts.length > 1 || nextParts.some((part) => /[,.]/.test(part)) || cleanBase.length > 70;
+  return cleanPublishName(`${cleanBase}${usePunctuation ? ', ' : ' '}${nextParts.join(', ')}`);
+}
+
+function shortenSpammyPublishName(base: string, variantParts: string[]): string {
   const cleanBase = cleanPublishName(base);
   if (/автовизитк/i.test(cleanBase)) {
-    return cleanPublishName(`Автовизитка для автомобиля ${variantText}`);
+    return appendVariantTitleParts('Автовизитка для автомобиля', variantParts);
   }
 
   if (!hasSuspiciousPublishName(cleanBase)) {
-    return cleanPublishName(`${cleanBase} ${variantText}`);
+    return appendVariantTitleParts(cleanBase, variantParts);
   }
 
   const phrase = String(base || '')
     .split(/[,;|]+/)
     .map((part) => cleanPublishName(part))
     .find((part) => part && !containsCjkText(part) && part.length >= 4);
-  const fallback = cleanBase.split(/\s+/).slice(0, 5).join(' ');
-  return cleanPublishName(`${phrase || fallback} ${variantText}`);
+  const fallback = compactRepeatedPublishBase(cleanBase);
+  return appendVariantTitleParts(phrase || fallback, variantParts);
+}
+
+export function sanitizePublishDescription(value: unknown, maxLength = DESCRIPTION_MAX_LENGTH): string {
+  let text = String(value || '').normalize('NFKC');
+  if (!text.trim()) return '';
+  text = text
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<(br|\/p|\/div|\/li|\/h[1-6])\b[^>]*>/gi, '\n')
+    .replace(/<li\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text.slice(0, maxLength).trim();
+}
+
+function sanitizeNotesPublishDescription(value: unknown): string {
+  const text = sanitizePublishDescription(value);
+  if (!text) return '';
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^重量[:：]/.test(line) && !/^(offer_id|sku|category_id|type_id)\s*:/i.test(line))
+    .join('\n')
+    .trim();
+}
+
+export function resolvePublishDescription(
+  item: { notes?: string | null; metadata?: unknown },
+  clonedDescription?: unknown,
+): string {
+  const meta = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+    ? item.metadata as Record<string, any>
+    : {};
+  const candidates = [
+    meta.publishDescriptionRu,
+    meta.sourceDescriptionRu,
+    clonedDescription,
+  ];
+  for (const candidate of candidates) {
+    const description = sanitizePublishDescription(candidate);
+    if (description) return description;
+  }
+  return sanitizeNotesPublishDescription(item.notes);
 }
 
 export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
@@ -184,9 +309,8 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
   const cleanBase = cleanPublishName(base);
-  const shouldShorten = /автовизитк/i.test(cleanBase) || hasSuspiciousPublishName(cleanBase);
-  const attrText = normalizeVariantTitleParts(variantAttrs, shouldShorten);
-  return shortenSpammyPublishName(base, attrText).slice(0, 200);
+  const attrParts = normalizeVariantTitleParts(variantAttrs, /автовизитк/i.test(cleanBase));
+  return shortenSpammyPublishName(base, attrParts).slice(0, 200);
 }
 
 export function syncOzonTitleAttribute<T extends { id: number; complex_id?: number; values: any[] }>(
@@ -940,11 +1064,13 @@ export async function collectRoutes(app: FastifyInstance) {
     const d = parsed.data;
     const sourceProductId = normalizeProductId(d.sourceProductId || d.sku);
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
-    const notes = [weightNote, d.description?.slice(0, 500)].filter(Boolean).join('\n') || null;
+    const sourceDescription = sanitizePublishDescription(d.description);
+    const notes = [weightNote, sourceDescription.slice(0, 500)].filter(Boolean).join('\n') || null;
     const metadata: Record<string, unknown> = {};
     if (d.publishTitle) metadata.publishTitleRu = d.publishTitle;
     if (d.sourceTitleRaw) metadata.sourceTitleRaw = d.sourceTitleRaw;
     if (d.sourceLocale) metadata.sourceLocale = d.sourceLocale;
+    if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
     if (d.title && containsCjkText(d.title) && !d.publishTitle) metadata.titleNeedsReview = true;
 
     const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
@@ -985,10 +1111,12 @@ export async function collectRoutes(app: FastifyInstance) {
     for (const item of body.items.slice(0, 50)) {
       try {
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
+        const sourceDescription = sanitizePublishDescription(item.description);
         const metadata: Record<string, unknown> = {};
         if (item.publishTitle) metadata.publishTitleRu = String(item.publishTitle);
         if (item.sourceTitleRaw) metadata.sourceTitleRaw = String(item.sourceTitleRaw);
         if (item.sourceLocale) metadata.sourceLocale = String(item.sourceLocale);
+        if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
         if (item.title && containsCjkText(item.title) && !item.publishTitle) metadata.titleNeedsReview = true;
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
@@ -1030,7 +1158,7 @@ export async function collectRoutes(app: FastifyInstance) {
             originalCurrency: priceInfo.originalCurrency,
             exchangeRateUsed: priceInfo.exchangeRateUsed,
             priceNeedsReview: priceInfo.needsReview,
-            notes: item.description?.slice(0, 500) || null,
+            notes: sourceDescription.slice(0, 500) || null,
             metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
             variants: hasVariants ? (item.variants as any) : undefined,
             modelId: item.modelId ? String(item.modelId) : null,
@@ -1250,7 +1378,7 @@ export async function collectRoutes(app: FastifyInstance) {
       return {
         id: it.id,
         title: it.title,
-        description: it.notes || '',
+        description: resolvePublishDescription(it),
         sku: it.sku,
         sourceUrl: it.sourceUrl,
         purchasePrice: it.purchasePrice ? String(it.purchasePrice) : null,
@@ -1320,13 +1448,18 @@ export async function collectRoutes(app: FastifyInstance) {
       if (publishOfferId) meta.publishOfferId = publishOfferId;
       else delete meta.publishOfferId;
     }
+    if (body.description !== undefined) {
+      const publishDescription = sanitizePublishDescription(body.description);
+      if (publishDescription) meta.publishDescriptionRu = publishDescription;
+      else delete meta.publishDescriptionRu;
+    }
     // 历史字段名叫 watermarkedImages；这里实际表示改款表单确认后的商品级发布图片。
     // publish-ozon 会把变体封面排在它前面，避免多 SKU 主图被商品级图片覆盖。
     if (body.images?.length) meta.watermarkedImages = body.images;
 
     const updateData: any = { metadata: meta };
     if (body.title) updateData.title = body.title;
-    if (body.description !== undefined) updateData.notes = body.description;
+    if (body.description !== undefined) updateData.notes = sanitizePublishDescription(body.description);
 
     // 变体价格/库存覆盖（保留原 attrs/sku）
     if (body.variants?.length) {
@@ -1804,7 +1937,7 @@ export async function collectRoutes(app: FastifyInstance) {
           const attributes = convertOzonRawAttrs(meta.ozonAttributes, followBrand);
           if (attributes.length > 0) {
             cloneAttrsByProductId.set(pid, {
-              description: item.notes || '',
+              description: resolvePublishDescription(item),
               attributes,
               images: Array.isArray(item.images) ? (item.images as string[]) : [],
             });
@@ -1869,6 +2002,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const dims = getItemDimensions(item);
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
       const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
+      const itemDescription = resolvePublishDescription(item, cloned?.description);
 
       const variants = enrichOzonVariantSpecs(Array.isArray(item.variants) ? (item.variants as any[]) : []);
       // 无 variants：保持原行为（1 个 item）
@@ -1893,7 +2027,7 @@ export async function collectRoutes(app: FastifyInstance) {
           depth: dims.depth,
           width: dims.width,
           images: baseImages,
-          ...(cloned?.description ? { description: cloned.description } : {}),
+          ...(itemDescription ? { description: itemDescription } : {}),
           ...(itemAttrs.length ? { attributes: itemAttrs } : {}),
         }];
       }
@@ -1947,7 +2081,7 @@ export async function collectRoutes(app: FastifyInstance) {
           depth: subDepth,
           width: subWidth,
           images: subImages,
-          ...(cloned?.description ? { description: cloned.description } : {}),
+          ...(itemDescription ? { description: itemDescription } : {}),
           ...(publishAttrs.length ? { attributes: publishAttrs } : {}),
           // 自定义字段：变体属性（颜色/尺码等），等真实数据回流后映射成 OZON 真实 attribute_id
           _variantAttrs: subAttrs,

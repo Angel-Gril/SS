@@ -13,6 +13,7 @@ import {
   recordOfferPublishImages,
   removeVariantsBySkus,
   planFallbackPictureUploads,
+  resolvePublishDescription,
   resolveOzonDictionaryAttributeValues,
   resolveBasePublishImages,
   resolveItemPublishCategory,
@@ -21,6 +22,7 @@ import {
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
   syncOzonTitleAttribute,
+  sanitizePublishDescription,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -57,6 +59,20 @@ describe('collect publish helpers', () => {
     expect(hasSuspiciousPublishName(name)).toBe(false);
   });
 
+  it('keeps punctuation and shortens long multi-variant publish names', () => {
+    const name = resolvePublishName({
+      title: 'Форма для льда QIWU форма для льда 1 яч 1 шт',
+      metadata: {},
+    }, {
+      'Цвет': 'бирюзовый, салатовый',
+      'Количество ячеек, шт': '1',
+      'Количество в упаковке, шт': '4',
+    });
+
+    expect(name).toBe('Форма для льда QIWU, бирюзовый, салатовый, 1, 4');
+    expect(name.length).toBeLessThan(80);
+  });
+
   it('turns repeated keyword spam titles into short publish names with variant color', () => {
     const name = resolvePublishName({
       title: 'Автовизитка, автовизитка в машину, номер телефона в автомобиль,Ретро-парковочная плата для автомобиля',
@@ -87,6 +103,23 @@ describe('collect publish helpers', () => {
       values: [{ value: 'Автовизитка ретро для автомобиля' }],
     }]);
     expect(attrs.find((attr) => attr.id === 85)?.values[0]?.value).toBe('Без бренда');
+  });
+
+  it('uses collected source descriptions as sanitized publish descriptions', () => {
+    expect(sanitizePublishDescription('<p>Описание&nbsp;товара</p><script>bad()</script><br>Характеристики')).toBe(
+      'Описание товара\nХарактеристики',
+    );
+
+    expect(resolvePublishDescription({
+      notes: 'old note',
+      metadata: {
+        sourceDescriptionRu: '<p>Подробное описание товара</p>',
+      },
+    })).toBe('Подробное описание товара');
+    expect(resolvePublishDescription({
+      notes: '重量: 500g\n  Краткое описание из заметок  ',
+      metadata: {},
+    })).toBe('Краткое описание из заметок');
   });
 
   it('keeps composite Ozon dictionary values as multiple values instead of collapsing to the first color', () => {
