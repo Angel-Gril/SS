@@ -60,6 +60,18 @@ describe('collect publish helpers', () => {
     expect(hasSuspiciousPublishName(name)).toBe(false);
   });
 
+  it('cleans Ozon publish names that have leading counts, glued Russian words, and multi-word variants', () => {
+    const name = resolvePublishName({
+      title: '6 Рафия ручной работыдекор на стену для интерьера',
+      metadata: {},
+    }, { Материал: 'Деревянные шарики' });
+
+    expect(name).toBe('Рафия ручной работы декор на стену для интерьера, деревянные шарики');
+    expect(name).not.toMatch(/^\d+\s/);
+    expect(name).not.toContain('работыдекор');
+    expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
   it('keeps punctuation and shortens long multi-variant publish names', () => {
     const name = resolvePublishName({
       title: 'Форма для льда QIWU форма для льда 1 яч 1 шт',

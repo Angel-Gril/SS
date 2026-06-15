@@ -44,6 +44,24 @@ export function containsCjkText(value: unknown): boolean {
 
 const TITLE_STOP_WORDS = new Set(['для', 'в', 'на', 'и', 'с', 'со', 'по', 'из', 'от', 'к']);
 
+function repairRussianTitleGluing(value: string): string {
+  return value
+    .replace(/(^|[^\p{L}])(ручн(?:ой|ая|ое|ые))работ(?:ы|а)(?=$|[^\p{L}])/giu, '$1$2 работы')
+    .replace(/(^|[^\p{L}])(работ(?:ы|а))декор(?=$|[^\p{L}])/giu, '$1$2 декор');
+}
+
+function removeLeadingStandaloneCount(value: string): string {
+  const text = value.trim();
+  if (/^\d{1,3}\s+в\s+\d{1,3}\b/i.test(text)) return text;
+  return text.replace(/^\d{1,3}\s+(?=\p{L})/u, '');
+}
+
+function lowercaseCyrillicVariantPart(value: string): string {
+  const text = cleanPublishName(value);
+  if (!/^[\p{Script=Cyrillic}][\p{Script=Cyrillic}\s,.-]*$/u.test(text)) return text;
+  return text.charAt(0).toLocaleLowerCase('ru-RU') + text.slice(1);
+}
+
 export function hasSuspiciousPublishName(value: unknown): boolean {
   const text = String(value || '').trim();
   if (!text) return false;
@@ -65,6 +83,9 @@ export function hasSuspiciousPublishName(value: unknown): boolean {
 export function cleanPublishName(value: unknown): string {
   const text = String(value || '')
     .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalized = removeLeadingStandaloneCount(repairRussianTitleGluing(text))
     .replace(/[;:|/]+/g, ', ')
     .replace(/\s*([,.])\s*/g, '$1 ')
     .replace(/\s*-\s*/g, '-')
@@ -72,11 +93,11 @@ export function cleanPublishName(value: unknown): string {
     .replace(/([,.]){2,}/g, '$1')
     .replace(/[,.]\s*$/g, '')
     .trim();
-  if (!text) return '';
+  if (!normalized) return '';
 
   const words: string[] = [];
   let previousKey = '';
-  for (const rawWord of text.split(/\s+/)) {
+  for (const rawWord of normalized.split(/\s+/)) {
     const word = rawWord
       .replace(/^[^\p{L}\p{N}]+/gu, '')
       .replace(/[^\p{L}\p{N},.-]+$/gu, '');
@@ -100,7 +121,9 @@ function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, inclu
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     const value = cleanPublishName(rawValue);
     if (!value) continue;
-    const part = includeColorLabel && /цвет|color/i.test(rawName) ? cleanPublishName(`${value} цвет`) : value;
+    const part = includeColorLabel && /цвет|color/i.test(rawName)
+      ? cleanPublishName(`${value} цвет`)
+      : lowercaseCyrillicVariantPart(value);
     const key = part.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -162,7 +185,9 @@ function appendVariantTitleParts(base: string, parts: string[]): string {
     .map((part) => removeLeadingVariantOverlap(cleanBase, part))
     .filter(Boolean);
   if (!nextParts.length) return cleanBase;
-  const usePunctuation = nextParts.length > 1 || nextParts.some((part) => /[,.]/.test(part)) || cleanBase.length > 70;
+  const usePunctuation = nextParts.length > 1
+    || nextParts.some((part) => /[,.]/.test(part) || (/\s/.test(part) && !/\sцвет$/i.test(part)))
+    || cleanBase.length > 70;
   return cleanPublishName(`${cleanBase}${usePunctuation ? ', ' : ' '}${nextParts.join(', ')}`);
 }
 
