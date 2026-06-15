@@ -2085,6 +2085,7 @@ export async function collectRoutes(app: FastifyInstance) {
           ...(publishAttrs.length ? { attributes: publishAttrs } : {}),
           // 自定义字段：变体属性（颜色/尺码等），等真实数据回流后映射成 OZON 真实 attribute_id
           _variantAttrs: subAttrs,
+          _sourceVariantSku: subSku,
           _sourceItemId: item.id,
           _sourceModelId: item.modelId || null,
           _hasOwnAttrs: !!variantAttrs,
@@ -2257,11 +2258,12 @@ export async function collectRoutes(app: FastifyInstance) {
         .map((i) => ({
           offerId: i.offer_id,
           sourceItemId: i._sourceItemId || null,
+          sourceVariantSku: i._sourceVariantSku || null,
           sourceModelId: i._sourceModelId || null,
           variantAttrs: i._variantAttrs || null,
         }));
       const cleanItems = importItems.map((i) => {
-        const { _variantAttrs, _sourceItemId, _sourceModelId, _hasOwnAttrs, ...rest } = i;
+        const { _variantAttrs, _sourceVariantSku, _sourceItemId, _sourceModelId, _hasOwnAttrs, ...rest } = i;
         return rest;
       });
 
@@ -2269,9 +2271,9 @@ export async function collectRoutes(app: FastifyInstance) {
       const taskId = result.result.task_id;
 
       const mainOfferImages: Record<string, string> = {};
+      const mainOfferImageLists: Record<string, string[]> = {};
       for (const it of cleanItems) {
-        const firstImg = Array.isArray(it.images) && it.images.length ? String(it.images[0]) : '';
-        if (firstImg) mainOfferImages[it.offer_id] = firstImg;
+        recordOfferPublishImages(mainOfferImageLists, mainOfferImages, it.offer_id, it.images);
       }
 
       await prisma.syncJob.create({
@@ -2292,6 +2294,7 @@ export async function collectRoutes(app: FastifyInstance) {
             offerIds: cleanItems.map((i) => i.offer_id),
             sourceSkus: items.map((i) => i.sku).filter(Boolean),
             offerImages: Object.keys(mainOfferImages).length ? mainOfferImages : null,
+            offerImageLists: Object.keys(mainOfferImageLists).length ? mainOfferImageLists : null,
             variantTrace: variantTrace.length ? variantTrace : null,
           },
         },

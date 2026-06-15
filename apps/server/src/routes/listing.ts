@@ -33,8 +33,16 @@ const batchListSchema = z.object({
   })).min(1).max(100),
 });
 
-function isFallbackPictureUploadJob(payload: Record<string, any>): boolean {
-  return payload.source === 'collect-publish-fallback' || payload.mode === 'follow-by-sku';
+export function isPictureUploadRepairJob(payload: Record<string, any>): boolean {
+  if (payload.source === 'collect-publish-fallback' || payload.mode === 'follow-by-sku') return true;
+  if (payload.source !== 'collect-publish') return false;
+  const offerImageLists = payload.offerImageLists && typeof payload.offerImageLists === 'object' && !Array.isArray(payload.offerImageLists)
+    ? payload.offerImageLists as Record<string, unknown>
+    : {};
+  const offerImages = payload.offerImages && typeof payload.offerImages === 'object' && !Array.isArray(payload.offerImages)
+    ? payload.offerImages as Record<string, unknown>
+    : {};
+  return Object.keys(offerImageLists).length > 0 || Object.keys(offerImages).length > 0;
 }
 
 function mergePictureUploadDiagnostics(existingInput: unknown, next: any[]): any[] {
@@ -262,7 +270,7 @@ export async function listingRoutes(app: FastifyInstance) {
       };
       let pictureErrorMessage: string | null = null;
 
-      if (isFallbackPictureUploadJob(payload)) {
+      if (isPictureUploadRepairJob(payload)) {
         const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];
         const sourceItemIds = Array.from(new Set(
           traces

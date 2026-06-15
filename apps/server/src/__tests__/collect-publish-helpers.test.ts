@@ -390,6 +390,35 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('plans clone picture repair from stored offer image lists when product ids are available', () => {
+    const plan = planFallbackPictureUploads({
+      source: 'collect-publish',
+      mode: 'clone',
+      offerImageLists: {
+        '1781155551-6DH6': [
+          'https://cdn.example.com/xreal-white-cover.jpg',
+          'https://cdn.example.com/xreal-common.jpg',
+        ],
+      },
+    }, [
+      {
+        offer_id: '1781155551-6DH6',
+        product_id: 5100617465,
+        status: 'imported',
+      },
+    ], []);
+
+    expect(plan.operations).toEqual([{
+      offerId: '1781155551-6DH6',
+      productId: 5100617465,
+      rawImages: [
+        'https://cdn.example.com/xreal-white-cover.jpg',
+        'https://cdn.example.com/xreal-common.jpg',
+      ],
+    }]);
+    expect(plan.pendingCount).toBe(0);
+  });
+
   it('records picture upload diagnostics without leaking the whole image list', () => {
     const diagnostics: any[] = [];
 
