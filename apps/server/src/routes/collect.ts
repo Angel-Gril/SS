@@ -27,6 +27,7 @@ const collectSchema = z.object({
   categoryName: z.string().optional(),
   attributes: z.array(z.object({ id: z.number().optional(), name: z.string(), value: z.string() })).optional(),
   description: z.string().optional(),
+  richDescriptionJson: z.string().optional(),
   weight: z.number().optional(),
   weightG: z.number().optional(),
   sku: z.string().optional(),
@@ -317,17 +318,35 @@ export function syncOzonTitleAttribute<T extends { id: number; complex_id?: numb
   attributes: T[] | null | undefined,
   title: string,
 ): Array<T | { id: number; complex_id: number; values: { value: string }[] }> {
+  return syncOzonCoreTextAttributes(attributes, title);
+}
+
+export function syncOzonCoreTextAttributes<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  title: string,
+  description?: unknown,
+): Array<T | { id: number; complex_id: number; values: { value: string }[] }> {
   const cleanTitle = cleanPublishName(title).slice(0, 200);
-  const attrs = Array.isArray(attributes) ? attributes.filter((attr) => Number(attr.id) !== 4180) : [];
-  if (!cleanTitle) return attrs;
-  return [
-    ...attrs,
-    {
+  const cleanDescription = sanitizePublishDescription(description);
+  const attrs = Array.isArray(attributes)
+    ? attributes.filter((attr) => Number(attr.id) !== 4180 && (cleanDescription ? Number(attr.id) !== 4191 : true))
+    : [];
+  const next: Array<T | { id: number; complex_id: number; values: { value: string }[] }> = [...attrs];
+  if (cleanTitle) {
+    next.push({
       id: 4180,
       complex_id: 0,
       values: [{ value: cleanTitle }],
-    },
-  ];
+    });
+  }
+  if (cleanDescription) {
+    next.push({
+      id: 4191,
+      complex_id: 0,
+      values: [{ value: cleanDescription }],
+    });
+  }
+  return next;
 }
 
 type OzonDictionaryEntry = { id: number; value?: string | null };
@@ -1071,6 +1090,7 @@ export async function collectRoutes(app: FastifyInstance) {
     if (d.sourceTitleRaw) metadata.sourceTitleRaw = d.sourceTitleRaw;
     if (d.sourceLocale) metadata.sourceLocale = d.sourceLocale;
     if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
+    if (d.richDescriptionJson) metadata.sourceRichDescriptionJson = d.richDescriptionJson;
     if (d.title && containsCjkText(d.title) && !d.publishTitle) metadata.titleNeedsReview = true;
 
     const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
@@ -1117,6 +1137,7 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.sourceTitleRaw) metadata.sourceTitleRaw = String(item.sourceTitleRaw);
         if (item.sourceLocale) metadata.sourceLocale = String(item.sourceLocale);
         if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
+        if (item.richDescriptionJson) metadata.sourceRichDescriptionJson = String(item.richDescriptionJson);
         if (item.title && containsCjkText(item.title) && !item.publishTitle) metadata.titleNeedsReview = true;
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
@@ -1971,7 +1992,7 @@ export async function collectRoutes(app: FastifyInstance) {
               limit: chunk.length,
             });
             for (const a of attrs) {
-              const description = descriptionMap.get(a.id) || (a.attributes?.find((x) => x.id === 4180)?.values?.[0]?.value) || '';
+              const description = descriptionMap.get(a.id) || (a.attributes?.find((x) => x.id === 4191)?.values?.[0]?.value) || '';
               const attributes = (a.attributes || [])
                 .filter((x) => followBrand || x.id !== 85)
                 .map((x) => ({
@@ -2009,7 +2030,7 @@ export async function collectRoutes(app: FastifyInstance) {
       if (!variants.length) {
         const itemName = resolvePublishName(item);
         const itemAttrs = cloned?.attributes?.length
-          ? syncOzonTitleAttribute(cloned.attributes, itemName)
+          ? syncOzonCoreTextAttributes(cloned.attributes, itemName, itemDescription)
           : [];
         return [{
           name: itemName,
@@ -2057,7 +2078,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const finalAttrs = variantAttrs && variantAttrs.length
           ? variantAttrs
           : (cloned?.attributes || []);
-        const publishAttrs = finalAttrs.length ? syncOzonTitleAttribute(finalAttrs, subName) : [];
+        const publishAttrs = finalAttrs.length ? syncOzonCoreTextAttributes(finalAttrs, subName, itemDescription) : [];
 
         // 维度：每个变体自己的 > 整组 dims
         const subWeight = (typeof v.weight === 'number' && v.weight > 0) ? v.weight : dims.weight;

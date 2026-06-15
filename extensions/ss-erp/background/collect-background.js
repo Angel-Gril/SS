@@ -48,6 +48,26 @@ function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
 }
 
+function resolveOzonCollectionPolicy(options) {
+  if (globalThis.SS_ERP_OZON_COLLECTION_POLICY && typeof globalThis.SS_ERP_OZON_COLLECTION_POLICY.resolveOzonCollectionPolicy === "function") {
+    return globalThis.SS_ERP_OZON_COLLECTION_POLICY.resolveOzonCollectionPolicy(options);
+  }
+  const mode = options && (options.mode === "complete" || options.collectMode === "complete") ? "complete" : "quick";
+  const complete = mode === "complete";
+  return {
+    mode,
+    discoverVariants: complete,
+    fetchRootSellerInsights: true,
+    fetchVariantSellerInsights: complete,
+    rootProductDelayMs: complete ? 200 : 0,
+    recursive: {
+      maxPages: complete ? 120 : 0,
+      maxDepth: complete ? 3 : 0,
+      delayMs: 0,
+    },
+  };
+}
+
 function isHostAccessError(error) {
   return /Cannot access contents|manifest must request permission|respective host|host permission|Missing host permission/i.test(normalizeErrorMessage(error));
 }
@@ -1750,6 +1770,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
       var priceText = null;
       var currency = null;
       var description = "";
+      var richDescriptionJson = null;
       var brand = null;
       var category = null;
       var attributes = [];
@@ -1798,8 +1819,14 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
           }
         }
 
-        if (!description && /^(webDescription|webRichAnnotation|description)/.test(k) && st) {
-          description = st.richAnnotation || st.description || st.text || "";
+        if (/^(webDescription|webRichAnnotation|description)/.test(k) && st) {
+          var firstDescriptionCandidate = st.richAnnotation || st.description || st.text || "";
+          if (firstDescriptionCandidate && (!description || firstDescriptionCandidate.length > description.length)) {
+            description = firstDescriptionCandidate;
+          }
+          if (!richDescriptionJson && st.richAnnotationJson) {
+            richDescriptionJson = st.richAnnotationJson;
+          }
         }
 
         if (!category && /^breadCrumbs/.test(k) && st && Array.isArray(st.breadcrumbs) && st.breadcrumbs.length) {
@@ -2018,6 +2045,64 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
         }
       }
 
+      try {
+        var baseProductPath = requestedPath || ("/product/" + pid + "/");
+        if (baseProductPath.indexOf("/product/") < 0) baseProductPath = "/product/" + pid + "/";
+        baseProductPath = baseProductPath.split("?")[0];
+        if (!/\/$/.test(baseProductPath)) baseProductPath += "/";
+        var descriptionPath = baseProductPath + "?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru";
+        var descriptionData = await doFetch("/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(descriptionPath));
+        var descriptionStates = descriptionData && descriptionData.widgetStates;
+        if (descriptionStates && typeof descriptionStates === "object") {
+          var descriptionKeys = Object.keys(descriptionStates);
+          for (var dsk = 0; dsk < descriptionKeys.length; dsk++) {
+            var dKey = descriptionKeys[dsk];
+            var dState;
+            try { dState = JSON.parse(descriptionStates[dKey]); } catch (e) { continue; }
+            if (/^(webDescription|webRichAnnotation|description)/.test(dKey) && dState) {
+              var descriptionCandidate = dState.richAnnotation || dState.description || dState.text || "";
+              if (descriptionCandidate && (!description || descriptionCandidate.length > description.length)) {
+                description = descriptionCandidate;
+              }
+              if (!richDescriptionJson && dState.richAnnotationJson) {
+                richDescriptionJson = dState.richAnnotationJson;
+              }
+            }
+            if (/^(webShortCharacteristics|webCharacteristics|characteristics)/.test(dKey) && dState) {
+              var dChars = dState.characteristics;
+              if (Array.isArray(dChars)) {
+                for (var dci = 0; dci < dChars.length; dci++) {
+                  var dCh = dChars[dci];
+                  var dNm = "";
+                  if (dCh.title && Array.isArray(dCh.title.textRs) && dCh.title.textRs.length) {
+                    dNm = dCh.title.textRs[0].content || "";
+                  } else if (typeof dCh.title === "string") {
+                    dNm = dCh.title;
+                  } else if (dCh.name) {
+                    dNm = dCh.name;
+                  }
+                  var dVl = "";
+                  if (Array.isArray(dCh.values)) {
+                    var dParts = [];
+                    for (var dvi = 0; dvi < dCh.values.length; dvi++) {
+                      var dVal = dCh.values[dvi];
+                      var dText = dVal.text || dVal.value || "";
+                      if (dText) dParts.push(dText.replace(/,\s*$/, ""));
+                    }
+                    dVl = dParts.join(", ");
+                  }
+                  if (dNm && dVl && !attributes.some(function (attr) { return attr.name === dNm && attr.value === dVl; })) {
+                    attributes.push({ name: dNm, value: dVl });
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Description page is optional; keep first-page data if Ozon rejects it.
+      }
+
       var widgetStatesDump = variantCandidates.length ? {
         currentProductId: pid,
         modelIdGuess: modelId,
@@ -2043,7 +2128,8 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
           priceText: priceText,
           oldPrice: oldPrice,
           currency: currency || fallbackCurrencyByHost(location.hostname),
-          description: typeof description === "string" ? description.slice(0, 2000) : "",
+          description: typeof description === "string" ? description.slice(0, 5000) : "",
+          richDescriptionJson: richDescriptionJson ? JSON.stringify(richDescriptionJson).slice(0, 30000) : null,
           brand: brand,
           category: category,
           attributes: attributes,
@@ -2188,15 +2274,29 @@ async function discoverOzonVariantsRecursively(productData, rootProductId, optio
   return productData;
 }
 
-async function completeOzonProductVariantsForCollection(productData, productId) {
+async function completeOzonProductVariantsForCollection(productData, productId, options = {}) {
   if (!productData || !Array.isArray(productData.variants) || productData.variants.length === 0) {
     return productData;
   }
+  const policy = resolveOzonCollectionPolicy(options.mode || options.collectMode || options.discoverVariants !== undefined ? options : { mode: "complete" });
+  if (!policy.discoverVariants) {
+    attachOzonVariantDiscoveryDiagnostics(productData, {
+      enabled: false,
+      skipped: true,
+      mode: policy.mode,
+      rootProductId: String(productId || productData.productId || ""),
+      initialVariantCount: productData.variants.length,
+      finalVariantCount: productData.variants.length,
+      reason: "quick collect skips recursive variant pages",
+    });
+    return productData;
+  }
   try {
-    return await discoverOzonVariantsRecursively(productData, productId);
+    return await discoverOzonVariantsRecursively(productData, productId, policy.recursive || {});
   } catch (error) {
     attachOzonVariantDiscoveryDiagnostics(productData, {
       enabled: true,
+      mode: policy.mode,
       rootProductId: String(productId || ""),
       initialVariantCount: productData.variants.length,
       finalVariantCount: productData.variants.length,
@@ -2207,7 +2307,7 @@ async function completeOzonProductVariantsForCollection(productData, productId) 
   }
 }
 
-async function collectOzonProductsToErp(productIds) {
+async function collectOzonProductsToErp(productIds, options = {}) {
   const pids = Array.isArray(productIds)
     ? productIds.map((id) => String(id || "").trim()).filter(Boolean)
     : [];
@@ -2224,6 +2324,7 @@ async function collectOzonProductsToErp(productIds) {
 
   let sellerCompanyId = null;
   try { sellerCompanyId = await getSellerCompanyId(); } catch (e) {}
+  const collectPolicy = resolveOzonCollectionPolicy(options);
 
   const collected = [];
   const errors = [];
@@ -2237,9 +2338,9 @@ async function collectOzonProductsToErp(productIds) {
     }
 
     const productData = r.data;
-    await completeOzonProductVariantsForCollection(productData, pid);
+    await completeOzonProductVariantsForCollection(productData, pid, collectPolicy);
 
-    if (sellerCompanyId) {
+    if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {
         const insights = await getOzonInsights(pid);
         if (insights.detail && Array.isArray(insights.detail.attributes)) {
@@ -2274,7 +2375,7 @@ async function collectOzonProductsToErp(productIds) {
           }
         } catch (e) {}
 
-        if (Array.isArray(productData.variants) && productData.variants.length > 0) {
+        if (collectPolicy.fetchVariantSellerInsights && Array.isArray(productData.variants) && productData.variants.length > 0) {
           const subPids = productData.variants
             .map((v) => v && v.sku ? String(v.sku) : null)
             .filter((s) => s && s !== String(pid));
@@ -2307,7 +2408,7 @@ async function collectOzonProductsToErp(productIds) {
     }
 
     collected.push(productData);
-    if (i < pids.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
+    if (collectPolicy.rootProductDelayMs > 0 && i < pids.length - 1) await new Promise((resolve) => setTimeout(resolve, collectPolicy.rootProductDelayMs));
   }
 
   if (!collected.length) {
@@ -2328,6 +2429,7 @@ async function collectOzonProductsToErp(productIds) {
       priceText: p.priceText || p.price || "",
       currency: p.currency || "RUB",
       description: p.description || "",
+      richDescriptionJson: p.richDescriptionJson || null,
       sku: String(p.productId),
       sourceProductId: String(p.productId),
       attributes: p.attributes,
@@ -2719,7 +2821,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       case "spb-self-hosted:fetch-ozon-product-to-erp": {
-        return await collectOzonProductsToErp(message.productIds);
+        return await collectOzonProductsToErp(message.productIds, {
+          mode: message.mode || message.collectMode || "quick",
+        });
       }
     }
   })().then(sendResponse).catch((error) => {

@@ -21,6 +21,7 @@ import {
   resolvePublishName,
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
+  syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
   sanitizePublishDescription,
 } from '../routes/collect.js';
@@ -101,6 +102,38 @@ describe('collect publish helpers', () => {
       id: 4180,
       complex_id: 0,
       values: [{ value: 'Автовизитка ретро для автомобиля' }],
+    }]);
+    expect(attrs.find((attr) => attr.id === 85)?.values[0]?.value).toBe('Без бренда');
+  });
+
+  it('replaces cloned Ozon title and description attributes with final publish text', () => {
+    const attrs = syncOzonCoreTextAttributes([
+      {
+        id: 4180,
+        complex_id: 0,
+        values: [{ value: 'Старое название' }],
+      },
+      {
+        id: 4191,
+        complex_id: 0,
+        values: [{ value: 'Старое описание из исходной карточки' }],
+      },
+      {
+        id: 85,
+        complex_id: 0,
+        values: [{ value: 'Без бренда', dictionary_value_id: 97021 }],
+      },
+    ], 'Новое название', '<p>Новое описание</p>');
+
+    expect(attrs.filter((attr) => attr.id === 4180)).toEqual([{
+      id: 4180,
+      complex_id: 0,
+      values: [{ value: 'Новое название' }],
+    }]);
+    expect(attrs.filter((attr) => attr.id === 4191)).toEqual([{
+      id: 4191,
+      complex_id: 0,
+      values: [{ value: 'Новое описание' }],
     }]);
     expect(attrs.find((attr) => attr.id === 85)?.values[0]?.value).toBe('Без бренда');
   });
