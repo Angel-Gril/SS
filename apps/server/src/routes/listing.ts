@@ -7,6 +7,7 @@ import { OzonClient } from '../services/ozon-client.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { summarizeOzonImportItems } from '../services/ozon-import-status.js';
 import { resolveImageUrls } from '../services/ozon-image-resolver.js';
+import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
 
 const batchListSchema = z.object({
@@ -90,6 +91,99 @@ function summarizePictureUploadDiagnostics(diagnosticsInput: unknown, pendingCou
     pendingCount,
     errorMessage: null,
   };
+}
+
+type PictureActivationClient = Pick<OzonClient, 'getProductInfoList' | 'getProductInfoAttributes'>;
+
+function getImportProductRefs(importItems: any[]): Array<{ productId: string; offerId: string }> {
+  const seen = new Set<string>();
+  const refs: Array<{ productId: string; offerId: string }> = [];
+  for (const item of importItems) {
+    const productId = String(item?.product_id || item?.productId || '').trim();
+    if (!productId || seen.has(productId)) continue;
+    seen.add(productId);
+    refs.push({
+      productId,
+      offerId: String(item?.offer_id || item?.offerId || '').trim(),
+    });
+  }
+  return refs;
+}
+
+export async function findPictureActivationPendingItems(
+  client: PictureActivationClient,
+  shopId: string,
+  importItems: any[],
+): Promise<any[]> {
+  const refs = getImportProductRefs(importItems);
+  const productIds = importItems
+    .map((item) => String(item?.product_id || item?.productId || '').trim())
+    .filter(Boolean);
+  if (!productIds.length) return [];
+
+  const numericProductIds = refs
+    .map((ref) => Number(ref.productId))
+    .filter((productId) => Number.isFinite(productId) && productId > 0);
+
+  if (numericProductIds.length) {
+    try {
+      const liveDetails = await client.getProductInfoList(numericProductIds);
+      const attributesByProductId = new Map<string, any>();
+      try {
+        const attributes = await client.getProductInfoAttributes({
+          product_id: numericProductIds.map(String),
+          limit: Math.min(numericProductIds.length, 100),
+        });
+        for (const item of attributes) attributesByProductId.set(String(item.id), item);
+      } catch {
+        // Product info already carries primary_image/images; attributes are only an extra source.
+      }
+      const detailsByProductId = new Map(liveDetails.map((item) => [String(item.id), item]));
+      return refs
+        .map((ref) => {
+          const info = detailsByProductId.get(ref.productId);
+          const images = info ? resolveOzonProductImages(info, attributesByProductId.get(ref.productId)) : [];
+          if (images.length > 0) return null;
+          return {
+            offerId: ref.offerId || String(info?.offer_id || '').trim(),
+            productId: ref.productId,
+            reason: 'Ozon 商品详情暂未返回图片',
+          };
+        })
+        .filter(Boolean);
+    } catch {
+      // Fall back to the last local sync snapshot if Ozon detail lookup is temporarily unavailable.
+    }
+  }
+
+  const products = await prisma.product.findMany({
+    where: {
+      shopId,
+      platformProductId: { in: productIds },
+    },
+    select: {
+      platformProductId: true,
+      offerId: true,
+      images: true,
+    },
+  });
+  const byProductId = new Map(products.map((product) => [String(product.platformProductId), product]));
+
+  return importItems
+    .map((item) => {
+      const productId = String(item?.product_id || item?.productId || '').trim();
+      if (!productId) return null;
+      const product = byProductId.get(productId);
+      if (!product) return null;
+      const images = Array.isArray(product.images) ? product.images : [];
+      if (images.length > 0) return null;
+      return {
+        offerId: String(item?.offer_id || item?.offerId || product.offerId || '').trim(),
+        productId,
+        reason: 'Ozon 商品详情暂未返回图片',
+      };
+    })
+    .filter(Boolean);
 }
 
 export async function listingRoutes(app: FastifyInstance) {
@@ -332,6 +426,20 @@ export async function listingRoutes(app: FastifyInstance) {
           pictureUploadSkippedCount: pictureSummary.skippedCount,
           pictureUploadPendingCount: pictureSummary.pendingCount,
           pictureUploadError: pictureSummary.errorMessage,
+        };
+      }
+
+      const pictureStatus = String(nextPayload.pictureUploadStatus || '').toLowerCase();
+      const canCheckPictureActivation = allDone
+        && failed < total
+        && pictureStatus !== 'failed'
+        && pictureStatus !== 'pending';
+      if (canCheckPictureActivation) {
+        const pendingActivation = await findPictureActivationPendingItems(client, job.shopId, info.items || []);
+        nextPayload = {
+          ...nextPayload,
+          pictureActivationPendingCount: pendingActivation.length,
+          pictureActivationPending: pendingActivation.length ? pendingActivation : null,
         };
       }
 

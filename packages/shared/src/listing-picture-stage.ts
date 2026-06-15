@@ -39,6 +39,7 @@ export interface ListingPictureStagePayload {
   pictureUploadPendingCount?: number;
   pictureUploadFailedCount?: number;
   pictureUploadSkippedCount?: number;
+  pictureActivationPendingCount?: number;
   pictureUploadError?: string | null;
 }
 
@@ -56,6 +57,16 @@ function positiveCount(value: unknown): number {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 }
 
+function pictureActivationPendingStage(count: number): ListingPictureStage {
+  return {
+    code: 'pictures_submitted',
+    label: '图片待 Ozon 生效',
+    description: '图片已提交给 Ozon，但部分商品详情仍未返回图片；请稍后刷新或让系统继续同步确认。',
+    tone: 'warning',
+    countLabel: `${count} 个待确认`,
+  };
+}
+
 export function resolveListingPictureStage(input: ListingPictureStageInput): ListingPictureStage {
   const status = String(input.status || '').toUpperCase();
   const payload = input.payload || {};
@@ -64,6 +75,7 @@ export function resolveListingPictureStage(input: ListingPictureStageInput): Lis
   const pictureStatus = String(payload.pictureUploadStatus || '').toLowerCase();
   const pendingCount = positiveCount(payload.pictureUploadPendingCount);
   const failedCount = positiveCount(payload.pictureUploadFailedCount) + positiveCount(payload.pictureUploadSkippedCount);
+  const activationPendingCount = positiveCount(payload.pictureActivationPendingCount);
 
   if (status === 'FAILED') {
     return {
@@ -72,6 +84,10 @@ export function resolveListingPictureStage(input: ListingPictureStageInput): Lis
       description: 'Ozon 没有完成商品创建，请先查看失败原因。',
       tone: 'error',
     };
+  }
+
+  if (status === 'SUCCESS' && activationPendingCount > 0) {
+    return pictureActivationPendingStage(activationPendingCount);
   }
 
   if (!fallbackPictureJob) {
@@ -110,6 +126,9 @@ export function resolveListingPictureStage(input: ListingPictureStageInput): Lis
   }
 
   if (pictureStatus === 'success') {
+    if (activationPendingCount > 0) {
+      return pictureActivationPendingStage(activationPendingCount);
+    }
     const uploadedCount = pictureUploads.filter((entry) => entry.status === 'uploaded').length;
     return {
       code: 'pictures_submitted',

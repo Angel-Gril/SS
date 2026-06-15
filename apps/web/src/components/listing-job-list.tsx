@@ -36,6 +36,8 @@ export interface JobRow {
     pictureUploadFailedCount?: number;
     pictureUploadSkippedCount?: number;
     pictureUploadPendingCount?: number;
+    pictureActivationPendingCount?: number;
+    pictureActivationPending?: Array<{ offerId?: string; productId?: string | number; reason?: string }> | null;
     pictureUploadError?: string | null;
     itemCount?: number;
     sourceItemCount?: number;
@@ -77,8 +79,10 @@ export function modeLabel(payload: JobRow['payload']): { text: string; cls: stri
 function needsRemoteRefresh(row: JobRow): boolean {
   const pictureUploadStatus = row.payload?.pictureUploadStatus;
   const pictureUploads = row.payload?.pictureUploads || [];
+  const pictureActivationPendingCount = Number(row.payload?.pictureActivationPendingCount || 0);
   return row.status === 'RUNNING'
     || pictureUploadStatus === 'pending'
+    || pictureActivationPendingCount > 0
     || (
       row.status === 'SUCCESS'
       && isFallbackPictureJob(row.payload)

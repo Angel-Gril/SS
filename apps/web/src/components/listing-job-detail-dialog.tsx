@@ -99,6 +99,8 @@ export function ListingJobDetailDialog({
   const pictureProblemCount = pictureUploads.filter((it) => it.status !== 'uploaded').length
     + (data?.payload?.pictureUploadError ? 1 : 0);
   const pictureUploadStatus = data?.payload?.pictureUploadStatus;
+  const pictureActivationPending = data?.payload?.pictureActivationPending || [];
+  const pictureActivationPendingCount = Number(data?.payload?.pictureActivationPendingCount || pictureActivationPending.length || 0);
   const pictureStage = data
     ? resolveListingPictureStage({ status: data.status, payload: data.payload })
     : null;
@@ -107,6 +109,7 @@ export function ListingJobDetailDialog({
     fallbackPictureJob
     || !!pictureUploadStatus
     || pictureUploads.length > 0
+    || pictureActivationPendingCount > 0
     || !!data?.payload?.pictureUploadError
   );
   const needsLegacyFallbackPictureRefresh = !!data
@@ -117,6 +120,7 @@ export function ListingJobDetailDialog({
   const shouldAutoRefresh = !!data && (
     data.status === 'RUNNING'
     || pictureUploadStatus === 'pending'
+    || pictureActivationPendingCount > 0
     || needsLegacyFallbackPictureRefresh
   );
   const canManualRefresh = !!data && (
@@ -124,6 +128,7 @@ export function ListingJobDetailDialog({
     || fallbackPictureJob
     || pictureUploadStatus === 'pending'
     || pictureUploadStatus === 'failed'
+    || pictureActivationPendingCount > 0
   );
 
   useEffect(() => {
@@ -132,7 +137,7 @@ export function ListingJobDetailDialog({
       void refresh(true);
     }, 15000);
     return () => window.clearTimeout(timer);
-  }, [jobId, shouldAutoRefresh, refreshing, data?.payload?.pictureUploadPendingCount]);
+  }, [jobId, shouldAutoRefresh, refreshing, data?.payload?.pictureUploadPendingCount, pictureActivationPendingCount]);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -202,7 +207,7 @@ export function ListingJobDetailDialog({
               </Button>
             </div>
 
-            {(pictureUploads.length > 0 || data.payload?.pictureUploadError) && (
+            {(pictureUploads.length > 0 || pictureActivationPendingCount > 0 || data.payload?.pictureUploadError) && (
               <div className="border rounded-md overflow-hidden">
                 <div className="px-3 py-2 bg-muted flex items-center justify-between">
                   <div className="font-medium">图片补传诊断</div>
@@ -216,6 +221,11 @@ export function ListingJobDetailDialog({
                 {data.payload?.pictureUploadError && (
                   <div className="px-3 py-2 text-xs text-destructive border-t break-words">
                     {data.payload.pictureUploadError}
+                  </div>
+                )}
+                {pictureActivationPendingCount > 0 && (
+                  <div className="px-3 py-2 text-xs text-amber-700 bg-amber-50 border-t">
+                    {pictureActivationPendingCount} 个商品图片已提交但 Ozon 商品详情暂未返回图片，系统会继续刷新确认。
                   </div>
                 )}
                 {pictureUploads.length > 0 && (
