@@ -52,6 +52,8 @@ sudo systemctl start ss-erp-api ss-erp-worker ss-erp-web
 
 ## 日常更新 / 今天的更新推送
 
+线上修复必须保持同一个闭环：本地代码修复 → 本地验证 → git commit → git push → VPS 部署该 commit → 线上验证。VPS 不能作为长期热修源头；如果直接在服务器目录改了业务代码，下一次从 Git 重新部署会覆盖掉这些改动，也会让 `.git` 无法准确说明线上版本。
+
 先确认当前服务器部署模式：
 
 ```bash
@@ -139,6 +141,15 @@ curl http://127.0.0.1:3001/ready
 cd /opt/ss-erp/app/apps/server
 SMOKE_ENV_FILE=../../.env.staging SMOKE_BASE_URL=https://ss-erp.com pnpm smoke:live
 ```
+
+部署完成后同时确认实际 commit。app-dir 模式可以查看部署脚本写入的标记；如果标记不存在，至少用最近部署日志或 release 目录名确认：
+
+```bash
+cd /opt/ss-erp/app
+test -f DEPLOYED_COMMIT && cat DEPLOYED_COMMIT
+```
+
+这个 commit 应与本地 `git log --oneline -1` 或指定部署 commit 一致。
 
 如果你只能通过公网访问、没有 SSH 或数据库权限，用本地机器跑：
 

@@ -360,6 +360,18 @@ SMOKE_CREATE_TEMP_USER=true SMOKE_EXPECT_RUNTIME=any pnpm smoke:remote
 
 ## 今天的更新推送
 
+### 修复闭环
+
+任何线上问题都按同一条链路处理，避免本地代码、GitHub 和 VPS 三处漂移：
+
+1. 本地修复代码并跑对应验证。
+2. 只 stage 本次相关文件，提交到当前分支。
+3. push 到 GitHub，让仓库成为唯一事实来源。
+4. VPS 只部署这个明确 commit，并记录/确认 `DEPLOYED_COMMIT`。
+5. 部署后跑 `/ready`、相关 smoke 或专项测试，再审查 `git diff` / `git log` 确认没有游离改动。
+
+不要在 VPS 上直接改业务代码做热修。确实需要临时排查脚本时，放在 `tmp/` 或服务器临时目录，最终修复仍回到本地仓库提交，再按 commit 部署。这样后续重新打包、回滚和再次部署才不会出现“服务器好了但 Git 没记录”的偏差。
+
 最省事的流程是：
 
 ```bash

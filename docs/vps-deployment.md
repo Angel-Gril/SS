@@ -23,6 +23,17 @@ WorkingDirectory=/opt/ss-erp/app/apps/server
 EnvironmentFile=/opt/ss-erp/app/.env.staging
 ```
 
+## Commit-Bound Deploy Rule
+
+Production fixes must be commit-bound:
+
+1. fix and verify locally
+2. commit and push the branch
+3. deploy that exact commit to the VPS
+4. verify `/ready`, the relevant smoke test, and the deployed commit marker
+
+Do not patch application source directly under `/opt/ss-erp/app`, `/opt/ss-erp`, or `/opt/ss-erp/current`. Temporary diagnostic files are fine, but the durable fix must live in Git first. This keeps local code, GitHub, and the VPS rebuildable from the same commit.
+
 Deploy the latest local commit from your workstation:
 
 ```bash

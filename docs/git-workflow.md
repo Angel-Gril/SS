@@ -37,6 +37,19 @@
 - `apps/server/dist`
 - 本地上传图片、水印图片、日志、数据库目录
 
+## 修复与部署顺序
+
+线上问题不要在 VPS 里直接改业务代码作为最终修复。标准顺序是：
+
+```powershell
+git status --short
+git add <本次修复文件>
+git commit -m "fix(scope): describe the production issue"
+git push
+```
+
+然后部署这个 commit 到 VPS，并在线上验证。这样 GitHub、开发机和 VPS 的代码都能用同一个 commit 对齐；否则重新打包或回滚时会丢失服务器上的临时改动。
+
 ## 合并前验证
 
 至少运行：
