@@ -99,6 +99,17 @@ describe('collect publish helpers', () => {
     expect(hasSuspiciousPublishName(name)).toBe(false);
   });
 
+  it('drops duplicated numeric variant suffixes when they make the publish title spammy', () => {
+    const name = resolvePublishName({
+      title: "Мист для тела и волос парфюмированный Eclat d'arpege Mi Comimi 100 мл",
+      metadata: {},
+    }, { 'Объем, мл': '100.1' });
+
+    expect(name).toBe("Мист для тела и волос парфюмированный Eclat d'arpege Mi Comimi 100 мл");
+    expect(name).not.toContain('100.1');
+    expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
   it('suggests a neutral title for risky collectible figurine names without changing publish name automatically', () => {
     const item = {
       title: 'Фигурка девочки-лисицы в прозрачной юбке высотой 26 см',
@@ -109,6 +120,16 @@ describe('collect publish helpers', () => {
     expect(suggestNeutralOzonPublishTitle(item)).toEqual({
       suggestedTitle: 'Коллекционная декоративная фигурка, 26 см',
       reasons: ['标题含可能触发 Ozon 审核的敏感/营销词，建议改成中性商品名'],
+    });
+  });
+
+  it('suggests a neutral title for perfumed body and hair mist titles', () => {
+    expect(suggestNeutralOzonPublishTitle({
+      title: "Мист для тела и волос парфюмированный Eclat d'arpege Mi Comimi 100 мл",
+      metadata: {},
+    })).toEqual({
+      suggestedTitle: 'Парфюмированный мист для тела и волос, 100 мл',
+      reasons: ['标题含品牌/变体后缀或疑似堆词，建议改成中性商品名'],
     });
   });
 

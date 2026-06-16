@@ -116,11 +116,22 @@ export function cleanPublishName(value: unknown): string {
     .trim();
 }
 
-function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false): string[] {
+function hasVolumeInTitle(value: string): boolean {
+  return /(^|[^\p{L}\p{N}])\d{1,5}(?:[,.]\d+)?\s*(?:мл|ml)($|[^\p{L}])/iu.test(value);
+}
+
+function isRedundantVolumeVariantTitlePart(base: string, rawName: string, rawValue: string): boolean {
+  if (!/(об[ъь]?е?м|volume|мл|ml)/iu.test(rawName)) return false;
+  if (!hasVolumeInTitle(base)) return false;
+  return /^\s*\d{1,5}(?:[,.]\d+)?\s*$/u.test(String(rawValue || ''));
+}
+
+function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false, base = ''): string[] {
   if (!variantAttrs || !Object.keys(variantAttrs).length) return [];
   const parts: string[] = [];
   const seen = new Set<string>();
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
+    if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
     const value = cleanPublishName(rawValue);
     if (!value) continue;
     const part = includeColorLabel && /цвет|color/i.test(rawName)
@@ -358,7 +369,7 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   const meta = (item.metadata && typeof item.metadata === 'object' ? item.metadata : {}) as Record<string, any>;
   const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
   const cleanBase = cleanPublishName(base);
-  const attrParts = normalizeVariantTitleParts(variantAttrs, /автовизитк/i.test(cleanBase));
+  const attrParts = normalizeVariantTitleParts(variantAttrs, /автовизитк/i.test(cleanBase), cleanBase);
   return shortenSpammyPublishName(base, attrParts).slice(0, 200);
 }
 
@@ -373,13 +384,26 @@ export function suggestNeutralOzonPublishTitle(item: { title?: string | null; me
   const lower = cleanTitle.toLocaleLowerCase('ru-RU');
   const hasFigurine = /(^|[^\p{L}])(фигурк\p{L}*|статуэтк\p{L}*)($|[^\p{L}])/iu.test(lower);
   const hasRiskyTerms = /(^|[^\p{L}])(девочк\p{L}*|девушк\p{L}*|прозрачн\p{L}*|лисиц\p{L}*|аниме|манг\p{L}*)($|[^\p{L}])/iu.test(lower);
-  if (!hasFigurine || !hasRiskyTerms) return null;
+  if (hasFigurine && hasRiskyTerms) {
+    const height = cleanTitle.match(/(^|[^\p{L}\p{N}])(\d{1,3})\s*(?:см|cm)($|[^\p{L}])/iu)?.[2];
+    return {
+      suggestedTitle: cleanPublishName(`Коллекционная декоративная фигурка${height ? `, ${height} см` : ''}`),
+      reasons: ['标题含可能触发 Ozon 审核的敏感/营销词，建议改成中性商品名'],
+    };
+  }
 
-  const height = cleanTitle.match(/(^|[^\p{L}\p{N}])(\d{1,3})\s*(?:см|cm)($|[^\p{L}])/iu)?.[2];
-  return {
-    suggestedTitle: cleanPublishName(`Коллекционная декоративная фигурка${height ? `, ${height} см` : ''}`),
-    reasons: ['标题含可能触发 Ozon 审核的敏感/营销词，建议改成中性商品名'],
-  };
+  const hasBodyHairMist = /(^|[^\p{L}])мист($|[^\p{L}])/iu.test(lower)
+    && /(^|[^\p{L}])тел[ао]($|[^\p{L}])/iu.test(lower)
+    && /(^|[^\p{L}])волос($|[^\p{L}])/iu.test(lower);
+  if (hasBodyHairMist) {
+    const volume = cleanTitle.match(/(^|[^\p{L}\p{N}])(\d{1,5}(?:[,.]\d+)?)\s*(?:мл|ml)($|[^\p{L}])/iu)?.[2];
+    return {
+      suggestedTitle: cleanPublishName(`Парфюмированный мист для тела и волос${volume ? `, ${volume} мл` : ''}`),
+      reasons: ['标题含品牌/变体后缀或疑似堆词，建议改成中性商品名'],
+    };
+  }
+
+  return null;
 }
 
 export function syncOzonTitleAttribute<T extends { id: number; complex_id?: number; values: any[] }>(

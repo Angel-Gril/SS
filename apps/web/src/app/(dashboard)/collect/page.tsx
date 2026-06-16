@@ -92,10 +92,25 @@ function cleanPublishPreviewName(value: unknown): string {
   return words.join(' ').trim();
 }
 
+function previewTitleHasVolume(value: string): boolean {
+  return /(^|[^\p{L}\p{N}])\d{1,5}(?:[,.]\d+)?\s*(?:мл|ml)($|[^\p{L}])/iu.test(value);
+}
+
+function isRedundantPreviewVolumeVariant(base: string, name: string, value: string): boolean {
+  if (!/(об[ъь]?е?м|volume|мл|ml)/iu.test(name)) return false;
+  if (!previewTitleHasVolume(base)) return false;
+  return /^\s*\d{1,5}(?:[,.]\d+)?\s*$/u.test(String(value || ''));
+}
+
 function resolvePublishPreviewName(item: CollectedItem, variantAttrs?: Record<string, string>) {
   const meta = item.metadata || {};
   const base = String(meta.publishTitleRu || meta.sourceTitleRu || item.title || '').trim();
-  const attrText = variantAttrs && Object.keys(variantAttrs).length ? Object.values(variantAttrs).filter(Boolean).join(' ') : '';
+  const attrText = variantAttrs && Object.keys(variantAttrs).length
+    ? Object.entries(variantAttrs)
+      .filter(([name, value]) => value && !isRedundantPreviewVolumeVariant(base, name, String(value)))
+      .map(([, value]) => value)
+      .join(' ')
+    : '';
   const raw = (attrText ? `${base} ${attrText}` : base).replace(/\s+/g, ' ').trim();
   const name = cleanPublishPreviewName(raw).slice(0, 200);
   return { name, optimized: !!raw && name !== raw.slice(0, 200) };
