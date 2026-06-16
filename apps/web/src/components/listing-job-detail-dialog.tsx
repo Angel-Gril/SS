@@ -15,7 +15,7 @@ interface PushItem {
   offer_id: string;
   product_id?: number;
   status: 'imported' | 'failed' | 'pending';
-  errors?: Array<{ code: string; message: string; field?: string }>;
+  errors?: Array<{ code?: string; message?: string; description?: string; field?: string; level?: string; state?: string }>;
 }
 
 interface DetailData {
@@ -57,6 +57,15 @@ function pictureStageBadgeClass(tone: ListingPictureStageTone): string {
     default:
       return 'border-muted-foreground/30 text-muted-foreground';
   }
+}
+
+function isBlockingImportError(item: PushItem): boolean {
+  if (item.status === 'failed') return true;
+  return (item.errors || []).some((error) => {
+    const level = String(error.level || '').toLowerCase();
+    const state = String(error.state || '').toLowerCase();
+    return level === 'error' || state === 'declined';
+  });
 }
 
 export function ListingJobDetailDialog({
@@ -286,6 +295,7 @@ export function ListingJobDetailDialog({
                       const cls = it.status === 'imported' ? 'bg-emerald-600' : it.status === 'failed' ? 'bg-destructive' : 'bg-amber-500';
                       const txt = it.status === 'imported' ? '成功' : it.status === 'failed' ? '失败' : '处理中';
                       const img = data.payload?.offerImages?.[it.offer_id];
+                      const blockingError = isBlockingImportError(it);
                       const hints = Array.from(new Map((it.errors || [])
                         .map((error) => explainOzonError(error))
                         .filter((hint): hint is OzonErrorHint => !!hint)
@@ -309,17 +319,26 @@ export function ListingJobDetailDialog({
                           <td className="px-3 py-2"><code>{it.offer_id}</code></td>
                           <td className="px-3 py-2">{it.product_id || '-'}</td>
                           <td className="px-3 py-2"><Badge className={`${cls} text-white text-[10px]`}>{txt}</Badge></td>
-                          <td className="px-3 py-2 text-destructive">
+                          <td className={`px-3 py-2 ${blockingError ? 'text-destructive' : 'text-amber-700'}`}>
                             {messages.length ? (
                               <div className="space-y-1">
                                 {hints.length > 0 && (
                                   <div className="flex flex-wrap gap-1">
                                     {hints.map((hint) => (
-                                      <Badge key={hint.code} variant="outline" className="text-[10px] border-destructive/30">
+                                      <Badge
+                                        key={hint.code}
+                                        variant="outline"
+                                        className={`text-[10px] ${blockingError ? 'border-destructive/30' : 'border-amber-300 text-amber-700'}`}
+                                      >
                                         {hint.label}
                                       </Badge>
                                     ))}
                                   </div>
+                                )}
+                                {!blockingError && (
+                                  <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
+                                    成功后诊断
+                                  </Badge>
                                 )}
                                 <div className="space-y-0.5 break-words">
                                   {messages.map((message, index) => <div key={index}>{message}</div>)}
