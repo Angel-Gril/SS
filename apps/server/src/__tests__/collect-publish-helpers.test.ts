@@ -26,6 +26,7 @@ import {
   syncOzonTitleAttribute,
   sanitizePublishDescription,
   syncOzonVariantGroupingAttributes,
+  normalizeOzonOriginCountryForChinaSeller,
   normalizeCollectedSourceVideos,
 } from '../routes/collect.js';
 
@@ -256,6 +257,32 @@ describe('collect publish helpers', () => {
       values: [{ value: 'бирюзовый, редкий оттенок', dictionary_value_id: 0 }],
       matched: false,
       matchType: 'text-fallback',
+    });
+  });
+
+  it('rewrites cloned Russian origin country to China for China seller publishing', () => {
+    const attrs = normalizeOzonOriginCountryForChinaSeller([{
+      id: 4389,
+      complex_id: 0,
+      values: [{ value: 'Россия', dictionary_value_id: 643 }],
+    }, {
+      id: 85,
+      complex_id: 0,
+      values: [{ value: 'Без бренда', dictionary_value_id: 97021 }],
+    }], [
+      { id: 643, value: 'Россия' },
+      { id: 156, value: 'Китай' },
+    ]);
+
+    expect(attrs).toContainEqual({
+      id: 4389,
+      complex_id: 0,
+      values: [{ value: 'Китай', dictionary_value_id: 156 }],
+    });
+    expect(attrs).toContainEqual({
+      id: 85,
+      complex_id: 0,
+      values: [{ value: 'Без бренда', dictionary_value_id: 97021 }],
     });
   });
 

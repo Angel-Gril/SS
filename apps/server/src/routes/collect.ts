@@ -12,6 +12,7 @@ import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
 const OZON_MAX_PUBLISH_IMAGES = 30;
+const OZON_ORIGIN_COUNTRY_ATTR_ID = 4389;
 
 const collectSchema = z.object({
   title: z.string().min(1),
@@ -558,6 +559,52 @@ function findOzonDictionaryEntry(
     const value = normalizeOzonDictionaryText(entry.value);
     return value.length >= 2 && target.includes(value);
   }) || null;
+}
+
+function findOzonOriginChinaEntry(dict: OzonDictionaryEntry[]): OzonDictionaryEntry | null {
+  return findOzonDictionaryEntry(dict, 'Китай', true)
+    || findOzonDictionaryEntry(dict, 'China', true)
+    || findOzonDictionaryEntry(dict, '中国', true)
+    || null;
+}
+
+function isOzonOriginRussiaValue(value: unknown, dict: OzonDictionaryEntry[]): boolean {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const dictionaryId = Number(row.dictionary_value_id);
+  if (Number.isFinite(dictionaryId) && dictionaryId > 0) {
+    const dictEntry = dict.find((entry) => Number(entry.id) === dictionaryId);
+    if (dictEntry && isOzonOriginRussiaText(dictEntry.value)) return true;
+  }
+  return isOzonOriginRussiaText(row.value);
+}
+
+function isOzonOriginRussiaText(value: unknown): boolean {
+  const text = normalizeOzonDictionaryText(value);
+  return text === 'россия'
+    || text === 'russia'
+    || text === 'ru'
+    || text === 'российская федерация'
+    || text.includes('российск')
+    || text.includes('russian federation');
+}
+
+export function normalizeOzonOriginCountryForChinaSeller<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  originCountryDict: OzonDictionaryEntry[] = [],
+): Array<T | { id: number; complex_id?: number; values: { value: string; dictionary_value_id: number }[] }> {
+  if (!Array.isArray(attributes)) return [];
+  const china = findOzonOriginChinaEntry(originCountryDict);
+  const chinaValue = String(china?.value || 'Китай').trim();
+  const chinaDictionaryId = Number(china?.id) || 0;
+  return attributes.map((attr) => {
+    if (Number(attr.id) !== OZON_ORIGIN_COUNTRY_ATTR_ID) return attr;
+    const values = Array.isArray(attr.values) ? attr.values : [];
+    if (!values.some((value) => isOzonOriginRussiaValue(value, originCountryDict))) return attr;
+    return {
+      ...attr,
+      values: [{ value: chinaValue, dictionary_value_id: chinaDictionaryId }],
+    };
+  });
 }
 
 function metadataRecord(value: unknown): Record<string, any> {
@@ -2256,6 +2303,7 @@ export async function collectRoutes(app: FastifyInstance) {
 
         const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
         const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
+        const originCountryAttrDef = allAttrs.find((a) => a.id === OZON_ORIGIN_COUNTRY_ATTR_ID);
 
         console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}`);
 
@@ -2279,6 +2327,26 @@ export async function collectRoutes(app: FastifyInstance) {
           }
         }
 
+        let originCountryValues: { id: number; value: string; info: string; picture: string }[] = [];
+        if (originCountryAttrDef && group.items.some((item: any) => Array.isArray(item.attributes) && item.attributes.some((attr: any) => Number(attr.id) === OZON_ORIGIN_COUNTRY_ATTR_ID))) {
+          try {
+            const dictKey = `${group.categoryId}:${group.typeId}:${OZON_ORIGIN_COUNTRY_ATTR_ID}`;
+            if (!attrDictCache.has(dictKey)) {
+              const values = await client.getAttributeValues({
+                description_category_id: group.categoryId,
+                type_id: group.typeId,
+                attribute_id: OZON_ORIGIN_COUNTRY_ATTR_ID,
+                language: 'DEFAULT',
+                limit: 5000,
+              });
+              attrDictCache.set(dictKey, values);
+            }
+            originCountryValues = attrDictCache.get(dictKey) || [];
+          } catch (e: any) {
+            console.warn(`[publish-ozon] failed to query origin country dictionary category=${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 150));
+          }
+        }
+
         for (const importItem of group.items) {
           if (!importItem.attributes) importItem.attributes = [];
           // 深拷贝 cloned.attributes，避免多个 sub-SKU 共用同一个数组引用导致互相污染
@@ -2286,6 +2354,7 @@ export async function collectRoutes(app: FastifyInstance) {
             ...a,
             values: Array.isArray(a.values) ? a.values.map((v: any) => ({ ...v })) : a.values,
           }));
+          importItem.attributes = normalizeOzonOriginCountryForChinaSeller(importItem.attributes, originCountryValues);
 
           importItem.attributes = syncOzonVariantGroupingAttributes(importItem.attributes, importItem);
 
