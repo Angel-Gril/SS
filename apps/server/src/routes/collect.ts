@@ -56,6 +56,7 @@ function repairRussianTitleGluing(value: string): string {
 function removeLeadingStandaloneCount(value: string): string {
   const text = value.trim();
   if (/^\d{1,3}\s+в\s+\d{1,3}\b/i.test(text)) return text;
+  if (/^\d{1,3}\s+(?:RU|EU|US|UK|XS|S|M|L|XL|XXL|XXXL)\b/i.test(text)) return text;
   return text.replace(/^\d{1,3}\s+(?=\p{L})/u, '');
 }
 
@@ -181,6 +182,7 @@ function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, inclu
     if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
     const value = cleanPublishName(rawValue);
     if (!value) continue;
+    if (containsCjkText(value)) continue;
     const part = includeColorLabel && /цвет|color/i.test(rawName)
       ? cleanPublishName(`${value} цвет`)
       : lowercaseCyrillicVariantPart(value);

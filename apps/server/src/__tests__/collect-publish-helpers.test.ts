@@ -94,6 +94,19 @@ describe('collect publish helpers', () => {
     expect(name).toBe('Чехол для iPad серый');
   });
 
+  it('does not append browser-translated Chinese variant values to Ozon publish titles', () => {
+    const name = resolvePublishName({
+      title: 'Бюстгальтер Top Bra',
+      metadata: {},
+    }, {
+      '颜色': '咖啡色',
+      '尺码': '52 RU / XL',
+    });
+
+    expect(name).toBe('Бюстгальтер Top Bra, 52 RU, XL');
+    expect(containsCjkText(name)).toBe(false);
+  });
+
   it('deduplicates repeated color words when appending variant attributes to publish names', () => {
     const name = resolvePublishName({
       title: 'Панама Zara черный',

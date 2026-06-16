@@ -73,6 +73,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 - Ozon Cookie 同步会按“手动 companyId -> 当前 seller header -> `sc_company_id` cookie -> ERP 店铺已保存 companyId”兜底；用户右上角同步 Cookie 后不应再因为已保存 companyId 缺失而反复要求去 seller 页面手动同步。
 - Ozon 佣金同步优先使用 `global-help.ozon.com` 的 CHN 佣金页；若 Ozon 帮助中心返回 403 或 `__rr` 重定向循环，扩展会保存本地 CHN 兜底佣金快照，并在 diagnostics 记录在线同步失败原因。
 - Ozon 标题采集如果出现中文标题，不再把中文内容保存为 `publishTitleRu`，也不再作为 ERP 上品列表主标题。扩展在 SKU/批量采集时会优先用 seller insights 返回的非中文标题修复；服务端再兜底从 Ozon 商品 URL slug 生成非中文展示标题，最后才使用 `Ozon SKU <sku>`，并标记 `titleNeedsReview`。`Ozon SKU <sku>` 只表示俄文标题来源失败，不是正常标题方案。
+- Ozon 上架标题生成会跳过中文变体值，避免浏览器/Ozon 中文语言环境采到的 `咖啡色`、`浅米色` 等颜色被拼进俄文标题；`52 RU / XL` 这类国际尺码会保留数字和尺码文本。
 
 缺口：
 
