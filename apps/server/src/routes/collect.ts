@@ -295,9 +295,9 @@ export function normalizeCollectedSourceVideos(value: unknown): { url: string; c
   return out;
 }
 
-export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
+export function calcPublishPrice(baseCny: number, markupPct = 0, markupAmount = 0): number {
   const base = Number.isFinite(baseCny) && baseCny > 0 ? baseCny : 100;
-  const pct = Number.isFinite(markupPct) ? markupPct : 200;
+  const pct = Number.isFinite(markupPct) ? markupPct : 0;
   const fixed = Number.isFinite(markupAmount) ? markupAmount : 0;
   return Math.max(1, Math.ceil(base * (1 + pct / 100) + fixed));
 }
@@ -1701,7 +1701,7 @@ export async function collectRoutes(app: FastifyInstance) {
       return !meta?.ozonAttributes?.length;
     });
 
-    const markupPct = body.markupPct ?? 200;
+    const markupPct = Number.isFinite(body.markupPct) ? body.markupPct : 0;
     const markupAmount = Number(body.markupAmount) || 0;
     const mode = body.mode === 'clone' ? 'clone' : 'follow';
     const followBrand = body.followBrand !== false;

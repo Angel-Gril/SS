@@ -60,12 +60,17 @@ function parsePositiveNumber(value: unknown): number | null {
   return Number.isFinite(num) && num > 0 ? num : null;
 }
 
+function parseFiniteNumberOrDefault(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
 function calcPublishPreviewPrice(baseCny: unknown, markupPct: unknown, markupAmount: unknown): number | null {
   const base = parsePositiveNumber(baseCny);
   if (base == null) return null;
-  const pct = Number(markupPct);
-  const fixed = Number(markupAmount);
-  return Math.max(1, Math.ceil(base * (1 + (Number.isFinite(pct) ? pct : 200) / 100) + (Number.isFinite(fixed) ? fixed : 0)));
+  const pct = parseFiniteNumberOrDefault(markupPct, 0);
+  const fixed = parseFiniteNumberOrDefault(markupAmount, 0);
+  return Math.max(1, Math.ceil(base * (1 + pct / 100) + fixed));
 }
 
 function formatPreviewPrice(value: number | null): string {
@@ -184,7 +189,7 @@ export default function CollectPage() {
   const [publishHeight, setPublishHeight] = useState('100');
   const [publishDepth, setPublishDepth] = useState('100');
   const [publishWidth, setPublishWidth] = useState('100');
-  const [publishMarkup, setPublishMarkup] = useState('200');
+  const [publishMarkup, setPublishMarkup] = useState('');
   const [publishMarkupAmount, setPublishMarkupAmount] = useState('0');
   const [publishMode, setPublishMode] = useState<'follow' | 'clone'>('clone');
   const [publishFollowBrand, setPublishFollowBrand] = useState(true);
@@ -561,8 +566,8 @@ export default function CollectPage() {
       height: Number(publishHeight) || 100,
       depth: Number(publishDepth) || 100,
       width: Number(publishWidth) || 100,
-      markupPct: Number(publishMarkup) || 200,
-      markupAmount: Number(publishMarkupAmount) || 0,
+      markupPct: parseFiniteNumberOrDefault(publishMarkup, 0),
+      markupAmount: parseFiniteNumberOrDefault(publishMarkupAmount, 0),
       mode: publishMode,
       followBrand: publishFollowBrand,
       randomOfferId: randomOfferIdEnabled,
@@ -915,7 +920,7 @@ export default function CollectPage() {
     .filter((price): price is number => typeof price === 'number' && Number.isFinite(price));
   const publishPreviewMin = publishPreviewPrices.length ? Math.min(...publishPreviewPrices) : null;
   const publishPreviewMax = publishPreviewPrices.length ? Math.max(...publishPreviewPrices) : null;
-  const publishFormulaText = `售价=原价×(1+${Number(publishMarkup) || 200}%)+${Number(publishMarkupAmount) || 0}`;
+  const publishFormulaText = `售价=原价×(1+${parseFiniteNumberOrDefault(publishMarkup, 0)}%)+${parseFiniteNumberOrDefault(publishMarkupAmount, 0)}`;
   const randomizeEnabled = !!randomizeConfig?.enabled;
   const randomOfferIdAvailable = !!(randomizeConfig?.enabled && randomizeConfig.randomOfferId);
   const publishTitleSuggestionItems = selectedPublishItems.filter((item) => !item.metadata?.publishTitleRu && item.titleSuggestion?.suggestedTitle);
@@ -1376,7 +1381,7 @@ export default function CollectPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">加价比例 %</Label>
-                <Input value={publishMarkup} onChange={(e) => setPublishMarkup(e.target.value)} type="number" className="h-8 text-sm" placeholder="200" />
+                <Input value={publishMarkup} onChange={(e) => setPublishMarkup(e.target.value)} type="number" className="h-8 text-sm" placeholder="0" />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">固定加价 CNY</Label>

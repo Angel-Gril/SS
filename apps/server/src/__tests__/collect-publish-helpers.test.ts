@@ -35,6 +35,11 @@ describe('collect publish helpers', () => {
     expect(calcPublishPrice(100, 0, 9.5)).toBe(110);
   });
 
+  it('does not add markup by default when users leave publish markup empty', () => {
+    expect(calcPublishPrice(100)).toBe(100);
+    expect(calcPublishPrice(100, Number.NaN, 0)).toBe(100);
+  });
+
   it('detects Chinese text in publish names', () => {
     expect(containsCjkText('Чехол для iPad')).toBe(false);
     expect(containsCjkText('保护套 для iPad')).toBe(true);
