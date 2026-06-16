@@ -11,6 +11,7 @@ import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
+const OZON_MAX_PUBLISH_IMAGES = 30;
 
 const collectSchema = z.object({
   title: z.string().min(1),
@@ -339,6 +340,26 @@ export function resolvePublishName(item: { title?: string | null; metadata?: unk
   return shortenSpammyPublishName(base, attrParts).slice(0, 200);
 }
 
+export function suggestNeutralOzonPublishTitle(item: { title?: string | null; metadata?: unknown }): { suggestedTitle: string; reasons: string[] } | null {
+  const meta = metadataRecord(item.metadata);
+  if (String(meta.publishTitleRu || '').trim()) return null;
+
+  const sourceTitle = String(meta.sourceTitleRu || item.title || '').trim();
+  const cleanTitle = cleanPublishName(sourceTitle);
+  if (!cleanTitle || containsCjkText(cleanTitle)) return null;
+
+  const lower = cleanTitle.toLocaleLowerCase('ru-RU');
+  const hasFigurine = /(^|[^\p{L}])(фигурк\p{L}*|статуэтк\p{L}*)($|[^\p{L}])/iu.test(lower);
+  const hasRiskyTerms = /(^|[^\p{L}])(девочк\p{L}*|девушк\p{L}*|прозрачн\p{L}*|лисиц\p{L}*|аниме|манг\p{L}*)($|[^\p{L}])/iu.test(lower);
+  if (!hasFigurine || !hasRiskyTerms) return null;
+
+  const height = cleanTitle.match(/(^|[^\p{L}\p{N}])(\d{1,3})\s*(?:см|cm)($|[^\p{L}])/iu)?.[2];
+  return {
+    suggestedTitle: cleanPublishName(`Коллекционная декоративная фигурка${height ? `, ${height} см` : ''}`),
+    reasons: ['标题含可能触发 Ozon 审核的敏感/营销词，建议改成中性商品名'],
+  };
+}
+
 export function syncOzonTitleAttribute<T extends { id: number; complex_id?: number; values: any[] }>(
   attributes: T[] | null | undefined,
   title: string,
@@ -512,6 +533,10 @@ function mergePublishImageLists(...lists: unknown[]): string[] {
   return out;
 }
 
+function limitOzonPublishImages(images: string[]): string[] {
+  return images.slice(0, OZON_MAX_PUBLISH_IMAGES);
+}
+
 function sameStringList(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
@@ -574,10 +599,10 @@ export function resolveBasePublishImages(
 ): string[] {
   const meta = metadataRecord(item.metadata);
   const customOrWatermarked = normalizePublishImageList(meta.watermarkedImages);
-  if (customOrWatermarked.length) return customOrWatermarked;
+  if (customOrWatermarked.length) return limitOzonPublishImages(customOrWatermarked);
   const cloned = normalizePublishImageList(clonedImages);
-  if (cloned.length) return cloned;
-  return normalizePublishImageList(item.images);
+  if (cloned.length) return limitOzonPublishImages(cloned);
+  return limitOzonPublishImages(normalizePublishImageList(item.images));
 }
 
 export function resolveVariantPublishImages(
@@ -589,7 +614,7 @@ export function resolveVariantPublishImages(
   const variantImages = variantWatermarkedImages.length
     ? variantWatermarkedImages
     : normalizePublishImageList(variant.images);
-  return variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages;
+  return limitOzonPublishImages(variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages);
 }
 
 export function setVariantWatermarkedImages(
@@ -615,7 +640,7 @@ export function recordOfferPublishImages(
   offerId: string,
   images: unknown,
 ): void {
-  const normalizedImages = normalizePublishImageList(images);
+  const normalizedImages = limitOzonPublishImages(normalizePublishImageList(images));
   if (!offerId || !normalizedImages.length) return;
   offerImageLists[offerId] = normalizedImages;
   offerImages[offerId] = normalizedImages[0]!;
@@ -677,7 +702,7 @@ export function planFallbackPictureUploads(
 
   const explicitLists = metadataRecord(payload.offerImageLists);
   for (const [offerId, images] of Object.entries(explicitLists)) {
-    const normalized = normalizePublishImageList(images);
+    const normalized = limitOzonPublishImages(normalizePublishImageList(images));
     if (offerId && normalized.length) offerImageLists[offerId] = normalized;
   }
 
@@ -1093,6 +1118,7 @@ export async function collectRoutes(app: FastifyInstance) {
           purchasePrice: r.purchasePrice?.toString() ?? null,
           originalPrice: r.originalPrice?.toString() ?? null,
           exchangeRateUsed: r.exchangeRateUsed?.toString() ?? null,
+          titleSuggestion: suggestNeutralOzonPublishTitle(r),
         })),
       },
     };

@@ -13,6 +13,7 @@ import {
   recordOfferPublishImages,
   removeVariantsBySkus,
   planFallbackPictureUploads,
+  suggestNeutralOzonPublishTitle,
   resolvePublishDescription,
   resolveOzonDictionaryAttributeValues,
   resolveBasePublishImages,
@@ -94,6 +95,19 @@ describe('collect publish helpers', () => {
 
     expect(name).toBe('Автовизитка для автомобиля коричнево-красный цвет');
     expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
+  it('suggests a neutral title for risky collectible figurine names without changing publish name automatically', () => {
+    const item = {
+      title: 'Фигурка девочки-лисицы в прозрачной юбке высотой 26 см',
+      metadata: {},
+    };
+
+    expect(resolvePublishName(item)).toBe('Фигурка девочки-лисицы в прозрачной юбке высотой 26 см');
+    expect(suggestNeutralOzonPublishTitle(item)).toEqual({
+      suggestedTitle: 'Коллекционная декоративная фигурка, 26 см',
+      reasons: ['标题含可能触发 Ozon 审核的敏感/营销词，建议改成中性商品名'],
+    });
   });
 
   it('replaces cloned Ozon title attribute with the final cleaned publish name', () => {
@@ -412,6 +426,21 @@ describe('collect publish helpers', () => {
     expect(selectedImages.every((images) => images[1] === '/watermarked/cmq9luvfn004h5obkwe0ogi5c_0_e81563ca.jpg')).toBe(true);
   });
 
+  it('limits Ozon publish images to 30 while keeping the variant image first', () => {
+    const baseImages = Array.from({ length: 30 }, (_, index) => `https://cdn.example.com/base-${index + 1}.jpg`);
+    const images = resolveVariantPublishImages({
+      images: baseImages,
+      metadata: {},
+    }, {
+      images: ['https://cdn.example.com/variant-cover.jpg'],
+    }, baseImages);
+
+    expect(images).toHaveLength(30);
+    expect(images[0]).toBe('https://cdn.example.com/variant-cover.jpg');
+    expect(images).toContain('https://cdn.example.com/base-1.jpg');
+    expect(images).not.toContain('https://cdn.example.com/base-30.jpg');
+  });
+
   it('records fallback upload images by offer id while keeping the first image for job previews', () => {
     const offerImageLists: Record<string, string[]> = {};
     const offerImages: Record<string, string> = {};
@@ -462,6 +491,25 @@ describe('collect publish helpers', () => {
       ],
     }]);
     expect(plan.pendingCount).toBe(0);
+  });
+
+  it('limits stored fallback picture repair lists to 30 images', () => {
+    const images = Array.from({ length: 31 }, (_, index) => `https://cdn.example.com/stored-${index + 1}.jpg`);
+    const plan = planFallbackPictureUploads({
+      offerImageLists: {
+        'offer-31': images,
+      },
+    }, [
+      {
+        offer_id: 'offer-31',
+        product_id: 123456,
+        status: 'imported',
+      },
+    ], []);
+
+    expect(plan.operations[0]?.rawImages).toHaveLength(30);
+    expect(plan.operations[0]?.rawImages[0]).toBe('https://cdn.example.com/stored-1.jpg');
+    expect(plan.operations[0]?.rawImages).not.toContain('https://cdn.example.com/stored-31.jpg');
   });
 
   it('records picture upload diagnostics without leaking the whole image list', () => {

@@ -14,6 +14,11 @@ import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { formatVariantAttrs } from '@/lib/ozon-attr-names';
 
+interface TitleSuggestion {
+  suggestedTitle: string;
+  reasons: string[];
+}
+
 interface VariantSku {
   sku?: string;
   attrs?: Record<string, string>;
@@ -41,6 +46,7 @@ interface CollectedItem {
   status: string;
   createdAt: string;
   metadata?: { watermarkApplied?: boolean; ozonAttributes?: any[]; [key: string]: any } | null;
+  titleSuggestion?: TitleSuggestion | null;
   variants?: VariantSku[] | null;
   modelId?: string | null;
 }
@@ -124,8 +130,10 @@ function mergePreviewImages(...lists: unknown[]): string[] {
 function resolvePublishPreviewImages(item: CollectedItem, variant?: VariantSku): string[] {
   const meta = item.metadata || {};
   const baseImages = normalizePreviewImages(meta.watermarkedImages?.length ? meta.watermarkedImages : item.images);
-  if (meta.watermarkApplied) return baseImages;
-  return variant?.images?.length ? mergePreviewImages(variant.images, baseImages) : baseImages;
+  const images = meta.watermarkApplied
+    ? baseImages
+    : variant?.images?.length ? mergePreviewImages(variant.images, baseImages) : baseImages;
+  return images.slice(0, 30);
 }
 
 interface Shop { id: string; name: string; platform: string; }
@@ -501,13 +509,7 @@ export default function CollectPage() {
     }
   }
 
-  async function handlePublish() {
-    if (!selectedIds.size) { toast({ title: '请先选择商品', variant: 'destructive' }); return; }
-    if (!publishShopId) { toast({ title: '请选择目标店铺', variant: 'destructive' }); return; }
-    if (!publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
-    if (!publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
-    setPublishing(true);
-
+  async function submitPublishRequest() {
     // 收集变体价格覆盖：仅选中且确实有 override 的项才传
     const priceOverrides: Record<string, Record<string, number>> = {};
     for (const id of selectedIds) {
@@ -571,6 +573,47 @@ export default function CollectPage() {
       });
       console.error('[publish-ozon] error:', errorMsg);
     }
+  }
+
+  async function handlePublish() {
+    if (!selectedIds.size) { toast({ title: '请先选择商品', variant: 'destructive' }); return; }
+    if (!publishShopId) { toast({ title: '请选择目标店铺', variant: 'destructive' }); return; }
+    if (!publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
+    if (!publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
+    setPublishing(true);
+    await submitPublishRequest();
+  }
+
+  async function handleApplyTitleSuggestionsAndPublish() {
+    if (!selectedIds.size) { toast({ title: '请先选择商品', variant: 'destructive' }); return; }
+    if (!publishShopId) { toast({ title: '请选择目标店铺', variant: 'destructive' }); return; }
+    if (!publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
+    if (!publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
+
+    const targets = items.filter((item) => selectedIds.has(item.id) && !item.metadata?.publishTitleRu && item.titleSuggestion?.suggestedTitle);
+    if (!targets.length) {
+      setPublishing(true);
+      await submitPublishRequest();
+      return;
+    }
+
+    setPublishing(true);
+    for (const item of targets) {
+      const res = await api.put(`/api/collect/${item.id}`, {
+        publishTitle: item.titleSuggestion!.suggestedTitle,
+      });
+      if (res.code !== 1) {
+        setPublishing(false);
+        toast({
+          title: '建议标题保存失败',
+          description: `${item.sku || item.id}: ${res.msg || '保存失败'}`,
+          variant: 'destructive',
+          duration: 8000,
+        });
+        return;
+      }
+    }
+    await submitPublishRequest();
   }
 
   async function handleAutoInherit() {
@@ -860,6 +903,7 @@ export default function CollectPage() {
   const publishFormulaText = `售价=原价×(1+${Number(publishMarkup) || 200}%)+${Number(publishMarkupAmount) || 0}`;
   const randomizeEnabled = !!randomizeConfig?.enabled;
   const randomOfferIdAvailable = !!(randomizeConfig?.enabled && randomizeConfig.randomOfferId);
+  const publishTitleSuggestionItems = selectedPublishItems.filter((item) => !item.metadata?.publishTitleRu && item.titleSuggestion?.suggestedTitle);
   const visiblePublishPreviewRows = pricePreviewExpanded ? publishPreviewRows : publishPreviewRows.slice(0, 4);
   const hiddenPublishPreviewCount = Math.max(0, publishPreviewRows.length - visiblePublishPreviewRows.length);
   const optimizedTitleCount = publishPreviewRows.filter((row) => row.titleOptimized).length;
@@ -1353,13 +1397,40 @@ export default function CollectPage() {
                 </label>
               </div>
             )}
+            {publishTitleSuggestionItems.length > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50/80 p-3 space-y-2">
+                <div className="text-sm font-medium text-amber-900">标题建议</div>
+                <div className="space-y-2">
+                  {publishTitleSuggestionItems.slice(0, 3).map((item) => (
+                    <div key={item.id} className="rounded border bg-background p-2 text-xs">
+                      <div className="font-medium line-clamp-1">{item.title}</div>
+                      <div className="mt-1 text-muted-foreground line-clamp-1">{item.titleSuggestion?.suggestedTitle}</div>
+                      <div className="mt-1 text-[11px] text-amber-700">{item.titleSuggestion?.reasons?.join(' · ')}</div>
+                    </div>
+                  ))}
+                  {publishTitleSuggestionItems.length > 3 && (
+                    <div className="text-[11px] text-amber-700">还有 {publishTitleSuggestionItems.length - 3} 个商品有建议标题</div>
+                  )}
+                </div>
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">将上架 {selectedIds.size} 件商品到 OZON（货币: CNY）</p>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setShowPublishDialog(false)}>取消</Button>
               <Button onClick={handlePublish} disabled={publishing || !publishShopId || !publishCategoryId || !publishTypeId}>
                 {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
                 确认上架
               </Button>
+              {publishTitleSuggestionItems.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={handleApplyTitleSuggestionsAndPublish}
+                  disabled={publishing || !publishShopId || !publishCategoryId || !publishTypeId}
+                >
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  使用建议标题并继续上架
+                </Button>
+              )}
             </div>
           </div>
             <aside className="border-t bg-muted/20 px-4 py-4 lg:border-l lg:border-t-0 overflow-y-auto">
