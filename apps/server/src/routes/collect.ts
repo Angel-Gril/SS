@@ -29,6 +29,7 @@ const collectSchema = z.object({
   attributes: z.array(z.object({ id: z.number().optional(), name: z.string(), value: z.string() })).optional(),
   description: z.string().optional(),
   richDescriptionJson: z.string().optional(),
+  sourceVideos: z.array(z.any()).optional(),
   weight: z.number().optional(),
   weightG: z.number().optional(),
   sku: z.string().optional(),
@@ -260,6 +261,27 @@ export function resolvePublishDescription(
     if (description) return description;
   }
   return sanitizeNotesPublishDescription(item.notes);
+}
+
+export function normalizeCollectedSourceVideos(value: unknown): { url: string; coverUrl?: string; title?: string }[] {
+  if (!Array.isArray(value)) return [];
+  const out: { url: string; coverUrl?: string; title?: string }[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const url = String(row.url || row.videoUrl || row.src || row.link || '').trim();
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const coverUrl = String(row.coverUrl || row.cover || row.poster || row.preview || row.thumbnail || '').trim();
+    const title = cleanPublishName(row.title || row.name || row.caption || '').slice(0, 200);
+    const next: { url: string; coverUrl?: string; title?: string } = { url };
+    if (/^https?:\/\//i.test(coverUrl)) next.coverUrl = coverUrl;
+    if (title) next.title = title;
+    out.push(next);
+    if (out.length >= 10) break;
+  }
+  return out;
 }
 
 export function calcPublishPrice(baseCny: number, markupPct = 200, markupAmount = 0): number {
@@ -1161,6 +1183,8 @@ export async function collectRoutes(app: FastifyInstance) {
     if (d.sourceLocale) metadata.sourceLocale = d.sourceLocale;
     if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
     if (d.richDescriptionJson) metadata.sourceRichDescriptionJson = d.richDescriptionJson;
+    const sourceVideos = normalizeCollectedSourceVideos(d.sourceVideos);
+    if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
     if (d.title && containsCjkText(d.title) && !d.publishTitle) metadata.titleNeedsReview = true;
 
     const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
@@ -1208,6 +1232,8 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.sourceLocale) metadata.sourceLocale = String(item.sourceLocale);
         if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
         if (item.richDescriptionJson) metadata.sourceRichDescriptionJson = String(item.richDescriptionJson);
+        const sourceVideos = normalizeCollectedSourceVideos(item.sourceVideos);
+        if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
         if (item.title && containsCjkText(item.title) && !item.publishTitle) metadata.titleNeedsReview = true;
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;

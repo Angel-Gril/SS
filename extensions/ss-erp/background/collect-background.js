@@ -1579,6 +1579,7 @@ async function aggregateOzonProductInsights(productId) {
           attributes: d.attributes,
           description: d.description,
           richDescriptionJson: d.richDescriptionJson || item.richDescriptionJson,
+          sourceVideos: d.sourceVideos || item.sourceVideos,
         });
       } else {
         recordInsightSourceError(sourceErrors, "public-entrypoint", (pub && pub.error) || "OZON 公开商品接口无数据");
@@ -1781,6 +1782,62 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
         if (value.indexOf("ozon.by") >= 0) return "BYN";
         return "RUB";
       };
+      function isHttpUrl(value) {
+        return /^https?:\/\//i.test(String(value || "").trim());
+      }
+      function isVideoUrl(value) {
+        var text = String(value || "").trim();
+        return isHttpUrl(text) && (/\.(?:mp4|m3u8|webm|mov)(?:[?#].*)?$/i.test(text) || /(?:stream|playlist)/i.test(text));
+      }
+      function pickVideoUrl(obj) {
+        var fields = ["videoUrl", "videoURL", "video", "mp4", "hls", "src", "url", "link"];
+        for (var i = 0; i < fields.length; i++) {
+          var raw = obj && obj[fields[i]];
+          if (typeof raw === "string" && isVideoUrl(raw)) return raw.trim();
+        }
+        return "";
+      }
+      function pickCoverUrl(obj) {
+        var fields = ["coverUrl", "coverURL", "coverImage", "cover", "poster", "preview", "thumbnail", "image", "src"];
+        for (var i = 0; i < fields.length; i++) {
+          var raw = obj && obj[fields[i]];
+          if (typeof raw === "string" && isHttpUrl(raw) && !isVideoUrl(raw)) return raw.trim();
+        }
+        return "";
+      }
+      function pickVideoTitle(obj) {
+        var raw = obj && (obj.title || obj.name || obj.caption);
+        return typeof raw === "string" ? String(raw).replace(/\s+/g, " ").trim().slice(0, 200) : "";
+      }
+      function addSourceVideo(target, entry) {
+        if (!entry || !entry.url || !isHttpUrl(entry.url)) return;
+        for (var i = 0; i < target.length; i++) {
+          if (target[i].url === entry.url) return;
+        }
+        var next = { url: entry.url };
+        if (entry.coverUrl && isHttpUrl(entry.coverUrl)) next.coverUrl = entry.coverUrl;
+        if (entry.title) next.title = entry.title;
+        target.push(next);
+      }
+      function visitVideoValue(value, target, seen, depth) {
+        if (value == null || depth > 8 || target.length >= 10) return;
+        if (typeof value !== "object") return;
+        if (seen.indexOf(value) >= 0) return;
+        seen.push(value);
+        if (Array.isArray(value)) {
+          for (var i = 0; i < value.length; i++) visitVideoValue(value[i], target, seen, depth + 1);
+          return;
+        }
+        var url = pickVideoUrl(value);
+        if (url) addSourceVideo(target, { url: url, coverUrl: pickCoverUrl(value), title: pickVideoTitle(value) });
+        var keys = Object.keys(value);
+        for (var k = 0; k < keys.length; k++) visitVideoValue(value[keys[k]], target, seen, depth + 1);
+      }
+      function extractSourceVideosFromWidget(key, state, target) {
+        if (!state || typeof state !== "object") return;
+        if (!/(video|видео|gallery|media|rich)/i.test(key)) return;
+        visitVideoValue(state, target, [], 0);
+      }
 
       // 强制俄语：language=ru 放进内嵌 url，避免被中文 cookie 覆盖
       var productPath = requestedPath || ("/product/" + pid + "/?language=ru");
@@ -1826,6 +1883,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
       var currency = null;
       var description = "";
       var richDescriptionJson = null;
+      var sourceVideos = [];
       var brand = null;
       var category = null;
       var attributes = [];
@@ -1883,6 +1941,8 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
             richDescriptionJson = firstDescriptionPayload.richJson;
           }
         }
+
+        extractSourceVideosFromWidget(k, st, sourceVideos);
 
         if (!category && /^breadCrumbs/.test(k) && st && Array.isArray(st.breadcrumbs) && st.breadcrumbs.length) {
           category = st.breadcrumbs[st.breadcrumbs.length - 1].text || null;
@@ -2123,6 +2183,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
                 richDescriptionJson = descriptionPayload.richJson;
               }
             }
+            extractSourceVideosFromWidget(dKey, dState, sourceVideos);
             if (/^(webShortCharacteristics|webCharacteristics|characteristics)/.test(dKey) && dState) {
               var dChars = dState.characteristics;
               if (Array.isArray(dChars)) {
@@ -2185,6 +2246,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
           currency: currency || fallbackCurrencyByHost(location.hostname),
           description: typeof description === "string" ? description.slice(0, 5000) : "",
           richDescriptionJson: richDescriptionJson ? JSON.stringify(richDescriptionJson).slice(0, 30000) : null,
+          sourceVideos: sourceVideos.length ? sourceVideos : null,
           brand: brand,
           category: category,
           attributes: attributes,
@@ -2485,6 +2547,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
       currency: p.currency || "RUB",
       description: p.description || "",
       richDescriptionJson: p.richDescriptionJson || null,
+      sourceVideos: p.sourceVideos || null,
       sku: String(p.productId),
       sourceProductId: String(p.productId),
       attributes: p.attributes,

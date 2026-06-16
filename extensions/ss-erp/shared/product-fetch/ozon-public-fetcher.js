@@ -56,6 +56,7 @@
       currency: null,
       description: '',
       richDescriptionJson: null,
+      sourceVideos: [],
       brand: null,
       category: null,
       attributes: [],
@@ -70,6 +71,7 @@
       extractImages(key, s, result);
       extractPrice(key, s, result);
       extractDescription(key, s, result);
+      extractVideos(key, s, result);
       extractBreadcrumbs(key, s, result);
       extractCharacteristics(key, s, result);
     }
@@ -180,6 +182,90 @@
       if (next && next.length > text.length) text = next;
     }
     return { text: text, richJson: richJson };
+  }
+
+  function extractVideos(key, s, r) {
+    if (!s || typeof s !== 'object') return;
+    if (!/(video|видео|gallery|media|rich)/i.test(key)) return;
+    var found = collectVideoEntries(s);
+    for (var i = 0; i < found.length; i++) {
+      addSourceVideo(r.sourceVideos, found[i]);
+    }
+  }
+
+  function collectVideoEntries(value) {
+    var entries = [];
+    visitVideoValue(value, entries, [], 0);
+    return entries;
+  }
+
+  function visitVideoValue(value, entries, seen, depth) {
+    if (value == null || depth > 8 || entries.length >= 10) return;
+    if (typeof value !== 'object') return;
+    if (seen.indexOf(value) >= 0) return;
+    seen.push(value);
+
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i++) visitVideoValue(value[i], entries, seen, depth + 1);
+      return;
+    }
+
+    var videoUrl = pickVideoUrl(value);
+    if (videoUrl) {
+      entries.push({
+        url: videoUrl,
+        coverUrl: pickCoverUrl(value),
+        title: pickVideoTitle(value)
+      });
+    }
+
+    var keys = Object.keys(value);
+    for (var k = 0; k < keys.length; k++) {
+      visitVideoValue(value[keys[k]], entries, seen, depth + 1);
+    }
+  }
+
+  function pickVideoUrl(obj) {
+    var fields = ['videoUrl', 'videoURL', 'video', 'mp4', 'hls', 'src', 'url', 'link'];
+    for (var i = 0; i < fields.length; i++) {
+      var raw = obj && obj[fields[i]];
+      if (typeof raw === 'string' && isVideoUrl(raw)) return raw.trim();
+    }
+    return '';
+  }
+
+  function pickCoverUrl(obj) {
+    var fields = ['coverUrl', 'coverURL', 'coverImage', 'cover', 'poster', 'preview', 'thumbnail', 'image', 'src'];
+    for (var i = 0; i < fields.length; i++) {
+      var raw = obj && obj[fields[i]];
+      if (typeof raw === 'string' && isHttpUrl(raw) && !isVideoUrl(raw)) return raw.trim();
+    }
+    return '';
+  }
+
+  function pickVideoTitle(obj) {
+    var raw = obj && (obj.title || obj.name || obj.caption);
+    return typeof raw === 'string' ? normalizeText(raw).slice(0, 200) : '';
+  }
+
+  function addSourceVideo(target, entry) {
+    if (!entry || !entry.url || !isHttpUrl(entry.url)) return;
+    for (var i = 0; i < target.length; i++) {
+      if (target[i].url === entry.url) return;
+    }
+    var next = { url: entry.url };
+    if (entry.coverUrl && isHttpUrl(entry.coverUrl)) next.coverUrl = entry.coverUrl;
+    if (entry.title) next.title = entry.title;
+    target.push(next);
+  }
+
+  function isHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value || '').trim());
+  }
+
+  function isVideoUrl(value) {
+    var text = String(value || '').trim();
+    return isHttpUrl(text) && (/\.(?:mp4|m3u8|webm|mov)(?:[?#].*)?$/i.test(text) || /(?:stream|playlist)/i.test(text));
   }
 
   function extractTextFromRichValue(value) {

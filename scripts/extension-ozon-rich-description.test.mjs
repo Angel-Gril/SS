@@ -26,6 +26,13 @@ const richAnnotationJson = {
 const result = sandbox.OZON_PUBLIC_FETCHER.parseWidgetStates(123456789, {
   widgetStates: {
     webProductHeading: JSON.stringify({ title: 'Фигурка тестовая' }),
+    webGallery: JSON.stringify({
+      videos: [{
+        videoUrl: 'https://cdn.example.com/video/product-demo.mp4',
+        coverUrl: 'https://cdn.example.com/video/product-demo-cover.jpg',
+        title: 'Обзор товара',
+      }],
+    }),
     webRichAnnotation: JSON.stringify({
       richAnnotation: {
         children: [
@@ -42,5 +49,10 @@ assert.equal(result.ok, true);
 assert.match(result.description, /Коллекционная фигурка|Короткое описание/);
 assert.match(result.description, /Материал пластик|Высота 14 см/);
 assert.equal(result.richDescriptionJson, JSON.stringify(richAnnotationJson));
+assert.deepEqual(JSON.parse(JSON.stringify(result.sourceVideos)), [{
+  url: 'https://cdn.example.com/video/product-demo.mp4',
+  coverUrl: 'https://cdn.example.com/video/product-demo-cover.jpg',
+  title: 'Обзор товара',
+}]);
 
-console.log('PASS Ozon rich description extraction');
+console.log('PASS Ozon rich description and video extraction');

@@ -216,6 +216,7 @@
     let oldPrice = null;
     let description = "";
     let richDescriptionJson = null;
+    const sourceVideos = [];
     let brand = null;
     let category = null;
     const attributes = [];
@@ -266,6 +267,7 @@
           richDescriptionJson = descriptionPayload.richJson;
         }
       }
+      extractVideos(k, st, sourceVideos);
       if (!category && /^breadCrumbs/.test(k) && st && Array.isArray(st.breadcrumbs) && st.breadcrumbs.length) {
         category = st.breadcrumbs[st.breadcrumbs.length - 1].text || null;
       }
@@ -320,6 +322,7 @@
       oldPriceValue: oldPrice ? Number(oldPrice) : 0,
       description: typeof description === "string" ? description.slice(0, 5000) : "",
       richDescriptionJson: richDescriptionJson ? JSON.stringify(richDescriptionJson).slice(0, 30000) : null,
+      sourceVideos: sourceVideos.length ? sourceVideos : null,
       brand,
       categoryName: category,
       attributes,
@@ -348,6 +351,73 @@
       if (next && next.length > text.length) text = next;
     }
     return { text, richJson };
+  }
+
+  function extractVideos(key, state, target) {
+    if (!state || typeof state !== "object") return;
+    if (!/(video|видео|gallery|media|rich)/i.test(key)) return;
+    visitVideoValue(state, target, new Set(), 0);
+  }
+
+  function visitVideoValue(value, target, seen, depth) {
+    if (value == null || depth > 8 || target.length >= 10) return;
+    if (typeof value !== "object") return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) visitVideoValue(item, target, seen, depth + 1);
+      return;
+    }
+
+    const url = pickVideoUrl(value);
+    if (url) addSourceVideo(target, {
+      url,
+      coverUrl: pickCoverUrl(value),
+      title: pickVideoTitle(value)
+    });
+
+    for (const child of Object.values(value)) {
+      visitVideoValue(child, target, seen, depth + 1);
+    }
+  }
+
+  function pickVideoUrl(obj) {
+    for (const field of ["videoUrl", "videoURL", "video", "mp4", "hls", "src", "url", "link"]) {
+      const raw = obj && obj[field];
+      if (typeof raw === "string" && isVideoUrl(raw)) return raw.trim();
+    }
+    return "";
+  }
+
+  function pickCoverUrl(obj) {
+    for (const field of ["coverUrl", "coverURL", "coverImage", "cover", "poster", "preview", "thumbnail", "image", "src"]) {
+      const raw = obj && obj[field];
+      if (typeof raw === "string" && isHttpUrl(raw) && !isVideoUrl(raw)) return raw.trim();
+    }
+    return "";
+  }
+
+  function pickVideoTitle(obj) {
+    const raw = obj && (obj.title || obj.name || obj.caption);
+    return typeof raw === "string" ? normalizeWhitespace(raw).slice(0, 200) : "";
+  }
+
+  function addSourceVideo(target, entry) {
+    if (!entry || !entry.url || !isHttpUrl(entry.url)) return;
+    if (target.some((video) => video.url === entry.url)) return;
+    const next = { url: entry.url };
+    if (entry.coverUrl && isHttpUrl(entry.coverUrl)) next.coverUrl = entry.coverUrl;
+    if (entry.title) next.title = entry.title;
+    target.push(next);
+  }
+
+  function isHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value || "").trim());
+  }
+
+  function isVideoUrl(value) {
+    const text = String(value || "").trim();
+    return isHttpUrl(text) && (/\.(?:mp4|m3u8|webm|mov)(?:[?#].*)?$/i.test(text) || /(?:stream|playlist)/i.test(text));
   }
 
   function extractTextFromRichValue(value) {

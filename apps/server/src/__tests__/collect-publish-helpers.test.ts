@@ -26,6 +26,7 @@ import {
   syncOzonTitleAttribute,
   sanitizePublishDescription,
   syncOzonVariantGroupingAttributes,
+  normalizeCollectedSourceVideos,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -180,6 +181,27 @@ describe('collect publish helpers', () => {
       notes: '重量: 500g\n  Краткое описание из заметок  ',
       metadata: {},
     })).toBe('Краткое описание из заметок');
+  });
+
+  it('normalizes collected source video metadata without keeping invalid rows', () => {
+    expect(normalizeCollectedSourceVideos([
+      {
+        videoUrl: ' https://cdn.example.com/video/demo.mp4 ',
+        coverUrl: 'https://cdn.example.com/video/demo-cover.jpg',
+        title: 'Обзор товара',
+      },
+      {
+        url: 'https://cdn.example.com/video/demo.mp4',
+        cover: 'https://cdn.example.com/video/duplicate-cover.jpg',
+      },
+      {
+        coverUrl: 'https://cdn.example.com/video/no-video.jpg',
+      },
+    ])).toEqual([{
+      url: 'https://cdn.example.com/video/demo.mp4',
+      coverUrl: 'https://cdn.example.com/video/demo-cover.jpg',
+      title: 'Обзор товара',
+    }]);
   });
 
   it('keeps composite Ozon dictionary values as multiple values instead of collapsing to the first color', () => {
