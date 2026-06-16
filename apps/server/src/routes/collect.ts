@@ -117,6 +117,52 @@ export function cleanPublishName(value: unknown): string {
     .trim();
 }
 
+function extractOzonSlugTitleFromUrl(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw, 'https://www.ozon.ru');
+    const match = url.pathname.match(/^\/product\/([^/?#]+)/i);
+    if (!match?.[1] || /^\d+$/.test(match[1])) return '';
+    const decoded = decodeURIComponent(match[1])
+      .replace(/[-_]\d{6,}$/i, '')
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!decoded || containsCjkText(decoded)) return '';
+    const cleaned = cleanPublishName(decoded);
+    if (!cleaned) return '';
+    return cleaned.charAt(0).toLocaleUpperCase('ru-RU') + cleaned.slice(1);
+  } catch {
+    return '';
+  }
+}
+
+export function resolveCollectedDisplayTitle(input: {
+  title?: unknown;
+  publishTitle?: unknown;
+  sourceTitleRaw?: unknown;
+  sourceUrl?: unknown;
+  sourceProductId?: unknown;
+  sku?: unknown;
+}): string {
+  const candidates = [
+    input.title,
+    input.publishTitle,
+    input.sourceTitleRaw,
+  ];
+  for (const candidate of candidates) {
+    const cleaned = cleanPublishName(candidate);
+    if (cleaned && !containsCjkText(cleaned)) return cleaned.slice(0, 200);
+  }
+
+  const slugTitle = extractOzonSlugTitleFromUrl(input.sourceUrl);
+  if (slugTitle) return slugTitle.slice(0, 200);
+
+  const sku = normalizeProductId(input.sourceProductId || input.sku);
+  return sku ? `Ozon SKU ${sku}` : 'Ozon product title needs review';
+}
+
 function hasVolumeInTitle(value: string): boolean {
   return /(^|[^\p{L}\p{N}])\d{1,5}(?:[,.]\d+)?\s*(?:мл|ml)($|[^\p{L}])/iu.test(value);
 }
@@ -1274,12 +1320,20 @@ export async function collectRoutes(app: FastifyInstance) {
     const sourceDescription = sanitizePublishDescription(d.description);
     const notes = [weightNote, sourceDescription.slice(0, 500)].filter(Boolean).join('\n') || null;
     const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(d);
+    const displayTitle = resolveCollectedDisplayTitle({
+      title: d.title,
+      publishTitle: d.publishTitle,
+      sourceTitleRaw: d.sourceTitleRaw,
+      sourceUrl: d.sourceUrl,
+      sourceProductId,
+      sku: d.sku,
+    });
 
     const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
     const item = await prisma.supplyGoods.create({
       data: {
         user: { connect: { id: userId } },
-        title: d.title,
+        title: displayTitle,
         sourceUrl: d.sourceUrl || null,
         sourcePlatform: d.sourcePlatform || 'ozon',
         sourceProductId,
@@ -1339,11 +1393,19 @@ export async function collectRoutes(app: FastifyInstance) {
         console.log(`[batch-collect] SKU=${item.sku} | modelId=${item.modelId || 'none'} | variants=${hasVariants ? item.variants.length : 0} | ozonAttributes=${Array.isArray(item.ozonAttributes) ? item.ozonAttributes.length : 'NONE'}`);
 
         const priceInfo = await resolveCollectedPrice(item.priceText || item.price, item.currency, item.sourceUrl);
+        const displayTitle = resolveCollectedDisplayTitle({
+          title: item.title,
+          publishTitle: item.publishTitle,
+          sourceTitleRaw: item.sourceTitleRaw,
+          sourceUrl: item.sourceUrl,
+          sourceProductId,
+          sku: item.sku,
+        });
 
         await prisma.supplyGoods.create({
           data: {
             user: { connect: { id: userId } },
-            title: item.title || '未命名商品',
+            title: displayTitle,
             sourceUrl: item.sourceUrl || null,
             sourcePlatform: item.sourcePlatform || 'ozon',
             sourceProductId,

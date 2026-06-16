@@ -23,6 +23,7 @@ import {
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
   buildCollectedGoodsMetadata,
+  resolveCollectedDisplayTitle,
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
   sanitizePublishDescription,
@@ -63,6 +64,21 @@ describe('collect publish helpers', () => {
       sourceTitleRaw: '中国风墙面装饰',
       sourceLocale: 'ru',
     })).not.toHaveProperty('publishTitleRu');
+  });
+
+  it('does not keep Chinese Ozon translated titles as collected display titles', () => {
+    expect(resolveCollectedDisplayTitle({
+      title: '室内装饰品',
+      publishTitle: '室内装饰品',
+      sourceTitleRaw: '室内装饰品',
+      sourceUrl: 'https://www.ozon.ru/product/6-rafiya-ruchnoy-rabotydekor-na-stenu-dlya-interera-1616509508/',
+      sourceProductId: '1616509508',
+    })).toBe('Rafiya ruchnoy rabotydekor na stenu dlya interera');
+
+    expect(resolveCollectedDisplayTitle({
+      title: '室内装饰品',
+      sourceProductId: '1616509508',
+    })).toBe('Ozon SKU 1616509508');
   });
 
   it('flags repeated keyword spam titles before Ozon rejects the card', () => {
