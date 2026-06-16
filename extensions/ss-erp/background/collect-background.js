@@ -422,6 +422,21 @@ function sanitizeCollectedOzonVariantAttrs(variants) {
   return variants;
 }
 
+function collectedOzonVariantsNeedSellerRepair(variants) {
+  const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+  const containsCjk = specHelper && typeof specHelper.containsCjkText === "function"
+    ? specHelper.containsCjkText
+    : containsCjkText;
+  if (!Array.isArray(variants)) return false;
+  return variants.some((variant) => {
+    const attrs = variant && variant.attrs && typeof variant.attrs === "object" && !Array.isArray(variant.attrs)
+      ? variant.attrs
+      : null;
+    if (!attrs) return false;
+    return Object.entries(attrs).some(([key, value]) => containsCjk(key) || containsCjk(value));
+  });
+}
+
 function mergeCollectedOzonVariantLists(baseVariants, incomingVariants) {
   const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
   if (specHelper && typeof specHelper.mergeOzonVariantLists === "function") {
@@ -2607,7 +2622,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
           }
         } catch (e) {}
 
-        if (collectPolicy.fetchVariantSellerInsights && Array.isArray(productData.variants) && productData.variants.length > 0) {
+        if ((collectPolicy.fetchVariantSellerInsights || collectedOzonVariantsNeedSellerRepair(productData.variants)) && Array.isArray(productData.variants) && productData.variants.length > 0) {
           const subPids = productData.variants
             .map((v) => v && v.sku ? String(v.sku) : null)
             .filter((s) => s && s !== String(pid));

@@ -18,6 +18,51 @@
     return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
   }
 
+  const CHINESE_COLOR_VALUE_RU = {
+    '卡其': 'хаки',
+    '卡其色': 'хаки',
+    '浅天蓝': 'светло-голубой',
+    '浅天蓝色': 'светло-голубой',
+    '天蓝': 'голубой',
+    '天蓝色': 'голубой',
+    '藏青': 'темно-синий',
+    '藏青色': 'темно-синий',
+    '灰': 'серый',
+    '灰色': 'серый',
+    '蓝': 'синий',
+    '蓝色': 'синий',
+    '黑': 'черный',
+    '黑色': 'черный',
+    '白': 'белый',
+    '白色': 'белый',
+    '米色': 'бежевый',
+    '浅米色': 'светло-бежевый',
+    '咖啡': 'коричневый',
+    '咖啡色': 'коричневый',
+    '棕': 'коричневый',
+    '棕色': 'коричневый',
+    '红': 'красный',
+    '红色': 'красный',
+    '粉': 'розовый',
+    '粉色': 'розовый',
+    '绿': 'зеленый',
+    '绿色': 'зеленый',
+    '黄': 'желтый',
+    '黄色': 'желтый',
+    '紫': 'фиолетовый',
+    '紫色': 'фиолетовый',
+  };
+
+  const OZON_ATTR_NAME_BY_ID = {
+    '10096': 'Цвет',
+    '10097': 'Название цвета',
+    '4295': 'Российский размер',
+    '9533': 'Размер производителя',
+    '9688': 'Размер производителя',
+    '9689': 'Российский размер',
+    '9695': 'Российский размер',
+  };
+
   function readOzonAttributeValue(attribute) {
     const values = attribute && Array.isArray(attribute.values) ? attribute.values : [];
     const parts = [];
@@ -29,12 +74,15 @@
   }
 
   function readOzonAttributeName(attribute) {
-    return cleanText(attribute && (
+    const explicit = cleanText(attribute && (
       attribute.attribute_name
       || attribute.name
       || attribute.attributeName
       || attribute.title
     ));
+    if (explicit) return explicit;
+    const id = attribute && (attribute.attribute_id != null ? attribute.attribute_id : attribute.id);
+    return OZON_ATTR_NAME_BY_ID[String(id)] || '';
   }
 
   function variantAttrKind(name) {
@@ -48,6 +96,39 @@
     return '';
   }
 
+  function normalizePublicVariantAttrName(name) {
+    const text = cleanText(name);
+    if (!containsCjkText(text)) return text;
+    const kind = variantAttrKind(text);
+    if (kind === 'color') return 'Цвет';
+    if (kind === 'size') return 'Размер';
+    if (kind === 'volume') return 'Объем';
+    if (kind === 'scent') return 'Аромат';
+    if (kind === 'model') return 'Модель';
+    return text;
+  }
+
+  function normalizePublicVariantAttrValue(name, value) {
+    const text = cleanText(value);
+    if (!text) return '';
+    const kind = variantAttrKind(name);
+    if (!containsCjkText(text)) return text;
+    if (kind === 'color') {
+      const normalized = text.replace(/\s+/g, '');
+      return CHINESE_COLOR_VALUE_RU[normalized] || '';
+    }
+    if (kind === 'size') {
+      const cleaned = text
+        .replace(/系列/g, '')
+        .replace(/尺码/g, '')
+        .replace(/尺寸/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return containsCjkText(cleaned) ? '' : cleaned;
+    }
+    return '';
+  }
+
   function findOzonAttributeForVariantAttr(attrName, ozonAttributes, usedNames) {
     const attrs = Array.isArray(ozonAttributes) ? ozonAttributes : [];
     const sourceKind = variantAttrKind(attrName);
@@ -56,7 +137,7 @@
       const attr = attrs[i];
       const name = readOzonAttributeName(attr);
       const value = readOzonAttributeValue(attr);
-      if (!name || !value || containsCjkText(name) || usedNames.has(name)) continue;
+      if (!name || !value || containsCjkText(name)) continue;
       const nameLower = name.toLowerCase();
       if (sourceName && nameLower === sourceName) return attr;
       if (sourceKind && variantAttrKind(name) === sourceKind) return attr;
@@ -71,19 +152,22 @@
       : {};
     const nextAttrs = {};
     const dropped = [];
+    const officialCandidates = [];
 
     Object.keys(attrs).forEach((key) => {
       const value = attrs[key];
-      if (containsCjkText(key) || containsCjkText(value)) {
+      const hadCjk = containsCjkText(key) || containsCjkText(value);
+      const cleanKey = normalizePublicVariantAttrName(key);
+      const cleanValue = normalizePublicVariantAttrValue(cleanKey || key, value);
+      if (!cleanKey || !cleanValue || containsCjkText(cleanKey) || containsCjkText(cleanValue)) {
         dropped.push({ key, value });
         return;
       }
-      const cleanKey = cleanText(key);
-      const cleanValue = cleanText(value);
       if (cleanKey && cleanValue) nextAttrs[cleanKey] = cleanValue;
+      if (hadCjk) officialCandidates.push({ key, value });
     });
 
-    if (!dropped.length) {
+    if (!dropped.length && !officialCandidates.length) {
       const clean = { ...variant, attrs: nextAttrs };
       delete clean._variantAttrsWarning;
       return clean;
@@ -91,7 +175,7 @@
 
     const usedNames = new Set(Object.keys(nextAttrs));
     let repaired = 0;
-    dropped.forEach((entry) => {
+    officialCandidates.concat(dropped).forEach((entry) => {
       const official = findOzonAttributeForVariantAttr(entry.key, variant.ozonAttributes, usedNames);
       if (!official) return;
       const name = readOzonAttributeName(official);
@@ -99,7 +183,7 @@
       if (!name || !value) return;
       nextAttrs[name] = value;
       usedNames.add(name);
-      repaired += 1;
+      if (dropped.indexOf(entry) >= 0) repaired += 1;
     });
 
     const clean = { ...variant, attrs: nextAttrs };

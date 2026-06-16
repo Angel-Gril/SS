@@ -51,7 +51,7 @@ test('drops Chinese Ozon variant attrs when seller attributes cannot repair them
   const variant = {
     sku: '123456789',
     attrs: {
-      '颜色': '咖啡色',
+      '颜色': '未知花色',
       'Размер': '52 RU / XL',
     },
   };
@@ -64,6 +64,25 @@ test('drops Chinese Ozon variant attrs when seller attributes cannot repair them
   assert.equal(repaired._variantAttrsWarning, '变体属性含中文，已移除无法自动修复的字段');
 });
 
+test('translates common Chinese public Ozon color attrs before saving variants', () => {
+  const spec = loadVariantSpec();
+  const variant = {
+    sku: '3558932214',
+    attrs: {
+      'Цвет': '蓝色',
+      'Размер': '54 RU / XXL系列',
+    },
+  };
+
+  const repaired = spec.sanitizeOzonVariantAttrs(variant);
+
+  assert.deepEqual(plain(repaired.attrs), {
+    'Цвет': 'синий',
+    'Размер': '54 RU / XXL',
+  });
+  assert.equal(repaired._variantAttrsWarning, undefined);
+});
+
 test('sanitizes Ozon variant attrs before ERP collection payload is saved', () => {
   const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 
@@ -71,5 +90,15 @@ test('sanitizes Ozon variant attrs before ERP collection payload is saved', () =
   assert.match(
     source,
     /productData\.variants\s*=\s*sanitizeCollectedOzonVariantAttrs\(productData\.variants\);[\s\S]*collected\.push\(productData\);/
+  );
+});
+
+test('fetches seller variant details in quick mode when Ozon public variant attrs are translated', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(source, /collectedOzonVariantsNeedSellerRepair/);
+  assert.match(
+    source,
+    /collectPolicy\.fetchVariantSellerInsights\s*\|\|\s*collectedOzonVariantsNeedSellerRepair\(productData\.variants\)/
   );
 });
