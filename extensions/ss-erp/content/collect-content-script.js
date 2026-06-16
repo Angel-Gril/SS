@@ -215,6 +215,7 @@
     let price = null;
     let oldPrice = null;
     let description = "";
+    let richDescriptionJson = null;
     let brand = null;
     let category = null;
     const attributes = [];
@@ -256,8 +257,14 @@
           }
         }
       }
-      if (!description && /^(webDescription|webRichAnnotation|description)/.test(k) && st) {
-        description = st.richAnnotation || st.description || st.text || "";
+      if (/^(webDescription|webRichAnnotation|description)/.test(k) && st) {
+        const descriptionPayload = extractDescriptionPayload(st);
+        if (descriptionPayload.text && (!description || descriptionPayload.text.length > description.length)) {
+          description = descriptionPayload.text;
+        }
+        if (!richDescriptionJson && descriptionPayload.richJson) {
+          richDescriptionJson = descriptionPayload.richJson;
+        }
       }
       if (!category && /^breadCrumbs/.test(k) && st && Array.isArray(st.breadcrumbs) && st.breadcrumbs.length) {
         category = st.breadcrumbs[st.breadcrumbs.length - 1].text || null;
@@ -311,7 +318,8 @@
       pagePriceCurrency: currency,
       currentPriceValue: price ? Number(price) : 0,
       oldPriceValue: oldPrice ? Number(oldPrice) : 0,
-      description: typeof description === "string" ? description.slice(0, 2000) : "",
+      description: typeof description === "string" ? description.slice(0, 5000) : "",
+      richDescriptionJson: richDescriptionJson ? JSON.stringify(richDescriptionJson).slice(0, 30000) : null,
       brand,
       categoryName: category,
       attributes,
@@ -323,6 +331,52 @@
       warnings: [],
       collectedAt: new Date().toISOString()
     };
+  }
+
+  function extractDescriptionPayload(state) {
+    const richJson = state.richAnnotationJson || (typeof state.richAnnotation === "object" ? state.richAnnotation : null);
+    const candidates = [
+      state.richAnnotation,
+      state.description,
+      state.text,
+      state.content,
+      richJson
+    ];
+    let text = "";
+    for (const candidate of candidates) {
+      const next = extractTextFromRichValue(candidate);
+      if (next && next.length > text.length) text = next;
+    }
+    return { text, richJson };
+  }
+
+  function extractTextFromRichValue(value) {
+    const parts = [];
+    const seen = new Set();
+    visitRichValue(value, parts, seen, 0);
+    return normalizeWhitespace(parts.join("\n")).slice(0, 5000);
+  }
+
+  function visitRichValue(value, parts, seen, depth) {
+    if (value == null || depth > 8) return;
+    if (typeof value === "string") {
+      const text = normalizeWhitespace(value);
+      if (text) parts.push(text);
+      return;
+    }
+    if (typeof value !== "object") return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) visitRichValue(item, parts, seen, depth + 1);
+      return;
+    }
+    const preferredKeys = ["content", "text", "value", "title", "description", "children", "items", "blocks", "nodes"];
+    for (const key of preferredKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        visitRichValue(value[key], parts, seen, depth + 1);
+      }
+    }
   }
 
   // 占位实现：扫描 widgetStates 找 model_id 和 variants 候选 widget

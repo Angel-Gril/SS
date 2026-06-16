@@ -55,6 +55,7 @@
       oldPrice: null,
       currency: null,
       description: '',
+      richDescriptionJson: null,
       brand: null,
       category: null,
       attributes: [],
@@ -157,12 +158,57 @@
   }
 
   function extractDescription(key, s, r) {
-    if (r.description) return;
     if (!/^(webDescription|webRichAnnotation|description)/.test(key)) return;
     if (!s) return;
-    if (typeof s.richAnnotation === 'string') r.description = s.richAnnotation;
-    else if (typeof s.description === 'string') r.description = s.description;
-    else if (typeof s.text === 'string') r.description = s.text;
+    var payload = extractDescriptionPayload(s);
+    if (payload.text && (!r.description || payload.text.length > r.description.length)) {
+      r.description = payload.text.slice(0, 5000);
+    }
+    if (!r.richDescriptionJson && payload.richJson) {
+      try {
+        r.richDescriptionJson = JSON.stringify(payload.richJson).slice(0, 30000);
+      } catch (e) {}
+    }
+  }
+
+  function extractDescriptionPayload(state) {
+    var richJson = state.richAnnotationJson || (state.richAnnotation && typeof state.richAnnotation === 'object' ? state.richAnnotation : null);
+    var candidates = [state.richAnnotation, state.description, state.text, state.content, richJson];
+    var text = '';
+    for (var i = 0; i < candidates.length; i++) {
+      var next = extractTextFromRichValue(candidates[i]);
+      if (next && next.length > text.length) text = next;
+    }
+    return { text: text, richJson: richJson };
+  }
+
+  function extractTextFromRichValue(value) {
+    var parts = [];
+    visitRichValue(value, parts, [], 0);
+    return normalizeText(parts.join('\n')).slice(0, 5000);
+  }
+
+  function visitRichValue(value, parts, seen, depth) {
+    if (value == null || depth > 8) return;
+    if (typeof value === 'string') {
+      var text = normalizeText(value);
+      if (text) parts.push(text);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    if (seen.indexOf(value) >= 0) return;
+    seen.push(value);
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i++) visitRichValue(value[i], parts, seen, depth + 1);
+      return;
+    }
+    var preferredKeys = ['content', 'text', 'value', 'title', 'description', 'children', 'items', 'blocks', 'nodes'];
+    for (var k = 0; k < preferredKeys.length; k++) {
+      var key = preferredKeys[k];
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        visitRichValue(value[key], parts, seen, depth + 1);
+      }
+    }
   }
 
   function extractBreadcrumbs(key, s, r) {
@@ -205,6 +251,24 @@
 
   function normalizePrice(raw) {
     return raw.replace(/[^\d.,]/g, '').replace(/\s/g, '').replace(',', '.');
+  }
+
+  function normalizeText(value) {
+    return String(value || '')
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n\s+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 
   function fetchOzonProductBatch(productIds, onProgress) {

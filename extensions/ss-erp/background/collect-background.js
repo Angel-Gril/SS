@@ -48,6 +48,60 @@ function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
 }
 
+function normalizeRichDescriptionText(value) {
+  return String(value || "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function visitRichDescriptionValue(value, parts, seen, depth) {
+  if (value == null || depth > 8) return;
+  if (typeof value === "string") {
+    const text = normalizeRichDescriptionText(value);
+    if (text) parts.push(text);
+    return;
+  }
+  if (typeof value !== "object") return;
+  if (seen.indexOf(value) >= 0) return;
+  seen.push(value);
+  if (Array.isArray(value)) {
+    for (const item of value) visitRichDescriptionValue(item, parts, seen, depth + 1);
+    return;
+  }
+  const preferredKeys = ["content", "text", "value", "title", "description", "children", "items", "blocks", "nodes"];
+  for (const key of preferredKeys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      visitRichDescriptionValue(value[key], parts, seen, depth + 1);
+    }
+  }
+}
+
+function extractRichDescriptionPayload(state) {
+  if (!state || typeof state !== "object") return { text: "", richJson: null };
+  const richJson = state.richAnnotationJson || (state.richAnnotation && typeof state.richAnnotation === "object" ? state.richAnnotation : null);
+  const candidates = [state.richAnnotation, state.description, state.text, state.content, richJson];
+  let text = "";
+  for (const candidate of candidates) {
+    const parts = [];
+    visitRichDescriptionValue(candidate, parts, [], 0);
+    const next = normalizeRichDescriptionText(parts.join("\n")).slice(0, 5000);
+    if (next && next.length > text.length) text = next;
+  }
+  return { text, richJson };
+}
+
 function resolveOzonCollectionPolicy(options) {
   if (globalThis.SS_ERP_OZON_COLLECTION_POLICY && typeof globalThis.SS_ERP_OZON_COLLECTION_POLICY.resolveOzonCollectionPolicy === "function") {
     return globalThis.SS_ERP_OZON_COLLECTION_POLICY.resolveOzonCollectionPolicy(options);
@@ -1524,6 +1578,7 @@ async function aggregateOzonProductInsights(productId) {
           modelId: d.modelId,
           attributes: d.attributes,
           description: d.description,
+          richDescriptionJson: d.richDescriptionJson || item.richDescriptionJson,
         });
       } else {
         recordInsightSourceError(sourceErrors, "public-entrypoint", (pub && pub.error) || "OZON 公开商品接口无数据");
@@ -1820,12 +1875,12 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
         }
 
         if (/^(webDescription|webRichAnnotation|description)/.test(k) && st) {
-          var firstDescriptionCandidate = st.richAnnotation || st.description || st.text || "";
-          if (firstDescriptionCandidate && (!description || firstDescriptionCandidate.length > description.length)) {
-            description = firstDescriptionCandidate;
+          var firstDescriptionPayload = extractRichDescriptionPayload(st);
+          if (firstDescriptionPayload.text && (!description || firstDescriptionPayload.text.length > description.length)) {
+            description = firstDescriptionPayload.text;
           }
-          if (!richDescriptionJson && st.richAnnotationJson) {
-            richDescriptionJson = st.richAnnotationJson;
+          if (!richDescriptionJson && firstDescriptionPayload.richJson) {
+            richDescriptionJson = firstDescriptionPayload.richJson;
           }
         }
 
@@ -2060,12 +2115,12 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
             var dState;
             try { dState = JSON.parse(descriptionStates[dKey]); } catch (e) { continue; }
             if (/^(webDescription|webRichAnnotation|description)/.test(dKey) && dState) {
-              var descriptionCandidate = dState.richAnnotation || dState.description || dState.text || "";
-              if (descriptionCandidate && (!description || descriptionCandidate.length > description.length)) {
-                description = descriptionCandidate;
+              var descriptionPayload = extractRichDescriptionPayload(dState);
+              if (descriptionPayload.text && (!description || descriptionPayload.text.length > description.length)) {
+                description = descriptionPayload.text;
               }
-              if (!richDescriptionJson && dState.richAnnotationJson) {
-                richDescriptionJson = dState.richAnnotationJson;
+              if (!richDescriptionJson && descriptionPayload.richJson) {
+                richDescriptionJson = descriptionPayload.richJson;
               }
             }
             if (/^(webShortCharacteristics|webCharacteristics|characteristics)/.test(dKey) && dState) {
