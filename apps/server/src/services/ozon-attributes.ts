@@ -1,4 +1,5 @@
-const SKIP_ATTRS = new Set(['22057', '11254', '23171']);
+const SKIP_ATTRS = new Set(['22057', '11254', '23171', '22336']);
+const UNSAFE_CLONED_ATTR_NAME_RE = /(видео|video|обложк|cover|rich|медиа|media|мультимеди|видеофон|background|banner|баннер|视频|封面|富文本|富媒体)/i;
 
 export interface OzonImportAttribute {
   id: number;
@@ -18,7 +19,7 @@ export function convertOzonRawAttrs(
 ): OzonImportAttribute[] {
   if (!Array.isArray(rawAttrs)) return [];
   return rawAttrs
-    .filter((x: any) => !SKIP_ATTRS.has(String(x.attribute_id)))
+    .filter((x: any) => !shouldSkipOzonPublishAttr(x))
     .filter((x: any) => followBrand || String(x.attribute_id) !== '85')
     .map((x: any) => ({
       id: Number(x.attribute_id),
@@ -32,4 +33,17 @@ export function convertOzonRawAttrs(
       }) : [],
     }))
     .filter((x: any) => x.values.length > 0);
+}
+
+export function shouldSkipOzonPublishAttr(attr: any): boolean {
+  const id = attr?.attribute_id ?? attr?.id;
+  if (SKIP_ATTRS.has(String(id))) return true;
+
+  const names = [
+    attr?.attribute_name,
+    attr?.name,
+    attr?.attributeName,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  return names.some((name) => UNSAFE_CLONED_ATTR_NAME_RE.test(name));
 }

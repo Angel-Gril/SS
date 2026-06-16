@@ -25,6 +25,7 @@ import {
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
   sanitizePublishDescription,
+  syncOzonVariantGroupingAttributes,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -735,6 +736,41 @@ describe('collect publish helpers', () => {
       userRandomOfferId: true,
       suffixFactory: () => 'rand01',
     })).toBe('my-custom-offer');
+  });
+
+  it('does not force offer ids into Ozon color-family attributes for variant grouping', () => {
+    const attrs = syncOzonVariantGroupingAttributes([
+      {
+        id: 10097,
+        complex_id: 0,
+        values: [{ value: 'белый', dictionary_value_id: 61571 }],
+      },
+      {
+        id: 4180,
+        complex_id: 0,
+        values: [{ value: 'Миостимулятор' }],
+      },
+    ], {
+      offer_id: '3639452223-ZWJS',
+      _sourceModelId: '3639452223',
+      _sourceItemId: 'item-1',
+    });
+
+    expect(attrs).toContainEqual({
+      id: 8292,
+      complex_id: 0,
+      values: [{ value: '3639452223', dictionary_value_id: 0 }],
+    });
+    expect(attrs).toContainEqual({
+      id: 10097,
+      complex_id: 0,
+      values: [{ value: 'белый', dictionary_value_id: 61571 }],
+    });
+    expect(attrs).not.toContainEqual({
+      id: 10097,
+      complex_id: 0,
+      values: [{ value: '3639452223-ZWJS', dictionary_value_id: 0 }],
+    });
   });
 
   it('keeps offer ids unique when user disables random offer ids', () => {

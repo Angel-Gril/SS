@@ -6,7 +6,7 @@ import { getRandomizeConfig, randomOfferIdFrom, jitterDimensionMm, bucketWeightG
 import { randomSuffix, chunkArray } from '../lib/util.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
-import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
+import { convertOzonRawAttrs, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
@@ -393,6 +393,25 @@ export function syncOzonCoreTextAttributes<T extends { id: number; complex_id?: 
     });
   }
   return next;
+}
+
+export function syncOzonVariantGroupingAttributes<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  importItem: { offer_id?: unknown; _sourceModelId?: unknown; _sourceItemId?: unknown },
+): Array<T | { id: number; complex_id: number; values: { value: string; dictionary_value_id: number }[] }> {
+  const MERGE_ATTR_ID = 8292;
+  const mergeValue = importItem._sourceModelId || `model-${importItem._sourceItemId || 'group'}`;
+  const attrs = Array.isArray(attributes)
+    ? attributes.filter((attr) => Number(attr.id) !== MERGE_ATTR_ID)
+    : [];
+  return [
+    ...attrs,
+    {
+      id: MERGE_ATTR_ID,
+      complex_id: 0,
+      values: [{ value: String(mergeValue), dictionary_value_id: 0 }],
+    },
+  ];
 }
 
 type OzonDictionaryEntry = { id: number; value?: string | null };
@@ -2045,6 +2064,7 @@ export async function collectRoutes(app: FastifyInstance) {
             for (const a of attrs) {
               const description = descriptionMap.get(a.id) || (a.attributes?.find((x) => x.id === 4191)?.values?.[0]?.value) || '';
               const attributes = (a.attributes || [])
+                .filter((x) => !shouldSkipOzonPublishAttr(x))
                 .filter((x) => followBrand || x.id !== 85)
                 .map((x) => ({
                   id: x.id,
@@ -2217,22 +2237,7 @@ export async function collectRoutes(app: FastifyInstance) {
             values: Array.isArray(a.values) ? a.values.map((v: any) => ({ ...v })) : a.values,
           }));
 
-          const MERGE_ATTR_ID = 8292;
-          const mergeValue = importItem._sourceModelId || `model-${importItem._sourceItemId || 'group'}`;
-          importItem.attributes = importItem.attributes.filter((a: any) => a.id !== MERGE_ATTR_ID);
-          importItem.attributes.push({
-            id: MERGE_ATTR_ID,
-            complex_id: 0,
-            values: [{ value: String(mergeValue), dictionary_value_id: 0 }],
-          });
-
-          const COLOR_NAME_ATTR_ID = 10097;
-          importItem.attributes = importItem.attributes.filter((a: any) => a.id !== COLOR_NAME_ATTR_ID);
-          importItem.attributes.push({
-            id: COLOR_NAME_ATTR_ID,
-            complex_id: 0,
-            values: [{ value: String(importItem.offer_id), dictionary_value_id: 0 }],
-          });
+          importItem.attributes = syncOzonVariantGroupingAttributes(importItem.attributes, importItem);
 
           const existingIds = new Set(importItem.attributes.map((a: any) => a.id));
 
