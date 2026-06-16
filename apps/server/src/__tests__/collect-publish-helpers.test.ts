@@ -22,6 +22,7 @@ import {
   resolvePublishName,
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
+  buildCollectedGoodsMetadata,
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
   sanitizePublishDescription,
@@ -44,6 +45,24 @@ describe('collect publish helpers', () => {
   it('detects Chinese text in publish names', () => {
     expect(containsCjkText('Чехол для iPad')).toBe(false);
     expect(containsCjkText('保护套 для iPad')).toBe(true);
+  });
+
+  it('does not persist Chinese collected titles as Russian publish titles', () => {
+    expect(buildCollectedGoodsMetadata({
+      title: '中国风墙面装饰',
+      publishTitle: '中国风墙面装饰',
+      sourceTitleRaw: '中国风墙面装饰',
+      sourceLocale: 'ru',
+    })).toMatchObject({
+      titleNeedsReview: true,
+      sourceTitleRaw: '中国风墙面装饰',
+    });
+    expect(buildCollectedGoodsMetadata({
+      title: '中国风墙面装饰',
+      publishTitle: '中国风墙面装饰',
+      sourceTitleRaw: '中国风墙面装饰',
+      sourceLocale: 'ru',
+    })).not.toHaveProperty('publishTitleRu');
   });
 
   it('flags repeated keyword spam titles before Ozon rejects the card', () => {

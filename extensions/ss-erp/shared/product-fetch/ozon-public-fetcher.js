@@ -4,9 +4,26 @@
   var COMPOSER_PATH = '/api/composer-api.bx/page/json/v2';
   var FETCH_DELAY_MS = 800;
 
-  function fetchOzonProduct(productId) {
+  function fetchOzonProduct(productId, options) {
+    options = options || {};
     // 强制俄语：把 language=ru 放到内嵌 url 的 query 里，避免被中文 cookie 覆盖
-    var url = COMPOSER_PATH + '?url=' + encodeURIComponent('/product/' + productId + '/?language=ru');
+    var productPath = normalizeOzonProductPathForFetch(options.sourceUrl || options.productPath, productId);
+    var url = COMPOSER_PATH + '?url=' + encodeURIComponent(productPath);
+    return fetchOzonJson(url)
+    .then(function (data) {
+      var result = parseWidgetStates(productId, data);
+      return fetchOzonDescriptionPage(productId, productPath)
+        .then(function (descriptionData) {
+          if (descriptionData) mergeDescriptionWidgetStates(result, descriptionData);
+          return result;
+        })
+        .catch(function () {
+          return result;
+        });
+    });
+  }
+
+  function fetchOzonJson(url) {
     return fetch(url, {
       credentials: 'include',
       headers: {
@@ -23,10 +40,81 @@
         });
       }
       return res.json();
-    })
-    .then(function (data) {
-      return parseWidgetStates(productId, data);
     });
+  }
+
+  function fetchOzonDescriptionPage(productId, productPath) {
+    var paths = buildDescriptionFetchPaths(productId, productPath);
+    var index = 0;
+    function next() {
+      if (index >= paths.length) return Promise.resolve(null);
+      var path = paths[index++];
+      var url = '/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent(path);
+      return fetchOzonJson(url)
+        .catch(function () { return null; })
+        .then(function (data) {
+          if (hasDescriptionWidgetStates(data)) return data;
+          return next();
+        });
+    }
+    return next();
+  }
+
+  function normalizeOzonProductPathForFetch(value, fallbackProductId) {
+    var path = '';
+    var raw = String(value || '').trim();
+    if (raw) {
+      try {
+        var url = new URL(raw, 'https://www.ozon.ru');
+        if (/^\/product\//i.test(url.pathname)) path = url.pathname + url.search;
+      } catch (e) {}
+    }
+    if (!path) path = '/product/' + fallbackProductId + '/';
+    try {
+      var parsed = new URL(path, 'https://www.ozon.ru');
+      parsed.searchParams.set('language', 'ru');
+      return parsed.pathname + parsed.search;
+    } catch (e) {
+      return path.indexOf('?') >= 0 ? path + '&language=ru' : path + '?language=ru';
+    }
+  }
+
+  function buildDescriptionFetchPaths(productId, productPath) {
+    var bases = [];
+    function addBase(path) {
+      path = String(path || '').split('?')[0];
+      if (!path || !/^\/product\//i.test(path)) return;
+      if (!/\/$/.test(path)) path += '/';
+      if (bases.indexOf(path) < 0) bases.push(path);
+    }
+    addBase(productPath);
+    addBase('/product/' + productId + '/');
+    return bases.map(function (base) {
+      return base + '?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru';
+    });
+  }
+
+  function hasDescriptionWidgetStates(data) {
+    var states = data && data.widgetStates;
+    if (!states || typeof states !== 'object') return false;
+    return Object.keys(states).some(function (key) {
+      return /^(webDescription|webRichAnnotation|description)/.test(key);
+    });
+  }
+
+  function mergeDescriptionWidgetStates(result, data) {
+    var states = data && data.widgetStates;
+    if (!result || !states || typeof states !== 'object') return result;
+    var keys = Object.keys(states);
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      var state;
+      try { state = JSON.parse(states[key]); } catch (e) { continue; }
+      extractDescription(key, state, result);
+      extractVideos(key, state, result);
+      extractCharacteristics(key, state, result);
+    }
+    return result;
   }
 
   function parseWidgetStates(productId, data) {

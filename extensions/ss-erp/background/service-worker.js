@@ -41,6 +41,8 @@ const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
 const OZON_COMMISSION_SNAPSHOT_KEY = 'ozon-calculator:commission-snapshot';
 const OZON_FX_SNAPSHOT_KEY = 'ozon-calculator:fx-snapshot';
 const OZON_COMMISSION_DOC_URLS = [
+  'https://global-help.ozon.com/zh/commissions/ozon-fees/commissions?region=CHN',
+  'https://global-help.ozon.com/en/commissions/ozon-fees/commissions?region=CHN',
   'https://docs.ozon.com/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER',
   'https://docs.ozon.com/global/en/commissions/ozon-fees/commissions/?country=OTHER',
   'https://docs.ozon.ru/global/zh-hans/commissions/ozon-fees/commissions/?country=OTHER',
@@ -48,6 +50,55 @@ const OZON_COMMISSION_DOC_URLS = [
   'https://docs.ozon.com/global/zh-hans/commissions',
   'https://docs.ozon.ru/global/zh-hans/commissions',
 ];
+const OZON_COMMISSION_FALLBACK_SNAPSHOT = {
+  sourceUrl: 'local-fallback:ozon-chn-commission',
+  source: 'local-fallback',
+  rules: [
+    {
+      group: 'fallback',
+      category: '智能手机和手机配件',
+      aliases: ['手机配件', 'зарядное устройство', 'зарядка', 'кабель', 'iphone', 'phone', 'charger', 'magsafe'],
+      bands: [
+        { minRUB: 0, maxRUB: 1500, rfbs: 13, fbp: 13 },
+        { minRUB: 1500, maxRUB: 5000, rfbs: 13, fbp: 13 },
+        { minRUB: 5000, maxRUB: 0, rfbs: 13, fbp: 13 },
+      ],
+    },
+    {
+      group: 'fallback',
+      category: '美容与健康',
+      aliases: ['косметика', 'парфюм', 'уход', 'beauty', 'cosmetics', 'миостимулятор', 'массажер'],
+      bands: [
+        { minRUB: 0, maxRUB: 1500, rfbs: 15, fbp: 15 },
+        { minRUB: 1500, maxRUB: 5000, rfbs: 15, fbp: 15 },
+        { minRUB: 5000, maxRUB: 0, rfbs: 15, fbp: 15 },
+      ],
+    },
+    {
+      group: 'fallback',
+      category: '家居与花园',
+      aliases: ['декор', 'для дома', 'интерьера', 'home', 'decor', 'рафия'],
+      bands: [
+        { minRUB: 0, maxRUB: 1500, rfbs: 12, fbp: 12 },
+        { minRUB: 1500, maxRUB: 5000, rfbs: 12, fbp: 12 },
+        { minRUB: 5000, maxRUB: 0, rfbs: 12, fbp: 12 },
+      ],
+    },
+    {
+      group: 'fallback',
+      category: '默认类目',
+      aliases: ['default', 'прочее', 'товары'],
+      bands: [
+        { minRUB: 0, maxRUB: 1500, rfbs: 15, fbp: 15 },
+        { minRUB: 1500, maxRUB: 5000, rfbs: 15, fbp: 15 },
+        { minRUB: 5000, maxRUB: 0, rfbs: 15, fbp: 15 },
+      ],
+    },
+  ],
+  diagnostics: {
+    fallbackReason: 'Ozon help pages can reject extension background fetches with 403 or redirect loops',
+  },
+};
 const OZON_FX_API_URL = 'https://open.er-api.com/v6/latest/CNY';
 const OZON_CALC_CAPTURE_LIMIT = 200;
 const OZON_CALC_VISIBLE_SNAPSHOT_LIMIT = 50;
@@ -249,6 +300,15 @@ function findOzonCompanyIdFromCookies(cookies) {
   return normalizeOzonCompanyIdForSync((direct || shared || {}).value);
 }
 
+function fetchStoredOzonCompanyIdForSync(apiBase, token, shopId) {
+  if (!apiBase || !token || !shopId) return Promise.resolve('');
+  return fetch(apiBase + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
+    headers: { 'authorization': 'Bearer ' + token },
+  }).then((res) => res.json())
+    .then((data) => normalizeOzonCompanyIdForSync(data && data.data && data.data.companyId))
+    .catch(() => '');
+}
+
 function safeIsoDate(value) {
   const text = toText(value).trim();
   if (text) {
@@ -385,10 +445,27 @@ async function syncCommissionSnapshot() {
       lastError = error;
     }
   }
-  if (!html) throw lastError || new Error('无法请求 Ozon 佣金文档');
+  if (!html) {
+    const fallback = parser.normalizeSnapshot(Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT, {
+      fetchedAt: new Date().toISOString(),
+      diagnostics: Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT.diagnostics, {
+        onlineSyncError: lastError && lastError.message ? lastError.message : String(lastError || '无法请求 Ozon 佣金文档'),
+      }),
+    }));
+    await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: fallback });
+    return fallback;
+  }
   const snapshot = parser.buildSnapshotFromHtml(html, sourceUrl);
   if (!snapshot || !Array.isArray(snapshot.rules) || !snapshot.rules.length) {
-    throw new Error('未能从 Ozon 帮助中心解析到佣金费率表');
+    const fallback = parser.normalizeSnapshot(Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT, {
+      fetchedAt: new Date().toISOString(),
+      diagnostics: Object.assign({}, OZON_COMMISSION_FALLBACK_SNAPSHOT.diagnostics, {
+        onlineSyncError: '未能从 Ozon 帮助中心解析到佣金费率表',
+        sourceUrl,
+      }),
+    }));
+    await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: fallback });
+    return fallback;
   }
   await chrome.storage.local.set({ [OZON_COMMISSION_SNAPSHOT_KEY]: snapshot });
   return snapshot;
@@ -1878,17 +1955,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const token = toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim();
         if (!token) throw new Error('请先在插件设置中配置 ERP Token');
         const apiBase = baseEndpoint.replace(/\/api\/.*$/, '');
-        const body = { cookie: cookieStr };
-        const companyId = payloadCompanyId || capturedCompanyId || cookieCompanyId;
-        if (companyId) {
-          body.companyId = companyId;
-          rememberRuntimeOzonCompanyIdForSync(companyId);
-        }
-        return fetch(apiBase + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token },
-          body: JSON.stringify(body),
-        }).then((res) => res.json());
+        return fetchStoredOzonCompanyIdForSync(apiBase, token, shopId).then((storedCompanyId) => {
+          const body = { cookie: cookieStr };
+          const companyId = payloadCompanyId || capturedCompanyId || cookieCompanyId || storedCompanyId;
+          if (companyId) {
+            body.companyId = companyId;
+            rememberRuntimeOzonCompanyIdForSync(companyId);
+          }
+          return fetch(apiBase + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token },
+            body: JSON.stringify(body),
+          }).then((res) => res.json());
+        });
       }).then((data) => {
         if (data && data.code === 1) {
           sendResponse({ ok: true, msg: 'Cookie 已同步到该店铺', data: data.data });

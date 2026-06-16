@@ -188,15 +188,8 @@
       throw new Error("无法从 URL 提取 product_id");
     }
 
-    const url = "/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent("/product/" + productId + "/?language=ru");
-    const res = await fetch(url, {
-      credentials: "include",
-      headers: { "x-o3-app-name": "dweb_client", "accept": "application/json", "x-o3-language": "ru", "Accept-Language": "ru" }
-    });
-    if (!res.ok) {
-      throw new Error("Ozon API HTTP " + res.status);
-    }
-    const data = await res.json();
+    const productPath = normalizeOzonProductPathForFetch(location.href, productId);
+    const data = await fetchOzonWidgetJson("/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(productPath));
     const states = data && data.widgetStates;
     if (!states || typeof states !== "object") {
       throw new Error("Ozon API 未返回 widgetStates");
@@ -288,6 +281,46 @@
       }
     }
 
+    try {
+      const descriptionData = await fetchOzonDescriptionWidgetJson(productId, productPath);
+      const descriptionStates = descriptionData && descriptionData.widgetStates;
+      if (descriptionStates && typeof descriptionStates === "object") {
+        for (const dKey of Object.keys(descriptionStates)) {
+          let dState;
+          try { dState = JSON.parse(descriptionStates[dKey]); } catch (e) { continue; }
+          if (/^(webDescription|webRichAnnotation|description)/.test(dKey) && dState) {
+            const descriptionPayload = extractDescriptionPayload(dState);
+            if (descriptionPayload.text && (!description || descriptionPayload.text.length > description.length)) {
+              description = descriptionPayload.text;
+            }
+            if (!richDescriptionJson && descriptionPayload.richJson) {
+              richDescriptionJson = descriptionPayload.richJson;
+            }
+          }
+          extractVideos(dKey, dState, sourceVideos);
+          if (/^(webShortCharacteristics|webCharacteristics|characteristics)/.test(dKey) && dState && Array.isArray(dState.characteristics)) {
+            for (const ch of dState.characteristics) {
+              let nm = "";
+              if (ch.title && Array.isArray(ch.title.textRs) && ch.title.textRs.length) {
+                nm = ch.title.textRs[0].content || "";
+              } else if (typeof ch.title === "string") {
+                nm = ch.title;
+              } else if (ch.name) {
+                nm = ch.name;
+              }
+              let vl = "";
+              if (Array.isArray(ch.values)) {
+                vl = ch.values.map(v => (v.text || v.value || "").replace(/,\s*$/, "")).filter(Boolean).join(", ");
+              }
+              if (nm && vl && !attributes.some(attr => attr.name === nm && attr.value === vl)) {
+                attributes.push({ name: nm, value: vl });
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
     currency = detectCurrencyFromTextSafe(priceString, currency);
 
     if (!currency) {
@@ -334,6 +367,59 @@
       warnings: [],
       collectedAt: new Date().toISOString()
     };
+  }
+
+  async function fetchOzonWidgetJson(url) {
+    const res = await fetch(url, {
+      credentials: "include",
+      headers: { "x-o3-app-name": "dweb_client", "accept": "application/json", "x-o3-language": "ru", "Accept-Language": "ru" }
+    });
+    if (!res.ok) {
+      throw new Error("Ozon API HTTP " + res.status);
+    }
+    return res.json();
+  }
+
+  function normalizeOzonProductPathForFetch(value, fallbackProductId) {
+    let path = "";
+    const raw = String(value || "").trim();
+    if (raw) {
+      try {
+        const url = new URL(raw, "https://www.ozon.ru");
+        if (/^\/product\//i.test(url.pathname)) path = url.pathname + url.search;
+      } catch (e) {}
+    }
+    if (!path) path = "/product/" + fallbackProductId + "/";
+    try {
+      const parsed = new URL(path, "https://www.ozon.ru");
+      parsed.searchParams.set("language", "ru");
+      return parsed.pathname + parsed.search;
+    } catch (e) {
+      return path.indexOf("?") >= 0 ? path + "&language=ru" : path + "?language=ru";
+    }
+  }
+
+  async function fetchOzonDescriptionWidgetJson(productId, productPath) {
+    const bases = [];
+    const addBase = (value) => {
+      let base = String(value || "").split("?")[0];
+      if (!base || !/^\/product\//i.test(base)) return;
+      if (!/\/$/.test(base)) base += "/";
+      if (!bases.includes(base)) bases.push(base);
+    };
+    addBase(productPath);
+    addBase("/product/" + productId + "/");
+    for (const base of bases) {
+      const descriptionPath = base + "?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru";
+      try {
+        const data = await fetchOzonWidgetJson("/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(descriptionPath));
+        const states = data && data.widgetStates;
+        if (states && typeof states === "object" && Object.keys(states).some(k => /^(webDescription|webRichAnnotation|description)/.test(k))) {
+          return data;
+        }
+      } catch (e) {}
+    }
+    return null;
   }
 
   function extractDescriptionPayload(state) {

@@ -1839,8 +1839,43 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
         visitVideoValue(state, target, [], 0);
       }
 
+      function normalizeRequestedProductPath(value, fallbackProductId) {
+        var path = "";
+        var raw = String(value || "").trim();
+        if (raw) {
+          try {
+            var url = new URL(raw, "https://www.ozon.ru");
+            if (/^\/product\//i.test(url.pathname)) path = url.pathname + url.search;
+          } catch (e) {}
+        }
+        if (!path) path = "/product/" + fallbackProductId + "/";
+        try {
+          var parsed = new URL(path, "https://www.ozon.ru");
+          parsed.searchParams.set("language", "ru");
+          return parsed.pathname + parsed.search;
+        } catch (e) {
+          return path.indexOf("?") >= 0 ? path + "&language=ru" : path + "?language=ru";
+        }
+      }
+      function buildDescriptionFetchPaths(fallbackProductId, currentProductPath) {
+        var bases = [];
+        function addBase(path) {
+          path = String(path || "").split("?")[0];
+          if (!path || !/^\/product\//i.test(path)) return;
+          if (!/\/$/.test(path)) path += "/";
+          if (bases.indexOf(path) < 0) bases.push(path);
+        }
+        addBase(currentProductPath);
+        addBase("/product/" + fallbackProductId + "/");
+        var out = [];
+        for (var i = 0; i < bases.length; i++) {
+          out.push(bases[i] + "?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru");
+        }
+        return out;
+      }
+
       // 强制俄语：language=ru 放进内嵌 url，避免被中文 cookie 覆盖
-      var productPath = requestedPath || ("/product/" + pid + "/?language=ru");
+      var productPath = normalizeRequestedProductPath(requestedPath, pid);
       var encodedPath = encodeURIComponent(productPath);
       var primaryUrl = "/api/entrypoint-api.bx/page/json/v2?url=" + encodedPath;
       var fallbackUrl = "/api/composer-api.bx/page/json/v2?url=" + encodedPath;
@@ -2161,13 +2196,23 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
       }
 
       try {
-        var baseProductPath = requestedPath || ("/product/" + pid + "/");
-        if (baseProductPath.indexOf("/product/") < 0) baseProductPath = "/product/" + pid + "/";
-        baseProductPath = baseProductPath.split("?")[0];
-        if (!/\/$/.test(baseProductPath)) baseProductPath += "/";
-        var descriptionPath = baseProductPath + "?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru";
-        var descriptionData = await doFetch("/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(descriptionPath));
-        var descriptionStates = descriptionData && descriptionData.widgetStates;
+        var descriptionPaths = buildDescriptionFetchPaths(pid, productPath);
+        var descriptionStates = null;
+        for (var dpi = 0; dpi < descriptionPaths.length; dpi++) {
+          try {
+            var descriptionData = await doFetch("/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(descriptionPaths[dpi]));
+            var candidateStates = descriptionData && descriptionData.widgetStates;
+            if (candidateStates && typeof candidateStates === "object") {
+              var hasDescriptionState = Object.keys(candidateStates).some(function (stateKey) {
+                return /^(webDescription|webRichAnnotation|description)/.test(stateKey);
+              });
+              if (hasDescriptionState) {
+                descriptionStates = candidateStates;
+                break;
+              }
+            }
+          } catch (e) {}
+        }
         if (descriptionStates && typeof descriptionStates === "object") {
           var descriptionKeys = Object.keys(descriptionStates);
           for (var dsk = 0; dsk < descriptionKeys.length; dsk++) {
@@ -2250,7 +2295,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
           brand: brand,
           category: category,
           attributes: attributes,
-          url: "https://www.ozon.ru/product/" + pid + "/",
+          url: "https://www.ozon.ru" + String(productPath || ("/product/" + pid + "/")).split("?")[0],
           _usedApi: usedApi,
           modelId: modelId,
           variants: variants,

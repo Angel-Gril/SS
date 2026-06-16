@@ -296,6 +296,31 @@ export function normalizeCollectedSourceVideos(value: unknown): { url: string; c
   return out;
 }
 
+export function buildCollectedGoodsMetadata(input: {
+  title?: unknown;
+  publishTitle?: unknown;
+  sourceTitleRaw?: unknown;
+  sourceLocale?: unknown;
+  description?: unknown;
+  richDescriptionJson?: unknown;
+  sourceVideos?: unknown;
+  [key: string]: unknown;
+}): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  const publishTitle = String(input.publishTitle || '').trim();
+  const titleNeedsReview = containsCjkText(input.title) || containsCjkText(input.sourceTitleRaw) || containsCjkText(publishTitle);
+  if (publishTitle && !containsCjkText(publishTitle)) metadata.publishTitleRu = publishTitle;
+  if (input.sourceTitleRaw) metadata.sourceTitleRaw = String(input.sourceTitleRaw);
+  if (input.sourceLocale) metadata.sourceLocale = String(input.sourceLocale);
+  const sourceDescription = sanitizePublishDescription(input.description);
+  if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
+  if (input.richDescriptionJson) metadata.sourceRichDescriptionJson = String(input.richDescriptionJson);
+  const sourceVideos = normalizeCollectedSourceVideos(input.sourceVideos);
+  if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
+  if (titleNeedsReview) metadata.titleNeedsReview = true;
+  return metadata;
+}
+
 export function calcPublishPrice(baseCny: number, markupPct = 0, markupAmount = 0): number {
   const base = Number.isFinite(baseCny) && baseCny > 0 ? baseCny : 100;
   const pct = Number.isFinite(markupPct) ? markupPct : 0;
@@ -1248,15 +1273,7 @@ export async function collectRoutes(app: FastifyInstance) {
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const sourceDescription = sanitizePublishDescription(d.description);
     const notes = [weightNote, sourceDescription.slice(0, 500)].filter(Boolean).join('\n') || null;
-    const metadata: Record<string, unknown> = {};
-    if (d.publishTitle) metadata.publishTitleRu = d.publishTitle;
-    if (d.sourceTitleRaw) metadata.sourceTitleRaw = d.sourceTitleRaw;
-    if (d.sourceLocale) metadata.sourceLocale = d.sourceLocale;
-    if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
-    if (d.richDescriptionJson) metadata.sourceRichDescriptionJson = d.richDescriptionJson;
-    const sourceVideos = normalizeCollectedSourceVideos(d.sourceVideos);
-    if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
-    if (d.title && containsCjkText(d.title) && !d.publishTitle) metadata.titleNeedsReview = true;
+    const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(d);
 
     const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
     const item = await prisma.supplyGoods.create({
@@ -1296,16 +1313,7 @@ export async function collectRoutes(app: FastifyInstance) {
     for (const item of body.items.slice(0, 50)) {
       try {
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
-        const sourceDescription = sanitizePublishDescription(item.description);
-        const metadata: Record<string, unknown> = {};
-        if (item.publishTitle) metadata.publishTitleRu = String(item.publishTitle);
-        if (item.sourceTitleRaw) metadata.sourceTitleRaw = String(item.sourceTitleRaw);
-        if (item.sourceLocale) metadata.sourceLocale = String(item.sourceLocale);
-        if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
-        if (item.richDescriptionJson) metadata.sourceRichDescriptionJson = String(item.richDescriptionJson);
-        const sourceVideos = normalizeCollectedSourceVideos(item.sourceVideos);
-        if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
-        if (item.title && containsCjkText(item.title) && !item.publishTitle) metadata.titleNeedsReview = true;
+        const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(item);
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
         if (item.typeId) metadata.typeId = item.typeId;
@@ -1327,6 +1335,7 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
 
         const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
+        const sourceDescription = sanitizePublishDescription(item.description);
         console.log(`[batch-collect] SKU=${item.sku} | modelId=${item.modelId || 'none'} | variants=${hasVariants ? item.variants.length : 0} | ozonAttributes=${Array.isArray(item.ozonAttributes) ? item.ozonAttributes.length : 'NONE'}`);
 
         const priceInfo = await resolveCollectedPrice(item.priceText || item.price, item.currency, item.sourceUrl);

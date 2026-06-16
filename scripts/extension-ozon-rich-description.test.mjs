@@ -8,6 +8,7 @@ const sandbox = {
   console,
   globalThis: {},
   location: { hostname: 'www.ozon.ru' },
+  URL,
 };
 sandbox.globalThis = sandbox;
 
@@ -54,5 +55,55 @@ assert.deepEqual(JSON.parse(JSON.stringify(result.sourceVideos)), [{
   coverUrl: 'https://cdn.example.com/video/product-demo-cover.jpg',
   title: 'Обзор товара',
 }]);
+
+const fetchedUrls = [];
+const slugRichAnnotationJson = {
+  content: [{
+    blocks: [
+      { text: { content: 'Описание со второй страницы' } },
+      { img: { src: 'https://cdn.example.com/rich-image.jpg' } },
+    ],
+  }],
+};
+
+const originalFetch = sandbox.fetch;
+sandbox.fetch = async (url) => {
+  fetchedUrls.push(String(url));
+  const decodedUrl = decodeURIComponent(String(url));
+  const body = decodedUrl.includes('layout_page_index=2')
+    ? {
+      widgetStates: {
+        'webDescription-1': JSON.stringify({
+          richAnnotationJson: slugRichAnnotationJson,
+        }),
+      },
+    }
+    : {
+      widgetStates: {
+        webProductHeading: JSON.stringify({ title: '6 Рафия ручной работыдекор на стену для интерьера' }),
+        webGallery: JSON.stringify({ images: ['https://cdn.example.com/main.jpg'] }),
+      },
+    };
+  return {
+    ok: true,
+    json: async () => body,
+  };
+};
+
+const fetched = await sandbox.OZON_PUBLIC_FETCHER.fetchOzonProduct(1616509508, {
+  sourceUrl: 'https://www.ozon.ru/product/6-rafiya-ruchnoy-rabotydekor-na-stenu-dlya-interera-1616509508/?at=test',
+});
+
+assert.equal(fetched.ok, true);
+assert.match(fetched.description, /Описание со второй страницы/);
+assert.equal(fetched.richDescriptionJson, JSON.stringify(slugRichAnnotationJson));
+assert.ok(
+  fetchedUrls.some((url) => {
+    const decodedUrl = decodeURIComponent(url);
+    return decodedUrl.includes('6-rafiya-ruchnoy-rabotydekor-na-stenu-dlya-interera-1616509508') && decodedUrl.includes('layout_page_index=2');
+  }),
+  'expected rich description fetch to use the full Ozon product slug path',
+);
+sandbox.fetch = originalFetch;
 
 console.log('PASS Ozon rich description and video extraction');
