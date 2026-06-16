@@ -414,6 +414,14 @@ function enrichCollectedOzonVariants(variants) {
   return variants;
 }
 
+function sanitizeCollectedOzonVariantAttrs(variants) {
+  const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
+  if (specHelper && typeof specHelper.sanitizeOzonVariantsAttrs === "function") {
+    return specHelper.sanitizeOzonVariantsAttrs(variants);
+  }
+  return variants;
+}
+
 function mergeCollectedOzonVariantLists(baseVariants, incomingVariants) {
   const specHelper = globalThis.SS_ERP_OZON_VARIANT_SPEC;
   if (specHelper && typeof specHelper.mergeOzonVariantLists === "function") {
@@ -2629,6 +2637,10 @@ async function collectOzonProductsToErp(productIds, options = {}) {
           }
         }
       } catch (e) {}
+    }
+
+    if (Array.isArray(productData.variants) && productData.variants.length > 0) {
+      productData.variants = sanitizeCollectedOzonVariantAttrs(productData.variants);
     }
 
     collected.push(productData);

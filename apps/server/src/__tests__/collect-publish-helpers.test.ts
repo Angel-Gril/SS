@@ -27,6 +27,7 @@ import {
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
   sanitizePublishDescription,
+  sanitizeVariantAttrsForPublish,
   syncOzonVariantGroupingAttributes,
   normalizeOzonOriginCountryForChinaSeller,
   normalizeCollectedSourceVideos,
@@ -105,6 +106,16 @@ describe('collect publish helpers', () => {
 
     expect(name).toBe('Бюстгальтер Top Bra, 52 RU, XL');
     expect(containsCjkText(name)).toBe(false);
+  });
+
+  it('drops Chinese variant attributes before publishing Ozon attributes', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': '咖啡色',
+      '颜色': 'бежевый',
+      'Размер': '52 RU / XL',
+    })).toEqual({
+      'Размер': '52 RU / XL',
+    });
   });
 
   it('deduplicates repeated color words when appending variant attributes to publish names', () => {

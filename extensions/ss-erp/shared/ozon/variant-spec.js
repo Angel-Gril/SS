@@ -10,6 +10,112 @@
     }
   }
 
+  function containsCjkText(value) {
+    return /[\u3400-\u9fff]/.test(String(value || ''));
+  }
+
+  function cleanText(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function readOzonAttributeValue(attribute) {
+    const values = attribute && Array.isArray(attribute.values) ? attribute.values : [];
+    const parts = [];
+    values.forEach((item) => {
+      const text = cleanText(item && (item.value || item.text || item.name));
+      if (text && !containsCjkText(text) && parts.indexOf(text) < 0) parts.push(text);
+    });
+    return parts.join(', ');
+  }
+
+  function readOzonAttributeName(attribute) {
+    return cleanText(attribute && (
+      attribute.attribute_name
+      || attribute.name
+      || attribute.attributeName
+      || attribute.title
+    ));
+  }
+
+  function variantAttrKind(name) {
+    const text = String(name || '').toLowerCase();
+    if (!text) return '';
+    if (/颜色|цвет|color|colour/.test(text)) return 'color';
+    if (/尺码|尺寸|размер|size/.test(text)) return 'size';
+    if (/容量|体积|об[ъь]ем|volume/.test(text)) return 'volume';
+    if (/香味|气味|аромат|запах|scent|fragrance/.test(text)) return 'scent';
+    if (/型号|модель|model/.test(text)) return 'model';
+    return '';
+  }
+
+  function findOzonAttributeForVariantAttr(attrName, ozonAttributes, usedNames) {
+    const attrs = Array.isArray(ozonAttributes) ? ozonAttributes : [];
+    const sourceKind = variantAttrKind(attrName);
+    const sourceName = cleanText(attrName).toLowerCase();
+    for (let i = 0; i < attrs.length; i++) {
+      const attr = attrs[i];
+      const name = readOzonAttributeName(attr);
+      const value = readOzonAttributeValue(attr);
+      if (!name || !value || containsCjkText(name) || usedNames.has(name)) continue;
+      const nameLower = name.toLowerCase();
+      if (sourceName && nameLower === sourceName) return attr;
+      if (sourceKind && variantAttrKind(name) === sourceKind) return attr;
+    }
+    return null;
+  }
+
+  function sanitizeOzonVariantAttrs(variant) {
+    if (!variant || typeof variant !== 'object') return variant;
+    const attrs = variant.attrs && typeof variant.attrs === 'object' && !Array.isArray(variant.attrs)
+      ? variant.attrs
+      : {};
+    const nextAttrs = {};
+    const dropped = [];
+
+    Object.keys(attrs).forEach((key) => {
+      const value = attrs[key];
+      if (containsCjkText(key) || containsCjkText(value)) {
+        dropped.push({ key, value });
+        return;
+      }
+      const cleanKey = cleanText(key);
+      const cleanValue = cleanText(value);
+      if (cleanKey && cleanValue) nextAttrs[cleanKey] = cleanValue;
+    });
+
+    if (!dropped.length) {
+      const clean = { ...variant, attrs: nextAttrs };
+      delete clean._variantAttrsWarning;
+      return clean;
+    }
+
+    const usedNames = new Set(Object.keys(nextAttrs));
+    let repaired = 0;
+    dropped.forEach((entry) => {
+      const official = findOzonAttributeForVariantAttr(entry.key, variant.ozonAttributes, usedNames);
+      if (!official) return;
+      const name = readOzonAttributeName(official);
+      const value = readOzonAttributeValue(official);
+      if (!name || !value) return;
+      nextAttrs[name] = value;
+      usedNames.add(name);
+      repaired += 1;
+    });
+
+    const clean = { ...variant, attrs: nextAttrs };
+    if (repaired < dropped.length) {
+      clean._variantAttrsWarning = '变体属性含中文，已移除无法自动修复的字段';
+    } else {
+      delete clean._variantAttrsWarning;
+    }
+    return clean;
+  }
+
+  function sanitizeOzonVariantsAttrs(variants) {
+    if (!Array.isArray(variants)) return variants;
+    return variants.map(sanitizeOzonVariantAttrs);
+  }
+
   function parseOzonVariantSpecFromText(value) {
     const text = normalizeText(value);
     if (!text) return null;
@@ -289,6 +395,9 @@
     parseOzonVariantSpecFromText,
     enrichOzonVariantAttrs,
     enrichOzonVariants,
+    containsCjkText,
+    sanitizeOzonVariantAttrs,
+    sanitizeOzonVariantsAttrs,
     buildOzonVariantsFromWebAspects,
     extractOzonProductIdFromLink,
     mergeOzonVariantLists,

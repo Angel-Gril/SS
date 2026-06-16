@@ -194,6 +194,19 @@ function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, inclu
   return parts.slice(0, 4);
 }
 
+export function sanitizeVariantAttrsForPublish(variantAttrs?: Record<string, string>): Record<string, string> {
+  if (!variantAttrs || typeof variantAttrs !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
+    const name = String(rawName || '').trim();
+    const value = String(rawValue || '').trim();
+    if (!name || !value) continue;
+    if (containsCjkText(name) || containsCjkText(value)) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
 function wordKeys(value: string): string[] {
   return cleanPublishName(value)
     .split(/\s+/)
@@ -1968,7 +1981,7 @@ export async function collectRoutes(app: FastifyInstance) {
               });
               const rawImages = resolveVariantPublishImages(item, v, baseRawImages);
               recordOfferPublishImages(fallbackOfferImageLists, fallbackOfferImages, offerId, rawImages);
-              const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined;
+              const subAttrs = sanitizeVariantAttrsForPublish(v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined);
               const subTitle = resolvePublishName(item, subAttrs);
               return {
                 sku: subSourceSku,
@@ -2308,7 +2321,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const subImages = sameStringList(subImagesRaw, baseRawImages)
           ? baseImages
           : await resolveImageUrls(subImagesRaw, body.shopId, userId);
-        const subAttrs = v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : {};
+        const subAttrs = sanitizeVariantAttrsForPublish(v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined);
         const subName = resolvePublishName(item, subAttrs);
 
         // === 优先用每个变体自己的 ozonAttributes（扩展端 Step 2 抓的）===
