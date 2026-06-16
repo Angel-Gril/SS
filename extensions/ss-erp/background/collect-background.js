@@ -48,6 +48,60 @@ function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
 }
 
+function containsCjkText(value) {
+  return /[\u3400-\u9fff]/.test(String(value || ""));
+}
+
+function normalizeCollectedTitleText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function pickOzonRussianTitleFromInsights(insights) {
+  const candidates = [];
+  const item = insights && insights.item || {};
+  const detail = insights && insights.detail || {};
+  const analytics = insights && insights.analytics || {};
+  candidates.push(item.name, item.title, item.productName);
+  candidates.push(detail.name, detail.title, detail.productName);
+  if (Array.isArray(analytics.items)) {
+    for (const row of analytics.items) {
+      candidates.push(row && row.name, row && row.title, row && row.productName);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const title = normalizeCollectedTitleText(candidate);
+    if (title && !containsCjkText(title)) return title;
+  }
+  return "";
+}
+
+function repairOzonCollectedTitleFromInsights(product, insights) {
+  if (!product || typeof product !== "object") return product;
+  const nextTitle = pickOzonRussianTitleFromInsights(insights);
+  if (!nextTitle) return product;
+
+  const currentTitle = normalizeCollectedTitleText(product.title);
+  const currentPublishTitle = normalizeCollectedTitleText(product.publishTitle);
+  const currentSourceTitle = normalizeCollectedTitleText(product.sourceTitleRaw);
+  const needsRepair = !currentTitle
+    || containsCjkText(currentTitle)
+    || containsCjkText(currentPublishTitle)
+    || containsCjkText(currentSourceTitle);
+  if (!needsRepair) return product;
+
+  const translated = [currentTitle, currentPublishTitle, currentSourceTitle]
+    .find((value) => value && containsCjkText(value));
+  if (translated && translated !== nextTitle && !product.sourceTitleTranslated) {
+    product.sourceTitleTranslated = translated;
+  }
+  product.title = nextTitle;
+  product.publishTitle = nextTitle;
+  product.sourceTitleRaw = nextTitle;
+  product.sourceLocale = "ru";
+  return product;
+}
+
 function normalizeRichDescriptionText(value) {
   return String(value || "")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
@@ -705,6 +759,7 @@ function mergeOzonInsightsIntoProduct(product, ozonInsights) {
   const item = ozonInsights.item || {};
   const specs = ozonInsights.specs || {};
   const detail = ozonInsights.detail || {};
+  repairOzonCollectedTitleFromInsights(product, ozonInsights);
 
   if (item.sku) {
     product.productId = String(item.sku);
@@ -1533,6 +1588,8 @@ async function aggregateOzonProductInsights(productId) {
         brand: analytics.item.brand,
         category1: analytics.item.category1,
         category3: analytics.item.category3,
+        title: analytics.item.name || analytics.item.title || item.title,
+        name: analytics.item.name || analytics.item.title || item.name,
         sellerId: analytics.item.sellerId,
         sellerName: analytics.item.sellerName,
         avgDeliveryDays: analytics.item.avgDeliveryDays,
@@ -1566,8 +1623,12 @@ async function aggregateOzonProductInsights(productId) {
         sources.push("public-entrypoint");
         const d = pub.data;
         // 公开 API 拿不到月销量/GMV，但能拿到标题/价格/评分/品牌/类目/图片/变体
+        const publicTitle = normalizeCollectedTitleText(d.title);
+        const nextTitle = publicTitle && (!containsCjkText(publicTitle) || !item.title || containsCjkText(item.title))
+          ? publicTitle
+          : item.title;
         Object.assign(item, {
-          title: d.title || item.title,
+          title: nextTitle || item.title,
           price: d.price || item.price,
           oldPrice: d.oldPrice,
           currency: d.currency,
@@ -2505,6 +2566,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {
         const insights = await getOzonInsights(pid);
+        repairOzonCollectedTitleFromInsights(productData, insights);
         if (insights.detail && Array.isArray(insights.detail.attributes)) {
           productData.ozonAttributes = insights.detail.attributes;
         } else {
