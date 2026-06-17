@@ -548,6 +548,58 @@ export function syncOzonVariantGroupingAttributes<T extends { id: number; comple
   ];
 }
 
+const OZON_VARIANT_ATTR_NAME_BY_ID: Record<number, string> = {
+  10096: 'Цвет',
+  10097: 'Название цвета',
+  4295: 'Российский размер',
+  9533: 'Размер производителя',
+  9688: 'Размер производителя',
+  9689: 'Российский размер',
+  9695: 'Российский размер',
+};
+
+function getOzonVariantAttrKind(value: { id?: number | null; name?: string | null } | string | number | null | undefined): string {
+  if (typeof value === 'number') {
+    const known = OZON_VARIANT_ATTR_NAME_BY_ID[value];
+    return known ? getOzonVariantAttrKind(known) : '';
+  }
+  if (typeof value === 'string') {
+    const text = value.toLocaleLowerCase('ru-RU');
+    if (/цвет|color|colour/i.test(text)) return 'color';
+    if (/размер|size/i.test(text)) return 'size';
+    if (/об[ъь]е?м|volume|мл|ml/i.test(text)) return 'volume';
+    if (/аромат|запах|scent|fragrance/i.test(text)) return 'scent';
+    if (/модель|model/i.test(text)) return 'model';
+    if (/ячеек|ячеек|ячейки|яч/i.test(text)) return 'cells';
+    if (/упаковк|pack/i.test(text)) return 'pack';
+    return '';
+  }
+  if (value && typeof value === 'object') {
+    return getOzonVariantAttrKind(
+      value.name
+      || (value.id != null ? OZON_VARIANT_ATTR_NAME_BY_ID[Number(value.id)] : '')
+      || (value.id != null ? Number(value.id) : ''),
+    );
+  }
+  return '';
+}
+
+export function shouldApplyCollectedVariantAttrOverride(
+  attributes: Array<{ id: number; complex_id?: number; values?: any[] }> | null | undefined,
+  attrId: number,
+): boolean {
+  const targetKind = getOzonVariantAttrKind(Number(attrId));
+  if (!targetKind) return true;
+  const attrs = Array.isArray(attributes) ? attributes : [];
+  return !attrs.some((attr) => {
+    if (!Array.isArray(attr?.values) || !attr.values.length) return false;
+    return getOzonVariantAttrKind({
+      id: Number(attr?.id),
+      name: OZON_VARIANT_ATTR_NAME_BY_ID[Number(attr?.id)] || null,
+    }) === targetKind;
+  });
+}
+
 type OzonDictionaryEntry = { id: number; value?: string | null };
 type OzonResolvedAttributeValue = { value: string; dictionary_value_id: number };
 
@@ -583,12 +635,23 @@ export function resolveOzonDictionaryAttributeValues(
     return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
   }
 
-  const partial = findOzonDictionaryEntry(entries, text, true);
+  const partial = isSafeLooseDictionaryMatch(text)
+    ? findOzonDictionaryEntry(entries, text, true)
+    : null;
   if (partial) {
     return { values: [toOzonResolvedAttributeValue(partial)], matched: true, matchType: 'partial' };
   }
 
   return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
+}
+
+function isSafeLooseDictionaryMatch(value: string): boolean {
+  const text = normalizeOzonDictionaryText(value);
+  if (!text) return false;
+  if (/\s/.test(text)) return false;
+  if (/[-/]/.test(text)) return false;
+  if (/[a-zа-я]+\d|\d+[a-zа-я]/iu.test(text)) return false;
+  return true;
 }
 
 function toOzonResolvedAttributeValue(entry: OzonDictionaryEntry): OzonResolvedAttributeValue {
@@ -606,6 +669,51 @@ function normalizeOzonDictionaryText(value: unknown): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeVariantConflictValue(value: unknown): string {
+  return cleanPublishName(value)
+    .toLocaleLowerCase('ru-RU')
+    .replace(/ё/g, 'е')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function findVariantAttributeConflicts(
+  variantsInput: unknown,
+): Array<{ skus: string[]; attrs: Record<string, string> }> {
+  const variants = Array.isArray(variantsInput) ? variantsInput as any[] : [];
+  const bySignature = new Map<string, { skus: string[]; attrs: Record<string, string> }>();
+
+  for (const variant of variants) {
+    const sku = String(variant?.sku || '').trim();
+    if (!sku) continue;
+    const attrs = sanitizeVariantAttrsForPublish(variant?.attrs && typeof variant.attrs === 'object'
+      ? variant.attrs as Record<string, string>
+      : undefined);
+    const entries = Object.entries(attrs)
+      .map(([name, value]) => [cleanPublishName(name), cleanPublishName(value)] as const)
+      .filter(([name, value]) => name && value)
+      .sort(([a], [b]) => a.localeCompare(b, 'ru-RU'));
+    if (!entries.length) continue;
+    const signature = entries
+      .map(([name, value]) => `${normalizeVariantConflictValue(name)}=${normalizeVariantConflictValue(value)}`)
+      .join('|');
+    if (!signature) continue;
+    const existing = bySignature.get(signature);
+    if (existing) {
+      existing.skus.push(sku);
+      continue;
+    }
+    bySignature.set(signature, {
+      skus: [sku],
+      attrs: Object.fromEntries(entries),
+    });
+  }
+
+  return Array.from(bySignature.values())
+    .filter((entry) => entry.skus.length > 1);
 }
 
 function splitOzonCompositeDictionaryValue(value: string): string[] {
@@ -1124,8 +1232,15 @@ export function removeVariantsBySkus(variantsInput: unknown, skusInput: unknown[
 function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; title?: string | null; metadata?: unknown; variants?: unknown }[]) {
   const unsafe: string[] = [];
   const suspicious: string[] = [];
+  const variantConflicts: string[] = [];
   for (const item of items) {
     const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
+    if (variants.length) {
+      const conflicts = findVariantAttributeConflicts(variants);
+      for (const conflict of conflicts.slice(0, 3)) {
+        variantConflicts.push(`${item.sku || item.id}: ${conflict.skus.join('/') } -> ${Object.entries(conflict.attrs).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+      }
+    }
     if (!variants.length) {
       const name = resolvePublishName(item);
       if (!name || containsCjkText(name)) unsafe.push(`${item.sku || item.id}: ${name || '空标题'}`);
@@ -1146,6 +1261,10 @@ function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; tit
   if (suspicious.length) {
     const sample = suspicious.slice(0, 3).join('；');
     throw new Error(`上架标题疑似重复堆词，OZON 可能会判定“名称中有无意义文本或语法错误”。请先在采集改款里精简标题：${sample}`);
+  }
+  if (variantConflicts.length) {
+    const sample = variantConflicts.slice(0, 3).join('；');
+    throw new Error(`变体可变特性在清洗后出现重复，OZON 会拒绝合并上架。请先检查颜色/尺码等差异值是否被合并：${sample}`);
   }
 }
 
@@ -2510,6 +2629,10 @@ export async function collectRoutes(app: FastifyInstance) {
               || allAttrs.find((a) => a.name && aspectLower.includes(a.name.toLowerCase()));
             if (!attrDef) {
               console.warn(`[publish-ozon variant] aspect "${aspectName}" not found in category attrs ${group.categoryId}/${group.typeId} (offer ${importItem.offer_id})`);
+              continue;
+            }
+            if (importItem._hasOwnAttrs && !shouldApplyCollectedVariantAttrOverride(importItem.attributes, attrDef.id)) {
+              console.log(`[publish-ozon variant] keep official attr#${attrDef.id}(${attrDef.name}) for offer=${importItem.offer_id}; skip collected web aspect "${aspectName}"`);
               continue;
             }
 

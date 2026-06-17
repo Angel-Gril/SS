@@ -20,8 +20,10 @@ import {
   resolveItemPublishCategory,
   resolvePublishOfferId,
   resolvePublishName,
+  findVariantAttributeConflicts,
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
+  shouldApplyCollectedVariantAttrOverride,
   buildCollectedGoodsMetadata,
   resolveCollectedDisplayTitle,
   syncOzonCoreTextAttributes,
@@ -319,6 +321,19 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('does not collapse near-color variant values into a broader Ozon dictionary entry', () => {
+    const result = resolveOzonDictionaryAttributeValues('светло-голубой', [
+      { id: 101, value: 'голубой' },
+      { id: 102, value: 'синий' },
+    ]);
+
+    expect(result).toEqual({
+      values: [{ value: 'светло-голубой', dictionary_value_id: 0 }],
+      matched: false,
+      matchType: 'text-fallback',
+    });
+  });
+
   it('rewrites cloned Russian origin country to China for China seller publishing', () => {
     const attrs = normalizeOzonOriginCountryForChinaSeller([{
       id: 4389,
@@ -343,6 +358,31 @@ describe('collect publish helpers', () => {
       complex_id: 0,
       values: [{ value: 'Без бренда', dictionary_value_id: 97021 }],
     });
+  });
+
+  it('keeps official SKU variant attributes instead of overwriting them with collected web aspects', () => {
+    expect(shouldApplyCollectedVariantAttrOverride([{
+      id: 10096,
+      complex_id: 0,
+      values: [{ value: 'голубой', dictionary_value_id: 101 }],
+    }], 10096)).toBe(false);
+
+    expect(shouldApplyCollectedVariantAttrOverride([{
+      id: 10096,
+      complex_id: 0,
+      values: [{ value: 'голубой', dictionary_value_id: 101 }],
+    }], 10097)).toBe(false);
+  });
+
+  it('detects duplicate collected variant signatures before Ozon rejects merged variants', () => {
+    expect(findVariantAttributeConflicts([
+      { sku: '1945889349', attrs: { 'Цвет': 'коричневый' } },
+      { sku: '1945889350', attrs: { 'Цвет': 'коричневый' } },
+      { sku: '1945889351', attrs: { 'Цвет': 'хаки' } },
+    ])).toEqual([{
+      skus: ['1945889349', '1945889350'],
+      attrs: { 'Цвет': 'коричневый' },
+    }]);
   });
 
   it('prefers each collected item category over batch fallback category', () => {
