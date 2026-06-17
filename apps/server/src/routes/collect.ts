@@ -8,6 +8,7 @@ import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
+import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
@@ -954,6 +955,22 @@ export function planFallbackPictureUploads(
       continue;
     }
     if (status === 'failed') continue;
+    const blockingErrors = Array.isArray(item?.errors)
+      ? item.errors.filter((error: any) => {
+        const level = String(error?.level || '').toLowerCase();
+        const state = String(error?.state || '').toLowerCase();
+        return level === 'error' || state === 'declined';
+      })
+      : [];
+    if (blockingErrors.length) {
+      skipped.push({
+        offerId,
+        productId,
+        rawImages: offerImageLists[offerId] || [],
+        message: `商品卡被 Ozon 拒绝，已跳过图片补传：${blockingErrors.map((error: any) => formatOzonErrorMessage(error)).join('； ')}`.slice(0, 300),
+      });
+      continue;
+    }
 
     const rawImages = offerImageLists[offerId] || [];
     if (!rawImages.length) {
@@ -2056,11 +2073,13 @@ export async function collectRoutes(app: FastifyInstance) {
             fallbackError = `${unmatched.length} 件商品被源卖家禁止跟卖`;
           }
 
+          let fallbackImportItems: any[] = [];
           // 轮询拿 product_id，然后上传采集的图片
           if (!unmatched.length) {
             await new Promise((r) => setTimeout(r, 3000));
             try {
               const info = await client.getImportInfo(fallbackTaskId);
+              fallbackImportItems = Array.isArray(info.items) ? info.items : [];
               for (const it of info.items || []) {
                 if (it.product_id && it.status === 'imported') {
                   const offerId = String(it.offer_id || '');
@@ -2108,11 +2127,33 @@ export async function collectRoutes(app: FastifyInstance) {
             await prisma.supplyGoods.update({ where: { id: item.id }, data: { status: 'listed' } });
           }
 
+          const uploadedOfferIds = new Set(
+            fallbackPictureUploads
+              .filter((it) => it.status === 'uploaded')
+              .map((it) => String(it.offerId || '').trim())
+              .filter(Boolean),
+          );
+          const blockedOfferIds = new Set(
+            fallbackPictureUploads
+              .filter((it) => it.status === 'failed' || it.status === 'skipped')
+              .map((it) => String(it.offerId || '').trim())
+              .filter(Boolean),
+          );
+          const fallbackPendingCount = fallbackImportItems.filter((it: any) => {
+            const offerId = String(it?.offer_id || '').trim();
+            if (!offerId || uploadedOfferIds.has(offerId) || blockedOfferIds.has(offerId)) return false;
+            const productId = positiveInt(it?.product_id);
+            const status = String(it?.status || '').toLowerCase();
+            return !productId || status === 'pending';
+          }).length;
+          const blockedCount = fallbackPictureUploads.filter((it) => it.status === 'failed' || it.status === 'skipped').length;
           const pictureUploadStatus = fallbackPictureUploadError
             ? 'failed'
-            : fallbackPictureUploads.length
-              ? (fallbackPictureUploads.some((it) => it.status === 'failed' || it.status === 'skipped') ? 'failed' : 'success')
-              : 'pending';
+            : fallbackPendingCount > 0
+              ? (blockedCount > 0 ? 'partial_pending' : 'pending')
+              : fallbackPictureUploads.length
+                ? (blockedCount > 0 ? 'partial_failed' : 'success')
+                : 'pending';
           await prisma.syncJob.update({
             where: { id: fallbackJobId },
             data: {
@@ -2124,7 +2165,7 @@ export async function collectRoutes(app: FastifyInstance) {
                 pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
                 pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
                 pictureUploadSkippedCount: fallbackPictureUploads.filter((it) => it.status === 'skipped').length,
-                pictureUploadPendingCount: pictureUploadStatus === 'pending' ? fallbackItems.length : 0,
+                pictureUploadPendingCount: fallbackPendingCount,
                 pictureUploadStatus,
                 pictureUploadError: fallbackPictureUploadError,
               },

@@ -844,6 +844,40 @@ describe('collect publish helpers', () => {
     expect(plan.pendingCount).toBe(0);
   });
 
+  it('skips fallback picture uploads for offers blocked by Ozon card validation errors', () => {
+    const plan = planFallbackPictureUploads({
+      source: 'collect-publish-fallback',
+      offerImageLists: {
+        'offer-blocked': ['https://cdn.example.com/blocked.jpg'],
+      },
+    }, [
+      {
+        offer_id: 'offer-blocked',
+        product_id: 1002,
+        status: 'imported',
+        errors: [
+          {
+            level: 'error',
+            state: 'declined',
+            code: 'FB_ORIGINAL',
+            attribute_name: 'Название',
+            description: 'В карточке товара есть указание на то, что продаётся оригинал товара',
+          },
+        ],
+      },
+    ], []);
+
+    expect(plan.operations).toEqual([]);
+    expect(plan.pendingCount).toBe(0);
+    expect(plan.skipped).toEqual([
+      expect.objectContaining({
+        offerId: 'offer-blocked',
+        productId: 1002,
+        message: expect.stringContaining('оригинал'),
+      }),
+    ]);
+  });
+
   it('removes multiple collected variants by sku and reports missing skus', () => {
     const result = removeVariantsBySkus([
       { sku: 'blue', attrs: { Color: 'blue' } },

@@ -105,10 +105,12 @@ export function ListingJobDetailDialog({
   const mode = data ? modeLabel(data.payload) : null;
   const jobErrorHint = data?.error ? explainOzonError(data.error) : null;
   const pictureUploads = data?.payload?.pictureUploads || [];
-  const pictureProblemCount = pictureUploads.filter((it) => it.status !== 'uploaded').length
-    + (data?.payload?.pictureUploadError ? 1 : 0);
+  const pictureUploadedCount = pictureUploads.filter((it) => it.status === 'uploaded').length;
+  const pictureBlockedCount = pictureUploads.filter((it) => it.status !== 'uploaded').length;
+  const pictureProblemCount = pictureBlockedCount + (data?.payload?.pictureUploadError ? 1 : 0);
   const pictureUploadStatus = data?.payload?.pictureUploadStatus;
   const pictureActivationPending = data?.payload?.pictureActivationPending || [];
+  const picturePendingCount = Number(data?.payload?.pictureUploadPendingCount || 0);
   const pictureActivationPendingCount = Number(data?.payload?.pictureActivationPendingCount || pictureActivationPending.length || 0);
   const pictureStage = data
     ? resolveListingPictureStage({ status: data.status, payload: data.payload })
@@ -129,6 +131,7 @@ export function ListingJobDetailDialog({
   const shouldAutoRefresh = !!data && (
     data.status === 'RUNNING'
     || pictureUploadStatus === 'pending'
+    || pictureUploadStatus === 'partial_pending'
     || pictureActivationPendingCount > 0
     || needsLegacyFallbackPictureRefresh
   );
@@ -136,6 +139,7 @@ export function ListingJobDetailDialog({
     data.status !== 'SUCCESS'
     || fallbackPictureJob
     || pictureUploadStatus === 'pending'
+    || pictureUploadStatus === 'partial_pending'
     || pictureUploadStatus === 'failed'
     || pictureActivationPendingCount > 0
   );
@@ -224,12 +228,19 @@ export function ListingJobDetailDialog({
                     variant={pictureProblemCount ? 'destructive' : 'outline'}
                     className={`text-[10px] ${!pictureProblemCount && pictureStage ? pictureStageBadgeClass(pictureStage.tone) : ''}`}
                   >
-                    {pictureProblemCount ? `${pictureProblemCount} 个异常` : (pictureStage?.label || '正常')}
+                    {pictureProblemCount
+                      ? `已上传 ${pictureUploadedCount} / 已阻塞 ${pictureBlockedCount} / 待补传 ${picturePendingCount}`
+                      : (pictureStage?.label || '正常')}
                   </Badge>
                 </div>
                 {data.payload?.pictureUploadError && (
                   <div className="px-3 py-2 text-xs text-destructive border-t break-words">
                     {data.payload.pictureUploadError}
+                  </div>
+                )}
+                {(pictureUploadedCount > 0 || pictureBlockedCount > 0 || picturePendingCount > 0) && (
+                  <div className="px-3 py-2 text-xs border-t bg-muted/40">
+                    已上传 {pictureUploadedCount} 个，已阻塞 {pictureBlockedCount} 个，待补传 {picturePendingCount} 个。
                   </div>
                 )}
                 {pictureActivationPendingCount > 0 && (

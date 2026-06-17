@@ -57,7 +57,7 @@ function mergePictureUploadDiagnostics(existingInput: unknown, next: any[]): any
 }
 
 function summarizePictureUploadDiagnostics(diagnosticsInput: unknown, pendingCount: number): {
-  status: 'pending' | 'success' | 'failed';
+  status: 'pending' | 'success' | 'failed' | 'partial_pending' | 'partial_failed';
   failedCount: number;
   skippedCount: number;
   pendingCount: number;
@@ -66,22 +66,25 @@ function summarizePictureUploadDiagnostics(diagnosticsInput: unknown, pendingCou
   const diagnostics = Array.isArray(diagnosticsInput) ? diagnosticsInput as any[] : [];
   const failedCount = diagnostics.filter((entry) => entry?.status === 'failed').length;
   const skippedCount = diagnostics.filter((entry) => entry?.status === 'skipped').length;
+  const blockedCount = failedCount + skippedCount;
+  if (pendingCount > 0) {
+    return {
+      status: blockedCount > 0 ? 'partial_pending' : 'pending',
+      failedCount,
+      skippedCount,
+      pendingCount,
+      errorMessage: blockedCount > 0
+        ? `图片补传进行中：已阻塞 ${blockedCount} 个，待补传 ${pendingCount} 个`
+        : `图片补传等待 OZON 生成 product_id：剩余 ${pendingCount} 个`,
+    };
+  }
   if (failedCount || skippedCount) {
     return {
-      status: 'failed',
+      status: 'partial_failed',
       failedCount,
       skippedCount,
       pendingCount,
       errorMessage: `图片补传未完成：失败 ${failedCount} 个，缺图 ${skippedCount} 个`,
-    };
-  }
-  if (pendingCount > 0) {
-    return {
-      status: 'pending',
-      failedCount,
-      skippedCount,
-      pendingCount,
-      errorMessage: `图片补传等待 OZON 生成 product_id：剩余 ${pendingCount} 个`,
     };
   }
   return {
@@ -433,6 +436,7 @@ export async function listingRoutes(app: FastifyInstance) {
       const canCheckPictureActivation = allDone
         && failed < total
         && pictureStatus !== 'failed'
+        && pictureStatus !== 'partial_failed'
         && pictureStatus !== 'pending';
       if (canCheckPictureActivation) {
         const pendingActivation = await findPictureActivationPendingItems(client, job.shopId, info.items || []);
@@ -445,7 +449,14 @@ export async function listingRoutes(app: FastifyInstance) {
 
       const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
       const finalStatus = pictureErrorMessage
-        ? (allDone && nextPayload.pictureUploadStatus === 'failed' ? 'FAILED' : 'RUNNING')
+        ? (
+          allDone
+          && nextPayload.pictureUploadStatus !== 'pending'
+          && nextPayload.pictureUploadStatus !== 'partial_pending'
+          && (nextPayload.pictureUploadStatus === 'failed' || nextPayload.pictureUploadStatus === 'partial_failed')
+            ? 'FAILED'
+            : 'RUNNING'
+        )
         : newStatus;
       const errorMessage = pictureErrorMessage || (failed > 0 ? `${failed} 个商品上架失败` : null);
 

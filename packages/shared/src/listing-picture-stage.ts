@@ -27,6 +27,7 @@ export interface ListingPictureUploadEntry {
   status?: string;
   imageCount?: number;
   resolvedCount?: number;
+  message?: string;
 }
 
 export interface ListingPictureStagePayload {
@@ -115,7 +116,19 @@ export function resolveListingPictureStage(input: ListingPictureStageInput): Lis
     };
   }
 
-  if (pictureStatus === 'failed' || failedCount > 0 || payload.pictureUploadError) {
+  if ((pictureStatus === 'pending' || pictureStatus === 'partial_pending') && (pendingCount > 0 || status === 'RUNNING')) {
+    return {
+      code: 'waiting_product_id',
+      label: '等待 Ozon 生成商品ID',
+      description: failedCount > 0
+        ? `商品创建任务已提交，系统拿到 product_id 后会继续补传图片；当前已阻塞 ${failedCount} 个 offer，请在详情里查看具体原因。`
+        : '商品创建任务已提交，系统拿到 product_id 后会继续补传图片。',
+      tone: 'warning',
+      ...(pendingCount ? { countLabel: `剩余 ${pendingCount}` } : {}),
+    };
+  }
+
+  if (pictureStatus === 'failed' || pictureStatus === 'partial_failed' || failedCount > 0 || payload.pictureUploadError) {
     return {
       code: 'picture_failed',
       label: '图片补传异常',

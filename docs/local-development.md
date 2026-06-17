@@ -95,6 +95,17 @@ pnpm verify:extension
 
 建议把这四条当成开发提交前的最低门槛。涉及部署、存储、备份或扩展发布时，再按下面的测试矩阵补跑对应项。
 
+如果这次改动涉及 Ozon 跟卖上架、图片补传或上架日志诊断，额外补跑：
+
+```bash
+pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/__tests__/listing-picture-stage.test.ts
+```
+
+这两组用例覆盖：
+
+- `follow-by-sku` 图片补传在 `已上传 / 已阻塞 / 待补传` 三种状态下的续跑逻辑
+- Ozon 已拒绝商品卡时，系统应跳过图片补传并直接展示卡片阻塞原因
+
 ## 测试矩阵
 
 | 场景 | 在哪里跑 | 命令 | 通过标准 |

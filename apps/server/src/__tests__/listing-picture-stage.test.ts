@@ -90,6 +90,55 @@ describe('listing picture stage', () => {
     });
   });
 
+  it('keeps waiting-for-product-id stage when some fallback pictures failed but others are still pending', () => {
+    const stage = resolveListingPictureStage({
+      status: 'RUNNING',
+      payload: {
+        source: 'collect-publish-fallback',
+        mode: 'follow-by-sku',
+        itemCount: 8,
+        pictureUploadStatus: 'partial_pending',
+        pictureUploadPendingCount: 5,
+        pictureUploadFailedCount: 1,
+        pictureUploads: [
+          { offerId: 'offer-failed', productId: 501, status: 'failed', imageCount: 2, resolvedCount: 0 },
+        ],
+      },
+    });
+
+    expect(stage).toMatchObject({
+      code: 'waiting_product_id',
+      label: '等待 Ozon 生成商品ID',
+      tone: 'warning',
+      countLabel: '剩余 5',
+    });
+    expect(stage.description).toContain('已阻塞 1 个');
+  });
+
+  it('shows a partial failure stage after pending fallback offers are exhausted', () => {
+    const stage = resolveListingPictureStage({
+      status: 'SUCCESS',
+      payload: {
+        source: 'collect-publish-fallback',
+        mode: 'follow-by-sku',
+        itemCount: 4,
+        pictureUploadStatus: 'partial_failed',
+        pictureUploadFailedCount: 1,
+        pictureUploads: [
+          { offerId: 'offer-failed', productId: 601, status: 'failed', imageCount: 2, resolvedCount: 0 },
+          { offerId: 'offer-ok', productId: 602, status: 'uploaded', imageCount: 3, resolvedCount: 3 },
+        ],
+      },
+    });
+
+    expect(stage).toMatchObject({
+      code: 'picture_failed',
+      label: '图片补传异常',
+      tone: 'error',
+      countLabel: '1 个异常',
+    });
+  });
+
   it('marks legacy successful fallback jobs without diagnostics as needing a refresh', () => {
     const stage = resolveListingPictureStage({
       status: 'SUCCESS',

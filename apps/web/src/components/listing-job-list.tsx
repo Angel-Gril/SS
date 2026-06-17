@@ -32,7 +32,7 @@ export interface JobRow {
       firstImage?: string;
       message?: string;
     }> | null;
-    pictureUploadStatus?: 'pending' | 'success' | 'failed';
+    pictureUploadStatus?: 'pending' | 'success' | 'failed' | 'partial_pending' | 'partial_failed';
     pictureUploadFailedCount?: number;
     pictureUploadSkippedCount?: number;
     pictureUploadPendingCount?: number;
@@ -82,6 +82,7 @@ function needsRemoteRefresh(row: JobRow): boolean {
   const pictureActivationPendingCount = Number(row.payload?.pictureActivationPendingCount || 0);
   return row.status === 'RUNNING'
     || pictureUploadStatus === 'pending'
+    || pictureUploadStatus === 'partial_pending'
     || pictureActivationPendingCount > 0
     || (
       row.status === 'SUCCESS'
