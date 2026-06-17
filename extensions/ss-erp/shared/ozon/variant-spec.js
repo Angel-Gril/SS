@@ -18,6 +18,10 @@
     return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
   }
 
+  function wordCount(value) {
+    return cleanText(value).split(/\s+/).filter(Boolean).length;
+  }
+
   const CHINESE_COLOR_VALUE_RU = {
     '卡其': 'хаки',
     '卡其色': 'хаки',
@@ -98,6 +102,17 @@
     return '';
   }
 
+  function isLikelyDescriptiveColorValue(value) {
+    const text = cleanText(value);
+    if (!text || containsCjkText(text)) return false;
+    if (/(?:\d+\s*[xх*]\s*\d+|\d+(?:[,.]\d+)?\s*(?:см|mm|мм))/iu.test(text)) return true;
+    if (/(?:аксессуар|фото|держател|инструмент|мойк|раковин|кухн|набор|кукла|толщин|покрыти|монтажн)/iu.test(text)) return true;
+    const words = wordCount(text);
+    if (words >= 5) return true;
+    if (text.length >= 36 && words >= 4) return true;
+    return false;
+  }
+
   function normalizePublicVariantAttrName(name) {
     const text = cleanText(name);
     if (!containsCjkText(text)) return text;
@@ -114,11 +129,14 @@
     const text = cleanText(value);
     if (!text) return '';
     const kind = variantAttrKind(name);
-    if (!containsCjkText(text)) return text;
     if (kind === 'color') {
+      if (!containsCjkText(text)) {
+        return isLikelyDescriptiveColorValue(text) ? '' : text;
+      }
       const normalized = text.replace(/\s+/g, '');
       return CHINESE_COLOR_VALUE_RU[normalized] || '';
     }
+    if (!containsCjkText(text)) return text;
     if (kind === 'size') {
       const cleaned = text
         .replace(/系列/g, '')
@@ -182,9 +200,10 @@
       const value = attrs[key];
       const hadCjk = containsCjkText(key) || containsCjkText(value);
       const cleanKey = normalizePublicVariantAttrName(key);
+      const descriptiveColor = variantAttrKind(cleanKey || key) === 'color' && isLikelyDescriptiveColorValue(value);
       const cleanValue = normalizePublicVariantAttrValue(cleanKey || key, value);
       if (!cleanKey || !cleanValue || containsCjkText(cleanKey) || containsCjkText(cleanValue)) {
-        dropped.push({ key, value });
+        dropped.push({ key, value, descriptiveColor });
         return;
       }
       if (cleanKey && cleanValue) nextAttrs[cleanKey] = cleanValue;
@@ -218,7 +237,9 @@
 
     const clean = { ...variant, attrs: nextAttrs };
     if (repaired < dropped.length) {
-      clean._variantAttrsWarning = '变体属性含中文，已移除无法自动修复的字段';
+      clean._variantAttrsWarning = dropped.some((entry) => entry && entry.descriptiveColor)
+        ? '变体属性含长句商品描述，已移除无法自动修复的字段'
+        : '变体属性含中文，已移除无法自动修复的字段';
     } else {
       delete clean._variantAttrsWarning;
     }
@@ -312,9 +333,11 @@
         const parsedPrice = priceText && typeof opts.parsePriceText === 'function'
           ? opts.parsePriceText(priceText)
           : null;
+        const cleanName = normalizePublicVariantAttrName(dimName);
+        const cleanValue = normalizePublicVariantAttrValue(cleanName || dimName, text);
         const next = {
           sku,
-          attrs: { [dimName]: text },
+          attrs: cleanName && cleanValue ? { [cleanName]: cleanValue } : {},
           ...(parsedPrice && parsedPrice.price ? { price: parsedPrice.price } : {}),
           ...(parsedPrice && parsedPrice.currency ? { priceCurrency: parsedPrice.currency } : {}),
           ...(priceText ? { priceText } : {}),

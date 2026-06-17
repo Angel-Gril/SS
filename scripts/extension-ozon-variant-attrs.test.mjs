@@ -117,6 +117,45 @@ test('prefers official seller variable attrs over translated public attrs', () =
   assert.equal(repaired._variantAttrsWarning, undefined);
 });
 
+test('drops long descriptive Ozon color text when seller attrs cannot repair it', () => {
+  const spec = loadVariantSpec();
+  const variant = {
+    sku: '2303472839',
+    attrs: {
+      'Цвет': '50х50 Сатин Мойка для кухни нержавеющая с PVD покрытием (аксессуары показаны на втором фото)',
+    },
+  };
+
+  const repaired = spec.sanitizeOzonVariantAttrs(variant);
+
+  assert.deepEqual(plain(repaired.attrs), {});
+  assert.equal(repaired._variantAttrsWarning, '变体属性含长句商品描述，已移除无法自动修复的字段');
+});
+
+test('does not save long descriptive webAspects text as color variants during Ozon collection', () => {
+  const spec = loadVariantSpec();
+  const variants = spec.buildOzonVariantsFromWebAspects({
+    aspects: [{
+      aspectName: 'Цвет',
+      variants: [{
+        sku: '2303472839',
+        data: {
+          textRs: [{
+            content: '50х50 Сатин Мойка для кухни нержавеющая с PVD покрытием (аксессуары показаны на втором фото)',
+          }],
+          coverImage: 'https://cdn.example.com/cover.jpg',
+        },
+      }],
+    }],
+  }, {});
+
+  assert.deepEqual(plain(variants), [{
+    sku: '2303472839',
+    attrs: {},
+    images: ['https://cdn.example.com/cover.jpg'],
+  }]);
+});
+
 test('sanitizes Ozon variant attrs before ERP collection payload is saved', () => {
   const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 

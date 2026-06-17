@@ -46,6 +46,10 @@ export function containsCjkText(value: unknown): boolean {
   return CJK_TEXT_RE.test(String(value || ''));
 }
 
+function variantWordCount(value: unknown): number {
+  return String(value || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
 const TITLE_STOP_WORDS = new Set(['для', 'в', 'на', 'и', 'с', 'со', 'по', 'из', 'от', 'к']);
 
 function repairRussianTitleGluing(value: string): string {
@@ -175,12 +179,28 @@ function isRedundantVolumeVariantTitlePart(base: string, rawName: string, rawVal
   return /^\s*\d{1,5}(?:[,.]\d+)?\s*$/u.test(String(rawValue || ''));
 }
 
+function isColorLikeVariantName(name: unknown): boolean {
+  return /цвет|color|colour/i.test(String(name || ''));
+}
+
+function isLikelyDescriptiveColorVariantValue(value: unknown): boolean {
+  const text = cleanPublishName(value);
+  if (!text || containsCjkText(text)) return false;
+  if (/(?:\d+\s*[xх*]\s*\d+|\d+(?:[,.]\d+)?\s*(?:см|mm|мм))/iu.test(text)) return true;
+  if (/(?:аксессуар|фото|держател|инструмент|мойк|раковин|кухн|набор|кукла|толщин|покрыти|монтажн)/iu.test(text)) return true;
+  const words = variantWordCount(text);
+  if (words >= 5) return true;
+  if (text.length >= 36 && words >= 4) return true;
+  return false;
+}
+
 function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false, base = ''): string[] {
   if (!variantAttrs || !Object.keys(variantAttrs).length) return [];
   const parts: string[] = [];
   const seen = new Set<string>();
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
+    if (isColorLikeVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue)) continue;
     const value = cleanPublishName(rawValue);
     if (!value) continue;
     if (containsCjkText(value)) continue;
@@ -203,6 +223,7 @@ export function sanitizeVariantAttrsForPublish(variantAttrs?: Record<string, str
     const value = String(rawValue || '').trim();
     if (!name || !value) continue;
     if (containsCjkText(name) || containsCjkText(value)) continue;
+    if (isColorLikeVariantName(name) && isLikelyDescriptiveColorVariantValue(value)) continue;
     out[name] = value;
   }
   return out;
@@ -609,6 +630,7 @@ export function resolveOzonDictionaryAttributeValues(
 ): { values: OzonResolvedAttributeValue[]; matched: boolean; matchType: 'exact' | 'split' | 'partial' | 'text-fallback' | 'empty' } {
   const text = String(rawValue || '').trim();
   if (!text) return { values: [], matched: false, matchType: 'empty' };
+  if (isLikelyDescriptiveColorVariantValue(text)) return { values: [], matched: false, matchType: 'empty' };
 
   const entries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
   const exact = findOzonDictionaryEntry(entries, text, false);

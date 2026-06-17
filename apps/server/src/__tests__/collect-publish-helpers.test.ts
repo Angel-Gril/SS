@@ -334,6 +334,23 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('does not treat long collected color sentences as Ozon color dictionary values', () => {
+    const result = resolveOzonDictionaryAttributeValues(
+      '50х50 Сатин Мойка для кухни нержавеющая с PVD покрытием',
+      [
+        { id: 101, value: 'сатин' },
+        { id: 102, value: 'графит' },
+        { id: 103, value: 'серебристый' },
+      ],
+    );
+
+    expect(result).toEqual({
+      values: [],
+      matched: false,
+      matchType: 'empty',
+    });
+  });
+
   it('rewrites cloned Russian origin country to China for China seller publishing', () => {
     const attrs = normalizeOzonOriginCountryForChinaSeller([{
       id: 4389,
@@ -383,6 +400,19 @@ describe('collect publish helpers', () => {
       skus: ['1945889349', '1945889350'],
       attrs: { 'Цвет': 'коричневый' },
     }]);
+  });
+
+  it('ignores long descriptive color sentences when checking variant conflicts', () => {
+    expect(findVariantAttributeConflicts([
+      {
+        sku: '2159287264',
+        attrs: { 'Цвет': 'Держатель для инструмента серебристый 50*50см толщиной 3,0 мм' },
+      },
+      {
+        sku: '2303472839',
+        attrs: { 'Цвет': 'Держатель для инструментов черный 50*50 см толщина 3,0 мм' },
+      },
+    ])).toEqual([]);
   });
 
   it('prefers each collected item category over batch fallback category', () => {
