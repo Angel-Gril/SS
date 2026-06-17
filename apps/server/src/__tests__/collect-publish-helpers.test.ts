@@ -259,6 +259,10 @@ describe('collect publish helpers', () => {
       'Описание товара\nХарактеристики',
     );
 
+    expect(sanitizePublishDescription('Хлопок Проверено Оригинальный Белый')).toBe(
+      'Хлопок Белый',
+    );
+
     expect(resolvePublishDescription({
       notes: 'old note',
       metadata: {
@@ -351,6 +355,22 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('extracts safe color tokens from mixed marketing color phrases', () => {
+    const result = resolveOzonDictionaryAttributeValues(
+      'Хлопок Проверено Оригинальный Белый',
+      [
+        { id: 101, value: 'белый' },
+        { id: 102, value: 'черный' },
+      ],
+    );
+
+    expect(result).toEqual({
+      values: [{ value: 'белый', dictionary_value_id: 101 }],
+      matched: true,
+      matchType: 'split',
+    });
+  });
+
   it('rewrites cloned Russian origin country to China for China seller publishing', () => {
     const attrs = normalizeOzonOriginCountryForChinaSeller([{
       id: 4389,
@@ -413,6 +433,21 @@ describe('collect publish helpers', () => {
         attrs: { 'Цвет': 'Держатель для инструментов черный 50*50 см толщина 3,0 мм' },
       },
     ])).toEqual([]);
+  });
+
+  it('drops marketing words from mixed color attrs before using them in publish title', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'Хлопок Проверено Оригинальный Белый',
+    })).toEqual({
+      'Цвет': 'Белый',
+    });
+
+    expect(resolvePublishName({
+      title: 'Футболка женская',
+      metadata: {},
+    }, {
+      'Цвет': 'Хлопок Проверено Оригинальный Белый',
+    })).toBe('Футболка женская белый');
   });
 
   it('prefers each collected item category over batch fallback category', () => {

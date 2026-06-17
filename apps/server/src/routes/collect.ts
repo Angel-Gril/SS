@@ -14,6 +14,12 @@ const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
 const OZON_MAX_PUBLISH_IMAGES = 30;
 const OZON_ORIGIN_COUNTRY_ATTR_ID = 4389;
+const OZON_MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
+const OZON_COLOR_TOKEN_RE = /^(?:бел|черн|красн|син|голуб|зел[её]н|желт|розов|фиолет|сер|беж|корич|хаки|бирюз|салатов|графит|серебрист|золот|оранж|бордов|молочн|кремов|оливк|сиренев|лилов|изумруд|лаванд|мятн|пудров|коралл|терракот|персиков|бронз|сапфир)\p{L}*$/iu;
+const OZON_COLOR_PREFIX_RE = /^(?:светло|темно|тёмно|ярко|нежно|бледно|пастельно|дымчато)$/iu;
+const OZON_COMPOUND_COLOR_PREFIX_RE = /^(?:бело|черно|чёрно|красно|сине|голубо|зелено|зелёно|желто|жёлто|розово|фиолетово|серо|бежево|коричнево|бирюзово|салатово|графитово|серебристо|золотисто|оранжево|бордово|молочно|кремово|оливково|сиренево|лилово|изумрудно|лавандово|мятно|пудрово|кораллово|терракотово|персиково|бронзово)$/iu;
+const OZON_COLOR_TAIL_RE = /^(?:сапфир|матов\p{L}*|глянцев\p{L}*|жемчуж\p{L}*|перламутр\p{L}*|металлик\p{L}*|металлическ\p{L}*|мрамор\p{L}*|меланж\p{L}*|карбон\p{L}*|неон\p{L}*|хамелеон\p{L}*)$/iu;
+const OZON_COLOR_NOISE_RE = /^(?:хлопок|лен|лён|шерсть|кожа|замша|шелк|шёлк|сатин|атлас|полиэстер|вискоза|кашемир|акрил|для|на|с|со|и|по|из|от|к)$/iu;
 
 const collectSchema = z.object({
   title: z.string().min(1),
@@ -183,8 +189,99 @@ function isColorLikeVariantName(name: unknown): boolean {
   return /цвет|color|colour/i.test(String(name || ''));
 }
 
+function stripOzonMarketingWords(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(OZON_MARKETING_WORD_RE, '$1');
+}
+
+function sanitizeOzonAttrText(value: unknown): string {
+  return stripOzonMarketingWords(value)
+    .replace(/[ \t\f\v\r]+/g, ' ')
+    .replace(/\s*\/\s*/g, ' / ')
+    .replace(/\s*([,;])\s*/g, '$1 ')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,;])/g, '$1')
+    .replace(/([,;]){2,}/g, '$1')
+    .replace(/[,;]\s*$/g, '')
+    .trim();
+}
+
+function sanitizeOzonDescriptionText(value: unknown): string {
+  return stripOzonMarketingWords(value)
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeColorToken(value: string): string {
+  return value
+    .replace(/^[^\p{L}\p{N}]+/gu, '')
+    .replace(/[^\p{L}\p{N}-]+$/gu, '')
+    .trim();
+}
+
+function isColorToken(value: string): boolean {
+  if (OZON_COLOR_TOKEN_RE.test(value)) return true;
+  const parts = value.split('-').map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  return parts.every((part, index) => (
+    OZON_COLOR_TOKEN_RE.test(part)
+    || (index < parts.length - 1 && OZON_COMPOUND_COLOR_PREFIX_RE.test(part))
+  ));
+}
+
+function isAllowedColorTail(value: string): boolean {
+  if (!value || /\d/u.test(value)) return false;
+  if (OZON_COLOR_NOISE_RE.test(value)) return false;
+  return OZON_COLOR_TAIL_RE.test(value) || /^[\p{L}-]{3,}$/u.test(value);
+}
+
+function extractSafeColorSegment(value: string): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text || containsCjkText(text) || isLikelyDescriptiveColorVariantValue(text)) return '';
+
+  const tokens = text
+    .split(/\s+/)
+    .map((part) => normalizeColorToken(part))
+    .filter(Boolean);
+  if (!tokens.length) return '';
+
+  const firstColorIndex = tokens.findIndex((token) => isColorToken(token));
+  if (firstColorIndex < 0) return '';
+
+  if (firstColorIndex === 1 && OZON_COLOR_PREFIX_RE.test(tokens[0] || '')) {
+    return `${tokens[0]} ${tokens[1]}`;
+  }
+
+  if (firstColorIndex === 0) {
+    if (tokens.length >= 2 && isAllowedColorTail(tokens[1] || '')) {
+      return `${tokens[0]} ${tokens[1]}`;
+    }
+    return tokens[0] || '';
+  }
+
+  return tokens[firstColorIndex] || '';
+}
+
+function extractSafeColorValue(value: unknown): string {
+  const seen = new Set<string>();
+  const colors = splitOzonCompositeDictionaryValue(sanitizeOzonAttrText(value))
+    .map((part) => extractSafeColorSegment(part))
+    .filter((part) => {
+      const key = normalizeOzonDictionaryText(part);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return colors.join(', ');
+}
+
 function isLikelyDescriptiveColorVariantValue(value: unknown): boolean {
-  const text = cleanPublishName(value);
+  const text = sanitizeOzonAttrText(value);
   if (!text || containsCjkText(text)) return false;
   if (/(?:\d+\s*[xх*]\s*\d+|\d+(?:[,.]\d+)?\s*(?:см|mm|мм))/iu.test(text)) return true;
   if (/(?:аксессуар|фото|держател|инструмент|мойк|раковин|кухн|набор|кукла|толщин|покрыти|монтажн)/iu.test(text)) return true;
@@ -200,8 +297,10 @@ function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, inclu
   const seen = new Set<string>();
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
-    if (isColorLikeVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue)) continue;
-    const value = cleanPublishName(rawValue);
+    const value = isColorLikeVariantName(rawName)
+      ? extractSafeColorValue(rawValue)
+      : sanitizeOzonAttrText(rawValue);
+    if (isColorLikeVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue) && !value) continue;
     if (!value) continue;
     if (containsCjkText(value)) continue;
     const part = includeColorLabel && /цвет|color/i.test(rawName)
@@ -220,10 +319,11 @@ export function sanitizeVariantAttrsForPublish(variantAttrs?: Record<string, str
   const out: Record<string, string> = {};
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     const name = String(rawName || '').trim();
-    const value = String(rawValue || '').trim();
+    const value = isColorLikeVariantName(name)
+      ? extractSafeColorValue(rawValue)
+      : sanitizeOzonAttrText(rawValue);
     if (!name || !value) continue;
     if (containsCjkText(name) || containsCjkText(value)) continue;
-    if (isColorLikeVariantName(name) && isLikelyDescriptiveColorVariantValue(value)) continue;
     out[name] = value;
   }
   return out;
@@ -323,6 +423,9 @@ export function sanitizePublishDescription(value: unknown, maxLength = DESCRIPTI
     .replace(/&#39;/g, "'")
     .replace(/[ \t\f\v]+/g, ' ')
     .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  text = sanitizeOzonDescriptionText(text)
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return text.slice(0, maxLength).trim();
@@ -628,9 +731,23 @@ export function resolveOzonDictionaryAttributeValues(
   rawValue: unknown,
   dict: OzonDictionaryEntry[],
 ): { values: OzonResolvedAttributeValue[]; matched: boolean; matchType: 'exact' | 'split' | 'partial' | 'text-fallback' | 'empty' } {
-  const text = String(rawValue || '').trim();
+  const text = sanitizeOzonAttrText(rawValue);
   if (!text) return { values: [], matched: false, matchType: 'empty' };
-  if (isLikelyDescriptiveColorVariantValue(text)) return { values: [], matched: false, matchType: 'empty' };
+  if (isLikelyDescriptiveColorVariantValue(text)) {
+    const extractedColor = extractSafeColorValue(text);
+    if (!extractedColor) return { values: [], matched: false, matchType: 'empty' };
+    const extractedParts = splitOzonCompositeDictionaryValue(extractedColor);
+    const extractedEntries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
+    const resolvedExtracted = extractedParts.map((part) => findOzonDictionaryEntry(extractedEntries, part, true));
+    if (resolvedExtracted.every(Boolean)) {
+      return {
+        values: resolvedExtracted.filter((entry): entry is OzonDictionaryEntry => !!entry).map(toOzonResolvedAttributeValue),
+        matched: true,
+        matchType: 'split',
+      };
+    }
+    return { values: [], matched: false, matchType: 'empty' };
+  }
 
   const entries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
   const exact = findOzonDictionaryEntry(entries, text, false);
@@ -655,6 +772,21 @@ export function resolveOzonDictionaryAttributeValues(
     }
 
     return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
+  }
+
+  const extractedColor = extractSafeColorValue(text);
+  if (extractedColor && normalizeOzonDictionaryText(extractedColor) !== normalizeOzonDictionaryText(text)) {
+    const extractedParts = splitOzonCompositeDictionaryValue(extractedColor);
+    const resolvedExtracted = extractedParts.map((part) => findOzonDictionaryEntry(entries, part, true));
+    if (resolvedExtracted.every(Boolean)) {
+      return {
+        values: resolvedExtracted
+          .filter((entry): entry is OzonDictionaryEntry => !!entry)
+          .map(toOzonResolvedAttributeValue),
+        matched: true,
+        matchType: 'split',
+      };
+    }
   }
 
   const partial = isSafeLooseDictionaryMatch(text)
