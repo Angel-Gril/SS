@@ -257,7 +257,14 @@ function extractSafeColorSegment(value: string): string {
     return `${tokens[0]} ${tokens[1]}`;
   }
 
+  if (firstColorIndex === 1 && OZON_COMPOUND_COLOR_PREFIX_RE.test(tokens[0] || '')) {
+    return `${tokens[0]}-${tokens[1]}`;
+  }
+
   if (firstColorIndex === 0) {
+    if (tokens.length >= 2 && OZON_COMPOUND_COLOR_PREFIX_RE.test(tokens[0] || '') && isColorToken(tokens[1] || '')) {
+      return `${tokens[0]}-${tokens[1]}`;
+    }
     if (tokens.length >= 2 && isAllowedColorTail(tokens[1] || '')) {
       return `${tokens[0]} ${tokens[1]}`;
     }

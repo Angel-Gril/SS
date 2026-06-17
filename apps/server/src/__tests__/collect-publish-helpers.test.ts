@@ -450,6 +450,28 @@ describe('collect publish helpers', () => {
     })).toBe('Футболка женская белый');
   });
 
+  it('preserves compound color prefixes so distinct shades do not collapse', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'коричнево красный',
+    })).toEqual({
+      'Цвет': 'коричнево-красный',
+    });
+
+    expect(resolveOzonDictionaryAttributeValues('коричнево красный', [
+      { id: 101, value: 'коричнево-красный' },
+      { id: 102, value: 'коричневый' },
+    ])).toEqual({
+      values: [{ value: 'коричнево-красный', dictionary_value_id: 101 }],
+      matched: true,
+      matchType: 'exact',
+    });
+
+    expect(findVariantAttributeConflicts([
+      { sku: 'a', attrs: { 'Цвет': 'коричнево красный' } },
+      { sku: 'b', attrs: { 'Цвет': 'коричневый' } },
+    ])).toEqual([]);
+  });
+
   it('prefers each collected item category over batch fallback category', () => {
     expect(resolveItemPublishCategory({
       metadata: { descriptionCategoryId: 17028706, typeId: 95913 },
