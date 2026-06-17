@@ -7,6 +7,13 @@ import { randomSuffix, chunkArray } from '../lib/util.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
+import {
+  appendOzonRichContentAttribute,
+  buildOzonRichContentAttribute,
+  OZON_RICH_CONTENT_ATTR_ID,
+  planCollectedVideoPublish,
+  transferRichContentImage,
+} from '../services/ozon-rich-content.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 
@@ -965,6 +972,16 @@ export function normalizeOzonOriginCountryForChinaSeller<T extends { id: number;
 
 function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function getCollectedRichDescriptionJson(item: { metadata?: unknown }): string {
+  const meta = metadataRecord(item.metadata);
+  return String(meta.sourceRichDescriptionJson || '').trim();
+}
+
+function getCollectedSourceVideos(item: { metadata?: unknown }): unknown[] {
+  const meta = metadataRecord(item.metadata);
+  return Array.isArray(meta.sourceVideos) ? meta.sourceVideos : [];
 }
 
 function normalizePublishImageList(value: unknown): string[] {
@@ -2599,6 +2616,8 @@ export async function collectRoutes(app: FastifyInstance) {
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
       const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
       const itemDescription = resolvePublishDescription(item, cloned?.description);
+      const sourceRichDescriptionJson = getCollectedRichDescriptionJson(item);
+      const sourceVideos = getCollectedSourceVideos(item);
 
       const variants = enrichOzonVariantSpecs(Array.isArray(item.variants) ? (item.variants as any[]) : []);
       // 无 variants：保持原行为（1 个 item）
@@ -2625,6 +2644,11 @@ export async function collectRoutes(app: FastifyInstance) {
           images: baseImages,
           ...(itemDescription ? { description: itemDescription } : {}),
           ...(itemAttrs.length ? { attributes: itemAttrs } : {}),
+          _sourceItemId: item.id,
+          _sourceVariantSku: item.sku || null,
+          _sourceModelId: item.modelId || null,
+          _sourceRichDescriptionJson: sourceRichDescriptionJson || null,
+          _sourceVideos: sourceVideos,
         }];
       }
 
@@ -2685,6 +2709,9 @@ export async function collectRoutes(app: FastifyInstance) {
           _sourceItemId: item.id,
           _sourceModelId: item.modelId || null,
           _hasOwnAttrs: !!variantAttrs,
+          _sourceRichDescriptionJson: sourceRichDescriptionJson || null,
+          _sourceVideos: sourceVideos,
+          _isVariantItem: true,
         };
       }));
       return subItems;
@@ -2696,6 +2723,11 @@ export async function collectRoutes(app: FastifyInstance) {
 
     // 按每个 payload item 自己的类目补属性，避免批量多类目上架时第一类目污染整批。
     const attrDictCache = new Map<string, { id: number; value: string; info: string; picture: string }[]>();
+    const richContentTrace: any[] = [];
+    const richContentTraceSeen = new Set<string>();
+    const richContentAttrCache = new Map<string, Promise<{ status: string; attribute: any | null; error?: string }>>();
+    const videoTrace: any[] = [];
+    const videoTraceSeen = new Set<string>();
     const MANUFACTURER_NAMES = /производитель|manufacturer/i;
     const BRAND_NAMES = /бренд|brand/i;
     for (const group of groupPublishItemsByCategory(importItems)) {
@@ -2711,8 +2743,9 @@ export async function collectRoutes(app: FastifyInstance) {
         const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
         const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
         const originCountryAttrDef = allAttrs.find((a) => a.id === OZON_ORIGIN_COUNTRY_ATTR_ID);
+        const richContentAttrDef = allAttrs.find((a) => a.id === OZON_RICH_CONTENT_ATTR_ID);
 
-        console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}`);
+        console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}, rich=${richContentAttrDef?.id || 'NOT_FOUND'}`);
 
         let noBrandDictId: number | null = null;
         if (brandAttrDef) {
@@ -2764,6 +2797,60 @@ export async function collectRoutes(app: FastifyInstance) {
           importItem.attributes = normalizeOzonOriginCountryForChinaSeller(importItem.attributes, originCountryValues);
 
           importItem.attributes = syncOzonVariantGroupingAttributes(importItem.attributes, importItem);
+
+          const richSource = String(importItem._sourceRichDescriptionJson || '').trim();
+          if (richSource) {
+            const sourceKey = String(importItem._sourceItemId || importItem.offer_id || 'unknown');
+            const traceKey = `${group.categoryId}:${group.typeId}:${sourceKey}`;
+            if (!richContentAttrDef) {
+              if (!richContentTraceSeen.has(traceKey)) {
+                richContentTraceSeen.add(traceKey);
+                richContentTrace.push({
+                  sourceItemId: importItem._sourceItemId || null,
+                  offerId: importItem.offer_id,
+                  categoryId: group.categoryId,
+                  typeId: group.typeId,
+                  status: 'skipped',
+                  reason: 'category_missing_22336',
+                });
+              }
+            } else {
+              if (!richContentAttrCache.has(traceKey)) {
+                richContentAttrCache.set(traceKey, (async () => {
+                  try {
+                    const attribute = await buildOzonRichContentAttribute(richSource, {
+                      imageMapper: (url) => transferRichContentImage(url, body.shopId, userId),
+                    });
+                    return { status: attribute ? 'generated' : 'empty', attribute };
+                  } catch (e: any) {
+                    return { status: 'failed', attribute: null, error: e?.message ? String(e.message).slice(0, 300) : 'unknown error' };
+                  }
+                })());
+              }
+              const result = await richContentAttrCache.get(traceKey)!;
+              if (!richContentTraceSeen.has(traceKey)) {
+                richContentTraceSeen.add(traceKey);
+                richContentTrace.push({
+                  sourceItemId: importItem._sourceItemId || null,
+                  offerId: importItem.offer_id,
+                  categoryId: group.categoryId,
+                  typeId: group.typeId,
+                  status: result.status,
+                  attributeId: result.attribute?.id || null,
+                  error: result.error || null,
+                });
+              }
+              if (result.attribute) {
+                importItem.attributes = appendOzonRichContentAttribute(importItem.attributes, result.attribute);
+              }
+            }
+          }
+
+          const videoPlan = planCollectedVideoPublish(importItem._sourceVideos, importItem.offer_id);
+          if (videoPlan && !videoTraceSeen.has(videoPlan.offerId)) {
+            videoTraceSeen.add(videoPlan.offerId);
+            videoTrace.push(videoPlan);
+          }
 
           const existingIds = new Set(importItem.attributes.map((a: any) => a.id));
 
@@ -2861,7 +2948,7 @@ export async function collectRoutes(app: FastifyInstance) {
     try {
       // 把诊断字段（_variantAttrs/_sourceItemId/_sourceModelId）抽出来留给 SyncJob，发给 OZON 的 payload 必须干净
       const variantTrace = importItems
-        .filter((i) => i._sourceItemId || i._variantAttrs)
+        .filter((i) => i._isVariantItem || i._variantAttrs)
         .map((i) => ({
           offerId: i.offer_id,
           sourceItemId: i._sourceItemId || null,
@@ -2870,7 +2957,17 @@ export async function collectRoutes(app: FastifyInstance) {
           variantAttrs: i._variantAttrs || null,
         }));
       const cleanItems = importItems.map((i) => {
-        const { _variantAttrs, _sourceVariantSku, _sourceItemId, _sourceModelId, _hasOwnAttrs, ...rest } = i;
+        const {
+          _variantAttrs,
+          _sourceVariantSku,
+          _sourceItemId,
+          _sourceModelId,
+          _hasOwnAttrs,
+          _sourceRichDescriptionJson,
+          _sourceVideos,
+          _isVariantItem,
+          ...rest
+        } = i;
         return rest;
       });
 
@@ -2903,6 +3000,8 @@ export async function collectRoutes(app: FastifyInstance) {
             offerImages: Object.keys(mainOfferImages).length ? mainOfferImages : null,
             offerImageLists: Object.keys(mainOfferImageLists).length ? mainOfferImageLists : null,
             variantTrace: variantTrace.length ? variantTrace : null,
+            richContentTrace: richContentTrace.length ? richContentTrace : null,
+            videoTrace: videoTrace.length ? videoTrace : null,
           },
         },
       });
