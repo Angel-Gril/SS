@@ -63,6 +63,8 @@
     '9695': 'Российский размер',
   };
 
+  const OZON_VARIANT_ATTR_IDS = new Set(Object.keys(OZON_ATTR_NAME_BY_ID));
+
   function readOzonAttributeValue(attribute) {
     const values = attribute && Array.isArray(attribute.values) ? attribute.values : [];
     const parts = [];
@@ -145,8 +147,30 @@
     return null;
   }
 
+  function buildOfficialOzonVariantAttrs(ozonAttributes) {
+    const attrs = Array.isArray(ozonAttributes) ? ozonAttributes : [];
+    const out = {};
+    for (let i = 0; i < attrs.length; i++) {
+      const attr = attrs[i];
+      const id = attr && (attr.attribute_id != null ? attr.attribute_id : attr.id);
+      const name = readOzonAttributeName(attr);
+      const value = readOzonAttributeValue(attr);
+      if (!name || !value || containsCjkText(name) || containsCjkText(value)) continue;
+      const idIsVariable = OZON_VARIANT_ATTR_IDS.has(String(id));
+      const nameIsVariable = ['color', 'size', 'volume', 'scent', 'model'].indexOf(variantAttrKind(name)) >= 0;
+      if (!idIsVariable && !nameIsVariable) continue;
+      out[name] = value;
+    }
+    return out;
+  }
+
+  function hasAttrs(value) {
+    return value && typeof value === 'object' && Object.keys(value).length > 0;
+  }
+
   function sanitizeOzonVariantAttrs(variant) {
     if (!variant || typeof variant !== 'object') return variant;
+    const officialAttrs = buildOfficialOzonVariantAttrs(variant.ozonAttributes);
     const attrs = variant.attrs && typeof variant.attrs === 'object' && !Array.isArray(variant.attrs)
       ? variant.attrs
       : {};
@@ -166,6 +190,12 @@
       if (cleanKey && cleanValue) nextAttrs[cleanKey] = cleanValue;
       if (hadCjk) officialCandidates.push({ key, value });
     });
+
+    if (hasAttrs(officialAttrs)) {
+      const clean = { ...variant, attrs: officialAttrs };
+      delete clean._variantAttrsWarning;
+      return clean;
+    }
 
     if (!dropped.length && !officialCandidates.length) {
       const clean = { ...variant, attrs: nextAttrs };

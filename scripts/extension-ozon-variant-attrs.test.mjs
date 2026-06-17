@@ -40,8 +40,8 @@ test('repairs Chinese Ozon variant attrs from seller attributes', () => {
   const repaired = spec.sanitizeOzonVariantAttrs(variant);
 
   assert.deepEqual(plain(repaired.attrs), {
-    'Размер': '52 RU / XL',
     'Цвет': 'бежевый',
+    'Российский размер': '52 RU / XL',
   });
   assert.equal(repaired._variantAttrsWarning, undefined);
 });
@@ -79,6 +79,40 @@ test('translates common Chinese public Ozon color attrs before saving variants',
   assert.deepEqual(plain(repaired.attrs), {
     'Цвет': 'синий',
     'Размер': '54 RU / XXL',
+  });
+  assert.equal(repaired._variantAttrsWarning, undefined);
+});
+
+test('prefers official seller variable attrs over translated public attrs', () => {
+  const spec = loadVariantSpec();
+  const variant = {
+    sku: '3558929476',
+    attrs: {
+      'Цвет': '蓝色',
+      'Размер': '54 RU / XXL系列',
+    },
+    ozonAttributes: [
+      {
+        attribute_id: '10096',
+        values: [{ value: 'синий', dictionary_value_id: '61574' }],
+      },
+      {
+        attribute_id: '4295',
+        values: [{ value: '54', dictionary_value_id: '35434' }],
+      },
+      {
+        attribute_id: '9533',
+        values: [{ value: 'XXL', dictionary_value_id: '0' }],
+      },
+    ],
+  };
+
+  const repaired = spec.sanitizeOzonVariantAttrs(variant);
+
+  assert.deepEqual(plain(repaired.attrs), {
+    'Цвет': 'синий',
+    'Российский размер': '54',
+    'Размер производителя': 'XXL',
   });
   assert.equal(repaired._variantAttrsWarning, undefined);
 });
