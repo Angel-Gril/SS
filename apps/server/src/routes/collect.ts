@@ -1501,6 +1501,50 @@ export function buildCollectSnapshot(item: {
   };
 }
 
+function isNonEmptyObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeCollectedMetadata(
+  existing: unknown,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  const current = isNonEmptyObject(existing) ? { ...(existing as Record<string, unknown>) } : {};
+  const next = { ...current, ...incoming };
+
+  if (current.publishTitleRu) next.publishTitleRu = current.publishTitleRu;
+  if (current.publishDescriptionRu) next.publishDescriptionRu = current.publishDescriptionRu;
+  if (current.publishOfferId) next.publishOfferId = current.publishOfferId;
+  if (current.watermarkedImages) next.watermarkedImages = current.watermarkedImages;
+  if (current.watermarkApplied !== undefined) next.watermarkApplied = current.watermarkApplied;
+
+  return next;
+}
+
+async function findExistingCollectedOzonGoods(userId: string, item: {
+  sourcePlatform?: unknown;
+  sourceProductId?: unknown;
+  sku?: unknown;
+}) {
+  const sourcePlatform = String(item.sourcePlatform || 'ozon').trim().toLowerCase();
+  if (sourcePlatform !== 'ozon') return null;
+
+  const lookupId = normalizeProductId(item.sourceProductId || item.sku);
+  if (!lookupId) return null;
+
+  return prisma.supplyGoods.findFirst({
+    where: {
+      userId,
+      sourcePlatform: 'ozon',
+      OR: [
+        { sourceProductId: lookupId },
+        { sku: lookupId },
+      ],
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+}
+
 export async function collectRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -1731,28 +1775,48 @@ export async function collectRoutes(app: FastifyInstance) {
           sku: item.sku,
         });
 
-        await prisma.supplyGoods.create({
-          data: {
-            user: { connect: { id: userId } },
-            title: displayTitle,
-            sourceUrl: item.sourceUrl || null,
-            sourcePlatform: item.sourcePlatform || 'ozon',
-            sourceProductId,
-            sku: item.sku || sourceProductId,
-            images: item.images || undefined,
-            purchasePrice: priceInfo.purchasePriceCny,
-            currency: 'CNY',
-            originalPrice: priceInfo.originalPrice,
-            originalCurrency: priceInfo.originalCurrency,
-            exchangeRateUsed: priceInfo.exchangeRateUsed,
-            priceNeedsReview: priceInfo.needsReview,
-            notes: sourceDescription.slice(0, 500) || null,
-            metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
-            variants: hasVariants ? (item.variants as any) : undefined,
-            modelId: item.modelId ? String(item.modelId) : null,
-            status: 'collected',
-          },
+        const existing = await findExistingCollectedOzonGoods(userId, {
+          sourcePlatform: item.sourcePlatform,
+          sourceProductId,
+          sku: item.sku,
         });
+
+        const data = {
+          title: displayTitle,
+          sourceUrl: item.sourceUrl || null,
+          sourcePlatform: item.sourcePlatform || 'ozon',
+          sourceProductId,
+          sku: item.sku || sourceProductId,
+          images: item.images || undefined,
+          purchasePrice: priceInfo.purchasePriceCny,
+          currency: 'CNY',
+          originalPrice: priceInfo.originalPrice,
+          originalCurrency: priceInfo.originalCurrency,
+          exchangeRateUsed: priceInfo.exchangeRateUsed,
+          priceNeedsReview: priceInfo.needsReview,
+          notes: sourceDescription.slice(0, 500) || null,
+          metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
+          variants: hasVariants ? (item.variants as any) : undefined,
+          modelId: item.modelId ? String(item.modelId) : null,
+          status: 'collected',
+        };
+
+        if (existing) {
+          await prisma.supplyGoods.update({
+            where: { id: existing.id },
+            data: {
+              ...data,
+              metadata: mergeCollectedMetadata(existing.metadata, metadata) as any,
+            },
+          });
+        } else {
+          await prisma.supplyGoods.create({
+            data: {
+              user: { connect: { id: userId } },
+              ...data,
+            },
+          });
+        }
         saved++;
       } catch (e: any) {
         const errMsg = (e?.message ? String(e.message) : '未知错误').slice(0, 300);

@@ -248,7 +248,9 @@ export default function CollectPage() {
       if (!d || d.direction !== 'ss-erp:from-extension' || !d.broadcast) return;
       const evt = d.event;
       if (!evt || evt.type !== 'ss-erp:collect-completed') return;
-      toast({ title: `扩展采集完成：${evt.collected} 件${evt.errorCount ? `，${evt.errorCount} 件失败` : ''}` });
+      if (evt.phase !== 'enrichment') {
+        toast({ title: `扩展采集完成：${evt.collected} 件${evt.errorCount ? `，${evt.errorCount} 件失败` : ''}` });
+      }
       fetchData();
     }
     window.addEventListener('message', onExtBroadcast);
@@ -491,7 +493,7 @@ export default function CollectPage() {
     const res = await sendToExtension({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds,
-      collectMode: 'complete',
+      collectMode: 'balanced',
     });
 
     setExtFetching(false);

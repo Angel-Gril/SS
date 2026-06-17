@@ -130,7 +130,7 @@ export default function BatchCollectPage() {
     const res = await sendToExtension({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds,
-      collectMode: 'complete',
+      collectMode: 'balanced',
     }, 180000);
 
     if (!res?.ok) {

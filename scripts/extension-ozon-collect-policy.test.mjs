@@ -32,12 +32,24 @@ test('enables recursive discovery and per-variant seller details only in complet
   assert.equal(policy.recursive.delayMs, 0);
 });
 
-test('popup ERP collection asks background for complete Ozon variant discovery', () => {
+test('balanced Ozon ERP collection keeps the first pass quick', () => {
+  const policy = loadPolicy().resolveOzonCollectionPolicy({ mode: 'balanced' });
+
+  assert.equal(policy.mode, 'balanced');
+  assert.equal(policy.discoverVariants, false);
+  assert.equal(policy.fetchRootSellerInsights, true);
+  assert.equal(policy.fetchVariantSellerInsights, false);
+  assert.equal(policy.rootProductDelayMs, 0);
+  assert.equal(policy.recursive.maxPages, 0);
+  assert.equal(policy.recursive.maxDepth, 0);
+});
+
+test('popup ERP collection asks background for balanced Ozon variant discovery', () => {
   const source = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 
   assert.match(
     source,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
   );
 });
 
@@ -57,14 +69,23 @@ test('all interactive Ozon ERP collection entry points explicitly request comple
 
   assert.match(
     panelSource,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
   );
   assert.match(
     collectPageSource,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
   );
   assert.match(
     batchCollectSource,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
+  );
+});
+
+test('balanced collection queues a complete enrichment pass after the first ERP push', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    source,
+    /collectPolicy\.mode\s*===\s*["']balanced["'][\s\S]*enqueueOzonCollectEnrichment/,
   );
 });

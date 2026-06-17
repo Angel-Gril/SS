@@ -420,7 +420,7 @@
     sendRuntimeMessage({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds: [primaryActionState.productId],
-      collectMode: 'complete'
+      collectMode: 'balanced'
     }, function (response) {
       restorePrimaryButton();
       if (response && response.ok) {

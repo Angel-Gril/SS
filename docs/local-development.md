@@ -106,6 +106,19 @@ pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/_
 - `follow-by-sku` 图片补传在 `已上传 / 已阻塞 / 待补传` 三种状态下的续跑逻辑
 - Ozon 已拒绝商品卡时，系统应跳过图片补传并直接展示卡片阻塞原因
 
+如果这次改动涉及 Ozon 扩展采集模式、变体补全或 ERP 批量采集回写，额外补跑：
+
+```bash
+node --test scripts/extension-ozon-collect-policy.test.mjs
+pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
+```
+
+这两组用例覆盖：
+
+- popup、Ozon 面板、ERP Web 单采/批量采是否默认走 `balanced`
+- `balanced` 首轮采集后是否会排队触发 `complete` 补全
+- Ozon 完整补全回写 ERP 时是否更新同一条 `supplyGoods` 记录，而不是创建重复采集数据
+
 ## 测试矩阵
 
 | 场景 | 在哪里跑 | 命令 | 通过标准 |

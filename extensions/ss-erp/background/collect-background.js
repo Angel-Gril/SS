@@ -43,6 +43,8 @@ const OZON_ENDPOINTS = {
 
 const SELLER_OZON_ORIGIN = "https://seller.ozon.ru/*";
 const SELLER_OZON_PERMISSION_ERROR = "扩展未获得 seller.ozon.ru 站点访问权限。请点击同步按钮时允许授权，或在 Chrome 扩展详情页把“网站访问权限”设为允许 seller.ozon.ru，然后刷新 seller 页面重试。";
+const OZON_COLLECT_ENRICHMENT_QUEUE_KEY = "ss_erp_ozon_collect_enrichment_queue";
+let ozonCollectEnrichmentRunQueue = Promise.resolve();
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
@@ -100,6 +102,153 @@ function repairOzonCollectedTitleFromInsights(product, insights) {
   product.sourceTitleRaw = nextTitle;
   product.sourceLocale = "ru";
   return product;
+}
+
+function enqueueOzonCollectEnrichment(task) {
+  const run = ozonCollectEnrichmentRunQueue.then(() => task());
+  ozonCollectEnrichmentRunQueue = run.catch(() => {});
+  return run;
+}
+
+async function readOzonCollectEnrichmentQueue() {
+  const queue = await storageGet(OZON_COLLECT_ENRICHMENT_QUEUE_KEY);
+  return Array.isArray(queue) ? queue : [];
+}
+
+async function writeOzonCollectEnrichmentQueue(queue) {
+  await storageSet({ [OZON_COLLECT_ENRICHMENT_QUEUE_KEY]: Array.isArray(queue) ? queue : [] });
+}
+
+async function enqueueOzonCollectEnrichmentJob(job) {
+  const queue = await readOzonCollectEnrichmentQueue();
+  queue.push({
+    productIds: Array.isArray(job && job.productIds) ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean) : [],
+    queuedAt: new Date().toISOString(),
+  });
+  await writeOzonCollectEnrichmentQueue(queue);
+}
+
+async function runOzonCollectEnrichmentJob(job, erpConn) {
+  const pids = Array.isArray(job && job.productIds) ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
+  if (!pids.length) return { ok: true, skipped: true };
+
+  const sellerCompanyId = await getSellerCompanyId().catch(() => null);
+  const collectPolicy = resolveOzonCollectionPolicy({ mode: "complete" });
+  const collected = [];
+  const errors = [];
+
+  for (let i = 0; i < pids.length; i++) {
+    const pid = pids[i];
+    const r = await fetchOzonProductViaTab(pid);
+    if (!r.ok) {
+      errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
+      continue;
+    }
+
+    const productData = r.data;
+    await completeOzonProductVariantsForCollection(productData, pid, collectPolicy);
+
+    if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
+      try {
+        const insights = await getOzonInsights(pid);
+        repairOzonCollectedTitleFromInsights(productData, insights);
+        if (insights.detail && Array.isArray(insights.detail.attributes)) {
+          productData.ozonAttributes = insights.detail.attributes;
+        }
+        if (insights.detail) {
+          productData.weight = insights.detail.weight || (insights.specs && insights.specs.weightGrams) || null;
+          productData.length = insights.detail.depth || (insights.specs && insights.specs.lengthMm) || null;
+          productData.width = insights.detail.width || (insights.specs && insights.specs.widthMm) || null;
+          productData.height = insights.detail.height || (insights.specs && insights.specs.heightMm) || null;
+          if (insights.detail.manufacturer) productData.manufacturerName = insights.detail.manufacturer;
+          if (insights.detail.brand) productData.brandName = insights.detail.brand;
+        } else if (insights.specs) {
+          productData.weight = insights.specs.weightGrams;
+          productData.length = insights.specs.lengthMm;
+          productData.width = insights.specs.widthMm;
+          productData.height = insights.specs.heightMm;
+        }
+
+        try {
+          const treeRes = await sellerTabFetchJson(
+            "https://seller.ozon.ru/api/v1/seller-tree/resolve/by-sku",
+            { skus: [String(pid)] },
+            sellerCompanyId
+          );
+          const resolved = treeRes && treeRes.resolved_categories_by_sku && treeRes.resolved_categories_by_sku[String(pid)];
+          if (resolved) {
+            productData.descriptionCategoryId = resolved.description_category_id_level_3 || null;
+            productData.typeId = resolved.description_type_id || null;
+          }
+        } catch (e) {}
+
+        if (Array.isArray(productData.variants) && productData.variants.length > 0) {
+          const subPids = productData.variants
+            .map((v) => v && v.sku ? String(v.sku) : null)
+            .filter((s) => s && s !== String(pid));
+          if (subPids.length) {
+            const subMap = await fetchVariantInsightsConcurrent(subPids, 2, 200);
+            productData.variants.forEach((v) => {
+              if (!v || !v.sku) return;
+              const sku = String(v.sku);
+              if (sku === String(pid)) {
+                v.ozonAttributes = productData.ozonAttributes || null;
+                v.weight = productData.weight || null;
+                v.depth = productData.length || null;
+                v.width = productData.width || null;
+                v.height = productData.height || null;
+              } else if (subMap[sku] && subMap[sku].attributes) {
+                v.ozonAttributes = subMap[sku].attributes;
+                v.weight = subMap[sku].weight;
+                v.depth = subMap[sku].depth;
+                v.width = subMap[sku].width;
+                v.height = subMap[sku].height;
+                if (subMap[sku].manufacturer) v.manufacturerName = subMap[sku].manufacturer;
+                if (subMap[sku].brand) v.brandName = subMap[sku].brand;
+              } else {
+                v._attrMissing = (subMap[sku] && subMap[sku].error) || "no insights";
+              }
+            });
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (Array.isArray(productData.variants) && productData.variants.length > 0) {
+      productData.variants = sanitizeCollectedOzonVariantAttrs(productData.variants);
+    }
+    collected.push(productData);
+  }
+
+  if (!collected.length) {
+    return { ok: false, error: errors[0] && errors[0].error ? errors[0].error : "完整补全失败", errors };
+  }
+
+  return pushOzonCollectedProductsToErp(erpConn.baseUrl, erpConn.token, collected, errors, {
+    phase: "enrichment",
+  });
+}
+
+async function flushOzonCollectEnrichmentQueue() {
+  return enqueueOzonCollectEnrichment(async () => {
+    const erpConn = await getStoredErpConnection();
+    if (!erpConn.baseUrl || !erpConn.token) return;
+
+    const queue = await readOzonCollectEnrichmentQueue();
+    if (!queue.length) return;
+
+    const remaining = [];
+    for (let index = 0; index < queue.length; index += 1) {
+      const job = queue[index];
+      try {
+        const result = await runOzonCollectEnrichmentJob(job, erpConn);
+        if (!result || result.ok !== true) remaining.push(job);
+      } catch (error) {
+        remaining.push(job);
+      }
+    }
+    await writeOzonCollectEnrichmentQueue(remaining);
+  });
 }
 
 function normalizeRichDescriptionText(value) {
@@ -160,7 +309,8 @@ function resolveOzonCollectionPolicy(options) {
   if (globalThis.SS_ERP_OZON_COLLECTION_POLICY && typeof globalThis.SS_ERP_OZON_COLLECTION_POLICY.resolveOzonCollectionPolicy === "function") {
     return globalThis.SS_ERP_OZON_COLLECTION_POLICY.resolveOzonCollectionPolicy(options);
   }
-  const mode = options && (options.mode === "complete" || options.collectMode === "complete") ? "complete" : "quick";
+  const mode = options && (options.mode === "complete" || options.collectMode === "complete") ? "complete"
+    : (options && (options.mode === "balanced" || options.collectMode === "balanced") ? "balanced" : "quick");
   const complete = mode === "complete";
   return {
     mode,
@@ -274,6 +424,114 @@ function storageSessionRemove(keys) {
 
 function normalizeOzonCompanyId(value) {
   return value == null ? "" : String(value).trim();
+}
+
+function buildOzonCollectBatchPayload(collected) {
+  return {
+    items: collected.map((p) => ({
+      title: p.title,
+      publishTitle: p.publishTitle || p.title,
+      sourceTitleRaw: p.sourceTitleRaw || p.title,
+      sourceLocale: p.sourceLocale || "ru",
+      sourceUrl: p.url,
+      sourcePlatform: "ozon",
+      images: p.images,
+      price: p.price || "",
+      priceText: p.priceText || p.price || "",
+      currency: p.currency || "RUB",
+      description: p.description || "",
+      richDescriptionJson: p.richDescriptionJson || null,
+      sourceVideos: p.sourceVideos || null,
+      sku: String(p.productId),
+      sourceProductId: String(p.productId),
+      attributes: p.attributes,
+      ozonAttributes: p.ozonAttributes || null,
+      descriptionCategoryId: p.descriptionCategoryId || null,
+      typeId: p.typeId || null,
+      weightG: p.weight || null,
+      lengthMm: p.length || null,
+      widthMm: p.width || null,
+      heightMm: p.height || null,
+      manufacturerName: p.manufacturerName || null,
+      brandName: p.brandName || null,
+      variants: Array.isArray(p.variants) && p.variants.length ? p.variants : null,
+      modelId: p.modelId ? String(p.modelId) : null,
+      widgetStatesDump: p.widgetStatesDump || null,
+    })),
+  };
+}
+
+async function notifyErpCollectCompleted(collectedCount, errorCount, options = {}) {
+  try {
+    var bridgeMatches = ["http://localhost/*", "https://localhost/*", "http://127.0.0.1/*", "https://127.0.0.1/*"];
+    try {
+      var mf = chrome.runtime.getManifest();
+      var bridge = (mf.content_scripts || []).find(function (cs) {
+        return Array.isArray(cs.js) && cs.js.indexOf("content/erp-collect-bridge.js") >= 0;
+      });
+      if (bridge && Array.isArray(bridge.matches) && bridge.matches.length) {
+        bridgeMatches = bridge.matches.filter(function (m) { return /^https?:/.test(m); });
+      }
+    } catch (e) {}
+    var erpTabs = await chrome.tabs.query({ url: bridgeMatches });
+    for (var nti = 0; nti < erpTabs.length; nti++) {
+      try {
+        chrome.tabs.sendMessage(erpTabs[nti].id, {
+          type: "ss-erp:collect-completed",
+          collected: Number(collectedCount) || 0,
+          errorCount: Number(errorCount) || 0,
+          phase: options.phase || "collect",
+        });
+      } catch (e) {}
+    }
+  } catch (e) {}
+}
+
+async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors, options = {}) {
+  const batchPayload = buildOzonCollectBatchPayload(collected);
+  const pushResp = await fetch(erpBase + "/api/collect/batch", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + erpToken,
+    },
+    body: JSON.stringify(batchPayload),
+  });
+
+  const pushText = await pushResp.text();
+  if (!pushResp.ok) {
+    return { ok: false, error: "ERP 推送失败: HTTP " + pushResp.status + " " + pushText.slice(0, 200), collected: collected.length, errors };
+  }
+
+  let pushParsed = {};
+  try { pushParsed = JSON.parse(pushText); } catch (e) {}
+  const backendErrors = pushParsed && pushParsed.data && Array.isArray(pushParsed.data.errors)
+    ? pushParsed.data.errors
+    : [];
+  const allErrors = (Array.isArray(errors) ? errors : []).concat(backendErrors);
+  if (pushParsed && pushParsed.code === 0) {
+    return {
+      ok: false,
+      error: pushParsed.msg || "ERP 采集失败",
+      data: { collected: 0, pushed: pushParsed, errors: allErrors },
+    };
+  }
+
+  const shouldBroadcast = options.broadcast !== false;
+  if (shouldBroadcast) {
+    await notifyErpCollectCompleted(collected.length, allErrors.length, {
+      phase: options.phase || "collect",
+    });
+  }
+
+  return {
+    ok: true,
+    data: {
+      collected: collected.length,
+      pushed: pushParsed,
+      errors: allErrors,
+    },
+  };
 }
 
 function isRecentOzonCompanyIdCapture(value) {
@@ -1467,7 +1725,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (!current) {
     await saveConfig(DEFAULT_CONFIG);
   }
+  flushOzonCollectEnrichmentQueue().catch(() => {});
 });
+
+if (chrome.runtime && typeof chrome.runtime.onStartup?.addListener === "function") {
+  chrome.runtime.onStartup.addListener(() => {
+    flushOzonCollectEnrichmentQueue().catch(() => {});
+  });
+}
 
 // ---- Cookie 监控：检测 1688/淘宝/天猫登录态变化 ----
 // 移植自 V3.1.74，_m_h5_tk 是 1688/淘宝系的防 CSRF token
@@ -2667,98 +2932,12 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     return { ok: false, error: firstErr ? `全部采集失败：${firstErr}` : "全部采集失败", errors };
   }
 
-  const batchPayload = {
-    items: collected.map((p) => ({
-      title: p.title,
-      publishTitle: p.publishTitle || p.title,
-      sourceTitleRaw: p.sourceTitleRaw || p.title,
-      sourceLocale: p.sourceLocale || "ru",
-      sourceUrl: p.url,
-      sourcePlatform: "ozon",
-      images: p.images,
-      price: p.price || "",
-      priceText: p.priceText || p.price || "",
-      currency: p.currency || "RUB",
-      description: p.description || "",
-      richDescriptionJson: p.richDescriptionJson || null,
-      sourceVideos: p.sourceVideos || null,
-      sku: String(p.productId),
-      sourceProductId: String(p.productId),
-      attributes: p.attributes,
-      ozonAttributes: p.ozonAttributes || null,
-      descriptionCategoryId: p.descriptionCategoryId || null,
-      typeId: p.typeId || null,
-      weightG: p.weight || null,
-      lengthMm: p.length || null,
-      widthMm: p.width || null,
-      heightMm: p.height || null,
-      manufacturerName: p.manufacturerName || null,
-      brandName: p.brandName || null,
-      variants: Array.isArray(p.variants) && p.variants.length ? p.variants : null,
-      modelId: p.modelId ? String(p.modelId) : null,
-      widgetStatesDump: p.widgetStatesDump || null,
-    })),
-  };
-
-  const pushResp = await fetch(erpBase + "/api/collect/batch", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json;charset=utf-8",
-      "Authorization": "Bearer " + erpToken,
-    },
-    body: JSON.stringify(batchPayload),
-  });
-
-  const pushText = await pushResp.text();
-  if (!pushResp.ok) {
-    return { ok: false, error: "ERP 推送失败: HTTP " + pushResp.status + " " + pushText.slice(0, 200), collected: collected.length, errors };
+  const pushResult = await pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors);
+  if (pushResult.ok && collectPolicy.mode === "balanced") {
+    await enqueueOzonCollectEnrichmentJob({ productIds: pids });
+    flushOzonCollectEnrichmentQueue().catch(() => {});
   }
-
-  let pushParsed = {};
-  try { pushParsed = JSON.parse(pushText); } catch (e) {}
-  const backendErrors = pushParsed && pushParsed.data && Array.isArray(pushParsed.data.errors)
-    ? pushParsed.data.errors
-    : [];
-  const allErrors = errors.concat(backendErrors);
-  if (pushParsed && pushParsed.code === 0) {
-    return {
-      ok: false,
-      error: pushParsed.msg || "ERP 采集失败",
-      data: { collected: 0, pushed: pushParsed, errors: allErrors },
-    };
-  }
-
-  try {
-    var bridgeMatches = ["http://localhost/*", "https://localhost/*", "http://127.0.0.1/*", "https://127.0.0.1/*"];
-    try {
-      var mf = chrome.runtime.getManifest();
-      var bridge = (mf.content_scripts || []).find(function (cs) {
-        return Array.isArray(cs.js) && cs.js.indexOf("content/erp-collect-bridge.js") >= 0;
-      });
-      if (bridge && Array.isArray(bridge.matches) && bridge.matches.length) {
-        bridgeMatches = bridge.matches.filter(function (m) { return /^https?:/.test(m); });
-      }
-    } catch (e) {}
-    var erpTabs = await chrome.tabs.query({ url: bridgeMatches });
-    for (var nti = 0; nti < erpTabs.length; nti++) {
-      try {
-        chrome.tabs.sendMessage(erpTabs[nti].id, {
-          type: "ss-erp:collect-completed",
-          collected: collected.length,
-          errorCount: allErrors.length,
-        });
-      } catch (e) {}
-    }
-  } catch (e) {}
-
-  return {
-    ok: true,
-    data: {
-      collected: collected.length,
-      pushed: pushParsed,
-      errors: allErrors,
-    },
-  };
+  return pushResult;
 }
 
 globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_BACKGROUND || {}, {

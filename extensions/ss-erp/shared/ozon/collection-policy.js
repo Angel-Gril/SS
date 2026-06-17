@@ -14,6 +14,7 @@
   function normalizeMode(value) {
     var mode = String(value || '').trim().toLowerCase();
     if (mode === 'complete' || mode === 'full') return 'complete';
+    if (mode === 'balanced' || mode === 'hybrid') return 'balanced';
     return 'quick';
   }
 
@@ -21,6 +22,7 @@
     var opts = options && typeof options === 'object' ? options : {};
     var mode = normalizeMode(opts.mode || opts.collectMode);
     var complete = mode === 'complete';
+    var recursiveDefaultsEnabled = complete;
     var recursive = opts.recursive && typeof opts.recursive === 'object' ? opts.recursive : {};
 
     return {
@@ -30,8 +32,8 @@
       fetchVariantSellerInsights: toBoolean(opts.fetchVariantSellerInsights, complete),
       rootProductDelayMs: toFiniteNumber(opts.rootProductDelayMs, complete ? 200 : 0),
       recursive: {
-        maxPages: toFiniteNumber(recursive.maxPages != null ? recursive.maxPages : opts.recursiveMaxPages, complete ? 120 : 0),
-        maxDepth: toFiniteNumber(recursive.maxDepth != null ? recursive.maxDepth : opts.recursiveMaxDepth, complete ? 3 : 0),
+        maxPages: toFiniteNumber(recursive.maxPages != null ? recursive.maxPages : opts.recursiveMaxPages, recursiveDefaultsEnabled ? 120 : 0),
+        maxDepth: toFiniteNumber(recursive.maxDepth != null ? recursive.maxDepth : opts.recursiveMaxDepth, recursiveDefaultsEnabled ? 3 : 0),
         delayMs: toFiniteNumber(recursive.delayMs != null ? recursive.delayMs : opts.recursiveDelayMs, 0),
       },
     };
