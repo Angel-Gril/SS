@@ -491,6 +491,7 @@ export default function CollectPage() {
     const res = await sendToExtension({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds,
+      collectMode: 'complete',
     });
 
     setExtFetching(false);

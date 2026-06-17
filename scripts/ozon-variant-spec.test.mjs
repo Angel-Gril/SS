@@ -123,6 +123,23 @@ test('builds Ozon variants from all webAspects without collapsing composite colo
   ]);
 });
 
+test('keeps Ozon public color names that are phrases but not product descriptions', () => {
+  const helpers = loadHelpers();
+
+  assert.deepEqual(
+    plain(helpers.sanitizeOzonVariantAttrs({
+      sku: '2912066495',
+      attrs: { 'Цвет': 'Цвет пасты из красной фасоли' },
+      images: ['https://cdn.example.com/red-bean.jpg'],
+    })),
+    {
+      sku: '2912066495',
+      attrs: { 'Цвет': 'Цвет пасты из красной фасоли' },
+      images: ['https://cdn.example.com/red-bean.jpg'],
+    },
+  );
+});
+
 test('merges recursively discovered Ozon variants by real sku without losing attrs', () => {
   const helpers = loadHelpers();
 

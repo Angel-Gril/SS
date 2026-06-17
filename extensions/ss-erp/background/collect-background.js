@@ -3074,7 +3074,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       case "spb-self-hosted:fetch-ozon-product-to-erp": {
         return await collectOzonProductsToErp(message.productIds, {
-          mode: message.mode || message.collectMode || "quick",
+          mode: message.mode || message.collectMode || "complete",
         });
       }
     }

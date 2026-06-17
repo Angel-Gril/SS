@@ -31,3 +31,40 @@ test('enables recursive discovery and per-variant seller details only in complet
   assert.equal(policy.recursive.maxPages, 120);
   assert.equal(policy.recursive.delayMs, 0);
 });
+
+test('popup ERP collection asks background for complete Ozon variant discovery', () => {
+  const source = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
+
+  assert.match(
+    source,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+  );
+});
+
+test('background ERP collection message defaults to complete mode', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    source,
+    /collectOzonProductsToErp\(message\.productIds,\s*\{[\s\S]*mode:\s*message\.mode\s*\|\|\s*message\.collectMode\s*\|\|\s*["']complete["']/,
+  );
+});
+
+test('all interactive Ozon ERP collection entry points explicitly request complete mode', () => {
+  const panelSource = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
+  const collectPageSource = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');
+  const batchCollectSource = fs.readFileSync('apps/web/src/app/(dashboard)/collect/batch/page.tsx', 'utf8');
+
+  assert.match(
+    panelSource,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+  );
+  assert.match(
+    collectPageSource,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+  );
+  assert.match(
+    batchCollectSource,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+  );
+});

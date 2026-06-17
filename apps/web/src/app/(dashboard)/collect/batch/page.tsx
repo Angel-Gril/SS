@@ -127,7 +127,11 @@ export default function BatchCollectPage() {
     setErrors([]);
 
     const productIds = ok.map((p) => p.sku);
-    const res = await sendToExtension({ type: 'spb-self-hosted:fetch-ozon-product-to-erp', productIds }, 180000);
+    const res = await sendToExtension({
+      type: 'spb-self-hosted:fetch-ozon-product-to-erp',
+      productIds,
+      collectMode: 'complete',
+    }, 180000);
 
     if (!res?.ok) {
       setCollecting(false);

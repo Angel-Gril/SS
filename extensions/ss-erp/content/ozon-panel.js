@@ -2040,6 +2040,7 @@
         sendRuntimeMessage({
           type: 'spb-self-hosted:fetch-ozon-product-to-erp',
           productIds: [String(pid)],
+          collectMode: 'complete',
         }).then(function (response) {
           collectButton.disabled = false;
           collectButton.textContent = '采集此商品';

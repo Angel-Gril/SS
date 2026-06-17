@@ -419,7 +419,8 @@
     setActionStatus('', '');
     sendRuntimeMessage({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
-      productIds: [primaryActionState.productId]
+      productIds: [primaryActionState.productId],
+      collectMode: 'complete'
     }, function (response) {
       restorePrimaryButton();
       if (response && response.ok) {

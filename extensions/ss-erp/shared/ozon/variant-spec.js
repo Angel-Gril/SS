@@ -105,6 +105,7 @@
   function isLikelyDescriptiveColorValue(value) {
     const text = cleanText(value);
     if (!text || containsCjkText(text)) return false;
+    if (/^цвет\s+/iu.test(text) && text.length <= 40) return false;
     if (/(?:\d+\s*[xх*]\s*\d+|\d+(?:[,.]\d+)?\s*(?:см|mm|мм))/iu.test(text)) return true;
     if (/(?:аксессуар|фото|держател|инструмент|мойк|раковин|кухн|набор|кукла|толщин|покрыти|монтажн)/iu.test(text)) return true;
     const words = wordCount(text);
