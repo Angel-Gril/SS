@@ -110,6 +110,7 @@ pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/_
 
 ```bash
 node --test scripts/extension-ozon-collect-policy.test.mjs
+node scripts/extension-erp-collect-diagnostics.test.mjs
 node scripts/extension-ozon-rich-description.test.mjs
 pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
 ```
@@ -120,6 +121,7 @@ pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
 - `balanced` 首轮采集后是否会排队触发 `complete` 补全
 - Ozon 完整补全回写 ERP 时是否更新同一条 `supplyGoods` 记录，而不是创建重复采集数据
 - Ozon 富内容提取是否同时兼容老 `richAnnotationJson` 和新版 `content/blocks` 结构
+- ERP Web 扩展采集入口是否先检测扩展桥、ERP Token 和采集模块状态，避免点击后没有任何反馈
 
 ## 测试矩阵
 

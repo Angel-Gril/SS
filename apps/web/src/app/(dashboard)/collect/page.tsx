@@ -51,6 +51,16 @@ interface CollectedItem {
   modelId?: string | null;
 }
 
+interface ExtensionPingStatus {
+  ok?: boolean;
+  version?: string;
+  endpoint?: string;
+  hasEndpoint?: boolean;
+  hasToken?: boolean;
+  hasCollectModule?: boolean;
+  error?: string;
+}
+
 function hasCjkText(value?: string | null) {
   return /[\u3400-\u9fff]/.test(String(value || ''));
 }
@@ -217,6 +227,7 @@ export default function CollectPage() {
   const [extFetchInput, setExtFetchInput] = useState('');
   const [extFetching, setExtFetching] = useState(false);
   const [extFetchResults, setExtFetchResults] = useState<any[] | null>(null);
+  const [extFetchStatus, setExtFetchStatus] = useState('');
   const [expandedVariantIds, setExpandedVariantIds] = useState<Set<string>>(new Set());
   const [variantPriceOverrides, setVariantPriceOverrides] = useState<Record<string, Record<string, string>>>({});
   const [offerIdOverrides, setOfferIdOverrides] = useState<Record<string, string>>({});
@@ -454,23 +465,42 @@ export default function CollectPage() {
     }
   }
 
-  function sendToExtension(message: any): Promise<any> {
+  function sendToExtension(message: any, timeoutMs = 30000): Promise<any> {
     return new Promise((resolve) => {
       const requestId = Date.now() + '-' + Math.random().toString(36).slice(2);
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      function finish(response: any) {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        resolve(response);
+      }
       function onMessage(event: MessageEvent) {
         if (event.source !== window) return;
         if (!event.data || event.data.direction !== 'ss-erp:from-extension') return;
         if (event.data.requestId !== requestId) return;
-        window.removeEventListener('message', onMessage);
-        resolve(event.data.response);
+        finish(event.data.response);
       }
       window.addEventListener('message', onMessage);
       window.postMessage({ direction: 'ss-erp:to-extension', requestId, message }, '*');
-      setTimeout(() => {
-        window.removeEventListener('message', onMessage);
-        resolve({ ok: false, error: '扩展未响应，请确认已安装并启用 SS ERP 扩展' });
-      }, 30000);
+      timer = setTimeout(() => {
+        finish({ ok: false, error: '扩展未响应，请确认已安装并启用 SS ERP 扩展' });
+      }, timeoutMs);
     });
+  }
+
+  async function pingExtensionForCollect(): Promise<ExtensionPingStatus> {
+    const ping = await sendToExtension({ type: 'ss-erp:ping' }, 5000);
+    if (!ping?.ok) {
+      const error = String(ping?.error || ping?.msg || '').trim();
+      const hint = !error || error === 'no response'
+        ? '扩展未连接或版本过旧，请重新加载/更新 SS ERP 扩展后再试'
+        : error;
+      return { ok: false, error: hint };
+    }
+    return ping;
   }
 
   async function handleExtFetch() {
@@ -489,22 +519,49 @@ export default function CollectPage() {
     setExtFetching(true);
     setExtFetchResults(null);
     setExtFetchErrors([]);
+    setExtFetchStatus('正在检测浏览器扩展连接...');
+
+    const ping = await pingExtensionForCollect();
+    if (!ping.ok) {
+      setExtFetching(false);
+      setExtFetchStatus(`扩展未连接：${ping.error || '请确认已安装并启用 SS ERP 扩展'}`);
+      toast({ title: ping.error || '扩展未连接，请确认已安装并启用 SS ERP 扩展', variant: 'destructive' });
+      return;
+    }
+    if (!ping.hasCollectModule) {
+      setExtFetching(false);
+      setExtFetchStatus('扩展采集模块未加载，请在浏览器扩展管理页重新加载 SS ERP 扩展');
+      toast({ title: '扩展采集模块未加载，请重新加载 SS ERP 扩展', variant: 'destructive' });
+      return;
+    }
+    if (!ping.hasEndpoint || !ping.hasToken) {
+      setExtFetching(false);
+      const missing = !ping.hasEndpoint ? 'ERP 地址' : 'ERP Token';
+      setExtFetchStatus(`扩展未配置 ${missing}，请先用右上角扩展同步登录/Token`);
+      toast({ title: `扩展未配置 ${missing}`, description: '请先用右上角扩展同步登录/Token 后再采集', variant: 'destructive' });
+      return;
+    }
+
+    setExtFetchStatus(`扩展已连接 v${ping.version || '-'}，正在采集并写入 ERP...`);
 
     const res = await sendToExtension({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds,
       collectMode: 'balanced',
-    });
+    }, 180000);
 
     setExtFetching(false);
     if (res.ok) {
       setExtFetchResults(res.data?.collected ? Array(res.data.collected).fill(null) : []);
       const errors = res.data?.errors?.map((e: any) => `${e.productId}: ${e.error}`) || [];
       setExtFetchErrors(errors);
+      setExtFetchStatus(`采集完成：成功 ${res.data?.collected || 0} 件${errors.length ? `，失败 ${errors.length} 件` : ''}`);
       toast({ title: `成功采集 ${res.data?.collected || 0} 件商品` });
       fetchData();
     } else {
-      toast({ title: res.error || '扩展采集失败', variant: 'destructive' });
+      const error = res.error || res.msg || '扩展采集失败';
+      setExtFetchStatus(error);
+      toast({ title: error, variant: 'destructive' });
     }
   }
 
@@ -1637,7 +1694,7 @@ export default function CollectPage() {
       </Dialog>
 
       {/* 扩展采集弹窗（任意商品） */}
-      <Dialog open={showExtFetch} onOpenChange={(o) => { if (!o) { setShowExtFetch(false); setExtFetchResults(null); setExtFetchErrors([]); } }}>
+      <Dialog open={showExtFetch} onOpenChange={(o) => { if (!o) { setShowExtFetch(false); setExtFetchResults(null); setExtFetchErrors([]); setExtFetchStatus(''); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>扩展采集（任意商品）</DialogTitle>
@@ -1656,6 +1713,12 @@ export default function CollectPage() {
               />
             </div>
 
+            {extFetchStatus && (
+              <div className="rounded border bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                {extFetchStatus}
+              </div>
+            )}
+
             {extFetchResults && (
               <div className="p-3 rounded border bg-orange-50 text-orange-800 text-sm">
                 已成功采集 {extFetchResults.length} 件商品并保存到采集列表
@@ -1669,7 +1732,7 @@ export default function CollectPage() {
             )}
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => { setShowExtFetch(false); setExtFetchResults(null); setExtFetchErrors([]); }}>
+              <Button variant="outline" onClick={() => { setShowExtFetch(false); setExtFetchResults(null); setExtFetchErrors([]); setExtFetchStatus(''); }}>
                 {extFetchResults ? '关闭' : '取消'}
               </Button>
               {!extFetchResults && (

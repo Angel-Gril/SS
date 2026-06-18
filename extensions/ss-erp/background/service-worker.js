@@ -881,6 +881,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'ss-erp:ping') {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, 'ss_erp_connection']).then((result) => {
+      const legacyConn = result.ss_erp_connection || {};
+      const rawEndpoint = result[OZON_CALC_ERP_ENDPOINT_KEY] || (legacyConn.baseUrl ? legacyConn.baseUrl + '/api/collect' : '');
+      const endpoint = normalizeEndpoint(rawEndpoint);
+      const baseUrl = endpoint
+        ? endpoint.replace(/\/api\/.*$/, '').replace(/\/+$/, '')
+        : toText(legacyConn.baseUrl).trim().replace(/\/+$/, '');
+      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY] || legacyConn.token).trim();
+      const collectModule = globalThis.SS_ERP_COLLECT_BACKGROUND || {};
+      sendResponse({
+        ok: true,
+        version: chrome.runtime.getManifest().version,
+        endpoint: baseUrl,
+        hasEndpoint: Boolean(baseUrl),
+        hasToken: Boolean(token),
+        hasCollectModule: Boolean(collectModule.collectOzonProductsToErp),
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
   if (message.type === OZON_CALC_SYNC_CHANNEL) {
     const schema = globalThis.OZON_CALC_SYNC_SCHEMA;
     const snapshot = schema && typeof schema.normalizeSnapshot === 'function'

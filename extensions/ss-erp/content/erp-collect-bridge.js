@@ -42,10 +42,18 @@
       if (!message || !message.type) return;
 
       chrome.runtime.sendMessage(message, function (response) {
+        var lastError = chrome.runtime.lastError;
+        var safeResponse = response || { ok: false, error: 'no response' };
+        if (lastError) {
+          safeResponse = {
+            ok: false,
+            error: lastError.message || String(lastError),
+          };
+        }
         window.postMessage({
           direction: DIRECTION_FROM_EXT,
           requestId: requestId,
-          response: response || { ok: false, error: 'no response' }
+          response: safeResponse
         }, '*');
       });
     });

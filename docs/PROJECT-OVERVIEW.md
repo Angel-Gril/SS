@@ -77,6 +77,7 @@ build/scripts/            本地离线包脚本
 - 浏览器扩展在 OZON 商品页或列表页读取商品信息。
 - 采集数据进入 `/api/collect`，保留源商品 ID、原始标题、上架标题、价格、货币、图片和变体信息。
 - Ozon 采集到 ERP 现在分两阶段：首轮默认走 `balanced`，先快速保存当前页商品、首层变体和根 SKU seller 信息；后台再静默补跑 `complete` 递归，把完整变体组合和子 SKU seller 属性回写到同一条采集记录，避免大多变体商品首轮采集明显变慢。
+- ERP Web 发起的扩展采集会先 ping 浏览器扩展，确认扩展桥、版本、ERP 连接配置和采集模块状态；如果采集请求没有打到后端，页面会优先提示扩展未连接、未配置 Token 或模块未加载。
 - Ozon 富文本简介和源视频元数据会随采集保存到 metadata，便于后续展示和能力扩展；采集兼容 `richAnnotationJson / richAnnotation` 以及 `content / blocks / children / items / nodes / widgets` 等富内容结构。当前发布链路不会把源商品的视频、富媒体或视频封面属性直接克隆到新商品。
 - 上架标题要求使用 OZON 可识别语言。检测到中文标题时，后端阻止直接上架并提示人工修正。
 - 价格采集保留货币信息，避免把 `CNY` 数字误当 `RUB` 计算。
