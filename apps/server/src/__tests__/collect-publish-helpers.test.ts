@@ -160,6 +160,42 @@ describe('collect publish helpers', () => {
     expect(name.length).toBeLessThan(80);
   });
 
+  it('normalizes repeated table runner base titles before appending color variants', () => {
+    const name = resolvePublishName({
+      title: 'Carte Blanche Скатерть-дорожка на стол 90x300 см, кухонная дорожка сервировочная',
+      metadata: {},
+    }, {
+      'Цвет': 'красный, салатовый, светло-желтый, желтый',
+    });
+
+    expect(name).toBe('Скатерть-дорожка на стол Carte Blanche, 90x300 см, красный, салатовый, светло-желтый');
+    expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
+  it('drops redundant shade color-name parts from publish titles', () => {
+    const name = resolvePublishName({
+      title: 'Carte Blanche Скатерть-дорожка на стол 90x300 см, кухонная дорожка сервировочная',
+      metadata: {},
+    }, {
+      'Цвет': 'красный, светло-розовый',
+      'Название цвета': 'розовый луг',
+    });
+
+    expect(name).toBe('Скатерть-дорожка на стол Carte Blanche, 90x300 см, красный, светло-розовый');
+    expect(name).not.toContain('розовый луг');
+    expect(hasSuspiciousPublishName(name)).toBe(false);
+  });
+
+  it('neutralizes color-name variants that repeat the base color family before publish', () => {
+    expect(sanitizeVariantAttrSetsForOzonPublish([
+      { 'Цвет': 'красный, светло-розовый', 'Название цвета': 'розовый луг' },
+      { 'Цвет': 'красный, светло-розовый', 'Название цвета': 'розовый жемчуг' },
+    ])).toEqual([
+      { 'Цвет': 'красный, светло-розовый', 'Название цвета': 'Тип 1' },
+      { 'Цвет': 'красный, светло-розовый', 'Название цвета': 'Тип 2' },
+    ]);
+  });
+
   it('turns repeated keyword spam titles into short publish names with variant color', () => {
     const name = resolvePublishName({
       title: 'Автовизитка, автовизитка в машину, номер телефона в автомобиль,Ретро-парковочная плата для автомобиля',

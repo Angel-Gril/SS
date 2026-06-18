@@ -18,6 +18,7 @@ test('defaults Ozon ERP collection to quick mode', () => {
   assert.equal(policy.discoverVariants, false);
   assert.equal(policy.fetchRootSellerInsights, true);
   assert.equal(policy.fetchVariantSellerInsights, false);
+  assert.equal(policy.fetchDescriptionDetails, true);
   assert.equal(policy.rootProductDelayMs, 0);
 });
 
@@ -27,18 +28,21 @@ test('enables recursive discovery and per-variant seller details only in complet
   assert.equal(policy.mode, 'complete');
   assert.equal(policy.discoverVariants, true);
   assert.equal(policy.fetchVariantSellerInsights, true);
+  assert.equal(policy.fetchRootSellerInsights, true);
+  assert.equal(policy.fetchDescriptionDetails, true);
   assert.equal(policy.recursive.maxDepth, 3);
   assert.equal(policy.recursive.maxPages, 120);
   assert.equal(policy.recursive.delayMs, 0);
 });
 
-test('balanced Ozon ERP collection keeps the first pass quick', () => {
+test('balanced Ozon ERP collection keeps the first pass fast and queues details', () => {
   const policy = loadPolicy().resolveOzonCollectionPolicy({ mode: 'balanced' });
 
   assert.equal(policy.mode, 'balanced');
   assert.equal(policy.discoverVariants, false);
-  assert.equal(policy.fetchRootSellerInsights, true);
+  assert.equal(policy.fetchRootSellerInsights, false);
   assert.equal(policy.fetchVariantSellerInsights, false);
+  assert.equal(policy.fetchDescriptionDetails, false);
   assert.equal(policy.rootProductDelayMs, 0);
   assert.equal(policy.recursive.maxPages, 0);
   assert.equal(policy.recursive.maxDepth, 0);
@@ -87,5 +91,18 @@ test('balanced collection queues a complete enrichment pass after the first ERP 
   assert.match(
     source,
     /collectPolicy\.mode\s*===\s*["']balanced["'][\s\S]*enqueueOzonCollectEnrichment/,
+  );
+});
+
+test('balanced first pass forwards collection policy into the Ozon tab fetcher', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    source,
+    /fetchOzonProductViaTab\(pid,\s*[^,\n]+,\s*collectPolicy\)/,
+  );
+  assert.match(
+    source,
+    /fetchDescriptionDetails:\s*!!collectPolicy\.fetchDescriptionDetails/,
   );
 });

@@ -28,8 +28,9 @@
     return {
       mode: mode,
       discoverVariants: toBoolean(opts.discoverVariants, complete),
-      fetchRootSellerInsights: toBoolean(opts.fetchRootSellerInsights, true),
+      fetchRootSellerInsights: toBoolean(opts.fetchRootSellerInsights, mode !== 'balanced'),
       fetchVariantSellerInsights: toBoolean(opts.fetchVariantSellerInsights, complete),
+      fetchDescriptionDetails: toBoolean(opts.fetchDescriptionDetails, mode !== 'balanced'),
       rootProductDelayMs: toFiniteNumber(opts.rootProductDelayMs, complete ? 200 : 0),
       recursive: {
         maxPages: toFiniteNumber(recursive.maxPages != null ? recursive.maxPages : opts.recursiveMaxPages, recursiveDefaultsEnabled ? 120 : 0),

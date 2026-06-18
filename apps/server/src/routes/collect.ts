@@ -263,6 +263,63 @@ function isAllowedColorTail(value: string): boolean {
   return OZON_COLOR_TAIL_RE.test(value) || /^[\p{L}-]{3,}$/u.test(value);
 }
 
+function colorFamilyKey(value: unknown): string {
+  const tokens = sanitizeOzonAttrText(value)
+    .split(/[\s-]+/u)
+    .map((part) => normalizeColorToken(part))
+    .filter(Boolean);
+  for (const token of tokens) {
+    if (OZON_COLOR_PREFIX_RE.test(token) || OZON_COMPOUND_COLOR_PREFIX_RE.test(token)) continue;
+    if (OZON_COLOR_TOKEN_RE.test(token)) return normalizeOzonDictionaryText(token);
+  }
+  return '';
+}
+
+function colorSpecificity(value: unknown): number {
+  const text = sanitizeOzonAttrText(value);
+  if (!text) return 0;
+  const tokens = text
+    .split(/[\s-]+/u)
+    .map((part) => normalizeColorToken(part))
+    .filter(Boolean);
+  const family = colorFamilyKey(text);
+  if (!family) return 0;
+  const meaningful = tokens.filter((token) => !OZON_COLOR_PREFIX_RE.test(token) && !OZON_COMPOUND_COLOR_PREFIX_RE.test(token));
+  if (meaningful.length > 1) return 2;
+  return /[\s-]/u.test(text) ? 2 : 1;
+}
+
+function compactColorSegments(segments: string[]): string[] {
+  const rows = segments.map((segment) => ({
+    segment,
+    family: colorFamilyKey(segment),
+    specificity: colorSpecificity(segment),
+  }));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    const key = normalizeOzonDictionaryText(row.segment);
+    if (!key || seen.has(key)) continue;
+    if (row.family && rows.some((other) => (
+      other !== row
+      && other.family === row.family
+      && other.specificity > row.specificity
+    ))) {
+      continue;
+    }
+    seen.add(key);
+    out.push(row.segment);
+  }
+  return out;
+}
+
+function colorNameRepeatsColorFamily(colorValue: unknown, colorNameValue: unknown): boolean {
+  const colorNameFamily = colorFamilyKey(colorNameValue);
+  if (!colorNameFamily) return false;
+  return splitOzonCompositeDictionaryValue(sanitizeOzonAttrText(colorValue))
+    .some((part) => colorFamilyKey(part) === colorNameFamily);
+}
+
 function extractSafeColorSegment(value: string): string {
   const text = sanitizeOzonAttrText(value);
   if (!text || containsCjkText(text) || isLikelyDescriptiveColorVariantValue(text)) return '';
@@ -298,16 +355,10 @@ function extractSafeColorSegment(value: string): string {
 }
 
 function extractSafeColorValue(value: unknown): string {
-  const seen = new Set<string>();
   const colors = splitOzonCompositeDictionaryValue(sanitizeOzonAttrText(value))
     .map((part) => extractSafeColorSegment(part))
-    .filter((part) => {
-      const key = normalizeOzonDictionaryText(part);
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  return colors.join(', ');
+    .filter(Boolean);
+  return compactColorSegments(colors).join(', ');
 }
 
 function isLikelyDescriptiveColorVariantValue(value: unknown): boolean {
@@ -403,8 +454,14 @@ function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, inclu
   if (!variantAttrs || !Object.keys(variantAttrs).length) return [];
   const parts: string[] = [];
   const seen = new Set<string>();
+  const colorValue = Object.entries(variantAttrs)
+    .filter(([name]) => isStrictColorVariantName(name))
+    .map(([, value]) => sanitizeVariantAttrValueForTitle('Цвет', value))
+    .filter(Boolean)
+    .join(', ');
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
+    if (isColorNameVariantName(rawName) && colorNameRepeatsColorFamily(colorValue, rawValue)) continue;
     const value = sanitizeVariantAttrValueForTitle(rawName, rawValue);
     if (isStrictColorVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue) && !value) continue;
     if (!value) continue;
@@ -464,6 +521,11 @@ export function sanitizeVariantAttrSetsForOzonPublish(
     const attrs = sanitized[index]!;
     const colorNameEntry = Object.entries(attrs).find(([name]) => isColorNameVariantName(name));
     if (!colorNameEntry) continue;
+    const colorEntry = Object.entries(attrs).find(([name]) => isStrictColorVariantName(name));
+    if (colorEntry && colorNameRepeatsColorFamily(colorEntry[1], colorNameEntry[1])) {
+      needsNeutralColorName.push({ index, name: colorNameEntry[0] });
+      continue;
+    }
     const rawAttrs = inputs[index];
     const rawColorNameEntry = rawAttrs && typeof rawAttrs === 'object'
       ? Object.entries(rawAttrs).find(([name]) => isColorNameVariantName(name))
@@ -595,6 +657,12 @@ function normalizeKnownPublishBaseName(value: string): string {
   const text = cleanPublishName(value);
   if (/^скатерт\p{L}*-дорожк\p{L}*\s+на\s+стол\s+дорожк\p{L}*\s+сервировочн\p{L}*$/iu.test(text)) {
     return 'Дорожка на стол сервировочная';
+  }
+  const tableRunner = text.match(/^(?:(?<brand>.+?)\s+)?скатерт\p{L}*-дорожк\p{L}*\s+на\s+стол(?:\s+(?<size>\d{1,4}(?:[,.]\d+)?\s*[xх*×]\s*\d{1,4}(?:[,.]\d+)?\s*(?:см|cm)?))?(?:,?\s+(?:кухонн\p{L}*\s+)?дорожк\p{L}*\s+сервировочн\p{L}*)$/iu);
+  if (tableRunner?.groups) {
+    const brand = cleanPublishName(tableRunner.groups.brand || '');
+    const size = cleanPublishName(tableRunner.groups.size || '').replace(/\s*[xх*×]\s*/iu, 'x');
+    return cleanPublishName(`Скатерть-дорожка на стол${brand ? ` ${brand}` : ''}${size ? `, ${size}` : ''}`);
   }
   return text;
 }

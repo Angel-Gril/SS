@@ -139,7 +139,7 @@ async function runOzonCollectEnrichmentJob(job, erpConn) {
 
   for (let i = 0; i < pids.length; i++) {
     const pid = pids[i];
-    const r = await fetchOzonProductViaTab(pid);
+    const r = await fetchOzonProductViaTab(pid, null, collectPolicy);
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
       continue;
@@ -355,8 +355,9 @@ function resolveOzonCollectionPolicy(options) {
   return {
     mode,
     discoverVariants: complete,
-    fetchRootSellerInsights: true,
+    fetchRootSellerInsights: mode !== "balanced",
     fetchVariantSellerInsights: complete,
+    fetchDescriptionDetails: mode !== "balanced",
     rootProductDelayMs: complete ? 200 : 0,
     recursive: {
       maxPages: complete ? 120 : 0,
@@ -2067,16 +2068,19 @@ function normalizeOzonProductPathForFetch(link, fallbackProductId) {
   }
 }
 
-async function fetchOzonProductViaTab(productId, productPath) {
+async function fetchOzonProductViaTab(productId, productPath, options = {}) {
   var tab = await getOzonPublicTab();
   if (!tab || !tab.id) {
     return { ok: false, error: "请先打开 www.ozon.ru 任意页面（需要登录状态）" };
   }
+  var collectPolicy = resolveOzonCollectionPolicy(options);
 
   // 临时把 ozon.ru 上跟语言相关的 cookie 都改成 ru，采集结束后恢复，避免用户中文界面导致返回中文翻译版
   var savedCookies = await switchOzonLanguageCookies("ru");
   try {
-    return await doFetchOzonProductViaTab(tab, productId, productPath);
+    return await doFetchOzonProductViaTab(tab, productId, productPath, {
+      fetchDescriptionDetails: !!collectPolicy.fetchDescriptionDetails,
+    });
   } finally {
     await restoreOzonLanguageCookies(savedCookies);
   }
@@ -2144,12 +2148,16 @@ function cookieUrl(c) {
   return protocol + host + c.path;
 }
 
-async function doFetchOzonProductViaTab(tab, productId, productPath) {
+async function doFetchOzonProductViaTab(tab, productId, productPath, options = {}) {
+  var fetchOptions = {
+    fetchDescriptionDetails: options && options.fetchDescriptionDetails !== false,
+  };
   var results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    args: [String(productId), String(productPath || "")],
-    func: async (pid, requestedPath) => {
+    args: [String(productId), String(productPath || ""), fetchOptions],
+    func: async (pid, requestedPath, fetchOptions) => {
+      var shouldFetchDescriptionDetails = !fetchOptions || fetchOptions.fetchDescriptionDetails !== false;
       var priceCurrency = globalThis.SS_ERP_PRICE_CURRENCY || {};
       var parsePriceWithCurrency = priceCurrency.parsePriceWithCurrency || function (text, fallback) {
         return {
@@ -2584,7 +2592,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath) {
         }
       }
 
-      try {
+      if (shouldFetchDescriptionDetails) try {
         var descriptionPaths = buildDescriptionFetchPaths(pid, productPath);
         var descriptionStates = null;
         for (var dpi = 0; dpi < descriptionPaths.length; dpi++) {
@@ -2771,7 +2779,9 @@ async function discoverOzonVariantsRecursively(productData, rootProductId, optio
 
       try {
         const productPath = normalizeOzonProductPathForFetch(ref.link, fetchId);
-        const result = await doFetchOzonProductViaTab(tab, fetchId, productPath);
+        const result = await doFetchOzonProductViaTab(tab, fetchId, productPath, {
+          fetchDescriptionDetails: !!policy.fetchDescriptionDetails,
+        });
         if (!result.ok || !result.data) {
           if (diagnostics.errors.length < 10) {
             diagnostics.errors.push({
@@ -2881,7 +2891,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
   const errors = [];
   for (let i = 0; i < pids.length; i++) {
     const pid = pids[i];
-    const r = await fetchOzonProductViaTab(pid);
+    const r = await fetchOzonProductViaTab(pid, null, collectPolicy);
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
       if (i < pids.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
