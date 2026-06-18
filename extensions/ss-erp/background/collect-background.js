@@ -2833,7 +2833,7 @@ async function discoverOzonVariantsRecursively(productData, rootProductId, optio
       try {
         const productPath = normalizeOzonProductPathForFetch(ref.link, fetchId);
         const result = await doFetchOzonProductViaTab(tab, fetchId, productPath, {
-          fetchDescriptionDetails: !!policy.fetchDescriptionDetails,
+          fetchDescriptionDetails: options.fetchDescriptionDetails !== false,
         });
         if (!result.ok || !result.data) {
           if (diagnostics.errors.length < 10) {
@@ -2906,7 +2906,10 @@ async function completeOzonProductVariantsForCollection(productData, productId, 
     return productData;
   }
   try {
-    return await discoverOzonVariantsRecursively(productData, productId, policy.recursive || {});
+    return await discoverOzonVariantsRecursively(productData, productId, {
+      ...(policy.recursive || {}),
+      fetchDescriptionDetails: policy.fetchDescriptionDetails,
+    });
   } catch (error) {
     attachOzonVariantDiscoveryDiagnostics(productData, {
       enabled: true,

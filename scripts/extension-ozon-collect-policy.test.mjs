@@ -48,12 +48,12 @@ test('balanced Ozon ERP collection keeps the first pass fast and queues details'
   assert.equal(policy.recursive.maxDepth, 0);
 });
 
-test('popup ERP collection asks background for balanced Ozon variant discovery', () => {
+test('popup ERP collection asks background for complete Ozon variant discovery', () => {
   const source = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 
   assert.match(
     source,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
   );
 });
 
@@ -73,15 +73,28 @@ test('all interactive Ozon ERP collection entry points explicitly request comple
 
   assert.match(
     panelSource,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
   );
   assert.match(
     collectPageSource,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
   );
   assert.match(
     batchCollectSource,
-    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]balanced['"]/,
+    /type:\s*['"]spb-self-hosted:fetch-ozon-product-to-erp['"][\s\S]*collectMode:\s*['"]complete['"]/,
+  );
+});
+
+test('recursive Ozon discovery forwards description policy without referencing an out-of-scope policy variable', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    source,
+    /discoverOzonVariantsRecursively\(productData,\s*productId,\s*\{[\s\S]*fetchDescriptionDetails:\s*policy\.fetchDescriptionDetails/,
+  );
+  assert.doesNotMatch(
+    source,
+    /discoverOzonVariantsRecursively[\s\S]*fetchDescriptionDetails:\s*!!policy\.fetchDescriptionDetails[\s\S]*async function completeOzonProductVariantsForCollection/,
   );
 });
 
