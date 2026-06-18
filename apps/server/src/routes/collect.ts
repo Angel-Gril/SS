@@ -1985,7 +1985,7 @@ export async function collectRoutes(app: FastifyInstance) {
         where: where as any,
         skip: offset,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { updatedAt: 'desc' },
       }),
     ]);
 

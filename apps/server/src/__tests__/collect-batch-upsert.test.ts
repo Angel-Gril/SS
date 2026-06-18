@@ -46,6 +46,8 @@ const mocks = vi.hoisted(() => {
       id: where.id,
       ...data,
     })),
+    supplyGoodsCount: vi.fn(async () => 1),
+    supplyGoodsFindMany: vi.fn(async () => [{ ...record, updatedAt: new Date('2026-06-18T01:00:00.000Z') }]),
     resolveCollectedPrice: vi.fn(async () => ({
       purchasePriceCny: 99,
       originalPrice: 799,
@@ -66,7 +68,8 @@ vi.mock('../lib/prisma.js', () => ({
       findFirst: mocks.supplyGoodsFindFirst,
       create: mocks.supplyGoodsCreate,
       update: mocks.supplyGoodsUpdate,
-      findMany: vi.fn(async () => []),
+      count: mocks.supplyGoodsCount,
+      findMany: mocks.supplyGoodsFindMany,
       delete: vi.fn(),
     },
     shop: {
@@ -185,6 +188,28 @@ describe('collectRoutes batch upsert', () => {
         brandName: 'Brand',
         widgetStatesDump: { recursiveVariantDiscovery: { finalVariantCount: 2 } },
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('orders the collect list by updatedAt so refreshed SKU records are visible first', async () => {
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/collect?offset=0&limit=20',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { total: 1 },
+      });
+      expect(mocks.supplyGoodsFindMany).toHaveBeenCalledWith(expect.objectContaining({
+        orderBy: { updatedAt: 'desc' },
+      }));
     } finally {
       await app.close();
     }
