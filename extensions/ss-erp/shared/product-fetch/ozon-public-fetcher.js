@@ -261,9 +261,58 @@
     }
   }
 
+  function isStructuredRichValue(value, depth) {
+    if (value == null || depth > 5) return false;
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i++) {
+        if (isStructuredRichValue(value[i], depth + 1)) return true;
+      }
+      return false;
+    }
+    if (typeof value !== 'object') return false;
+    var keys = Object.keys(value);
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k];
+      if (/^(?:richannotationjson|richannotation|content|blocks|children|items|nodes|widgets|gallery|img|image|picture|text|description|title)$/i.test(key)) {
+        return true;
+      }
+      if (isStructuredRichValue(value[key], depth + 1)) return true;
+    }
+    return false;
+  }
+
+  function pickRichJsonCandidate(state) {
+    var objectCandidates = [
+      { key: 'richAnnotationJson', value: state && state.richAnnotationJson },
+      { key: 'richAnnotation', value: state && state.richAnnotation },
+      { key: 'content', value: state && state.content },
+      { key: 'description', value: state && state.description },
+      { key: 'blocks', value: state && state.blocks },
+      { key: 'items', value: state && state.items },
+      { key: 'children', value: state && state.children },
+      { key: 'nodes', value: state && state.nodes },
+      { key: 'widgets', value: state && state.widgets }
+    ];
+    for (var i = 0; i < objectCandidates.length; i++) {
+      var entry = objectCandidates[i];
+      var candidate = entry.value;
+      if ((candidate && typeof candidate === 'object') || Array.isArray(candidate)) {
+        if (!isStructuredRichValue(candidate, 0)) continue;
+        if (entry.key === 'richAnnotationJson' || entry.key === 'richAnnotation') return candidate;
+        if (Array.isArray(candidate)) {
+          var wrapped = {};
+          wrapped[entry.key] = candidate;
+          return wrapped;
+        }
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   function extractDescriptionPayload(state) {
-    var richJson = state.richAnnotationJson || (state.richAnnotation && typeof state.richAnnotation === 'object' ? state.richAnnotation : null);
-    var candidates = [state.richAnnotation, state.description, state.text, state.content, richJson];
+    var richJson = pickRichJsonCandidate(state);
+    var candidates = [state.richAnnotation, state.description, state.text, state.content, state.blocks, richJson];
     var text = '';
     for (var i = 0; i < candidates.length; i++) {
       var next = extractTextFromRichValue(candidates[i]);

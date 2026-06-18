@@ -422,13 +422,53 @@
     return null;
   }
 
+  function isStructuredRichValue(value, depth = 0) {
+    if (value == null || depth > 5) return false;
+    if (Array.isArray(value)) {
+      return value.some((item) => isStructuredRichValue(item, depth + 1));
+    }
+    if (typeof value !== "object") return false;
+    for (const [key, child] of Object.entries(value)) {
+      if (/^(?:richannotationjson|richannotation|content|blocks|children|items|nodes|widgets|gallery|img|image|picture|text|description|title)$/i.test(key)) {
+        return true;
+      }
+      if (isStructuredRichValue(child, depth + 1)) return true;
+    }
+    return false;
+  }
+
+  function pickRichJsonCandidate(state) {
+    const objectCandidates = [
+      { key: "richAnnotationJson", value: state?.richAnnotationJson },
+      { key: "richAnnotation", value: state?.richAnnotation },
+      { key: "content", value: state?.content },
+      { key: "description", value: state?.description },
+      { key: "blocks", value: state?.blocks },
+      { key: "items", value: state?.items },
+      { key: "children", value: state?.children },
+      { key: "nodes", value: state?.nodes },
+      { key: "widgets", value: state?.widgets },
+    ];
+    for (const entry of objectCandidates) {
+      const candidate = entry.value;
+      if ((candidate && typeof candidate === "object") || Array.isArray(candidate)) {
+        if (!isStructuredRichValue(candidate, 0)) continue;
+        if (entry.key === "richAnnotationJson" || entry.key === "richAnnotation") return candidate;
+        if (Array.isArray(candidate)) return { [entry.key]: candidate };
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   function extractDescriptionPayload(state) {
-    const richJson = state.richAnnotationJson || (typeof state.richAnnotation === "object" ? state.richAnnotation : null);
+    const richJson = pickRichJsonCandidate(state);
     const candidates = [
       state.richAnnotation,
       state.description,
       state.text,
       state.content,
+      state.blocks,
       richJson
     ];
     let text = "";

@@ -110,6 +110,7 @@ pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/_
 
 ```bash
 node --test scripts/extension-ozon-collect-policy.test.mjs
+node scripts/extension-ozon-rich-description.test.mjs
 pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
 ```
 
@@ -118,6 +119,7 @@ pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
 - popup、Ozon 面板、ERP Web 单采/批量采是否默认走 `balanced`
 - `balanced` 首轮采集后是否会排队触发 `complete` 补全
 - Ozon 完整补全回写 ERP 时是否更新同一条 `supplyGoods` 记录，而不是创建重复采集数据
+- Ozon 富内容提取是否同时兼容老 `richAnnotationJson` 和新版 `content/blocks` 结构
 
 ## 测试矩阵
 

@@ -56,6 +56,31 @@ assert.deepEqual(JSON.parse(JSON.stringify(result.sourceVideos)), [{
   title: 'Обзор товара',
 }]);
 
+const contentOnlyRich = sandbox.OZON_PUBLIC_FETCHER.parseWidgetStates(123456790, {
+  widgetStates: {
+    webProductHeading: JSON.stringify({ title: 'Скатерть тестовая' }),
+    webDescription: JSON.stringify({
+      content: [{
+        blocks: [
+          { text: { content: 'Описание из content.blocks' } },
+          { image: { src: 'https://cdn.example.com/rich-content-block.jpg' } },
+        ],
+      }],
+    }),
+  },
+});
+
+assert.equal(contentOnlyRich.ok, true);
+assert.match(contentOnlyRich.description, /Описание из content\.blocks/);
+assert.equal(contentOnlyRich.richDescriptionJson, JSON.stringify({
+  content: [{
+    blocks: [
+      { text: { content: 'Описание из content.blocks' } },
+      { image: { src: 'https://cdn.example.com/rich-content-block.jpg' } },
+    ],
+  }],
+}));
+
 const fetchedUrls = [];
 const slugRichAnnotationJson = {
   content: [{

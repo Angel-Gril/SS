@@ -49,7 +49,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 - ERP 连接配置、Ozon Cookie 同步、店铺分析同步。
 - Popup 已收敛为一个智能主动作，连接状态和计算器数据保留在首屏，Cookie/店铺分析/经营图表同步放进“同步与维护”折叠区。
 - Ozon 商品页“核价找货源”已接入 1688/PDD/淘宝主图搜图第一版：popup 采集当前商品主图并转码，service worker 只为用户已勾选的平台创建搜图任务，各平台页面桥负责上传图片并跳转结果。
-- Ozon 商品采集会保存富文本简介和源视频元数据到 ERP metadata；富文本会优先用完整商品 slug 请求 Ozon 第二页详情 `layout_page_index=2`，再兜底短 `product_id` 路径。当前只采集保存，不自动把源视频/富媒体重新发布到 Ozon 新商品。
+- Ozon 商品采集会保存富文本简介和源视频元数据到 ERP metadata；富文本会优先用完整商品 slug 请求 Ozon 第二页详情 `layout_page_index=2`，再兜底短 `product_id` 路径。采集器现在不仅识别 `richAnnotationJson / richAnnotation` 老结构，也会兼容 `content / blocks / children / items / nodes / widgets` 这类新版富内容结构。当前只采集保存，不自动把源视频/富媒体重新发布到 Ozon 新商品。
 - Ozon 采集到 ERP 的交互入口（popup、Ozon 面板、ERP Web 单采/批量采）默认走 `collectMode=balanced`：首轮先快速保存当前页商品、首层变体和根 SKU seller 信息；后台再静默补跑 `complete` 递归，把完整变体组合和子 SKU seller 属性回写到同一条 ERP 采集记录。这样 ERP 最终仍会尽量拿到“每个真实 SKU = 完整属性组合”，但不会把 60+ SKU 商品的首轮采集时间全部压到前台等待。
 - 1688/PDD/淘宝/天猫货源页主动作已改为直接写入 ERP `/api/collect/batch`，采集成功后提示“已进入 ERP 上品列表”，并通知已打开的 ERP 采集页刷新。
 - 候选货源本地池保留为辅助能力：在 Ozon 商品页打开扩展会记住 6 小时上下文，但不再作为国内货源采集的主保存路径。
