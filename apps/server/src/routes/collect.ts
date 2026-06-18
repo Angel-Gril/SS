@@ -372,6 +372,17 @@ function isLikelyDescriptiveColorVariantValue(value: unknown): boolean {
   return false;
 }
 
+function normalizeCodeLikeVariantLabel(value: unknown): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text || containsCjkText(text)) return '';
+  if (/https?:\/\/|www\.|@/iu.test(text)) return '';
+  if (isLikelyDescriptiveColorVariantValue(text)) return '';
+  const compact = text.replace(/\s+/g, '');
+  const match = compact.match(/^([a-z]{1,6})[-_](\d{1,4}[a-z]?)$/iu);
+  if (!match?.[1] || !match[2]) return '';
+  return `${match[1].toLocaleUpperCase('ru-RU')}-${match[2].toLocaleUpperCase('ru-RU')}`;
+}
+
 function sanitizeSupplementalVariantAttrValue(value: unknown): string {
   const text = sanitizeOzonAttrText(value);
   if (!text || containsCjkText(text)) return '';
@@ -421,12 +432,14 @@ function sanitizeSupplementalVariantTitleValue(value: unknown): string {
 function sanitizeSupplementalVariantAttrValueForOzonPublish(value: unknown, options?: VariantPublishSanitizeOptions): string {
   const structured = normalizeStructuredSupplementalVariantValue(value);
   if (structured) return structured;
+  const codeLike = normalizeCodeLikeVariantLabel(value);
+  if (codeLike) return codeLike;
   const text = sanitizeSupplementalVariantAttrValue(value);
   return text ? neutralSupplementalVariantLabel(options) : '';
 }
 
 function sanitizeVariantAttrValueForPublish(name: unknown, value: unknown): string {
-  if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
+  if (isStrictColorVariantName(name)) return extractSafeColorValue(value) || normalizeCodeLikeVariantLabel(value);
   if (isColorNameVariantName(name)) return sanitizeSupplementalVariantAttrValue(value);
   if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
   return sanitizeOzonAttrText(value);
@@ -499,6 +512,13 @@ export function sanitizeVariantAttrsForOzonPublish(
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     const name = String(rawName || '').trim();
     const value = sanitizeVariantAttrValueForOzonPublish(name, rawValue, options);
+    if (!value && isStrictColorVariantName(name)) {
+      const codeLike = normalizeCodeLikeVariantLabel(rawValue);
+      if (codeLike) {
+        out['Название цвета'] = codeLike;
+        continue;
+      }
+    }
     if (!name || !value) continue;
     if (containsCjkText(name) || containsCjkText(value)) continue;
     out[name] = value;
@@ -530,7 +550,9 @@ export function sanitizeVariantAttrSetsForOzonPublish(
     const rawColorNameEntry = rawAttrs && typeof rawAttrs === 'object'
       ? Object.entries(rawAttrs).find(([name]) => isColorNameVariantName(name))
       : null;
-    const rawStructured = normalizeStructuredSupplementalVariantValue(rawColorNameEntry?.[1]);
+    const rawStructured = normalizeStructuredSupplementalVariantValue(rawColorNameEntry?.[1])
+      || normalizeCodeLikeVariantLabel(rawColorNameEntry?.[1])
+      || normalizeCodeLikeVariantLabel(colorNameEntry[1]);
     const key = normalizeOzonDictionaryText(colorNameEntry[1]);
     if (!key) continue;
     if (rawStructured) {

@@ -415,6 +415,49 @@ async function executeScriptWithHostAccess(options, permissionErrorMessage) {
   }
 }
 
+function parseCookieValueFromString(cookieString, name) {
+  const targetName = String(name || "").trim();
+  if (!targetName) return "";
+  for (const rawPart of String(cookieString || "").split(";")) {
+    const part = rawPart.trim();
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    if (part.slice(0, eq).trim() !== targetName) continue;
+    try {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    } catch (_error) {
+      return part.slice(eq + 1).trim();
+    }
+  }
+  return "";
+}
+
+async function readOzonSellerCookieValueFromOpenTab(name) {
+  await ensureSellerOzonHostAccess();
+  const tabs = await chrome.tabs.query({ url: "https://seller.ozon.ru/*" });
+  const candidates = [
+    ...tabs.filter((tab) => tab.active),
+    ...tabs.filter((tab) => (tab.url || "").includes("/app/")),
+    ...tabs,
+  ];
+  const seen = new Set();
+  for (const tab of candidates) {
+    if (!tab || !tab.id || seen.has(tab.id)) continue;
+    seen.add(tab.id);
+    try {
+      const results = await executeScriptWithHostAccess({
+        target: { tabId: tab.id },
+        world: "MAIN",
+        func: () => document.cookie || "",
+      });
+      const cookieString = results && results[0] ? results[0].result : "";
+      const value = parseCookieValueFromString(cookieString, name);
+      if (value) return value;
+    } catch (_error) {}
+  }
+  return "";
+}
+
 function storageGet(key) {
   return new Promise((resolve) => {
     chrome.storage.local.get([key], (result) => resolve(result[key]));
@@ -836,6 +879,16 @@ async function getSellerCompanyId(preferredCompanyId) {
   const preferred = normalizeOzonCompanyId(preferredCompanyId);
   if (preferred) {
     return rememberRuntimeOzonCompanyId(preferred);
+  }
+
+  try {
+    const tabCompanyId = normalizeOzonCompanyId(await readOzonSellerCookieValueFromOpenTab("sc_company_id"));
+    if (tabCompanyId) {
+      return rememberRuntimeOzonCompanyId(tabCompanyId);
+    }
+  } catch (error) {
+    if (isHostAccessError(error)) throw error;
+    console.warn("[SS ERP] read Ozon company cookie from seller tab failed:", error);
   }
 
   const cookieQueries = [

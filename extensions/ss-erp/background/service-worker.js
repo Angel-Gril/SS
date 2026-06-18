@@ -300,6 +300,109 @@ function findOzonCompanyIdFromCookies(cookies) {
   return normalizeOzonCompanyIdForSync((direct || shared || {}).value);
 }
 
+function parseCookieValueFromStringForSync(cookieString, name) {
+  const targetName = toText(name).trim();
+  if (!targetName) return '';
+  for (const part of toText(cookieString).split(';')) {
+    const eq = part.indexOf('=');
+    if (eq <= 0) continue;
+    const cookieName = part.slice(0, eq).trim();
+    if (cookieName !== targetName) continue;
+    try {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    } catch (_error) {
+      return part.slice(eq + 1).trim();
+    }
+  }
+  return '';
+}
+
+function mergeCookieStringsForSync(primary, fallback) {
+  const out = [];
+  const seen = new Set();
+  for (const source of [primary, fallback]) {
+    for (const rawPart of toText(source).split(';')) {
+      const part = rawPart.trim();
+      const eq = part.indexOf('=');
+      if (eq <= 0) continue;
+      const name = part.slice(0, eq).trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(part);
+    }
+  }
+  return out.join('; ');
+}
+
+function cookieStringFromOzonCookiesForSync(cookies) {
+  if (!Array.isArray(cookies)) return '';
+  const seen = new Set();
+  return cookies
+    .filter((cookie) => cookie && cookie.name && (cookie.domain || '').includes('ozon.ru'))
+    .filter((cookie) => {
+      const key = `${cookie.name}\n${cookie.domain || ''}\n${cookie.path || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join('; ');
+}
+
+async function readOzonSellerCookieStringFromOpenTabForSync() {
+  try {
+    if (!chrome.tabs || !chrome.scripting) return '';
+    const tabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+    const candidates = [
+      ...tabs.filter((tab) => tab.active),
+      ...tabs.filter((tab) => (tab.url || '').includes('/app/')),
+      ...tabs,
+    ];
+    const seen = new Set();
+    for (const tab of candidates) {
+      if (!tab || !tab.id || seen.has(tab.id)) continue;
+      seen.add(tab.id);
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: 'MAIN',
+          func: () => document.cookie || '',
+        });
+        const cookieString = toText(results && results[0] && results[0].result).trim();
+        if (cookieString) return cookieString;
+      } catch (_error) {}
+    }
+  } catch (_error) {}
+  return '';
+}
+
+async function readOzonSellerCookieValueFromOpenTabForSync(name) {
+  const cookieString = await readOzonSellerCookieStringFromOpenTabForSync();
+  return normalizeOzonCompanyIdForSync(parseCookieValueFromStringForSync(cookieString, name));
+}
+
+async function getOzonSellerCookiesForSync() {
+  const queries = [
+    { url: 'https://seller.ozon.ru/' },
+    { domain: '.ozon.ru' },
+    { domain: 'seller.ozon.ru' },
+  ];
+  const merged = [];
+  const seen = new Set();
+  for (const query of queries) {
+    try {
+      const cookies = await chrome.cookies.getAll(query);
+      for (const cookie of cookies || []) {
+        const key = `${cookie.name}\n${cookie.domain || ''}\n${cookie.path || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(cookie);
+      }
+    } catch (_error) {}
+  }
+  return merged;
+}
+
 function fetchStoredOzonCompanyIdForSync(apiBase, token, shopId) {
   if (!apiBase || !token || !shopId) return Promise.resolve('');
   return fetch(apiBase + '/api/shops/' + encodeURIComponent(shopId) + '/ozon-cdn-auth', {
@@ -1957,11 +2060,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: '缺少 shopId，请先选择目标店铺' });
       return false;
     }
-    chrome.cookies.getAll({ domain: '.ozon.ru' }).then((cookies) => {
-      const sellerCookies = cookies.filter((c) =>
-        c.domain.includes('seller.ozon.ru') || c.domain === '.ozon.ru'
-      );
-      const cookieStr = sellerCookies.map((c) => c.name + '=' + c.value).join('; ');
+    Promise.all([
+      getOzonSellerCookiesForSync(),
+      readOzonSellerCookieStringFromOpenTabForSync(),
+      readOzonSellerCookieValueFromOpenTabForSync('sc_company_id')
+    ]).then(([cookies, tabCookieStr, tabCompanyId]) => {
+      const cookieStr = mergeCookieStringsForSync(cookieStringFromOzonCookiesForSync(cookies), tabCookieStr);
       if (!cookieStr) throw new Error('未检测到 seller.ozon.ru 登录态，请先登录卖家后台');
 
       const payloadCompanyId = normalizeOzonCompanyIdForSync(message.payload && message.payload.companyId);
@@ -1981,7 +2085,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const apiBase = baseEndpoint.replace(/\/api\/.*$/, '');
         return fetchStoredOzonCompanyIdForSync(apiBase, token, shopId).then((storedCompanyId) => {
           const body = { cookie: cookieStr };
-          const companyId = payloadCompanyId || capturedCompanyId || cookieCompanyId || storedCompanyId;
+          const companyId = tabCompanyId || payloadCompanyId || capturedCompanyId || cookieCompanyId || storedCompanyId;
           if (companyId) {
             body.companyId = companyId;
             rememberRuntimeOzonCompanyIdForSync(companyId);

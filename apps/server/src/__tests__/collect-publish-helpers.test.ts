@@ -759,6 +759,38 @@ describe('collect publish helpers', () => {
     ])).toEqual([]);
   });
 
+  it('keeps code-like color variants distinct without treating them as Ozon dictionary colors', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'AB-1',
+      'Размер': '36 RU / S',
+    })).toEqual({
+      'Цвет': 'AB-1',
+      'Размер': '36 RU / S',
+    });
+
+    expect(resolvePublishName({
+      title: 'Худи',
+      metadata: {},
+    }, {
+      'Цвет': 'AB-1',
+      'Размер': '36 RU / S',
+    })).toBe('Худи, 36 RU, S');
+
+    expect(sanitizeVariantAttrSetsForOzonPublish([
+      { 'Цвет': 'AB-1', 'Размер': '36 RU / S' },
+      { 'Цвет': 'AB-6', 'Размер': '36 RU / S' },
+    ])).toEqual([
+      { 'Название цвета': 'AB-1', 'Размер': '36 RU / S' },
+      { 'Название цвета': 'AB-6', 'Размер': '36 RU / S' },
+    ]);
+
+    expect(findVariantAttributeConflicts([
+      { sku: '908024412', attrs: { 'Цвет': 'AB-1', 'Размер': '36 RU / S' } },
+      { sku: '908024681', attrs: { 'Цвет': 'AB-6', 'Размер': '36 RU / S' } },
+      { sku: '908023810', attrs: { 'Цвет': 'AB-1', 'Размер': '38 RU / M' } },
+    ])).toEqual([]);
+  });
+
   it('prefers each collected item category over batch fallback category', () => {
     expect(resolveItemPublishCategory({
       metadata: { descriptionCategoryId: 17028706, typeId: 95913 },
