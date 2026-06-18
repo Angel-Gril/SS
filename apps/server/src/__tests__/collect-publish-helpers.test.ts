@@ -472,6 +472,68 @@ describe('collect publish helpers', () => {
     ])).toEqual([]);
   });
 
+  it('keeps valid prefixed and less-common Ozon colors instead of dropping variant attrs', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'Светло-фиолетовый',
+    })).toEqual({
+      'Цвет': 'Светло-фиолетовый',
+    });
+
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'Темно-синий',
+    })).toEqual({
+      'Цвет': 'Темно-синий',
+    });
+
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'Темно-винно-красный',
+    })).toEqual({
+      'Цвет': 'Темно-винно-красный',
+    });
+
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'Крем',
+    })).toEqual({
+      'Цвет': 'Крем',
+    });
+
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'Верблюд',
+    })).toEqual({
+      'Цвет': 'Верблюд',
+    });
+  });
+
+  it('resolves valid prefixed colors to dictionary values when Ozon provides those values', () => {
+    expect(resolveOzonDictionaryAttributeValues('Светло-фиолетовый', [
+      { id: 101, value: 'Светло-фиолетовый' },
+      { id: 102, value: 'Фиолетовый' },
+    ])).toEqual({
+      values: [{ value: 'Светло-фиолетовый', dictionary_value_id: 101 }],
+      matched: true,
+      matchType: 'exact',
+    });
+
+    expect(resolveOzonDictionaryAttributeValues('Темно-винно-красный', [
+      { id: 101, value: 'Темно-винно-красный' },
+      { id: 102, value: 'Бордовый' },
+    ])).toEqual({
+      values: [{ value: 'Темно-винно-красный', dictionary_value_id: 101 }],
+      matched: true,
+      matchType: 'exact',
+    });
+  });
+
+  it('does not collapse distinct valid shade names into empty variant signatures', () => {
+    expect(findVariantAttributeConflicts([
+      { sku: '2912064172', attrs: { 'Цвет': 'Светло-фиолетовый' } },
+      { sku: '2912067487', attrs: { 'Цвет': 'Темно-синий' } },
+      { sku: '2912066933', attrs: { 'Цвет': 'Крем' } },
+      { sku: '2912066564', attrs: { 'Цвет': 'Верблюд' } },
+      { sku: '2912067006', attrs: { 'Цвет': 'Темно-винно-красный' } },
+    ])).toEqual([]);
+  });
+
   it('prefers each collected item category over batch fallback category', () => {
     expect(resolveItemPublishCategory({
       metadata: { descriptionCategoryId: 17028706, typeId: 95913 },
