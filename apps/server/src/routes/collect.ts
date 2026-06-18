@@ -2977,10 +2977,8 @@ export async function collectRoutes(app: FastifyInstance) {
         const subImages = sameStringList(subImagesRaw, baseRawImages)
           ? baseImages
           : await resolveImageUrls(subImagesRaw, body.shopId, userId);
-        const rawVariantAttrs = rawVariantAttrsList[idx];
-        const titleAttrs = sanitizeVariantAttrsForPublish(rawVariantAttrs);
         const subAttrs = publishVariantAttrsList[idx] || {};
-        const subName = resolvePublishName(item, titleAttrs);
+        const subName = resolvePublishName(item, subAttrs);
 
         // === 优先用每个变体自己的 ozonAttributes（扩展端 Step 2 抓的）===
         // 没有时退化用 cloned（来自源 SKU 的共用属性）

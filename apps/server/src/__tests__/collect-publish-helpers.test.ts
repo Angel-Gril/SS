@@ -557,6 +557,23 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('uses neutralized color-name labels in publish titles to avoid duplicate same-color names', () => {
+    const safeVariantAttrs = sanitizeVariantAttrSetsForOzonPublish([
+      { 'Цвет': 'светло-бежевый', 'Название цвета': 'изысканный' },
+      { 'Цвет': 'светло-бежевый', 'Название цвета': 'Тип 1' },
+    ]);
+
+    expect(resolvePublishName({
+      title: 'Скатертью-дорожка на стол дорожка сервировочная',
+      metadata: {},
+    }, safeVariantAttrs[0])).toBe('Дорожка на стол сервировочная, светло-бежевый, тип 2');
+
+    expect(resolvePublishName({
+      title: 'Скатертью-дорожка на стол дорожка сервировочная',
+      metadata: {},
+    }, safeVariantAttrs[1])).toBe('Дорожка на стол сервировочная, светло-бежевый, тип 1');
+  });
+
   it('neutralizes cloned Ozon color-name attributes before sending import payloads', () => {
     expect(sanitizeOzonVariantPublishAttributes([
       {
