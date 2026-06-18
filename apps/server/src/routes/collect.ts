@@ -196,6 +196,18 @@ function isColorLikeVariantName(name: unknown): boolean {
   return /цвет|color|colour/i.test(String(name || ''));
 }
 
+function isStrictColorVariantName(name: unknown): boolean {
+  const normalized = normalizeOzonDictionaryText(name);
+  return normalized === 'цвет' || normalized === 'color' || normalized === 'colour';
+}
+
+function isColorNameVariantName(name: unknown): boolean {
+  const normalized = normalizeOzonDictionaryText(name);
+  return normalized === 'название цвета'
+    || normalized === 'color name'
+    || normalized === 'colour name';
+}
+
 function stripOzonMarketingWords(value: unknown): string {
   return String(value || '')
     .normalize('NFKC')
@@ -309,19 +321,34 @@ function isLikelyDescriptiveColorVariantValue(value: unknown): boolean {
   return false;
 }
 
+function sanitizeSupplementalVariantAttrValue(value: unknown): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text || containsCjkText(text)) return '';
+  if (/https?:\/\/|www\.|@/iu.test(text)) return '';
+  const words = variantWordCount(text);
+  if (words >= 5) return '';
+  if (text.length > 40) return '';
+  return text;
+}
+
+function sanitizeVariantAttrValueForPublish(name: unknown, value: unknown): string {
+  if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
+  if (isColorNameVariantName(name)) return sanitizeSupplementalVariantAttrValue(value);
+  if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
+  return sanitizeOzonAttrText(value);
+}
+
 function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false, base = ''): string[] {
   if (!variantAttrs || !Object.keys(variantAttrs).length) return [];
   const parts: string[] = [];
   const seen = new Set<string>();
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
-    const value = isColorLikeVariantName(rawName)
-      ? extractSafeColorValue(rawValue)
-      : sanitizeOzonAttrText(rawValue);
-    if (isColorLikeVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue) && !value) continue;
+    const value = sanitizeVariantAttrValueForPublish(rawName, rawValue);
+    if (isStrictColorVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue) && !value) continue;
     if (!value) continue;
     if (containsCjkText(value)) continue;
-    const part = includeColorLabel && /цвет|color/i.test(rawName)
+    const part = includeColorLabel && isStrictColorVariantName(rawName)
       ? cleanPublishName(`${value} цвет`)
       : lowercaseCyrillicVariantPart(value);
     const key = part.toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}]+/gu, '');
@@ -337,9 +364,7 @@ export function sanitizeVariantAttrsForPublish(variantAttrs?: Record<string, str
   const out: Record<string, string> = {};
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     const name = String(rawName || '').trim();
-    const value = isColorLikeVariantName(name)
-      ? extractSafeColorValue(rawValue)
-      : sanitizeOzonAttrText(rawValue);
+    const value = sanitizeVariantAttrValueForPublish(name, rawValue);
     if (!name || !value) continue;
     if (containsCjkText(name) || containsCjkText(value)) continue;
     out[name] = value;

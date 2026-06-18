@@ -472,6 +472,31 @@ describe('collect publish helpers', () => {
     ])).toEqual([]);
   });
 
+  it('keeps short Ozon color-name variants so same base colors stay distinct', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'красный',
+      'Название цвета': 'Тип 1',
+    })).toEqual({
+      'Цвет': 'красный',
+      'Название цвета': 'Тип 1',
+    });
+
+    expect(findVariantAttributeConflicts([
+      { sku: '2300714578', attrs: { 'Цвет': 'красный', 'Название цвета': 'изысканный' } },
+      { sku: '3048351087', attrs: { 'Цвет': 'красный', 'Название цвета': 'Тип 1' } },
+      { sku: '3048353403', attrs: { 'Цвет': 'красный', 'Название цвета': 'Тип 2' } },
+    ])).toEqual([]);
+  });
+
+  it('still drops long descriptive Ozon color-name values before publish', () => {
+    expect(sanitizeVariantAttrsForPublish({
+      'Цвет': 'зеленый',
+      'Название цвета': 'Изысканный зеленый цвет в соответствии с рождественской сценой',
+    })).toEqual({
+      'Цвет': 'зеленый',
+    });
+  });
+
   it('keeps valid prefixed and less-common Ozon colors instead of dropping variant attrs', () => {
     expect(sanitizeVariantAttrsForPublish({
       'Цвет': 'Светло-фиолетовый',
