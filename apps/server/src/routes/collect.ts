@@ -80,7 +80,7 @@ function removeLeadingStandaloneCount(value: string): string {
 
 function lowercaseCyrillicVariantPart(value: string): string {
   const text = cleanPublishName(value);
-  if (!/^[\p{Script=Cyrillic}][\p{Script=Cyrillic}\s,.-]*$/u.test(text)) return text;
+  if (!/^[\p{Script=Cyrillic}][\p{Script=Cyrillic}\p{N}\s,.-]*$/u.test(text)) return text;
   return text.charAt(0).toLocaleLowerCase('ru-RU') + text.slice(1);
 }
 
@@ -331,11 +331,72 @@ function sanitizeSupplementalVariantAttrValue(value: unknown): string {
   return text;
 }
 
+type VariantPublishSanitizeOptions = { variantIndex?: number };
+
+function normalizeStructuredSupplementalVariantValue(value: unknown): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text || containsCjkText(text)) return '';
+  if (/https?:\/\/|www\.|@/iu.test(text)) return '';
+
+  const exactColor = extractSafeColorValue(text);
+  if (exactColor && normalizeOzonDictionaryText(exactColor) === normalizeOzonDictionaryText(text)) {
+    return exactColor;
+  }
+
+  const dimension = text.match(/^(\d{1,4}(?:[,.]\d+)?)\s*[xх*×]\s*(\d{1,4}(?:[,.]\d+)?)\s*(см|cm)?$/iu);
+  if (dimension?.[1] && dimension[2]) {
+    const first = dimension[1].replace(',', '.');
+    const second = dimension[2].replace(',', '.');
+    const unit = dimension[3] ? ' см' : '';
+    return `${first}x${second}${unit}`;
+  }
+
+  const type = text.match(/^(?:тип|type|вариант|variant|style|стиль|модель)\s*[-#№]?\s*([a-zа-я]?\d{1,3}|[a-zа-я])$/iu);
+  if (type?.[1]) return `Тип ${type[1].toLocaleUpperCase('ru-RU')}`;
+
+  return '';
+}
+
+function neutralSupplementalVariantLabel(options?: VariantPublishSanitizeOptions): string {
+  const index = Number(options?.variantIndex);
+  const suffix = Number.isInteger(index) && index >= 0 ? index + 1 : 1;
+  return `Тип ${suffix}`;
+}
+
+function sanitizeSupplementalVariantTitleValue(value: unknown): string {
+  return normalizeStructuredSupplementalVariantValue(value);
+}
+
+function sanitizeSupplementalVariantAttrValueForOzonPublish(value: unknown, options?: VariantPublishSanitizeOptions): string {
+  const structured = normalizeStructuredSupplementalVariantValue(value);
+  if (structured) return structured;
+  const text = sanitizeSupplementalVariantAttrValue(value);
+  return text ? neutralSupplementalVariantLabel(options) : '';
+}
+
 function sanitizeVariantAttrValueForPublish(name: unknown, value: unknown): string {
   if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
   if (isColorNameVariantName(name)) return sanitizeSupplementalVariantAttrValue(value);
   if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
   return sanitizeOzonAttrText(value);
+}
+
+function sanitizeVariantAttrValueForOzonPublish(
+  name: unknown,
+  value: unknown,
+  options?: VariantPublishSanitizeOptions,
+): string {
+  if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
+  if (isColorNameVariantName(name)) return sanitizeSupplementalVariantAttrValueForOzonPublish(value, options);
+  if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
+  return sanitizeOzonAttrText(value);
+}
+
+function sanitizeVariantAttrValueForTitle(name: unknown, value: unknown): string {
+  if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
+  if (isColorNameVariantName(name)) return sanitizeSupplementalVariantTitleValue(value);
+  if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
+  return sanitizeVariantAttrValueForPublish(name, value);
 }
 
 function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, includeColorLabel = false, base = ''): string[] {
@@ -344,7 +405,7 @@ function normalizeVariantTitleParts(variantAttrs?: Record<string, string>, inclu
   const seen = new Set<string>();
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     if (isRedundantVolumeVariantTitlePart(base, rawName, rawValue)) continue;
-    const value = sanitizeVariantAttrValueForPublish(rawName, rawValue);
+    const value = sanitizeVariantAttrValueForTitle(rawName, rawValue);
     if (isStrictColorVariantName(rawName) && isLikelyDescriptiveColorVariantValue(rawValue) && !value) continue;
     if (!value) continue;
     if (containsCjkText(value)) continue;
@@ -372,6 +433,143 @@ export function sanitizeVariantAttrsForPublish(variantAttrs?: Record<string, str
   return out;
 }
 
+export function sanitizeVariantAttrsForOzonPublish(
+  variantAttrs?: Record<string, string>,
+  options?: VariantPublishSanitizeOptions,
+): Record<string, string> {
+  if (!variantAttrs || typeof variantAttrs !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
+    const name = String(rawName || '').trim();
+    const value = sanitizeVariantAttrValueForOzonPublish(name, rawValue, options);
+    if (!name || !value) continue;
+    if (containsCjkText(name) || containsCjkText(value)) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
+export function sanitizeVariantAttrSetsForOzonPublish(
+  variantAttrSets?: Array<Record<string, string> | null | undefined>,
+): Record<string, string>[] {
+  const inputs = Array.isArray(variantAttrSets) ? variantAttrSets : [];
+  const sanitized = inputs.map((attrs, index) => sanitizeVariantAttrsForOzonPublish(
+    attrs && typeof attrs === 'object' ? attrs : undefined,
+    { variantIndex: index },
+  ));
+  const occupiedColorNames = new Set<string>();
+  const needsNeutralColorName: Array<{ index: number; name: string }> = [];
+
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const attrs = sanitized[index]!;
+    const colorNameEntry = Object.entries(attrs).find(([name]) => isColorNameVariantName(name));
+    if (!colorNameEntry) continue;
+    const rawAttrs = inputs[index];
+    const rawColorNameEntry = rawAttrs && typeof rawAttrs === 'object'
+      ? Object.entries(rawAttrs).find(([name]) => isColorNameVariantName(name))
+      : null;
+    const rawStructured = normalizeStructuredSupplementalVariantValue(rawColorNameEntry?.[1]);
+    const key = normalizeOzonDictionaryText(colorNameEntry[1]);
+    if (!key) continue;
+    if (rawStructured) {
+      occupiedColorNames.add(key);
+    } else {
+      needsNeutralColorName.push({ index, name: colorNameEntry[0] });
+    }
+  }
+
+  for (const entry of needsNeutralColorName) {
+    let suffix = 1;
+    let label = `Тип ${suffix}`;
+    while (occupiedColorNames.has(normalizeOzonDictionaryText(label))) {
+      suffix += 1;
+      label = `Тип ${suffix}`;
+    }
+    sanitized[entry.index]![entry.name] = label;
+    occupiedColorNames.add(normalizeOzonDictionaryText(label));
+  }
+
+  return sanitized;
+}
+
+export function sanitizeOzonVariantPublishAttributes<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  options?: VariantPublishSanitizeOptions,
+): T[] {
+  if (!Array.isArray(attributes)) return [];
+  return attributes
+    .map((attr) => {
+      const name = OZON_VARIANT_ATTR_NAME_BY_ID[Number(attr.id)] || '';
+      if (!name || (!isStrictColorVariantName(name) && !isColorNameVariantName(name))) return attr;
+      const rawValue = Array.isArray(attr.values)
+        ? attr.values.map((value) => value?.value).filter(Boolean).join(', ')
+        : '';
+      const value = sanitizeVariantAttrValueForOzonPublish(name, rawValue, options);
+      if (!value) return null;
+      const originalValue = Array.isArray(attr.values) && attr.values.length === 1
+        ? String(attr.values[0]?.value || '').trim()
+        : '';
+      const nextValue: { value: string; dictionary_value_id?: number } = { value };
+      if (normalizeOzonDictionaryText(value) === normalizeOzonDictionaryText(originalValue)) {
+        const dictId = Number(attr.values[0]?.dictionary_value_id);
+        if (Number.isFinite(dictId) && dictId > 0) nextValue.dictionary_value_id = dictId;
+      } else {
+        nextValue.dictionary_value_id = 0;
+      }
+      return {
+        ...attr,
+        values: [nextValue],
+      } as T;
+    })
+    .filter((attr): attr is T => !!attr);
+}
+
+export function sanitizeOzonVariantPublishAttributeSets<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributeSets?: Array<T[] | null | undefined>,
+): T[][] {
+  const inputs = Array.isArray(attributeSets) ? attributeSets : [];
+  const sanitized = inputs.map((attributes, index) => sanitizeOzonVariantPublishAttributes(attributes, { variantIndex: index }));
+  const occupiedColorNames = new Set<string>();
+  const needsNeutralColorName: Array<{ index: number; attrIndex: number }> = [];
+
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const attrs = sanitized[index] || [];
+    for (let attrIndex = 0; attrIndex < attrs.length; attrIndex += 1) {
+      const attr = attrs[attrIndex];
+      if (!attr) continue;
+      const name = OZON_VARIANT_ATTR_NAME_BY_ID[Number(attr.id)] || '';
+      if (!isColorNameVariantName(name)) continue;
+      const value = Array.isArray(attr.values) && attr.values.length === 1 ? String(attr.values[0]?.value || '') : '';
+      const key = normalizeOzonDictionaryText(value);
+      if (!key) continue;
+      const rawAttr = Array.isArray(inputs[index]) ? inputs[index]![attrIndex] : null;
+      const rawValue = rawAttr && Array.isArray(rawAttr.values)
+        ? rawAttr.values.map((item) => item?.value).filter(Boolean).join(', ')
+        : '';
+      if (normalizeStructuredSupplementalVariantValue(rawValue)) {
+        occupiedColorNames.add(key);
+      } else {
+        needsNeutralColorName.push({ index, attrIndex });
+      }
+    }
+  }
+
+  for (const entry of needsNeutralColorName) {
+    let suffix = 1;
+    let label = `Тип ${suffix}`;
+    while (occupiedColorNames.has(normalizeOzonDictionaryText(label))) {
+      suffix += 1;
+      label = `Тип ${suffix}`;
+    }
+    const attr = sanitized[entry.index]?.[entry.attrIndex];
+    if (!attr) continue;
+    attr.values = [{ value: label, dictionary_value_id: 0 }];
+    occupiedColorNames.add(normalizeOzonDictionaryText(label));
+  }
+
+  return sanitized;
+}
+
 function wordKeys(value: string): string[] {
   return cleanPublishName(value)
     .split(/\s+/)
@@ -393,8 +591,16 @@ function compactRepeatedPublishBase(base: string): string {
   return cleanPublishName(out.join(' '));
 }
 
+function normalizeKnownPublishBaseName(value: string): string {
+  const text = cleanPublishName(value);
+  if (/^скатерт\p{L}*-дорожк\p{L}*\s+на\s+стол\s+дорожк\p{L}*\s+сервировочн\p{L}*$/iu.test(text)) {
+    return 'Дорожка на стол сервировочная';
+  }
+  return text;
+}
+
 function compactPublishBaseName(base: string): string {
-  const cleanBase = cleanPublishName(base);
+  const cleanBase = normalizeKnownPublishBaseName(base);
   if (!cleanBase) return '';
   if (!hasSuspiciousPublishName(cleanBase) && cleanBase.length <= 90) return cleanBase;
 
@@ -2717,7 +2923,7 @@ export async function collectRoutes(app: FastifyInstance) {
       if (!variants.length) {
         const itemName = resolvePublishName(item);
         const itemAttrs = cloned?.attributes?.length
-          ? syncOzonCoreTextAttributes(cloned.attributes, itemName, itemDescription)
+          ? sanitizeOzonVariantPublishAttributes(syncOzonCoreTextAttributes(cloned.attributes, itemName, itemDescription))
           : [];
         return [{
           name: itemName,
@@ -2749,6 +2955,18 @@ export async function collectRoutes(app: FastifyInstance) {
       // model_id 字段不主动声明，依赖 OZON 后端按源 model 自动归组（待实测验证）
       console.log(`[publish-ozon variants] item=${item.id} model=${item.modelId || 'none'} expand to ${variants.length} sub-SKUs`);
       const itemOverrides = body.priceOverrides?.[item.id] || {};
+      const rawVariantAttrsList = variants.map((variant) => (
+        variant?.attrs && typeof variant.attrs === 'object'
+          ? variant.attrs as Record<string, string>
+          : undefined
+      ));
+      const publishVariantAttrsList = sanitizeVariantAttrSetsForOzonPublish(rawVariantAttrsList);
+      const rawVariantOzonAttrSets = variants.map((variant) => (
+        Array.isArray(variant?.ozonAttributes) && variant.ozonAttributes.length
+          ? convertOzonRawAttrs(variant.ozonAttributes, followBrand)
+          : null
+      ));
+      const publishVariantOzonAttrSets = sanitizeOzonVariantPublishAttributeSets(rawVariantOzonAttrSets);
       const subItems = await Promise.all(variants.map(async (v: any, idx: number) => {
         // 价格优先级：前端单独覆盖（CNY） > 整组 priceWithMarkup（CNY）
         // v.price 是采集自源平台的原始币种（RUB），不能直接 ×markup 上架
@@ -2759,18 +2977,22 @@ export async function collectRoutes(app: FastifyInstance) {
         const subImages = sameStringList(subImagesRaw, baseRawImages)
           ? baseImages
           : await resolveImageUrls(subImagesRaw, body.shopId, userId);
-        const subAttrs = sanitizeVariantAttrsForPublish(v.attrs && typeof v.attrs === 'object' ? v.attrs as Record<string, string> : undefined);
-        const subName = resolvePublishName(item, subAttrs);
+        const rawVariantAttrs = rawVariantAttrsList[idx];
+        const titleAttrs = sanitizeVariantAttrsForPublish(rawVariantAttrs);
+        const subAttrs = publishVariantAttrsList[idx] || {};
+        const subName = resolvePublishName(item, titleAttrs);
 
         // === 优先用每个变体自己的 ozonAttributes（扩展端 Step 2 抓的）===
         // 没有时退化用 cloned（来自源 SKU 的共用属性）
-        const variantAttrs = Array.isArray(v.ozonAttributes) && v.ozonAttributes.length
-          ? convertOzonRawAttrs(v.ozonAttributes, followBrand)
+        const variantAttrs = publishVariantOzonAttrSets[idx]?.length
+          ? publishVariantOzonAttrSets[idx]
           : null;
         const finalAttrs = variantAttrs && variantAttrs.length
           ? variantAttrs
           : (cloned?.attributes || []);
-        const publishAttrs = finalAttrs.length ? syncOzonCoreTextAttributes(finalAttrs, subName, itemDescription) : [];
+        const publishAttrs = finalAttrs.length
+          ? sanitizeOzonVariantPublishAttributes(syncOzonCoreTextAttributes(finalAttrs, subName, itemDescription), { variantIndex: idx })
+          : [];
 
         // 维度：每个变体自己的 > 整组 dims
         const subWeight = (typeof v.weight === 'number' && v.weight > 0) ? v.weight : dims.weight;

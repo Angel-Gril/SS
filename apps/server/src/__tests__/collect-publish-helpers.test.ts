@@ -29,7 +29,11 @@ import {
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
   sanitizePublishDescription,
+  sanitizeVariantAttrSetsForOzonPublish,
+  sanitizeOzonVariantPublishAttributes,
+  sanitizeOzonVariantPublishAttributeSets,
   sanitizeVariantAttrsForPublish,
+  sanitizeVariantAttrsForOzonPublish,
   syncOzonVariantGroupingAttributes,
   normalizeOzonOriginCountryForChinaSeller,
   normalizeCollectedSourceVideos,
@@ -486,6 +490,149 @@ describe('collect publish helpers', () => {
       { sku: '3048351087', attrs: { 'Цвет': 'красный', 'Название цвета': 'Тип 1' } },
       { sku: '3048353403', attrs: { 'Цвет': 'красный', 'Название цвета': 'Тип 2' } },
     ])).toEqual([]);
+  });
+
+  it('does not append subjective Ozon color-name phrases to publish titles', () => {
+    const elegantName = resolvePublishName({
+      title: 'Скатертью-дорожка на стол дорожка сервировочная',
+      metadata: {},
+    }, {
+      'Цвет': 'светло-бежевый',
+      'Название цвета': 'изысканный',
+    });
+
+    expect(elegantName).toBe('Дорожка на стол сервировочная светло-бежевый');
+    expect(elegantName).not.toContain('изысканный');
+    expect(hasSuspiciousPublishName(elegantName)).toBe(false);
+
+    const descriptiveName = resolvePublishName({
+      title: 'Скатертью-дорожка на стол дорожка сервировочная',
+      metadata: {},
+    }, {
+      'Цвет': 'светло-зеленый',
+      'Название цвета': 'красивых зеленых кусочков',
+    });
+
+    expect(descriptiveName).toBe('Дорожка на стол сервировочная светло-зеленый');
+    expect(descriptiveName).not.toContain('красивых');
+    expect(descriptiveName).not.toContain('кусочков');
+    expect(hasSuspiciousPublishName(descriptiveName)).toBe(false);
+  });
+
+  it('turns unsafe Ozon color-name publish attrs into neutral variant labels', () => {
+    expect(sanitizeVariantAttrsForOzonPublish({
+      'Цвет': 'светло-бежевый',
+      'Название цвета': 'изысканный',
+    }, { variantIndex: 0 })).toEqual({
+      'Цвет': 'светло-бежевый',
+      'Название цвета': 'Тип 1',
+    });
+
+    expect(sanitizeVariantAttrsForOzonPublish({
+      'Цвет': 'светло-зеленый',
+      'Название цвета': 'красивых зеленых кусочков',
+    }, { variantIndex: 1 })).toEqual({
+      'Цвет': 'светло-зеленый',
+      'Название цвета': 'Тип 2',
+    });
+
+    expect(sanitizeVariantAttrsForOzonPublish({
+      'Цвет': 'светло-бежевый',
+      'Название цвета': '90*180cm',
+    }, { variantIndex: 2 })).toEqual({
+      'Цвет': 'светло-бежевый',
+      'Название цвета': '90x180 см',
+    });
+  });
+
+  it('avoids neutral color-name labels that collide with existing structured variants', () => {
+    expect(sanitizeVariantAttrSetsForOzonPublish([
+      { 'Цвет': 'красный', 'Название цвета': 'изысканный' },
+      { 'Цвет': 'красный', 'Название цвета': 'Тип 1' },
+      { 'Цвет': 'красный', 'Название цвета': 'Тип 2' },
+    ])).toEqual([
+      { 'Цвет': 'красный', 'Название цвета': 'Тип 3' },
+      { 'Цвет': 'красный', 'Название цвета': 'Тип 1' },
+      { 'Цвет': 'красный', 'Название цвета': 'Тип 2' },
+    ]);
+  });
+
+  it('neutralizes cloned Ozon color-name attributes before sending import payloads', () => {
+    expect(sanitizeOzonVariantPublishAttributes([
+      {
+        id: 10097,
+        complex_id: 0,
+        values: [{ value: 'изысканный', dictionary_value_id: 123 }],
+      },
+      {
+        id: 10096,
+        complex_id: 0,
+        values: [{ value: 'светло-бежевый', dictionary_value_id: 456 }],
+      },
+    ], { variantIndex: 0 })).toEqual([
+      {
+        id: 10097,
+        complex_id: 0,
+        values: [{ value: 'Тип 1', dictionary_value_id: 0 }],
+      },
+      {
+        id: 10096,
+        complex_id: 0,
+        values: [{ value: 'светло-бежевый', dictionary_value_id: 456 }],
+      },
+    ]);
+  });
+
+  it('avoids cloned Ozon color-name collisions across a variant batch', () => {
+    expect(sanitizeOzonVariantPublishAttributeSets([
+      [
+        {
+          id: 10097,
+          complex_id: 0,
+          values: [{ value: 'изысканный', dictionary_value_id: 0 }],
+        },
+      ],
+      [
+        {
+          id: 10097,
+          complex_id: 0,
+          values: [{ value: 'Тип 1', dictionary_value_id: 61571 }],
+        },
+      ],
+    ])).toEqual([
+      [
+        {
+          id: 10097,
+          complex_id: 0,
+          values: [{ value: 'Тип 2', dictionary_value_id: 0 }],
+        },
+      ],
+      [
+        {
+          id: 10097,
+          complex_id: 0,
+          values: [{ value: 'Тип 1', dictionary_value_id: 61571 }],
+        },
+      ],
+    ]);
+  });
+
+  it('still appends structured Ozon color-name variants to publish titles', () => {
+    expect(resolvePublishName({
+      title: 'Дорожка на стол сервировочная',
+      metadata: {},
+    }, {
+      'Цвет': 'светло-бежевый',
+      'Название цвета': 'Тип 1',
+    })).toBe('Дорожка на стол сервировочная, светло-бежевый, тип 1');
+
+    expect(resolvePublishName({
+      title: 'Дорожка на стол сервировочная',
+      metadata: {},
+    }, {
+      'Цвет': 'светло-бежевый',
+      'Название цвета': '90*180cm',
+    })).toBe('Дорожка на стол сервировочная, светло-бежевый, 90x180 см');
   });
 
   it('still drops long descriptive Ozon color-name values before publish', () => {
