@@ -73,6 +73,25 @@ describe('collect publish helpers', () => {
     })).not.toHaveProperty('publishTitleRu');
   });
 
+  it('persists Ozon description fetch diagnostics for collected goods', () => {
+    const diagnostics = {
+      enabled: true,
+      found: true,
+      attempts: [{ api: 'entrypoint', ok: true, descriptionKeyCount: 1 }],
+    };
+
+    expect(buildCollectedGoodsMetadata({
+      title: 'Дорожка для стола',
+      publishTitle: 'Дорожка для стола',
+      sourceTitleRaw: 'Дорожка для стола',
+      sourceLocale: 'ru',
+      descriptionFetchDiagnostics: diagnostics,
+    })).toMatchObject({
+      publishTitleRu: 'Дорожка для стола',
+      descriptionFetchDiagnostics: diagnostics,
+    });
+  });
+
   it('does not keep Chinese Ozon translated titles as collected display titles', () => {
     expect(resolveCollectedDisplayTitle({
       title: '室内装饰品',

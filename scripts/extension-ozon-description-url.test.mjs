@@ -40,3 +40,20 @@ test('background description fetch tries multiple Ozon APIs and records diagnost
   assert.match(backgroundSource, /descriptionFetchTrace/);
   assert.match(backgroundSource, /descriptionFetchDiagnostics/);
 });
+
+test('background page fetcher injects rich description parser helpers into page context', () => {
+  const backgroundSource = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    backgroundSource,
+    /func:\s*async\s*\(pid,\s*requestedPath,\s*fetchOptions\)\s*=>\s*\{[\s\S]*function extractRichDescriptionPayload\(state\)[\s\S]*var firstDescriptionPayload = extractRichDescriptionPayload\(st\)/,
+  );
+  assert.match(
+    backgroundSource,
+    /descriptionFetchDiagnostics:\s*descriptionFetchDiagnostics/,
+  );
+  assert.match(
+    backgroundSource,
+    /descriptionFetchDiagnostics:\s*p\.descriptionFetchDiagnostics\s*\|\|\s*\(p\.widgetStatesDump\s*&&\s*p\.widgetStatesDump\.descriptionFetchDiagnostics\)\s*\|\|\s*null/,
+  );
+});

@@ -45,6 +45,8 @@ const collectSchema = z.object({
   description: z.string().optional(),
   richDescriptionJson: z.string().optional(),
   sourceVideos: z.array(z.any()).optional(),
+  descriptionFetchDiagnostics: z.any().optional(),
+  descriptionFetchTrace: z.any().optional(),
   weight: z.number().optional(),
   weightG: z.number().optional(),
   sku: z.string().optional(),
@@ -829,6 +831,8 @@ export function buildCollectedGoodsMetadata(input: {
   description?: unknown;
   richDescriptionJson?: unknown;
   sourceVideos?: unknown;
+  descriptionFetchDiagnostics?: unknown;
+  descriptionFetchTrace?: unknown;
   [key: string]: unknown;
 }): Record<string, unknown> {
   const metadata: Record<string, unknown> = {};
@@ -842,6 +846,12 @@ export function buildCollectedGoodsMetadata(input: {
   if (input.richDescriptionJson) metadata.sourceRichDescriptionJson = String(input.richDescriptionJson);
   const sourceVideos = normalizeCollectedSourceVideos(input.sourceVideos);
   if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
+  if (input.descriptionFetchDiagnostics && typeof input.descriptionFetchDiagnostics === 'object') {
+    metadata.descriptionFetchDiagnostics = input.descriptionFetchDiagnostics;
+  }
+  if (input.descriptionFetchTrace && typeof input.descriptionFetchTrace === 'object') {
+    metadata.descriptionFetchTrace = input.descriptionFetchTrace;
+  }
   if (titleNeedsReview) metadata.titleNeedsReview = true;
   return metadata;
 }

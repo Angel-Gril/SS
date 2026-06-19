@@ -533,6 +533,8 @@ function buildOzonCollectBatchPayload(collected) {
       description: p.description || "",
       richDescriptionJson: p.richDescriptionJson || null,
       sourceVideos: p.sourceVideos || null,
+      descriptionFetchDiagnostics: p.descriptionFetchDiagnostics || (p.widgetStatesDump && p.widgetStatesDump.descriptionFetchDiagnostics) || null,
+      descriptionFetchTrace: p.descriptionFetchTrace || (p.widgetStatesDump && p.widgetStatesDump.descriptionFetchTrace) || null,
       sku: String(p.productId),
       sourceProductId: String(p.productId),
       attributes: p.attributes,
@@ -2331,6 +2333,106 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
         if (!/(video|видео|gallery|media|rich)/i.test(key)) return;
         visitVideoValue(state, target, [], 0);
       }
+      function normalizeRichDescriptionText(value) {
+        return String(value || "")
+          .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+          .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/&amp;/gi, "&")
+          .replace(/&lt;/gi, "<")
+          .replace(/&gt;/gi, ">")
+          .replace(/\r/g, "\n")
+          .replace(/[ \t]+/g, " ")
+          .replace(/\n\s+/g, "\n")
+          .replace(/\n{3,}/g, "\n\n")
+          .trim();
+      }
+      function visitRichDescriptionValue(value, parts, seen, depth) {
+        if (value == null || depth > 8) return;
+        if (typeof value === "string") {
+          var text = normalizeRichDescriptionText(value);
+          if (text) parts.push(text);
+          return;
+        }
+        if (typeof value !== "object") return;
+        if (seen.indexOf(value) >= 0) return;
+        seen.push(value);
+        if (Array.isArray(value)) {
+          for (var i = 0; i < value.length; i++) visitRichDescriptionValue(value[i], parts, seen, depth + 1);
+          return;
+        }
+        var preferredKeys = ["content", "text", "value", "title", "description", "children", "items", "blocks", "nodes"];
+        for (var k = 0; k < preferredKeys.length; k++) {
+          var key = preferredKeys[k];
+          if (Object.prototype.hasOwnProperty.call(value, key)) {
+            visitRichDescriptionValue(value[key], parts, seen, depth + 1);
+          }
+        }
+      }
+      function isStructuredRichValue(value, depth) {
+        if (value == null || depth > 5) return false;
+        if (Array.isArray(value)) {
+          for (var i = 0; i < value.length; i++) {
+            if (isStructuredRichValue(value[i], depth + 1)) return true;
+          }
+          return false;
+        }
+        if (typeof value !== "object") return false;
+        var keys = Object.keys(value);
+        for (var k = 0; k < keys.length; k++) {
+          var key = keys[k];
+          if (/^(?:richannotationjson|richannotation|content|blocks|children|items|nodes|widgets|gallery|img|image|picture|text|description|title)$/i.test(key)) {
+            return true;
+          }
+          if (isStructuredRichValue(value[key], depth + 1)) return true;
+        }
+        return false;
+      }
+      function pickRichDescriptionJsonCandidate(state) {
+        if (!state || typeof state !== "object") return null;
+        var objectCandidates = [
+          { key: "richAnnotationJson", value: state.richAnnotationJson },
+          { key: "richAnnotation", value: state.richAnnotation },
+          { key: "content", value: state.content },
+          { key: "description", value: state.description },
+          { key: "blocks", value: state.blocks },
+          { key: "items", value: state.items },
+          { key: "children", value: state.children },
+          { key: "nodes", value: state.nodes },
+          { key: "widgets", value: state.widgets }
+        ];
+        for (var i = 0; i < objectCandidates.length; i++) {
+          var entry = objectCandidates[i];
+          var candidate = entry.value;
+          if ((candidate && typeof candidate === "object") || Array.isArray(candidate)) {
+            if (!isStructuredRichValue(candidate, 0)) continue;
+            if (entry.key === "richAnnotationJson" || entry.key === "richAnnotation") return candidate;
+            if (Array.isArray(candidate)) {
+              var wrapped = {};
+              wrapped[entry.key] = candidate;
+              return wrapped;
+            }
+            return candidate;
+          }
+        }
+        return null;
+      }
+      function extractRichDescriptionPayload(state) {
+        if (!state || typeof state !== "object") return { text: "", richJson: null };
+        var richJson = pickRichDescriptionJsonCandidate(state);
+        var candidates = [state.richAnnotation, state.description, state.text, state.content, state.blocks, richJson];
+        var text = "";
+        for (var i = 0; i < candidates.length; i++) {
+          var parts = [];
+          visitRichDescriptionValue(candidates[i], parts, [], 0);
+          var next = normalizeRichDescriptionText(parts.join("\n")).slice(0, 5000);
+          if (next && next.length > text.length) text = next;
+        }
+        return { text: text, richJson: richJson };
+      }
 
       function normalizeRequestedProductPath(value, fallbackProductId) {
         var path = "";
@@ -2828,6 +2930,8 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
           description: typeof description === "string" ? description.slice(0, 5000) : "",
           richDescriptionJson: richDescriptionJson ? JSON.stringify(richDescriptionJson).slice(0, 30000) : null,
           sourceVideos: sourceVideos.length ? sourceVideos : null,
+          descriptionFetchDiagnostics: descriptionFetchDiagnostics,
+          descriptionFetchTrace: descriptionFetchTrace,
           brand: brand,
           category: category,
           attributes: attributes,
