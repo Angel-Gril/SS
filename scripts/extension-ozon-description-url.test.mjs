@@ -26,7 +26,7 @@ test('ERP URL collection preserves full Ozon product URLs for description fetche
 
   assert.match(backgroundSource, /function\s+normalizeOzonCollectionInputs\(/);
   assert.match(backgroundSource, /normalizeOzonCollectionInputs\(productIds,\s*options\.productUrls\)/);
-  assert.match(backgroundSource, /fetchOzonProductViaTab\(pid,\s*sourceUrl,\s*collectPolicy\)/);
+  assert.match(backgroundSource, /fetchOzonProductViaTab\(pid,\s*sourceUrl,\s*collectionRunOptions\)/);
   assert.match(backgroundSource, /productUrls:\s*message\.productUrls/);
 });
 

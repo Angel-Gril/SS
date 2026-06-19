@@ -124,6 +124,7 @@ async function enqueueOzonCollectEnrichmentJob(job) {
   queue.push({
     productIds: Array.isArray(job && job.productIds) ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean) : [],
     productUrls: Array.isArray(job && job.productUrls) ? job.productUrls.map((url) => String(url || "").trim()) : [],
+    fetchVariantDescriptionDetails: job && job.fetchVariantDescriptionDetails === true,
     queuedAt: new Date().toISOString(),
   });
   await writeOzonCollectEnrichmentQueue(queue);
@@ -135,20 +136,24 @@ async function runOzonCollectEnrichmentJob(job, erpConn) {
 
   const sellerCompanyId = await getSellerCompanyId().catch(() => null);
   const collectPolicy = resolveOzonCollectionPolicy({ mode: "complete" });
+  const collectionRunOptions = {
+    ...collectPolicy,
+    fetchVariantDescriptionDetails: job && job.fetchVariantDescriptionDetails === true,
+  };
   const collected = [];
   const errors = [];
 
   for (let i = 0; i < inputs.length; i++) {
     const pid = inputs[i].productId;
     const sourceUrl = inputs[i].sourceUrl;
-    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectPolicy);
+    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions);
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
       continue;
     }
 
     const productData = r.data;
-    await completeOzonProductVariantsForCollection(productData, pid, collectPolicy);
+    await completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions);
 
     if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {
@@ -2870,6 +2875,7 @@ async function discoverOzonVariantsRecursively(productData, rootProductId, optio
     maxPages,
     maxDepth,
     maxReached: false,
+    variantDescriptionMode: options.fetchVariantDescriptionDetails === true ? "per-variant" : "root-shared",
     errors: [],
   };
 
@@ -2914,7 +2920,7 @@ async function discoverOzonVariantsRecursively(productData, rootProductId, optio
       try {
         const productPath = normalizeOzonProductPathForFetch(ref.link, fetchId);
         const result = await doFetchOzonProductViaTab(tab, fetchId, productPath, {
-          fetchDescriptionDetails: options.fetchDescriptionDetails !== false,
+          fetchDescriptionDetails: options.fetchVariantDescriptionDetails === true,
         });
         if (!result.ok || !result.data) {
           if (diagnostics.errors.length < 10) {
@@ -2989,7 +2995,7 @@ async function completeOzonProductVariantsForCollection(productData, productId, 
   try {
     return await discoverOzonVariantsRecursively(productData, productId, {
       ...(policy.recursive || {}),
-      fetchDescriptionDetails: policy.fetchDescriptionDetails,
+      fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
     });
   } catch (error) {
     attachOzonVariantDiscoveryDiagnostics(productData, {
@@ -3021,13 +3027,17 @@ async function collectOzonProductsToErp(productIds, options = {}) {
   let sellerCompanyId = null;
   try { sellerCompanyId = await getSellerCompanyId(); } catch (e) {}
   const collectPolicy = resolveOzonCollectionPolicy(options);
+  const collectionRunOptions = {
+    ...collectPolicy,
+    fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
+  };
 
   const collected = [];
   const errors = [];
   for (let i = 0; i < inputs.length; i++) {
     const pid = inputs[i].productId;
     const sourceUrl = inputs[i].sourceUrl;
-    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectPolicy);
+    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions);
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
       if (i < inputs.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
@@ -3035,7 +3045,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     }
 
     const productData = r.data;
-    await completeOzonProductVariantsForCollection(productData, pid, collectPolicy);
+    await completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions);
 
     if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {
@@ -3123,6 +3133,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     await enqueueOzonCollectEnrichmentJob({
       productIds: inputs.map((input) => input.productId),
       productUrls: inputs.map((input) => input.sourceUrl || ""),
+      fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
     });
     flushOzonCollectEnrichmentQueue().catch(() => {});
   }
@@ -3353,7 +3364,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (!productId) return { ok: false, error: "缺少 productId" };
         const fetchResult = await fetchOzonProductViaTab(productId, message.sourceUrl || message.productUrl || null);
         if (fetchResult && fetchResult.ok && fetchResult.data) {
-          await completeOzonProductVariantsForCollection(fetchResult.data, productId);
+          await completeOzonProductVariantsForCollection(fetchResult.data, productId, {
+            fetchVariantDescriptionDetails: message.fetchVariantDescriptionDetails === true,
+          });
         }
         return fetchResult;
       }
@@ -3443,6 +3456,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "spb-self-hosted:fetch-ozon-product-to-erp": {
         return await collectOzonProductsToErp(message.productIds, {
           productUrls: message.productUrls,
+          fetchVariantDescriptionDetails: message.fetchVariantDescriptionDetails === true,
           mode: message.mode || message.collectMode || "complete",
         });
       }

@@ -85,16 +85,32 @@ test('all interactive Ozon ERP collection entry points explicitly request comple
   );
 });
 
-test('recursive Ozon discovery forwards description policy without referencing an out-of-scope policy variable', () => {
+test('recursive Ozon discovery skips variant description details by default', () => {
   const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 
   assert.match(
     source,
-    /discoverOzonVariantsRecursively\(productData,\s*productId,\s*\{[\s\S]*fetchDescriptionDetails:\s*policy\.fetchDescriptionDetails/,
+    /discoverOzonVariantsRecursively\(productData,\s*productId,\s*\{[\s\S]*fetchVariantDescriptionDetails:\s*options\.fetchVariantDescriptionDetails\s*===\s*true/,
   );
-  assert.doesNotMatch(
+  assert.match(
     source,
-    /discoverOzonVariantsRecursively[\s\S]*fetchDescriptionDetails:\s*!!policy\.fetchDescriptionDetails[\s\S]*async function completeOzonProductVariantsForCollection/,
+    /doFetchOzonProductViaTab\(tab,\s*fetchId,\s*productPath,\s*\{[\s\S]*fetchDescriptionDetails:\s*options\.fetchVariantDescriptionDetails\s*===\s*true/,
+  );
+  assert.match(
+    source,
+    /variantDescriptionMode:\s*options\.fetchVariantDescriptionDetails\s*===\s*true\s*\?\s*["']per-variant["']\s*:\s*["']root-shared["']/,
+  );
+  assert.match(
+    source,
+    /fetchVariantDescriptionDetails:\s*message\.fetchVariantDescriptionDetails\s*===\s*true/,
+  );
+  assert.match(
+    source,
+    /fetchVariantDescriptionDetails:\s*job\s*&&\s*job\.fetchVariantDescriptionDetails\s*===\s*true/,
+  );
+  assert.match(
+    source,
+    /completeOzonProductVariantsForCollection\(productData,\s*pid,\s*collectionRunOptions\)/,
   );
 });
 
@@ -107,12 +123,20 @@ test('balanced collection queues a complete enrichment pass after the first ERP 
   );
 });
 
-test('balanced first pass forwards collection policy into the Ozon tab fetcher', () => {
+test('collection run forwards root policy and skips per-variant descriptions by default', () => {
   const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 
   assert.match(
     source,
-    /fetchOzonProductViaTab\(pid,\s*[^,\n]+,\s*collectPolicy\)/,
+    /const collectionRunOptions\s*=\s*\{[\s\S]*\.\.\.collectPolicy[\s\S]*fetchVariantDescriptionDetails:\s*options\.fetchVariantDescriptionDetails\s*===\s*true[\s\S]*\}/,
+  );
+  assert.match(
+    source,
+    /fetchOzonProductViaTab\(pid,\s*sourceUrl,\s*collectionRunOptions\)/,
+  );
+  assert.match(
+    source,
+    /completeOzonProductVariantsForCollection\(productData,\s*pid,\s*collectionRunOptions\)/,
   );
   assert.match(
     source,
