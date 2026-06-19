@@ -123,6 +123,27 @@ test('balanced collection queues a complete enrichment pass after the first ERP 
   );
 });
 
+test('Ozon collect payload distinguishes manual collection from enrichment updates', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    source,
+    /function buildOzonCollectBatchPayload\(collected,\s*options\s*=\s*\{\}\)/,
+  );
+  assert.match(
+    source,
+    /collectPhase:\s*options\.phase\s*\|\|\s*["']collect["']/,
+  );
+  assert.match(
+    source,
+    /buildOzonCollectBatchPayload\(collected,\s*options\)/,
+  );
+  assert.match(
+    source,
+    /phase:\s*["']enrichment["']/,
+  );
+});
+
 test('collection run forwards root policy and skips per-variant descriptions by default', () => {
   const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 

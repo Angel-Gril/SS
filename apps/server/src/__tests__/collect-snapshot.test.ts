@@ -10,6 +10,7 @@ describe('collect snapshot helpers', () => {
 
   it('serializes ERP collect status for list-page overlays', () => {
     const createdAt = new Date('2026-05-31T12:00:00.000Z');
+    const updatedAt = new Date('2026-06-01T08:30:00.000Z');
 
     expect(buildCollectSnapshot({
       id: 'collect-1',
@@ -19,6 +20,7 @@ describe('collect snapshot helpers', () => {
       sourceUrl: 'https://www.ozon.ru/product/item-123/',
       status: 'listed',
       createdAt,
+      updatedAt,
       purchasePrice: { toString: () => '99.90' },
       images: ['a.jpg', 'b.jpg'],
       metadata: { lastError: 'old error' },
@@ -30,7 +32,7 @@ describe('collect snapshot helpers', () => {
       sku: '123',
       sourceUrl: 'https://www.ozon.ru/product/item-123/',
       status: 'listed',
-      lastCollectedAt: '2026-05-31T12:00:00.000Z',
+      lastCollectedAt: '2026-06-01T08:30:00.000Z',
       price: '99.90',
       imageCount: 2,
       listed: true,

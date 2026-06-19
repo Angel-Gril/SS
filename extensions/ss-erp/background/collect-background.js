@@ -517,8 +517,9 @@ function normalizeOzonCompanyId(value) {
   return value == null ? "" : String(value).trim();
 }
 
-function buildOzonCollectBatchPayload(collected) {
+function buildOzonCollectBatchPayload(collected, options = {}) {
   return {
+    collectPhase: options.phase || "collect",
     items: collected.map((p) => ({
       title: p.title,
       publishTitle: p.publishTitle || p.title,
@@ -581,7 +582,7 @@ async function notifyErpCollectCompleted(collectedCount, errorCount, options = {
 }
 
 async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors, options = {}) {
-  const batchPayload = buildOzonCollectBatchPayload(collected);
+  const batchPayload = buildOzonCollectBatchPayload(collected, options);
   const pushResp = await fetch(erpBase + "/api/collect/batch", {
     method: "POST",
     headers: {

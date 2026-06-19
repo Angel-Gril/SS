@@ -18,7 +18,16 @@ interface BatchItem {
   images: string[] | null;
   purchasePrice: string | null;
   status: string;
-  metadata?: { watermarkApplied?: boolean; ozonAttributes?: any[]; descriptionCategoryId?: number; typeId?: number } | null;
+  metadata?: {
+    watermarkApplied?: boolean;
+    ozonAttributes?: any[];
+    descriptionCategoryId?: number;
+    typeId?: number;
+    sourceDescriptionRu?: string;
+    sourceRichDescriptionJson?: string;
+    sourceVideos?: any[];
+    [key: string]: any;
+  } | null;
 }
 interface ParsedLine { sku: string; targetPrice: number | null; raw: string; }
 
@@ -33,6 +42,18 @@ function parseSkuLines(text: string): { ok: ParsedLine[]; bad: string[] } {
     ok.push({ sku, targetPrice: Number.isFinite(price) && price > 0 ? price : null, raw });
   }
   return { ok, bad };
+}
+
+function hasCollectedDescription(item: BatchItem) {
+  return Boolean(String(item.metadata?.sourceDescriptionRu || '').trim());
+}
+
+function hasCollectedRichContent(item: BatchItem) {
+  return Boolean(String(item.metadata?.sourceRichDescriptionJson || '').trim());
+}
+
+function collectedVideoCount(item: BatchItem) {
+  return Array.isArray(item.metadata?.sourceVideos) ? item.metadata.sourceVideos.length : 0;
 }
 
 function sendToExtension(message: any, timeoutMs = 60000): Promise<any> {
@@ -444,6 +465,9 @@ export default function BatchCollectPage() {
                       {item.metadata?.watermarkApplied && <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-600 px-1 py-0">水印</Badge>}
                       {item.metadata?.ozonAttributes && <Badge variant="outline" className="text-[10px] border-orange-300 text-orange-600 px-1 py-0">属性</Badge>}
                       {item.metadata?.descriptionCategoryId && item.metadata?.typeId && <Badge variant="outline" className="text-[10px] border-green-300 text-green-700 px-1 py-0">源分类</Badge>}
+                      {hasCollectedDescription(item) && <Badge variant="outline" className="text-[10px] border-sky-300 text-sky-700 px-1 py-0">简介</Badge>}
+                      {hasCollectedRichContent(item) && <Badge variant="outline" className="text-[10px] border-violet-300 text-violet-700 px-1 py-0">富内容</Badge>}
+                      {collectedVideoCount(item) > 0 && <Badge variant="outline" className="text-[10px] border-rose-300 text-rose-700 px-1 py-0">视频 {collectedVideoCount(item)}</Badge>}
                     </div>
                   </div>
                   <button

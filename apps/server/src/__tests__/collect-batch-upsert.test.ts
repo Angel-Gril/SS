@@ -38,9 +38,11 @@ const mocks = vi.hoisted(() => {
       request.user = { userId: 'user-1' };
     }),
     supplyGoodsFindFirst: vi.fn(async () => ({ ...record })),
-    supplyGoodsCreate: vi.fn(async () => {
-      throw new Error('create should not be called for existing Ozon collect records');
-    }),
+    supplyGoodsCreate: vi.fn(async ({ data }: any) => ({
+      ...record,
+      id: 'collect-new',
+      ...data,
+    })),
     supplyGoodsUpdate: vi.fn(async ({ where, data }: any) => ({
       ...record,
       id: where.id,
@@ -89,12 +91,43 @@ async function buildApp() {
   return app;
 }
 
+function collectedOzonItem() {
+  return {
+    title: 'New collected title',
+    publishTitle: 'Новый исходный заголовок',
+    sourceTitleRaw: 'Новый исходный заголовок',
+    sourceLocale: 'ru',
+    sourceUrl: 'https://www.ozon.ru/product/new-item-123/',
+    sourcePlatform: 'ozon',
+    sourceProductId: '123',
+    sku: '123',
+    images: ['new-a.jpg', 'new-b.jpg'],
+    priceText: '799',
+    currency: 'RUB',
+    description: 'Новое описание карточки',
+    richDescriptionJson: '{"blocks":[]}',
+    sourceVideos: [{ url: 'https://cdn.example.com/demo.mp4', coverUrl: 'https://cdn.example.com/demo.jpg' }],
+    ozonAttributes: [{ id: 1, values: [{ value: 'значение' }] }],
+    descriptionCategoryId: 17028706,
+    typeId: 95913,
+    weightG: 510,
+    lengthMm: 220,
+    widthMm: 180,
+    heightMm: 70,
+    manufacturerName: 'Factory',
+    brandName: 'Brand',
+    variants: [{ sku: '123', attrs: { Цвет: 'синий' } }, { sku: '124', attrs: { Цвет: 'черный' } }],
+    modelId: 'new-model',
+    widgetStatesDump: { recursiveVariantDiscovery: { finalVariantCount: 2 } },
+  };
+}
+
 describe('collectRoutes batch upsert', () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('updates an existing Ozon collect record instead of creating a duplicate during enrichment', async () => {
+  it('creates a new Ozon collect record for repeated manual collection', async () => {
     const app = await buildApp();
 
     try {
@@ -102,34 +135,7 @@ describe('collectRoutes batch upsert', () => {
         method: 'POST',
         url: '/api/collect/batch',
         payload: {
-          items: [{
-            title: 'New collected title',
-            publishTitle: 'Новый исходный заголовок',
-            sourceTitleRaw: 'Новый исходный заголовок',
-            sourceLocale: 'ru',
-            sourceUrl: 'https://www.ozon.ru/product/new-item-123/',
-            sourcePlatform: 'ozon',
-            sourceProductId: '123',
-            sku: '123',
-            images: ['new-a.jpg', 'new-b.jpg'],
-            priceText: '799',
-            currency: 'RUB',
-            description: 'Новое описание карточки',
-            richDescriptionJson: '{"blocks":[]}',
-            sourceVideos: [{ url: 'https://cdn.example.com/demo.mp4', coverUrl: 'https://cdn.example.com/demo.jpg' }],
-            ozonAttributes: [{ id: 1, values: [{ value: 'значение' }] }],
-            descriptionCategoryId: 17028706,
-            typeId: 95913,
-            weightG: 510,
-            lengthMm: 220,
-            widthMm: 180,
-            heightMm: 70,
-            manufacturerName: 'Factory',
-            brandName: 'Brand',
-            variants: [{ sku: '123', attrs: { Цвет: 'синий' } }, { sku: '124', attrs: { Цвет: 'черный' } }],
-            modelId: 'new-model',
-            widgetStatesDump: { recursiveVariantDiscovery: { finalVariantCount: 2 } },
-          }],
+          items: [collectedOzonItem()],
         },
       });
 
@@ -139,18 +145,13 @@ describe('collectRoutes batch upsert', () => {
         data: { saved: 1, errors: [] },
       });
 
-      expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
-      expect(mocks.supplyGoodsUpdate).toHaveBeenCalledTimes(1);
-      expect(mocks.supplyGoodsFindFirst).toHaveBeenCalledWith(expect.objectContaining({
-        where: expect.objectContaining({
-          userId: 'user-1',
-          sourcePlatform: 'ozon',
-        }),
-      }));
+      expect(mocks.supplyGoodsFindFirst).not.toHaveBeenCalled();
+      expect(mocks.supplyGoodsUpdate).not.toHaveBeenCalled();
+      expect(mocks.supplyGoodsCreate).toHaveBeenCalledTimes(1);
 
-      const updateArgs = mocks.supplyGoodsUpdate.mock.calls[0]?.[0];
-      expect(updateArgs.where).toEqual({ id: 'collect-existing' });
-      expect(updateArgs.data).toMatchObject({
+      const createArgs = mocks.supplyGoodsCreate.mock.calls[0]?.[0];
+      expect(createArgs.data).toMatchObject({
+        user: { connect: { id: 'user-1' } },
         title: 'New collected title',
         sourceUrl: 'https://www.ozon.ru/product/new-item-123/',
         sourcePlatform: 'ozon',
@@ -167,11 +168,8 @@ describe('collectRoutes batch upsert', () => {
         variants: [{ sku: '123', attrs: { Цвет: 'синий' } }, { sku: '124', attrs: { Цвет: 'черный' } }],
         modelId: 'new-model',
       });
-      expect(updateArgs.data.metadata).toMatchObject({
-        existingFlag: true,
-        publishTitleRu: 'Ручной заголовок',
-        publishDescriptionRu: 'Ручное описание',
-        watermarkedImages: ['custom-parent.jpg'],
+      expect(createArgs.data.metadata).toMatchObject({
+        publishTitleRu: 'Новый исходный заголовок',
         sourceTitleRaw: 'Новый исходный заголовок',
         sourceLocale: 'ru',
         sourceDescriptionRu: 'Новое описание карточки',
@@ -187,6 +185,53 @@ describe('collectRoutes batch upsert', () => {
         manufacturerName: 'Factory',
         brandName: 'Brand',
         widgetStatesDump: { recursiveVariantDiscovery: { finalVariantCount: 2 } },
+      });
+      expect(createArgs.data.metadata).not.toHaveProperty('existingFlag');
+      expect(createArgs.data.metadata).not.toHaveProperty('watermarkedImages');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('updates an existing Ozon collect record during enrichment', async () => {
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: {
+          collectPhase: 'enrichment',
+          items: [collectedOzonItem()],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { saved: 1, errors: [] },
+      });
+
+      expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+      expect(mocks.supplyGoodsUpdate).toHaveBeenCalledTimes(1);
+      expect(mocks.supplyGoodsFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          userId: 'user-1',
+          sourcePlatform: 'ozon',
+        }),
+        orderBy: { updatedAt: 'desc' },
+      }));
+
+      const updateArgs = mocks.supplyGoodsUpdate.mock.calls[0]?.[0];
+      expect(updateArgs.where).toEqual({ id: 'collect-existing' });
+      expect(updateArgs.data.metadata).toMatchObject({
+        existingFlag: true,
+        publishTitleRu: 'Ручной заголовок',
+        publishDescriptionRu: 'Ручное описание',
+        watermarkedImages: ['custom-parent.jpg'],
+        sourceTitleRaw: 'Новый исходный заголовок',
+        sourceDescriptionRu: 'Новое описание карточки',
+        sourceRichDescriptionJson: '{"blocks":[]}',
       });
     } finally {
       await app.close();

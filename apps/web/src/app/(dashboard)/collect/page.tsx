@@ -144,6 +144,19 @@ function normalizePreviewImages(value: unknown): string[] {
   return images;
 }
 
+function hasCollectedDescription(item: { notes?: string | null; metadata?: Record<string, any> | null }) {
+  const meta = item.metadata || {};
+  return Boolean(String(meta.sourceDescriptionRu || item.notes || '').trim());
+}
+
+function hasCollectedRichContent(item: { metadata?: Record<string, any> | null }) {
+  return Boolean(String(item.metadata?.sourceRichDescriptionJson || '').trim());
+}
+
+function collectedVideoCount(item: { metadata?: Record<string, any> | null }) {
+  return Array.isArray(item.metadata?.sourceVideos) ? item.metadata.sourceVideos.length : 0;
+}
+
 function mergePreviewImages(...lists: unknown[]): string[] {
   const images: string[] = [];
   const seen = new Set<string>();
@@ -1160,6 +1173,15 @@ export default function CollectPage() {
                           )}
                           {item.metadata?.ozonAttributes && (
                             <Badge variant="outline" className="text-xs border-orange-300 text-orange-600">属性完整</Badge>
+                          )}
+                          {hasCollectedDescription(item) && (
+                            <Badge variant="outline" className="text-xs border-sky-300 text-sky-700">简介</Badge>
+                          )}
+                          {hasCollectedRichContent(item) && (
+                            <Badge variant="outline" className="text-xs border-violet-300 text-violet-700">富内容</Badge>
+                          )}
+                          {collectedVideoCount(item) > 0 && (
+                            <Badge variant="outline" className="text-xs border-rose-300 text-rose-700">视频 {collectedVideoCount(item)}</Badge>
                           )}
                         </div>
                         <div>

@@ -1815,6 +1815,7 @@ export function buildCollectSnapshot(item: {
   sourceUrl?: string | null;
   status: string;
   createdAt: Date;
+  updatedAt?: Date;
   purchasePrice?: { toString(): string } | null;
   images?: unknown;
   metadata?: unknown;
@@ -1828,7 +1829,7 @@ export function buildCollectSnapshot(item: {
     sku: item.sku || null,
     sourceUrl: item.sourceUrl || null,
     status: item.status,
-    lastCollectedAt: item.createdAt.toISOString(),
+    lastCollectedAt: (item.updatedAt || item.createdAt).toISOString(),
     price: item.purchasePrice?.toString() || null,
     imageCount: Array.isArray(item.images) ? item.images.length : 0,
     listed: item.status === 'listed',
@@ -1899,6 +1900,7 @@ export async function collectRoutes(app: FastifyInstance) {
           { sourceProductId: sku },
         ],
       },
+      orderBy: { updatedAt: 'desc' },
       select: { id: true, title: true, status: true },
     });
     return reply.send({
@@ -1933,6 +1935,7 @@ export async function collectRoutes(app: FastifyInstance) {
           { sku: { in: skus } },
         ],
       },
+      orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
         sourceProductId: true,
@@ -1941,6 +1944,7 @@ export async function collectRoutes(app: FastifyInstance) {
         sourceUrl: true,
         status: true,
         createdAt: true,
+        updatedAt: true,
         purchasePrice: true,
         images: true,
         metadata: true,
@@ -2064,12 +2068,14 @@ export async function collectRoutes(app: FastifyInstance) {
 
   app.post('/batch', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
     const { userId } = (request as any).user;
-    const body = request.body as { items: any[] };
+    const body = request.body as { items: any[]; collectPhase?: string };
 
     if (!body?.items?.length) {
       return reply.status(400).send({ code: 0, msg: '请提供商品数据' });
     }
 
+    const collectPhase = String(body.collectPhase || 'collect').trim().toLowerCase();
+    const shouldUpdateExisting = collectPhase === 'enrichment';
     let saved = 0;
     const errors: { sku?: string; sourceProductId?: string; title?: string; error: string }[] = [];
     for (const item of body.items.slice(0, 50)) {
@@ -2110,11 +2116,13 @@ export async function collectRoutes(app: FastifyInstance) {
           sku: item.sku,
         });
 
-        const existing = await findExistingCollectedOzonGoods(userId, {
-          sourcePlatform: item.sourcePlatform,
-          sourceProductId,
-          sku: item.sku,
-        });
+        const existing = shouldUpdateExisting
+          ? await findExistingCollectedOzonGoods(userId, {
+            sourcePlatform: item.sourcePlatform,
+            sourceProductId,
+            sku: item.sku,
+          })
+          : null;
 
         const data = {
           title: displayTitle,
