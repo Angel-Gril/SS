@@ -507,10 +507,11 @@ export default function CollectPage() {
     if (!extFetchInput.trim()) { toast({ title: '请输入商品链接或Product ID', variant: 'destructive' }); return; }
     const lines = extFetchInput.trim().split('\n').map((s) => s.trim()).filter(Boolean);
     const productIds: string[] = [];
+    const productUrls: string[] = [];
     for (const line of lines) {
       const match = line.match(/[-/](\d{6,})\/?(\?|$)/);
-      if (match) { productIds.push(match[1]!); continue; }
-      if (/^\d{6,}$/.test(line)) { productIds.push(line); continue; }
+      if (match) { productIds.push(match[1]!); productUrls.push(line); continue; }
+      if (/^\d{6,}$/.test(line)) { productIds.push(line); productUrls.push(''); continue; }
       toast({ title: `无法解析: ${line.slice(0, 40)}`, variant: 'destructive' });
       return;
     }
@@ -547,6 +548,7 @@ export default function CollectPage() {
     const res = await sendToExtension({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds,
+      productUrls,
       collectMode: 'complete',
     }, 180000);
 

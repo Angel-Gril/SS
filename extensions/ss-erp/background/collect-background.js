@@ -123,23 +123,25 @@ async function enqueueOzonCollectEnrichmentJob(job) {
   const queue = await readOzonCollectEnrichmentQueue();
   queue.push({
     productIds: Array.isArray(job && job.productIds) ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean) : [],
+    productUrls: Array.isArray(job && job.productUrls) ? job.productUrls.map((url) => String(url || "").trim()) : [],
     queuedAt: new Date().toISOString(),
   });
   await writeOzonCollectEnrichmentQueue(queue);
 }
 
 async function runOzonCollectEnrichmentJob(job, erpConn) {
-  const pids = Array.isArray(job && job.productIds) ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean) : [];
-  if (!pids.length) return { ok: true, skipped: true };
+  const inputs = normalizeOzonCollectionInputs(job && job.productIds, job && job.productUrls);
+  if (!inputs.length) return { ok: true, skipped: true };
 
   const sellerCompanyId = await getSellerCompanyId().catch(() => null);
   const collectPolicy = resolveOzonCollectionPolicy({ mode: "complete" });
   const collected = [];
   const errors = [];
 
-  for (let i = 0; i < pids.length; i++) {
-    const pid = pids[i];
-    const r = await fetchOzonProductViaTab(pid, null, collectPolicy);
+  for (let i = 0; i < inputs.length; i++) {
+    const pid = inputs[i].productId;
+    const sourceUrl = inputs[i].sourceUrl;
+    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectPolicy);
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
       continue;
@@ -2121,6 +2123,42 @@ function normalizeOzonProductPathForFetch(link, fallbackProductId) {
   }
 }
 
+function parseOzonProductIdFromCollectionUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, "https://www.ozon.ru");
+    const path = url.pathname || "";
+    const slugMatch = path.match(/-(\d{6,})\/?$/);
+    if (slugMatch) return slugMatch[1];
+    const bareMatch = path.match(/\/product\/(\d{6,})\/?$/);
+    if (bareMatch) return bareMatch[1];
+  } catch (e) {}
+  const looseMatch = raw.split("?")[0].match(/[-/](\d{6,})\/?$/);
+  return looseMatch ? looseMatch[1] : "";
+}
+
+function normalizeOzonCollectionInputs(productIds, productUrls) {
+  const ids = Array.isArray(productIds)
+    ? productIds.map((id) => String(id || "").trim())
+    : [];
+  const urls = Array.isArray(productUrls)
+    ? productUrls.map((url) => String(url || "").trim())
+    : [];
+  const inputs = [];
+  const seen = new Set();
+
+  for (let i = 0; i < Math.max(ids.length, urls.length); i++) {
+    const url = urls[i] || "";
+    const id = normalizeOzonDiscoveryId(ids[i] || parseOzonProductIdFromCollectionUrl(url));
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    inputs.push({ productId: id, sourceUrl: url || null });
+  }
+
+  return inputs;
+}
+
 async function fetchOzonProductViaTab(productId, productPath, options = {}) {
   var tab = await getOzonPublicTab();
   if (!tab || !tab.id) {
@@ -2307,7 +2345,7 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
           return path.indexOf("?") >= 0 ? path + "&language=ru" : path + "?language=ru";
         }
       }
-      function buildDescriptionFetchPaths(fallbackProductId, currentProductPath) {
+      function buildDescriptionFetchRequests(fallbackProductId, currentProductPath) {
         var bases = [];
         function addBase(path) {
           path = String(path || "").split("?")[0];
@@ -2319,7 +2357,23 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
         addBase("/product/" + fallbackProductId + "/");
         var out = [];
         for (var i = 0; i < bases.length; i++) {
-          out.push(bases[i] + "?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru");
+          var paths = [
+            bases[i] + "?layout_container=pdpPage2column&layout_page_index=2&oos_search=false&language=ru",
+            bases[i] + "?layout_page_index=2&oos_search=false&language=ru",
+            bases[i] + "?layout_container=pdpPage2column&layout_page_index=3&oos_search=false&language=ru"
+          ];
+          for (var pi = 0; pi < paths.length; pi++) {
+            out.push({
+              api: "entrypoint",
+              path: paths[pi],
+              url: "/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(paths[pi])
+            });
+            out.push({
+              api: "composer",
+              path: paths[pi],
+              url: "/api/composer-api.bx/page/json/v2?url=" + encodeURIComponent(paths[pi])
+            });
+          }
         }
         return out;
       }
@@ -2369,6 +2423,11 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
       var description = "";
       var richDescriptionJson = null;
       var sourceVideos = [];
+      var descriptionFetchDiagnostics = {
+        enabled: shouldFetchDescriptionDetails,
+        attempts: [],
+        found: false
+      };
       var brand = null;
       var category = null;
       var attributes = [];
@@ -2646,22 +2705,40 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
       }
 
       if (shouldFetchDescriptionDetails) try {
-        var descriptionPaths = buildDescriptionFetchPaths(pid, productPath);
+        var descriptionRequests = buildDescriptionFetchRequests(pid, productPath);
         var descriptionStates = null;
-        for (var dpi = 0; dpi < descriptionPaths.length; dpi++) {
+        for (var dpi = 0; dpi < descriptionRequests.length; dpi++) {
+          var requestInfo = descriptionRequests[dpi];
+          var attemptTrace = {
+            api: requestInfo.api,
+            path: String(requestInfo.path || "").slice(0, 260),
+            ok: false,
+            stateKeyCount: 0,
+            descriptionKeyCount: 0
+          };
+          descriptionFetchDiagnostics.attempts.push(attemptTrace);
           try {
-            var descriptionData = await doFetch("/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(descriptionPaths[dpi]));
+            var descriptionData = await doFetch(requestInfo.url);
             var candidateStates = descriptionData && descriptionData.widgetStates;
             if (candidateStates && typeof candidateStates === "object") {
-              var hasDescriptionState = Object.keys(candidateStates).some(function (stateKey) {
+              var candidateKeys = Object.keys(candidateStates);
+              attemptTrace.ok = true;
+              attemptTrace.stateKeyCount = candidateKeys.length;
+              var descriptionKeysFound = candidateKeys.filter(function (stateKey) {
                 return /^(webDescription|webRichAnnotation|description)/.test(stateKey);
               });
+              var hasDescriptionState = descriptionKeysFound.length > 0;
+              attemptTrace.descriptionKeyCount = descriptionKeysFound.length;
               if (hasDescriptionState) {
                 descriptionStates = candidateStates;
+                attemptTrace.used = true;
+                descriptionFetchDiagnostics.found = true;
                 break;
               }
             }
-          } catch (e) {}
+          } catch (e) {
+            attemptTrace.error = e && e.message ? e.message.slice(0, 180) : String(e || "").slice(0, 180);
+          }
         }
         if (descriptionStates && typeof descriptionStates === "object") {
           var descriptionKeys = Object.keys(descriptionStates);
@@ -2711,10 +2788,12 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
           }
         }
       } catch (e) {
+        descriptionFetchDiagnostics.error = e && e.message ? e.message.slice(0, 180) : String(e || "").slice(0, 180);
         // Description page is optional; keep first-page data if Ozon rejects it.
       }
 
-      var widgetStatesDump = variantCandidates.length ? {
+      var descriptionFetchTrace = descriptionFetchDiagnostics;
+      var widgetStatesDump = (variantCandidates.length || descriptionFetchTrace) ? {
         currentProductId: pid,
         modelIdGuess: modelId,
         aspectName: aspectName,
@@ -2723,7 +2802,9 @@ async function doFetchOzonProductViaTab(tab, productId, productPath, options = {
         modalRealCount: modalRealCount,
         modalAdded: modalVariantCount,
         allWidgetKeys: allWidgetKeys,
-        candidates: variantCandidates.slice(0, 20)
+        candidates: variantCandidates.slice(0, 20),
+        descriptionFetchTrace: descriptionFetchTrace,
+        descriptionFetchDiagnostics: descriptionFetchDiagnostics
       } : null;
 
       return {
@@ -2925,10 +3006,8 @@ async function completeOzonProductVariantsForCollection(productData, productId, 
 }
 
 async function collectOzonProductsToErp(productIds, options = {}) {
-  const pids = Array.isArray(productIds)
-    ? productIds.map((id) => String(id || "").trim()).filter(Boolean)
-    : [];
-  if (!pids.length) {
+  const inputs = normalizeOzonCollectionInputs(productIds, options.productUrls);
+  if (!inputs.length) {
     return { ok: false, error: "缺少 productIds" };
   }
 
@@ -2945,12 +3024,13 @@ async function collectOzonProductsToErp(productIds, options = {}) {
 
   const collected = [];
   const errors = [];
-  for (let i = 0; i < pids.length; i++) {
-    const pid = pids[i];
-    const r = await fetchOzonProductViaTab(pid, null, collectPolicy);
+  for (let i = 0; i < inputs.length; i++) {
+    const pid = inputs[i].productId;
+    const sourceUrl = inputs[i].sourceUrl;
+    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectPolicy);
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
-      if (i < pids.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
+      if (i < inputs.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
       continue;
     }
 
@@ -3030,7 +3110,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     }
 
     collected.push(productData);
-    if (collectPolicy.rootProductDelayMs > 0 && i < pids.length - 1) await new Promise((resolve) => setTimeout(resolve, collectPolicy.rootProductDelayMs));
+    if (collectPolicy.rootProductDelayMs > 0 && i < inputs.length - 1) await new Promise((resolve) => setTimeout(resolve, collectPolicy.rootProductDelayMs));
   }
 
   if (!collected.length) {
@@ -3040,7 +3120,10 @@ async function collectOzonProductsToErp(productIds, options = {}) {
 
   const pushResult = await pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors);
   if (pushResult.ok && collectPolicy.mode === "balanced") {
-    await enqueueOzonCollectEnrichmentJob({ productIds: pids });
+    await enqueueOzonCollectEnrichmentJob({
+      productIds: inputs.map((input) => input.productId),
+      productUrls: inputs.map((input) => input.sourceUrl || ""),
+    });
     flushOzonCollectEnrichmentQueue().catch(() => {});
   }
   return pushResult;
@@ -3268,7 +3351,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "spb-self-hosted:fetch-ozon-product": {
         const productId = message.productId;
         if (!productId) return { ok: false, error: "缺少 productId" };
-        const fetchResult = await fetchOzonProductViaTab(productId);
+        const fetchResult = await fetchOzonProductViaTab(productId, message.sourceUrl || message.productUrl || null);
         if (fetchResult && fetchResult.ok && fetchResult.data) {
           await completeOzonProductVariantsForCollection(fetchResult.data, productId);
         }
@@ -3359,6 +3442,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       case "spb-self-hosted:fetch-ozon-product-to-erp": {
         return await collectOzonProductsToErp(message.productIds, {
+          productUrls: message.productUrls,
           mode: message.mode || message.collectMode || "complete",
         });
       }

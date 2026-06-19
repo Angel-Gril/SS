@@ -277,6 +277,7 @@
           type: 'collectOzonToErp',
           tab: tab,
           productId: productId,
+          sourceUrl: url,
           label: 'Ozon 商品页',
           title: '采集到 ERP',
           hint: productId ? ('SKU ' + productId + ' · 货源将自动关联') : '未识别 SKU',
@@ -420,6 +421,7 @@
     sendRuntimeMessage({
       type: 'spb-self-hosted:fetch-ozon-product-to-erp',
       productIds: [primaryActionState.productId],
+      productUrls: [primaryActionState.sourceUrl],
       collectMode: 'complete'
     }, function (response) {
       restorePrimaryButton();

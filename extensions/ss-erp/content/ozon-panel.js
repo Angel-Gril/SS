@@ -2040,6 +2040,7 @@
         sendRuntimeMessage({
           type: 'spb-self-hosted:fetch-ozon-product-to-erp',
           productIds: [String(pid)],
+          productUrls: [window.location.href],
           collectMode: 'complete',
         }).then(function (response) {
           collectButton.disabled = false;
