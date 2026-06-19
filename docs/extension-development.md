@@ -50,7 +50,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 - Ozon Seller Cookie/company_id 同步已增加无感兜底：优先读取已打开 `seller.ozon.ru` 标签页里的 `document.cookie`，再回退到 `chrome.cookies`、网络捕获的 `x-o3-company-id` 和 ERP 已保存店铺配置，减少用户反复手动同步 Cookie 的情况。
 - Popup 已收敛为一个智能主动作，连接状态和计算器数据保留在首屏，Cookie/店铺分析/经营图表同步放进“同步与维护”折叠区。
 - Ozon 商品页“核价找货源”已接入 1688/PDD/淘宝主图搜图第一版：popup 采集当前商品主图并转码，service worker 只为用户已勾选的平台创建搜图任务，各平台页面桥负责上传图片并跳转结果。
-- Ozon 商品采集会保存富文本简介和源视频元数据到 ERP metadata；富文本会优先用完整商品 slug 请求 Ozon 第二页详情 `layout_page_index=2`，再兜底短 `product_id` 路径。采集器现在不仅识别 `richAnnotationJson / richAnnotation` 老结构，也会兼容 `content / blocks / children / items / nodes / widgets` 这类新版富内容结构。发布时会重新解析富内容文本/图片、转存富内容图片，并按类目支持的 `22336` 或 `11254` 富内容属性生成新的安全 JSON；源视频仍只采集保存和记录诊断，不自动发布。
+- Ozon 商品采集会保存富文本简介和源视频元数据到 ERP metadata；富文本会优先用完整商品 slug 请求 Ozon 第二页详情 `layout_page_index=2`，再兜底短 `product_id` 路径。采集器现在不仅识别 `richAnnotationJson / richAnnotation` 老结构，也会兼容 `content / blocks / children / items / nodes / widgets` 这类新版富内容结构。发布时会优先保留 Ozon 原始富内容模板（如 `version: 0.3` / `raShowcase`），重新转存富内容图片并清洗文本，再按类目支持的 `22336` 或 `11254` 富内容属性写入；源视频仍只采集保存和记录诊断，不自动发布。
 - Ozon 采集到 ERP 的交互入口（popup、Ozon 面板、ERP Web 单采/批量采）默认走 `collectMode=balanced`：首轮先快速保存当前页商品、弹窗可见变体、价格和主图，不等待富内容详情页或 seller 细节接口；后台再静默补跑 `complete` 递归，把完整变体组合、富内容、源视频、类目和子 SKU seller 属性回写到同一条 ERP 采集记录。这样 ERP 最终仍会尽量拿到“每个真实 SKU = 完整属性组合”，但不会把 60+ SKU 商品的首轮采集时间全部压到前台等待。
 - Ozon 上架清洗会保留 `AB-1` / `AB-6` 这类安全色号作为变体区分维度，并转为 `Название цвета` 上传；不会把这类色号当作 `Цвет` 字典颜色提交，避免“颜色属性值不正确”和“清洗后只剩尺码导致可变特性重复”同时出现。
 - ERP Web 的“扩展采集”入口会先通过 `ss-erp:ping` 检测扩展桥接、扩展版本、ERP 地址/Token 和采集模块状态；如果浏览器仍在旧扩展、桥未注入或 Token 未同步，弹窗会直接显示诊断信息，而不是静默等待后端数据变化。
@@ -73,7 +73,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 - Popup 当前支持按页面识别 Ozon 商品采集、Ozon 到 1688/PDD/淘宝找同款核价、搜图平台选择、国内货源核价回填、国内货源采集到 ERP、seller Cookie 同步；PDD/淘宝搜图已接入同一个“核价找货源”入口，仍需真实页面手工回归。
 - 1688 和淘宝/天猫能采集基础数据，但还需要对齐旧 `test-extension` 的 SKU、阶梯价、重量尺寸和图片提取质量。
 - Ozon 到 ERP 采集链路可用，国内货源到 ERP 上品列表链路已接通，但翻译、类目映射、属性映射和改款上架前的字段检查还未完整收口。
-- Ozon 视频目前是采集保存能力，不是发布能力；发布时会过滤源商品的视频封面和不可复用媒体字段，避免 Ozon 因无效视频封面链接拒绝新商品。富内容会从采集 JSON 重新生成，并兼容类目返回的 `22336` / `11254` 富内容属性。
+- Ozon 视频目前是采集保存能力，不是发布能力；发布时会过滤源商品的视频封面和不可复用媒体字段，避免 Ozon 因无效视频封面链接拒绝新商品。富内容会从采集 JSON 保留模板并重写图片，兼容类目返回的 `22336` / `11254` 富内容属性。
 - Ozon Cookie 同步会按“手动 companyId -> 当前 seller header -> `sc_company_id` cookie -> ERP 店铺已保存 companyId”兜底；用户右上角同步 Cookie 后不应再因为已保存 companyId 缺失而反复要求去 seller 页面手动同步。
 - Ozon 佣金同步优先使用 `global-help.ozon.com` 的 CHN 佣金页；若 Ozon 帮助中心返回 403 或 `__rr` 重定向循环，扩展会保存本地 CHN 兜底佣金快照，并在 diagnostics 记录在线同步失败原因。
 - Ozon 标题采集如果出现中文标题，不再把中文内容保存为 `publishTitleRu`，也不再作为 ERP 上品列表主标题。扩展在 SKU/批量采集时会优先用 seller insights 返回的非中文标题修复；服务端再兜底从 Ozon 商品 URL slug 生成非中文展示标题，最后才使用 `Ozon SKU <sku>`，并标记 `titleNeedsReview`。`Ozon SKU <sku>` 只表示俄文标题来源失败，不是正常标题方案。

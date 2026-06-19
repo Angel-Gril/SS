@@ -38,6 +38,8 @@ export interface VideoPublishPlan {
 const RICH_TEXT_MAX_LENGTH = 900;
 const RICH_BLOCK_MAX_COUNT = 30;
 const MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
+const RICH_IMAGE_URL_KEYS = new Set(['imageurl', 'originalurl', 'src', 'srcmobile', 'picture', 'cover']);
+const RICH_TEXT_VALUE_KEYS = new Set(['title', 'description', 'content', 'value', 'text', 'caption']);
 
 export function isOzonRichContentAttributeId(value: unknown): boolean {
   const id = Number(value);
@@ -102,6 +104,60 @@ function normalizeImageUrl(value: unknown): string {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOzonRichContentTemplate(root: unknown): root is Record<string, unknown> {
+  if (!isRecord(root) || !Array.isArray(root.content)) return false;
+  return root.content.some((item) => isRecord(item) && typeof item.widgetName === 'string');
+}
+
+function shouldRewriteTemplateImage(keyHint: string, value: unknown): boolean {
+  return RICH_IMAGE_URL_KEYS.has(keyHint.toLocaleLowerCase('ru-RU')) && !!normalizeImageUrl(value);
+}
+
+function shouldSanitizeTemplateText(keyHint: string, parentKey: string, value: unknown): boolean {
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  const key = keyHint.toLocaleLowerCase('ru-RU');
+  const parent = parentKey.toLocaleLowerCase('ru-RU');
+  if (RICH_TEXT_VALUE_KEYS.has(key) && !normalizeImageUrl(value)) return true;
+  return parent === 'text' && key !== 'color' && key !== 'align' && key !== 'size';
+}
+
+async function rewriteOzonRichContentTemplate(
+  node: unknown,
+  options: { imageMapper?: (url: string) => Promise<string> },
+  keyHint = '',
+  parentKey = '',
+): Promise<unknown> {
+  if (node == null) return node;
+
+  if (typeof node === 'string' || typeof node === 'number') {
+    if (shouldRewriteTemplateImage(keyHint, node)) {
+      const mappedUrl = options.imageMapper ? await options.imageMapper(normalizeImageUrl(node)) : normalizeImageUrl(node);
+      return normalizeImageUrl(mappedUrl) || node;
+    }
+    if (shouldSanitizeTemplateText(keyHint, parentKey, node)) return normalizeText(node);
+    return node;
+  }
+
+  if (Array.isArray(node)) {
+    const rewritten: unknown[] = [];
+    for (const item of node) {
+      rewritten.push(await rewriteOzonRichContentTemplate(item, options, keyHint, parentKey));
+    }
+    return rewritten;
+  }
+
+  if (!isRecord(node)) return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    out[key] = await rewriteOzonRichContentTemplate(value, options, key, keyHint);
+  }
+  return out;
+}
+
 function pushText(out: ParsedRichContentBlock[], seen: Set<string>, value: unknown) {
   const text = normalizeText(value);
   const key = `text:${text.toLocaleLowerCase('ru-RU')}`;
@@ -149,7 +205,7 @@ function visitRichNode(node: unknown, out: ParsedRichContentBlock[], seen: Set<s
   if (typeof row.value === 'string' && !normalizeImageUrl(row.value)) pushText(out, seen, row.value);
   if (typeof row.text === 'string') pushText(out, seen, row.text);
 
-  for (const imageKey of ['imageUrl', 'originalUrl', 'src', 'picture', 'cover', 'url']) {
+  for (const imageKey of ['imageUrl', 'originalUrl', 'src', 'srcMobile', 'picture', 'cover', 'url']) {
     if (imageKey in row) pushImage(out, seen, row[imageKey]);
   }
   for (const imageObjectKey of ['img', 'image', 'picture']) {
@@ -173,16 +229,61 @@ export function parseCollectedRichContent(input: unknown): ParsedRichContent {
   return { blocks };
 }
 
-function richContentWidget(block: ParsedRichContentBlock) {
-  if (block.type === 'image') {
-    return {
-      widgetName: 'raImage',
-      img: { src: block.url },
+async function buildTemplateRichContent(
+  input: unknown,
+  options: { imageMapper?: (url: string) => Promise<string> },
+): Promise<Record<string, unknown> | null> {
+  const root = toObject(input);
+  if (!hasOzonRichContentTemplate(root)) return null;
+  const rewritten = await rewriteOzonRichContentTemplate(root, options);
+  return hasOzonRichContentTemplate(rewritten) ? rewritten : null;
+}
+
+function fallbackShowcaseBlock(imageUrl: string | null, textLines: string[]) {
+  const block: Record<string, unknown> = {
+    imgLink: '',
+    text: {
+      align: 'left',
+      color: 'color1',
+      content: textLines.length ? textLines : [''],
+      size: 'size2',
+    },
+  };
+  if (imageUrl) {
+    block.img = {
+      alt: '',
+      position: 'width_full',
+      positionMobile: 'width_full',
+      src: imageUrl,
+      srcMobile: imageUrl,
     };
   }
+  return block;
+}
+
+function buildFallbackRichContent(blocks: ParsedRichContentBlock[]) {
+  const imageUrls: string[] = [];
+  const textLines: string[] = [];
+
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      textLines.push(...block.text.split('\n').map((line) => line.trim()).filter(Boolean));
+      continue;
+    }
+    imageUrls.push(block.url);
+  }
+
+  const showcaseBlocks = imageUrls.length
+    ? imageUrls.map((url, index) => fallbackShowcaseBlock(url, index === 0 ? textLines : []))
+    : [fallbackShowcaseBlock(null, textLines)];
+
   return {
-    widgetName: 'raText',
-    text: { content: block.text },
+    version: 0.3,
+    content: [{
+      widgetName: 'raShowcase',
+      type: 'billboard',
+      blocks: showcaseBlocks.slice(0, RICH_BLOCK_MAX_COUNT),
+    }],
   };
 }
 
@@ -194,6 +295,19 @@ export async function buildOzonRichContentAttribute(
     maxBlocks?: number;
   } = {},
 ): Promise<OzonRichContentAttribute | null> {
+  const templated = await buildTemplateRichContent(input, {
+    imageMapper: options.imageMapper,
+  });
+  if (templated) {
+    return {
+      id: options.attributeId && Number.isInteger(options.attributeId) && options.attributeId > 0
+        ? options.attributeId
+        : OZON_RICH_CONTENT_ATTR_ID,
+      complex_id: 0,
+      values: [{ value: JSON.stringify(templated), dictionary_value_id: 0 }],
+    };
+  }
+
   const parsed = parseCollectedRichContent(input);
   if (!parsed.blocks.length) return null;
 
@@ -211,10 +325,7 @@ export async function buildOzonRichContentAttribute(
   }
 
   if (!blocks.length) return null;
-  const generated = {
-    version: 1,
-    content: blocks.map(richContentWidget),
-  };
+  const generated = buildFallbackRichContent(blocks);
 
   return {
     id: options.attributeId && Number.isInteger(options.attributeId) && options.attributeId > 0

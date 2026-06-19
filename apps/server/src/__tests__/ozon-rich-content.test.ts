@@ -41,12 +41,20 @@ describe('Ozon rich content publishing', () => {
 
     const richJson = JSON.parse(attr!.values[0]!.value);
     expect(richJson).toMatchObject({
-      version: 1,
-      content: [
-        { widgetName: 'raText', text: { content: 'Описание' } },
-        { widgetName: 'raText', text: { content: 'Коллекционная фигурка' } },
-        { widgetName: 'raImage', img: { src: 'https://erp.example.com/rich/source.jpg' } },
-      ],
+      version: 0.3,
+      content: [{
+        widgetName: 'raShowcase',
+        type: 'billboard',
+        blocks: [{
+          img: {
+            src: 'https://erp.example.com/rich/source.jpg',
+            srcMobile: 'https://erp.example.com/rich/source.jpg',
+          },
+          text: {
+            content: ['Описание', 'Коллекционная фигурка'],
+          },
+        }],
+      }],
     });
     expect(attr?.values[0]?.dictionary_value_id).toBe(0);
   });
@@ -64,10 +72,72 @@ describe('Ozon rich content publishing', () => {
 
     expect(attr?.id).toBe(11254);
     const richJson = JSON.parse(attr!.values[0]!.value);
-    expect(richJson.content).toEqual([
-      { widgetName: 'raImage', img: { src: 'https://erp.example.com/rich/source.jpg' } },
-      { widgetName: 'raText', text: { content: 'Описание с изображением' } },
-    ]);
+    expect(richJson).toMatchObject({
+      version: 0.3,
+      content: [{
+        widgetName: 'raShowcase',
+        type: 'billboard',
+        blocks: [{
+          img: {
+            src: 'https://erp.example.com/rich/source.jpg',
+            srcMobile: 'https://erp.example.com/rich/source.jpg',
+          },
+          text: {
+            content: ['Описание с изображением'],
+          },
+        }],
+      }],
+    });
+  });
+
+  it('preserves collected Ozon rich content templates while rewriting nested images', async () => {
+    const attr = await buildOzonRichContentAttribute(JSON.stringify({
+      version: 0.3,
+      content: [{
+        widgetName: 'raShowcase',
+        type: 'billboard',
+        blocks: [{
+          img: {
+            src: 'https://ir.ozone.ru/source-desktop.jpg',
+            srcMobile: 'https://ir.ozone.ru/source-mobile.jpg',
+            position: 'width_full',
+            positionMobile: 'width_full',
+          },
+          imgLink: '',
+          text: {
+            align: 'left',
+            color: 'color1',
+            content: ['Описание:', 'Оригинальный текст', 'Материал: полиэстер'],
+            size: 'size2',
+          },
+        }],
+      }],
+    }), {
+      attributeId: 11254,
+      imageMapper: async (url) => `https://erp.example.com/rich/${url.split('/').pop()}`,
+    });
+
+    const richJson = JSON.parse(attr!.values[0]!.value);
+    expect(richJson.version).toBe(0.3);
+    expect(richJson.content[0]).toMatchObject({
+      widgetName: 'raShowcase',
+      type: 'billboard',
+      blocks: [{
+        img: {
+          src: 'https://erp.example.com/rich/source-desktop.jpg',
+          srcMobile: 'https://erp.example.com/rich/source-mobile.jpg',
+          position: 'width_full',
+          positionMobile: 'width_full',
+        },
+        imgLink: '',
+        text: {
+          align: 'left',
+          color: 'color1',
+          content: ['Описание:', 'текст', 'Материал: полиэстер'],
+          size: 'size2',
+        },
+      }],
+    });
   });
 
   it('returns null when collected rich JSON has no supported content', async () => {
