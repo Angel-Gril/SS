@@ -51,6 +51,25 @@ describe('Ozon rich content publishing', () => {
     expect(attr?.values[0]?.dictionary_value_id).toBe(0);
   });
 
+  it('builds a generated 11254 rich content attribute when the category exposes the legacy rich field', async () => {
+    const attr = await buildOzonRichContentAttribute(JSON.stringify({
+      blocks: [
+        { imageUrl: 'https://cdn.example.com/source.jpg' },
+        { text: 'Описание с изображением' },
+      ],
+    }), {
+      attributeId: 11254,
+      imageMapper: async (url) => `https://erp.example.com/rich/${url.split('/').pop()}`,
+    });
+
+    expect(attr?.id).toBe(11254);
+    const richJson = JSON.parse(attr!.values[0]!.value);
+    expect(richJson.content).toEqual([
+      { widgetName: 'raImage', img: { src: 'https://erp.example.com/rich/source.jpg' } },
+      { widgetName: 'raText', text: { content: 'Описание с изображением' } },
+    ]);
+  });
+
   it('returns null when collected rich JSON has no supported content', async () => {
     await expect(buildOzonRichContentAttribute(JSON.stringify({ content: [] }))).resolves.toBeNull();
     expect(parseCollectedRichContent('{bad json')).toEqual({ blocks: [] });
@@ -66,6 +85,23 @@ describe('Ozon rich content publishing', () => {
     expect(appendOzonRichContentAttribute([
       { id: 4180, complex_id: 0, values: [{ value: 'Название' }] },
       { id: 22336, complex_id: 0, values: [{ value: '{"old":true}' }] },
+    ], generated)).toEqual([
+      { id: 4180, complex_id: 0, values: [{ value: 'Название' }] },
+      generated,
+    ]);
+  });
+
+  it('replaces both modern and legacy rich content attributes with one generated attribute', () => {
+    const generated = {
+      id: 11254,
+      complex_id: 0,
+      values: [{ value: '{"content":[{"widgetName":"raText"}]}', dictionary_value_id: 0 }],
+    };
+
+    expect(appendOzonRichContentAttribute([
+      { id: 22336, complex_id: 0, values: [{ value: '{"old":true}' }] },
+      { id: 11254, complex_id: 0, values: [{ value: '{"oldLegacy":true}' }] },
+      { id: 4180, complex_id: 0, values: [{ value: 'Название' }] },
     ], generated)).toEqual([
       { id: 4180, complex_id: 0, values: [{ value: 'Название' }] },
       generated,

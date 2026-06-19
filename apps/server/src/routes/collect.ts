@@ -10,8 +10,8 @@ import { convertOzonRawAttrs, shouldSkipOzonPublishAttr } from '../services/ozon
 import {
   appendOzonRichContentAttribute,
   buildOzonRichContentAttribute,
-  OZON_RICH_CONTENT_ATTR_ID,
   planCollectedVideoPublish,
+  resolveOzonRichContentAttributeDef,
   transferRichContentImage,
 } from '../services/ozon-rich-content.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
@@ -3164,7 +3164,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
         const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
         const originCountryAttrDef = allAttrs.find((a) => a.id === OZON_ORIGIN_COUNTRY_ATTR_ID);
-        const richContentAttrDef = allAttrs.find((a) => a.id === OZON_RICH_CONTENT_ATTR_ID);
+        const richContentAttrDef = resolveOzonRichContentAttributeDef(allAttrs);
 
         console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}, rich=${richContentAttrDef?.id || 'NOT_FOUND'}`);
 
@@ -3232,7 +3232,7 @@ export async function collectRoutes(app: FastifyInstance) {
                   categoryId: group.categoryId,
                   typeId: group.typeId,
                   status: 'skipped',
-                  reason: 'category_missing_22336',
+                  reason: 'category_missing_rich_content_attr',
                 });
               }
             } else {
@@ -3240,6 +3240,7 @@ export async function collectRoutes(app: FastifyInstance) {
                 richContentAttrCache.set(traceKey, (async () => {
                   try {
                     const attribute = await buildOzonRichContentAttribute(richSource, {
+                      attributeId: Number(richContentAttrDef.id),
                       imageMapper: (url) => transferRichContentImage(url, body.shopId, userId),
                     });
                     return { status: attribute ? 'generated' : 'empty', attribute };

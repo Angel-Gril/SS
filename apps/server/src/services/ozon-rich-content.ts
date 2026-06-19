@@ -2,6 +2,11 @@ import { getStorageBackend } from './image-storage.js';
 import { normalizeOzonPublishImageUrl, waitForOzonImageReady } from './ozon-image-resolver.js';
 
 export const OZON_RICH_CONTENT_ATTR_ID = 22336;
+export const OZON_LEGACY_RICH_CONTENT_ATTR_ID = 11254;
+export const OZON_RICH_CONTENT_ATTR_IDS = [
+  OZON_RICH_CONTENT_ATTR_ID,
+  OZON_LEGACY_RICH_CONTENT_ATTR_ID,
+] as const;
 
 export type ParsedRichContentBlock =
   | { type: 'text'; text: string }
@@ -33,6 +38,25 @@ export interface VideoPublishPlan {
 const RICH_TEXT_MAX_LENGTH = 900;
 const RICH_BLOCK_MAX_COUNT = 30;
 const MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
+
+export function isOzonRichContentAttributeId(value: unknown): boolean {
+  const id = Number(value);
+  return OZON_RICH_CONTENT_ATTR_IDS.some((candidate) => candidate === id);
+}
+
+export function resolveOzonRichContentAttributeDef<T extends { id?: unknown; name?: unknown }>(
+  attributes: T[] | null | undefined,
+): T | null {
+  if (!Array.isArray(attributes)) return null;
+  for (const id of OZON_RICH_CONTENT_ATTR_IDS) {
+    const found = attributes.find((attr) => Number(attr.id) === id);
+    if (found) return found;
+  }
+  return attributes.find((attr) => (
+    /rich[-\s]*контент\s+json/i.test(String(attr.name || ''))
+    || /rich[-\s]*content\s+json/i.test(String(attr.name || ''))
+  )) || null;
+}
 
 function toObject(value: unknown): unknown {
   if (typeof value !== 'string') return value;
@@ -165,6 +189,7 @@ function richContentWidget(block: ParsedRichContentBlock) {
 export async function buildOzonRichContentAttribute(
   input: unknown,
   options: {
+    attributeId?: number;
     imageMapper?: (url: string) => Promise<string>;
     maxBlocks?: number;
   } = {},
@@ -192,7 +217,9 @@ export async function buildOzonRichContentAttribute(
   };
 
   return {
-    id: OZON_RICH_CONTENT_ATTR_ID,
+    id: options.attributeId && Number.isInteger(options.attributeId) && options.attributeId > 0
+      ? options.attributeId
+      : OZON_RICH_CONTENT_ATTR_ID,
     complex_id: 0,
     values: [{ value: JSON.stringify(generated), dictionary_value_id: 0 }],
   };
@@ -203,7 +230,7 @@ export function appendOzonRichContentAttribute<T extends { id: number; complex_i
   richContentAttribute: OzonRichContentAttribute | null | undefined,
 ): Array<T | OzonRichContentAttribute> {
   const attrs = Array.isArray(attributes)
-    ? attributes.filter((attr) => Number(attr.id) !== OZON_RICH_CONTENT_ATTR_ID)
+    ? attributes.filter((attr) => !isOzonRichContentAttributeId(attr.id))
     : [];
   return richContentAttribute ? [...attrs, richContentAttribute] : attrs;
 }
