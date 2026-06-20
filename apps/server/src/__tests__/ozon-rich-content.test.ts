@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendOzonRichContentAttribute,
+  buildOzonVideoImportRequests,
   buildOzonRichContentAttribute,
   parseCollectedRichContent,
   planCollectedVideoPublish,
@@ -178,16 +179,24 @@ describe('Ozon rich content publishing', () => {
     ]);
   });
 
-  it('records collected videos as unsupported publish diagnostics instead of cloning them', () => {
-    expect(planCollectedVideoPublish([
+  it('plans collected videos for the post-import video stage instead of cloning media attributes', () => {
+    const plan = planCollectedVideoPublish([
       { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg', title: 'Обзор' },
-    ], 'offer-1')).toEqual({
+    ], 'offer-1');
+
+    expect(plan).toEqual({
       offerId: 'offer-1',
-      status: 'skipped',
-      reason: 'video_publish_not_supported',
+      status: 'ready',
       sourceVideos: [
         { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg', title: 'Обзор' },
       ],
     });
+    expect(buildOzonVideoImportRequests(plan!, 12345)).toEqual([{
+      product_id: 12345,
+      video: {
+        url: 'https://cdn.example.com/video.mp4',
+        name: 'Обзор',
+      },
+    }]);
   });
 });

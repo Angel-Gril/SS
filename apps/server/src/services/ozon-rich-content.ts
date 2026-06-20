@@ -30,9 +30,16 @@ export interface CollectedVideo {
 
 export interface VideoPublishPlan {
   offerId: string;
-  status: 'skipped';
-  reason: 'video_publish_not_supported';
+  status: 'ready';
   sourceVideos: CollectedVideo[];
+}
+
+export interface OzonVideoImportRequest {
+  product_id: number;
+  video: {
+    url: string;
+    name: string;
+  };
 }
 
 const RICH_TEXT_MAX_LENGTH = 900;
@@ -409,8 +416,22 @@ export function planCollectedVideoPublish(input: unknown, offerId: string): Vide
   if (!sourceVideos.length) return null;
   return {
     offerId,
-    status: 'skipped',
-    reason: 'video_publish_not_supported',
+    status: 'ready',
     sourceVideos,
   };
+}
+
+export function buildOzonVideoImportRequests(
+  plan: VideoPublishPlan,
+  productId: number,
+): OzonVideoImportRequest[] {
+  const safeProductId = Number(productId);
+  if (!Number.isInteger(safeProductId) || safeProductId <= 0) return [];
+  return plan.sourceVideos.map((video, index) => ({
+    product_id: safeProductId,
+    video: {
+      url: video.url,
+      name: (video.title || `${plan.offerId}-video-${index + 1}`).slice(0, 200),
+    },
+  }));
 }
