@@ -98,7 +98,7 @@ pnpm verify:extension
 如果这次改动涉及 Ozon 跟卖上架、图片补传或上架日志诊断，额外补跑：
 
 ```bash
-pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/__tests__/listing-picture-stage.test.ts
+pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/__tests__/listing-picture-stage.test.ts src/__tests__/ozon-attribute-dictionary-cache.test.ts
 ```
 
 这两组用例覆盖：
@@ -106,6 +106,7 @@ pnpm --filter server test -- src/__tests__/collect-publish-helpers.test.ts src/_
 - `follow-by-sku` 图片补传在 `已上传 / 已阻塞 / 待补传` 三种状态下的续跑逻辑
 - Ozon 已拒绝商品卡时，系统应跳过图片补传并直接展示卡片阻塞原因
 - `Название цвета` 这类补充变体值在发布时是否区分“仅用于 SKU 区分”和“可安全拼进标题/属性”；主观修饰词应被中性化成未冲突的 `Тип N`
+- Ozon 类目属性字典是否优先读持久缓存、缺失时拉 Seller API、API 异常时用旧缓存兜底
 
 如果这次改动涉及 Ozon 扩展采集模式、变体补全或 ERP 批量采集回写，额外补跑：
 

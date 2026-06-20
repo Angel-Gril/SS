@@ -1291,3 +1291,23 @@ model OzonAnalyticsCache {
   @@index([userId, sku, expiresAt])
   @@map("ozon_analytics_cache")
 }
+
+// OZON 类目属性字典缓存：按类目/类型/属性保存 Seller API 可选值
+model OzonAttributeDictionaryCache {
+  id                    String   @id @default(cuid())
+  descriptionCategoryId Int      @map("description_category_id")
+  typeId                Int      @map("type_id")
+  attributeId           Int      @map("attribute_id")
+  language              String   @default("DEFAULT")
+  values                Json     @map("values_json")
+  valuesHash            String   @map("values_hash")
+  fetchedAt             DateTime @map("fetched_at")
+  expiresAt             DateTime @map("expires_at")
+  source                String   @default("ozon_api")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@unique([descriptionCategoryId, typeId, attributeId, language], name: "ozon_attribute_dictionary_cache_key")
+  @@index([expiresAt])
+  @@map("ozon_attribute_dictionary_cache")
+}

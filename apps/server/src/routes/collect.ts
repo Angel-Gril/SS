@@ -8,6 +8,10 @@ import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { convertOzonRawAttrs, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
 import {
+  createPrismaOzonAttributeDictionaryCacheStore,
+  getCachedOzonAttributeValues,
+} from '../services/ozon-attribute-dictionary-cache.js';
+import {
   appendOzonRichContentAttribute,
   buildOzonRichContentAttribute,
   planCollectedVideoPublish,
@@ -3237,7 +3241,32 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     // 按每个 payload item 自己的类目补属性，避免批量多类目上架时第一类目污染整批。
-    const attrDictCache = new Map<string, { id: number; value: string; info: string; picture: string }[]>();
+    const attrDictCache = new Map<string, { id: number; value?: string | null }[]>();
+    const persistentAttrDictStore = createPrismaOzonAttributeDictionaryCacheStore(prisma as any);
+    const getAttributeDictValues = async (categoryId: number, typeId: number, attributeId: number, language = 'DEFAULT') => {
+      const dictKey = `${categoryId}:${typeId}:${attributeId}:${language}`;
+      if (attrDictCache.has(dictKey)) return attrDictCache.get(dictKey)!;
+      const result = await getCachedOzonAttributeValues({
+        description_category_id: categoryId,
+        type_id: typeId,
+        attribute_id: attributeId,
+        language,
+      }, {
+        store: persistentAttrDictStore,
+        fetchValues: (params) => client.getAttributeValues({
+          description_category_id: params.description_category_id,
+          type_id: params.type_id,
+          attribute_id: params.attribute_id,
+          language: params.language,
+          limit: 5000,
+        }),
+      });
+      attrDictCache.set(dictKey, result.values);
+      if (result.source !== 'ozon_api') {
+        console.log(`[publish-ozon dict-cache] ${result.source}: attr#${attributeId} category=${categoryId}/${typeId} values=${result.values.length}${result.warning ? ` warning=${result.warning.slice(0, 150)}` : ''}`);
+      }
+      return result.values;
+    };
     const richContentTrace: any[] = [];
     const richContentTraceSeen = new Set<string>();
     const richContentAttrCache = new Map<string, Promise<{ status: string; attribute: any | null; error?: string }>>();
@@ -3265,12 +3294,8 @@ export async function collectRoutes(app: FastifyInstance) {
         let noBrandDictId: number | null = null;
         if (brandAttrDef) {
           try {
-            const brandValues = await client.getAttributeValues({
-              description_category_id: group.categoryId,
-              type_id: group.typeId,
-              attribute_id: brandAttrDef.id,
-            });
-            const noBrand = brandValues.find((v) => /без бренда/i.test(v.value));
+            const brandValues = await getAttributeDictValues(group.categoryId, group.typeId, brandAttrDef.id);
+            const noBrand = brandValues.find((v) => /без бренда/i.test(String(v.value || '')));
             if (noBrand) {
               noBrandDictId = noBrand.id;
               console.log(`[publish-ozon] found "Без бренда" dict_id=${noBrandDictId} for attr ${brandAttrDef.id} category=${group.categoryId}/${group.typeId}`);
@@ -3285,18 +3310,7 @@ export async function collectRoutes(app: FastifyInstance) {
         let originCountryValues: { id: number; value: string; info: string; picture: string }[] = [];
         if (originCountryAttrDef && group.items.some((item: any) => Array.isArray(item.attributes) && item.attributes.some((attr: any) => Number(attr.id) === OZON_ORIGIN_COUNTRY_ATTR_ID))) {
           try {
-            const dictKey = `${group.categoryId}:${group.typeId}:${OZON_ORIGIN_COUNTRY_ATTR_ID}`;
-            if (!attrDictCache.has(dictKey)) {
-              const values = await client.getAttributeValues({
-                description_category_id: group.categoryId,
-                type_id: group.typeId,
-                attribute_id: OZON_ORIGIN_COUNTRY_ATTR_ID,
-                language: 'DEFAULT',
-                limit: 5000,
-              });
-              attrDictCache.set(dictKey, values);
-            }
-            originCountryValues = attrDictCache.get(dictKey) || [];
+            originCountryValues = await getAttributeDictValues(group.categoryId, group.typeId, OZON_ORIGIN_COUNTRY_ATTR_ID) as any;
           } catch (e: any) {
             console.warn(`[publish-ozon] failed to query origin country dictionary category=${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 150));
           }
@@ -3410,18 +3424,7 @@ export async function collectRoutes(app: FastifyInstance) {
             let matchLabel = 'text';
             if (attrDef.dictionary_id && attrDef.dictionary_id > 0) {
               try {
-                const dictKey = `${group.categoryId}:${group.typeId}:${attrDef.id}`;
-                if (!attrDictCache.has(dictKey)) {
-                  const values = await client.getAttributeValues({
-                    description_category_id: group.categoryId,
-                    type_id: group.typeId,
-                    attribute_id: attrDef.id,
-                    language: 'DEFAULT',
-                    limit: 5000,
-                  });
-                  attrDictCache.set(dictKey, values);
-                }
-                const dict = attrDictCache.get(dictKey)!;
+                const dict = await getAttributeDictValues(group.categoryId, group.typeId, attrDef.id);
                 const resolved = resolveOzonDictionaryAttributeValues(aspectValue, dict, {
                   allowTextFallback: !strictColorDictionaryAttr,
                   allowPartialDictionaryValues: strictColorDictionaryAttr,
