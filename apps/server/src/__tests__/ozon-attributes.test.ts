@@ -31,4 +31,60 @@ describe('Ozon attribute conversion', () => {
       },
     ]);
   });
+
+  it('drops unnamed Ozon video media attributes by id before publishing', () => {
+    const attrs = convertOzonRawAttrs([
+      {
+        attribute_id: '4180',
+        complex_id: '0',
+        values: [{ value: 'Название товара', dictionary_value_id: '0' }],
+      },
+      {
+        attribute_id: '21842',
+        complex_id: '0',
+        values: [{ value: 'https://ir.ozone.ru/s3/video-64/demo/cover/cover.jpg', dictionary_value_id: '0' }],
+      },
+      {
+        attribute_id: '21846',
+        complex_id: '0',
+        values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/demo/master.m3u8', dictionary_value_id: '0' }],
+      },
+    ], true);
+
+    expect(attrs).toEqual([
+      {
+        id: 4180,
+        complex_id: 0,
+        values: [{ value: 'Название товара' }],
+      },
+    ]);
+  });
+
+  it('drops unknown cloned attributes whose values are Ozon video media links', () => {
+    const attrs = convertOzonRawAttrs([
+      {
+        attribute_id: '4180',
+        complex_id: '0',
+        values: [{ value: 'Название товара', dictionary_value_id: '0' }],
+      },
+      {
+        attribute_id: '999001',
+        complex_id: '0',
+        values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-63/demo/asset_0_h264.mp4', dictionary_value_id: '0' }],
+      },
+      {
+        attribute_id: '999002',
+        complex_id: '0',
+        values: [{ value: 'https://ir.ozone.ru/s3/video-63/demo/cover/cover.jpg', dictionary_value_id: '0' }],
+      },
+    ], true);
+
+    expect(attrs).toEqual([
+      {
+        id: 4180,
+        complex_id: 0,
+        values: [{ value: 'Название товара' }],
+      },
+    ]);
+  });
 });

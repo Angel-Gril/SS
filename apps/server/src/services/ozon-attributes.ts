@@ -1,5 +1,17 @@
 const SKIP_ATTRS = new Set(['22057', '11254', '23171', '22336']);
+const OZON_VIDEO_MEDIA_ATTRS = new Set([
+  '21838',
+  '21839',
+  '21840',
+  '21841',
+  '21842',
+  '21843',
+  '21844',
+  '21845',
+  '21846',
+]);
 const UNSAFE_CLONED_ATTR_NAME_RE = /(видео|video|обложк|cover|rich|медиа|media|мультимеди|видеофон|background|banner|баннер|视频|封面|富文本|富媒体)/i;
+const UNSAFE_CLONED_ATTR_VIDEO_VALUE_RE = /(?:cdnvideo\.v\.ozone\.ru|\/(?:s3|vod)\/video-\d+\/|\.(?:m3u8|mp4|webm|mov)(?:[?#"'\s]|$))/i;
 
 export interface OzonImportAttribute {
   id: number;
@@ -38,6 +50,7 @@ export function convertOzonRawAttrs(
 export function shouldSkipOzonPublishAttr(attr: any): boolean {
   const id = attr?.attribute_id ?? attr?.id;
   if (SKIP_ATTRS.has(String(id))) return true;
+  if (OZON_VIDEO_MEDIA_ATTRS.has(String(id))) return true;
 
   const names = [
     attr?.attribute_name,
@@ -45,5 +58,8 @@ export function shouldSkipOzonPublishAttr(attr: any): boolean {
     attr?.attributeName,
   ].map((value) => String(value || '').trim()).filter(Boolean);
 
-  return names.some((name) => UNSAFE_CLONED_ATTR_NAME_RE.test(name));
+  if (names.some((name) => UNSAFE_CLONED_ATTR_NAME_RE.test(name))) return true;
+
+  const valuesText = JSON.stringify(attr?.values || '');
+  return UNSAFE_CLONED_ATTR_VIDEO_VALUE_RE.test(valuesText);
 }
