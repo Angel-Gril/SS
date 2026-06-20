@@ -36,6 +36,7 @@ pnpm dev
 - `REDIS_URL`
 - `JWT_SECRET`
 - `ENCRYPTION_KEY`
+- 云端 `.env.staging` 还需要 `RUNTIME_MODE=cloud`、`NEXT_PUBLIC_RUNTIME_MODE=cloud`、`NEXT_PUBLIC_API_BASE_URL=https://ss-erp.com` 和 `CORS_ORIGIN`
 
 云端基础环境文件可以先做静态校验，不会打印密钥。这里检查的是启动级配置，不要求 R2 密钥必须写在 `.env.staging`：
 

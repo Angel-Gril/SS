@@ -60,7 +60,7 @@ DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg RUN_DB_BACKUP=true DEPLOY
 
 `DEPLOY_ENV_PROFILE=cloud-r2` now validates two layers:
 
-1. bootstrap env in `.env.staging`: service startup, database, Redis, auth, and cloud mode
+1. bootstrap env in `.env.staging`: service startup, database, Redis, auth, cloud mode, and public API base URL
 2. upload runtime config after Prisma migration: super-admin `SystemConfig` (`upload_storage_backend=oss` + `upload_oss_*`) or env fallback (`IMAGE_STORAGE_BACKEND=oss` + `OSS_*`)
 
 This means R2 does not have to be duplicated into `.env.staging` when the super-admin settings already contain the upload OSS/R2 config. If you choose env fallback instead of super-admin configuration, write the R2 values on the VPS:

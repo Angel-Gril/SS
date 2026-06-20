@@ -155,8 +155,8 @@ function validateCloudBootstrap(env) {
   expectValue(env, 'RUNTIME_MODE', 'cloud');
   expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'cloud');
   requireValue(env, 'CORS_ORIGIN');
+  requireValue(env, 'NEXT_PUBLIC_API_BASE_URL');
 
-  warnIfMissing(env, 'NEXT_PUBLIC_API_BASE_URL');
   warnIfMissing(env, 'LOCAL_BASE_URL');
   warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
   warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');

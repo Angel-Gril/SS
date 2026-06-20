@@ -59,6 +59,7 @@ writeFileSync(bootstrapEnvPath, [
   'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',
   'RUNTIME_MODE=cloud',
   'NEXT_PUBLIC_RUNTIME_MODE=cloud',
+  'NEXT_PUBLIC_API_BASE_URL=https://ss-erp.com',
   'CORS_ORIGIN=https://ss-erp.com',
   '',
 ].join('\n'));
@@ -76,5 +77,28 @@ assert.equal(
   0,
   `cloud-bootstrap should not require upload storage env when SystemConfig can provide it\nSTDOUT:\n${bootstrapCheck.stdout}\nSTDERR:\n${bootstrapCheck.stderr}`,
 );
+
+const missingApiBaseEnvPath = join(tempDir, '.env.missing-api-base');
+writeFileSync(missingApiBaseEnvPath, [
+  'DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/db?schema=public',
+  'REDIS_URL=redis://127.0.0.1:6379',
+  'JWT_SECRET=0123456789abcdef',
+  'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',
+  'RUNTIME_MODE=cloud',
+  'NEXT_PUBLIC_RUNTIME_MODE=cloud',
+  'CORS_ORIGIN=https://ss-erp.com',
+  '',
+].join('\n'));
+
+const missingApiBaseCheck = spawnSync(process.execPath, [
+  'scripts/validate-env.mjs',
+  '--profile',
+  'cloud-bootstrap',
+  '--env',
+  missingApiBaseEnvPath,
+], { encoding: 'utf8' });
+
+assert.notEqual(missingApiBaseCheck.status, 0, 'cloud-bootstrap should require NEXT_PUBLIC_API_BASE_URL for production web builds');
+assert.match(missingApiBaseCheck.stderr, /NEXT_PUBLIC_API_BASE_URL is required/);
 
 console.log('PASS deploy runtime config guards');
