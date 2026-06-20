@@ -654,6 +654,25 @@ export function sanitizeOzonVariantPublishAttributes<T extends { id: number; com
     .map((attr) => {
       const name = OZON_VARIANT_ATTR_NAME_BY_ID[Number(attr.id)] || '';
       if (!name || (!isStrictColorVariantName(name) && !isColorNameVariantName(name))) return attr;
+      if (isStrictColorVariantName(name)) {
+        const strictValues = Array.isArray(attr.values)
+          ? attr.values
+            .map((raw) => {
+              const value = sanitizeVariantAttrValueForOzonPublish(name, raw?.value, options);
+              const dictId = Number(raw?.dictionary_value_id);
+              if (!value || !Number.isFinite(dictId) || dictId <= 0) return null;
+              return { value, dictionary_value_id: dictId };
+            })
+            .filter((value): value is { value: string; dictionary_value_id: number } => !!value)
+          : [];
+        if (strictValues.length) {
+          return {
+            ...attr,
+            values: strictValues,
+          } as T;
+        }
+        return null;
+      }
       const rawValue = Array.isArray(attr.values)
         ? attr.values.map((value) => value?.value).filter(Boolean).join(', ')
         : '';

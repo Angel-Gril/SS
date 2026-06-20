@@ -692,6 +692,32 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('preserves cloned multi-value Ozon color dictionary ids instead of collapsing to text', () => {
+    expect(sanitizeOzonVariantPublishAttributes([
+      {
+        id: 10096,
+        complex_id: 0,
+        values: [
+          { value: 'бежевый', dictionary_value_id: 61573 },
+          { value: 'красный', dictionary_value_id: 61579 },
+          { value: 'зеленый', dictionary_value_id: 61583 },
+          { value: 'оранжевый', dictionary_value_id: 61585 },
+        ],
+      },
+    ], { variantIndex: 0 })).toEqual([
+      {
+        id: 10096,
+        complex_id: 0,
+        values: [
+          { value: 'бежевый', dictionary_value_id: 61573 },
+          { value: 'красный', dictionary_value_id: 61579 },
+          { value: 'зеленый', dictionary_value_id: 61583 },
+          { value: 'оранжевый', dictionary_value_id: 61585 },
+        ],
+      },
+    ]);
+  });
+
   it('avoids cloned Ozon color-name collisions across a variant batch', () => {
     expect(sanitizeOzonVariantPublishAttributeSets([
       [
