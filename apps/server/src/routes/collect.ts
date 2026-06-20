@@ -571,6 +571,10 @@ export function sanitizeVariantAttrsForOzonPublish(
         out['Название цвета'] = codeLike;
         continue;
       }
+      if (sanitizeSupplementalVariantAttrValue(rawValue)) {
+        out['Название цвета'] = sanitizeSupplementalVariantAttrValueForOzonPublish(rawValue, options);
+        continue;
+      }
     }
     if (!name || !value) continue;
     if (containsCjkText(name) || containsCjkText(value)) continue;
@@ -1305,13 +1309,17 @@ export function findVariantAttributeConflicts(
 ): Array<{ skus: string[]; attrs: Record<string, string> }> {
   const variants = Array.isArray(variantsInput) ? variantsInput as any[] : [];
   const bySignature = new Map<string, { skus: string[]; attrs: Record<string, string> }>();
+  const sanitizedAttrSets = sanitizeVariantAttrSetsForOzonPublish(variants.map((variant) => (
+    variant?.attrs && typeof variant.attrs === 'object'
+      ? variant.attrs as Record<string, string>
+      : undefined
+  )));
 
-  for (const variant of variants) {
+  for (let index = 0; index < variants.length; index += 1) {
+    const variant = variants[index];
     const sku = String(variant?.sku || '').trim();
     if (!sku) continue;
-    const attrs = sanitizeVariantAttrsForPublish(variant?.attrs && typeof variant.attrs === 'object'
-      ? variant.attrs as Record<string, string>
-      : undefined);
+    const attrs = sanitizedAttrSets[index] || {};
     const entries = Object.entries(attrs)
       .map(([name, value]) => [cleanPublishName(name), cleanPublishName(value)] as const)
       .filter(([name, value]) => name && value)

@@ -886,6 +886,24 @@ describe('collect publish helpers', () => {
     ])).toEqual([]);
   });
 
+  it('keeps short style names from strict color fields as safe Ozon color-name variants', () => {
+    expect(sanitizeVariantAttrSetsForOzonPublish([
+      { 'Цвет': 'Цилиндры', 'Количество в упаковке, шт': '24' },
+      { 'Цвет': 'Звёздочки_серые', 'Количество в упаковке, шт': '24' },
+      { 'Цвет': 'Бежевый-овал', 'Количество в упаковке, шт': '24' },
+    ])).toEqual([
+      { 'Название цвета': 'Тип 1', 'Количество в упаковке, шт': '24' },
+      { 'Название цвета': 'Тип 2', 'Количество в упаковке, шт': '24' },
+      { 'Название цвета': 'Тип 3', 'Количество в упаковке, шт': '24' },
+    ]);
+
+    expect(findVariantAttributeConflicts([
+      { sku: '2100145720', attrs: { 'Цвет': 'Цилиндры', 'Количество в упаковке, шт': '24' } },
+      { sku: '2100115253', attrs: { 'Цвет': 'Звёздочки_серые', 'Количество в упаковке, шт': '24' } },
+      { sku: '2107687981', attrs: { 'Цвет': 'Бежевый-овал', 'Количество в упаковке, шт': '24' } },
+    ])).toEqual([]);
+  });
+
   it('prefers each collected item category over batch fallback category', () => {
     expect(resolveItemPublishCategory({
       metadata: { descriptionCategoryId: 17028706, typeId: 95913 },
