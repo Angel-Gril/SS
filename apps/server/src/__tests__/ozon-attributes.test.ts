@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertOzonRawAttrs } from '../services/ozon-attributes.js';
+import { convertOzonRawAttrs, isOzonVideoMediaAttributeId } from '../services/ozon-attributes.js';
 
 describe('Ozon attribute conversion', () => {
   it('drops cloned video cover and rich media attributes before publishing', () => {
@@ -32,7 +32,7 @@ describe('Ozon attribute conversion', () => {
     ]);
   });
 
-  it('drops unnamed Ozon video media attributes by id before publishing', () => {
+  it('keeps official Ozon video media attributes for normal product import', () => {
     const attrs = convertOzonRawAttrs([
       {
         attribute_id: '4180',
@@ -56,6 +56,16 @@ describe('Ozon attribute conversion', () => {
         id: 4180,
         complex_id: 0,
         values: [{ value: 'Название товара' }],
+      },
+      {
+        id: 21842,
+        complex_id: 0,
+        values: [{ value: 'https://ir.ozone.ru/s3/video-64/demo/cover/cover.jpg' }],
+      },
+      {
+        id: 21846,
+        complex_id: 0,
+        values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/demo/master.m3u8' }],
       },
     ]);
   });
@@ -86,5 +96,11 @@ describe('Ozon attribute conversion', () => {
         values: [{ value: 'Название товара' }],
       },
     ]);
+  });
+
+  it('identifies official Ozon video media attribute ids', () => {
+    expect(isOzonVideoMediaAttributeId(21845)).toBe(true);
+    expect(isOzonVideoMediaAttributeId('21846')).toBe(true);
+    expect(isOzonVideoMediaAttributeId(999001)).toBe(false);
   });
 });

@@ -50,7 +50,7 @@ export function convertOzonRawAttrs(
 export function shouldSkipOzonPublishAttr(attr: any): boolean {
   const id = attr?.attribute_id ?? attr?.id;
   if (SKIP_ATTRS.has(String(id))) return true;
-  if (OZON_VIDEO_MEDIA_ATTRS.has(String(id))) return true;
+  if (isOzonVideoMediaAttributeId(id)) return false;
 
   const names = [
     attr?.attribute_name,
@@ -62,4 +62,8 @@ export function shouldSkipOzonPublishAttr(attr: any): boolean {
 
   const valuesText = JSON.stringify(attr?.values || '');
   return UNSAFE_CLONED_ATTR_VIDEO_VALUE_RE.test(valuesText);
+}
+
+export function isOzonVideoMediaAttributeId(value: unknown): boolean {
+  return OZON_VIDEO_MEDIA_ATTRS.has(String(value));
 }

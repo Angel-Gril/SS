@@ -6,7 +6,7 @@ import { getRandomizeConfig, randomOfferIdFrom, jitterDimensionMm, bucketWeightG
 import { randomSuffix, chunkArray } from '../lib/util.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
-import { convertOzonRawAttrs, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
+import { convertOzonRawAttrs, isOzonVideoMediaAttributeId, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
 import {
   createPrismaOzonAttributeDictionaryCacheStore,
   getCachedOzonAttributeValues,
@@ -1581,6 +1581,11 @@ export function recordOfferPublishImages(
   if (!offerId || !normalizedImages.length) return;
   offerImageLists[offerId] = normalizedImages;
   offerImages[offerId] = normalizedImages[0]!;
+}
+
+export function hasOzonVideoMediaAttributes(attributes: unknown): boolean {
+  return Array.isArray(attributes)
+    && attributes.some((attr: any) => isOzonVideoMediaAttributeId(attr?.id ?? attr?.attribute_id));
 }
 
 export function recordPictureUploadDiagnostic(
@@ -3434,7 +3439,9 @@ export async function collectRoutes(app: FastifyInstance) {
             }
           }
 
-          const videoPlan = planCollectedVideoPublish(importItem._sourceVideos, importItem.offer_id);
+          const videoPlan = hasOzonVideoMediaAttributes(importItem.attributes)
+            ? null
+            : planCollectedVideoPublish(importItem._sourceVideos, importItem.offer_id);
           if (videoPlan && !videoTraceSeen.has(videoPlan.offerId)) {
             videoTraceSeen.add(videoPlan.offerId);
             videoTrace.push(videoPlan);

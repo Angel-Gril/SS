@@ -8,6 +8,7 @@ import {
   findFallbackRecreateConflicts,
   groupPublishItemsByCategory,
   hasOwnPublishCategory,
+  hasOzonVideoMediaAttributes,
   hasSuspiciousPublishName,
   recordPictureUploadDiagnostic,
   recordOfferPublishImages,
@@ -48,6 +49,18 @@ describe('collect publish helpers', () => {
   it('does not add markup by default when users leave publish markup empty', () => {
     expect(calcPublishPrice(100)).toBe(100);
     expect(calcPublishPrice(100, Number.NaN, 0)).toBe(100);
+  });
+
+  it('detects official Ozon video media attributes in publish payloads', () => {
+    expect(hasOzonVideoMediaAttributes([
+      { id: 21842, values: [{ value: 'https://ir.ozone.ru/s3/video-64/demo/cover/cover.jpg' }] },
+    ])).toBe(true);
+    expect(hasOzonVideoMediaAttributes([
+      { attribute_id: '21846', values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/demo/master.m3u8' }] },
+    ])).toBe(true);
+    expect(hasOzonVideoMediaAttributes([
+      { id: 999001, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/demo/master.m3u8' }] },
+    ])).toBe(false);
   });
 
   it('detects Chinese text in publish names', () => {
