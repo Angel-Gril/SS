@@ -40,10 +40,10 @@ if [ ! -f "$DEPLOY_DIR/scripts/validate-env.mjs" ]; then
   exit 1
 fi
 
-echo "[1/3] Static env file validation"
+echo "[1/3] Bootstrap env file validation"
 (
   cd "$DEPLOY_DIR"
-  node scripts/validate-env.mjs --profile cloud-r2 --env "$ENV_FILE"
+  node scripts/validate-env.mjs --profile cloud-bootstrap --env "$ENV_FILE"
 )
 
 echo ""

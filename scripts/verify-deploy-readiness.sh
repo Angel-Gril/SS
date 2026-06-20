@@ -116,25 +116,41 @@ if [ -f "$ENV_PATH" ]; then
   if [ "$EXPECTED_PROFILE" = "cloud-r2" ]; then
     [ "${RUNTIME_MODE:-}" = "cloud" ] || fail "RUNTIME_MODE expected cloud, got ${RUNTIME_MODE:-empty}"
     [ "${NEXT_PUBLIC_RUNTIME_MODE:-}" = "cloud" ] || fail "NEXT_PUBLIC_RUNTIME_MODE expected cloud, got ${NEXT_PUBLIC_RUNTIME_MODE:-empty}"
-    [ "${IMAGE_STORAGE_BACKEND:-}" = "oss" ] || fail "IMAGE_STORAGE_BACKEND expected oss, got ${IMAGE_STORAGE_BACKEND:-empty}"
-    for key in OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_REGION; do
-      if [ -n "${!key:-}" ]; then
-        pass "$key is set"
-      else
-        fail "$key is empty"
-      fi
-    done
+    pass "cloud bootstrap env selected; upload storage may come from SystemConfig or env fallback"
   fi
 fi
 
 if [ -f "$DEPLOY_DIR/scripts/validate-env.mjs" ] && [ -f "$ENV_PATH" ]; then
-  if node "$DEPLOY_DIR/scripts/validate-env.mjs" --profile "$EXPECTED_PROFILE" --env "$ENV_PATH"; then
-    pass "env profile validation passed: $EXPECTED_PROFILE"
+  validation_profile="$EXPECTED_PROFILE"
+  if [ "$EXPECTED_PROFILE" = "cloud-r2" ]; then
+    validation_profile="cloud-bootstrap"
+  fi
+  if node "$DEPLOY_DIR/scripts/validate-env.mjs" --profile "$validation_profile" --env "$ENV_PATH"; then
+    pass "env profile validation passed: $validation_profile"
   else
-    fail "env profile validation failed: $EXPECTED_PROFILE"
+    fail "env profile validation failed: $validation_profile"
   fi
 else
   warn "validate-env.mjs unavailable; cannot validate env profile"
+fi
+
+if [ "$EXPECTED_PROFILE" = "cloud-r2" ]; then
+  if [ -f "$DEPLOY_DIR/scripts/diagnose-runtime-env.sh" ]; then
+    echo ""
+    echo "--- Runtime upload config validation ---"
+    if DEPLOY_DIR="$DEPLOY_DIR" \
+      ENV_FILE="$ENV_FILE" \
+      SKIP_SERVICE_CHECKS=1 \
+      SKIP_PROCESS_ENV_CHECKS=1 \
+      SKIP_HTTP_CHECK=1 \
+      bash "$DEPLOY_DIR/scripts/diagnose-runtime-env.sh"; then
+      pass "runtime upload config validation passed"
+    else
+      fail "runtime upload config validation failed"
+    fi
+  else
+    warn "diagnose-runtime-env.sh unavailable; cannot validate runtime upload config"
+  fi
 fi
 
 check_service "$API_SERVICE" "$DEPLOY_DIR/apps/server"

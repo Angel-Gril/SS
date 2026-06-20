@@ -58,7 +58,12 @@ Optional pre-deploy database backup:
 DEPLOY_HOST=45.76.49.64 SSH_KEY=~/.ssh/ss_erp_vultr_sg RUN_DB_BACKUP=true DEPLOY_ENV_PROFILE=cloud-r2 ./scripts/deploy-app-dir.sh
 ```
 
-Before using `DEPLOY_ENV_PROFILE=cloud-r2`, the server env must already contain R2 values. On the VPS:
+`DEPLOY_ENV_PROFILE=cloud-r2` now validates two layers:
+
+1. bootstrap env in `.env.staging`: service startup, database, Redis, auth, and cloud mode
+2. upload runtime config after Prisma migration: super-admin `SystemConfig` (`upload_storage_backend=oss` + `upload_oss_*`) or env fallback (`IMAGE_STORAGE_BACKEND=oss` + `OSS_*`)
+
+This means R2 does not have to be duplicated into `.env.staging` when the super-admin settings already contain the upload OSS/R2 config. If you choose env fallback instead of super-admin configuration, write the R2 values on the VPS:
 
 ```bash
 cd /opt/ss-erp/app
@@ -85,6 +90,8 @@ DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging EXPECTED_PROFILE=cloud-r2 bash 
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/verify-cloud-runtime.sh
 DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 ```
+
+`verify-cloud-runtime.sh` checks bootstrap env first, then runs `diagnose-runtime-env.sh`, which accepts either complete super-admin upload config or complete env OSS fallback.
 
 Then from the local repository:
 

@@ -50,8 +50,13 @@ set -a
 set +a
 
 if [ -n "$DEPLOY_ENV_PROFILE" ]; then
-  echo "[0/7] Validating env profile: $DEPLOY_ENV_PROFILE"
-  node scripts/validate-env.mjs --profile "$DEPLOY_ENV_PROFILE" --env "$ENV_FILE"
+  if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+    echo "[0/7] Validating bootstrap env for profile: $DEPLOY_ENV_PROFILE"
+    node scripts/validate-env.mjs --profile cloud-bootstrap --env "$ENV_FILE"
+  else
+    echo "[0/7] Validating env profile: $DEPLOY_ENV_PROFILE"
+    node scripts/validate-env.mjs --profile "$DEPLOY_ENV_PROFILE" --env "$ENV_FILE"
+  fi
 fi
 
 # 1. 拉取最新代码
@@ -70,6 +75,16 @@ cd apps/server
 npx prisma generate
 npx prisma migrate deploy
 cd "$DEPLOY_DIR"
+
+if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+  echo "[3b/7] Validating runtime upload config..."
+  DEPLOY_DIR="$DEPLOY_DIR" \
+  ENV_FILE="$ENV_FILE" \
+  SKIP_SERVICE_CHECKS=1 \
+  SKIP_PROCESS_ENV_CHECKS=1 \
+  SKIP_HTTP_CHECK=1 \
+  bash scripts/diagnose-runtime-env.sh
+fi
 
 # 4. 构建
 if [ "$SKIP_BUILD" = false ]; then

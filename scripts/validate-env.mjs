@@ -102,7 +102,7 @@ function parseEnv(content) {
   return env;
 }
 
-function validateCommon(env) {
+function validateBootstrapBase(env) {
   requireValue(env, 'DATABASE_URL');
   if (env.REDIS_DISABLED !== '1' && env.REDIS_DISABLED !== 'true') {
     requireValue(env, 'REDIS_URL');
@@ -110,10 +110,14 @@ function validateCommon(env) {
   requireValue(env, 'JWT_SECRET', { minLength: 16 });
   requireValue(env, 'ENCRYPTION_KEY', { minLength: 32 });
   expectOneOf(env, 'RUNTIME_MODE', ['local', 'cloud']);
-  expectOneOf(env, 'IMAGE_STORAGE_BACKEND', ['local', 'oss', 'ozon-cdn']);
   if (isSet(env.AUTH_COOKIE_SECURE) && !['true', 'false'].includes(env.AUTH_COOKIE_SECURE)) {
     fail(`AUTH_COOKIE_SECURE expected true/false, got ${env.AUTH_COOKIE_SECURE}`);
   }
+}
+
+function validateCommon(env) {
+  validateBootstrapBase(env);
+  expectOneOf(env, 'IMAGE_STORAGE_BACKEND', ['local', 'oss', 'ozon-cdn']);
 }
 
 function validateCloudR2(env) {
@@ -146,6 +150,31 @@ function validateCloudR2(env) {
   }
 }
 
+function validateCloudBootstrap(env) {
+  validateBootstrapBase(env);
+  expectValue(env, 'RUNTIME_MODE', 'cloud');
+  expectValue(env, 'NEXT_PUBLIC_RUNTIME_MODE', 'cloud');
+  requireValue(env, 'CORS_ORIGIN');
+
+  warnIfMissing(env, 'NEXT_PUBLIC_API_BASE_URL');
+  warnIfMissing(env, 'LOCAL_BASE_URL');
+  warnIfMissing(env, 'TURNSTILE_SECRET_KEY');
+  warnIfMissing(env, 'NEXT_PUBLIC_TURNSTILE_SITE_KEY');
+  warnIfMissing(env, 'SMS_PROVIDER');
+  if (env.SMS_PROVIDER === 'tencent') {
+    for (const key of [
+      'SMS_TENCENT_SECRET_ID',
+      'SMS_TENCENT_SECRET_KEY',
+      'SMS_TENCENT_REGION',
+      'SMS_TENCENT_SDK_APP_ID',
+      'SMS_TENCENT_SIGN_NAME',
+      'SMS_TENCENT_TEMPLATE_ID',
+    ]) {
+      requireValue(env, key);
+    }
+  }
+}
+
 function validateLocal(env) {
   validateCommon(env);
   expectValue(env, 'RUNTIME_MODE', 'local');
@@ -159,6 +188,7 @@ function validateLocal(env) {
 const env = loadEnv(envFile);
 if (failures.length === 0) {
   if (profile === 'cloud-r2') validateCloudR2(env);
+  else if (profile === 'cloud-bootstrap') validateCloudBootstrap(env);
   else if (profile === 'local') validateLocal(env);
   else fail(`unknown profile: ${profile}`);
 }

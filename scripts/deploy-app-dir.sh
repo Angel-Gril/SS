@@ -156,8 +156,13 @@ if id "$DEPLOY_RUN_USER" >/dev/null 2>&1; then
 fi
 
 if [ -n "$DEPLOY_ENV_PROFILE" ]; then
-  log "Validating env profile: $DEPLOY_ENV_PROFILE"
-  run_in_dir "$NEXT_DIR" "node scripts/validate-env.mjs --profile '$DEPLOY_ENV_PROFILE' --env '$ENV_FILE_NAME'"
+  if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+    log "Validating bootstrap env for profile: $DEPLOY_ENV_PROFILE"
+    run_in_dir "$NEXT_DIR" "node scripts/validate-env.mjs --profile 'cloud-bootstrap' --env '$ENV_FILE_NAME'"
+  else
+    log "Validating env profile: $DEPLOY_ENV_PROFILE"
+    run_in_dir "$NEXT_DIR" "node scripts/validate-env.mjs --profile '$DEPLOY_ENV_PROFILE' --env '$ENV_FILE_NAME'"
+  fi
 fi
 
 log "Installing dependencies"
@@ -165,6 +170,11 @@ run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm install --fro
 
 log "Generating Prisma client and migrating database"
 run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; npx prisma generate && npx prisma migrate deploy"
+
+if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+  log "Validating runtime upload config for profile: $DEPLOY_ENV_PROFILE"
+  run_in_dir "$NEXT_DIR" "DEPLOY_DIR='$NEXT_DIR' ENV_FILE='$ENV_FILE_NAME' SKIP_SERVICE_CHECKS=1 SKIP_PROCESS_ENV_CHECKS=1 SKIP_HTTP_CHECK=1 bash scripts/diagnose-runtime-env.sh"
+fi
 
 log "Building server and web"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm --filter server build && pnpm --filter web build"

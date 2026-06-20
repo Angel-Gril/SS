@@ -198,11 +198,10 @@ cd /opt/ss-erp/app
 bash scripts/diagnose-runtime-env.sh
 ```
 
-预期里必须同时看到：
+预期分两种：
 
-- `RUNTIME_MODE=cloud`
-- `IMAGE_STORAGE_BACKEND=oss`
-- `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION` 都为非空
+- 后台配置路径：看到 `upload SystemConfig complete`，说明超管后台的 `upload_storage_backend=oss` 和 `upload_oss_*` 已完整生效。
+- env 兜底路径：看到 `RUNTIME_MODE=cloud`、`IMAGE_STORAGE_BACKEND=oss`，并且 `OSS_ENDPOINT / OSS_BUCKET / OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET / OSS_REGION` 都为非空。
 
 如果这里仍然是 `ozon-cdn` 或空值，但后台 `upload_*` 已填，新版本仍应该优先使用后台配置；这时看 `/api/extension/runtime` 的 `source` 和 `capabilities.imageUpload`。
 

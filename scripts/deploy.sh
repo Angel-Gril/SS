@@ -112,8 +112,13 @@ set -a
 set +a
 
 if [ -n "$DEPLOY_ENV_PROFILE" ]; then
-  echo "[deploy] Validating env profile: $DEPLOY_ENV_PROFILE"
-  node scripts/validate-env.mjs --profile "$DEPLOY_ENV_PROFILE" --env "$ENV_FILE_NAME"
+  if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+    echo "[deploy] Validating bootstrap env for profile: $DEPLOY_ENV_PROFILE"
+    node scripts/validate-env.mjs --profile cloud-bootstrap --env "$ENV_FILE_NAME"
+  else
+    echo "[deploy] Validating env profile: $DEPLOY_ENV_PROFILE"
+    node scripts/validate-env.mjs --profile "$DEPLOY_ENV_PROFILE" --env "$ENV_FILE_NAME"
+  fi
 fi
 
 echo "[deploy] Installing dependencies"
@@ -124,6 +129,16 @@ cd apps/server
 npx prisma generate
 npx prisma migrate deploy
 cd "$RELEASE_DIR"
+
+if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+  echo "[deploy] Validating runtime upload config for profile: $DEPLOY_ENV_PROFILE"
+  DEPLOY_DIR="$RELEASE_DIR" \
+  ENV_FILE="$ENV_FILE_NAME" \
+  SKIP_SERVICE_CHECKS=1 \
+  SKIP_PROCESS_ENV_CHECKS=1 \
+  SKIP_HTTP_CHECK=1 \
+  bash scripts/diagnose-runtime-env.sh
+fi
 
 echo "[deploy] Building server and web"
 pnpm --filter server build

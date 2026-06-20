@@ -10,6 +10,9 @@ API_SERVICE="${API_SERVICE:-ss-erp-api}"
 WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:3001}"
+SKIP_SERVICE_CHECKS="${SKIP_SERVICE_CHECKS:-0}"
+SKIP_PROCESS_ENV_CHECKS="${SKIP_PROCESS_ENV_CHECKS:-0}"
+SKIP_HTTP_CHECK="${SKIP_HTTP_CHECK:-0}"
 EXPECTED_API_WORKING_DIR="${EXPECTED_API_WORKING_DIR:-$DEPLOY_DIR/apps/server}"
 EXPECTED_WORKER_WORKING_DIR="${EXPECTED_WORKER_WORKING_DIR:-$DEPLOY_DIR/apps/server}"
 EXPECTED_WEB_WORKING_DIR="${EXPECTED_WEB_WORKING_DIR:-$DEPLOY_DIR/apps/web}"
@@ -303,13 +306,26 @@ load_env_file "$env_path"
 check_expected_env
 check_upload_system_config
 
-check_service_envfile "$API_SERVICE" "$EXPECTED_API_WORKING_DIR"
-check_service_envfile "$WORKER_SERVICE" "$EXPECTED_WORKER_WORKING_DIR"
-check_service_envfile "$WEB_SERVICE" "$EXPECTED_WEB_WORKING_DIR"
-check_process_env "$API_SERVICE"
-check_process_env "$WORKER_SERVICE"
+if [ "$SKIP_SERVICE_CHECKS" = "1" ] || [ "$SKIP_SERVICE_CHECKS" = "true" ]; then
+  pass "service env checks skipped"
+else
+  check_service_envfile "$API_SERVICE" "$EXPECTED_API_WORKING_DIR"
+  check_service_envfile "$WORKER_SERVICE" "$EXPECTED_WORKER_WORKING_DIR"
+  check_service_envfile "$WEB_SERVICE" "$EXPECTED_WEB_WORKING_DIR"
+fi
 
-check_runtime_endpoint
+if [ "$SKIP_PROCESS_ENV_CHECKS" = "1" ] || [ "$SKIP_PROCESS_ENV_CHECKS" = "true" ]; then
+  pass "process env checks skipped"
+else
+  check_process_env "$API_SERVICE"
+  check_process_env "$WORKER_SERVICE"
+fi
+
+if [ "$SKIP_HTTP_CHECK" = "1" ] || [ "$SKIP_HTTP_CHECK" = "true" ]; then
+  pass "HTTP runtime check skipped"
+else
+  check_runtime_endpoint
+fi
 
 echo ""
 echo "=== Result: ${FAILURES} failure(s), ${WARNINGS} warning(s) ==="

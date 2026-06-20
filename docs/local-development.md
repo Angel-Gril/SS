@@ -37,10 +37,10 @@ pnpm dev
 - `JWT_SECRET`
 - `ENCRYPTION_KEY`
 
-云端 R2 环境文件可以先做静态校验，不会打印密钥：
+云端基础环境文件可以先做静态校验，不会打印密钥。这里检查的是启动级配置，不要求 R2 密钥必须写在 `.env.staging`：
 
 ```bash
-pnpm env:check -- --profile cloud-r2 --env .env.staging
+pnpm env:check -- --profile cloud-bootstrap --env .env.staging
 ```
 
 先区分两类配置，不要混着看：
@@ -303,11 +303,11 @@ pnpm smoke:remote
 服务器侧可以用只读脚本确认 `.env.staging`、systemd `EnvironmentFile`、API/Worker 进程实际环境变量是否一致：
 
 ```bash
-pnpm env:check -- --profile cloud-r2 --env .env.staging
+pnpm env:check -- --profile cloud-bootstrap --env .env.staging
 DEPLOY_DIR=/opt/ss-erp/app ENV_FILE=.env.staging bash scripts/diagnose-runtime-env.sh
 ```
 
-`diagnose-runtime-env.sh` 会先读取后台 `upload_storage_backend` / `upload_oss_*`。后台 R2 配置完整时，即使 env 兜底仍是 `IMAGE_STORAGE_BACKEND=ozon-cdn` 也不会误报；后台只填一半时会明确列出缺少的 `upload_oss_*` 项。只有后台完全没填时，脚本才要求 VPS env 里 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 齐全。
+`cloud-bootstrap` 只检查服务启动必需的 `.env` 项。`diagnose-runtime-env.sh` 会先读取后台 `upload_storage_backend` / `upload_oss_*`。后台 R2 配置完整时，即使 env 兜底仍是 `IMAGE_STORAGE_BACKEND=ozon-cdn` 也不会误报；后台只填一半时会明确列出缺少的 `upload_oss_*` 项。只有后台完全没填时，脚本才要求 VPS env 里 `IMAGE_STORAGE_BACKEND=oss` 和 `OSS_*` 齐全。
 
 如果线上 R2 已经在 Cloudflare 控制台创建，但 smoke 仍返回 `imageUpload:"local"` 或 `imageUpload:"ozon-cdn"`，不要继续改前端或扩展。优先确认超管后台：
 

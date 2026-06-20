@@ -120,6 +120,7 @@ build/scripts/            本地离线包脚本
 - 全局配置统一走 `SystemConfig`。
 - 配置项集中在 `apps/server/src/config/system-config-schema.ts`，包含类型、默认值、校验和敏感字段标记。
 - 超管后台负责功能开关、上传/R2、保留策略、备份、维护模式等设置。
+- 部署校验分两层：`.env` 只负责服务启动级配置；上传/R2 等业务运行配置优先读取超管后台 `SystemConfig`，缺失时才回退到 env `OSS_*`。
 
 ## 部署策略
 
@@ -156,7 +157,7 @@ pnpm verify:extension
 云端部署前预检：
 
 ```bash
-pnpm env:check -- --profile cloud-r2 --env .env.staging
+pnpm env:check -- --profile cloud-bootstrap --env .env.staging
 pnpm preflight --remote-oss
 ```
 
