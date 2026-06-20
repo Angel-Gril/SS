@@ -189,6 +189,167 @@ export async function findPictureActivationPendingItems(
     .filter(Boolean);
 }
 
+export async function refreshListingProductPushJob(id: string, userId?: string): Promise<{
+  code: 1 | 0;
+  msg: string;
+  statusCode?: number;
+  data?: {
+    id: string;
+    status: string;
+    finishedAt: Date | null;
+    payload: unknown;
+  };
+}> {
+  const job = await prisma.syncJob.findFirst({
+    where: { id, type: 'PRODUCT_PUSH' },
+    include: { shop: true },
+  });
+  if (!job || (userId && job.shop.userId !== userId)) {
+    return { code: 0, msg: '任务不存在', statusCode: 404 };
+  }
+
+  const taskId = (job.payload as any)?.taskId;
+  if (!taskId) {
+    return { code: 0, msg: '任务缺少 taskId' };
+  }
+
+  const client = new OzonClient({
+    clientId: job.shop.clientId!,
+    apiKey: decrypt(job.shop.apiKeyEncrypted),
+  });
+
+  try {
+    const info = await client.getImportInfo(Number(taskId));
+    const { total, failed, allDone } = summarizeOzonImportItems(info.items);
+    const payload = (job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload))
+      ? job.payload as Record<string, any>
+      : {};
+    let nextPayload: Record<string, any> = {
+      ...payload,
+      itemCount: total,
+      failedCount: failed,
+      items: info.items,
+    };
+    let pictureErrorMessage: string | null = null;
+
+    if (isPictureUploadRepairJob(payload)) {
+      const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];
+      const sourceItemIds = Array.from(new Set(
+        traces
+          .map((trace) => String(trace?.sourceItemId || '').trim())
+          .filter(Boolean),
+      ));
+      const sourceItems = sourceItemIds.length
+        ? await prisma.supplyGoods.findMany({
+          where: {
+            id: { in: sourceItemIds },
+            userId: job.shop.userId,
+          },
+        })
+        : [];
+      const plan = planFallbackPictureUploads(payload, info.items, sourceItems);
+      const pictureDiagnostics: any[] = [];
+
+      for (const skipped of plan.skipped) {
+        recordPictureUploadDiagnostic(pictureDiagnostics, {
+          offerId: skipped.offerId,
+          productId: skipped.productId,
+          status: 'skipped',
+          rawImages: skipped.rawImages,
+          message: skipped.message,
+        });
+      }
+
+      for (const operation of plan.operations) {
+        try {
+          const resolvedImages = await resolveImageUrls(operation.rawImages, job.shopId, job.shop.userId);
+          await client.importProductPictures({ product_id: operation.productId, images: resolvedImages });
+          recordPictureUploadDiagnostic(pictureDiagnostics, {
+            offerId: operation.offerId,
+            productId: operation.productId,
+            status: 'uploaded',
+            rawImages: operation.rawImages,
+            resolvedImages,
+          });
+        } catch (e: any) {
+          recordPictureUploadDiagnostic(pictureDiagnostics, {
+            offerId: operation.offerId,
+            productId: operation.productId,
+            status: 'failed',
+            rawImages: operation.rawImages,
+            error: e,
+          });
+        }
+      }
+
+      const mergedDiagnostics = mergePictureUploadDiagnostics(payload.pictureUploads, pictureDiagnostics);
+      const pictureSummary = summarizePictureUploadDiagnostics(mergedDiagnostics, plan.pendingCount);
+      pictureErrorMessage = pictureSummary.errorMessage;
+      nextPayload = {
+        ...nextPayload,
+        offerImageLists: Object.keys(plan.offerImageLists).length ? plan.offerImageLists : payload.offerImageLists ?? null,
+        pictureUploads: mergedDiagnostics.length ? mergedDiagnostics : null,
+        pictureUploadStatus: pictureSummary.status,
+        pictureUploadFailedCount: pictureSummary.failedCount,
+        pictureUploadSkippedCount: pictureSummary.skippedCount,
+        pictureUploadPendingCount: pictureSummary.pendingCount,
+        pictureUploadError: pictureSummary.errorMessage,
+      };
+    }
+
+    const pictureStatus = String(nextPayload.pictureUploadStatus || '').toLowerCase();
+    const canCheckPictureActivation = allDone
+      && failed < total
+      && pictureStatus !== 'failed'
+      && pictureStatus !== 'partial_failed'
+      && pictureStatus !== 'pending';
+    if (canCheckPictureActivation) {
+      const pendingActivation = await findPictureActivationPendingItems(client, job.shopId, info.items || []);
+      nextPayload = {
+        ...nextPayload,
+        pictureActivationPendingCount: pendingActivation.length,
+        pictureActivationPending: pendingActivation.length ? pendingActivation : null,
+      };
+    }
+
+    const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
+    const finalStatus = pictureErrorMessage
+      ? (
+        allDone
+        && nextPayload.pictureUploadStatus !== 'pending'
+        && nextPayload.pictureUploadStatus !== 'partial_pending'
+        && (nextPayload.pictureUploadStatus === 'failed' || nextPayload.pictureUploadStatus === 'partial_failed')
+          ? 'FAILED'
+          : 'RUNNING'
+      )
+      : newStatus;
+    const errorMessage = pictureErrorMessage || (failed > 0 ? `${failed} 个商品上架失败` : null);
+
+    const updated = await prisma.syncJob.update({
+      where: { id: job.id },
+      data: {
+        status: finalStatus,
+        finishedAt: allDone && finalStatus !== 'RUNNING' ? new Date() : null,
+        payload: nextPayload,
+        errorMessage,
+      },
+    });
+
+    return {
+      code: 1,
+      msg: 'ok',
+      data: {
+        id: updated.id,
+        status: updated.status,
+        finishedAt: updated.finishedAt,
+        payload: updated.payload,
+      },
+    };
+  } catch (e: any) {
+    return { code: 0, msg: `刷新失败: ${e.message}` };
+  }
+}
+
 export async function listingRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 

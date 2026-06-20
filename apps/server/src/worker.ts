@@ -11,6 +11,7 @@ import { startDataRetentionWorker } from './workers/data-retention-cleanup.js';
 import { startOssCleanupWorker } from './workers/oss-cleanup.js';
 import { startDatabaseBackupWorker } from './workers/database-backup.js';
 import { startRechargeTimeoutWorker } from './workers/recharge-timeout.js';
+import { startListingTaskRefreshWorker } from './workers/listing-task-refresh.js';
 import { shutdownAllWorkers } from './lib/worker-registry.js';
 
 console.log('[worker] starting all workers as standalone process...');
@@ -20,6 +21,7 @@ startDataRetentionWorker();
 startOssCleanupWorker();
 startDatabaseBackupWorker();
 startRechargeTimeoutWorker();
+startListingTaskRefreshWorker();
 startProductSyncWorker();
 startOrderSyncWorker();
 startSoloBillingWorker();
