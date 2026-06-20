@@ -904,6 +904,18 @@ describe('collect publish helpers', () => {
     ])).toEqual([]);
   });
 
+  it('does not append long repeated multi-color lists to Ozon publish titles', () => {
+    const attrs = sanitizeVariantAttrSetsForOzonPublish([{
+      'Цвет': 'белый, красный, светло-желтый, светло-синий, светло-розовый',
+      'Название цвета': 'Ромашки_шпажки',
+    }])[0];
+
+    expect(resolvePublishName({
+      title: 'Шпажки для канапе Морские раковины", 24 шт, 12 см',
+      metadata: {},
+    }, attrs)).toBe('Шпажки для канапе Морские раковины", 24 шт, 12 см, тип 1');
+  });
+
   it('prefers each collected item category over batch fallback category', () => {
     expect(resolveItemPublishCategory({
       metadata: { descriptionCategoryId: 17028706, typeId: 95913 },

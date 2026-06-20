@@ -510,7 +510,10 @@ function sanitizeVariantAttrValueForOzonPublish(
 }
 
 function sanitizeVariantAttrValueForTitle(name: unknown, value: unknown): string {
-  if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
+  if (isStrictColorVariantName(name)) {
+    const color = extractSafeColorValue(value);
+    return splitOzonCompositeDictionaryValue(color).length > 3 ? '' : color;
+  }
   if (isColorNameVariantName(name)) return sanitizeSupplementalVariantTitleValue(value);
   if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
   return sanitizeVariantAttrValueForPublish(name, value);
