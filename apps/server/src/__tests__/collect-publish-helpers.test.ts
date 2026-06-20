@@ -600,6 +600,43 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('normalizes descriptive composite colors for Ozon color dictionary publishing', () => {
+    expect(sanitizeVariantAttrSetsForOzonPublish([
+      {
+        'Цвет': 'белый',
+        'Название цвета': 'Тип 1',
+        'Российский размер': '44',
+      },
+      {
+        'Цвет': 'белый, бежевый нейтральный',
+        'Российский размер': '44',
+      },
+    ])).toEqual([
+      {
+        'Цвет': 'белый',
+        'Название цвета': 'Тип 1',
+        'Российский размер': '44',
+      },
+      {
+        'Цвет': 'белый, бежевый',
+        'Название цвета': 'Тип 2',
+        'Российский размер': '44',
+      },
+    ]);
+  });
+
+  it('does not send raw text fallback for strict Ozon color dictionaries', () => {
+    expect(resolveOzonDictionaryAttributeValues(
+      'белый, бежевый нейтральный',
+      [{ id: 101, value: 'белый' }],
+      { allowTextFallback: false, allowPartialDictionaryValues: true },
+    )).toEqual({
+      values: [{ value: 'белый', dictionary_value_id: 101 }],
+      matched: true,
+      matchType: 'partial',
+    });
+  });
+
   it('avoids neutral color-name labels that collide with existing structured variants', () => {
     expect(sanitizeVariantAttrSetsForOzonPublish([
       { 'Цвет': 'красный', 'Название цвета': 'изысканный' },

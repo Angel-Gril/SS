@@ -363,6 +363,53 @@ function extractSafeColorValue(value: unknown): string {
   return compactColorSegments(colors).join(', ');
 }
 
+function isAllowedStrictOzonColorTail(value: string): boolean {
+  if (!value || /\d/u.test(value)) return false;
+  if (OZON_COLOR_NOISE_RE.test(value)) return false;
+  return OZON_COLOR_TAIL_RE.test(value);
+}
+
+function extractStrictOzonColorSegment(value: string): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text || containsCjkText(text) || isLikelyDescriptiveColorVariantValue(text)) return '';
+
+  const tokens = text
+    .split(/\s+/)
+    .map((part) => normalizeColorToken(part))
+    .filter(Boolean);
+  if (!tokens.length) return '';
+
+  const firstColorIndex = tokens.findIndex((token) => isColorToken(token));
+  if (firstColorIndex < 0) return '';
+
+  if (firstColorIndex === 1 && OZON_COLOR_PREFIX_RE.test(tokens[0] || '')) {
+    return `${tokens[0]} ${tokens[1]}`;
+  }
+
+  if (firstColorIndex === 1 && OZON_COMPOUND_COLOR_PREFIX_RE.test(tokens[0] || '')) {
+    return `${tokens[0]}-${tokens[1]}`;
+  }
+
+  if (firstColorIndex === 0) {
+    if (tokens.length >= 2 && OZON_COMPOUND_COLOR_PREFIX_RE.test(tokens[0] || '') && isColorToken(tokens[1] || '')) {
+      return `${tokens[0]}-${tokens[1]}`;
+    }
+    if (tokens.length >= 2 && isAllowedStrictOzonColorTail(tokens[1] || '')) {
+      return `${tokens[0]} ${tokens[1]}`;
+    }
+    return tokens[0] || '';
+  }
+
+  return tokens[firstColorIndex] || '';
+}
+
+function extractStrictOzonColorValue(value: unknown): string {
+  const colors = splitOzonCompositeDictionaryValue(sanitizeOzonAttrText(value))
+    .map((part) => extractStrictOzonColorSegment(part))
+    .filter(Boolean);
+  return compactColorSegments(colors).join(', ');
+}
+
 function isLikelyDescriptiveColorVariantValue(value: unknown): boolean {
   const text = sanitizeOzonAttrText(value);
   if (!text || containsCjkText(text)) return false;
@@ -452,9 +499,9 @@ function sanitizeVariantAttrValueForOzonPublish(
   value: unknown,
   options?: VariantPublishSanitizeOptions,
 ): string {
-  if (isStrictColorVariantName(name)) return extractSafeColorValue(value);
+  if (isStrictColorVariantName(name)) return extractStrictOzonColorValue(value);
   if (isColorNameVariantName(name)) return sanitizeSupplementalVariantAttrValueForOzonPublish(value, options);
-  if (isColorLikeVariantName(name)) return extractSafeColorValue(value);
+  if (isColorLikeVariantName(name)) return extractStrictOzonColorValue(value);
   return sanitizeOzonAttrText(value);
 }
 
@@ -536,6 +583,22 @@ export function sanitizeVariantAttrSetsForOzonPublish(
     attrs && typeof attrs === 'object' ? attrs : undefined,
     { variantIndex: index },
   ));
+
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const attrs = sanitized[index]!;
+    if (Object.keys(attrs).some((name) => isColorNameVariantName(name))) continue;
+    const rawAttrs = inputs[index];
+    if (!rawAttrs || typeof rawAttrs !== 'object') continue;
+    const rawColorEntry = Object.entries(rawAttrs).find(([name]) => isStrictColorVariantName(name));
+    const safeColorEntry = Object.entries(attrs).find(([name]) => isStrictColorVariantName(name));
+    if (!rawColorEntry || !safeColorEntry) continue;
+    const rawColorKey = normalizeOzonDictionaryText(rawColorEntry[1]);
+    const safeColorKey = normalizeOzonDictionaryText(safeColorEntry[1]);
+    if (rawColorKey && safeColorKey && rawColorKey !== safeColorKey) {
+      attrs['Название цвета'] = neutralSupplementalVariantLabel({ variantIndex: index });
+    }
+  }
+
   const occupiedColorNames = new Set<string>();
   const needsNeutralColorName: Array<{ index: number; name: string }> = [];
 
@@ -1075,30 +1138,52 @@ export function shouldApplyCollectedVariantAttrOverride(
 
 type OzonDictionaryEntry = { id: number; value?: string | null };
 type OzonResolvedAttributeValue = { value: string; dictionary_value_id: number };
+type OzonDictionaryResolveOptions = {
+  allowTextFallback?: boolean;
+  allowPartialDictionaryValues?: boolean;
+};
 
 export function resolveOzonDictionaryAttributeValues(
   rawValue: unknown,
   dict: OzonDictionaryEntry[],
+  options?: OzonDictionaryResolveOptions,
 ): { values: OzonResolvedAttributeValue[]; matched: boolean; matchType: 'exact' | 'split' | 'partial' | 'text-fallback' | 'empty' } {
   const text = sanitizeOzonAttrText(rawValue);
   if (!text) return { values: [], matched: false, matchType: 'empty' };
+  const allowTextFallback = options?.allowTextFallback !== false;
+  const allowPartialDictionaryValues = options?.allowPartialDictionaryValues === true;
+  const entries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
+  const uniqueResolvedValues = (values: Array<OzonDictionaryEntry | null | undefined>) => {
+    const seen = new Set<number>();
+    return values
+      .filter((entry): entry is OzonDictionaryEntry => !!entry)
+      .map(toOzonResolvedAttributeValue)
+      .filter((value) => {
+        if (seen.has(value.dictionary_value_id)) return false;
+        seen.add(value.dictionary_value_id);
+        return true;
+      });
+  };
+
   if (isLikelyDescriptiveColorVariantValue(text)) {
     const extractedColor = extractSafeColorValue(text);
     if (!extractedColor) return { values: [], matched: false, matchType: 'empty' };
     const extractedParts = splitOzonCompositeDictionaryValue(extractedColor);
-    const extractedEntries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
-    const resolvedExtracted = extractedParts.map((part) => findOzonDictionaryEntry(extractedEntries, part, true));
+    const resolvedExtracted = extractedParts.map((part) => findOzonDictionaryEntry(entries, part, true));
     if (resolvedExtracted.every(Boolean)) {
       return {
-        values: resolvedExtracted.filter((entry): entry is OzonDictionaryEntry => !!entry).map(toOzonResolvedAttributeValue),
+        values: uniqueResolvedValues(resolvedExtracted),
         matched: true,
         matchType: 'split',
       };
     }
+    if (allowPartialDictionaryValues) {
+      const partialValues = uniqueResolvedValues(resolvedExtracted);
+      if (partialValues.length) return { values: partialValues, matched: true, matchType: 'partial' };
+    }
     return { values: [], matched: false, matchType: 'empty' };
   }
 
-  const entries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
   const exact = findOzonDictionaryEntry(entries, text, false);
   if (exact) {
     return { values: [toOzonResolvedAttributeValue(exact)], matched: true, matchType: 'exact' };
@@ -1108,18 +1193,24 @@ export function resolveOzonDictionaryAttributeValues(
   if (parts.length > 1) {
     const resolvedParts = parts.map((part) => findOzonDictionaryEntry(entries, part, true));
     if (resolvedParts.every(Boolean)) {
-      const seen = new Set<number>();
-      const values = resolvedParts
-        .filter((entry): entry is OzonDictionaryEntry => !!entry)
-        .map(toOzonResolvedAttributeValue)
-        .filter((value) => {
-          if (seen.has(value.dictionary_value_id)) return false;
-          seen.add(value.dictionary_value_id);
-          return true;
-        });
+      const values = uniqueResolvedValues(resolvedParts);
       return { values, matched: true, matchType: 'split' };
     }
 
+    const strictColor = extractStrictOzonColorValue(text);
+    if (strictColor) {
+      const strictParts = splitOzonCompositeDictionaryValue(strictColor);
+      const resolvedStrictParts = strictParts.map((part) => findOzonDictionaryEntry(entries, part, true));
+      if (strictParts.length === parts.length && resolvedStrictParts.length && resolvedStrictParts.every(Boolean)) {
+        return { values: uniqueResolvedValues(resolvedStrictParts), matched: true, matchType: 'split' };
+      }
+      if (allowPartialDictionaryValues) {
+        const partialValues = uniqueResolvedValues(resolvedStrictParts);
+        if (partialValues.length) return { values: partialValues, matched: true, matchType: 'partial' };
+      }
+    }
+
+    if (!allowTextFallback) return { values: [], matched: false, matchType: 'empty' };
     return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
   }
 
@@ -1129,12 +1220,14 @@ export function resolveOzonDictionaryAttributeValues(
     const resolvedExtracted = extractedParts.map((part) => findOzonDictionaryEntry(entries, part, true));
     if (resolvedExtracted.every(Boolean)) {
       return {
-        values: resolvedExtracted
-          .filter((entry): entry is OzonDictionaryEntry => !!entry)
-          .map(toOzonResolvedAttributeValue),
+        values: uniqueResolvedValues(resolvedExtracted),
         matched: true,
         matchType: 'split',
       };
+    }
+    if (allowPartialDictionaryValues) {
+      const partialValues = uniqueResolvedValues(resolvedExtracted);
+      if (partialValues.length) return { values: partialValues, matched: true, matchType: 'partial' };
     }
   }
 
@@ -1145,6 +1238,7 @@ export function resolveOzonDictionaryAttributeValues(
     return { values: [toOzonResolvedAttributeValue(partial)], matched: true, matchType: 'partial' };
   }
 
+  if (!allowTextFallback) return { values: [], matched: false, matchType: 'empty' };
   return { values: [{ value: text, dictionary_value_id: 0 }], matched: false, matchType: 'text-fallback' };
 }
 
@@ -3306,10 +3400,13 @@ export async function collectRoutes(app: FastifyInstance) {
               continue;
             }
 
-            let resolvedValues: { value: string; dictionary_value_id: number }[] = [{
-              value: String(aspectValue),
-              dictionary_value_id: 0,
-            }];
+            const strictColorDictionaryAttr = Boolean(attrDef.dictionary_id && attrDef.dictionary_id > 0 && isStrictColorVariantName(aspectName));
+            let resolvedValues: { value: string; dictionary_value_id: number }[] = strictColorDictionaryAttr
+              ? []
+              : [{
+                value: String(aspectValue),
+                dictionary_value_id: 0,
+              }];
             let matchLabel = 'text';
             if (attrDef.dictionary_id && attrDef.dictionary_id > 0) {
               try {
@@ -3325,11 +3422,16 @@ export async function collectRoutes(app: FastifyInstance) {
                   attrDictCache.set(dictKey, values);
                 }
                 const dict = attrDictCache.get(dictKey)!;
-                const resolved = resolveOzonDictionaryAttributeValues(aspectValue, dict);
+                const resolved = resolveOzonDictionaryAttributeValues(aspectValue, dict, {
+                  allowTextFallback: !strictColorDictionaryAttr,
+                  allowPartialDictionaryValues: strictColorDictionaryAttr,
+                });
                 if (resolved.values.length) resolvedValues = resolved.values;
                 matchLabel = resolved.matchType;
                 if (resolved.matched) {
                   console.log(`[publish-ozon variant] dict ${resolved.matchType}: attr#${attrDef.id} "${aspectValue}" -> ${resolvedValues.map((value) => `${value.dictionary_value_id}:${value.value}`).join(', ')} category=${group.categoryId}/${group.typeId}`);
+                } else if (strictColorDictionaryAttr) {
+                  console.warn(`[publish-ozon variant] strict color dict miss: attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" not matched in ${dict.length} entries; omit invalid text fallback`);
                 } else {
                   console.warn(`[publish-ozon variant] dict miss: attr#${attrDef.id}(${attrDef.name}) value="${aspectValue}" not fully matched in ${dict.length} entries; send collected text instead of cloned value`);
                 }
@@ -3339,6 +3441,10 @@ export async function collectRoutes(app: FastifyInstance) {
             }
 
             importItem.attributes = importItem.attributes.filter((a: any) => a.id !== attrDef.id);
+            if (!resolvedValues.length) {
+              console.warn(`[publish-ozon variant] offer=${importItem.offer_id} attr#${attrDef.id}(${attrDef.name})="${aspectValue}" skipped because no valid dictionary value was resolved`);
+              continue;
+            }
             importItem.attributes.push({
               id: attrDef.id,
               complex_id: 0,
