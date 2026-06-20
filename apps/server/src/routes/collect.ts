@@ -13,7 +13,6 @@ import {
 } from '../services/ozon-attribute-dictionary-cache.js';
 import {
   appendOzonRichContentAttribute,
-  buildOzonVideoImportRequests,
   buildOzonRichContentAttribute,
   planCollectedVideoPublish,
   resolveOzonRichContentAttributeDef,
@@ -3565,103 +3564,19 @@ export async function collectRoutes(app: FastifyInstance) {
       const taskId = result.result.task_id;
 
       let finalVideoTrace = videoTrace;
-      let videoPublishStatus: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending' = videoTrace.length ? 'pending' : 'not_applicable';
+      let videoPublishStatus: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending' = videoTrace.length ? 'failed' : 'not_applicable';
       if (videoTrace.length) {
         finalVideoTrace = [];
-        try {
-          await new Promise((r) => setTimeout(r, 3000));
-          const info = await client.getImportInfo(taskId);
-          const importItemsByOffer = new Map(
-            (Array.isArray(info.items) ? info.items : [])
-              .map((item: any) => [String(item?.offer_id || '').trim(), item] as const)
-              .filter(([offerId]) => !!offerId),
-          );
-
-          for (const plan of videoTrace) {
-            const importInfoItem = importItemsByOffer.get(String(plan.offerId || '').trim());
-            const productId = positiveInt(importInfoItem?.product_id);
-            const status = String(importInfoItem?.status || '').toLowerCase();
-            const blockingErrors = Array.isArray(importInfoItem?.errors)
-              ? importInfoItem.errors.filter((error: any) => {
-                const level = String(error?.level || '').toLowerCase();
-                const state = String(error?.state || '').toLowerCase();
-                return level === 'error' || state === 'declined';
-              })
-              : [];
-
-            if (!productId || status === 'pending') {
-              recordVideoPublishDiagnostic(finalVideoTrace, {
-                offerId: plan.offerId,
-                productId,
-                status: 'pending',
-                sourceVideos: plan.sourceVideos,
-                reason: 'product_id_not_ready',
-                message: 'Ozon import task has not returned product_id yet; video was not submitted in this request',
-              });
-              continue;
-            }
-            if (status === 'failed' || blockingErrors.length) {
-              recordVideoPublishDiagnostic(finalVideoTrace, {
-                offerId: plan.offerId,
-                productId,
-                status: 'skipped',
-                sourceVideos: plan.sourceVideos,
-                reason: 'product_import_failed',
-                message: blockingErrors.length
-                  ? `商品卡被 Ozon 拒绝，已跳过视频发布：${blockingErrors.map((error: any) => formatOzonErrorMessage(error)).join('； ')}`
-                  : '商品卡导入未成功，已跳过视频发布',
-              });
-              continue;
-            }
-
-            const requests = buildOzonVideoImportRequests(plan, productId);
-            if (!requests.length) {
-              recordVideoPublishDiagnostic(finalVideoTrace, {
-                offerId: plan.offerId,
-                productId,
-                status: 'skipped',
-                sourceVideos: plan.sourceVideos,
-                reason: 'empty_video_import_request',
-              });
-              continue;
-            }
-            for (const videoRequest of requests) {
-              try {
-                await client.importProductVideo(videoRequest);
-                recordVideoPublishDiagnostic(finalVideoTrace, {
-                  offerId: plan.offerId,
-                  productId,
-                  status: 'uploaded',
-                  videoUrl: videoRequest.video.url,
-                  name: videoRequest.video.name,
-                });
-                console.log(`[publish-ozon video] submitted video for offer=${plan.offerId} product_id=${productId}`);
-              } catch (e: any) {
-                recordVideoPublishDiagnostic(finalVideoTrace, {
-                  offerId: plan.offerId,
-                  productId,
-                  status: 'failed',
-                  videoUrl: videoRequest.video.url,
-                  name: videoRequest.video.name,
-                  error: e,
-                });
-                console.warn(`[publish-ozon video] video import failed for offer=${plan.offerId}:`, e.message?.slice(0, 150));
-              }
-            }
-          }
-        } catch (e: any) {
-          finalVideoTrace = [];
-          for (const plan of videoTrace) {
-            recordVideoPublishDiagnostic(finalVideoTrace, {
-              offerId: plan.offerId,
-              status: 'failed',
-              sourceVideos: plan.sourceVideos,
-              reason: 'import_info_failed',
-              error: e,
-            });
-          }
-          console.warn(`[publish-ozon video] import info read failed:`, e.message?.slice(0, 150));
+        for (const plan of videoTrace) {
+          recordVideoPublishDiagnostic(finalVideoTrace, {
+            offerId: plan.offerId,
+            status: 'skipped',
+            sourceVideos: plan.sourceVideos,
+            reason: plan.reason,
+            message: plan.message,
+          });
         }
+        console.warn('[publish-ozon video] skipped collected videos: Ozon documents only describe Seller media tab, XLS template, or Ozon Seller app upload; no documented Seller API endpoint is configured');
         const videoFailedCount = finalVideoTrace.filter((entry) => entry.status === 'failed').length;
         const videoSkippedCount = finalVideoTrace.filter((entry) => entry.status === 'skipped').length;
         const videoPendingCount = finalVideoTrace.filter((entry) => entry.status === 'pending').length;

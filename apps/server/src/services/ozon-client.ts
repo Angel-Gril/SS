@@ -433,10 +433,6 @@ export class OzonClient {
     return this.request('/v1/product/pictures/import', { body: params });
   }
 
-  async importProductVideo(params: { product_id: number; video: { url: string; name: string } }): Promise<{ result?: unknown }> {
-    return this.request('/v1/product/video/import', { body: params });
-  }
-
   async getImportInfo(task_id: number): Promise<OzonImportInfo> {
     const res = await this.request<{ result: OzonImportInfo }>(
       '/v1/product/import/info',

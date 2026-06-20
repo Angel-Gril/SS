@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendOzonRichContentAttribute,
-  buildOzonVideoImportRequests,
   buildOzonRichContentAttribute,
+  OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
   parseCollectedRichContent,
   planCollectedVideoPublish,
 } from '../services/ozon-rich-content.js';
@@ -179,24 +179,19 @@ describe('Ozon rich content publishing', () => {
     ]);
   });
 
-  it('plans collected videos for the post-import video stage instead of cloning media attributes', () => {
+  it('keeps collected videos in diagnostics without creating unsupported Seller API requests', () => {
     const plan = planCollectedVideoPublish([
       { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg', title: 'Обзор' },
     ], 'offer-1');
 
     expect(plan).toEqual({
       offerId: 'offer-1',
-      status: 'ready',
+      status: 'manual_required',
+      reason: OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
+      message: expect.stringContaining('VK Video'),
       sourceVideos: [
         { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg', title: 'Обзор' },
       ],
     });
-    expect(buildOzonVideoImportRequests(plan!, 12345)).toEqual([{
-      product_id: 12345,
-      video: {
-        url: 'https://cdn.example.com/video.mp4',
-        name: 'Обзор',
-      },
-    }]);
   });
 });

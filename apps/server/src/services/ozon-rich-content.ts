@@ -30,18 +30,14 @@ export interface CollectedVideo {
 
 export interface VideoPublishPlan {
   offerId: string;
-  status: 'ready';
+  status: 'manual_required';
+  reason: typeof OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON;
+  message: string;
   sourceVideos: CollectedVideo[];
 }
 
-export interface OzonVideoImportRequest {
-  product_id: number;
-  video: {
-    url: string;
-    name: string;
-  };
-}
-
+export const OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON = 'ozon_video_publish_requires_official_media_or_xls_flow';
+export const OZON_VIDEO_PUBLISH_UNSUPPORTED_MESSAGE = 'Ozon official video documentation supports upload through the Seller media tab, XLS template, or Ozon Seller app using VK Video, Yandex Disk, or Rutube links. No documented Seller API video import endpoint is available here.';
 const RICH_TEXT_MAX_LENGTH = 900;
 const RICH_BLOCK_MAX_COUNT = 30;
 const MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
@@ -416,22 +412,9 @@ export function planCollectedVideoPublish(input: unknown, offerId: string): Vide
   if (!sourceVideos.length) return null;
   return {
     offerId,
-    status: 'ready',
+    status: 'manual_required',
+    reason: OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
+    message: OZON_VIDEO_PUBLISH_UNSUPPORTED_MESSAGE,
     sourceVideos,
   };
-}
-
-export function buildOzonVideoImportRequests(
-  plan: VideoPublishPlan,
-  productId: number,
-): OzonVideoImportRequest[] {
-  const safeProductId = Number(productId);
-  if (!Number.isInteger(safeProductId) || safeProductId <= 0) return [];
-  return plan.sourceVideos.map((video, index) => ({
-    product_id: safeProductId,
-    video: {
-      url: video.url,
-      name: (video.title || `${plan.offerId}-video-${index + 1}`).slice(0, 200),
-    },
-  }));
 }
