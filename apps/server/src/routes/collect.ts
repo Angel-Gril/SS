@@ -14,6 +14,7 @@ import {
 import {
   appendOzonRichContentAttribute,
   buildOzonRichContentAttribute,
+  buildOzonVideoMediaAttributesFromSourceVideos,
   planCollectedVideoPublish,
   resolveOzonRichContentAttributeDef,
   transferRichContentImage,
@@ -1597,6 +1598,22 @@ export function recordOfferPublishImages(
 export function hasOzonVideoMediaAttributes(attributes: unknown): boolean {
   return Array.isArray(attributes)
     && attributes.some((attr: any) => isOzonVideoMediaAttributeId(attr?.id ?? attr?.attribute_id));
+}
+
+export function appendCollectedOzonVideoMediaAttributes<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  sourceVideos: unknown,
+): { attributes: Array<T | ReturnType<typeof buildOzonVideoMediaAttributesFromSourceVideos>[number]>; generatedCount: number } {
+  const baseAttributes = Array.isArray(attributes) ? attributes : [];
+  if (hasOzonVideoMediaAttributes(baseAttributes)) {
+    return { attributes: baseAttributes, generatedCount: 0 };
+  }
+  const generated = buildOzonVideoMediaAttributesFromSourceVideos(sourceVideos);
+  if (!generated.length) return { attributes: baseAttributes, generatedCount: 0 };
+  return {
+    attributes: [...baseAttributes, ...generated],
+    generatedCount: generated.length,
+  };
 }
 
 export function recordPictureUploadDiagnostic(
@@ -3450,12 +3467,27 @@ export async function collectRoutes(app: FastifyInstance) {
             }
           }
 
-          const videoPlan = hasOzonVideoMediaAttributes(importItem.attributes)
-            ? null
-            : planCollectedVideoPublish(importItem._sourceVideos, importItem.offer_id);
-          if (videoPlan && !videoTraceSeen.has(videoPlan.offerId)) {
-            videoTraceSeen.add(videoPlan.offerId);
-            videoTrace.push(videoPlan);
+          const videoAttrsResult = appendCollectedOzonVideoMediaAttributes(importItem.attributes, importItem._sourceVideos);
+          if (videoAttrsResult.generatedCount > 0) {
+            importItem.attributes = videoAttrsResult.attributes;
+            if (!videoTraceSeen.has(importItem.offer_id)) {
+              videoTraceSeen.add(importItem.offer_id);
+              videoTrace.push({
+                offerId: importItem.offer_id,
+                status: 'pending',
+                reason: 'ozon_video_media_attributes_generated',
+                message: 'Generated Ozon video media attributes from collected Ozon CDN sourceVideos; Ozon will process them with the product import task.',
+                sourceVideos: Array.isArray(importItem._sourceVideos) ? importItem._sourceVideos : [],
+              });
+            }
+          } else {
+            const videoPlan = hasOzonVideoMediaAttributes(importItem.attributes)
+              ? null
+              : planCollectedVideoPublish(importItem._sourceVideos, importItem.offer_id);
+            if (videoPlan && !videoTraceSeen.has(videoPlan.offerId)) {
+              videoTraceSeen.add(videoPlan.offerId);
+              videoTrace.push(videoPlan);
+            }
           }
 
           const existingIds = new Set(importItem.attributes.map((a: any) => a.id));
@@ -3586,15 +3618,27 @@ export async function collectRoutes(app: FastifyInstance) {
       if (videoTrace.length) {
         finalVideoTrace = [];
         for (const plan of videoTrace) {
-          recordVideoPublishDiagnostic(finalVideoTrace, {
-            offerId: plan.offerId,
-            status: 'skipped',
-            sourceVideos: plan.sourceVideos,
-            reason: plan.reason,
-            message: plan.message,
-          });
+          if (plan.status === 'pending') {
+            recordVideoPublishDiagnostic(finalVideoTrace, {
+              offerId: plan.offerId,
+              status: 'pending',
+              sourceVideos: plan.sourceVideos,
+              reason: plan.reason,
+              message: plan.message,
+            });
+          } else {
+            recordVideoPublishDiagnostic(finalVideoTrace, {
+              offerId: plan.offerId,
+              status: 'skipped',
+              sourceVideos: plan.sourceVideos,
+              reason: plan.reason,
+              message: plan.message,
+            });
+          }
         }
-        console.warn('[publish-ozon video] skipped collected videos: Ozon documents only describe Seller media tab, XLS template, or Ozon Seller app upload; no documented Seller API endpoint is configured');
+        if (finalVideoTrace.some((entry) => entry.status === 'skipped')) {
+          console.warn('[publish-ozon video] skipped collected videos: Ozon documents only describe Seller media tab, XLS template, or Ozon Seller app upload; no documented Seller API endpoint is configured');
+        }
         const videoFailedCount = finalVideoTrace.filter((entry) => entry.status === 'failed').length;
         const videoSkippedCount = finalVideoTrace.filter((entry) => entry.status === 'skipped').length;
         const videoPendingCount = finalVideoTrace.filter((entry) => entry.status === 'pending').length;

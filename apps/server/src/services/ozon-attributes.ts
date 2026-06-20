@@ -1,5 +1,6 @@
 const SKIP_ATTRS = new Set(['22057', '11254', '23171', '22336']);
 const OZON_VIDEO_MEDIA_ATTRS = new Set([
+  '21837',
   '21838',
   '21839',
   '21840',
@@ -9,6 +10,9 @@ const OZON_VIDEO_MEDIA_ATTRS = new Set([
   '21844',
   '21845',
   '21846',
+  '22964',
+  '23255',
+  '23256',
 ]);
 const UNSAFE_CLONED_ATTR_NAME_RE = /(видео|video|обложк|cover|rich|медиа|media|мультимеди|видеофон|background|banner|баннер|视频|封面|富文本|富媒体)/i;
 const UNSAFE_CLONED_ATTR_VIDEO_VALUE_RE = /(?:cdnvideo\.v\.ozone\.ru|\/(?:s3|vod)\/video-\d+\/|\.(?:m3u8|mp4|webm|mov)(?:[?#"'\s]|$))/i;

@@ -36,6 +36,12 @@ export interface VideoPublishPlan {
   sourceVideos: CollectedVideo[];
 }
 
+export interface OzonVideoMediaAttribute {
+  id: number;
+  complex_id: number;
+  values: { value: string }[];
+}
+
 export const OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON = 'ozon_video_publish_requires_official_media_or_xls_flow';
 export const OZON_VIDEO_PUBLISH_UNSUPPORTED_MESSAGE = 'Ozon official video documentation supports upload through the Seller media tab, XLS template, or Ozon Seller app using VK Video, Yandex Disk, or Rutube links. No documented Seller API video import endpoint is available here.';
 const RICH_TEXT_MAX_LENGTH = 900;
@@ -417,4 +423,98 @@ export function planCollectedVideoPublish(input: unknown, offerId: string): Vide
     message: OZON_VIDEO_PUBLISH_UNSUPPORTED_MESSAGE,
     sourceVideos,
   };
+}
+
+interface ParsedOzonVideoUrl {
+  videoBucket: string;
+  videoId: string;
+  assetName: string;
+  assetUrl: string;
+  masterUrl: string;
+}
+
+function parseOzonVideoUrl(rawUrl: unknown): ParsedOzonVideoUrl | null {
+  const url = normalizeImageUrl(rawUrl);
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!/^(?:cdnvideo\.v\.ozone\.ru|v-\d+\.ozone\.ru)$/i.test(parsed.hostname)) return null;
+    const match = parsed.pathname.match(/^\/vod\/(video-\d+)\/([A-Z0-9]+)\/([^/]+\.mp4)$/i);
+    if (!match) return null;
+    const [, videoBucket, videoId, assetName] = match;
+    if (!videoBucket || !videoId || !assetName) return null;
+    const basePath = `/vod/${videoBucket}/${videoId}`;
+    return {
+      videoBucket,
+      videoId,
+      assetName,
+      assetUrl: `${parsed.origin}${basePath}/${assetName}`,
+      masterUrl: `${parsed.origin}${basePath}/master.m3u8`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOzonVideoCoverUrl(rawUrl: unknown, parsedVideo: ParsedOzonVideoUrl): string {
+  const coverUrl = normalizeImageUrl(rawUrl);
+  if (coverUrl) {
+    try {
+      const parsed = new URL(coverUrl);
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString();
+    } catch {
+      // Fall through to the standard Ozon cover URL.
+    }
+  }
+  return `https://ir.ozone.ru/s3/${parsedVideo.videoBucket}/${parsedVideo.videoId}/cover/cover.jpg`;
+}
+
+function videoAttr(id: number, complexId: number, value: string): OzonVideoMediaAttribute {
+  return { id, complex_id: complexId, values: [{ value }] };
+}
+
+export function buildOzonVideoMediaAttributesFromSourceVideos(input: unknown): OzonVideoMediaAttribute[] {
+  if (!Array.isArray(input) || !input.length) return [];
+  const parsedVideos: Array<{ video: ParsedOzonVideoUrl; coverUrl: string }> = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const video = parseOzonVideoUrl(row.url || row.videoUrl || row.src || row.link);
+    if (!video || seen.has(video.videoId)) continue;
+    seen.add(video.videoId);
+    parsedVideos.push({
+      video,
+      coverUrl: normalizeOzonVideoCoverUrl(row.coverUrl || row.cover || row.poster || row.preview || row.thumbnail, video),
+    });
+    if (parsedVideos.length >= 2) break;
+  }
+
+  const attrs: OzonVideoMediaAttribute[] = [];
+  const primary = parsedVideos[0];
+  if (primary) {
+    attrs.push(
+      videoAttr(21842, 100002, primary.coverUrl),
+      videoAttr(21843, 100002, primary.video.assetUrl),
+      videoAttr(21844, 100002, primary.video.videoId),
+      videoAttr(21845, 100002, primary.video.assetUrl),
+      videoAttr(21846, 100002, primary.video.masterUrl),
+      videoAttr(22964, 100002, 'true'),
+      videoAttr(23256, 100002, '0.75'),
+    );
+  }
+  const secondary = parsedVideos[1];
+  if (secondary) {
+    attrs.push(
+      videoAttr(21837, 100001, secondary.video.assetName),
+      videoAttr(21838, 100001, secondary.coverUrl),
+      videoAttr(21839, 100001, secondary.video.masterUrl),
+      videoAttr(21840, 100001, secondary.video.videoId),
+      videoAttr(21841, 100001, secondary.video.assetUrl),
+      videoAttr(23255, 100001, '1.78'),
+    );
+  }
+  return attrs;
 }

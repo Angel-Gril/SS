@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appendOzonRichContentAttribute,
   buildOzonRichContentAttribute,
+  buildOzonVideoMediaAttributesFromSourceVideos,
   OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
   parseCollectedRichContent,
   planCollectedVideoPublish,
@@ -193,5 +194,40 @@ describe('Ozon rich content publishing', () => {
         { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg', title: 'Обзор' },
       ],
     });
+  });
+
+  it('builds Ozon video media attributes from collected Ozon CDN videos', () => {
+    const attrs = buildOzonVideoMediaAttributesFromSourceVideos([
+      {
+        url: 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/asset_0_h264.mp4?type=pdp',
+        coverUrl: 'https://ir.ozone.ru/s3/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/cover/cover.jpg',
+      },
+      {
+        url: 'https://cdnvideo.v.ozone.ru/vod/video-63/01KF0PT40YRX4EXA18X4JW8ZYE/asset_3_h264.mp4?type=pdp',
+        coverUrl: 'https://ir.ozone.ru/s3/video-63/01KF0PT40YRX4EXA18X4JW8ZYE/cover/cover.jpg',
+      },
+    ]);
+
+    expect(attrs).toEqual([
+      { id: 21842, complex_id: 100002, values: [{ value: 'https://ir.ozone.ru/s3/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/cover/cover.jpg' }] },
+      { id: 21843, complex_id: 100002, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/asset_0_h264.mp4' }] },
+      { id: 21844, complex_id: 100002, values: [{ value: '01KF0S7TY54CCQ9SZCCMQAM1RS' }] },
+      { id: 21845, complex_id: 100002, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/asset_0_h264.mp4' }] },
+      { id: 21846, complex_id: 100002, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/master.m3u8' }] },
+      { id: 22964, complex_id: 100002, values: [{ value: 'true' }] },
+      { id: 23256, complex_id: 100002, values: [{ value: '0.75' }] },
+      { id: 21837, complex_id: 100001, values: [{ value: 'asset_3_h264.mp4' }] },
+      { id: 21838, complex_id: 100001, values: [{ value: 'https://ir.ozone.ru/s3/video-63/01KF0PT40YRX4EXA18X4JW8ZYE/cover/cover.jpg' }] },
+      { id: 21839, complex_id: 100001, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-63/01KF0PT40YRX4EXA18X4JW8ZYE/master.m3u8' }] },
+      { id: 21840, complex_id: 100001, values: [{ value: '01KF0PT40YRX4EXA18X4JW8ZYE' }] },
+      { id: 21841, complex_id: 100001, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-63/01KF0PT40YRX4EXA18X4JW8ZYE/asset_3_h264.mp4' }] },
+      { id: 23255, complex_id: 100001, values: [{ value: '1.78' }] },
+    ]);
+  });
+
+  it('does not build Ozon video media attributes from generic external videos', () => {
+    expect(buildOzonVideoMediaAttributesFromSourceVideos([
+      { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg' },
+    ])).toEqual([]);
   });
 });

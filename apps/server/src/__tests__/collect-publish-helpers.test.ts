@@ -9,6 +9,7 @@ import {
   groupPublishItemsByCategory,
   hasOwnPublishCategory,
   hasOzonVideoMediaAttributes,
+  appendCollectedOzonVideoMediaAttributes,
   hasSuspiciousPublishName,
   recordPictureUploadDiagnostic,
   recordOfferPublishImages,
@@ -56,11 +57,48 @@ describe('collect publish helpers', () => {
       { id: 21842, values: [{ value: 'https://ir.ozone.ru/s3/video-64/demo/cover/cover.jpg' }] },
     ])).toBe(true);
     expect(hasOzonVideoMediaAttributes([
+      { id: 21837, complex_id: 100001, values: [{ value: 'demo.mp4' }] },
+      { id: 22964, complex_id: 100001, values: [{ value: 'true' }] },
+      { id: 23255, complex_id: 100001, values: [{ value: '1.78' }] },
+    ])).toBe(true);
+    expect(hasOzonVideoMediaAttributes([
       { attribute_id: '21846', values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/demo/master.m3u8' }] },
     ])).toBe(true);
     expect(hasOzonVideoMediaAttributes([
       { id: 999001, values: [{ value: 'https://cdnvideo.v.ozone.ru/vod/video-64/demo/master.m3u8' }] },
     ])).toBe(false);
+  });
+
+  it('appends generated Ozon video media attributes when collected videos are publishable CDN videos', () => {
+    const result = appendCollectedOzonVideoMediaAttributes([
+      { id: 4180, complex_id: 0, values: [{ value: 'Название' }] },
+    ], [
+      {
+        url: 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/asset_0_h264.mp4?type=pdp',
+        coverUrl: 'https://ir.ozone.ru/s3/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/cover/cover.jpg',
+      },
+    ]);
+
+    expect(result.generatedCount).toBe(7);
+    expect(result.attributes.some((attr) => attr.id === 21846)).toBe(true);
+    expect(result.attributes.find((attr) => attr.id === 4180)).toEqual({
+      id: 4180,
+      complex_id: 0,
+      values: [{ value: 'Название' }],
+    });
+  });
+
+  it('does not append generated Ozon video media attributes over existing official video attributes', () => {
+    const existing = [
+      { id: 21842, complex_id: 100002, values: [{ value: 'https://ir.ozone.ru/s3/video-64/demo/cover/cover.jpg' }] },
+    ];
+
+    expect(appendCollectedOzonVideoMediaAttributes(existing, [
+      { url: 'https://cdnvideo.v.ozone.ru/vod/video-64/01KF0S7TY54CCQ9SZCCMQAM1RS/asset_0_h264.mp4?type=pdp' },
+    ])).toEqual({
+      attributes: existing,
+      generatedCount: 0,
+    });
   });
 
   it('detects Chinese text in publish names', () => {
