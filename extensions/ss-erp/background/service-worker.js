@@ -25,6 +25,8 @@ const SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY = 'ss-erp:source-candidate-context';
 const SS_ERP_SOURCE_QUOTES_KEY = 'ss-erp:source-quotes';
 const SS_ERP_SOURCE_QUOTE_PENDING_KEY = 'ss-erp:source-quote-pending';
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
+const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
+const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
 let imageSearchJobsQueue = Promise.resolve();
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
@@ -975,6 +977,93 @@ function enqueueImageSearchJob(task) {
   return run;
 }
 
+function normalizeSourceSearchPlatforms(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  for (const item of raw) {
+    const text = toText(item).trim().toLowerCase();
+    const platform = text === '1688' || text === 'ali1688'
+      ? '1688'
+      : (text === 'pdd' || text === 'pinduoduo' ? 'pdd' : (text === 'taobao' || text === 'tb' ? 'taobao' : ''));
+    if (platform && !normalized.includes(platform)) normalized.push(platform);
+  }
+  return normalized;
+}
+
+function normalizeRemoteImageUrl(value) {
+  const text = toText(value).trim();
+  if (!text) return '';
+  return text.startsWith('//') ? ('https:' + text) : text;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  return btoa(binary);
+}
+
+async function fetchImageAsBase64(imageUrl) {
+  const normalizedUrl = normalizeRemoteImageUrl(imageUrl);
+  if (!/^https?:\/\//i.test(normalizedUrl)) throw new Error('缺少可用的 Ozon 主图链接');
+  const response = await fetch(normalizedUrl, { credentials: 'omit' });
+  if (!response.ok) throw new Error('读取 Ozon 主图失败：HTTP ' + response.status);
+  const contentType = response.headers && response.headers.get ? response.headers.get('content-type') : '';
+  if (contentType && !/^image\//i.test(contentType)) throw new Error('Ozon 主图响应不是图片');
+  const buffer = await response.arrayBuffer();
+  if (!buffer || !buffer.byteLength) throw new Error('Ozon 主图为空，无法以图搜图');
+  return arrayBufferToBase64(buffer);
+}
+
+async function openImageSearchTabsFromOzon(payload) {
+  payload = payload && typeof payload === 'object' ? payload : {};
+  const prefs = await chrome.storage.local.get([SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY]);
+  const platforms = normalizeSourceSearchPlatforms(payload.platforms).length
+    ? normalizeSourceSearchPlatforms(payload.platforms)
+    : (normalizeSourceSearchPlatforms(prefs[SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY]).length
+      ? normalizeSourceSearchPlatforms(prefs[SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY])
+      : SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS.slice());
+  if (!platforms.length) throw new Error('请至少选择一个核价网站');
+
+  const imageUrl = normalizeRemoteImageUrl(payload.imageUrl || payload.mainImage || payload.image);
+  const imageBase64 = toText(payload.imageBase64).trim() || await fetchImageAsBase64(imageUrl);
+  const helper = globalThis.SS_ERP_IMAGE_SEARCH_JOB;
+  if (!helper || typeof helper.createImageSearchJob !== 'function') {
+    throw new Error('image search job helper 未加载');
+  }
+
+  const jobsToOpen = await enqueueImageSearchJob(async () => {
+    const result = await chrome.storage.local.get([SS_ERP_IMAGE_SEARCH_JOBS_KEY]);
+    let jobs = result[SS_ERP_IMAGE_SEARCH_JOBS_KEY] && typeof result[SS_ERP_IMAGE_SEARCH_JOBS_KEY] === 'object'
+      ? result[SS_ERP_IMAGE_SEARCH_JOBS_KEY]
+      : {};
+    const opened = [];
+    for (const platform of platforms) {
+      const created = helper.createImageSearchJob(jobs, {
+        platform,
+        imageUrl,
+        imageBase64,
+        imagePreviewDataUrl: payload.imagePreviewDataUrl,
+        imageSize: payload.imageSize,
+        ozon: payload.ozon,
+      });
+      jobs = created.jobs;
+      opened.push({ platform, token: created.token, url: created.url });
+    }
+    await chrome.storage.local.set({ [SS_ERP_IMAGE_SEARCH_JOBS_KEY]: jobs });
+    return opened;
+  });
+
+  for (const job of jobsToOpen) {
+    await chrome.tabs.create({ url: job.url });
+  }
+  return jobsToOpen;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
@@ -1557,6 +1646,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ok: true,
         count: filtered.length,
         sets: filtered,
+      });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ss-erp:image-search-open-from-ozon') {
+    Promise.resolve().then(async () => {
+      const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+      const jobs = await openImageSearchTabsFromOzon(payload);
+      sendResponse({
+        ok: true,
+        count: jobs.length,
+        jobs,
       });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });

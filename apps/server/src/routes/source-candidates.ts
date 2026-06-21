@@ -93,8 +93,9 @@ function normalizeOzonProduct(input: unknown) {
   const price = product.price && typeof product.price === 'object' ? product.price as JsonRecord : {};
   const url = normalizeUrl(product.url || product.sourceUrl || product.tabUrl);
   const productId = toText(product.productId || product.sku || parseOzonProductId(url)).trim();
-  const priceValue = parseMoney(product.pagePriceValue ?? product.currentPriceValue ?? price.value ?? product.price);
-  const currency = normalizeCurrency(product.pagePriceCurrency || price.currency || product.currency, 'RUB');
+  const costingInputPriceCny = optionalMoney(product.costingInputPriceCny ?? product.priceRMB ?? product.priceCny ?? product.pagePriceCny);
+  const priceValue = costingInputPriceCny ?? parseMoney(product.pagePriceValue ?? product.currentPriceValue ?? price.value ?? product.price);
+  const currency = costingInputPriceCny != null ? 'CNY' : normalizeCurrency(product.pagePriceCurrency || price.currency || product.currency, 'RUB');
   return {
     productId,
     url,
@@ -247,16 +248,16 @@ function csvEscape(value: unknown): string {
 export function exportSourceQuotesCsv(rowsInput: unknown[]): string {
   const rows = Array.isArray(rowsInput) ? rowsInput as JsonRecord[] : [];
   const header = [
-    'ozonProductId',
+    'ozonSku',
     'ozonUrl',
     'ozonTitle',
-    'ozonSalePrice',
+    'ozonCostingInputPriceCny',
     'sourcePlatform',
     'sourceProductId',
     'sourceSku',
     'sourceUrl',
     'sourceTitle',
-    'costCny',
+    'purchaseCostCny',
     'sourceUnitPrice',
     'sourceShippingCny',
     'status',

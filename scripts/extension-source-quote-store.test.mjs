@@ -62,7 +62,7 @@ assert.equal(listed.length, 1);
 assert.equal(listed[0].source.sku, 'red-l');
 
 const csv = api.exportQuotesAsCsv(quotes);
-assert.match(csv, /ozonProductId,ozonUrl,ozonTitle,ozonSalePrice,sourcePlatform,sourceProductId,sourceSku,sourceUrl,sourceTitle,costCny,sourceUnitPrice,sourceShippingCny,sourcePriceText,status,createdAt,updatedAt/);
+assert.match(csv, /ozonSku,ozonUrl,ozonTitle,ozonCostingInputPriceCny,sourcePlatform,sourceProductId,sourceSku,sourceUrl,sourceTitle,purchaseCostCny,sourceUnitPrice,sourceShippingCny,sourcePriceText,status,createdAt,updatedAt/);
 assert.match(csv, /1628675309/);
 assert.match(csv, /733344455566/);
 assert.match(csv, /13\.5/);
@@ -101,5 +101,39 @@ assert.equal(shippingQuote.source.shippingFee.value, 6);
 assert.equal(shippingQuote.source.totalCostCny, 104);
 assert.equal(shippingQuote.source.sku, 'large-filter');
 assert.equal(shippingQuote.costCny, 104);
+
+const ozonContextWithFallbackPrice = api.normalizeQuote({
+  ozon: {
+    productId: '1888000111',
+    title: 'Ozon context with fallback seller price',
+    url: 'https://www.ozon.ru/product/fallback-1888000111/',
+    price: { value: 0, currency: 'RUB' },
+    pagePriceValue: 1499,
+    pagePriceCurrency: 'RUB',
+    currentPriceValue: 1599,
+    costingInputPriceCny: 119.92,
+  },
+  sourceProduct: {
+    sourcePlatform: '1688',
+    productId: '858352817684',
+    sourceUrl: 'https://detail.1688.com/offer/858352817684.html',
+    selectedSku: { skuId: '016-white-en', specText: '016白色英文款', price: 13.5 },
+    shippingCny: 4.5,
+    totalCostCny: 18,
+  },
+}, null, { now });
+
+assert.equal(ozonContextWithFallbackPrice.ozon.price.value, 119.92);
+assert.equal(ozonContextWithFallbackPrice.ozon.price.currency, 'CNY');
+
+const fallbackPriceCsv = api.exportQuotesAsCsv([ozonContextWithFallbackPrice]);
+assert.match(
+  fallbackPriceCsv,
+  /ozonSku,ozonUrl,ozonTitle,ozonCostingInputPriceCny,sourcePlatform,sourceProductId,sourceSku,sourceUrl,sourceTitle,purchaseCostCny,sourceUnitPrice,sourceShippingCny,sourcePriceText,status,createdAt,updatedAt/,
+);
+assert.match(fallbackPriceCsv, /1888000111/);
+assert.match(fallbackPriceCsv, /119\.92/);
+assert.match(fallbackPriceCsv, /016-white-en/);
+assert.match(fallbackPriceCsv, /18/);
 
 console.log('PASS source quote store');

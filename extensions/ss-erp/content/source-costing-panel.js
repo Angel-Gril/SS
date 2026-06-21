@@ -4,7 +4,9 @@
   var PANEL_ID = 'ss-erp-source-costing-panel';
   var FAB_ID = 'ss-erp-source-costing-fab';
   var PANEL_POSITION_KEY = 'ss-erp:source-costing-panel-position';
-  var SOURCE_PLATFORM = detectSourcePlatform(location.href);
+  var SourceCosting = window.SS_ERP_SOURCE_COSTING_CORE;
+  if (!SourceCosting) return;
+  var SOURCE_PLATFORM = SourceCosting.detectSourcePlatform(location.href, location.hostname);
   var state = {
     context: null,
     product: null,
@@ -43,20 +45,8 @@
     refreshProductOnly({ auto: true });
   }, 1000);
 
-  function detectSourcePlatform(url) {
-    var host = '';
-    try {
-      host = new URL(url || location.href).hostname.toLowerCase();
-    } catch (_error) {
-      host = String(location.hostname || '').toLowerCase();
-    }
-    if (host === 'detail.1688.com') return '1688';
-    if (host.indexOf('pinduoduo.com') >= 0 || host.indexOf('yangkeduo.com') >= 0) return 'PDD';
-    return '';
-  }
-
   function platformLabel() {
-    return SOURCE_PLATFORM || '货源';
+    return SourceCosting.platformLabel(SOURCE_PLATFORM);
   }
 
   function sendRuntimeMessage(message) {
@@ -257,16 +247,7 @@
   }
 
   function buildProductSignature(product) {
-    product = product && typeof product === 'object' ? product : {};
-    var selected = product.selectedSku && typeof product.selectedSku === 'object' ? product.selectedSku : {};
-    return [
-      product.productId || product.sourceProductId || product.url || '',
-      selected.skuId || selected.name || selected.specText || product.sku || '',
-      selected.quantity || '',
-      product.priceCny || product.price || '',
-      product.shippingCny || '',
-      product.totalCostCny || ''
-    ].join('|');
+    return SourceCosting.buildProductSignature(product);
   }
 
   function renderContent() {
@@ -336,9 +317,9 @@
     ].join('|');
 
     if (!state.initializedInputs) {
-      state.inputs.fxRate = toNumber(formState.fxRate, getFxRateFromStatus(status, state.inputs.fxRate || 0.08));
-      state.inputs.commissionPct = toNumber(formState.commissionPct, state.inputs.commissionPct || 12);
-      state.inputs.packingFee = toNumber(formState.packingFee, state.inputs.packingFee || 0);
+      state.inputs.fxRate = SourceCosting.toNumber(formState.fxRate, SourceCosting.getFxRateFromStatus(status, state.inputs.fxRate || 0.08));
+      state.inputs.commissionPct = SourceCosting.toNumber(formState.commissionPct, state.inputs.commissionPct || 12);
+      state.inputs.packingFee = SourceCosting.toNumber(formState.packingFee, state.inputs.packingFee || 0);
     }
 
     if (cost > 0 && costSignature !== state.lastCostSignature) {
@@ -350,9 +331,9 @@
     if (!state.initializedInputs) {
       state.inputs.priceRMB = readOzonPriceCny(ozon, state.inputs.fxRate);
       state.inputs.weightG = Number(ozon.weightG || product.grossWeightGrams || product.weightG) || 0;
-      state.inputs.lenCm = mmToCm(product.lengthMm);
-      state.inputs.widCm = mmToCm(product.widthMm);
-      state.inputs.hgtCm = mmToCm(product.heightMm);
+      state.inputs.lenCm = SourceCosting.mmToCm(product.lengthMm);
+      state.inputs.widCm = SourceCosting.mmToCm(product.widthMm);
+      state.inputs.hgtCm = SourceCosting.mmToCm(product.heightMm);
       state.initializedInputs = true;
     }
   }
@@ -403,7 +384,7 @@
         state.inputs[field] = Boolean(input.checked);
         return;
       }
-      state.inputs[field] = toNumber(input.value, 0);
+      state.inputs[field] = SourceCosting.toNumber(input.value, 0);
     });
   }
 
@@ -466,73 +447,23 @@
   }
 
   function computeCosting() {
-    var status = state.calculatorStatus || {};
-    var snapshot = status.snapshot || {};
-    var userConfig = snapshot.userConfig || {};
-    var selectedServiceIds = Array.isArray(userConfig.selectedServiceIds) ? userConfig.selectedServiceIds : [];
-    if (!selectedServiceIds.length) throw new Error('未同步 Ozon 物流配置，无法正式核价。');
-    if (!window.OZON_CALC_RULE_ENGINE || !window.OZON_CALC_PROFIT_ENGINE) throw new Error('计算器引擎未加载，请重新加载扩展。');
-    if (!(state.inputs.priceRMB > 0)) throw new Error('缺少 Ozon 售价，请手动填写售价后重新核价。');
-    if (!(state.inputs.cost > 0)) throw new Error('缺少当前 ' + platformLabel() + ' 采购成本，请先选择 SKU 或刷新页面。');
-    if (!(state.inputs.weightG > 0)) throw new Error('缺少商品重量，请手动填写重量后重新核价。');
-
-    var ruleSnapshot = snapshot.ruleSnapshot || { services: [] };
-    var catalogSnapshot = snapshot.catalogSnapshot || { services: [] };
-    var serviceMap = new Map((catalogSnapshot.services || []).map(function (service) {
-      return [service.id, service];
-    }));
-    var ruleMap = new Map();
-    (ruleSnapshot.services || []).forEach(function (rule) {
-      if (!ruleMap.has(rule.serviceId)) ruleMap.set(rule.serviceId, []);
-      ruleMap.get(rule.serviceId).push(rule);
-    });
-
-    var commissionMatch = resolveCommissionMatch(status);
-    var commissionInput = Object.assign({}, state.inputs, {
-      commissionPct: commissionMatch.ratePct,
-      commissionMatch: commissionMatch,
-      customFees: []
-    });
-    var quotes = [];
-    var unavailable = [];
-    selectedServiceIds.forEach(function (serviceId) {
-      var service = serviceMap.get(serviceId);
-      if (!service) return;
-      var verdict = window.OZON_CALC_RULE_ENGINE.buildServiceQuote(service, ruleMap.get(serviceId) || [], commissionInput);
-      if (!verdict.available) {
-        unavailable.push(verdict);
-        return;
-      }
-      quotes.push(window.OZON_CALC_PROFIT_ENGINE.enrichQuote(verdict.matchedRule, commissionInput));
-    });
-    if (!quotes.length) {
+    try {
+      var computed = SourceCosting.computeCosting({
+        status: state.calculatorStatus || {},
+        inputs: state.inputs,
+        ozon: state.context && state.context.ozon || {},
+        sourcePlatform: SOURCE_PLATFORM,
+        ruleEngine: window.OZON_CALC_RULE_ENGINE,
+        profitEngine: window.OZON_CALC_PROFIT_ENGINE,
+        commissionRates: window.OZON_CALC_COMMISSION_RATES
+      });
+      state.result = computed.result;
+      state.unavailable = computed.unavailable;
+    } catch (error) {
       state.result = null;
-      state.unavailable = unavailable;
-      throw new Error(unavailable.length ? ('当前条件没有命中物流：' + unavailable[0].reason) : '当前条件没有命中物流。');
+      state.unavailable = error && error.unavailable || [];
+      throw error;
     }
-
-    state.result = {
-      best: window.OZON_CALC_RULE_ENGINE.resolveBestQuote(quotes, userConfig.resolutionMode || 'lowest_cost', selectedServiceIds),
-      quotes: quotes,
-      commissionMatch: commissionMatch
-    };
-    state.unavailable = unavailable;
-  }
-
-  function resolveCommissionMatch(status) {
-    var snapshot = status && status.snapshot || {};
-    var formState = snapshot.formState || {};
-    var manualRate = toNumber(state.inputs.commissionPct, 12);
-    if (formState.autoCommissionSync === false || !window.OZON_CALC_COMMISSION_RATES || typeof window.OZON_CALC_COMMISSION_RATES.matchCommissionRate !== 'function') {
-      return { ratePct: manualRate, source: 'manual', priceBand: { minRUB: 0, maxRUB: 0 } };
-    }
-    var ozon = state.context && state.context.ozon || {};
-    return window.OZON_CALC_COMMISSION_RATES.matchCommissionRate(status.commissionSnapshot, {
-      scheme: formState.commissionScheme || 'rfbs',
-      categoryHints: ozon.categoryHints || [ozon.title],
-      priceRUB: state.inputs.fxRate > 0 ? state.inputs.priceRMB / state.inputs.fxRate : 0,
-      manualRatePct: manualRate
-    });
   }
 
   function buildResultCardHtml() {
@@ -573,7 +504,7 @@
       var candidateResponse = await sendRuntimeMessage({
         type: 'ss-erp:source-candidate-upsert',
         payload: {
-          ozon: state.context.ozon,
+          ozon: buildOzonQuoteContext(),
           sourceProduct: state.product
         }
       });
@@ -582,7 +513,7 @@
       var response = await sendRuntimeMessage({
         type: 'ss-erp:source-quote-save',
         payload: {
-          ozon: state.context.ozon,
+          ozon: buildOzonQuoteContext(),
           sourceProduct: state.product,
           costCny: state.inputs.cost || state.product.totalCostCny || state.product.priceCny || state.product.price,
           suppressOzonApply: true
@@ -600,6 +531,15 @@
       state.busy = false;
       renderContent();
     }
+  }
+
+  function buildOzonQuoteContext() {
+    var ozon = state.context && state.context.ozon || {};
+    return SourceCosting.buildOzonQuoteContext(
+      ozon,
+      state.inputs.priceRMB,
+      readOzonPriceCny(ozon, state.inputs.fxRate)
+    );
   }
 
   async function collectToErp() {
@@ -634,55 +574,24 @@
   }
 
   function formatMoney(value) {
-    var number = Number(value);
-    if (!Number.isFinite(number)) return '0';
-    return number.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+    return SourceCosting.formatMoney(value);
   }
 
   function formatInputValue(value) {
-    var number = Number(value);
-    if (!Number.isFinite(number) || number <= 0) return '';
-    return String(Math.round(number * 1000000) / 1000000);
-  }
-
-  function toNumber(value, fallbackValue) {
-    var number = Number(value);
-    return Number.isFinite(number) ? number : (fallbackValue == null ? 0 : fallbackValue);
-  }
-
-  function mmToCm(value) {
-    var number = Number(value) || 0;
-    return number > 0 ? Math.round(number / 10 * 100) / 100 : 0;
-  }
-
-  function getFxRateFromStatus(status, fallbackValue) {
-    var snapshot = status && status.fxSnapshot;
-    var rate = snapshot && snapshot.cnyPerCurrency ? Number(snapshot.cnyPerCurrency.RUB) || 0 : 0;
-    return rate > 0 ? rate : (fallbackValue || 0.08);
+    return SourceCosting.formatInputValue(value);
   }
 
   function readOzonPriceCny(ozon, fxRate) {
-    ozon = ozon && typeof ozon === 'object' ? ozon : {};
-    var priceObject = ozon.price && typeof ozon.price === 'object' ? ozon.price : {};
-    var value = Number(ozon.pagePriceValue || priceObject.value || ozon.currentPriceValue || ozon.price) || 0;
-    var currency = String(ozon.pagePriceCurrency || priceObject.currency || ozon.currency || 'CNY').toUpperCase();
-    if (!(value > 0)) return 0;
-    if (currency === 'CNY' || currency === 'RMB') return value;
-    if (window.OZON_CALC_FX_RATES && typeof window.OZON_CALC_FX_RATES.priceToCNY === 'function') {
-      return window.OZON_CALC_FX_RATES.priceToCNY(value, currency, state.calculatorStatus && state.calculatorStatus.fxSnapshot, fxRate || 0.08);
-    }
-    if (currency === 'RUB') return value * (fxRate || 0.08);
-    return value;
+    return SourceCosting.readOzonPriceCny(
+      ozon,
+      fxRate,
+      state.calculatorStatus && state.calculatorStatus.fxSnapshot,
+      window.OZON_CALC_FX_RATES
+    );
   }
 
   function formatOzonPrice(ozon) {
-    ozon = ozon && typeof ozon === 'object' ? ozon : {};
-    var priceObject = ozon.price && typeof ozon.price === 'object' ? ozon.price : {};
-    var value = Number(ozon.pagePriceValue || priceObject.value || ozon.currentPriceValue || 0) || 0;
-    var currency = String(ozon.pagePriceCurrency || priceObject.currency || ozon.currency || 'RUB').toUpperCase();
-    if (!(value > 0)) return '-';
-    var symbol = currency === 'CNY' || currency === 'RMB' ? '¥ ' : currency === 'RUB' ? '₽ ' : (currency + ' ');
-    return symbol + formatMoney(value);
+    return SourceCosting.formatOzonPrice(ozon);
   }
 
   function escapeHtml(value) {

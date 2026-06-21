@@ -93,6 +93,7 @@ const navigation: NavItem[] = [
     children: [
       { label: 'SKU批量采集', href: '/collect/batch' },
       { label: 'SKU采集跟卖', href: '/collect' },
+      { label: '1688商品采集', href: '/collect/source' },
       { label: 'SKU采集改款', href: '/listing' },
       { label: '图片处理', href: '/image-processing' },
       { label: '上架日志', href: '/listing-logs' },

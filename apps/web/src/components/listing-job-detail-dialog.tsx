@@ -59,6 +59,53 @@ function pictureStageBadgeClass(tone: ListingPictureStageTone): string {
   }
 }
 
+function videoStatusLabel(status: string): string {
+  switch (status) {
+    case 'uploaded':
+      return '已上架';
+    case 'pending':
+      return '待确认';
+    case 'skipped':
+      return '未自动上架';
+    case 'failed':
+      return '失败';
+    default:
+      return status || '未知';
+  }
+}
+
+function videoStatusBadgeClass(status: string): string {
+  switch (status) {
+    case 'uploaded':
+      return 'bg-emerald-600';
+    case 'pending':
+      return 'bg-blue-600';
+    case 'skipped':
+      return 'bg-amber-500';
+    case 'failed':
+      return 'bg-destructive';
+    default:
+      return 'bg-zinc-500';
+  }
+}
+
+function videoPublishStatusLabel(status?: string): string {
+  switch (status) {
+    case 'success':
+      return '视频已上架';
+    case 'pending':
+      return '视频待确认';
+    case 'partial_pending':
+      return '部分视频待确认';
+    case 'partial_failed':
+      return '部分视频未上架';
+    case 'failed':
+      return '视频未自动上架';
+    default:
+      return '视频诊断';
+  }
+}
+
 function isBlockingImportError(item: PushItem): boolean {
   if (item.status === 'failed') return true;
   return (item.errors || []).some((error) => {
@@ -112,6 +159,13 @@ export function ListingJobDetailDialog({
   const pictureActivationPending = data?.payload?.pictureActivationPending || [];
   const picturePendingCount = Number(data?.payload?.pictureUploadPendingCount || 0);
   const pictureActivationPendingCount = Number(data?.payload?.pictureActivationPendingCount || pictureActivationPending.length || 0);
+  const videoTrace = data?.payload?.videoTrace || [];
+  const videoPublishedCount = Number(data?.payload?.videoPublishedCount || 0);
+  const videoFailedCount = Number(data?.payload?.videoPublishFailedCount || 0);
+  const videoSkippedCount = Number(data?.payload?.videoPublishSkippedCount || 0);
+  const videoPendingCount = Number(data?.payload?.videoPublishPendingCount || 0);
+  const videoProblemCount = videoFailedCount + videoSkippedCount;
+  const videoPublishStatus = data?.payload?.videoPublishStatus;
   const pictureStage = data
     ? resolveListingPictureStage({ status: data.status, payload: data.payload })
     : null;
@@ -286,6 +340,57 @@ export function ListingJobDetailDialog({
                     </tbody>
                   </table>
                 )}
+              </div>
+            )}
+
+            {videoTrace.length > 0 && (
+              <div className="border rounded-md overflow-hidden">
+                <div className="px-3 py-2 bg-muted flex items-center justify-between">
+                  <div className="font-medium">视频上架诊断</div>
+                  <Badge
+                    variant={videoProblemCount ? 'destructive' : 'outline'}
+                    className={`text-[10px] ${videoProblemCount ? '' : 'border-blue-300 text-blue-700 bg-blue-50 dark:bg-blue-950 dark:text-blue-300'}`}
+                  >
+                    {videoPublishStatusLabel(videoPublishStatus)}
+                  </Badge>
+                </div>
+                <div className="px-3 py-2 text-xs border-t bg-muted/40">
+                  已上架 {videoPublishedCount} 个，待确认 {videoPendingCount} 个，未自动上架 {videoSkippedCount} 个，失败 {videoFailedCount} 个。
+                </div>
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/70">
+                    <tr>
+                      <th className="text-left px-3 py-2">OFFER ID</th>
+                      <th className="text-left px-3 py-2 w-24">状态</th>
+                      <th className="text-left px-3 py-2">视频</th>
+                      <th className="text-left px-3 py-2">原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {videoTrace.map((it, i) => (
+                      <tr key={`${it.offerId}-${i}`} className="border-t">
+                        <td className="px-3 py-2"><code>{it.offerId}</code></td>
+                        <td className="px-3 py-2">
+                          <Badge className={`${videoStatusBadgeClass(it.status)} text-white text-[10px]`}>
+                            {videoStatusLabel(it.status)}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2">
+                          {it.videoUrl ? (
+                            <button
+                              type="button"
+                              className="text-left underline-offset-2 hover:underline"
+                              onClick={() => window.open(it.videoUrl, '_blank')}
+                            >
+                              {it.name || it.videoUrl}
+                            </button>
+                          ) : `${it.videoCount || 0} 个`}
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground break-words">{it.message || it.reason || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
 

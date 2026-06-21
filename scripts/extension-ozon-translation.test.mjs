@@ -12,6 +12,7 @@ function readRepoFile(...parts) {
 }
 
 function loadOzonPanelHarness({ priceText, htmlText = '', dataStates = [] } = {}) {
+  const helperSource = readRepoFile('extensions', 'ss-erp', 'shared', 'ozon', 'page-product.js');
   const source = readRepoFile('extensions', 'ss-erp', 'content', 'ozon-panel.js');
   const dataStateNodes = dataStates.map((value) => ({
     getAttribute(name) {
@@ -53,6 +54,8 @@ function loadOzonPanelHarness({ priceText, htmlText = '', dataStates = [] } = {}
   };
   context.window.window = context.window;
   context.window.document = document;
+  context.globalThis = context.window;
+  vm.runInNewContext(helperSource, context, { filename: 'page-product.js' });
   vm.runInNewContext(source, context, { filename: 'ozon-panel.js' });
   return context.window.OZON_CALC_OZON_PANEL;
 }
@@ -98,10 +101,19 @@ test('Ozon calculator parses browser-translated visible China prices with comma 
 
 test('Ozon calculator drawer opts out of browser page translation', () => {
   const injector = readRepoFile('extensions', 'ss-erp', 'content', 'ozon-injector.js');
+  const manifest = JSON.parse(readRepoFile('extensions', 'ss-erp', 'manifest.json'));
 
   assert.match(injector, /fab\.classList\.add\('notranslate'\)/);
   assert.match(injector, /drawer\.classList\.add\('notranslate'\)/);
   assert.match(injector, /fab\.setAttribute\('translate',\s*'no'\)/);
   assert.match(injector, /drawer\.setAttribute\('translate',\s*'no'\)/);
   assert.match(injector, /drawer\.setAttribute\('lang',\s*'zh-CN'\)/);
+
+  const ozonScript = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('content/ozon-panel.js'));
+  assert.ok(ozonScript, 'manifest should register the Ozon panel content script');
+  assert.ok(
+    ozonScript.js.indexOf('shared/ozon/page-product.js') >= 0
+      && ozonScript.js.indexOf('shared/ozon/page-product.js') < ozonScript.js.indexOf('content/ozon-panel.js'),
+    'Ozon product page helper should load before the Ozon panel',
+  );
 });

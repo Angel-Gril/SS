@@ -77,6 +77,7 @@
         "shared/calculator-core/rule-engine.js",
         "shared/commission/commission-rates.js",
         "shared/currency/fx-rates.js",
+        "shared/ozon/page-product.js",
         "shared/seller-products/seller-products-export.js",
         "shared/official-freight/official-freight-export.js",
         "shared/seller-logistics/seller-logistics-export.js",
@@ -114,6 +115,7 @@
       ],
       "js": [
         "shared/currency/price-currency.js",
+        "shared/collectors/source-product-core.js",
         "shared/collectors/pdd-product.js",
         "shared/ozon/variant-spec.js",
         "content/collect-content-script.js"
@@ -124,13 +126,16 @@
       "matches": [
         "https://detail.1688.com/*",
         "https://*.pinduoduo.com/*",
-        "https://*.yangkeduo.com/*"
+        "https://*.yangkeduo.com/*",
+        "https://item.taobao.com/*",
+        "https://detail.tmall.com/*"
       ],
       "js": [
         "shared/calculator-core/profit-engine.js",
         "shared/calculator-core/rule-engine.js",
         "shared/commission/commission-rates.js",
         "shared/currency/fx-rates.js",
+        "shared/source-costing/panel-core.js",
         "content/source-costing-panel.js"
       ],
       "css": [

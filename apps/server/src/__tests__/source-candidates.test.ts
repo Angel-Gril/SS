@@ -11,7 +11,10 @@ describe('source candidate sync helpers', () => {
         productId: '1663890868',
         title: 'Концентратор кислорода 0-8 л/мин',
         url: 'https://www.ozon.ru/product/foo-1663890868/',
-        price: { value: 692.51, currency: 'CNY' },
+        price: { value: 0, currency: 'RUB' },
+        pagePriceValue: 1499,
+        pagePriceCurrency: 'RUB',
+        costingInputPriceCny: 119.92,
       },
       sourceProduct: {
         platform: '1688',
@@ -40,6 +43,8 @@ describe('source candidate sync helpers', () => {
     });
 
     expect(payload.candidate.key).toBe('1663890868|1688|523212088534|OJ-231E');
+    expect(payload.ozon.priceValue).toBe(119.92);
+    expect(payload.ozon.currency).toBe('CNY');
     expect(payload.source.sku).toBe('OJ-231E');
     expect(payload.source.skuAttributes).toEqual({ 除湿量: '20L/D', 额定功率: '310W' });
     expect(payload.source.unitPriceCny).toBe(800);
@@ -73,8 +78,10 @@ describe('source candidate sync helpers', () => {
       },
     ]);
 
-    expect(csv).toContain('ozonProductId,ozonUrl,ozonTitle');
+    expect(csv).toContain('ozonSku,ozonUrl,ozonTitle,ozonCostingInputPriceCny');
+    expect(csv).toContain('purchaseCostCny');
     expect(csv).toContain('1663890868');
+    expect(csv).toContain('692.51');
     expect(csv).toContain('OJ-231E');
     expect(csv).toContain('800');
   });

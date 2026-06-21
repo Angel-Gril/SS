@@ -6,6 +6,7 @@ const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-work
 const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
 const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 const sourceCostingPanelJs = fs.readFileSync('extensions/ss-erp/content/source-costing-panel.js', 'utf8');
+const sourceCostingCoreJs = fs.readFileSync('extensions/ss-erp/shared/source-costing/panel-core.js', 'utf8');
 
 assert.match(
   serviceWorker,
@@ -55,6 +56,11 @@ assert.ok(
   'source costing panel should run on PDD source pages',
 );
 assert.ok(
+  sourceCostingPanel.matches.includes('https://item.taobao.com/*')
+    && sourceCostingPanel.matches.includes('https://detail.tmall.com/*'),
+  'source costing panel should run on Taobao and Tmall source detail pages',
+);
+assert.ok(
   sourceCostingPanel.css.includes('content/source-costing-panel.css'),
   'source costing panel should include its CSS',
 );
@@ -63,6 +69,7 @@ for (const script of [
   'shared/calculator-core/rule-engine.js',
   'shared/commission/commission-rates.js',
   'shared/currency/fx-rates.js',
+  'shared/source-costing/panel-core.js',
 ]) {
   assert.ok(
     sourceCostingPanel.js.includes(script),
@@ -90,17 +97,22 @@ assert.match(
 );
 assert.match(
   sourceCostingPanelJs,
-  /OZON_CALC_RULE_ENGINE\.buildServiceQuote/,
-  'source costing panel should reuse the shared logistics rule engine',
+  /SourceCosting\.computeCosting/,
+  'source costing panel should delegate calculator logic to the shared source costing helper',
+);
+assert.match(
+  sourceCostingCoreJs,
+  /ruleEngine\.buildServiceQuote/,
+  'source costing helper should reuse the shared logistics rule engine',
+);
+assert.match(
+  sourceCostingCoreJs,
+  /profitEngine\.enrichQuote/,
+  'source costing helper should reuse the shared profit engine',
 );
 assert.match(
   sourceCostingPanelJs,
-  /OZON_CALC_PROFIT_ENGINE\.enrichQuote/,
-  'source costing panel should reuse the shared profit engine',
-);
-assert.match(
-  sourceCostingPanelJs,
-  /重新核价/,
+  /data-action="run-costing">重新计算/,
   'source costing panel primary action should be recalculating, not saving',
 );
 assert.match(
@@ -143,6 +155,25 @@ assert.match(
   /openPanel/,
   'source costing panel should automatically expand when an Ozon source context is available',
 );
+
+const sourceCollector = contentScripts.find((entry) => {
+  const scripts = Array.isArray(entry.js) ? entry.js : [];
+  return scripts.includes('content/collect-content-script.js');
+});
+assert.ok(sourceCollector, 'manifest should register the source product collector');
+for (const script of [
+  'shared/currency/price-currency.js',
+  'shared/collectors/source-product-core.js',
+]) {
+  assert.ok(
+    sourceCollector.js.includes(script),
+    `source product collector should load ${script}`,
+  );
+  assert.ok(
+    sourceCollector.js.indexOf(script) < sourceCollector.js.indexOf('content/collect-content-script.js'),
+    `${script} should load before the source product collector`,
+  );
+}
 
 const pddBridge = contentScripts.find((entry) => {
   const scripts = Array.isArray(entry.js) ? entry.js : [];

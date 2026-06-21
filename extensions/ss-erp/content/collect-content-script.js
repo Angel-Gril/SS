@@ -4,6 +4,21 @@
   const BRIDGE_ID = "spb-self-hosted-page-bridge";
   const PAGE_STATE_TIMEOUT_MS = 8000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
+  const SourceProductCore = globalThis.SS_ERP_SOURCE_PRODUCT_CORE || {};
+  const detectPlatform = SourceProductCore.detectPlatform;
+  const parseLooseNumber = SourceProductCore.parseLooseNumber;
+  const formatMoney = SourceProductCore.formatMoney;
+  const convertWeightToGrams = SourceProductCore.convertWeightToGrams;
+  const guessWeightUnit = SourceProductCore.guessWeightUnit;
+  const normalizeWhitespace = SourceProductCore.normalizeWhitespace;
+  const collectDataSources = SourceProductCore.collectDataSources;
+  const collectStringCandidates = SourceProductCore.collectStringCandidates;
+  const collectObjectCandidates = SourceProductCore.collectObjectCandidates;
+  const collectNumberCandidates = SourceProductCore.collectNumberCandidates;
+  const summarizeSources = SourceProductCore.summarizeSources;
+  const walkObject = SourceProductCore.walkObject;
+  const hasAnyKey = SourceProductCore.hasAnyKey;
+  const pickFirstValue = SourceProductCore.pickFirstValue;
   let lastOzonUrl = "";
 
   injectPageBridge();
@@ -980,36 +995,6 @@
     amazon: extractAmazonProduct
   };
 
-  function detectPlatform(hostname) {
-    const host = (hostname || "").toLowerCase();
-    if (host.includes("1688.com")) return "1688";
-    if (host.includes("pinduoduo.com") || host.includes("yangkeduo.com")) return "pdd";
-    if (host.includes("temu.com")) return "temu";
-    if (host.includes("aliexpress.com")) return "aliexpress";
-    if (host.includes("wildberries.ru")) return "wb";
-    if (host.includes("ozon.ru")) return "ozon";
-    if (host.includes("jd.com")) return "jd";
-    if (host.includes("taobao.com")) return "taobao";
-    if (host.includes("tmall.com")) return "tmall";
-    if (host.includes("amazon.")) return "amazon";
-    return "generic";
-  }
-
-  function collectDataSources(pageState) {
-    const sources = [];
-    if (pageState && pageState.knownGlobals) {
-      Object.values(pageState.knownGlobals).forEach((value) => {
-        if (value && typeof value === "object") {
-          sources.push(value);
-        }
-      });
-    }
-    if (pageState && pageState.aliExpressData) {
-      sources.push(pageState.aliExpressData);
-    }
-    return sources;
-  }
-
   function parseJsonLd() {
     const results = [];
     document.querySelectorAll('script[type="application/ld+json"]').forEach((node) => {
@@ -1946,187 +1931,4 @@
     return candidates.length ? candidates[0].value : "";
   }
 
-  function collectStringCandidates(sources, regex) {
-    const results = [];
-    sources.forEach((source) => {
-      walkObject(source, [], (value, path) => {
-        const lastKey = path[path.length - 1] || "";
-        if (typeof value === "string" && regex.test(String(lastKey))) {
-          const text = normalizeWhitespace(value);
-          if (text && text.length <= 300) {
-            results.push({ path: path.join("."), value: text });
-          }
-        }
-      });
-    });
-    return results;
-  }
-
-  function collectObjectCandidates(sources, regex) {
-    const results = [];
-    sources.forEach((source) => {
-      walkObject(source, [], (value, path) => {
-        const lastKey = path[path.length - 1] || "";
-        if (value && typeof value === "object" && regex.test(String(lastKey))) {
-          results.push({ path: path.join("."), value });
-        }
-      });
-    });
-    return results;
-  }
-
-  function collectNumberCandidates(sources, regex) {
-    const results = [];
-    sources.forEach((source) => {
-      walkObject(source, [], (value, path) => {
-        const lastKey = path[path.length - 1] || "";
-        if (!regex.test(String(lastKey))) {
-          return;
-        }
-
-        if (typeof value === "number" && Number.isFinite(value)) {
-          results.push({
-            path: path.join("."),
-            value,
-            weightGrams: convertWeightToGrams(value, guessWeightUnit(lastKey))
-          });
-          return;
-        }
-
-        if (typeof value === "string") {
-          const parsed = parseLooseNumber(value);
-          if (parsed != null) {
-            results.push({
-              path: path.join("."),
-              value: parsed,
-              weightGrams: convertWeightToGrams(value, guessWeightUnit(value))
-            });
-          }
-        }
-      });
-    });
-    return results;
-  }
-
-  function summarizeSources(sources) {
-    return sources.map((source, index) => ({
-      index,
-      keys: Object.keys(source || {}).slice(0, 20)
-    }));
-  }
-
-  function walkObject(value, path, visitor, depth = 0) {
-    if (depth > 12 || value == null) {
-      return;
-    }
-
-    visitor(value, path);
-
-    if (Array.isArray(value)) {
-      value.forEach((item, index) => {
-        walkObject(item, path.concat(String(index)), visitor, depth + 1);
-      });
-      return;
-    }
-
-    if (typeof value === "object") {
-      Object.keys(value).forEach((key) => {
-        walkObject(value[key], path.concat(key), visitor, depth + 1);
-      });
-    }
-  }
-
-  function hasAnyKey(obj, regex) {
-    return Object.keys(obj || {}).some((key) => regex.test(key));
-  }
-
-  function pickFirstValue(obj, keys) {
-    for (const key of keys) {
-      if (obj && Object.prototype.hasOwnProperty.call(obj, key) && obj[key] != null && obj[key] !== "") {
-        return obj[key];
-      }
-    }
-    return null;
-  }
-
-  function parseLooseNumber(input) {
-    if (input == null || input === "") {
-      return null;
-    }
-
-    if (typeof input === "number" && Number.isFinite(input)) {
-      return input;
-    }
-
-    const text = String(input).replace(/,/g, "").replace(/\s+/g, "").trim().toLowerCase();
-    if (!text) {
-      return null;
-    }
-
-    const match = text.match(/([0-9]+(?:\.[0-9]+)?)(万|w|k|m)?/i);
-    if (!match) {
-      return null;
-    }
-
-    let value = Number(match[1]);
-    const unit = match[2];
-    if (!Number.isFinite(value)) {
-      return null;
-    }
-
-    if (unit === "万") value *= 10000;
-    if (unit === "w") value *= 10000;
-    if (unit === "k") value *= 1000;
-    if (unit === "m") value *= 1000000;
-    return Math.round(value);
-  }
-
-  function formatMoney(value) {
-    if (value == null || !Number.isFinite(Number(value))) return "";
-    return Number(value).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
-  }
-
-  function convertWeightToGrams(value, unitHint) {
-    if (value == null || value === "") {
-      return null;
-    }
-
-    const unit = String(unitHint || guessWeightUnit(value) || "").toLowerCase();
-    const parsed =
-      typeof value === "number" && Number.isFinite(value)
-        ? value
-        : Number(String(value).replace(/,/g, "").match(/([0-9]+(?:\.[0-9]+)?)/)?.[1]);
-
-    if (!Number.isFinite(parsed)) {
-      return null;
-    }
-
-    if (unit.includes("kg") || unit.includes("千克")) {
-      return Math.round(parsed * 1000);
-    }
-    if (unit.includes("斤")) {
-      return Math.round(parsed * 500);
-    }
-    if (unit.includes("lb") || unit.includes("pound") || unit.includes("磅")) {
-      return Math.round(parsed * 453.592);
-    }
-    if (unit.includes("oz") || unit.includes("ounce")) {
-      return Math.round(parsed * 28.3495);
-    }
-    return Math.round(parsed);
-  }
-
-  function guessWeightUnit(input) {
-    const text = String(input || "").toLowerCase();
-    if (text.includes("kg") || text.includes("千克")) return "kg";
-    if (text.includes("斤")) return "斤";
-    if (text.includes("lb") || text.includes("pound") || text.includes("磅")) return "lb";
-    if (text.includes("oz") || text.includes("ounce")) return "oz";
-    if (text.includes("g") || text.includes("克")) return "g";
-    return "g";
-  }
-
-  function normalizeWhitespace(value) {
-    return String(value || "").replace(/\s+/g, " ").trim();
-  }
 })();

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const priceCurrencyScript = fs.readFileSync('extensions/ss-erp/shared/currency/price-currency.js', 'utf8');
+const sourceProductCoreScript = fs.readFileSync('extensions/ss-erp/shared/collectors/source-product-core.js', 'utf8');
 const collectScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 
 function makeMockElement({ text = '', className = '', attrs = {}, value = '', children = [] }) {
@@ -118,6 +119,7 @@ async function collectWithPage({ url, title, bodyText, selectors, queryAll, page
 
   vm.createContext(sandbox);
   vm.runInContext(priceCurrencyScript, sandbox, { filename: 'price-currency.js' });
+  vm.runInContext(sourceProductCoreScript, sandbox, { filename: 'source-product-core.js' });
   vm.runInContext(collectScript, sandbox, { filename: 'collect-content-script.js' });
 
   assert.equal(typeof messageListener, 'function', 'collect script should register a runtime message listener');

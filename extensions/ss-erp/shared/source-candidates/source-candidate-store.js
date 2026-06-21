@@ -68,6 +68,12 @@
     var url = normalizeUrl(product.url || product.sourceUrl || product.tabUrl);
     var productId = toText(product.productId || product.sku || parseOzonProductId(url)).trim();
     var key = productId ? 'ozon:product:' + productId : 'ozon:url:' + encodeURIComponent(url);
+    var priceObject = product.price && typeof product.price === 'object' ? product.price : {};
+    var costingInputPriceCny = parsePrice(product.costingInputPriceCny || product.priceRMB || product.priceCny || product.pagePriceCny);
+    var priceValue = parsePrice(costingInputPriceCny || product.pagePriceValue || product.currentPriceValue || priceObject.value || product.price);
+    var pagePriceValue = parsePrice(product.pagePriceValue || priceValue || product.currentPriceValue || priceObject.value || product.price);
+    var currentPriceValue = parsePrice(product.currentPriceValue || pagePriceValue || priceValue || priceObject.value || product.price);
+    var currency = costingInputPriceCny ? 'CNY' : normalizeCurrency(product.pagePriceCurrency || priceObject.currency || product.currency, 'RUB');
     return {
       key: key,
       productId: productId,
@@ -75,12 +81,12 @@
       url: url,
       images: uniqueStrings(product.images || product.imageUrls || (product.image ? [product.image] : [])),
       price: {
-        value: parsePrice(product.price || product.currentPriceValue || product.pagePriceValue),
-        currency: normalizeCurrency(product.currency || product.pagePriceCurrency, 'RUB')
+        value: priceValue,
+        currency: currency
       },
-      pagePriceValue: parsePrice(product.pagePriceValue || product.price || product.currentPriceValue),
-      pagePriceCurrency: normalizeCurrency(product.pagePriceCurrency || product.currency, 'RUB'),
-      currentPriceValue: parsePrice(product.currentPriceValue || product.pagePriceValue || product.price),
+      pagePriceValue: pagePriceValue,
+      pagePriceCurrency: currency,
+      currentPriceValue: currentPriceValue,
       weightG: Number(product.weightG || product.grossWeightGrams) || 0,
       categoryHints: Array.isArray(product.categoryHints)
         ? product.categoryHints.map(toText).filter(Boolean).slice(0, 8)

@@ -83,12 +83,10 @@
     options = options && typeof options === 'object' ? options : {};
     var url = normalizeUrl(product.url || product.sourceUrl || product.tabUrl);
     var productId = toText(product.productId || product.sku || parseOzonProductId(url)).trim();
-    var priceSource = product.price && typeof product.price === 'object'
-      ? product.price.value
-      : (product.price || product.currentPriceValue || product.pagePriceValue);
-    var currencySource = product.price && typeof product.price === 'object'
-      ? product.price.currency
-      : (product.currency || product.pagePriceCurrency);
+    var priceObject = product.price && typeof product.price === 'object' ? product.price : {};
+    var costingInputPriceCny = parsePrice(product.costingInputPriceCny || product.priceRMB || product.priceCny || product.pagePriceCny);
+    var priceSource = costingInputPriceCny || product.pagePriceValue || product.currentPriceValue || priceObject.value || product.price;
+    var currencySource = costingInputPriceCny ? 'CNY' : (product.pagePriceCurrency || priceObject.currency || product.currency);
     return {
       productId: productId,
       title: toText(product.title || product.sourceTitleRaw || product.name).trim(),
@@ -302,16 +300,16 @@
 
   function exportQuotesAsCsv(existingQuotes) {
     var rows = [[
-      'ozonProductId',
+      'ozonSku',
       'ozonUrl',
       'ozonTitle',
-      'ozonSalePrice',
+      'ozonCostingInputPriceCny',
       'sourcePlatform',
       'sourceProductId',
       'sourceSku',
       'sourceUrl',
       'sourceTitle',
-      'costCny',
+      'purchaseCostCny',
       'sourceUnitPrice',
       'sourceShippingCny',
       'sourcePriceText',

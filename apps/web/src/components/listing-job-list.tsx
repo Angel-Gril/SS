@@ -39,6 +39,21 @@ export interface JobRow {
     pictureActivationPendingCount?: number;
     pictureActivationPending?: Array<{ offerId?: string; productId?: string | number; reason?: string }> | null;
     pictureUploadError?: string | null;
+    videoTrace?: Array<{
+      offerId: string;
+      productId?: number | null;
+      status: 'uploaded' | 'failed' | 'pending' | 'skipped';
+      videoCount?: number;
+      videoUrl?: string;
+      name?: string;
+      reason?: string;
+      message?: string;
+    }> | null;
+    videoPublishStatus?: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending';
+    videoPublishedCount?: number;
+    videoPublishFailedCount?: number;
+    videoPublishSkippedCount?: number;
+    videoPublishPendingCount?: number;
     itemCount?: number;
     sourceItemCount?: number;
     failedCount?: number;

@@ -113,6 +113,41 @@ assert.match(
   'Ozon panel should fill the purchase cost from the selected source quote',
 );
 assert.match(
+  ozonPanel,
+  /data-action="search-sources"/,
+  'Ozon panel should expose an in-page source search action beside calculator actions',
+);
+assert.match(
+  ozonPanel,
+  /type:\s*['"]ss-erp:source-candidate-context-save['"]/,
+  'Ozon panel source search should save the current Ozon product context before opening source sites',
+);
+assert.match(
+  ozonPanel,
+  /type:\s*['"]ss-erp:image-search-open-from-ozon['"]/,
+  'Ozon panel source search should ask the background worker to open source image-search tabs without requiring the popup entry',
+);
+assert.match(
+  ozonPanel,
+  /costingInputPriceCny/,
+  'Ozon panel source search should pass the calculator input CNY price into 1688-side costing context',
+);
+assert.match(
+  serviceWorker,
+  /message\.type\s*===\s*['"]ss-erp:image-search-open-from-ozon['"]/,
+  'service worker should support opening source image-search tabs from the Ozon page panel',
+);
+assert.match(
+  serviceWorker,
+  /createImageSearchJob/,
+  'service worker source search should reuse the shared image-search job helper',
+);
+assert.match(
+  serviceWorker,
+  /chrome\.tabs\.create/,
+  'service worker source search should open source search tabs after creating jobs',
+);
+assert.match(
   sourceCostingPanel,
   /suppressOzonApply:\s*true/,
   '1688 costing panel should save quotes without forcing an Ozon tab switch',
@@ -121,6 +156,11 @@ assert.match(
   sourceCostingPanel,
   /type:\s*['"]ss-erp:source-candidate-upsert['"]/,
   '1688 costing panel should also save the current source product into the Ozon candidate pool',
+);
+assert.match(
+  sourceCostingPanel,
+  /buildOzonQuoteContext\(\)/,
+  '1688 costing panel should save the calculator input price with the Ozon quote context',
 );
 assert.match(
   popupJs,

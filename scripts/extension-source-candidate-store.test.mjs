@@ -59,4 +59,31 @@ const listed = api.listCandidatesForOzon(sets, '1628675309');
 assert.equal(listed.length, 1);
 assert.equal(listed[0].key, 'ozon:product:1628675309');
 
+const priceFallbackSets = api.upsertCandidateSet([], {
+  productId: '1888000111',
+  title: 'Ozon sample with collected seller price',
+  url: 'https://www.ozon.ru/product/fallback-1888000111/',
+  price: { value: 0, currency: 'RUB' },
+  pagePriceValue: 1499,
+  pagePriceCurrency: 'RUB',
+  currentPriceValue: 1599,
+}, sourceProduct, { now });
+
+assert.equal(priceFallbackSets[0].ozon.price.value, 1499);
+assert.equal(priceFallbackSets[0].ozon.price.currency, 'RUB');
+assert.equal(priceFallbackSets[0].ozon.pagePriceValue, 1499);
+assert.equal(priceFallbackSets[0].ozon.currentPriceValue, 1599);
+
+const costingInputSets = api.upsertCandidateSet([], {
+  productId: '1888000222',
+  title: 'Ozon sample with calculator input price',
+  url: 'https://www.ozon.ru/product/input-1888000222/',
+  pagePriceValue: 1499,
+  pagePriceCurrency: 'RUB',
+  costingInputPriceCny: 119.92,
+}, sourceProduct, { now });
+
+assert.equal(costingInputSets[0].ozon.price.value, 119.92);
+assert.equal(costingInputSets[0].ozon.price.currency, 'CNY');
+
 console.log('PASS source candidate store');
