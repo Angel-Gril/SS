@@ -67,6 +67,24 @@ function variantCount(item: SourceCollectItem): number {
   return Array.isArray(item.variants) ? item.variants.length : 0;
 }
 
+function sourceAttributeCount(item: SourceCollectItem): number {
+  const attrs = item.metadata?.sourceAttributes;
+  return Array.isArray(attrs) ? attrs.length : 0;
+}
+
+function sourceDisplayTitle(item: SourceCollectItem): string {
+  const metaTitle = item.metadata?.sourceTitleRaw;
+  return String(metaTitle || item.title || '未命名货源商品');
+}
+
+function sourceCategoryText(item: SourceCollectItem): string {
+  const categoryPath = item.metadata?.categoryPath;
+  if (Array.isArray(categoryPath) && categoryPath.length) {
+    return categoryPath.map((part) => String(part)).filter(Boolean).join(' / ');
+  }
+  return String(item.metadata?.categoryName || '');
+}
+
 function isSourceCollectItem(item: SourceCollectItem): boolean {
   return ['1688', 'pdd', 'taobao', 'tmall'].includes(normalizePlatform(item.sourcePlatform));
 }
@@ -81,7 +99,7 @@ export default function SourceCollectPage() {
   async function loadItems() {
     setLoading(true);
     setError('');
-    const params = new URLSearchParams({ limit: '50' });
+    const params = new URLSearchParams({ limit: '50', sourceGroup: 'source' });
     if (search.trim()) params.set('search', search.trim());
     const res = await api.get<{ total: number; rows: SourceCollectItem[] }>(`/api/collect?${params}`);
     if (res.code === 1 && res.data) {
@@ -186,7 +204,10 @@ export default function SourceCollectPage() {
                 ) : filteredItems.map((item) => (
                   <tr key={item.id} className="border-t">
                     <td className="px-3 py-3 align-top">
-                      <div className="font-medium line-clamp-2">{item.title}</div>
+                      <div className="font-medium line-clamp-2">{sourceDisplayTitle(item)}</div>
+                      {sourceCategoryText(item) ? (
+                        <div className="text-xs text-muted-foreground mt-1 line-clamp-1">{sourceCategoryText(item)}</div>
+                      ) : null}
                       <div className="text-xs text-muted-foreground mt-1">
                         {item.sourceProductId || item.sku || item.id}
                       </div>
@@ -198,7 +219,7 @@ export default function SourceCollectPage() {
                       {item.purchasePrice ? `¥${item.purchasePrice}` : '-'}
                     </td>
                     <td className="px-3 py-3 align-top text-xs text-muted-foreground">
-                      图 {sourceImageCount(item)} / 视频 {sourceVideoCount(item)} / SKU {variantCount(item)}
+                      图 {sourceImageCount(item)} / 视频 {sourceVideoCount(item)} / SKU {variantCount(item)} / 属性 {sourceAttributeCount(item)}
                     </td>
                     <td className="px-3 py-3 align-top">
                       <Badge variant={item.status === 'collected' ? 'secondary' : 'outline'}>{item.status}</Badge>

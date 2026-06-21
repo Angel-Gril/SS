@@ -159,6 +159,28 @@ assert.equal(aliResponse.data.shippingCny, 6);
 assert.equal(aliResponse.data.totalCostCny, 21.5);
 assert.equal(aliResponse.data.currency, 'CNY');
 
+const aliTitlePriorityResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/811122233344.html',
+  title: '1688 company title priority',
+  bodyText: '智能保温杯 ¥18.80 近30天成交 3200',
+  selectors: {
+    '.price': '¥18.80',
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '811122233344',
+        companyName: '揭阳市玖点服装有限公司',
+        subject: '智能保温杯批发',
+      },
+    },
+  },
+});
+
+assert.equal(aliTitlePriorityResponse.ok, true);
+assert.equal(aliTitlePriorityResponse.data.title, '智能保温杯批发');
+assert.equal(aliTitlePriorityResponse.data.shopName, '揭阳市玖点服装有限公司');
+
 const aliCompleteSourceResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/744455566677.html',
   title: '1688 complete source detail',

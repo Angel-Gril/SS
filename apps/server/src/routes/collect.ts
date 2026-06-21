@@ -184,7 +184,14 @@ export function resolveCollectedDisplayTitle(input: {
   sourceUrl?: unknown;
   sourceProductId?: unknown;
   sku?: unknown;
+  sourcePlatform?: unknown;
 }): string {
+  const sourcePlatform = String(input.sourcePlatform || '').trim().toLowerCase();
+  if (sourcePlatform && sourcePlatform !== 'ozon') {
+    const sourceTitle = cleanPublishName(input.sourceTitleRaw || input.title);
+    if (sourceTitle) return sourceTitle.slice(0, 200);
+  }
+
   const candidates = [
     input.title,
     input.publishTitle,
@@ -2283,10 +2290,16 @@ export async function collectRoutes(app: FastifyInstance) {
 
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { status?: string; search?: string; offset?: string; limit?: string };
+    const query = request.query as { status?: string; search?: string; offset?: string; limit?: string; sourceGroup?: string };
 
     const where: Record<string, unknown> = { userId };
     if (query.status) where.status = query.status;
+    const sourceGroup = String(query.sourceGroup || '').trim().toLowerCase();
+    if (sourceGroup === 'source') {
+      where.sourcePlatform = { in: ['1688', 'pdd', 'taobao', 'tmall'] };
+    } else if (sourceGroup === 'ozon') {
+      where.sourcePlatform = 'ozon';
+    }
     if (query.search) {
       where.OR = [
         { title: { contains: query.search, mode: 'insensitive' } },
@@ -2347,6 +2360,7 @@ export async function collectRoutes(app: FastifyInstance) {
       sourceUrl: d.sourceUrl,
       sourceProductId,
       sku: d.sku,
+      sourcePlatform: d.sourcePlatform,
     });
 
     const priceInfo = await resolveCollectedPrice(d.priceText || (d.price != null ? String(d.price) : undefined), d.currency, d.sourceUrl);
@@ -2424,6 +2438,7 @@ export async function collectRoutes(app: FastifyInstance) {
           sourceUrl: item.sourceUrl,
           sourceProductId,
           sku: item.sku,
+          sourcePlatform: item.sourcePlatform,
         });
 
         const existing = shouldUpdateExisting

@@ -215,6 +215,15 @@ describe('collect publish helpers', () => {
     })).toBe('Ozon SKU 1616509508');
   });
 
+  it('keeps domestic source titles for source collection records', () => {
+    expect(resolveCollectedDisplayTitle({
+      title: '智能保温杯批发',
+      sourceTitleRaw: '智能保温杯批发',
+      sourcePlatform: '1688',
+      sourceProductId: '744455566677',
+    })).toBe('智能保温杯批发');
+  });
+
   it('flags repeated keyword spam titles before Ozon rejects the card', () => {
     expect(hasSuspiciousPublishName('Автовизитка, автовизитка в машину, номер телефона в автомобиль')).toBe(true);
     expect(hasSuspiciousPublishName('Защитный чехол для AirPods Pro 3 вязание')).toBe(false);

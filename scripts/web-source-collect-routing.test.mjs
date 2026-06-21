@@ -15,6 +15,11 @@ assert.match(
   /api\.get<[\s\S]*\/api\/collect\?/,
   'source collection page should read collected source goods from the collect API',
 );
+assert.match(
+  page,
+  /sourceGroup:\s*['"]source['"]|sourceGroup['"]?\s*,\s*['"]source['"]|sourceGroup=source/,
+  'source collection page should request only domestic source collect records',
+);
 for (const label of ['1688', 'PDD', '淘宝', '天猫']) {
   assert.match(page, new RegExp(label), `source collection page should support ${label} filtering`);
 }
@@ -22,6 +27,13 @@ assert.match(
   page,
   /sourcePlatform/i,
   'source collection page should separate source-platform goods from Ozon SKU collection',
+);
+
+const skuCollectPage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');
+assert.match(
+  skuCollectPage,
+  /sourceGroup:\s*['"]ozon['"]|sourceGroup['"]?\s*,\s*['"]ozon['"]|sourceGroup=ozon/,
+  'SKU follow collection page should request only Ozon collect records',
 );
 
 console.log('PASS web source collect routing');

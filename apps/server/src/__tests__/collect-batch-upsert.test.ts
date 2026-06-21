@@ -177,7 +177,7 @@ describe('collectRoutes batch upsert', () => {
 
       const createArgs = mocks.supplyGoodsCreate.mock.calls[0]?.[0];
       expect(createArgs.data).toMatchObject({
-        title: 'Ozon SKU 744455566677',
+        title: '智能保温杯批发',
         sourceUrl: 'https://detail.1688.com/offer/744455566677.html',
         sourcePlatform: '1688',
         sourceProductId: '744455566677',
@@ -211,6 +211,38 @@ describe('collectRoutes batch upsert', () => {
         rawSourceProduct: { offerId: '744455566677' },
       });
       expect(createArgs.data.metadata).not.toHaveProperty('sourceDescriptionRu');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('filters the collect list between Ozon follow records and domestic source records', async () => {
+    const app = await buildApp();
+
+    try {
+      const ozonResponse = await app.inject({
+        method: 'GET',
+        url: '/api/collect?sourceGroup=ozon',
+      });
+      expect(ozonResponse.statusCode).toBe(200);
+      expect(mocks.supplyGoodsCount).toHaveBeenLastCalledWith({
+        where: expect.objectContaining({
+          userId: 'user-1',
+          sourcePlatform: 'ozon',
+        }),
+      });
+
+      const sourceResponse = await app.inject({
+        method: 'GET',
+        url: '/api/collect?sourceGroup=source',
+      });
+      expect(sourceResponse.statusCode).toBe(200);
+      expect(mocks.supplyGoodsCount).toHaveBeenLastCalledWith({
+        where: expect.objectContaining({
+          userId: 'user-1',
+          sourcePlatform: { in: ['1688', 'pdd', 'taobao', 'tmall'] },
+        }),
+      });
     } finally {
       await app.close();
     }

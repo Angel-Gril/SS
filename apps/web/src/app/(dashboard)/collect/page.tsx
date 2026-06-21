@@ -316,7 +316,7 @@ export default function CollectPage() {
 
   async function fetchData() {
     setLoading(true);
-    const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit) });
+    const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit), sourceGroup: 'ozon' });
     if (search) params.set('search', search);
     if (statusFilter) params.set('status', statusFilter);
     const res = await api.get<{ total: number; rows: CollectedItem[] }>(`/api/collect?${params}`);

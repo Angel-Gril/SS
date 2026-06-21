@@ -1738,9 +1738,24 @@
     }
 
     return (
-      pickStringByKey(sources, /(title|name|subject|productName|offerTitle)$/i) ||
+      pickProductTitleByKey(sources) ||
       (document.title || "").trim()
     );
+  }
+
+  function pickProductTitleByKey(sources) {
+    const candidates = collectStringCandidates(sources, /(title|name|subject|productName|offerTitle)$/i)
+      .filter((item) => !/(companyName|shopName|sellerName|storeName|supplierName)$/i.test(item.path))
+      .map((item) => ({ ...item, score: scoreProductTitlePath(item.path) }))
+      .sort((a, b) => b.score - a.score || a.value.length - b.value.length);
+    return candidates.length ? candidates[0].value : "";
+  }
+
+  function scoreProductTitlePath(path) {
+    const text = String(path || "");
+    if (/(subject|offerTitle|productName|goodsName|itemTitle)$/i.test(text)) return 10;
+    if (/(title|name)$/i.test(text)) return 4;
+    return 1;
   }
 
   function pickProductId(regexes, sources) {
