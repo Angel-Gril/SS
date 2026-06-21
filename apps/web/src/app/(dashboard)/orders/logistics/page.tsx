@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 
 interface Order {
   id: string;
@@ -22,10 +23,15 @@ interface Order {
   platformOrderId: string;
   postingNumber: string | null;
   status: string;
+  subStatus: string | null;
   totalAmount: string;
   currency: string;
   items: any[] | null;
   trackingNumber: string | null;
+  inProcessAt: string | null;
+  shipmentDate: string | null;
+  deliveringDate: string | null;
+  deliveredAt: string | null;
   createdAt: string;
   domesticTrackingNumber: string | null;
   domesticCarrier: string | null;
@@ -35,6 +41,10 @@ interface Order {
   internationalStatus: string | null;
   purchaseOrderId: string | null;
   purchasePlatform: string | null;
+  inspectionStatus: string | null;
+  warehouseScanInAt: string | null;
+  warehouseScanOutAt: string | null;
+  labelPrintedAt: string | null;
   shop: { name: string; platform: string };
 }
 interface Shop {
@@ -621,6 +631,10 @@ function LogisticsDetailDialog({ order, onClose }: {
           <div className="space-y-4">
             <div className="text-sm p-3 bg-muted/50 rounded-md">
               <div><span className="text-muted-foreground">订单号：</span><span className="font-mono">{detail.postingNumber || detail.platformOrderId}</span></div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-muted-foreground">履约阶段：</span>
+                <LogisticsStatusBadge order={detail as Order} />
+              </div>
             </div>
 
             <div className="border rounded-md">
@@ -649,7 +663,7 @@ function LogisticsDetailDialog({ order, onClose }: {
                 <div className="grid grid-cols-2 gap-2">
                   <div><span className="text-muted-foreground text-xs">物流公司：</span>{detail.international?.carrier || '-'}</div>
                   <div><span className="text-muted-foreground text-xs">物流单号：</span><span className="font-mono text-xs">{detail.international?.trackingNumber || '-'}</span></div>
-                  <div><span className="text-muted-foreground text-xs">状态：</span><InternationalStatusBadge status={detail.international?.status} /></div>
+                  <div><span className="text-muted-foreground text-xs">状态：</span><InternationalStatusBadge order={detail} /></div>
                 </div>
               </div>
             </div>
@@ -673,13 +687,8 @@ function LogisticsDetailDialog({ order, onClose }: {
 }
 
 function LogisticsStatusBadge({ order }: { order: Order }) {
-  if (order.internationalTrackingNumber) {
-    return <Badge variant="success">国际已发</Badge>;
-  }
-  if (order.domesticTrackingNumber) {
-    return <Badge variant="warning">国内在途</Badge>;
-  }
-  return <Badge variant="secondary">待绑定</Badge>;
+  const stage = resolveOrderFulfillmentStage(order);
+  return <Badge variant={stage.variant}>{stage.label}</Badge>;
 }
 
 function DomesticStatusBadge({ status }: { status: string | null }) {
@@ -692,13 +701,13 @@ function DomesticStatusBadge({ status }: { status: string | null }) {
   return <Badge variant={info.variant}>{info.label}</Badge>;
 }
 
-function InternationalStatusBadge({ status }: { status: string | null }) {
-  const map: Record<string, { label: string; variant: 'success' | 'warning' | 'secondary' }> = {
-    pending: { label: '待发出', variant: 'secondary' },
-    shipped: { label: '运输中', variant: 'warning' },
-    delivered: { label: '已送达', variant: 'success' },
-  };
-  const info = map[status || 'pending'] || { label: status || '-', variant: 'secondary' as const };
-  return <Badge variant={info.variant}>{info.label}</Badge>;
+function InternationalStatusBadge({ order }: { order: any }) {
+  const stage = resolveOrderFulfillmentStage(order);
+  if (stage.key === 'delivered') return <Badge variant="success">已送达</Badge>;
+  if (stage.key === 'delivering') return <Badge variant="success">出库发运</Badge>;
+  if (stage.key === 'awaiting_label') return <Badge variant={stage.variant}>{stage.label}</Badge>;
+  if (order.internationalTrackingNumber || order.trackingNumber || order.international?.trackingNumber) {
+    return <Badge variant="warning">国际单已生成</Badge>;
+  }
+  return <Badge variant="secondary">待发出</Badge>;
 }
-

@@ -22,6 +22,7 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
+import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 
 interface Order {
   id: string;
@@ -39,6 +40,7 @@ interface Order {
   inProcessAt: string | null;
   shipmentDate: string | null;
   deliveringDate: string | null;
+  deliveredAt: string | null;
   createdAt: string;
   domesticTrackingNumber: string | null;
   domesticCarrier: string | null;
@@ -51,6 +53,9 @@ interface Order {
   serviceTags: string[] | null;
   serviceFee: number | null;
   inspectionStatus: string | null;
+  warehouseScanInAt: string | null;
+  warehouseScanOutAt: string | null;
+  labelPrintedAt: string | null;
   shop: { name: string; platform: string };
 }
 
@@ -148,6 +153,15 @@ function getProgressStep(order: any): number {
   if (order.status === 'awaiting_packaging') return 2;
   if (order.inProcessAt) return 1;
   return 0;
+}
+
+function formatInternationalDisplayStatus(order: any): string {
+  const stage = resolveOrderFulfillmentStage(order);
+  if (stage.key === 'delivered') return '已送达';
+  if (stage.key === 'delivering') return '出库发运';
+  if (stage.key === 'awaiting_label') return stage.label;
+  if (order.internationalTrackingNumber || order.trackingNumber) return '国际单已生成';
+  return '待发出';
 }
 
 function OrderProgressBar({ order }: { order: any }) {
@@ -698,9 +712,10 @@ export default function OrdersPage() {
                       <TableCell className="text-xs">
                         {(() => {
                           const meta = describeSubstatus(order.subStatus);
+                          const fulfillmentStage = resolveOrderFulfillmentStage(order);
                           const showStatus = order.subStatus && meta.phase !== 'unknown';
                           // 获取最新的物流时间
-                          const latestTime = order.deliveringDate || order.shipmentDate || order.inProcessAt;
+                          const latestTime = order.warehouseScanOutAt || order.deliveringDate || order.labelPrintedAt || order.shipmentDate || order.warehouseScanInAt || order.inProcessAt;
                           const formattedTime = latestTime ? new Date(latestTime).toLocaleString('zh-CN', {
                             year: '2-digit',
                             month: '2-digit',
@@ -715,6 +730,7 @@ export default function OrdersPage() {
 
                           return (
                             <div className="space-y-1">
+                              <Badge variant={fulfillmentStage.variant}>{fulfillmentStage.label}</Badge>
                               {showStatus && (
                                 <div className="text-xs">
                                   <div className="font-medium">{meta.text}</div>
@@ -766,9 +782,6 @@ export default function OrdersPage() {
                                   </>
                                 )}
                               </div>
-                              {!showStatus && !hasDomesticTracking && !hasInternationalTracking && (
-                                <span className="text-muted-foreground">-</span>
-                              )}
                             </div>
                           );
                         })()}
@@ -1040,7 +1053,7 @@ function OrderDetailDialog({ orderId, onClose }: {
                   <div><span className="text-muted-foreground">国内快递：</span>{detail.domesticCarrier ? `${detail.domesticCarrier} ${detail.domesticTrackingNumber}` : '-'}</div>
                   <div><span className="text-muted-foreground">国内状态：</span>{detail.domesticStatus === 'shipped' ? '已发出' : detail.domesticStatus === 'received' ? '已签收' : '待发货'}</div>
                   <div><span className="text-muted-foreground">国际物流：</span>{detail.internationalCarrier ? `${detail.internationalCarrier} ${detail.internationalTrackingNumber}` : '-'}</div>
-                  <div><span className="text-muted-foreground">国际状态：</span>{detail.internationalStatus === 'shipped' ? '运输中' : detail.internationalStatus === 'delivered' ? '已送达' : '待发出'}</div>
+                  <div><span className="text-muted-foreground">国际状态：</span>{formatInternationalDisplayStatus(detail)}</div>
                   {detail.purchaseOrderId && <div><span className="text-muted-foreground">采购单号：</span>{detail.purchaseOrderId}</div>}
                   {detail.purchasePlatform && <div><span className="text-muted-foreground">采购平台：</span>{detail.purchasePlatform}</div>}
                 </div>

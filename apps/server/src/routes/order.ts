@@ -255,6 +255,8 @@ export async function orderRoutes(app: FastifyInstance) {
           shippingMethod: true,
           inProcessAt: true,
           shipmentDate: true,
+          deliveringDate: true,
+          deliveredAt: true,
           createdAt: true,
           domesticTrackingNumber: true,
           domesticCarrier: true,
@@ -272,6 +274,29 @@ export async function orderRoutes(app: FastifyInstance) {
       }),
     ]);
 
+    const orderIds = rows.map((row) => row.id);
+    const warehouseLogs = orderIds.length > 0
+      ? await prisma.warehouseLog.findMany({
+          where: { orderId: { in: orderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+          orderBy: { createdAt: 'desc' },
+          select: { orderId: true, operationType: true, createdAt: true },
+        })
+      : [];
+    const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }>();
+    for (const log of warehouseLogs) {
+      const current = latestWarehouseLogByOrder.get(log.orderId) || {};
+      if (log.operationType === 'scan_in' && !current.scanInAt) {
+        current.scanInAt = log.createdAt;
+      }
+      if (log.operationType === 'scan_out' && !current.scanOutAt) {
+        current.scanOutAt = log.createdAt;
+      }
+      if (log.operationType === 'label_print' && !current.labelPrintedAt) {
+        current.labelPrintedAt = log.createdAt;
+      }
+      latestWarehouseLogByOrder.set(log.orderId, current);
+    }
+
     return {
       code: 1,
       msg: 'ok',
@@ -280,6 +305,9 @@ export async function orderRoutes(app: FastifyInstance) {
         rows: rows.map((r) => ({
           ...r,
           totalAmount: r.totalAmount?.toString() ?? '0',
+          warehouseScanInAt: latestWarehouseLogByOrder.get(r.id)?.scanInAt ?? null,
+          warehouseScanOutAt: latestWarehouseLogByOrder.get(r.id)?.scanOutAt ?? null,
+          labelPrintedAt: latestWarehouseLogByOrder.get(r.id)?.labelPrintedAt ?? null,
         })),
       },
     };
@@ -540,6 +568,7 @@ export async function orderRoutes(app: FastifyInstance) {
 
   app.get('/:id/label', async (request, reply) => {
     const { userId } = (request as any).user;
+    const actorUserId = (request as any).user.actorUserId ?? userId;
     const { id } = request.params as { id: string };
     const query = request.query as { format?: string };
 
@@ -626,6 +655,19 @@ export async function orderRoutes(app: FastifyInstance) {
       }
     }
 
+    try {
+      await prisma.warehouseLog.create({
+        data: {
+          orderId: order.id,
+          operationType: 'label_print',
+          operatorId: actorUserId,
+          trackingNumber: order.trackingNumber || order.internationalTrackingNumber || order.postingNumber,
+        },
+      });
+    } catch (e: any) {
+      console.warn(`[OrderLabel] label_print log failed for ${order.id}: ${e.message}`);
+    }
+
     if (query.format === 'base64') {
       return reply.send({
         code: 1,
@@ -645,6 +687,7 @@ export async function orderRoutes(app: FastifyInstance) {
 
   app.post('/labels', async (request, reply) => {
     const { userId } = (request as any).user;
+    const actorUserId = (request as any).user.actorUserId ?? userId;
     const body = request.body as { orderIds: string[] };
 
     if (!body?.orderIds?.length) {
@@ -688,6 +731,18 @@ export async function orderRoutes(app: FastifyInstance) {
     try {
       const postingNumbers = valid.map((o) => o.postingNumber!);
       const { buffer, contentType } = await client.getPackageLabel(postingNumbers);
+      try {
+        await prisma.warehouseLog.createMany({
+          data: valid.map((order) => ({
+            orderId: order.id,
+            operationType: 'label_print',
+            operatorId: actorUserId,
+            trackingNumber: order.trackingNumber || order.internationalTrackingNumber || order.postingNumber,
+          })),
+        });
+      } catch (logError: any) {
+        console.warn(`[OrderLabel] batch label_print log failed: ${logError.message}`);
+      }
       reply.header('Content-Type', contentType);
       reply.header('Content-Disposition', `attachment; filename="labels-${valid.length}.pdf"`);
       return reply.send(buffer);
@@ -773,7 +828,7 @@ export async function orderRoutes(app: FastifyInstance) {
       data: {
         internationalTrackingNumber,
         internationalCarrier,
-        internationalStatus: 'shipped',
+        internationalStatus: 'pending',
       },
     });
 
@@ -861,6 +916,15 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
+    const warehouseLogs = await prisma.warehouseLog.findMany({
+      where: { orderId: id, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+      orderBy: { createdAt: 'desc' },
+      select: { operationType: true, createdAt: true },
+    });
+    const warehouseScanInAt = warehouseLogs.find((log) => log.operationType === 'scan_in')?.createdAt ?? null;
+    const warehouseScanOutAt = warehouseLogs.find((log) => log.operationType === 'scan_out')?.createdAt ?? null;
+    const labelPrintedAt = warehouseLogs.find((log) => log.operationType === 'label_print')?.createdAt ?? null;
+
     return reply.send({
       code: 1,
       msg: 'ok',
@@ -868,6 +932,21 @@ export async function orderRoutes(app: FastifyInstance) {
         orderId: order.id,
         postingNumber: order.postingNumber,
         platformOrderId: order.platformOrderId,
+        status: order.status,
+        subStatus: order.subStatus,
+        trackingNumber: order.trackingNumber,
+        inProcessAt: order.inProcessAt,
+        shipmentDate: order.shipmentDate,
+        deliveringDate: order.deliveringDate,
+        deliveredAt: order.deliveredAt,
+        domesticTrackingNumber: order.domesticTrackingNumber,
+        domesticStatus: order.domesticStatus,
+        internationalTrackingNumber: order.internationalTrackingNumber,
+        internationalStatus: order.internationalStatus,
+        inspectionStatus: order.inspectionStatus,
+        warehouseScanInAt,
+        warehouseScanOutAt,
+        labelPrintedAt,
         // 采购信息
         purchase: {
           orderId: order.purchaseOrderId,

@@ -4,6 +4,7 @@ import { authenticate } from '../../lib/auth.js';
 import { prisma } from '../../lib/prisma.js';
 import { decrypt } from '../../lib/crypto.js';
 import { OzonClient } from '../../services/ozon-client.js';
+import { resolveOrderFulfillmentStage, type FulfillmentStageKey } from 'shared/order-fulfillment-stage';
 
 export async function orderAnalyticsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -121,25 +122,70 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     const shopIds = userShops.map((s) => s.id);
     if (shopIds.length === 0) return { code: 1, msg: 'ok', data: { stages: [] } };
 
-    const baseWhere = { shopId: { in: shopIds } };
-    const [purchased, domesticShipped, received, inspecting, awaitingLabel, delivering, abnormal] = await Promise.all([
-      prisma.order.count({ where: { ...baseWhere, purchasePlatform: { not: null }, OR: [{ domesticStatus: null }, { domesticStatus: 'pending' }] } }),
-      prisma.order.count({ where: { ...baseWhere, domesticStatus: 'shipped' } }),
-      prisma.order.count({ where: { ...baseWhere, domesticStatus: 'received', OR: [{ inspectionStatus: null }, { inspectionStatus: 'pending' }], NOT: { internationalStatus: 'shipped' } } }),
-      prisma.order.count({ where: { ...baseWhere, inspectionStatus: 'pending' } }),
-      prisma.order.count({ where: { ...baseWhere, status: 'awaiting_deliver' } }),
-      prisma.order.count({ where: { ...baseWhere, OR: [{ internationalStatus: 'shipped' }, { status: 'delivering' }] } }),
-      prisma.order.count({ where: { ...baseWhere, OR: [{ status: { contains: 'cancel' } }, { status: { contains: 'problem' } }, { status: { contains: 'arbitration' } }] } }),
-    ]);
+    const orders = await prisma.order.findMany({
+      where: { shopId: { in: shopIds } },
+      select: {
+        id: true,
+        status: true,
+        subStatus: true,
+        domesticTrackingNumber: true,
+        domesticStatus: true,
+        internationalTrackingNumber: true,
+        internationalStatus: true,
+        trackingNumber: true,
+        inProcessAt: true,
+        shipmentDate: true,
+        deliveringDate: true,
+        deliveredAt: true,
+        inspectionStatus: true,
+      },
+    });
+    const orderIds = orders.map((order) => order.id);
+    const warehouseLogs = orderIds.length > 0
+      ? await prisma.warehouseLog.findMany({
+          where: { orderId: { in: orderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+          orderBy: { createdAt: 'desc' },
+          select: { orderId: true, operationType: true, createdAt: true },
+        })
+      : [];
+    const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }>();
+    for (const log of warehouseLogs) {
+      const current = latestWarehouseLogByOrder.get(log.orderId) || {};
+      if (log.operationType === 'scan_in' && !current.scanInAt) current.scanInAt = log.createdAt;
+      if (log.operationType === 'scan_out' && !current.scanOutAt) current.scanOutAt = log.createdAt;
+      if (log.operationType === 'label_print' && !current.labelPrintedAt) current.labelPrintedAt = log.createdAt;
+      latestWarehouseLogByOrder.set(log.orderId, current);
+    }
+    const counts: Record<FulfillmentStageKey, number> = {
+      purchased: 0,
+      domestic_transit: 0,
+      received: 0,
+      inspecting: 0,
+      awaiting_label: 0,
+      delivering: 0,
+      delivered: 0,
+      abnormal: 0,
+    };
+    const now = new Date();
+    for (const order of orders) {
+      const logs = latestWarehouseLogByOrder.get(order.id);
+      const stage = resolveOrderFulfillmentStage({
+        ...order,
+        warehouseScanInAt: logs?.scanInAt ?? null,
+        warehouseScanOutAt: logs?.scanOutAt ?? null,
+        labelPrintedAt: logs?.labelPrintedAt ?? null,
+      }, now);
+      counts[stage.key] += 1;
+    }
 
     return { code: 1, msg: 'ok', data: { stages: [
-      { key: 'purchased', label: '采购下单', count: purchased },
-      { key: 'domestic_transit', label: '国内在途', count: domesticShipped },
-      { key: 'received', label: '到仓入库', count: received },
-      { key: 'inspecting', label: '验视/打包', count: inspecting },
-      { key: 'awaiting_label', label: '打印面单', count: awaitingLabel },
-      { key: 'delivering', label: '出库发运', count: delivering },
-      { key: 'abnormal', label: '异常', count: abnormal },
+      { key: 'purchased', label: '采购下单', count: counts.purchased },
+      { key: 'domestic_transit', label: '国内在途', count: counts.domestic_transit },
+      { key: 'received', label: '到仓入库', count: counts.received },
+      { key: 'inspecting', label: '验视/打包', count: counts.inspecting },
+      { key: 'awaiting_label', label: '打印面单', count: counts.awaiting_label },
+      { key: 'delivering', label: '出库发运', count: counts.delivering },
+      { key: 'abnormal', label: '异常', count: counts.abnormal },
     ] } };
   });
 
