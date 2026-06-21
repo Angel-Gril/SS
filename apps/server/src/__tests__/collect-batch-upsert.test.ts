@@ -127,6 +127,95 @@ describe('collectRoutes batch upsert', () => {
     vi.clearAllMocks();
   });
 
+  it('creates a source collect record with complete 1688 metadata through the single collect endpoint', async () => {
+    const app = await buildApp();
+
+    try {
+      const payload = {
+        title: '智能保温杯批发',
+        sourceTitleRaw: '智能保温杯批发',
+        sourceLocale: 'zh-CN',
+        sourceUrl: 'https://detail.1688.com/offer/744455566677.html',
+        sourcePlatform: '1688',
+        sourceProductId: '744455566677',
+        sku: '744455566677',
+        images: ['https://img.example.com/main.jpg', 'https://img.example.com/detail-1.jpg'],
+        priceText: '¥18.80 ~ ¥22.50',
+        currency: 'CNY',
+        shippingCny: 5,
+        totalCostCny: 23.8,
+        priceSourceType: 'rangeHigh',
+        weightG: 350,
+        lengthMm: 80,
+        widthMm: 80,
+        heightMm: 220,
+        categoryPath: ['日用百货', '杯具', '保温杯'],
+        categoryName: '保温杯',
+        attributes: [
+          { name: '材质', value: '316不锈钢' },
+          { name: '容量', value: '500ml' },
+        ],
+        description: '双层真空保温，适合跨境上架。',
+        sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
+        selectedSku: { skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } },
+        skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
+        variants: [{ skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } }],
+        rawSourceProduct: { offerId: '744455566677' },
+      };
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect',
+        payload,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { id: 'collect-new' },
+      });
+
+      const createArgs = mocks.supplyGoodsCreate.mock.calls[0]?.[0];
+      expect(createArgs.data).toMatchObject({
+        title: 'Ozon SKU 744455566677',
+        sourceUrl: 'https://detail.1688.com/offer/744455566677.html',
+        sourcePlatform: '1688',
+        sourceProductId: '744455566677',
+        sku: '744455566677',
+        images: ['https://img.example.com/main.jpg', 'https://img.example.com/detail-1.jpg'],
+        variants: [{ skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } }],
+      });
+      expect(createArgs.data.metadata).toMatchObject({
+        titleNeedsReview: true,
+        sourcePlatform: '1688',
+        sourceTitleRaw: '智能保温杯批发',
+        sourceLocale: 'zh-CN',
+        sourceDescriptionRaw: '双层真空保温，适合跨境上架。',
+        sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
+        categoryPath: ['日用百货', '杯具', '保温杯'],
+        categoryName: '保温杯',
+        sourceAttributes: [
+          { name: '材质', value: '316不锈钢' },
+          { name: '容量', value: '500ml' },
+        ],
+        priceText: '¥18.80 ~ ¥22.50',
+        shippingCny: 5,
+        totalCostCny: 23.8,
+        priceSourceType: 'rangeHigh',
+        weightG: 350,
+        lengthMm: 80,
+        widthMm: 80,
+        heightMm: 220,
+        selectedSku: { skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } },
+        skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
+        rawSourceProduct: { offerId: '744455566677' },
+      });
+      expect(createArgs.data.metadata).not.toHaveProperty('sourceDescriptionRu');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('creates a new Ozon collect record for repeated manual collection', async () => {
     const app = await buildApp();
 

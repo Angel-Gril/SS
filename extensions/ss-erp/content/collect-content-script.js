@@ -1175,6 +1175,10 @@
     const grossWeightGrams = pickGrossWeight(context.pageText, context.sources, config.weightKeywords, skuItems);
     const images = pickImages(context.sources);
     const attributes = pickAttributes(context.sources);
+    const categoryPath = pickCategoryPath(context.sources);
+    const dimensions = pickDimensions(context.pageText, context.sources);
+    const description = pickSourceDescription(context.sources);
+    const sourceVideos = pickSourceVideos(context.sources);
 
     return {
       platform: context.platform,
@@ -1195,8 +1199,18 @@
       totalCostCny,
       monthlySales,
       grossWeightGrams,
+      weightG: grossWeightGrams,
+      lengthMm: dimensions.lengthMm || undefined,
+      widthMm: dimensions.widthMm || undefined,
+      heightMm: dimensions.heightMm || undefined,
+      dimensionsMm: dimensions.lengthMm && dimensions.widthMm && dimensions.heightMm ? dimensions : null,
+      categoryPath,
+      categoryName: categoryPath.length ? categoryPath[categoryPath.length - 1] : "",
+      description,
+      sourceVideos,
       skuCount,
       skuItems,
+      variants: skuItems,
       images,
       attributes,
       debug: {
@@ -1832,9 +1846,18 @@
   function normalizeSkuItem(item) {
     const skuId = pickFirstValue(item, ["skuId", "sku_id", "id", "offerId", "specId", "nameId"]);
     const name = pickFirstValue(item, ["name", "title", "skuName", "sku_name", "displayName"]);
+    const attrs = normalizeSkuAttrs(pickFirstValue(item, ["attrs", "attributes", "skuAttrs", "skuAttributes", "properties", "props"]));
     const specText = [
       pickFirstValue(item, ["spec", "specText", "specValue", "skuSpec", "attributeValue"]),
-      Array.isArray(item.attributes) ? item.attributes.join(" / ") : ""
+      Array.isArray(item.attributes) ? item.attributes.map((entry) => {
+        if (entry && typeof entry === "object") {
+          const attrName = pickFirstValue(entry, ["name", "key", "attrName", "title"]);
+          const attrValue = pickFirstValue(entry, ["value", "attrValue", "text", "content"]);
+          return attrName && attrValue ? (attrName + ":" + attrValue) : "";
+        }
+        return String(entry || "");
+      }).filter(Boolean).join(" / ") : "",
+      Object.keys(attrs).map((key) => key + ":" + attrs[key]).join(" / ")
     ]
       .filter(Boolean)
       .join(" / ");
@@ -1842,6 +1865,13 @@
     const stock = parseLooseNumber(pickFirstValue(item, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale"]));
     const weightRaw = pickFirstValue(item, ["grossWeight", "weight", "weightGram", "skuWeight", "freightWeight"]);
     const grossWeightGrams = convertWeightToGrams(weightRaw, guessWeightUnit(weightRaw));
+    const images = normalizeImageValues([
+      pickFirstValue(item, ["image", "imageUrl", "img", "pic", "picture", "photo"]),
+      item.images,
+      item.imageUrls,
+      item.pictures,
+      item.photos
+    ]);
 
     return {
       skuId: skuId == null ? "" : String(skuId),
@@ -1849,7 +1879,9 @@
       specText,
       price,
       stock,
-      grossWeightGrams
+      grossWeightGrams,
+      attrs,
+      images
     };
   }
 
@@ -1888,12 +1920,42 @@
         }
       });
 
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!/(image|img|photo|picture|gallery|detailImages|mainImage|主图|详情图)/i.test(pathText)) return;
+        normalizeImageValues(value).forEach((image) => imageSet.add(normalizeOzonCollectedImageUrl(image)));
+      });
+    });
+
     return Array.from(imageSet).slice(0, 20);
+  }
+
+  function normalizeImageValues(value) {
+    const images = [];
+    const seen = new Set();
+    function push(raw) {
+      if (!raw) return;
+      if (Array.isArray(raw)) {
+        raw.forEach(push);
+        return;
+      }
+      if (raw && typeof raw === "object") {
+        push(raw.url || raw.src || raw.imageUrl || raw.imgUrl || raw.originalUrl || raw.picUrl || raw.coverUrl || raw.thumbnail);
+        return;
+      }
+      const text = String(raw || "").trim();
+      if (!/^https?:\/\//i.test(text) || seen.has(text)) return;
+      seen.add(text);
+      images.push(text);
+    }
+    push(value);
+    return images.slice(0, 100);
   }
 
   function pickAttributes(sources) {
     const attrs = [];
-    const pairs = collectObjectCandidates(sources, /(attribute|spec|property|props|参数|属性)/i).slice(0, 20);
+    const pairs = collectObjectCandidates(sources, /(attribute|spec|property|properties|props|参数|属性)/i).slice(0, 20);
 
     pairs.forEach((item) => {
       if (Array.isArray(item.value)) {
@@ -1910,6 +1972,143 @@
     });
 
     return attrs.slice(0, 50);
+  }
+
+  function normalizeSkuAttrs(value) {
+    const attrs = {};
+    if (!value) return attrs;
+    if (Array.isArray(value)) {
+      value.forEach((row) => {
+        if (!row || typeof row !== "object") return;
+        const name = pickFirstValue(row, ["name", "key", "attrName", "title"]);
+        const attrValue = pickFirstValue(row, ["value", "attrValue", "text", "content"]);
+        if (name && attrValue) attrs[String(name)] = String(attrValue);
+      });
+      return attrs;
+    }
+    if (typeof value === "object") {
+      Object.keys(value).forEach((key) => {
+        const attrValue = value[key];
+        if (attrValue != null && attrValue !== "" && typeof attrValue !== "object") {
+          attrs[String(key)] = String(attrValue);
+        }
+      });
+    }
+    return attrs;
+  }
+
+  function pickCategoryPath(sources) {
+    const candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!/(categoryPath|category_path|breadcrumb|crumb|catPath|类目|分类)/i.test(pathText)) return;
+        const normalized = normalizeCategoryPath(value);
+        if (normalized.length) candidates.push(normalized);
+      });
+    });
+    candidates.sort((a, b) => b.length - a.length);
+    return candidates.length ? candidates[0].slice(0, 8) : [];
+  }
+
+  function normalizeCategoryPath(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+      return value.map((item) => {
+        if (item && typeof item === "object") {
+          return normalizeWhitespace(item.name || item.title || item.text || item.value || item.categoryName || "");
+        }
+        return normalizeWhitespace(item);
+      }).filter(Boolean);
+    }
+    if (typeof value === "string") {
+      return value.split(/>|\/|»|›|,/).map(normalizeWhitespace).filter(Boolean);
+    }
+    if (typeof value === "object") {
+      return normalizeCategoryPath(value.path || value.items || value.list || value.breadcrumbs || value.name);
+    }
+    return [];
+  }
+
+  function pickDimensions(pageText, sources) {
+    const textHit = pickDimensionsFromText(pageText);
+    if (textHit.lengthMm && textHit.widthMm && textHit.heightMm) return textHit;
+
+    const candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return;
+        const pathText = path.join(".");
+        if (!/(size|dimension|package|volume|spec|规格|尺寸|包装)/i.test(pathText) && !hasAnyKey(value, /(length|width|height|长|宽|高)/i)) return;
+        const unit = pickFirstValue(value, ["unit", "sizeUnit", "dimensionUnit"]) || "";
+        const lengthMm = dimensionToMm(pickFirstValue(value, ["length", "len", "depth", "long", "l", "长"]), unit);
+        const widthMm = dimensionToMm(pickFirstValue(value, ["width", "wid", "w", "宽"]), unit);
+        const heightMm = dimensionToMm(pickFirstValue(value, ["height", "hgt", "h", "高"]), unit);
+        if (lengthMm && widthMm && heightMm) candidates.push({ lengthMm, widthMm, heightMm });
+      });
+    });
+    return candidates.length ? candidates[0] : { lengthMm: 0, widthMm: 0, heightMm: 0 };
+  }
+
+  function pickDimensionsFromText(value) {
+    const text = normalizeWhitespace(value || "");
+    const match = text.match(/(\d+(?:\.\d+)?)\s*(?:x|×|\*)\s*(\d+(?:\.\d+)?)\s*(?:x|×|\*)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米)?/i);
+    if (!match) return { lengthMm: 0, widthMm: 0, heightMm: 0 };
+    const unit = match[4] || "cm";
+    return {
+      lengthMm: dimensionToMm(match[1], unit),
+      widthMm: dimensionToMm(match[2], unit),
+      heightMm: dimensionToMm(match[3], unit)
+    };
+  }
+
+  function dimensionToMm(value, unitHint) {
+    const number = Number(String(value == null ? "" : value).replace(/[^\d.]/g, ""));
+    if (!Number.isFinite(number) || number <= 0) return 0;
+    const unit = String(unitHint || value || "").toLowerCase();
+    if (/mm|毫米/.test(unit)) return Math.round(number);
+    if (/m\b|米/.test(unit) && !/cm|mm/.test(unit)) return Math.round(number * 1000);
+    return Math.round(number * 10);
+  }
+
+  function pickSourceDescription(sources) {
+    const candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        if (typeof value !== "string") return;
+        const pathText = path.join(".");
+        if (!/(description|desc|detail|content|介绍|详情|描述)/i.test(pathText)) return;
+        const text = normalizeWhitespace(value);
+        if (text && !/^https?:\/\//i.test(text)) candidates.push(text);
+      });
+    });
+    candidates.sort((a, b) => b.length - a.length);
+    return candidates.length ? candidates[0].slice(0, 5000) : "";
+  }
+
+  function pickSourceVideos(sources) {
+    const videos = [];
+    const seen = new Set();
+    function add(entry) {
+      const url = entry && (entry.url || entry.videoUrl || entry.src || entry.link);
+      if (!isVideoUrl(url) || seen.has(url)) return;
+      seen.add(url);
+      const next = { url: String(url).trim() };
+      const coverUrl = entry.coverUrl || entry.cover || entry.poster || entry.preview || entry.thumbnail || "";
+      const title = normalizeWhitespace(entry.title || entry.name || entry.caption || "");
+      if (/^https?:\/\//i.test(String(coverUrl))) next.coverUrl = String(coverUrl).trim();
+      if (title) next.title = title.slice(0, 200);
+      videos.push(next);
+    }
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!/(video|media|视频)/i.test(pathText)) return;
+        if (typeof value === "string" && isVideoUrl(value)) add({ url: value });
+        if (value && typeof value === "object") add(value);
+      });
+    });
+    return videos.slice(0, 10);
   }
 
   function pickFirstDomText(selectors) {

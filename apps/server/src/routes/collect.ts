@@ -41,11 +41,13 @@ const collectSchema = z.object({
   sourceUrl: z.string().optional(),
   sourcePlatform: z.string().optional(),
   images: z.array(z.string()).optional(),
-  price: z.string().optional(),
+  price: z.union([z.string(), z.number()]).optional(),
   priceText: z.string().optional(),
+  unitPriceText: z.string().optional(),
   currency: z.string().optional(),
   categoryId: z.number().optional(),
   categoryName: z.string().optional(),
+  categoryPath: z.array(z.string()).optional(),
   attributes: z.array(z.object({ id: z.number().optional(), name: z.string(), value: z.string() })).optional(),
   description: z.string().optional(),
   richDescriptionJson: z.string().optional(),
@@ -54,6 +56,17 @@ const collectSchema = z.object({
   descriptionFetchTrace: z.any().optional(),
   weight: z.number().optional(),
   weightG: z.number().optional(),
+  lengthMm: z.number().optional(),
+  widthMm: z.number().optional(),
+  heightMm: z.number().optional(),
+  shippingCny: z.number().optional(),
+  totalCostCny: z.number().optional(),
+  priceSourceType: z.string().optional(),
+  selectedSku: z.any().optional(),
+  skuItems: z.array(z.any()).optional(),
+  variants: z.array(z.any()).optional(),
+  modelId: z.string().optional(),
+  rawSourceProduct: z.any().optional(),
   sku: z.string().optional(),
   sourceProductId: z.string().optional(),
 });
@@ -917,6 +930,84 @@ export function normalizeCollectedSourceVideos(value: unknown): { url: string; c
   return out;
 }
 
+function finiteMetadataNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function cleanMetadataText(value: unknown, maxLength = 500): string {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, maxLength) : '';
+}
+
+function cleanRawSourceText(value: unknown, maxLength = DESCRIPTION_MAX_LENGTH): string {
+  const text = String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text ? text.slice(0, maxLength).trim() : '';
+}
+
+function normalizeCollectedCategoryPath(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => cleanMetadataText(
+        item && typeof item === 'object'
+          ? (item as Record<string, unknown>).name
+            ?? (item as Record<string, unknown>).title
+            ?? (item as Record<string, unknown>).text
+            ?? (item as Record<string, unknown>).value
+          : item,
+        120,
+      ))
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+  if (typeof value === 'string') {
+    return value.split(/>|\/|»|›|,/)
+      .map((part) => cleanMetadataText(part, 120))
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+  return [];
+}
+
+function normalizeCollectedSourceAttributes(value: unknown): { id?: number; name: string; value: string }[] {
+  if (!Array.isArray(value)) return [];
+  const out: { id?: number; name: string; value: string }[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const name = cleanMetadataText(row.name ?? row.key ?? row.attrName ?? row.title, 160);
+    const attrValue = cleanMetadataText(row.value ?? row.attrValue ?? row.text ?? row.content, 500);
+    if (!name || !attrValue) continue;
+    const key = `${name}\u0000${attrValue}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const next: { id?: number; name: string; value: string } = { name, value: attrValue };
+    const id = finiteMetadataNumber(row.id);
+    if (id != null) next.id = id;
+    out.push(next);
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+
+function cloneMetadataJson(value: unknown, maxArrayLength = 100): unknown {
+  if (Array.isArray(value)) {
+    return value.slice(0, maxArrayLength).map((item) => cloneMetadataJson(item, maxArrayLength));
+  }
+  if (!value || typeof value !== 'object') return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildCollectedGoodsMetadata(input: {
   title?: unknown;
   publishTitle?: unknown;
@@ -935,11 +1026,36 @@ export function buildCollectedGoodsMetadata(input: {
   if (publishTitle && !containsCjkText(publishTitle)) metadata.publishTitleRu = publishTitle;
   if (input.sourceTitleRaw) metadata.sourceTitleRaw = String(input.sourceTitleRaw);
   if (input.sourceLocale) metadata.sourceLocale = String(input.sourceLocale);
+  if (input.sourcePlatform) metadata.sourcePlatform = String(input.sourcePlatform);
   const sourceDescription = sanitizePublishDescription(input.description);
-  if (sourceDescription) metadata.sourceDescriptionRu = sourceDescription;
+  const sourceDescriptionRaw = cleanRawSourceText(input.description);
+  if (sourceDescriptionRaw) metadata.sourceDescriptionRaw = sourceDescriptionRaw;
+  if (sourceDescription && !containsCjkText(sourceDescription)) metadata.sourceDescriptionRu = sourceDescription;
   if (input.richDescriptionJson) metadata.sourceRichDescriptionJson = String(input.richDescriptionJson);
   const sourceVideos = normalizeCollectedSourceVideos(input.sourceVideos);
   if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
+  const categoryPath = normalizeCollectedCategoryPath(input.categoryPath);
+  if (categoryPath.length) metadata.categoryPath = categoryPath;
+  const categoryName = cleanMetadataText(input.categoryName || categoryPath[categoryPath.length - 1], 160);
+  if (categoryName) metadata.categoryName = categoryName;
+  const sourceAttributes = normalizeCollectedSourceAttributes(input.attributes);
+  if (sourceAttributes.length) metadata.sourceAttributes = sourceAttributes;
+  const priceText = cleanMetadataText(input.priceText, 200);
+  if (priceText) metadata.priceText = priceText;
+  const unitPriceText = cleanMetadataText(input.unitPriceText, 200);
+  if (unitPriceText) metadata.unitPriceText = unitPriceText;
+  const priceSourceType = cleanMetadataText(input.priceSourceType, 120);
+  if (priceSourceType) metadata.priceSourceType = priceSourceType;
+  for (const key of ['weightG', 'lengthMm', 'widthMm', 'heightMm', 'shippingCny', 'totalCostCny'] as const) {
+    const number = finiteMetadataNumber(input[key]);
+    if (number != null) metadata[key] = number;
+  }
+  const selectedSku = cloneMetadataJson(input.selectedSku);
+  if (selectedSku && typeof selectedSku === 'object') metadata.selectedSku = selectedSku;
+  const skuItems = cloneMetadataJson(input.skuItems);
+  if (Array.isArray(skuItems) && skuItems.length) metadata.skuItems = skuItems;
+  const rawSourceProduct = cloneMetadataJson(input.rawSourceProduct);
+  if (rawSourceProduct && typeof rawSourceProduct === 'object') metadata.rawSourceProduct = rawSourceProduct;
   if (input.descriptionFetchDiagnostics && typeof input.descriptionFetchDiagnostics === 'object') {
     metadata.descriptionFetchDiagnostics = input.descriptionFetchDiagnostics;
   }
@@ -2221,6 +2337,9 @@ export async function collectRoutes(app: FastifyInstance) {
     const sourceDescription = sanitizePublishDescription(d.description);
     const notes = [weightNote, sourceDescription.slice(0, 500)].filter(Boolean).join('\n') || null;
     const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(d);
+    const collectedVariants = Array.isArray(d.variants) && d.variants.length
+      ? d.variants
+      : (Array.isArray(d.skuItems) && d.skuItems.length ? d.skuItems : undefined);
     const displayTitle = resolveCollectedDisplayTitle({
       title: d.title,
       publishTitle: d.publishTitle,
@@ -2230,7 +2349,7 @@ export async function collectRoutes(app: FastifyInstance) {
       sku: d.sku,
     });
 
-    const priceInfo = await resolveCollectedPrice(d.priceText || d.price, d.currency, d.sourceUrl);
+    const priceInfo = await resolveCollectedPrice(d.priceText || (d.price != null ? String(d.price) : undefined), d.currency, d.sourceUrl);
     const item = await prisma.supplyGoods.create({
       data: {
         user: { connect: { id: userId } },
@@ -2248,6 +2367,8 @@ export async function collectRoutes(app: FastifyInstance) {
         priceNeedsReview: priceInfo.needsReview,
         notes,
         metadata: Object.keys(metadata).length ? (metadata as any) : undefined,
+        variants: collectedVariants as any,
+        modelId: d.modelId || null,
         status: 'collected',
       },
     });

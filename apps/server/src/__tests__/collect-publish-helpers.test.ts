@@ -143,6 +143,63 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('persists domestic source product metadata for future 1688 listing preparation', () => {
+    const metadata = buildCollectedGoodsMetadata({
+      title: '智能保温杯批发',
+      sourceTitleRaw: '智能保温杯批发',
+      sourceLocale: 'zh-CN',
+      sourcePlatform: '1688',
+      description: '双层真空保温，适合跨境上架。',
+      priceText: '¥18.80 ~ ¥22.50',
+      unitPriceText: '¥18.80',
+      shippingCny: 5,
+      totalCostCny: 23.8,
+      priceSourceType: 'rangeHigh',
+      weightG: 350,
+      lengthMm: 80,
+      widthMm: 80,
+      heightMm: 220,
+      categoryPath: ['日用百货', '杯具', '保温杯'],
+      categoryName: '保温杯',
+      attributes: [
+        { name: '材质', value: '316不锈钢' },
+        { name: '容量', value: '500ml' },
+      ],
+      selectedSku: { skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } },
+      skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
+      sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
+      rawSourceProduct: { offerId: '744455566677' },
+    });
+
+    expect(metadata).toMatchObject({
+      titleNeedsReview: true,
+      sourceTitleRaw: '智能保温杯批发',
+      sourceLocale: 'zh-CN',
+      sourcePlatform: '1688',
+      sourceDescriptionRaw: '双层真空保温，适合跨境上架。',
+      priceText: '¥18.80 ~ ¥22.50',
+      unitPriceText: '¥18.80',
+      shippingCny: 5,
+      totalCostCny: 23.8,
+      priceSourceType: 'rangeHigh',
+      weightG: 350,
+      lengthMm: 80,
+      widthMm: 80,
+      heightMm: 220,
+      categoryPath: ['日用百货', '杯具', '保温杯'],
+      categoryName: '保温杯',
+      sourceAttributes: [
+        { name: '材质', value: '316不锈钢' },
+        { name: '容量', value: '500ml' },
+      ],
+      selectedSku: { skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } },
+      skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
+      sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
+      rawSourceProduct: { offerId: '744455566677' },
+    });
+    expect(metadata).not.toHaveProperty('sourceDescriptionRu');
+  });
+
   it('does not keep Chinese Ozon translated titles as collected display titles', () => {
     expect(resolveCollectedDisplayTitle({
       title: '室内装饰品',

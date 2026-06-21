@@ -6,6 +6,10 @@ const priceCurrencyScript = fs.readFileSync('extensions/ss-erp/shared/currency/p
 const sourceProductCoreScript = fs.readFileSync('extensions/ss-erp/shared/collectors/source-product-core.js', 'utf8');
 const collectScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function makeMockElement({ text = '', className = '', attrs = {}, value = '', children = [] }) {
   return {
     textContent: text,
@@ -154,6 +158,63 @@ assert.equal(aliResponse.data.priceSourceType, 'rangeHigh');
 assert.equal(aliResponse.data.shippingCny, 6);
 assert.equal(aliResponse.data.totalCostCny, 21.5);
 assert.equal(aliResponse.data.currency, 'CNY');
+
+const aliCompleteSourceResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/744455566677.html',
+  title: '1688 complete source detail',
+  bodyText: '智能保温杯 ¥18.80 ~ ¥22.50 近30天成交 3200 运费 ¥5 重量 350g 尺寸 8x8x22cm',
+  selectors: {
+    h1: '智能保温杯批发',
+    '.price': '¥18.80 ~ ¥22.50',
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '744455566677',
+        subject: '智能保温杯批发',
+        categoryPath: ['日用百货', '杯具', '保温杯'],
+        properties: [
+          { name: '材质', value: '316不锈钢' },
+          { attrName: '容量', attrValue: '500ml' },
+        ],
+        detailDescription: '双层真空保温，适合跨境上架。',
+        detailImages: ['https://img.example.com/detail-1.jpg'],
+        mainImage: 'https://img.example.com/main.jpg',
+        videos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg', title: '展示视频' }],
+        packageSize: { length: 80, width: 80, height: 220, unit: 'mm' },
+        skuProps: [
+          {
+            skuId: 'red-500',
+            specText: '红色 500ml',
+            price: '18.80',
+            stock: 88,
+            image: 'https://img.example.com/red.jpg',
+            attributes: { 颜色: '红色', 容量: '500ml' },
+          },
+        ],
+      },
+    },
+  },
+});
+
+assert.equal(aliCompleteSourceResponse.ok, true);
+assert.deepEqual(plain(aliCompleteSourceResponse.data.categoryPath), ['日用百货', '杯具', '保温杯']);
+assert.equal(aliCompleteSourceResponse.data.categoryName, '保温杯');
+assert.deepEqual(plain(aliCompleteSourceResponse.data.dimensionsMm), { lengthMm: 80, widthMm: 80, heightMm: 220 });
+assert.equal(aliCompleteSourceResponse.data.lengthMm, 80);
+assert.equal(aliCompleteSourceResponse.data.widthMm, 80);
+assert.equal(aliCompleteSourceResponse.data.heightMm, 220);
+assert.equal(aliCompleteSourceResponse.data.description, '双层真空保温，适合跨境上架。');
+assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceVideos), [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg', title: '展示视频' }]);
+assert.ok(aliCompleteSourceResponse.data.images.includes('https://img.example.com/main.jpg'));
+assert.ok(aliCompleteSourceResponse.data.images.includes('https://img.example.com/detail-1.jpg'));
+assert.deepEqual(plain(aliCompleteSourceResponse.data.attributes), [
+  { name: '材质', value: '316不锈钢' },
+  { name: '容量', value: '500ml' },
+]);
+assert.equal(aliCompleteSourceResponse.data.skuItems[0].skuId, 'red-500');
+assert.deepEqual(plain(aliCompleteSourceResponse.data.skuItems[0].attrs), { 颜色: '红色', 容量: '500ml' });
+assert.deepEqual(plain(aliCompleteSourceResponse.data.skuItems[0].images), ['https://img.example.com/red.jpg']);
 
 const selectedSkuResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/1032907994887.html',
