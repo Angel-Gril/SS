@@ -208,8 +208,8 @@
         <div style="display:flex;flex-direction:column;gap:14px;margin-top:18px;">
           <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
             <span>ERP 后端地址</span>
-            <input id="erpUrlInput" type="url" placeholder="http://localhost:3001" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
-            <small style="font-weight:400;color:#94a3b8;">填后端 API 端口（3001），不是前端页面（3000）</small>
+            <input id="erpUrlInput" type="url" placeholder="https://ss-erp.com" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:12px;background:rgba(255,255,255,0.92);color:#0f172a;padding:11px 12px;font-weight:650;outline:none;" />
+            <small style="font-weight:400;color:#94a3b8;">填写已部署的 ERP 服务地址。</small>
           </label>
           <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
             <span>扩展 Token</span>
@@ -237,8 +237,8 @@
           </label>
           <div class="actions">
             <button id="syncAnalyticsBtn" class="btn btn-primary" type="button">同步店铺分析到 ERP</button>
-            <button id="syncGraphsBtn" class="btn btn-secondary" type="button">同步经营图表到 ERP (V3)</button>
-            <button id="testMarketApisBtn" class="btn btn-secondary" type="button" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;">测试市场数据 API</button>
+            <button id="syncGraphsBtn" class="btn btn-secondary" type="button">同步经营图表到 ERP</button>
+            <button id="testMarketApisBtn" class="btn btn-secondary" type="button" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;">检查市场数据权限</button>
           </div>
         </div>
         <div id="analyticsStatus" class="status compact" style="margin-top:12px;"></div>

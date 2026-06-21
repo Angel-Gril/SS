@@ -7,8 +7,6 @@ const ozonPanel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'ut
 const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
 const sourceCostingPanel = fs.readFileSync('extensions/ss-erp/content/source-costing-panel.js', 'utf8');
 const serviceWorkerSource = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
-const localAdapterSource = fs.readFileSync('extensions/ss-erp/shared/adapters/local-adapter.js', 'utf8');
-const cloudAdapterSource = fs.readFileSync('extensions/ss-erp/shared/adapters/cloud-adapter.js', 'utf8');
 
 assert.match(
   popupJs,
@@ -61,20 +59,10 @@ assert.match(
   /message\.type\s*===\s*['"]ss-erp:source-quote-save['"]/,
   'service worker should handle saving quote records',
 );
-assert.match(
+assert.doesNotMatch(
   serviceWorkerSource,
-  /syncSourceCandidateQuote/,
-  'saving a source quote should attempt to sync the candidate and quote to ERP',
-);
-assert.match(
-  localAdapterSource,
-  /\/api\/source-candidates\/sync/,
-  'local adapter should send source candidate quote sync payloads to ERP',
-);
-assert.match(
-  cloudAdapterSource,
-  /\/api\/source-candidates\/sync/,
-  'cloud adapter should send source candidate quote sync payloads to ERP',
+  /await syncSourceCandidateQuote\(quote\)/,
+  'saving a source quote should stay extension-local and not sync candidate quotes to ERP',
 );
 assert.match(
   serviceWorker,
@@ -147,20 +135,15 @@ assert.match(
   /chrome\.tabs\.create/,
   'service worker source search should open source search tabs after creating jobs',
 );
-assert.match(
-  sourceCostingPanel,
-  /suppressOzonApply:\s*true/,
-  '1688 costing panel should save quotes without forcing an Ozon tab switch',
-);
-assert.match(
+assert.doesNotMatch(
   sourceCostingPanel,
   /type:\s*['"]ss-erp:source-candidate-upsert['"]/,
-  '1688 costing panel should also save the current source product into the Ozon candidate pool',
+  '1688 costing panel should not save source candidates from its main page workflow',
 );
-assert.match(
+assert.doesNotMatch(
   sourceCostingPanel,
   /buildOzonQuoteContext\(\)/,
-  '1688 costing panel should save the calculator input price with the Ozon quote context',
+  '1688 costing panel should not keep dead Ozon candidate save plumbing',
 );
 assert.match(
   popupJs,
@@ -187,10 +170,10 @@ assert.doesNotMatch(
   /class="primary" data-action="save-quote">保存核价/,
   'saving a quote must not remain the primary 1688 page action',
 );
-assert.match(
+assert.doesNotMatch(
   sourceCostingPanel,
   /data-action="save-quote"[^>]*>保存货源候选/,
-  '1688 costing panel should name the saved record as a source candidate, not a generic save action',
+  '1688 costing panel should not expose source candidate saving as a main page action',
 );
 
 console.log('PASS source quote flow wiring');

@@ -181,6 +181,14 @@
     return "RUB";
   }
 
+  function shouldLogOzonDebug() {
+    try {
+      return globalThis.localStorage && localStorage.getItem("ss_erp_debug_ozon_collect") === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
   function normalizeOzonCollectedImageUrl(raw) {
     let text = String(raw || "").trim();
     if (!text) return "";
@@ -346,9 +354,8 @@
       if (!brand && /бренд|brand|Бренд/i.test(a.name)) brand = a.value;
     }
 
-    // 占位：抽取 model_id + variants[]（结构未知，先 dump 全量 widgetStates 到 console 供二次完善）
     const variantsResult = extractOzonVariants(widgets, productId, currency);
-    if (variantsResult.dump) {
+    if (variantsResult.dump && shouldLogOzonDebug()) {
       console.log("[ss-erp] OZON widgetStates dump (variants 解析占位):", variantsResult.dump);
     }
 
@@ -792,7 +799,7 @@
         <div data-role="body" style="padding:12px;max-height:70vh;overflow-y:auto;">
           <div data-role="status" style="font-size:12px;color:#6b7a93;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
             <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f0b400;animation:pulse 1.5s infinite;"></span>
-            读取 seller.ozon.ru 分析数据中...
+            读取商品数据中...
           </div>
           <div data-role="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 8px;"></div>
         </div>
@@ -889,7 +896,8 @@
       return;
     }
 
-    status.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#16a34a;margin-right:6px;"></span>数据来源: seller.ozon.ru 卖家分析接口';
+    status.style.display = "none";
+    status.textContent = "";
 
     const weightDisplay = buildWeightDisplay(specs);
 
@@ -1153,9 +1161,12 @@
   }
 
   function buildProductResult(context, config) {
-    const title = pickTitle(config.titleSelectors, context.sources);
     const shopName = pickFirstDomText(config.shopSelectors) || pickStringByKey(context.sources, /(shopName|sellerName|companyName|storeName|supplierName)$/i);
     const productId = pickProductId(config.productIdRegexes, context.sources);
+    const title = pickTitle(config.titleSelectors, context.sources, {
+      platform: context.platform,
+      productId
+    });
     const sourcePrice = pickSourcePrice(context, config);
     const sourceShipping = sourcePrice.sourceType === "selectedOrderSummary" && sourcePrice.shippingCny != null
       ? {
@@ -1731,24 +1742,74 @@
     return text;
   }
 
-  function pickTitle(selectors, sources) {
+  function pickTitle(selectors, sources, context) {
     const domTitle = pickFirstDomText(selectors);
     if (domTitle) {
       return domTitle;
     }
 
     return (
-      pickProductTitleByKey(sources) ||
-      (document.title || "").trim()
+      pickProductTitleByKey(sources, context) ||
+      pickDocumentProductTitle(context) ||
+      buildFallbackProductTitle(context)
     );
   }
 
-  function pickProductTitleByKey(sources) {
+  function pickProductTitleByKey(sources, context) {
     const candidates = collectStringCandidates(sources, /(title|name|subject|productName|offerTitle)$/i)
       .filter((item) => !/(companyName|shopName|sellerName|storeName|supplierName)$/i.test(item.path))
+      .filter((item) => !isForeignOzonTitleCandidate(item, context))
       .map((item) => ({ ...item, score: scoreProductTitlePath(item.path) }))
       .sort((a, b) => b.score - a.score || a.value.length - b.value.length);
     return candidates.length ? candidates[0].value : "";
+  }
+
+  function pickDocumentProductTitle(context) {
+    const title = normalizeWhitespace(document.title || "");
+    if (!title || isForeignOzonTitleText(title, context)) {
+      return "";
+    }
+    return title;
+  }
+
+  function isForeignOzonTitleCandidate(item, context) {
+    if (String(context && context.platform || "").toLowerCase() === "ozon") {
+      return false;
+    }
+    const path = String(item && item.path || "").toLowerCase();
+    if (/(^|\.|_)(ozon|ozonproduct|ozon_product)(\.|_|$)/.test(path)) {
+      return true;
+    }
+    return isForeignOzonTitleText(item && item.value, context);
+  }
+
+  function isForeignOzonTitleText(value, context) {
+    if (String(context && context.platform || "").toLowerCase() === "ozon") {
+      return false;
+    }
+    const text = normalizeWhitespace(value || "");
+    if (!text) {
+      return false;
+    }
+    return /\bozon\b/i.test(text)
+      && (/\bsku\b/i.test(text) || /跟卖|核价/.test(text) || /\bozon\b\D{0,16}\d{6,}/i.test(text));
+  }
+
+  function buildFallbackProductTitle(context) {
+    const platform = String(context && context.platform || "source").toLowerCase();
+    const productId = normalizeWhitespace(context && context.productId || "");
+    const labels = {
+      "1688": "1688 商品",
+      pdd: "拼多多商品",
+      taobao: "淘宝商品",
+      tmall: "天猫商品",
+      jd: "京东商品",
+      temu: "Temu 商品",
+      aliexpress: "AliExpress 商品",
+      wb: "Wildberries 商品"
+    };
+    const label = labels[platform] || "货源商品";
+    return productId ? `${label} ${productId}` : label;
   }
 
   function scoreProductTitlePath(path) {

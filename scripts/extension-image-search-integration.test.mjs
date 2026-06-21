@@ -5,6 +5,10 @@ const manifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', '
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const popupHtml = fs.readFileSync('extensions/ss-erp/pages/popup.html', 'utf8');
 const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
+const settingsHtml = fs.readFileSync('extensions/ss-erp/pages/settings.html', 'utf8');
+const settingsJs = fs.readFileSync('extensions/ss-erp/pages/settings.js', 'utf8');
+const collectContentScriptJs = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
+const ozonInjectorJs = fs.readFileSync('extensions/ss-erp/content/ozon-injector.js', 'utf8');
 const sourceCostingPanelJs = fs.readFileSync('extensions/ss-erp/content/source-costing-panel.js', 'utf8');
 const sourceCostingCoreJs = fs.readFileSync('extensions/ss-erp/shared/source-costing/panel-core.js', 'utf8');
 
@@ -150,10 +154,70 @@ assert.match(
   /tryAutoCosting/,
   'source costing panel should automatically recompute when the selected source SKU changes',
 );
-assert.match(
+assert.doesNotMatch(
   sourceCostingPanelJs,
-  /openPanel/,
-  'source costing panel should automatically expand when an Ozon source context is available',
+  /if \(state\.context && state\.context\.ozon\) openPanel\(\);/,
+  'source costing panel should stay collapsed until the user clicks the costing button',
+);
+assert.doesNotMatch(
+  collectContentScriptJs,
+  /数据来源: seller\.ozon\.ru 卖家分析接口/,
+  'Ozon data overview should not keep the middle seller API source label after loading',
+);
+assert.doesNotMatch(
+  collectContentScriptJs,
+  /seller\.ozon\.ru 分析数据/,
+  'Ozon data overview should avoid exposing seller API implementation details in loading text',
+);
+assert.match(
+  collectContentScriptJs,
+  /function shouldLogOzonDebug\(\)/,
+  'Ozon collector debug logging should be behind an explicit localStorage gate',
+);
+assert.match(
+  collectContentScriptJs,
+  /if \(variantsResult\.dump && shouldLogOzonDebug\(\)\)/,
+  'Ozon collector should not dump widgetStates to the console unless debug is explicitly enabled',
+);
+assert.doesNotMatch(
+  ozonInjectorJs,
+  /autoOpenOnDetailPage/,
+  'Ozon calculator drawer should stay collapsed until the user clicks the floating calculator button',
+);
+assert.doesNotMatch(
+  ozonInjectorJs,
+  /商品详情页自动展开侧边栏/,
+  'Ozon calculator injector should not keep auto-open developer behavior on product pages',
+);
+assert.doesNotMatch(
+  settingsJs,
+  /本地开发版/,
+  'settings page should not expose a local development version label',
+);
+assert.doesNotMatch(
+  settingsHtml,
+  /http:\/\/localhost:3001/,
+  'settings page should not show localhost as the production ERP address hint',
+);
+assert.doesNotMatch(
+  settingsHtml + settingsJs,
+  /API 测试结果|正在测试市场数据 API|测试市场数据 API/,
+  'settings market data actions should use product wording instead of API test wording',
+);
+assert.match(
+  popupHtml,
+  /class="sync-card"/,
+  'popup maintenance actions should be grouped into scannable sync cards',
+);
+assert.match(
+  popupHtml,
+  />店铺 Cookie</,
+  'popup should label seller cookie sync in user-facing terms',
+);
+assert.doesNotMatch(
+  popupHtml,
+  />OZON Cookie</,
+  'popup should avoid raw platform-cookie wording in the maintenance area',
 );
 
 const sourceCollector = contentScripts.find((entry) => {

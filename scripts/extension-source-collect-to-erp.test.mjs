@@ -24,6 +24,16 @@ assert.match(
   /SS_ERP_CLIENT\.submitCollect\s*\(\s*\{\s*items:/,
   'service worker should post source products through the existing /api/collect batch path',
 );
+assert.match(
+  serviceWorker,
+  /pickSourceCollectTitle/,
+  'source ERP collection should sanitize title candidates before building the payload',
+);
+assert.doesNotMatch(
+  serviceWorker,
+  /const title = firstText\(\[source\.title, source\.titleZh, source\.name, source\.tabTitle\]\)/,
+  'source ERP collection must not blindly fall back to an Ozon tab title',
+);
 assert.doesNotMatch(
   popupJs,
   /baseStatus\s*\+\s*['"]，已加入候选货源/,

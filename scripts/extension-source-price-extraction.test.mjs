@@ -181,6 +181,33 @@ assert.equal(aliTitlePriorityResponse.ok, true);
 assert.equal(aliTitlePriorityResponse.data.title, '智能保温杯批发');
 assert.equal(aliTitlePriorityResponse.data.shopName, '揭阳市玖点服装有限公司');
 
+const aliOzonContextFallbackResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/811122233344.html',
+  title: 'Ozon SKU 1580539717 跟卖核价',
+  bodyText: '起批价 ¥18.80 近30天成交 3200',
+  selectors: {
+    '.price': '¥18.80',
+  },
+  pageState: {
+    knownGlobals: {
+      searchContext: {
+        ozon: {
+          productId: '1580539717',
+          title: 'Ozon SKU 1580539717 跟卖商品',
+          url: 'https://www.ozon.ru/product/example-1580539717/',
+        },
+      },
+      offer: {
+        offerId: '811122233344',
+      },
+    },
+  },
+});
+
+assert.equal(aliOzonContextFallbackResponse.ok, true);
+assert.equal(aliOzonContextFallbackResponse.data.title, '1688 商品 811122233344');
+assert.doesNotMatch(aliOzonContextFallbackResponse.data.title, /Ozon|1580539717/i);
+
 const aliCompleteSourceResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/744455566677.html',
   title: '1688 complete source detail',

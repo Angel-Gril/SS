@@ -307,7 +307,7 @@
   }
 
   function renderExtensionVersion() {
-    var version = '本地开发版';
+    var version = '版本未识别';
     try {
       if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getManifest === 'function') {
         var manifest = chrome.runtime.getManifest();
@@ -1047,7 +1047,7 @@
       var d = response.data || {};
       var skuCount = d.tableData && d.tableData.items ? d.tableData.items.length : 0;
       var recCount = d.recommendations && d.recommendations.items ? d.recommendations.items.length : 0;
-      var msg = '同步成功 (V3): ' + skuCount + ' 条SKU数据';
+      var msg = '同步成功：' + skuCount + ' 条SKU数据';
       if (recCount > 0) msg += ' + ' + recCount + ' 条AI推荐';
       if (d.salesFunnel && !d.salesFunnel.error) msg += ' + 销售漏斗';
       msg += ' 已推送到 ERP';
@@ -1062,12 +1062,12 @@
     setAnalyticsStatus('正在请求 seller.ozon.ru 访问权限...', '');
     if (marketApiResults) { marketApiResults.style.display = 'none'; marketApiResults.innerHTML = ''; }
     runSellerOzonAction(function () {
-      setAnalyticsStatus('正在测试市场数据 API（搜索词/趋势/爆品/竞争定位）...', '');
+      setAnalyticsStatus('正在检查市场数据权限（搜索词/趋势/爆品/竞争定位）...', '');
       var shopId = analyticsShopSelect ? analyticsShopSelect.value : '';
       return sendSellerAnalyticsMessage('spb-self-hosted:test-market-apis', shopId);
     }).then(function (response) {
       if (!response || !response.ok) {
-        setAnalyticsStatus('测试失败: ' + (response && response.error ? response.error : '未知错误'), 'error');
+        setAnalyticsStatus('检查失败: ' + (response && response.error ? response.error : '未知错误'), 'error');
         return;
       }
       var results = response.data || {};
@@ -1080,8 +1080,8 @@
         competitivePosition: '竞争定位 (Premium)',
         salesFunnel: '销售漏斗',
         categoryTree: '品类树',
-        chartsV3: 'V3 图表 API',
-        chartsLegacy: 'Legacy 图表 API',
+        chartsV3: '经营图表（新版）',
+        chartsLegacy: '经营图表（旧版）',
         whatToSellOwn: '店铺商品分析'
       };
       Object.keys(results).forEach(function (key) {
@@ -1099,7 +1099,7 @@
 
       if (marketApiResults) {
         var html = '<div style="font-size:12px;line-height:1.6;padding:8px 12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">';
-        html += '<strong>API 测试结果:</strong><br>';
+        html += '<strong>市场数据检查结果:</strong><br>';
         Object.keys(results).forEach(function (key) {
           var r = results[key];
           var name = apiNames[key] || key;

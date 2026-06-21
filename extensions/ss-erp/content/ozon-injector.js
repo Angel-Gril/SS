@@ -48,8 +48,6 @@
     let moved = false;
     let drawerPointerState = null;
     let drawerMoved = false;
-    let lastAutoOpenedPath = null;
-    let userClosedPath = null;
 
     try {
       const saved = window.localStorage.getItem(storageKey);
@@ -64,14 +62,7 @@
       }
     } catch (error) {}
 
-    function isDetailPagePath(pathname) {
-      return /\/product\/(?:[^/]*-)?\d+(?:\/|$)/.test(pathname || window.location.pathname);
-    }
-
     function openDrawer(options) {
-      if (options && options.manual) {
-        userClosedPath = null;
-      }
       drawer.classList.add('open');
       if (!drawerMoved) {
         drawer.style.left = '';
@@ -86,42 +77,6 @@
     function closeDrawer() {
       drawer.classList.remove('open');
       fab.style.display = '';
-      if (isDetailPagePath(window.location.pathname)) {
-        userClosedPath = window.location.pathname;
-      }
-    }
-
-    // 默认展开侧边栏（商品详情页进入时自动打开）
-    function autoOpenOnDetailPage() {
-      const path = window.location.pathname;
-      if (!isDetailPagePath(path)) return;
-      if (userClosedPath === path) return;
-      if (lastAutoOpenedPath === path && drawer.classList.contains('open')) return;
-      lastAutoOpenedPath = path;
-      openDrawer();
-    }
-
-    function scheduleAutoOpenCheck() {
-      window.setTimeout(autoOpenOnDetailPage, 300);
-    }
-
-    function watchRouteChanges() {
-      const originalPushState = window.history.pushState;
-      const originalReplaceState = window.history.replaceState;
-
-      window.history.pushState = function () {
-        const result = originalPushState.apply(this, arguments);
-        scheduleAutoOpenCheck();
-        return result;
-      };
-
-      window.history.replaceState = function () {
-        const result = originalReplaceState.apply(this, arguments);
-        scheduleAutoOpenCheck();
-        return result;
-      };
-
-      window.addEventListener('popstate', scheduleAutoOpenCheck);
     }
 
     function onDrawerPointerMove(event) {
@@ -233,9 +188,6 @@
       window.OZON_CALC_OZON_PANEL.renderDrawerContent(body);
     });
 
-    // 商品详情页自动展开侧边栏
-    autoOpenOnDetailPage();
-    watchRouteChanges();
   }
 
   if (document.readyState === 'loading') {

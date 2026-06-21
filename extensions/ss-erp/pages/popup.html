@@ -270,15 +270,23 @@
     details.maintenance[open] summary::after { content: "收起"; }
 
     .maintenance-body {
-      padding: 0 16px 12px;
+      display: grid;
+      gap: 8px;
+      padding: 0 12px 12px;
+    }
+
+    .sync-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      padding: 8px;
     }
 
     .sync-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 0;
-      border-top: 1px solid var(--line);
+      min-height: 30px;
     }
     .sync-info { flex: 1; min-width: 0; }
     .sync-name { font-size: 12px; font-weight: 650; }
@@ -315,6 +323,7 @@
       background: #fff;
     }
     .field + .field { margin-top: 6px; }
+    .sync-card .field { margin-top: 6px; }
     .help-text {
       margin-top: 5px;
       color: var(--muted);
@@ -395,42 +404,51 @@
     </section>
 
     <details class="maintenance">
-      <summary>同步与维护</summary>
+      <summary>数据同步</summary>
       <div class="maintenance-body">
-        <div class="sync-row">
-          <div class="sync-info">
-            <div class="sync-name">OZON Cookie</div>
-            <div class="sync-time" id="cookieSyncTime">未同步</div>
+        <div class="sync-card">
+          <div class="sync-row">
+            <div class="sync-info">
+              <div class="sync-name">店铺 Cookie</div>
+              <div class="sync-time" id="cookieSyncTime">未同步</div>
+            </div>
+            <button class="btn btn-primary" id="syncCookieBtn" type="button">同步</button>
           </div>
-          <button class="btn btn-primary" id="syncCookieBtn" type="button">同步</button>
-        </div>
-        <select class="field" id="cookieShopSelect">
-          <option value="">选择目标店铺</option>
-        </select>
-        <input class="field" id="cookieCompanyIdInput" type="text" placeholder="可选：留空自动识别当前 seller 店铺" />
-        <div class="help-text">在 seller.ozon.ru 切到目标店铺后同步；仅自动识别失败时手动填写 company_id。</div>
-
-        <div class="sync-row">
-          <div class="sync-info">
-            <div class="sync-name">核价记录</div>
-            <div class="sync-time">采购价、Ozon SKU、货源 SKU</div>
-          </div>
-          <button class="btn" id="exportSourceQuotesBtn" type="button">导出</button>
+          <select class="field" id="cookieShopSelect">
+            <option value="">选择目标店铺</option>
+          </select>
+          <input class="field" id="cookieCompanyIdInput" type="text" placeholder="可选：留空自动识别当前 seller 店铺" />
+          <div class="help-text">切到目标店铺后同步；仅自动识别失败时手动填写 company_id。</div>
         </div>
 
-        <div class="sync-row">
-          <div class="sync-info">
-            <div class="sync-name">店铺分析</div>
-            <div class="sync-time" id="analyticsSyncTime">未同步</div>
+        <div class="sync-card">
+          <div class="sync-row">
+            <div class="sync-info">
+              <div class="sync-name">核价记录</div>
+              <div class="sync-time">采购价 / Ozon SKU / 货源 SKU</div>
+            </div>
+            <button class="btn" id="exportSourceQuotesBtn" type="button">导出</button>
           </div>
-          <button class="btn" id="syncAnalyticsBtn" type="button">同步</button>
         </div>
-        <div class="sync-row">
-          <div class="sync-info">
-            <div class="sync-name">经营图表</div>
-            <div class="sync-time" id="graphsSyncTime">未同步</div>
+
+        <div class="sync-card">
+          <div class="sync-row">
+            <div class="sync-info">
+              <div class="sync-name">店铺分析</div>
+              <div class="sync-time" id="analyticsSyncTime">未同步</div>
+            </div>
+            <button class="btn" id="syncAnalyticsBtn" type="button">同步</button>
           </div>
-          <button class="btn" id="syncGraphsBtn" type="button">同步</button>
+        </div>
+
+        <div class="sync-card">
+          <div class="sync-row">
+            <div class="sync-info">
+              <div class="sync-name">经营图表</div>
+              <div class="sync-time" id="graphsSyncTime">未同步</div>
+            </div>
+            <button class="btn" id="syncGraphsBtn" type="button">同步</button>
+          </div>
         </div>
       </div>
     </details>

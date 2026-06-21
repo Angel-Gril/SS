@@ -903,10 +903,46 @@ function normalizeCollectImages(product) {
   return values.slice(0, 50);
 }
 
+function isForeignOzonTitleTextForSourceCollect(value, product) {
+  const platform = normalizeSourcePlatformForCollect(product).toLowerCase();
+  if (platform === 'ozon') return false;
+  const text = firstText([value]);
+  if (!text) return false;
+  return /\bozon\b/i.test(text)
+    && (/\bsku\b/i.test(text) || /跟卖|核价/.test(text) || /\bozon\b\D{0,16}\d{6,}/i.test(text));
+}
+
+function buildSourceCollectFallbackTitle(product, sourceProductId) {
+  const platform = normalizeSourcePlatformForCollect(product).toLowerCase();
+  const labels = {
+    '1688': '1688 商品',
+    pdd: '拼多多商品',
+    taobao: '淘宝商品',
+    tmall: '天猫商品',
+    jd: '京东商品',
+    temu: 'Temu 商品',
+    aliexpress: 'AliExpress 商品',
+    wb: 'Wildberries 商品',
+  };
+  const label = labels[platform] || '货源商品';
+  return sourceProductId ? label + ' ' + sourceProductId : label;
+}
+
+function pickSourceCollectTitle(product, sourceProductId, candidates) {
+  const source = product && typeof product === 'object' ? product : {};
+  const values = Array.isArray(candidates)
+    ? candidates
+    : [source.title, source.titleZh, source.name, source.tabTitle];
+  for (const value of values) {
+    const text = firstText([value]);
+    if (text && !isForeignOzonTitleTextForSourceCollect(text, source)) return text;
+  }
+  return buildSourceCollectFallbackTitle(source, sourceProductId);
+}
+
 function normalizeSourceProductForErpCollect(product) {
   const source = product && typeof product === 'object' ? product : {};
   const sourceUrl = firstText([source.sourceUrl, source.tabUrl, source.url]);
-  const title = firstText([source.title, source.titleZh, source.name, source.tabTitle]) || '未命名商品';
   const sourceProductId = firstText([
     source.sourceProductId,
     source.productId,
@@ -914,6 +950,7 @@ function normalizeSourceProductForErpCollect(product) {
     source.offerId,
     source.sku,
   ]);
+  const title = pickSourceCollectTitle(source, sourceProductId);
   const unitPriceText = firstText([source.priceText, source.price, source.priceCny]);
   const purchaseCostText = firstText([source.totalCostCny, source.purchaseCostCny, source.landedCostCny, unitPriceText]);
   const selectedSku = source.selectedSku && typeof source.selectedSku === 'object' ? source.selectedSku : null;
@@ -922,7 +959,7 @@ function normalizeSourceProductForErpCollect(product) {
     ...source,
     title,
     publishTitle: '',
-    sourceTitleRaw: firstText([source.sourceTitleRaw, source.title, source.titleZh, source.name]) || title,
+    sourceTitleRaw: pickSourceCollectTitle(source, sourceProductId, [source.sourceTitleRaw, source.title, source.titleZh, source.name]),
     sourceLocale: firstText([source.sourceLocale]) || 'zh-CN',
     sourceUrl,
     sourcePlatform: normalizeSourcePlatformForCollect(source),
@@ -1517,7 +1554,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         [SS_ERP_SOURCE_QUOTES_KEY]: quotes,
         [SS_ERP_SOURCE_QUOTE_PENDING_KEY]: quote,
       });
-      const erpSync = await syncSourceCandidateQuote(quote);
       if (!payload.suppressOzonApply) {
         await notifyOzonTabToApplySourceQuote(quote);
       }
@@ -1525,7 +1561,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ok: true,
         quote,
         quoteCount: quotes.length,
-        erpSync,
         ozonUrl: quote.ozon && quote.ozon.url || '',
       });
     }).catch((error) => {

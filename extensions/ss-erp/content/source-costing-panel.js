@@ -97,7 +97,6 @@
       '  <section class="ss-erp-source-section" data-role="result-card"></section>',
       '  <div class="ss-erp-source-actions">',
       '    <button type="button" class="primary" data-action="run-costing">重新计算</button>',
-      '    <button type="button" class="secondary" data-action="save-quote" title="保存当前 SKU 为该 Ozon 商品的货源候选">保存货源候选</button>',
       '    <button type="button" class="secondary" data-action="collect-erp" title="采集当前货源商品到 ERP">采集货源到ERP</button>',
       '  </div>',
       '  <div class="ss-erp-source-status" data-role="status"></div>',
@@ -117,13 +116,7 @@
     });
     panel.querySelector('[data-action="refresh"]').addEventListener('click', refreshAll);
     panel.querySelector('[data-action="run-costing"]').addEventListener('click', runCosting);
-    panel.querySelector('[data-action="save-quote"]').addEventListener('click', saveQuote);
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
-  }
-
-  function openPanel() {
-    var panel = document.getElementById(PANEL_ID);
-    if (panel) panel.classList.add('open');
   }
 
   function restorePanelPosition(panel) {
@@ -200,7 +193,6 @@
     await Promise.all([refreshContext(), refreshCalculatorStatus(), refreshProductOnly()]);
     hydrateInputs();
     renderContent();
-    if (state.context && state.context.ozon) openPanel();
     tryAutoCosting();
   }
 
@@ -236,7 +228,6 @@
         if (nextSignature) state.lastProductSignature = nextSignature;
         hydrateInputs();
         renderContent();
-        if (state.context && state.context.ozon) openPanel();
         if (changed && !options.skipAuto) tryAutoCosting();
         return;
       }
@@ -263,7 +254,6 @@
     var resultCard = panel.querySelector('[data-role="result-card"]');
     var costNode = panel.querySelector('[data-role="cost"]');
     var runButton = panel.querySelector('[data-action="run-costing"]');
-    var saveButton = panel.querySelector('[data-action="save-quote"]');
     var collectButton = panel.querySelector('[data-action="collect-erp"]');
 
     var cost = Number(product.totalCostCny || product.priceCny || product.price) || 0;
@@ -296,7 +286,6 @@
     if (resultCard) resultCard.innerHTML = buildResultCardHtml();
     bindInputEvents(inputCard);
     if (runButton) runButton.disabled = !ozon || state.busy;
-    if (saveButton) saveButton.disabled = !ozon || !(cost > 0) || state.busy;
     if (collectButton) {
       collectButton.disabled = !product.title || state.busy;
       collectButton.title = '采集当前 ' + platformLabel() + ' 货源商品到 ERP';
@@ -484,62 +473,6 @@
       '<div class="ss-erp-source-row"><span>总成本</span><b>¥ ' + formatMoney(best.totalCost) + '</b></div>',
       '<div class="ss-erp-source-muted">' + escapeHtml(best.summary || best.reason || '') + '</div>'
     ].join('');
-  }
-
-  async function saveQuote() {
-    if (state.busy) return;
-    if (!state.context || !state.context.ozon) {
-      setStatus('没有最近的 Ozon 关联，请先从 Ozon 商品页进入核价。', 'fail');
-      return;
-    }
-    if (!state.product) {
-      setStatus('当前 ' + platformLabel() + ' 商品还未读取完成。', 'fail');
-      return;
-    }
-
-    state.busy = true;
-    renderContent();
-    setStatus('保存货源候选...', '');
-    try {
-      var candidateResponse = await sendRuntimeMessage({
-        type: 'ss-erp:source-candidate-upsert',
-        payload: {
-          ozon: buildOzonQuoteContext(),
-          sourceProduct: state.product
-        }
-      });
-      if (!candidateResponse || !candidateResponse.ok) throw new Error(candidateResponse && candidateResponse.error || '保存候选失败');
-
-      var response = await sendRuntimeMessage({
-        type: 'ss-erp:source-quote-save',
-        payload: {
-          ozon: buildOzonQuoteContext(),
-          sourceProduct: state.product,
-          costCny: state.inputs.cost || state.product.totalCostCny || state.product.priceCny || state.product.price,
-          suppressOzonApply: true
-        }
-      });
-      if (!response || !response.ok) throw new Error(response && response.error || '保存失败');
-      if (response.erpSync && response.erpSync.ok === false) {
-        setStatus('本地已保存，ERP 同步失败：' + (response.erpSync.error || '未知错误'), 'fail');
-      } else {
-        setStatus('已保存货源候选并同步到 ERP。', 'ok');
-      }
-    } catch (error) {
-      setStatus(error && error.message ? error.message : String(error), 'fail');
-    } finally {
-      state.busy = false;
-      renderContent();
-    }
-  }
-
-  function buildOzonQuoteContext() {
-    var ozon = state.context && state.context.ozon || {};
-    return SourceCosting.buildOzonQuoteContext(
-      ozon,
-      state.inputs.priceRMB,
-      readOzonPriceCny(ozon, state.inputs.fxRate)
-    );
   }
 
   async function collectToErp() {
