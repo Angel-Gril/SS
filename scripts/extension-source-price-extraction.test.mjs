@@ -350,6 +350,43 @@ assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.some((item) => item.att
 assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.every((item) => !/^(货源类别|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节)$/.test(item.name || '')));
 assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.every((item) => !/斤\s*条.*斤\s*条/s.test(item.name || item.specText || '')));
 
+const aliGenericSalePropMatrixResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/104444555666.html?offerId=104444555666',
+  title: '厨房食品收纳罐密封罐透明塑料五谷杂粮储物罐批发',
+  bodyText: [
+    '商品属性 品牌 无 材质 PET 产地 浙江 是否进口 否',
+    '规格 基础款 升级款 加厚款',
+    '容量 500ml、1000ml',
+    '基础款 500ml ¥3.2 库存999件 升级款 1000ml ¥5.8 库存888件',
+  ].join(' '),
+  selectors: {
+    h1: '厨房食品收纳罐密封罐透明塑料五谷杂粮储物罐批发',
+  },
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '104444555666',
+        subject: '厨房食品收纳罐密封罐透明塑料五谷杂粮储物罐批发',
+        offerProps: [
+          { name: '品牌', value: '无' },
+          { name: '材质', value: 'PET' },
+          { name: '产地', value: '浙江' },
+          { name: '是否进口', value: '否' },
+          { name: '规格', value: '基础款 升级款 加厚款' },
+          { name: '容量', value: '500ml、1000ml' },
+        ],
+      },
+    },
+  },
+});
+
+assert.equal(aliGenericSalePropMatrixResponse.ok, true);
+assert.equal(aliGenericSalePropMatrixResponse.data.skuItems.length, 6);
+assert.ok(aliGenericSalePropMatrixResponse.data.skuItems.every((item) => item.attrs?.规格 && item.attrs?.容量), '1688 generic sale props should become variant attrs');
+assert.ok(aliGenericSalePropMatrixResponse.data.skuItems.some((item) => item.attrs.规格 === '基础款' && item.attrs.容量 === '500ml'));
+assert.ok(aliGenericSalePropMatrixResponse.data.skuItems.some((item) => item.attrs.规格 === '加厚款' && item.attrs.容量 === '1000ml'));
+assert.ok(aliGenericSalePropMatrixResponse.data.skuItems.every((item) => !/^(品牌|材质|产地|是否进口|规格|容量)$/.test(item.name || '')));
+
 const aliShopNameTitleFallbackResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/953122376708.html',
   title: '揭阳市揭东区新亨镇小树树服装店',

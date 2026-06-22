@@ -107,7 +107,7 @@ function sourceVariantLabel(variant: Record<string, unknown>, index: number): st
   return String(variant.name || variant.specText || attrs || variant.skuId || `SKU ${index + 1}`).replace(/\s+/g, ' ').trim();
 }
 
-const SOURCE_VARIANT_STOP_LABEL_RE = /^(里料成分|产地|货号|颜色|尺码|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格|里料成分含量|品牌|材质|成分|面料|货源类别|货源类型|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节|是否库存|库存类型|适合人群|上市年份\/季节|上市年份季节|适用场景|裤脚口款式|款式细节|弹力|类别|原创设计货源|有无质检报告|质检报告编号|是否加绒|领标|吊牌|适用体型|适用对象|款式|厚薄|工艺)$/;
+const SOURCE_VARIANT_STOP_LABEL_RE = /^(里料成分|产地|货号|颜色|尺码|规格|型号|容量|尺寸|套餐|版本|口味|是否进口|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格|里料成分含量|品牌|材质|成分|面料|货源类别|货源类型|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节|是否库存|库存类型|适合人群|上市年份\/季节|上市年份季节|适用场景|裤脚口款式|款式细节|弹力|类别|原创设计货源|有无质检报告|质检报告编号|是否加绒|领标|吊牌|适用体型|适用对象|款式|厚薄|工艺)$/;
 
 function isLikelySourceVariantTextBlob(label: string): boolean {
   if (/斤\s*(?:条|件|个).+斤\s*(?:条|件|个)/.test(label)) return true;
