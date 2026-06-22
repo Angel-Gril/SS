@@ -245,6 +245,58 @@ assert.deepEqual(plain(aliStructuredPantsResponse.data.skuItems[0].attrs), { 颜
 assert.equal(aliStructuredPantsResponse.data.skuItems[0].stock, 19999917);
 assert.ok(aliStructuredPantsResponse.data.skuItems.every((item) => !/已选|商品金额|运费/.test(item.name || item.specText || '')));
 
+const aliBraTextMatrixResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/965731536766.html?offerId=965731536766&hotSaleSkuId=5905150268481',
+  title: '大u型露美背隐形内衣无痕粉底液小胸聚拢特调肤色细肩带夏季文胸',
+  bodyText: [
+    '商品属性 款式 大露背 面料名称 锦纶 功能 聚拢、透气、上托、舒适',
+    '颜色 优雅黑【超低露背 穿搭隐形】 粉底液肤【超低露背 穿搭隐形】 奶皮白【超低露背 穿搭隐形】',
+    '尺码 S适合70/32ABC M适合75/34ABC L适合80/36ABC XL适合85/38ABC',
+    '优雅黑 【超低露背 穿搭隐形】 粉底液肤【超低露背 穿搭隐形】 奶皮白 【超低露背 穿搭隐形】 S适合70/32ABC M适合75/34ABC L适合80/36ABC XL适合85/38ABC ¥12.33 库存999',
+  ].join(' '),
+  selectors: {
+    h1: '大u型露美背隐形内衣无痕粉底液小胸聚拢特调肤色细肩带夏季文胸',
+  },
+  queryAll(selector) {
+    if (!String(selector).includes('sku')) return [];
+    return [
+      makeMockElement({
+        text: '优雅黑 【超低露背 穿搭隐形】 粉底液肤【超低露背 穿搭隐形】 奶皮白 【超低露背 穿搭隐形】 S适合70/32ABC M适合75/34ABC L适合80/36ABC XL适合85/38ABC ¥12.33 库存999',
+        className: 'sku-list',
+      }),
+    ];
+  },
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '965731536766',
+        subject: '大u型露美背隐形内衣无痕粉底液小胸聚拢特调肤色细肩带夏季文胸',
+        offerProps: [
+          { name: '里料成分', value: '锦纶/尼龙' },
+          { name: '产地', value: '汕头' },
+          { name: '货号', value: '8838#AA' },
+          { name: '颜色', value: '优雅黑【超低露背 穿搭隐形】、粉底液肤【超低露背 穿搭隐形】、奶皮白【超低露背 穿搭隐形】' },
+          { name: '尺码', value: 'S适合70/32ABC、M适合75/34ABC、L适合80/36ABC、XL适合85/38ABC' },
+          { name: '上市时间', value: '2025夏季' },
+          { name: '罩杯型', value: '3/4罩杯' },
+          { name: '排扣类型', value: '后单排搭扣' },
+          { name: '肩带类型', value: '可拆卸双肩带' },
+          { name: '主面料成分含量', value: '50%（含）-70%（不含）' },
+          { name: '风格', value: '辣妹' },
+        ],
+      },
+    },
+  },
+});
+
+assert.equal(aliBraTextMatrixResponse.ok, true);
+assert.equal(aliBraTextMatrixResponse.data.skuItems.length, 12);
+assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => item.attrs?.颜色 && item.attrs?.尺码), '1688 text matrix variants should carry color and size attrs');
+assert.ok(aliBraTextMatrixResponse.data.skuItems.some((item) => item.attrs.颜色 === '优雅黑【超低露背 穿搭隐形】' && item.attrs.尺码 === 'L适合80/36ABC'));
+assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => !/^(里料成分|产地|货号|颜色|尺码|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格)$/.test(item.name || '')));
+assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => !/粉底液肤.*奶皮白.*S适合.*M适合.*L适合/s.test(item.name || item.specText || '')));
+assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => Array.isArray(item.images) && item.images.length === 0), 'do not attach the same product image to every text-inferred variant');
+
 const aliShopNameTitleFallbackResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/953122376708.html',
   title: '揭阳市揭东区新亨镇小树树服装店',

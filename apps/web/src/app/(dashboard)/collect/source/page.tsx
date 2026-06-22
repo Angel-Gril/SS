@@ -82,7 +82,7 @@ function sourcePreviewImages(item: SourceCollectItem): string[] {
 }
 
 function variantCount(item: SourceCollectItem): number {
-  return Array.isArray(item.variants) ? item.variants.length : 0;
+  return sourceDisplayVariants(item).length;
 }
 
 function sourceAttributeCount(item: SourceCollectItem): number {
@@ -110,6 +110,17 @@ function sourceVariantLabel(variant: Record<string, unknown>, index: number): st
 function isDisplayableSourceVariant(variant: Record<string, unknown>, index: number): boolean {
   const label = sourceVariantLabel(variant, index);
   if (!label || label.length > 96) return false;
+  const attrs = variant.attrs && typeof variant.attrs === 'object' ? variant.attrs as Record<string, unknown> : {};
+  const attrKeys = Object.keys(attrs);
+  const onlySpecAttr = attrKeys.length === 1 && attrKeys[0] === 'spec';
+  const hasSkuSignal = !!String(variant.skuId || variant.sku || variant.id || '').trim()
+    || Number.isFinite(Number(variant.price))
+    || Number.isFinite(Number(variant.stock ?? variant.stockNum ?? variant.quantity))
+    || attrKeys.some((key) => !/^spec$/i.test(key));
+  if (!hasSkuSignal && /^(里料成分|产地|货号|颜色|尺码|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格|里料成分含量|品牌|材质|成分|面料)$/.test(label)) return false;
+  const sizeTokenCount = (label.match(/(?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*适合/g) || []).length;
+  const colorMarkerCount = (label.match(/【/g) || []).length;
+  if (onlySpecAttr && sizeTokenCount >= 3 && colorMarkerCount >= 2) return false;
   if (/(退货|退款|跨境|贴标|箱唛|复购率|已加购|先采后付|立即下单|加采购车|收藏|商品评价|商品属性|包装信息|商品详情|热门推荐|全部好评|差评|问大家|保障|发货率|运费\s*起)/.test(label)) return false;
   if (label.split(/\s+/).length > 10 && !/[/:：]/.test(label)) return false;
   return true;

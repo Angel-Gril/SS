@@ -1049,7 +1049,8 @@
       : normalize1688ProductImages(result.images);
     let skuItems = structured.skuItems.length
       ? structured.skuItems
-      : filter1688SkuItems(result.skuItems);
+      : infer1688SkuItemsFromText(context, result, structured.attributes, structured.skuProps);
+    if (!skuItems.length) skuItems = filter1688SkuItems(result.skuItems);
     const selectedSku = pick1688SelectedSku(context, skuItems, result.selectedSku);
     if (!skuItems.length && selectedSku && (selectedSku.name || selectedSku.specText || selectedSku.skuId)) {
       skuItems = [selectedSku];
@@ -1106,6 +1107,7 @@
       productId,
       shopName,
       title,
+      skuProps,
       images,
       skuItems,
       attributes,
@@ -1154,7 +1156,7 @@
       walkObject(source, [], (value, path) => {
         if (!Array.isArray(value) || !value.length || typeof value[0] !== "object") return;
         const pathText = path.join(".");
-        if (!/(skuProps|skuPropList|skuProperties|skuAttributes|saleProp|saleProps|specProps|specifications)/i.test(pathText)) return;
+        if (!/(skuProps|skuPropList|skuProperties|skuProperty|skuPropertyList|skuAttributes|saleProp|saleProps|saleProperty|salePropertyList|specProps|specifications|specAttrs)/i.test(pathText)) return;
         const props = normalize1688SkuProps(value);
         if (props.length) candidates.push({ score: score1688SkuPropsPath(pathText), props });
       });
@@ -1175,14 +1177,14 @@
     return (Array.isArray(rows) ? rows : []).map((row) => {
       if (!row || typeof row !== "object") return null;
       const name = normalizeWhitespace(pickFirstValue(row, ["prop", "name", "propName", "propertyName", "skuPropName", "attributeName", "title"]) || "");
-      const rawValues = pickFirstValue(row, ["value", "values", "propValues", "skuValues", "children", "items", "list"]);
+      const rawValues = pickFirstValue(row, ["value", "values", "propValues", "propValueList", "skuValues", "skuPropertyValues", "children", "items", "list"]);
       const values = (Array.isArray(rawValues) ? rawValues : []).map((item) => {
         if (item && typeof item === "object") {
           const valueName = normalizeWhitespace(pickFirstValue(item, ["name", "value", "valueName", "text", "label", "title"]) || "");
           if (!valueName) return null;
           const imageUrl = normalize1688ProductImageUrl(pickFirstValue(item, ["imageUrl", "image", "imgUrl", "picUrl", "url", "src"]));
           return {
-            id: normalizeWhitespace(pickFirstValue(item, ["id", "valueId", "vid", "propValueId", "skuValueId"]) || ""),
+            id: normalizeWhitespace(pickFirstValue(item, ["id", "valueId", "vid", "propValueId", "propertyValueId", "skuValueId"]) || ""),
             name: valueName,
             imageUrl: imageUrl && isValidSourceProductImage(imageUrl) ? imageUrl : ""
           };
@@ -1274,6 +1276,192 @@
       });
     });
     return dedupeSkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+  }
+
+  function infer1688SkuItemsFromText(context, result, attributes, skuProps) {
+    const price = pick1688FallbackSkuPrice(result);
+    const fromProps = build1688SkuPropCombinations(skuProps, price);
+    if (fromProps.length) return fromProps;
+
+    const labels = (Array.isArray(result && result.skuItems) ? result.skuItems : [])
+      .map((item) => normalizeWhitespace(item && (item.name || item.specText || "")))
+      .filter((text) => text && /(适合|尺码|颜色|ABC|已选|商品金额|[¥￥]\s*\d)/i.test(text));
+    const text = [
+      labels.join(" "),
+      (Array.isArray(attributes) ? attributes : []).map((attr) => `${attr && attr.name || ""}: ${attr && attr.value || ""}`).join(" "),
+      context && context.pageText
+    ].map(normalizeWhitespace).filter(Boolean).join(" ");
+
+    const colors = extract1688ColorValues(labels, attributes, text);
+    const sizes = extract1688SizeValues(attributes, text);
+    if (!colors.length || !sizes.length || colors.length * sizes.length > 200) return [];
+
+    const rows = [];
+    colors.forEach((color) => {
+      sizes.forEach((size) => {
+        rows.push({
+          skuId: "",
+          name: `${color} / ${size}`,
+          specText: `${color} / ${size}`,
+          price,
+          stock: null,
+          attrs: { "颜色": color, "尺码": size },
+          images: [],
+          source: "textMatrix"
+        });
+      });
+    });
+    return rows;
+  }
+
+  function pick1688FallbackSkuPrice(result) {
+    const rows = Array.isArray(result && result.skuItems) ? result.skuItems : [];
+    const hit = rows.find((item) => Number(item && item.price) > 0);
+    if (hit) return roundMoney(Number(hit.price));
+    const price = Number(result && (result.priceCny || result.price));
+    return Number.isFinite(price) && price > 0 ? roundMoney(price) : null;
+  }
+
+  function build1688SkuPropCombinations(skuProps, price) {
+    const props = (Array.isArray(skuProps) ? skuProps : [])
+      .filter((prop) => prop && prop.name && Array.isArray(prop.values) && prop.values.length)
+      .slice(0, 3);
+    if (!props.length) return [];
+    const total = props.reduce((count, prop) => count * prop.values.length, 1);
+    if (total <= 0 || total > 200) return [];
+
+    const rows = [];
+    function walk(index, attrs, images) {
+      if (index >= props.length) {
+        const label = Object.values(attrs).join(" / ");
+        rows.push({
+          skuId: "",
+          name: label,
+          specText: label,
+          price,
+          stock: null,
+          attrs: { ...attrs },
+          images: normalize1688ProductImages(images),
+          source: "skuPropsMatrix"
+        });
+        return;
+      }
+      const prop = props[index];
+      (prop.values || []).forEach((value) => {
+        const nextAttrs = { ...attrs, [prop.name]: value.name };
+        const nextImages = value.imageUrl ? images.concat(value.imageUrl) : images;
+        walk(index + 1, nextAttrs, nextImages);
+      });
+    }
+    walk(0, {}, []);
+    return dedupeSkuRows(rows.filter(isUseful1688SkuItem));
+  }
+
+  function extract1688ColorValues(labels, attributes, allText) {
+    const out = [];
+    const push = (value) => {
+      const cleaned = cleanup1688SkuValue(value);
+      if (!cleaned || is1688SkuStopToken(cleaned) || /适合|尺码|商品金额|另需运费/.test(cleaned)) return;
+      if (!out.includes(cleaned)) out.push(cleaned);
+    };
+
+    (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
+      const name = normalizeWhitespace(attr && (attr.name || attr.key || ""));
+      if (!/颜色|色号|款式/i.test(name)) return;
+      split1688ColorList(attr.value).forEach(push);
+    });
+
+    (Array.isArray(labels) ? labels : []).forEach((label) => {
+      const index = find1688FirstSizeIndex(label);
+      if (index <= 0) return;
+      split1688ColorList(label.slice(0, index)).forEach(push);
+    });
+
+    if (out.length <= 1) {
+      const text = normalizeWhitespace(allText || "");
+      const match = text.match(/颜色[:：]?\s*(.{2,180}?)(?:尺码|上市时间|货号|[XSML]{1,4}\s*适合)/i);
+      if (match && match[1]) split1688ColorList(match[1]).forEach(push);
+    }
+
+    return out.slice(0, 20);
+  }
+
+  function split1688ColorList(value) {
+    const text = normalizeWhitespace(value || "")
+      .replace(/^颜色[:：]?\s*/i, "")
+      .replace(/已选.*$/g, " ")
+      .replace(/商品金额.*$/g, " ");
+    const tokens = [];
+    const regex = /([\u3400-\u9fffA-Za-z0-9#]{1,24}(?:\s*【[^】]{1,50}】)?)/g;
+    let match;
+    while ((match = regex.exec(text))) {
+      const token = cleanup1688SkuValue(match[1]);
+      if (token && !is1688SkuStopToken(token)) tokens.push(token);
+    }
+    return dedupeTextValues(tokens);
+  }
+
+  function extract1688SizeValues(attributes, allText) {
+    const out = [];
+    const push = (value) => {
+      const cleaned = cleanup1688SkuValue(value)
+        .replace(/\s*\/\s*/g, "/")
+        .replace(/适合\s+/g, "适合");
+      if (!cleaned || is1688SkuStopToken(cleaned)) return;
+      if (!/^(?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(cleaned)) return;
+      if (!out.includes(cleaned)) out.push(cleaned);
+    };
+
+    (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
+      const name = normalizeWhitespace(attr && (attr.name || attr.key || ""));
+      if (!/尺码|规格|size/i.test(name)) return;
+      match1688SizeTokens(attr.value).forEach(push);
+    });
+    match1688SizeTokens(allText).forEach(push);
+    return out.slice(0, 40);
+  }
+
+  function match1688SizeTokens(value) {
+    const text = normalizeWhitespace(value || "");
+    const rows = [];
+    const regex = /((?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*(?:适合\s*)?(?:\d{2,3})?\s*(?:\/\s*\d{2,3}[A-Z]{1,5})?)/gi;
+    let match;
+    while ((match = regex.exec(text))) {
+      const token = cleanup1688SkuValue(match[1]);
+      if (token && token.length <= 40) rows.push(token);
+    }
+    return dedupeTextValues(rows);
+  }
+
+  function find1688FirstSizeIndex(value) {
+    const text = String(value || "");
+    const match = text.match(/(?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*(?:适合|\/\s*\d{2,3}[A-Z]{1,5})/i);
+    return match ? match.index : -1;
+  }
+
+  function cleanup1688SkuValue(value) {
+    return normalizeWhitespace(value || "")
+      .replace(/^[:：,，、;\s]+|[:：,，、;\s]+$/g, "")
+      .replace(/\s+【/g, "【")
+      .replace(/】\s+/g, "】")
+      .trim();
+  }
+
+  function is1688SkuStopToken(value) {
+    const text = normalizeWhitespace(value || "");
+    if (!text) return true;
+    if (/^(颜色|尺码|规格|属性|商品|金额|运费|库存|价格|起批|产地|货号|风格|品牌|材质|成分|面料|名称|功能)$/.test(text)) return true;
+    if (/^(上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|里料成分|里料成分含量|适用年龄段|模杯类型|主面料成分)$/.test(text)) return true;
+    return false;
+  }
+
+  function dedupeTextValues(values) {
+    const out = [];
+    (Array.isArray(values) ? values : []).forEach((value) => {
+      const text = normalizeWhitespace(value);
+      if (text && !out.includes(text)) out.push(text);
+    });
+    return out;
   }
 
   function normalize1688SkuMapEntry(key, row, skuProps) {
@@ -1368,9 +1556,12 @@
     if (!item) return false;
     const label = normalizeWhitespace(item.name || item.specText || "");
     const hasAttrs = item.attrs && Object.keys(item.attrs).length > 0;
+    const attrKeys = hasAttrs ? Object.keys(item.attrs) : [];
+    const onlySpecAttr = attrKeys.length === 1 && attrKeys[0] === "spec";
     if (!item.skuId && !hasAttrs && !label) return false;
+    if (!item.skuId && !hasAttrs && item.price == null && is1688SkuStopToken(label)) return false;
     if (/(已选|商品金额|货品金额|另需运费|运费\s*起|立即下单|加采购车|商品评价|商品属性|包装信息|商品详情)/.test(label)) return false;
-    if (label.length > 96 && !hasAttrs) return false;
+    if (label.length > 96 && (!hasAttrs || onlySpecAttr)) return false;
     return true;
   }
 
