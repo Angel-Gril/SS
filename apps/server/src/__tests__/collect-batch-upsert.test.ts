@@ -57,6 +57,10 @@ const mocks = vi.hoisted(() => {
       exchangeRateUsed: 0.124,
       needsReview: false,
     })),
+    transferSourceProductImages: vi.fn(async ({ images }: any): Promise<{ images: string[]; diagnostic: any }> => ({
+      images: Array.isArray(images) ? images : [],
+      diagnostic: null,
+    })),
   };
 });
 
@@ -82,6 +86,10 @@ vi.mock('../lib/prisma.js', () => ({
 
 vi.mock('../services/collect-pricing.js', () => ({
   resolveCollectedPrice: mocks.resolveCollectedPrice,
+}));
+
+vi.mock('../services/source-image-transfer.js', () => ({
+  transferSourceProductImages: mocks.transferSourceProductImages,
 }));
 
 async function buildApp() {
@@ -128,6 +136,20 @@ describe('collectRoutes batch upsert', () => {
   });
 
   it('creates a source collect record with complete 1688 metadata through the single collect endpoint', async () => {
+    mocks.transferSourceProductImages.mockResolvedValueOnce({
+      images: [
+        'https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg',
+        'https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg',
+      ],
+      diagnostic: {
+        enabled: true,
+        backend: 'oss',
+        attempted: 2,
+        transferred: 2,
+        skipped: 0,
+        errors: [],
+      },
+    });
     const app = await buildApp();
 
     try {
@@ -182,8 +204,16 @@ describe('collectRoutes batch upsert', () => {
         sourcePlatform: '1688',
         sourceProductId: '744455566677',
         sku: '744455566677',
-        images: ['https://img.example.com/main.jpg', 'https://img.example.com/detail-1.jpg'],
+        images: [
+          'https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg',
+          'https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg',
+        ],
         variants: [{ skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } }],
+      });
+      expect(mocks.transferSourceProductImages).toHaveBeenCalledWith({
+        images: ['https://img.example.com/main.jpg', 'https://img.example.com/detail-1.jpg'],
+        sourcePlatform: '1688',
+        userId: 'user-1',
       });
       expect(createArgs.data.metadata).toMatchObject({
         titleNeedsReview: true,
@@ -209,6 +239,14 @@ describe('collectRoutes batch upsert', () => {
         selectedSku: { skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } },
         skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
         rawSourceProduct: { offerId: '744455566677' },
+        sourceImageTransfer: {
+          enabled: true,
+          backend: 'oss',
+          attempted: 2,
+          transferred: 2,
+          skipped: 0,
+          errors: [],
+        },
       });
       expect(createArgs.data.metadata).not.toHaveProperty('sourceDescriptionRu');
     } finally {

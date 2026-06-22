@@ -9,8 +9,18 @@
     "__NUXT__",
     "__PRELOADED_STATE__",
     "__APP_DATA__",
+    "__INITIAL_DATA__",
+    "__GLOBAL_DATA__",
+    "__ICE_APP_DATA__",
+    "__APOLLO_STATE__",
     "pageData",
-    "globalData"
+    "globalData",
+    "offerDetailData",
+    "iDetailData",
+    "detailData",
+    "offerData",
+    "skuModel",
+    "skuMap"
   ];
 
   function safeClone(value) {
@@ -39,6 +49,35 @@
         }
       }
     });
+    const detected = readLikelyProductGlobals();
+    if (Object.keys(detected).length) {
+      result.__detectedProductGlobals = detected;
+    }
+    return result;
+  }
+
+  function readLikelyProductGlobals() {
+    const result = {};
+    const names = Object.keys(window)
+      .filter((name) => /(?:offer|detail|sku|product|gallery|price|desc)/i.test(name))
+      .filter((name) => !/^webkit|^chrome|^on/i.test(name))
+      .slice(0, 80);
+
+    for (const name of names) {
+      if (Object.prototype.hasOwnProperty.call(result, name)) continue;
+      const value = window[name];
+      if (!value || typeof value !== "object" || value === window || value === document) continue;
+      const cloned = safeClone(value);
+      if (!cloned) continue;
+      try {
+        const size = JSON.stringify(cloned).length;
+        if (size > 500000) continue;
+      } catch (_error) {
+        continue;
+      }
+      result[name] = cloned;
+      if (Object.keys(result).length >= 20) break;
+    }
     return result;
   }
 

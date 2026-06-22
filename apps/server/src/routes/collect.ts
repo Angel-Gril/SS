@@ -20,6 +20,7 @@ import {
   transferRichContentImage,
 } from '../services/ozon-rich-content.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
+import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
@@ -2352,6 +2353,8 @@ export async function collectRoutes(app: FastifyInstance) {
     const sourceDescription = sanitizePublishDescription(d.description);
     const notes = [weightNote, sourceDescription.slice(0, 500)].filter(Boolean).join('\n') || null;
     const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(d);
+    const imageTransfer = await transferSourceProductImages({ images: d.images, sourcePlatform: d.sourcePlatform, userId });
+    if (imageTransfer.diagnostic) metadata.sourceImageTransfer = imageTransfer.diagnostic;
     const collectedVariants = Array.isArray(d.variants) && d.variants.length
       ? d.variants
       : (Array.isArray(d.skuItems) && d.skuItems.length ? d.skuItems : undefined);
@@ -2374,7 +2377,7 @@ export async function collectRoutes(app: FastifyInstance) {
         sourcePlatform: d.sourcePlatform || 'ozon',
         sourceProductId,
         sku: d.sku || sourceProductId,
-        images: d.images || undefined,
+        images: imageTransfer.images.length ? imageTransfer.images : undefined,
         purchasePrice: priceInfo.purchasePriceCny,
         currency: 'CNY',
         originalPrice: priceInfo.originalPrice,
@@ -2427,6 +2430,8 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.rawSourceProduct) metadata.rawSourceProduct = item.rawSourceProduct;
         // 调试用：未识别的 widget 全量 dump（扩展占位阶段使用）
         if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
+        const imageTransfer = await transferSourceProductImages({ images: item.images, sourcePlatform: item.sourcePlatform, userId });
+        if (imageTransfer.diagnostic) metadata.sourceImageTransfer = imageTransfer.diagnostic;
 
         const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
         const sourceDescription = sanitizePublishDescription(item.description);
@@ -2457,7 +2462,7 @@ export async function collectRoutes(app: FastifyInstance) {
           sourcePlatform: item.sourcePlatform || 'ozon',
           sourceProductId,
           sku: item.sku || sourceProductId,
-          images: item.images || undefined,
+          images: imageTransfer.images.length ? imageTransfer.images : undefined,
           purchasePrice: priceInfo.purchasePriceCny,
           currency: 'CNY',
           originalPrice: priceInfo.originalPrice,

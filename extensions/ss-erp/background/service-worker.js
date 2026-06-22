@@ -894,13 +894,38 @@ function normalizeCollectImages(product) {
       return;
     }
     const text = toText(value).trim();
-    if (/^https?:\/\//i.test(text) && !values.includes(text)) values.push(text);
+    const normalized = normalizeCollectImageUrl(text);
+    if (normalized && !values.includes(normalized)) values.push(normalized);
   }
   append(product.images);
   append(product.imageUrls);
   append(product.mainImage);
   append(product.imageUrl);
   return values.slice(0, 50);
+}
+
+function normalizeCollectImageUrl(value) {
+  let text = toText(value).trim();
+  if (!text) return '';
+  if (text.startsWith('//')) text = 'https:' + text;
+  if (!/^https?:\/\//i.test(text)) return '';
+  const lower = text.toLowerCase();
+  if (/\.(svg)(?:[?#]|$)/i.test(lower)) return '';
+  if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/)/i.test(lower)) return '';
+  if (/[-_]tps[-_]\d{1,4}[-x]\d{1,4}|55-tps|\b2-tps\b|gg_dtc|[-_/]rate(?:[._/-]|$)/i.test(lower)) return '';
+  if (/imgextra\/i\d\/600000\d+\/.*(?:-tps-|gg_dtc|160-160|44-45|24-24|16-16)/i.test(lower)) return '';
+  try {
+    const url = new URL(text);
+    url.hash = '';
+    url.search = '';
+    url.pathname = url.pathname
+      .replace(/\.(jpe?g|png|webp)_\.webp$/i, '.$1')
+      .replace(/\.(jpe?g|png|webp)_(?:sum|b)\.(?:jpe?g|png|webp)$/i, '.$1')
+      .replace(/\.(jpe?g|png|webp)_(?:\d{2,4}x\d{2,4}|q\d+)\.(?:jpe?g|png|webp)$/i, '.$1');
+    return url.href;
+  } catch (_error) {
+    return text;
+  }
 }
 
 function isForeignOzonTitleTextForSourceCollect(value, product) {

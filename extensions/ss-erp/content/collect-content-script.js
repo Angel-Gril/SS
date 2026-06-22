@@ -1024,7 +1024,7 @@
   }
 
   function extract1688Product(context) {
-    return buildProductResult(context, {
+    const result = buildProductResult(context, {
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /近30天成交[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /毛重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
       titleSelectors: ["h1", ".title-text", ".d-title"],
@@ -1032,6 +1032,410 @@
       shopSelectors: [".company-name", ".shop-name", ".mod-detail-company-name"],
       productIdRegexes: [/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i]
     });
+    return merge1688StructuredProduct(result, context);
+  }
+
+  function merge1688StructuredProduct(result, context) {
+    const structured = extract1688StructuredProduct(context);
+    const productId = structured.productId || result.productId;
+    const shopName = structured.shopName || result.shopName || "";
+    const titleContext = { platform: "1688", productId, shopName };
+    const title = structured.title && !isLikelyShopTitle(structured.title, titleContext)
+      ? structured.title
+      : (isLikelyShopTitle(result.title, titleContext) ? buildFallbackProductTitle(titleContext) : result.title);
+
+    const images = structured.images.length
+      ? structured.images
+      : normalize1688ProductImages(result.images);
+    let skuItems = structured.skuItems.length
+      ? structured.skuItems
+      : filter1688SkuItems(result.skuItems);
+    const selectedSku = pick1688SelectedSku(context, skuItems, result.selectedSku);
+    if (!skuItems.length && selectedSku && (selectedSku.name || selectedSku.specText || selectedSku.skuId)) {
+      skuItems = [selectedSku];
+    }
+    const attributes = mergeSourceAttributes(structured.attributes, result.attributes);
+    const categoryPath = structured.categoryPath.length ? structured.categoryPath : result.categoryPath;
+    const dimensions = structured.dimensions.lengthMm && structured.dimensions.widthMm && structured.dimensions.heightMm
+      ? structured.dimensions
+      : { lengthMm: result.lengthMm || 0, widthMm: result.widthMm || 0, heightMm: result.heightMm || 0 };
+
+    return {
+      ...result,
+      title,
+      shopName,
+      productId,
+      images,
+      skuItems,
+      variants: skuItems,
+      selectedSku,
+      attributes,
+      categoryPath,
+      categoryName: categoryPath.length ? categoryPath[categoryPath.length - 1] : result.categoryName,
+      description: structured.description || result.description,
+      sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
+      lengthMm: dimensions.lengthMm || result.lengthMm,
+      widthMm: dimensions.widthMm || result.widthMm,
+      heightMm: dimensions.heightMm || result.heightMm,
+      dimensionsMm: dimensions.lengthMm && dimensions.widthMm && dimensions.heightMm ? dimensions : result.dimensionsMm,
+      extractionDiagnostics: buildSourceExtractionDiagnostics({
+        title,
+        images,
+        skuItems,
+        attributes,
+        description: structured.description || result.description,
+        sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos
+      })
+    };
+  }
+
+  function extract1688StructuredProduct(context) {
+    const sources = Array.isArray(context && context.sources) ? context.sources : [];
+    const productId = pickProductId([/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i], sources);
+    const shopName = pick1688ShopName(sources);
+    const title = pick1688StructuredTitle(sources, { platform: "1688", productId, shopName });
+    const skuProps = pick1688SkuProps(sources);
+    const images = pick1688StructuredImages(sources, skuProps);
+    const skuItems = pick1688StructuredSkuItems(sources, skuProps);
+    const attributes = pick1688StructuredAttributes(sources);
+    const categoryPath = pickCategoryPath(sources);
+    const dimensions = pickDimensions(context && context.pageText, sources);
+    const description = pickSourceDescription(sources, context && context.pageText);
+    const sourceVideos = pickSourceVideos(sources);
+    return {
+      productId,
+      shopName,
+      title,
+      images,
+      skuItems,
+      attributes,
+      categoryPath,
+      dimensions,
+      description,
+      sourceVideos
+    };
+  }
+
+  function pick1688ShopName(sources) {
+    return pickStringByKey(sources, /(companyName|company|shopName|sellerName|storeName|supplierName)$/i);
+  }
+
+  function pick1688StructuredTitle(sources, context) {
+    const candidates = collectStringCandidates(sources, /(subject|offerTitle|offerSubject|productName|goodsName|itemTitle|title)$/i)
+      .filter((item) => !/(companyName|shopName|sellerName|storeName|supplierName|nickName|loginId)$/i.test(item.path))
+      .filter((item) => !isForeignOzonTitleCandidate(item, context))
+      .filter((item) => !isLikelyShopTitle(item.value, context))
+      .filter((item) => isLikely1688ProductTitle(item.value))
+      .map((item) => ({ ...item, score: score1688TitlePath(item.path) }))
+      .sort((a, b) => b.score - a.score || b.value.length - a.value.length);
+    return candidates.length ? candidates[0].value : "";
+  }
+
+  function isLikely1688ProductTitle(value) {
+    const text = normalizeWhitespace(value || "");
+    if (text.length < 6 || text.length > 180) return false;
+    if (/^https?:\/\//i.test(text)) return false;
+    if (/店|公司|旗舰店|专营店|供应商$/.test(text) && text.length < 28) return false;
+    if (/^(1688|阿里巴巴|商品详情|商品属性|包装信息|商品评价)$/.test(text)) return false;
+    return true;
+  }
+
+  function score1688TitlePath(path) {
+    const text = String(path || "");
+    if (/(subject|offerTitle|offerSubject)$/i.test(text)) return 20;
+    if (/(productName|goodsName|itemTitle)$/i.test(text)) return 16;
+    if (/(title)$/i.test(text)) return 6;
+    return 1;
+  }
+
+  function pick1688SkuProps(sources) {
+    const candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        if (!Array.isArray(value) || !value.length || typeof value[0] !== "object") return;
+        const pathText = path.join(".");
+        if (!/(skuProps|skuPropList|skuProperties|skuAttributes|saleProp|saleProps|specProps|specifications)/i.test(pathText)) return;
+        const props = normalize1688SkuProps(value);
+        if (props.length) candidates.push({ score: score1688SkuPropsPath(pathText), props });
+      });
+    });
+    candidates.sort((a, b) => b.score - a.score || b.props.length - a.props.length);
+    return candidates.length ? candidates[0].props : [];
+  }
+
+  function score1688SkuPropsPath(pathText) {
+    let score = 0;
+    if (/skuProps/i.test(pathText)) score += 8;
+    if (/skuModel|offer|detail|data/i.test(pathText)) score += 4;
+    if (/recommend|search|filter/i.test(pathText)) score -= 5;
+    return score;
+  }
+
+  function normalize1688SkuProps(rows) {
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      if (!row || typeof row !== "object") return null;
+      const name = normalizeWhitespace(pickFirstValue(row, ["prop", "name", "propName", "propertyName", "skuPropName", "attributeName", "title"]) || "");
+      const rawValues = pickFirstValue(row, ["value", "values", "propValues", "skuValues", "children", "items", "list"]);
+      const values = (Array.isArray(rawValues) ? rawValues : []).map((item) => {
+        if (item && typeof item === "object") {
+          const valueName = normalizeWhitespace(pickFirstValue(item, ["name", "value", "valueName", "text", "label", "title"]) || "");
+          if (!valueName) return null;
+          const imageUrl = normalize1688ProductImageUrl(pickFirstValue(item, ["imageUrl", "image", "imgUrl", "picUrl", "url", "src"]));
+          return {
+            id: normalizeWhitespace(pickFirstValue(item, ["id", "valueId", "vid", "propValueId", "skuValueId"]) || ""),
+            name: valueName,
+            imageUrl: imageUrl && isValidSourceProductImage(imageUrl) ? imageUrl : ""
+          };
+        }
+        const valueName = normalizeWhitespace(item);
+        return valueName ? { id: "", name: valueName, imageUrl: "" } : null;
+      }).filter(Boolean);
+      return name && values.length ? { name, values } : null;
+    }).filter(Boolean);
+  }
+
+  function pick1688StructuredImages(sources, skuProps) {
+    const images = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!/(imageList|images|imageUrls|mainImage|mainPic|album|gallery|detailImages|offerImage|skuProps|skuMap|picUrl|imageUrl)$/i.test(pathText)) return;
+        normalizeImageValues(value).forEach((image) => add1688Image(images, image));
+      });
+    });
+    (skuProps || []).forEach((prop) => {
+      (prop.values || []).forEach((value) => add1688Image(images, value.imageUrl));
+    });
+    return images
+      .sort((a, b) => score1688Image(b) - score1688Image(a))
+      .slice(0, 30);
+  }
+
+  function add1688Image(target, raw) {
+    const normalized = normalize1688ProductImageUrl(raw);
+    if (!normalized || !isValidSourceProductImage(normalized)) return;
+    if (!target.includes(normalized)) target.push(normalized);
+  }
+
+  function normalize1688ProductImages(images) {
+    const out = [];
+    (Array.isArray(images) ? images : []).forEach((image) => add1688Image(out, image));
+    return out.sort((a, b) => score1688Image(b) - score1688Image(a)).slice(0, 30);
+  }
+
+  function normalize1688ProductImageUrl(raw) {
+    let text = String(raw || "").trim();
+    if (!text) return "";
+    if (text.startsWith("//")) text = "https:" + text;
+    try {
+      const url = new URL(text);
+      url.hash = "";
+      url.search = "";
+      let path = url.pathname;
+      path = path.replace(/\.(jpe?g|png|webp)_\.webp$/i, ".$1");
+      path = path.replace(/\.(jpe?g|png|webp)_(?:sum|b)\.(?:jpe?g|png|webp)$/i, ".$1");
+      path = path.replace(/\.(jpe?g|png|webp)_(?:\d{2,4}x\d{2,4}|q\d+)\.(?:jpe?g|png|webp)$/i, ".$1");
+      url.pathname = path;
+      return url.href;
+    } catch (_error) {
+      return text;
+    }
+  }
+
+  function score1688Image(value) {
+    const url = String(value || "").toLowerCase();
+    let score = 0;
+    if (/cbu\d+\.alicdn\.com\/img\/ibank/.test(url)) score += 20;
+    if (/\/img\/ibank\//.test(url)) score += 12;
+    if (/2207621481200|!!2\d{11,}/.test(url)) score += 4;
+    if (/imgextra\/i\d\/600000/.test(url)) score -= 20;
+    if (/rate|gg_dtc|-tps-|_sum/.test(url)) score -= 10;
+    return score;
+  }
+
+  function pick1688StructuredSkuItems(sources, skuProps) {
+    const rows = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (value && typeof value === "object" && !Array.isArray(value) && /skuMap|skuInfoMap|skuPriceMap|skuDataMap/i.test(pathText)) {
+          Object.keys(value).forEach((key) => {
+            const item = normalize1688SkuMapEntry(key, value[key], skuProps);
+            if (item) rows.push(item);
+          });
+          return;
+        }
+        if (Array.isArray(value) && value.length && typeof value[0] === "object" && /skuList|skuInfos|skuInfoList|skuModels|skuPriceList|saleInfos/i.test(pathText)) {
+          value.forEach((entry) => {
+            const item = normalize1688SkuObject(entry, skuProps);
+            if (item) rows.push(item);
+          });
+        }
+      });
+    });
+    return dedupeSkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+  }
+
+  function normalize1688SkuMapEntry(key, row, skuProps) {
+    const data = row && typeof row === "object" ? row : {};
+    const attrs = Object.assign(
+      {},
+      parse1688SkuKeyAttrs(key, skuProps),
+      normalizeSkuAttrs(pickFirstValue(data, ["attrs", "attributes", "skuAttrs", "skuAttributes", "properties", "props"]))
+    );
+    return normalize1688SkuObject({ ...data, attrs, specText: Object.keys(attrs).map((name) => attrs[name]).join(" / ") || key }, skuProps);
+  }
+
+  function normalize1688SkuObject(row, skuProps) {
+    const data = row && typeof row === "object" ? row : {};
+    const attrs = normalizeSkuAttrs(pickFirstValue(data, ["attrs", "attributes", "skuAttrs", "skuAttributes", "properties", "props"]));
+    const skuId = pickFirstValue(data, ["skuId", "sku_id", "skuID", "id", "specId", "spec_id", "offerSkuId", "saleSkuId"]);
+    const price = normalize1688SkuPrice(pickFirstValue(data, ["price", "salePrice", "discountPrice", "promotionPrice", "consignPrice", "retailPrice", "priceText", "priceCent"]));
+    const stock = parseLooseNumber(pickFirstValue(data, ["stock", "stockNum", "canBookCount", "quantity", "qty", "amountOnSale", "inventory"]));
+    const imageCandidates = normalizeImageValues([
+      pickFirstValue(data, ["image", "imageUrl", "img", "imgUrl", "pic", "picUrl", "picture", "photo"]),
+      data.images,
+      data.imageUrls
+    ]);
+    Object.keys(attrs).forEach((name) => {
+      const value = attrs[name];
+      const match = find1688SkuPropValue(skuProps, name, value);
+      if (match && match.imageUrl) imageCandidates.push(match.imageUrl);
+    });
+    const images = normalize1688ProductImages(imageCandidates);
+    const specText = normalizeWhitespace(
+      pickFirstValue(data, ["spec", "specText", "specValue", "skuSpec", "attributeValue", "name", "title", "skuName", "displayName"])
+      || Object.keys(attrs).map((name) => attrs[name]).join(" / ")
+    );
+    return {
+      skuId: skuId == null ? "" : String(skuId),
+      name: specText,
+      specText,
+      price,
+      stock,
+      attrs,
+      images
+    };
+  }
+
+  function normalize1688SkuPrice(value) {
+    const parsed = parseMoneyNumber(value);
+    if (parsed == null) return null;
+    const text = String(value == null ? "" : value);
+    if (/cent|分/i.test(text) && parsed > 100) return roundMoney(parsed / 100);
+    if (parsed > 10000) return roundMoney(parsed / 100);
+    return roundMoney(parsed);
+  }
+
+  function parse1688SkuKeyAttrs(key, skuProps) {
+    const attrs = {};
+    const text = normalizeWhitespace(key || "");
+    if (!text) return attrs;
+    const namedParts = text.split(/[;；]/).map((part) => part.trim()).filter(Boolean);
+    namedParts.forEach((part) => {
+      const pair = part.match(/^([^:：=]+)[:：=](.+)$/);
+      if (pair && !/^\d+$/.test(pair[1])) attrs[pair[1].trim()] = pair[2].trim();
+    });
+    if (Object.keys(attrs).length) return attrs;
+
+    const values = text.split(/\s*(?:>|\/|\||,|，)\s*/).map(normalizeWhitespace).filter(Boolean);
+    if (values.length && skuProps && values.length === skuProps.length) {
+      values.forEach((value, index) => {
+        if (skuProps[index] && skuProps[index].name) attrs[skuProps[index].name] = value;
+      });
+      return attrs;
+    }
+
+    const ids = Array.from(text.matchAll(/(?:^|[;:])(\d{3,})(?=[:;]|$)/g)).map((match) => match[1]);
+    ids.forEach((id) => {
+      (skuProps || []).forEach((prop) => {
+        const found = (prop.values || []).find((value) => String(value.id || "") === String(id));
+        if (found) attrs[prop.name] = found.name;
+      });
+    });
+    return attrs;
+  }
+
+  function find1688SkuPropValue(skuProps, propName, propValue) {
+    const name = normalizeWhitespace(propName);
+    const value = normalizeWhitespace(propValue);
+    const prop = (skuProps || []).find((entry) => entry.name === name);
+    if (!prop) return null;
+    return (prop.values || []).find((entry) => entry.name === value) || null;
+  }
+
+  function isUseful1688SkuItem(item) {
+    if (!item) return false;
+    const label = normalizeWhitespace(item.name || item.specText || "");
+    const hasAttrs = item.attrs && Object.keys(item.attrs).length > 0;
+    if (!item.skuId && !hasAttrs && !label) return false;
+    if (/(已选|商品金额|货品金额|另需运费|运费\s*起|立即下单|加采购车|商品评价|商品属性|包装信息|商品详情)/.test(label)) return false;
+    if (label.length > 96 && !hasAttrs) return false;
+    return true;
+  }
+
+  function filter1688SkuItems(items) {
+    return (Array.isArray(items) ? items : []).filter(isUseful1688SkuItem).slice(0, 200);
+  }
+
+  function pick1688SelectedSku(context, skuItems, fallback) {
+    const hotSaleSkuId = (() => {
+      try {
+        return new URL(location.href).searchParams.get("hotSaleSkuId") || "";
+      } catch (_error) {
+        return "";
+      }
+    })();
+    const matchById = hotSaleSkuId ? (skuItems || []).find((item) => String(item.skuId || "") === hotSaleSkuId) : null;
+    const fallbackPrice = Number(fallback && fallback.price) || 0;
+    const matchByPrice = fallbackPrice > 0 ? (skuItems || []).find((item) => Math.abs((Number(item.price) || 0) - fallbackPrice) < 0.01) : null;
+    const picked = matchById || matchByPrice || null;
+    if (!picked) return fallback;
+    return {
+      ...picked,
+      selected: true,
+      quantity: Number(fallback && fallback.quantity) || 0,
+      productAmount: fallback && fallback.productAmount,
+      shippingCny: fallback && fallback.shippingCny,
+      shippingFree: fallback && fallback.shippingFree,
+      price: fallbackPrice || picked.price,
+      priceText: fallbackPrice ? ("¥" + formatMoney(fallbackPrice)) : picked.priceText
+    };
+  }
+
+  function pick1688StructuredAttributes(sources) {
+    const attrs = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!Array.isArray(value) || !value.length || !/(props|properties|attributes|productProps|offerProps|detailProps|参数|属性)/i.test(pathText)) return;
+        value.forEach((row) => {
+          if (!row || typeof row !== "object") return;
+          const name = normalizeWhitespace(pickFirstValue(row, ["name", "key", "attrName", "propertyName", "title"]) || "");
+          const attrValue = normalizeWhitespace(pickFirstValue(row, ["value", "attrValue", "propertyValue", "text", "content"]) || "");
+          if (name && attrValue) attrs.push({ name, value: attrValue });
+        });
+      });
+    });
+    return mergeSourceAttributes(attrs, []);
+  }
+
+  function mergeSourceAttributes(primary, secondary) {
+    const out = [];
+    const seen = new Set();
+    [primary, secondary].forEach((list) => {
+      (Array.isArray(list) ? list : []).forEach((attr) => {
+        if (!attr || typeof attr !== "object") return;
+        const name = normalizeWhitespace(attr.name || attr.key || attr.attrName || "");
+        const value = normalizeWhitespace(attr.value || attr.attrValue || attr.text || "");
+        if (!name || !value) return;
+        const key = name + ":" + value;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push({ name, value });
+      });
+    });
+    return out.slice(0, 80);
   }
 
   function extractPddPageProduct(context) {
@@ -1624,6 +2028,13 @@
 
   function cleanupSkuRowName(text) {
     return normalizeWhitespace(text)
+      .replace(/已选\s*\d+\s*款.*$/g, " ")
+      .replace(/商品金额[:：]?.*$/g, " ")
+      .replace(/货品金额[:：]?.*$/g, " ")
+      .replace(/另需运费.*$/g, " ")
+      .replace(/\d+\s*(?:个|件|只|台|条|套)?\s*起批/g, " ")
+      .replace(/运费\s*起/g, " ")
+      .replace(/包邮|免邮|先采后付|\d+\s*小时发货/g, " ")
       .replace(/[¥￥]\s*\d[\d.,]*/g, " ")
       .replace(/库存\s*\d+\s*[个件]?/g, " ")
       .replace(/[-+]\s*\d+\s*[-+]?/g, " ")
@@ -2085,6 +2496,8 @@
     const lower = text.toLowerCase();
     if (/\.(svg)(?:[?#]|$)/i.test(lower)) return false;
     if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/)/i.test(lower)) return false;
+    if (/[-_]tps[-_]\d{1,4}[-x]\d{1,4}|55-tps|\b2-tps\b|gg_dtc|[-_/]rate(?:[._/-]|$)/i.test(lower)) return false;
+    if (/imgextra\/i\d\/600000\d+\/.*(?:-tps-|gg_dtc|160-160|44-45|24-24|16-16|15-14)/i.test(lower)) return false;
     const sizeMatch = lower.match(/(?:[-_]|\/)(\d{1,4})[-x](\d{1,4})(?:[._/-]|$)/i);
     if (sizeMatch && (Number(sizeMatch[1]) < 200 || Number(sizeMatch[2]) < 200)) return false;
     return true;

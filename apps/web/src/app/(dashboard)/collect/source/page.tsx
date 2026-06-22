@@ -69,7 +69,9 @@ function isPreviewableSourceImage(value: unknown): boolean {
   if (!/^https?:\/\//i.test(url)) return false;
   const lower = url.toLowerCase();
   if (/\.(svg)(?:[?#]|$)/i.test(lower)) return false;
-  if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/|55-tps|160-160)/i.test(lower)) return false;
+  if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/|55-tps|-tps-|2-tps|gg_dtc|160-160|44-45|24-24|16-16)/i.test(lower)) return false;
+  if (/[-_/]rate(?:[._/-]|$)/i.test(lower)) return false;
+  if (/imgextra\/i\d\/600000\d+\/.*(?:-tps-|gg_dtc|160-160|44-45|24-24|16-16)/i.test(lower)) return false;
   const sizeMatch = lower.match(/(?:[-_/])(\d{1,4})[-x](\d{1,4})(?:[._/-]|$)/);
   if (sizeMatch && (Number(sizeMatch[1]) < 220 || Number(sizeMatch[2]) < 220)) return false;
   return true;

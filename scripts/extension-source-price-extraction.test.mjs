@@ -5,6 +5,7 @@ import vm from 'node:vm';
 const priceCurrencyScript = fs.readFileSync('extensions/ss-erp/shared/currency/price-currency.js', 'utf8');
 const sourceProductCoreScript = fs.readFileSync('extensions/ss-erp/shared/collectors/source-product-core.js', 'utf8');
 const collectScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
+const pageBridgeScript = fs.readFileSync('extensions/ss-erp/content/page-bridge.js', 'utf8');
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -41,6 +42,9 @@ function makeMockElement({ text = '', className = '', attrs = {}, value = '', ch
     },
   };
 }
+
+assert.match(pageBridgeScript, /offerDetailData/, 'page bridge should expose 1688 offer detail globals to the collector');
+assert.match(pageBridgeScript, /readLikelyProductGlobals/, 'page bridge should scan likely 1688 product globals when exact names change');
 
 async function collectWithPage({ url, title, bodyText, selectors, queryAll, pageState }) {
   let messageListener = null;
@@ -182,6 +186,64 @@ const aliTitlePriorityResponse = await collectWithPage({
 assert.equal(aliTitlePriorityResponse.ok, true);
 assert.equal(aliTitlePriorityResponse.data.title, '智能保温杯批发');
 assert.equal(aliTitlePriorityResponse.data.shopName, '揭阳市玖点服装有限公司');
+
+const aliStructuredPantsResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/953122376708.html?offerId=953122376708&hotSaleSkuId=6036311658769',
+  title: '揭阳市揭东区新亨镇小树树服装店',
+  bodyText: '¥16.00 1条起批 已售800+条 藏青色 L ¥16 库存19999917条 - 1 + 已选1款1条 商品金额： ¥16 另需运费（预估）： ¥3.5',
+  selectors: {
+    h1: '揭阳市揭东区新亨镇小树树服装店',
+    '.company-name': '揭阳市揭东区新亨镇小树树服装店',
+  },
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '953122376708',
+        companyName: '揭阳市揭东区新亨镇小树树服装店',
+        subject: '棉麻九分裤男士直筒宽松夏季薄款松紧腰白色中国风亚麻休闲裤子男',
+        imageList: [
+          'https://img.alicdn.com/imgextra/i4/O1CN01DqZtmR1MFXa1N8MmN_!!6000000001405-55-tps-15-14.svg',
+          'https://cbu01.alicdn.com/img/ibank/O1CN01D0D3Sx1KjeLthDyvr_!!2207621481200-0-cib.jpg_.webp',
+          'https://img.alicdn.com/imgextra/i1/6000000006798/O1CN01e9cj0y205XaaPZPXW_!!6000000006798-2-gg_dtc.png',
+          'https://img.alicdn.com/imgextra/i2/O1CN01mOEB1b1FYamKsqhTz_!!4611686018427382835-0-rate.jpg_b.jpg',
+        ],
+        skuProps: [
+          {
+            prop: '颜色',
+            value: [
+              { name: '深灰色', imageUrl: 'https://cbu01.alicdn.com/img/ibank/O1CN01CuK49n1KjeLvOq5wF_!!2207621481200-0-cib.jpg_sum.jpg' },
+              { name: '藏青色', imageUrl: 'https://cbu01.alicdn.com/img/ibank/O1CN01J1suz31KjeLuRvyjf_!!2207621481200-0-cib.jpg_.webp' },
+            ],
+          },
+          { prop: '尺码', value: [{ name: 'M' }, { name: 'L' }, { name: 'XL' }] },
+        ],
+        skuMap: {
+          '藏青色>L': {
+            skuId: '6036311658769',
+            price: '16',
+            stock: 19999917,
+          },
+        },
+        props: [
+          { name: '主面料成分', value: '亚麻' },
+          { name: '面料名称', value: '麻布' },
+          { name: '厚薄', value: '薄款' },
+        ],
+      },
+    },
+  },
+});
+
+assert.equal(aliStructuredPantsResponse.ok, true);
+assert.equal(aliStructuredPantsResponse.data.title, '棉麻九分裤男士直筒宽松夏季薄款松紧腰白色中国风亚麻休闲裤子男');
+assert.equal(aliStructuredPantsResponse.data.shopName, '揭阳市揭东区新亨镇小树树服装店');
+assert.ok(aliStructuredPantsResponse.data.images.length >= 2);
+assert.ok(aliStructuredPantsResponse.data.images.every((url) => !/-tps-|gg_dtc|rate|\\.svg/i.test(url)), '1688 product images should exclude platform art and review images');
+assert.ok(aliStructuredPantsResponse.data.images.every((url) => !/_sum\\.jpg|_\\.webp/i.test(url)), '1688 product images should be normalized away from thumbnail suffixes');
+assert.equal(aliStructuredPantsResponse.data.skuItems[0].skuId, '6036311658769');
+assert.deepEqual(plain(aliStructuredPantsResponse.data.skuItems[0].attrs), { 颜色: '藏青色', 尺码: 'L' });
+assert.equal(aliStructuredPantsResponse.data.skuItems[0].stock, 19999917);
+assert.ok(aliStructuredPantsResponse.data.skuItems.every((item) => !/已选|商品金额|运费/.test(item.name || item.specText || '')));
 
 const aliShopNameTitleFallbackResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/953122376708.html',

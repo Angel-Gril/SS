@@ -38,6 +38,9 @@ assert.match(
   /sourcePreviewImages/,
   'source collection detail should filter previewable product images before rendering thumbnails',
 );
+for (const pattern of ['-tps-', 'gg_dtc', 'rate', '160-160']) {
+  assert.match(page, new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `source collection detail should reject Alibaba platform image noise: ${pattern}`);
+}
 assert.match(
   page,
   /onError=\{\(event\)/,

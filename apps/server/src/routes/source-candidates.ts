@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
+import { transferSourceProductImages } from '../services/source-image-transfer.js';
 
 type JsonRecord = Record<string, any>;
 
@@ -319,7 +320,8 @@ async function upsertSupplyGoods(userId: string, source: ReturnType<typeof norma
         })
       : null;
   }
-  const metadata = {
+  const imageTransfer = await transferSourceProductImages({ images: source.images, sourcePlatform: source.platform, userId });
+  const metadata: Record<string, unknown> = {
     sourceCandidateSynced: true,
     selectedSku: source.selectedSku,
     skuAttributes: source.skuAttributes,
@@ -333,6 +335,7 @@ async function upsertSupplyGoods(userId: string, source: ReturnType<typeof norma
     heightMm: source.heightMm,
     rawSourceProduct: source.raw,
   };
+  if (imageTransfer.diagnostic) metadata.sourceImageTransfer = imageTransfer.diagnostic;
   const data = {
     title: source.title || '未命名货源',
     sourceUrl: source.url || null,
@@ -346,7 +349,7 @@ async function upsertSupplyGoods(userId: string, source: ReturnType<typeof norma
     exchangeRateUsed: 1,
     priceNeedsReview: false,
     sku: source.sku || source.productId || null,
-    images: source.images.length ? source.images as any : undefined,
+    images: imageTransfer.images.length ? imageTransfer.images as any : undefined,
     variants: source.skuItems.length ? source.skuItems as any : undefined,
     metadata: metadata as any,
     status: 'collected',
