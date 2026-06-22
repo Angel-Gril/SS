@@ -181,6 +181,28 @@ assert.equal(aliTitlePriorityResponse.ok, true);
 assert.equal(aliTitlePriorityResponse.data.title, '智能保温杯批发');
 assert.equal(aliTitlePriorityResponse.data.shopName, '揭阳市玖点服装有限公司');
 
+const aliShopNameTitleFallbackResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/953122376708.html',
+  title: '揭阳市揭东区新亨镇小树树服装店',
+  bodyText: '¥16.00 近30天成交 120 藏青色 3XL ¥16 库存20件 - 1 + 已选1款1件 商品金额： ¥16 另需运费（预估）： ¥3.5',
+  selectors: {
+    h1: '揭阳市揭东区新亨镇小树树服装店',
+    '.company-name': '揭阳市揭东区新亨镇小树树服装店',
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '953122376708',
+        companyName: '揭阳市揭东区新亨镇小树树服装店',
+      },
+    },
+  },
+});
+
+assert.equal(aliShopNameTitleFallbackResponse.ok, true);
+assert.equal(aliShopNameTitleFallbackResponse.data.title, '1688 商品 953122376708');
+assert.notEqual(aliShopNameTitleFallbackResponse.data.title, '揭阳市揭东区新亨镇小树树服装店');
+
 const aliOzonContextFallbackResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/811122233344.html',
   title: 'Ozon SKU 1580539717 跟卖核价',
@@ -323,6 +345,9 @@ assert.equal(selectedOrderSummaryResponse.data.priceText, '¥13.5');
 assert.equal(selectedOrderSummaryResponse.data.priceSourceType, 'selectedOrderSummary');
 assert.equal(selectedOrderSummaryResponse.data.selectedSku.price, 13.5);
 assert.equal(selectedOrderSummaryResponse.data.selectedSku.quantity, 1);
+assert.match(selectedOrderSummaryResponse.data.selectedSku.name, /白色英文款/);
+assert.ok(selectedOrderSummaryResponse.data.skuItems.length >= 1);
+assert.ok(selectedOrderSummaryResponse.data.skuItems.some((item) => /白色英文款/.test(item.name)));
 assert.equal(selectedOrderSummaryResponse.data.shippingCny, 4.5);
 assert.equal(selectedOrderSummaryResponse.data.totalCostCny, 18);
 

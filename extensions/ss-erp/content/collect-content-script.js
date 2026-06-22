@@ -1165,7 +1165,8 @@
     const productId = pickProductId(config.productIdRegexes, context.sources);
     const title = pickTitle(config.titleSelectors, context.sources, {
       platform: context.platform,
-      productId
+      productId,
+      shopName
     });
     const sourcePrice = pickSourcePrice(context, config);
     const sourceShipping = sourcePrice.sourceType === "selectedOrderSummary" && sourcePrice.shippingCny != null
@@ -1181,7 +1182,7 @@
       ? roundMoney(Number(sourcePrice.price) + (Number(sourceShipping.value) || 0))
       : null;
     const monthlySales = pickMonthlySales(context.pageText, context.sources, config.monthlySalesKeywords);
-    const skuItems = pickSkuItems(context.sources);
+    const skuItems = pickSkuItems(context.sources, context.pageText);
     const skuCount = skuItems.length || pickSkuCountFromDom();
     const grossWeightGrams = pickGrossWeight(context.pageText, context.sources, config.weightKeywords, skuItems);
     const images = pickImages(context.sources);
@@ -1258,7 +1259,7 @@
       };
     }
 
-    const skuItems = pickSkuItems(context.sources);
+    const skuItems = pickSkuItems(context.sources, context.pageText);
     const skuPrice = skuItems
       .map((item) => item.price)
       .filter((value) => typeof value === "number" && Number.isFinite(value) && value > 0 && isTrustedPriceValue(value, visibleRange))
@@ -1329,6 +1330,31 @@
   function pickSelectedOrderSummaryPrice(context) {
     const summary = pickSelectedOrderSummary(context && context.pageText);
     if (!summary) return null;
+    const selectedRow = pickSelectedSkuRowForSummary(context, summary);
+    const selectedSku = selectedRow
+      ? {
+          ...selectedRow,
+          price: summary.unitPrice,
+          priceText: "¥" + formatMoney(summary.unitPrice),
+          selected: true,
+          quantity: summary.quantity,
+          productAmount: summary.productAmount,
+          shippingCny: summary.shipping != null ? summary.shipping : (summary.shippingFree ? 0 : null),
+          shippingFree: summary.shippingFree
+        }
+      : {
+          skuId: "",
+          name: "",
+          specText: "",
+          price: summary.unitPrice,
+          priceText: "¥" + formatMoney(summary.unitPrice),
+          selected: true,
+          quantity: summary.quantity,
+          productAmount: summary.productAmount,
+          shippingCny: summary.shipping != null ? summary.shipping : (summary.shippingFree ? 0 : null),
+          shippingFree: summary.shippingFree,
+          attrs: {}
+        };
     return {
       price: summary.unitPrice,
       currency: "CNY",
@@ -1337,20 +1363,18 @@
       shippingCny: summary.shipping != null ? summary.shipping : (summary.shippingFree ? 0 : null),
       shippingText: summary.sample,
       shippingFree: summary.shippingFree,
-      selectedSku: {
-        skuId: "",
-        name: "",
-        specText: "",
-        price: summary.unitPrice,
-        priceText: "¥" + formatMoney(summary.unitPrice),
-        selected: true,
-        quantity: summary.quantity,
-        productAmount: summary.productAmount,
-        shippingCny: summary.shipping != null ? summary.shipping : (summary.shippingFree ? 0 : null),
-        shippingFree: summary.shippingFree,
-        attrs: {}
-      }
+      selectedSku
     };
+  }
+
+  function pickSelectedSkuRowForSummary(context, summary) {
+    const rows = collectDomSkuPriceRows(context && context.pageText);
+    if (!rows.length) return null;
+    const matchesSummaryPrice = (row) => Math.abs((Number(row.price) || 0) - (Number(summary && summary.unitPrice) || 0)) < 0.01;
+    return rows.find((row) => row.selected && matchesSummaryPrice(row))
+      || rows.find((row) => row.selected)
+      || rows.find(matchesSummaryPrice)
+      || null;
   }
 
   function pickSelectedOrderSummary(value) {
@@ -1744,7 +1768,7 @@
 
   function pickTitle(selectors, sources, context) {
     const domTitle = pickFirstDomText(selectors);
-    if (domTitle) {
+    if (domTitle && !isLikelyShopTitle(domTitle, context)) {
       return domTitle;
     }
 
@@ -1759,6 +1783,7 @@
     const candidates = collectStringCandidates(sources, /(title|name|subject|productName|offerTitle)$/i)
       .filter((item) => !/(companyName|shopName|sellerName|storeName|supplierName)$/i.test(item.path))
       .filter((item) => !isForeignOzonTitleCandidate(item, context))
+      .filter((item) => !isLikelyShopTitle(item.value, context))
       .map((item) => ({ ...item, score: scoreProductTitlePath(item.path) }))
       .sort((a, b) => b.score - a.score || a.value.length - b.value.length);
     return candidates.length ? candidates[0].value : "";
@@ -1766,10 +1791,20 @@
 
   function pickDocumentProductTitle(context) {
     const title = normalizeWhitespace(document.title || "");
-    if (!title || isForeignOzonTitleText(title, context)) {
+    if (!title || isForeignOzonTitleText(title, context) || isLikelyShopTitle(title, context)) {
       return "";
     }
     return title;
+  }
+
+  function isLikelyShopTitle(value, context) {
+    const text = normalizeWhitespace(value || "");
+    const shopName = normalizeWhitespace(context && context.shopName || "");
+    if (!text || !shopName) return false;
+    if (text === shopName) return true;
+    const compactText = text.replace(/\s+/g, "");
+    const compactShop = shopName.replace(/\s+/g, "");
+    return compactText === compactShop || (compactShop.length >= 6 && compactText.includes(compactShop));
   }
 
   function isForeignOzonTitleCandidate(item, context) {
@@ -1875,7 +1910,7 @@
     return weightHit ? weightHit.weightGrams : null;
   }
 
-  function pickSkuItems(sources) {
+  function pickSkuItems(sources, pageText) {
     const skuArrays = [];
 
     sources.forEach((source) => {
@@ -1897,12 +1932,11 @@
 
     skuArrays.sort((a, b) => b.score - a.score || b.value.length - a.value.length);
     const best = skuArrays[0];
-    if (!best) {
-      return [];
-    }
-
-    const normalized = best.value
+    const sourceItems = best ? best.value : [];
+    const domItems = collectDomSkuPriceRows(pageText);
+    const normalized = sourceItems
       .map((item) => normalizeSkuItem(item))
+      .concat(domItems)
       .filter((item) => item.skuId || item.name || item.specText || item.price != null);
 
     const unique = [];
