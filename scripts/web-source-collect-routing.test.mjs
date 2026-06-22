@@ -59,6 +59,12 @@ assert.match(
 for (const label of ['待翻译', '图片待处理', '待水印', '待改图', '可上架']) {
   assert.match(page, new RegExp(label), `source collection row should expose workflow badge: ${label}`);
 }
+for (const label of ['详情图原始素材', '包装信息', '原始富内容待处理', '富内容待处理']) {
+  assert.match(page, new RegExp(label), `source collection page should expose 1688 source asset workflow label: ${label}`);
+}
+for (const helper of ['sourceDetailPreviewImages', 'sourcePackagingRows', 'sourceRichContentDraft']) {
+  assert.match(page, new RegExp(helper), `source collection page should read 1688 source asset helper: ${helper}`);
+}
 for (const label of ['概览', 'SKU', '属性', '图片', '翻译', '上架检查']) {
   assert.match(page, new RegExp(label), `source detail dialog should expose section: ${label}`);
 }

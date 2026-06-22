@@ -42,6 +42,10 @@ const collectSchema = z.object({
   sourceUrl: z.string().optional(),
   sourcePlatform: z.string().optional(),
   images: z.array(z.string()).optional(),
+  sourceMainImages: z.array(z.string()).optional(),
+  sourceDetailImages: z.array(z.string()).optional(),
+  sourcePackagingRows: z.array(z.any()).optional(),
+  sourceRichContentDraft: z.any().optional(),
   price: z.union([z.string(), z.number()]).optional(),
   priceText: z.string().optional(),
   unitPriceText: z.string().optional(),
@@ -1004,6 +1008,45 @@ function normalizeCollectedSourceAttributes(value: unknown): { id?: number; name
   return out;
 }
 
+function normalizeCollectedSourceImageList(value: unknown, maxLength = 100): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = String(item || '').trim();
+    if (!/^https?:\/\//i.test(text) || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= maxLength) break;
+  }
+  return out;
+}
+
+function normalizeCollectedPackagingRows(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  const rows: unknown[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    const color = cleanMetadataText(row.color ?? row.colour ?? row['颜色'], 120);
+    const size = cleanMetadataText(row.size ?? row.spec ?? row.specText ?? row['尺码'] ?? row['规格'], 120);
+    if (color) next.color = color;
+    if (size) next.size = size;
+    for (const key of ['lengthMm', 'widthMm', 'heightMm', 'volumeCm3', 'weightG'] as const) {
+      const number = finiteMetadataNumber(row[key]);
+      if (number != null && number > 0) next[key] = number;
+    }
+    const encoded = JSON.stringify(next);
+    if (encoded === '{}' || seen.has(encoded)) continue;
+    seen.add(encoded);
+    rows.push(next);
+    if (rows.length >= 200) break;
+  }
+  return rows;
+}
+
 function cloneMetadataJson(value: unknown, maxArrayLength = 100): unknown {
   if (Array.isArray(value)) {
     return value.slice(0, maxArrayLength).map((item) => cloneMetadataJson(item, maxArrayLength));
@@ -1040,6 +1083,14 @@ export function buildCollectedGoodsMetadata(input: {
   if (sourceDescriptionRaw) metadata.sourceDescriptionRaw = sourceDescriptionRaw;
   if (sourceDescription && !containsCjkText(sourceDescription)) metadata.sourceDescriptionRu = sourceDescription;
   if (input.richDescriptionJson) metadata.sourceRichDescriptionJson = String(input.richDescriptionJson);
+  const sourceMainImages = normalizeCollectedSourceImageList(input.sourceMainImages);
+  if (sourceMainImages.length) metadata.sourceMainImages = sourceMainImages;
+  const sourceDetailImages = normalizeCollectedSourceImageList(input.sourceDetailImages);
+  if (sourceDetailImages.length) metadata.sourceDetailImages = sourceDetailImages;
+  const sourcePackagingRows = normalizeCollectedPackagingRows(input.sourcePackagingRows);
+  if (sourcePackagingRows.length) metadata.sourcePackagingRows = sourcePackagingRows;
+  const sourceRichContentDraft = cloneMetadataJson(input.sourceRichContentDraft);
+  if (sourceRichContentDraft && typeof sourceRichContentDraft === 'object') metadata.sourceRichContentDraft = sourceRichContentDraft;
   const sourceVideos = normalizeCollectedSourceVideos(input.sourceVideos);
   if (sourceVideos.length) metadata.sourceVideos = sourceVideos;
   const categoryPath = normalizeCollectedCategoryPath(input.categoryPath);
@@ -1074,6 +1125,64 @@ export function buildCollectedGoodsMetadata(input: {
   }
   if (titleNeedsReview) metadata.titleNeedsReview = true;
   return metadata;
+}
+
+function rewriteSourceRichContentDraftImages(value: unknown, replacements: Map<string, string>): unknown {
+  if (!replacements.size) return value;
+  if (typeof value === 'string') return replacements.get(value) || value;
+  if (Array.isArray(value)) return value.map((item) => rewriteSourceRichContentDraftImages(item, replacements));
+  if (!value || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = rewriteSourceRichContentDraftImages(entry, replacements);
+  }
+  return out;
+}
+
+function isDomesticCollectedSource(value: unknown): boolean {
+  return ['1688', 'pdd', 'pinduoduo', 'taobao', 'tmall'].includes(String(value || '').trim().toLowerCase());
+}
+
+async function prepareCollectedSourceImageMetadata(input: {
+  images?: unknown;
+  sourceMainImages?: unknown;
+  sourceDetailImages?: unknown;
+  sourcePlatform?: unknown;
+  sourceRichContentDraft?: unknown;
+}, userId: string): Promise<{
+  images: string[];
+  metadataPatch: Record<string, unknown>;
+}> {
+  const isSource = isDomesticCollectedSource(input.sourcePlatform);
+  const sourceMainFromImages = normalizeCollectedSourceImageList(input.images);
+  const sourceMainFromField = normalizeCollectedSourceImageList(input.sourceMainImages);
+  const mainRaw = isSource
+    ? (sourceMainFromImages.length ? sourceMainFromImages : sourceMainFromField)
+    : (Array.isArray(input.images) ? input.images : []);
+  const detailRaw = isSource ? normalizeCollectedSourceImageList(input.sourceDetailImages) : [];
+
+  const mainTransfer = await transferSourceProductImages({ images: mainRaw, sourcePlatform: input.sourcePlatform, userId });
+  const metadataPatch: Record<string, unknown> = {};
+  if (isSource && mainTransfer.images.length) metadataPatch.sourceMainImages = mainTransfer.images;
+  if (mainTransfer.diagnostic) metadataPatch.sourceImageTransfer = mainTransfer.diagnostic;
+
+  let detailImages: string[] = [];
+  if (detailRaw.length) {
+    const detailTransfer = await transferSourceProductImages({ images: detailRaw, sourcePlatform: input.sourcePlatform, userId });
+    detailImages = detailTransfer.images;
+    if (isSource && detailImages.length) metadataPatch.sourceDetailImages = detailImages;
+    if (detailTransfer.diagnostic) metadataPatch.sourceDetailImageTransfer = detailTransfer.diagnostic;
+  }
+
+  if (input.sourceRichContentDraft && detailRaw.length && detailImages.length) {
+    const replacements = new Map<string, string>();
+    detailRaw.forEach((url, index) => {
+      if (detailImages[index]) replacements.set(url, detailImages[index]!);
+    });
+    metadataPatch.sourceRichContentDraft = rewriteSourceRichContentDraftImages(input.sourceRichContentDraft, replacements);
+  }
+
+  return { images: mainTransfer.images, metadataPatch };
 }
 
 export function calcPublishPrice(baseCny: number, markupPct = 0, markupAmount = 0): number {
@@ -2352,9 +2461,11 @@ export async function collectRoutes(app: FastifyInstance) {
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const sourceDescription = sanitizePublishDescription(d.description);
     const notes = [weightNote, sourceDescription.slice(0, 500)].filter(Boolean).join('\n') || null;
-    const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(d);
-    const imageTransfer = await transferSourceProductImages({ images: d.images, sourcePlatform: d.sourcePlatform, userId });
-    if (imageTransfer.diagnostic) metadata.sourceImageTransfer = imageTransfer.diagnostic;
+    const imageState = await prepareCollectedSourceImageMetadata(d, userId);
+    const metadata: Record<string, unknown> = {
+      ...buildCollectedGoodsMetadata({ ...d, ...imageState.metadataPatch }),
+      ...imageState.metadataPatch,
+    };
     const collectedVariants = Array.isArray(d.variants) && d.variants.length
       ? d.variants
       : (Array.isArray(d.skuItems) && d.skuItems.length ? d.skuItems : undefined);
@@ -2377,7 +2488,7 @@ export async function collectRoutes(app: FastifyInstance) {
         sourcePlatform: d.sourcePlatform || 'ozon',
         sourceProductId,
         sku: d.sku || sourceProductId,
-        images: imageTransfer.images.length ? imageTransfer.images : undefined,
+        images: imageState.images.length ? imageState.images : undefined,
         purchasePrice: priceInfo.purchasePriceCny,
         currency: 'CNY',
         originalPrice: priceInfo.originalPrice,
@@ -2410,7 +2521,11 @@ export async function collectRoutes(app: FastifyInstance) {
     for (const item of body.items.slice(0, 50)) {
       try {
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
-        const metadata: Record<string, unknown> = buildCollectedGoodsMetadata(item);
+        const imageState = await prepareCollectedSourceImageMetadata(item, userId);
+        const metadata: Record<string, unknown> = {
+          ...buildCollectedGoodsMetadata({ ...item, ...imageState.metadataPatch }),
+          ...imageState.metadataPatch,
+        };
         if (item.ozonAttributes) metadata.ozonAttributes = item.ozonAttributes;
         if (item.descriptionCategoryId) metadata.descriptionCategoryId = item.descriptionCategoryId;
         if (item.typeId) metadata.typeId = item.typeId;
@@ -2430,8 +2545,6 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.rawSourceProduct) metadata.rawSourceProduct = item.rawSourceProduct;
         // 调试用：未识别的 widget 全量 dump（扩展占位阶段使用）
         if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
-        const imageTransfer = await transferSourceProductImages({ images: item.images, sourcePlatform: item.sourcePlatform, userId });
-        if (imageTransfer.diagnostic) metadata.sourceImageTransfer = imageTransfer.diagnostic;
 
         const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
         const sourceDescription = sanitizePublishDescription(item.description);
@@ -2462,7 +2575,7 @@ export async function collectRoutes(app: FastifyInstance) {
           sourcePlatform: item.sourcePlatform || 'ozon',
           sourceProductId,
           sku: item.sku || sourceProductId,
-          images: imageTransfer.images.length ? imageTransfer.images : undefined,
+          images: imageState.images.length ? imageState.images : undefined,
           purchasePrice: priceInfo.purchasePriceCny,
           currency: 'CNY',
           originalPrice: priceInfo.originalPrice,

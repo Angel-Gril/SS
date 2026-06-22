@@ -503,6 +503,19 @@ const aliCompleteSourceResponse = await collectWithPage({
         mainImage: 'https://img.example.com/main.jpg',
         videos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg', title: '展示视频' }],
         packageSize: { length: 80, width: 80, height: 220, unit: 'mm' },
+        packagingInfo: [
+          {
+            color: '红色',
+            size: '500ml',
+            length: 8,
+            width: 8,
+            height: 22,
+            unit: 'cm',
+            volumeCm3: 1408,
+            weight: 350,
+            weightUnit: 'g',
+          },
+        ],
         skuProps: [
           {
             skuId: 'red-500',
@@ -527,8 +540,28 @@ assert.equal(aliCompleteSourceResponse.data.widthMm, 80);
 assert.equal(aliCompleteSourceResponse.data.heightMm, 220);
 assert.equal(aliCompleteSourceResponse.data.description, '双层真空保温，适合跨境上架。');
 assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceVideos), [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg', title: '展示视频' }]);
-assert.ok(aliCompleteSourceResponse.data.images.includes('https://img.example.com/main.jpg'));
-assert.ok(aliCompleteSourceResponse.data.images.includes('https://img.example.com/detail-1.jpg'));
+assert.deepEqual(plain(aliCompleteSourceResponse.data.images), ['https://img.example.com/main.jpg']);
+assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceMainImages), ['https://img.example.com/main.jpg']);
+assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceDetailImages), ['https://img.example.com/detail-1.jpg']);
+assert.equal(aliCompleteSourceResponse.data.richDescriptionJson || null, null);
+assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceRichContentDraft), {
+  status: 'raw_source_requires_processing',
+  source: '1688',
+  locale: 'zh-CN',
+  blocks: [
+    { type: 'text', text: '双层真空保温，适合跨境上架。' },
+    { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+  ],
+});
+assert.deepEqual(plain(aliCompleteSourceResponse.data.sourcePackagingRows), [{
+  color: '红色',
+  size: '500ml',
+  lengthMm: 80,
+  widthMm: 80,
+  heightMm: 220,
+  volumeCm3: 1408,
+  weightG: 350,
+}]);
 assert.deepEqual(plain(aliCompleteSourceResponse.data.attributes), [
   { name: '材质', value: '316不锈钢' },
   { name: '容量', value: '500ml' },

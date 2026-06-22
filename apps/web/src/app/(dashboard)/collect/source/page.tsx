@@ -91,8 +91,14 @@ function sourceVideoCount(item: SourceCollectItem): number {
   return Array.isArray(videos) ? videos.length : 0;
 }
 
+function sourceMetadataArray(item: SourceCollectItem, key: string): unknown[] {
+  const value = item.metadata?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
 function sourceImageCount(item: SourceCollectItem): number {
-  return Array.isArray(item.images) ? item.images.length : 0;
+  const sourceMainImages = sourceMetadataArray(item, 'sourceMainImages');
+  return sourceMainImages.length || (Array.isArray(item.images) ? item.images.length : 0);
 }
 
 function isPreviewableSourceImage(value: unknown): boolean {
@@ -109,11 +115,66 @@ function isPreviewableSourceImage(value: unknown): boolean {
 }
 
 function sourcePreviewImages(item: SourceCollectItem): string[] {
-  return Array.isArray(item.images) ? item.images.filter(isPreviewableSourceImage) : [];
+  const sourceMainImages = sourcePreviewableImageList(sourceMetadataArray(item, 'sourceMainImages'));
+  if (sourceMainImages.length) return sourceMainImages;
+  return sourcePreviewableImageList(Array.isArray(item.images) ? item.images : []);
 }
 
 function sourceMainPreviewImage(item: SourceCollectItem): string {
   return sourcePreviewImages(item)[0] || '';
+}
+
+function sourcePreviewableImageList(values: unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  values.forEach((value) => {
+    const url = String(value || '').trim();
+    if (!url || seen.has(url) || !isPreviewableSourceImage(url)) return;
+    seen.add(url);
+    out.push(url);
+  });
+  return out;
+}
+
+function sourceDetailImageCount(item: SourceCollectItem): number {
+  return sourceMetadataArray(item, 'sourceDetailImages').length;
+}
+
+function sourceDetailPreviewImages(item: SourceCollectItem): string[] {
+  return sourcePreviewableImageList(sourceMetadataArray(item, 'sourceDetailImages'));
+}
+
+function sourcePackagingRows(item: SourceCollectItem): Array<Record<string, unknown>> {
+  return sourceMetadataArray(item, 'sourcePackagingRows')
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
+}
+
+function sourceRichContentDraft(item: SourceCollectItem): Record<string, unknown> | null {
+  const draft = item.metadata?.sourceRichContentDraft;
+  return draft && typeof draft === 'object' && !Array.isArray(draft) ? draft as Record<string, unknown> : null;
+}
+
+function sourceRichContentDraftStatus(item: SourceCollectItem): string {
+  const draft = sourceRichContentDraft(item);
+  if (!draft) return '';
+  const status = String(draft.status || '');
+  if (status === 'raw_source_requires_processing') return '原始富内容待处理';
+  return status || '原始富内容';
+}
+
+function sourceRichContentDraftSummary(item: SourceCollectItem): string {
+  const draft = sourceRichContentDraft(item);
+  if (!draft) return '';
+  const blocks = Array.isArray(draft.blocks) ? draft.blocks : [];
+  const textCount = blocks.filter((block) => !!block && typeof block === 'object' && String((block as Record<string, unknown>).type || '') === 'text').length;
+  const imageCount = blocks.filter((block) => {
+    if (!block || typeof block !== 'object') return false;
+    const data = block as Record<string, unknown>;
+    return String(data.type || '') === 'image' || !!data.url;
+  }).length;
+  return [sourceRichContentDraftStatus(item), textCount ? `文本 ${textCount}` : '', imageCount ? `图片 ${imageCount}` : '']
+    .filter(Boolean)
+    .join(' / ');
 }
 
 function variantCount(item: SourceCollectItem): number {
@@ -236,8 +297,7 @@ function sourceMissingFields(item: SourceCollectItem): string[] {
 }
 
 function metadataArray(item: SourceCollectItem, key: string): unknown[] {
-  const value = item.metadata?.[key];
-  return Array.isArray(value) ? value : [];
+  return sourceMetadataArray(item, key);
 }
 
 function hasMetadataValue(item: SourceCollectItem, keys: string[]): boolean {
@@ -266,6 +326,8 @@ function sourceReadinessBadges(item: SourceCollectItem): ReadinessBadge[] {
   const skuCount = variantCount(item);
   const attrs = sourceAttributeCount(item);
   const previewCount = sourcePreviewImages(item).length;
+  const detailImageCount = sourceDetailPreviewImages(item).length;
+  const richDraft = sourceRichContentDraft(item);
   return [
     skuCount > 0
       ? { label: `SKU ${skuCount}`, tone: 'ok' as const }
@@ -279,6 +341,12 @@ function sourceReadinessBadges(item: SourceCollectItem): ReadinessBadge[] {
     previewCount > 0
       ? { label: `图 ${previewCount}`, tone: 'info' as const }
       : { label: '图片待处理', tone: 'warn' as const },
+    detailImageCount > 0
+      ? { label: `详情图 ${detailImageCount}`, tone: 'info' as const }
+      : { label: '详情图待采', tone: 'muted' as const },
+    richDraft
+      ? { label: '富内容待处理', tone: 'warn' as const, title: sourceRichContentDraftSummary(item) }
+      : { label: '富内容待采', tone: 'muted' as const },
     sourceHasWatermark(item)
       ? { label: '已水印', tone: 'ok' as const }
       : { label: '待水印', tone: 'muted' as const },
@@ -413,7 +481,8 @@ function SourceProductRow({
 
           <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-              <span>图 {sourcePreviewImages(item).length}/{sourceImageCount(item)}</span>
+              <span>主图 {sourcePreviewImages(item).length}/{sourceImageCount(item)}</span>
+              <span>详情图 {sourceDetailPreviewImages(item).length}/{sourceDetailImageCount(item)}</span>
               <span>视频 {sourceVideoCount(item)}</span>
               <span>SKU {variantCount(item)}</span>
               <span>属性 {sourceAttributeCount(item)}</span>
@@ -544,11 +613,13 @@ function SourceDetailContent({
 function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-6">
         <MetricBlock label="平台" value={platformLabel(item.sourcePlatform)} />
         <MetricBlock label="采购价" value={detailPriceText(item)} />
         <MetricBlock label="SKU" value={String(variantCount(item))} />
-        <MetricBlock label="图片" value={`${sourcePreviewImages(item).length}/${sourceImageCount(item)}`} />
+        <MetricBlock label="主图" value={`${sourcePreviewImages(item).length}/${sourceImageCount(item)}`} />
+        <MetricBlock label="详情图" value={`${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`} />
+        <MetricBlock label="包装" value={String(sourcePackagingRows(item).length)} />
       </div>
       <InfoPanel title="采集诊断" count={null}>
         <div className="text-muted-foreground">{extractionDiagnosticText(item) || '暂无诊断信息'}</div>
@@ -559,31 +630,67 @@ function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
           <KeyValue label="采集时间" value={formatDate(item.createdAt)} />
           <KeyValue label="类目" value={sourceCategoryText(item) || '-'} />
           <KeyValue label="已选 SKU" value={selectedSkuText(item) || '-'} />
+          <KeyValue label="原始富内容" value={sourceRichContentDraftSummary(item) || '-'} />
         </div>
       </InfoPanel>
     </div>
   );
 }
 
+function packagingRowTitle(row: Record<string, unknown>, index: number): string {
+  return [row.color, row.size].map((value) => String(value || '').trim()).filter(Boolean).join(' / ') || `包装 ${index + 1}`;
+}
+
+function packagingRowMeta(row: Record<string, unknown>): string {
+  const length = Number(row.lengthMm);
+  const width = Number(row.widthMm);
+  const height = Number(row.heightMm);
+  const volume = Number(row.volumeCm3);
+  const weight = Number(row.weightG);
+  return [
+    Number.isFinite(length) && Number.isFinite(width) && Number.isFinite(height) && length > 0 && width > 0 && height > 0
+      ? `${length} x ${width} x ${height} mm`
+      : '',
+    Number.isFinite(volume) && volume > 0 ? `${volume} cm3` : '',
+    Number.isFinite(weight) && weight > 0 ? `${weight} g` : '',
+  ].filter(Boolean).join(' · ');
+}
+
 function SourceSkuSection({ item }: { item: SourceCollectItem }) {
   const variants = sourceDisplayVariants(item);
+  const packagingRows = sourcePackagingRows(item);
   return (
-    <InfoPanel title="SKU / 变体" count={variants.length}>
-      {variants.length ? (
-        <div className="grid gap-2 md:grid-cols-2">
-          {variants.slice(0, 80).map((variant, index) => (
-            <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
-              <div className="break-words">{sourceVariantLabel(variant, index)}</div>
-              <div className="mt-1 flex gap-3 text-muted-foreground">
-                {variant.price != null ? <span>¥{String(variant.price)}</span> : null}
-                {variant.stock != null ? <span>库存 {String(variant.stock)}</span> : null}
-                {variant.skuId ? <span>{String(variant.skuId)}</span> : null}
+    <div className="space-y-3">
+      <InfoPanel title="SKU / 变体" count={variants.length}>
+        {variants.length ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {variants.slice(0, 80).map((variant, index) => (
+              <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+                <div className="break-words">{sourceVariantLabel(variant, index)}</div>
+                <div className="mt-1 flex gap-3 text-muted-foreground">
+                  {variant.price != null ? <span>¥{String(variant.price)}</span> : null}
+                  {variant.stock != null ? <span>库存 {String(variant.stock)}</span> : null}
+                  {variant.skuId ? <span>{String(variant.skuId)}</span> : null}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      ) : <div className="text-muted-foreground">未采集到 SKU 变体</div>}
-    </InfoPanel>
+            ))}
+          </div>
+        ) : <div className="text-muted-foreground">未采集到 SKU 变体</div>}
+      </InfoPanel>
+
+      <InfoPanel title="包装信息" count={packagingRows.length}>
+        {packagingRows.length ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {packagingRows.slice(0, 80).map((row, index) => (
+              <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+                <div className="break-words">{packagingRowTitle(row, index)}</div>
+                <div className="mt-1 text-muted-foreground">{packagingRowMeta(row) || '未采集到件重尺'}</div>
+              </div>
+            ))}
+          </div>
+        ) : <div className="text-muted-foreground">未采集到包装信息</div>}
+      </InfoPanel>
+    </div>
   );
 }
 
@@ -607,27 +714,16 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
 
 function SourceImagesSection({ item }: { item: SourceCollectItem }) {
   const images = sourcePreviewImages(item);
+  const detailImages = sourceDetailPreviewImages(item);
   const watermarked = metadataArray(item, 'watermarkedImages');
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   return (
     <div className="space-y-3">
       <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
-        {images.length ? (
-          <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
-            {images.slice(0, 32).map((image, index) => (
-              <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
-                <img
-                  src={image}
-                  alt=""
-                  className="h-full w-full object-cover"
-                  onError={(event) => {
-                    event.currentTarget.parentElement?.classList.add('hidden');
-                  }}
-                />
-              </a>
-            ))}
-          </div>
-        ) : <div className="text-muted-foreground">未采集到可预览商品图片</div>}
+        <SourceImageGrid images={images} empty="未采集到可预览商品图片" limit={32} />
+      </InfoPanel>
+      <InfoPanel title="详情图原始素材" count={`${detailImages.length} / ${sourceDetailImageCount(item)}`}>
+        <SourceImageGrid images={detailImages} empty="未采集到详情图原始素材" limit={50} />
       </InfoPanel>
       <div className="grid gap-3 md:grid-cols-2">
         <InfoPanel title="水印图" count={watermarked.length}>
@@ -642,29 +738,59 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
 }
 
 function SourceTranslationSection({ item }: { item: SourceCollectItem }) {
+  const richDraftSummary = sourceRichContentDraftSummary(item);
   return (
-    <InfoPanel title="翻译" count={sourceHasTranslation(item) ? '已翻译' : '待翻译'}>
-      <div className="grid gap-2">
-        <KeyValue label="中文标题" value={sourceDisplayTitle(item)} />
-        <KeyValue label="俄文标题" value={String(item.metadata?.publishTitleRu || item.metadata?.titleRu || '-')} />
-        <KeyValue label="俄文描述" value={String(item.metadata?.sourceDescriptionRu || item.metadata?.descriptionRu || '-')} />
-      </div>
-    </InfoPanel>
+    <div className="space-y-3">
+      <InfoPanel title="翻译" count={sourceHasTranslation(item) ? '已翻译' : '待翻译'}>
+        <div className="grid gap-2">
+          <KeyValue label="中文标题" value={sourceDisplayTitle(item)} />
+          <KeyValue label="俄文标题" value={String(item.metadata?.publishTitleRu || item.metadata?.titleRu || '-')} />
+          <KeyValue label="俄文描述" value={String(item.metadata?.sourceDescriptionRu || item.metadata?.descriptionRu || '-')} />
+        </div>
+      </InfoPanel>
+      <InfoPanel title="原始富内容待处理" count={richDraftSummary || '未采集'}>
+        <div className="grid gap-2">
+          <KeyValue label="原始富内容" value={richDraftSummary || '-'} />
+          <KeyValue label="详情图原始素材" value={`${sourceDetailPreviewImages(item).length} / ${sourceDetailImageCount(item)}`} />
+        </div>
+      </InfoPanel>
+    </div>
   );
 }
 
 function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
   const missing = sourceMissingFields(item);
+  const sourceAssets = [
+    { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
+    { label: `详情图 ${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`, done: sourceDetailPreviewImages(item).length > 0 },
+    { label: sourceRichContentDraft(item) ? '原始富内容待处理' : '富内容待采', done: !!sourceRichContentDraft(item) },
+    { label: `包装信息 ${sourcePackagingRows(item).length}`, done: sourcePackagingRows(item).length > 0 },
+  ];
   return (
-    <InfoPanel title="上架检查" count={missing.length ? `${missing.length} 项` : '可上架'}>
-      {missing.length ? (
+    <div className="space-y-3">
+      <InfoPanel title="上架检查" count={missing.length ? `${missing.length} 项` : '可上架'}>
+        {missing.length ? (
+          <div className="flex flex-wrap gap-2">
+            {missing.map((field) => (
+              <Badge key={field} variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">{field}</Badge>
+            ))}
+          </div>
+        ) : <div className="text-emerald-700">关键上架字段已采集或已补全</div>}
+      </InfoPanel>
+      <InfoPanel title="素材处理" count={sourceRichContentDraftStatus(item) || null}>
         <div className="flex flex-wrap gap-2">
-          {missing.map((field) => (
-            <Badge key={field} variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">{field}</Badge>
+          {sourceAssets.map((asset) => (
+            <Badge
+              key={asset.label}
+              variant="outline"
+              className={asset.done ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-600'}
+            >
+              {asset.label}
+            </Badge>
           ))}
         </div>
-      ) : <div className="text-emerald-700">关键上架字段已采集或已补全</div>}
-    </InfoPanel>
+      </InfoPanel>
+    </div>
   );
 }
 
@@ -698,18 +824,29 @@ function InfoPanel({ title, count, children }: { title: string; count: string | 
   );
 }
 
-function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }) {
-  const urls = images.map((image) => String(image || '')).filter(isPreviewableSourceImage);
-  if (!urls.length) return <div className="text-muted-foreground">{empty}</div>;
+function SourceImageGrid({ images, empty, limit }: { images: string[]; empty: string; limit: number }) {
+  if (!images.length) return <div className="text-muted-foreground">{empty}</div>;
   return (
-    <div className="grid grid-cols-4 gap-2">
-      {urls.slice(0, 8).map((image, index) => (
+    <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
+      {images.slice(0, limit).map((image, index) => (
         <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
-          <img src={image} alt="" className="h-full w-full object-cover" />
+          <img
+            src={image}
+            alt=""
+            className="h-full w-full object-cover"
+            onError={(event) => {
+              event.currentTarget.parentElement?.classList.add('hidden');
+            }}
+          />
         </a>
       ))}
     </div>
   );
+}
+
+function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }) {
+  const urls = images.map((image) => String(image || '')).filter(isPreviewableSourceImage);
+  return <SourceImageGrid images={urls} empty={empty} limit={8} />;
 }
 
 export default function SourceCollectPage() {

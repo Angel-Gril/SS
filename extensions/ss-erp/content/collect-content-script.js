@@ -1060,6 +1060,11 @@
     const dimensions = structured.dimensions.lengthMm && structured.dimensions.widthMm && structured.dimensions.heightMm
       ? structured.dimensions
       : { lengthMm: result.lengthMm || 0, widthMm: result.widthMm || 0, heightMm: result.heightMm || 0 };
+    const sourceDetailImages = structured.detailImages;
+    const sourceRichContentDraft = build1688SourceRichContentDraft({
+      description: structured.description || result.description,
+      detailImages: sourceDetailImages
+    });
 
     return {
       ...result,
@@ -1074,6 +1079,10 @@
       categoryPath,
       categoryName: categoryPath.length ? categoryPath[categoryPath.length - 1] : result.categoryName,
       description: structured.description || result.description,
+      sourceMainImages: images,
+      sourceDetailImages,
+      sourcePackagingRows: structured.packagingRows,
+      sourceRichContentDraft,
       sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
       lengthMm: dimensions.lengthMm || result.lengthMm,
       widthMm: dimensions.widthMm || result.widthMm,
@@ -1085,7 +1094,10 @@
         skuItems,
         attributes,
         description: structured.description || result.description,
-        sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos
+        sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
+        sourceDetailImages,
+        sourcePackagingRows: structured.packagingRows,
+        sourceRichContentDraft
       })
     };
   }
@@ -1097,10 +1109,12 @@
     const title = pick1688StructuredTitle(sources, { platform: "1688", productId, shopName });
     const skuProps = pick1688SkuProps(sources);
     const images = pick1688StructuredImages(sources, skuProps);
+    const detailImages = pick1688DetailImages(sources);
     const skuItems = pick1688StructuredSkuItems(sources, skuProps);
     const attributes = pick1688StructuredAttributes(sources);
     const categoryPath = pickCategoryPath(sources);
     const dimensions = pickDimensions(context && context.pageText, sources);
+    const packagingRows = pick1688PackagingRows(sources);
     const description = pickSourceDescription(sources, context && context.pageText);
     const sourceVideos = pickSourceVideos(sources);
     return {
@@ -1109,10 +1123,12 @@
       title,
       skuProps,
       images,
+      detailImages,
       skuItems,
       attributes,
       categoryPath,
       dimensions,
+      packagingRows,
       description,
       sourceVideos
     };
@@ -1201,6 +1217,7 @@
     (Array.isArray(sources) ? sources : []).forEach((source) => {
       walkObject(source, [], (value, path) => {
         const pathText = path.join(".");
+        if (is1688DetailImagePath(pathText)) return;
         if (!/(imageList|images|imageUrls|mainImage|mainPic|album|gallery|detailImages|offerImage|skuProps|skuMap|picUrl|imageUrl)$/i.test(pathText)) return;
         normalizeImageValues(value).forEach((image) => add1688Image(images, image));
       });
@@ -1211,6 +1228,39 @@
     return images
       .sort((a, b) => score1688Image(b) - score1688Image(a))
       .slice(0, 30);
+  }
+
+  function is1688DetailImagePath(pathText) {
+    return /(detailImages|detailImage|descImages|descriptionImages|richImages|详情图|详情图片|商品详情|detail|description|desc|rich)/i.test(String(pathText || ""));
+  }
+
+  function pick1688DetailImages(sources) {
+    const images = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!is1688DetailImagePath(pathText)) return;
+        if (!/(image|img|pic|picture|photo|url|src|详情图|详情图片|detail|description|desc|rich)/i.test(pathText)) return;
+        normalizeImageValues(value).forEach((image) => add1688Image(images, image));
+      });
+    });
+    return images.sort((a, b) => score1688Image(b) - score1688Image(a)).slice(0, 50);
+  }
+
+  function build1688SourceRichContentDraft(input) {
+    const blocks = [];
+    const description = normalizeWhitespace(input && input.description || "");
+    if (description) blocks.push({ type: "text", text: description.slice(0, 900) });
+    (Array.isArray(input && input.detailImages) ? input.detailImages : []).slice(0, 30).forEach((url) => {
+      if (url) blocks.push({ type: "image", url });
+    });
+    if (!blocks.length) return null;
+    return {
+      status: "raw_source_requires_processing",
+      source: "1688",
+      locale: "zh-CN",
+      blocks
+    };
   }
 
   function add1688Image(target, raw) {
@@ -1276,6 +1326,76 @@
       });
     });
     return dedupeSkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+  }
+
+  function pick1688PackagingRows(sources) {
+    const rows = [];
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      walkObject(source, [], (value, path) => {
+        const pathText = path.join(".");
+        if (!/(package|packaging|packing|skuPackage|skuPackaging|商品件重尺|包装|件重尺)/i.test(pathText)) return;
+        if (Array.isArray(value)) {
+          value.forEach((entry) => {
+            const row = normalize1688PackagingRow(entry);
+            if (row) rows.push(row);
+          });
+          return;
+        }
+        const row = normalize1688PackagingRow(value);
+        if (row) rows.push(row);
+      });
+    });
+    return dedupe1688PackagingRows(rows).slice(0, 200);
+  }
+
+  function normalize1688PackagingRow(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const row = value;
+    const unit = pickFirstValue(row, ["unit", "dimensionUnit", "sizeUnit", "lengthUnit", "尺寸单位"]) || "";
+    const weightUnit = pickFirstValue(row, ["weightUnit", "重量单位"]) || "";
+    const color = normalizeWhitespace(pickFirstValue(row, ["color", "colour", "颜色", "颜色分类"]) || "");
+    const size = normalizeWhitespace(pickFirstValue(row, ["size", "spec", "specText", "尺码", "规格", "容量"]) || "");
+    const lengthMm = dimensionToMm(pickFirstValue(row, ["lengthMm", "length", "len", "long", "长", "长(cm)"]), unit);
+    const widthMm = dimensionToMm(pickFirstValue(row, ["widthMm", "width", "wid", "宽", "宽(cm)"]), unit);
+    const heightMm = dimensionToMm(pickFirstValue(row, ["heightMm", "height", "hgt", "高", "高(cm)"]), unit);
+    const weightRaw = pickFirstValue(row, ["weightG", "weight", "grossWeight", "重量", "重量(g)"]);
+    const weightG = normalize1688PackagingWeight(weightRaw, weightUnit);
+    const volumeRaw = pickFirstValue(row, ["volumeCm3", "volume", "体积", "体积(cm³)", "体积(cm3)"]);
+    const volumeCm3 = parseLooseNumber(volumeRaw);
+    if (!color && !size) return null;
+    if (!color && !size && !lengthMm && !widthMm && !heightMm && !weightG && !volumeCm3) return null;
+    const out = {};
+    if (color) out.color = color;
+    if (size) out.size = size;
+    if (lengthMm) out.lengthMm = lengthMm;
+    if (widthMm) out.widthMm = widthMm;
+    if (heightMm) out.heightMm = heightMm;
+    if (volumeCm3 != null) out.volumeCm3 = volumeCm3;
+    if (weightG) out.weightG = weightG;
+    return out;
+  }
+
+  function normalize1688PackagingWeight(value, unitHint) {
+    if (value == null || value === "") return 0;
+    const text = String(value);
+    const unit = String(unitHint || text || "").toLowerCase();
+    const numeric = parseLooseNumber(text);
+    if (numeric == null || numeric <= 0) return 0;
+    if (/kg|千克|公斤/.test(unit)) return Math.round(numeric * 1000);
+    if (/斤/.test(unit)) return Math.round(numeric * 500);
+    return Math.round(numeric);
+  }
+
+  function dedupe1688PackagingRows(rows) {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const key = JSON.stringify(row || {});
+      if (!key || key === "{}" || seen.has(key)) return;
+      seen.add(key);
+      out.push(row);
+    });
+    return out;
   }
 
   function infer1688SkuItemsFromText(context, result, attributes, skuProps) {

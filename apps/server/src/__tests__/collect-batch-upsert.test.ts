@@ -137,15 +137,23 @@ describe('collectRoutes batch upsert', () => {
 
   it('creates a source collect record with complete 1688 metadata through the single collect endpoint', async () => {
     mocks.transferSourceProductImages.mockResolvedValueOnce({
-      images: [
-        'https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg',
-        'https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg',
-      ],
+      images: ['https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg'],
       diagnostic: {
         enabled: true,
         backend: 'oss',
-        attempted: 2,
-        transferred: 2,
+        attempted: 1,
+        transferred: 1,
+        skipped: 0,
+        errors: [],
+      },
+    });
+    mocks.transferSourceProductImages.mockResolvedValueOnce({
+      images: ['https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg'],
+      diagnostic: {
+        enabled: true,
+        backend: 'oss',
+        attempted: 1,
+        transferred: 1,
         skipped: 0,
         errors: [],
       },
@@ -161,7 +169,27 @@ describe('collectRoutes batch upsert', () => {
         sourcePlatform: '1688',
         sourceProductId: '744455566677',
         sku: '744455566677',
-        images: ['https://img.example.com/main.jpg', 'https://img.example.com/detail-1.jpg'],
+        images: ['https://img.example.com/main.jpg'],
+        sourceMainImages: ['https://img.example.com/main.jpg'],
+        sourceDetailImages: ['https://img.example.com/detail-1.jpg'],
+        sourcePackagingRows: [{
+          color: '红色',
+          size: '500ml',
+          lengthMm: 80,
+          widthMm: 80,
+          heightMm: 220,
+          volumeCm3: 1408,
+          weightG: 350,
+        }],
+        sourceRichContentDraft: {
+          status: 'raw_source_requires_processing',
+          source: '1688',
+          locale: 'zh-CN',
+          blocks: [
+            { type: 'text', text: '双层真空保温，适合跨境上架。' },
+            { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+          ],
+        },
         priceText: '¥18.80 ~ ¥22.50',
         currency: 'CNY',
         shippingCny: 5,
@@ -204,14 +232,16 @@ describe('collectRoutes batch upsert', () => {
         sourcePlatform: '1688',
         sourceProductId: '744455566677',
         sku: '744455566677',
-        images: [
-          'https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg',
-          'https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg',
-        ],
+        images: ['https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg'],
         variants: [{ skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } }],
       });
       expect(mocks.transferSourceProductImages).toHaveBeenCalledWith({
-        images: ['https://img.example.com/main.jpg', 'https://img.example.com/detail-1.jpg'],
+        images: ['https://img.example.com/main.jpg'],
+        sourcePlatform: '1688',
+        userId: 'user-1',
+      });
+      expect(mocks.transferSourceProductImages).toHaveBeenCalledWith({
+        images: ['https://img.example.com/detail-1.jpg'],
         sourcePlatform: '1688',
         userId: 'user-1',
       });
@@ -221,6 +251,26 @@ describe('collectRoutes batch upsert', () => {
         sourceTitleRaw: '智能保温杯批发',
         sourceLocale: 'zh-CN',
         sourceDescriptionRaw: '双层真空保温，适合跨境上架。',
+        sourceMainImages: ['https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg'],
+        sourceDetailImages: ['https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg'],
+        sourcePackagingRows: [{
+          color: '红色',
+          size: '500ml',
+          lengthMm: 80,
+          widthMm: 80,
+          heightMm: 220,
+          volumeCm3: 1408,
+          weightG: 350,
+        }],
+        sourceRichContentDraft: {
+          status: 'raw_source_requires_processing',
+          source: '1688',
+          locale: 'zh-CN',
+          blocks: [
+            { type: 'text', text: '双层真空保温，适合跨境上架。' },
+            { type: 'image', url: 'https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg' },
+          ],
+        },
         sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
         categoryPath: ['日用百货', '杯具', '保温杯'],
         categoryName: '保温杯',
@@ -242,8 +292,16 @@ describe('collectRoutes batch upsert', () => {
         sourceImageTransfer: {
           enabled: true,
           backend: 'oss',
-          attempted: 2,
-          transferred: 2,
+          attempted: 1,
+          transferred: 1,
+          skipped: 0,
+          errors: [],
+        },
+        sourceDetailImageTransfer: {
+          enabled: true,
+          backend: 'oss',
+          attempted: 1,
+          transferred: 1,
           skipped: 0,
           errors: [],
         },
