@@ -1,7 +1,21 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Eye, Loader2, RefreshCw, Search } from 'lucide-react';
+import {
+  AlertTriangle,
+  Calculator,
+  CheckCircle2,
+  Droplets,
+  ExternalLink,
+  Eye,
+  Image as ImageIcon,
+  Languages,
+  Loader2,
+  RefreshCw,
+  Search,
+  Wand2,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -11,6 +25,14 @@ import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 
 type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall';
+type DetailSection = 'overview' | 'sku' | 'attributes' | 'images' | 'translation' | 'listing';
+type BadgeTone = 'ok' | 'warn' | 'muted' | 'info';
+
+interface ReadinessBadge {
+  label: string;
+  tone: BadgeTone;
+  title?: string;
+}
 
 interface SourceCollectItem {
   id: string;
@@ -35,6 +57,15 @@ const platformTabs: Array<{ key: PlatformFilter; label: string }> = [
   { key: 'pdd', label: 'PDD' },
   { key: 'taobao', label: '淘宝' },
   { key: 'tmall', label: '天猫' },
+];
+
+const detailSections: Array<{ key: DetailSection; label: string }> = [
+  { key: 'overview', label: '概览' },
+  { key: 'sku', label: 'SKU' },
+  { key: 'attributes', label: '属性' },
+  { key: 'images', label: '图片' },
+  { key: 'translation', label: '翻译' },
+  { key: 'listing', label: '上架检查' },
 ];
 
 function normalizePlatform(value: unknown): PlatformFilter | 'other' {
@@ -79,6 +110,10 @@ function isPreviewableSourceImage(value: unknown): boolean {
 
 function sourcePreviewImages(item: SourceCollectItem): string[] {
   return Array.isArray(item.images) ? item.images.filter(isPreviewableSourceImage) : [];
+}
+
+function sourceMainPreviewImage(item: SourceCollectItem): string {
+  return sourcePreviewImages(item)[0] || '';
 }
 
 function variantCount(item: SourceCollectItem): number {
@@ -200,6 +235,73 @@ function sourceMissingFields(item: SourceCollectItem): string[] {
   return missing;
 }
 
+function metadataArray(item: SourceCollectItem, key: string): unknown[] {
+  const value = item.metadata?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function hasMetadataValue(item: SourceCollectItem, keys: string[]): boolean {
+  return keys.some((key) => {
+    const value = item.metadata?.[key];
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'string') return value.trim().length > 0;
+    return Boolean(value);
+  });
+}
+
+function sourceHasTranslation(item: SourceCollectItem): boolean {
+  return hasMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu']);
+}
+
+function sourceHasWatermark(item: SourceCollectItem): boolean {
+  return hasMetadataValue(item, ['watermarkedImages', 'sourceWatermarkedImages', 'watermarkImages']);
+}
+
+function sourceHasEditedImages(item: SourceCollectItem): boolean {
+  return hasMetadataValue(item, ['editedImages', 'processedImages', 'sourceEditedImages', 'imageProcessingResult']);
+}
+
+function sourceReadinessBadges(item: SourceCollectItem): ReadinessBadge[] {
+  const missing = sourceMissingFields(item);
+  const skuCount = variantCount(item);
+  const attrs = sourceAttributeCount(item);
+  const previewCount = sourcePreviewImages(item).length;
+  return [
+    skuCount > 0
+      ? { label: `SKU ${skuCount}`, tone: 'ok' as const }
+      : { label: 'SKU异常', tone: 'warn' as const },
+    attrs > 0
+      ? { label: '属性完整', tone: 'ok' as const }
+      : { label: '属性待补', tone: 'warn' as const },
+    sourceHasTranslation(item)
+      ? { label: '已翻译', tone: 'ok' as const }
+      : { label: '待翻译', tone: 'muted' as const },
+    previewCount > 0
+      ? { label: `图 ${previewCount}`, tone: 'info' as const }
+      : { label: '图片待处理', tone: 'warn' as const },
+    sourceHasWatermark(item)
+      ? { label: '已水印', tone: 'ok' as const }
+      : { label: '待水印', tone: 'muted' as const },
+    sourceHasEditedImages(item)
+      ? { label: '已改图', tone: 'ok' as const }
+      : { label: '待改图', tone: 'muted' as const },
+    missing.length === 0
+      ? { label: '可上架', tone: 'ok' as const }
+      : { label: `待处理 ${missing.length}`, tone: 'warn' as const, title: missing.join(' / ') },
+  ];
+}
+
+function readinessBadgeClass(tone: BadgeTone): string {
+  if (tone === 'ok') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (tone === 'warn') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (tone === 'info') return 'border-blue-200 bg-blue-50 text-blue-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function workflowActionClass(enabled: boolean): string {
+  return enabled ? 'text-foreground hover:text-primary' : 'text-muted-foreground/70 hover:text-foreground';
+}
+
 function extractionDiagnosticText(item: SourceCollectItem): string {
   const diagnostics = item.metadata?.extractionDiagnostics;
   if (!diagnostics || typeof diagnostics !== 'object') return '';
@@ -230,6 +332,386 @@ function isSourceCollectItem(item: SourceCollectItem): boolean {
   return ['1688', 'pdd', 'taobao', 'tmall'].includes(normalizePlatform(item.sourcePlatform));
 }
 
+function SourceProductRow({
+  item,
+  onDetail,
+}: {
+  item: SourceCollectItem;
+  onDetail: (item: SourceCollectItem, section?: DetailSection) => void;
+}) {
+  const preview = sourceMainPreviewImage(item);
+  const missing = sourceMissingFields(item);
+  const badges = sourceReadinessBadges(item);
+  const translated = sourceHasTranslation(item);
+  const watermarked = sourceHasWatermark(item);
+  const edited = sourceHasEditedImages(item);
+  return (
+    <div className="rounded-md border bg-card px-4 py-4 transition-colors hover:border-primary/30 hover:bg-muted/20">
+      <div className="flex gap-4">
+        <button
+          type="button"
+          onClick={() => onDetail(item)}
+          className="relative h-24 w-24 shrink-0 overflow-hidden rounded-md border bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
+          title="查看采集详情"
+        >
+          {preview ? (
+            <img
+              src={preview}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={(event) => {
+                event.currentTarget.style.display = 'none';
+              }}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+              <ImageIcon className="h-7 w-7" />
+            </div>
+          )}
+          <span className="absolute bottom-1 right-1 rounded bg-background/90 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {sourcePreviewImages(item).length || sourceImageCount(item)}
+          </span>
+        </button>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => onDetail(item)}
+                className="line-clamp-2 text-left text-base font-medium leading-snug hover:text-primary"
+              >
+                {sourceDisplayTitle(item)}
+              </button>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{item.sourceProductId || item.sku || item.id}</span>
+                <Badge variant="outline" className="h-5 px-2 text-[11px]">{platformLabel(item.sourcePlatform)}</Badge>
+                {sourceCategoryText(item) ? <span className="line-clamp-1 max-w-xl">{sourceCategoryText(item)}</span> : null}
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-2 text-left lg:text-right">
+              <div className="text-base font-semibold">{detailPriceText(item)}</div>
+              <div className="text-xs text-muted-foreground">{formatDate(item.createdAt)}</div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {badges.map((badge) => (
+              <Badge
+                key={badge.label}
+                variant="outline"
+                title={badge.title}
+                className={`h-6 rounded-full px-2 text-[11px] font-medium ${readinessBadgeClass(badge.tone)}`}
+              >
+                {badge.tone === 'ok' ? <CheckCircle2 className="mr-1 h-3 w-3" /> : null}
+                {badge.tone === 'warn' ? <AlertTriangle className="mr-1 h-3 w-3" /> : null}
+                {badge.label}
+              </Badge>
+            ))}
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+              <span>图 {sourcePreviewImages(item).length}/{sourceImageCount(item)}</span>
+              <span>视频 {sourceVideoCount(item)}</span>
+              <span>SKU {variantCount(item)}</span>
+              <span>属性 {sourceAttributeCount(item)}</span>
+              {missing.length ? <span>缺失 {missing.length}</span> : <span>上架检查通过</span>}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => onDetail(item)} title="查看采集详情">
+                <Eye className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-8 w-8 p-0 ${workflowActionClass(translated)}`}
+                onClick={() => onDetail(item, 'translation')}
+                title="翻译标题/描述"
+              >
+                <Languages className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-8 w-8 p-0 ${workflowActionClass(watermarked)}`}
+                onClick={() => onDetail(item, 'images')}
+                title="图片加水印"
+              >
+                <Droplets className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-8 w-8 p-0 ${workflowActionClass(edited)}`}
+                onClick={() => onDetail(item, 'images')}
+                title="改图/清洗图片"
+              >
+                <Wand2 className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => onDetail(item, 'listing')}
+                title="核价/上架检查"
+              >
+                <Calculator className="h-4 w-4" />
+              </Button>
+              {item.sourceUrl ? (
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" asChild>
+                  <a href={item.sourceUrl} target="_blank" rel="noreferrer" title="打开来源页面">
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function detailPriceText(item: SourceCollectItem): string {
+  return item.purchasePrice ? `¥${item.purchasePrice}` : '-';
+}
+
+function SourceDetailContent({
+  item,
+  activeSection,
+  onSectionChange,
+}: {
+  item: SourceCollectItem;
+  activeSection: DetailSection;
+  onSectionChange: (section: DetailSection) => void;
+}) {
+  return (
+    <div className="space-y-4 text-sm">
+      <div className="flex gap-4">
+        <div className="h-24 w-24 shrink-0 overflow-hidden rounded-md border bg-muted">
+          {sourceMainPreviewImage(item) ? (
+            <img src={sourceMainPreviewImage(item)} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+              <ImageIcon className="h-7 w-7" />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-base font-medium leading-snug">{sourceDisplayTitle(item)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{item.sourceProductId || item.sku || item.id}</div>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {sourceReadinessBadges(item).map((badge) => (
+              <Badge
+                key={badge.label}
+                variant="outline"
+                title={badge.title}
+                className={`h-6 rounded-full px-2 text-[11px] font-medium ${readinessBadgeClass(badge.tone)}`}
+              >
+                {badge.label}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 border-b pb-2">
+        {detailSections.map((section) => (
+          <Button
+            key={section.key}
+            type="button"
+            variant={activeSection === section.key ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => onSectionChange(section.key)}
+          >
+            {section.label}
+          </Button>
+        ))}
+      </div>
+
+      {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
+      {activeSection === 'sku' ? <SourceSkuSection item={item} /> : null}
+      {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} /> : null}
+      {activeSection === 'translation' ? <SourceTranslationSection item={item} /> : null}
+      {activeSection === 'listing' ? <SourceListingCheckSection item={item} /> : null}
+    </div>
+  );
+}
+
+function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricBlock label="平台" value={platformLabel(item.sourcePlatform)} />
+        <MetricBlock label="采购价" value={detailPriceText(item)} />
+        <MetricBlock label="SKU" value={String(variantCount(item))} />
+        <MetricBlock label="图片" value={`${sourcePreviewImages(item).length}/${sourceImageCount(item)}`} />
+      </div>
+      <InfoPanel title="采集诊断" count={null}>
+        <div className="text-muted-foreground">{extractionDiagnosticText(item) || '暂无诊断信息'}</div>
+      </InfoPanel>
+      <InfoPanel title="来源信息" count={null}>
+        <div className="grid gap-2 md:grid-cols-2">
+          <KeyValue label="商品ID" value={item.sourceProductId || item.sku || item.id} />
+          <KeyValue label="采集时间" value={formatDate(item.createdAt)} />
+          <KeyValue label="类目" value={sourceCategoryText(item) || '-'} />
+          <KeyValue label="已选 SKU" value={selectedSkuText(item) || '-'} />
+        </div>
+      </InfoPanel>
+    </div>
+  );
+}
+
+function SourceSkuSection({ item }: { item: SourceCollectItem }) {
+  const variants = sourceDisplayVariants(item);
+  return (
+    <InfoPanel title="SKU / 变体" count={variants.length}>
+      {variants.length ? (
+        <div className="grid gap-2 md:grid-cols-2">
+          {variants.slice(0, 80).map((variant, index) => (
+            <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+              <div className="break-words">{sourceVariantLabel(variant, index)}</div>
+              <div className="mt-1 flex gap-3 text-muted-foreground">
+                {variant.price != null ? <span>¥{String(variant.price)}</span> : null}
+                {variant.stock != null ? <span>库存 {String(variant.stock)}</span> : null}
+                {variant.skuId ? <span>{String(variant.skuId)}</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : <div className="text-muted-foreground">未采集到 SKU 变体</div>}
+    </InfoPanel>
+  );
+}
+
+function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
+  const attrs = sourceAttributes(item);
+  return (
+    <InfoPanel title="属性" count={attrs.length}>
+      {attrs.length ? (
+        <div className="grid gap-2 md:grid-cols-2">
+          {attrs.map((attr, index) => (
+            <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+              <span className="text-muted-foreground">{String(attr.name || attr.key || '-')}：</span>
+              {String(attr.value || attr.attrValue || attr.text || '-')}
+            </div>
+          ))}
+        </div>
+      ) : <div className="text-muted-foreground">未采集到商品属性</div>}
+    </InfoPanel>
+  );
+}
+
+function SourceImagesSection({ item }: { item: SourceCollectItem }) {
+  const images = sourcePreviewImages(item);
+  const watermarked = metadataArray(item, 'watermarkedImages');
+  const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
+  return (
+    <div className="space-y-3">
+      <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
+        {images.length ? (
+          <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
+            {images.slice(0, 32).map((image, index) => (
+              <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
+                <img
+                  src={image}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  onError={(event) => {
+                    event.currentTarget.parentElement?.classList.add('hidden');
+                  }}
+                />
+              </a>
+            ))}
+          </div>
+        ) : <div className="text-muted-foreground">未采集到可预览商品图片</div>}
+      </InfoPanel>
+      <div className="grid gap-3 md:grid-cols-2">
+        <InfoPanel title="水印图" count={watermarked.length}>
+          <ImageStatusList images={watermarked} empty="暂无水印图" />
+        </InfoPanel>
+        <InfoPanel title="改图结果" count={edited.length}>
+          <ImageStatusList images={edited} empty="暂无改图结果" />
+        </InfoPanel>
+      </div>
+    </div>
+  );
+}
+
+function SourceTranslationSection({ item }: { item: SourceCollectItem }) {
+  return (
+    <InfoPanel title="翻译" count={sourceHasTranslation(item) ? '已翻译' : '待翻译'}>
+      <div className="grid gap-2">
+        <KeyValue label="中文标题" value={sourceDisplayTitle(item)} />
+        <KeyValue label="俄文标题" value={String(item.metadata?.publishTitleRu || item.metadata?.titleRu || '-')} />
+        <KeyValue label="俄文描述" value={String(item.metadata?.sourceDescriptionRu || item.metadata?.descriptionRu || '-')} />
+      </div>
+    </InfoPanel>
+  );
+}
+
+function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
+  const missing = sourceMissingFields(item);
+  return (
+    <InfoPanel title="上架检查" count={missing.length ? `${missing.length} 项` : '可上架'}>
+      {missing.length ? (
+        <div className="flex flex-wrap gap-2">
+          {missing.map((field) => (
+            <Badge key={field} variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">{field}</Badge>
+          ))}
+        </div>
+      ) : <div className="text-emerald-700">关键上架字段已采集或已补全</div>}
+    </InfoPanel>
+  );
+}
+
+function MetricBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 font-medium">{value}</div>
+    </div>
+  );
+}
+
+function KeyValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border bg-muted/30 px-3 py-2 text-xs">
+      <span className="text-muted-foreground">{label}：</span>
+      <span className="break-words">{value}</span>
+    </div>
+  );
+}
+
+function InfoPanel({ title, count, children }: { title: string; count: string | number | null; children: ReactNode }) {
+  return (
+    <div className="rounded-md border p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="font-medium">{title}</div>
+        {count != null ? <Badge variant="outline">{count}</Badge> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }) {
+  const urls = images.map((image) => String(image || '')).filter(isPreviewableSourceImage);
+  if (!urls.length) return <div className="text-muted-foreground">{empty}</div>;
+  return (
+    <div className="grid grid-cols-4 gap-2">
+      {urls.slice(0, 8).map((image, index) => (
+        <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
+          <img src={image} alt="" className="h-full w-full object-cover" />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export default function SourceCollectPage() {
   const [items, setItems] = useState<SourceCollectItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -237,6 +719,7 @@ export default function SourceCollectPage() {
   const [platform, setPlatform] = useState<PlatformFilter>('all');
   const [error, setError] = useState('');
   const [detailItem, setDetailItem] = useState<SourceCollectItem | null>(null);
+  const [activeDetailSection, setActiveDetailSection] = useState<DetailSection>('overview');
 
   async function loadItems() {
     setLoading(true);
@@ -318,75 +801,24 @@ export default function SourceCollectPage() {
         </CardHeader>
         <CardContent>
           {error && <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
-          <div className="overflow-x-auto border rounded-md">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/70">
-                <tr>
-                  <th className="text-left px-3 py-2 min-w-72">商品</th>
-                  <th className="text-left px-3 py-2 w-24">平台</th>
-                  <th className="text-left px-3 py-2 w-28">采购价</th>
-                  <th className="text-left px-3 py-2 w-32">素材</th>
-                  <th className="text-left px-3 py-2 w-28">状态</th>
-                  <th className="text-left px-3 py-2 w-36">采集时间</th>
-                  <th className="text-left px-3 py-2 w-28">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
-                      <Loader2 className="h-5 w-5 animate-spin inline mr-2" />
-                      读取中
-                    </td>
-                  </tr>
-                ) : filteredItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">暂无货源采集记录</td>
-                  </tr>
-                ) : filteredItems.map((item) => (
-                  <tr key={item.id} className="border-t">
-                    <td className="px-3 py-3 align-top">
-                      <div className="font-medium line-clamp-2">{sourceDisplayTitle(item)}</div>
-                      {sourceCategoryText(item) ? (
-                        <div className="text-xs text-muted-foreground mt-1 line-clamp-1">{sourceCategoryText(item)}</div>
-                      ) : null}
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {item.sourceProductId || item.sku || item.id}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <Badge variant="outline">{platformLabel(item.sourcePlatform)}</Badge>
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      {item.purchasePrice ? `¥${item.purchasePrice}` : '-'}
-                    </td>
-                    <td className="px-3 py-3 align-top text-xs text-muted-foreground">
-                      图 {sourceImageCount(item)} / 视频 {sourceVideoCount(item)} / SKU {variantCount(item)} / 属性 {sourceAttributeCount(item)}
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <Badge variant={item.status === 'collected' ? 'secondary' : 'outline'}>{item.status}</Badge>
-                    </td>
-                    <td className="px-3 py-3 align-top text-xs text-muted-foreground">
-                      {formatDate(item.createdAt)}
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <div className="flex items-center gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => setDetailItem(item)} title="查看采集详情">
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      {item.sourceUrl ? (
-                        <Button variant="ghost" size="sm" asChild>
-                          <a href={item.sourceUrl} target="_blank" rel="noreferrer" title="打开来源页面">
-                            <ExternalLink className="h-4 w-4" />
-                          </a>
-                        </Button>
-                      ) : '-'}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-3">
+            {loading ? (
+              <div className="rounded-md border px-3 py-10 text-center text-muted-foreground">
+                <Loader2 className="mr-2 inline h-5 w-5 animate-spin" />
+                读取中
+              </div>
+            ) : filteredItems.length === 0 ? (
+              <div className="rounded-md border px-3 py-10 text-center text-muted-foreground">暂无货源采集记录</div>
+            ) : filteredItems.map((item) => (
+              <SourceProductRow
+                key={item.id}
+                item={item}
+                onDetail={(next, section = 'overview') => {
+                  setDetailItem(next);
+                  setActiveDetailSection(section);
+                }}
+              />
+            ))}
           </div>
         </CardContent>
       </Card>
@@ -397,114 +829,11 @@ export default function SourceCollectPage() {
             <DialogTitle>采集详情</DialogTitle>
           </DialogHeader>
           {detailItem ? (
-            <div className="space-y-4 text-sm">
-              <div>
-                <div className="font-medium text-base">{sourceDisplayTitle(detailItem)}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{detailItem.sourceProductId || detailItem.sku || detailItem.id}</div>
-              </div>
-
-              <div className="rounded-md border p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="font-medium">Ozon 上架缺失项</div>
-                  <Badge variant={sourceMissingFields(detailItem).length ? 'outline' : 'secondary'}>
-                    {sourceMissingFields(detailItem).length ? `${sourceMissingFields(detailItem).length} 项` : '已齐全'}
-                  </Badge>
-                </div>
-                {sourceMissingFields(detailItem).length ? (
-                  <div className="flex flex-wrap gap-2">
-                    {sourceMissingFields(detailItem).map((field) => (
-                      <Badge key={field} variant="outline">{field}</Badge>
-                    ))}
-                  </div>
-                ) : <div className="text-muted-foreground">关键上架字段已采集或已补全</div>}
-                {extractionDiagnosticText(detailItem) ? (
-                  <div className="mt-2 text-xs text-muted-foreground">{extractionDiagnosticText(detailItem)}</div>
-                ) : null}
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">平台</div>
-                  <div className="mt-1 font-medium">{platformLabel(detailItem.sourcePlatform)}</div>
-                </div>
-                <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">采购价</div>
-                  <div className="mt-1 font-medium">{detailItem.purchasePrice ? `¥${detailItem.purchasePrice}` : '-'}</div>
-                </div>
-                <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">采集时间</div>
-                  <div className="mt-1 font-medium">{formatDate(detailItem.createdAt)}</div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">已选 SKU</div>
-                  <div className="mt-1 break-words">{selectedSkuText(detailItem) || '-'}</div>
-                </div>
-                <div className="rounded-md border p-3">
-                  <div className="text-xs text-muted-foreground">类目</div>
-                  <div className="mt-1 break-words">{sourceCategoryText(detailItem) || '-'}</div>
-                </div>
-              </div>
-
-              <div className="rounded-md border p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="font-medium">SKU / 变体</div>
-                  <Badge variant="outline">{sourceDisplayVariants(detailItem).length}</Badge>
-                </div>
-                {sourceDisplayVariants(detailItem).length ? (
-                  <div className="space-y-2">
-                    {sourceDisplayVariants(detailItem).slice(0, 20).map((variant, index) => (
-                      <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
-                        {sourceVariantLabel(variant, index)}
-                        {variant.price != null ? <span className="ml-2 text-muted-foreground">¥{String(variant.price)}</span> : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : <div className="text-muted-foreground">未采集到 SKU 变体</div>}
-              </div>
-
-              <div className="rounded-md border p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="font-medium">属性</div>
-                  <Badge variant="outline">{sourceAttributes(detailItem).length}</Badge>
-                </div>
-                {sourceAttributes(detailItem).length ? (
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {sourceAttributes(detailItem).map((attr, index) => (
-                      <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
-                        <span className="text-muted-foreground">{String(attr.name || attr.key || '-')}：</span>
-                        {String(attr.value || attr.attrValue || attr.text || '-')}
-                      </div>
-                    ))}
-                  </div>
-                ) : <div className="text-muted-foreground">未采集到商品属性</div>}
-              </div>
-
-              <div className="rounded-md border p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="font-medium">图片</div>
-                  <Badge variant="outline">{sourcePreviewImages(detailItem).length} / {sourceImageCount(detailItem)}</Badge>
-                </div>
-                {sourcePreviewImages(detailItem).length ? (
-                  <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
-                    {sourcePreviewImages(detailItem).slice(0, 24).map((image, index) => (
-                      <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
-                        <img
-                          src={image}
-                          alt=""
-                          className="h-full w-full object-cover"
-                          onError={(event) => {
-                            event.currentTarget.parentElement?.classList.add('hidden');
-                          }}
-                        />
-                      </a>
-                    ))}
-                  </div>
-                ) : <div className="text-muted-foreground">未采集到可预览商品图片</div>}
-              </div>
-            </div>
+            <SourceDetailContent
+              item={detailItem}
+              activeSection={activeDetailSection}
+              onSectionChange={setActiveDetailSection}
+            />
           ) : null}
         </DialogContent>
       </Dialog>

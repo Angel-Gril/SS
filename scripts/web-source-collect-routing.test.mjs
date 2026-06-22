@@ -46,6 +46,25 @@ assert.match(
   /onError=\{\(event\)/,
   'source collection thumbnails should hide broken image previews',
 );
+assert.match(
+  page,
+  /sourceReadinessBadges/,
+  'source collection page should compute workflow readiness badges',
+);
+assert.match(
+  page,
+  /SourceProductRow/,
+  'source collection page should render each item as a preview-focused product row',
+);
+for (const label of ['待翻译', '图片待处理', '待水印', '待改图', '可上架']) {
+  assert.match(page, new RegExp(label), `source collection row should expose workflow badge: ${label}`);
+}
+for (const label of ['概览', 'SKU', '属性', '图片', '翻译', '上架检查']) {
+  assert.match(page, new RegExp(label), `source detail dialog should expose section: ${label}`);
+}
+for (const icon of ['Languages', 'Droplets', 'Wand2', 'Calculator']) {
+  assert.match(page, new RegExp(icon), `source collection row should expose ${icon} action entry`);
+}
 for (const label of ['真实商品标题', '俄文标题/描述', 'Ozon 类目/type', '颜色尺码变体', '重量尺寸']) {
   assert.match(page, new RegExp(label), `source detail should expose missing field label: ${label}`);
 }
