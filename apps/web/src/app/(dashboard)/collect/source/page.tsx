@@ -177,6 +177,28 @@ function sourceRichContentDraftSummary(item: SourceCollectItem): string {
     .join(' / ');
 }
 
+function sourceRejectedAssetCount(item: SourceCollectItem): number {
+  return sourceMetadataArray(item, 'rejectedAssets').length;
+}
+
+function sourcePriceModelText(item: SourceCollectItem): string {
+  const sourceType = String(item.metadata?.priceSourceType || '').trim();
+  const confidence = String(item.metadata?.priceConfidence || '').trim();
+  const ladderPrices = sourceMetadataArray(item, 'ladderPrices');
+  const displayPrice = String(item.metadata?.displayPrice || '').trim();
+  const sourceLabel: Record<string, string> = {
+    sku: 'SKU价格',
+    ladder: '阶梯价',
+    display: '展示价',
+  };
+  return [
+    sourceLabel[sourceType] || sourceType || '未识别',
+    confidence ? `置信度 ${confidence}` : '',
+    ladderPrices.length ? `阶梯 ${ladderPrices.length}` : '',
+    displayPrice ? `展示 ${displayPrice}` : '',
+  ].filter(Boolean).join(' / ');
+}
+
 function variantCount(item: SourceCollectItem): number {
   return sourceDisplayVariants(item).length;
 }
@@ -376,8 +398,10 @@ function extractionDiagnosticText(item: SourceCollectItem): string {
   const data = diagnostics as Record<string, unknown>;
   return [
     `图 ${String(data.imageCount ?? sourceImageCount(item))}`,
+    `过滤图片 ${String(data.rejectedImageCount ?? sourceRejectedAssetCount(item))}`,
     `SKU ${String(data.skuCount ?? sourceVariants(item).length)}`,
     `属性 ${String(data.attributeCount ?? sourceAttributeCount(item))}`,
+    `价格来源 ${sourcePriceModelText(item)}`,
     `描述 ${data.descriptionFound ? '有' : '无'}`,
     `视频 ${String(data.videoCount ?? sourceVideoCount(item))}`,
   ].join(' / ');
@@ -613,13 +637,15 @@ function SourceDetailContent({
 function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-6">
+      <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
         <MetricBlock label="平台" value={platformLabel(item.sourcePlatform)} />
         <MetricBlock label="采购价" value={detailPriceText(item)} />
+        <MetricBlock label="价格来源" value={sourcePriceModelText(item)} />
         <MetricBlock label="SKU" value={String(variantCount(item))} />
         <MetricBlock label="主图" value={`${sourcePreviewImages(item).length}/${sourceImageCount(item)}`} />
         <MetricBlock label="详情图" value={`${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`} />
         <MetricBlock label="包装" value={String(sourcePackagingRows(item).length)} />
+        <MetricBlock label="过滤图片" value={String(sourceRejectedAssetCount(item))} />
       </div>
       <InfoPanel title="采集诊断" count={null}>
         <div className="text-muted-foreground">{extractionDiagnosticText(item) || '暂无诊断信息'}</div>

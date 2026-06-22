@@ -49,6 +49,8 @@ const collectSchema = z.object({
   price: z.union([z.string(), z.number()]).optional(),
   priceText: z.string().optional(),
   unitPriceText: z.string().optional(),
+  displayPrice: z.string().optional(),
+  ladderPrices: z.array(z.any()).optional(),
   currency: z.string().optional(),
   categoryId: z.number().optional(),
   categoryName: z.string().optional(),
@@ -67,11 +69,14 @@ const collectSchema = z.object({
   shippingCny: z.number().optional(),
   totalCostCny: z.number().optional(),
   priceSourceType: z.string().optional(),
+  priceConfidence: z.string().optional(),
   selectedSku: z.any().optional(),
   skuItems: z.array(z.any()).optional(),
   variants: z.array(z.any()).optional(),
   modelId: z.string().optional(),
   rawSourceProduct: z.any().optional(),
+  rejectedAssets: z.array(z.any()).optional(),
+  extractionDiagnostics: z.any().optional(),
   sku: z.string().optional(),
   sourceProductId: z.string().optional(),
 });
@@ -1103,8 +1108,14 @@ export function buildCollectedGoodsMetadata(input: {
   if (priceText) metadata.priceText = priceText;
   const unitPriceText = cleanMetadataText(input.unitPriceText, 200);
   if (unitPriceText) metadata.unitPriceText = unitPriceText;
+  const displayPrice = cleanMetadataText(input.displayPrice, 200);
+  if (displayPrice) metadata.displayPrice = displayPrice;
+  const ladderPrices = cloneMetadataJson(input.ladderPrices);
+  if (Array.isArray(ladderPrices) && ladderPrices.length) metadata.ladderPrices = ladderPrices;
   const priceSourceType = cleanMetadataText(input.priceSourceType, 120);
   if (priceSourceType) metadata.priceSourceType = priceSourceType;
+  const priceConfidence = cleanMetadataText(input.priceConfidence, 80);
+  if (priceConfidence) metadata.priceConfidence = priceConfidence;
   for (const key of ['weightG', 'lengthMm', 'widthMm', 'heightMm', 'shippingCny', 'totalCostCny'] as const) {
     const number = finiteMetadataNumber(input[key]);
     if (number != null) metadata[key] = number;
@@ -1115,6 +1126,8 @@ export function buildCollectedGoodsMetadata(input: {
   if (Array.isArray(skuItems) && skuItems.length) metadata.skuItems = skuItems;
   const rawSourceProduct = cloneMetadataJson(input.rawSourceProduct);
   if (rawSourceProduct && typeof rawSourceProduct === 'object') metadata.rawSourceProduct = rawSourceProduct;
+  const rejectedAssets = cloneMetadataJson(input.rejectedAssets);
+  if (Array.isArray(rejectedAssets) && rejectedAssets.length) metadata.rejectedAssets = rejectedAssets;
   const extractionDiagnostics = cloneMetadataJson(input.extractionDiagnostics);
   if (extractionDiagnostics && typeof extractionDiagnostics === 'object') metadata.extractionDiagnostics = extractionDiagnostics;
   if (input.descriptionFetchDiagnostics && typeof input.descriptionFetchDiagnostics === 'object') {

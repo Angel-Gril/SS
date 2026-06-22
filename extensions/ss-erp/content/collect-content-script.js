@@ -19,6 +19,7 @@
   const walkObject = SourceProductCore.walkObject;
   const hasAnyKey = SourceProductCore.hasAnyKey;
   const pickFirstValue = SourceProductCore.pickFirstValue;
+  const extract1688ProductFromSources = SourceProductCore.extract1688ProductFromSources;
   let lastOzonUrl = "";
 
   injectPageBridge();
@@ -1061,9 +1062,20 @@
       ? structured.dimensions
       : { lengthMm: result.lengthMm || 0, widthMm: result.widthMm || 0, heightMm: result.heightMm || 0 };
     const sourceDetailImages = structured.detailImages;
-    const sourceRichContentDraft = build1688SourceRichContentDraft({
+    const sourceRichContentDraft = structured.sourceRichContentDraft || build1688SourceRichContentDraft({
       description: structured.description || result.description,
       detailImages: sourceDetailImages
+    });
+    const extractionDiagnostics = structured.extractionDiagnostics || buildSourceExtractionDiagnostics({
+      title,
+      images,
+      skuItems,
+      attributes,
+      description: structured.description || result.description,
+      sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
+      sourceDetailImages,
+      sourcePackagingRows: structured.packagingRows,
+      sourceRichContentDraft
     });
 
     return {
@@ -1079,8 +1091,17 @@
       categoryPath,
       categoryName: categoryPath.length ? categoryPath[categoryPath.length - 1] : result.categoryName,
       description: structured.description || result.description,
+      price: structured.price || result.price,
+      priceCny: structured.priceCny || result.priceCny,
+      priceText: structured.priceText || result.priceText,
+      unitPriceText: structured.unitPriceText || result.unitPriceText,
+      displayPrice: structured.displayPrice || result.displayPrice,
+      ladderPrices: structured.ladderPrices || result.ladderPrices,
+      priceSourceType: structured.priceSourceType || result.priceSourceType,
+      priceConfidence: structured.priceConfidence || result.priceConfidence,
       sourceMainImages: images,
       sourceDetailImages,
+      rejectedAssets: structured.rejectedAssets || result.rejectedAssets,
       sourcePackagingRows: structured.packagingRows,
       sourceRichContentDraft,
       sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
@@ -1088,21 +1109,57 @@
       widthMm: dimensions.widthMm || result.widthMm,
       heightMm: dimensions.heightMm || result.heightMm,
       dimensionsMm: dimensions.lengthMm && dimensions.widthMm && dimensions.heightMm ? dimensions : result.dimensionsMm,
-      extractionDiagnostics: buildSourceExtractionDiagnostics({
-        title,
-        images,
-        skuItems,
-        attributes,
-        description: structured.description || result.description,
-        sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
-        sourceDetailImages,
-        sourcePackagingRows: structured.packagingRows,
-        sourceRichContentDraft
-      })
+      extractionDiagnostics
     };
   }
 
   function extract1688StructuredProduct(context) {
+    if (typeof extract1688ProductFromSources === "function") {
+      const coreResult = extract1688ProductFromSources({
+        url: location.href,
+        host: location.hostname,
+        pageText: context && context.pageText,
+        sources: Array.isArray(context && context.sources) ? context.sources : []
+      });
+      const hasCoreData = coreResult && (
+        Boolean(coreResult.title) ||
+        (Array.isArray(coreResult.skuItems) && coreResult.skuItems.length > 0) ||
+        (Array.isArray(coreResult.images) && coreResult.images.length > 0) ||
+        (Array.isArray(coreResult.sourceDetailImages) && coreResult.sourceDetailImages.length > 0) ||
+        (Array.isArray(coreResult.attributes) && coreResult.attributes.length > 0) ||
+        (Array.isArray(coreResult.sourcePackagingRows) && coreResult.sourcePackagingRows.length > 0) ||
+        Boolean(coreResult.priceCny) ||
+        Boolean(coreResult.displayPrice)
+      );
+      if (hasCoreData) {
+        return {
+          productId: coreResult.productId || "",
+          shopName: coreResult.shopName || "",
+          title: coreResult.title || "",
+          skuProps: (coreResult.rawSourceProduct && coreResult.rawSourceProduct.skuProps) || [],
+          images: Array.isArray(coreResult.images) ? coreResult.images : [],
+          detailImages: Array.isArray(coreResult.sourceDetailImages) ? coreResult.sourceDetailImages : [],
+          skuItems: Array.isArray(coreResult.skuItems) ? coreResult.skuItems : [],
+          attributes: Array.isArray(coreResult.attributes) ? coreResult.attributes : [],
+          categoryPath: Array.isArray(coreResult.categoryPath) ? coreResult.categoryPath : [],
+          dimensions: coreResult.dimensionsMm || { lengthMm: 0, widthMm: 0, heightMm: 0 },
+          packagingRows: Array.isArray(coreResult.sourcePackagingRows) ? coreResult.sourcePackagingRows : [],
+          description: coreResult.description || "",
+          sourceVideos: Array.isArray(coreResult.sourceVideos) ? coreResult.sourceVideos : [],
+          price: coreResult.price,
+          priceCny: coreResult.priceCny,
+          priceText: coreResult.priceText,
+          unitPriceText: coreResult.unitPriceText,
+          displayPrice: coreResult.displayPrice,
+          ladderPrices: coreResult.ladderPrices,
+          priceSourceType: coreResult.priceSourceType,
+          priceConfidence: coreResult.priceConfidence,
+          rejectedAssets: coreResult.rejectedAssets,
+          sourceRichContentDraft: coreResult.sourceRichContentDraft,
+          extractionDiagnostics: coreResult.extractionDiagnostics
+        };
+      }
+    }
     const sources = Array.isArray(context && context.sources) ? context.sources : [];
     const productId = pickProductId([/offer\/(\d+)\.html/i, /offerId[=:/"]+(\d+)/i], sources);
     const shopName = pick1688ShopName(sources);
