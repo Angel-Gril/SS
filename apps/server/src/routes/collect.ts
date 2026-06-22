@@ -1063,6 +1063,8 @@ export function buildCollectedGoodsMetadata(input: {
   if (Array.isArray(skuItems) && skuItems.length) metadata.skuItems = skuItems;
   const rawSourceProduct = cloneMetadataJson(input.rawSourceProduct);
   if (rawSourceProduct && typeof rawSourceProduct === 'object') metadata.rawSourceProduct = rawSourceProduct;
+  const extractionDiagnostics = cloneMetadataJson(input.extractionDiagnostics);
+  if (extractionDiagnostics && typeof extractionDiagnostics === 'object') metadata.extractionDiagnostics = extractionDiagnostics;
   if (input.descriptionFetchDiagnostics && typeof input.descriptionFetchDiagnostics === 'object') {
     metadata.descriptionFetchDiagnostics = input.descriptionFetchDiagnostics;
   }

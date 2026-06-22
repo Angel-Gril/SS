@@ -50,9 +50,20 @@
     var dimensions = pickDimensions(goods, pageText);
     var categoryId = normalizeText(pickFirstValue(goods, ['catId', 'cat_id', 'categoryId']) || pickFirstValue(globals, ['catId', 'cat_id', 'categoryId']));
     var categoryName = normalizeText(pickFirstValue(goods, ['categoryName', 'category_name', 'catName', 'cat_name']));
+    var description = pickPddDescription(goods, globals, pageText);
     var skuList = pickSkuList(goods);
     var internalSkuItems = normalizePddSkus(skuList);
     var skuItems = internalSkuItems.map(toPublicSkuItem);
+    var attributes = pickPddAttributes(goods);
+    var sourceVideos = pickPddVideos(goods, globals);
+    var extractionDiagnostics = buildExtractionDiagnostics({
+      title: title,
+      images: images,
+      skuItems: skuItems,
+      attributes: attributes,
+      description: description,
+      sourceVideos: sourceVideos
+    });
 
     return {
       platform: 'pdd',
@@ -85,12 +96,15 @@
       categoryName: categoryName || null,
       categorySrcId: categoryId || undefined,
       categorySrcPath: categoryName || undefined,
+      description: description,
       images: images,
       imageUrls: images,
+      sourceVideos: sourceVideos,
       skuCount: skuItems.length,
       skuItems: skuItems,
       variants: internalSkuItems.map(skuItemToVariant),
-      attributes: pickPddAttributes(goods),
+      attributes: attributes,
+      extractionDiagnostics: extractionDiagnostics,
       titleZh: title || '',
       priceCny: priceNumber,
       shop: shopName,
@@ -376,6 +390,74 @@
       if (name && value) attrs.push({ name: name, value: value });
     });
     return attrs.slice(0, 50);
+  }
+
+  function pickPddVideos(goods, globals) {
+    var out = [];
+    addVideo(out, pickFirstValue(goods, ['video', 'videoUrl', 'video_url', 'videoGallery']));
+    addVideo(out, pickFirstValue(globals, ['video', 'videoUrl', 'video_url', 'videoGallery']));
+    return out.slice(0, 10);
+  }
+
+  function addVideo(out, value) {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(function (item) { addVideo(out, item); });
+      return;
+    }
+    var url = '';
+    var coverUrl = '';
+    var title = '';
+    if (typeof value === 'string') {
+      url = value;
+    } else if (value && typeof value === 'object') {
+      url = value.url || value.videoUrl || value.video_url || value.src || '';
+      coverUrl = value.coverUrl || value.cover || value.poster || value.thumbnail || '';
+      title = normalizeText(value.title || value.name || '');
+    }
+    url = normalizeUrl(url);
+    if (!/^https?:\/\/.+\.(mp4|m3u8)(?:[?#]|$)/i.test(url)) return;
+    if (out.some(function (entry) { return entry.url === url; })) return;
+    var next = { url: url };
+    coverUrl = normalizeUrl(coverUrl);
+    if (isValidProductImage(coverUrl)) next.coverUrl = coverUrl;
+    if (title) next.title = title.slice(0, 200);
+    out.push(next);
+  }
+
+  function buildExtractionDiagnostics(input) {
+    return {
+      titleFound: Boolean(normalizeText(input && input.title)),
+      imageCount: Array.isArray(input && input.images) ? input.images.length : 0,
+      skuCount: Array.isArray(input && input.skuItems) ? input.skuItems.length : 0,
+      attributeCount: Array.isArray(input && input.attributes) ? input.attributes.length : 0,
+      descriptionFound: Boolean(normalizeText(input && input.description)),
+      videoCount: Array.isArray(input && input.sourceVideos) ? input.sourceVideos.length : 0
+    };
+  }
+
+  function pickPddDescription(goods, globals, pageText) {
+    var candidates = [
+      pickFirstValue(goods, ['detailDescription', 'detail_description', 'description', 'desc', 'goodsDesc', 'goods_desc']),
+      pickFirstValue(globals, ['detailDescription', 'detail_description', 'description', 'desc', 'goodsDesc', 'goods_desc'])
+    ].map(normalizeText).filter(isLikelyDescription);
+
+    if (!candidates.length) {
+      var text = normalizeText(pageText || '');
+      var match = text.match(/(?:商品描述|产品描述|详情描述|描述|介绍)[:：]?\s*(.{20,500})/);
+      if (match && isLikelyDescription(match[1])) candidates.push(normalizeText(match[1]));
+    }
+
+    candidates.sort(function (a, b) { return b.length - a.length; });
+    return candidates.length ? candidates[0].slice(0, 5000) : '';
+  }
+
+  function isLikelyDescription(value) {
+    var text = normalizeText(value);
+    if (!text || /^https?:\/\//i.test(text)) return false;
+    if (text.length < 8 || text.length > 8000) return false;
+    if (/^(¥|￥)?\d+(?:\.\d+)?$/.test(text)) return false;
+    return true;
   }
 
   function pickFirstEntry(obj, keys) {

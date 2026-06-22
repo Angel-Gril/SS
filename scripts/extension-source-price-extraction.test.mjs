@@ -10,12 +10,14 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function makeMockElement({ text = '', className = '', attrs = {}, value = '', children = [] }) {
+function makeMockElement({ text = '', className = '', attrs = {}, value = '', children = [], src = '' }) {
   return {
     textContent: text,
     innerText: text,
     className,
     value,
+    src,
+    currentSrc: src,
     children,
     classList: {
       contains(name) {
@@ -286,6 +288,64 @@ assert.deepEqual(plain(aliCompleteSourceResponse.data.attributes), [
 assert.equal(aliCompleteSourceResponse.data.skuItems[0].skuId, 'red-500');
 assert.deepEqual(plain(aliCompleteSourceResponse.data.skuItems[0].attrs), { 颜色: '红色', 容量: '500ml' });
 assert.deepEqual(plain(aliCompleteSourceResponse.data.skuItems[0].images), ['https://img.example.com/red.jpg']);
+
+const aliDomFallbackSourceResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/955566677788.html',
+  title: '1688 dom source detail',
+  bodyText: '女装连衣裙跨境货源 ¥16.00 运费 ¥3.5 重量 350g 尺寸 30x20x3cm',
+  selectors: {
+    h1: '女装连衣裙跨境货源',
+    '.price': '¥16.00',
+  },
+  queryAll(selector) {
+    if (selector === 'img') {
+      return [
+        makeMockElement({ src: 'https://img.alicdn.com/imgextra/i4/O1CN01demo.svg' }),
+        makeMockElement({ src: 'https://gw.alicdn.com/imgextra/i4/O1CN01logo-160-160.png' }),
+        makeMockElement({ src: 'https://cbu01.alicdn.com/img/ibank/O1CN01main_!!2200-0-cib.jpg_.webp' }),
+        makeMockElement({ src: 'https://cbu01.alicdn.com/img/ibank/O1CN01detail_!!2200-0-cib.jpg_.webp' }),
+      ];
+    }
+    if (/(attr|Attr|prop|Prop|param|Param|属性|参数)/.test(selector)) {
+      return [
+        makeMockElement({ text: '材质 聚酯纤维' }),
+        makeMockElement({ text: '成分 95%聚酯纤维' }),
+        makeMockElement({ text: '适用性别 女' }),
+      ];
+    }
+    if (/(description|Description|desc|Desc|detail|Detail|详情|描述)/.test(selector)) {
+      return [makeMockElement({ text: '适合跨境上架的夏季女装连衣裙，轻薄透气。' })];
+    }
+    return [];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '955566677788',
+      },
+    },
+  },
+});
+
+assert.equal(aliDomFallbackSourceResponse.ok, true);
+assert.deepEqual(plain(aliDomFallbackSourceResponse.data.attributes), [
+  { name: '材质', value: '聚酯纤维' },
+  { name: '成分', value: '95%聚酯纤维' },
+  { name: '适用性别', value: '女' },
+]);
+assert.equal(aliDomFallbackSourceResponse.data.description, '适合跨境上架的夏季女装连衣裙，轻薄透气。');
+assert.deepEqual(plain(aliDomFallbackSourceResponse.data.images), [
+  'https://cbu01.alicdn.com/img/ibank/O1CN01main_!!2200-0-cib.jpg_.webp',
+  'https://cbu01.alicdn.com/img/ibank/O1CN01detail_!!2200-0-cib.jpg_.webp',
+]);
+assert.deepEqual(plain(aliDomFallbackSourceResponse.data.extractionDiagnostics), {
+  titleFound: true,
+  imageCount: 2,
+  skuCount: 0,
+  attributeCount: 3,
+  descriptionFound: true,
+  videoCount: 0,
+});
 
 const selectedSkuResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/1032907994887.html',

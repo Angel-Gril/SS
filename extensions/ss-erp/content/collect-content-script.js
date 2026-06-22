@@ -1186,11 +1186,19 @@
     const skuCount = skuItems.length || pickSkuCountFromDom();
     const grossWeightGrams = pickGrossWeight(context.pageText, context.sources, config.weightKeywords, skuItems);
     const images = pickImages(context.sources);
-    const attributes = pickAttributes(context.sources);
+    const attributes = pickAttributes(context.sources, context.pageText);
     const categoryPath = pickCategoryPath(context.sources);
     const dimensions = pickDimensions(context.pageText, context.sources);
-    const description = pickSourceDescription(context.sources);
+    const description = pickSourceDescription(context.sources, context.pageText);
     const sourceVideos = pickSourceVideos(context.sources);
+    const extractionDiagnostics = buildSourceExtractionDiagnostics({
+      title,
+      images,
+      skuItems,
+      attributes,
+      description,
+      sourceVideos
+    });
 
     return {
       platform: context.platform,
@@ -1220,6 +1228,7 @@
       categoryName: categoryPath.length ? categoryPath[categoryPath.length - 1] : "",
       description,
       sourceVideos,
+      extractionDiagnostics,
       skuCount,
       skuItems,
       variants: skuItems,
@@ -1232,6 +1241,17 @@
         weightCandidates: collectNumberCandidates(context.sources, /(weight|gross|gram|克|斤|重量|毛重|净重)/i).slice(0, 20),
         rawSources: summarizeSources(context.sources)
       }
+    };
+  }
+
+  function buildSourceExtractionDiagnostics(input) {
+    return {
+      titleFound: Boolean(normalizeWhitespace(input && input.title || "")),
+      imageCount: Array.isArray(input && input.images) ? input.images.length : 0,
+      skuCount: Array.isArray(input && input.skuItems) ? input.skuItems.length : 0,
+      attributeCount: Array.isArray(input && input.attributes) ? input.attributes.length : 0,
+      descriptionFound: Boolean(normalizeWhitespace(input && input.description || "")),
+      videoCount: Array.isArray(input && input.sourceVideos) ? input.sourceVideos.length : 0
     };
   }
 
@@ -2016,8 +2036,9 @@
 
     document.querySelectorAll("img").forEach((img) => {
       const src = img.currentSrc || img.src || "";
-      if (/^https?:\/\//i.test(src) && src.length < 1000) {
-        imageSet.add(normalizeOzonCollectedImageUrl(src));
+      const normalized = normalizeOzonCollectedImageUrl(src);
+      if (isValidSourceProductImage(normalized)) {
+        imageSet.add(normalized);
       }
     });
 
@@ -2025,8 +2046,9 @@
       .slice(0, 100)
       .forEach((item) => {
         const value = item.value;
-        if (/^https?:\/\//i.test(value)) {
-          imageSet.add(normalizeOzonCollectedImageUrl(value));
+        const normalized = normalizeOzonCollectedImageUrl(value);
+        if (isValidSourceProductImage(normalized)) {
+          imageSet.add(normalized);
         }
       });
 
@@ -2034,11 +2056,25 @@
       walkObject(source, [], (value, path) => {
         const pathText = path.join(".");
         if (!/(image|img|photo|picture|gallery|detailImages|mainImage|主图|详情图)/i.test(pathText)) return;
-        normalizeImageValues(value).forEach((image) => imageSet.add(normalizeOzonCollectedImageUrl(image)));
+        normalizeImageValues(value).forEach((image) => {
+          const normalized = normalizeOzonCollectedImageUrl(image);
+          if (isValidSourceProductImage(normalized)) imageSet.add(normalized);
+        });
       });
     });
 
     return Array.from(imageSet).slice(0, 20);
+  }
+
+  function isValidSourceProductImage(url) {
+    const text = String(url || "");
+    if (!/^https?:\/\//i.test(text) || text.length >= 1000) return false;
+    const lower = text.toLowerCase();
+    if (/\.(svg)(?:[?#]|$)/i.test(lower)) return false;
+    if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/)/i.test(lower)) return false;
+    const sizeMatch = lower.match(/(?:[-_]|\/)(\d{1,4})[-x](\d{1,4})(?:[._/-]|$)/i);
+    if (sizeMatch && (Number(sizeMatch[1]) < 200 || Number(sizeMatch[2]) < 200)) return false;
+    return true;
   }
 
   function normalizeImageValues(value) {
@@ -2063,7 +2099,7 @@
     return images.slice(0, 100);
   }
 
-  function pickAttributes(sources) {
+  function pickAttributes(sources, pageText) {
     const attrs = [];
     const pairs = collectObjectCandidates(sources, /(attribute|spec|property|properties|props|参数|属性)/i).slice(0, 20);
 
@@ -2081,7 +2117,56 @@
       }
     });
 
-    return attrs.slice(0, 50);
+    pickDomAttributes(pageText).forEach((attr) => attrs.push(attr));
+
+    const unique = [];
+    const seen = new Set();
+    attrs.forEach((attr) => {
+      const key = normalizeWhitespace((attr.name || "") + ":" + (attr.value || ""));
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      unique.push(attr);
+    });
+
+    return unique.slice(0, 50);
+  }
+
+  function pickDomAttributes(pageText) {
+    const rows = [];
+    if (typeof document !== "undefined" && document.querySelectorAll) {
+      const selectors = [
+        "[class*='attr'], [class*='Attr'], [class*='prop'], [class*='Prop'], [class*='param'], [class*='Param'], [class*='spec'], [class*='Spec'], [class*='属性'], [class*='参数']"
+      ];
+      selectors.forEach((selector) => {
+        Array.from(document.querySelectorAll(selector) || []).slice(0, 120).forEach((node) => {
+          const text = normalizeWhitespace(node && (node.innerText || node.textContent) || "");
+          const attr = parseDomAttributeText(text);
+          if (attr) rows.push(attr);
+        });
+      });
+    }
+
+    const text = normalizeWhitespace(pageText || "");
+    const knownNames = ["品牌", "材质", "成分", "面料", "适用性别", "性别", "季节", "上市年份季节", "风格", "版型", "厚薄", "颜色", "尺码", "货号"];
+    knownNames.forEach((name) => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const match = text.match(new RegExp(escaped + "\\s*[:：]?\\s*([^\\s，,；;]{1,40})"));
+      if (match && match[1] && match[1] !== name) rows.push({ name, value: match[1] });
+    });
+
+    return rows;
+  }
+
+  function parseDomAttributeText(text) {
+    const normalized = normalizeWhitespace(text || "");
+    if (!normalized || normalized.length > 120) return null;
+    const colon = normalized.match(/^([^:：]{1,20})[:：]\s*(.{1,80})$/);
+    if (colon) return { name: colon[1].trim(), value: colon[2].trim() };
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2 && parts[0].length <= 20) {
+      return { name: parts[0], value: parts.slice(1).join(" ") };
+    }
+    return null;
   }
 
   function normalizeSkuAttrs(value) {
@@ -2181,19 +2266,43 @@
     return Math.round(number * 10);
   }
 
-  function pickSourceDescription(sources) {
+  function pickSourceDescription(sources, pageText) {
     const candidates = [];
+    if (typeof document !== "undefined" && document.querySelectorAll) {
+      const selectors = [
+        "[class*='description'], [class*='Description'], [class*='desc'], [class*='Desc'], [class*='detail'], [class*='Detail'], [class*='详情'], [class*='描述']"
+      ];
+      selectors.forEach((selector) => {
+        Array.from(document.querySelectorAll(selector) || []).slice(0, 30).forEach((node) => {
+          const text = normalizeWhitespace(node && (node.innerText || node.textContent) || "");
+          if (isLikelySourceDescription(text)) candidates.push(text);
+        });
+      });
+    }
     (Array.isArray(sources) ? sources : []).forEach((source) => {
       walkObject(source, [], (value, path) => {
         if (typeof value !== "string") return;
         const pathText = path.join(".");
         if (!/(description|desc|detail|content|介绍|详情|描述)/i.test(pathText)) return;
         const text = normalizeWhitespace(value);
-        if (text && !/^https?:\/\//i.test(text)) candidates.push(text);
+        if (isLikelySourceDescription(text)) candidates.push(text);
       });
     });
+    if (!candidates.length) {
+      const text = normalizeWhitespace(pageText || "");
+      const match = text.match(/(?:商品描述|产品描述|详情描述|描述|介绍)[:：]?\s*(.{20,500})/);
+      if (match && isLikelySourceDescription(match[1])) candidates.push(match[1]);
+    }
     candidates.sort((a, b) => b.length - a.length);
     return candidates.length ? candidates[0].slice(0, 5000) : "";
+  }
+
+  function isLikelySourceDescription(text) {
+    const value = normalizeWhitespace(text || "");
+    if (!value || /^https?:\/\//i.test(value)) return false;
+    if (value.length < 12 || value.length > 8000) return false;
+    if (/^(¥|￥)?\d+(?:\.\d+)?$/.test(value)) return false;
+    return true;
   }
 
   function pickSourceVideos(sources) {

@@ -99,6 +99,59 @@ function selectedSkuText(item: SourceCollectItem): string {
   ].map((part) => String(part || '').trim()).filter(Boolean).join(' · ');
 }
 
+function hasSourceAttribute(item: SourceCollectItem, pattern: RegExp): boolean {
+  return sourceAttributes(item).some((attr) => pattern.test(String(attr.name || attr.key || '')) || pattern.test(String(attr.value || attr.attrValue || '')));
+}
+
+function hasVariantAttribute(item: SourceCollectItem, pattern: RegExp): boolean {
+  return sourceVariants(item).some((variant) => {
+    const attrs = variant.attrs && typeof variant.attrs === 'object' ? variant.attrs as Record<string, unknown> : {};
+    return Object.entries(attrs).some(([key, value]) => pattern.test(key) || pattern.test(String(value || '')))
+      || pattern.test(String(variant.name || variant.specText || ''));
+  });
+}
+
+function hasStock(item: SourceCollectItem): boolean {
+  return sourceVariants(item).some((variant) => {
+    const stock = Number(variant.stock ?? variant.stockNum ?? variant.quantity);
+    return Number.isFinite(stock) && stock >= 0;
+  });
+}
+
+function sourceMissingFields(item: SourceCollectItem): string[] {
+  const missing: string[] = [];
+  const title = sourceDisplayTitle(item);
+  if (!title || /^(1688|PDD|拼多多|淘宝|天猫)?\s*商品\s*\d*$/i.test(title) || item.metadata?.titleNeedsReview) {
+    missing.push('真实商品标题');
+  }
+  if (!item.metadata?.publishTitleRu || !item.metadata?.sourceDescriptionRu) missing.push('俄文标题/描述');
+  if (!item.metadata?.descriptionCategoryId && !item.metadata?.ozonCategoryId && !item.metadata?.typeId && !item.metadata?.ozonTypeId) {
+    missing.push('Ozon 类目/type');
+  }
+  if (!hasSourceAttribute(item, /品牌|brand/i)) missing.push('品牌/无品牌');
+  if (!hasVariantAttribute(item, /颜色|color|colour/i) || !hasVariantAttribute(item, /尺码|规格|size/i)) missing.push('颜色尺码变体');
+  if (!hasStock(item)) missing.push('SKU 库存');
+  if (!hasSourceAttribute(item, /材质|成分|面料|material|composition/i)) missing.push('材质/成分');
+  if (!hasSourceAttribute(item, /性别|适用性别|gender/i) || !hasSourceAttribute(item, /季节|season/i)) missing.push('性别/季节');
+  if (!item.metadata?.weightG || !item.metadata?.lengthMm || !item.metadata?.widthMm || !item.metadata?.heightMm) missing.push('重量尺寸');
+  if (!sourceImageCount(item)) missing.push('可用主图清洗');
+  if (!sourceVideoCount(item) && !item.metadata?.sourceRichDescriptionJson) missing.push('视频/富内容');
+  return missing;
+}
+
+function extractionDiagnosticText(item: SourceCollectItem): string {
+  const diagnostics = item.metadata?.extractionDiagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object') return '';
+  const data = diagnostics as Record<string, unknown>;
+  return [
+    `图 ${String(data.imageCount ?? sourceImageCount(item))}`,
+    `SKU ${String(data.skuCount ?? sourceVariants(item).length)}`,
+    `属性 ${String(data.attributeCount ?? sourceAttributeCount(item))}`,
+    `描述 ${data.descriptionFound ? '有' : '无'}`,
+    `视频 ${String(data.videoCount ?? sourceVideoCount(item))}`,
+  ].join(' / ');
+}
+
 function sourceDisplayTitle(item: SourceCollectItem): string {
   const metaTitle = item.metadata?.sourceTitleRaw;
   return String(metaTitle || item.title || '未命名货源商品');
@@ -287,6 +340,25 @@ export default function SourceCollectPage() {
               <div>
                 <div className="font-medium text-base">{sourceDisplayTitle(detailItem)}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{detailItem.sourceProductId || detailItem.sku || detailItem.id}</div>
+              </div>
+
+              <div className="rounded-md border p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="font-medium">Ozon 上架缺失项</div>
+                  <Badge variant={sourceMissingFields(detailItem).length ? 'outline' : 'secondary'}>
+                    {sourceMissingFields(detailItem).length ? `${sourceMissingFields(detailItem).length} 项` : '已齐全'}
+                  </Badge>
+                </div>
+                {sourceMissingFields(detailItem).length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {sourceMissingFields(detailItem).map((field) => (
+                      <Badge key={field} variant="outline">{field}</Badge>
+                    ))}
+                  </div>
+                ) : <div className="text-muted-foreground">关键上架字段已采集或已补全</div>}
+                {extractionDiagnosticText(detailItem) ? (
+                  <div className="mt-2 text-xs text-muted-foreground">{extractionDiagnosticText(detailItem)}</div>
+                ) : null}
               </div>
 
               <div className="grid gap-3 md:grid-cols-3">

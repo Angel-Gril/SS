@@ -169,6 +169,14 @@ describe('collect publish helpers', () => {
       skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
       sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
       rawSourceProduct: { offerId: '744455566677' },
+      extractionDiagnostics: {
+        titleFound: true,
+        imageCount: 2,
+        skuCount: 1,
+        attributeCount: 2,
+        descriptionFound: true,
+        videoCount: 1,
+      },
     });
 
     expect(metadata).toMatchObject({
@@ -196,6 +204,14 @@ describe('collect publish helpers', () => {
       skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
       sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
       rawSourceProduct: { offerId: '744455566677' },
+      extractionDiagnostics: {
+        titleFound: true,
+        imageCount: 2,
+        skuCount: 1,
+        attributeCount: 2,
+        descriptionFound: true,
+        videoCount: 1,
+      },
     });
     expect(metadata).not.toHaveProperty('sourceDescriptionRu');
   });

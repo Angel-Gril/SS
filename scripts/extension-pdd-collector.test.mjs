@@ -20,6 +20,11 @@ const rawData = {
     shipWeight: 650,
     catId: 987,
     categoryName: '居家日用 > 收纳用品',
+    detailDescription: '加厚牛津布，适合跨境发货的折叠收纳箱。',
+    goodsProperty: [
+      { name: '材质', value: '牛津布' },
+      { name: '适用场景', value: '衣柜收纳' },
+    ],
     skus: [
       {
         skuId: 'sku-red-l',
@@ -70,6 +75,11 @@ assert.equal(result.lengthMm, 300);
 assert.equal(result.widthMm, 200);
 assert.equal(result.heightMm, 100);
 assert.equal(result.categoryName, '居家日用 > 收纳用品');
+assert.equal(result.description, '加厚牛津布，适合跨境发货的折叠收纳箱。');
+assert.deepEqual(result.attributes, [
+  { name: '材质', value: '牛津布' },
+  { name: '适用场景', value: '衣柜收纳' },
+]);
 assert.deepEqual(result.images, [
   'https://img.pddpic.com/product/main-800x800.jpeg',
   'https://img.pddpic.com/product/detail-800x800.webp',
@@ -116,6 +126,14 @@ assert.deepEqual(result.variants, [
   },
 ]);
 assert.equal(result.debug.rawSources[0].keys.includes('goods'), true);
+assert.deepEqual(result.extractionDiagnostics, {
+  titleFound: true,
+  imageCount: 2,
+  skuCount: 2,
+  attributeCount: 2,
+  descriptionFound: true,
+  videoCount: 0,
+});
 
 const yuanPriceResult = api.extractPddProduct({
   platform: 'pdd',

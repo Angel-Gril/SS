@@ -28,6 +28,14 @@ assert.match(
   /sourcePlatform/i,
   'source collection page should separate source-platform goods from Ozon SKU collection',
 );
+assert.match(
+  page,
+  /sourceMissingFields/,
+  'source collection detail should compute Ozon listing missing fields',
+);
+for (const label of ['真实商品标题', '俄文标题/描述', 'Ozon 类目/type', '颜色尺码变体', '重量尺寸']) {
+  assert.match(page, new RegExp(label), `source detail should expose missing field label: ${label}`);
+}
 
 const skuCollectPage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');
 assert.match(
