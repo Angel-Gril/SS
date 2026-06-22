@@ -64,6 +64,21 @@ function sourceImageCount(item: SourceCollectItem): number {
   return Array.isArray(item.images) ? item.images.length : 0;
 }
 
+function isPreviewableSourceImage(value: unknown): boolean {
+  const url = String(value || '').trim();
+  if (!/^https?:\/\//i.test(url)) return false;
+  const lower = url.toLowerCase();
+  if (/\.(svg)(?:[?#]|$)/i.test(lower)) return false;
+  if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/|55-tps|160-160)/i.test(lower)) return false;
+  const sizeMatch = lower.match(/(?:[-_/])(\d{1,4})[-x](\d{1,4})(?:[._/-]|$)/);
+  if (sizeMatch && (Number(sizeMatch[1]) < 220 || Number(sizeMatch[2]) < 220)) return false;
+  return true;
+}
+
+function sourcePreviewImages(item: SourceCollectItem): string[] {
+  return Array.isArray(item.images) ? item.images.filter(isPreviewableSourceImage) : [];
+}
+
 function variantCount(item: SourceCollectItem): number {
   return Array.isArray(item.variants) ? item.variants.length : 0;
 }
@@ -81,6 +96,25 @@ function sourceAttributes(item: SourceCollectItem): Array<Record<string, unknown
 function sourceVariants(item: SourceCollectItem): Array<Record<string, unknown>> {
   const variants = Array.isArray(item.variants) ? item.variants : item.metadata?.skuItems;
   return Array.isArray(variants) ? variants.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : [];
+}
+
+function sourceVariantLabel(variant: Record<string, unknown>, index: number): string {
+  const attrs = variant.attrs && typeof variant.attrs === 'object'
+    ? Object.entries(variant.attrs as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`).join(' / ')
+    : '';
+  return String(variant.name || variant.specText || attrs || variant.skuId || `SKU ${index + 1}`).replace(/\s+/g, ' ').trim();
+}
+
+function isDisplayableSourceVariant(variant: Record<string, unknown>, index: number): boolean {
+  const label = sourceVariantLabel(variant, index);
+  if (!label || label.length > 96) return false;
+  if (/(退货|退款|跨境|贴标|箱唛|复购率|已加购|先采后付|立即下单|加采购车|收藏|商品评价|商品属性|包装信息|商品详情|热门推荐|全部好评|差评|问大家|保障|发货率|运费\s*起)/.test(label)) return false;
+  if (label.split(/\s+/).length > 10 && !/[/:：]/.test(label)) return false;
+  return true;
+}
+
+function sourceDisplayVariants(item: SourceCollectItem): Array<Record<string, unknown>> {
+  return sourceVariants(item).filter(isDisplayableSourceVariant);
 }
 
 function selectedSkuText(item: SourceCollectItem): string {
@@ -104,7 +138,7 @@ function hasSourceAttribute(item: SourceCollectItem, pattern: RegExp): boolean {
 }
 
 function hasVariantAttribute(item: SourceCollectItem, pattern: RegExp): boolean {
-  return sourceVariants(item).some((variant) => {
+  return sourceDisplayVariants(item).some((variant) => {
     const attrs = variant.attrs && typeof variant.attrs === 'object' ? variant.attrs as Record<string, unknown> : {};
     return Object.entries(attrs).some(([key, value]) => pattern.test(key) || pattern.test(String(value || '')))
       || pattern.test(String(variant.name || variant.specText || ''));
@@ -112,7 +146,7 @@ function hasVariantAttribute(item: SourceCollectItem, pattern: RegExp): boolean 
 }
 
 function hasStock(item: SourceCollectItem): boolean {
-  return sourceVariants(item).some((variant) => {
+  return sourceDisplayVariants(item).some((variant) => {
     const stock = Number(variant.stock ?? variant.stockNum ?? variant.quantity);
     return Number.isFinite(stock) && stock >= 0;
   });
@@ -134,7 +168,7 @@ function sourceMissingFields(item: SourceCollectItem): string[] {
   if (!hasSourceAttribute(item, /材质|成分|面料|material|composition/i)) missing.push('材质/成分');
   if (!hasSourceAttribute(item, /性别|适用性别|gender/i) || !hasSourceAttribute(item, /季节|season/i)) missing.push('性别/季节');
   if (!item.metadata?.weightG || !item.metadata?.lengthMm || !item.metadata?.widthMm || !item.metadata?.heightMm) missing.push('重量尺寸');
-  if (!sourceImageCount(item)) missing.push('可用主图清洗');
+  if (!sourcePreviewImages(item).length) missing.push('可用主图清洗');
   if (!sourceVideoCount(item) && !item.metadata?.sourceRichDescriptionJson) missing.push('视频/富内容');
   return missing;
 }
@@ -390,13 +424,13 @@ export default function SourceCollectPage() {
               <div className="rounded-md border p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <div className="font-medium">SKU / 变体</div>
-                  <Badge variant="outline">{sourceVariants(detailItem).length}</Badge>
+                  <Badge variant="outline">{sourceDisplayVariants(detailItem).length}</Badge>
                 </div>
-                {sourceVariants(detailItem).length ? (
+                {sourceDisplayVariants(detailItem).length ? (
                   <div className="space-y-2">
-                    {sourceVariants(detailItem).slice(0, 20).map((variant, index) => (
+                    {sourceDisplayVariants(detailItem).slice(0, 20).map((variant, index) => (
                       <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
-                        {String(variant.name || variant.specText || variant.skuId || `SKU ${index + 1}`)}
+                        {sourceVariantLabel(variant, index)}
                         {variant.price != null ? <span className="ml-2 text-muted-foreground">¥{String(variant.price)}</span> : null}
                       </div>
                     ))}
@@ -424,17 +458,24 @@ export default function SourceCollectPage() {
               <div className="rounded-md border p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <div className="font-medium">图片</div>
-                  <Badge variant="outline">{sourceImageCount(detailItem)}</Badge>
+                  <Badge variant="outline">{sourcePreviewImages(detailItem).length} / {sourceImageCount(detailItem)}</Badge>
                 </div>
-                {detailItem.images?.length ? (
+                {sourcePreviewImages(detailItem).length ? (
                   <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
-                    {detailItem.images.slice(0, 24).map((image, index) => (
+                    {sourcePreviewImages(detailItem).slice(0, 24).map((image, index) => (
                       <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
-                        <img src={image} alt="" className="h-full w-full object-cover" />
+                        <img
+                          src={image}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          onError={(event) => {
+                            event.currentTarget.parentElement?.classList.add('hidden');
+                          }}
+                        />
                       </a>
                     ))}
                   </div>
-                ) : <div className="text-muted-foreground">未采集到图片</div>}
+                ) : <div className="text-muted-foreground">未采集到可预览商品图片</div>}
               </div>
             </div>
           ) : null}

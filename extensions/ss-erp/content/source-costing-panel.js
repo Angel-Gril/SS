@@ -102,6 +102,7 @@
       '  <div class="ss-erp-source-status" data-role="status"></div>',
       '</div>'
     ].join('');
+    renderLoadingContent(panel);
 
     document.documentElement.appendChild(fab);
     document.documentElement.appendChild(panel);
@@ -244,6 +245,10 @@
   function renderContent() {
     var panel = document.getElementById(PANEL_ID);
     if (!panel) return;
+    if (!state.product && state.collecting) {
+      renderLoadingContent(panel);
+      return;
+    }
 
     var ozon = state.context && state.context.ozon || null;
     var product = state.product || {};
@@ -290,6 +295,33 @@
       collectButton.disabled = !product.title || state.busy;
       collectButton.title = '采集当前 ' + platformLabel() + ' 货源商品到 ERP';
     }
+  }
+
+  function renderLoadingContent(panel) {
+    if (!panel) return;
+    var ozonCard = panel.querySelector('[data-role="ozon-card"]');
+    var sourceCard = panel.querySelector('[data-role="source-card"]');
+    var inputCard = panel.querySelector('[data-role="input-card"]');
+    var resultCard = panel.querySelector('[data-role="result-card"]');
+    var costNode = panel.querySelector('[data-role="cost"]');
+    var runButton = panel.querySelector('[data-action="run-costing"]');
+    var collectButton = panel.querySelector('[data-action="collect-erp"]');
+
+    if (ozonCard) {
+      ozonCard.innerHTML = '<div class="ss-erp-source-loading"><b>读取 Ozon 关联</b><span>如果从 Ozon 商品页进入核价，这里会显示关联 SKU 和售价。</span></div>';
+    }
+    if (sourceCard) {
+      sourceCard.innerHTML = '<div class="ss-erp-source-loading"><b>读取当前 ' + escapeHtml(platformLabel()) + ' 商品</b><span>正在提取标题、SKU、价格、运费和商品素材。</span></div>';
+    }
+    if (inputCard) {
+      inputCard.innerHTML = '<div class="ss-erp-source-loading compact"><b>核价输入准备中</b><span>读取完成后可调整重量、尺寸、汇率和佣金。</span></div>';
+    }
+    if (resultCard) {
+      resultCard.innerHTML = '<div class="ss-erp-source-loading compact"><b>等待计算</b><span>读取成本后会自动尝试核价。</span></div>';
+    }
+    if (costNode) costNode.textContent = '--';
+    if (runButton) runButton.disabled = true;
+    if (collectButton) collectButton.disabled = true;
   }
 
   function hydrateInputs() {

@@ -1482,6 +1482,7 @@
           if (!text || text.length > 320) return;
           if (!/[¥￥]\s*\d|\d[\d.,]*\s*元/.test(text)) return;
           if (!/(库存|现货|起批|件|个|颜色|尺码|规格|型号|sku|SKU)/.test(text)) return;
+          if (!isUsableSkuRowText(text)) return;
           const price = extractSkuRowPrice(text);
           if (!(price > 0)) return;
           const quantity = extractSkuRowQuantity(text) || extractControlQuantity(node);
@@ -1516,6 +1517,7 @@
       const end = Math.min(text.length, nextIndex);
       const sample = text.slice(start, end);
       if (!/(库存|现货|颜色|尺码|规格|型号|sku|SKU|(?:-|−|－)\s*\d+\s*\+)/.test(sample)) return;
+      if (!isUsableSkuRowText(sample)) return;
       const quantity = extractSkuRowQuantity(sample);
       rows.push(buildSkuRow({
         skuId: "",
@@ -1527,6 +1529,17 @@
       }));
     });
     return rows;
+  }
+
+  function isUsableSkuRowText(text) {
+    const value = normalizeWhitespace(text || "");
+    if (!value || value.length > 220) return false;
+    if (/(退货|退款|跨境|贴标|箱唛|复购率|已加购|先采后付|立即下单|加采购车|收藏|商品评价|商品属性|包装信息|商品详情|热门推荐|全部好评|差评|问大家|保障|发货率|运费\s*起)/.test(value)) {
+      return false;
+    }
+    const hasSkuHint = /(颜色|尺码|规格|型号|sku|SKU|款|色|码|容量|尺寸)/.test(value);
+    const hasStockOrQuantity = /(库存|现货)\s*\d+/.test(value) || /(?:-|−|－)\s*\d+\s*\+/.test(value);
+    return hasSkuHint && hasStockOrQuantity;
   }
 
   function buildSkuRow(input) {

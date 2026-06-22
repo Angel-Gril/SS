@@ -165,6 +165,16 @@ assert.match(
   /data-action="run-costing"/,
   '1688 costing panel should expose a primary in-page recalculation action',
 );
+assert.match(
+  sourceCostingPanel,
+  /renderLoadingContent/,
+  '1688 costing panel should render readable loading content before product data returns',
+);
+assert.match(
+  sourceCostingPanel,
+  /ss-erp-source-loading/,
+  '1688 costing panel loading state should use an explicit loading layout instead of blank cards',
+);
 assert.doesNotMatch(
   sourceCostingPanel,
   /class="primary" data-action="save-quote">保存核价/,

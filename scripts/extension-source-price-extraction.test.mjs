@@ -411,6 +411,34 @@ assert.ok(selectedOrderSummaryResponse.data.skuItems.some((item) => /白色英�
 assert.equal(selectedOrderSummaryResponse.data.shippingCny, 4.5);
 assert.equal(selectedOrderSummaryResponse.data.totalCostCny, 18);
 
+const noisySkuTextResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/909011382013.html',
+  title: '1688 noisy sku text detail',
+  bodyText: [
+    '白色 藏青色 灰色 杏色 浅紫色 卡其色 天蓝色 M 套 L 套 XL 套 XXL 套 XXXL 套 XXXXL 套 ¥79',
+    '已售 万+件 ¥35 已售 +件 ¥18',
+    '休闲宽松外套跨境防晒两件套男 商品复购率 % +人已加购 套起批 已售 +套 先采后付 元下单',
+    '湖北 送至 福建厦门 运费 起 退货包运费 天天理由退货 晚发必赔 极速退款 支持跨境贴标 支持贴箱唛 白色 藏青色 灰色 杏色 浅紫色 卡其色 天蓝色 M ¥8',
+    '商品评价 商品属性 包装信息 商品详情 热门推荐 全部好评 差评 有内容',
+    '颜色 天蓝色 M 套 L 套 XL 套 XXL 套 XXXL 套 XXXXL 套 已选 款 套 商品金额： ¥79',
+  ].join(' '),
+  selectors: {
+    h1: '广州泰昌隆贸易有限公司',
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '909011382013',
+        subject: '男士防晒外套两件套',
+      },
+    },
+  },
+});
+
+assert.equal(noisySkuTextResponse.ok, true);
+assert.ok(noisySkuTextResponse.data.skuItems.length <= 2, 'marketing and page chrome text should not become SKU rows');
+assert.ok(noisySkuTextResponse.data.skuItems.every((item) => !/退货|退款|跨境|商品评价|商品属性|包装信息|商品详情|已加购/.test(item.name || item.specText || '')));
+
 const aliVisibleRangeGuardResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/700797177324.html',
   title: '1688 oxygen concentrator detail',

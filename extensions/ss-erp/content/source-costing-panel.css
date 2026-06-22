@@ -168,6 +168,43 @@
   font-size: 11px;
 }
 
+.ss-erp-source-loading {
+  display: grid;
+  gap: 6px;
+  min-height: 56px;
+  align-content: center;
+  color: #475569;
+}
+
+.ss-erp-source-loading b {
+  color: #111827;
+  font-size: 12px;
+}
+
+.ss-erp-source-loading span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.ss-erp-source-loading::after {
+  content: "";
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #fed7aa 0%, #fff7ed 45%, #fed7aa 100%);
+  background-size: 180% 100%;
+  animation: ss-erp-source-loading-pulse 1.1s ease-in-out infinite;
+}
+
+.ss-erp-source-loading.compact {
+  min-height: 36px;
+}
+
+@keyframes ss-erp-source-loading-pulse {
+  0% { background-position: 0% 0; }
+  100% { background-position: 180% 0; }
+}
+
 .ss-erp-source-cost {
   display: flex;
   align-items: baseline;

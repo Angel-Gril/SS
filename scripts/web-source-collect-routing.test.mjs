@@ -33,6 +33,16 @@ assert.match(
   /sourceMissingFields/,
   'source collection detail should compute Ozon listing missing fields',
 );
+assert.match(
+  page,
+  /sourcePreviewImages/,
+  'source collection detail should filter previewable product images before rendering thumbnails',
+);
+assert.match(
+  page,
+  /onError=\{\(event\)/,
+  'source collection thumbnails should hide broken image previews',
+);
 for (const label of ['真实商品标题', '俄文标题/描述', 'Ozon 类目/type', '颜色尺码变体', '重量尺寸']) {
   assert.match(page, new RegExp(label), `source detail should expose missing field label: ${label}`);
 }
