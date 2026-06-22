@@ -297,6 +297,59 @@ assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => !/^(里料成�
 assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => !/粉底液肤.*奶皮白.*S适合.*M适合.*L适合/s.test(item.name || item.specText || '')));
 assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => Array.isArray(item.images) && item.images.length === 0), 'do not attach the same product image to every text-inferred variant');
 
+const aliPantsWeightSizeMatrixResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/1037213576946.html?offerId=1037213576946&hotSaleSkuId=6217325499120',
+  title: '100%纯亚麻裤子男春秋薄款九分裤宽松显瘦休闲哈伦裤大码直筒裤男',
+  bodyText: [
+    '商品属性 货源类别 现货 淘货类别 时尚都市 裤型 哈伦裤 裤长 九分裤 腰型 中腰 是否有腰带 无腰带',
+    '颜色 亚麻-色 夏款 灰-色 夏款 藏青-色 夏款 黑-色 夏款 绿-色 夏款',
+    '尺码 M 80-100斤 L 100-110斤 XL 110-120斤 2XL 120-130斤 3XL 130-145斤 4XL 145-160斤 5XL 160-180斤',
+    '亚麻-色 夏款 灰-色 夏款 藏青-色 夏款 黑-色 夏款 绿-色 夏款 L 100-110斤 1条 M 80-100斤 1条 XL 110-120斤 1条',
+  ].join(' '),
+  selectors: {
+    h1: '100%纯亚麻裤子男春秋薄款九分裤宽松显瘦休闲哈伦裤大码直筒裤男',
+  },
+  queryAll(selector) {
+    if (!String(selector).includes('sku')) return [];
+    return [
+      makeMockElement({
+        text: '亚麻-色 夏款 灰-色 夏款 藏青-色 夏款 黑-色 夏款 绿-色 夏款 L 100-110斤 1条 M 80-100斤 1条 XL 110-120斤 1条',
+        className: 'sku-list',
+      }),
+    ];
+  },
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '1037213576946',
+        subject: '100%纯亚麻裤子男春秋薄款九分裤宽松显瘦休闲哈伦裤大码直筒裤男',
+        offerProps: [
+          { name: '货源类别', value: '现货' },
+          { name: '淘货类别', value: '时尚都市' },
+          { name: '裤型', value: '哈伦裤' },
+          { name: '裤长', value: '九分裤' },
+          { name: '腰型', value: '中腰' },
+          { name: '是否有腰带', value: '无腰带' },
+          { name: '裤门襟', value: '系带闭襟' },
+          { name: '图案', value: '纯色' },
+          { name: '误差范围', value: '1-3cm' },
+          { name: '适合季节', value: '夏季' },
+          { name: '颜色', value: '亚麻-色 夏款、灰-色 夏款、藏青-色 夏款、黑-色 夏款、绿-色 夏款' },
+          { name: '尺码', value: 'M 80-100斤、L 100-110斤、XL 110-120斤、2XL 120-130斤、3XL 130-145斤、4XL 145-160斤、5XL 160-180斤' },
+        ],
+      },
+    },
+  },
+});
+
+assert.equal(aliPantsWeightSizeMatrixResponse.ok, true);
+assert.equal(aliPantsWeightSizeMatrixResponse.data.skuItems.length, 35);
+assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.every((item) => item.attrs?.颜色 && item.attrs?.尺码), '1688 pants variants should carry color and size attrs');
+assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.some((item) => item.attrs.颜色 === '亚麻-色 夏款' && item.attrs.尺码 === 'M 80-100斤'));
+assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.some((item) => item.attrs.颜色 === '绿-色 夏款' && item.attrs.尺码 === '5XL 160-180斤'));
+assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.every((item) => !/^(货源类别|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节)$/.test(item.name || '')));
+assert.ok(aliPantsWeightSizeMatrixResponse.data.skuItems.every((item) => !/斤\s*条.*斤\s*条/s.test(item.name || item.specText || '')));
+
 const aliShopNameTitleFallbackResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/953122376708.html',
   title: '揭阳市揭东区新亨镇小树树服装店',

@@ -1371,15 +1371,17 @@
       split1688ColorList(attr.value).forEach(push);
     });
 
-    (Array.isArray(labels) ? labels : []).forEach((label) => {
-      const index = find1688FirstSizeIndex(label);
-      if (index <= 0) return;
-      split1688ColorList(label.slice(0, index)).forEach(push);
-    });
+    if (out.length <= 1) {
+      (Array.isArray(labels) ? labels : []).forEach((label) => {
+        const index = find1688FirstSizeIndex(label);
+        if (index <= 0) return;
+        split1688ColorList(label.slice(0, index)).forEach(push);
+      });
+    }
 
     if (out.length <= 1) {
       const text = normalizeWhitespace(allText || "");
-      const match = text.match(/颜色[:：]?\s*(.{2,180}?)(?:尺码|上市时间|货号|[XSML]{1,4}\s*适合)/i);
+      const match = text.match(/颜色[:：]?\s*(.{2,220}?)(?:尺码|上市时间|货号|(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*(?:适合|\d{2,3}\s*(?:[-~—–至到]|\/)))/i);
       if (match && match[1]) split1688ColorList(match[1]).forEach(push);
     }
 
@@ -1392,11 +1394,34 @@
       .replace(/已选.*$/g, " ")
       .replace(/商品金额.*$/g, " ");
     const tokens = [];
-    const regex = /([\u3400-\u9fffA-Za-z0-9#]{1,24}(?:\s*【[^】]{1,50}】)?)/g;
-    let match;
-    while ((match = regex.exec(text))) {
-      const token = cleanup1688SkuValue(match[1]);
+
+    const push = (value) => {
+      const token = cleanup1688SkuValue(value);
       if (token && !is1688SkuStopToken(token)) tokens.push(token);
+    };
+
+    const delimited = text.split(/[、,，;；]+/).map((item) => cleanup1688SkuValue(item)).filter(Boolean);
+    if (delimited.length > 1) {
+      delimited.forEach(push);
+      return dedupeTextValues(tokens);
+    }
+
+    const seasonalColorRegex = /([\u3400-\u9fffA-Za-z0-9#-]{1,24}-色\s*(?:春款|夏款|秋款|冬款|四季款|常规款)?)/g;
+    let match;
+    while ((match = seasonalColorRegex.exec(text))) {
+      push(match[1]);
+    }
+    if (tokens.length) return dedupeTextValues(tokens);
+
+    const bracketColorRegex = /([\u3400-\u9fffA-Za-z0-9#-]{1,30}\s*【[^】]{1,50}】)/g;
+    while ((match = bracketColorRegex.exec(text))) {
+      push(match[1]);
+    }
+    if (tokens.length) return dedupeTextValues(tokens);
+
+    const regex = /([\u3400-\u9fffA-Za-z0-9#-]{1,24})/g;
+    while ((match = regex.exec(text))) {
+      push(match[1]);
     }
     return dedupeTextValues(tokens);
   }
@@ -1408,26 +1433,36 @@
         .replace(/\s*\/\s*/g, "/")
         .replace(/适合\s+/g, "适合");
       if (!cleaned || is1688SkuStopToken(cleaned)) return;
-      if (!/^(?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(cleaned)) return;
+      if (!/^(?:\d+XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(cleaned)) return;
       if (!out.includes(cleaned)) out.push(cleaned);
     };
 
     (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
       const name = normalizeWhitespace(attr && (attr.name || attr.key || ""));
       if (!/尺码|规格|size/i.test(name)) return;
-      match1688SizeTokens(attr.value).forEach(push);
+      match1688SizeTokens(attr.value, false).forEach(push);
     });
-    match1688SizeTokens(allText).forEach(push);
+    match1688SizeTokens(allText, false).forEach(push);
+    if (out.length) return out.slice(0, 40);
+
+    (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
+      const name = normalizeWhitespace(attr && (attr.name || attr.key || ""));
+      if (!/尺码|规格|size/i.test(name)) return;
+      match1688SizeTokens(attr.value, true).forEach(push);
+    });
     return out.slice(0, 40);
   }
 
-  function match1688SizeTokens(value) {
+  function match1688SizeTokens(value, allowBare) {
     const text = normalizeWhitespace(value || "");
     const rows = [];
-    const regex = /((?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*(?:适合\s*)?(?:\d{2,3})?\s*(?:\/\s*\d{2,3}[A-Z]{1,5})?)/gi;
+    const code = "(?:\\d+\\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)";
+    const sized = `${code}\\s*(?:适合\\s*)?(?:\\d{2,3}\\s*(?:[-~—–至到])\\s*\\d{2,3}\\s*斤|\\d{2,3}\\s*\\/\\s*\\d{2,3}[A-Z]{1,5}|\\d{2,3}\\s*[A-Z]{0,5})`;
+    const pattern = allowBare ? `${sized}|${code}` : sized;
+    const regex = new RegExp(`(?:^|[\\s,，、;；])(${pattern})(?=$|[\\s,，、;；])`, "gi");
     let match;
     while ((match = regex.exec(text))) {
-      const token = cleanup1688SkuValue(match[1]);
+      const token = cleanup1688SizeToken(match[1]);
       if (token && token.length <= 40) rows.push(token);
     }
     return dedupeTextValues(rows);
@@ -1435,8 +1470,21 @@
 
   function find1688FirstSizeIndex(value) {
     const text = String(value || "");
-    const match = text.match(/(?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*(?:适合|\/\s*\d{2,3}[A-Z]{1,5})/i);
-    return match ? match.index : -1;
+    const code = "(?:\\d+\\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)";
+    const regex = new RegExp(`(?:^|[\\s,，、;；])(${code}\\s*(?:适合|\\d{2,3}\\s*(?:[-~—–至到]|\\/)))`, "i");
+    const match = regex.exec(text);
+    return match ? match.index + match[0].indexOf(match[1]) : -1;
+  }
+
+  function cleanup1688SizeToken(value) {
+    return cleanup1688SkuValue(value)
+      .replace(/^(\d+)\s+XL/i, "$1XL")
+      .replace(/\s*([~—–至到-])\s*/g, "$1")
+      .replace(/\s*\/\s*/g, "/")
+      .replace(/适合\s+/g, "适合")
+      .replace(/\s*斤/g, "斤")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function cleanup1688SkuValue(value) {
@@ -1452,6 +1500,7 @@
     if (!text) return true;
     if (/^(颜色|尺码|规格|属性|商品|金额|运费|库存|价格|起批|产地|货号|风格|品牌|材质|成分|面料|名称|功能)$/.test(text)) return true;
     if (/^(上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|里料成分|里料成分含量|适用年龄段|模杯类型|主面料成分)$/.test(text)) return true;
+    if (/^(货源类别|货源类型|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节|是否库存|库存类型|适合人群|上市年份\/季节|上市年份季节|适用场景|裤脚口款式|款式细节|弹力|类别|原创设计货源|有无质检报告|质检报告编号|是否加绒|领标|吊牌|适用体型|适用对象|款式|厚薄|工艺)$/.test(text)) return true;
     return false;
   }
 
@@ -1560,9 +1609,23 @@
     const onlySpecAttr = attrKeys.length === 1 && attrKeys[0] === "spec";
     if (!item.skuId && !hasAttrs && !label) return false;
     if (!item.skuId && !hasAttrs && item.price == null && is1688SkuStopToken(label)) return false;
+    if (!item.skuId && item.price == null && (is1688SkuStopToken(label) || (onlySpecAttr && is1688SkuStopToken(item.attrs.spec)))) return false;
     if (/(已选|商品金额|货品金额|另需运费|运费\s*起|立即下单|加采购车|商品评价|商品属性|包装信息|商品详情)/.test(label)) return false;
+    if (isLikely1688SkuTextBlob(label)) return false;
     if (label.length > 96 && (!hasAttrs || onlySpecAttr)) return false;
     return true;
+  }
+
+  function isLikely1688SkuTextBlob(value) {
+    const text = normalizeWhitespace(value || "");
+    if (!text) return false;
+    if (/斤\s*(?:条|件|个).+斤\s*(?:条|件|个)/.test(text)) return true;
+    const colorSeasonCount = (text.match(/-色\s*(?:春款|夏款|秋款|冬款|四季款)?/g) || []).length;
+    const weightSizeStubCount = (text.match(/(?:^|\s)(?:\d+XL|XXXXL|XXXL|XXL|XL|XS|L|M|S)\s*斤/g) || []).length;
+    if (colorSeasonCount >= 3 && weightSizeStubCount >= 1) return true;
+    const fullSizeCount = match1688SizeTokens(text, false).length;
+    if (fullSizeCount >= 3 && (colorSeasonCount >= 2 || text.length > 60)) return true;
+    return false;
   }
 
   function filter1688SkuItems(items) {
@@ -1581,7 +1644,7 @@
     const fallbackPrice = Number(fallback && fallback.price) || 0;
     const matchByPrice = fallbackPrice > 0 ? (skuItems || []).find((item) => Math.abs((Number(item.price) || 0) - fallbackPrice) < 0.01) : null;
     const picked = matchById || matchByPrice || null;
-    if (!picked) return fallback;
+    if (!picked) return isUseful1688SelectedSkuFallback(fallback) ? fallback : null;
     return {
       ...picked,
       selected: true,
@@ -1592,6 +1655,15 @@
       price: fallbackPrice || picked.price,
       priceText: fallbackPrice ? ("¥" + formatMoney(fallbackPrice)) : picked.priceText
     };
+  }
+
+  function isUseful1688SelectedSkuFallback(fallback) {
+    if (!fallback || typeof fallback !== "object") return false;
+    const label = normalizeWhitespace(fallback.name || fallback.specText || "");
+    if (label && isLikely1688SkuTextBlob(label)) return false;
+    if (fallback.selected && Number(fallback.price) > 0) return true;
+    if (!isUseful1688SkuItem(fallback)) return false;
+    return Boolean(fallback.skuId || fallback.name || fallback.specText || Number(fallback.price) > 0);
   }
 
   function pick1688StructuredAttributes(sources) {

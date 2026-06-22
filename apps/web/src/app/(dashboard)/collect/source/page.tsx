@@ -107,6 +107,18 @@ function sourceVariantLabel(variant: Record<string, unknown>, index: number): st
   return String(variant.name || variant.specText || attrs || variant.skuId || `SKU ${index + 1}`).replace(/\s+/g, ' ').trim();
 }
 
+const SOURCE_VARIANT_STOP_LABEL_RE = /^(里料成分|产地|货号|颜色|尺码|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格|里料成分含量|品牌|材质|成分|面料|货源类别|货源类型|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节|是否库存|库存类型|适合人群|上市年份\/季节|上市年份季节|适用场景|裤脚口款式|款式细节|弹力|类别|原创设计货源|有无质检报告|质检报告编号|是否加绒|领标|吊牌|适用体型|适用对象|款式|厚薄|工艺)$/;
+
+function isLikelySourceVariantTextBlob(label: string): boolean {
+  if (/斤\s*(?:条|件|个).+斤\s*(?:条|件|个)/.test(label)) return true;
+  const colorSeasonCount = (label.match(/-色\s*(?:春款|夏款|秋款|冬款|四季款)?/g) || []).length;
+  const weightSizeStubCount = (label.match(/(?:^|\s)(?:\d+XL|XXXXL|XXXL|XXL|XL|XS|L|M|S)\s*斤/g) || []).length;
+  if (colorSeasonCount >= 3 && weightSizeStubCount >= 1) return true;
+  const fullWeightSizeCount = (label.match(/(?:^|\s)(?:\d+XL|XXXXL|XXXL|XXL|XL|XS|L|M|S)\s*\d{2,3}\s*(?:-|~|—|–|至|到)\s*\d{2,3}\s*斤/g) || []).length;
+  if (fullWeightSizeCount >= 3 && (colorSeasonCount >= 2 || label.length > 60)) return true;
+  return false;
+}
+
 function isDisplayableSourceVariant(variant: Record<string, unknown>, index: number): boolean {
   const label = sourceVariantLabel(variant, index);
   if (!label || label.length > 96) return false;
@@ -117,10 +129,12 @@ function isDisplayableSourceVariant(variant: Record<string, unknown>, index: num
     || Number.isFinite(Number(variant.price))
     || Number.isFinite(Number(variant.stock ?? variant.stockNum ?? variant.quantity))
     || attrKeys.some((key) => !/^spec$/i.test(key));
-  if (!hasSkuSignal && /^(里料成分|产地|货号|颜色|尺码|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格|里料成分含量|品牌|材质|成分|面料)$/.test(label)) return false;
+  if (!hasSkuSignal && SOURCE_VARIANT_STOP_LABEL_RE.test(label)) return false;
+  if (onlySpecAttr && SOURCE_VARIANT_STOP_LABEL_RE.test(String(attrs.spec || '').trim())) return false;
   const sizeTokenCount = (label.match(/(?:XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)\s*适合/g) || []).length;
   const colorMarkerCount = (label.match(/【/g) || []).length;
   if (onlySpecAttr && sizeTokenCount >= 3 && colorMarkerCount >= 2) return false;
+  if (isLikelySourceVariantTextBlob(label)) return false;
   if (/(退货|退款|跨境|贴标|箱唛|复购率|已加购|先采后付|立即下单|加采购车|收藏|商品评价|商品属性|包装信息|商品详情|热门推荐|全部好评|差评|问大家|保障|发货率|运费\s*起)/.test(label)) return false;
   if (label.split(/\s+/).length > 10 && !/[/:：]/.test(label)) return false;
   return true;
