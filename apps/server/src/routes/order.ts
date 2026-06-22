@@ -8,10 +8,36 @@ import { describeSubstatus } from '../lib/ozon-substatus.js';
 import { getRate } from '../services/exchange-rate.js';
 import { fetchLabelAsync } from '../services/ozon-label.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
+import {
+  resolveOrderFulfillmentStage,
+  type FulfillmentStageKey,
+  type OrderFulfillmentStageInput,
+} from 'shared/order-fulfillment-stage';
+
+const fulfillmentStageKeys = [
+  'purchased',
+  'domestic_transit',
+  'received',
+  'warehouse_processing',
+  'delivering',
+  'delivered',
+  'abnormal',
+] as const;
+
+type OrderStageFilterInput = OrderFulfillmentStageInput & {
+  id: string;
+};
+
+type WarehouseStageLogInput = {
+  orderId: string;
+  operationType: string;
+  createdAt: Date;
+};
 
 const orderQuerySchema = z.object({
   shopId: z.string().optional(),
   status: z.string().optional(),
+  fulfillmentStage: z.enum(fulfillmentStageKeys).optional(),
   search: z.string().optional(),
   searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(),
   serviceTagId: z.string().optional(),
@@ -22,6 +48,70 @@ const orderQuerySchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });
+
+export function buildOrderCreatedAtRange(startDate?: string, endDate?: string): Record<string, Date> | undefined {
+  const range: Record<string, Date> = {};
+  if (startDate) {
+    range.gte = parseDateAtUtcStartOfDay(startDate);
+  }
+  if (endDate) {
+    const exclusiveEnd = parseDateAtUtcStartOfDay(endDate);
+    exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
+    range.lt = exclusiveEnd;
+  }
+  return Object.keys(range).length > 0 ? range : undefined;
+}
+
+export function filterOrderIdsByFulfillmentStage(
+  orders: OrderStageFilterInput[],
+  warehouseLogs: WarehouseStageLogInput[],
+  fulfillmentStage: FulfillmentStageKey,
+  now: Date = new Date(),
+): string[] {
+  const latestWarehouseLogByOrder = buildLatestWarehouseLogMap(warehouseLogs);
+
+  return orders
+    .filter((order) => {
+      const logs = latestWarehouseLogByOrder.get(order.id);
+      const stage = resolveOrderFulfillmentStage({
+        ...order,
+        warehouseScanInAt: logs?.scanInAt ?? null,
+        warehouseScanOutAt: logs?.scanOutAt ?? null,
+        labelPrintedAt: logs?.labelPrintedAt ?? null,
+      }, now);
+      return stage.key === fulfillmentStage;
+    })
+    .map((order) => order.id);
+}
+
+function parseDateAtUtcStartOfDay(value: string): Date {
+  const trimmed = value.trim();
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T00:00:00.000Z`)
+    : new Date(trimmed);
+  dateOnly.setUTCHours(0, 0, 0, 0);
+  return dateOnly;
+}
+
+function buildLatestWarehouseLogMap(
+  warehouseLogs: WarehouseStageLogInput[],
+): Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }> {
+  const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }>();
+  for (const log of warehouseLogs) {
+    const current = latestWarehouseLogByOrder.get(log.orderId) || {};
+    if (log.operationType === 'scan_in' && !current.scanInAt) {
+      current.scanInAt = log.createdAt;
+    }
+    if (log.operationType === 'scan_out' && !current.scanOutAt) {
+      current.scanOutAt = log.createdAt;
+    }
+    if (log.operationType === 'label_print' && !current.labelPrintedAt) {
+      current.labelPrintedAt = log.createdAt;
+    }
+    latestWarehouseLogByOrder.set(log.orderId, current);
+  }
+  return latestWarehouseLogByOrder;
+}
 
 export async function orderRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -229,9 +319,42 @@ export async function orderRoutes(app: FastifyInstance) {
     }
 
     if (query.startDate || query.endDate) {
-      where.createdAt = {};
-      if (query.startDate) (where.createdAt as any).gte = new Date(query.startDate);
-      if (query.endDate) (where.createdAt as any).lte = new Date(query.endDate);
+      where.createdAt = buildOrderCreatedAtRange(query.startDate, query.endDate);
+    }
+
+    if (query.fulfillmentStage) {
+      const candidateOrders = await prisma.order.findMany({
+        where: where as any,
+        select: {
+          id: true,
+          status: true,
+          subStatus: true,
+          domesticTrackingNumber: true,
+          domesticStatus: true,
+          internationalTrackingNumber: true,
+          internationalStatus: true,
+          trackingNumber: true,
+          inProcessAt: true,
+          shipmentDate: true,
+          deliveringDate: true,
+          deliveredAt: true,
+          inspectionStatus: true,
+        },
+      });
+      const candidateOrderIds = candidateOrders.map((order) => order.id);
+      const warehouseLogs = candidateOrderIds.length > 0
+        ? await prisma.warehouseLog.findMany({
+            where: { orderId: { in: candidateOrderIds }, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+            orderBy: { createdAt: 'desc' },
+            select: { orderId: true, operationType: true, createdAt: true },
+          })
+        : [];
+      const matchingOrderIds = filterOrderIdsByFulfillmentStage(
+        candidateOrders,
+        warehouseLogs,
+        query.fulfillmentStage,
+      );
+      where.id = { in: matchingOrderIds };
     }
 
     const [total, rows] = await Promise.all([
@@ -282,20 +405,7 @@ export async function orderRoutes(app: FastifyInstance) {
           select: { orderId: true, operationType: true, createdAt: true },
         })
       : [];
-    const latestWarehouseLogByOrder = new Map<string, { scanInAt?: Date; scanOutAt?: Date; labelPrintedAt?: Date }>();
-    for (const log of warehouseLogs) {
-      const current = latestWarehouseLogByOrder.get(log.orderId) || {};
-      if (log.operationType === 'scan_in' && !current.scanInAt) {
-        current.scanInAt = log.createdAt;
-      }
-      if (log.operationType === 'scan_out' && !current.scanOutAt) {
-        current.scanOutAt = log.createdAt;
-      }
-      if (log.operationType === 'label_print' && !current.labelPrintedAt) {
-        current.labelPrintedAt = log.createdAt;
-      }
-      latestWarehouseLogByOrder.set(log.orderId, current);
-    }
+    const latestWarehouseLogByOrder = buildLatestWarehouseLogMap(warehouseLogs);
 
     return {
       code: 1,

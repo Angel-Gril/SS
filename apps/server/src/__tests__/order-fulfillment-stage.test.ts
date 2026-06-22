@@ -8,14 +8,14 @@ describe('resolveOrderFulfillmentStage', () => {
       internationalTrackingNumber: 'OZON123',
       internationalStatus: 'pending',
     });
-    expect(stage.key).toBe('awaiting_label');
-    expect(stage.label).toBe('国际单已生成');
+    expect(stage.key).toBe('warehouse_processing');
+    expect(stage.label).toBe('仓库处理');
 
     expect(resolveOrderFulfillmentStage({
       status: 'awaiting_deliver',
       internationalTrackingNumber: 'OZON123',
       labelPrintedAt: new Date().toISOString(),
-    }).label).toBe('打印面单');
+    }).label).toBe('仓库处理');
   });
 
   it('shows outbound dispatch only after a real shipping signal', () => {
@@ -29,7 +29,7 @@ describe('resolveOrderFulfillmentStage', () => {
       status: 'awaiting_deliver',
       internationalTrackingNumber: 'OZON123',
       internationalStatus: 'shipped',
-    }).key).toBe('awaiting_label');
+    }).key).toBe('warehouse_processing');
 
     expect(resolveOrderFulfillmentStage({
       status: 'awaiting_deliver',
@@ -40,7 +40,9 @@ describe('resolveOrderFulfillmentStage', () => {
   });
 
   it('tracks the domestic warehouse flow before international dispatch', () => {
-    expect(resolveOrderFulfillmentStage({}).key).toBe('purchased');
+    const firstStage = resolveOrderFulfillmentStage({});
+    expect(firstStage.key).toBe('purchased');
+    expect(firstStage.label).toBe('采购备货');
 
     expect(resolveOrderFulfillmentStage({
       inspectionStatus: 'pending',
@@ -61,7 +63,26 @@ describe('resolveOrderFulfillmentStage', () => {
       domesticTrackingNumber: 'SF123',
       domesticStatus: 'received',
       warehouseScanInAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
-    }).key).toBe('inspecting');
+    }).key).toBe('warehouse_processing');
+  });
+
+  it('uses warehouse processing for inspection, packing and label printing', () => {
+    expect(resolveOrderFulfillmentStage({
+      domesticTrackingNumber: 'SF123',
+      domesticStatus: 'received',
+      warehouseScanInAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+    })).toMatchObject({
+      key: 'warehouse_processing',
+      label: '仓库处理',
+    });
+
+    expect(resolveOrderFulfillmentStage({
+      status: 'awaiting_deliver',
+      shipmentDate: new Date().toISOString(),
+    })).toMatchObject({
+      key: 'warehouse_processing',
+      label: '仓库处理',
+    });
   });
 
   it('keeps abnormal orders out of the normal flow', () => {

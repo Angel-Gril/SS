@@ -160,8 +160,7 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
       purchased: 0,
       domestic_transit: 0,
       received: 0,
-      inspecting: 0,
-      awaiting_label: 0,
+      warehouse_processing: 0,
       delivering: 0,
       delivered: 0,
       abnormal: 0,
@@ -179,11 +178,10 @@ export async function orderAnalyticsRoutes(app: FastifyInstance) {
     }
 
     return { code: 1, msg: 'ok', data: { stages: [
-      { key: 'purchased', label: '采购下单', count: counts.purchased },
+      { key: 'purchased', label: '采购备货', count: counts.purchased },
       { key: 'domestic_transit', label: '国内在途', count: counts.domestic_transit },
       { key: 'received', label: '到仓入库', count: counts.received },
-      { key: 'inspecting', label: '验视/打包', count: counts.inspecting },
-      { key: 'awaiting_label', label: '打印面单', count: counts.awaiting_label },
+      { key: 'warehouse_processing', label: '仓库处理', count: counts.warehouse_processing },
       { key: 'delivering', label: '出库发运', count: counts.delivering },
       { key: 'abnormal', label: '异常', count: counts.abnormal },
     ] } };

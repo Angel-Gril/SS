@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Eye, Plane, ShoppingCart, ExternalLink } from 'lucide-react';
+import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -100,10 +100,18 @@ const PIPELINE_ICONS: Record<string, any> = {
   purchased: ShoppingCart,
   domestic_transit: Truck,
   received: Warehouse,
-  inspecting: Eye,
-  awaiting_label: Printer,
+  warehouse_processing: Warehouse,
   delivering: Plane,
   abnormal: AlertTriangle,
+};
+
+const PIPELINE_LABELS: Record<string, string> = {
+  purchased: '采购备货',
+  domestic_transit: '国内在途',
+  received: '到仓入库',
+  warehouse_processing: '仓库处理',
+  delivering: '出库发运',
+  abnormal: '异常',
 };
 
 function ProductImagePreview({ items }: { items: any[] }) {
@@ -159,7 +167,7 @@ function formatInternationalDisplayStatus(order: any): string {
   const stage = resolveOrderFulfillmentStage(order);
   if (stage.key === 'delivered') return '已送达';
   if (stage.key === 'delivering') return '出库发运';
-  if (stage.key === 'awaiting_label') return stage.label;
+  if (stage.key === 'warehouse_processing') return '仓库处理';
   if (order.internationalTrackingNumber || order.trackingNumber) return '国际单已生成';
   return '待发出';
 }
@@ -273,6 +281,7 @@ export default function OrdersPage() {
     if (hasTracking) params.set('hasTracking', hasTracking);
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
+    if (pipelineActive) params.set('fulfillmentStage', pipelineActive);
 
     const res = await api.get<{ total: number; rows: Order[] }>(`/api/orders?${params}`);
     if (res.code === 1 && res.data) {
@@ -284,7 +293,7 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders();
-  }, [status, shopId, search, searchField, serviceTagId, shipmentUrgency, hasTracking, page, startDate, endDate]);
+  }, [status, shopId, search, searchField, serviceTagId, shipmentUrgency, hasTracking, page, startDate, endDate, pipelineActive]);
 
   async function handleSync(fullSync = false) {
     if (!shopId && shops.length === 0) {
@@ -331,21 +340,9 @@ export default function OrdersPage() {
   function handlePipelineClick(stageKey: string) {
     if (pipelineActive === stageKey) {
       setPipelineActive(null);
-      setStatus('');
     } else {
       setPipelineActive(stageKey);
-      // 映射 pipeline stage 到 status 筛选
-      const stageStatusMap: Record<string, string> = {
-        purchased: '',
-        domestic_transit: '',
-        received: '',
-        inspecting: '',
-        awaiting_label: 'awaiting_deliver',
-        delivering: 'delivering',
-        abnormal: 'cancelled',
-      };
-      const mappedStatus = stageStatusMap[stageKey] ?? '';
-      setStatus(mappedStatus);
+      setStatus('');
     }
     setPage(0);
   }
@@ -448,7 +445,7 @@ export default function OrdersPage() {
                       <span className={`text-xs whitespace-nowrap ${
                         isActive ? 'text-blue-600 font-medium dark:text-blue-400' : 'text-muted-foreground'
                       }`}>
-                        {stage.label}
+                        {PIPELINE_LABELS[stage.key] || stage.label}
                       </span>
                     </button>
                     {idx < pipeline.length - 1 && (

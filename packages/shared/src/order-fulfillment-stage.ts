@@ -2,8 +2,7 @@ export type FulfillmentStageKey =
   | 'purchased'
   | 'domestic_transit'
   | 'received'
-  | 'inspecting'
-  | 'awaiting_label'
+  | 'warehouse_processing'
   | 'delivering'
   | 'delivered'
   | 'abnormal';
@@ -35,11 +34,10 @@ export interface OrderFulfillmentStage {
 }
 
 const STAGES: Record<FulfillmentStageKey, OrderFulfillmentStage> = {
-  purchased: { key: 'purchased', label: '采购下单', variant: 'secondary' },
+  purchased: { key: 'purchased', label: '采购备货', variant: 'secondary' },
   domestic_transit: { key: 'domestic_transit', label: '国内在途', variant: 'warning' },
   received: { key: 'received', label: '到仓入库', variant: 'success' },
-  inspecting: { key: 'inspecting', label: '验视/打包', variant: 'warning' },
-  awaiting_label: { key: 'awaiting_label', label: '打印面单', variant: 'warning' },
+  warehouse_processing: { key: 'warehouse_processing', label: '仓库处理', variant: 'warning' },
   delivering: { key: 'delivering', label: '出库发运', variant: 'success' },
   delivered: { key: 'delivered', label: '已送达', variant: 'success' },
   abnormal: { key: 'abnormal', label: '异常', variant: 'destructive' },
@@ -99,15 +97,12 @@ export function resolveOrderFulfillmentStage(
   }
 
   if (AWAITING_LABEL_STATUSES.has(status) || !!order.shipmentDate || !!order.internationalTrackingNumber || !!order.trackingNumber) {
-    if (!order.labelPrintedAt && (order.internationalTrackingNumber || order.trackingNumber)) {
-      return { ...STAGES.awaiting_label, label: '国际单已生成' };
-    }
-    return STAGES.awaiting_label;
+    return STAGES.warehouse_processing;
   }
 
   if (domesticStatus === 'received') {
     if (isOlderThan(order.warehouseScanInAt, INSPECTION_DELAY_MS, now)) {
-      return STAGES.inspecting;
+      return STAGES.warehouse_processing;
     }
     return STAGES.received;
   }

@@ -705,7 +705,7 @@ function InternationalStatusBadge({ order }: { order: any }) {
   const stage = resolveOrderFulfillmentStage(order);
   if (stage.key === 'delivered') return <Badge variant="success">已送达</Badge>;
   if (stage.key === 'delivering') return <Badge variant="success">出库发运</Badge>;
-  if (stage.key === 'awaiting_label') return <Badge variant={stage.variant}>{stage.label}</Badge>;
+  if (stage.key === 'warehouse_processing') return <Badge variant={stage.variant}>{stage.label}</Badge>;
   if (order.internationalTrackingNumber || order.trackingNumber || order.international?.trackingNumber) {
     return <Badge variant="warning">国际单已生成</Badge>;
   }
