@@ -297,6 +297,50 @@ assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => !/^(里料成�
 assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => !/粉底液肤.*奶皮白.*S适合.*M适合.*L适合/s.test(item.name || item.specText || '')));
 assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => Array.isArray(item.images) && item.images.length === 0), 'do not attach the same product image to every text-inferred variant');
 
+const aliBraFunctionNoiseMatrixResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/1025802373364.html?offerId=1025802373364&hotSaleSkuId=6200788978652',
+  title: '夏季无痕聚拢上托新款冰丝内衣女无钢圈国风浮雕提花前扣文胸背心',
+  bodyText: [
+    '商品属性 款式 背心式 功能 聚拢、无痕、透气、上托、防走光、舒适 主面料成分 锦纶 面料名称 锦纶 模杯面料 棉 罩杯型 全罩杯 里料成分 氨纶 品牌 其他',
+    '适用年龄段 青年（18-40周岁） 颜色 檀香肤、丁香紫、胭脂红、柳茶绿、檀木咖、水墨黑',
+    '尺码 M【建议80-100斤】、L【建议100-120斤】、XL【建议120-140斤】、2XL【建议140-160斤】、3XL【建议160-180斤】',
+    '包装信息 商品件重尺 颜色 尺码 长(cm) 宽(cm) 高(cm) 体积(cm³) 重量(g)',
+  ].join(' '),
+  selectors: {
+    h1: '夏季无痕聚拢上托新款冰丝内衣女无钢圈国风浮雕提花前扣文胸背心',
+  },
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '1025802373364',
+        subject: '夏季无痕聚拢上托新款冰丝内衣女无钢圈国风浮雕提花前扣文胸背心',
+        offerProps: [
+          {
+            name: '款式',
+            value: '背心式 功能 聚拢、无痕、透气、上托、防走光、舒适 主面料成分 锦纶 面料名称 锦纶 模杯面料 棉 罩杯型 全罩杯 里料成分 氨纶 品牌 其他',
+          },
+          { name: '品牌', value: '其他' },
+          { name: '材质', value: '锦纶' },
+          { name: '成分', value: '锦纶' },
+          { name: '面料', value: '棉' },
+          { name: '季节', value: '夏季、四季通用' },
+          { name: '风格', value: '奢华高贵' },
+          { name: '颜色', value: '檀香肤、丁香紫、胭脂红、柳茶绿、檀木咖、水墨黑' },
+          { name: '尺码', value: 'M【建议80-100斤】、L【建议100-120斤】、XL【建议120-140斤】、2XL【建议140-160斤】、3XL【建议160-180斤】' },
+          { name: '货号', value: '3183#' },
+        ],
+      },
+    },
+  },
+});
+
+assert.equal(aliBraFunctionNoiseMatrixResponse.ok, true);
+assert.equal(aliBraFunctionNoiseMatrixResponse.data.skuItems.length, 30);
+assert.ok(aliBraFunctionNoiseMatrixResponse.data.skuItems.every((item) => item.attrs?.颜色 && item.attrs?.尺码), '1688 bra variants should only carry color and size attrs');
+assert.ok(aliBraFunctionNoiseMatrixResponse.data.skuItems.some((item) => item.attrs.颜色 === '檀香肤' && item.attrs.尺码 === 'M【建议80-100斤】'));
+assert.ok(aliBraFunctionNoiseMatrixResponse.data.skuItems.some((item) => item.attrs.颜色 === '水墨黑' && item.attrs.尺码 === '3XL【建议160-180斤】'));
+assert.ok(aliBraFunctionNoiseMatrixResponse.data.skuItems.every((item) => !/无痕 \/ 透气|上托 \/ 防走光|舒适 主面料|主面料成分|罩杯型|适用年龄段/.test(item.name || item.specText || '')));
+
 const aliPantsWeightSizeMatrixResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/1037213576946.html?offerId=1037213576946&hotSaleSkuId=6217325499120',
   title: '100%纯亚麻裤子男春秋薄款九分裤宽松显瘦休闲哈伦裤大码直筒裤男',

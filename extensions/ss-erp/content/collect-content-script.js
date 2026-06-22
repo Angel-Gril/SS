@@ -1370,6 +1370,7 @@
     (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
       const name = normalizeWhitespace(attr && (attr.name || attr.key || ""));
       if (!is1688SalePropName(name)) return;
+      if (isWeak1688SalePropName(name) && isLikely1688ProductAttributeBlob(attr && attr.value)) return;
       const values = split1688SalePropValues(name, attr && attr.value);
       if (values.length > 1 || isStrong1688SalePropName(name)) addDimension(name, values, "attribute");
     });
@@ -1422,6 +1423,20 @@
     return /^(颜色|尺码|规格|型号|容量|套餐|版本|口味)$/.test(name);
   }
 
+  function isWeak1688SalePropName(value) {
+    const name = normalize1688SalePropName(value);
+    return /^(款式)$/.test(name);
+  }
+
+  function isLikely1688ProductAttributeBlob(value) {
+    const text = normalizeWhitespace(value || "");
+    if (!text) return false;
+    const markers = text.match(/(功能|主面料成分|面料名称|模杯面料|罩杯型|里料成分|品牌|适用年龄段|材质|成分|货号|上市时间|包装信息|商品件重尺)/g) || [];
+    if (markers.length >= 2) return true;
+    if (/功能\s+[\u3400-\u9fff、,，\s]+(?:主面料|面料|罩杯|里料|品牌)/.test(text)) return true;
+    return false;
+  }
+
   function split1688SalePropValues(name, value) {
     const normalizedName = normalize1688SalePropName(name);
     if (normalizedName === "颜色") return split1688ColorList(value);
@@ -1457,7 +1472,27 @@
     const text = normalizeWhitespace(allText || "");
     if (!text) return [];
     const names = ["颜色分类", "净含量", "色号", "颜色", "尺码", "尺寸", "规格", "型号", "容量", "套餐", "版本", "口味"];
-    const boundary = names.concat(["品牌", "材质", "成分", "产地", "货号", "商品属性", "包装信息", "商品详情", "库存", "价格"]).join("|");
+    const boundary = names.concat([
+      "款式",
+      "功能",
+      "主面料成分",
+      "面料名称",
+      "模杯面料",
+      "罩杯型",
+      "里料成分",
+      "品牌",
+      "材质",
+      "成分",
+      "产地",
+      "货号",
+      "适用年龄段",
+      "上市时间",
+      "商品属性",
+      "包装信息",
+      "商品详情",
+      "库存",
+      "价格"
+    ]).join("|");
     const out = [];
     names.forEach((name) => {
       const regex = new RegExp(`${name}\\s*[:：]?\\s*(.{2,220}?)(?=(?:${boundary})\\s*[:：]?|[¥￥]\\s*\\d|\\d+\\s*件|$)`, "i");
@@ -1479,7 +1514,7 @@
 
     (Array.isArray(attributes) ? attributes : []).forEach((attr) => {
       const name = normalizeWhitespace(attr && (attr.name || attr.key || ""));
-      if (!/颜色|色号|款式/i.test(name)) return;
+      if (!/颜色|色号|颜色分类|色系/i.test(name)) return;
       split1688ColorList(attr.value).forEach(push);
     });
 
@@ -1569,7 +1604,7 @@
     const text = normalizeWhitespace(value || "");
     const rows = [];
     const code = "(?:\\d+\\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)";
-    const sized = `${code}\\s*(?:适合\\s*)?(?:\\d{2,3}\\s*(?:[-~—–至到])\\s*\\d{2,3}\\s*斤|\\d{2,3}\\s*\\/\\s*\\d{2,3}[A-Z]{1,5}|\\d{2,3}\\s*[A-Z]{0,5})`;
+    const sized = `${code}\\s*(?:[【\\[]?\\s*(?:建议|适合)\\s*)?(?:\\d{2,3}\\s*(?:[-~—–至到])\\s*\\d{2,3}\\s*斤|\\d{2,3}\\s*\\/\\s*\\d{2,3}[A-Z]{1,5}|\\d{2,3}\\s*[A-Z]{0,5})\\s*[】\\]]?`;
     const pattern = allowBare ? `${sized}|${code}` : sized;
     const regex = new RegExp(`(?:^|[\\s,，、;；])(${pattern})(?=$|[\\s,，、;；])`, "gi");
     let match;
