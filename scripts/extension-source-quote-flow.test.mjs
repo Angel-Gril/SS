@@ -175,6 +175,26 @@ assert.match(
   /ss-erp-source-loading/,
   '1688 costing panel loading state should use an explicit loading layout instead of blank cards',
 );
+assert.match(
+  sourceCostingPanel,
+  /function ensureLoaded/,
+  '1688 costing panel should lazily load product data only after the user opens or refreshes the panel',
+);
+assert.match(
+  sourceCostingPanel,
+  /function stopAutoRefresh/,
+  '1688 costing panel should stop background product polling when the panel is closed',
+);
+assert.doesNotMatch(
+  sourceCostingPanel,
+  /renderShell\(\);\s*refreshAll\(\);/,
+  '1688 costing panel must not refresh and collect product data immediately on page load',
+);
+assert.match(
+  sourceCostingPanel,
+  /window\.clearInterval\(state\.refreshTimer\)/,
+  '1688 costing panel should clear its auto-refresh interval after closing',
+);
 assert.doesNotMatch(
   sourceCostingPanel,
   /class="primary" data-action="save-quote">保存核价/,

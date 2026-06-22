@@ -30,6 +30,9 @@
     collecting: false,
     autoComputing: false,
     initializedInputs: false,
+    loaded: false,
+    opened: false,
+    refreshTimer: null,
     lastCostSignature: '',
     lastProductSignature: ''
   };
@@ -40,10 +43,6 @@
   if (!SOURCE_PLATFORM) return;
 
   renderShell();
-  refreshAll();
-  window.setInterval(function () {
-    refreshProductOnly({ auto: true });
-  }, 1000);
 
   function platformLabel() {
     return SourceCosting.platformLabel(SOURCE_PLATFORM);
@@ -110,14 +109,61 @@
     bindPanelDrag(panel);
 
     fab.addEventListener('click', function () {
-      panel.classList.toggle('open');
+      if (panel.classList.contains('open')) {
+        closePanel(panel);
+      } else {
+        openPanel(panel);
+      }
     });
     panel.querySelector('[data-action="close"]').addEventListener('click', function () {
-      panel.classList.remove('open');
+      closePanel(panel);
     });
-    panel.querySelector('[data-action="refresh"]').addEventListener('click', refreshAll);
+    panel.querySelector('[data-action="refresh"]').addEventListener('click', function () {
+      ensureLoaded({ force: true });
+    });
     panel.querySelector('[data-action="run-costing"]').addEventListener('click', runCosting);
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
+  }
+
+  function openPanel(panel) {
+    panel = panel || document.getElementById(PANEL_ID);
+    if (!panel) return;
+    panel.classList.add('open');
+    state.opened = true;
+    ensureLoaded();
+    startAutoRefresh();
+  }
+
+  function closePanel(panel) {
+    panel = panel || document.getElementById(PANEL_ID);
+    if (!panel) return;
+    panel.classList.remove('open');
+    state.opened = false;
+    stopAutoRefresh();
+  }
+
+  function ensureLoaded(options) {
+    options = options || {};
+    if (!options.force && state.loaded) {
+      refreshProductOnly({ auto: true });
+      return;
+    }
+    state.loaded = true;
+    refreshAll();
+  }
+
+  function startAutoRefresh() {
+    if (state.refreshTimer) return;
+    state.refreshTimer = window.setInterval(function () {
+      if (!state.opened) return;
+      refreshProductOnly({ auto: true });
+    }, 1000);
+  }
+
+  function stopAutoRefresh() {
+    if (!state.refreshTimer) return;
+    window.clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
   }
 
   function restorePanelPosition(panel) {
