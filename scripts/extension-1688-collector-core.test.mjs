@@ -411,6 +411,67 @@ test('1688 core does not leak packaging weight headers into sale attribute matri
   assert.equal(result.skuItems.some((sku) => sku.attrs && sku.attrs['尺码'] === 'XL（125-165斤）'), true);
 });
 
+test('1688 core separates lingerie attribute table fields from sale sizes', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1026338058165.html?offerId=1026338058165',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 罩杯型 1/2罩杯 款式 法式风格',
+      '功能 聚拢,无痕,透气,上托,美背,调整型,舒适,侧收,收副乳,大胸显小 面料名称 蕾丝',
+      '模杯类型 薄模杯 里料成分 聚酯纤维（涤纶） 是否可外穿 不可外穿',
+      '模杯面料 棉 材质 尼龙或莱卡 成分 聚酯纤维（涤纶） 季节 夏季,冬季,春季,秋季',
+      '钢圈 无钢圈 适用年龄段 青年（18-40周岁） 主面料成分 聚酯纤维（涤纶） 主面料成分的含量 70-80（%）',
+      '里料成分含量 70-80（%） 排扣类型 后三排搭扣 肩带类型 固定双肩带 肩带材质 尼龙或莱卡',
+      '设计特色 蕾丝边 产地 汕头 是否无缝 否 纱线来源 其它 品牌 其他 货源类别 现货',
+      '是否支持贴牌 不支持 是否跨境出口专供货源 是 适合季节 夏季,冬季,春季,秋季',
+      '颜色 凝脂白,朝霞蓝,橡灰咖,锦鲤红,苍弯黑 尺码 34-75BC,36-80BC,38-85BC,40-90BC,42-95BC 包装形式 单入装 展开全部 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '1026338058165',
+      subject: '法式内衣女兔耳朵水晶杯大胸显小薄款聚拢防下垂女士内衣胸罩揭阳',
+      priceInfo: { price: '24' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  const attrs = Object.fromEntries(result.attributes.map((attr) => [attr.name, attr.value]));
+  assert.equal(result.skuItems.length, 25);
+  assert.equal(result.skuItems.some((sku) => /包装形式|展开全部/.test(JSON.stringify(sku.attrs || {}))), false);
+  assert.equal(attrs['尺码'], '34-75BC、36-80BC、38-85BC、40-90BC、42-95BC');
+  assert.equal(attrs['包装形式'], '单入装');
+  assert.equal(attrs['是否可外穿'], '不可外穿');
+  assert.equal(attrs['里料成分'], '聚酯纤维（涤纶）');
+  assert.equal(attrs['钢圈'], '无钢圈');
+  assert.equal(attrs['肩带材质'], '尼龙或莱卡');
+  assert.equal(attrs['是否支持贴牌'], '不支持');
+  assert.equal(attrs['是否跨境出口专供货源'], '是');
+  assert.equal(attrs['适合季节'], '夏季,冬季,春季,秋季');
+});
+
+test('1688 core extracts detail images embedded in description html', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1026338058165.html?offerId=1026338058165',
+    host: 'detail.1688.com',
+    pageText: '商品属性 颜色 凝脂白 尺码 34-75BC 商品详情',
+    sources: [{
+      offerId: '1026338058165',
+      subject: '法式内衣女兔耳朵水晶杯大胸显小薄款聚拢防下垂女士内衣胸罩揭阳',
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+      detailDescription: '<div><img src="https://cbu01.alicdn.com/img/ibank/O1CN-detail-1.jpg_790x790.jpg"/><img src="//cbu01.alicdn.com/img/ibank/O1CN-detail-2.jpg_790x790.jpg"/></div>',
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.sourceDetailImages)), [
+    'https://cbu01.alicdn.com/img/ibank/O1CN-detail-1.jpg',
+    'https://cbu01.alicdn.com/img/ibank/O1CN-detail-2.jpg',
+  ]);
+  assert.equal(result.sourceRichContentDraft.blocks.filter((block) => block.type === 'image').length, 2);
+});
+
 test('1688 core extracts general package weight from 1688 packaging text', () => {
   const core = loadCore();
 

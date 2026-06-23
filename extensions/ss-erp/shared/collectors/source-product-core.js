@@ -868,10 +868,28 @@
         return;
       }
       var text = String(raw || '').trim();
+      var htmlUrls = extract1688ImageUrlsFromText(text);
+      if (htmlUrls.length) {
+        htmlUrls.forEach(push);
+        return;
+      }
       if (/^\/\//.test(text) || /^https?:\/\//i.test(text)) images.push(text);
     }
     push(value);
     return images;
+  }
+
+  function extract1688ImageUrlsFromText(value) {
+    var text = String(value || '');
+    if (!/<|(?:src|data-src|data-lazy-src|url)\s*=/i.test(text)) return [];
+    var rows = [];
+    var regex = /(?:src|data-src|data-lazy-src|url)\s*=\s*["']([^"']+)["']|\b(https?:\/\/[^\s"'<>]+)|\/\/([^\s"'<>]+)/ig;
+    var match;
+    while ((match = regex.exec(text))) {
+      var url = match[1] || match[2] || (match[3] ? '//' + match[3] : '');
+      if (url) rows.push(url);
+    }
+    return dedupe1688TextValues(rows);
   }
 
   function normalize1688ImageList(values) {
@@ -960,6 +978,7 @@
         });
       });
     });
+    attrs = attrs.concat(extract1688GeneralAttributesFromPageText(pageText));
     attrs = attrs.concat(extract1688AttributesFromPageText(pageText, attrs));
     attrs = merge1688SaleAttributes(attrs);
     return dedupe1688Objects(attrs, function (row) { return normalizeWhitespace(row.name + ':' + row.value); }).slice(0, 80);
@@ -977,7 +996,7 @@
 
     var names = ['颜色分类', '净含量', '色号', '颜色', '尺码', '尺寸', '规格', '型号', '容量', '套餐', '版本', '口味'];
     var saleText = strip1688PackagingSectionsFromPageText(text);
-    var boundaries = names.concat([
+    var boundaries = names.concat(get1688AttributeMarkers()).concat([
       '款式', '功能', '主面料成分', '面料名称', '模杯面料', '罩杯型', '里料成分',
       '品牌', '材质', '成分', '产地', '货号', '适用年龄段', '上市时间',
       '是否跨境出口专供货源',
@@ -1003,6 +1022,35 @@
       if (best && best.values.length) out.push({ name: normalizedName, value: best.values.join('、') });
     });
     return out;
+  }
+
+  function extract1688GeneralAttributesFromPageText(pageText) {
+    var text = normalizeWhitespace(pageText || '');
+    if (!/(商品属性|产品属性|基本参数|详细参数)/.test(text)) return [];
+    var sectionMatch = text.match(/(?:商品属性|产品属性|基本参数|详细参数)\s+(.{1,4000}?)(?=(?:包装信息|商品件重尺|商品详情|商品评价|买家评价|价格说明|$))/);
+    var section = sectionMatch && sectionMatch[1] ? sectionMatch[1] : text;
+    return parse1688AttributeMarkerSection(section).filter(function (attr) {
+      return attr && !is1688StrongSalePropName(normalize1688SalePropName(attr.name));
+    });
+  }
+
+  function parse1688AttributeMarkerSection(value) {
+    var text = normalizeWhitespace(value || '');
+    if (!text) return [];
+    var markers = get1688AttributeMarkers();
+    var markerPattern = markers.map(escape1688RegExp).join('|');
+    var regex = new RegExp('(?:^|[\\s,，、;；])(' + markerPattern + ')\\s+', 'g');
+    var rows = [];
+    var currentName = '';
+    var currentStart = 0;
+    var match;
+    while ((match = regex.exec(text))) {
+      if (currentName) push1688ExpandedAttribute(rows, currentName, text.slice(currentStart, match.index));
+      currentName = match[1];
+      currentStart = match.index + match[0].length;
+    }
+    if (currentName) push1688ExpandedAttribute(rows, currentName, text.slice(currentStart));
+    return rows;
   }
   function strip1688PackagingSectionsFromPageText(value) {
     var text = normalizeWhitespace(value || '');
@@ -1231,17 +1279,20 @@
   }
 
   function clean1688AttributeValue(value) {
-    return normalizeWhitespace(value || '').replace(/^[:：,，、;；\s]+|[:：,，、;；\s]+$/g, '');
+    return normalizeWhitespace(value || '')
+      .replace(/\s*(?:展开全部|收起|查看更多)\s*$/g, '')
+      .replace(/^[:：,，、;；\s]+|[:：,，、;；\s]+$/g, '');
   }
 
   function get1688AttributeMarkers() {
     return [
-      '主面料成分含量', '里料成分含量', '上市年份/季节', '上市年份季节', '适用年龄段',
-      '主面料成分', '面料名称', '模杯面料', '模杯类型', '罩杯型', '里料成分', '排扣类型', '肩带类型',
+      '主面料成分的含量', '主面料成分含量', '里料成分含量', '上市年份/季节', '上市年份季节', '适用年龄段',
+      '是否跨境出口专供货源', '是否支持贴牌', '是否可外穿',
+      '主面料成分', '面料名称', '模杯面料', '模杯类型', '罩杯型', '里料成分', '排扣类型', '肩带类型', '肩带材质',
       '货源类别', '裤型', '裤长', '腰型', '裤门襟', '适合季节', '适合人群', '适用场景',
-      '商品件重尺', '包装信息', '材质', '成分', '季节', '风格', '功能', '功效', '款式',
+      '商品件重尺', '包装信息', '包装形式', '材质', '成分', '季节', '风格', '功能', '功效', '款式',
       '颜色', '尺码', '规格', '型号', '容量', '品牌', '货号', '厚薄', '图案', '弹力',
-      '类别', '工艺', '产地'
+      '钢圈', '设计特色', '是否无缝', '纱线来源', '类别', '工艺', '产地'
     ].sort(function (a, b) { return b.length - a.length; });
   }
 
