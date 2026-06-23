@@ -251,3 +251,50 @@ test('1688 core builds sku matrix from explicit color and size attributes when s
   assert.equal(result.skuItems.every((sku) => sku.price === 8.5), true);
   assert.equal(result.skuItems.some((sku) => /店铺|入驻|主面料成分|功能/.test(sku.name)), false);
 });
+
+test('1688 core builds sku matrix from explicit page text color and size sections', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    pageText: '商品属性 颜色 隐形肤 性感黑 香槟白 尺码 S（适合75-95斤32/70AB） M（适合95-110斤34/75AB） L（适合110-125斤36/80AB） 货号 8838 商品详情',
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      priceInfo: { price: '11' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 9);
+  assert.equal(result.attributes.some((attr) => attr.name === '颜色' && attr.value === '隐形肤、性感黑、香槟白'), true);
+  assert.equal(result.attributes.some((attr) => attr.name === '尺码' && attr.value.includes('M（适合95-110斤34/75AB）')), true);
+  assert.equal(result.skuItems.some((sku) => /商品属性|商品详情|货号|店铺/.test(sku.name)), false);
+});
+
+test('1688 core extracts packaging rows from explicit page text table', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    pageText: '商品属性 颜色 隐形肤 性感黑 尺码 S M 包装信息 商品件重尺 颜色 尺码 长(cm) 宽(cm) 高(cm) 重量(g) 隐形肤 S 30 20 2 120 性感黑 M 31 21 2 125 商品详情',
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      priceInfo: { price: '11' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.sourcePackagingRows[0])), {
+    color: '隐形肤',
+    size: 'S',
+    lengthMm: 300,
+    widthMm: 200,
+    heightMm: 20,
+    weightG: 120,
+  });
+});
