@@ -201,9 +201,12 @@
     var title = pick1688Title(sources, productId, shopName);
     var skuProps = pick1688SkuProps(sources);
     var skuItems = pick1688SkuItems(sources, skuProps);
-    var priceModel = build1688PriceModel(sources, skuItems);
     var assets = collect1688Assets(sources, skuProps);
     var attributes = pick1688Attributes(sources);
+    var priceModel = build1688PriceModel(sources, skuItems);
+    if (!skuItems.length) {
+      skuItems = build1688SkuItemsFromAttributes(attributes, priceModel.costPriceForOzon);
+    }
     var packagingRows = pick1688PackagingRows(sources);
     var description = pick1688Description(sources, pageText, assets.detailImages);
     var sourceRichContentDraft = build1688RichContentDraft(description, assets.detailImages);
@@ -535,6 +538,93 @@
     return /^(颜色|尺码|规格|型号|容量|套餐|版本|口味)$/.test(name);
   }
 
+  function build1688SkuItemsFromAttributes(attributes, price) {
+    var dimensions = [];
+    (Array.isArray(attributes) ? attributes : []).forEach(function (attr) {
+      var name = normalize1688SalePropName(attr && attr.name);
+      if (!is1688StrongSalePropName(name)) return;
+      var values = split1688AttributeSaleValues(name, attr && attr.value);
+      if (!values.length) return;
+      var existing = dimensions.find(function (dimension) { return dimension.name === name; });
+      if (!existing) {
+        existing = { name: name, values: [] };
+        dimensions.push(existing);
+      }
+      values.forEach(function (value) {
+        if (!existing.values.some(function (item) { return item.name === value; })) {
+          existing.values.push({ id: '', name: value, imageUrl: '' });
+        }
+      });
+    });
+    dimensions = dimensions
+      .filter(function (dimension) { return dimension.values.length > 0; })
+      .slice(0, 3);
+    if (!dimensions.length) return [];
+    if (dimensions.length === 1 && dimensions[0].values.length <= 1) return [];
+    var total = dimensions.reduce(function (count, dimension) { return count * dimension.values.length; }, 1);
+    if (total <= 0 || total > 200) return [];
+    var skuPrice = Number(price);
+    skuPrice = Number.isFinite(skuPrice) && skuPrice > 0 ? roundMoney(skuPrice) : null;
+    var rows = [];
+    function walk(index, attrs) {
+      if (index >= dimensions.length) {
+        var label = Object.keys(attrs).map(function (name) { return attrs[name]; }).join(' / ');
+        rows.push({
+          skuId: '',
+          sku: '',
+          name: label,
+          specText: label,
+          price: skuPrice,
+          priceText: skuPrice != null ? ('¥' + formatMoney(skuPrice)) : '',
+          stock: null,
+          attrs: Object.assign({}, attrs),
+          images: [],
+          source: 'attributeMatrix'
+        });
+        return;
+      }
+      var dimension = dimensions[index];
+      dimension.values.forEach(function (value) {
+        var nextAttrs = Object.assign({}, attrs);
+        nextAttrs[dimension.name] = value.name;
+        walk(index + 1, nextAttrs);
+      });
+    }
+    walk(0, {});
+    return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+  }
+
+  function split1688AttributeSaleValues(name, value) {
+    var text = clean1688AttributeValue(value);
+    if (!text || is1688MerchantMetricLabel(text) || isLikely1688AttributeBlob(text)) return [];
+    var normalizedName = normalize1688SalePropName(name);
+    var parts = text.split(/[、,，;；|]+/).map(clean1688AttributeValue).filter(Boolean);
+    if (parts.length <= 1) {
+      var spaced = text.split(/\s{2,}|\s+(?=(?:\d+XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)(?:[（(【\[]|$))/i)
+        .map(clean1688AttributeValue)
+        .filter(Boolean);
+      if (spaced.length > 1) parts = spaced;
+    }
+    if (parts.length <= 1) parts = [text];
+    return dedupe1688TextValues(parts
+      .map(function (part) { return clean1688AttributeValue(part); })
+      .filter(function (part) {
+        if (!part || part.length > 80) return false;
+        if (is1688MerchantMetricLabel(part) || isLikely1688AttributeBlob(part)) return false;
+        if (normalizedName === '尺码') return /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(part);
+        return true;
+      }));
+  }
+
+  function dedupe1688TextValues(values) {
+    var out = [];
+    (Array.isArray(values) ? values : []).forEach(function (value) {
+      var text = normalizeWhitespace(value || '');
+      if (text && !out.includes(text)) out.push(text);
+    });
+    return out;
+  }
+
   function normalize1688Attrs(value) {
     var attrs = {};
     if (!value) return attrs;
@@ -603,6 +693,7 @@
 
   function build1688PriceModel(sources, skuItems) {
     var skuPrices = (Array.isArray(skuItems) ? skuItems : [])
+      .filter(function (item) { return item && item.source === 'skuMap'; })
       .map(function (item) { return Number(item && item.price); })
       .filter(function (value) { return Number.isFinite(value) && value > 0; })
       .sort(function (a, b) { return a - b; });

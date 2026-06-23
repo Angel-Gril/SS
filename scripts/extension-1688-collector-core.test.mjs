@@ -224,3 +224,30 @@ test('1688 core splits product attribute blobs into named attributes', () => {
   assert.equal(attrs['货号'], '3183#');
   assert.equal(result.attributes.some((attr) => attr.name === '款式' && attr.value.includes('主面料成分')), false);
 });
+
+test('1688 core builds sku matrix from explicit color and size attributes when sku map is missing', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      productProps: [
+        { name: '颜色', value: '隐形肤、性感黑、香槟白' },
+        { name: '尺码', value: 'S（适合75-95斤32/70AB）、M（适合95-110斤34/75AB）、L（适合110-125斤36/80AB）' },
+      ],
+      priceInfo: { price: '8.5' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 9);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.skuItems[0].attrs)), {
+    '颜色': '隐形肤',
+    '尺码': 'S（适合75-95斤32/70AB）',
+  });
+  assert.equal(result.skuItems.every((sku) => sku.price === 8.5), true);
+  assert.equal(result.skuItems.some((sku) => /店铺|入驻|主面料成分|功能/.test(sku.name)), false);
+});
