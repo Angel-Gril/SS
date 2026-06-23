@@ -188,12 +188,24 @@ function sourcePriceModelText(item: SourceCollectItem): string {
   const displayPrice = String(item.metadata?.displayPrice || '').trim();
   const sourceLabel: Record<string, string> = {
     sku: 'SKU价格',
+    selectedSku: '已选SKU价',
+    selectedOrderSummary: '订单价',
     ladder: '阶梯价',
     display: '展示价',
+    rangeHigh: '区间高价',
+    visibleRangeHigh: '可见高价',
+    dom: '页面价格',
+    text: '文本价格',
+    skuMinFallback: 'SKU最低价',
+  };
+  const confidenceLabel: Record<string, string> = {
+    high: '高',
+    medium: '中',
+    low: '低',
   };
   return [
     sourceLabel[sourceType] || sourceType || '未识别',
-    confidence ? `置信度 ${confidence}` : '',
+    confidence ? `置信度 ${confidenceLabel[confidence] || confidence}` : '',
     ladderPrices.length ? `阶梯 ${ladderPrices.length}` : '',
     displayPrice ? `展示 ${displayPrice}` : '',
   ].filter(Boolean).join(' / ');
@@ -822,9 +834,9 @@ function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
 
 function MetricBlock({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border p-3">
+    <div className="min-w-0 rounded-md border p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 font-medium">{value}</div>
+      <div className="mt-1 break-words font-medium leading-snug [overflow-wrap:anywhere]">{value}</div>
     </div>
   );
 }

@@ -68,6 +68,14 @@ for (const helper of ['sourceDetailPreviewImages', 'sourcePackagingRows', 'sourc
 for (const helper of ['sourcePriceModelText', 'sourceRejectedAssetCount', 'rejectedAssets', 'priceConfidence', 'ladderPrices']) {
   assert.match(page, new RegExp(helper), `source collection page should expose source collection quality helper: ${helper}`);
 }
+for (const readablePriceSource of ['visibleRangeHigh', '可见高价', '低']) {
+  assert.match(page, new RegExp(readablePriceSource), `source collection page should render readable price source text: ${readablePriceSource}`);
+}
+assert.match(
+  page,
+  /break-words|break-all|overflow-wrap|word-break/,
+  'source collection metric blocks should wrap long values inside their card boundary',
+);
 for (const label of ['价格来源', '过滤图片']) {
   assert.match(page, new RegExp(label), `source collection diagnostics should expose label: ${label}`);
 }

@@ -472,6 +472,33 @@ test('1688 core extracts detail images embedded in description html', () => {
   assert.equal(result.sourceRichContentDraft.blocks.filter((block) => block.type === 'image').length, 2);
 });
 
+test('1688 core separates vest product category fields from main fabric composition', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/899426396630.html?offerId=899426396630',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 黑色 粉色 白色 咖啡色 深灰 黄色 尺码 均码【适合80-125斤】',
+      '面料名称 棉 主面料成分 棉 产品类别 吊带背心 款式细节 棉垫 领型 圆领',
+      '品牌 界之伊 成分 棉 季节 夏季 风格 韩版 厚薄 （克重） 货号 6910 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '899426396630',
+      subject: '758#人棉设计感蝴蝶结吊带背心甜欲系带胸垫内搭外穿百搭打底内衣',
+      priceInfo: { price: '12' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  const attrs = Object.fromEntries(result.attributes.map((attr) => [attr.name, attr.value]));
+  assert.equal(attrs['主面料成分'], '棉');
+  assert.equal(attrs['产品类别'], '吊带背心');
+  assert.equal(attrs['款式细节'], '棉垫');
+  assert.equal(attrs['领型'], '圆领');
+  assert.equal(result.attributes.some((attr) => attr.name === '主面料成分' && /产品类别|款式细节|领型/.test(attr.value)), false);
+});
+
 test('1688 core extracts general package weight from 1688 packaging text', () => {
   const core = loadCore();
 
