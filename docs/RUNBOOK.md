@@ -70,6 +70,40 @@ DEPLOY_ENV_PROFILE=cloud-r2 \
 ./scripts/deploy-app-dir.sh
 ```
 
+### Windows / WSL SSH 部署注意事项
+
+这个仓库常在 Windows 工作区里操作，但部署脚本是 bash 脚本，容易混用三套环境：Windows PowerShell/OpenSSH、Git Bash、WSL。出问题时先分清是哪一层失败。
+
+已知坑：
+
+- 不要从 WSL 里运行 Windows Git 创建的 worktree。`.git` 文件会指向类似 `D:/AI Agent/.../.git/worktrees/...` 的 Windows 路径，WSL Git 会报 `fatal: not a git repository`。
+- 在 WSL/Git Bash 里写 `SSH_KEY=~/.ssh/ss_erp_vultr_sg` 会解析到 Unix home，例如 `/home/miku/.ssh/...`，不是 Windows 的 `C:\Users\550W\.ssh\...`。如果 key 实际在 Windows 用户目录，必须用当前 shell 能读到的绝对路径。
+- `ssh root@45.76.49.64 echo ok` 通过，只能证明认证和 exec 通道正常；`scp` 还会走文件传输通道，可能因为客户端默认 SFTP、远端策略或中间网络被关闭而失败。
+- 当前机器上 Windows OpenSSH 到 VPS 可用；优先用 Windows 侧确认连通，再决定是否用 Git Bash/WSL 执行脚本。
+
+部署前最小诊断：
+
+```powershell
+Test-NetConnection 45.76.49.64 -Port 22
+ssh -i $env:USERPROFILE\.ssh\ss_erp_vultr_sg -o BatchMode=yes -o IdentitiesOnly=yes root@45.76.49.64 echo ok
+ssh -i $env:USERPROFILE\.ssh\ss_erp_vultr_sg -o BatchMode=yes -o IdentitiesOnly=yes root@45.76.49.64 "command -v scp; grep -n '^Subsystem[[:space:]]\+sftp' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/* 2>/dev/null || true"
+```
+
+如果当前工作树有无关已跟踪改动，`deploy-app-dir.sh` 会拒绝部署。不要为了部署去提交或 stash 无关改动；从当前 commit 新建干净 clone 再部署：
+
+```powershell
+git clone "D:\AI Agent\Work\QE\SS ERP" D:\tmp\ss-erp-deploy-clone-<commit>
+cd D:\tmp\ss-erp-deploy-clone-<commit>
+git checkout <commit>
+$env:DEPLOY_HOST="45.76.49.64"
+$env:DEPLOY_USER="root"
+$env:SSH_KEY="$env:USERPROFILE\.ssh\ss_erp_vultr_sg"
+$env:DEPLOY_ENV_PROFILE="cloud-r2"
+C:\Progra~1\Git\bin\bash.exe scripts/deploy-app-dir.sh <commit>
+```
+
+如果脚本卡在上传阶段，先单独测试上传同一个 tarball；`scp` 失败时不要反复重跑完整部署脚本，先切换到可控的上传方式或修复本机 SSH/SFTP 客户端问题。
+
 部署前可以先在 VPS 做只读就绪检查：
 
 ```bash
