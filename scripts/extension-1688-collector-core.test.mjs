@@ -273,6 +273,37 @@ test('1688 core builds sku matrix from explicit page text color and size section
   assert.equal(result.skuItems.some((sku) => /商品属性|商品详情|货号|店铺/.test(sku.name)), false);
 });
 
+test('1688 core prefers complete page text sale attributes over selected sku fragments', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    pageText: [
+      '颜色 隐形肤 性感黑 香槟白 尺码 S 已选 隐形肤 S 商品金额 ¥8.50',
+      '商品属性 款式 美背型 颜色 隐形肤,性感黑,香槟白',
+      '尺码 S（适合75-95斤32/70AB）,M（适合95-110斤34/75AB）,L（适合110-125斤36/80AB）,XL（适合125-140斤38/85AB）',
+      '是否跨境出口专供货源 否 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      productProps: [
+        { name: '颜色', value: '隐形肤、性感黑、香槟白' },
+        { name: '尺码', value: 'S' },
+      ],
+      priceInfo: { price: '8.5' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 12);
+  assert.equal(result.attributes.filter((attr) => attr.name === '尺码').length, 1);
+  assert.equal(result.attributes.some((attr) => attr.name === '尺码' && attr.value.includes('XL（适合125-140斤38/85AB）')), true);
+  assert.equal(result.skuItems.some((sku) => sku.attrs && sku.attrs['尺码'] === 'S'), false);
+  assert.equal(result.skuItems.some((sku) => sku.attrs && String(sku.attrs['尺码']).startsWith('XL')), true);
+});
+
 test('1688 core extracts packaging rows from explicit page text table', () => {
   const core = loadCore();
 
