@@ -22,6 +22,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api';
+import { evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
 import { formatDate } from '@/lib/utils';
 
 type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall';
@@ -67,6 +68,8 @@ const detailSections: Array<{ key: DetailSection; label: string }> = [
   { key: 'translation', label: '翻译' },
   { key: 'listing', label: '上架检查' },
 ];
+
+const sourceListingStatusLegend = '可上架 / 待复核 / 阻断 / 真实商品标题 / 俄文标题/描述 / Ozon 类目/type / Ozon 必填属性/字典值 / 颜色尺码变体 / 重量尺寸 / 销售受限/出口限制';
 
 function normalizePlatform(value: unknown): PlatformFilter | 'other' {
   const text = String(value || '').trim().toLowerCase();
@@ -290,44 +293,9 @@ function selectedSkuText(item: SourceCollectItem): string {
   ].map((part) => String(part || '').trim()).filter(Boolean).join(' · ');
 }
 
-function hasSourceAttribute(item: SourceCollectItem, pattern: RegExp): boolean {
-  return sourceAttributes(item).some((attr) => pattern.test(String(attr.name || attr.key || '')) || pattern.test(String(attr.value || attr.attrValue || '')));
-}
-
-function hasVariantAttribute(item: SourceCollectItem, pattern: RegExp): boolean {
-  return sourceDisplayVariants(item).some((variant) => {
-    const attrs = variant.attrs && typeof variant.attrs === 'object' ? variant.attrs as Record<string, unknown> : {};
-    return Object.entries(attrs).some(([key, value]) => pattern.test(key) || pattern.test(String(value || '')))
-      || pattern.test(String(variant.name || variant.specText || ''));
-  });
-}
-
-function hasStock(item: SourceCollectItem): boolean {
-  return sourceDisplayVariants(item).some((variant) => {
-    const stock = Number(variant.stock ?? variant.stockNum ?? variant.quantity);
-    return Number.isFinite(stock) && stock >= 0;
-  });
-}
 
 function sourceMissingFields(item: SourceCollectItem): string[] {
-  const missing: string[] = [];
-  const title = sourceDisplayTitle(item);
-  if (!title || /^(1688|PDD|拼多多|淘宝|天猫)?\s*商品\s*\d*$/i.test(title) || item.metadata?.titleNeedsReview) {
-    missing.push('真实商品标题');
-  }
-  if (!item.metadata?.publishTitleRu || !item.metadata?.sourceDescriptionRu) missing.push('俄文标题/描述');
-  if (!item.metadata?.descriptionCategoryId && !item.metadata?.ozonCategoryId && !item.metadata?.typeId && !item.metadata?.ozonTypeId) {
-    missing.push('Ozon 类目/type');
-  }
-  if (!hasSourceAttribute(item, /品牌|brand/i)) missing.push('品牌/无品牌');
-  if (!hasVariantAttribute(item, /颜色|color|colour/i) || !hasVariantAttribute(item, /尺码|规格|size/i)) missing.push('颜色尺码变体');
-  if (!hasStock(item)) missing.push('SKU 库存');
-  if (!hasSourceAttribute(item, /材质|成分|面料|material|composition/i)) missing.push('材质/成分');
-  if (!hasSourceAttribute(item, /性别|适用性别|gender/i) || !hasSourceAttribute(item, /季节|season/i)) missing.push('性别/季节');
-  if (!item.metadata?.weightG || !item.metadata?.lengthMm || !item.metadata?.widthMm || !item.metadata?.heightMm) missing.push('重量尺寸');
-  if (!sourcePreviewImages(item).length) missing.push('可用主图清洗');
-  if (!sourceVideoCount(item) && !item.metadata?.sourceRichDescriptionJson) missing.push('视频/富内容');
-  return missing;
+  return evaluateSourceListingReadiness(item).missingFields;
 }
 
 function metadataArray(item: SourceCollectItem, key: string): unknown[] {
@@ -356,7 +324,7 @@ function sourceHasEditedImages(item: SourceCollectItem): boolean {
 }
 
 function sourceReadinessBadges(item: SourceCollectItem): ReadinessBadge[] {
-  const missing = sourceMissingFields(item);
+  const readiness = evaluateSourceListingReadiness(item);
   const skuCount = variantCount(item);
   const attrs = sourceAttributeCount(item);
   const previewCount = sourcePreviewImages(item).length;
@@ -387,9 +355,11 @@ function sourceReadinessBadges(item: SourceCollectItem): ReadinessBadge[] {
     sourceHasEditedImages(item)
       ? { label: '已改图', tone: 'ok' as const }
       : { label: '待改图', tone: 'muted' as const },
-    missing.length === 0
-      ? { label: '可上架', tone: 'ok' as const }
-      : { label: `待处理 ${missing.length}`, tone: 'warn' as const, title: missing.join(' / ') },
+    {
+      label: sourceListingStatusLabel(readiness.status),
+      tone: readiness.status === 'ready' ? 'ok' as const : 'warn' as const,
+      title: readiness.blockers.concat(readiness.warnings).join(' / ') || sourceListingStatusLegend,
+    },
   ];
 }
 
@@ -797,7 +767,8 @@ function SourceTranslationSection({ item }: { item: SourceCollectItem }) {
 }
 
 function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
-  const missing = sourceMissingFields(item);
+  const readiness = evaluateSourceListingReadiness(item);
+  const missing = readiness.missingFields;
   const sourceAssets = [
     { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
     { label: `详情图 ${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`, done: sourceDetailPreviewImages(item).length > 0 },
@@ -806,7 +777,18 @@ function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
   ];
   return (
     <div className="space-y-3">
-      <InfoPanel title="上架检查" count={missing.length ? `${missing.length} 项` : '可上架'}>
+      <InfoPanel title="上架检查" count={sourceListingStatusLabel(readiness.status)}>
+        <div className="mb-2 flex flex-wrap gap-2">
+          <Badge
+            variant="outline"
+            className={readiness.status === 'ready' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}
+            title={sourceListingStatusLegend}
+          >
+            {sourceListingStatusLabel(readiness.status)}
+          </Badge>
+          {readiness.status === 'blocked' ? <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">阻断</Badge> : null}
+          {readiness.status === 'needs_review' ? <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">待复核</Badge> : null}
+        </div>
         {missing.length ? (
           <div className="flex flex-wrap gap-2">
             {missing.map((field) => (
@@ -815,6 +797,21 @@ function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
           </div>
         ) : <div className="text-emerald-700">关键上架字段已采集或已补全</div>}
       </InfoPanel>
+      {readiness.blockers.length ? (
+        <InfoPanel title="阻断项" count={readiness.blockers.length}>
+          <ReadinessIssueList issues={readiness.blockers} tone="blocked" />
+        </InfoPanel>
+      ) : null}
+      {readiness.warnings.length ? (
+        <InfoPanel title="待复核项" count={readiness.warnings.length}>
+          <ReadinessIssueList issues={readiness.warnings} tone="warning" />
+        </InfoPanel>
+      ) : null}
+      {readiness.restrictionRisks.length ? (
+        <InfoPanel title="销售受限/出口限制" count={readiness.restrictionRisks.length}>
+          <ReadinessIssueList issues={readiness.restrictionRisks} tone="blocked" />
+        </InfoPanel>
+      ) : null}
       <InfoPanel title="素材处理" count={sourceRichContentDraftStatus(item) || null}>
         <div className="flex flex-wrap gap-2">
           {sourceAssets.map((asset) => (
@@ -828,6 +825,17 @@ function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
           ))}
         </div>
       </InfoPanel>
+    </div>
+  );
+}
+
+function ReadinessIssueList({ issues, tone }: { issues: string[]; tone: 'blocked' | 'warning' }) {
+  const className = tone === 'blocked'
+    ? 'border-red-200 bg-red-50 text-red-700'
+    : 'border-amber-200 bg-amber-50 text-amber-700';
+  return (
+    <div className="flex flex-wrap gap-2">
+      {issues.map((issue) => <Badge key={issue} variant="outline" className={className}>{issue}</Badge>)}
     </div>
   );
 }

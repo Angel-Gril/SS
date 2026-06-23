@@ -53,6 +53,14 @@ assert.match(
 );
 assert.match(
   page,
+  /evaluateSourceListingReadiness/,
+  'source collection page should reuse shared Ozon listing readiness evaluation',
+);
+for (const label of ['可上架', '待复核', '阻断', 'Ozon 必填属性/字典值', '销售受限/出口限制']) {
+  assert.match(page, new RegExp(label), `source listing readiness should expose status/risk label: ${label}`);
+}
+assert.match(
+  page,
   /SourceProductRow/,
   'source collection page should render each item as a preview-focused product row',
 );
