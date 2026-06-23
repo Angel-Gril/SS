@@ -1133,7 +1133,7 @@ describe('collect publish helpers', () => {
     expect(getVariantOverridePrice({ missing: '0' }, { sku: 'missing' }, 0)).toBeNull();
   });
 
-  it('uses each variant source price before falling back to the group purchase price', () => {
+  it('uses manual variant prices as corrected base prices before markup', () => {
     expect(resolveVariantPublishPriceCny({
       itemOverrides: {},
       variant: { sku: '4073973986', price: '86.08' },
@@ -1152,7 +1152,7 @@ describe('collect publish helpers', () => {
       markupPct: 100,
       markupAmount: 10,
       fxRate: 1,
-    })).toBe(30);
+    })).toBe(70);
   });
 
   it('fills missing Ozon variant cells and pack specs from collected variant links', () => {

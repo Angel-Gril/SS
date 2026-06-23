@@ -25,7 +25,11 @@ export function resolveVariantPublishPreviewPrice(input: {
 }): { finalPrice: number | null; manual: boolean; source: 'manual' | 'variant' | 'group' | 'none' } {
   const manualPrice = parsePositiveNumber(input.manualPrice);
   if (manualPrice != null) {
-    return { finalPrice: Math.ceil(manualPrice), manual: true, source: 'manual' };
+    return {
+      finalPrice: calcPublishPreviewPrice(manualPrice, input.markupPct, input.markupAmount),
+      manual: true,
+      source: 'manual',
+    };
   }
 
   const variantPrice = parsePositiveNumber(input.variantPrice);

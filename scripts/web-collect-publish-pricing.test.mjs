@@ -24,7 +24,7 @@ assert.deepEqual(plain(resolveVariantPublishPreviewPrice({
   groupBasePrice: '13.05',
   markupPct: 100,
   markupAmount: 10,
-})), { finalPrice: 30, manual: true, source: 'manual' });
+})), { finalPrice: 70, manual: true, source: 'manual' });
 
 assert.deepEqual(plain(resolveVariantPublishPreviewPrice({
   manualPrice: '',

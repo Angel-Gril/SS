@@ -1228,7 +1228,9 @@ export function resolveVariantPublishPriceCny(input: {
   fxRate?: number | null;
 }): number {
   const overridePrice = getVariantOverridePrice(input.itemOverrides, input.variant, input.index);
-  if (overridePrice != null) return overridePrice;
+  if (overridePrice != null) {
+    return calcPublishPrice(overridePrice, input.markupPct, input.markupAmount);
+  }
 
   const variantPriceRaw = input.variant.price != null && input.variant.price !== ''
     ? Number(input.variant.price)

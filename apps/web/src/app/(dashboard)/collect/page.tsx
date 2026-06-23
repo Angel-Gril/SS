@@ -590,7 +590,7 @@ export default function CollectPage() {
   }
 
   async function submitPublishRequest() {
-    // 收集变体价格覆盖：仅选中且确实有 override 的项才传
+    // 收集变体价格覆盖：仅选中且确实有 override 的项才传，作为修正后的采购基价。
     const priceOverrides: Record<string, Record<string, number>> = {};
     for (const id of selectedIds) {
       const overrides = variantPriceOverrides[id];
@@ -988,7 +988,7 @@ export default function CollectPage() {
     .filter((price): price is number => typeof price === 'number' && Number.isFinite(price));
   const publishPreviewMin = publishPreviewPrices.length ? Math.min(...publishPreviewPrices) : null;
   const publishPreviewMax = publishPreviewPrices.length ? Math.max(...publishPreviewPrices) : null;
-  const publishFormulaText = `售价=原价×(1+${parseFiniteNumberOrDefault(publishMarkup, 0)}%)+${parseFiniteNumberOrDefault(publishMarkupAmount, 0)}`;
+  const publishFormulaText = `售价=基价×(1+${parseFiniteNumberOrDefault(publishMarkup, 0)}%)+${parseFiniteNumberOrDefault(publishMarkupAmount, 0)}`;
   const randomizeEnabled = !!randomizeConfig?.enabled;
   const randomOfferIdAvailable = !!(randomizeConfig?.enabled && randomizeConfig.randomOfferId);
   const publishTitleSuggestionItems = selectedPublishItems.filter((item) => !item.metadata?.publishTitleRu && item.titleSuggestion?.suggestedTitle);
@@ -1467,7 +1467,7 @@ export default function CollectPage() {
             </div>
             <div className="grid grid-cols-1 gap-3">
               <div className="flex items-end pb-0.5">
-                <p className="text-xs text-muted-foreground">卖价 = 采购价 × (1 + 加价%/100) + 固定加价；变体单独填写价格时按最终售价处理</p>
+                <p className="text-xs text-muted-foreground">卖价 = 基价 × (1 + 加价%/100) + 固定加价；变体价格框用于修正基价后统一加价。</p>
               </div>
             </div>
             {randomizeEnabled && (
@@ -1566,7 +1566,7 @@ export default function CollectPage() {
                 <div className="rounded-md border bg-background p-3">
                   <div className="text-xs font-medium">{publishFormulaText}</div>
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    变体价格框填写后按最终售价处理，不再二次加价。
+                    变体价格框填写的是修正后的基价，会继续套用左侧加价。
                   </p>
                 </div>
 
@@ -1601,7 +1601,7 @@ export default function CollectPage() {
                             <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                               <span className="font-mono">{row.sku || '无源SKU'}</span>
                               {row.isVariant && <span>变体</span>}
-                              {row.manual && <span>手动价</span>}
+                              {row.manual && <span>手动基价</span>}
                               {!row.manual && row.priceSource === 'variant' && <span>变体价</span>}
                               {row.titleOptimized && <span className="text-amber-600">标题已优化</span>}
                             </div>
