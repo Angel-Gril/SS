@@ -2107,7 +2107,7 @@
   function get1688AttributeMarkers() {
     return [
       "主面料成分含量", "里料成分含量", "上市年份/季节", "上市年份季节", "适用年龄段",
-      "主面料成分", "面料名称", "模杯面料", "罩杯型", "里料成分", "排扣类型", "肩带类型",
+      "主面料成分", "面料名称", "模杯面料", "模杯类型", "罩杯型", "里料成分", "排扣类型", "肩带类型",
       "货源类别", "裤型", "裤长", "腰型", "裤门襟", "适合季节", "适合人群", "适用场景",
       "商品件重尺", "包装信息", "材质", "成分", "季节", "风格", "功能", "功效", "款式",
       "颜色", "尺码", "规格", "型号", "容量", "品牌", "货号", "厚薄", "图案", "弹力",
@@ -2120,21 +2120,93 @@
   }
 
   function mergeSourceAttributes(primary, secondary) {
-    const out = [];
-    const seen = new Set();
+    const byName = new Map();
     [primary, secondary].forEach((list) => {
       (Array.isArray(list) ? list : []).forEach((attr) => {
         if (!attr || typeof attr !== "object") return;
-        const name = normalizeWhitespace(attr.name || attr.key || attr.attrName || "");
+        const name = normalize1688SalePropName(attr.name || attr.key || attr.attrName || "");
         const value = normalizeWhitespace(attr.value || attr.attrValue || attr.text || "");
-        if (!name || !value) return;
-        const key = name + ":" + value;
-        if (seen.has(key)) return;
-        seen.add(key);
-        out.push({ name, value });
+        expand1688AttributeRow(name, value).forEach((row) => {
+          const normalized = normalizeSourceAttributeRow(row.name, row.value);
+          if (!normalized) return;
+          const existing = byName.get(normalized.name);
+          if (!existing || scoreSourceAttribute(normalized) > scoreSourceAttribute(existing)) {
+            byName.set(normalized.name, normalized);
+          }
+        });
       });
     });
-    return out.slice(0, 80);
+    return Array.from(byName.values()).slice(0, 80);
+  }
+
+  function normalizeSourceAttributeRow(name, value) {
+    const attrName = normalize1688SalePropName(name || "");
+    const attrValue = clean1688AttributeValue(value || "");
+    if (!attrName || !attrValue || attrName === attrValue) return null;
+    if (is1688MerchantMetricLabel(attrName) || is1688MerchantMetricLabel(attrValue)) return null;
+    if (isLikely1688AttributeBlob(attrValue)) return null;
+    if (isLowValue1688Attribute(attrName, attrValue)) return null;
+    if (is1688StrongSalePropName(attrName)) {
+      const values = split1688AttributeSaleValues(attrName, attrValue);
+      if (values.length) return { name: attrName, value: values.join("、") };
+    }
+    return { name: attrName, value: attrValue };
+  }
+
+  function scoreSourceAttribute(attr) {
+    const name = attr && attr.name || "";
+    const value = attr && attr.value || "";
+    const saleValues = is1688StrongSalePropName(name) ? split1688AttributeSaleValues(name, value) : [];
+    let score = value.length;
+    if (saleValues.length > 1) score += saleValues.length * 1000;
+    if (saleValues.length === 1) score += 100;
+    if (isLikely1688AttributeBlob(value) || isLowValue1688Attribute(name, value)) score -= 5000;
+    return score;
+  }
+
+  function isLowValue1688Attribute(name, value) {
+    const attrName = normalizeWhitespace(name || "");
+    const text = normalizeWhitespace(value || "");
+    if (!attrName || !text) return true;
+    if (/相似性|多维度要素/.test(text)) return true;
+    if (/^(名称|其他|无|默认)$/.test(text) && /^(面料|材质|成分|品牌)$/.test(attrName)) return true;
+    return false;
+  }
+
+  function is1688StrongSalePropName(value) {
+    const name = normalize1688SalePropName(value);
+    return /^(颜色|尺码|规格|型号|容量|套餐|版本|口味)$/.test(name);
+  }
+
+  function split1688AttributeSaleValues(name, value) {
+    const text = clean1688AttributeValue(value);
+    if (!text || is1688MerchantMetricLabel(text) || isLikely1688AttributeBlob(text)) return [];
+    const normalizedName = normalize1688SalePropName(name);
+    let parts = text.split(/[、,，;；|]+/).map(clean1688AttributeValue).filter(Boolean);
+    if (parts.length <= 1) {
+      const spaced = text.split(/\s{2,}|\s+(?=(?:\d+XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)(?:[（(【\[]|$))/i)
+        .map(clean1688AttributeValue)
+        .filter(Boolean);
+      if (spaced.length > 1) parts = spaced;
+    }
+    if (parts.length <= 1) parts = [text];
+    return dedupeTextValues(parts
+      .map((part) => clean1688AttributeValue(part))
+      .filter((part) => {
+        if (!part || part.length > 80) return false;
+        if (is1688MerchantMetricLabel(part) || isLikely1688AttributeBlob(part)) return false;
+        if (normalizedName === "尺码") return /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(part);
+        return true;
+      }));
+  }
+
+  function isLikely1688AttributeBlob(value) {
+    const text = normalizeWhitespace(value || "");
+    if (!text) return false;
+    const markers = text.match(/(功能|主面料成分|面料名称|模杯面料|罩杯型|罩杯|里料成分|品牌|适用年龄段|材质|成分|货号|上市时间|包装信息|商品件重尺|风格|厚薄)/g) || [];
+    if (markers.length >= 3) return true;
+    if (text.length > 80 && markers.length >= 2) return true;
+    return false;
   }
 
   function extractPddPageProduct(context) {

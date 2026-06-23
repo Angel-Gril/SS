@@ -599,6 +599,67 @@ assert.equal(aliGeneralPackageWeightResponse.data.weightG, 20);
 assert.equal(aliGeneralPackageWeightResponse.data.grossWeightGrams, 20);
 assert.deepEqual(plain(aliGeneralPackageWeightResponse.data.sourcePackagingRows), []);
 
+const aliCleanStructuredAttributesResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/945335480485.html',
+  title: '1688 clean attributes source detail',
+  bodyText: [
+    '商品属性 颜色 隐形肤 性感黑 香槟白 尺码 S (适合75-95斤32/70AB) M (适合95-110斤34/75AB) L (适合110-125斤36/80AB) XL (适合125-140斤38/85AB) 已选 隐形肤 S',
+    '款式 美背型 面料名称 锦纶 功能 上托 主面料成分 锦纶 模杯面料 聚酰胺纤维(锦纶) 模杯类型 厚模杯 里料成分 聚酯纤维（涤纶） 适用年龄段 青年（18-40周岁）',
+    '材质 、功效、功能等多维度要素具有高度的相似性 成分 锦纶 面料 名称 风格 简约休闲 货号 8838',
+  ].join(' '),
+  selectors: {},
+  queryAll(selector) {
+    if (/(attr|Attr|prop|Prop|param|Param|spec|Spec|属性|参数)/.test(selector)) {
+      return [
+        makeMockElement({ text: '款式 美背型 面料名称 锦纶 功能 上托 主面料成分 锦纶 模杯面料 聚酰胺纤维(锦纶) 模杯类型 厚模杯 里料成分 聚酯纤维（涤纶） 适用年龄段 青年（18-40周岁）' }),
+        makeMockElement({ text: '材质 、功效、功能等多维度要素具有高度的相似性' }),
+        makeMockElement({ text: '面料 名称' }),
+        makeMockElement({ text: '尺码 S' }),
+      ];
+    }
+    return [];
+  },
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '945335480485',
+        subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+        productProps: [
+          { name: '颜色', value: '隐形肤、性感黑、香槟白' },
+          { name: '尺码', value: 'S (适合75-95斤32/70AB)、M (适合95-110斤34/75AB)、L (适合110-125斤36/80AB)、XL (适合125-140斤38/85AB)' },
+          {
+            name: '款式',
+            value: '美背型 面料名称 锦纶 功能 上托 主面料成分 锦纶 模杯面料 聚酰胺纤维(锦纶) 模杯类型 厚模杯 里料成分 聚酯纤维（涤纶） 适用年龄段 青年（18-40周岁）',
+          },
+          { name: '品牌', value: '其他' },
+          { name: '货号', value: '8838' },
+        ],
+        priceInfo: { price: '8.5' },
+        imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+      },
+    },
+  },
+});
+
+assert.equal(aliCleanStructuredAttributesResponse.ok, true);
+{
+  const attrs = Object.fromEntries(aliCleanStructuredAttributesResponse.data.attributes.map((attr) => [attr.name, attr.value]));
+  assert.equal(attrs['颜色'], '隐形肤、性感黑、香槟白');
+  assert.equal(attrs['尺码'].includes('XL'), true);
+  assert.equal(attrs['款式'], '美背型');
+  assert.equal(attrs['面料名称'], '锦纶');
+  assert.equal(attrs['功能'], '上托');
+  assert.equal(attrs['主面料成分'], '锦纶');
+  assert.equal(attrs['模杯面料'], '聚酰胺纤维(锦纶)');
+  assert.equal(attrs['模杯类型'], '厚模杯');
+  assert.equal(attrs['里料成分'], '聚酯纤维（涤纶）');
+  assert.equal(attrs['适用年龄段'], '青年（18-40周岁）');
+  assert.equal(aliCleanStructuredAttributesResponse.data.attributes.filter((attr) => attr.name === '尺码').length, 1);
+  assert.equal(JSON.stringify(aliCleanStructuredAttributesResponse.data.attributes).includes('相似性'), false);
+  assert.equal(JSON.stringify(aliCleanStructuredAttributesResponse.data.attributes).includes('面料","value":"名称'), false);
+  assert.equal(aliCleanStructuredAttributesResponse.data.attributes.some((attr) => attr.name === '款式' && attr.value.includes('面料名称')), false);
+}
+
 const aliDomFallbackSourceResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/955566677788.html',
   title: '1688 dom source detail',
