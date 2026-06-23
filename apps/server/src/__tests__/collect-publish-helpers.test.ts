@@ -5,6 +5,7 @@ import {
   enrichOzonVariantAttrsFromLink,
   enrichOzonVariantSpecs,
   getVariantOverridePrice,
+  resolveVariantPublishPriceCny,
   findFallbackRecreateConflicts,
   groupPublishItemsByCategory,
   hasOwnPublishCategory,
@@ -1130,6 +1131,28 @@ describe('collect publish helpers', () => {
     expect(getVariantOverridePrice({ '3378860669': '188.2', 0: 123 }, { sku: '3378860669' }, 0)).toBe(189);
     expect(getVariantOverridePrice({ 1: '77.1' }, { sku: 'missing' }, 1)).toBe(78);
     expect(getVariantOverridePrice({ missing: '0' }, { sku: 'missing' }, 0)).toBeNull();
+  });
+
+  it('uses each variant source price before falling back to the group purchase price', () => {
+    expect(resolveVariantPublishPriceCny({
+      itemOverrides: {},
+      variant: { sku: '4073973986', price: '86.08' },
+      index: 1,
+      groupBasePriceCny: 13.05,
+      markupPct: 0,
+      markupAmount: 0,
+      fxRate: 1,
+    })).toBe(87);
+
+    expect(resolveVariantPublishPriceCny({
+      itemOverrides: { '4184643691': '30' },
+      variant: { sku: '4184643691', price: '13.05' },
+      index: 0,
+      groupBasePriceCny: 13.05,
+      markupPct: 100,
+      markupAmount: 10,
+      fxRate: 1,
+    })).toBe(30);
   });
 
   it('fills missing Ozon variant cells and pack specs from collected variant links', () => {

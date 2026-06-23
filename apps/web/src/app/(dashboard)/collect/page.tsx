@@ -13,6 +13,13 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { formatVariantAttrs } from '@/lib/ozon-attr-names';
+import {
+  calcPublishPreviewPrice,
+  formatPreviewPrice,
+  parseFiniteNumberOrDefault,
+  parsePositiveNumber,
+  resolveVariantPublishPreviewPrice,
+} from '@/lib/collect-publish-pricing';
 
 interface TitleSuggestion {
   suggestedTitle: string;
@@ -63,28 +70,6 @@ interface ExtensionPingStatus {
 
 function hasCjkText(value?: string | null) {
   return /[\u3400-\u9fff]/.test(String(value || ''));
-}
-
-function parsePositiveNumber(value: unknown): number | null {
-  const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? num : null;
-}
-
-function parseFiniteNumberOrDefault(value: unknown, fallback: number): number {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : fallback;
-}
-
-function calcPublishPreviewPrice(baseCny: unknown, markupPct: unknown, markupAmount: unknown): number | null {
-  const base = parsePositiveNumber(baseCny);
-  if (base == null) return null;
-  const pct = parseFiniteNumberOrDefault(markupPct, 0);
-  const fixed = parseFiniteNumberOrDefault(markupAmount, 0);
-  return Math.max(1, Math.ceil(base * (1 + pct / 100) + fixed));
-}
-
-function formatPreviewPrice(value: number | null): string {
-  return value == null ? '-' : `¥${value}`;
 }
 
 function cleanPublishPreviewName(value: unknown): string {
@@ -943,7 +928,13 @@ export default function CollectPage() {
     if (item.variants?.length) {
       return item.variants.map((variant, idx) => {
         const variantKey = variant.sku || String(idx);
-        const manualPrice = parsePositiveNumber(variantPriceOverrides[item.id]?.[variantKey]);
+        const pricePreview = resolveVariantPublishPreviewPrice({
+          manualPrice: variantPriceOverrides[item.id]?.[variantKey],
+          variantPrice: variant.price,
+          groupBasePrice: item.purchasePrice,
+          markupPct: publishMarkup,
+          markupAmount: publishMarkupAmount,
+        });
         const offerOverride = variantOfferIdOverrides[item.id]?.[variantKey] || '';
         const previewName = resolvePublishPreviewName(item, variant.attrs);
         const previewImages = resolvePublishPreviewImages(item, variant);
@@ -959,8 +950,9 @@ export default function CollectPage() {
           savedOfferId: variant.publishOfferId || '',
           offerOverride,
           basePrice,
-          finalPrice: manualPrice ? Math.ceil(manualPrice) : calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
-          manual: !!manualPrice,
+          finalPrice: pricePreview.finalPrice,
+          manual: pricePreview.manual,
+          priceSource: pricePreview.source,
           categoryId: category.categoryId,
           typeId: category.typeId,
           imageCount: previewImages.length,
@@ -984,6 +976,7 @@ export default function CollectPage() {
       basePrice,
       finalPrice: calcPublishPreviewPrice(item.purchasePrice, publishMarkup, publishMarkupAmount),
       manual: false,
+      priceSource: 'group',
       categoryId: category.categoryId,
       typeId: category.typeId,
       imageCount: previewImages.length,
@@ -1298,7 +1291,7 @@ export default function CollectPage() {
                               {v.sku && <span className="font-mono text-[10px] text-muted-foreground">{v.sku}</span>}
                               <Input
                                 type="number"
-                                placeholder={v.price != null ? String(v.price) : '组价'}
+                                placeholder={v.price != null ? `原价 ${String(v.price)}` : '组价'}
                                 value={overrideValue}
                                 onChange={(e) => {
                                   const val = e.target.value;
@@ -1609,6 +1602,7 @@ export default function CollectPage() {
                               <span className="font-mono">{row.sku || '无源SKU'}</span>
                               {row.isVariant && <span>变体</span>}
                               {row.manual && <span>手动价</span>}
+                              {!row.manual && row.priceSource === 'variant' && <span>变体价</span>}
                               {row.titleOptimized && <span className="text-amber-600">标题已优化</span>}
                             </div>
                           </div>

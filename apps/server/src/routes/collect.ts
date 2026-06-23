@@ -1218,6 +1218,33 @@ export function getVariantOverridePrice(
   return Number.isFinite(value) && value > 0 ? Math.ceil(value) : null;
 }
 
+export function resolveVariantPublishPriceCny(input: {
+  itemOverrides?: Record<string | number, unknown>;
+  variant: { sku?: unknown; price?: unknown };
+  index: number;
+  groupBasePriceCny: number;
+  markupPct?: number;
+  markupAmount?: number;
+  fxRate?: number | null;
+}): number {
+  const overridePrice = getVariantOverridePrice(input.itemOverrides, input.variant, input.index);
+  if (overridePrice != null) return overridePrice;
+
+  const variantPriceRaw = input.variant.price != null && input.variant.price !== ''
+    ? Number(input.variant.price)
+    : null;
+  const fxRate = Number.isFinite(Number(input.fxRate)) && Number(input.fxRate) > 0 ? Number(input.fxRate) : null;
+  const variantBaseCny = variantPriceRaw != null && Number.isFinite(variantPriceRaw) && variantPriceRaw > 0
+    ? (fxRate ? variantPriceRaw * fxRate : variantPriceRaw)
+    : null;
+
+  return calcPublishPrice(
+    variantBaseCny != null ? variantBaseCny : input.groupBasePriceCny,
+    input.markupPct,
+    input.markupAmount,
+  );
+}
+
 const OZON_CELL_ATTR_NAME = 'Количество ячеек, шт';
 const OZON_PACK_ATTR_NAME = 'Количество в упаковке, шт';
 
@@ -3137,20 +3164,15 @@ export async function collectRoutes(app: FastifyInstance) {
             .map((v, idx) => {
               const subSourceSku = v.sku && /^\d+$/.test(String(v.sku)) ? Number(v.sku) : null;
               if (!subSourceSku) return null;
-              const overridePrice = getVariantOverridePrice(itemOverrides, v, idx);
-              let subPrice: number;
-              if (overridePrice != null) {
-                subPrice = overridePrice;
-              } else {
-                const subPriceRaw = v.price != null && v.price !== '' ? parseFloat(String(v.price)) : null;
-                // v.price 是原币（RUB），用采集汇率转成 CNY 后再 markup
-                const subBaseCny = subPriceRaw && Number.isFinite(subPriceRaw)
-                  ? (fxRate ? subPriceRaw * fxRate : subPriceRaw)
-                  : null;
-                subPrice = subBaseCny != null
-                  ? calcPublishPrice(subBaseCny, markupPct, markupAmount)
-                  : priceWithMarkup;
-              }
+              const subPrice = resolveVariantPublishPriceCny({
+                itemOverrides,
+                variant: v,
+                index: idx,
+                groupBasePriceCny: basePriceCny,
+                markupPct,
+                markupAmount,
+                fxRate,
+              });
               const offerId = buildOfferId(String(v.sku), `f${Date.now().toString(36)}${randomSuffix(4)}`, getVariantCustomOfferId(item, v, idx));
               fallbackTrace.push({
                 offerId,
@@ -3534,10 +3556,19 @@ export async function collectRoutes(app: FastifyInstance) {
       ));
       const publishVariantOzonAttrSets = sanitizeOzonVariantPublishAttributeSets(rawVariantOzonAttrSets);
       const subItems = await Promise.all(variants.map(async (v: any, idx: number) => {
-        // 价格优先级：前端单独覆盖（CNY） > 整组 priceWithMarkup（CNY）
-        // v.price 是采集自源平台的原始币种（RUB），不能直接 ×markup 上架
-        const overridePrice = getVariantOverridePrice(itemOverrides, v, idx);
-        const subPrice = overridePrice ?? priceWithMarkup;
+        // 价格优先级：前端单独覆盖（CNY 最终价） > 变体自身价格按汇率转 CNY 后加价 > 整组价格。
+        const fxRate = item.originalCurrency && item.originalCurrency !== 'CNY' && item.exchangeRateUsed
+          ? Number(item.exchangeRateUsed)
+          : null;
+        const subPrice = resolveVariantPublishPriceCny({
+          itemOverrides,
+          variant: v,
+          index: idx,
+          groupBasePriceCny: basePriceCny,
+          markupPct,
+          markupAmount,
+          fxRate,
+        });
         const subSku = v.sku ? String(v.sku) : `${item.sku || item.id}-v${idx}`;
         const subImagesRaw = resolveVariantPublishImages(item, v, baseRawImages);
         const subImages = sameStringList(subImagesRaw, baseRawImages)
