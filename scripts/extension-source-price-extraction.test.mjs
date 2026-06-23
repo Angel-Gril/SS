@@ -540,8 +540,8 @@ assert.equal(aliCompleteSourceResponse.data.widthMm, 80);
 assert.equal(aliCompleteSourceResponse.data.heightMm, 220);
 assert.equal(aliCompleteSourceResponse.data.description, '双层真空保温，适合跨境上架。');
 assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceVideos), [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg', title: '展示视频' }]);
-assert.deepEqual(plain(aliCompleteSourceResponse.data.images), ['https://img.example.com/main.jpg']);
-assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceMainImages), ['https://img.example.com/main.jpg']);
+assert.deepEqual(plain(aliCompleteSourceResponse.data.images), ['https://img.example.com/main.jpg', 'https://img.example.com/red.jpg']);
+assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceMainImages), ['https://img.example.com/main.jpg', 'https://img.example.com/red.jpg']);
 assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceDetailImages), ['https://img.example.com/detail-1.jpg']);
 assert.equal(aliCompleteSourceResponse.data.richDescriptionJson || null, null);
 assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceRichContentDraft), {
@@ -549,8 +549,8 @@ assert.deepEqual(plain(aliCompleteSourceResponse.data.sourceRichContentDraft), {
   source: '1688',
   locale: 'zh-CN',
   blocks: [
-    { type: 'text', text: '双层真空保温，适合跨境上架。' },
     { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+    { type: 'text', text: '双层真空保温，适合跨境上架。' },
   ],
 });
 assert.deepEqual(plain(aliCompleteSourceResponse.data.sourcePackagingRows), [{

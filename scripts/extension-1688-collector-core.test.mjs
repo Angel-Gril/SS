@@ -78,6 +78,7 @@ test('1688 core normalizes structured sku props, sku map, price model and source
   assert.equal(result.title, '夏季薄款亚麻休闲裤男跨境货源');
   assert.equal(result.shopName, '义乌市松鼠服饰有限公司');
   assert.equal(result.skuItems.length, 35);
+  assert.equal(result.selectedSku, null);
   assert.equal(result.skuItems[0].skuId, '11-21');
   assert.deepEqual(JSON.parse(JSON.stringify(result.skuItems[0].attrs)), { '颜色': '黑色-色 夏款', '尺码': 'M 80-100斤' });
   assert.equal(result.skuItems[0].price, 18.8);
@@ -302,6 +303,32 @@ test('1688 core prefers complete page text sale attributes over selected sku fra
   assert.equal(result.attributes.some((attr) => attr.name === '尺码' && attr.value.includes('XL（适合125-140斤38/85AB）')), true);
   assert.equal(result.skuItems.some((sku) => sku.attrs && sku.attrs['尺码'] === 'S'), false);
   assert.equal(result.skuItems.some((sku) => sku.attrs && String(sku.attrs['尺码']).startsWith('XL')), true);
+});
+
+test('1688 core keeps bracketed color names intact when page text has inner spaces', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/965731536766.html?offerId=965731536766',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 优雅黑 【超低露背 穿搭隐形】 粉底液肤【超低露背 穿搭隐形】 奶皮白 【超低露背 穿搭隐形】',
+      '尺码 S适合70/32ABC M适合75/34ABC L适合80/36ABC XL适合85/38ABC 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '965731536766',
+      subject: '大u型露美背隐形内衣无痕粉底液小胸聚拢特调肤色细肩带夏季文胸',
+      offerProps: [
+        { name: '颜色', value: '优雅黑【超低露背 穿搭隐形】、粉底液肤【超低露背 穿搭隐形】、奶皮白【超低露背 穿搭隐形】' },
+        { name: '尺码', value: 'S适合70/32ABC、M适合75/34ABC、L适合80/36ABC、XL适合85/38ABC' },
+      ],
+      priceInfo: { price: '12.33' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 12);
+  assert.equal(result.skuItems.some((sku) => /穿搭隐形】 \/ L适合80/.test(sku.name)), true);
 });
 
 test('1688 core extracts packaging rows from explicit page text table', () => {

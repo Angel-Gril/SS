@@ -1052,14 +1052,17 @@
     if (!skuItems.length && structured.skuProps.length) {
       skuItems = build1688SkuPropCombinations(structured.skuProps, pick1688FallbackSkuPrice(result));
     }
+    if (!skuItems.length && structured.fromCore) {
+      skuItems = filter1688SkuItems(result.skuItems).filter(isTrusted1688StructuredFallbackSkuItem);
+    }
     if (!skuItems.length && !structured.fromCore) {
       skuItems = infer1688SkuItemsFromText(context, result, structured.attributes, structured.skuProps);
     }
     if (!skuItems.length && !structured.fromCore) skuItems = filter1688SkuItems(result.skuItems);
-    const selectedSku = skuItems.length || !structured.fromCore
+    const selectedSku = skuItems.length || !structured.fromCore || is1688SelectedPriceContext(result)
       ? pick1688SelectedSku(context, skuItems, result.selectedSku)
       : null;
-    if (!skuItems.length && !structured.fromCore && selectedSku && (selectedSku.name || selectedSku.specText || selectedSku.skuId)) {
+    if (!skuItems.length && (!structured.fromCore || is1688SelectedPriceContext(result)) && selectedSku && (selectedSku.name || selectedSku.specText || selectedSku.skuId)) {
       skuItems = [selectedSku];
     }
     const attributes = mergeSourceAttributes(structured.attributes, result.attributes);
@@ -1072,6 +1075,7 @@
       description: structured.description || result.description,
       detailImages: sourceDetailImages
     });
+    const keepContextPrice = shouldKeep1688ContextPrice(result);
     const extractionDiagnostics = structured.extractionDiagnostics || buildSourceExtractionDiagnostics({
       title,
       images,
@@ -1097,13 +1101,13 @@
       categoryPath,
       categoryName: categoryPath.length ? categoryPath[categoryPath.length - 1] : result.categoryName,
       description: structured.description || result.description,
-      price: structured.price || (structured.fromCore ? "" : result.price),
-      priceCny: structured.priceCny || (structured.fromCore ? null : result.priceCny),
-      priceText: structured.priceText || (structured.fromCore ? "" : result.priceText),
-      unitPriceText: structured.unitPriceText || (structured.fromCore ? "" : result.unitPriceText),
+      price: keepContextPrice ? result.price : (structured.price || (structured.fromCore ? "" : result.price)),
+      priceCny: keepContextPrice ? result.priceCny : (structured.priceCny || (structured.fromCore ? null : result.priceCny)),
+      priceText: keepContextPrice ? result.priceText : (structured.priceText || (structured.fromCore ? "" : result.priceText)),
+      unitPriceText: keepContextPrice ? result.unitPriceText : (structured.unitPriceText || (structured.fromCore ? "" : result.unitPriceText)),
       displayPrice: structured.displayPrice || result.displayPrice,
       ladderPrices: structured.ladderPrices || result.ladderPrices,
-      priceSourceType: structured.priceSourceType || (structured.fromCore ? "" : result.priceSourceType),
+      priceSourceType: keepContextPrice ? result.priceSourceType : (structured.priceSourceType || (structured.fromCore ? "" : result.priceSourceType)),
       priceConfidence: structured.priceConfidence || (structured.fromCore ? "" : result.priceConfidence),
       sourceMainImages: images,
       sourceDetailImages,
@@ -1117,6 +1121,15 @@
       dimensionsMm: dimensions.lengthMm && dimensions.widthMm && dimensions.heightMm ? dimensions : result.dimensionsMm,
       extractionDiagnostics
     };
+  }
+
+  function shouldKeep1688ContextPrice(result) {
+    if (!result || result.priceCny == null || !Number.isFinite(Number(result.priceCny))) return false;
+    return /^(selectedOrderSummary|selectedSku|rangeHigh|visibleRangeHigh|dom|text|skuMinFallback)$/.test(String(result.priceSourceType || ""));
+  }
+
+  function is1688SelectedPriceContext(result) {
+    return /^(selectedOrderSummary|selectedSku)$/.test(String(result && result.priceSourceType || ""));
   }
 
   function extract1688StructuredProduct(context) {
@@ -1986,6 +1999,12 @@
 
   function filter1688SkuItems(items) {
     return (Array.isArray(items) ? items : []).filter(isUseful1688SkuItem).slice(0, 200);
+  }
+
+  function isTrusted1688StructuredFallbackSkuItem(item) {
+    if (!item || typeof item !== "object") return false;
+    const attrs = item.attrs && typeof item.attrs === "object" && !Array.isArray(item.attrs) ? item.attrs : {};
+    return Boolean(item.skuId || item.sku || Object.keys(attrs).length);
   }
 
   function pick1688SelectedSku(context, skuItems, fallback) {

@@ -247,7 +247,7 @@
       skuItems: skuItems,
       skuCount: skuItems.length,
       variants: skuItems,
-      selectedSku: skuItems[0] || null,
+      selectedSku: null,
       images: assets.mainImages,
       sourceMainImages: assets.mainImages,
       sourceDetailImages: assets.detailImages,
@@ -307,9 +307,18 @@
     if (/^https?:\/\//i.test(text)) return false;
     if (productId && text === String(productId)) return false;
     if (shopName && text === normalizeWhitespace(shopName)) return false;
+    if (isForeignOzonContextTitle(text)) return false;
     if (/店|公司|旗舰店|专营店|供应商$/.test(text) && text.length < 28) return false;
     if (/^(1688|阿里巴巴|商品详情|商品属性|包装信息|商品评价)$/.test(text)) return false;
     return true;
+  }
+
+  function isForeignOzonContextTitle(value) {
+    var text = normalizeWhitespace(value || '');
+    if (!text) return false;
+    if (/ozon/i.test(text) && /\d{6,}/.test(text)) return true;
+    if (/(跟卖|核价)/.test(text) && /\d{6,}/.test(text)) return true;
+    return false;
   }
 
   function score1688TitlePath(path) {
@@ -602,6 +611,17 @@
         .map(clean1688AttributeValue)
         .filter(Boolean);
       if (spaced.length > 1) parts = spaced;
+    }
+    if (parts.length <= 1 && normalizedName !== '颜色' && normalizedName !== '尺码') {
+      var genericSpaced = text.split(/\s+/).map(clean1688AttributeValue).filter(Boolean);
+      var skuLikeCount = genericSpaced.filter(function (item) {
+        return /(?:款|色|码|号|型|版|套|组|ml|kg|#|^\d|^[A-Z]{1,4}$)/i.test(item);
+      }).length;
+      if (genericSpaced.length >= 2 && genericSpaced.length <= 40 && genericSpaced.every(function (item) {
+        return item.length <= 30;
+      }) && skuLikeCount >= Math.min(2, genericSpaced.length)) {
+        parts = genericSpaced;
+      }
     }
     if (parts.length <= 1) parts = [text];
     return dedupe1688TextValues(parts
@@ -988,6 +1008,31 @@
       .replace(/商品金额.*$/g, ' ');
     if (!text || is1688MerchantMetricLabel(text) || isLikely1688AttributeBlob(text)) return values;
 
+    if (normalizedName === '尺码') {
+      var sizeValues = match1688PageTextSizeValues(text);
+      if (sizeValues.length > 1) return sizeValues;
+    }
+
+    if (normalizedName === '颜色' && /【/.test(text)) {
+      var bracketValues = [];
+      var bracketRegex = /([\u3400-\u9fffA-Za-z0-9#-]{1,30}\s*【[^】]{1,80}】)/g;
+      var bracketMatch;
+      while ((bracketMatch = bracketRegex.exec(text))) {
+        bracketValues.push(clean1688AttributeValue(bracketMatch[1]).replace(/\s+(?=【)/g, ''));
+      }
+      if (bracketValues.length > 1) return dedupe1688TextValues(bracketValues);
+    }
+
+    if (normalizedName === '颜色' && /-色/.test(text)) {
+      var seasonalValues = [];
+      var seasonalRegex = /([\u3400-\u9fffA-Za-z0-9#-]{1,24}-色\s*(?:春款|夏款|秋款|冬款|四季款|常规款)?)/g;
+      var seasonalMatch;
+      while ((seasonalMatch = seasonalRegex.exec(text))) {
+        seasonalValues.push(clean1688AttributeValue(seasonalMatch[1]));
+      }
+      if (seasonalValues.length > 1) return dedupe1688TextValues(seasonalValues);
+    }
+
     var spaced = text.split(/\s+/).map(clean1688AttributeValue).filter(Boolean);
     if (spaced.length <= 1 || spaced.length > 40) return values;
     var cleaned = spaced.filter(function (item) {
@@ -995,11 +1040,40 @@
       if (/^(商品属性|产品属性|基本参数|详细参数|包装信息|商品件重尺|商品详情|货号)$/.test(item)) return false;
       if (is1688MerchantMetricLabel(item) || isLikely1688AttributeBlob(item)) return false;
       if (normalizedName === '尺码') return /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(item);
+      if (normalizedName === '颜色') {
+        if (/^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|套|款|件|台|个)$/i.test(item)) return false;
+        return item.length <= 24 && /^[\u3400-\u9fffA-Za-z0-9#-]+$/.test(item);
+      }
       return true;
     });
     if (normalizedName === '颜色' && cleaned.length >= 2) return dedupe1688TextValues(cleaned);
     if (normalizedName === '尺码' && cleaned.length >= 1) return dedupe1688TextValues(cleaned);
     return values;
+  }
+
+  function match1688PageTextSizeValues(value) {
+    var text = normalizeWhitespace(value || '');
+    if (!text) return [];
+    var rows = [];
+    var code = '(?:\\d+\\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)';
+    var sized = code
+      + '\\s*(?:[（(【\\[]?\\s*(?:建议|适合)?\\s*)?'
+      + '(?:\\d{2,3}\\s*(?:[-~—–至到])\\s*\\d{2,3}\\s*斤|\\d{2,3}\\s*\\/\\s*\\d{2,3}[A-Z]{1,5}|\\d{2,3}\\s*[A-Z]{0,5})'
+      + '\\s*[）)】\\]]?';
+    var regex = new RegExp('(?:^|[\\s,，、;；])(' + sized + ')(?=$|[\\s,，、;；])', 'gi');
+    var match;
+    while ((match = regex.exec(text))) {
+      var item = clean1688AttributeValue(match[1])
+        .replace(/^(\d+)\s+XL/i, '$1XL')
+        .replace(/\s*([~—–至到-])\s*/g, '$1')
+        .replace(/\s*\/\s*/g, '/')
+        .replace(/适合\s+/g, '适合')
+        .replace(/建议\s+/g, '建议')
+        .replace(/\s*斤/g, '斤')
+        .replace(/\s+/g, ' ');
+      if (item && item.length <= 60) rows.push(item);
+    }
+    return dedupe1688TextValues(rows);
   }
 
   function score1688SaleValues(values) {
@@ -1011,32 +1085,35 @@
 
   function merge1688SaleAttributes(attrs) {
     var sales = {};
-    var saleOrder = [];
-    var others = [];
+    var source = Array.isArray(attrs) ? attrs : [];
     (Array.isArray(attrs) ? attrs : []).forEach(function (attr) {
       if (!attr) return;
       var name = normalize1688SalePropName(attr.name);
-      if (!is1688StrongSalePropName(name)) {
-        others.push(attr);
-        return;
-      }
+      if (!is1688StrongSalePropName(name)) return;
       var values = split1688AttributeSaleValues(name, attr.value);
       if (!values.length) return;
-      if (!sales[name]) {
-        sales[name] = [];
-        saleOrder.push(name);
-      }
+      if (!sales[name]) sales[name] = [];
       values.forEach(function (value) {
         push1688SaleValue(sales[name], name, { id: '', name: value, imageUrl: '' });
       });
     });
-    var saleRows = saleOrder.map(function (name) {
-      return {
-        name: name,
-        value: sales[name].map(function (item) { return item.name; }).join('、')
-      };
-    }).filter(function (row) { return row.value; });
-    return saleRows.concat(others);
+    var emitted = {};
+    return source.reduce(function (out, attr) {
+      if (!attr) return out;
+      var name = normalize1688SalePropName(attr.name);
+      if (!is1688StrongSalePropName(name) || !sales[name]) {
+        out.push(attr);
+        return out;
+      }
+      if (!emitted[name]) {
+        emitted[name] = true;
+        out.push({
+          name: name,
+          value: sales[name].map(function (item) { return item.name; }).join('、')
+        });
+      }
+      return out;
+    }, []);
   }
 
   function push1688SaleValue(target, propName, value) {
@@ -1068,6 +1145,10 @@
       var match = text.match(/^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i);
       if (match) return match[0].replace(/\s+/g, '').toUpperCase();
     }
+    if (name === '容量') {
+      var capacity = text.match(/^(\d+(?:\.\d+)?\s*(?:ml|l|g|kg|克|千克|斤|升|毫升))/i);
+      if (capacity) return capacity[1].replace(/\s+/g, '').toLowerCase();
+    }
     return text.toLowerCase();
   }
 
@@ -1077,6 +1158,7 @@
     if (/[（(【\[]/.test(text)) score += 30;
     if (/(已选|商品金额|库存|立即下单|加采购车|另需运费|是否跨境出口专供货源)/.test(text)) score -= 100;
     if (normalize1688SalePropName(propName) === '尺码' && /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})$/i.test(text)) score -= 20;
+    if (normalize1688SalePropName(propName) === '容量' && /^\d+(?:\.\d+)?\s*(?:ml|l|g|kg|克|千克|斤|升|毫升)\s+\S+/i.test(text)) score -= 80;
     return score;
   }
 
@@ -1134,6 +1216,7 @@
       walkObject(source, [], function (value, path) {
         var pathText = path.join('.');
         if (!/(package|packaging|packing|skuPackage|skuPackaging|商品件重尺|包装|件重尺)/i.test(pathText)) return;
+        if (/(^|\.)(packageSize|packageDimensions|packageDimension|packSize|packDimensions)$/i.test(pathText)) return;
         if (Array.isArray(value)) {
           value.forEach(function (entry) {
             var row = normalize1688PackagingRow(entry);
