@@ -50,5 +50,15 @@ assert.match(
   /Array\.isArray\(coreResult\.skuItems\) && coreResult\.skuItems\.length > 0/,
   '1688 structured collector must not treat an empty sku array as useful core data',
 );
+assert.match(
+  collectContentScript,
+  /fromCore:\s*true/,
+  '1688 structured collector should mark data returned by the shared core parser',
+);
+assert.match(
+  collectContentScript,
+  /!structured\.fromCore[\s\S]{0,160}infer1688SkuItemsFromText/,
+  '1688 merge should not infer sku rows from full page text when shared core already extracted product data',
+);
 
 console.log('PASS source collect enters ERP workflow');

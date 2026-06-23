@@ -117,3 +117,110 @@ test('1688 core normalizes structured sku props, sku map, price model and source
     missing: [],
   });
 });
+
+test('1688 core rejects merchant metrics and product attributes as sku rows', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1037213576946.html?offerId=1037213576946',
+    host: 'detail.1688.com',
+    pageText: '店铺回头率 店铺服务分 入驻1年 颜色 植香肤 尺码 M 800-100斤 L 100-110斤',
+    sources: [{
+      offerId: '1037213576946',
+      subject: '100%纯亚麻裤子男春秋薄款九分裤宽松显瘦休闲哈伦裤',
+      selectedOrderSummary: {
+        price: '67.20',
+        skuText: '上海娅坚悦贸易有限公司 / M 800-100斤',
+      },
+      saleInfos: [
+        { name: '入驻1年', price: '67.2' },
+        { name: '店铺回头率', price: '67.2' },
+        { name: '35', price: '67.2' },
+        { name: '店铺服务分', price: '67.2' },
+      ],
+      productProps: [
+        { name: '材质', value: '亚麻' },
+        { name: '风格', value: '休闲' },
+      ],
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 0);
+  assert.equal(result.skuItems.some((sku) => /入驻|店铺|回头率|服务分|上海娅坚/.test(sku.name)), false);
+  assert.equal(result.priceSourceType, 'display');
+});
+
+test('1688 core does not promote product specification blobs to sale props', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1025802373364.html?offerId=1025802373364',
+    host: 'detail.1688.com',
+    sources: [{
+      offerId: '1025802373364',
+      subject: '夏季无痕聚拢上托新款冰丝内衣女无钢圈',
+      specifications: [
+        {
+          name: '款式',
+          values: [
+            { name: '舒适 主面料成分 锦纶 面料名称 锦纶 模杯面料 棉 罩杯型 全罩杯 里料成分 氨纶 品牌 其他 适用年龄段 青年' },
+            { name: '无痕' },
+            { name: '透气' },
+            { name: '上托' },
+            { name: '防走光' },
+          ],
+        },
+        {
+          name: '尺码',
+          values: [
+            { name: 'M【建议80-100斤】' },
+            { name: 'L【建议100-120斤】' },
+          ],
+        },
+      ],
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+      priceInfo: { price: '29' },
+    }],
+  });
+
+  const skuProps = result.rawSourceProduct.skuProps;
+  assert.equal(skuProps.some((prop) => prop.name === '款式'), false);
+  assert.equal(JSON.stringify(skuProps).includes('主面料成分'), false);
+  assert.equal(JSON.stringify(skuProps).includes('店铺'), false);
+});
+
+test('1688 core splits product attribute blobs into named attributes', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1025802373364.html?offerId=1025802373364',
+    host: 'detail.1688.com',
+    sources: [{
+      offerId: '1025802373364',
+      subject: '夏季无痕聚拢上托新款冰丝内衣女无钢圈',
+      productProps: [
+        {
+          name: '款式',
+          value: '背心式 功能 聚拢、无痕、透气、上托、防走光、舒适 主面料成分 锦纶 面料名称 锦纶 模杯面料 棉 罩杯型 全罩杯 里料成分 氨纶 品牌 其他 适用年龄段 青年（18-40周岁） 颜色 植香肤 尺码 M【建议80-100斤】、L【建议100-120斤】 货号 3183#',
+        },
+      ],
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  const attrs = Object.fromEntries(result.attributes.map((attr) => [attr.name, attr.value]));
+  assert.equal(attrs['款式'], '背心式');
+  assert.equal(attrs['功能'], '聚拢、无痕、透气、上托、防走光、舒适');
+  assert.equal(attrs['主面料成分'], '锦纶');
+  assert.equal(attrs['面料名称'], '锦纶');
+  assert.equal(attrs['模杯面料'], '棉');
+  assert.equal(attrs['罩杯型'], '全罩杯');
+  assert.equal(attrs['里料成分'], '氨纶');
+  assert.equal(attrs['品牌'], '其他');
+  assert.equal(attrs['适用年龄段'], '青年（18-40周岁）');
+  assert.equal(attrs['颜色'], '植香肤');
+  assert.equal(attrs['尺码'], 'M【建议80-100斤】、L【建议100-120斤】');
+  assert.equal(attrs['货号'], '3183#');
+  assert.equal(result.attributes.some((attr) => attr.name === '款式' && attr.value.includes('主面料成分')), false);
+});

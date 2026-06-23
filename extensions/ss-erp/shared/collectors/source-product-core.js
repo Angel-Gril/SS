@@ -324,7 +324,7 @@
         if (!Array.isArray(value) || !value.length || typeof value[0] !== 'object') return;
         var pathText = path.join('.');
         if (!/(skuProps|skuPropList|skuProperties|skuProperty|skuPropertyList|skuAttributes|saleProp|saleProps|saleProperty|salePropertyList|specProps|specifications|specAttrs)/i.test(pathText)) return;
-        var props = normalize1688SkuProps(value);
+        var props = normalize1688SkuProps(value, pathText);
         if (props.length) candidates.push({ score: score1688SkuPropsPath(pathText), props: props });
       });
     });
@@ -340,7 +340,7 @@
     return score;
   }
 
-  function normalize1688SkuProps(rows) {
+  function normalize1688SkuProps(rows, pathText) {
     return (Array.isArray(rows) ? rows : []).map(function (row) {
       if (!row || typeof row !== 'object') return null;
       var name = normalize1688SalePropName(pickFirstValue(row, ['prop', 'name', 'propName', 'propertyName', 'skuPropName', 'attributeName', 'title']) || '');
@@ -349,6 +349,7 @@
         if (item && typeof item === 'object') {
           var valueName = normalizeWhitespace(pickFirstValue(item, ['name', 'value', 'valueName', 'text', 'label', 'title']) || '');
           if (!valueName) return null;
+          if (is1688MerchantMetricLabel(valueName) || isLikely1688AttributeBlob(valueName)) return null;
           return {
             id: normalizeWhitespace(pickFirstValue(item, ['id', 'valueId', 'vid', 'propValueId', 'propertyValueId', 'skuValueId']) || ''),
             name: valueName,
@@ -356,10 +357,25 @@
           };
         }
         var text = normalizeWhitespace(item);
+        if (is1688MerchantMetricLabel(text) || isLikely1688AttributeBlob(text)) return null;
         return text ? { id: '', name: text, imageUrl: '' } : null;
       }).filter(Boolean);
+      if (!shouldKeep1688SkuProp(name, values, pathText)) return null;
       return name && values.length ? { name: name, values: values } : null;
     }).filter(Boolean);
+  }
+
+  function shouldKeep1688SkuProp(name, values, pathText) {
+    if (!name || !Array.isArray(values) || !values.length) return false;
+    if (!is1688SalePropName(name)) return false;
+    var path = String(pathText || '');
+    var lowTrustPath = /(specifications|specAttrs|specProps)/i.test(path) && !/(sku|saleProp|saleProperty)/i.test(path);
+    if (lowTrustPath && !is1688StrongSalePropName(name)) return false;
+    if (values.length > 40) return false;
+    return values.some(function (value) {
+      var text = normalizeWhitespace(value && value.name || '');
+      return text && !is1688MerchantMetricLabel(text) && !isLikely1688AttributeBlob(text);
+    });
   }
 
   function normalize1688SalePropName(value) {
@@ -381,14 +397,14 @@
     (Array.isArray(sources) ? sources : []).forEach(function (source) {
       walkObject(source, [], function (value, path) {
         var pathText = path.join('.');
-        if (value && typeof value === 'object' && !Array.isArray(value) && /(?:^|\.)(?:skuMap|skuInfoMap|skuPriceMap|skuDataMap)$/i.test(pathText)) {
+        if (value && typeof value === 'object' && !Array.isArray(value) && is1688SkuMapPath(pathText)) {
           Object.keys(value).forEach(function (key) {
             var item = normalize1688SkuMapEntry(key, value[key], skuProps);
             if (item) rows.push(item);
           });
           return;
         }
-        if (Array.isArray(value) && value.length && typeof value[0] === 'object' && /(?:^|\.)(?:skuList|skuInfos|skuInfoList|skuPriceList|saleInfos)$/i.test(pathText)) {
+        if (Array.isArray(value) && value.length && typeof value[0] === 'object' && is1688SkuListPath(pathText)) {
           value.forEach(function (entry) {
             var item = normalize1688SkuObject(entry, skuProps);
             if (item) rows.push(item);
@@ -397,6 +413,18 @@
       });
     });
     return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+  }
+
+  function is1688SkuMapPath(pathText) {
+    var text = String(pathText || '');
+    if (!/(?:^|\.)(?:skuMap|skuInfoMap|skuPriceMap|skuDataMap)$/i.test(text)) return false;
+    return !/(seller|shop|store|company|member|credit|service|summary|selectedOrder|saleInfo)/i.test(text);
+  }
+
+  function is1688SkuListPath(pathText) {
+    var text = String(pathText || '');
+    if (!/(?:^|\.)(?:skuList|skuInfos|skuInfoList|skuPriceList)$/i.test(text)) return false;
+    return !/(seller|shop|store|company|member|credit|service|summary|selectedOrder|saleInfo)/i.test(text);
   }
 
   function normalize1688SkuMapEntry(key, row, skuProps) {
@@ -432,6 +460,7 @@
       pickFirstValue(data, ['spec', 'specText', 'specValue', 'skuSpec', 'attributeValue', 'name', 'title', 'skuName', 'displayName'])
       || Object.keys(attrs).map(function (name) { return attrs[name]; }).join(' / ')
     );
+    if (!has1688SkuEvidence({ skuId: skuId, price: price, stock: stock, attrs: attrs, specText: specText }, skuProps)) return null;
     return {
       skuId: skuId == null ? '' : String(skuId),
       sku: skuId == null ? '' : String(skuId),
@@ -444,6 +473,19 @@
       images: images,
       source: 'skuMap'
     };
+  }
+
+  function has1688SkuEvidence(item, skuProps) {
+    var attrs = item && item.attrs && typeof item.attrs === 'object' ? item.attrs : {};
+    var attrKeys = Object.keys(attrs);
+    var hasSaleAttrs = attrKeys.some(function (name) { return is1688SalePropName(name); });
+    var specText = normalizeWhitespace(item && item.specText || '');
+    if (is1688MerchantMetricLabel(specText)) return false;
+    if (isLikely1688AttributeBlob(specText)) return false;
+    if (hasSaleAttrs) return true;
+    if (item && item.skuId && (item.price != null || item.stock != null || specText)) return true;
+    if (specText && skuProps && skuProps.length && parse1688SkuKeyAttrs(specText, skuProps) && Object.keys(parse1688SkuKeyAttrs(specText, skuProps)).length) return true;
+    return false;
   }
 
   function parse1688SkuKeyAttrs(key, skuProps) {
@@ -483,6 +525,16 @@
     return (prop.values || []).find(function (entry) { return entry.name === value; }) || null;
   }
 
+  function is1688SalePropName(value) {
+    var name = normalize1688SalePropName(value);
+    return /^(颜色|尺码|规格|型号|容量|套餐|版本|口味|款式)$/.test(name);
+  }
+
+  function is1688StrongSalePropName(value) {
+    var name = normalize1688SalePropName(value);
+    return /^(颜色|尺码|规格|型号|容量|套餐|版本|口味)$/.test(name);
+  }
+
   function normalize1688Attrs(value) {
     var attrs = {};
     if (!value) return attrs;
@@ -511,10 +563,30 @@
     var label = normalizeWhitespace(item.name || item.specText || '');
     var hasAttrs = item.attrs && Object.keys(item.attrs).length > 0;
     if (!item.skuId && !hasAttrs && !label) return false;
+    if (is1688MerchantMetricLabel(label)) return false;
+    if (isLikely1688AttributeBlob(label)) return false;
     if (/^(货源类别|货源类型|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节|是否库存|库存类型|适合人群|上市年份\/季节|上市年份季节|适用场景|裤脚口款式|款式细节|弹力|类别|原创设计货源|有无质检报告|质检报告编号|是否加绒|领标|吊牌|适用体型|适用对象|厚薄|工艺)$/.test(label)) return false;
     if (/(已选|商品金额|货品金额|另需运费|运费\s*起|立即下单|加采购车|商品评价|商品属性|包装信息|商品详情)/.test(label)) return false;
     if (label.length > 120 && !hasAttrs) return false;
     return true;
+  }
+
+  function is1688MerchantMetricLabel(value) {
+    var text = normalizeWhitespace(value || '');
+    if (!text) return false;
+    if (/^(入驻\d*年?|店铺回头率|店铺服务分|回头率|服务分|响应速度|发货速度|描述相符|诚信通|买家保障|实力商家|深度验厂|\d{1,3})$/.test(text)) return true;
+    if (/(店铺回头率|店铺服务分|入驻\d*年|诚信通|实力商家)/.test(text)) return true;
+    if (/公司|贸易|商行|工厂|供应商/.test(text) && text.length < 60) return true;
+    return false;
+  }
+
+  function isLikely1688AttributeBlob(value) {
+    var text = normalizeWhitespace(value || '');
+    if (!text) return false;
+    var markers = text.match(/(功能|主面料成分|面料名称|模杯面料|罩杯型|罩杯|里料成分|品牌|适用年龄段|材质|成分|货号|上市时间|包装信息|商品件重尺|风格|厚薄)/g) || [];
+    if (markers.length >= 3) return true;
+    if (text.length > 80 && markers.length >= 2) return true;
+    return false;
   }
 
   function dedupe1688SkuRows(rows) {
@@ -765,11 +837,66 @@
           if (!row || typeof row !== 'object') return;
           var name = normalizeWhitespace(pickFirstValue(row, ['name', 'key', 'attrName', 'propertyName', 'title']) || '');
           var attrValue = normalizeWhitespace(pickFirstValue(row, ['value', 'attrValue', 'propertyValue', 'text', 'content']) || '');
-          if (name && attrValue) attrs.push({ name: name, value: attrValue });
+          if (name && attrValue) {
+            var expanded = expand1688AttributeRow(name, attrValue);
+            if (expanded.length) {
+              attrs = attrs.concat(expanded);
+            } else {
+              attrs.push({ name: name, value: attrValue });
+            }
+          }
         });
       });
     });
     return dedupe1688Objects(attrs, function (row) { return normalizeWhitespace(row.name + ':' + row.value); }).slice(0, 80);
+  }
+
+  function expand1688AttributeRow(name, value) {
+    var rowName = normalizeWhitespace(name || '');
+    var text = normalizeWhitespace(value || '');
+    if (!rowName || !text) return [];
+    var markers = get1688AttributeMarkers().filter(function (marker) { return marker !== rowName; });
+    var markerPattern = markers.map(escape1688RegExp).join('|');
+    var regex = new RegExp('(?:^|[\\s,，、;；])(' + markerPattern + ')\\s+', 'g');
+    var rows = [];
+    var currentName = rowName;
+    var currentStart = 0;
+    var match;
+    while ((match = regex.exec(text))) {
+      var marker = match[1];
+      var markerIndex = match.index + match[0].indexOf(marker);
+      push1688ExpandedAttribute(rows, currentName, text.slice(currentStart, match.index));
+      currentName = marker;
+      currentStart = markerIndex + marker.length;
+    }
+    push1688ExpandedAttribute(rows, currentName, text.slice(currentStart));
+    return rows.length > 1 ? rows : [{ name: rowName, value: text }];
+  }
+
+  function push1688ExpandedAttribute(rows, name, value) {
+    var attrName = normalizeWhitespace(name || '');
+    var attrValue = clean1688AttributeValue(value);
+    if (!attrName || !attrValue || attrName === attrValue) return;
+    rows.push({ name: attrName, value: attrValue });
+  }
+
+  function clean1688AttributeValue(value) {
+    return normalizeWhitespace(value || '').replace(/^[:：,，、;；\s]+|[:：,，、;；\s]+$/g, '');
+  }
+
+  function get1688AttributeMarkers() {
+    return [
+      '主面料成分含量', '里料成分含量', '上市年份/季节', '上市年份季节', '适用年龄段',
+      '主面料成分', '面料名称', '模杯面料', '罩杯型', '里料成分', '排扣类型', '肩带类型',
+      '货源类别', '裤型', '裤长', '腰型', '裤门襟', '适合季节', '适合人群', '适用场景',
+      '商品件重尺', '包装信息', '材质', '成分', '季节', '风格', '功能', '功效', '款式',
+      '颜色', '尺码', '规格', '型号', '容量', '品牌', '货号', '厚薄', '图案', '弹力',
+      '类别', '工艺', '产地'
+    ].sort(function (a, b) { return b.length - a.length; });
+  }
+
+  function escape1688RegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   function pick1688PackagingRows(sources) {
