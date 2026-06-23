@@ -965,6 +965,7 @@
   function extract1688AttributesFromPageText(pageText, existingAttrs) {
     var text = normalizeWhitespace(pageText || '');
     if (!text) return [];
+    var existingSaleValueCounts = count1688ExistingSaleValues(existingAttrs);
     var hasTrustedSection = /商品属性|产品属性|基本参数|详细参数/.test(text);
     var hasSaleAttrEvidence = (Array.isArray(existingAttrs) ? existingAttrs : []).some(function (attr) {
       return attr && is1688StrongSalePropName(attr.name);
@@ -983,6 +984,7 @@
     var out = [];
     names.forEach(function (name) {
       var normalizedName = normalize1688SalePropName(name);
+      if (existingSaleValueCounts[normalizedName] >= 2) return;
       var regex = new RegExp('(?:^|\\s)' + escape1688RegExp(name) + '\\s*[:：]?\\s*(.{1,320}?)(?=(?:\\s(?:' + boundaryPattern + ')\\s*[:：]?)|[¥￥]\\s*\\d|\\d+\\s*件|$)', 'ig');
       var best = null;
       var match;
@@ -990,12 +992,39 @@
         if (!match || !match[1]) continue;
         var values = split1688PageTextSaleValues(normalizedName, match[1]);
         if (!values.length) continue;
+        if (isLikely1688PageTextSaleNoise(normalizedName, match[1], values)) continue;
         var candidate = { values: values, score: score1688SaleValues(values) };
         if (!best || candidate.score > best.score) best = candidate;
       }
       if (best && best.values.length) out.push({ name: normalizedName, value: best.values.join('、') });
     });
     return out;
+  }
+
+  function count1688ExistingSaleValues(attrs) {
+    var counts = {};
+    (Array.isArray(attrs) ? attrs : []).forEach(function (attr) {
+      if (!attr) return;
+      var name = normalize1688SalePropName(attr.name);
+      if (!is1688StrongSalePropName(name)) return;
+      var values = split1688AttributeSaleValues(name, attr.value);
+      if (!values.length) return;
+      counts[name] = Math.max(counts[name] || 0, values.length);
+    });
+    return counts;
+  }
+
+  function isLikely1688PageTextSaleNoise(name, rawValue, values) {
+    var normalizedName = normalize1688SalePropName(name);
+    var text = normalizeWhitespace(rawValue || '');
+    var joined = normalizeWhitespace((Array.isArray(values) ? values : []).join(' '));
+    if (!text && !joined) return false;
+    if (/(买家评价|累计评价|评价|预览|匿名购买|下单哦|大家喜欢|布料|摸起来|穿起来|哺乳期)/.test(text)) return true;
+    if (normalizedName === '颜色') {
+      if (/(真的很多|选了好久|不够看|冰冰凉凉|挺舒服|很舒服|特别适合|那么多种穿法)/.test(text)) return true;
+      if (/(预览|匿名购买|下单|舒服|哺乳期|摸起来|穿起来)/.test(joined)) return true;
+    }
+    return false;
   }
 
   function split1688PageTextSaleValues(name, value) {

@@ -305,6 +305,36 @@ test('1688 core prefers complete page text sale attributes over selected sku fra
   assert.equal(result.skuItems.some((sku) => sku.attrs && String(sku.attrs['尺码']).startsWith('XL')), true);
 });
 
+test('1688 core does not merge review text colors into structured 1688 sale attributes', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485&hotSaleSkuId=6014886287479',
+    host: 'detail.1688.com',
+    pageText: [
+      '买家评价 颜色 真的很多 选了好久都不够看。布料摸起来很舒服 冰冰凉凉的 很好 还有那么多种穿法',
+      '特别适合我 这个哺乳期也可以穿的 我现在就是哺乳期 挺好的 穿起来挺舒服的 大家喜欢的话可以下单哦 预览 预览 匿名购买',
+      '商品属性 款式 美背型 颜色 隐形肤、性感黑、香槟白 尺码 S（适合75-95斤32/70AB） M（适合95-110斤34/75AB） L（适合110-125斤36/80AB） XL（适合125-140斤38/85AB）',
+      '货号 8838 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      productProps: [
+        { name: '颜色', value: '隐形肤、性感黑、香槟白' },
+        { name: '尺码', value: 'S' },
+      ],
+      priceInfo: { price: '8.5' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 12);
+  assert.equal(result.attributes.some((attr) => attr.name === '颜色' && attr.value === '隐形肤、性感黑、香槟白'), true);
+  assert.equal(result.attributes.some((attr) => attr.name === '尺码' && attr.value.includes('XL（适合125-140斤38/85AB）')), true);
+  assert.equal(result.skuItems.some((sku) => /真的很多|布料摸起来|匿名购买|预览|下单哦/.test(sku.name)), false);
+});
+
 test('1688 core keeps bracketed color names intact when page text has inner spaces', () => {
   const core = loadCore();
 
