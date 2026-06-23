@@ -387,6 +387,30 @@ test('1688 core extracts packaging rows from explicit page text table', () => {
   });
 });
 
+test('1688 core does not leak packaging weight headers into sale attribute matrix', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/940329348845.html?offerId=940329348845',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 黑色 白色 高级灰 卡其 尺码 L（85-125斤） XL（125-165斤）',
+      '包装信息 商品件重尺 颜色 尺码 重量(g) 黑色 L（85-125斤） 120 黑色 XL（125-165斤） 120 白色 L（85-125斤） 120 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '940329348845',
+      subject: '新款美背内搭背心无痕一片式蕾丝吊带自带胸垫打底外穿大码内衣女',
+      priceInfo: { price: '12' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 8);
+  assert.equal(result.skuItems.some((sku) => /重量\(g\)|尺码\s+重量|\b120\b/.test(JSON.stringify(sku.attrs || {}))), false);
+  assert.equal(result.skuItems.some((sku) => sku.attrs && sku.attrs['颜色'] === '黑色'), true);
+  assert.equal(result.skuItems.some((sku) => sku.attrs && sku.attrs['尺码'] === 'XL（125-165斤）'), true);
+});
+
 test('1688 core extracts general package weight from 1688 packaging text', () => {
   const core = loadCore();
 

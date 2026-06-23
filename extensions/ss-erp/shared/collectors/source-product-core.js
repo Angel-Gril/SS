@@ -976,6 +976,7 @@
     if (!hasTrustedSection && !hasSaleAttrEvidence) return [];
 
     var names = ['颜色分类', '净含量', '色号', '颜色', '尺码', '尺寸', '规格', '型号', '容量', '套餐', '版本', '口味'];
+    var saleText = strip1688PackagingSectionsFromPageText(text);
     var boundaries = names.concat([
       '款式', '功能', '主面料成分', '面料名称', '模杯面料', '罩杯型', '里料成分',
       '品牌', '材质', '成分', '产地', '货号', '适用年龄段', '上市时间',
@@ -991,7 +992,7 @@
       var regex = new RegExp('(?:^|\\s)' + escape1688RegExp(name) + '\\s*[:：]?\\s*(.{1,320}?)(?=(?:\\s(?:' + boundaryPattern + ')\\s*[:：]?)|[¥￥]\\s*\\d|\\d+\\s*件|$)', 'ig');
       var best = null;
       var match;
-      while ((match = regex.exec(text))) {
+      while ((match = regex.exec(saleText))) {
         if (!match || !match[1]) continue;
         var values = split1688PageTextSaleValues(normalizedName, match[1]);
         if (!values.length) continue;
@@ -1003,6 +1004,12 @@
     });
     return out;
   }
+  function strip1688PackagingSectionsFromPageText(value) {
+    var text = normalizeWhitespace(value || '');
+    if (!text || !/(包装信息|商品件重尺)/.test(text)) return text;
+    return normalizeWhitespace(text.replace(/(?:包装信息|商品件重尺)\s+.{0,1800}?(?=(?:商品属性|产品属性|基本参数|详细参数|商品详情|商品评价|买家评价|价格说明|$))/g, ' '));
+  }
+
 
   function count1688ExistingSaleValues(attrs) {
     var counts = {};
