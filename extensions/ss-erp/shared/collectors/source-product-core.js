@@ -208,6 +208,7 @@
       skuItems = build1688SkuItemsFromAttributes(attributes, priceModel.costPriceForOzon);
     }
     var packagingRows = pick1688PackagingRows(sources, pageText, attributes);
+    var packageWeightG = pick1688PackageWeightG(sources, pageText);
     var description = pick1688Description(sources, pageText, assets.detailImages);
     var sourceRichContentDraft = build1688RichContentDraft(description, assets.detailImages);
     var diagnostics = build1688Diagnostics({
@@ -253,6 +254,8 @@
       sourceDetailImages: assets.detailImages,
       rejectedAssets: assets.rejectedAssets,
       attributes: attributes,
+      weightG: packageWeightG || null,
+      grossWeightGrams: packageWeightG || null,
       sourcePackagingRows: packagingRows,
       description: description,
       sourceRichContentDraft: sourceRichContentDraft,
@@ -1259,6 +1262,45 @@
     });
     rows = rows.concat(extract1688PackagingRowsFromPageText(pageText, attributes));
     return dedupe1688Objects(rows, function (row) { return JSON.stringify(row); }).slice(0, 200);
+  }
+
+  function pick1688PackageWeightG(sources, pageText) {
+    var sourceWeight = pick1688PackageWeightGFromSources(sources);
+    if (sourceWeight) return sourceWeight;
+    return extract1688PackageWeightGFromPageText(pageText);
+  }
+
+  function pick1688PackageWeightGFromSources(sources) {
+    var candidates = [];
+    (Array.isArray(sources) ? sources : []).forEach(function (source) {
+      walkObject(source, [], function (value, path) {
+        var pathText = path.join('.');
+        var key = path[path.length - 1] || '';
+        if (!/(package|packaging|packing|weight|gross|重量|毛重|净重|克重)/i.test(pathText)) return;
+        if (!/(weight|gross|重量|毛重|净重|克重)$/i.test(key)) return;
+        var weight = convertWeightToGrams(value, guessWeightUnit(String(key) + ' ' + String(value || '')));
+        if (weight && weight > 0 && weight < 50000) candidates.push(weight);
+      });
+    });
+    return candidates.length ? candidates[0] : null;
+  }
+
+  function extract1688PackageWeightGFromPageText(pageText) {
+    var text = normalizeWhitespace(pageText || '');
+    if (!/(包装信息|商品件重尺|包装重量|商品重量|毛重|净重|克重)/.test(text)) return null;
+    var sectionMatch = text.match(/(?:包装信息|商品件重尺)\s+(.{1,800}?)(?=(?:商品详情|商品评价|买家评价|价格说明|$))/);
+    var section = sectionMatch && sectionMatch[1] ? sectionMatch[1] : text;
+    if (!/(重量|毛重|净重|克重)/.test(section)) return null;
+
+    var unitFirst = section.match(/(?:商品重量|包装重量|包裹重量|毛重|净重|克重|重量)\s*[（(]\s*(kg|g|克|千克|斤)\s*[）)]\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+    if (unitFirst) return convertWeightToGrams(unitFirst[2] + unitFirst[1], unitFirst[1]);
+
+    var labeled = section.match(/(?:商品重量|包装重量|包裹重量|毛重|净重|克重|重量)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)\s*(kg|g|克|千克|斤)?/i);
+    if (labeled) return convertWeightToGrams(labeled[1] + (labeled[2] || 'g'), labeled[2] || 'g');
+
+    var standalone = section.match(/[0-9]+(?:\.[0-9]+)?\s*(?:kg|g|克|千克|斤)/ig) || [];
+    if (standalone.length === 1) return convertWeightToGrams(standalone[0], guessWeightUnit(standalone[0]));
+    return null;
   }
 
   function extract1688PackagingRowsFromPageText(pageText, attributes) {

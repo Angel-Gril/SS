@@ -386,3 +386,27 @@ test('1688 core extracts packaging rows from explicit page text table', () => {
     weightG: 120,
   });
 });
+
+test('1688 core extracts general package weight from 1688 packaging text', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    pageText: '商品属性 颜色 隐形肤 性感黑 香槟白 尺码 S M L XL 包装信息 商品件重尺 重量(g) 20 商品详情',
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      productProps: [
+        { name: '颜色', value: '隐形肤、性感黑、香槟白' },
+        { name: '尺码', value: 'S、M、L、XL' },
+      ],
+      priceInfo: { price: '8.5' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 0);
+  assert.equal(result.weightG, 20);
+  assert.equal(result.grossWeightGrams, 20);
+});

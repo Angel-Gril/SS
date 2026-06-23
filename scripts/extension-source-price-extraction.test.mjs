@@ -570,6 +570,35 @@ assert.equal(aliCompleteSourceResponse.data.skuItems[0].skuId, 'red-500');
 assert.deepEqual(plain(aliCompleteSourceResponse.data.skuItems[0].attrs), { 颜色: '红色', 容量: '500ml' });
 assert.deepEqual(plain(aliCompleteSourceResponse.data.skuItems[0].images), ['https://img.example.com/red.jpg']);
 
+const aliGeneralPackageWeightResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/945335480485.html',
+  title: '1688 package weight source detail',
+  bodyText: [
+    '商品属性 颜色 隐形肤 性感黑 香槟白 尺码 S M L XL',
+    '包装信息 商品件重尺 重量(g) 20 商品详情',
+  ].join(' '),
+  selectors: {},
+  pageState: {
+    knownGlobals: {
+      offerDetailData: {
+        offerId: '945335480485',
+        subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+        productProps: [
+          { name: '颜色', value: '隐形肤、性感黑、香槟白' },
+          { name: '尺码', value: 'S、M、L、XL' },
+        ],
+        priceInfo: { price: '8.5' },
+        imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+      },
+    },
+  },
+});
+
+assert.equal(aliGeneralPackageWeightResponse.ok, true);
+assert.equal(aliGeneralPackageWeightResponse.data.weightG, 20);
+assert.equal(aliGeneralPackageWeightResponse.data.grossWeightGrams, 20);
+assert.deepEqual(plain(aliGeneralPackageWeightResponse.data.sourcePackagingRows), []);
+
 const aliDomFallbackSourceResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/955566677788.html',
   title: '1688 dom source detail',

@@ -1075,6 +1075,7 @@
       description: structured.description || result.description,
       detailImages: sourceDetailImages
     });
+    const grossWeightGrams = Number(structured.grossWeightGrams || structured.weightG || result.grossWeightGrams || result.weightG) || null;
     const keepContextPrice = shouldKeep1688ContextPrice(result);
     const extractionDiagnostics = structured.extractionDiagnostics || buildSourceExtractionDiagnostics({
       title,
@@ -1115,6 +1116,8 @@
       sourcePackagingRows: structured.packagingRows,
       sourceRichContentDraft,
       sourceVideos: structured.sourceVideos.length ? structured.sourceVideos : result.sourceVideos,
+      grossWeightGrams,
+      weightG: grossWeightGrams,
       lengthMm: dimensions.lengthMm || result.lengthMm,
       widthMm: dimensions.widthMm || result.widthMm,
       heightMm: dimensions.heightMm || result.heightMm,
@@ -1147,6 +1150,7 @@
         (Array.isArray(coreResult.sourceDetailImages) && coreResult.sourceDetailImages.length > 0) ||
         (Array.isArray(coreResult.attributes) && coreResult.attributes.length > 0) ||
         (Array.isArray(coreResult.sourcePackagingRows) && coreResult.sourcePackagingRows.length > 0) ||
+        Boolean(coreResult.weightG || coreResult.grossWeightGrams) ||
         Boolean(coreResult.priceCny) ||
         Boolean(coreResult.displayPrice)
       );
@@ -1162,6 +1166,8 @@
           attributes: Array.isArray(coreResult.attributes) ? coreResult.attributes : [],
           categoryPath: Array.isArray(coreResult.categoryPath) ? coreResult.categoryPath : [],
           dimensions: coreResult.dimensionsMm || { lengthMm: 0, widthMm: 0, heightMm: 0 },
+          grossWeightGrams: Number(coreResult.grossWeightGrams || coreResult.weightG) || null,
+          weightG: Number(coreResult.weightG || coreResult.grossWeightGrams) || null,
           packagingRows: Array.isArray(coreResult.sourcePackagingRows) ? coreResult.sourcePackagingRows : [],
           description: coreResult.description || "",
           sourceVideos: Array.isArray(coreResult.sourceVideos) ? coreResult.sourceVideos : [],
