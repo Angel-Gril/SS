@@ -14,6 +14,7 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Store,
   Wand2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api';
 import { evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
 import { formatDate } from '@/lib/utils';
+import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
 
 type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall';
 type DetailSection = 'overview' | 'sku' | 'attributes' | 'images' | 'translation' | 'listing';
@@ -50,6 +52,35 @@ interface SourceCollectItem {
   updatedAt?: string;
   variants?: unknown[] | null;
   metadata?: Record<string, unknown> | null;
+}
+
+type SourceStandardModel = ReturnType<typeof normalizeSourceStandardAttributes>;
+interface OzonShopOption {
+  id: string;
+  name: string;
+  platform: string;
+}
+
+interface SourceOzonCategoryCandidate {
+  categoryId: number;
+  typeId: number;
+  categoryName: string;
+  typeName: string;
+  score: number;
+  label: 'recommended' | 'optional' | 'risky';
+  selected: boolean;
+  source: string;
+  confirmationCount: number;
+  reasons: string[];
+  attributePlan: {
+    candidates: Array<{ standardKey: string; attributeName: string; values: string[]; needsDictionaryResolution: boolean }>; 
+    missingRequired: Array<{ attributeId: number; attributeName: string; standardKey: string; reason: string }>; 
+  };
+}
+
+interface SourceOzonCategoryCandidateResponse {
+  signature: string;
+  candidates: SourceOzonCategoryCandidate[];
 }
 
 const platformTabs: Array<{ key: PlatformFilter; label: string }> = [
@@ -233,6 +264,50 @@ function sourceVariants(item: SourceCollectItem): Array<Record<string, unknown>>
   return Array.isArray(variants) ? variants.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : [];
 }
 
+function sourceStandardAttributeModel(item: SourceCollectItem): SourceStandardModel {
+  return normalizeSourceStandardAttributes(item);
+}
+
+function sourceStandardListText(values: string[]): string {
+  return values.length ? values.join('、') : '-';
+}
+
+function sourceStandardGenderText(value: string): string {
+  if (value === 'female') return '女';
+  if (value === 'male') return '男';
+  if (value === 'unisex') return '中性';
+  return value || '-';
+}
+
+function sourceStandardSeasonText(values: string[]): string {
+  return sourceStandardListText(values.map((value) => {
+    if (value === 'all-season') return '四季';
+    if (value === 'spring') return '春';
+    if (value === 'summer') return '夏';
+    if (value === 'autumn') return '秋';
+    if (value === 'winter') return '冬';
+    return value;
+  }));
+}
+
+function sourceStandardBrandText(standard: SourceStandardModel): string {
+  if (standard.brand.value) return standard.brand.isBrandless ? `${standard.brand.value}（无品牌）` : standard.brand.value;
+  return standard.brand.isBrandless ? '无品牌' : '-';
+}
+
+function sourceStandardGenderSeasonText(standard: SourceStandardModel): string {
+  const parts = [sourceStandardGenderText(standard.gender.value), sourceStandardSeasonText(standard.seasons)]
+    .filter((value) => value && value !== '-');
+  return parts.length ? parts.join(' / ') : '-';
+}
+
+function sourceStandardPackageText(standard: SourceStandardModel): string {
+  const dims = standard.packageDimensionsMm;
+  const weight = standard.packageWeightG ? `${standard.packageWeightG}g` : '';
+  const size = dims ? `${dims.length}×${dims.width}×${dims.height}mm` : '';
+  return [weight, size].filter(Boolean).join(' / ') || '-';
+}
+
 function sourceVariantLabel(variant: Record<string, unknown>, index: number): string {
   const attrs = variant.attrs && typeof variant.attrs === 'object'
     ? Object.entries(variant.attrs as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`).join(' / ')
@@ -368,6 +443,22 @@ function readinessBadgeClass(tone: BadgeTone): string {
   if (tone === 'warn') return 'border-amber-200 bg-amber-50 text-amber-700';
   if (tone === 'info') return 'border-blue-200 bg-blue-50 text-blue-700';
   return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function ozonCategoryCandidateKey(candidate: SourceOzonCategoryCandidate): string {
+  return `${candidate.categoryId}:${candidate.typeId}`;
+}
+
+function ozonCandidateLabelText(label: SourceOzonCategoryCandidate['label']): string {
+  if (label === 'recommended') return '推荐';
+  if (label === 'optional') return '可选';
+  return '谨慎';
+}
+
+function ozonCandidateLabelClass(label: SourceOzonCategoryCandidate['label']): string {
+  if (label === 'recommended') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (label === 'optional') return 'border-blue-200 bg-blue-50 text-blue-700';
+  return 'border-amber-200 bg-amber-50 text-amber-700';
 }
 
 function workflowActionClass(enabled: boolean): string {
@@ -557,10 +648,12 @@ function SourceDetailContent({
   item,
   activeSection,
   onSectionChange,
+  onItemUpdate,
 }: {
   item: SourceCollectItem;
   activeSection: DetailSection;
   onSectionChange: (section: DetailSection) => void;
+  onItemUpdate: (item: SourceCollectItem) => void;
 }) {
   return (
     <div className="space-y-4 text-sm">
@@ -611,7 +704,7 @@ function SourceDetailContent({
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
       {activeSection === 'images' ? <SourceImagesSection item={item} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} /> : null}
-      {activeSection === 'listing' ? <SourceListingCheckSection item={item} /> : null}
+      {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
   );
 }
@@ -704,19 +797,34 @@ function SourceSkuSection({ item }: { item: SourceCollectItem }) {
 
 function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
   const attrs = sourceAttributes(item);
+  const standard = sourceStandardAttributeModel(item);
   return (
-    <InfoPanel title="属性" count={attrs.length}>
-      {attrs.length ? (
+    <div className="space-y-3">
+      <InfoPanel title="标准属性" count={standard.missingForOzon.length ? `缺口 ${standard.missingForOzon.length}` : '已归一'}>
         <div className="grid gap-2 md:grid-cols-2">
-          {attrs.map((attr, index) => (
-            <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
-              <span className="text-muted-foreground">{String(attr.name || attr.key || '-')}：</span>
-              {String(attr.value || attr.attrValue || attr.text || '-')}
-            </div>
-          ))}
+          <KeyValue label="品牌/无品牌" value={sourceStandardBrandText(standard)} />
+          <KeyValue label="颜色" value={sourceStandardListText(standard.colors)} />
+          <KeyValue label="尺码" value={sourceStandardListText(standard.sizes)} />
+          <KeyValue label="材质/成分" value={sourceStandardListText(standard.materials)} />
+          <KeyValue label="性别/季节" value={sourceStandardGenderSeasonText(standard)} />
+          <KeyValue label="重量尺寸" value={sourceStandardPackageText(standard)} />
+          <KeyValue label="类目提示" value={sourceStandardListText(standard.categoryHints)} />
+          <KeyValue label="Ozon缺口" value={sourceStandardListText(standard.missingForOzon)} />
         </div>
-      ) : <div className="text-muted-foreground">未采集到商品属性</div>}
-    </InfoPanel>
+      </InfoPanel>
+      <InfoPanel title="属性" count={attrs.length}>
+        {attrs.length ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {attrs.map((attr, index) => (
+              <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+                <span className="text-muted-foreground">{String(attr.name || attr.key || '-')}：</span>
+                {String(attr.value || attr.attrValue || attr.text || '-')}
+              </div>
+            ))}
+          </div>
+        ) : <div className="text-muted-foreground">未采集到商品属性</div>}
+      </InfoPanel>
+    </div>
   );
 }
 
@@ -766,15 +874,98 @@ function SourceTranslationSection({ item }: { item: SourceCollectItem }) {
   );
 }
 
-function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
+function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
   const readiness = evaluateSourceListingReadiness(item);
   const missing = readiness.missingFields;
+  const [shops, setShops] = useState<OzonShopOption[]>([]);
+  const [shopId, setShopId] = useState('');
+  const [shopsLoading, setShopsLoading] = useState(false);
+  const [categoryData, setCategoryData] = useState<SourceOzonCategoryCandidateResponse | null>(null);
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [candidateError, setCandidateError] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [selectedCandidateKey, setSelectedCandidateKey] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const candidates = categoryData?.candidates || [];
+  const selectedCandidate = candidates.find((candidate) => ozonCategoryCandidateKey(candidate) === selectedCandidateKey) || candidates[0];
   const sourceAssets = [
     { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
     { label: `详情图 ${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`, done: sourceDetailPreviewImages(item).length > 0 },
     { label: sourceRichContentDraft(item) ? '原始富内容待处理' : '富内容待采', done: !!sourceRichContentDraft(item) },
     { label: `包装信息 ${sourcePackagingRows(item).length}`, done: sourcePackagingRows(item).length > 0 },
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+    setShopsLoading(true);
+    api.get<OzonShopOption[]>('/api/shops').then((res) => {
+      if (cancelled) return;
+      if (res.code === 1 && res.data) {
+        const ozonShops = res.data.filter((shop) => shop.platform === 'OZON');
+        setShops(ozonShops);
+        setShopId((current) => current || ozonShops[0]?.id || '');
+      }
+      setShopsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCategoryData(null);
+    setCandidateError('');
+    setConfirmMessage('');
+    setSelectedCandidateKey('');
+    if (!shopId) return () => { cancelled = true; };
+    setCandidateLoading(true);
+    api.get<SourceOzonCategoryCandidateResponse>(`/api/collect/${item.id}/ozon-category-candidates?shopId=${encodeURIComponent(shopId)}`).then((res) => {
+      if (cancelled) return;
+      if (res.code === 1 && res.data) {
+        setCategoryData(res.data);
+        const selected = res.data.candidates.find((candidate) => candidate.selected) || res.data.candidates[0];
+        setSelectedCandidateKey(selected ? ozonCategoryCandidateKey(selected) : '');
+      } else {
+        setCandidateError(res.msg || '生成 Ozon 类目候选失败');
+      }
+      setCandidateLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [item.id, shopId]);
+
+  async function confirmSelectedCandidate() {
+    if (!selectedCandidate || confirming) return;
+    setConfirming(true);
+    setCandidateError('');
+    setConfirmMessage('');
+    const res = await api.post(`/api/collect/${item.id}/ozon-category-confirm`, {
+      signature: categoryData?.signature,
+      categoryId: selectedCandidate.categoryId,
+      typeId: selectedCandidate.typeId,
+      categoryName: selectedCandidate.categoryName,
+      typeName: selectedCandidate.typeName,
+    });
+    if (res.code === 1) {
+      const metadata = {
+        ...(item.metadata || {}),
+        descriptionCategoryId: selectedCandidate.categoryId,
+        typeId: selectedCandidate.typeId,
+        sourceOzonCategoryConfirmed: {
+          signature: categoryData?.signature || '',
+          categoryId: selectedCandidate.categoryId,
+          typeId: selectedCandidate.typeId,
+          categoryName: selectedCandidate.categoryName,
+          typeName: selectedCandidate.typeName,
+          confirmedAt: new Date().toISOString(),
+        },
+      };
+      onItemUpdate({ ...item, metadata });
+      setConfirmMessage('已确认，后续同类货源会优先推荐该 Ozon 类目');
+    } else {
+      setCandidateError(res.msg || '确认 Ozon 类目失败');
+    }
+    setConfirming(false);
+  }
+
   return (
     <div className="space-y-3">
       <InfoPanel title="上架检查" count={sourceListingStatusLabel(readiness.status)}>
@@ -796,6 +987,88 @@ function SourceListingCheckSection({ item }: { item: SourceCollectItem }) {
             ))}
           </div>
         ) : <div className="text-emerald-700">关键上架字段已采集或已补全</div>}
+      </InfoPanel>
+      <InfoPanel title="Ozon 类目候选" count={selectedCandidate ? ozonCandidateLabelText(selectedCandidate.label) : null}>
+        <div className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+              <Store className="h-4 w-4 shrink-0" />
+              <span className="shrink-0">店铺</span>
+              <select
+                value={shopId}
+                onChange={(event) => setShopId(event.target.value)}
+                disabled={shopsLoading || candidateLoading}
+                className="h-8 min-w-0 rounded-md border bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                {shops.length === 0 ? <option value="">请先添加 OZON 店铺</option> : null}
+                {shops.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}
+              </select>
+            </div>
+            {selectedCandidate ? (
+              <Button type="button" size="sm" onClick={confirmSelectedCandidate} disabled={confirming || candidateLoading}>
+                {confirming ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                确认类目
+              </Button>
+            ) : null}
+          </div>
+
+          {candidateLoading ? (
+            <div className="rounded-md border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
+              <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
+              正在生成候选
+            </div>
+          ) : null}
+          {candidateError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{candidateError}</div> : null}
+          {confirmMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{confirmMessage}</div> : null}
+
+          {!candidateLoading && !candidateError && candidates.length === 0 ? (
+            <div className="text-sm text-muted-foreground">暂无可用候选</div>
+          ) : null}
+
+          {candidates.length ? (
+            <div className="space-y-2">
+              {candidates.map((candidate) => {
+                const candidateKey = ozonCategoryCandidateKey(candidate);
+                const isSelected = candidateKey === selectedCandidateKey;
+                return (
+                  <button
+                    key={candidateKey}
+                    type="button"
+                    onClick={() => setSelectedCandidateKey(candidateKey)}
+                    className={`w-full rounded-md border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${isSelected ? 'border-primary bg-primary/5' : 'bg-background hover:bg-muted/40'}`}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="break-words text-sm font-medium leading-snug">
+                          {candidate.categoryName || '-'} / {candidate.typeName || '-'}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          category {candidate.categoryId} · type {candidate.typeId} · 分数 {candidate.score}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-1">
+                        <Badge variant="outline" className={ozonCandidateLabelClass(candidate.label)}>{ozonCandidateLabelText(candidate.label)}</Badge>
+                        {candidate.confirmationCount ? <Badge variant="outline">历史 {candidate.confirmationCount}</Badge> : null}
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {candidate.reasons.map((reason) => <Badge key={reason} variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">{reason}</Badge>)}
+                      <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">可映射属性 {candidate.attributePlan.candidates.length}</Badge>
+                      {candidate.attributePlan.missingRequired.length ? (
+                        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">缺必填 {candidate.attributePlan.missingRequired.length}</Badge>
+                      ) : null}
+                    </div>
+                    {candidate.attributePlan.missingRequired.length ? (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        缺口：{candidate.attributePlan.missingRequired.slice(0, 3).map((gap) => gap.attributeName || gap.standardKey).join('、')}
+                      </div>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
       </InfoPanel>
       {readiness.blockers.length ? (
         <InfoPanel title="阻断项" count={readiness.blockers.length}>
@@ -918,6 +1191,11 @@ export default function SourceCollectPage() {
     setLoading(false);
   }
 
+  function updateItem(next: SourceCollectItem) {
+    setItems((prev) => prev.map((item) => (item.id === next.id ? next : item)));
+    setDetailItem((current) => (current?.id === next.id ? next : current));
+  }
+
   useEffect(() => {
     loadItems();
   }, []);
@@ -1016,6 +1294,7 @@ export default function SourceCollectPage() {
               item={detailItem}
               activeSection={activeDetailSection}
               onSectionChange={setActiveDetailSection}
+              onItemUpdate={updateItem}
             />
           ) : null}
         </DialogContent>

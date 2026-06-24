@@ -1,6 +1,6 @@
 'use client';
 
-const LOCAL_API_BASE = 'http://localhost:3001';
+const LOCAL_API_PORT = '3001';
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
@@ -23,16 +23,24 @@ export function getApiBase(): string {
   const trimmedConfigured = configured ? trimTrailingSlash(configured) : '';
 
   if (typeof window !== 'undefined') {
-    const { hostname, origin } = window.location;
+    const { hostname, origin, protocol } = window.location;
     if (!isLocalHost(hostname)) {
       if (trimmedConfigured && !isLocalApiBase(trimmedConfigured)) return trimmedConfigured;
       return origin;
+    }
+    if (trimmedConfigured && isLocalApiBase(trimmedConfigured)) {
+      const url = new URL(trimmedConfigured);
+      url.hostname = hostname;
+      return trimTrailingSlash(url.toString());
+    }
+    if (!trimmedConfigured) {
+      return `${protocol}//${hostname}:${LOCAL_API_PORT}`;
     }
   }
 
   if (trimmedConfigured) return trimmedConfigured;
 
-  return LOCAL_API_BASE;
+  return `http://localhost:${LOCAL_API_PORT}`;
 }
 
 export function apiUrl(path: string): string {

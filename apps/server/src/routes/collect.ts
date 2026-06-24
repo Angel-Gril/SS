@@ -22,6 +22,7 @@ import {
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
+import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
@@ -1104,6 +1105,26 @@ export function buildCollectedGoodsMetadata(input: {
   if (categoryName) metadata.categoryName = categoryName;
   const sourceAttributes = normalizeCollectedSourceAttributes(input.attributes);
   if (sourceAttributes.length) metadata.sourceAttributes = sourceAttributes;
+  const sourceStandardVariants = [
+    input.selectedSku,
+    ...(Array.isArray(input.skuItems) ? input.skuItems : []),
+    ...(Array.isArray(input.variants) ? input.variants : []),
+  ].filter((entry) => !!entry && typeof entry === 'object' && !Array.isArray(entry));
+  const sourceStandardAttributes = normalizeSourceStandardAttributes({
+    title: input.sourceTitleRaw ?? input.title,
+    variants: sourceStandardVariants,
+    metadata: {
+      sourceAttributes,
+      sourcePackagingRows,
+      categoryPath,
+      categoryName,
+      weightG: finiteMetadataNumber(input.weightG),
+      lengthMm: finiteMetadataNumber(input.lengthMm),
+      widthMm: finiteMetadataNumber(input.widthMm),
+      heightMm: finiteMetadataNumber(input.heightMm),
+    },
+  });
+  metadata.sourceStandardAttributes = cloneMetadataJson(sourceStandardAttributes);
   const priceText = cleanMetadataText(input.priceText, 200);
   if (priceText) metadata.priceText = priceText;
   const unitPriceText = cleanMetadataText(input.unitPriceText, 200);
@@ -1711,6 +1732,254 @@ export function normalizeOzonOriginCountryForChinaSeller<T extends { id: number;
   });
 }
 
+type SourceStandardOzonAttributeKey = 'brand' | 'colors' | 'sizes' | 'materials' | 'gender' | 'seasons';
+
+type SourceStandardOzonAttributeDef = {
+  id: number;
+  name: string;
+  is_required?: boolean;
+  dictionary_id?: number | null;
+};
+
+type SourceStandardOzonAttributePlanCandidate = {
+  standardKey: SourceStandardOzonAttributeKey;
+  attributeId: number;
+  attributeName: string;
+  required: boolean;
+  dictionaryId: number | null;
+  needsDictionaryResolution: boolean;
+  values: string[];
+};
+
+type SourceStandardOzonAttributePlanGap = {
+  attributeId: number;
+  attributeName: string;
+  standardKey: SourceStandardOzonAttributeKey | 'unknown';
+  reason: 'no_source_standard_value';
+};
+
+function sourceStandardOzonAttributeKey(attr: { id?: unknown; name?: unknown }): SourceStandardOzonAttributeKey | null {
+  const name = normalizeOzonDictionaryText(attr.name);
+  if (Number(attr.id) === 85 || /^(бренд|brand)$/.test(name)) return 'brand';
+  if (/^(цвет|color|colour)$/.test(name)) return 'colors';
+  if (/размер|size/.test(name)) return 'sizes';
+  if (/материал|состав|material|composition|ткань|fabric/.test(name)) return 'materials';
+  if (/^(пол|gender)$/.test(name) || /для кого|кому подходит/.test(name)) return 'gender';
+  if (/сезон|season/.test(name)) return 'seasons';
+  return null;
+}
+
+function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStandardOzonAttributeKey): string[] {
+  if (key === 'brand') {
+    const value = String(standard.brand?.value || '').trim();
+    if (value) return [value];
+    return standard.brand?.isBrandless ? ['Без бренда'] : [];
+  }
+  if (key === 'colors') return Array.isArray(standard.colors) ? standard.colors.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  if (key === 'sizes') return Array.isArray(standard.sizes) ? standard.sizes.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  if (key === 'gender') {
+    const value = String(standard.gender?.value || '').trim();
+    if (value === 'female') return ['Женский'];
+    if (value === 'male') return ['Мужской'];
+    if (value === 'unisex') return ['Унисекс'];
+    return value ? [value] : [];
+  }
+  if (key === 'seasons') {
+    const labels: Record<string, string> = {
+      'all-season': 'Всесезонный',
+      spring: 'Весна',
+      summer: 'Лето',
+      autumn: 'Осень',
+      winter: 'Зима',
+    };
+    return Array.isArray(standard.seasons) ? standard.seasons.map((value) => labels[String(value)] || String(value || '').trim()).filter(Boolean) : [];
+  }
+  return [];
+}
+
+export function buildSourceStandardOzonAttributePlan(
+  standard: Record<string, any>,
+  categoryAttrs: SourceStandardOzonAttributeDef[] | null | undefined,
+  existingAttributes: Array<{ id?: unknown }> | null | undefined = [],
+): { candidates: SourceStandardOzonAttributePlanCandidate[]; missingRequired: SourceStandardOzonAttributePlanGap[] } {
+  const existingIds = new Set((Array.isArray(existingAttributes) ? existingAttributes : [])
+    .map((attr) => Number(attr?.id))
+    .filter((id) => Number.isFinite(id) && id > 0));
+  const candidates: SourceStandardOzonAttributePlanCandidate[] = [];
+  const missingRequired: SourceStandardOzonAttributePlanGap[] = [];
+  for (const attr of Array.isArray(categoryAttrs) ? categoryAttrs : []) {
+    const attributeId = Number(attr.id);
+    if (!Number.isFinite(attributeId) || attributeId <= 0 || existingIds.has(attributeId)) continue;
+    const standardKey = sourceStandardOzonAttributeKey(attr);
+    if (!standardKey) continue;
+    const values = sourceStandardOzonValues(standard || {}, standardKey);
+    if (values.length) {
+      const dictionaryId = Number(attr.dictionary_id);
+      candidates.push({
+        standardKey,
+        attributeId,
+        attributeName: String(attr.name || ''),
+        required: attr.is_required === true,
+        dictionaryId: Number.isFinite(dictionaryId) && dictionaryId > 0 ? dictionaryId : null,
+        needsDictionaryResolution: Number.isFinite(dictionaryId) && dictionaryId > 0,
+        values,
+      });
+    } else if (attr.is_required === true) {
+      missingRequired.push({
+        attributeId,
+        attributeName: String(attr.name || ''),
+        standardKey,
+        reason: 'no_source_standard_value',
+      });
+    }
+  }
+  return { candidates, missingRequired };
+}
+
+function normalizeSourceCategoryToken(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+export function sourceCategorySignature(item: { sourcePlatform?: unknown; metadata?: unknown }): string {
+  const meta = metadataRecord(item.metadata);
+  const platform = normalizeSourceCategoryToken(item.sourcePlatform || meta.sourcePlatform || 'source');
+  const path = Array.isArray(meta.categoryPath) ? meta.categoryPath : [];
+  const parts = path.map(normalizeSourceCategoryToken).filter(Boolean);
+  const categoryName = normalizeSourceCategoryToken(meta.categoryName);
+  if (categoryName && !parts.includes(categoryName)) parts.push(categoryName);
+  return platform + '|' + parts.join('>');
+}
+
+type SourceOzonConfirmedMapping = {
+  signature: string;
+  categoryId: number;
+  typeId: number;
+  categoryName?: string | null;
+  typeName?: string | null;
+  confirmations?: number;
+};
+
+type SourceOzonCategoryTreeNode = {
+  description_category_id?: number;
+  category_name?: string;
+  type_id?: number;
+  type_name?: string;
+  children?: SourceOzonCategoryTreeNode[];
+};
+
+type SourceOzonCategoryCandidate = {
+  categoryId: number;
+  typeId: number;
+  categoryName: string;
+  typeName: string;
+  score: number;
+  label: 'recommended' | 'optional' | 'risky';
+  selected: boolean;
+  source: 'shared_history' | 'tree_match';
+  confirmationCount: number;
+  reasons: string[];
+  attributePlan: ReturnType<typeof buildSourceStandardOzonAttributePlan>;
+};
+
+function flattenOzonCategoryTree(nodes: SourceOzonCategoryTreeNode[] | null | undefined): Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> {
+  const out: Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> = [];
+  const walk = (rows: SourceOzonCategoryTreeNode[]) => {
+    for (const row of rows) {
+      const categoryId = Number(row.description_category_id);
+      const typeId = Number(row.type_id);
+      if (Number.isFinite(categoryId) && categoryId > 0 && Number.isFinite(typeId) && typeId > 0) {
+        out.push({
+          categoryId,
+          typeId,
+          categoryName: String(row.category_name || ''),
+          typeName: String(row.type_name || ''),
+        });
+      }
+      if (Array.isArray(row.children)) walk(row.children);
+    }
+  };
+  walk(Array.isArray(nodes) ? nodes : []);
+  return out;
+}
+
+function categoryTextScore(sourceTerms: string[], candidate: { categoryName: string; typeName: string }): number {
+  const haystack = normalizeSourceCategoryToken(String(candidate.categoryName || '') + ' ' + String(candidate.typeName || ''));
+  let score = 0;
+  for (const term of sourceTerms) {
+    if (!term) continue;
+    if (haystack.includes(term) || term.includes(haystack)) score += 8;
+  }
+  return score;
+}
+
+export function buildSourceOzonCategoryCandidates(input: {
+  item: { sourcePlatform?: unknown; metadata?: unknown; title?: unknown };
+  categoryTree?: SourceOzonCategoryTreeNode[] | null;
+  attributesByCategory?: Record<string, SourceStandardOzonAttributeDef[]>;
+  confirmedMappings?: SourceOzonConfirmedMapping[];
+}): SourceOzonCategoryCandidate[] {
+  const signature = sourceCategorySignature(input.item);
+  const meta = metadataRecord(input.item.metadata);
+  const standard = metadataRecord(meta.sourceStandardAttributes);
+  const sourceTerms = [
+    ...(Array.isArray(meta.categoryPath) ? meta.categoryPath : []),
+    meta.categoryName,
+    input.item.title,
+  ].map(normalizeSourceCategoryToken).filter(Boolean);
+  const byKey = new Map<string, SourceOzonCategoryCandidate>();
+  const treeRows = flattenOzonCategoryTree(input.categoryTree);
+  const treeByKey = new Map(treeRows.map((row) => [String(row.categoryId) + ':' + String(row.typeId), row]));
+  const addCandidate = (row: { categoryId: number; typeId: number; categoryName?: string | null; typeName?: string | null }, baseScore: number, source: 'shared_history' | 'tree_match', reasons: string[], confirmationCount = 0) => {
+    const key = String(row.categoryId) + ':' + String(row.typeId);
+    const tree = treeByKey.get(key);
+    const attrs = input.attributesByCategory?.[key] || [];
+    const attributePlan = buildSourceStandardOzonAttributePlan(standard, attrs, []);
+    const coverageScore = attributePlan.candidates.length * 6 - attributePlan.missingRequired.length * 10;
+    const existing = byKey.get(key);
+    const score = baseScore + coverageScore;
+    const candidate: SourceOzonCategoryCandidate = {
+      categoryId: row.categoryId,
+      typeId: row.typeId,
+      categoryName: String(row.categoryName || tree?.categoryName || ''),
+      typeName: String(row.typeName || tree?.typeName || ''),
+      score,
+      label: 'risky',
+      selected: false,
+      source: existing?.source === 'shared_history' ? 'shared_history' : source,
+      confirmationCount: Math.max(existing?.confirmationCount || 0, confirmationCount),
+      reasons: Array.from(new Set([...(existing?.reasons || []), ...reasons])),
+      attributePlan,
+    };
+    if (!existing || candidate.score > existing.score) byKey.set(key, candidate);
+  };
+
+  for (const mapping of input.confirmedMappings || []) {
+    if (mapping.signature !== signature) continue;
+    const confirmations = Math.max(1, Number(mapping.confirmations) || 1);
+    addCandidate(mapping, 80 + confirmations * 8, 'shared_history', ['全局历史确认', '确认 ' + confirmations + ' 次'], confirmations);
+  }
+
+  for (const row of treeRows) {
+    const textScore = categoryTextScore(sourceTerms, row);
+    if (textScore <= 0 && byKey.size >= 5) continue;
+    addCandidate(row, textScore > 0 ? 30 + textScore : 5, 'tree_match', textScore > 0 ? ['类目名称相似'] : ['备选类目'], 0);
+  }
+
+  const sorted = Array.from(byKey.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+  sorted.forEach((candidate, index) => {
+    candidate.selected = index === 0;
+    candidate.label = candidate.score >= 80 ? 'recommended' : candidate.score >= 45 ? 'optional' : 'risky';
+  });
+  return sorted;
+}
+
 function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
@@ -1723,6 +1992,12 @@ function getCollectedRichDescriptionJson(item: { metadata?: unknown }): string {
 function getCollectedSourceVideos(item: { metadata?: unknown }): unknown[] {
   const meta = metadataRecord(item.metadata);
   return Array.isArray(meta.sourceVideos) ? meta.sourceVideos : [];
+}
+
+function getCollectedSourceStandardAttributes(item: { metadata?: unknown }): Record<string, any> | null {
+  const meta = metadataRecord(item.metadata);
+  const standard = meta.sourceStandardAttributes;
+  return standard && typeof standard === 'object' && !Array.isArray(standard) ? standard as Record<string, any> : null;
 }
 
 function normalizePublishImageList(value: unknown): string[] {
@@ -3507,6 +3782,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const itemDescription = resolvePublishDescription(item, cloned?.description);
       const sourceRichDescriptionJson = getCollectedRichDescriptionJson(item);
       const sourceVideos = getCollectedSourceVideos(item);
+      const sourceStandardAttributes = getCollectedSourceStandardAttributes(item);
 
       const variants = enrichOzonVariantSpecs(Array.isArray(item.variants) ? (item.variants as any[]) : []);
       // 无 variants：保持原行为（1 个 item）
@@ -3538,6 +3814,7 @@ export async function collectRoutes(app: FastifyInstance) {
           _sourceModelId: item.modelId || null,
           _sourceRichDescriptionJson: sourceRichDescriptionJson || null,
           _sourceVideos: sourceVideos,
+          _sourceStandardAttributes: sourceStandardAttributes,
         }];
       }
 
@@ -3623,6 +3900,7 @@ export async function collectRoutes(app: FastifyInstance) {
           _hasOwnAttrs: !!variantAttrs,
           _sourceRichDescriptionJson: sourceRichDescriptionJson || null,
           _sourceVideos: sourceVideos,
+          _sourceStandardAttributes: sourceStandardAttributes,
           _isVariantItem: true,
         };
       }));
@@ -3665,6 +3943,8 @@ export async function collectRoutes(app: FastifyInstance) {
     const richContentAttrCache = new Map<string, Promise<{ status: string; attribute: any | null; error?: string }>>();
     const videoTrace: any[] = [];
     const videoTraceSeen = new Set<string>();
+    const sourceStandardAttributeTrace: any[] = [];
+    const sourceStandardAttributeTraceSeen = new Set<string>();
     const MANUFACTURER_NAMES = /производитель|manufacturer/i;
     const BRAND_NAMES = /бренд|brand/i;
     for (const group of groupPublishItemsByCategory(importItems)) {
@@ -3805,6 +4085,26 @@ export async function collectRoutes(app: FastifyInstance) {
             console.log(`[publish-ozon] injected manufacturer placeholder for attr ${mfrAttrDef.id} (${mfrAttrDef.name}) category=${group.categoryId}/${group.typeId}`);
           }
 
+          if (importItem._sourceStandardAttributes) {
+            const traceKey = String(group.categoryId) + ':' + String(group.typeId) + ':' + String(importItem.offer_id || '');
+            if (!sourceStandardAttributeTraceSeen.has(traceKey)) {
+              sourceStandardAttributeTraceSeen.add(traceKey);
+              const plan = buildSourceStandardOzonAttributePlan(importItem._sourceStandardAttributes, allAttrs, importItem.attributes);
+              if (plan.candidates.length || plan.missingRequired.length) {
+                sourceStandardAttributeTrace.push({
+                  offerId: importItem.offer_id,
+                  sourceItemId: importItem._sourceItemId || null,
+                  sourceVariantSku: importItem._sourceVariantSku || null,
+                  categoryId: group.categoryId,
+                  typeId: group.typeId,
+                  status: 'source_standard_ozon_attribute_plan',
+                  candidates: plan.candidates,
+                  missingRequired: plan.missingRequired,
+                });
+              }
+            }
+          }
+
           const variantAttrs: Record<string, string> = importItem._variantAttrs || {};
           if (importItem._hasOwnAttrs && Object.keys(variantAttrs).length) {
             console.log(`[publish-ozon variant] offer=${importItem.offer_id} has own ozonAttributes; override variable aspects from collected webAspects`);
@@ -3906,6 +4206,7 @@ export async function collectRoutes(app: FastifyInstance) {
           _hasOwnAttrs,
           _sourceRichDescriptionJson,
           _sourceVideos,
+          _sourceStandardAttributes,
           _isVariantItem,
           ...rest
         } = i;
@@ -3981,6 +4282,7 @@ export async function collectRoutes(app: FastifyInstance) {
             variantTrace: variantTrace.length ? variantTrace : null,
             richContentTrace: richContentTrace.length ? richContentTrace : null,
             videoTrace: finalVideoTrace.length ? finalVideoTrace : null,
+            sourceStandardAttributeTrace: sourceStandardAttributeTrace.length ? sourceStandardAttributeTrace : null,
             videoPublishStatus,
             videoPublishedCount: finalVideoTrace.filter((entry) => entry.status === 'uploaded').length,
             videoPublishFailedCount: finalVideoTrace.filter((entry) => entry.status === 'failed').length,
@@ -4416,6 +4718,100 @@ export async function collectRoutes(app: FastifyInstance) {
     } catch (e: any) {
       return reply.send({ code: 0, msg: `获取源商品属性失败: ${e.message?.slice(0, 200) || '未知'}` });
     }
+  });
+
+  app.get('/:id/ozon-category-candidates', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const query = request.query as { shopId?: string };
+    const shopId = String(query.shopId || '').trim();
+    if (!shopId) return reply.status(400).send({ code: 0, msg: '请选择 OZON 店铺' });
+
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+    const shop = await prisma.shop.findFirst({ where: { id: shopId, userId, platform: 'OZON' } });
+    if (!shop || !shop.clientId || !shop.apiKeyEncrypted) return reply.status(400).send({ code: 0, msg: '店铺配置不完整' });
+
+    const signature = sourceCategorySignature(item);
+    const confirmedRows = await prisma.supplyGoods.findMany({
+      where: {
+        metadata: { path: ['sourceOzonCategoryConfirmed', 'signature'], equals: signature } as any,
+      },
+      select: { metadata: true },
+      take: 200,
+      orderBy: { updatedAt: 'desc' },
+    });
+    const confirmedMap = new Map<string, SourceOzonConfirmedMapping>();
+    for (const row of confirmedRows) {
+      const confirmed = metadataRecord(row.metadata).sourceOzonCategoryConfirmed;
+      if (!confirmed || typeof confirmed !== 'object' || Array.isArray(confirmed)) continue;
+      const categoryId = Number(confirmed.categoryId);
+      const typeId = Number(confirmed.typeId);
+      if (!Number.isFinite(categoryId) || !Number.isFinite(typeId) || categoryId <= 0 || typeId <= 0) continue;
+      const key = String(categoryId) + ':' + String(typeId);
+      const existing = confirmedMap.get(key);
+      confirmedMap.set(key, {
+        signature,
+        categoryId,
+        typeId,
+        categoryName: String(confirmed.categoryName || existing?.categoryName || ''),
+        typeName: String(confirmed.typeName || existing?.typeName || ''),
+        confirmations: (existing?.confirmations || 0) + 1,
+      });
+    }
+
+    const { OzonClient } = await import('../services/ozon-client.js');
+    const { decrypt } = await import('../lib/crypto.js');
+    const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
+    try {
+      const tree = await client.getDescriptionCategoryTree();
+      const preliminary = buildSourceOzonCategoryCandidates({ item, categoryTree: tree, confirmedMappings: Array.from(confirmedMap.values()) });
+      const attributesByCategory: Record<string, SourceStandardOzonAttributeDef[]> = {};
+      for (const candidate of preliminary) {
+        const key = String(candidate.categoryId) + ':' + String(candidate.typeId);
+        attributesByCategory[key] = await client.getDescriptionCategoryAttributes({
+          description_category_id: candidate.categoryId,
+          type_id: candidate.typeId,
+          language: 'DEFAULT',
+        });
+      }
+      const candidates = buildSourceOzonCategoryCandidates({
+        item,
+        categoryTree: tree,
+        confirmedMappings: Array.from(confirmedMap.values()),
+        attributesByCategory,
+      });
+      return reply.send({ code: 1, msg: 'ok', data: { signature, candidates } });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: '生成类目候选失败: ' + (e.message?.slice(0, 200) || '未知') });
+    }
+  });
+
+  app.post('/:id/ozon-category-confirm', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const body = request.body as { categoryId?: number; typeId?: number; categoryName?: string; typeName?: string; signature?: string };
+    const categoryId = Number(body.categoryId);
+    const typeId = Number(body.typeId);
+    if (!Number.isFinite(categoryId) || !Number.isFinite(typeId) || categoryId <= 0 || typeId <= 0) {
+      return reply.status(400).send({ code: 0, msg: '请选择有效的 Ozon 类目/type' });
+    }
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+    const signature = String(body.signature || sourceCategorySignature(item));
+    const meta = metadataRecord(item.metadata);
+    meta.descriptionCategoryId = categoryId;
+    meta.typeId = typeId;
+    meta.sourceOzonCategoryConfirmed = {
+      signature,
+      categoryId,
+      typeId,
+      categoryName: String(body.categoryName || ''),
+      typeName: String(body.typeName || ''),
+      confirmedAt: new Date().toISOString(),
+    };
+    await prisma.supplyGoods.update({ where: { id }, data: { metadata: meta as any } });
+    return reply.send({ code: 1, msg: '已确认 Ozon 类目', data: { id, signature, categoryId, typeId } });
   });
 
   app.post('/resolve-type-id', async (request, reply) => {

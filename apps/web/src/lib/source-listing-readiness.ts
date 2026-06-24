@@ -1,3 +1,5 @@
+import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
+
 export type SourceListingReadinessStatus = 'ready' | 'needs_review' | 'blocked';
 
 export interface SourceListingReadinessResult {
@@ -26,10 +28,6 @@ function stringValue(value: unknown): string {
   return String(value || '').trim();
 }
 
-function hasPositiveNumber(value: unknown): boolean {
-  const num = Number(value);
-  return Number.isFinite(num) && num > 0;
-}
 
 function sourceAttributes(item: SourceListingItemLike): Array<Record<string, unknown>> {
   return metadataArray(item, 'sourceAttributes')
@@ -43,19 +41,7 @@ function sourceVariants(item: SourceListingItemLike): Array<Record<string, unkno
     : [];
 }
 
-function hasAttribute(item: SourceListingItemLike, pattern: RegExp): boolean {
-  return sourceAttributes(item).some((attr) => pattern.test(stringValue(attr.name || attr.key)) || pattern.test(stringValue(attr.value || attr.attrValue || attr.text)));
-}
 
-function hasVariantAttribute(item: SourceListingItemLike, pattern: RegExp): boolean {
-  return sourceVariants(item).some((variant) => {
-    const attrs = variant.attrs && typeof variant.attrs === 'object' && !Array.isArray(variant.attrs)
-      ? variant.attrs as Record<string, unknown>
-      : {};
-    return Object.entries(attrs).some(([key, value]) => pattern.test(key) || pattern.test(stringValue(value)))
-      || pattern.test(stringValue(variant.name || variant.specText));
-  });
-}
 
 function hasStock(item: SourceListingItemLike): boolean {
   return sourceVariants(item).some((variant) => {
@@ -83,12 +69,6 @@ function hasCategoryAndType(item: SourceListingItemLike): boolean {
     && hasMetadataValue(item, ['typeId', 'ozonTypeId']);
 }
 
-function hasDimensions(item: SourceListingItemLike): boolean {
-  return hasPositiveNumber(item.metadata?.weightG)
-    && hasPositiveNumber(item.metadata?.lengthMm)
-    && hasPositiveNumber(item.metadata?.widthMm)
-    && hasPositiveNumber(item.metadata?.heightMm);
-}
 
 function displayTitle(item: SourceListingItemLike): string {
   return stringValue(item.metadata?.sourceTitleRaw || item.title);
@@ -111,6 +91,7 @@ function hasOzonAttributeReadiness(item: SourceListingItemLike): boolean {
 }
 
 export function evaluateSourceListingReadiness(item: SourceListingItemLike): SourceListingReadinessResult {
+  const standard = normalizeSourceStandardAttributes(item);
   const missingFields: string[] = [];
   const blockers: string[] = [];
   const warnings: string[] = [];
@@ -126,12 +107,12 @@ export function evaluateSourceListingReadiness(item: SourceListingItemLike): Sou
   if (!hasMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu'])) addMissing('俄文标题/描述', 'warning');
   if (!hasCategoryAndType(item)) addMissing('Ozon 类目/type', 'blocker');
   if (!hasOzonAttributeReadiness(item)) addMissing('Ozon 必填属性/字典值', 'warning');
-  if (!hasAttribute(item, /品牌|brand/i)) addMissing('品牌/无品牌', 'warning');
-  if (!hasVariantAttribute(item, /颜色|color|colour/i) || !hasVariantAttribute(item, /尺码|规格|size/i)) addMissing('颜色尺码变体', 'blocker');
+  if (!standard.brand.value && !standard.brand.isBrandless) addMissing('品牌/无品牌', 'warning');
+  if (!standard.colors.length || !standard.sizes.length) addMissing('颜色尺码变体', 'blocker');
   if (!hasStock(item)) addMissing('SKU 库存', 'blocker');
-  if (!hasAttribute(item, /材质|成分|面料|material|composition/i)) addMissing('材质/成分', 'warning');
-  if (!hasAttribute(item, /性别|适用性别|gender/i) || !hasAttribute(item, /季节|season/i)) addMissing('性别/季节', 'warning');
-  if (!hasDimensions(item)) addMissing('重量尺寸', 'blocker');
+  if (!standard.materials.length) addMissing('材质/成分', 'warning');
+  if (!standard.gender.value || !standard.seasons.length) addMissing('性别/季节', 'warning');
+  if (!standard.packageWeightG || !standard.packageDimensionsMm) addMissing('重量尺寸', 'blocker');
   if (!hasAnyImage(item)) addMissing('可用主图清洗', 'blocker');
   if (!hasMetadataValue(item, ['watermarkedImages', 'sourceWatermarkedImages', 'watermarkImages'])
     || !hasMetadataValue(item, ['editedImages', 'processedImages', 'sourceEditedImages', 'imageProcessingResult'])) {

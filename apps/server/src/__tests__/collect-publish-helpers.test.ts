@@ -28,6 +28,9 @@ import {
   setVariantWatermarkedImages,
   shouldApplyCollectedVariantAttrOverride,
   buildCollectedGoodsMetadata,
+  buildSourceStandardOzonAttributePlan,
+  sourceCategorySignature,
+  buildSourceOzonCategoryCandidates,
   resolveCollectedDisplayTitle,
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
@@ -241,6 +244,18 @@ describe('collect publish helpers', () => {
         { name: '材质', value: '316不锈钢' },
         { name: '容量', value: '500ml' },
       ],
+      sourceStandardAttributes: {
+        brand: { value: '', isBrandless: false },
+        colors: ['红色'],
+        sizes: [],
+        materials: ['316不锈钢'],
+        gender: { value: '' },
+        seasons: [],
+        packageDimensionsMm: { length: 80, width: 80, height: 220 },
+        packageWeightG: 350,
+        categoryHints: ['日用百货', '杯具', '保温杯'],
+        missingForOzon: ['品牌/无品牌', '颜色尺码变体', '性别/季节'],
+      },
       selectedSku: { skuId: 'red-500', price: 18.8, attrs: { 颜色: '红色' } },
       skuItems: [{ skuId: 'red-500', price: 18.8, images: ['https://img.example.com/red.jpg'] }],
       sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
@@ -1075,6 +1090,107 @@ describe('collect publish helpers', () => {
       title: 'Шпажки для канапе Морские раковины", 24 шт, 12 см',
       metadata: {},
     }, attrs)).toBe('Шпажки для канапе Морские раковины", 24 шт, 12 см, тип 1');
+  });
+
+  it('ranks shared confirmed Ozon category mappings and reports candidate gaps', () => {
+    const sourceItem = {
+      title: '女式棉质T恤',
+      metadata: {
+        sourcePlatform: '1688',
+        categoryPath: ['服饰内衣', '女装', 'T恤'],
+        categoryName: 'T恤',
+        sourceStandardAttributes: {
+          brand: { value: '', isBrandless: true },
+          colors: ['черный'],
+          sizes: ['M'],
+          materials: ['хлопок'],
+          gender: { value: 'female' },
+          seasons: [],
+          packageDimensionsMm: { length: 300, width: 200, height: 30 },
+          packageWeightG: 120,
+          categoryHints: ['服饰内衣', '女装', 'T恤'],
+          missingForOzon: ['性别/季节'],
+        },
+      },
+    };
+    const signature = sourceCategorySignature(sourceItem);
+    expect(signature).toBe('1688|服饰内衣>女装>t恤');
+
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: sourceItem,
+      categoryTree: [
+        { description_category_id: 170001, category_name: 'Одежда', type_id: 91001, type_name: 'Футболки', children: [] },
+        { description_category_id: 170002, category_name: 'Дом', type_id: 91002, type_name: 'Термокружки', children: [] },
+      ],
+      attributesByCategory: {
+        '170001:91001': [
+          { id: 85, name: 'Бренд', is_required: true, dictionary_id: 100 },
+          { id: 10096, name: 'Цвет', is_required: true, dictionary_id: 200 },
+          { id: 4295, name: 'Российский размер', is_required: true },
+          { id: 9001, name: 'Материал', is_required: true },
+          { id: 9002, name: 'Пол', is_required: true, dictionary_id: 300 },
+          { id: 9003, name: 'Сезон', is_required: true, dictionary_id: 400 },
+        ],
+        '170002:91002': [
+          { id: 85, name: 'Бренд', is_required: true, dictionary_id: 100 },
+          { id: 7777, name: 'Объем', is_required: true },
+        ],
+      },
+      confirmedMappings: [
+        { signature, categoryId: 170001, typeId: 91001, categoryName: 'Одежда', typeName: 'Футболки', confirmations: 3 },
+        { signature: '1688|日用百货>杯具>保温杯', categoryId: 170002, typeId: 91002, confirmations: 5 },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 170001,
+      typeId: 91001,
+      label: 'recommended',
+      selected: true,
+      source: 'shared_history',
+      confirmationCount: 3,
+    });
+    expect(candidates[0]?.attributePlan.candidates.map((candidate: any) => candidate.standardKey)).toEqual(['brand', 'colors', 'sizes', 'materials', 'gender']);
+    expect(candidates[0]?.attributePlan.missingRequired).toEqual([
+      { attributeId: 9003, attributeName: 'Сезон', standardKey: 'seasons', reason: 'no_source_standard_value' },
+    ]);
+    expect(candidates[1]).toMatchObject({ categoryId: 170002, typeId: 91002, label: 'risky', selected: false });
+  });
+
+  it('maps source standard attributes to Ozon category candidates and required gaps', () => {
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: ['черный'],
+      sizes: ['M'],
+      materials: ['хлопок'],
+      gender: { value: 'female' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: ['性别/季节'],
+    }, [
+      { id: 85, name: 'Бренд', is_required: true, dictionary_id: 100 },
+      { id: 10096, name: 'Цвет', is_required: true, dictionary_id: 200 },
+      { id: 4295, name: 'Российский размер', is_required: true },
+      { id: 9001, name: 'Материал', is_required: true },
+      { id: 9002, name: 'Пол', is_required: true, dictionary_id: 300 },
+      { id: 9003, name: 'Сезон', is_required: true, dictionary_id: 400 },
+      { id: 9999, name: 'Особенности', is_required: true },
+    ], [
+      { id: 9999, values: [{ value: 'manual' }] },
+    ]);
+
+    expect(plan.candidates).toEqual([
+      { standardKey: 'brand', attributeId: 85, attributeName: 'Бренд', required: true, dictionaryId: 100, needsDictionaryResolution: true, values: ['Без бренда'] },
+      { standardKey: 'colors', attributeId: 10096, attributeName: 'Цвет', required: true, dictionaryId: 200, needsDictionaryResolution: true, values: ['черный'] },
+      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['M'] },
+      { standardKey: 'materials', attributeId: 9001, attributeName: 'Материал', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['хлопок'] },
+      { standardKey: 'gender', attributeId: 9002, attributeName: 'Пол', required: true, dictionaryId: 300, needsDictionaryResolution: true, values: ['Женский'] },
+    ]);
+    expect(plan.missingRequired).toEqual([
+      { attributeId: 9003, attributeName: 'Сезон', standardKey: 'seasons', reason: 'no_source_standard_value' },
+    ]);
   });
 
   it('prefers each collected item category over batch fallback category', () => {

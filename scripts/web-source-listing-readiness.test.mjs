@@ -5,24 +5,34 @@ import { createRequire } from 'node:module';
 import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
+
+function loadTsModule(modulePath, injected = {}) {
+  assert.equal(fs.existsSync(modulePath), true, `${modulePath} should exist`);
+  const source = fs.readFileSync(modulePath, 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+    },
+  }).outputText;
+
+  const sandbox = {
+    exports: {},
+    module: { exports: {} },
+    require(specifier) {
+      if (Object.prototype.hasOwnProperty.call(injected, specifier)) return injected[specifier];
+      return require(specifier);
+    },
+  };
+  vm.runInNewContext(compiled, sandbox, { filename: modulePath });
+  return Object.keys(sandbox.module.exports).length ? sandbox.module.exports : sandbox.exports;
+}
+
+const standard = loadTsModule('packages/shared/src/source-standard-attributes.ts');
 const sourcePath = 'apps/web/src/lib/source-listing-readiness.ts';
-assert.equal(fs.existsSync(sourcePath), true, 'source listing readiness helper should exist');
-
-const source = fs.readFileSync(sourcePath, 'utf8');
-const compiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2020,
-  },
-}).outputText;
-
-const sandbox = {
-  exports: {},
-  module: { exports: {} },
-  require,
-};
-vm.runInNewContext(compiled, sandbox, { filename: sourcePath });
-const readiness = Object.keys(sandbox.module.exports).length ? sandbox.module.exports : sandbox.exports;
+const readiness = loadTsModule(sourcePath, {
+  'shared/source-standard-attributes': standard,
+});
 
 function item(overrides = {}) {
   return {

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { registerSchema, loginSchema, sendSmsCodeSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
@@ -10,17 +10,23 @@ import {
   isSmsRegistrationChallengeEnabled,
 } from '../lib/auth-challenge-config.js';
 
-export async function authRoutes(app: FastifyInstance) {
-  // 路由级频控：注册/登录 10 次/分钟
-  await app.register(import('@fastify/rate-limit'), {
+const authRateLimitConfig = {
+  rateLimit: {
     max: 10,
     timeWindow: '1 minute',
-    keyGenerator: (request) => request.ip,
-    errorResponseBuilder: (_request, context) => ({
+    keyGenerator: (request: FastifyRequest) => request.ip,
+    errorResponseBuilder: (_request: FastifyRequest, context: { statusCode: number }) => ({
       statusCode: context.statusCode,
       code: 0,
       msg: '请求过于频繁，请稍后再试',
     }),
+  },
+};
+
+export async function authRoutes(app: FastifyInstance) {
+  // auth 专用频控只挂到敏感 POST 路由，避免 challenge-config 消耗登录尝试桶。
+  await app.register(import('@fastify/rate-limit'), {
+    global: false,
   });
 
   app.get('/challenge-config', async (_request, reply) => {
@@ -29,7 +35,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // 发送短信验证码（注册前调用）
-  app.post('/sms-code', async (request, reply) => {
+  app.post('/sms-code', { config: authRateLimitConfig }, async (request, reply) => {
     const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
     if (adminCount === 0) {
       return reply.status(403).send({ code: 0, msg: '系统尚未初始化，请先创建管理员账号' });
@@ -58,7 +64,7 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.send({ code: result.ok ? 1 : 0, msg: result.msg });
   });
 
-  app.post('/register', async (request, reply) => {
+  app.post('/register', { config: authRateLimitConfig }, async (request, reply) => {
     const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
     if (adminCount === 0) {
       return reply.status(403).send({ code: 0, msg: '系统尚未初始化，请先创建管理员账号' });
@@ -107,7 +113,7 @@ export async function authRoutes(app: FastifyInstance) {
     });
   });
 
-  app.post('/login', async (request, reply) => {
+  app.post('/login', { config: authRateLimitConfig }, async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
