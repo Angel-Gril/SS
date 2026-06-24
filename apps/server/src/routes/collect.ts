@@ -12,6 +12,11 @@ import {
   getCachedOzonAttributeValues,
 } from '../services/ozon-attribute-dictionary-cache.js';
 import {
+  buildOzonCategoryCatalog,
+  createPrismaOzonCategoryCatalogStore,
+  searchOrRefreshOzonCategoryCatalogForShop,
+} from '../services/ozon-category-catalog.js';
+import {
   appendOzonRichContentAttribute,
   buildOzonRichContentAttribute,
   buildOzonVideoMediaAttributesFromSourceVideos,
@@ -1801,7 +1806,7 @@ function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStan
 export function buildSourceStandardOzonAttributePlan(
   standard: Record<string, any>,
   categoryAttrs: SourceStandardOzonAttributeDef[] | null | undefined,
-  existingAttributes: Array<{ id?: unknown }> | null | undefined = [],
+  existingAttributes: Array<{ id?: unknown; values?: unknown }> | null | undefined = [],
 ): { candidates: SourceStandardOzonAttributePlanCandidate[]; missingRequired: SourceStandardOzonAttributePlanGap[] } {
   const existingIds = new Set((Array.isArray(existingAttributes) ? existingAttributes : [])
     .map((attr) => Number(attr?.id))
@@ -4804,6 +4809,52 @@ export async function collectRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get('/ozon-category-catalog/search', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const query = request.query as { shopId?: string; q?: string; limit?: string; refresh?: string; language?: string };
+    const shopId = String(query.shopId || '').trim();
+    if (!shopId) return reply.status(400).send({ code: 0, msg: '请选择 OZON 店铺' });
+
+    const shop = await prisma.shop.findFirst({ where: { id: shopId, userId, platform: 'OZON' } });
+    if (!shop || !shop.clientId || !shop.apiKeyEncrypted) return reply.status(400).send({ code: 0, msg: '店铺配置不完整' });
+
+    const limitRaw = Number(query.limit || 20);
+    const limit = Math.min(50, Math.max(1, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 20));
+    const language = String(query.language || 'DEFAULT').trim() || 'DEFAULT';
+    const refresh = ['1', 'true', 'yes'].includes(String(query.refresh || '').toLowerCase());
+    const store = createPrismaOzonCategoryCatalogStore(prisma);
+
+    try {
+      const result = await searchOrRefreshOzonCategoryCatalogForShop({
+        shopId,
+        query: query.q || '',
+        language,
+        limit,
+        refresh,
+      }, {
+        store,
+        fetchTree: async () => {
+          const { OzonClient } = await import('../services/ozon-client.js');
+          const { decrypt } = await import('../lib/crypto.js');
+          const client = new OzonClient({ clientId: shop.clientId!, apiKey: decrypt(shop.apiKeyEncrypted) });
+          return client.getDescriptionCategoryTree({ language });
+        },
+      });
+
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: {
+          entries: result.entries,
+          total: result.total,
+          refreshed: result.refreshed,
+          language,
+        },
+      });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: `搜索 Ozon 类目目录失败: ${e.message?.slice(0, 200) || '未知'}` });
+    }
+  });
   app.get('/:id/ozon-category-candidates', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
@@ -4849,6 +4900,9 @@ export async function collectRoutes(app: FastifyInstance) {
     const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
     try {
       const tree = await client.getDescriptionCategoryTree();
+      await createPrismaOzonCategoryCatalogStore(prisma)
+        .replace(shopId, 'DEFAULT', buildOzonCategoryCatalog(tree), new Date())
+        .catch(() => undefined);
       const preliminary = buildSourceOzonCategoryCandidates({ item, categoryTree: tree, confirmedMappings: Array.from(confirmedMap.values()) });
       const attributesByCategory: Record<string, SourceStandardOzonAttributeDef[]> = {};
       for (const candidate of preliminary) {
@@ -4917,6 +4971,9 @@ export async function collectRoutes(app: FastifyInstance) {
 
     try {
       const tree = await client.getDescriptionCategoryTree();
+      await createPrismaOzonCategoryCatalogStore(prisma)
+        .replace(body.shopId, 'DEFAULT', buildOzonCategoryCatalog(tree), new Date())
+        .catch(() => undefined);
       const targetId = body.descriptionCategoryId;
       const types: { typeId: number; typeName: string }[] = [];
 

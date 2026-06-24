@@ -144,6 +144,7 @@ model Shop {
   returns     Return[]
   issues      ExpressIssue[]
   financeTransactions OzonFinanceTransaction[]
+  ozonCategoryCatalogs OzonCategoryCatalog[]
 
   @@index([userId])
   @@index([platform])
@@ -1310,4 +1311,34 @@ model OzonAttributeDictionaryCache {
   @@unique([descriptionCategoryId, typeId, attributeId, language], name: "ozon_attribute_dictionary_cache_key")
   @@index([expiresAt])
   @@map("ozon_attribute_dictionary_cache")
+}
+
+// OZON 类目目录缓存：按店铺保存 description category/type 叶子及中文搜索文本
+model OzonCategoryCatalog {
+  id                    String   @id @default(cuid())
+  shopId                String   @map("shop_id")
+  shop                  Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  language              String   @default("DEFAULT")
+  descriptionCategoryId Int      @map("description_category_id")
+  typeId                Int      @map("type_id")
+  categoryPathRu        Json     @map("category_path_ru")
+  categoryPathZh        Json     @map("category_path_zh")
+  categoryNameRu        String   @default("") @map("category_name_ru")
+  categoryNameZh        String   @default("") @map("category_name_zh")
+  typeNameRu            String   @default("") @map("type_name_ru")
+  typeNameZh            String   @default("") @map("type_name_zh")
+  displayPathRu         String   @default("") @map("display_path_ru")
+  displayPathZh         String   @default("") @map("display_path_zh")
+  keywords              Json     @map("keywords_json")
+  searchText            String   @default("") @map("search_text")
+  fetchedAt             DateTime @map("fetched_at")
+  source                String   @default("ozon_api")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@unique([shopId, language, descriptionCategoryId, typeId], name: "ozon_category_catalog_key")
+  @@index([shopId, language])
+  @@index([descriptionCategoryId, typeId])
+  @@index([updatedAt])
+  @@map("ozon_category_catalog")
 }

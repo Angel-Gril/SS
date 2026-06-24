@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShoppingCart, Loader2, Search, Trash2, ExternalLink, Upload, Edit2, Save, ArrowRight, Download, Sparkles, Image as ImageIcon, Layers, ChevronDown, ChevronUp, KeyRound, Shuffle } from 'lucide-react';
+import { ShoppingCart, Loader2, Search, Trash2, ExternalLink, Upload, Edit2, Save, ArrowRight, Download, Sparkles, Image as ImageIcon, Layers, ChevronDown, ChevronUp, KeyRound, Shuffle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -166,6 +166,18 @@ function resolvePublishPreviewImages(item: CollectedItem, variant?: VariantSku):
 
 interface Shop { id: string; name: string; platform: string; }
 
+
+interface OzonCategoryCatalogEntry {
+  descriptionCategoryId: number;
+  typeId: number;
+  displayPathRu: string;
+  displayPathZh: string;
+  categoryNameRu: string;
+  categoryNameZh: string;
+  typeNameRu: string;
+  typeNameZh: string;
+  keywords?: string[];
+}
 interface RandomizeConfig {
   enabled: boolean;
   randomOfferId: boolean;
@@ -206,6 +218,13 @@ export default function CollectPage() {
   const [randomizeConfig, setRandomizeConfig] = useState<RandomizeConfig | null>(null);
   const [randomOfferIdEnabled, setRandomOfferIdEnabled] = useState(true);
   const [publishUseItemCategory, setPublishUseItemCategory] = useState(false);
+  const [categoryCatalogQuery, setCategoryCatalogQuery] = useState('');
+  const [categoryCatalogResults, setCategoryCatalogResults] = useState<OzonCategoryCatalogEntry[]>([]);
+  const [categoryCatalogTotal, setCategoryCatalogTotal] = useState(0);
+  const [categoryCatalogSearching, setCategoryCatalogSearching] = useState(false);
+  const [categoryCatalogRefreshing, setCategoryCatalogRefreshing] = useState(false);
+  const [categoryCatalogError, setCategoryCatalogError] = useState('');
+  const [selectedOzonCategoryPath, setSelectedOzonCategoryPath] = useState('');
   const [inheriting, setInheriting] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const [enrichShopId, setEnrichShopId] = useState('');
@@ -248,6 +267,12 @@ export default function CollectPage() {
 
   useEffect(() => { fetchData(); }, [search, page, statusFilter]);
   useEffect(() => { loadShops(); loadWmTemplates(); loadRandomizeConfig(); }, []);
+  useEffect(() => {
+    setCategoryCatalogResults([]);
+    setCategoryCatalogTotal(0);
+    setCategoryCatalogError('');
+    setSelectedOzonCategoryPath('');
+  }, [publishShopId, showPublishDialog]);
 
   // 监听扩展 popup/侧栏采集完成的广播（content-script erp-collect-bridge 转发过来）
   useEffect(() => {
@@ -791,6 +816,52 @@ export default function CollectPage() {
     toast({ title: inheritedCount > 1 ? `已分别继承 ${inheritedCount} 件商品的源分类/尺寸，部分 type_id 需补齐` : '已继承分类/重量/尺寸，type_id 需手动从分类树获取' });
   }
 
+  function defaultOzonCategoryCatalogQuery() {
+    const first = selectedPublishItems[0];
+    const meta = first?.metadata || {};
+    const categoryPath = Array.isArray(meta.categoryPath) ? meta.categoryPath.filter(Boolean).join(' ') : '';
+    return String(categoryCatalogQuery || meta.categoryName || categoryPath || first?.title || '').trim();
+  }
+
+  async function handleSearchOzonCategoryCatalog(refresh = false) {
+    if (!publishShopId) {
+      toast({ title: '请选择目标店铺', variant: 'destructive' });
+      return;
+    }
+    const queryText = defaultOzonCategoryCatalogQuery();
+    if (!queryText && !refresh) {
+      toast({ title: '请输入类目关键词', variant: 'destructive' });
+      return;
+    }
+    if (!categoryCatalogQuery && queryText) setCategoryCatalogQuery(queryText);
+    setCategoryCatalogError('');
+    setCategoryCatalogSearching(!refresh);
+    setCategoryCatalogRefreshing(refresh);
+    try {
+      const params = new URLSearchParams({ shopId: publishShopId, q: queryText, limit: '8' });
+      if (refresh) params.set('refresh', 'true');
+      const res = await api.get<{ entries: OzonCategoryCatalogEntry[]; total: number; refreshed: boolean }>(`/api/collect/ozon-category-catalog/search?${params.toString()}`);
+      if (res.code !== 1) {
+        setCategoryCatalogError(res.msg || '搜索类目目录失败');
+        return;
+      }
+      setCategoryCatalogResults(res.data?.entries || []);
+      setCategoryCatalogTotal(res.data?.total || 0);
+      if (res.data?.refreshed) toast({ title: 'Ozon 类目目录已刷新' });
+    } catch (e: any) {
+      setCategoryCatalogError(`搜索类目目录失败: ${e?.message || '网络错误'}`);
+    } finally {
+      setCategoryCatalogSearching(false);
+      setCategoryCatalogRefreshing(false);
+    }
+  }
+
+  function applyOzonCategoryCatalogEntry(entry: OzonCategoryCatalogEntry) {
+    setPublishUseItemCategory(false);
+    setPublishCategoryId(String(entry.descriptionCategoryId));
+    setPublishTypeId(String(entry.typeId));
+    setSelectedOzonCategoryPath(entry.displayPathZh || entry.displayPathRu);
+  }
   function handleGoToListing() {
     const selected = items.filter((i) => selectedIds.has(i.id));
     const listingData = selected.map((i) => ({
@@ -1425,6 +1496,83 @@ export default function CollectPage() {
               {inheriting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Download className="h-4 w-4 mr-1" />}
               从源商品继承分类/重量/尺寸
             </Button>
+
+            <div className="rounded-md border bg-muted/20 p-3 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Label className="text-xs">OZON 类目目录</Label>
+                  <p className="mt-1 text-[11px] text-muted-foreground">按中文/俄文关键词搜索，点选后自动填入分类和类型。</p>
+                </div>
+                {categoryCatalogTotal > 0 && (
+                  <Badge variant="secondary" className="h-5 text-[11px]">
+                    {categoryCatalogTotal} 条
+                  </Badge>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  value={categoryCatalogQuery}
+                  onChange={(e) => setCategoryCatalogQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSearchOzonCategoryCatalog(false);
+                    }
+                  }}
+                  placeholder="如：牛仔裤 / футболка / 类目ID"
+                  className="h-8 text-sm"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2"
+                  onClick={() => handleSearchOzonCategoryCatalog(false)}
+                  disabled={categoryCatalogSearching || categoryCatalogRefreshing || !publishShopId}
+                >
+                  {categoryCatalogSearching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2"
+                  onClick={() => handleSearchOzonCategoryCatalog(true)}
+                  disabled={categoryCatalogSearching || categoryCatalogRefreshing || !publishShopId}
+                >
+                  {categoryCatalogRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+              {categoryCatalogError && (
+                <p className="text-xs text-destructive">{categoryCatalogError}</p>
+              )}
+              {selectedOzonCategoryPath && (
+                <p className="rounded border bg-background px-2 py-1.5 text-xs text-muted-foreground">
+                  已选择：{selectedOzonCategoryPath}
+                </p>
+              )}
+              {categoryCatalogResults.length > 0 && (
+                <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                  {categoryCatalogResults.map((entry) => (
+                    <button
+                      key={`${entry.descriptionCategoryId}:${entry.typeId}`}
+                      type="button"
+                      onClick={() => applyOzonCategoryCatalogEntry(entry)}
+                      className="w-full rounded-md border bg-background px-2 py-2 text-left transition hover:border-primary/60 hover:bg-primary/5"
+                    >
+                      <div className="line-clamp-1 text-xs font-medium">
+                        {entry.displayPathZh || entry.displayPathRu}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                        <span>category {entry.descriptionCategoryId}</span>
+                        <span>type {entry.typeId}</span>
+                        {entry.typeNameRu && <span className="line-clamp-1">{entry.typeNameRu}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="space-y-2">
               <Label>OZON 分类 ID *</Label>
