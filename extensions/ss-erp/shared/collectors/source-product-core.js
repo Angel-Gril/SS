@@ -604,6 +604,19 @@
     return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
   }
 
+  function normalize1688SizeSaleValue(value) {
+    var text = clean1688AttributeValue(value);
+    if (!text) return '';
+    text = text
+      .replace(/(?:^|\s+)(?:主要下游平台|下游平台|跨境平台|销售平台|适用平台|平台).*$/i, '')
+      .replace(/(?:^|\s+)(?:ebay|amazon|lazada|shopee|shein|temu|aliexpress|wish|速卖通|亚马逊|虾皮).*$/i, '')
+      .trim();
+    if (!text || /^(?:ebay|amazon|lazada|shopee|shein|temu|aliexpress|wish|速卖通|亚马逊|虾皮)$/i.test(text)) return '';
+    if (/^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)(?:$|\s*$|\s+\d|[（(【\[]|适合|建议|\d|[-~—–至到/])/i.test(text)) return text;
+    if (/^\d{2,3}(?:\s*(?:[-~—–至到/]\s*\d{2,3}[A-Z]{0,5}|[A-Z]{1,5}|斤|码|号|cm|厘米|[（(【\[]|$))/i.test(text)) return text;
+    return '';
+  }
+
   function split1688AttributeSaleValues(name, value) {
     var text = clean1688AttributeValue(value);
     if (!text || is1688MerchantMetricLabel(text) || isLikely1688AttributeBlob(text)) return [];
@@ -628,11 +641,11 @@
     }
     if (parts.length <= 1) parts = [text];
     return dedupe1688TextValues(parts
-      .map(function (part) { return clean1688AttributeValue(part); })
+      .map(function (part) { return normalizedName === '尺码' ? normalize1688SizeSaleValue(part) : clean1688AttributeValue(part); })
       .filter(function (part) {
         if (!part || part.length > 80) return false;
         if (is1688MerchantMetricLabel(part) || isLikely1688AttributeBlob(part)) return false;
-        if (normalizedName === '尺码') return /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(part);
+        if (normalizedName === '尺码') return !!part;
         return true;
       }));
   }
@@ -1122,11 +1135,13 @@
 
     var spaced = text.split(/\s+/).map(clean1688AttributeValue).filter(Boolean);
     if (spaced.length <= 1 || spaced.length > 40) return values;
-    var cleaned = spaced.filter(function (item) {
+    var cleaned = spaced.map(function (item) {
+      return normalizedName === '尺码' ? normalize1688SizeSaleValue(item) : item;
+    }).filter(function (item) {
       if (!item || item.length > 80) return false;
       if (/^(商品属性|产品属性|基本参数|详细参数|包装信息|商品件重尺|商品详情|货号)$/.test(item)) return false;
       if (is1688MerchantMetricLabel(item) || isLikely1688AttributeBlob(item)) return false;
-      if (normalizedName === '尺码') return /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})/i.test(item);
+      if (normalizedName === '尺码') return !!item;
       if (normalizedName === '颜色') {
         if (/^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|套|款|件|台|个)$/i.test(item)) return false;
         return item.length <= 24 && /^[\u3400-\u9fffA-Za-z0-9#-]+$/.test(item);

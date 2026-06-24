@@ -522,3 +522,30 @@ test('1688 core extracts general package weight from 1688 packaging text', () =>
   assert.equal(result.weightG, 20);
   assert.equal(result.grossWeightGrams, 20);
 });
+test('1688 core rejects downstream platform text from size sku values', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/910186654868.html?offerId=910186654868',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 黑色 浅蓝色 深蓝色 黑灰色',
+      '尺码 S M LAZADA XL 2XL 3XL 主要下游平台 ebay 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '910186654868',
+      subject: '东南亚虾皮爆款港风抽绳牛仔裤高级感直筒宽松美式高街复古裤子男',
+      productProps: [
+        { name: '颜色', value: '黑色、浅蓝色、深蓝色、黑灰色' },
+        { name: '尺码', value: 'S、M、LAZADA、XL、2XL、3XL 主要下游平台 ebay' },
+      ],
+      priceInfo: { price: '16.8' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  const attrs = Object.fromEntries(result.attributes.map((attr) => [attr.name, attr.value]));
+  assert.equal(attrs['尺码'], 'S、M、XL、2XL、3XL');
+  assert.equal(result.skuItems.length, 20);
+  assert.equal(result.skuItems.some((sku) => /LAZADA|主要下游平台|ebay/i.test(JSON.stringify(sku.attrs || {}))), false);
+});
