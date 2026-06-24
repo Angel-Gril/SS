@@ -1938,6 +1938,20 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
     if (!term) continue;
     if (haystack.includes(term) || term.includes(haystack)) score += 8;
   }
+  const sourceText = sourceTerms.join(' ');
+  if (/牛仔裤|джинсы|jeans?/.test(sourceText)) {
+    if (/джинсы|jeans?/.test(haystack)) score += 28;
+    if (/брюки|штаны|pants|trousers/.test(haystack) && !/джинсы|jeans?/.test(haystack)) score -= 12;
+  }
+  if (/\bmale\b|мужск|男装|男士|男款|男人|男性/.test(sourceText)) {
+    if (/мужск|men|male/.test(haystack)) score += 16;
+    if (/женск|women|female|малыш|детск|ребен|ребён|baby|kids?/.test(haystack)) score -= 28;
+  }
+  if (/\bfemale\b|женск|女装|女士|女款|女人|女性/.test(sourceText)) {
+    if (/женск|women|female/.test(haystack)) score += 16;
+    if (/мужск|men|male|малыш|детск|ребен|ребён|baby|kids?/.test(haystack)) score -= 28;
+  }
+  if (/спецодежд|медицинск|малыш|детск|ребен|ребён|тактическ|прессотерапии/.test(haystack)) score -= 18;
   return score;
 }
 

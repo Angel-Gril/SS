@@ -1184,6 +1184,13 @@ describe('collect publish helpers', () => {
           category_name: 'Одежда',
           children: [
             {
+              description_category_id: 200001519,
+              category_name: 'Одежда для малышей',
+              children: [
+                { type_id: 972076152, type_name: 'Джинсы для малышей', children: [] },
+              ],
+            },
+            {
               description_category_id: 17028718,
               category_name: 'Мужская одежда',
               children: [
@@ -1214,6 +1221,60 @@ describe('collect publish helpers', () => {
     });
     expect(candidates[0]?.reasons).toContain('类目名称相似');
     expect(candidates[0]?.attributePlan.missingRequired).toEqual([]);
+  });
+
+  it('prefers generic jeans over baby and tactical trouser matches for source mens jeans', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '港风抽绳牛仔裤男宽松直筒裤',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['черный'],
+            sizes: ['M'],
+            materials: ['хлопок'],
+            gender: { value: 'male' },
+            seasons: ['summer'],
+            packageDimensionsMm: { length: 300, width: 250, height: 40 },
+            packageWeightG: 350,
+            categoryHints: [],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 17028706,
+          category_name: 'Одежда',
+          children: [
+            {
+              description_category_id: 200001521,
+              category_name: 'Спецодежда',
+              children: [{ type_id: 970806010, type_name: 'Брюки тактические', children: [] }],
+            },
+            {
+              description_category_id: 200001519,
+              category_name: 'Одежда для малышей',
+              children: [{ type_id: 972076152, type_name: 'Джинсы для малышей', children: [] }],
+            },
+            {
+              description_category_id: 200000933,
+              category_name: 'Одежда',
+              children: [{ type_id: 93080, type_name: 'Джинсы', children: [] }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200000933,
+      typeId: 93080,
+      categoryName: 'Одежда',
+      typeName: 'Джинсы',
+    });
   });
 
   it('maps source standard attributes to Ozon category candidates and required gaps', () => {
