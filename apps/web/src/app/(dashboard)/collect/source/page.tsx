@@ -66,6 +66,10 @@ interface SourceOzonCategoryCandidate {
   typeId: number;
   categoryName: string;
   typeName: string;
+  categoryNameZh?: string;
+  typeNameZh?: string;
+  displayPathZh?: string;
+  displayPathRu?: string;
   score: number;
   label: 'recommended' | 'optional' | 'risky';
   selected: boolean;
@@ -1040,7 +1044,10 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <div className="break-words text-sm font-medium leading-snug">
-                          {candidate.categoryName || '-'} / {candidate.typeName || '-'}
+                          {candidate.displayPathZh || `${candidate.categoryNameZh || candidate.categoryName || '-'} / ${candidate.typeNameZh || candidate.typeName || '-'}`}
+                        </div>
+                        <div className="mt-1 break-words text-xs text-muted-foreground">
+                          {candidate.displayPathRu || `${candidate.categoryName || '-'} / ${candidate.typeName || '-'}`}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
                           category {candidate.categoryId} · type {candidate.typeId} · 分数 {candidate.score}

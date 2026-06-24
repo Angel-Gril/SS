@@ -1877,6 +1877,10 @@ type SourceOzonCategoryCandidate = {
   typeId: number;
   categoryName: string;
   typeName: string;
+  categoryNameZh: string;
+  typeNameZh: string;
+  displayPathZh: string;
+  displayPathRu: string;
   score: number;
   label: 'recommended' | 'optional' | 'risky';
   selected: boolean;
@@ -1885,6 +1889,41 @@ type SourceOzonCategoryCandidate = {
   reasons: string[];
   attributePlan: ReturnType<typeof buildSourceStandardOzonAttributePlan>;
 };
+
+function translateOzonCategoryText(value: unknown): string {
+  const text = String(value || '').trim();
+  const normalized = normalizeSourceCategoryToken(text);
+  const exact: Record<string, string> = {
+    'одежда': '服装',
+    'мужская одежда': '男装',
+    'женская одежда': '女装',
+    'одежда для малышей': '婴幼儿服装',
+    'спецодежда': '工装/职业服',
+    'джинсы': '牛仔裤',
+    'джинсы для малышей': '婴幼儿牛仔裤',
+    'брюки тактические': '战术裤',
+    'брюки для малышей': '婴幼儿裤子',
+    'термобрюки': '保暖裤',
+    'белье': '内衣',
+    'обувь': '鞋靴',
+  };
+  if (exact[normalized]) return exact[normalized];
+  let out = text;
+  const replacements: Array<[RegExp, string]> = [
+    [/Джинсы/gi, '牛仔裤'],
+    [/Брюки/gi, '裤子'],
+    [/Штаны/gi, '裤子'],
+    [/Мужская одежда/gi, '男装'],
+    [/Женская одежда/gi, '女装'],
+    [/Одежда для малышей/gi, '婴幼儿服装'],
+    [/Одежда/gi, '服装'],
+    [/Спецодежда/gi, '工装/职业服'],
+    [/для малышей/gi, '婴幼儿'],
+    [/тактические/gi, '战术'],
+  ];
+  for (const [pattern, replacement] of replacements) out = out.replace(pattern, replacement);
+  return out === text ? '' : out;
+}
 
 function flattenOzonCategoryTree(nodes: SourceOzonCategoryTreeNode[] | null | undefined): Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> {
   const out: Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> = [];
@@ -1985,6 +2024,10 @@ export function buildSourceOzonCategoryCandidates(input: {
       typeId: row.typeId,
       categoryName: String(row.categoryName || tree?.categoryName || ''),
       typeName: String(row.typeName || tree?.typeName || ''),
+      categoryNameZh: translateOzonCategoryText(row.categoryName || tree?.categoryName || ''),
+      typeNameZh: translateOzonCategoryText(row.typeName || tree?.typeName || ''),
+      displayPathZh: '',
+      displayPathRu: '',
       score,
       label: 'risky',
       selected: false,
@@ -2009,11 +2052,14 @@ export function buildSourceOzonCategoryCandidates(input: {
   }
 
   const sorted = Array.from(byKey.values())
+    .filter((candidate) => candidate.source === 'shared_history' || candidate.reasons.some((reason) => reason === '类目名称相似') || byKey.size <= 5)
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
   sorted.forEach((candidate, index) => {
     candidate.selected = index === 0;
     candidate.label = candidate.score >= 80 ? 'recommended' : candidate.score >= 45 ? 'optional' : 'risky';
+    candidate.displayPathRu = [candidate.categoryName, candidate.typeName].filter(Boolean).join(' / ');
+    candidate.displayPathZh = [candidate.categoryNameZh || candidate.categoryName, candidate.typeNameZh || candidate.typeName].filter(Boolean).join(' / ');
   });
   return sorted;
 }

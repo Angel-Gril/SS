@@ -1273,8 +1273,11 @@ describe('collect publish helpers', () => {
       categoryId: 200000933,
       typeId: 93080,
       categoryName: 'Одежда',
+      categoryNameZh: '服装',
       typeName: 'Джинсы',
+      typeNameZh: '牛仔裤',
     });
+    expect(candidates.map((candidate) => candidate.typeName)).not.toContain('MIDI-контроллер');
   });
 
   it('maps source standard attributes to Ozon category candidates and required gaps', () => {
