@@ -1888,23 +1888,47 @@ type SourceOzonCategoryCandidate = {
 
 function flattenOzonCategoryTree(nodes: SourceOzonCategoryTreeNode[] | null | undefined): Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> {
   const out: Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> = [];
-  const walk = (rows: SourceOzonCategoryTreeNode[]) => {
+  const walk = (rows: SourceOzonCategoryTreeNode[], parentCategory?: { id: number; name: string }) => {
     for (const row of rows) {
       const categoryId = Number(row.description_category_id);
       const typeId = Number(row.type_id);
-      if (Number.isFinite(categoryId) && categoryId > 0 && Number.isFinite(typeId) && typeId > 0) {
+      const currentCategory = Number.isFinite(categoryId) && categoryId > 0
+        ? { id: categoryId, name: String(row.category_name || parentCategory?.name || '') }
+        : parentCategory;
+      if (currentCategory && Number.isFinite(typeId) && typeId > 0) {
         out.push({
-          categoryId,
+          categoryId: currentCategory.id,
           typeId,
-          categoryName: String(row.category_name || ''),
+          categoryName: currentCategory.name,
           typeName: String(row.type_name || ''),
         });
       }
-      if (Array.isArray(row.children)) walk(row.children);
+      if (Array.isArray(row.children)) walk(row.children, currentCategory);
     }
   };
   walk(Array.isArray(nodes) ? nodes : []);
   return out;
+}
+
+function sourceCategorySearchTerms(value: unknown): string[] {
+  const term = normalizeSourceCategoryToken(value);
+  if (!term) return [];
+  const out = [term];
+  const expansions: Array<[RegExp, string[]]> = [
+    [/牛仔裤|牛仔|jeans?/i, ['джинсы', 'denim', 'jeans']],
+    [/裤子|长裤|直筒裤|休闲裤|pants?|trousers?/i, ['брюки', 'штаны', 'джинсы', 'pants', 'trousers']],
+    [/男装|男士|男款|男人|男性|\bmen'?s?\b|male/i, ['мужская', 'мужской', 'мужские', 'men', 'male']],
+    [/女装|女士|女款|女人|女性|\bwomen'?s?\b|female/i, ['женская', 'женский', 'женские', 'women', 'female']],
+    [/t恤|体恤|短袖|футбол/i, ['футболка', 'футболки', 't-shirt']],
+    [/衬衫|shirt/i, ['рубашка', 'рубашки', 'shirt']],
+    [/外套|夹克|jacket/i, ['куртка', 'куртки', 'jacket']],
+    [/短裤|shorts/i, ['шорты', 'shorts']],
+    [/裙|skirt|dress/i, ['юбка', 'платье', 'skirt', 'dress']],
+  ];
+  for (const [pattern, words] of expansions) {
+    if (pattern.test(term)) out.push(...words.map(normalizeSourceCategoryToken));
+  }
+  return Array.from(new Set(out.filter(Boolean)));
 }
 
 function categoryTextScore(sourceTerms: string[], candidate: { categoryName: string; typeName: string }): number {
@@ -1930,7 +1954,7 @@ export function buildSourceOzonCategoryCandidates(input: {
     ...(Array.isArray(meta.categoryPath) ? meta.categoryPath : []),
     meta.categoryName,
     input.item.title,
-  ].map(normalizeSourceCategoryToken).filter(Boolean);
+  ].flatMap(sourceCategorySearchTerms).filter(Boolean);
   const byKey = new Map<string, SourceOzonCategoryCandidate>();
   const treeRows = flattenOzonCategoryTree(input.categoryTree);
   const treeByKey = new Map(treeRows.map((row) => [String(row.categoryId) + ':' + String(row.typeId), row]));

@@ -1157,6 +1157,65 @@ describe('collect publish helpers', () => {
     expect(candidates[1]).toMatchObject({ categoryId: 170002, typeId: 91002, label: 'risky', selected: false });
   });
 
+  it('extracts Ozon type leaves from parent category nodes and matches Chinese source terms', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '港风抽绳牛仔裤男宽松直筒裤',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['черный'],
+            sizes: ['M'],
+            materials: ['хлопок'],
+            gender: { value: 'male' },
+            seasons: ['summer'],
+            packageDimensionsMm: { length: 300, width: 250, height: 40 },
+            packageWeightG: 350,
+            categoryHints: [],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 17028706,
+          category_name: 'Одежда',
+          children: [
+            {
+              description_category_id: 17028718,
+              category_name: 'Мужская одежда',
+              children: [
+                { type_id: 95913, type_name: 'Джинсы', children: [] },
+              ],
+            },
+          ],
+        },
+      ],
+      attributesByCategory: {
+        '17028718:95913': [
+          { id: 85, name: 'Бренд', is_required: true, dictionary_id: 100 },
+          { id: 10096, name: 'Цвет', is_required: true, dictionary_id: 200 },
+          { id: 4295, name: 'Российский размер', is_required: true },
+          { id: 9001, name: 'Материал', is_required: true },
+          { id: 9002, name: 'Пол', is_required: true, dictionary_id: 300 },
+          { id: 9003, name: 'Сезон', is_required: true, dictionary_id: 400 },
+        ],
+      },
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 17028718,
+      categoryName: 'Мужская одежда',
+      typeId: 95913,
+      typeName: 'Джинсы',
+      selected: true,
+    });
+    expect(candidates[0]?.reasons).toContain('类目名称相似');
+    expect(candidates[0]?.attributePlan.missingRequired).toEqual([]);
+  });
+
   it('maps source standard attributes to Ozon category candidates and required gaps', () => {
     const plan = buildSourceStandardOzonAttributePlan({
       brand: { value: '', isBrandless: true },
