@@ -2158,6 +2158,7 @@ export async function loadSourceOzonCategoryCatalogForCandidates(input: {
   store: OzonCategoryCatalogStore;
   fetchTree(): Promise<SourceOzonCategoryTreeNode[]>;
   enrichMissingTranslations?(entries: OzonCategoryCatalogEntry[]): Promise<OzonCategoryCatalogEntry[]>;
+  allowAiEnrichment?: boolean;
   forceRefresh?: boolean;
   now?: () => Date;
 }): Promise<{
@@ -2181,7 +2182,7 @@ export async function loadSourceOzonCategoryCatalogForCandidates(input: {
   categoryCatalog = applyOzonCategoryCatalogLocalTranslations(categoryCatalog);
   let changed = categoryCatalogTranslationFingerprint(categoryCatalog) !== before;
 
-  if (input.enrichMissingTranslations && hasOzonCategoryCatalogTranslationGaps(categoryCatalog)) {
+  if (input.allowAiEnrichment && input.enrichMissingTranslations && hasOzonCategoryCatalogTranslationGaps(categoryCatalog)) {
     before = categoryCatalogTranslationFingerprint(categoryCatalog);
     categoryCatalog = await input.enrichMissingTranslations(categoryCatalog);
     changed = changed || categoryCatalogTranslationFingerprint(categoryCatalog) !== before;

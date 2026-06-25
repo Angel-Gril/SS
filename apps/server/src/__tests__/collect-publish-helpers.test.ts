@@ -2216,6 +2216,48 @@ describe('collect publish helpers', () => {
     expect(candidates.map((candidate) => candidate.typeId)).not.toContain(910001);
     expect(candidates[0]).toMatchObject({ typeId: 910002, label: 'recommended', selected: true });
   });
+  it('does not run AI category enrichment while loading source candidates by default', async () => {
+    const cachedCatalog = [{
+      descriptionCategoryId: 700001,
+      typeId: 800001,
+      categoryPathRu: ['Неизвестная категория'],
+      categoryPathZh: [''],
+      categoryLevels: [
+        { level: 1, categoryId: 700001, nameRu: 'Неизвестная категория', nameZh: '', translated: false },
+      ],
+      categoryNameRu: 'Неизвестная категория',
+      categoryNameZh: '',
+      typeNameRu: 'Неизвестный тип',
+      typeNameZh: '',
+      displayPathRu: 'Неизвестная категория / Неизвестный тип',
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      translationStatus: 'missing' as const,
+      untranslatedTerms: ['Неизвестная категория', 'Неизвестный тип'],
+      keywords: ['Неизвестная категория', 'Неизвестный тип'],
+      searchText: 'неизвестная категория неизвестный тип 700001 800001',
+    }];
+    const store = {
+      list: vi.fn(async () => cachedCatalog),
+      replace: vi.fn(async () => cachedCatalog.length),
+    };
+    const enrichMissingTranslations = vi.fn(async () => {
+      throw new Error('AI enrichment must not run in the candidate request path');
+    });
+
+    const result = await loadSourceOzonCategoryCatalogForCandidates({
+      shopId: 'shop-1',
+      store,
+      fetchTree: vi.fn(async () => []),
+      enrichMissingTranslations,
+    });
+
+    expect(enrichMissingTranslations).not.toHaveBeenCalled();
+    expect(store.replace).not.toHaveBeenCalled();
+    expect(result.categoryCatalog[0]).toMatchObject({
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      translationStatus: 'missing',
+    });
+  });
   it('uses cached Ozon category catalog for candidates and persists missing translation enrichment', async () => {
     const cachedCatalog = [{
       descriptionCategoryId: 200001517,
