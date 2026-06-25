@@ -1397,10 +1397,11 @@
     if (!/(长|宽|高|重量|体积)/.test(section)) return [];
 
     var colors = pick1688AttributeValues(attributes, '颜色');
+    var directRows = extract1688PackagingRowsByColorFromPageText(section, colors);
     var sizes = pick1688AttributeValues(attributes, '尺码');
-    if (!colors.length || !sizes.length) return [];
+    if (!colors.length || !sizes.length) return directRows;
 
-    var rows = [];
+    var rows = directRows.slice();
     colors.sort(function (a, b) { return b.length - a.length; }).forEach(function (color) {
       sizes.sort(function (a, b) { return b.length - a.length; }).forEach(function (size) {
         var pattern = build1688FlexibleTextPattern(color) + '\\s+' + build1688FlexibleTextPattern(size)
@@ -1421,6 +1422,39 @@
           if (row) rows.push(row);
         }
       });
+    });
+    return rows;
+  }
+
+  function extract1688PackagingRowsByColorFromPageText(section, colors) {
+    if (!Array.isArray(colors) || !colors.length || !/(颜色|色号|色系)/.test(section)) return [];
+    var rows = [];
+    var hasVolumeBeforeWeight = /体积[\s\S]{0,30}重量/.test(section);
+    colors.sort(function (a, b) { return b.length - a.length; }).forEach(function (color) {
+      var pattern = build1688FlexibleTextPattern(color)
+        + '\\s+(.{1,80}?)'
+        + '\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([0-9]+(?:\\.[0-9]+)?)';
+      pattern += hasVolumeBeforeWeight
+        ? '\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([0-9]+(?:\\.[0-9]+)?\\s*(?:kg|g|克|千克|斤)?)'
+        : '\\s+([0-9]+(?:\\.[0-9]+)?\\s*(?:kg|g|克|千克|斤)?)';
+      var regex = new RegExp(pattern, 'ig');
+      var match;
+      while ((match = regex.exec(section))) {
+        var size = normalizeWhitespace(match[1] || '').replace(/^(?:颜色|尺码|规格)\s+/g, '');
+        if (!size || /(长\(cm\)|宽\(cm\)|高\(cm\)|重量\(g\)|体积)/.test(size)) continue;
+        var row = normalize1688PackagingRow({
+          color: color,
+          size: size,
+          length: match[2],
+          width: match[3],
+          height: match[4],
+          volume: hasVolumeBeforeWeight ? match[5] : undefined,
+          weight: hasVolumeBeforeWeight ? match[6] : match[5],
+          unit: section,
+          weightUnit: section
+        });
+        if (row) rows.push(row);
+      }
     });
     return rows;
   }

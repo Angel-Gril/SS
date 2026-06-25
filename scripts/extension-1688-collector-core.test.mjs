@@ -387,6 +387,40 @@ test('1688 core extracts packaging rows from explicit page text table', () => {
   });
 });
 
+test('1688 core extracts packaging rows when the table includes volume before weight', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1026338058165.html?offerId=1026338058165',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 粉肤色 香槟色 淡紫色 淡绿色 高级黑 尺码 32AB 厚杯 34AB 厚杯 36AB 厚杯 38AB 厚杯 40AB 厚杯',
+      '包装信息 商品件重尺 颜色 尺码 长(cm) 宽(cm) 高(cm) 体积(cm³) 重量(g)',
+      '粉肤色 32AB 厚杯 38 26 2 1976 120',
+      '粉肤色 34AB 厚杯 38 26 2 1976 120',
+      '香槟色 32AB 厚杯 38 26 2 1976 120',
+      '商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '1026338058165',
+      subject: '一体吊带文胸内衣女小胸薄款打底吊带背心带胸垫',
+      priceInfo: { price: '12' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.sourcePackagingRows[0])), {
+    color: '粉肤色',
+    size: '32AB 厚杯',
+    lengthMm: 380,
+    widthMm: 260,
+    heightMm: 20,
+    volumeCm3: 1976,
+    weightG: 120,
+  });
+});
+
 test('1688 core does not leak packaging weight headers into sale attribute matrix', () => {
   const core = loadCore();
 
