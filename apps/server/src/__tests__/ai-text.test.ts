@@ -72,4 +72,35 @@ describe('AI text client', () => {
       usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
     });
   });
+  it('reports a token-budget hint when a reasoning model returns empty final content', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: '',
+            reasoning_content: 'The model spent the whole budget reasoning.',
+          },
+          finish_reason: 'length',
+        }],
+      }),
+    }));
+
+    const result = await generateAiText({
+      messages: [{ role: 'user', content: 'Generate title' }],
+      config: config({
+        provider: 'custom',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'secret-token',
+        model: 'deepseek-v4-flash',
+      }),
+      fetchImpl: fetchMock,
+      maxTokens: 120,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'AI response empty: model used the token budget for reasoning; increase max tokens or use a non-reasoning chat model',
+    });
+  });
 });

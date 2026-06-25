@@ -111,7 +111,14 @@ export async function generateAiText(params: GenerateAiTextParams): Promise<AiTe
     const data = await res.json();
     const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
     const text = String(choice?.message?.content ?? choice?.text ?? '').trim();
-    if (!text) return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: 'AI response empty' };
+    if (!text) {
+      const reasoning = String(choice?.message?.reasoning_content || '').trim();
+      const finishReason = String(choice?.finish_reason || choice?.finishReason || '').trim();
+      const error = reasoning && finishReason === 'length'
+        ? 'AI response empty: model used the token budget for reasoning; increase max tokens or use a non-reasoning chat model'
+        : 'AI response empty';
+      return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error };
+    }
 
     return {
       ok: true,

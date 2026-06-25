@@ -172,7 +172,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
               { role: 'user', content: inputText },
             ],
             temperature: field === 'title' ? 0.2 : 0.3,
-            maxTokens: field === 'title' ? 120 : 900,
+            maxTokens: field === 'title' ? 600 : 1800,
           });
           if (!ai.ok) {
             await recordAiUsageEvent(params.usageStore, {

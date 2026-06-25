@@ -190,4 +190,23 @@ describe('product content AI drafts', () => {
     });
     expect(generateText).not.toHaveBeenCalled();
   });
+  it('allocates enough output tokens for reasoning-capable product models', async () => {
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, text: 'Женская ночная сорочка на бретелях', provider: 'custom', model: 'deepseek-v4-flash', usage: { totalTokens: 240 } })
+      .mockResolvedValueOnce({ ok: true, text: 'Женская ночная сорочка на бретелях из мягкой сетки для сна и дома.', provider: 'custom', model: 'deepseek-v4-flash', usage: { totalTokens: 620 } });
+
+    await generateProductContentDraft({
+      item,
+      actorUserId: 'user-1',
+      fields: ['title', 'description'],
+      config: { ...config, model: 'deepseek-v4-flash' },
+      cacheStore: memoryCacheStore(),
+      usageStore: memoryUsageStore(),
+      generateText,
+    });
+
+    expect(generateText).toHaveBeenNthCalledWith(1, expect.objectContaining({ maxTokens: 600 }));
+    expect(generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({ maxTokens: 1800 }));
+  });
 });
