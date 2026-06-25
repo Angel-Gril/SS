@@ -445,6 +445,37 @@ test('1688 core does not leak packaging weight headers into sale attribute matri
   assert.equal(result.skuItems.some((sku) => sku.attrs && sku.attrs['尺码'] === 'XL（125-165斤）'), true);
 });
 
+test('1688 core extracts SKU packaging rows when 1688 table only has weight column', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/1012782046261.html?offerId=1012782046261',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 黑色 白色 玫红色 藕色 酒红色 尺码 S M L XL XXL',
+      '包装信息 商品件重尺 颜色 尺码 重量(g)',
+      '黑色 S 150 黑色 M 150 黑色 L 150 黑色 XL 150 黑色 XXL 150',
+      '白色 S 150 白色 M 150 白色 L 150 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '1012782046261',
+      subject: '跨境2026新款立体花边睡衣连衣裙女装批发网纱蕾丝吊带睡裙女夏',
+      productProps: [
+        { name: '颜色', value: '黑色、白色、玫红色、藕色、酒红色' },
+        { name: '尺码', value: 'S、M、L、XL、XXL' },
+      ],
+      priceInfo: { price: '15' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 8);
+  assert.equal(result.sourcePackagingRows.some((row) => row.color === '黑色' && row.size === 'S' && row.weightG === 150), true);
+  assert.equal(result.sourcePackagingRows.some((row) => row.color === '白色' && row.size === 'L' && row.weightG === 150), true);
+  assert.equal(result.weightG, 150);
+  assert.equal(result.grossWeightGrams, 150);
+});
+
 test('1688 core separates lingerie attribute table fields from sale sizes', () => {
   const core = loadCore();
 

@@ -208,7 +208,7 @@
       skuItems = build1688SkuItemsFromAttributes(attributes, priceModel.costPriceForOzon);
     }
     var packagingRows = pick1688PackagingRows(sources, pageText, attributes);
-    var packageWeightG = pick1688PackageWeightG(sources, pageText);
+    var packageWeightG = pick1688PackageWeightG(sources, pageText) || pick1688PackageWeightGFromRows(packagingRows);
     var description = pick1688Description(sources, pageText, assets.detailImages);
     var sourceRichContentDraft = build1688RichContentDraft(description, assets.detailImages);
     var diagnostics = build1688Diagnostics({
@@ -1356,6 +1356,13 @@
     return extract1688PackageWeightGFromPageText(pageText);
   }
 
+  function pick1688PackageWeightGFromRows(rows) {
+    var found = (Array.isArray(rows) ? rows : []).find(function (row) {
+      return row && Number(row.weightG) > 0;
+    });
+    return found ? Number(found.weightG) : null;
+  }
+
   function pick1688PackageWeightGFromSources(sources) {
     var candidates = [];
     (Array.isArray(sources) ? sources : []).forEach(function (source) {
@@ -1399,9 +1406,10 @@
     var colors = pick1688AttributeValues(attributes, '颜色');
     var directRows = extract1688PackagingRowsByColorFromPageText(section, colors);
     var sizes = pick1688AttributeValues(attributes, '尺码');
-    if (!colors.length || !sizes.length) return directRows;
+    var weightOnlyRows = /(长|宽|高|体积)/.test(section) ? [] : extract1688PackagingWeightRowsByColorSizeFromPageText(section, colors, sizes);
+    if (!colors.length || !sizes.length) return directRows.concat(weightOnlyRows);
 
-    var rows = directRows.slice();
+    var rows = directRows.concat(weightOnlyRows);
     colors.sort(function (a, b) { return b.length - a.length; }).forEach(function (color) {
       sizes.sort(function (a, b) { return b.length - a.length; }).forEach(function (size) {
         var pattern = build1688FlexibleTextPattern(color) + '\\s+' + build1688FlexibleTextPattern(size)
@@ -1417,6 +1425,30 @@
             height: match[3],
             weight: match[4],
             unit: section,
+            weightUnit: section
+          });
+          if (row) rows.push(row);
+        }
+      });
+    });
+    return rows;
+  }
+
+  function extract1688PackagingWeightRowsByColorSizeFromPageText(section, colors, sizes) {
+    if (!Array.isArray(colors) || !colors.length || !Array.isArray(sizes) || !sizes.length || !/重量/.test(section)) return [];
+    var rows = [];
+    colors.sort(function (a, b) { return b.length - a.length; }).forEach(function (color) {
+      sizes.sort(function (a, b) { return b.length - a.length; }).forEach(function (size) {
+        var pattern = build1688FlexibleTextPattern(color)
+          + '\\s+' + build1688FlexibleTextPattern(size)
+          + '\\s+([0-9]+(?:\\.[0-9]+)?\\s*(?:kg|g|克|千克|斤)?)';
+        var regex = new RegExp(pattern, 'ig');
+        var match;
+        while ((match = regex.exec(section))) {
+          var row = normalize1688PackagingRow({
+            color: color,
+            size: size,
+            weight: match[1],
             weightUnit: section
           });
           if (row) rows.push(row);

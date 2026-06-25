@@ -1992,8 +1992,11 @@ function sourceCategorySearchTerms(value: unknown): string[] {
     [/衬衫|shirt/i, ['рубашка', 'рубашки', 'shirt']],
     [/外套|夹克|jacket/i, ['куртка', 'куртки', 'jacket']],
     [/短裤|shorts/i, ['шорты', 'shorts']],
+    [/睡衣|睡裙|睡袍|家居服|吊带睡|nightgown|nightdress|sleepwear|pajamas?|pyjamas?/i, ['пижама', 'пижамы', 'ночная сорочка', 'сорочка', 'пеньюар', 'домашняя одежда', 'sleepwear', 'nightdress']],
     [/裙|skirt|dress/i, ['юбка', 'платье', 'skirt', 'dress']],
-    [/文胸|胸罩|内衣|吊带|胸垫|无痕|聚拢|薄杯|厚杯|bra|lingerie/i, ['бюстгальтер', 'бюстгальтеры', 'белье', 'бельё', 'bra', 'lingerie']],
+    [/文胸|胸罩|胸垫|无痕|聚拢|薄杯|厚杯|bra/i, ['бюстгальтер', 'бюстгальтеры', 'bra']],
+    [/内衣|lingerie/i, ['белье', 'бельё', 'lingerie']],
+    [/吊带|背心|camisole|tank/i, ['майка', 'топ', 'белье', 'бельё']],
   ];
   for (const [pattern, words] of expansions) {
     if (pattern.test(term)) out.push(...words.map(normalizeSourceCategoryToken));
@@ -2029,6 +2032,13 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
   if (/\bfemale\b|женск|女装|女士|女款|女人|女性/.test(sourceText)) {
     if (/женск|women|female/.test(haystack)) score += 16;
     if (/мужск|men|male|малыш|детск|ребен|ребён|baby|kids?/.test(haystack)) score -= 28;
+  }
+  if (/文胸|胸罩|胸垫|bra|бюстгальтер/.test(sourceText)) {
+    if (/бюстгальтер|лифчик|bra/.test(haystack)) score += 28;
+  }
+  if (/睡衣|睡裙|睡袍|家居服|sleepwear|nightdress|nightgown|pajamas?|pyjamas?|пижам|ночн|сорочк|пеньюар/.test(sourceText)) {
+    if (/пижам|ночн|сорочк|пеньюар|домашн|халат|sleepwear|nightdress|nightgown/.test(haystack)) score += 42;
+    if (/бюстгальтер|лифчик|bra|аксессуар для бюстгальтера/.test(haystack)) score -= 28;
   }
   if (/спецодежд|медицинск|малыш|детск|ребен|ребён|тактическ|прессотерапии/.test(haystack)) score -= 18;
   return score;
@@ -2117,7 +2127,7 @@ export function buildSourceOzonCategoryCandidates(input: {
   const sourceIsAdult = isAdultSourceCategoryTerms(sourceTerms);
   for (const row of treeRows) {
     const textScore = categoryTextScore(sourceTerms, row);
-    if (!sourceIsAdult && isAdultOzonCategoryCandidate(row) && textScore <= 0) continue;
+    if (!sourceIsAdult && isAdultOzonCategoryCandidate(row)) continue;
     if (textScore <= 0 && byKey.size >= 5) continue;
     addCandidate(row, textScore > 0 ? 30 + textScore : 5, 'tree_match', textScore > 0 ? ['类目名称相似'] : ['备选类目'], 0);
   }

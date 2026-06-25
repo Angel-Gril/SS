@@ -2216,6 +2216,131 @@ describe('collect publish helpers', () => {
     expect(candidates.map((candidate) => candidate.typeId)).not.toContain(910001);
     expect(candidates[0]).toMatchObject({ typeId: 910002, label: 'recommended', selected: true });
   });
+
+  it('prefers Ozon sleepwear categories over bra and adult matches for sleep dress source titles', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '跨境2026新款立体花边睡衣连衣裙女装批发网纱蕾丝吊带睡裙女夏',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['服饰内衣', '女装', '睡衣'],
+          categoryName: '睡裙',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['黑色'],
+            sizes: ['S'],
+            materials: ['聚酯纤维'],
+            gender: { value: 'female' },
+            seasons: ['summer'],
+            packageDimensionsMm: null,
+            packageWeightG: 150,
+            categoryHints: ['睡衣', '睡裙', '吊带睡裙'],
+            missingForOzon: ['包装尺寸'],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 200001517,
+          category_name: 'Одежда / Белье',
+          children: [
+            { type_id: 93065, type_name: 'Бюстгалтер', children: [] },
+            { type_id: 93170, type_name: 'Пеньюар', children: [] },
+          ],
+        },
+        {
+          description_category_id: 200000933,
+          category_name: 'Одежда / Одежда',
+          children: [
+            { type_id: 93176, type_name: 'Пижама', children: [] },
+            { type_id: 970960142, type_name: 'Ночная сорочка', children: [] },
+          ],
+        },
+        {
+          description_category_id: 17028959,
+          category_name: 'Товары для взрослых',
+          children: [
+            { type_id: 324689473, type_name: 'Имитатор женской груди', children: [] },
+          ],
+        },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 200001517,
+          typeId: 93065,
+          categoryPathRu: ['Одежда', 'Белье'],
+          categoryPathZh: ['服装', '内衣'],
+          categoryLevels: [],
+          categoryNameRu: 'Белье',
+          categoryNameZh: '内衣',
+          typeNameRu: 'Бюстгалтер',
+          typeNameZh: '文胸',
+          displayPathRu: 'Одежда / Белье / Бюстгалтер',
+          displayPathZh: '服装 / 内衣 / 文胸',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '内衣', '文胸'],
+          searchText: 'одежда белье бюстгалтер 服装 内衣 文胸',
+        },
+        {
+          descriptionCategoryId: 200001517,
+          typeId: 93170,
+          categoryPathRu: ['Одежда', 'Белье'],
+          categoryPathZh: ['服装', '内衣'],
+          categoryLevels: [],
+          categoryNameRu: 'Белье',
+          categoryNameZh: '内衣',
+          typeNameRu: 'Пеньюар',
+          typeNameZh: '睡衣',
+          displayPathRu: 'Одежда / Белье / Пеньюар',
+          displayPathZh: '服装 / 内衣 / 睡衣',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '内衣', '睡衣'],
+          searchText: 'одежда белье пеньюар 服装 内衣 睡衣',
+        },
+        {
+          descriptionCategoryId: 200000933,
+          typeId: 970960142,
+          categoryPathRu: ['Одежда', 'Одежда'],
+          categoryPathZh: ['服装', '服装'],
+          categoryLevels: [],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Ночная сорочка',
+          typeNameZh: '睡裙',
+          displayPathRu: 'Одежда / Одежда / Ночная сорочка',
+          displayPathZh: '服装 / 服装 / 睡裙',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '睡裙'],
+          searchText: 'одежда ночная сорочка 服装 睡裙',
+        },
+        {
+          descriptionCategoryId: 17028959,
+          typeId: 324689473,
+          categoryPathRu: ['Товары для взрослых'],
+          categoryPathZh: ['成人用品'],
+          categoryLevels: [],
+          categoryNameRu: 'Товары для взрослых',
+          categoryNameZh: '成人用品',
+          typeNameRu: 'Имитатор женской груди',
+          typeNameZh: '女性胸部模拟器',
+          displayPathRu: 'Товары для взрослых / Имитатор женской груди',
+          displayPathZh: '成人用品 / 性玩具 / 女性胸部模拟器',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['成人用品', '女性胸部模拟器'],
+          searchText: 'товары для взрослых имитатор женской груди 成人用品 女性胸部模拟器',
+        },
+      ],
+    });
+
+    expect(candidates.map((candidate) => candidate.typeId)).not.toContain(324689473);
+    expect(candidates[0]?.displayPathZh).toMatch(/睡衣|睡裙/);
+    expect(candidates[0]?.typeId).not.toBe(93065);
+  });
   it('does not run AI category enrichment while loading source candidates by default', async () => {
     const cachedCatalog = [{
       descriptionCategoryId: 700001,
