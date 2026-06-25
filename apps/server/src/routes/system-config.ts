@@ -16,6 +16,7 @@ import {
   encryptConfigValue,
   isSensitiveConfigKey,
 } from '../config/system-config-schema.js';
+import { createPrismaAiUsageStore, normalizeAiUsageDate } from '../services/ai-usage.js';
 
 const upsertSchema = z.object({
   key: z.string().min(1),
@@ -143,6 +144,21 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     const configs = await prisma.systemConfig.findMany({ where, orderBy: [{ group: 'asc' }, { key: 'asc' }] });
     const masked = configs.map((c) => ({ ...c, value: toPublicConfigValue(c.key, c.value) }));
     return reply.send({ code: 1, msg: 'ok', data: masked });
+  });
+
+  app.get('/ai-usage/summary', async (request, reply) => {
+    const query = request.query as { date?: string };
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(query.date || ''))
+      ? String(query.date)
+      : normalizeAiUsageDate();
+    const store = createPrismaAiUsageStore(prisma);
+    const namespaces = ['category_term', 'product_title', 'product_description', 'image_text'];
+    const total = await store.getDailySummary({ date });
+    const byNamespace: Record<string, unknown> = {};
+    for (const namespace of namespaces) {
+      byNamespace[namespace] = await store.getDailySummary({ date, namespace });
+    }
+    return reply.send({ code: 1, msg: 'ok', data: { date, total, byNamespace } });
   });
 
   app.get('/:key', async (request, reply) => {

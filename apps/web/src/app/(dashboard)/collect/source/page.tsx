@@ -61,6 +61,15 @@ interface OzonShopOption {
   platform: string;
 }
 
+interface AiContentDraft {
+  text: string;
+  source: 'cache' | 'provider';
+  provider: string;
+  model: string;
+  generatedAt: string;
+  usage?: Record<string, unknown> | null;
+}
+
 interface SourceOzonCategoryCandidate {
   categoryId: number;
   typeId: number;
@@ -405,8 +414,16 @@ function hasMetadataValue(item: SourceCollectItem, keys: string[]): boolean {
   });
 }
 
+function sourceAiContentDrafts(item: SourceCollectItem): Partial<Record<'title' | 'description', AiContentDraft>> {
+  const drafts = item.metadata?.aiContentDrafts;
+  return drafts && typeof drafts === 'object' && !Array.isArray(drafts)
+    ? drafts as Partial<Record<'title' | 'description', AiContentDraft>>
+    : {};
+}
+
 function sourceHasTranslation(item: SourceCollectItem): boolean {
-  return hasMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu']);
+  const drafts = sourceAiContentDrafts(item);
+  return hasMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu']) || Boolean(drafts.title?.text || drafts.description?.text);
 }
 
 function sourceHasWatermark(item: SourceCollectItem): boolean {
@@ -734,7 +751,7 @@ function SourceDetailContent({
       {activeSection === 'sku' ? <SourceSkuSection item={item} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
       {activeSection === 'images' ? <SourceImagesSection item={item} /> : null}
-      {activeSection === 'translation' ? <SourceTranslationSection item={item} /> : null}
+      {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
   );
@@ -895,15 +912,51 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
   );
 }
 
-function SourceTranslationSection({ item }: { item: SourceCollectItem }) {
+function SourceTranslationSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
   const richDraftSummary = sourceRichContentDraftSummary(item);
+  const drafts = sourceAiContentDrafts(item);
+  const [generating, setGenerating] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function generateDrafts() {
+    if (generating) return;
+    setGenerating(true);
+    setMessage('');
+    setError('');
+    const res = await api.post<{ item: SourceCollectItem; limit?: { used: number; remaining: number; limit: number } }>(`/api/collect/${item.id}/ai-content-draft`, {
+      fields: ['title', 'description'],
+    });
+    if (res.code === 1 && res.data?.item) {
+      onItemUpdate(res.data.item);
+      const limit = res.data.limit;
+      setMessage(limit ? `已生成草稿，今日剩余额度 ${limit.remaining}/${limit.limit}` : '已生成草稿');
+    } else {
+      setError(res.msg || 'AI 商品内容草稿生成失败');
+    }
+    setGenerating(false);
+  }
+
   return (
     <div className="space-y-3">
       <InfoPanel title="翻译" count={sourceHasTranslation(item) ? '已翻译' : '待翻译'}>
-        <div className="grid gap-2">
-          <KeyValue label="中文标题" value={sourceDisplayTitle(item)} />
-          <KeyValue label="俄文标题" value={String(item.metadata?.publishTitleRu || item.metadata?.titleRu || '-')} />
-          <KeyValue label="俄文描述" value={String(item.metadata?.sourceDescriptionRu || item.metadata?.descriptionRu || '-')} />
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" onClick={generateDrafts} disabled={generating}>
+              {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Languages className="mr-2 h-4 w-4" />}
+              生成标题/描述草稿
+            </Button>
+            {message ? <span className="text-xs text-emerald-700">{message}</span> : null}
+            {error ? <span className="text-xs text-destructive">{error}</span> : null}
+          </div>
+          <div className="grid gap-2">
+            <KeyValue label="中文标题" value={sourceDisplayTitle(item)} />
+            <KeyValue label="俄文标题" value={String(item.metadata?.publishTitleRu || item.metadata?.titleRu || '-')} />
+            <KeyValue label="俄文描述" value={String(item.metadata?.sourceDescriptionRu || item.metadata?.descriptionRu || '-')} />
+            <KeyValue label="AI 标题草稿" value={drafts.title?.text || '-'} />
+            <KeyValue label="AI 描述草稿" value={drafts.description?.text || '-'} />
+            <KeyValue label="AI 草稿来源" value={[drafts.title?.source, drafts.title?.model].filter(Boolean).join(' / ') || '-'} />
+          </div>
         </div>
       </InfoPanel>
       <InfoPanel title="原始富内容待处理" count={richDraftSummary || '未采集'}>

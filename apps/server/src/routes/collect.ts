@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
@@ -14,6 +15,7 @@ import {
 import {
   buildOzonCategoryCatalog,
   createPrismaOzonCategoryCatalogStore,
+  enrichMissingOzonCategoryCatalogTranslations,
   searchOrRefreshOzonCategoryCatalogForShop,
   translateOzonCategoryText as translateOzonCategoryCatalogText,
   type OzonCategoryCatalogEntry,
@@ -28,6 +30,11 @@ import {
   transferRichContentImage,
 } from '../services/ozon-rich-content.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
+import { getConfig } from '../config/system-config-schema.js';
+import { generateAiText } from '../services/ai-text.js';
+import { createPrismaAiTranslationCacheStore, getCachedAiTranslation } from '../services/ai-translation-cache.js';
+import { createPrismaAiUsageStore } from '../services/ai-usage.js';
+import { generateProductContentDraft, type ProductContentField } from '../services/product-content-ai.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { normalizeSourceStandardAttributes, sanitizeSourceStandardSizeValues } from 'shared/source-standard-attributes';
@@ -93,6 +100,10 @@ const collectSchema = z.object({
 
 const batchDeleteVariantsSchema = z.object({
   skus: z.array(z.string().min(1)).min(1).max(100),
+});
+
+const productContentDraftSchema = z.object({
+  fields: z.array(z.enum(['title', 'description'])).min(1).max(2).default(['title', 'description']),
 });
 
 export function containsCjkText(value: unknown): boolean {
@@ -1980,6 +1991,7 @@ function sourceCategorySearchTerms(value: unknown): string[] {
     [/外套|夹克|jacket/i, ['куртка', 'куртки', 'jacket']],
     [/短裤|shorts/i, ['шорты', 'shorts']],
     [/裙|skirt|dress/i, ['юбка', 'платье', 'skirt', 'dress']],
+    [/文胸|胸罩|内衣|吊带|胸垫|无痕|聚拢|薄杯|厚杯|bra|lingerie/i, ['бюстгальтер', 'бюстгальтеры', 'белье', 'бельё', 'bra', 'lingerie']],
   ];
   for (const [pattern, words] of expansions) {
     if (pattern.test(term)) out.push(...words.map(normalizeSourceCategoryToken));
@@ -1987,6 +1999,15 @@ function sourceCategorySearchTerms(value: unknown): string[] {
   return Array.from(new Set(out.filter(Boolean)));
 }
 
+function isAdultSourceCategoryTerms(sourceTerms: string[]): boolean {
+  const text = sourceTerms.join(' ');
+  return /成人用品|情趣| секс|adult|интим|эротич|анальн|вагинальн|эрекц/i.test(text);
+}
+
+function isAdultOzonCategoryCandidate(candidate: { categoryName?: string | null; typeName?: string | null }): boolean {
+  const text = normalizeSourceCategoryToken(String(candidate.categoryName || '') + ' ' + String(candidate.typeName || ''));
+  return /товары для взрослых|секс|интим|эротич|анальн|вагинальн|эрекц|adult|成人用品|情趣/.test(text);
+}
 function categoryTextScore(sourceTerms: string[], candidate: { categoryName: string; typeName: string }): number {
   const haystack = normalizeSourceCategoryToken(String(candidate.categoryName || '') + ' ' + String(candidate.typeName || ''));
   let score = 0;
@@ -2091,8 +2112,10 @@ export function buildSourceOzonCategoryCandidates(input: {
     addCandidate(mapping, 80 + confirmations * 8, 'shared_history', ['全局历史确认', '确认 ' + confirmations + ' 次'], confirmations);
   }
 
+  const sourceIsAdult = isAdultSourceCategoryTerms(sourceTerms);
   for (const row of treeRows) {
     const textScore = categoryTextScore(sourceTerms, row);
+    if (!sourceIsAdult && isAdultOzonCategoryCandidate(row) && textScore <= 0) continue;
     if (textScore <= 0 && byKey.size >= 5) continue;
     addCandidate(row, textScore > 0 ? 30 + textScore : 5, 'tree_match', textScore > 0 ? ['类目名称相似'] : ['备选类目'], 0);
   }
@@ -2113,6 +2136,56 @@ export function buildSourceOzonCategoryCandidates(input: {
   return sorted;
 }
 
+async function createAiOzonCategoryTranslationEnricher(): Promise<undefined | ((entries: OzonCategoryCatalogEntry[]) => Promise<OzonCategoryCatalogEntry[]>)> {
+  const enabled = await getConfig('ai_category_translation_enabled');
+  if (!enabled) return undefined;
+
+  const provider = await getConfig('ai_provider');
+  const baseUrl = String(await getConfig('ai_base_url') || '').trim();
+  const apiKey = String(await getConfig('ai_api_key') || '').trim();
+  const model = String(await getConfig('ai_model') || '').trim();
+  const providerLabel = String(await getConfig('ai_provider_label') || '').trim();
+  const timeoutMs = Number(await getConfig('ai_timeout_ms')) || 30000;
+  const prompt = String(await getConfig('ai_category_translation_prompt') || '').trim();
+  if (provider !== 'custom' || !baseUrl || !apiKey || !model || !prompt) return undefined;
+
+  const cacheStore = createPrismaAiTranslationCacheStore(prisma);
+  const promptHash = createHash('sha256').update(prompt).digest('hex');
+
+  return (entries: OzonCategoryCatalogEntry[]) => enrichMissingOzonCategoryCatalogTranslations(entries, {
+    translateTerm: async (term) => {
+      const result = await getCachedAiTranslation({
+        namespace: 'category_term',
+        sourceLang: 'ru',
+        targetLang: 'zh-CN',
+        inputText: term,
+        promptHash,
+        provider,
+        model,
+        store: cacheStore,
+        translate: async () => {
+          const ai = await generateAiText({
+            config: { provider, baseUrl, apiKey, model, providerLabel, timeoutMs },
+            messages: [
+              { role: 'system', content: prompt },
+              { role: 'user', content: term },
+            ],
+            temperature: 0,
+            maxTokens: 80,
+          });
+          if (!ai.ok) throw new Error(ai.error);
+          return {
+            outputText: ai.text,
+            usage: ai.usage ? { ...ai.usage } : null,
+            provider: ai.provider,
+            model: ai.model,
+          };
+        },
+      });
+      return { outputText: result.outputText, source: result.source };
+    },
+  });
+}
 function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
@@ -3122,6 +3195,78 @@ export async function collectRoutes(app: FastifyInstance) {
 
     await prisma.supplyGoods.update({ where: { id }, data: data as any });
     return reply.send({ code: 1, msg: '已更新' });
+  });
+
+  app.post('/:id/ai-content-draft', async (request, reply) => {
+    const { userId, actorUserId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const parsed = productContentDraftSchema.safeParse(request.body || {});
+    if (!parsed.success) return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message || '参数错误' });
+
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+
+    const enabled = await getConfig('ai_product_generation_enabled');
+    const provider = await getConfig('ai_provider');
+    const baseUrl = String(await getConfig('ai_base_url') || '').trim();
+    const apiKey = String(await getConfig('ai_api_key') || '').trim();
+    const model = String(await getConfig('ai_model') || '').trim();
+    const providerLabel = String(await getConfig('ai_provider_label') || '').trim();
+    const timeoutMs = Number(await getConfig('ai_timeout_ms')) || 30000;
+    const titlePrompt = String(await getConfig('ai_product_title_prompt') || '').trim();
+    const descriptionPrompt = String(await getConfig('ai_product_description_prompt') || '').trim();
+    const userDailyProductGenerationLimit = Number(await getConfig('ai_user_daily_product_generation_limit')) || 0;
+
+    const result = await generateProductContentDraft({
+      item,
+      actorUserId: String(actorUserId || userId),
+      fields: parsed.data.fields as ProductContentField[],
+      config: {
+        enabled,
+        provider,
+        baseUrl,
+        apiKey,
+        model,
+        providerLabel,
+        timeoutMs,
+        titlePrompt,
+        descriptionPrompt,
+        userDailyProductGenerationLimit,
+      },
+      cacheStore: createPrismaAiTranslationCacheStore(prisma),
+      usageStore: createPrismaAiUsageStore(prisma),
+      generateText: generateAiText,
+    });
+
+    if (!result.ok) {
+      return reply.status(400).send({ code: 0, msg: result.error, data: { drafts: result.drafts, limit: result.limit } });
+    }
+
+    const meta = metadataRecord(item.metadata);
+    const aiContentDrafts = metadataRecord(meta.aiContentDrafts);
+    for (const [field, draft] of Object.entries(result.drafts)) {
+      aiContentDrafts[field] = draft;
+    }
+    meta.aiContentDrafts = aiContentDrafts;
+    const updated = await prisma.supplyGoods.update({
+      where: { id },
+      data: { metadata: meta as any },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: 'AI 商品内容草稿已生成',
+      data: {
+        item: {
+          ...updated,
+          purchasePrice: updated.purchasePrice?.toString() ?? null,
+          originalPrice: updated.originalPrice?.toString() ?? null,
+          exchangeRateUsed: updated.exchangeRateUsed?.toString() ?? null,
+        },
+        drafts: result.drafts,
+        limit: result.limit,
+      },
+    });
   });
 
   app.post('/:id/variants/batch-delete', async (request, reply) => {
@@ -4869,6 +5014,7 @@ export async function collectRoutes(app: FastifyInstance) {
     const store = createPrismaOzonCategoryCatalogStore(prisma);
 
     try {
+      const enrichMissingTranslations = await createAiOzonCategoryTranslationEnricher();
       const result = await searchOrRefreshOzonCategoryCatalogForShop({
         shopId,
         query: query.q || '',
@@ -4877,6 +5023,7 @@ export async function collectRoutes(app: FastifyInstance) {
         refresh,
       }, {
         store,
+        ...(enrichMissingTranslations ? { enrichMissingTranslations } : {}),
         fetchTree: async () => {
           const { OzonClient } = await import('../services/ozon-client.js');
           const { decrypt } = await import('../lib/crypto.js');

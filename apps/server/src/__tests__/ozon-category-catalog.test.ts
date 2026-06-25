@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildOzonCategoryCatalog,
+  enrichMissingOzonCategoryCatalogTranslations,
   createPrismaOzonCategoryCatalogStore,
   searchOzonCategoryCatalog,
   searchOrRefreshOzonCategoryCatalogForShop,
@@ -321,5 +322,100 @@ describe('ozon category catalog', () => {
     ]), new Date('2026-06-25T00:00:00.000Z'))).resolves.toBe(1);
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(executeRaw).toHaveBeenCalledTimes(2);
+  });
+  it('enriches missing Ozon category labels through cache-backed translation and rebuilds display/search text', async () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 700001,
+        category_name: 'Женское белье',
+        disabled: false,
+        children: [
+          { type_id: 800001, type_name: 'Бюстгальтеры', disabled: false, children: [] },
+        ],
+      },
+    ]);
+    const translate = vi.fn(async (term: string) => ({
+      outputText: term === 'Женское белье' ? '女士内衣' : '文胸',
+      source: 'provider' as const,
+    }));
+
+    const enriched = await enrichMissingOzonCategoryCatalogTranslations(catalog, {
+      translateTerm: translate,
+    });
+
+    expect(translate).toHaveBeenCalledTimes(2);
+    expect(enriched[0]).toMatchObject({
+      categoryPathZh: ['女士内衣'],
+      categoryNameZh: '女士内衣',
+      typeNameZh: '文胸',
+      displayPathZh: '女士内衣 / 文胸',
+      translationStatus: 'complete',
+      untranslatedTerms: [],
+    });
+    expect(enriched[0]?.searchText).toContain('女士内衣');
+    expect(enriched[0]?.keywords).toEqual(expect.arrayContaining(['女士内衣', '文胸']));
+  });
+
+  it('rejects invalid AI category translations without poisoning the catalog entry', async () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 700001,
+        category_name: 'Женское белье',
+        disabled: false,
+        children: [
+          { type_id: 800001, type_name: 'Бюстгальтеры', disabled: false, children: [] },
+        ],
+      },
+    ]);
+
+    const enriched = await enrichMissingOzonCategoryCatalogTranslations(catalog, {
+      translateTerm: async () => ({ outputText: 'Перевод с пояснением', source: 'provider' as const }),
+    });
+
+    expect(enriched[0]).toMatchObject({
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      translationStatus: 'missing',
+      untranslatedTerms: ['Женское белье', 'Бюстгальтеры'],
+    });
+  });
+  it('applies missing-term enrichment when refreshing from Ozon tree', async () => {
+    const stored = new Map<string, OzonCategoryCatalogEntry[]>();
+    const enrich = vi.fn(async (entries: OzonCategoryCatalogEntry[]) => entries.map((entry) => ({
+      ...entry,
+      categoryPathZh: ['女士内衣'],
+      categoryLevels: entry.categoryLevels.map((level) => ({ ...level, nameZh: '女士内衣', translated: true })),
+      categoryNameZh: '女士内衣',
+      typeNameZh: '文胸',
+      displayPathZh: '女士内衣 / 文胸',
+      translationStatus: 'complete' as const,
+      untranslatedTerms: [],
+      keywords: [...entry.keywords, '女士内衣', '文胸'],
+      searchText: `${entry.searchText} 女士内衣 文胸`,
+    })));
+
+    const result = await searchOrRefreshOzonCategoryCatalogForShop({
+      shopId: 'shop-1',
+      query: '文胸',
+      refresh: true,
+    }, {
+      store: {
+        list: async (shopId) => stored.get(shopId) || [],
+        replace: async (shopId, _language, entries) => {
+          stored.set(shopId, entries);
+          return entries.length;
+        },
+      },
+      fetchTree: async () => [{
+        description_category_id: 700001,
+        category_name: 'Женское белье',
+        disabled: false,
+        children: [{ type_id: 800001, type_name: 'Бюстгальтеры', disabled: false, children: [] }],
+      }],
+      enrichMissingTranslations: enrich,
+    });
+
+    expect(enrich).toHaveBeenCalledTimes(1);
+    expect(result.entries[0]).toMatchObject({ displayPathZh: '女士内衣 / 文胸', translationStatus: 'complete' });
+    expect(stored.get('shop-1')?.[0]?.displayPathZh).toBe('女士内衣 / 文胸');
   });
 });

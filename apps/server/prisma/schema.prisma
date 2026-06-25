@@ -1346,3 +1346,54 @@ model OzonCategoryCatalog {
   @@index([updatedAt])
   @@map("ozon_category_catalog")
 }
+
+// AI 翻译/生成缓存：类目短词、商品标题/描述等共用，namespace 隔离
+model AiTranslationCache {
+  id          String   @id @default(cuid())
+  namespace   String
+  sourceLang  String   @map("source_lang")
+  targetLang  String   @map("target_lang")
+  inputHash   String   @map("input_hash")
+  inputText   String   @map("input_text")
+  outputText  String   @map("output_text")
+  promptHash  String   @default("") @map("prompt_hash")
+  provider    String
+  model       String
+  status      String   @default("success")
+  usage       Json?    @map("usage_json")
+  expiresAt   DateTime? @map("expires_at")
+  lastUsedAt  DateTime @default(now()) @map("last_used_at")
+  hitCount    Int      @default(0) @map("hit_count")
+  source      String   @default("ai")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([namespace, sourceLang, targetLang, inputHash, promptHash, provider, model], name: "ai_translation_cache_key")
+  @@index([namespace, sourceLang, targetLang])
+  @@index([expiresAt])
+  @@index([lastUsedAt])
+  @@map("ai_translation_cache")
+}
+// AI 用量日报：按 namespace/provider/model/真实操作用户聚合
+model AiUsageDaily {
+  id               String   @id @default(cuid())
+  date             DateTime @db.Date
+  namespace        String
+  provider         String
+  model            String
+  actorUserId      String   @default("") @map("actor_user_id")
+  requestCount     Int      @default(0) @map("request_count")
+  cacheHitCount    Int      @default(0) @map("cache_hit_count")
+  failureCount     Int      @default(0) @map("failure_count")
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  totalTokens      Int      @default(0) @map("total_tokens")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@unique([date, namespace, provider, model, actorUserId], name: "ai_usage_daily_key")
+  @@index([date])
+  @@index([namespace, date])
+  @@index([actorUserId, date])
+  @@map("ai_usage_daily")
+}

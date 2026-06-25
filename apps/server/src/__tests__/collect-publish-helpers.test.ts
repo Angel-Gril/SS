@@ -2134,4 +2134,85 @@ describe('collect publish helpers', () => {
       suffixFactory: () => 'safe',
     })).toBe('3399297127-safe');
   });
+  it('does not surface adult Ozon categories for normal underwear source products', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '女士无痕聚拢文胸 厚杯 内衣',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['服饰内衣', '女士内衣', '文胸'],
+          categoryName: '文胸',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['黑色'],
+            sizes: ['32AB 厚杯'],
+            materials: [],
+            gender: { value: 'female' },
+            seasons: [],
+            packageDimensionsMm: { length: 380, width: 260, height: 20 },
+            packageWeightG: 120,
+            categoryHints: ['文胸', '内衣'],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 900001,
+          category_name: 'Товары для взрослых',
+          children: [
+            { type_id: 910001, type_name: 'Секс игрушки', children: [] },
+          ],
+        },
+        {
+          description_category_id: 900002,
+          category_name: 'Одежда',
+          children: [
+            { type_id: 910002, type_name: 'Бюстгальтеры', children: [] },
+          ],
+        },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 900001,
+          typeId: 910001,
+          categoryPathRu: ['Товары для взрослых'],
+          categoryPathZh: ['成人用品'],
+          categoryLevels: [{ level: 1, categoryId: 900001, nameRu: 'Товары для взрослых', nameZh: '成人用品', translated: true }],
+          categoryNameRu: 'Товары для взрослых',
+          categoryNameZh: '成人用品',
+          typeNameRu: 'Секс игрушки',
+          typeNameZh: '情趣玩具',
+          displayPathRu: 'Товары для взрослых / Секс игрушки',
+          displayPathZh: '成人用品 / 情趣玩具',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['成人用品', '情趣玩具'],
+          searchText: 'товары для взрослых секс игрушки 成人用品 情趣玩具',
+        },
+        {
+          descriptionCategoryId: 900002,
+          typeId: 910002,
+          categoryPathRu: ['Одежда'],
+          categoryPathZh: ['服装'],
+          categoryLevels: [{ level: 1, categoryId: 900002, nameRu: 'Одежда', nameZh: '服装', translated: true }],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Бюстгальтеры',
+          typeNameZh: '文胸',
+          displayPathRu: 'Одежда / Бюстгальтеры',
+          displayPathZh: '服装 / 文胸',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '文胸', '内衣', 'bra'],
+          searchText: 'одежда бюстгальтеры 服装 文胸 内衣 bra',
+        },
+      ],
+    });
+
+    expect(candidates.map((candidate) => candidate.typeId)).toContain(910002);
+    expect(candidates.map((candidate) => candidate.typeId)).not.toContain(910001);
+    expect(candidates[0]).toMatchObject({ typeId: 910002, label: 'recommended', selected: true });
+  });
 });

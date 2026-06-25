@@ -20,6 +20,21 @@ interface SystemConfig {
   updatedAt: string;
 }
 
+interface AiUsageSummary {
+  requestCount: number;
+  cacheHitCount: number;
+  failureCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+interface AiUsageDiagnostics {
+  date: string;
+  total: AiUsageSummary;
+  byNamespace: Record<string, AiUsageSummary>;
+}
+
 interface BackupStatus {
   available: boolean;
   message?: string;
@@ -45,14 +60,18 @@ const GROUP_LABELS: Record<string, string> = {
   maintenance: '维护模式',
   version: '版本更新',
   randomize: '随机化（货号/尺寸/重量）',
+  ai: 'AI 翻译与生成',
   general: '通用',
 };
 
-const GROUP_ORDER = ['maintenance', 'auth', 'feature', 'upload', 'retention', 'backup', 'version', 'randomize', 'general'];
+const GROUP_ORDER = ['maintenance', 'auth', 'feature', 'ai', 'upload', 'retention', 'backup', 'version', 'randomize', 'general'];
+
+const REQUIRED_CONFIG_KEYS = ['ai_provider', 'ai_image_provider'];
 
 export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [aiUsage, setAiUsage] = useState<AiUsageDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -60,30 +79,37 @@ export default function AdminSettingsPage() {
 
   useEffect(() => { fetchConfigs(); }, []);
 
+  function applyConfigRows(rows: SystemConfig[]) {
+    const filtered = rows.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
+    setConfigs(filtered);
+    const map: Record<string, string> = {};
+    filtered.forEach((c) => { map[c.key] = c.value; });
+    setEditing(map);
+    return filtered;
+  }
+
   async function fetchConfigs() {
     setLoading(true);
-    const [configRes, backupRes] = await Promise.all([
+    const [configRes, backupRes, aiUsageRes] = await Promise.all([
       api.get<SystemConfig[]>('/api/admin/system-config'),
       api.get<BackupStatus>('/api/admin/ops/backup-status'),
+      api.get<AiUsageDiagnostics>('/api/admin/system-config/ai-usage/summary'),
     ]);
     if (configRes.code === 1 && configRes.data) {
-      const filtered = configRes.data.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
-      setConfigs(filtered);
-      const map: Record<string, string> = {};
-      filtered.forEach((c) => { map[c.key] = c.value; });
-      setEditing(map);
+      const filtered = applyConfigRows(configRes.data);
+      const hasRequiredKeys = REQUIRED_CONFIG_KEYS.every((key) => filtered.some((cfg) => cfg.key === key));
+      if (!hasRequiredKeys) {
+        await api.post('/api/admin/system-config/seed', {});
+        const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
+        if (res2.code === 1 && res2.data) applyConfigRows(res2.data);
+      }
     } else if (configRes.code === 0) {
       await api.post('/api/admin/system-config/seed', {});
       const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
-      if (res2.code === 1 && res2.data) {
-        const filtered = res2.data.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
-        setConfigs(filtered);
-        const map: Record<string, string> = {};
-        filtered.forEach((c) => { map[c.key] = c.value; });
-        setEditing(map);
-      }
+      if (res2.code === 1 && res2.data) applyConfigRows(res2.data);
     }
     if (backupRes.code === 1 && backupRes.data) setBackupStatus(backupRes.data);
+    if (aiUsageRes.code === 1 && aiUsageRes.data) setAiUsage(aiUsageRes.data);
     setLoading(false);
   }
 
@@ -181,6 +207,20 @@ export default function AdminSettingsPage() {
 
       {sortedGroups.map((group) => {
         const items = grouped[group]!;
+        if (group === 'ai') {
+          return (
+            <AiSettingsPanel
+              key={group}
+              items={items}
+              editing={editing}
+              setEditing={setEditing}
+              savingKey={savingKey}
+              saveConfigs={saveConfigs}
+              aiUsage={aiUsage}
+            />
+          );
+        }
+
         if (group === 'upload') {
           return (
             <UploadSettingsPanel
@@ -300,6 +340,15 @@ export default function AdminSettingsPage() {
       })}
     </div>
   );
+}
+
+interface AiSettingsPanelProps {
+  items: SystemConfig[];
+  editing: Record<string, string>;
+  setEditing: (next: Record<string, string>) => void;
+  savingKey: string | null;
+  saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+  aiUsage: AiUsageDiagnostics | null;
 }
 
 interface UploadSettingsPanelProps {
@@ -641,6 +690,245 @@ function BackupSettingsPanel({
   );
 }
 
+const AI_PROVIDER_KEYS = [
+  'ai_provider',
+  'ai_provider_label',
+  'ai_base_url',
+  'ai_api_key',
+  'ai_model',
+  'ai_timeout_ms',
+];
+
+const AI_IMAGE_PROVIDER_KEYS = [
+  'ai_image_provider',
+  'ai_image_base_url',
+  'ai_image_api_key',
+  'ai_image_model',
+];
+
+const AI_LIMIT_KEYS = [
+  'ai_daily_budget_cents',
+  'ai_user_daily_category_translation_limit',
+  'ai_user_daily_product_generation_limit',
+  'ai_user_daily_image_generation_limit',
+];
+
+const AI_FEATURE_KEYS = [
+  'ai_category_translation_enabled',
+  'ai_product_generation_enabled',
+  'ai_image_generation_enabled',
+];
+
+const AI_PROMPT_KEYS = [
+  'ai_category_translation_prompt',
+  'ai_product_title_prompt',
+  'ai_product_description_prompt',
+  'ai_image_prompt',
+];
+
+function AiSettingsPanel({
+  items,
+  editing,
+  setEditing,
+  savingKey,
+  saveConfigs,
+  aiUsage,
+}: AiSettingsPanelProps) {
+  const configs = Object.fromEntries(items.map((item) => [item.key, item]));
+  const provider = editing.ai_provider || 'disabled';
+  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const isSavingProvider = savingKey === 'group:AI 服务';
+  const isSavingLimits = savingKey === 'group:AI 额度';
+  const isSavingPrompts = savingKey === 'group:AI 提示词';
+  const isSavingFeatures = savingKey === 'group:AI 功能开关';
+  const providerReady = provider === 'custom'
+    && (editing.ai_base_url || '').trim()
+    && (editing.ai_api_key || '').trim()
+    && (editing.ai_model || '').trim();
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <details open className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">AI 翻译与生成</Badge>
+              <span className="text-sm text-muted-foreground">自定义 OpenAI-compatible 接口、缓存、用户每日额度</span>
+            </div>
+            <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+            <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+          </summary>
+          <CardContent className="space-y-6 border-t pt-5">
+            <section className="rounded-md border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">AI 服务</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    DeepSeek、MiniMax、OpenRouter、沉浸式翻译网关等统一按自定义兼容接口配置。
+                  </p>
+                </div>
+                <Badge variant={providerReady ? 'default' : 'secondary'}>{providerReady ? '接口已配置' : '默认关闭'}</Badge>
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">接口配置</h3>
+                  <p className="text-xs text-muted-foreground">Base URL 填到 /v1；系统会请求 /chat/completions。</p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(AI_PROVIDER_KEYS, 'AI 服务')}
+                  disabled={isSavingProvider}
+                >
+                  {isSavingProvider ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">保存接口</span>
+                </Button>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-2">
+                {[
+                  { value: 'disabled', label: '关闭', desc: '不调用外部 AI' },
+                  { value: 'custom', label: '自定义接口', desc: 'OpenAI-compatible' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setValue('ai_provider', option.value)}
+                    className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                      provider === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput cfg={configs.ai_provider_label} editing={editing} setValue={setValue} placeholder="DeepSeek / MiniMax / 自定义网关" />
+                <ConfigInput cfg={configs.ai_base_url} editing={editing} setValue={setValue} placeholder="https://api.deepseek.com/v1" />
+                <ConfigInput cfg={configs.ai_api_key} editing={editing} setValue={setValue} type="password" placeholder="API Key" />
+                <ConfigInput cfg={configs.ai_model} editing={editing} setValue={setValue} placeholder="deepseek-chat" />
+                <ConfigInput cfg={configs.ai_timeout_ms} editing={editing} setValue={setValue} placeholder="30000" />
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">生图/改图接口</h3>
+                  <p className="text-xs text-muted-foreground">预留 MiniMax 或其他图片生成/重绘网关配置；当前只保存参数，后续图片处理流程会读取这里。</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
+                  disabled={savingKey === 'group:AI 生图服务'}
+                >
+                  {savingKey === 'group:AI 生图服务' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">保存生图接口</span>
+                </Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput cfg={configs.ai_image_provider} editing={editing} setValue={setValue} placeholder="disabled / custom" />
+                <ConfigInput cfg={configs.ai_image_base_url} editing={editing} setValue={setValue} placeholder="https://api.minimax.chat/v1" />
+                <ConfigInput cfg={configs.ai_image_api_key} editing={editing} setValue={setValue} type="password" placeholder="Image API Key" />
+                <ConfigInput cfg={configs.ai_image_model} editing={editing} setValue={setValue} placeholder="image model id" />
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">功能与额度</h3>
+                  <p className="text-xs text-muted-foreground">缓存命中不扣用户额度；额度只限制新的外部 API 调用。生图/改图当前为预留配置。</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => saveConfigs(AI_FEATURE_KEYS, 'AI 功能开关')} disabled={isSavingFeatures}>
+                    {isSavingFeatures ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    <span className="ml-1">保存开关</span>
+                  </Button>
+                  <Button size="sm" onClick={() => saveConfigs(AI_LIMIT_KEYS, 'AI 额度')} disabled={isSavingLimits}>
+                    {isSavingLimits ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    <span className="ml-1">保存额度</span>
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigToggle cfg={configs.ai_category_translation_enabled} editing={editing} setValue={setValue} />
+                <ConfigToggle cfg={configs.ai_product_generation_enabled} editing={editing} setValue={setValue} />
+                <ConfigToggle cfg={configs.ai_image_generation_enabled} editing={editing} setValue={setValue} />
+                <ConfigInput cfg={configs.ai_user_daily_category_translation_limit} editing={editing} setValue={setValue} placeholder="1000" />
+                <ConfigInput cfg={configs.ai_user_daily_product_generation_limit} editing={editing} setValue={setValue} placeholder="20" />
+                <ConfigInput cfg={configs.ai_user_daily_image_generation_limit} editing={editing} setValue={setValue} placeholder="5" />
+                <ConfigInput cfg={configs.ai_daily_budget_cents} editing={editing} setValue={setValue} placeholder="0" />
+              </div>
+            </section>
+
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">AI 用量诊断</h3>
+                  <p className="text-xs text-muted-foreground">按今天汇总外部请求、缓存命中、失败和 token 用量。</p>
+                </div>
+                <Badge variant="outline">{aiUsage?.date || '-'}</Badge>
+              </div>
+              <div className="grid gap-2 md:grid-cols-4">
+                <MetricChip label="外部请求" value={String(aiUsage?.total?.requestCount ?? 0)} />
+                <MetricChip label="缓存命中" value={String(aiUsage?.total?.cacheHitCount ?? 0)} />
+                <MetricChip label="失败" value={String(aiUsage?.total?.failureCount ?? 0)} />
+                <MetricChip label="Tokens" value={String(aiUsage?.total?.totalTokens ?? 0)} />
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                {['category_term', 'product_title', 'product_description', 'image_text'].map((namespace) => {
+                  const row = aiUsage?.byNamespace?.[namespace];
+                  return (
+                    <div key={namespace} className="rounded-md border bg-muted/20 px-3 py-2 text-xs">
+                      <div className="font-medium">{namespace}</div>
+                      <div className="mt-1 text-muted-foreground">
+                        请求 {row?.requestCount ?? 0} / 缓存 {row?.cacheHitCount ?? 0} / 失败 {row?.failureCount ?? 0} / tokens {row?.totalTokens ?? 0}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <details className="rounded-md border p-4">
+              <summary className="cursor-pointer text-sm font-medium">提示词</summary>
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">类目翻译和商品生成提示词分开保存，避免互相污染缓存。</p>
+                  <Button size="sm" onClick={() => saveConfigs(AI_PROMPT_KEYS, 'AI 提示词')} disabled={isSavingPrompts}>
+                    {isSavingPrompts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    <span className="ml-1">保存提示词</span>
+                  </Button>
+                </div>
+                <div className="grid gap-3">
+                  <ConfigInput cfg={configs.ai_category_translation_prompt} editing={editing} setValue={setValue} />
+                  <ConfigInput cfg={configs.ai_product_title_prompt} editing={editing} setValue={setValue} />
+                  <ConfigInput cfg={configs.ai_product_description_prompt} editing={editing} setValue={setValue} />
+                </div>
+              </div>
+            </details>
+          </CardContent>
+        </details>
+      </Card>
+    </div>
+  );
+}
+
+function MetricChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border bg-muted/20 px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-base font-semibold">{value}</div>
+    </div>
+  );
+}
 function BackupStatusRow({ label, value, monospace = false, ok }: { label: string; value: string; monospace?: boolean; ok?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b py-1.5 last:border-b-0">

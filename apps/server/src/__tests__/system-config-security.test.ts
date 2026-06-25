@@ -47,6 +47,21 @@ describe('SystemConfig sensitive storage', () => {
     await expect(getConfig('backup_remote_secret_access_key')).resolves.toBe('backup-secret');
   });
 
+  it('encrypts AI provider API keys and exposes safe disabled defaults', async () => {
+    const { getConfig, setConfig } = await import('../config/system-config-schema.js');
+
+    await expect(getConfig('ai_provider')).resolves.toBe('disabled');
+    await expect(getConfig('ai_category_translation_enabled')).resolves.toBe(false);
+    await expect(getConfig('ai_product_generation_enabled')).resolves.toBe(false);
+    await expect(getConfig('ai_user_daily_product_generation_limit')).resolves.toBe(20);
+
+    await setConfig('ai_api_key', 'ai-secret-token');
+
+    const stored = configStore.get('ai_api_key');
+    expect(stored).toMatch(/^enc:v1:/);
+    expect(stored).not.toContain('ai-secret-token');
+    await expect(getConfig('ai_api_key')).resolves.toBe('ai-secret-token');
+  });
   it('keeps reading legacy plaintext sensitive values for backward compatibility', async () => {
     const { getConfig } = await import('../config/system-config-schema.js');
 
