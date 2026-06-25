@@ -209,4 +209,47 @@ describe('product content AI drafts', () => {
     expect(generateText).toHaveBeenNthCalledWith(1, expect.objectContaining({ maxTokens: 600 }));
     expect(generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({ maxTokens: 1800 }));
   });
+  it('includes cleaned source description and rich text in product generation input', async () => {
+    const generateText = vi.fn().mockResolvedValue({
+      ok: true,
+      text: 'Бюстгальтер без косточек с тонкими бретелями и открытой спиной.',
+      provider: 'custom',
+      model: 'deepseek-chat',
+      usage: { totalTokens: 80 },
+    });
+
+    await generateProductContentDraft({
+      item: {
+        ...item,
+        metadata: {
+          sourceTitleRaw: '闪钻细肩带美背内衣无痕无钢圈小胸聚拢显大露背文胸',
+          sourceDescriptionRaw: '<div>无钢圈设计，细肩带，美背交叉。<img src="https://img.example.com/detail.jpg"/>适合日常穿搭。</div>',
+          sourceRichContentDraft: {
+            blocks: [
+              { type: 'image', url: 'https://img.example.com/detail.jpg' },
+              { type: 'text', text: '<p>可拆卸胸垫，轻薄透气，不勒肩。</p>' },
+            ],
+          },
+        },
+      },
+      actorUserId: 'user-1',
+      fields: ['description'],
+      config,
+      cacheStore: memoryCacheStore(),
+      usageStore: memoryUsageStore(),
+      generateText,
+    });
+
+    const call = generateText.mock.calls[0]?.[0];
+    const systemMessage = call?.messages.find((message: { role: string; content: string }) => message.role === 'system')?.content || '';
+    const userMessage = call?.messages.find((message: { role: string; content: string }) => message.role === 'user')?.content || '{}';
+    const payload = JSON.parse(userMessage);
+
+    expect(systemMessage).toContain('Use only facts present in the source JSON');
+    expect(payload.description).toContain('无钢圈设计');
+    expect(payload.description).toContain('适合日常穿搭');
+    expect(payload.richContentSummary).toContain('可拆卸胸垫');
+    expect(JSON.stringify(payload)).not.toContain('<img');
+    expect(JSON.stringify(payload)).not.toContain('https://img.example.com');
+  });
 });

@@ -98,6 +98,7 @@ const collectSchema = z.object({
   extractionDiagnostics: z.any().optional(),
   sku: z.string().optional(),
   sourceProductId: z.string().optional(),
+  extensionVersion: z.string().optional(),
 });
 
 const batchDeleteVariantsSchema = z.object({
@@ -1110,6 +1111,7 @@ export function buildCollectedGoodsMetadata(input: {
   if (input.sourceTitleRaw) metadata.sourceTitleRaw = String(input.sourceTitleRaw);
   if (input.sourceLocale) metadata.sourceLocale = String(input.sourceLocale);
   if (input.sourcePlatform) metadata.sourcePlatform = String(input.sourcePlatform);
+  if (input.extensionVersion) metadata.extensionVersion = String(input.extensionVersion).slice(0, 40);
   const sourceDescription = sanitizePublishDescription(input.description);
   const sourceDescriptionRaw = cleanRawSourceText(input.description);
   if (sourceDescriptionRaw) metadata.sourceDescriptionRaw = sourceDescriptionRaw;

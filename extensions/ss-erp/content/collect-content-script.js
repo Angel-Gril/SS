@@ -98,6 +98,14 @@
     });
   }
 
+  function getExtensionVersionForDiagnostics() {
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.getManifest === "function") {
+        return chrome.runtime.getManifest().version || "";
+      }
+    } catch (e) {}
+    return "";
+  }
   async function collectCurrentPage() {
     // Ozon 商品页：走 entrypoint-api 拿完整数据（含图片）
     if (isOzonProductPage()) {
@@ -139,6 +147,7 @@
       warnings,
       sourceUrl: location.href,
       sourceHost: location.hostname,
+      extensionVersion: getExtensionVersionForDiagnostics(),
       collectedAt: new Date().toISOString()
     };
   }

@@ -71,6 +71,13 @@ export interface GenerateProductContentDraftParams {
 
 const CJK_RE = /[\u3400-\u9fff]/;
 const CYRILLIC_RE = /[А-Яа-яЁё]/;
+const PRODUCT_COPYWRITING_GUARDRAIL = [
+  'You are generating Russian Ozon product copy for marketplace buyers.',
+  'Use only facts present in the source JSON. Do not invent materials, cup type, effects, age range, brand, certification, discounts, shipping, or guarantees.',
+  'Prefer natural Russian retail wording over literal machine translation.',
+  'Do not mention 1688, wholesale, supplier, JSON, SKU internals, or source-system fields.',
+  'Return only the requested Russian output, with no markdown and no explanation.',
+].join(' ');
 
 function cleanText(value: unknown): string {
   return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
@@ -78,6 +85,54 @@ function cleanText(value: unknown): string {
 
 function metadataRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+function decodeBasicHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function cleanSourceCopy(value: unknown, maxLength = 1200): string {
+  let text = String(value || '').normalize('NFKC');
+  if (!text) return '';
+  text = text
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<img\b[^>]*\balt=["']?([^"'>\s][^"'>]*)["']?[^>]*>/gi, ' $1 ')
+    .replace(/<img\b[^>]*>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/p>|<\/div>|<\/li>|<\/tr>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\/\/\S+/g, ' ')
+    .replace(/\b[\w.-]+\.(?:jpg|jpeg|png|webp|gif)(?:\?\S*)?/gi, ' ');
+  text = cleanText(decodeBasicHtmlEntities(text));
+  return text.slice(0, maxLength);
+}
+
+function summarizeRichContentDraft(value: unknown): string {
+  const draft = metadataRecord(value);
+  const blocks = Array.isArray(draft.blocks) ? draft.blocks : [];
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const block of blocks) {
+    const record = metadataRecord(block);
+    const raw = record.text ?? record.content ?? record.description ?? record.title ?? record.value;
+    const text = cleanSourceCopy(raw, 400);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    parts.push(text);
+    if (parts.join(' ').length >= 1200) break;
+  }
+  return parts.join(' ').slice(0, 1200);
+}
+
+function buildEffectivePrompt(prompt: string): string {
+  return `${PRODUCT_COPYWRITING_GUARDRAIL}\n\n${prompt}`.trim();
 }
 
 function promptHash(prompt: string): string {
@@ -95,8 +150,8 @@ function buildProductContentInput(item: ProductContentAiItem, field: ProductCont
     selectedSku: meta.selectedSku || null,
     variants: item.variants || meta.variants || null,
     packaging: meta.sourcePackagingRows || null,
-    description: cleanText(meta.description || meta.sourceDescription || ''),
-    richContentSummary: cleanText(meta.sourceRichContentDraftSummary || ''),
+    description: cleanSourceCopy(meta.description || meta.sourceDescription || meta.sourceDescriptionRaw || ''),
+    richContentSummary: summarizeRichContentDraft(meta.sourceRichContentDraft) || cleanSourceCopy(meta.sourceRichContentDraftSummary || ''),
   };
   return JSON.stringify(payload);
 }
@@ -140,7 +195,8 @@ export async function generateProductContentDraft(params: GenerateProductContent
     if (!prompt) return { ok: false, error: `AI ${field} prompt is empty`, drafts, limit: latestLimit };
     const namespace = namespaceForField(field);
     const inputText = buildProductContentInput(params.item, field);
-    const hash = promptHash(prompt);
+    const effectivePrompt = buildEffectivePrompt(prompt);
+    const hash = promptHash(effectivePrompt);
 
     try {
       const cached = await getCachedAiTranslation({
@@ -168,7 +224,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
           const ai = await params.generateText({
             config: params.config,
             messages: [
-              { role: 'system', content: prompt },
+              { role: 'system', content: effectivePrompt },
               { role: 'user', content: inputText },
             ],
             temperature: field === 'title' ? 0.2 : 0.3,

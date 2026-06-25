@@ -56,3 +56,17 @@ test('ERP collect bridge relays Chrome runtime errors to the page', () => {
     'bridge should return the runtime error message to the ERP page',
   );
 });
+test('source collection diagnostics include the installed extension version', () => {
+  const source = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
+
+  assert.match(
+    source,
+    /extensionVersion/,
+    'source collection payload should include the installed extension version for debugging stale parsers',
+  );
+  assert.match(
+    source,
+    /chrome\.runtime\.getManifest\(\)\.version/,
+    'source collection should read the version from the Chrome extension manifest',
+  );
+});
