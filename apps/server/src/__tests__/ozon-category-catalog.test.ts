@@ -180,6 +180,13 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Брюки для малышей')).toBe('婴幼儿裤子');
     expect(translateOzonCategoryText('Термобрюки')).toBe('保暖裤');
     expect(translateOzonCategoryText('Белье')).toBe('内衣');
+    expect(translateOzonCategoryText('Бюстгалтер')).toBe('文胸');
+    expect(translateOzonCategoryText('Бюстгальтер')).toBe('文胸');
+    expect(translateOzonCategoryText('Бюстгальтеры')).toBe('文胸');
+    expect(translateOzonCategoryText('Аксессуар для бюстгальтера')).toBe('文胸配件');
+    expect(translateOzonCategoryText('Наматрасник')).toBe('床垫保护套');
+    expect(translateOzonCategoryText('Держатель простыни, одеяла')).toBe('床单/被子固定夹');
+    expect(translateOzonCategoryText('Веревка бельевая')).toBe('晾衣绳');
     expect(translateOzonCategoryText('Обувь')).toBe('鞋靴');
   });
 
@@ -335,7 +342,7 @@ describe('ozon category catalog', () => {
       },
     ]);
     const translate = vi.fn(async (term: string) => ({
-      outputText: term === 'Женское белье' ? '女士内衣' : '文胸',
+      outputText: '女士内衣',
       source: 'provider' as const,
     }));
 
@@ -343,7 +350,7 @@ describe('ozon category catalog', () => {
       translateTerm: translate,
     });
 
-    expect(translate).toHaveBeenCalledTimes(2);
+    expect(translate).toHaveBeenCalledTimes(1);
     expect(enriched[0]).toMatchObject({
       categoryPathZh: ['女士内衣'],
       categoryNameZh: '女士内衣',
@@ -356,6 +363,37 @@ describe('ozon category catalog', () => {
     expect(enriched[0]?.keywords).toEqual(expect.arrayContaining(['女士内衣', '文胸']));
   });
 
+  it('keeps local dictionary translations when AI fills a different missing term', async () => {
+    const catalog: OzonCategoryCatalogEntry[] = [{
+      descriptionCategoryId: 1,
+      typeId: 2,
+      categoryPathRu: ['Женское белье'],
+      categoryPathZh: [''],
+      categoryLevels: [{ level: 1, categoryId: 1, nameRu: 'Женское белье', nameZh: '', translated: false }],
+      categoryNameRu: 'Женское белье',
+      categoryNameZh: '',
+      typeNameRu: 'Бюстгалтер',
+      typeNameZh: '',
+      displayPathRu: 'Женское белье / Бюстгалтер',
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      translationStatus: 'missing',
+      untranslatedTerms: ['Женское белье', 'Бюстгалтер'],
+      keywords: ['Женское белье', 'Бюстгалтер'],
+      searchText: 'женское белье бюстгалтер',
+    }];
+
+    const enriched = await enrichMissingOzonCategoryCatalogTranslations(catalog, {
+      translateTerm: async () => ({ outputText: '女士内衣', source: 'provider' as const }),
+    });
+
+    expect(enriched[0]).toMatchObject({
+      categoryNameZh: '女士内衣',
+      typeNameZh: '文胸',
+      displayPathZh: '女士内衣 / 文胸',
+      translationStatus: 'complete',
+      untranslatedTerms: [],
+    });
+  });
   it('rejects invalid AI category translations without poisoning the catalog entry', async () => {
     const catalog = buildOzonCategoryCatalog([
       {
@@ -373,9 +411,9 @@ describe('ozon category catalog', () => {
     });
 
     expect(enriched[0]).toMatchObject({
-      displayPathZh: '待翻译类目1 / 待翻译类型',
-      translationStatus: 'missing',
-      untranslatedTerms: ['Женское белье', 'Бюстгальтеры'],
+      displayPathZh: '待翻译类目1 / 文胸',
+      translationStatus: 'partial',
+      untranslatedTerms: ['Женское белье'],
     });
   });
   it('applies missing-term enrichment when refreshing from Ozon tree', async () => {

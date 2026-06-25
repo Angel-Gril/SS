@@ -85,6 +85,17 @@ const CATEGORY_TRANSLATIONS: Record<string, string> = {
   'брюки для малышей': '婴幼儿裤子',
   'термобрюки': '保暖裤',
   'белье': '内衣',
+  'бельё': '内衣',
+  'бюстгалтер': '文胸',
+  'бюстгальтер': '文胸',
+  'бюстгальтеры': '文胸',
+  'аксессуар для бюстгальтера': '文胸配件',
+  'наматрасник': '床垫保护套',
+  'держатель простыни, одеяла': '床单/被子固定夹',
+  'веревка бельевая': '晾衣绳',
+  'дом и сад': '家居园艺',
+  'постельное белье': '床上用品',
+  'инвентарь для дома': '家居用品',
   'обувь': '鞋靴',
   'радиоуправляемые игрушки': '遥控玩具',
   'игрушка радиоуправляемая': '遥控玩具',
@@ -118,7 +129,16 @@ export function translateOzonCategoryText(value: unknown): string {
   out = out.replace(/Брюки тактические/giu, '战术裤');
   out = out.replace(/Брюки для малышей/giu, '婴幼儿裤子');
   out = out.replace(/Термобрюки/giu, '保暖裤');
-  out = out.replace(/Белье/giu, '内衣');
+  out = out.replace(/Бель[её]/giu, '内衣');
+  out = out.replace(/Бюстгалтер/giu, '文胸');
+  out = out.replace(/Бюстгальтеры?/giu, '文胸');
+  out = out.replace(/Аксессуар для бюстгальтера/giu, '文胸配件');
+  out = out.replace(/Наматрасник/giu, '床垫保护套');
+  out = out.replace(/Держатель простыни, одеяла/giu, '床单/被子固定夹');
+  out = out.replace(/Веревка бельевая/giu, '晾衣绳');
+  out = out.replace(/Дом и сад/giu, '家居园艺');
+  out = out.replace(/Постельное белье/giu, '床上用品');
+  out = out.replace(/Инвентарь для дома/giu, '家居用品');
   out = out.replace(/Обувь/giu, '鞋靴');
   out = out.replace(/Женские джинсы/giu, '女式牛仔裤');
   out = out.replace(/Мужские джинсы/giu, '男式牛仔裤');
@@ -282,6 +302,28 @@ function buildDisplayZhParts(categoryLevels: OzonCategoryLevel[], typeNameRu: st
   ].filter(Boolean);
 }
 
+function collectCatalogEntryTerms(entry: OzonCategoryCatalogEntry): string[] {
+  return unique([
+    ...entry.categoryLevels.map((level) => level.nameRu),
+    ...entry.categoryPathRu,
+    entry.categoryNameRu,
+    entry.typeNameRu,
+    ...entry.untranslatedTerms,
+  ]);
+}
+
+export function applyOzonCategoryCatalogLocalTranslations(catalog: OzonCategoryCatalogEntry[]): OzonCategoryCatalogEntry[] {
+  const translatedTerms = new Map<string, string>();
+  for (const entry of catalog) {
+    for (const term of collectCatalogEntryTerms(entry)) {
+      const translated = translateOzonCategoryTextForDisplay(term);
+      if (translated) translatedTerms.set(term, translated);
+    }
+  }
+  if (translatedTerms.size === 0) return catalog.map((entry) => ({ ...entry }));
+  return catalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms));
+}
+
 function rebuildCatalogEntryWithTranslations(
   entry: OzonCategoryCatalogEntry,
   translatedTerms: Map<string, string>,
@@ -324,8 +366,9 @@ export async function enrichMissingOzonCategoryCatalogTranslations(
   catalog: OzonCategoryCatalogEntry[],
   deps: EnrichOzonCategoryCatalogTranslationDeps,
 ): Promise<OzonCategoryCatalogEntry[]> {
-  const missingTerms = unique(catalog.flatMap((entry) => entry.untranslatedTerms));
-  if (!missingTerms.length) return catalog.map((entry) => ({ ...entry }));
+  const localCatalog = applyOzonCategoryCatalogLocalTranslations(catalog);
+  const missingTerms = unique(localCatalog.flatMap((entry) => entry.untranslatedTerms));
+  if (!missingTerms.length) return localCatalog.map((entry) => ({ ...entry }));
 
   const translatedTerms = new Map<string, string>();
   for (const term of missingTerms) {
@@ -338,7 +381,7 @@ export async function enrichMissingOzonCategoryCatalogTranslations(
     }
   }
 
-  return catalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms));
+  return localCatalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms));
 }
 export function searchOzonCategoryCatalog(
   catalog: OzonCategoryCatalogEntry[],
@@ -390,6 +433,20 @@ export interface SearchOzonCategoryCatalogDeps {
   now?: () => Date;
 }
 
+function categoryCatalogTranslationFingerprint(catalog: OzonCategoryCatalogEntry[]): string {
+  return catalog.map((entry) => [
+    entry.descriptionCategoryId,
+    entry.typeId,
+    entry.displayPathZh,
+    entry.translationStatus,
+    entry.untranslatedTerms.join('|'),
+  ].join(':')).join('\n');
+}
+
+function hasCatalogTranslationGaps(catalog: OzonCategoryCatalogEntry[]): boolean {
+  return catalog.some((entry) => entry.translationStatus !== 'complete' || entry.untranslatedTerms.length > 0);
+}
+
 export async function searchOrRefreshOzonCategoryCatalogForShop(
   params: SearchOzonCategoryCatalogParams,
   deps: SearchOzonCategoryCatalogDeps,
@@ -397,14 +454,25 @@ export async function searchOrRefreshOzonCategoryCatalogForShop(
   const language = cleanText(params.language) || 'DEFAULT';
   let catalog = await deps.store.list(params.shopId, language);
   let refreshed = false;
+  let changed = false;
 
   if (params.refresh || catalog.length === 0) {
     catalog = buildOzonCategoryCatalog(await deps.fetchTree());
-    if (deps.enrichMissingTranslations) {
-      catalog = await deps.enrichMissingTranslations(catalog);
-    }
-    await deps.store.replace(params.shopId, language, catalog, deps.now?.() || new Date());
     refreshed = true;
+  }
+
+  let before = categoryCatalogTranslationFingerprint(catalog);
+  catalog = applyOzonCategoryCatalogLocalTranslations(catalog);
+  changed = categoryCatalogTranslationFingerprint(catalog) !== before;
+
+  if (deps.enrichMissingTranslations && hasCatalogTranslationGaps(catalog)) {
+    before = categoryCatalogTranslationFingerprint(catalog);
+    catalog = await deps.enrichMissingTranslations(catalog);
+    changed = changed || categoryCatalogTranslationFingerprint(catalog) !== before;
+  }
+
+  if (refreshed || changed) {
+    await deps.store.replace(params.shopId, language, catalog, deps.now?.() || new Date());
   }
 
   return {

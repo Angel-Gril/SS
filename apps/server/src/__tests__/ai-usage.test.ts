@@ -91,7 +91,10 @@ describe('AI usage controls', () => {
         completionTokens: 5,
         totalTokens: 15,
       }]),
-      $executeRaw: vi.fn(async () => 1),
+      $executeRaw: vi.fn(async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+        expect(String(values[0])).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+        return 1;
+      }),
     };
     const store = createPrismaAiUsageStore(prisma as unknown as PrismaAiUsageClient);
 

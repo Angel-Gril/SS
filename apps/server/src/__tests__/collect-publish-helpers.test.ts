@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   calcPublishPrice,
   containsCjkText,
@@ -31,6 +31,7 @@ import {
   buildSourceStandardOzonAttributePlan,
   sourceCategorySignature,
   buildSourceOzonCategoryCandidates,
+  loadSourceOzonCategoryCatalogForCandidates,
   resolveCollectedDisplayTitle,
   syncOzonCoreTextAttributes,
   syncOzonTitleAttribute,
@@ -2214,5 +2215,62 @@ describe('collect publish helpers', () => {
     expect(candidates.map((candidate) => candidate.typeId)).toContain(910002);
     expect(candidates.map((candidate) => candidate.typeId)).not.toContain(910001);
     expect(candidates[0]).toMatchObject({ typeId: 910002, label: 'recommended', selected: true });
+  });
+  it('uses cached Ozon category catalog for candidates and persists missing translation enrichment', async () => {
+    const cachedCatalog = [{
+      descriptionCategoryId: 200001517,
+      typeId: 93065,
+      categoryPathRu: ['Одежда', 'Белье'],
+      categoryPathZh: ['服装', '内衣'],
+      categoryLevels: [
+        { level: 1, categoryId: 10, nameRu: 'Одежда', nameZh: '服装', translated: true },
+        { level: 2, categoryId: 200001517, nameRu: 'Белье', nameZh: '内衣', translated: true },
+      ],
+      categoryNameRu: 'Белье',
+      categoryNameZh: '内衣',
+      typeNameRu: 'Бюстгалтер',
+      typeNameZh: '',
+      displayPathRu: 'Одежда / Белье / Бюстгалтер',
+      displayPathZh: '服装 / 内衣 / 待翻译类型',
+      translationStatus: 'partial' as const,
+      untranslatedTerms: ['Бюстгалтер'],
+      keywords: ['服装', '内衣'],
+      searchText: 'одежда белье бюстгалтер 服装 内衣 200001517 93065',
+    }];
+    const store = {
+      list: vi.fn(async () => cachedCatalog),
+      replace: vi.fn(async () => cachedCatalog.length),
+    };
+    const fetchTree = vi.fn(async () => {
+      throw new Error('should not fetch Ozon tree when cached catalog exists');
+    });
+    const enrichMissingTranslations = vi.fn(async (entries: typeof cachedCatalog) => entries.map((entry) => ({
+      ...entry,
+      typeNameZh: '文胸',
+      displayPathZh: '服装 / 内衣 / 文胸',
+      translationStatus: 'complete' as const,
+      untranslatedTerms: [],
+      keywords: [...entry.keywords, '文胸'],
+      searchText: `${entry.searchText} 文胸`,
+    })));
+
+    const result = await loadSourceOzonCategoryCatalogForCandidates({
+      shopId: 'shop-1',
+      store,
+      fetchTree,
+      enrichMissingTranslations,
+    });
+
+    expect(fetchTree).not.toHaveBeenCalled();
+    expect(enrichMissingTranslations).not.toHaveBeenCalled();
+    expect(store.replace).toHaveBeenCalledWith('shop-1', 'DEFAULT', expect.arrayContaining([
+      expect.objectContaining({ typeNameZh: '文胸', translationStatus: 'complete' }),
+    ]), expect.any(Date));
+    expect(result.categoryTree).toEqual([]);
+    expect(result.categoryCatalog[0]).toMatchObject({
+      displayPathZh: '服装 / 内衣 / 文胸',
+      translationStatus: 'complete',
+      untranslatedTerms: [],
+    });
   });
 });

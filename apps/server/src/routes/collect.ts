@@ -13,12 +13,14 @@ import {
   getCachedOzonAttributeValues,
 } from '../services/ozon-attribute-dictionary-cache.js';
 import {
+  applyOzonCategoryCatalogLocalTranslations,
   buildOzonCategoryCatalog,
   createPrismaOzonCategoryCatalogStore,
   enrichMissingOzonCategoryCatalogTranslations,
   searchOrRefreshOzonCategoryCatalogForShop,
   translateOzonCategoryText as translateOzonCategoryCatalogText,
   type OzonCategoryCatalogEntry,
+  type OzonCategoryCatalogStore,
   type OzonCategoryTranslationStatus,
 } from '../services/ozon-category-catalog.js';
 import {
@@ -2136,6 +2138,62 @@ export function buildSourceOzonCategoryCandidates(input: {
   return sorted;
 }
 
+function categoryCatalogTranslationFingerprint(catalog: OzonCategoryCatalogEntry[]): string {
+  return catalog.map((entry) => [
+    entry.descriptionCategoryId,
+    entry.typeId,
+    entry.displayPathZh,
+    entry.translationStatus,
+    entry.untranslatedTerms.join('|'),
+  ].join(':')).join('\n');
+}
+
+function hasOzonCategoryCatalogTranslationGaps(catalog: OzonCategoryCatalogEntry[]): boolean {
+  return catalog.some((entry) => entry.translationStatus !== 'complete' || entry.untranslatedTerms.length > 0);
+}
+
+export async function loadSourceOzonCategoryCatalogForCandidates(input: {
+  shopId: string;
+  language?: string;
+  store: OzonCategoryCatalogStore;
+  fetchTree(): Promise<SourceOzonCategoryTreeNode[]>;
+  enrichMissingTranslations?(entries: OzonCategoryCatalogEntry[]): Promise<OzonCategoryCatalogEntry[]>;
+  forceRefresh?: boolean;
+  now?: () => Date;
+}): Promise<{
+  categoryTree: SourceOzonCategoryTreeNode[];
+  categoryCatalog: OzonCategoryCatalogEntry[];
+  refreshed: boolean;
+  persisted: boolean;
+}> {
+  const language = String(input.language || 'DEFAULT').trim() || 'DEFAULT';
+  let categoryTree: SourceOzonCategoryTreeNode[] = [];
+  let categoryCatalog = input.forceRefresh ? [] : await input.store.list(input.shopId, language);
+  let refreshed = false;
+
+  if (input.forceRefresh || categoryCatalog.length === 0) {
+    categoryTree = await input.fetchTree();
+    categoryCatalog = buildOzonCategoryCatalog(categoryTree);
+    refreshed = true;
+  }
+
+  let before = categoryCatalogTranslationFingerprint(categoryCatalog);
+  categoryCatalog = applyOzonCategoryCatalogLocalTranslations(categoryCatalog);
+  let changed = categoryCatalogTranslationFingerprint(categoryCatalog) !== before;
+
+  if (input.enrichMissingTranslations && hasOzonCategoryCatalogTranslationGaps(categoryCatalog)) {
+    before = categoryCatalogTranslationFingerprint(categoryCatalog);
+    categoryCatalog = await input.enrichMissingTranslations(categoryCatalog);
+    changed = changed || categoryCatalogTranslationFingerprint(categoryCatalog) !== before;
+  }
+
+  const persisted = refreshed || changed;
+  if (persisted) {
+    await input.store.replace(input.shopId, language, categoryCatalog, input.now?.() || new Date());
+  }
+
+  return { categoryTree, categoryCatalog, refreshed, persisted };
+}
 async function createAiOzonCategoryTranslationEnricher(): Promise<undefined | ((entries: OzonCategoryCatalogEntry[]) => Promise<OzonCategoryCatalogEntry[]>)> {
   const enabled = await getConfig('ai_category_translation_enabled');
   if (!enabled) return undefined;
@@ -5090,14 +5148,17 @@ export async function collectRoutes(app: FastifyInstance) {
     const { decrypt } = await import('../lib/crypto.js');
     const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
     try {
-      const tree = await client.getDescriptionCategoryTree();
-      const categoryCatalog = buildOzonCategoryCatalog(tree);
-      await createPrismaOzonCategoryCatalogStore(prisma)
-        .replace(shopId, 'DEFAULT', categoryCatalog, new Date())
-        .catch(() => undefined);
+      const store = createPrismaOzonCategoryCatalogStore(prisma);
+      const enrichMissingTranslations = await createAiOzonCategoryTranslationEnricher();
+      const { categoryTree, categoryCatalog } = await loadSourceOzonCategoryCatalogForCandidates({
+        shopId,
+        store,
+        fetchTree: async () => client.getDescriptionCategoryTree({ language: 'DEFAULT' }),
+        ...(enrichMissingTranslations ? { enrichMissingTranslations } : {}),
+      });
       const preliminary = buildSourceOzonCategoryCandidates({
         item,
-        categoryTree: tree,
+        categoryTree,
         categoryCatalog,
         confirmedMappings: Array.from(confirmedMap.values()),
       });
@@ -5112,7 +5173,7 @@ export async function collectRoutes(app: FastifyInstance) {
       }
       const candidates = buildSourceOzonCategoryCandidates({
         item,
-        categoryTree: tree,
+        categoryTree,
         categoryCatalog,
         confirmedMappings: Array.from(confirmedMap.values()),
         attributesByCategory,

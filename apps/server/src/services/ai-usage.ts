@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import type { AiTextUsage } from './ai-text.js';
 
 export type AiUsageEventKind = 'request' | 'cache_hit' | 'failure';
@@ -130,6 +131,7 @@ export function createPrismaAiUsageStore(prisma: PrismaAiUsageClient): AiUsageSt
       const failureCount = event.kind === 'failure' ? 1 : 0;
       await prisma.$executeRaw`
         INSERT INTO "ai_usage_daily" (
+          "id",
           "date",
           "namespace",
           "provider",
@@ -143,6 +145,7 @@ export function createPrismaAiUsageStore(prisma: PrismaAiUsageClient): AiUsageSt
           "total_tokens",
           "updated_at"
         ) VALUES (
+          ${randomUUID()},
           ${date}::date,
           ${event.namespace},
           ${event.provider},
