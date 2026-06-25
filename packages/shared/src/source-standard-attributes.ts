@@ -74,6 +74,35 @@ function splitList(value: unknown): string[] {
     .filter(Boolean));
 }
 
+const DOWNSTREAM_PLATFORM_SUFFIX_RE = /\s*(?:主要下游平台|下游平台|跨境平台|适用平台|销售平台|平台渠道|渠道平台).*$/iu;
+const DOWNSTREAM_PLATFORM_VALUE_RE = /^(?:lazada|ebay|e-bay|shopee|amazon|aliexpress|ali\s*express|shein|temu|tiktok|tik\s*tok|wish|walmart|ozon)$/i;
+const SOURCE_SIZE_TOKEN_RE = /^(?:\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码|\d{2,3})$/i;
+
+function normalizeSourceSizeToken(value: string): string {
+  return value.replace(/^(\d+)\s+XL$/i, '$1XL').toUpperCase();
+}
+
+function splitSourceStandardSizeValue(value: string): string[] {
+  const tokens = value.split(/\s+/u).map(text).filter(Boolean);
+  if (tokens.length <= 1) return [value];
+  const relevant = tokens.filter((token) => !DOWNSTREAM_PLATFORM_VALUE_RE.test(token));
+  if (relevant.length >= 2 && relevant.every((token) => SOURCE_SIZE_TOKEN_RE.test(token))) {
+    return relevant.map(normalizeSourceSizeToken);
+  }
+  return [value];
+}
+
+export function sanitizeSourceStandardSizeValues(values: unknown[]): string[] {
+  const cleaned = values.flatMap((raw) => {
+    const value = text(raw).replace(DOWNSTREAM_PLATFORM_SUFFIX_RE, '').trim();
+    if (!value || DOWNSTREAM_PLATFORM_VALUE_RE.test(value)) return [];
+    return splitList(value)
+      .flatMap(splitSourceStandardSizeValue)
+      .filter((part) => !DOWNSTREAM_PLATFORM_VALUE_RE.test(part));
+  });
+  return dedupe(cleaned);
+}
+
 function attrName(attr: Record<string, unknown>): string {
   return text(attr.name ?? attr.key ?? attr.attributeName ?? attr.attrName);
 }
@@ -170,8 +199,8 @@ export function normalizeSourceStandardAttributes(item: SourceItemLike): SourceS
     ...variantValuesByName(item, /颜色|色号|color|colour|цвет/i),
   ]);
   const sizes = dedupe([
-    ...valuesByName(item, /尺码|尺寸|规格|size|размер/i),
-    ...variantValuesByName(item, /尺码|尺寸|规格|size|размер/i),
+    ...sanitizeSourceStandardSizeValues(valuesByName(item, /尺码|尺寸|规格|size|размер/i)),
+    ...sanitizeSourceStandardSizeValues(variantValuesByName(item, /尺码|尺寸|规格|size|размер/i)),
   ]);
   const materials = valuesByName(item, /材质|成分|面料|主面料|里料|material|composition/i);
   const gender = normalizeGender(item);
@@ -183,7 +212,8 @@ export function normalizeSourceStandardAttributes(item: SourceItemLike): SourceS
   if (!colors.length || !sizes.length) missingForOzon.push('颜色尺码变体');
   if (!materials.length) missingForOzon.push('材质/成分');
   if (!gender.value || !seasons.length) missingForOzon.push('性别/季节');
-  if (!pack.packageWeightG || !pack.packageDimensionsMm) missingForOzon.push('重量尺寸');
+  if (!pack.packageWeightG) missingForOzon.push('重量');
+  if (!pack.packageDimensionsMm) missingForOzon.push('包装尺寸');
 
   return {
     brand,

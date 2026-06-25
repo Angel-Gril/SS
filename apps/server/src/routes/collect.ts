@@ -15,6 +15,9 @@ import {
   buildOzonCategoryCatalog,
   createPrismaOzonCategoryCatalogStore,
   searchOrRefreshOzonCategoryCatalogForShop,
+  translateOzonCategoryText as translateOzonCategoryCatalogText,
+  type OzonCategoryCatalogEntry,
+  type OzonCategoryTranslationStatus,
 } from '../services/ozon-category-catalog.js';
 import {
   appendOzonRichContentAttribute,
@@ -27,9 +30,10 @@ import {
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
-import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
+import { normalizeSourceStandardAttributes, sanitizeSourceStandardSizeValues } from 'shared/source-standard-attributes';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+const CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
 const OZON_MAX_PUBLISH_IMAGES = 30;
 const OZON_ORIGIN_COUNTRY_ATTR_ID = 4389;
@@ -93,6 +97,10 @@ const batchDeleteVariantsSchema = z.object({
 
 export function containsCjkText(value: unknown): boolean {
   return CJK_TEXT_RE.test(String(value || ''));
+}
+
+function containsCyrillicText(value: unknown): boolean {
+  return CYRILLIC_TEXT_RE.test(String(value || ''));
 }
 
 function variantWordCount(value: unknown): number {
@@ -1781,7 +1789,7 @@ function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStan
     return standard.brand?.isBrandless ? ['Без бренда'] : [];
   }
   if (key === 'colors') return Array.isArray(standard.colors) ? standard.colors.map((value) => String(value || '').trim()).filter(Boolean) : [];
-  if (key === 'sizes') return Array.isArray(standard.sizes) ? standard.sizes.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes) : [];
   if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map((value) => String(value || '').trim()).filter(Boolean) : [];
   if (key === 'gender') {
     const value = String(standard.gender?.value || '').trim();
@@ -1886,6 +1894,8 @@ type SourceOzonCategoryCandidate = {
   typeNameZh: string;
   displayPathZh: string;
   displayPathRu: string;
+  translationStatus: OzonCategoryTranslationStatus;
+  untranslatedTerms: string[];
   score: number;
   label: 'recommended' | 'optional' | 'risky';
   selected: boolean;
@@ -1896,38 +1906,40 @@ type SourceOzonCategoryCandidate = {
 };
 
 function translateOzonCategoryText(value: unknown): string {
-  const text = String(value || '').trim();
-  const normalized = normalizeSourceCategoryToken(text);
-  const exact: Record<string, string> = {
-    'одежда': '服装',
-    'мужская одежда': '男装',
-    'женская одежда': '女装',
-    'одежда для малышей': '婴幼儿服装',
-    'спецодежда': '工装/职业服',
-    'джинсы': '牛仔裤',
-    'джинсы для малышей': '婴幼儿牛仔裤',
-    'брюки тактические': '战术裤',
-    'брюки для малышей': '婴幼儿裤子',
-    'термобрюки': '保暖裤',
-    'белье': '内衣',
-    'обувь': '鞋靴',
+  const translated = translateOzonCategoryCatalogText(value);
+  return containsCjkText(translated) && !containsCyrillicText(translated) ? translated : '';
+}
+
+function sourceOzonCategoryKey(categoryId: number, typeId: number): string {
+  return String(categoryId) + ':' + String(typeId);
+}
+
+function uniqueCleanStrings(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function fallbackOzonCategoryTranslationAudit(parts: Array<{ raw: string; zh: string }>): {
+  translationStatus: OzonCategoryTranslationStatus;
+  untranslatedTerms: string[];
+} {
+  const meaningful = parts.filter((part) => String(part.raw || '').trim());
+  const untranslatedTerms = uniqueCleanStrings(meaningful
+    .filter((part) => !part.zh && !CJK_TEXT_RE.test(part.raw))
+    .map((part) => part.raw));
+  if (untranslatedTerms.length === 0) return { translationStatus: 'complete', untranslatedTerms };
+  const translatedCount = meaningful.filter((part) => !!part.zh).length;
+  return {
+    translationStatus: translatedCount > 0 ? 'partial' : 'missing',
+    untranslatedTerms,
   };
-  if (exact[normalized]) return exact[normalized];
-  let out = text;
-  const replacements: Array<[RegExp, string]> = [
-    [/Джинсы/gi, '牛仔裤'],
-    [/Брюки/gi, '裤子'],
-    [/Штаны/gi, '裤子'],
-    [/Мужская одежда/gi, '男装'],
-    [/Женская одежда/gi, '女装'],
-    [/Одежда для малышей/gi, '婴幼儿服装'],
-    [/Одежда/gi, '服装'],
-    [/Спецодежда/gi, '工装/职业服'],
-    [/для малышей/gi, '婴幼儿'],
-    [/тактические/gi, '战术'],
-  ];
-  for (const [pattern, replacement] of replacements) out = out.replace(pattern, replacement);
-  return out === text ? '' : out;
 }
 
 function flattenOzonCategoryTree(nodes: SourceOzonCategoryTreeNode[] | null | undefined): Array<{ categoryId: number; typeId: number; categoryName: string; typeName: string }> {
@@ -2002,6 +2014,7 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
 export function buildSourceOzonCategoryCandidates(input: {
   item: { sourcePlatform?: unknown; metadata?: unknown; title?: unknown };
   categoryTree?: SourceOzonCategoryTreeNode[] | null;
+  categoryCatalog?: OzonCategoryCatalogEntry[] | null;
   attributesByCategory?: Record<string, SourceStandardOzonAttributeDef[]>;
   confirmedMappings?: SourceOzonConfirmedMapping[];
 }): SourceOzonCategoryCandidate[] {
@@ -2014,25 +2027,53 @@ export function buildSourceOzonCategoryCandidates(input: {
     input.item.title,
   ].flatMap(sourceCategorySearchTerms).filter(Boolean);
   const byKey = new Map<string, SourceOzonCategoryCandidate>();
-  const treeRows = flattenOzonCategoryTree(input.categoryTree);
+  const catalogRows = Array.isArray(input.categoryCatalog) ? input.categoryCatalog : [];
+  const catalogByKey = new Map(catalogRows.map((entry) => [sourceOzonCategoryKey(entry.descriptionCategoryId, entry.typeId), entry]));
+  const treeRowsByKey = new Map<string, { categoryId: number; typeId: number; categoryName: string; typeName: string }>();
+  for (const row of flattenOzonCategoryTree(input.categoryTree)) {
+    treeRowsByKey.set(sourceOzonCategoryKey(row.categoryId, row.typeId), row);
+  }
+  for (const entry of catalogRows) {
+    const key = sourceOzonCategoryKey(entry.descriptionCategoryId, entry.typeId);
+    if (!treeRowsByKey.has(key)) {
+      treeRowsByKey.set(key, {
+        categoryId: entry.descriptionCategoryId,
+        typeId: entry.typeId,
+        categoryName: entry.categoryNameRu,
+        typeName: entry.typeNameRu,
+      });
+    }
+  }
+  const treeRows = Array.from(treeRowsByKey.values());
   const treeByKey = new Map(treeRows.map((row) => [String(row.categoryId) + ':' + String(row.typeId), row]));
   const addCandidate = (row: { categoryId: number; typeId: number; categoryName?: string | null; typeName?: string | null }, baseScore: number, source: 'shared_history' | 'tree_match', reasons: string[], confirmationCount = 0) => {
-    const key = String(row.categoryId) + ':' + String(row.typeId);
+    const key = sourceOzonCategoryKey(row.categoryId, row.typeId);
     const tree = treeByKey.get(key);
+    const catalog = catalogByKey.get(key);
     const attrs = input.attributesByCategory?.[key] || [];
     const attributePlan = buildSourceStandardOzonAttributePlan(standard, attrs, []);
     const coverageScore = attributePlan.candidates.length * 6 - attributePlan.missingRequired.length * 10;
     const existing = byKey.get(key);
     const score = baseScore + coverageScore;
+    const categoryName = String(row.categoryName || catalog?.categoryNameRu || tree?.categoryName || '');
+    const typeName = String(row.typeName || catalog?.typeNameRu || tree?.typeName || '');
+    const categoryNameZh = catalog ? catalog.categoryNameZh : translateOzonCategoryText(categoryName);
+    const typeNameZh = catalog ? catalog.typeNameZh : translateOzonCategoryText(typeName);
+    const fallbackAudit = fallbackOzonCategoryTranslationAudit([
+      { raw: categoryName, zh: categoryNameZh },
+      { raw: typeName, zh: typeNameZh },
+    ]);
     const candidate: SourceOzonCategoryCandidate = {
       categoryId: row.categoryId,
       typeId: row.typeId,
-      categoryName: String(row.categoryName || tree?.categoryName || ''),
-      typeName: String(row.typeName || tree?.typeName || ''),
-      categoryNameZh: translateOzonCategoryText(row.categoryName || tree?.categoryName || ''),
-      typeNameZh: translateOzonCategoryText(row.typeName || tree?.typeName || ''),
-      displayPathZh: '',
-      displayPathRu: '',
+      categoryName,
+      typeName,
+      categoryNameZh,
+      typeNameZh,
+      displayPathZh: catalog?.displayPathZh || '',
+      displayPathRu: catalog?.displayPathRu || '',
+      translationStatus: catalog?.translationStatus || fallbackAudit.translationStatus,
+      untranslatedTerms: catalog?.untranslatedTerms || fallbackAudit.untranslatedTerms,
       score,
       label: 'risky',
       selected: false,
@@ -2063,8 +2104,11 @@ export function buildSourceOzonCategoryCandidates(input: {
   sorted.forEach((candidate, index) => {
     candidate.selected = index === 0;
     candidate.label = candidate.score >= 80 ? 'recommended' : candidate.score >= 45 ? 'optional' : 'risky';
-    candidate.displayPathRu = [candidate.categoryName, candidate.typeName].filter(Boolean).join(' / ');
-    candidate.displayPathZh = [candidate.categoryNameZh || candidate.categoryName, candidate.typeNameZh || candidate.typeName].filter(Boolean).join(' / ');
+    candidate.displayPathRu = candidate.displayPathRu || [candidate.categoryName, candidate.typeName].filter(Boolean).join(' / ');
+    candidate.displayPathZh = candidate.displayPathZh || [
+      candidate.categoryNameZh || '待翻译类目',
+      candidate.typeNameZh || '待翻译类型',
+    ].filter(Boolean).join(' / ');
   });
   return sorted;
 }
@@ -4900,10 +4944,16 @@ export async function collectRoutes(app: FastifyInstance) {
     const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
     try {
       const tree = await client.getDescriptionCategoryTree();
+      const categoryCatalog = buildOzonCategoryCatalog(tree);
       await createPrismaOzonCategoryCatalogStore(prisma)
-        .replace(shopId, 'DEFAULT', buildOzonCategoryCatalog(tree), new Date())
+        .replace(shopId, 'DEFAULT', categoryCatalog, new Date())
         .catch(() => undefined);
-      const preliminary = buildSourceOzonCategoryCandidates({ item, categoryTree: tree, confirmedMappings: Array.from(confirmedMap.values()) });
+      const preliminary = buildSourceOzonCategoryCandidates({
+        item,
+        categoryTree: tree,
+        categoryCatalog,
+        confirmedMappings: Array.from(confirmedMap.values()),
+      });
       const attributesByCategory: Record<string, SourceStandardOzonAttributeDef[]> = {};
       for (const candidate of preliminary) {
         const key = String(candidate.categoryId) + ':' + String(candidate.typeId);
@@ -4916,6 +4966,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const candidates = buildSourceOzonCategoryCandidates({
         item,
         categoryTree: tree,
+        categoryCatalog,
         confirmedMappings: Array.from(confirmedMap.values()),
         attributesByCategory,
       });

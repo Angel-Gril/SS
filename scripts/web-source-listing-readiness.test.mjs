@@ -113,4 +113,22 @@ function item(overrides = {}) {
   assert.ok(result.restrictionRisks.some((risk) => risk.includes('销售受限')));
 }
 
+{
+  const base = item();
+  const result = readiness.evaluateSourceListingReadiness(item({
+    metadata: {
+      ...base.metadata,
+      weightG: 20,
+      lengthMm: undefined,
+      widthMm: undefined,
+      heightMm: undefined,
+    },
+  }));
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.missingFields.includes('重量尺寸'), false);
+  assert.equal(result.missingFields.includes('重量'), false);
+  assert.ok(result.missingFields.includes('包装尺寸'));
+  assert.ok(result.blockers.includes('包装尺寸'));
+}
+
 console.log('PASS web source listing readiness');

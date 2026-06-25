@@ -82,7 +82,69 @@ const item = {
   assert.ok(result.missingForOzon.includes('品牌/无品牌'));
   assert.ok(result.missingForOzon.includes('颜色尺码变体'));
   assert.ok(result.missingForOzon.includes('材质/成分'));
-  assert.ok(result.missingForOzon.includes('重量尺寸'));
+  assert.ok(result.missingForOzon.includes('重量'));
+  assert.ok(result.missingForOzon.includes('包装尺寸'));
+}
+
+{
+  const result = standard.normalizeSourceStandardAttributes({
+    title: '男士牛仔裤',
+    metadata: {
+      sourceAttributes: [
+        { name: '颜色', value: '黑色、浅蓝色' },
+        { name: '尺码', value: 'S、M、LAZADA、XL、2XL、3XL 主要下游平台 ebay' },
+      ],
+    },
+    variants: [
+      { attrs: { 颜色: '黑色', 尺码: 'S' }, stock: 3 },
+      { attrs: { 颜色: '黑色', 尺码: 'M' }, stock: 3 },
+      { attrs: { 颜色: '浅蓝色', 尺码: 'XL' }, stock: 3 },
+      { attrs: { 颜色: '浅蓝色', 尺码: '2XL' }, stock: 3 },
+      { attrs: { 颜色: '浅蓝色', 尺码: '3XL' }, stock: 3 },
+    ],
+  });
+  assert.equal(JSON.stringify(result.sizes), JSON.stringify(['S', 'M', 'XL', '2XL', '3XL']));
+  assert.equal(result.sizes.some((size) => /LAZADA|ebay|主要下游平台/i.test(size)), false);
+}
+
+{
+  const result = standard.normalizeSourceStandardAttributes({
+    title: '男士牛仔裤',
+    metadata: {
+      sourceAttributes: [
+        { name: '颜色', value: '黑色 浅蓝色' },
+        { name: '尺码', value: 'S M LAZADA XL 2XL 3XL 主要下游平台 ebay' },
+      ],
+    },
+  });
+  assert.equal(JSON.stringify(result.sizes), JSON.stringify(['S', 'M', 'XL', '2XL', '3XL']));
+  assert.equal(result.sizes.some((size) => /LAZADA|ebay|主要下游平台/i.test(size)), false);
+}
+
+{
+  const result = standard.normalizeSourceStandardAttributes({
+    title: '女士无痕内衣',
+    metadata: {
+      sourceAttributes: [
+        { name: '品牌', value: '其他' },
+        { name: '主面料成分', value: '锦纶' },
+        { name: '适用性别', value: '女' },
+        { name: '适合季节', value: '四季' },
+        { name: '颜色', value: '隐形肤、性感黑' },
+        { name: '尺码', value: 'S、M' },
+      ],
+      weightG: 20,
+    },
+    variants: [
+      { attrs: { 颜色: '隐形肤', 尺码: 'S' }, stock: 3 },
+      { attrs: { 颜色: '性感黑', 尺码: 'M' }, stock: 3 },
+    ],
+  });
+  assert.equal(result.packageWeightG, 20);
+  assert.equal(result.packageDimensionsMm, null);
+  assert.equal(result.missingForOzon.includes('重量尺寸'), false);
+  assert.equal(result.missingForOzon.includes('重量'), false);
+  assert.equal(result.missingForOzon.includes('包装尺寸'), true);
 }
 
 console.log('PASS source standard attributes');

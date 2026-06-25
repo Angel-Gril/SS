@@ -70,6 +70,8 @@ interface SourceOzonCategoryCandidate {
   typeNameZh?: string;
   displayPathZh?: string;
   displayPathRu?: string;
+  translationStatus?: 'complete' | 'partial' | 'missing' | string;
+  untranslatedTerms?: string[];
   score: number;
   label: 'recommended' | 'optional' | 'risky';
   selected: boolean;
@@ -104,7 +106,7 @@ const detailSections: Array<{ key: DetailSection; label: string }> = [
   { key: 'listing', label: '上架检查' },
 ];
 
-const sourceListingStatusLegend = '可上架 / 待复核 / 阻断 / 真实商品标题 / 俄文标题/描述 / Ozon 类目/type / Ozon 必填属性/字典值 / 颜色尺码变体 / 重量尺寸 / 销售受限/出口限制';
+const sourceListingStatusLegend = '可上架 / 待复核 / 阻断 / 真实商品标题 / 俄文标题/描述 / Ozon 类目/type / Ozon 必填属性/字典值 / 颜色尺码变体 / 重量 / 包装尺寸 / 销售受限/出口限制';
 
 function normalizePlatform(value: unknown): PlatformFilter | 'other' {
   const text = String(value || '').trim().toLowerCase();
@@ -185,6 +187,19 @@ function sourceDetailPreviewImages(item: SourceCollectItem): string[] {
 function sourcePackagingRows(item: SourceCollectItem): Array<Record<string, unknown>> {
   return sourceMetadataArray(item, 'sourcePackagingRows')
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
+}
+
+function sourcePackagingEvidence(item: SourceCollectItem): { metric: string; checklistLabel: string; done: boolean } {
+  const rows = sourcePackagingRows(item);
+  if (rows.length) return { metric: String(rows.length), checklistLabel: `包装信息 ${rows.length}`, done: true };
+
+  const standard = sourceStandardAttributeModel(item);
+  const parts = [
+    standard.packageWeightG ? '重量' : '',
+    standard.packageDimensionsMm ? '尺寸' : '',
+  ].filter(Boolean);
+  if (!parts.length) return { metric: '0', checklistLabel: '包装信息 0', done: false };
+  return { metric: parts.join('/'), checklistLabel: `包装信息 ${parts.join('/')}`, done: true };
 }
 
 function sourceRichContentDraft(item: SourceCollectItem): Record<string, unknown> | null {
@@ -465,6 +480,18 @@ function ozonCandidateLabelClass(label: SourceOzonCategoryCandidate['label']): s
   return 'border-amber-200 bg-amber-50 text-amber-700';
 }
 
+function ozonCandidateTranslationLabel(status: SourceOzonCategoryCandidate['translationStatus']): string {
+  if (status === 'partial') return '部分翻译';
+  if (status === 'missing') return '翻译缺失';
+  return '';
+}
+
+function ozonCandidateTranslationClass(status: SourceOzonCategoryCandidate['translationStatus']): string {
+  if (status === 'partial') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (status === 'missing') return 'border-red-200 bg-red-50 text-red-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
 function workflowActionClass(enabled: boolean): string {
   return enabled ? 'text-foreground hover:text-primary' : 'text-muted-foreground/70 hover:text-foreground';
 }
@@ -714,6 +741,7 @@ function SourceDetailContent({
 }
 
 function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
+  const packagingEvidence = sourcePackagingEvidence(item);
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
@@ -723,7 +751,7 @@ function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
         <MetricBlock label="SKU" value={String(variantCount(item))} />
         <MetricBlock label="主图" value={`${sourcePreviewImages(item).length}/${sourceImageCount(item)}`} />
         <MetricBlock label="详情图" value={`${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`} />
-        <MetricBlock label="包装" value={String(sourcePackagingRows(item).length)} />
+        <MetricBlock label="包装" value={packagingEvidence.metric} />
         <MetricBlock label="过滤图片" value={String(sourceRejectedAssetCount(item))} />
       </div>
       <InfoPanel title="采集诊断" count={null}>
@@ -764,6 +792,9 @@ function packagingRowMeta(row: Record<string, unknown>): string {
 function SourceSkuSection({ item }: { item: SourceCollectItem }) {
   const variants = sourceDisplayVariants(item);
   const packagingRows = sourcePackagingRows(item);
+  const standard = sourceStandardAttributeModel(item);
+  const packageSummary = sourceStandardPackageText(standard);
+  const packagingCount = packagingRows.length || (packageSummary !== '-' ? 1 : 0);
   return (
     <div className="space-y-3">
       <InfoPanel title="SKU / 变体" count={variants.length}>
@@ -783,7 +814,7 @@ function SourceSkuSection({ item }: { item: SourceCollectItem }) {
         ) : <div className="text-muted-foreground">未采集到 SKU 变体</div>}
       </InfoPanel>
 
-      <InfoPanel title="包装信息" count={packagingRows.length}>
+      <InfoPanel title="包装信息" count={packagingCount}>
         {packagingRows.length ? (
           <div className="grid gap-2 md:grid-cols-2">
             {packagingRows.slice(0, 80).map((row, index) => (
@@ -792,6 +823,13 @@ function SourceSkuSection({ item }: { item: SourceCollectItem }) {
                 <div className="mt-1 text-muted-foreground">{packagingRowMeta(row) || '未采集到件重尺'}</div>
               </div>
             ))}
+          </div>
+        ) : packageSummary !== '-' ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="rounded border bg-muted/30 px-3 py-2 text-xs">
+              <div className="break-words">通用件重尺</div>
+              <div className="mt-1 text-muted-foreground">{packageSummary}</div>
+            </div>
           </div>
         ) : <div className="text-muted-foreground">未采集到包装信息</div>}
       </InfoPanel>
@@ -811,7 +849,7 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
           <KeyValue label="尺码" value={sourceStandardListText(standard.sizes)} />
           <KeyValue label="材质/成分" value={sourceStandardListText(standard.materials)} />
           <KeyValue label="性别/季节" value={sourceStandardGenderSeasonText(standard)} />
-          <KeyValue label="重量尺寸" value={sourceStandardPackageText(standard)} />
+          <KeyValue label="重量/尺寸" value={sourceStandardPackageText(standard)} />
           <KeyValue label="类目提示" value={sourceStandardListText(standard.categoryHints)} />
           <KeyValue label="Ozon缺口" value={sourceStandardListText(standard.missingForOzon)} />
         </div>
@@ -892,11 +930,12 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [confirming, setConfirming] = useState(false);
   const candidates = categoryData?.candidates || [];
   const selectedCandidate = candidates.find((candidate) => ozonCategoryCandidateKey(candidate) === selectedCandidateKey) || candidates[0];
+  const packagingEvidence = sourcePackagingEvidence(item);
   const sourceAssets = [
     { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
     { label: `详情图 ${sourceDetailPreviewImages(item).length}/${sourceDetailImageCount(item)}`, done: sourceDetailPreviewImages(item).length > 0 },
     { label: sourceRichContentDraft(item) ? '原始富内容待处理' : '富内容待采', done: !!sourceRichContentDraft(item) },
-    { label: `包装信息 ${sourcePackagingRows(item).length}`, done: sourcePackagingRows(item).length > 0 },
+    { label: packagingEvidence.checklistLabel, done: packagingEvidence.done },
   ];
 
   useEffect(() => {
@@ -1034,6 +1073,8 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               {candidates.map((candidate) => {
                 const candidateKey = ozonCategoryCandidateKey(candidate);
                 const isSelected = candidateKey === selectedCandidateKey;
+                const translationLabel = ozonCandidateTranslationLabel(candidate.translationStatus);
+                const untranslatedTerms = Array.isArray(candidate.untranslatedTerms) ? candidate.untranslatedTerms : [];
                 return (
                   <button
                     key={candidateKey}
@@ -1055,6 +1096,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
                       </div>
                       <div className="flex shrink-0 flex-wrap gap-1">
                         <Badge variant="outline" className={ozonCandidateLabelClass(candidate.label)}>{ozonCandidateLabelText(candidate.label)}</Badge>
+                        {translationLabel ? <Badge variant="outline" className={ozonCandidateTranslationClass(candidate.translationStatus)}>{translationLabel}</Badge> : null}
                         {candidate.confirmationCount ? <Badge variant="outline">历史 {candidate.confirmationCount}</Badge> : null}
                       </div>
                     </div>
@@ -1065,6 +1107,11 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
                         <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">缺必填 {candidate.attributePlan.missingRequired.length}</Badge>
                       ) : null}
                     </div>
+                    {untranslatedTerms.length ? (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        待翻译：{untranslatedTerms.slice(0, 3).join('、')}
+                      </div>
+                    ) : null}
                     {candidate.attributePlan.missingRequired.length ? (
                       <div className="mt-2 text-xs text-muted-foreground">
                         缺口：{candidate.attributePlan.missingRequired.slice(0, 3).map((gap) => gap.attributeName || gap.standardKey).join('、')}

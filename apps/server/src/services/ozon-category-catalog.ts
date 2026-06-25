@@ -9,17 +9,30 @@ export interface OzonCategoryTreeNode {
   type_name?: string | null;
 }
 
+export type OzonCategoryTranslationStatus = 'complete' | 'partial' | 'missing';
+
+export interface OzonCategoryLevel {
+  level: number;
+  categoryId: number;
+  nameRu: string;
+  nameZh: string;
+  translated: boolean;
+}
+
 export interface OzonCategoryCatalogEntry {
   descriptionCategoryId: number;
   typeId: number;
   categoryPathRu: string[];
   categoryPathZh: string[];
+  categoryLevels: OzonCategoryLevel[];
   categoryNameRu: string;
   categoryNameZh: string;
   typeNameRu: string;
   typeNameZh: string;
   displayPathRu: string;
   displayPathZh: string;
+  translationStatus: OzonCategoryTranslationStatus;
+  untranslatedTerms: string[];
   keywords: string[];
   searchText: string;
 }
@@ -37,6 +50,22 @@ function normalizeToken(value: unknown): string {
   return cleanText(value).toLowerCase();
 }
 
+const CJK_TEXT_RE = /[\u3400-\u9fff]/u;
+const CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/u;
+
+function hasCjkText(value: unknown): boolean {
+  return CJK_TEXT_RE.test(String(value || ''));
+}
+
+function hasCyrillicText(value: unknown): boolean {
+  return CYRILLIC_TEXT_RE.test(String(value || ''));
+}
+
+function isTranslatedDisplayText(value: unknown): boolean {
+  const text = cleanText(value);
+  return !!text && hasCjkText(text) && !hasCyrillicText(text);
+}
+
 const CATEGORY_TRANSLATIONS: Record<string, string> = {
   'одежда': '服装',
   'женская одежда': '女装',
@@ -47,6 +76,23 @@ const CATEGORY_TRANSLATIONS: Record<string, string> = {
   'мужские футболки': '男式T恤',
   'женские футболки': '女式T恤',
   'футболки': 'T恤',
+  'одежда для малышей': '婴幼儿服装',
+  'спецодежда': '工装/职业服',
+  'брюки': '裤子',
+  'штаны': '裤子',
+  'джинсы для малышей': '婴幼儿牛仔裤',
+  'брюки тактические': '战术裤',
+  'брюки для малышей': '婴幼儿裤子',
+  'термобрюки': '保暖裤',
+  'белье': '内衣',
+  'обувь': '鞋靴',
+  'радиоуправляемые игрушки': '遥控玩具',
+  'игрушка радиоуправляемая': '遥控玩具',
+  'аксессуары, запчасти для радиоуправляемой модели': '遥控模型配件/备件',
+  'мобили и дуги в кроватку': '婴儿床铃/床挂玩具',
+  'мобиль': '婴儿床铃',
+  'аксессуары, запчасти для мобиля': '婴儿床铃配件/备件',
+  'развивающая дуга': '婴儿健身架',
 };
 
 const KEYWORD_EXPANSIONS: Array<[RegExp, string[]]> = [
@@ -54,6 +100,8 @@ const KEYWORD_EXPANSIONS: Array<[RegExp, string[]]> = [
   [/женск|女装|女士|女式|women|female/iu, ['女装', '女士', 'женская']],
   [/мужск|男装|男士|男式|men|male/iu, ['男装', '男士', 'мужская']],
   [/футбол|t-?shirt|T恤/iu, ['T恤', 'футболка', 'tshirt']],
+  [/радиоуправляем|遥控/iu, ['遥控玩具', '遥控模型', 'радиоуправляемые игрушки']],
+  [/мобил|кроватк|婴儿床铃|床挂/iu, ['婴儿床铃', '床挂玩具', 'мобиль']],
 ];
 
 export function translateOzonCategoryText(value: unknown): string {
@@ -63,16 +111,38 @@ export function translateOzonCategoryText(value: unknown): string {
   if (exact) return exact;
 
   let out = text;
+  out = out.replace(/Одежда для малышей/giu, '婴幼儿服装');
+  out = out.replace(/Спецодежда/giu, '工装/职业服');
+  out = out.replace(/Джинсы для малышей/giu, '婴幼儿牛仔裤');
+  out = out.replace(/Брюки тактические/giu, '战术裤');
+  out = out.replace(/Брюки для малышей/giu, '婴幼儿裤子');
+  out = out.replace(/Термобрюки/giu, '保暖裤');
+  out = out.replace(/Белье/giu, '内衣');
+  out = out.replace(/Обувь/giu, '鞋靴');
   out = out.replace(/Женские джинсы/giu, '女式牛仔裤');
   out = out.replace(/Мужские джинсы/giu, '男式牛仔裤');
   out = out.replace(/Джинсы/giu, '牛仔裤');
+  out = out.replace(/Брюки/giu, '裤子');
+  out = out.replace(/Штаны/giu, '裤子');
   out = out.replace(/Женская одежда/giu, '女装');
   out = out.replace(/Мужская одежда/giu, '男装');
   out = out.replace(/Одежда/giu, '服装');
   out = out.replace(/Женские футболки/giu, '女式T恤');
   out = out.replace(/Мужские футболки/giu, '男式T恤');
   out = out.replace(/Футболки/giu, 'T恤');
+  out = out.replace(/Аксессуары,\s*запчасти для радиоуправляемой модели/giu, '遥控模型配件/备件');
+  out = out.replace(/Радиоуправляемые игрушки/giu, '遥控玩具');
+  out = out.replace(/Игрушка радиоуправляемая/giu, '遥控玩具');
+  out = out.replace(/Мобили и дуги в кроватку/giu, '婴儿床铃/床挂玩具');
+  out = out.replace(/Аксессуары,\s*запчасти для мобиля/giu, '婴儿床铃配件/备件');
+  out = out.replace(/Развивающая дуга/giu, '婴儿健身架');
+  out = out.replace(/Мобиль/giu, '婴儿床铃');
   return out === text ? text : out;
+}
+
+function translateOzonCategoryTextForDisplay(value: unknown): string {
+  const translated = cleanText(translateOzonCategoryText(value));
+  return isTranslatedDisplayText(translated) ? translated : '';
 }
 
 function unique(values: string[]): string[] {
@@ -97,39 +167,83 @@ function buildKeywords(parts: string[]): string[] {
   return unique(expanded);
 }
 
+function resolveTranslationStatus(parts: Array<{ raw: string; translated: boolean }>): {
+  translationStatus: OzonCategoryTranslationStatus;
+  untranslatedTerms: string[];
+} {
+  const meaningful = parts.filter((part) => cleanText(part.raw));
+  const untranslatedTerms = unique(meaningful
+    .filter((part) => !part.translated && !hasCjkText(part.raw))
+    .map((part) => part.raw));
+  if (untranslatedTerms.length === 0) {
+    return { translationStatus: 'complete', untranslatedTerms };
+  }
+  const translatedCount = meaningful.filter((part) => part.translated).length;
+  return {
+    translationStatus: translatedCount > 0 ? 'partial' : 'missing',
+    untranslatedTerms,
+  };
+}
+
 export function buildOzonCategoryCatalog(nodes: OzonCategoryTreeNode[] | null | undefined): OzonCategoryCatalogEntry[] {
   const catalog: OzonCategoryCatalogEntry[] = [];
 
-  const walk = (rows: OzonCategoryTreeNode[], pathRu: string[], parentCategoryId: number | null = null) => {
+  const walk = (rows: OzonCategoryTreeNode[], pathLevels: OzonCategoryLevel[], parentCategoryId: number | null = null) => {
     for (const row of rows) {
       if (row.disabled) continue;
 
       const categoryName = cleanText(row.category_name);
-      const nextPath = categoryName ? [...pathRu, categoryName] : pathRu;
-      const categoryId = toPositiveInt(row.description_category_id) ?? parentCategoryId;
+      const rowCategoryId = toPositiveInt(row.description_category_id);
+      const categoryId = rowCategoryId ?? parentCategoryId;
+      const nextPath = categoryName
+        ? [
+          ...pathLevels,
+          {
+            level: pathLevels.length + 1,
+            categoryId: categoryId || 0,
+            nameRu: categoryName,
+            nameZh: translateOzonCategoryTextForDisplay(categoryName),
+            translated: !!translateOzonCategoryTextForDisplay(categoryName),
+          },
+        ]
+        : pathLevels;
       const typeId = toPositiveInt(row.type_id);
       const typeNameRu = cleanText(row.type_name);
 
       if (categoryId && typeId) {
-        const categoryPathZh = nextPath.map(translateOzonCategoryText);
-        const typeNameZh = translateOzonCategoryText(typeNameRu);
-        const categoryNameRu = nextPath[nextPath.length - 1] || '';
+        const categoryLevels = nextPath.map((level) => ({ ...level }));
+        const categoryPathRu = categoryLevels.map((level) => level.nameRu);
+        const categoryPathZh = categoryLevels.map((level) => level.nameZh);
+        const typeNameZh = translateOzonCategoryTextForDisplay(typeNameRu);
+        const categoryNameRu = categoryPathRu[categoryPathRu.length - 1] || '';
         const categoryNameZh = categoryPathZh[categoryPathZh.length - 1] || '';
-        const ruParts = [...nextPath, typeNameRu].filter(Boolean);
-        const zhParts = [...categoryPathZh, typeNameZh].filter(Boolean);
+        const typeTranslated = !!typeNameZh;
+        const { translationStatus, untranslatedTerms } = resolveTranslationStatus([
+          ...categoryLevels.map((level) => ({ raw: level.nameRu, translated: level.translated })),
+          { raw: typeNameRu, translated: typeTranslated },
+        ]);
+        const ruParts = [...categoryPathRu, typeNameRu].filter(Boolean);
+        const displayZhParts = [
+          ...categoryLevels.map((level) => level.nameZh || `待翻译类目${level.level}`),
+          typeNameRu ? (typeNameZh || '待翻译类型') : '',
+        ].filter(Boolean);
+        const zhParts = [...categoryPathZh, typeNameZh, ...displayZhParts].filter(Boolean);
         const keywords = buildKeywords([...ruParts, ...zhParts, String(categoryId), String(typeId)]);
 
         catalog.push({
           descriptionCategoryId: categoryId,
           typeId,
-          categoryPathRu: nextPath,
+          categoryPathRu,
           categoryPathZh,
+          categoryLevels,
           categoryNameRu,
           categoryNameZh,
           typeNameRu,
           typeNameZh,
           displayPathRu: ruParts.join(' / '),
-          displayPathZh: zhParts.join(' / '),
+          displayPathZh: displayZhParts.join(' / '),
+          translationStatus,
+          untranslatedTerms,
           keywords,
           searchText: normalizeToken([...ruParts, ...zhParts, ...keywords, categoryId, typeId].join(' ')),
         });
@@ -226,18 +340,83 @@ function stringArray(value: unknown): string[] {
   return value.map(cleanText).filter(Boolean);
 }
 
+function categoryLevelArray(value: unknown): OzonCategoryLevel[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const data = row as Record<string, unknown>;
+      const level = toPositiveInt(data.level) || index + 1;
+      const categoryId = toPositiveInt(data.categoryId) || 0;
+      const nameRu = cleanText(data.nameRu);
+      const nameZh = cleanText(data.nameZh);
+      return {
+        level,
+        categoryId,
+        nameRu,
+        nameZh,
+        translated: isTranslatedDisplayText(nameZh),
+      };
+    })
+    .filter((row): row is OzonCategoryLevel => !!row && (!!row.nameRu || !!row.nameZh));
+}
+
+function translationStatus(value: unknown): OzonCategoryTranslationStatus {
+  return value === 'complete' || value === 'partial' || value === 'missing' ? value : 'missing';
+}
+
+function buildStoredCategoryLevels(
+  categoryPathRu: string[],
+  categoryPathZh: string[],
+  descriptionCategoryId: number,
+): OzonCategoryLevel[] {
+  const length = Math.max(categoryPathRu.length, categoryPathZh.length);
+  return Array.from({ length }, (_, index) => {
+    const nameRu = categoryPathRu[index] || '';
+    const nameZh = categoryPathZh[index] || '';
+    return {
+      level: index + 1,
+      categoryId: index === categoryPathRu.length - 1 ? descriptionCategoryId : 0,
+      nameRu,
+      nameZh,
+      translated: isTranslatedDisplayText(nameZh),
+    };
+  }).filter((row) => !!row.nameRu || !!row.nameZh);
+}
+
 function mapCatalogRow(row: Record<string, any>): OzonCategoryCatalogEntry {
+  const descriptionCategoryId = Number(row.descriptionCategoryId);
+  const typeId = Number(row.typeId);
+  const categoryPathRu = stringArray(row.categoryPathRu);
+  const categoryPathZh = stringArray(row.categoryPathZh);
+  const storedCategoryLevels = categoryLevelArray(row.categoryLevels);
+  const categoryLevels = storedCategoryLevels.length > 0
+    ? storedCategoryLevels
+    : buildStoredCategoryLevels(categoryPathRu, categoryPathZh, descriptionCategoryId);
+  const typeNameRu = cleanText(row.typeNameRu);
+  const typeNameZh = cleanText(row.typeNameZh);
+  const derivedTranslation = resolveTranslationStatus([
+    ...categoryLevels.map((level) => ({
+      raw: level.nameRu,
+      translated: isTranslatedDisplayText(level.nameZh),
+    })),
+    { raw: typeNameRu, translated: isTranslatedDisplayText(typeNameZh) },
+  ]);
+
   return {
-    descriptionCategoryId: Number(row.descriptionCategoryId),
-    typeId: Number(row.typeId),
-    categoryPathRu: stringArray(row.categoryPathRu),
-    categoryPathZh: stringArray(row.categoryPathZh),
+    descriptionCategoryId,
+    typeId,
+    categoryPathRu,
+    categoryPathZh,
+    categoryLevels,
     categoryNameRu: cleanText(row.categoryNameRu),
     categoryNameZh: cleanText(row.categoryNameZh),
-    typeNameRu: cleanText(row.typeNameRu),
-    typeNameZh: cleanText(row.typeNameZh),
+    typeNameRu,
+    typeNameZh,
     displayPathRu: cleanText(row.displayPathRu),
     displayPathZh: cleanText(row.displayPathZh),
+    translationStatus: derivedTranslation.translationStatus || translationStatus(row.translationStatus),
+    untranslatedTerms: derivedTranslation.untranslatedTerms,
     keywords: stringArray(row.keywords),
     searchText: normalizeToken(row.searchText),
   };
@@ -254,12 +433,15 @@ export function createPrismaOzonCategoryCatalogStore(
           "type_id" AS "typeId",
           "category_path_ru" AS "categoryPathRu",
           "category_path_zh" AS "categoryPathZh",
+          "category_levels_json" AS "categoryLevels",
           "category_name_ru" AS "categoryNameRu",
           "category_name_zh" AS "categoryNameZh",
           "type_name_ru" AS "typeNameRu",
           "type_name_zh" AS "typeNameZh",
           "display_path_ru" AS "displayPathRu",
           "display_path_zh" AS "displayPathZh",
+          "translation_status" AS "translationStatus",
+          "untranslated_terms_json" AS "untranslatedTerms",
           "keywords_json" AS "keywords",
           "search_text" AS "searchText"
         FROM "ozon_category_catalog"
@@ -288,12 +470,15 @@ export function createPrismaOzonCategoryCatalogStore(
               "type_id",
               "category_path_ru",
               "category_path_zh",
+              "category_levels_json",
               "category_name_ru",
               "category_name_zh",
               "type_name_ru",
               "type_name_zh",
               "display_path_ru",
               "display_path_zh",
+              "translation_status",
+              "untranslated_terms_json",
               "keywords_json",
               "search_text",
               "fetched_at",
@@ -307,12 +492,15 @@ export function createPrismaOzonCategoryCatalogStore(
               ${entry.typeId},
               CAST(${JSON.stringify(entry.categoryPathRu)} AS jsonb),
               CAST(${JSON.stringify(entry.categoryPathZh)} AS jsonb),
+              CAST(${JSON.stringify(entry.categoryLevels)} AS jsonb),
               ${entry.categoryNameRu},
               ${entry.categoryNameZh},
               ${entry.typeNameRu},
               ${entry.typeNameZh},
               ${entry.displayPathRu},
               ${entry.displayPathZh},
+              ${entry.translationStatus},
+              CAST(${JSON.stringify(entry.untranslatedTerms)} AS jsonb),
               CAST(${JSON.stringify(entry.keywords)} AS jsonb),
               ${entry.searchText},
               ${fetchedAt},

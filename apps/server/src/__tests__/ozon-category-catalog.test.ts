@@ -4,6 +4,7 @@ import {
   createPrismaOzonCategoryCatalogStore,
   searchOzonCategoryCatalog,
   searchOrRefreshOzonCategoryCatalogForShop,
+  translateOzonCategoryText,
   type OzonCategoryCatalogEntry,
   type PrismaOzonCategoryCatalogClient,
 } from '../services/ozon-category-catalog.js';
@@ -84,6 +85,101 @@ describe('ozon category catalog', () => {
         displayPathZh: '服装 / 男装 / 牛仔裤',
       }),
     ]);
+  });
+
+  it('translates toy and baby crib-mobile category labels to Chinese', () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 300001,
+        category_name: 'Радиоуправляемые игрушки',
+        disabled: false,
+        children: [
+          { type_id: 400001, type_name: 'Игрушка радиоуправляемая', disabled: false, children: [] },
+          { type_id: 400002, type_name: 'Аксессуары, запчасти для радиоуправляемой модели', disabled: false, children: [] },
+        ],
+      },
+      {
+        description_category_id: 300002,
+        category_name: 'Мобили и дуги в кроватку',
+        disabled: false,
+        children: [
+          { type_id: 400003, type_name: 'Мобиль', disabled: false, children: [] },
+          { type_id: 400004, type_name: 'Аксессуары, запчасти для мобиля', disabled: false, children: [] },
+          { type_id: 400005, type_name: 'Развивающая дуга', disabled: false, children: [] },
+        ],
+      },
+    ]);
+
+    expect(catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        descriptionCategoryId: 300001,
+        typeId: 400001,
+        displayPathZh: '遥控玩具 / 遥控玩具',
+        keywords: expect.arrayContaining(['遥控玩具']),
+      }),
+      expect.objectContaining({
+        descriptionCategoryId: 300002,
+        typeId: 400003,
+        displayPathZh: '婴儿床铃/床挂玩具 / 婴儿床铃',
+        keywords: expect.arrayContaining(['婴儿床铃/床挂玩具', '婴儿床铃']),
+      }),
+      expect.objectContaining({
+        descriptionCategoryId: 300002,
+        typeId: 400005,
+        displayPathZh: '婴儿床铃/床挂玩具 / 婴儿健身架',
+      }),
+    ]));
+    expect(catalog.map((entry) => entry.displayPathZh).join(' ')).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('records category levels and translation gaps without leaking Russian into Chinese display paths', () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 100,
+        category_name: 'Неизвестный раздел',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 200,
+            category_name: 'Радиоуправляемые игрушки',
+            disabled: false,
+            children: [
+              { type_id: 300, type_name: 'Неизвестный тип', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(catalog).toEqual([
+      expect.objectContaining({
+        descriptionCategoryId: 200,
+        typeId: 300,
+        categoryPathRu: ['Неизвестный раздел', 'Радиоуправляемые игрушки'],
+        categoryPathZh: ['', '遥控玩具'],
+        categoryLevels: [
+          { level: 1, categoryId: 100, nameRu: 'Неизвестный раздел', nameZh: '', translated: false },
+          { level: 2, categoryId: 200, nameRu: 'Радиоуправляемые игрушки', nameZh: '遥控玩具', translated: true },
+        ],
+        typeNameZh: '',
+        displayPathRu: 'Неизвестный раздел / Радиоуправляемые игрушки / Неизвестный тип',
+        displayPathZh: '待翻译类目1 / 遥控玩具 / 待翻译类型',
+        translationStatus: 'partial',
+        untranslatedTerms: ['Неизвестный раздел', 'Неизвестный тип'],
+      }),
+    ]);
+    expect(catalog[0]?.displayPathZh).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('keeps source candidate apparel fallback translations in the shared catalog translator', () => {
+    expect(translateOzonCategoryText('Одежда для малышей')).toBe('婴幼儿服装');
+    expect(translateOzonCategoryText('Спецодежда')).toBe('工装/职业服');
+    expect(translateOzonCategoryText('Джинсы для малышей')).toBe('婴幼儿牛仔裤');
+    expect(translateOzonCategoryText('Брюки тактические')).toBe('战术裤');
+    expect(translateOzonCategoryText('Брюки для малышей')).toBe('婴幼儿裤子');
+    expect(translateOzonCategoryText('Термобрюки')).toBe('保暖裤');
+    expect(translateOzonCategoryText('Белье')).toBe('内衣');
+    expect(translateOzonCategoryText('Обувь')).toBe('鞋靴');
   });
 
   it('searches by Chinese terms, Russian terms, ids, and product title hints', () => {
@@ -189,6 +285,9 @@ describe('ozon category catalog', () => {
         typeNameZh: '牛仔裤',
         displayPathRu: 'Одежда / Женские джинсы / Джинсы',
         displayPathZh: '服装 / 女式牛仔裤 / 牛仔裤',
+        categoryLevels: [],
+        translationStatus: 'missing',
+        untranslatedTerms: [],
         keywords: ['牛仔裤', 'jeans'],
         searchText: 'одежда женские джинсы 服装 女式牛仔裤 牛仔裤 jeans 11 101',
       },
@@ -204,7 +303,17 @@ describe('ozon category catalog', () => {
     const store = createPrismaOzonCategoryCatalogStore(prisma);
 
     await expect(store.list('shop-1', 'DEFAULT')).resolves.toEqual([
-      expect.objectContaining({ descriptionCategoryId: 11, typeId: 101, displayPathZh: '服装 / 女式牛仔裤 / 牛仔裤' }),
+      expect.objectContaining({
+        descriptionCategoryId: 11,
+        typeId: 101,
+        displayPathZh: '服装 / 女式牛仔裤 / 牛仔裤',
+        translationStatus: 'complete',
+        categoryLevels: [
+          { level: 1, categoryId: 0, nameRu: 'Одежда', nameZh: '服装', translated: true },
+          { level: 2, categoryId: 11, nameRu: 'Женские джинсы', nameZh: '女式牛仔裤', translated: true },
+        ],
+        untranslatedTerms: [],
+      }),
     ]);
 
     await expect(store.replace('shop-1', 'DEFAULT', buildOzonCategoryCatalog([

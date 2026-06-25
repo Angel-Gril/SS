@@ -1223,6 +1223,175 @@ describe('collect publish helpers', () => {
     expect(candidates[0]?.attributePlan.missingRequired).toEqual([]);
   });
 
+  it('shows Chinese labels for toy and baby Ozon category candidates', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '遥控玩具车 婴儿床铃',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['玩具', '遥控玩具'],
+          categoryName: '遥控玩具',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: [],
+            sizes: [],
+            materials: [],
+            gender: { value: '' },
+            seasons: [],
+            packageDimensionsMm: { length: 300, width: 200, height: 120 },
+            packageWeightG: 450,
+            categoryHints: [],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 300001,
+          category_name: 'Радиоуправляемые игрушки',
+          children: [
+            { type_id: 400001, type_name: 'Игрушка радиоуправляемая', children: [] },
+            { type_id: 400002, type_name: 'Аксессуары, запчасти для радиоуправляемой модели', children: [] },
+          ],
+        },
+        {
+          description_category_id: 300002,
+          category_name: 'Мобили и дуги в кроватку',
+          children: [
+            { type_id: 400003, type_name: 'Мобиль', children: [] },
+            { type_id: 400004, type_name: 'Аксессуары, запчасти для мобиля', children: [] },
+            { type_id: 400005, type_name: 'Развивающая дуга', children: [] },
+          ],
+        },
+      ],
+    });
+
+    expect(candidates.find((candidate) => candidate.typeId === 400001)).toMatchObject({
+      categoryNameZh: '遥控玩具',
+      typeNameZh: '遥控玩具',
+      displayPathZh: '遥控玩具 / 遥控玩具',
+      displayPathRu: 'Радиоуправляемые игрушки / Игрушка радиоуправляемая',
+    });
+    expect(candidates.find((candidate) => candidate.typeId === 400003)).toMatchObject({
+      categoryNameZh: '婴儿床铃/床挂玩具',
+      typeNameZh: '婴儿床铃',
+      displayPathZh: '婴儿床铃/床挂玩具 / 婴儿床铃',
+      displayPathRu: 'Мобили и дуги в кроватку / Мобиль',
+    });
+    expect(candidates.map((candidate) => candidate.displayPathZh).join(' ')).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('does not leak partially translated Russian text into source category candidate Chinese labels', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '男士裤子',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['男装', '裤子'],
+          categoryName: '裤子',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: [],
+            sizes: [],
+            materials: [],
+            gender: { value: 'male' },
+            seasons: [],
+            packageDimensionsMm: { length: 300, width: 200, height: 50 },
+            packageWeightG: 350,
+            categoryHints: [],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 500001,
+          category_name: 'Брюки загадочные',
+          children: [
+            { type_id: 600001, type_name: 'Тип загадочный', children: [] },
+          ],
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryNameZh: '',
+      typeNameZh: '',
+      displayPathZh: '待翻译类目 / 待翻译类型',
+      translationStatus: 'missing',
+      untranslatedTerms: ['Брюки загадочные', 'Тип загадочный'],
+    });
+    expect(candidates[0]?.displayPathZh).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
+  it('uses catalog display paths and translation audit metadata for Ozon category candidates', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '未知玩具',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['玩具'],
+          categoryName: '玩具',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: [],
+            sizes: [],
+            materials: [],
+            gender: { value: '' },
+            seasons: [],
+            packageDimensionsMm: { length: 300, width: 200, height: 120 },
+            packageWeightG: 450,
+            categoryHints: [],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 200,
+          category_name: 'Неизвестный раздел',
+          children: [
+            { type_id: 300, type_name: 'Неизвестный тип', children: [] },
+          ],
+        },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 200,
+          typeId: 300,
+          categoryPathRu: ['Неизвестный раздел'],
+          categoryPathZh: [''],
+          categoryLevels: [
+            { level: 1, categoryId: 200, nameRu: 'Неизвестный раздел', nameZh: '', translated: false },
+          ],
+          categoryNameRu: 'Неизвестный раздел',
+          categoryNameZh: '',
+          typeNameRu: 'Неизвестный тип',
+          typeNameZh: '',
+          displayPathRu: 'Неизвестный раздел / Неизвестный тип',
+          displayPathZh: '待翻译类目1 / 待翻译类型',
+          translationStatus: 'missing',
+          untranslatedTerms: ['Неизвестный раздел', 'Неизвестный тип'],
+          keywords: ['Неизвестный раздел', 'Неизвестный тип', '200', '300'],
+          searchText: 'неизвестный раздел неизвестный тип 200 300',
+        },
+      ],
+    } as any);
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200,
+      typeId: 300,
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      displayPathRu: 'Неизвестный раздел / Неизвестный тип',
+      translationStatus: 'missing',
+      untranslatedTerms: ['Неизвестный раздел', 'Неизвестный тип'],
+    });
+    expect(candidates[0]?.displayPathZh).not.toMatch(/[А-Яа-яЁё]/);
+  });
+
   it('prefers generic jeans over baby and tactical trouser matches for source mens jeans', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {
@@ -1313,6 +1482,27 @@ describe('collect publish helpers', () => {
     ]);
     expect(plan.missingRequired).toEqual([
       { attributeId: 9003, attributeName: 'Сезон', standardKey: 'seasons', reason: 'no_source_standard_value' },
+    ]);
+  });
+
+  it('removes downstream platform noise from source standard size candidates', () => {
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: ['черный'],
+      sizes: ['S', 'M', 'LAZADA', 'XL', '2XL', '3XL 主要下游平台 ebay', '3XL'],
+      materials: [],
+      gender: { value: '' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: [],
+    }, [
+      { id: 4295, name: 'Российский размер', is_required: true },
+    ]);
+
+    expect(plan.candidates).toEqual([
+      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['S', 'M', 'XL', '2XL', '3XL'] },
     ]);
   });
 

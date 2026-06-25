@@ -112,7 +112,8 @@ export function evaluateSourceListingReadiness(item: SourceListingItemLike): Sou
   if (!hasStock(item)) addMissing('SKU 库存', 'blocker');
   if (!standard.materials.length) addMissing('材质/成分', 'warning');
   if (!standard.gender.value || !standard.seasons.length) addMissing('性别/季节', 'warning');
-  if (!standard.packageWeightG || !standard.packageDimensionsMm) addMissing('重量尺寸', 'blocker');
+  if (!standard.packageWeightG) addMissing('重量', 'blocker');
+  if (!standard.packageDimensionsMm) addMissing('包装尺寸', 'blocker');
   if (!hasAnyImage(item)) addMissing('可用主图清洗', 'blocker');
   if (!hasMetadataValue(item, ['watermarkedImages', 'sourceWatermarkedImages', 'watermarkImages'])
     || !hasMetadataValue(item, ['editedImages', 'processedImages', 'sourceEditedImages', 'imageProcessingResult'])) {

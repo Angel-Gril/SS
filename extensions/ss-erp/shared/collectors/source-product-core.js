@@ -982,11 +982,7 @@
           var attrValue = normalizeWhitespace(pickFirstValue(row, ['value', 'attrValue', 'propertyValue', 'text', 'content']) || '');
           if (name && attrValue) {
             var expanded = expand1688AttributeRow(name, attrValue);
-            if (expanded.length) {
-              attrs = attrs.concat(expanded);
-            } else {
-              attrs.push({ name: name, value: attrValue });
-            }
+            if (expanded.length) attrs = attrs.concat(expanded);
           }
         });
       });
@@ -1283,14 +1279,30 @@
       currentStart = markerIndex + marker.length;
     }
     push1688ExpandedAttribute(rows, currentName, text.slice(currentStart));
-    return rows.length > 1 ? rows : [{ name: rowName, value: text }];
+    var fallback = normalize1688AttributeRow(rowName, text);
+    return rows.length > 1 ? rows : (fallback ? [fallback] : []);
   }
 
   function push1688ExpandedAttribute(rows, name, value) {
+    var attr = normalize1688AttributeRow(name, value);
+    if (attr) rows.push(attr);
+  }
+
+  function normalize1688AttributeRow(name, value) {
     var attrName = normalizeWhitespace(name || '');
     var attrValue = clean1688AttributeValue(value);
-    if (!attrName || !attrValue || attrName === attrValue) return;
-    rows.push({ name: attrName, value: attrValue });
+    if (!attrName || !attrValue || attrName === attrValue) return null;
+    if (isLikely1688AttributeReviewFragment(attrName, attrValue)) return null;
+    return { name: attrName, value: attrValue };
+  }
+
+  function isLikely1688AttributeReviewFragment(name, value) {
+    var attrName = normalize1688SalePropName(name);
+    var text = normalizeWhitespace(value || '');
+    if (!attrName || !text) return false;
+    if (/^(?:也|都|还)?(?:很|挺|蛮|非常|特别)?(?:好|不错|可以|满意|喜欢|舒服|合适|好看|划算|推荐)(?:的|了)?$/.test(text)) return true;
+    if (text.length <= 30 && /(真的很多|选了好久|不够看|下单哦|摸起来|穿起来|挺舒服|很舒服|很好看|太好看)/.test(text)) return true;
+    return false;
   }
 
   function clean1688AttributeValue(value) {
@@ -1304,7 +1316,7 @@
       '主面料成分的含量', '主面料成分含量', '里料成分含量', '上市年份/季节', '上市年份季节', '适用年龄段',
       '是否跨境出口专供货源', '是否支持贴牌', '是否可外穿',
       '主面料成分', '面料名称', '模杯面料', '模杯类型', '罩杯型', '里料成分', '排扣类型', '肩带类型', '肩带材质',
-      '产品类别', '款式细节', '领型',
+      '产品类别', '款式细节', '领型', '版型',
       '货源类别', '裤型', '裤长', '腰型', '裤门襟', '适合季节', '适合人群', '适用场景',
       '商品件重尺', '包装信息', '包装形式', '材质', '成分', '季节', '风格', '功能', '功效', '款式',
       '颜色', '尺码', '规格', '型号', '容量', '品牌', '货号', '厚薄', '图案', '弹力',
