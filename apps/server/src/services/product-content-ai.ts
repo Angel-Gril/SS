@@ -10,6 +10,7 @@ import {
   recordAiUsageEvent,
   type AiUsageStore,
 } from './ai-usage.js';
+import { buildSourceProductProfile } from './source-product-profile.js';
 
 export type ProductContentField = 'title' | 'description';
 
@@ -141,17 +142,36 @@ function promptHash(prompt: string): string {
 
 function buildProductContentInput(item: ProductContentAiItem, field: ProductContentField): string {
   const meta = metadataRecord(item.metadata);
+  const sourceProfile = buildSourceProductProfile(item);
   const payload = {
     field,
-    sourceTitle: cleanText(meta.sourceTitleRaw || item.title),
-    sourceCategory: Array.isArray(meta.categoryPath) ? meta.categoryPath.map(cleanText).filter(Boolean).join(' / ') : cleanText(meta.categoryName),
+    sourceProfile: {
+      version: sourceProfile.version,
+      hash: sourceProfile.hash,
+      sourceTitle: sourceProfile.sourceTitle,
+      categoryPath: sourceProfile.categoryPath,
+      categoryName: sourceProfile.categoryName,
+      categoryHints: sourceProfile.categoryHints,
+      productIntentTerms: sourceProfile.productIntentTerms,
+      productTypeHints: sourceProfile.productTypeHints,
+      colors: sourceProfile.colors,
+      sizes: sourceProfile.sizes,
+      materials: sourceProfile.materials,
+      genderSeasonHints: sourceProfile.genderSeasonHints,
+      packaging: sourceProfile.packaging,
+      textEvidence: sourceProfile.textEvidence,
+      quality: sourceProfile.quality,
+    },
+    sourceTitle: sourceProfile.sourceTitle || cleanText(meta.sourceTitleRaw || item.title),
+    sourceCategory: sourceProfile.categoryPath.length ? sourceProfile.categoryPath.join(' / ') : cleanText(meta.categoryName),
     attributes: meta.attributes || meta.sourceAttributes || null,
-    standardAttributes: meta.standardAttributes || null,
+    standardAttributes: meta.sourceStandardAttributes || meta.standardAttributes || null,
     selectedSku: meta.selectedSku || null,
     variants: item.variants || meta.variants || null,
-    packaging: meta.sourcePackagingRows || null,
-    description: cleanSourceCopy(meta.description || meta.sourceDescription || meta.sourceDescriptionRaw || ''),
-    richContentSummary: summarizeRichContentDraft(meta.sourceRichContentDraft) || cleanSourceCopy(meta.sourceRichContentDraftSummary || ''),
+    packaging: sourceProfile.packaging,
+    sourcePackagingRows: meta.sourcePackagingRows || null,
+    description: sourceProfile.textEvidence.description || cleanSourceCopy(meta.description || meta.sourceDescription || meta.sourceDescriptionRaw || ''),
+    richContentSummary: sourceProfile.textEvidence.richContentSummary || summarizeRichContentDraft(meta.sourceRichContentDraft) || cleanSourceCopy(meta.sourceRichContentDraftSummary || ''),
   };
   return JSON.stringify(payload);
 }

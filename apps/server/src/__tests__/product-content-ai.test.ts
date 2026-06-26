@@ -246,6 +246,12 @@ describe('product content AI drafts', () => {
     const payload = JSON.parse(userMessage);
 
     expect(systemMessage).toContain('Use only facts present in the source JSON');
+    expect(payload.sourceProfile).toMatchObject({
+      sourceTitle: '闪钻细肩带美背内衣无痕无钢圈小胸聚拢显大露背文胸',
+      productIntentTerms: expect.arrayContaining(['bra', 'underwear']),
+      packaging: expect.objectContaining({ status: 'missing' }),
+    });
+    expect(payload.sourceProfile.hash).toMatch(/^[a-f0-9]{64}$/);
     expect(payload.description).toContain('无钢圈设计');
     expect(payload.description).toContain('适合日常穿搭');
     expect(payload.richContentSummary).toContain('可拆卸胸垫');

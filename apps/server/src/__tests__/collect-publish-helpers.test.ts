@@ -2217,6 +2217,84 @@ describe('collect publish helpers', () => {
     expect(candidates[0]).toMatchObject({ typeId: 910002, label: 'recommended', selected: true });
   });
 
+  it('uses source standard category hints through the product profile when titles are too generic', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '女夏吊带连衣裙',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['粉色'],
+            sizes: ['M'],
+            materials: ['聚酯纤维'],
+            gender: { value: 'female' },
+            seasons: ['summer'],
+            packageDimensionsMm: { length: 300, width: 200, height: 40 },
+            packageWeightG: 150,
+            categoryHints: ['睡裙'],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 300001,
+          category_name: 'Одежда',
+          children: [
+            { type_id: 300101, type_name: 'Платье', children: [] },
+          ],
+        },
+        {
+          description_category_id: 300002,
+          category_name: 'Одежда',
+          children: [
+            { type_id: 300202, type_name: 'Ночная сорочка', children: [] },
+          ],
+        },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 300001,
+          typeId: 300101,
+          categoryPathRu: ['Одежда'],
+          categoryPathZh: ['服装'],
+          categoryLevels: [],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Платье',
+          typeNameZh: '连衣裙',
+          displayPathRu: 'Одежда / Платье',
+          displayPathZh: '服装 / 连衣裙',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '连衣裙'],
+          searchText: 'одежда платье 服装 连衣裙',
+        },
+        {
+          descriptionCategoryId: 300002,
+          typeId: 300202,
+          categoryPathRu: ['Одежда'],
+          categoryPathZh: ['服装'],
+          categoryLevels: [],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Ночная сорочка',
+          typeNameZh: '睡裙',
+          displayPathRu: 'Одежда / Ночная сорочка',
+          displayPathZh: '服装 / 睡裙',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '睡裙'],
+          searchText: 'одежда ночная сорочка 服装 睡裙',
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({ typeId: 300202, selected: true });
+    expect(candidates[0]?.reasons).toContain('源商品画像');
+  });
   it('prefers Ozon sleepwear categories over bra and adult matches for sleep dress source titles', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {

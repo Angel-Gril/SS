@@ -37,6 +37,7 @@ import { generateAiText } from '../services/ai-text.js';
 import { createPrismaAiTranslationCacheStore, getCachedAiTranslation } from '../services/ai-translation-cache.js';
 import { createPrismaAiUsageStore } from '../services/ai-usage.js';
 import { generateProductContentDraft, type ProductContentField } from '../services/product-content-ai.js';
+import { buildSourceProductProfile } from '../services/source-product-profile.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { normalizeSourceStandardAttributes, sanitizeSourceStandardSizeValues } from 'shared/source-standard-attributes';
@@ -2056,10 +2057,22 @@ export function buildSourceOzonCategoryCandidates(input: {
   const signature = sourceCategorySignature(input.item);
   const meta = metadataRecord(input.item.metadata);
   const standard = metadataRecord(meta.sourceStandardAttributes);
+  const sourceProfile = buildSourceProductProfile({
+    title: input.item.title == null ? null : String(input.item.title),
+    sourcePlatform: input.item.sourcePlatform == null ? null : String(input.item.sourcePlatform),
+    metadata: input.item.metadata,
+  });
   const sourceTerms = [
     ...(Array.isArray(meta.categoryPath) ? meta.categoryPath : []),
     meta.categoryName,
     input.item.title,
+    sourceProfile.sourceTitle,
+    sourceProfile.categoryName,
+    ...sourceProfile.categoryPath,
+    ...sourceProfile.categoryHints,
+    ...sourceProfile.productIntentTerms,
+    ...sourceProfile.productTypeHints,
+    ...sourceProfile.genderSeasonHints,
   ].flatMap(sourceCategorySearchTerms).filter(Boolean);
   const byKey = new Map<string, SourceOzonCategoryCandidate>();
   const catalogRows = Array.isArray(input.categoryCatalog) ? input.categoryCatalog : [];
@@ -2131,7 +2144,7 @@ export function buildSourceOzonCategoryCandidates(input: {
     const textScore = categoryTextScore(sourceTerms, row);
     if (!sourceIsAdult && isAdultOzonCategoryCandidate(row)) continue;
     if (textScore <= 0 && byKey.size >= 5) continue;
-    addCandidate(row, textScore > 0 ? 30 + textScore : 5, 'tree_match', textScore > 0 ? ['类目名称相似'] : ['备选类目'], 0);
+    addCandidate(row, textScore > 0 ? 30 + textScore : 5, 'tree_match', textScore > 0 ? ['类目名称相似', '源商品画像'] : ['备选类目'], 0);
   }
 
   const sorted = Array.from(byKey.values())
