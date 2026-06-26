@@ -82,6 +82,14 @@ for (const helper of ['sourceDetailPreviewImages', 'sourcePackagingRows', 'sourc
 for (const helper of ['sourceProductProfile', 'sourcePackagingProfile', 'sourcePackagingReasonText']) {
   assert.match(page, new RegExp(helper), `source collection page should expose source profile packaging helper: ${helper}`);
 }
+assert.match(
+  page,
+  /sourcePackagingBadge/,
+  'source collection row should render a dedicated packaging status badge',
+);
+for (const label of ['包装完整', '缺包装尺寸', '无包装表', '包装解析失败']) {
+  assert.match(page, new RegExp(label), `source collection row should expose packaging status label: ${label}`);
+}
 for (const label of ['页面没有包装表', '只采到重量，缺包装尺寸', '有包装表但未解析出件重尺']) {
   assert.match(page, new RegExp(label), `source collection detail should explain packaging evidence: ${label}`);
 }

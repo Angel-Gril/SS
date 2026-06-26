@@ -2898,6 +2898,42 @@ function mergeCollectedMetadata(
   return next;
 }
 
+async function ensureSourceProductProfileForListRow<T extends {
+  id: string;
+  title?: string | null;
+  sourcePlatform?: string | null;
+  sourceProductId?: string | null;
+  sku?: string | null;
+  metadata?: unknown;
+  variants?: unknown;
+}>(row: T): Promise<T> {
+  const meta = metadataRecord(row.metadata);
+  if (!isDomesticCollectedSource(row.sourcePlatform ?? meta.sourcePlatform)) return row;
+  if (isNonEmptyObject(meta.sourceProductProfile)) return row;
+
+  const sourceProductProfile = buildSourceProductProfile({
+    id: row.id,
+    title: String(meta.sourceTitleRaw ?? row.title ?? ''),
+    sourcePlatform: String(row.sourcePlatform ?? meta.sourcePlatform ?? ''),
+    sourceProductId: String(row.sourceProductId ?? row.sku ?? meta.sourceProductId ?? ''),
+    metadata: meta,
+    variants: row.variants,
+  });
+  const metadata = {
+    ...meta,
+    sourceProductProfile: cloneMetadataJson(sourceProductProfile, 200),
+  };
+  try {
+    await prisma.supplyGoods.update({
+      where: { id: row.id },
+      data: { metadata: metadata as any },
+    });
+  } catch {
+    // Best-effort backfill: the list response already carries the generated profile.
+  }
+  return { ...row, metadata };
+}
+
 async function findExistingCollectedOzonGoods(userId: string, item: {
   sourcePlatform?: unknown;
   sourceProductId?: unknown;
@@ -3050,12 +3086,14 @@ export async function collectRoutes(app: FastifyInstance) {
       }),
     ]);
 
+    const hydratedRows = await Promise.all(rows.map((row) => ensureSourceProductProfileForListRow(row)));
+
     return {
       code: 1,
       msg: 'ok',
       data: {
         total,
-        rows: rows.map((r) => ({
+        rows: hydratedRows.map((r) => ({
           ...r,
           purchasePrice: r.purchasePrice?.toString() ?? null,
           originalPrice: r.originalPrice?.toString() ?? null,

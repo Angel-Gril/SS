@@ -514,4 +514,142 @@ describe('collectRoutes batch upsert', () => {
       await app.close();
     }
   });
+
+  it('keeps source list available when lazy source product profile persistence fails', async () => {
+    const app = await buildApp();
+    const legacySourceRow = {
+      id: 'legacy-source-write-fails',
+      title: '女士无痕内衣',
+      sourcePlatform: '1688',
+      sourceProductId: '945335480485',
+      sku: '945335480485',
+      purchasePrice: { toString: () => '8.50' },
+      originalPrice: null,
+      exchangeRateUsed: null,
+      metadata: {
+        sourceTitleRaw: '女士无痕内衣',
+        sourceStandardAttributes: {
+          packageWeightG: 100,
+          packageDimensionsMm: null,
+          missingForOzon: ['包装尺寸'],
+        },
+        extractionDiagnostics: {
+          packaging: {
+            status: 'weight_only',
+            reason: 'weight_only',
+            message: '只采到重量，缺包装尺寸',
+          },
+        },
+      },
+      variants: [{ sku: '945335480485', attrs: { 颜色: '黑色', 尺码: 'M' } }],
+      createdAt: new Date('2026-06-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-18T01:00:00.000Z'),
+    };
+    mocks.supplyGoodsFindMany.mockResolvedValueOnce([legacySourceRow as any]);
+    mocks.supplyGoodsUpdate.mockRejectedValueOnce(new Error('write conflict'));
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/collect?sourceGroup=source',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data.rows[0].metadata.sourceProductProfile).toMatchObject({
+        sourceProductId: '945335480485',
+        packaging: expect.objectContaining({
+          reasonCode: 'weight_only',
+        }),
+      });
+      expect(mocks.supplyGoodsUpdate).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('lazily persists source product profiles for legacy domestic source list rows', async () => {
+    const app = await buildApp();
+    const legacySourceRow = {
+      id: 'legacy-source-1',
+      userId: 'user-1',
+      title: '女士无痕内衣',
+      sourceUrl: 'https://detail.1688.com/offer/945335480485.html',
+      sourcePlatform: '1688',
+      sourceProductId: '945335480485',
+      sku: '945335480485',
+      images: ['https://img.example.com/main.jpg'],
+      purchasePrice: { toString: () => '8.50' },
+      currency: 'CNY',
+      originalPrice: null,
+      originalCurrency: null,
+      exchangeRateUsed: null,
+      priceNeedsReview: false,
+      notes: '',
+      modelId: null,
+      metadata: {
+        sourceTitleRaw: '女士无痕内衣',
+        categoryPath: ['服饰内衣', '女士内衣'],
+        sourceStandardAttributes: {
+          colors: ['黑色'],
+          sizes: ['M'],
+          materials: ['锦纶'],
+          categoryHints: ['内衣'],
+          packageWeightG: 100,
+          packageDimensionsMm: null,
+          missingForOzon: ['包装尺寸'],
+        },
+        extractionDiagnostics: {
+          packagingCount: 0,
+          packaging: {
+            status: 'weight_only',
+            reason: 'weight_only',
+            sectionFound: true,
+            tableLike: true,
+            rowCount: 0,
+            hasWeight: true,
+            hasDimensions: false,
+            message: '只采到重量，缺包装尺寸',
+          },
+        },
+      },
+      variants: [{ sku: '945335480485', attrs: { 颜色: '黑色', 尺码: 'M' } }],
+      status: 'collected',
+      createdAt: new Date('2026-06-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-18T01:00:00.000Z'),
+    };
+    mocks.supplyGoodsFindMany.mockResolvedValueOnce([legacySourceRow as any]);
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/collect?sourceGroup=source',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const row = response.json().data.rows[0];
+      expect(row.metadata.sourceProductProfile).toMatchObject({
+        sourceProductId: '945335480485',
+        packaging: {
+          status: 'weight_only',
+          reasonCode: 'weight_only',
+          reasonLabel: '只采到重量，缺包装尺寸',
+        },
+      });
+      expect(mocks.supplyGoodsUpdate).toHaveBeenCalledWith({
+        where: { id: 'legacy-source-1' },
+        data: {
+          metadata: expect.objectContaining({
+            sourceProductProfile: expect.objectContaining({
+              sourceProductId: '945335480485',
+              packaging: expect.objectContaining({
+                reasonCode: 'weight_only',
+              }),
+            }),
+          }),
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });

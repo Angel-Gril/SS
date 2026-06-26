@@ -258,6 +258,42 @@ function sourcePackagingEvidence(item: SourceCollectItem): { metric: string; che
   return { metric: parts.join('/'), checklistLabel: `包装信息 ${parts.join('/')}`, done: true, reasonLabel };
 }
 
+function sourcePackagingBadge(item: SourceCollectItem): ReadinessBadge {
+  const rows = sourcePackagingRows(item);
+  const standard = sourceStandardAttributeModel(item);
+  const packaging = sourcePackagingProfile(item);
+  const status = String(packaging.status || '').trim();
+  const reasonCode = String(packaging.reasonCode || packaging.reason || '').trim();
+  const reasonLabel = sourcePackagingReasonText(item);
+  const marker = status || reasonCode;
+
+  if (rows.length || marker === 'complete' || marker === 'complete_rows' || marker === 'parsed_rows') {
+    return { label: '包装完整', tone: 'ok', title: reasonLabel || `包装行 ${rows.length || 1}` };
+  }
+  if (marker === 'weight_only') {
+    return { label: '缺包装尺寸', tone: 'warn', title: reasonLabel || '只采到重量，缺包装尺寸' };
+  }
+  if (marker === 'dimensions_only') {
+    return { label: '缺包装重量', tone: 'warn', title: reasonLabel || '只采到包装尺寸，缺重量' };
+  }
+  if (marker === 'no_section' || marker === 'no_packaging_table' || marker === 'page_no_packaging_table') {
+    return { label: '无包装表', tone: 'warn', title: reasonLabel || '页面没有包装表' };
+  }
+  if (marker === 'parse_failed' || marker === 'packaging_table_parse_failed' || marker === 'table_parse_failed') {
+    return { label: '包装解析失败', tone: 'warn', title: reasonLabel || '有包装表但未解析出件重尺' };
+  }
+  if (standard.packageWeightG && standard.packageDimensionsMm) {
+    return { label: '包装完整', tone: 'ok', title: reasonLabel || '已采到包装重量和尺寸' };
+  }
+  if (standard.packageWeightG) {
+    return { label: '缺包装尺寸', tone: 'warn', title: reasonLabel || '只采到重量，缺包装尺寸' };
+  }
+  if (standard.packageDimensionsMm) {
+    return { label: '缺包装重量', tone: 'warn', title: reasonLabel || '只采到包装尺寸，缺重量' };
+  }
+  return { label: '包装待采', tone: 'muted', title: reasonLabel || '待采集包装重量和尺寸' };
+}
+
 function sourceRichContentDraft(item: SourceCollectItem): Record<string, unknown> | null {
   const draft = item.metadata?.sourceRichContentDraft;
   return draft && typeof draft === 'object' && !Array.isArray(draft) ? draft as Record<string, unknown> : null;
@@ -504,6 +540,7 @@ function sourceReadinessBadges(item: SourceCollectItem): ReadinessBadge[] {
     detailImageCount > 0
       ? { label: `详情图 ${detailImageCount}`, tone: 'info' as const }
       : { label: '详情图待采', tone: 'muted' as const },
+    sourcePackagingBadge(item),
     richDraft
       ? { label: '富内容待处理', tone: 'warn' as const, title: sourceRichContentDraftSummary(item) }
       : { label: '富内容待采', tone: 'muted' as const },
