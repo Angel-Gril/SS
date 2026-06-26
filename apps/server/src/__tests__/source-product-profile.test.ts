@@ -66,8 +66,62 @@ describe('source product profile', () => {
     expect(JSON.stringify(profile.textEvidence)).not.toContain('<img');
     expect(JSON.stringify(profile.textEvidence)).not.toContain('https://img.example.com');
     expect(profile.textEvidence.detailImageCount).toBe(2);
+    expect((profile as any).imageEvidence).toMatchObject({
+      mainImageCount: 0,
+      detailImageCount: 2,
+      hasMainImages: false,
+      hasDetailImages: true,
+    });
+    expect((profile as any).variantEvidence).toMatchObject({
+      variantCount: 0,
+      optionNames: [],
+      optionValues: {},
+    });
     expect(profile.quality.confidence).toBe('high');
     expect(profile.hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('summarizes source image and variant evidence for AI product copy', () => {
+    const profile = buildSourceProductProfile({
+      id: 'item-variants',
+      title: '8215#萌熊贺岁红内裤女',
+      sourcePlatform: 'pdd',
+      metadata: {
+        categoryPath: ['服饰内衣', '女士内衣', '内裤'],
+        sourceMainImages: ['https://img.example.com/main-1.jpg', 'https://img.example.com/main-2.jpg'],
+        sourceDetailImages: ['https://img.example.com/detail-1.jpg'],
+        sourceStandardAttributes: {
+          colors: ['红色', '粉色'],
+          sizes: ['M', 'L'],
+          materials: ['棉'],
+          categoryHints: ['女士内衣', '内裤'],
+          packageWeightG: 80,
+          packageDimensionsMm: { length: 220, width: 160, height: 25 },
+        },
+      },
+      variants: [
+        { sku: 'red-m', attrs: { 颜色: '红色', 尺码: 'M' }, images: ['https://img.example.com/red.jpg'] },
+        { sku: 'pink-l', attrs: { 颜色: '粉色', 尺码: 'L' } },
+      ],
+    });
+
+    expect((profile as any).imageEvidence).toMatchObject({
+      mainImageCount: 2,
+      detailImageCount: 1,
+      variantImageCount: 1,
+      hasMainImages: true,
+      hasDetailImages: true,
+      hasVariantImages: true,
+    });
+    expect((profile as any).variantEvidence).toMatchObject({
+      variantCount: 2,
+      optionNames: ['颜色', '尺码'],
+      optionValues: {
+        '颜色': ['红色', '粉色'],
+        '尺码': ['M', 'L'],
+      },
+      hasVariantSku: true,
+    });
   });
 
   it('classifies sleepwear without adding bra intent from generic chest or strap wording', () => {

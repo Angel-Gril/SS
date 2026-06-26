@@ -204,6 +204,67 @@ describe('product content AI drafts', () => {
     expect(titleSystemMessage).toContain('Do not literally translate livestream, factory, wholesale, hot-sale, SKU noise, or holiday slogans');
   });
 
+  it('routes product copy fields to field-specific models and parses rich content blocks', async () => {
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: JSON.stringify({
+          title: 'Женские трусы из хлопка, высокая посадка',
+          searchTags: ['женские трусы', 'трусы хлопок'],
+          confidence: 0.84,
+        }),
+        provider: 'custom',
+        model: 'fast-title-model',
+        usage: { totalTokens: 90 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: JSON.stringify({
+          description: 'Женские трусы из мягкого хлопка для повседневной носки.',
+          bulletPoints: ['Мягкий хлопок', 'Высокая посадка'],
+          richContentBlocks: [
+            'Женские трусы для ежедневного использования.',
+            'Мягкий хлопковый материал комфортен для дома и на каждый день.',
+          ],
+          searchTags: ['женское белье', 'нижнее белье'],
+          confidence: 0.86,
+        }),
+        provider: 'custom',
+        model: 'strong-copy-model',
+        usage: { totalTokens: 220 },
+      });
+
+    const result = await generateProductContentDraft({
+      item,
+      actorUserId: 'user-1',
+      fields: ['title', 'description'],
+      config: {
+        ...config,
+        model: 'base-model',
+        titleModel: 'fast-title-model',
+        descriptionModel: 'strong-copy-model',
+      } as any,
+      cacheStore: memoryCacheStore(),
+      usageStore: memoryUsageStore(),
+      generateText,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(generateText).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      config: expect.objectContaining({ model: 'fast-title-model' }),
+    }));
+    expect(generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      config: expect.objectContaining({ model: 'strong-copy-model' }),
+    }));
+    expect((result.drafts.description?.structured as any)?.richContentBlocks).toEqual([
+      'Женские трусы для ежедневного использования.',
+      'Мягкий хлопковый материал комфортен для дома и на каждый день.',
+    ]);
+    const descriptionSystemMessage = generateText.mock.calls[1]?.[0]?.messages.find((message: { role: string; content: string }) => message.role === 'system')?.content || '';
+    expect(descriptionSystemMessage).toContain('richContentBlocks');
+  });
+
   it('rejects unsafe generated titles before caching them', async () => {
     const cacheStore = memoryCacheStore();
     const usageStore = memoryUsageStore();

@@ -108,6 +108,7 @@ const batchDeleteVariantsSchema = z.object({
 
 const productContentDraftSchema = z.object({
   fields: z.array(z.enum(['title', 'description'])).min(1).max(2).default(['title', 'description']),
+  applyToPublish: z.boolean().optional().default(true),
 });
 
 export function containsCjkText(value: unknown): boolean {
@@ -957,6 +958,119 @@ export function resolvePublishDescription(
     if (description && containsRussianText(description)) return description;
   }
   return sanitizeNotesPublishDescription(item.notes);
+}
+
+function draftRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function russianDraftText(value: unknown, maxLength: number): string {
+  const text = maxLength === 200 ? cleanPublishName(value).slice(0, maxLength) : sanitizePublishDescription(value, maxLength);
+  return text && containsRussianText(text) ? text : '';
+}
+
+function collectAiDraftSearchTags(drafts: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const draft of [draftRecord(drafts.title), draftRecord(drafts.description)]) {
+    const structured = draftRecord(draft.structured);
+    const tags = Array.isArray(structured.searchTags) ? structured.searchTags : [];
+    for (const raw of tags) {
+      const tag = cleanPublishName(raw).slice(0, 80);
+      if (!tag || !containsRussianText(tag) || seen.has(tag)) continue;
+      seen.add(tag);
+      out.push(tag);
+      if (out.length >= 12) return out;
+    }
+  }
+  return out;
+}
+
+function collectAiRichContentTextBlocks(descriptionDraft: Record<string, any>): string[] {
+  const structured = draftRecord(descriptionDraft.structured);
+  const rawBlocks = Array.isArray(structured.richContentBlocks)
+    ? structured.richContentBlocks
+    : Array.isArray(structured.bulletPoints)
+      ? structured.bulletPoints
+      : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawBlocks) {
+    const text = sanitizePublishDescription(raw, 600);
+    if (!text || !containsRussianText(text) || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= 8) break;
+  }
+  if (!out.length) {
+    const fallback = russianDraftText(descriptionDraft.text, 900);
+    if (fallback) out.push(fallback);
+  }
+  return out;
+}
+
+function buildAiRichContentDraft(meta: Record<string, unknown>, descriptionDraft: Record<string, any>): Record<string, unknown> | null {
+  const textBlocks = collectAiRichContentTextBlocks(descriptionDraft);
+  if (!textBlocks.length) return null;
+  const blocks: Array<Record<string, string>> = textBlocks.map((text) => ({ type: 'text', text }));
+  for (const url of normalizePublishImageList(meta.sourceDetailImages).slice(0, 12)) {
+    blocks.push({ type: 'image', url });
+  }
+  return {
+    status: 'ai_generated_reviewable',
+    source: 'ai_product_content',
+    locale: 'ru',
+    blocks,
+  };
+}
+
+export function applyAiContentDraftsToPublishMetadata(input: unknown): { metadata: Record<string, unknown>; applied: string[] } {
+  const metadata = metadataRecord(input);
+  const drafts = metadataRecord(metadata.aiContentDrafts);
+  const titleDraft = draftRecord(drafts.title);
+  const descriptionDraft = draftRecord(drafts.description);
+  const applied: string[] = [];
+  const appliedFlags = metadataRecord(metadata.aiContentPublishApplied);
+
+  if (!String(metadata.publishTitleRu || '').trim()) {
+    const title = russianDraftText(titleDraft.text, 200);
+    if (title) {
+      metadata.publishTitleRu = title;
+      delete metadata.titleNeedsReview;
+      applied.push('publishTitleRu');
+      appliedFlags.title = true;
+    }
+  }
+
+  if (!String(metadata.publishDescriptionRu || '').trim()) {
+    const description = russianDraftText(descriptionDraft.text, DESCRIPTION_MAX_LENGTH);
+    if (description) {
+      metadata.publishDescriptionRu = description;
+      applied.push('publishDescriptionRu');
+      appliedFlags.description = true;
+    }
+  }
+
+  if (!Array.isArray(metadata.sourceSearchTagsRu) || !metadata.sourceSearchTagsRu.length) {
+    const tags = collectAiDraftSearchTags(drafts);
+    if (tags.length) {
+      metadata.sourceSearchTagsRu = tags;
+      applied.push('sourceSearchTagsRu');
+      appliedFlags.searchTags = true;
+    }
+  }
+
+  if (!String(metadata.sourceRichDescriptionJson || '').trim() && !metadata.sourceRichContentDraft) {
+    const richContentDraft = buildAiRichContentDraft(metadata, descriptionDraft);
+    if (richContentDraft) {
+      metadata.sourceRichContentDraft = richContentDraft;
+      applied.push('sourceRichContentDraft');
+      appliedFlags.richContent = true;
+    }
+  }
+
+  if (Object.keys(appliedFlags).length) metadata.aiContentPublishApplied = appliedFlags;
+  return { metadata, applied };
 }
 
 export function normalizeCollectedSourceVideos(value: unknown): { url: string; coverUrl?: string; title?: string }[] {
@@ -2309,9 +2423,15 @@ function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
-function getCollectedRichDescriptionJson(item: { metadata?: unknown }): string {
+export function getCollectedRichDescriptionJson(item: { metadata?: unknown }): string {
   const meta = metadataRecord(item.metadata);
-  return String(meta.sourceRichDescriptionJson || '').trim();
+  const richDescriptionJson = meta.sourceRichDescriptionJson;
+  if (typeof richDescriptionJson === 'string' && richDescriptionJson.trim()) return richDescriptionJson.trim();
+  if (richDescriptionJson && typeof richDescriptionJson === 'object') return JSON.stringify(richDescriptionJson);
+  const richContentDraft = meta.sourceRichContentDraft;
+  if (typeof richContentDraft === 'string' && richContentDraft.trim()) return richContentDraft.trim();
+  if (richContentDraft && typeof richContentDraft === 'object') return JSON.stringify(richContentDraft);
+  return '';
 }
 
 function getCollectedSourceVideos(item: { metadata?: unknown }): unknown[] {
@@ -3339,8 +3459,10 @@ export async function collectRoutes(app: FastifyInstance) {
       const meta: Record<string, unknown> = item.metadata && typeof item.metadata === 'object' ? { ...(item.metadata as any) } : {};
       if (body.publishTitle !== undefined) {
         const publishTitle = String(body.publishTitle || '').trim();
-        if (publishTitle) meta.publishTitleRu = publishTitle;
-        else delete meta.publishTitleRu;
+        if (publishTitle) {
+          meta.publishTitleRu = publishTitle;
+          if (containsRussianText(publishTitle)) delete meta.titleNeedsReview;
+        } else delete meta.publishTitleRu;
       }
       if (body.publishOfferId !== undefined) {
         const publishOfferId = String(body.publishOfferId || '').trim();
@@ -3368,6 +3490,8 @@ export async function collectRoutes(app: FastifyInstance) {
     const baseUrl = String(await getConfig('ai_base_url') || '').trim();
     const apiKey = String(await getConfig('ai_api_key') || '').trim();
     const model = String(await getConfig('ai_model') || '').trim();
+    const titleModel = String(await getConfig('ai_product_title_model') || '').trim();
+    const descriptionModel = String(await getConfig('ai_product_description_model') || '').trim();
     const providerLabel = String(await getConfig('ai_provider_label') || '').trim();
     const timeoutMs = Number(await getConfig('ai_timeout_ms')) || 30000;
     const titlePrompt = String(await getConfig('ai_product_title_prompt') || '').trim();
@@ -3384,6 +3508,8 @@ export async function collectRoutes(app: FastifyInstance) {
         baseUrl,
         apiKey,
         model,
+        titleModel,
+        descriptionModel,
         providerLabel,
         timeoutMs,
         titlePrompt,
@@ -3405,9 +3531,12 @@ export async function collectRoutes(app: FastifyInstance) {
       aiContentDrafts[field] = draft;
     }
     meta.aiContentDrafts = aiContentDrafts;
+    const applyResult = parsed.data.applyToPublish
+      ? applyAiContentDraftsToPublishMetadata(meta)
+      : { metadata: meta, applied: [] };
     const updated = await prisma.supplyGoods.update({
       where: { id },
-      data: { metadata: meta as any },
+      data: { metadata: applyResult.metadata as any },
     });
 
     return reply.send({
@@ -3421,6 +3550,7 @@ export async function collectRoutes(app: FastifyInstance) {
           exchangeRateUsed: updated.exchangeRateUsed?.toString() ?? null,
         },
         drafts: result.drafts,
+        applied: applyResult.applied,
         limit: result.limit,
       },
     });
@@ -3584,7 +3714,7 @@ export async function collectRoutes(app: FastifyInstance) {
           images: v.images || [],
         })),
         publishTitle: meta.publishTitleRu || null,
-        titleNeedsReview: !!meta.titleNeedsReview || containsCjkText(resolvePublishName(it)),
+        titleNeedsReview: containsRussianText(meta.publishTitleRu) ? false : (!!meta.titleNeedsReview || containsCjkText(resolvePublishName(it))),
         modelId: it.modelId,
         categoryId: meta.descriptionCategoryId || null,
         typeId: meta.typeId || null,
@@ -3632,8 +3762,10 @@ export async function collectRoutes(app: FastifyInstance) {
     if (body.typeId !== undefined && body.typeId > 0) meta.typeId = body.typeId;
     if (body.publishTitle !== undefined) {
       const publishTitle = String(body.publishTitle || '').trim();
-      if (publishTitle) meta.publishTitleRu = publishTitle;
-      else delete meta.publishTitleRu;
+      if (publishTitle) {
+        meta.publishTitleRu = publishTitle;
+        if (containsRussianText(publishTitle)) delete meta.titleNeedsReview;
+      } else delete meta.publishTitleRu;
     }
     if (body.publishOfferId !== undefined) {
       const publishOfferId = String(body.publishOfferId || '').trim();

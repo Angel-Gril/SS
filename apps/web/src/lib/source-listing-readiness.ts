@@ -99,6 +99,7 @@ function displayTitle(item: SourceListingItemLike): string {
 }
 
 function titleNeedsReview(item: SourceListingItemLike): boolean {
+  if (isRussianText(item.metadata?.publishTitleRu)) return false;
   const title = displayTitle(item);
   return !title || /^(1688|PDD|拼多多|淘宝|天猫)?\s*商品\s*\d*$/i.test(title) || Boolean(item.metadata?.titleNeedsReview);
 }

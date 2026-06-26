@@ -28,6 +28,8 @@ export interface ProductContentAiConfig extends AiTextConfig {
   enabled: boolean;
   titlePrompt: string;
   descriptionPrompt: string;
+  titleModel?: string;
+  descriptionModel?: string;
   userDailyProductGenerationLimit: number;
 }
 
@@ -37,6 +39,7 @@ export interface ProductContentStructuredDraft {
   bulletPoints?: string[];
   searchTags?: string[];
   warnings?: string[];
+  richContentBlocks?: string[];
   confidence?: number;
 }
 
@@ -160,8 +163,8 @@ function outputContractForField(field: ProductContentField): string {
   return [
     'Output contract for description: return a compact JSON object.',
     'Required key: "description" (Russian Ozon description based only on source facts).',
-    'Optional keys: "bulletPoints" (3-6 concise Russian benefits), "searchTags" (3-8 Russian phrases), "warnings" (review notes for missing facts or risky claims), "confidence" (0-1).',
-    'Example shape: {"description":"Краткое описание товара.","bulletPoints":["Мягкий материал"],"searchTags":["женское белье"],"warnings":[],"confidence":0.8}',
+    'Optional keys: "bulletPoints" (3-6 concise Russian benefits), "richContentBlocks" (2-6 Russian text blocks for Ozon rich content; no image URLs), "searchTags" (3-8 Russian phrases), "warnings" (review notes for missing facts or risky claims), "confidence" (0-1).',
+    'Example shape: {"description":"Краткое описание товара.","bulletPoints":["Мягкий материал"],"richContentBlocks":["Текстовый блок для rich content"],"searchTags":["женское белье"],"warnings":[],"confidence":0.8}',
   ].join(' ');
 }
 
@@ -203,6 +206,33 @@ function cleanDraftList(value: unknown, maxItems: number, maxLength: number): st
   return out.length ? out : undefined;
 }
 
+function richContentBlockSource(object: Record<string, unknown>): unknown {
+  if (object.richContentBlocks) return object.richContentBlocks;
+  const richContent = metadataRecord(object.richContent ?? object.ozonRichContent);
+  if (Array.isArray(richContent.blocks)) return richContent.blocks;
+  if (Array.isArray(richContent.content)) return richContent.content;
+  return undefined;
+}
+
+function cleanRichContentBlocks(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const record = metadataRecord(item);
+    const raw = Object.keys(record).length
+      ? record.text ?? record.title ?? record.description ?? record.content ?? record.value
+      : item;
+    const text = cleanText(raw).slice(0, 600);
+    if (!text || CJK_RE.test(text) || HTML_OR_URL_RE.test(text) || SOURCE_COMMERCE_NOISE_RE.test(text) || !CYRILLIC_RE.test(text)) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= 6) break;
+  }
+  return out.length ? out : undefined;
+}
+
 function cleanConfidence(value: unknown): number | undefined {
   const confidence = Number(value);
   if (!Number.isFinite(confidence)) return undefined;
@@ -216,10 +246,12 @@ function structuredFromObject(field: ProductContentField, object: Record<string,
   const bulletPoints = cleanDraftList(object.bulletPoints ?? object.bullets, 6, 180);
   const searchTags = cleanDraftList(object.searchTags ?? object.tags ?? object.keywords, 8, 80);
   const warnings = cleanDraftList(object.warnings ?? object.reviewWarnings ?? object.risks, 8, 180);
+  const richContentBlocks = cleanRichContentBlocks(richContentBlockSource(object));
   const confidence = cleanConfidence(object.confidence);
   if (bulletPoints) structured.bulletPoints = bulletPoints;
   if (searchTags) structured.searchTags = searchTags;
   if (warnings) structured.warnings = warnings;
+  if (richContentBlocks) structured.richContentBlocks = richContentBlocks;
   if (confidence !== undefined) structured.confidence = confidence;
   return Object.keys(structured).length ? structured : undefined;
 }
@@ -274,6 +306,8 @@ function buildProductContentInput(item: ProductContentAiItem, field: ProductCont
       sizes: sourceProfile.sizes,
       materials: sourceProfile.materials,
       genderSeasonHints: sourceProfile.genderSeasonHints,
+      imageEvidence: sourceProfile.imageEvidence,
+      variantEvidence: sourceProfile.variantEvidence,
       packaging: sourceProfile.packaging,
       textEvidence: sourceProfile.textEvidence,
       quality: sourceProfile.quality,
@@ -318,10 +352,26 @@ function promptForField(config: ProductContentAiConfig, field: ProductContentFie
   return field === 'title' ? config.titlePrompt : config.descriptionPrompt;
 }
 
+function modelForField(config: ProductContentAiConfig, field: ProductContentField): string {
+  const override = field === 'title' ? config.titleModel : config.descriptionModel;
+  return cleanText(override || config.model);
+}
+
+function aiConfigForField(config: ProductContentAiConfig, field: ProductContentField): AiTextConfig {
+  return {
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model: modelForField(config, field),
+    providerLabel: config.providerLabel,
+    timeoutMs: config.timeoutMs,
+  };
+}
+
 export async function generateProductContentDraft(params: GenerateProductContentDraftParams): Promise<ProductContentDraftResult> {
   const drafts: Partial<Record<ProductContentField, ProductContentDraft>> = {};
   if (!params.config.enabled) return { ok: false, error: 'AI product generation disabled', drafts };
-  if (params.config.provider !== 'custom' || !params.config.baseUrl || !params.config.apiKey || !params.config.model) {
+  if (params.config.provider !== 'custom' || !params.config.baseUrl || !params.config.apiKey || params.fields.some((field) => !modelForField(params.config, field))) {
     return { ok: false, error: 'AI provider config incomplete', drafts };
   }
 
@@ -336,6 +386,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
     const inputText = buildProductContentInput(params.item, field);
     const effectivePrompt = buildEffectivePrompt(field, prompt);
     const hash = promptHash(effectivePrompt);
+    const fieldConfig = aiConfigForField(params.config, field);
 
     try {
       const cached = await getCachedAiTranslation({
@@ -345,7 +396,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
         inputText,
         promptHash: hash,
         provider: params.config.provider,
-        model: params.config.model,
+        model: fieldConfig.model,
         store: params.cacheStore,
         now: () => now,
         translate: async () => {
@@ -361,7 +412,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
           if (!limit.allowed) throw new Error('AI product generation daily limit reached');
 
           const ai = await params.generateText({
-            config: params.config,
+            config: fieldConfig,
             messages: [
               { role: 'system', content: effectivePrompt },
               { role: 'user', content: inputText },
@@ -372,8 +423,8 @@ export async function generateProductContentDraft(params: GenerateProductContent
           if (!ai.ok) {
             await recordAiUsageEvent(params.usageStore, {
               namespace,
-              provider: params.config.provider,
-              model: params.config.model,
+              provider: fieldConfig.provider,
+              model: fieldConfig.model,
               actorUserId: params.actorUserId,
               date,
               kind: 'failure',
@@ -413,7 +464,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
         await recordAiUsageEvent(params.usageStore, {
           namespace,
           provider: params.config.provider,
-          model: params.config.model,
+          model: fieldConfig.model,
           actorUserId: params.actorUserId,
           date,
           kind: 'cache_hit',

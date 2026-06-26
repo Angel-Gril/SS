@@ -128,6 +128,19 @@ function item(overrides = {}) {
 
 {
   const result = readiness.evaluateSourceListingReadiness(item({
+    title: '【直播专供】红内裤女',
+    metadata: {
+      ...item().metadata,
+      titleNeedsReview: true,
+      publishTitleRu: 'Женские трусы из хлопка, высокая посадка',
+      sourceDescriptionRu: 'Женские трусы для повседневной носки.',
+    },
+  }));
+  assert.equal(result.blockers.includes('真实商品标题'), false);
+}
+
+{
+  const result = readiness.evaluateSourceListingReadiness(item({
     title: '仿大牌战术无人机配件',
     metadata: {
       ...item().metadata,

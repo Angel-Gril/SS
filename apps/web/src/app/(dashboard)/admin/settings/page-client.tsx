@@ -696,6 +696,8 @@ const AI_PROVIDER_KEYS = [
   'ai_base_url',
   'ai_api_key',
   'ai_model',
+  'ai_product_title_model',
+  'ai_product_description_model',
   'ai_timeout_ms',
 ];
 
@@ -811,6 +813,8 @@ function AiSettingsPanel({
                 <ConfigInput cfg={configs.ai_base_url} editing={editing} setValue={setValue} placeholder="https://api.deepseek.com/v1" />
                 <ConfigInput cfg={configs.ai_api_key} editing={editing} setValue={setValue} type="password" placeholder="API Key" />
                 <ConfigInput cfg={configs.ai_model} editing={editing} setValue={setValue} placeholder="deepseek-chat" />
+                <ConfigInput cfg={configs.ai_product_title_model} editing={editing} setValue={setValue} placeholder="可选：fast title model" />
+                <ConfigInput cfg={configs.ai_product_description_model} editing={editing} setValue={setValue} placeholder="可选：strong copy model" />
                 <ConfigInput cfg={configs.ai_timeout_ms} editing={editing} setValue={setValue} placeholder="30000" />
               </div>
             </section>

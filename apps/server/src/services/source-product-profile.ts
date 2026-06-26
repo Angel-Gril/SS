@@ -45,6 +45,23 @@ export interface SourceTextEvidenceProfile {
   sourceDescriptionRawLength: number;
 }
 
+export interface SourceImageEvidenceProfile {
+  mainImageCount: number;
+  detailImageCount: number;
+  variantImageCount: number;
+  hasMainImages: boolean;
+  hasDetailImages: boolean;
+  hasVariantImages: boolean;
+}
+
+export interface SourceVariantEvidenceProfile {
+  variantCount: number;
+  optionNames: string[];
+  optionValues: Record<string, string[]>;
+  hasVariantSku: boolean;
+  sampleSkus: string[];
+}
+
 export interface SourceProductProfile {
   version: string;
   hash: string;
@@ -61,6 +78,8 @@ export interface SourceProductProfile {
   sizes: string[];
   materials: string[];
   genderSeasonHints: string[];
+  imageEvidence: SourceImageEvidenceProfile;
+  variantEvidence: SourceVariantEvidenceProfile;
   packaging: SourcePackagingProfile;
   textEvidence: SourceTextEvidenceProfile;
   quality: {
@@ -391,6 +410,81 @@ function buildTextEvidence(meta: Record<string, unknown>): SourceTextEvidencePro
   };
 }
 
+function normalizeImageEvidenceList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return unique(value.map((item) => cleanText(item, 500)).filter((item) => /^https?:\/\//i.test(item)), 100);
+}
+
+function variantRows(item: SourceProductProfileItem, meta: Record<string, unknown>): Array<Record<string, unknown>> {
+  const source = Array.isArray(item.variants)
+    ? item.variants
+    : Array.isArray(meta.variants)
+      ? meta.variants
+      : Array.isArray(meta.skuItems)
+        ? meta.skuItems
+        : [];
+  return source.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
+}
+
+function buildImageEvidence(item: SourceProductProfileItem, meta: Record<string, unknown>): SourceImageEvidenceProfile {
+  const variants = variantRows(item, meta);
+  const mainImageCount = normalizeImageEvidenceList(meta.sourceMainImages ?? meta.images).length;
+  const detailImageCount = normalizeImageEvidenceList(meta.sourceDetailImages).length;
+  const variantImageCount = variants.reduce((count, variant) => {
+    const images = normalizeImageEvidenceList(variant.images ?? variant.imageUrls ?? variant.pictures);
+    return count + images.length;
+  }, 0);
+  return {
+    mainImageCount,
+    detailImageCount,
+    variantImageCount,
+    hasMainImages: mainImageCount > 0,
+    hasDetailImages: detailImageCount > 0,
+    hasVariantImages: variantImageCount > 0,
+  };
+}
+
+function variantAttrs(row: Record<string, unknown>): Record<string, unknown> {
+  const attrs = metadataRecord(row.attrs ?? row.attributes ?? row.properties);
+  if (Object.keys(attrs).length) return attrs;
+  const out: Record<string, unknown> = {};
+  for (const key of ['color', '颜色', 'colour', 'size', '尺码', 'spec', '规格'] as const) {
+    if (row[key] != null) out[key] = row[key];
+  }
+  return out;
+}
+
+function buildVariantEvidence(item: SourceProductProfileItem, meta: Record<string, unknown>): SourceVariantEvidenceProfile {
+  const rows = variantRows(item, meta);
+  const optionValues: Record<string, string[]> = {};
+  const optionNames: string[] = [];
+  const sampleSkus: string[] = [];
+  let hasVariantSku = false;
+
+  for (const row of rows) {
+    const sku = cleanText(row.sku ?? row.skuId ?? row.offerId, 120);
+    if (sku) {
+      hasVariantSku = true;
+      if (sampleSkus.length < 8 && !sampleSkus.includes(sku)) sampleSkus.push(sku);
+    }
+    for (const [rawName, rawValue] of Object.entries(variantAttrs(row))) {
+      const name = cleanText(rawName, 80);
+      const values = splitValueList(rawValue);
+      if (!name || !values.length) continue;
+      if (!optionNames.includes(name)) optionNames.push(name);
+      optionValues[name] = unique([...(optionValues[name] || []), ...values], 20);
+    }
+  }
+
+  return {
+    variantCount: rows.length,
+    optionNames: optionNames.slice(0, 20),
+    optionValues,
+    hasVariantSku,
+    sampleSkus,
+  };
+}
+
 function buildGenderSeasonHints(standard: Record<string, unknown>, meta: Record<string, unknown>): string[] {
   const hints: string[] = [];
   const gender = metadataRecord(standard.gender);
@@ -459,6 +553,8 @@ export function buildSourceProductProfile(item: SourceProductProfileItem): Sourc
     ? readStringArray(standard.materials)
     : attributeValues(meta, /面料|材质|成分|material|fabric|composition/i);
   const genderSeasonHints = buildGenderSeasonHints(standard, meta);
+  const imageEvidence = buildImageEvidence(item, meta);
+  const variantEvidence = buildVariantEvidence(item, meta);
   const packaging = buildPackagingProfile(meta);
   const textEvidence = buildTextEvidence(meta);
   const base: Omit<SourceProductProfile, 'hash'> = {
@@ -476,6 +572,8 @@ export function buildSourceProductProfile(item: SourceProductProfileItem): Sourc
     sizes,
     materials,
     genderSeasonHints,
+    imageEvidence,
+    variantEvidence,
     packaging,
     textEvidence,
     quality: buildQuality({ sourceTitle, categoryPath, colors, sizes, materials, packaging, textEvidence }),

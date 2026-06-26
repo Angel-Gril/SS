@@ -44,6 +44,8 @@ import {
   syncOzonVariantGroupingAttributes,
   normalizeOzonOriginCountryForChinaSeller,
   normalizeCollectedSourceVideos,
+  applyAiContentDraftsToPublishMetadata,
+  getCollectedRichDescriptionJson,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -280,6 +282,89 @@ describe('collect publish helpers', () => {
       },
     });
     expect(metadata).not.toHaveProperty('sourceDescriptionRu');
+  });
+
+  it('applies safe AI content drafts to publish metadata without overwriting manual copy', () => {
+    const result = applyAiContentDraftsToPublishMetadata({
+      titleNeedsReview: true,
+      sourceDetailImages: ['https://img.example.com/detail-1.jpg'],
+      aiContentDrafts: {
+        title: {
+          text: 'Женские трусы из хлопка, высокая посадка',
+          structured: {
+            searchTags: ['женские трусы', 'трусы хлопок'],
+          },
+        },
+        description: {
+          text: 'Женские трусы из мягкого хлопка для повседневной носки.',
+          structured: {
+            bulletPoints: ['Мягкий хлопок', 'Высокая посадка'],
+            searchTags: ['женское белье', 'нижнее белье'],
+            richContentBlocks: [
+              'Женские трусы для ежедневного использования.',
+              'Мягкий хлопковый материал комфортен для дома и на каждый день.',
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.metadata).toMatchObject({
+      publishTitleRu: 'Женские трусы из хлопка, высокая посадка',
+      publishDescriptionRu: 'Женские трусы из мягкого хлопка для повседневной носки.',
+      sourceSearchTagsRu: ['женские трусы', 'трусы хлопок', 'женское белье', 'нижнее белье'],
+      aiContentPublishApplied: {
+        title: true,
+        description: true,
+        searchTags: true,
+        richContent: true,
+      },
+    });
+    expect(result.metadata).not.toHaveProperty('titleNeedsReview');
+    expect(result.applied).toEqual(expect.arrayContaining(['publishTitleRu', 'publishDescriptionRu', 'sourceSearchTagsRu', 'sourceRichContentDraft']));
+    expect(result.metadata.sourceRichContentDraft).toMatchObject({
+      status: 'ai_generated_reviewable',
+      source: 'ai_product_content',
+      locale: 'ru',
+      blocks: [
+        { type: 'text', text: 'Женские трусы для ежедневного использования.' },
+        { type: 'text', text: 'Мягкий хлопковый материал комфортен для дома и на каждый день.' },
+        { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+      ],
+    });
+
+    const manual = applyAiContentDraftsToPublishMetadata({
+      publishTitleRu: 'Ручной заголовок',
+      publishDescriptionRu: 'Ручное описание.',
+      sourceSearchTagsRu: ['ручной тег'],
+      aiContentDrafts: result.metadata.aiContentDrafts,
+    });
+    expect(manual.metadata.publishTitleRu).toBe('Ручной заголовок');
+    expect(manual.metadata.publishDescriptionRu).toBe('Ручное описание.');
+    expect(manual.metadata.sourceSearchTagsRu).toEqual(['ручной тег']);
+  });
+
+  it('uses sourceRichContentDraft as publishable rich content JSON when no Ozon clone JSON exists', () => {
+    const richJson = getCollectedRichDescriptionJson({
+      metadata: {
+        sourceRichContentDraft: {
+          status: 'ai_generated_reviewable',
+          source: 'ai_product_content',
+          locale: 'ru',
+          blocks: [
+            { type: 'text', text: 'Описание для rich content.' },
+            { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+          ],
+        },
+      },
+    });
+
+    expect(JSON.parse(richJson)).toMatchObject({
+      blocks: [
+        { type: 'text', text: 'Описание для rich content.' },
+        { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+      ],
+    });
   });
   it('does not treat source HTML image fragments as Russian descriptions', () => {
     const metadata = buildCollectedGoodsMetadata({
