@@ -213,11 +213,13 @@
     var sourceRichContentDraft = build1688RichContentDraft(description, assets.detailImages);
     var diagnostics = build1688Diagnostics({
       title: title,
+      pageText: pageText,
       assets: assets,
       skuItems: skuItems,
       skuSource: skuItems.length ? (skuItems[0].source || '') : '',
       attributes: attributes,
       packagingRows: packagingRows,
+      packageWeightG: packageWeightG,
       description: description,
       sourceVideos: []
     }, priceModel);
@@ -1570,6 +1572,63 @@
     return { status: 'raw_source_requires_processing', source: '1688', locale: 'zh-CN', blocks: blocks };
   }
 
+  function pick1688PackagingSection(pageText) {
+    var text = normalizeWhitespace(pageText || '');
+    if (!text || !/(包装信息|商品件重尺)/.test(text)) return '';
+    var match = text.match(/(?:包装信息|商品件重尺)\s+(.{1,1800}?)(?=(?:商品详情|商品评价|买家评价|价格说明|$))/);
+    return normalizeWhitespace(match && match[1] ? match[1] : text);
+  }
+
+  function build1688PackagingDiagnostics(input) {
+    var rows = Array.isArray(input && input.packagingRows) ? input.packagingRows : [];
+    var packageWeightG = Number(input && input.packageWeightG) || 0;
+    var section = pick1688PackagingSection(input && input.pageText);
+    var sectionFound = Boolean(section);
+    var tableLike = sectionFound && /(长|宽|高|重量|体积|尺码|颜色|cm|mm|kg|g|克|千克)/i.test(section);
+    var rowHasWeight = rows.some(function (row) { return row && Number(row.weightG) > 0; });
+    var rowHasDimensions = rows.some(function (row) {
+      return row && Number(row.lengthMm) > 0 && Number(row.widthMm) > 0 && Number(row.heightMm) > 0;
+    });
+    var hasWeight = rowHasWeight || packageWeightG > 0;
+    var hasDimensions = rowHasDimensions;
+    var status = 'partial';
+    var reason = 'partial_packaging';
+    var message = '包装信息不完整';
+
+    if (hasWeight && hasDimensions) {
+      status = 'complete';
+      reason = 'parsed_rows';
+      message = '已采到包装重量和尺寸';
+    } else if (hasWeight) {
+      status = 'weight_only';
+      reason = 'weight_only';
+      message = '只采到重量，缺包装尺寸';
+    } else if (hasDimensions) {
+      status = 'dimensions_only';
+      reason = 'dimensions_only';
+      message = '只采到包装尺寸，缺重量';
+    } else if (!sectionFound) {
+      status = 'no_section';
+      reason = 'page_no_packaging_table';
+      message = '页面没有包装表';
+    } else if (tableLike) {
+      status = 'parse_failed';
+      reason = 'table_parse_failed';
+      message = '有包装表但未解析出件重尺';
+    }
+
+    return {
+      status: status,
+      reason: reason,
+      sectionFound: sectionFound,
+      tableLike: tableLike,
+      rowCount: rows.length,
+      hasWeight: hasWeight,
+      hasDimensions: hasDimensions,
+      message: message
+    };
+  }
+
   function build1688Diagnostics(input, priceModel) {
     var missing = [];
     if (!input.title) missing.push('title');
@@ -1585,6 +1644,7 @@
       skuSource: input.skuSource || '',
       attributeCount: input.attributes.length,
       packagingCount: input.packagingRows.length,
+      packaging: build1688PackagingDiagnostics(input),
       descriptionFound: Boolean(input.description || input.assets.detailImages.length),
       videoCount: (input.sourceVideos || []).length,
       priceSourceType: priceModel.sourceType,

@@ -19,6 +19,18 @@ export interface SourcePackagingProfile {
   hasWeight: boolean;
   hasDimensions: boolean;
   status: SourcePackagingStatus;
+  reasonCode: string;
+  reasonLabel: string;
+  evidence: {
+    source: string;
+    sectionFound: boolean;
+    tableLike: boolean;
+    rowCount: number;
+    hasWeight: boolean;
+    hasDimensions: boolean;
+    status: string;
+    reason: string;
+  };
   missing: string[];
   warnings: string[];
   sampleRows: Array<Record<string, unknown>>;
@@ -253,9 +265,38 @@ function packageDimensionsFromStandard(standard: Record<string, unknown>, meta: 
   return !!(finiteNumber(meta.lengthMm) && finiteNumber(meta.widthMm) && finiteNumber(meta.heightMm));
 }
 
+function boolValue(value: unknown): boolean {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+function packagingReason(input: {
+  status: SourcePackagingStatus;
+  diagnostics: Record<string, unknown>;
+  rows: Array<Record<string, unknown>>;
+  hasWeight: boolean;
+  hasDimensions: boolean;
+}): { reasonCode: string; reasonLabel: string } {
+  const diagnosticStatus = cleanText(input.diagnostics.status, 80);
+  const diagnosticReason = cleanText(input.diagnostics.reason, 120);
+  const diagnosticMessage = cleanText(input.diagnostics.message, 160);
+  if (!input.rows.length && (diagnosticStatus === 'no_section' || diagnosticReason === 'page_no_packaging_table')) {
+    return { reasonCode: 'no_packaging_table', reasonLabel: diagnosticMessage || '页面没有包装表' };
+  }
+  if (!input.rows.length && (diagnosticStatus === 'parse_failed' || diagnosticReason === 'table_parse_failed')) {
+    return { reasonCode: 'packaging_table_parse_failed', reasonLabel: diagnosticMessage || '有包装表但未解析出件重尺' };
+  }
+  if (input.status === 'complete') return { reasonCode: 'complete_rows', reasonLabel: '已采到包装重量和尺寸' };
+  if (input.status === 'weight_only') return { reasonCode: 'weight_only', reasonLabel: '只采到重量，缺包装尺寸' };
+  if (input.status === 'dimensions_only') return { reasonCode: 'dimensions_only', reasonLabel: '只采到包装尺寸，缺重量' };
+  if (!input.rows.length) return { reasonCode: 'no_packaging_rows', reasonLabel: '未采集到包装信息' };
+  return { reasonCode: 'partial_packaging', reasonLabel: '包装信息不完整' };
+}
+
 function buildPackagingProfile(meta: Record<string, unknown>): SourcePackagingProfile {
   const standard = sourceStandard(meta);
   const rows = normalizePackagingRows(meta.sourcePackagingRows);
+  const diagnostics = metadataRecord(meta.extractionDiagnostics);
+  const packagingDiagnostics = metadataRecord(diagnostics.packaging);
   const rowHasWeight = rows.some((row) => finiteNumber(row.weightG));
   const rowHasDimensions = rows.some((row) => (
     finiteNumber(row.lengthMm) && finiteNumber(row.widthMm) && finiteNumber(row.heightMm)
@@ -275,12 +316,26 @@ function buildPackagingProfile(meta: Record<string, unknown>): SourcePackagingPr
   else if (hasWeight && !hasDimensions) status = 'weight_only';
   else if (!hasWeight && hasDimensions) status = 'dimensions_only';
   else if (!rows.length) status = 'missing';
+  const reason = packagingReason({ status, diagnostics: packagingDiagnostics, rows, hasWeight, hasDimensions });
+  if (status !== 'complete' && reason.reasonLabel) warnings.push(reason.reasonLabel);
 
   return {
     rowCount: rows.length,
     hasWeight,
     hasDimensions,
     status,
+    reasonCode: reason.reasonCode,
+    reasonLabel: reason.reasonLabel,
+    evidence: {
+      source: Object.keys(packagingDiagnostics).length ? 'extraction_diagnostics' : rows.length ? 'source_packaging_rows' : 'source_metadata',
+      sectionFound: boolValue(packagingDiagnostics.sectionFound),
+      tableLike: boolValue(packagingDiagnostics.tableLike),
+      rowCount: Number(packagingDiagnostics.rowCount ?? rows.length) || rows.length,
+      hasWeight: boolValue(packagingDiagnostics.hasWeight) || hasWeight,
+      hasDimensions: boolValue(packagingDiagnostics.hasDimensions) || hasDimensions,
+      status: cleanText(packagingDiagnostics.status, 80),
+      reason: cleanText(packagingDiagnostics.reason, 120),
+    },
     missing,
     warnings,
     sampleRows: rows.slice(0, 5),

@@ -111,6 +111,16 @@ test('1688 core normalizes structured sku props, sku map, price model and source
     skuSource: 'skuMap',
     attributeCount: 3,
     packagingCount: 1,
+    packaging: {
+      status: 'complete',
+      reason: 'parsed_rows',
+      sectionFound: false,
+      tableLike: false,
+      rowCount: 1,
+      hasWeight: true,
+      hasDimensions: true,
+      message: '已采到包装重量和尺寸',
+    },
     descriptionFound: true,
     videoCount: 0,
     priceSourceType: 'sku',
@@ -586,6 +596,16 @@ test('1688 core extracts general package weight from 1688 packaging text', () =>
   assert.equal(result.sourcePackagingRows.length, 0);
   assert.equal(result.weightG, 20);
   assert.equal(result.grossWeightGrams, 20);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.extractionDiagnostics.packaging)), {
+    status: 'weight_only',
+    reason: 'weight_only',
+    sectionFound: true,
+    tableLike: true,
+    rowCount: 0,
+    hasWeight: true,
+    hasDimensions: false,
+    message: '只采到重量，缺包装尺寸',
+  });
 });
 
 test('1688 core extracts single-column packaging weight from page text', () => {
@@ -605,6 +625,68 @@ test('1688 core extracts single-column packaging weight from page text', () => {
 
   assert.equal(result.weightG, 100);
   assert.equal(result.grossWeightGrams, 100);
+});
+
+test('1688 core reports when page has no packaging table', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    pageText: '商品属性 颜色 隐形肤 性感黑 尺码 S M 商品详情',
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      priceInfo: { price: '8.5' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 0);
+  assert.equal(result.weightG, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.extractionDiagnostics.packaging)), {
+    status: 'no_section',
+    reason: 'page_no_packaging_table',
+    sectionFound: false,
+    tableLike: false,
+    rowCount: 0,
+    hasWeight: false,
+    hasDimensions: false,
+    message: '页面没有包装表',
+  });
+});
+
+test('1688 core reports when a packaging table cannot be parsed', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/945335480485.html?offerId=945335480485',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 隐形肤 性感黑 尺码 S M',
+      '包装信息 商品件重尺 颜色 尺码 长(cm) 宽(cm) 高(cm) 重量(g)',
+      '此处为图片表格 请查看详情图 商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '945335480485',
+      subject: '黑色挂脖吊带美背文胸内衣女小胸聚拢交叉u露背粉底液隐形无痕',
+      priceInfo: { price: '8.5' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 0);
+  assert.equal(result.weightG, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.extractionDiagnostics.packaging)), {
+    status: 'parse_failed',
+    reason: 'table_parse_failed',
+    sectionFound: true,
+    tableLike: true,
+    rowCount: 0,
+    hasWeight: false,
+    hasDimensions: false,
+    message: '有包装表但未解析出件重尺',
+  });
 });
 
 test('1688 core rejects review fragments from structured product attributes', () => {

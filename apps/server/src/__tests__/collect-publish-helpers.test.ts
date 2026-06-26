@@ -270,7 +270,55 @@ describe('collect publish helpers', () => {
         videoCount: 1,
       },
     });
+    expect(metadata.sourceProductProfile).toMatchObject({
+      version: 'source-product-profile-v1',
+      sourceTitle: '智能保温杯批发',
+      packaging: {
+        status: 'complete',
+        reasonCode: 'complete_rows',
+        reasonLabel: '已采到包装重量和尺寸',
+      },
+    });
     expect(metadata).not.toHaveProperty('sourceDescriptionRu');
+  });
+
+  it('persists source product profile packaging reasons for collection details', () => {
+    const metadata = buildCollectedGoodsMetadata({
+      title: '女士无痕内衣',
+      sourceTitleRaw: '女士无痕内衣',
+      sourcePlatform: '1688',
+      categoryPath: ['服饰内衣', '女士内衣'],
+      attributes: [
+        { name: '颜色', value: '黑色' },
+        { name: '尺码', value: 'M' },
+        { name: '材质', value: '锦纶' },
+      ],
+      extractionDiagnostics: {
+        packagingCount: 0,
+        packaging: {
+          status: 'no_section',
+          reason: 'page_no_packaging_table',
+          sectionFound: false,
+          tableLike: false,
+          rowCount: 0,
+          hasWeight: false,
+          hasDimensions: false,
+          message: '页面没有包装表',
+        },
+      },
+    });
+
+    expect(metadata.sourceProductProfile).toMatchObject({
+      packaging: {
+        status: 'missing',
+        reasonCode: 'no_packaging_table',
+        reasonLabel: '页面没有包装表',
+        evidence: {
+          source: 'extraction_diagnostics',
+          sectionFound: false,
+        },
+      },
+    });
   });
 
   it('does not keep Chinese Ozon translated titles as collected display titles', () => {

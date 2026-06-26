@@ -198,17 +198,64 @@ function sourcePackagingRows(item: SourceCollectItem): Array<Record<string, unkn
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
 }
 
-function sourcePackagingEvidence(item: SourceCollectItem): { metric: string; checklistLabel: string; done: boolean } {
+function sourceRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function sourceProductProfile(item: SourceCollectItem): Record<string, unknown> {
+  return sourceRecord(item.metadata?.sourceProductProfile);
+}
+
+function sourcePackagingProfile(item: SourceCollectItem): Record<string, unknown> {
+  const profilePackaging = sourceRecord(sourceProductProfile(item).packaging);
+  if (Object.keys(profilePackaging).length) return profilePackaging;
+  const diagnostics = sourceRecord(item.metadata?.extractionDiagnostics);
+  const diagnosticPackaging = sourceRecord(diagnostics.packaging);
+  if (Object.keys(diagnosticPackaging).length) return diagnosticPackaging;
+  return {};
+}
+
+function sourcePackagingReasonText(item: SourceCollectItem): string {
+  const packaging = sourcePackagingProfile(item);
+  const explicit = String(packaging.reasonLabel || packaging.message || '').trim();
+  if (explicit) return explicit;
+  const reasonCode = String(packaging.reasonCode || packaging.reason || '').trim();
+  const labels: Record<string, string> = {
+    complete_rows: '已采到包装重量和尺寸',
+    parsed_rows: '已采到包装重量和尺寸',
+    weight_only: '只采到重量，缺包装尺寸',
+    dimensions_only: '只采到包装尺寸，缺重量',
+    no_packaging_table: '页面没有包装表',
+    page_no_packaging_table: '页面没有包装表',
+    packaging_table_parse_failed: '有包装表但未解析出件重尺',
+    table_parse_failed: '有包装表但未解析出件重尺',
+  };
+  if (labels[reasonCode]) return labels[reasonCode];
   const rows = sourcePackagingRows(item);
-  if (rows.length) return { metric: String(rows.length), checklistLabel: `包装信息 ${rows.length}`, done: true };
+  const standard = sourceStandardAttributeModel(item);
+  if (rows.length || (standard.packageWeightG && standard.packageDimensionsMm)) return '已采到包装重量和尺寸';
+  if (standard.packageWeightG) return '只采到重量，缺包装尺寸';
+  if (standard.packageDimensionsMm) return '只采到包装尺寸，缺重量';
+  return '';
+}
+
+function sourcePackagingEvidence(item: SourceCollectItem): { metric: string; checklistLabel: string; done: boolean; reasonLabel: string } {
+  const rows = sourcePackagingRows(item);
+  const packaging = sourcePackagingProfile(item);
+  const reasonLabel = sourcePackagingReasonText(item);
+  if (rows.length) return { metric: String(rows.length), checklistLabel: `包装信息 ${rows.length}`, done: true, reasonLabel };
 
   const standard = sourceStandardAttributeModel(item);
   const parts = [
     standard.packageWeightG ? '重量' : '',
     standard.packageDimensionsMm ? '尺寸' : '',
   ].filter(Boolean);
-  if (!parts.length) return { metric: '0', checklistLabel: '包装信息 0', done: false };
-  return { metric: parts.join('/'), checklistLabel: `包装信息 ${parts.join('/')}`, done: true };
+  if (!parts.length) {
+    const status = String(packaging.status || '');
+    const metric = status === 'parse_failed' ? '解析失败' : status === 'no_section' ? '无包装表' : '0';
+    return { metric, checklistLabel: `包装信息 ${reasonLabel || metric}`, done: false, reasonLabel };
+  }
+  return { metric: parts.join('/'), checklistLabel: `包装信息 ${parts.join('/')}`, done: true, reasonLabel };
 }
 
 function sourceRichContentDraft(item: SourceCollectItem): Record<string, unknown> | null {
@@ -517,11 +564,13 @@ function extractionDiagnosticText(item: SourceCollectItem): string {
   const diagnostics = item.metadata?.extractionDiagnostics;
   if (!diagnostics || typeof diagnostics !== 'object') return '';
   const data = diagnostics as Record<string, unknown>;
+  const packagingReason = sourcePackagingReasonText(item);
   return [
     `图 ${String(data.imageCount ?? sourceImageCount(item))}`,
     `过滤图片 ${String(data.rejectedImageCount ?? sourceRejectedAssetCount(item))}`,
     `SKU ${String(data.skuCount ?? sourceVariants(item).length)}`,
     `属性 ${String(data.attributeCount ?? sourceAttributeCount(item))}`,
+    packagingReason ? `包装 ${packagingReason}` : '',
     `价格来源 ${sourcePriceModelText(item)}`,
     `描述 ${data.descriptionFound ? '有' : '无'}`,
     `视频 ${String(data.videoCount ?? sourceVideoCount(item))}`,
@@ -809,6 +858,8 @@ function packagingRowMeta(row: Record<string, unknown>): string {
 function SourceSkuSection({ item }: { item: SourceCollectItem }) {
   const variants = sourceDisplayVariants(item);
   const packagingRows = sourcePackagingRows(item);
+  const packagingProfile = sourcePackagingProfile(item);
+  const packagingReason = sourcePackagingReasonText(item);
   const standard = sourceStandardAttributeModel(item);
   const packageSummary = sourceStandardPackageText(standard);
   const packagingCount = packagingRows.length || (packageSummary !== '-' ? 1 : 0);
@@ -832,6 +883,14 @@ function SourceSkuSection({ item }: { item: SourceCollectItem }) {
       </InfoPanel>
 
       <InfoPanel title="包装信息" count={packagingCount}>
+        {packagingReason ? (
+          <div className="mb-2 rounded border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            <span className="text-foreground">{packagingReason}</span>
+            {packagingProfile.reasonCode || packagingProfile.reason ? (
+              <span> · {String(packagingProfile.reasonCode || packagingProfile.reason)}</span>
+            ) : null}
+          </div>
+        ) : null}
         {packagingRows.length ? (
           <div className="grid gap-2 md:grid-cols-2">
             {packagingRows.slice(0, 80).map((row, index) => (

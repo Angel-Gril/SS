@@ -79,11 +79,25 @@ for (const label of ['详情图原始素材', '包装信息', '原始富内容�
 for (const helper of ['sourceDetailPreviewImages', 'sourcePackagingRows', 'sourceRichContentDraft']) {
   assert.match(page, new RegExp(helper), `source collection page should read 1688 source asset helper: ${helper}`);
 }
+for (const helper of ['sourceProductProfile', 'sourcePackagingProfile', 'sourcePackagingReasonText']) {
+  assert.match(page, new RegExp(helper), `source collection page should expose source profile packaging helper: ${helper}`);
+}
+for (const label of ['页面没有包装表', '只采到重量，缺包装尺寸', '有包装表但未解析出件重尺']) {
+  assert.match(page, new RegExp(label), `source collection detail should explain packaging evidence: ${label}`);
+}
+for (const field of ['sourceProductProfile', 'reasonCode', 'reasonLabel', 'extractionDiagnostics']) {
+  assert.match(page, new RegExp(field), `source collection detail should consume packaging diagnostic field: ${field}`);
+}
 const sourceSkuSection = page.match(/function SourceSkuSection\(\{ item \}: \{ item: SourceCollectItem \}\) \{[\s\S]*?\nfunction SourceAttributesSection/)?.[0] || '';
 assert.match(
   sourceSkuSection,
   /sourceStandardAttributeModel\(item\)/,
   'source packaging detail should read normalized package fields when packaging rows are absent',
+);
+assert.match(
+  sourceSkuSection,
+  /sourcePackagingProfile\(item\)/,
+  'source packaging detail should show source profile packaging status and reason',
 );
 assert.match(
   sourceSkuSection,

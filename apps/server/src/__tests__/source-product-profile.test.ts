@@ -57,6 +57,8 @@ describe('source product profile', () => {
       hasWeight: true,
       hasDimensions: true,
       status: 'complete',
+      reasonCode: 'complete_rows',
+      reasonLabel: '已采到包装重量和尺寸',
       missing: [],
     });
     expect(profile.textEvidence.description).toContain('无钢圈设计');
@@ -96,6 +98,8 @@ describe('source product profile', () => {
       hasWeight: true,
       hasDimensions: false,
       status: 'weight_only',
+      reasonCode: 'weight_only',
+      reasonLabel: '只采到重量，缺包装尺寸',
     });
     expect(profile.packaging.missing).toContain('package_dimensions');
   });
@@ -130,5 +134,95 @@ describe('source product profile', () => {
     expect(profile.quality.missing).toEqual(expect.arrayContaining(['package_weight', 'package_dimensions', 'source_description']));
     expect(profile.quality.confidence).toBe('medium');
     expect(profile.quality.warnings.join(' ')).toContain('No source packaging rows');
+  });
+
+  it('uses packaging diagnostics to explain pages without a packaging table', () => {
+    const profile = buildSourceProductProfile({
+      id: 'item-4',
+      title: '女士无痕内衣',
+      sourcePlatform: '1688',
+      metadata: {
+        categoryPath: ['服饰内衣', '女士内衣'],
+        sourceStandardAttributes: {
+          colors: ['黑色'],
+          sizes: ['M'],
+          materials: ['锦纶'],
+          categoryHints: ['内衣'],
+          packageWeightG: null,
+          packageDimensionsMm: null,
+          missingForOzon: ['重量', '包装尺寸'],
+        },
+        extractionDiagnostics: {
+          packagingCount: 0,
+          packaging: {
+            status: 'no_section',
+            reason: 'page_no_packaging_table',
+            sectionFound: false,
+            tableLike: false,
+            rowCount: 0,
+            hasWeight: false,
+            hasDimensions: false,
+            message: '页面没有包装表',
+          },
+        },
+      },
+    });
+
+    expect(profile.packaging).toMatchObject({
+      status: 'missing',
+      reasonCode: 'no_packaging_table',
+      reasonLabel: '页面没有包装表',
+      evidence: {
+        source: 'extraction_diagnostics',
+        sectionFound: false,
+        tableLike: false,
+      },
+    });
+    expect(profile.quality.warnings.join(' ')).toContain('页面没有包装表');
+  });
+
+  it('uses packaging diagnostics to explain unparsed packaging tables', () => {
+    const profile = buildSourceProductProfile({
+      id: 'item-5',
+      title: '女士无痕内衣',
+      sourcePlatform: '1688',
+      metadata: {
+        categoryPath: ['服饰内衣', '女士内衣'],
+        sourceStandardAttributes: {
+          colors: ['黑色'],
+          sizes: ['M'],
+          materials: ['锦纶'],
+          categoryHints: ['内衣'],
+          packageWeightG: null,
+          packageDimensionsMm: null,
+          missingForOzon: ['重量', '包装尺寸'],
+        },
+        extractionDiagnostics: {
+          packagingCount: 0,
+          packaging: {
+            status: 'parse_failed',
+            reason: 'table_parse_failed',
+            sectionFound: true,
+            tableLike: true,
+            rowCount: 0,
+            hasWeight: false,
+            hasDimensions: false,
+            message: '有包装表但未解析出件重尺',
+          },
+        },
+      },
+    });
+
+    expect(profile.packaging).toMatchObject({
+      status: 'missing',
+      reasonCode: 'packaging_table_parse_failed',
+      reasonLabel: '有包装表但未解析出件重尺',
+      evidence: {
+        source: 'extraction_diagnostics',
+        sectionFound: true,
+        tableLike: true,
+      },
+    });
+    expect(profile.quality.warnings.join(' ')).toContain('有包装表但未解析出件重尺');
   });
 });

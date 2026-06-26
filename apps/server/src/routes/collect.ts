@@ -1186,6 +1186,16 @@ export function buildCollectedGoodsMetadata(input: {
   if (input.descriptionFetchTrace && typeof input.descriptionFetchTrace === 'object') {
     metadata.descriptionFetchTrace = input.descriptionFetchTrace;
   }
+  if (isDomesticCollectedSource(metadata.sourcePlatform ?? input.sourcePlatform)) {
+    const sourceProductProfile = buildSourceProductProfile({
+      title: String(input.sourceTitleRaw ?? input.title ?? ''),
+      sourcePlatform: String(metadata.sourcePlatform ?? input.sourcePlatform ?? ''),
+      sourceProductId: String(input.sourceProductId ?? ''),
+      metadata,
+      variants: sourceStandardVariants,
+    });
+    metadata.sourceProductProfile = cloneMetadataJson(sourceProductProfile, 200);
+  }
   if (titleNeedsReview) metadata.titleNeedsReview = true;
   return metadata;
 }
