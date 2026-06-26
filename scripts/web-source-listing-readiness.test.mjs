@@ -111,6 +111,20 @@ function item(overrides = {}) {
   assert.equal(result.status, 'needs_review');
   assert.ok(result.missingFields.includes('俄文标题/描述'));
 }
+{
+  const result = readiness.evaluateSourceListingReadiness(item({
+    metadata: {
+      ...item().metadata,
+      publishTitleRu: '',
+      sourceDescriptionRu: '',
+      aiContentDrafts: {
+        title: { text: 'Женские трусы с высокой посадкой, хлопок' },
+        description: { text: 'Женские трусы для повседневной носки из мягкой ткани.' },
+      },
+    },
+  }));
+  assert.equal(result.missingFields.includes('俄文标题/描述'), false);
+}
 
 {
   const result = readiness.evaluateSourceListingReadiness(item({

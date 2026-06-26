@@ -133,6 +133,77 @@ describe('product content AI drafts', () => {
     expect(generateText).toHaveBeenCalledTimes(2);
   });
 
+  it('parses constrained Ozon localization JSON into review metadata', async () => {
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: JSON.stringify({
+          title: 'Женские трусы с высокой посадкой, хлопок',
+          searchTags: ['женские трусы', 'нижнее белье'],
+          warnings: ['Антибактериальный эффект не подтвержден источником'],
+          confidence: 0.78,
+        }),
+        provider: 'custom',
+        model: 'deepseek-chat',
+        usage: { totalTokens: 120 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: JSON.stringify({
+          description: 'Женские трусы для повседневной носки. Мягкая ткань и высокая посадка подходят для дома и на каждый день.',
+          bulletPoints: ['Высокая посадка', 'Материал из источника: хлопок', 'Подходит для повседневной носки'],
+          searchTags: ['женское белье', 'трусы женские хлопок'],
+          warnings: ['Размерная сетка требует проверки'],
+          confidence: 0.81,
+        }),
+        provider: 'custom',
+        model: 'deepseek-chat',
+        usage: { totalTokens: 180 },
+      });
+
+    const result = await generateProductContentDraft({
+      item: {
+        ...item,
+        title: '【马年直播专供】8215#萌熊贺岁10A抗菌加长底裆本命必备红内裤女',
+        metadata: {
+          sourceTitleRaw: '【马年直播专供】8215#萌熊贺岁10A抗菌加长底裆本命必备红内裤女',
+          categoryPath: ['服饰内衣', '女士内衣', '内裤'],
+          sourceStandardAttributes: {
+            colors: ['红色'],
+            materials: ['棉'],
+            gender: { value: 'female' },
+          },
+        },
+      },
+      actorUserId: 'user-1',
+      fields: ['title', 'description'],
+      config,
+      cacheStore: memoryCacheStore(),
+      usageStore: memoryUsageStore(),
+      generateText,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.drafts.title?.text).toBe('Женские трусы с высокой посадкой, хлопок');
+    expect(result.drafts.title?.structured).toMatchObject({
+      searchTags: ['женские трусы', 'нижнее белье'],
+      warnings: ['Антибактериальный эффект не подтвержден источником'],
+      confidence: 0.78,
+    });
+    expect(result.drafts.description?.structured).toMatchObject({
+      bulletPoints: ['Высокая посадка', 'Материал из источника: хлопок', 'Подходит для повседневной носки'],
+      searchTags: ['женское белье', 'трусы женские хлопок'],
+      warnings: ['Размерная сетка требует проверки'],
+      confidence: 0.81,
+    });
+
+    const titleSystemMessage = generateText.mock.calls[0]?.[0]?.messages.find((message: { role: string; content: string }) => message.role === 'system')?.content || '';
+    expect(titleSystemMessage).toContain('Ozon localization contract');
+    expect(titleSystemMessage).toContain('Start the title with the concrete Russian product type');
+    expect(titleSystemMessage).toContain('Do not literally translate livestream, factory, wholesale, hot-sale, SKU noise, or holiday slogans');
+  });
+
   it('rejects unsafe generated titles before caching them', async () => {
     const cacheStore = memoryCacheStore();
     const usageStore = memoryUsageStore();
@@ -170,6 +241,29 @@ describe('product content AI drafts', () => {
     expect(retry.ok).toBe(false);
     expect(generateText).toHaveBeenCalledTimes(2);
     expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({ kind: 'failure' }));
+  });
+
+  it('rejects source-platform and wholesale noise in generated titles', async () => {
+    const generateText = vi.fn().mockResolvedValue({
+      ok: true,
+      text: 'Женские трусы 1688 оптом от поставщика',
+      provider: 'custom',
+      model: 'deepseek-chat',
+      usage: null,
+    });
+
+    await expect(generateProductContentDraft({
+      item,
+      actorUserId: 'user-1',
+      fields: ['title'],
+      config,
+      cacheStore: memoryCacheStore(),
+      usageStore: memoryUsageStore(),
+      generateText,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'Generated title is unsafe for Ozon',
+    });
   });
 
   it('blocks fresh provider calls after the user daily limit is reached', async () => {

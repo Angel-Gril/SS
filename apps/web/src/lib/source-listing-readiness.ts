@@ -43,6 +43,16 @@ function hasRussianMetadataValue(item: SourceListingItemLike, keys: string[]): b
   });
 }
 
+function hasRussianAiContentDraft(item: SourceListingItemLike): boolean {
+  const drafts = item.metadata?.aiContentDrafts;
+  if (!drafts || typeof drafts !== 'object' || Array.isArray(drafts)) return false;
+  return ['title', 'description'].some((field) => {
+    const draft = (drafts as Record<string, unknown>)[field];
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return false;
+    return isRussianText((draft as Record<string, unknown>).text);
+  });
+}
+
 function sourceAttributes(item: SourceListingItemLike): Array<Record<string, unknown>> {
   return metadataArray(item, 'sourceAttributes')
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
@@ -118,7 +128,7 @@ export function evaluateSourceListingReadiness(item: SourceListingItemLike): Sou
   };
 
   if (titleNeedsReview(item)) addMissing('真实商品标题', 'blocker');
-  if (!hasRussianMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu'])) addMissing('俄文标题/描述', 'warning');
+  if (!hasRussianMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu']) && !hasRussianAiContentDraft(item)) addMissing('俄文标题/描述', 'warning');
   if (!hasCategoryAndType(item)) addMissing('Ozon 类目/type', 'blocker');
   if (!hasOzonAttributeReadiness(item)) addMissing('Ozon 必填属性/字典值', 'warning');
   if (!standard.brand.value && !standard.brand.isBrandless) addMissing('品牌/无品牌', 'warning');

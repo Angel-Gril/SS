@@ -77,6 +77,9 @@ for (const label of ['待翻译', '图片待处理', '待水印', '待改图', '
 for (const helper of ['sourceRussianText', 'sourceTranslatedTitleText', 'sourceTranslatedDescriptionText']) {
   assert.match(page, new RegExp(helper), `source collection translation should validate Cyrillic text with helper: ${helper}`);
 }
+for (const label of ['俄语本地化', '生成Ozon文案草稿', 'AI 搜索标签', 'AI 卖点', 'AI 风险提示', 'AI 置信度']) {
+  assert.match(page, new RegExp(label), `source collection AI localization panel should expose label: ${label}`);
+}
 for (const label of ['详情图原始素材', '包装信息', '原始富内容待处理', '富内容待处理']) {
   assert.match(page, new RegExp(label), `source collection page should expose 1688 source asset workflow label: ${label}`);
 }

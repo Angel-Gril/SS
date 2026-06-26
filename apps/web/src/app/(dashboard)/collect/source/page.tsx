@@ -61,8 +61,18 @@ interface OzonShopOption {
   platform: string;
 }
 
+interface AiContentStructuredDraft {
+  title?: string;
+  description?: string;
+  bulletPoints?: string[];
+  searchTags?: string[];
+  warnings?: string[];
+  confidence?: number;
+}
+
 interface AiContentDraft {
   text: string;
+  structured?: AiContentStructuredDraft;
   source: 'cache' | 'provider';
   provider: string;
   model: string;
@@ -539,6 +549,31 @@ function sourceAiContentDrafts(item: SourceCollectItem): Partial<Record<'title' 
 function sourceHasTranslation(item: SourceCollectItem): boolean {
   const drafts = sourceAiContentDrafts(item);
   return Boolean(sourceTranslatedTitleText(item) || sourceTranslatedDescriptionText(item) || drafts.title?.text || drafts.description?.text);
+}
+
+function aiDraftListText(drafts: Partial<Record<'title' | 'description', AiContentDraft>>, key: 'bulletPoints' | 'searchTags' | 'warnings'): string {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const draft of [drafts.title, drafts.description]) {
+    const list = draft?.structured?.[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const text = String(item || '').trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      values.push(text);
+    }
+  }
+  return values.join(' / ');
+}
+
+function aiDraftConfidenceText(drafts: Partial<Record<'title' | 'description', AiContentDraft>>): string {
+  const values = [drafts.title?.structured?.confidence, drafts.description?.structured?.confidence]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return '';
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return `${Math.round(average * 100)}%`;
 }
 
 function sourceHasWatermark(item: SourceCollectItem): boolean {
@@ -1067,12 +1102,12 @@ function SourceTranslationSection({ item, onItemUpdate }: { item: SourceCollectI
 
   return (
     <div className="space-y-3">
-      <InfoPanel title="翻译" count={sourceHasTranslation(item) ? '已翻译' : '待翻译'}>
+      <InfoPanel title="俄语本地化" count={sourceHasTranslation(item) ? '已生成' : '待生成'}>
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button type="button" size="sm" onClick={generateDrafts} disabled={generating}>
               {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Languages className="mr-2 h-4 w-4" />}
-              生成标题/描述草稿
+              生成Ozon文案草稿
             </Button>
             {message ? <span className="text-xs text-emerald-700">{message}</span> : null}
             {error ? <span className="text-xs text-destructive">{error}</span> : null}
@@ -1083,6 +1118,10 @@ function SourceTranslationSection({ item, onItemUpdate }: { item: SourceCollectI
             <KeyValue label="俄文描述" value={sourceTranslatedDescriptionText(item) || '-'} />
             <KeyValue label="AI 标题草稿" value={drafts.title?.text || '-'} />
             <KeyValue label="AI 描述草稿" value={drafts.description?.text || '-'} />
+            <KeyValue label="AI 卖点" value={aiDraftListText(drafts, 'bulletPoints') || '-'} />
+            <KeyValue label="AI 搜索标签" value={aiDraftListText(drafts, 'searchTags') || '-'} />
+            <KeyValue label="AI 风险提示" value={aiDraftListText(drafts, 'warnings') || '-'} />
+            <KeyValue label="AI 置信度" value={aiDraftConfidenceText(drafts) || '-'} />
             <KeyValue label="AI 草稿来源" value={[drafts.title?.source, drafts.title?.model].filter(Boolean).join(' / ') || '-'} />
           </div>
         </div>

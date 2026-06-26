@@ -31,8 +31,18 @@ export interface ProductContentAiConfig extends AiTextConfig {
   userDailyProductGenerationLimit: number;
 }
 
+export interface ProductContentStructuredDraft {
+  title?: string;
+  description?: string;
+  bulletPoints?: string[];
+  searchTags?: string[];
+  warnings?: string[];
+  confidence?: number;
+}
+
 export interface ProductContentDraft {
   text: string;
+  structured?: ProductContentStructuredDraft;
   source: 'cache' | 'provider';
   provider: string;
   model: string;
@@ -73,12 +83,18 @@ export interface GenerateProductContentDraftParams {
 const CJK_RE = /[\u3400-\u9fff]/;
 const CYRILLIC_RE = /[А-Яа-яЁё]/;
 const PRODUCT_COPYWRITING_GUARDRAIL = [
-  'You are generating Russian Ozon product copy for marketplace buyers.',
+  'Ozon localization contract: generate Russian marketplace copy for Ozon buyers, not a literal translation.',
   'Use only facts present in the source JSON. Do not invent materials, cup type, effects, age range, brand, certification, discounts, shipping, or guarantees.',
-  'Prefer natural Russian retail wording over literal machine translation.',
-  'Do not mention 1688, wholesale, supplier, JSON, SKU internals, or source-system fields.',
-  'Return only the requested Russian output, with no markdown and no explanation.',
+  'Prefer natural Russian retail wording used by Russian sellers over literal machine translation.',
+  'Start the title with the concrete Russian product type, then add only verified attributes such as gender, material, color, size, pack count, or use case.',
+  'Do not literally translate livestream, factory, wholesale, hot-sale, SKU noise, or holiday slogans; omit source-platform and supplier wording instead.',
+  'Do not mention 1688, PDD, Taobao, wholesale, supplier, factory, JSON, SKU internals, or source-system fields.',
+  'Return Russian only, with no Chinese, no markdown, no HTML, no URLs, and no explanation outside the requested JSON contract.',
 ].join(' ');
+
+const PRODUCT_CONTENT_CACHE_VERSION = 1;
+const SOURCE_COMMERCE_NOISE_RE = /(?:1688|pdd|拼多多|taobao|tmall|淘宝|天猫|оптом|поставщик|поставщика|фабрик|завод|производител|дропшип|wholesale|supplier|factory|直播|专供|批发|厂家|货源|跨境专供)/i;
+const HTML_OR_URL_RE = /(?:<[^>]+>|https?:\/\/|www\.|\.jpg\b|\.jpeg\b|\.png\b|\.webp\b|\.gif\b)/i;
 
 function cleanText(value: unknown): string {
   return String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
@@ -132,8 +148,108 @@ function summarizeRichContentDraft(value: unknown): string {
   return parts.join(' ').slice(0, 1200);
 }
 
-function buildEffectivePrompt(prompt: string): string {
-  return `${PRODUCT_COPYWRITING_GUARDRAIL}\n\n${prompt}`.trim();
+function outputContractForField(field: ProductContentField): string {
+  if (field === 'title') {
+    return [
+      'Output contract for title: return a compact JSON object.',
+      'Required key: "title" (Russian Ozon title, 40-160 characters when possible).',
+      'Optional keys: "searchTags" (3-8 Russian phrases), "warnings" (review notes for unverifiable or risky claims), "confidence" (0-1).',
+      'Example shape: {"title":"Женские трусы из хлопка, высокая посадка","searchTags":["женские трусы"],"warnings":["Размерная сетка требует проверки"],"confidence":0.82}',
+    ].join(' ');
+  }
+  return [
+    'Output contract for description: return a compact JSON object.',
+    'Required key: "description" (Russian Ozon description based only on source facts).',
+    'Optional keys: "bulletPoints" (3-6 concise Russian benefits), "searchTags" (3-8 Russian phrases), "warnings" (review notes for missing facts or risky claims), "confidence" (0-1).',
+    'Example shape: {"description":"Краткое описание товара.","bulletPoints":["Мягкий материал"],"searchTags":["женское белье"],"warnings":[],"confidence":0.8}',
+  ].join(' ');
+}
+
+function buildEffectivePrompt(field: ProductContentField, prompt: string): string {
+  return `${PRODUCT_COPYWRITING_GUARDRAIL}\n\n${outputContractForField(field)}\n\n${prompt}`.trim();
+}
+
+function safeParseJsonObject(value: string): Record<string, unknown> | null {
+  const trimmed = value.trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  const candidates = [trimmed];
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      // Try the next possible JSON span.
+    }
+  }
+  return null;
+}
+
+function cleanDraftList(value: unknown, maxItems: number, maxLength: number): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = cleanText(item).slice(0, maxLength);
+    if (!text || CJK_RE.test(text) || HTML_OR_URL_RE.test(text) || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+    if (out.length >= maxItems) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function cleanConfidence(value: unknown): number | undefined {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence)) return undefined;
+  return Math.max(0, Math.min(1, Math.round(confidence * 100) / 100));
+}
+
+function structuredFromObject(field: ProductContentField, object: Record<string, unknown>, text: string): ProductContentStructuredDraft | undefined {
+  const structured: ProductContentStructuredDraft = {};
+  if (field === 'title') structured.title = text;
+  else structured.description = text;
+  const bulletPoints = cleanDraftList(object.bulletPoints ?? object.bullets, 6, 180);
+  const searchTags = cleanDraftList(object.searchTags ?? object.tags ?? object.keywords, 8, 80);
+  const warnings = cleanDraftList(object.warnings ?? object.reviewWarnings ?? object.risks, 8, 180);
+  const confidence = cleanConfidence(object.confidence);
+  if (bulletPoints) structured.bulletPoints = bulletPoints;
+  if (searchTags) structured.searchTags = searchTags;
+  if (warnings) structured.warnings = warnings;
+  if (confidence !== undefined) structured.confidence = confidence;
+  return Object.keys(structured).length ? structured : undefined;
+}
+
+function parseGeneratedProductContent(field: ProductContentField, raw: unknown): { text: string; structured?: ProductContentStructuredDraft } {
+  const rawText = String(raw || '').trim();
+  const object = safeParseJsonObject(rawText);
+  if (!object) return { text: cleanText(rawText) };
+  const textKey = field === 'title' ? 'title' : 'description';
+  const localizedTextKey = field === 'title' ? 'ruTitle' : 'ruDescription';
+  const text = cleanText(object[textKey] ?? object[localizedTextKey] ?? object.text);
+  return {
+    text,
+    structured: structuredFromObject(field, object, text),
+  };
+}
+
+function serializeProductContentDraftForCache(parsed: { text: string; structured?: ProductContentStructuredDraft }): string {
+  if (!parsed.structured) return parsed.text;
+  return JSON.stringify({ version: PRODUCT_CONTENT_CACHE_VERSION, text: parsed.text, structured: parsed.structured });
+}
+
+function parseCachedProductContentDraft(value: unknown, field: ProductContentField): { text: string; structured?: ProductContentStructuredDraft } {
+  const object = safeParseJsonObject(String(value || ''));
+  if (object && object.version === PRODUCT_CONTENT_CACHE_VERSION) {
+    const text = cleanText(object.text);
+    const structured = metadataRecord(object.structured) as ProductContentStructuredDraft;
+    return { text, structured: Object.keys(structured).length ? structured : undefined };
+  }
+  return parseGeneratedProductContent(field, value);
 }
 
 function promptHash(prompt: string): string {
@@ -178,13 +294,16 @@ function buildProductContentInput(item: ProductContentAiItem, field: ProductCont
 
 function validateGeneratedText(field: ProductContentField, text: string): string | null {
   if (!text) return field === 'title' ? 'Generated title is unsafe for Ozon' : 'Generated description is unsafe for Ozon';
+  if (HTML_OR_URL_RE.test(text) || SOURCE_COMMERCE_NOISE_RE.test(text)) {
+    return field === 'title' ? 'Generated title is unsafe for Ozon' : 'Generated description is unsafe for Ozon';
+  }
   if (field === 'title') {
     if (text.length < 5 || text.length > 200 || CJK_RE.test(text) || !CYRILLIC_RE.test(text)) {
       return 'Generated title is unsafe for Ozon';
     }
   }
   if (field === 'description') {
-    if (text.length < 10 || text.length > 5000 || (CJK_RE.test(text) && !CYRILLIC_RE.test(text))) {
+    if (text.length < 10 || text.length > 5000 || CJK_RE.test(text) || !CYRILLIC_RE.test(text)) {
       return 'Generated description is unsafe for Ozon';
     }
   }
@@ -215,7 +334,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
     if (!prompt) return { ok: false, error: `AI ${field} prompt is empty`, drafts, limit: latestLimit };
     const namespace = namespaceForField(field);
     const inputText = buildProductContentInput(params.item, field);
-    const effectivePrompt = buildEffectivePrompt(prompt);
+    const effectivePrompt = buildEffectivePrompt(field, prompt);
     const hash = promptHash(effectivePrompt);
 
     try {
@@ -262,8 +381,8 @@ export async function generateProductContentDraft(params: GenerateProductContent
             throw new Error(ai.error || 'AI generation failed');
           }
 
-          const text = cleanText(ai.text);
-          const validationError = validateGeneratedText(field, text);
+          const parsed = parseGeneratedProductContent(field, ai.text);
+          const validationError = validateGeneratedText(field, parsed.text);
           if (validationError) {
             await recordAiUsageEvent(params.usageStore, {
               namespace,
@@ -286,7 +405,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
             kind: 'request',
             usage: ai.usage,
           });
-          return { outputText: text, provider: ai.provider, model: ai.model, usage: ai.usage ? { ...ai.usage } : null };
+          return { outputText: serializeProductContentDraftForCache(parsed), provider: ai.provider, model: ai.model, usage: ai.usage ? { ...ai.usage } : null };
         },
       });
 
@@ -310,8 +429,10 @@ export async function generateProductContentDraft(params: GenerateProductContent
         date,
       });
       latestLimit = { used: limit.used, remaining: limit.remaining, limit: limit.limit };
+      const parsedCachedDraft = parseCachedProductContentDraft(cached.outputText, field);
       drafts[field] = {
-        text: cached.outputText,
+        text: parsedCachedDraft.text,
+        structured: parsedCachedDraft.structured,
         source: cached.source,
         provider: cached.record.provider,
         model: cached.record.model,
