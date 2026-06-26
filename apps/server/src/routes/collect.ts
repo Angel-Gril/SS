@@ -2013,7 +2013,11 @@ function sourceCategorySearchTerms(value: unknown): string[] {
     [/裙|skirt|dress/i, ['юбка', 'платье', 'skirt', 'dress']],
     [/文胸|胸罩|胸垫|无痕|聚拢|薄杯|厚杯|bra/i, ['бюстгальтер', 'бюстгальтеры', 'bra']],
     [/内衣|lingerie/i, ['белье', 'бельё', 'lingerie']],
+    [/内裤|underwear/i, ['трусы', 'нижнее белье', 'белье', 'бельё', 'underwear']],
     [/吊带|背心|camisole|tank/i, ['майка', 'топ', 'белье', 'бельё']],
+    [/遥控玩具|遥控|玩具车|remote control|rc toy/i, ['радиоуправляемые игрушки', 'игрушка радиоуправляемая', 'радиоуправляем', 'toy']],
+    [/婴儿床铃|床铃|床挂|baby mobile/i, ['мобили и дуги в кроватку', 'мобиль', 'baby mobile']],
+    [/玩具|toy/i, ['игрушки', 'игрушка', 'toy']],
   ];
   for (const [pattern, words] of expansions) {
     if (pattern.test(term)) out.push(...words.map(normalizeSourceCategoryToken));
@@ -2053,9 +2057,23 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
   if (/文胸|胸罩|胸垫|bra|бюстгальтер/.test(sourceText)) {
     if (/бюстгальтер|лифчик|bra/.test(haystack)) score += 28;
   }
+  if (/内裤|underwear|трус|нижнее белье|бель[её]/.test(sourceText)) {
+    const beddingCandidate = /постельн|пододеял|простын|наволоч|одеял|матрас|бельевая|бельёвая|веревк|верёвк/.test(haystack);
+    if (/трус|нижнее белье|женск\S* бель[её]|underwear/.test(haystack)) score += 34;
+    if (beddingCandidate) score -= 200;
+  }
   if (/睡衣|睡裙|睡袍|家居服|sleepwear|nightdress|nightgown|pajamas?|pyjamas?|пижам|ночн|сорочк|пеньюар/.test(sourceText)) {
     if (/пижам|ночн|сорочк|пеньюар|домашн|халат|sleepwear|nightdress|nightgown/.test(haystack)) score += 42;
     if (/бюстгальтер|лифчик|bra|аксессуар для бюстгальтера/.test(haystack)) score -= 28;
+  }
+  if (/遥控玩具|радиоуправляем|remote control|rc toy/.test(sourceText)) {
+    if (/радиоуправляем|игрушк/.test(haystack)) score += 34;
+  }
+  if (/婴儿床铃|床铃|床挂|мобил|baby mobile/.test(sourceText)) {
+    if (/мобил|кроватк|дуг/.test(haystack)) score += 34;
+  }
+  if (/玩具|toy|игруш/.test(sourceText)) {
+    if (/игруш|toy/.test(haystack)) score += 18;
   }
   if (/спецодежд|медицинск|малыш|детск|ребен|ребён|тактическ|прессотерапии/.test(haystack)) score -= 18;
   return score;
@@ -2157,12 +2175,15 @@ export function buildSourceOzonCategoryCandidates(input: {
   for (const row of treeRows) {
     const textScore = categoryTextScore(sourceTerms, row);
     if (!sourceIsAdult && isAdultOzonCategoryCandidate(row)) continue;
-    if (textScore <= 0 && byKey.size >= 5) continue;
-    addCandidate(row, textScore > 0 ? 30 + textScore : 5, 'tree_match', textScore > 0 ? ['类目名称相似', '源商品画像'] : ['备选类目'], 0);
+    if (textScore <= 0) continue;
+    addCandidate(row, 30 + textScore, 'tree_match', ['类目名称相似', '源商品画像'], 0);
   }
 
   const sorted = Array.from(byKey.values())
-    .filter((candidate) => candidate.source === 'shared_history' || candidate.reasons.some((reason) => reason === '类目名称相似') || byKey.size <= 5)
+    .filter((candidate) => (
+      candidate.source === 'shared_history'
+      || candidate.reasons.some((reason) => reason === '类目名称相似')
+    ))
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
   sorted.forEach((candidate, index) => {

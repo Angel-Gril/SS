@@ -1189,7 +1189,7 @@ describe('collect publish helpers', () => {
       item: sourceItem,
       categoryTree: [
         { description_category_id: 170001, category_name: 'Одежда', type_id: 91001, type_name: 'Футболки', children: [] },
-        { description_category_id: 170002, category_name: 'Дом', type_id: 91002, type_name: 'Термокружки', children: [] },
+        { description_category_id: 170002, category_name: 'Одежда', type_id: 91002, type_name: 'Футболки', children: [] },
       ],
       attributesByCategory: {
         '170001:91001': [
@@ -1223,7 +1223,7 @@ describe('collect publish helpers', () => {
     expect(candidates[0]?.attributePlan.missingRequired).toEqual([
       { attributeId: 9003, attributeName: 'Сезон', standardKey: 'seasons', reason: 'no_source_standard_value' },
     ]);
-    expect(candidates[1]).toMatchObject({ categoryId: 170002, typeId: 91002, label: 'risky', selected: false });
+    expect(candidates[1]).toMatchObject({ categoryId: 170002, typeId: 91002, selected: false });
   });
 
   it('extracts Ozon type leaves from parent category nodes and matches Chinese source terms', () => {
@@ -1421,7 +1421,7 @@ describe('collect publish helpers', () => {
       categoryTree: [
         {
           description_category_id: 200,
-          category_name: 'Неизвестный раздел',
+          category_name: 'Игрушки неизвестные',
           children: [
             { type_id: 300, type_name: 'Неизвестный тип', children: [] },
           ],
@@ -1431,21 +1431,21 @@ describe('collect publish helpers', () => {
         {
           descriptionCategoryId: 200,
           typeId: 300,
-          categoryPathRu: ['Неизвестный раздел'],
+          categoryPathRu: ['Игрушки неизвестные'],
           categoryPathZh: [''],
           categoryLevels: [
-            { level: 1, categoryId: 200, nameRu: 'Неизвестный раздел', nameZh: '', translated: false },
+            { level: 1, categoryId: 200, nameRu: 'Игрушки неизвестные', nameZh: '', translated: false },
           ],
-          categoryNameRu: 'Неизвестный раздел',
+          categoryNameRu: 'Игрушки неизвестные',
           categoryNameZh: '',
           typeNameRu: 'Неизвестный тип',
           typeNameZh: '',
-          displayPathRu: 'Неизвестный раздел / Неизвестный тип',
+          displayPathRu: 'Игрушки неизвестные / Неизвестный тип',
           displayPathZh: '待翻译类目1 / 待翻译类型',
           translationStatus: 'missing',
-          untranslatedTerms: ['Неизвестный раздел', 'Неизвестный тип'],
-          keywords: ['Неизвестный раздел', 'Неизвестный тип', '200', '300'],
-          searchText: 'неизвестный раздел неизвестный тип 200 300',
+          untranslatedTerms: ['Игрушки неизвестные', 'Неизвестный тип'],
+          keywords: ['Игрушки неизвестные', 'Неизвестный тип', '200', '300'],
+          searchText: 'игрушки неизвестные неизвестный тип 200 300',
         },
       ],
     } as any);
@@ -1454,9 +1454,9 @@ describe('collect publish helpers', () => {
       categoryId: 200,
       typeId: 300,
       displayPathZh: '待翻译类目1 / 待翻译类型',
-      displayPathRu: 'Неизвестный раздел / Неизвестный тип',
+      displayPathRu: 'Игрушки неизвестные / Неизвестный тип',
       translationStatus: 'missing',
-      untranslatedTerms: ['Неизвестный раздел', 'Неизвестный тип'],
+      untranslatedTerms: ['Игрушки неизвестные', 'Неизвестный тип'],
     });
     expect(candidates[0]?.displayPathZh).not.toMatch(/[А-Яа-яЁё]/);
   });
@@ -2284,7 +2284,123 @@ describe('collect publish helpers', () => {
     expect(candidates.map((candidate) => candidate.typeId)).not.toContain(910001);
     expect(candidates[0]).toMatchObject({ typeId: 910002, label: 'recommended', selected: true });
   });
+  it('does not surface arbitrary tree fallback categories when source terms have no category match', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '8215#萌熊贺岁10A抗菌加长底裆本命必备红内裤女',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['服饰内衣', '女士内衣', '内裤'],
+          categoryName: '女士内裤',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['红色'],
+            sizes: ['M'],
+            materials: ['棉'],
+            gender: { value: 'female' },
+            seasons: [],
+            packageDimensionsMm: null,
+            packageWeightG: 100,
+            categoryHints: ['女士内衣', '内裤'],
+            missingForOzon: ['包装尺寸'],
+          },
+        },
+      },
+      categoryTree: [
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 97620, type_name: 'Средство для ухода за музыкальными инструментами', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 971116952, type_name: 'Аксессуар для защиты музыкальных инструментов', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 445125483, type_name: 'Сумка для музыкального оборудования', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 445125484, type_name: 'Подставка для музыкальных инструментов', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 445125485, type_name: 'Струны для музыкальных инструментов', children: [] },
+      ],
+    });
 
+    expect(candidates).toEqual([]);
+  });
+  it('does not treat bedding categories as underwear matches', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '8215#萌熊贺岁10A抗菌加长底裆本命必备红内裤女',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['服饰内衣', '女士内衣', '内裤'],
+          categoryName: '女士内裤',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['红色'],
+            sizes: ['M'],
+            materials: ['棉'],
+            gender: { value: 'female' },
+            seasons: [],
+            packageDimensionsMm: null,
+            packageWeightG: 100,
+            categoryHints: ['女士内衣', '内裤'],
+            missingForOzon: ['包装尺寸'],
+          },
+        },
+      },
+      categoryTree: [
+        { description_category_id: 17028888, category_name: 'Дом и сад', type_id: 88001, type_name: 'Постельное белье', children: [] },
+      ],
+    });
+
+    expect(candidates).toEqual([]);
+  });
+  it('matches underwear source titles to Ozon underwear categories instead of early unrelated tree rows', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '8215#萌熊贺岁10A抗菌加长底裆本命必备红内裤女',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['红色'],
+            sizes: ['M'],
+            materials: ['棉'],
+            gender: { value: 'female' },
+            seasons: [],
+            packageDimensionsMm: null,
+            packageWeightG: 100,
+            categoryHints: [],
+            missingForOzon: ['包装尺寸'],
+          },
+        },
+      },
+      categoryTree: [
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 97620, type_name: 'Средство для ухода за музыкальными инструментами', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 971116952, type_name: 'Аксессуар для защиты музыкальных инструментов', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 445125483, type_name: 'Сумка для музыкального оборудования', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 445125484, type_name: 'Подставка для музыкальных инструментов', children: [] },
+        { description_category_id: 17028927, category_name: 'Музыкальные инструменты', type_id: 445125485, type_name: 'Струны для музыкальных инструментов', children: [] },
+        { description_category_id: 200001517, category_name: 'Женское белье', type_id: 93099, type_name: 'Трусы', children: [] },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 200001517,
+          typeId: 93099,
+          categoryPathRu: ['Одежда', 'Женское белье'],
+          categoryPathZh: ['服装', '女士内衣'],
+          categoryLevels: [],
+          categoryNameRu: 'Женское белье',
+          categoryNameZh: '女士内衣',
+          typeNameRu: 'Трусы',
+          typeNameZh: '内裤',
+          displayPathRu: 'Одежда / Женское белье / Трусы',
+          displayPathZh: '服装 / 女士内衣 / 内裤',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '女士内衣', '内裤'],
+          searchText: 'одежда женское белье трусы 服装 女士内衣 内裤',
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({ typeId: 93099, selected: true });
+    expect(candidates.map((candidate) => candidate.categoryName)).not.toContain('Музыкальные инструменты');
+  });
   it('uses source standard category hints through the product profile when titles are too generic', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {
