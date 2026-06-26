@@ -72,6 +72,10 @@ function hasCjkText(value?: string | null) {
   return /[\u3400-\u9fff]/.test(String(value || ''));
 }
 
+function hasRussianText(value: unknown) {
+  const text = String(value || '').trim();
+  return Boolean(text && /[А-Яа-яЁё]/.test(text) && !hasCjkText(text));
+}
 function cleanPublishPreviewName(value: unknown): string {
   const text = String(value || '')
     .normalize('NFKC')
@@ -131,7 +135,7 @@ function normalizePreviewImages(value: unknown): string[] {
 
 function hasCollectedDescription(item: { notes?: string | null; metadata?: Record<string, any> | null }) {
   const meta = item.metadata || {};
-  return Boolean(String(meta.sourceDescriptionRu || item.notes || '').trim());
+  return hasRussianText(meta.sourceDescriptionRu) || Boolean(String(item.notes || '').trim());
 }
 
 function hasCollectedRichContent(item: { metadata?: Record<string, any> | null }) {

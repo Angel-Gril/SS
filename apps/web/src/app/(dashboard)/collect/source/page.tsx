@@ -116,6 +116,8 @@ const detailSections: Array<{ key: DetailSection; label: string }> = [
 ];
 
 const sourceListingStatusLegend = '可上架 / 待复核 / 阻断 / 真实商品标题 / 俄文标题/描述 / Ozon 类目/type / Ozon 必填属性/字典值 / 颜色尺码变体 / 重量 / 包装尺寸 / 销售受限/出口限制';
+const SOURCE_CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
+const SOURCE_CJK_TEXT_RE = /[\u3400-\u9fff]/;
 
 function normalizePlatform(value: unknown): PlatformFilter | 'other' {
   const text = String(value || '').trim().toLowerCase();
@@ -488,6 +490,36 @@ function metadataArray(item: SourceCollectItem, key: string): unknown[] {
   return sourceMetadataArray(item, key);
 }
 
+function sourcePlainText(value: unknown): string {
+  return String(value || '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<(br|\/p|\/div|\/li|\/h[1-6])\b[^>]*>/gi, ' ')
+    .replace(/<li\b[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sourceRussianText(value: unknown): string {
+  const text = sourcePlainText(value);
+  return text && SOURCE_CYRILLIC_TEXT_RE.test(text) && !SOURCE_CJK_TEXT_RE.test(text) ? text : '';
+}
+
+function sourceTranslatedTitleText(item: SourceCollectItem): string {
+  return sourceRussianText(item.metadata?.publishTitleRu) || sourceRussianText(item.metadata?.titleRu);
+}
+
+function sourceTranslatedDescriptionText(item: SourceCollectItem): string {
+  return sourceRussianText(item.metadata?.sourceDescriptionRu) || sourceRussianText(item.metadata?.descriptionRu);
+}
+
 function hasMetadataValue(item: SourceCollectItem, keys: string[]): boolean {
   return keys.some((key) => {
     const value = item.metadata?.[key];
@@ -506,7 +538,7 @@ function sourceAiContentDrafts(item: SourceCollectItem): Partial<Record<'title' 
 
 function sourceHasTranslation(item: SourceCollectItem): boolean {
   const drafts = sourceAiContentDrafts(item);
-  return hasMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu']) || Boolean(drafts.title?.text || drafts.description?.text);
+  return Boolean(sourceTranslatedTitleText(item) || sourceTranslatedDescriptionText(item) || drafts.title?.text || drafts.description?.text);
 }
 
 function sourceHasWatermark(item: SourceCollectItem): boolean {
@@ -1047,8 +1079,8 @@ function SourceTranslationSection({ item, onItemUpdate }: { item: SourceCollectI
           </div>
           <div className="grid gap-2">
             <KeyValue label="中文标题" value={sourceDisplayTitle(item)} />
-            <KeyValue label="俄文标题" value={String(item.metadata?.publishTitleRu || item.metadata?.titleRu || '-')} />
-            <KeyValue label="俄文描述" value={String(item.metadata?.sourceDescriptionRu || item.metadata?.descriptionRu || '-')} />
+            <KeyValue label="俄文标题" value={sourceTranslatedTitleText(item) || '-'} />
+            <KeyValue label="俄文描述" value={sourceTranslatedDescriptionText(item) || '-'} />
             <KeyValue label="AI 标题草稿" value={drafts.title?.text || '-'} />
             <KeyValue label="AI 描述草稿" value={drafts.description?.text || '-'} />
             <KeyValue label="AI 草稿来源" value={[drafts.title?.source, drafts.title?.model].filter(Boolean).join(' / ') || '-'} />

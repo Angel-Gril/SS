@@ -103,4 +103,49 @@ describe('AI text client', () => {
       error: 'AI response empty: model used the token budget for reasoning; increase max tokens or use a non-reasoning chat model',
     });
   });
+  it('retries once with a larger completion budget when reasoning consumes the first response', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: '',
+              reasoning_content: 'The model spent the whole budget reasoning.',
+            },
+            finish_reason: 'length',
+          }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'Готовое описание' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21 },
+        }),
+      });
+
+    const result = await generateAiText({
+      messages: [{ role: 'user', content: 'Generate title' }],
+      config: config({
+        provider: 'custom',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'secret-token',
+        model: 'deepseek-v4-flash',
+      }),
+      fetchImpl: fetchMock,
+      maxTokens: 120,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'Готовое описание',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(firstBody.max_tokens).toBe(120);
+    expect(secondBody.max_tokens).toBeGreaterThan(120);
+  });
 });

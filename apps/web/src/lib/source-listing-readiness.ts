@@ -18,6 +18,8 @@ interface SourceListingItemLike {
 }
 
 const RESTRICTED_PRODUCT_RE = /(仿|高仿|a货|copy|复制品|1\s*[:：]\s*1|原版|正品|战术|军用|无人机|电子烟|烟草|酒|药品|处方|医疗器械|刀具|弩|枪|弹药|化学品|农药|危险品|成人用品)/i;
+const CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
+const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 
 function metadataArray(item: SourceListingItemLike, key: string): unknown[] {
   const value = item.metadata?.[key];
@@ -28,6 +30,18 @@ function stringValue(value: unknown): string {
   return String(value || '').trim();
 }
 
+function isRussianText(value: unknown): boolean {
+  const text = stringValue(value);
+  return Boolean(text && CYRILLIC_TEXT_RE.test(text) && !CJK_TEXT_RE.test(text));
+}
+
+function hasRussianMetadataValue(item: SourceListingItemLike, keys: string[]): boolean {
+  return keys.some((key) => {
+    const value = item.metadata?.[key];
+    if (Array.isArray(value)) return value.some((entry) => isRussianText(entry));
+    return isRussianText(value);
+  });
+}
 
 function sourceAttributes(item: SourceListingItemLike): Array<Record<string, unknown>> {
   return metadataArray(item, 'sourceAttributes')
@@ -104,7 +118,7 @@ export function evaluateSourceListingReadiness(item: SourceListingItemLike): Sou
   };
 
   if (titleNeedsReview(item)) addMissing('真实商品标题', 'blocker');
-  if (!hasMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu'])) addMissing('俄文标题/描述', 'warning');
+  if (!hasRussianMetadataValue(item, ['publishTitleRu', 'sourceDescriptionRu', 'titleRu', 'descriptionRu'])) addMissing('俄文标题/描述', 'warning');
   if (!hasCategoryAndType(item)) addMissing('Ozon 类目/type', 'blocker');
   if (!hasOzonAttributeReadiness(item)) addMissing('Ozon 必填属性/字典值', 'warning');
   if (!standard.brand.value && !standard.brand.isBrandless) addMissing('品牌/无品牌', 'warning');

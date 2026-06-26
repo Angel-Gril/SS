@@ -118,6 +118,10 @@ function containsCyrillicText(value: unknown): boolean {
   return CYRILLIC_TEXT_RE.test(String(value || ''));
 }
 
+function containsRussianText(value: unknown): boolean {
+  return containsCyrillicText(value) && !containsCjkText(value);
+}
+
 function variantWordCount(value: unknown): number {
   return String(value || '').trim().split(/\s+/).filter(Boolean).length;
 }
@@ -950,7 +954,7 @@ export function resolvePublishDescription(
   ];
   for (const candidate of candidates) {
     const description = sanitizePublishDescription(candidate);
-    if (description) return description;
+    if (description && containsRussianText(description)) return description;
   }
   return sanitizeNotesPublishDescription(item.notes);
 }
@@ -1116,7 +1120,7 @@ export function buildCollectedGoodsMetadata(input: {
   const sourceDescription = sanitizePublishDescription(input.description);
   const sourceDescriptionRaw = cleanRawSourceText(input.description);
   if (sourceDescriptionRaw) metadata.sourceDescriptionRaw = sourceDescriptionRaw;
-  if (sourceDescription && !containsCjkText(sourceDescription)) metadata.sourceDescriptionRu = sourceDescription;
+  if (sourceDescription && containsRussianText(sourceDescription)) metadata.sourceDescriptionRu = sourceDescription;
   if (input.richDescriptionJson) metadata.sourceRichDescriptionJson = String(input.richDescriptionJson);
   const sourceMainImages = normalizeCollectedSourceImageList(input.sourceMainImages);
   if (sourceMainImages.length) metadata.sourceMainImages = sourceMainImages;

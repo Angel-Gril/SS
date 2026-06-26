@@ -73,6 +73,10 @@ for (const label of ['部分翻译', '翻译缺失']) {
 for (const label of ['待翻译', '图片待处理', '待水印', '待改图', '可上架']) {
   assert.match(page, new RegExp(label), `source collection row should expose workflow badge: ${label}`);
 }
+
+for (const helper of ['sourceRussianText', 'sourceTranslatedTitleText', 'sourceTranslatedDescriptionText']) {
+  assert.match(page, new RegExp(helper), `source collection translation should validate Cyrillic text with helper: ${helper}`);
+}
 for (const label of ['详情图原始素材', '包装信息', '原始富内容待处理', '富内容待处理']) {
   assert.match(page, new RegExp(label), `source collection page should expose 1688 source asset workflow label: ${label}`);
 }

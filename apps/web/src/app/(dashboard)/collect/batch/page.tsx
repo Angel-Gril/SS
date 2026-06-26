@@ -31,6 +31,10 @@ interface BatchItem {
 }
 interface ParsedLine { sku: string; targetPrice: number | null; raw: string; }
 
+function hasRussianText(value: unknown) {
+  const text = String(value || '').trim();
+  return Boolean(text && /[А-Яа-яЁё]/.test(text) && !/[\u3400-\u9fff]/.test(text));
+}
 function parseSkuLines(text: string): { ok: ParsedLine[]; bad: string[] } {
   const ok: ParsedLine[] = [];
   const bad: string[] = [];
@@ -45,7 +49,7 @@ function parseSkuLines(text: string): { ok: ParsedLine[]; bad: string[] } {
 }
 
 function hasCollectedDescription(item: BatchItem) {
-  return Boolean(String(item.metadata?.sourceDescriptionRu || '').trim());
+  return hasRussianText(item.metadata?.sourceDescriptionRu);
 }
 
 function hasCollectedRichContent(item: BatchItem) {

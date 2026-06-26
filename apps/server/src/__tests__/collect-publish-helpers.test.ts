@@ -281,6 +281,18 @@ describe('collect publish helpers', () => {
     });
     expect(metadata).not.toHaveProperty('sourceDescriptionRu');
   });
+  it('does not treat source HTML image fragments as Russian descriptions', () => {
+    const metadata = buildCollectedGoodsMetadata({
+      title: 'U家舒服蕾细肩带内衣女士薄款无痕聚拢防下垂法式V领蕾丝文胸罩',
+      sourceTitleRaw: 'U家舒服蕾细肩带内衣女士薄款无痕聚拢防下垂法式V领蕾丝文胸罩',
+      sourceLocale: 'zh-CN',
+      sourcePlatform: '1688',
+      description: '<img style="display: block; width: 100%; height: auto;" src="https://cbu01.alicdn.com/img/ibank/demo.jpg?x-oss-process=image/resize,w_790"><br c',
+    });
+
+    expect(metadata.sourceDescriptionRaw).toContain('<img');
+    expect(metadata).not.toHaveProperty('sourceDescriptionRu');
+  });
 
   it('persists source product profile packaging reasons for collection details', () => {
     const metadata = buildCollectedGoodsMetadata({
@@ -569,6 +581,14 @@ describe('collect publish helpers', () => {
     expect(resolvePublishDescription({
       notes: '重量: 500g\n  Краткое описание из заметок  ',
       metadata: {},
+    })).toBe('Краткое описание из заметок');
+  });
+  it('ignores dirty non-Russian source descriptions when resolving publish descriptions', () => {
+    expect(resolvePublishDescription({
+      notes: '重量: 500g\n  Краткое описание из заметок  ',
+      metadata: {
+        sourceDescriptionRu: '<img style="display: block; width: 100%; height: auto;" src="https://cbu01.alicdn.com/img/ibank/demo.jpg?x-oss-process=image/resize,w_790"><br c',
+      },
     })).toBe('Краткое описание из заметок');
   });
 

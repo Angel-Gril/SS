@@ -100,6 +100,17 @@ function item(overrides = {}) {
   assert.ok(result.missingFields.includes('俄文标题/描述'));
   assert.ok(result.warnings.includes('图片待水印/改图'));
 }
+{
+  const result = readiness.evaluateSourceListingReadiness(item({
+    metadata: {
+      ...item().metadata,
+      publishTitleRu: '',
+      sourceDescriptionRu: '<img style="display: block; width: 100%; height: auto;" src="https://cbu01.alicdn.com/img/ibank/demo.jpg"><br c',
+    },
+  }));
+  assert.equal(result.status, 'needs_review');
+  assert.ok(result.missingFields.includes('俄文标题/描述'));
+}
 
 {
   const result = readiness.evaluateSourceListingReadiness(item({
