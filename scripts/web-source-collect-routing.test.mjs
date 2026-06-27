@@ -142,12 +142,48 @@ for (const icon of ['Languages', 'Droplets', 'Wand2', 'Calculator']) {
 for (const label of ['真实商品标题', '俄文标题/描述', 'Ozon 类目/type', '颜色尺码变体', '重量', '包装尺寸']) {
   assert.match(page, new RegExp(label), `source detail should expose missing field label: ${label}`);
 }
+for (const label of ['手动补录件重尺', '重量(g)', '长(mm)', '宽(mm)', '高(mm)', '保存件重尺']) {
+  assert.match(page, new RegExp(label.replace(/[()]/g, '\\$&')), `source listing detail should expose manual package edit control: ${label}`);
+}
+assert.match(
+  page,
+  /api\.post<[\s\S]*\/api\/collect\/save-customization|api\.post\(['"`]\/api\/collect\/save-customization/,
+  'source listing detail should save manual package weight and dimensions via collect customization API',
+);
+for (const label of ['去Ozon上架台', '上架到OZON']) {
+  assert.match(page, new RegExp(label), `source collection page should expose Ozon publish entry: ${label}`);
+}
+assert.match(
+  page,
+  /Upload/,
+  'source collection row should expose a publish action icon',
+);
 
 const skuCollectPage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');
 assert.match(
   skuCollectPage,
-  /sourceGroup:\s*['"]ozon['"]|sourceGroup['"]?\s*,\s*['"]ozon['"]|sourceGroup=ozon/,
-  'SKU follow collection page should request only Ozon collect records',
+  /defaultCollectSourceGroup\s*=\s*['"]ozon['"]/,
+  'SKU follow collection page should default to Ozon collect records',
+);
+assert.match(
+  skuCollectPage,
+  /sourceGroup:\s*collectSourceGroup/,
+  'SKU publish page should pass the selected source group to the collect API',
+);
+assert.match(
+  skuCollectPage,
+  /useSearchParams/,
+  'SKU publish page should read URL parameters for source collection handoff',
+);
+assert.match(
+  skuCollectPage,
+  /sourceGroupParam|collectSourceGroup|sourceGroupFromQuery/,
+  'SKU publish page should support sourceGroup query parameter while keeping Ozon as the default',
+);
+assert.match(
+  skuCollectPage,
+  /selected|selectId|preselect/i,
+  'SKU publish page should support preselecting a source item from the collection page handoff',
 );
 
 console.log('PASS web source collect routing');

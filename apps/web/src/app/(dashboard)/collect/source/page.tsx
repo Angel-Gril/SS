@@ -15,6 +15,8 @@ import {
   RefreshCw,
   Search,
   Store,
+  Save,
+  Upload,
   Wand2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -826,6 +828,11 @@ function SourceProductRow({
               >
                 <Calculator className="h-4 w-4" />
               </Button>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0" asChild>
+                <a href={`/collect?sourceGroup=source&selected=${encodeURIComponent(item.id)}`} title="上架到OZON">
+                  <Upload className="h-4 w-4" />
+                </a>
+              </Button>
               {item.sourceUrl ? (
                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0" asChild>
                   <a href={item.sourceUrl} target="_blank" rel="noreferrer" title="打开来源页面">
@@ -1139,6 +1146,8 @@ function SourceTranslationSection({ item, onItemUpdate }: { item: SourceCollectI
 function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
   const readiness = evaluateSourceListingReadiness(item);
   const missing = readiness.missingFields;
+  const standard = sourceStandardAttributeModel(item);
+  const standardDims = standard.packageDimensionsMm;
   const [shops, setShops] = useState<OzonShopOption[]>([]);
   const [shopId, setShopId] = useState('');
   const [shopsLoading, setShopsLoading] = useState(false);
@@ -1148,6 +1157,15 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [confirmMessage, setConfirmMessage] = useState('');
   const [selectedCandidateKey, setSelectedCandidateKey] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [packageForm, setPackageForm] = useState({
+    weightG: standard.packageWeightG ? String(standard.packageWeightG) : '',
+    lengthMm: standardDims ? String(standardDims.length) : '',
+    widthMm: standardDims ? String(standardDims.width) : '',
+    heightMm: standardDims ? String(standardDims.height) : '',
+  });
+  const [packageSaving, setPackageSaving] = useState(false);
+  const [packageMessage, setPackageMessage] = useState('');
+  const [packageError, setPackageError] = useState('');
   const candidates = categoryData?.candidates || [];
   const selectedCandidate = candidates.find((candidate) => ozonCategoryCandidateKey(candidate) === selectedCandidateKey) || candidates[0];
   const packagingEvidence = sourcePackagingEvidence(item);
@@ -1172,6 +1190,19 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    const nextStandard = sourceStandardAttributeModel(item);
+    const nextDims = nextStandard.packageDimensionsMm;
+    setPackageForm({
+      weightG: nextStandard.packageWeightG ? String(nextStandard.packageWeightG) : '',
+      lengthMm: nextDims ? String(nextDims.length) : '',
+      widthMm: nextDims ? String(nextDims.width) : '',
+      heightMm: nextDims ? String(nextDims.height) : '',
+    });
+    setPackageMessage('');
+    setPackageError('');
+  }, [item.id, item.metadata]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1229,8 +1260,66 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     setConfirming(false);
   }
 
+  function setPackageField(key: keyof typeof packageForm, value: string) {
+    setPackageForm((current) => ({ ...current, [key]: value }));
+    setPackageMessage('');
+    setPackageError('');
+  }
+
+  function packageNumber(value: string): number | null {
+    const number = Math.round(Number(value));
+    return Number.isFinite(number) && number > 0 ? number : null;
+  }
+
+  async function saveManualPackage() {
+    if (packageSaving) return;
+    const weightG = packageNumber(packageForm.weightG);
+    const lengthMm = packageNumber(packageForm.lengthMm);
+    const widthMm = packageNumber(packageForm.widthMm);
+    const heightMm = packageNumber(packageForm.heightMm);
+    if (!weightG && !lengthMm && !widthMm && !heightMm) {
+      setPackageError('请至少填写一个有效的重量或尺寸');
+      return;
+    }
+
+    setPackageSaving(true);
+    setPackageMessage('');
+    setPackageError('');
+    const body: Record<string, unknown> = { id: item.id };
+    if (weightG) body.weightG = weightG;
+    if (lengthMm) body.lengthMm = lengthMm;
+    if (widthMm) body.widthMm = widthMm;
+    if (heightMm) body.heightMm = heightMm;
+    const res = await api.post('/api/collect/save-customization', body);
+    setPackageSaving(false);
+    if (res.code === 1) {
+      const metadata = { ...(item.metadata || {}) };
+      if (weightG) metadata.weightG = weightG;
+      if (lengthMm) metadata.lengthMm = lengthMm;
+      if (widthMm) metadata.widthMm = widthMm;
+      if (heightMm) metadata.heightMm = heightMm;
+      onItemUpdate({ ...item, metadata });
+      setPackageMessage('已保存件重尺，发布时会优先使用这组数据');
+    } else {
+      setPackageError(res.msg || '保存件重尺失败');
+    }
+  }
+
   return (
     <div className="space-y-3">
+      <InfoPanel title="上架到OZON" count={readiness.status === 'ready' ? '可发布' : '需补齐'}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-muted-foreground">
+            当前页负责采集、文案、类目和件重尺准备；确认后进入发布台选择店铺、价格策略并提交 Ozon。
+          </div>
+          <Button type="button" size="sm" asChild>
+            <a href={`/collect?sourceGroup=source&selected=${encodeURIComponent(item.id)}`}>
+              <Upload className="mr-2 h-4 w-4" />
+              去Ozon上架台
+            </a>
+          </Button>
+        </div>
+      </InfoPanel>
       <InfoPanel title="上架检查" count={sourceListingStatusLabel(readiness.status)}>
         <div className="mb-2 flex flex-wrap gap-2">
           <Badge
@@ -1250,6 +1339,36 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
             ))}
           </div>
         ) : <div className="text-emerald-700">关键上架字段已采集或已补全</div>}
+      </InfoPanel>
+      <InfoPanel title="手动补录件重尺" count={sourceStandardPackageText(sourceStandardAttributeModel({ ...item, metadata: { ...(item.metadata || {}), ...packageForm } })) || null}>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">重量(g)</span>
+              <Input value={packageForm.weightG} onChange={(event) => setPackageField('weightG', event.target.value)} type="number" min="1" className="h-8" />
+            </label>
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">长(mm)</span>
+              <Input value={packageForm.lengthMm} onChange={(event) => setPackageField('lengthMm', event.target.value)} type="number" min="1" className="h-8" />
+            </label>
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">宽(mm)</span>
+              <Input value={packageForm.widthMm} onChange={(event) => setPackageField('widthMm', event.target.value)} type="number" min="1" className="h-8" />
+            </label>
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">高(mm)</span>
+              <Input value={packageForm.heightMm} onChange={(event) => setPackageField('heightMm', event.target.value)} type="number" min="1" className="h-8" />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={saveManualPackage} disabled={packageSaving}>
+              {packageSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              保存件重尺
+            </Button>
+            {packageMessage ? <span className="text-xs text-emerald-700">{packageMessage}</span> : null}
+            {packageError ? <span className="text-xs text-destructive">{packageError}</span> : null}
+          </div>
+        </div>
       </InfoPanel>
       <InfoPanel title="Ozon 类目候选" count={selectedCandidate ? ozonCandidateLabelText(selectedCandidate.label) : null}>
         <div className="space-y-3">
