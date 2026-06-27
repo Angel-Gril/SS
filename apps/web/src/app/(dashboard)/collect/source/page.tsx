@@ -29,7 +29,7 @@ import { evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/
 import { formatDate } from '@/lib/utils';
 import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
 
-type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall';
+type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall' | 'xianyu';
 type DetailSection = 'overview' | 'sku' | 'attributes' | 'images' | 'translation' | 'listing';
 type BadgeTone = 'ok' | 'warn' | 'muted' | 'info';
 
@@ -116,6 +116,7 @@ const platformTabs: Array<{ key: PlatformFilter; label: string }> = [
   { key: 'pdd', label: 'PDD' },
   { key: 'taobao', label: '淘宝' },
   { key: 'tmall', label: '天猫' },
+  { key: 'xianyu', label: '闲鱼' },
 ];
 
 const detailSections: Array<{ key: DetailSection; label: string }> = [
@@ -136,6 +137,7 @@ function normalizePlatform(value: unknown): PlatformFilter | 'other' {
   if (text.includes('1688')) return '1688';
   if (text.includes('pdd') || text.includes('pinduoduo') || text.includes('yangkeduo')) return 'pdd';
   if (text.includes('tmall') || text.includes('天猫')) return 'tmall';
+  if (text.includes('xianyu') || text.includes('goofish') || text.includes('闲鱼')) return 'xianyu';
   if (text.includes('taobao') || text.includes('淘宝')) return 'taobao';
   return 'other';
 }
@@ -145,6 +147,7 @@ function platformLabel(value: unknown): string {
   if (platform === 'pdd') return 'PDD';
   if (platform === 'taobao') return '淘宝';
   if (platform === 'tmall') return '天猫';
+  if (platform === 'xianyu') return '闲鱼';
   if (platform === '1688') return '1688';
   return String(value || '货源');
 }
@@ -683,6 +686,54 @@ function extractionDiagnosticText(item: SourceCollectItem): string {
   ].join(' / ');
 }
 
+function sourceFieldQualityRows(item: SourceCollectItem): Array<{ label: string; status: string; evidence: string }> {
+  const diagnostics = item.metadata?.extractionDiagnostics;
+  const data = diagnostics && typeof diagnostics === 'object' ? diagnostics as Record<string, unknown> : {};
+  const confidence = data.fieldConfidence && typeof data.fieldConfidence === 'object' ? data.fieldConfidence as Record<string, unknown> : {};
+  const standard = sourceStandardAttributeModel(item);
+  const fallback: Record<string, string> = {
+    title: sourceDisplayTitle(item) ? 'strong' : 'missing',
+    price: item.purchasePrice ? (String(item.metadata?.priceConfidence || '') === 'low' ? 'weak' : 'strong') : 'missing',
+    sku: sourceVariants(item).length ? 'strong' : 'missing',
+    images: sourcePreviewImages(item).length ? 'strong' : 'missing',
+    description: sourceTranslatedDescriptionText(item) || sourceRichContentDraft(item) ? 'strong' : 'missing',
+    package: standard.packageWeightG && standard.packageDimensionsMm ? 'strong' : (standard.packageWeightG || standard.packageDimensionsMm ? 'weak' : 'missing'),
+  };
+  const labels: Record<string, string> = {
+    title: '标题',
+    price: '价格',
+    sku: 'SKU',
+    images: '图片',
+    description: '详情/描述',
+    package: '件重尺',
+  };
+  const evidence: Record<string, string> = {
+    title: sourceDisplayTitle(item) || '-',
+    price: sourcePriceModelText(item) || '-',
+    sku: sourceVariants(item).length ? `${sourceVariants(item).length} 个变体` : '-',
+    images: `${sourcePreviewImages(item).length}/${sourceImageCount(item)}`,
+    description: sourceRichContentDraftSummary(item) || sourceTranslatedDescriptionText(item) || '-',
+    package: sourceStandardPackageText(standard),
+  };
+  return Object.keys(labels).map((key) => ({
+    label: labels[key] || key,
+    status: String(confidence[key] || fallback[key] || 'missing'),
+    evidence: evidence[key] || '-',
+  }));
+}
+
+function sourceFieldQualityLabel(status: string): string {
+  if (status === 'strong') return '强命中';
+  if (status === 'weak') return '弱猜测';
+  return '缺失';
+}
+
+function sourceFieldQualityClass(status: string): string {
+  if (status === 'strong') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'weak') return 'border-amber-200 bg-amber-50 text-amber-700';
+  return 'border-red-200 bg-red-50 text-red-700';
+}
+
 function sourceDisplayTitle(item: SourceCollectItem): string {
   const metaTitle = item.metadata?.sourceTitleRaw;
   return String(metaTitle || item.title || '未命名货源商品');
@@ -697,7 +748,7 @@ function sourceCategoryText(item: SourceCollectItem): string {
 }
 
 function isSourceCollectItem(item: SourceCollectItem): boolean {
-  return ['1688', 'pdd', 'taobao', 'tmall'].includes(normalizePlatform(item.sourcePlatform));
+  return ['1688', 'pdd', 'taobao', 'tmall', 'xianyu'].includes(normalizePlatform(item.sourcePlatform));
 }
 
 function SourceProductRow({
@@ -933,6 +984,19 @@ function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
       </div>
       <InfoPanel title="采集诊断" count={null}>
         <div className="text-muted-foreground">{extractionDiagnosticText(item) || '暂无诊断信息'}</div>
+      </InfoPanel>
+      <InfoPanel title="字段级采集质量" count={null}>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {sourceFieldQualityRows(item).map((row) => (
+            <div key={row.label} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-medium">{row.label}</span>
+                <Badge variant="outline" className={sourceFieldQualityClass(row.status)}>{sourceFieldQualityLabel(row.status)}</Badge>
+              </div>
+              <div className="break-words text-muted-foreground">{row.evidence}</div>
+            </div>
+          ))}
+        </div>
       </InfoPanel>
       <InfoPanel title="来源信息" count={null}>
         <div className="grid gap-2 md:grid-cols-2">

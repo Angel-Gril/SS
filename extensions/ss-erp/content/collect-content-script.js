@@ -20,6 +20,7 @@
   const hasAnyKey = SourceProductCore.hasAnyKey;
   const pickFirstValue = SourceProductCore.pickFirstValue;
   const extract1688ProductFromSources = SourceProductCore.extract1688ProductFromSources;
+  const MarketplaceCollector = globalThis.SS_ERP_MARKETPLACE_PRODUCT_COLLECTOR || {};
   let lastOzonUrl = "";
 
   injectPageBridge();
@@ -1010,6 +1011,7 @@
     jd: extractJdProduct,
     taobao: extractTaobaoProduct,
     tmall: extractTmallProduct,
+    xianyu: extractXianyuProduct,
     amazon: extractAmazonProduct
   };
 
@@ -2289,6 +2291,14 @@
   }
 
   function extractTaobaoProduct(context) {
+    if (MarketplaceCollector && typeof MarketplaceCollector.extractTaobaoProduct === "function") {
+      return MarketplaceCollector.extractTaobaoProduct({
+        ...context,
+        url: location.href,
+        host: location.hostname,
+        documentTitle: document.title || ""
+      });
+    }
     return buildProductResult(context, {
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
@@ -2300,6 +2310,14 @@
   }
 
   function extractTmallProduct(context) {
+    if (MarketplaceCollector && typeof MarketplaceCollector.extractTmallProduct === "function") {
+      return MarketplaceCollector.extractTmallProduct({
+        ...context,
+        url: location.href,
+        host: location.hostname,
+        documentTitle: document.title || ""
+      });
+    }
     return buildProductResult(context, {
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
       weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i, /克重[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
@@ -2307,6 +2325,25 @@
       priceSelectors: [".Price--priceText", ".tm-price", ".tb-rmb-num", "[class*='priceText']", "[class*='Price']", "[class*='price']"],
       shopSelectors: [".shopName", ".slogo-shopname"],
       productIdRegexes: [/id=(\d+)/i]
+    });
+  }
+
+  function extractXianyuProduct(context) {
+    if (MarketplaceCollector && typeof MarketplaceCollector.extractXianyuProduct === "function") {
+      return MarketplaceCollector.extractXianyuProduct({
+        ...context,
+        url: location.href,
+        host: location.hostname,
+        documentTitle: document.title || ""
+      });
+    }
+    return buildProductResult(context, {
+      monthlySalesKeywords: [],
+      weightKeywords: [/重量[:：]?\s*([0-9.,]+)\s*(g|kg|克|千克|斤)/i],
+      titleSelectors: ["h1", "[class*='title']", "title"],
+      priceSelectors: ["[class*='price']", "[class*='Price']"],
+      shopSelectors: ["[class*='seller']", "[class*='nick']", "[class*='user']"],
+      productIdRegexes: [/[?&](?:id|itemId)=(\w+)/i]
     });
   }
 

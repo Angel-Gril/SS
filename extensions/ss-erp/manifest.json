@@ -111,12 +111,16 @@
         "https://www.ozon.by/product/*",
         "https://item.jd.com/*",
         "https://item.taobao.com/*",
-        "https://detail.tmall.com/*"
+        "https://detail.tmall.com/*",
+        "https://www.goofish.com/*",
+        "https://goofish.com/*",
+        "https://2.taobao.com/*"
       ],
       "js": [
         "shared/currency/price-currency.js",
         "shared/collectors/source-product-core.js",
         "shared/collectors/pdd-product.js",
+        "shared/collectors/marketplace-product.js",
         "shared/ozon/variant-spec.js",
         "content/collect-content-script.js"
       ],
@@ -128,7 +132,10 @@
         "https://*.pinduoduo.com/*",
         "https://*.yangkeduo.com/*",
         "https://item.taobao.com/*",
-        "https://detail.tmall.com/*"
+        "https://detail.tmall.com/*",
+        "https://www.goofish.com/*",
+        "https://goofish.com/*",
+        "https://2.taobao.com/*"
       ],
       "js": [
         "shared/calculator-core/profit-engine.js",

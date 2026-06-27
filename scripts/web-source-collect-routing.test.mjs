@@ -20,7 +20,7 @@ assert.match(
   /sourceGroup:\s*['"]source['"]|sourceGroup['"]?\s*,\s*['"]source['"]|sourceGroup=source/,
   'source collection page should request only domestic source collect records',
 );
-for (const label of ['1688', 'PDD', '淘宝', '天猫']) {
+for (const label of ['1688', 'PDD', '淘宝', '天猫', '闲鱼']) {
   assert.match(page, new RegExp(label), `source collection page should support ${label} filtering`);
 }
 assert.match(
@@ -130,7 +130,7 @@ assert.match(
   /break-words|break-all|overflow-wrap|word-break/,
   'source collection metric blocks should wrap long values inside their card boundary',
 );
-for (const label of ['价格来源', '过滤图片']) {
+for (const label of ['价格来源', '过滤图片', '字段级采集质量', '强命中', '弱猜测', '缺失']) {
   assert.match(page, new RegExp(label), `source collection diagnostics should expose label: ${label}`);
 }
 for (const label of ['概览', 'SKU', '属性', '图片', '翻译', '上架检查']) {

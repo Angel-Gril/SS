@@ -51,6 +51,9 @@ const CLOUD_HOST_PERMISSIONS = [
   'https://s.taobao.com/*',
   'https://item.taobao.com/*',
   'https://detail.tmall.com/*',
+  'https://www.goofish.com/*',
+  'https://goofish.com/*',
+  'https://2.taobao.com/*',
 ];
 
 const CLOUD_ERP_MATCHES = [
@@ -70,6 +73,9 @@ const CLOUD_WEB_RESOURCE_MATCHES = [
   'https://pifa.pinduoduo.com/*',
   'https://www.taobao.com/*',
   'https://s.taobao.com/*',
+  'https://www.goofish.com/*',
+  'https://goofish.com/*',
+  'https://2.taobao.com/*',
 ];
 
 function unique(values) {

@@ -126,14 +126,14 @@ assert.deepEqual(result.variants, [
   },
 ]);
 assert.equal(result.debug.rawSources[0].keys.includes('goods'), true);
-assert.deepEqual(result.extractionDiagnostics, {
-  titleFound: true,
-  imageCount: 2,
-  skuCount: 2,
-  attributeCount: 2,
-  descriptionFound: true,
-  videoCount: 0,
-});
+assert.equal(result.extractionDiagnostics.titleFound, true);
+assert.equal(result.extractionDiagnostics.imageCount, 2);
+assert.equal(result.extractionDiagnostics.skuCount, 2);
+assert.equal(result.extractionDiagnostics.attributeCount, 2);
+assert.equal(result.extractionDiagnostics.descriptionFound, true);
+assert.equal(result.extractionDiagnostics.videoCount, 0);
+assert.equal(result.extractionDiagnostics.fieldConfidence.title, 'strong');
+assert.equal(result.extractionDiagnostics.fieldConfidence.images, 'strong');
 
 const yuanPriceResult = api.extractPddProduct({
   platform: 'pdd',
@@ -155,5 +155,57 @@ assert.equal(yuanPriceResult.priceText, '¥108');
 assert.equal(yuanPriceResult.priceCny, 108);
 assert.equal(yuanPriceResult.shippingCny, 5);
 assert.equal(yuanPriceResult.totalCostCny, 113);
+
+const wholesaleResult = api.extractPddProduct({
+  platform: 'pdd',
+  sources: [{
+    goodsDetail: {
+      goodsIdStr: '777888999',
+      goodsName: '拼多多批发整箱打包杯',
+      minGroupPrice: 5600,
+      skuList: [
+        {
+          skuID: 'box-white-24',
+          properties: [
+            { name: '颜色', value: '白色' },
+            { name: '装箱数', value: '24只装' },
+          ],
+          priceInCent: 5800,
+          stockNum: 88,
+          skuThumbUrl: 'https://img.pddpic.com/product/white-box-800x800.jpeg',
+        },
+      ],
+      gallery: [
+        'https://img.pddpic.com/product/cup-main-800x800.jpeg',
+        'https://img.pddpic.com/product/shop-logo-800x800.jpeg',
+      ],
+      dimension: '40*30*12cm',
+      goodsProperty: [
+        { name: '材质', value: 'PP' },
+        { name: '包装', value: '整箱' },
+      ],
+      goodsDesc: '适合批发采购的整箱打包杯，页面含 SKU 和包装尺寸。',
+    },
+  }],
+  pageText: '拼多多批发整箱打包杯 重量 1.2kg 尺寸 40*30*12cm',
+  url: 'https://pifa.pinduoduo.com/goods/detail?goods_id=777888999',
+  host: 'pifa.pinduoduo.com',
+});
+
+assert.equal(wholesaleResult.productId, '777888999');
+assert.equal(wholesaleResult.title, '拼多多批发整箱打包杯');
+assert.equal(wholesaleResult.price, '56');
+assert.equal(wholesaleResult.weightG, 1200);
+assert.equal(wholesaleResult.lengthMm, 400);
+assert.equal(wholesaleResult.widthMm, 300);
+assert.equal(wholesaleResult.heightMm, 120);
+assert.deepEqual(wholesaleResult.images, ['https://img.pddpic.com/product/cup-main-800x800.jpeg']);
+assert.equal(wholesaleResult.skuItems[0].skuId, 'box-white-24');
+assert.equal(wholesaleResult.skuItems[0].price, 58);
+assert.equal(wholesaleResult.variants[0].attrs['装箱数'], '24只装');
+assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.title, 'strong');
+assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.price, 'strong');
+assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.sku, 'strong');
+assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.package, 'strong');
 
 console.log('PASS PDD extension collector');

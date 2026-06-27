@@ -30,7 +30,7 @@ type TransferSourceProductImagesResult = {
 
 export function isDomesticSourcePlatform(value: unknown): boolean {
   const platform = String(value || '').trim().toLowerCase();
-  return ['1688', 'pdd', 'pinduoduo', 'taobao', 'tmall'].includes(platform);
+  return ['1688', 'pdd', 'pinduoduo', 'taobao', 'tmall', 'xianyu', 'goofish'].includes(platform);
 }
 
 export async function transferSourceProductImages(input: TransferSourceProductImagesInput): Promise<TransferSourceProductImagesResult> {

@@ -10,6 +10,7 @@
     if (host.indexOf('wildberries.ru') >= 0) return 'wb';
     if (host.indexOf('ozon.ru') >= 0) return 'ozon';
     if (host.indexOf('jd.com') >= 0) return 'jd';
+    if (host.indexOf('goofish.com') >= 0 || host.indexOf('2.taobao.com') >= 0) return 'xianyu';
     if (host.indexOf('taobao.com') >= 0) return 'taobao';
     if (host.indexOf('tmall.com') >= 0) return 'tmall';
     if (host.indexOf('amazon.') >= 0) return 'amazon';

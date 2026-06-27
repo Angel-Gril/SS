@@ -1331,7 +1331,7 @@ function rewriteSourceRichContentDraftImages(value: unknown, replacements: Map<s
 }
 
 function isDomesticCollectedSource(value: unknown): boolean {
-  return ['1688', 'pdd', 'pinduoduo', 'taobao', 'tmall'].includes(String(value || '').trim().toLowerCase());
+  return ['1688', 'pdd', 'pinduoduo', 'taobao', 'tmall', 'xianyu', 'goofish'].includes(String(value || '').trim().toLowerCase());
 }
 
 async function prepareCollectedSourceImageMetadata(input: {
@@ -3206,7 +3206,7 @@ export async function collectRoutes(app: FastifyInstance) {
     if (query.status) where.status = query.status;
     const sourceGroup = String(query.sourceGroup || '').trim().toLowerCase();
     if (sourceGroup === 'source') {
-      where.sourcePlatform = { in: ['1688', 'pdd', 'taobao', 'tmall'] };
+      where.sourcePlatform = { in: ['1688', 'pdd', 'taobao', 'tmall', 'xianyu', 'goofish'] };
     } else if (sourceGroup === 'ozon') {
       where.sourcePlatform = 'ozon';
     }

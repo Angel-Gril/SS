@@ -58,11 +58,14 @@
     var sourceVideos = pickPddVideos(goods, globals);
     var extractionDiagnostics = buildExtractionDiagnostics({
       title: title,
+      price: priceNumber,
       images: images,
       skuItems: skuItems,
       attributes: attributes,
       description: description,
-      sourceVideos: sourceVideos
+      sourceVideos: sourceVideos,
+      weightG: grossWeightGrams,
+      dimensions: dimensions
     });
 
     return {
@@ -171,7 +174,7 @@
     var hit = pickFirstEntry(obj, [
       'minNormalPrice', 'minGroupPrice', 'min_normal_price', 'min_group_price',
       'normalPrice', 'groupPrice', 'normal_price', 'group_price',
-      'price', 'salePrice', 'marketPrice'
+      'price', 'salePrice', 'marketPrice', 'priceInCent', 'price_in_cent', 'priceCent', 'price_cent'
     ]);
     return hit ? parsePddMoney(hit.value, hit.key) : null;
   }
@@ -309,7 +312,7 @@
       var attrs = extractSkuAttrs(sku);
       var attrValues = Object.keys(attrs).map(function (key) { return attrs[key]; }).filter(Boolean);
       var price = pickPddPrice(sku);
-      var imageUrl = normalizeUrl(pickFirstValue(sku, ['thumbUrl', 'thumb_url', 'image', 'imageUrl', 'imgUrl']));
+      var imageUrl = normalizeUrl(pickFirstValue(sku, ['thumbUrl', 'thumb_url', 'skuThumbUrl', 'sku_thumb_url', 'image', 'imageUrl', 'imgUrl']));
       out.push({
         skuId: normalizeText(pickFirstValue(sku, ['skuId', 'sku_id', 'skuID', 'id']) || ('pdd-sku-' + index)),
         name: attrValues.join(' / '),
@@ -426,13 +429,23 @@
   }
 
   function buildExtractionDiagnostics(input) {
+    var hasDims = Boolean(input && input.dimensions && input.dimensions.lengthMm && input.dimensions.widthMm && input.dimensions.heightMm);
+    var hasWeight = Boolean(input && input.weightG);
     return {
       titleFound: Boolean(normalizeText(input && input.title)),
       imageCount: Array.isArray(input && input.images) ? input.images.length : 0,
       skuCount: Array.isArray(input && input.skuItems) ? input.skuItems.length : 0,
       attributeCount: Array.isArray(input && input.attributes) ? input.attributes.length : 0,
       descriptionFound: Boolean(normalizeText(input && input.description)),
-      videoCount: Array.isArray(input && input.sourceVideos) ? input.sourceVideos.length : 0
+      videoCount: Array.isArray(input && input.sourceVideos) ? input.sourceVideos.length : 0,
+      fieldConfidence: {
+        title: normalizeText(input && input.title) ? 'strong' : 'missing',
+        price: input && input.price != null ? 'strong' : 'missing',
+        sku: Array.isArray(input && input.skuItems) && input.skuItems.length ? 'strong' : 'missing',
+        images: Array.isArray(input && input.images) && input.images.length ? 'strong' : 'missing',
+        description: normalizeText(input && input.description) ? 'strong' : 'missing',
+        package: hasWeight && hasDims ? 'strong' : (hasWeight || hasDims ? 'weak' : 'missing')
+      }
     };
   }
 

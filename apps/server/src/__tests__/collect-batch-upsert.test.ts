@@ -374,7 +374,7 @@ describe('collectRoutes batch upsert', () => {
       expect(mocks.supplyGoodsCount).toHaveBeenLastCalledWith({
         where: expect.objectContaining({
           userId: 'user-1',
-          sourcePlatform: { in: ['1688', 'pdd', 'taobao', 'tmall'] },
+          sourcePlatform: { in: ['1688', 'pdd', 'taobao', 'tmall', 'xianyu', 'goofish'] },
         }),
       });
     } finally {
