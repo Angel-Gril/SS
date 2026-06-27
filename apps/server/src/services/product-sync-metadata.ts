@@ -17,6 +17,25 @@ export interface ProductSyncMeta {
 }
 
 export type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
+export type WarehouseStockMode = 'all' | 'in_stock' | 'out_of_stock';
+
+export interface ProductListComputedFilters {
+  priceMin?: number | null;
+  priceMax?: number | null;
+  weightMin?: number | null;
+  weightMax?: number | null;
+  stockMin?: number | null;
+  stockMax?: number | null;
+  warehouseId?: string | number | null;
+  warehouseStockMode?: WarehouseStockMode;
+}
+
+interface ProductListFilterTarget {
+  price?: unknown;
+  weight?: unknown;
+  stock?: unknown;
+  variants?: unknown;
+}
 
 export function normalizeOzonSku(value: unknown): string | null {
   const sku = String(value ?? '').trim();
@@ -165,4 +184,37 @@ export function getWarehouseStock(meta: unknown, warehouseId: string | number | 
   const present = Number(stock.present) || 0;
   const reserved = Number(stock.reserved) || 0;
   return present + reserved;
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const numeric = typeof value === 'object' && value && 'toString' in value
+    ? Number((value as { toString: () => string }).toString())
+    : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function matchesRange(value: unknown, min?: number | null, max?: number | null): boolean {
+  if (min == null && max == null) return true;
+  const numeric = finiteNumber(value);
+  if (numeric == null) return false;
+  if (min != null && numeric < min) return false;
+  if (max != null && numeric > max) return false;
+  return true;
+}
+
+export function matchesProductListComputedFilters(
+  product: ProductListFilterTarget,
+  filters: ProductListComputedFilters,
+): boolean {
+  if (!matchesRange(product.price, filters.priceMin, filters.priceMax)) return false;
+  if (!matchesRange(product.weight, filters.weightMin, filters.weightMax)) return false;
+
+  const warehouseStock = filters.warehouseId ? getWarehouseStock(product.variants, filters.warehouseId) : null;
+  const stockForRange = warehouseStock == null ? product.stock : warehouseStock;
+  if (!matchesRange(stockForRange, filters.stockMin, filters.stockMax)) return false;
+
+  if (filters.warehouseStockMode === 'in_stock') return warehouseStock != null && warehouseStock > 0;
+  if (filters.warehouseStockMode === 'out_of_stock') return warehouseStock == null || warehouseStock <= 0;
+  return true;
 }

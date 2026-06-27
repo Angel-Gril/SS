@@ -3,6 +3,7 @@ import {
   buildProductSyncMeta,
   getOzonStatusDisplay,
   getWarehouseStock,
+  matchesProductListComputedFilters,
   normalizeOzonSku,
   resolveOzonProductImages,
 } from '../services/product-sync-metadata.js';
@@ -93,5 +94,44 @@ describe('product sync metadata helpers', () => {
     expect(normalizeOzonSku(0)).toBeNull();
     expect(normalizeOzonSku('0')).toBeNull();
     expect(normalizeOzonSku(' 12345 ')).toBe('12345');
+  });
+
+  it('filters products by price, weight and selected warehouse stock mode', () => {
+    const lightCheap = {
+      price: { toString: () => '144.00' },
+      weight: 80,
+      stock: 5,
+      variants: buildProductSyncMeta({ statuses: { status: 'price_sent' } }, [
+        { warehouse_id: 10, present: 0, reserved: 0 },
+      ]),
+    };
+    const heavyExpensive = {
+      price: { toString: () => '1047.00' },
+      weight: 620,
+      stock: 5,
+      variants: buildProductSyncMeta({ statuses: { status: 'price_sent' } }, [
+        { warehouse_id: 10, present: 5, reserved: 0 },
+      ]),
+    };
+
+    expect(matchesProductListComputedFilters(lightCheap, {
+      priceMin: 100,
+      priceMax: 300,
+      weightMax: 100,
+      warehouseId: '10',
+      warehouseStockMode: 'out_of_stock',
+    })).toBe(true);
+    expect(matchesProductListComputedFilters(heavyExpensive, {
+      priceMin: 100,
+      priceMax: 300,
+      weightMax: 100,
+      warehouseId: '10',
+      warehouseStockMode: 'out_of_stock',
+    })).toBe(false);
+    expect(matchesProductListComputedFilters(heavyExpensive, {
+      stockMin: 5,
+      warehouseId: '10',
+      warehouseStockMode: 'in_stock',
+    })).toBe(true);
   });
 });

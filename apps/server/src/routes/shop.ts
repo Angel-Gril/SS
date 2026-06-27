@@ -4,7 +4,13 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
-import { getOzonStatusDisplay, getWarehouseStock, normalizeOzonSku } from '../services/product-sync-metadata.js';
+import {
+  getOzonStatusDisplay,
+  getWarehouseStock,
+  matchesProductListComputedFilters,
+  normalizeOzonSku,
+  type WarehouseStockMode,
+} from '../services/product-sync-metadata.js';
 import {
   normalizePromotionActions,
   normalizePromotionProducts,
@@ -34,6 +40,12 @@ const promotionProductsQuerySchema = z.object({
 const deactivatePromotionProductsSchema = z.object({
   productIds: z.array(z.coerce.number().int().positive()).min(1).max(100),
 });
+
+function parseOptionalFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
 
 export async function shopRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
@@ -964,6 +976,13 @@ export async function shopRoutes(app: FastifyInstance) {
       search?: string;
       warehouseId?: string;
       warehouseInStock?: string;
+      warehouseStockMode?: string;
+      priceMin?: string;
+      priceMax?: string;
+      weightMin?: string;
+      weightMax?: string;
+      stockMin?: string;
+      stockMax?: string;
       statusFilter?: string;
     };
 
@@ -976,7 +995,25 @@ export async function shopRoutes(app: FastifyInstance) {
     const limit = Math.min(200, Math.max(1, Number(query.limit) || 20));
     const search = query.search?.trim();
     const warehouseId = query.warehouseId && /^\d+$/.test(query.warehouseId) ? query.warehouseId : null;
-    const warehouseInStock = warehouseId && query.warehouseInStock === '1';
+    const requestedWarehouseStockMode = ['all', 'in_stock', 'out_of_stock'].includes(query.warehouseStockMode || '')
+      ? query.warehouseStockMode as WarehouseStockMode
+      : 'all';
+    const warehouseStockMode: WarehouseStockMode = warehouseId
+      ? (query.warehouseInStock === '1' ? 'in_stock' : requestedWarehouseStockMode)
+      : 'all';
+    const computedFilters = {
+      priceMin: parseOptionalFiniteNumber(query.priceMin),
+      priceMax: parseOptionalFiniteNumber(query.priceMax),
+      weightMin: parseOptionalFiniteNumber(query.weightMin),
+      weightMax: parseOptionalFiniteNumber(query.weightMax),
+      stockMin: parseOptionalFiniteNumber(query.stockMin),
+      stockMax: parseOptionalFiniteNumber(query.stockMax),
+      warehouseId,
+      warehouseStockMode,
+    };
+    const hasComputedFilters = Object.entries(computedFilters).some(([key, value]) => (
+      key === 'warehouseStockMode' ? value !== 'all' : key !== 'warehouseId' && value != null
+    ));
     const statusFilter = ['current', 'archived', 'missing', 'all'].includes(query.statusFilter || '')
       ? query.statusFilter!
       : 'current';
@@ -1019,6 +1056,7 @@ export async function shopRoutes(app: FastifyInstance) {
       oldPrice: true,
       currency: true,
       stock: true,
+      weight: true,
       images: true,
       status: true,
       visibility: true,
@@ -1040,16 +1078,13 @@ export async function shopRoutes(app: FastifyInstance) {
 
     let total: number;
     let rows: any[];
-    if (warehouseInStock) {
+    if (hasComputedFilters) {
       const allRows = await prisma.product.findMany({
         where: where as any,
         orderBy: productOrderBy,
         select: productSelect,
       });
-      const filtered = allRows.filter((row) => {
-        const stock = getWarehouseStock(row.variants, warehouseId);
-        return stock != null && stock > 0;
-      });
+      const filtered = allRows.filter((row) => matchesProductListComputedFilters(row, computedFilters));
       total = filtered.length;
       rows = filtered.slice(offset, offset + limit);
     } else {

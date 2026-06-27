@@ -33,6 +33,7 @@ interface Product {
   oldPrice: string | null;
   currency: string;
   stock: number;
+  weight: number | null;
   images: string[] | null;
   status: string | null;
   visibility: string | null;
@@ -73,6 +74,7 @@ interface OzonWarehouse {
 type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
 type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
 type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
+type WarehouseStockMode = 'all' | 'in_stock' | 'out_of_stock';
 
 const PRODUCT_FILTERS_STORAGE_KEY = 'ss-erp:products:filters';
 
@@ -86,8 +88,14 @@ const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: str
 function readStoredProductFilters(): {
   shopId?: string;
   warehouseId?: number | null;
-  warehouseInStockOnly?: boolean;
+  warehouseStockMode?: WarehouseStockMode;
   statusFilter?: ProductStatusFilter;
+  priceMin?: string;
+  priceMax?: string;
+  weightMin?: string;
+  weightMax?: string;
+  stockMin?: string;
+  stockMax?: string;
 } {
   if (typeof window === 'undefined') return {};
   try {
@@ -97,12 +105,21 @@ function readStoredProductFilters(): {
     const statusFilter = ['current', 'archived', 'missing', 'all'].includes(String(data.statusFilter || ''))
       ? data.statusFilter as ProductStatusFilter
       : undefined;
+    const warehouseStockMode = ['all', 'in_stock', 'out_of_stock'].includes(String(data.warehouseStockMode || ''))
+      ? data.warehouseStockMode as WarehouseStockMode
+      : (data.warehouseInStockOnly === true ? 'in_stock' : undefined);
     const warehouseId = Number(data.warehouseId);
     return {
       shopId: typeof data.shopId === 'string' ? data.shopId : undefined,
       warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : null,
-      warehouseInStockOnly: typeof data.warehouseInStockOnly === 'boolean' ? data.warehouseInStockOnly : undefined,
+      warehouseStockMode,
       statusFilter,
+      priceMin: typeof data.priceMin === 'string' ? data.priceMin : undefined,
+      priceMax: typeof data.priceMax === 'string' ? data.priceMax : undefined,
+      weightMin: typeof data.weightMin === 'string' ? data.weightMin : undefined,
+      weightMax: typeof data.weightMax === 'string' ? data.weightMax : undefined,
+      stockMin: typeof data.stockMin === 'string' ? data.stockMin : undefined,
+      stockMax: typeof data.stockMax === 'string' ? data.stockMax : undefined,
     };
   } catch {
     return {};
@@ -173,8 +190,14 @@ function ProductsPageInner() {
   const [stockSyncOpen, setStockSyncOpen] = useState(false);
   const [warehouses, setWarehouses] = useState<OzonWarehouse[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
-  const [warehouseInStockOnly, setWarehouseInStockOnly] = useState(false);
+  const [warehouseStockMode, setWarehouseStockMode] = useState<WarehouseStockMode>('all');
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>('current');
+  const [priceMin, setPriceMin] = useState('');
+  const [priceMax, setPriceMax] = useState('');
+  const [weightMin, setWeightMin] = useState('');
+  const [weightMax, setWeightMax] = useState('');
+  const [stockMin, setStockMin] = useState('');
+  const [stockMax, setStockMax] = useState('');
   const [filtersRestored, setFiltersRestored] = useState(false);
   const [syncingCommissions, setSyncingCommissions] = useState(false);
   const [syncingProducts, setSyncingProducts] = useState(false);
@@ -185,13 +208,15 @@ function ProductsPageInner() {
   useEffect(() => {
     const stored = readStoredProductFilters();
     if (!initialShopId && stored.shopId) setShopId(stored.shopId);
-    if (stored.warehouseId) {
-      setSelectedWarehouseId(stored.warehouseId);
-      setWarehouseInStockOnly(stored.warehouseInStockOnly ?? true);
-    } else if (typeof stored.warehouseInStockOnly === 'boolean') {
-      setWarehouseInStockOnly(stored.warehouseInStockOnly);
-    }
+    if (stored.warehouseId) setSelectedWarehouseId(stored.warehouseId);
+    if (stored.warehouseStockMode) setWarehouseStockMode(stored.warehouseStockMode);
     if (stored.statusFilter) setStatusFilter(stored.statusFilter);
+    setPriceMin(stored.priceMin || '');
+    setPriceMax(stored.priceMax || '');
+    setWeightMin(stored.weightMin || '');
+    setWeightMax(stored.weightMax || '');
+    setStockMin(stored.stockMin || '');
+    setStockMax(stored.stockMax || '');
     setFiltersRestored(true);
   }, []);
 
@@ -213,7 +238,7 @@ function ProductsPageInner() {
           setWarehouses(res.data);
           setSelectedWarehouseId((current) => {
             if (!current || res.data!.some((warehouse) => warehouse.warehouse_id === current)) return current;
-            setWarehouseInStockOnly(false);
+            setWarehouseStockMode('all');
             return null;
           });
         }
@@ -227,10 +252,16 @@ function ProductsPageInner() {
     window.localStorage.setItem(PRODUCT_FILTERS_STORAGE_KEY, JSON.stringify({
       shopId,
       warehouseId: selectedWarehouseId,
-      warehouseInStockOnly,
+      warehouseStockMode,
       statusFilter,
+      priceMin,
+      priceMax,
+      weightMin,
+      weightMax,
+      stockMin,
+      stockMax,
     }));
-  }, [filtersRestored, shopId, selectedWarehouseId, warehouseInStockOnly, statusFilter]);
+  }, [filtersRestored, shopId, selectedWarehouseId, warehouseStockMode, statusFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   const loadProducts = useCallback(async () => {
     if (!filtersRestored || !shopId) return;
@@ -242,7 +273,13 @@ function ProductsPageInner() {
     });
     if (search) params.set('search', search);
     if (selectedWarehouseId) params.set('warehouseId', String(selectedWarehouseId));
-    if (selectedWarehouseId && warehouseInStockOnly) params.set('warehouseInStock', '1');
+    if (priceMin.trim()) params.set('priceMin', priceMin.trim());
+    if (priceMax.trim()) params.set('priceMax', priceMax.trim());
+    if (weightMin.trim()) params.set('weightMin', weightMin.trim());
+    if (weightMax.trim()) params.set('weightMax', weightMax.trim());
+    if (stockMin.trim()) params.set('stockMin', stockMin.trim());
+    if (stockMax.trim()) params.set('stockMax', stockMax.trim());
+    if (warehouseStockMode !== 'all') params.set('warehouseStockMode', warehouseStockMode);
 
     const res = await api.get<ProductListResponse>(
       `/api/shops/${shopId}/products?${params}`,
@@ -253,7 +290,7 @@ function ProductsPageInner() {
       setLastProductSyncAt(res.data.lastSyncAt);
     }
     setLoading(false);
-  }, [filtersRestored, shopId, page, search, selectedWarehouseId, warehouseInStockOnly, statusFilter]);
+  }, [filtersRestored, shopId, page, search, selectedWarehouseId, warehouseStockMode, statusFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -371,7 +408,7 @@ function ProductsPageInner() {
                 setPage(0);
                 setSelected(new Set());
                 setSelectedWarehouseId(null);
-                setWarehouseInStockOnly(false);
+                setWarehouseStockMode('all');
               }}
               className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             >
@@ -381,18 +418,19 @@ function ProductsPageInner() {
               ))}
             </select>
 
-            {warehouses.length > 1 && (
+            {warehouses.length > 0 && (
               <select
                 value={selectedWarehouseId || ''}
                 onChange={(e) => {
                   const nextWarehouseId = e.target.value ? Number(e.target.value) : null;
                   setSelectedWarehouseId(nextWarehouseId);
-                  setWarehouseInStockOnly(!!nextWarehouseId);
+                  if (!nextWarehouseId) setWarehouseStockMode('all');
                   setPage(0);
+                  setSelected(new Set());
                 }}
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
-                <option value="">全部仓库（总库存）</option>
+                <option value="">库存视图：全部仓库（总库存）</option>
                 {warehouses.map((w) => (
                   <option key={w.warehouse_id} value={w.warehouse_id}>{w.name}</option>
                 ))}
@@ -410,17 +448,16 @@ function ProductsPageInner() {
               <option value="all">全部记录</option>
             </select>
 
-            {selectedWarehouseId && (
-              <label className="inline-flex h-10 items-center gap-2 rounded-md border px-3 text-sm">
-                <input
-                  type="checkbox"
-                  checked={warehouseInStockOnly}
-                  onChange={(e) => { setWarehouseInStockOnly(e.target.checked); setPage(0); }}
-                  className="rounded border-gray-300"
-                />
-                仅看该仓有库存
-              </label>
-            )}
+            <select
+              value={warehouseStockMode}
+              onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
+              disabled={!selectedWarehouseId}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+            >
+              <option value="all">仓库库存：全部</option>
+              <option value="in_stock">该仓有库存</option>
+              <option value="out_of_stock">该仓无库存</option>
+            </select>
 
             <form onSubmit={handleSearch} className="flex items-center gap-2 flex-1 max-w-md">
               <div className="relative flex-1">
@@ -472,6 +509,57 @@ function ProductsPageInner() {
               </Button>
               <span className="text-sm text-muted-foreground">共 {total} 件</span>
             </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={priceMin}
+              onChange={(e) => { setPriceMin(e.target.value); setPage(0); }}
+              placeholder="最低售价"
+            />
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={priceMax}
+              onChange={(e) => { setPriceMax(e.target.value); setPage(0); }}
+              placeholder="最高售价"
+            />
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={weightMin}
+              onChange={(e) => { setWeightMin(e.target.value); setPage(0); }}
+              placeholder="最低重量(g)"
+            />
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={weightMax}
+              onChange={(e) => { setWeightMax(e.target.value); setPage(0); }}
+              placeholder="最高重量(g)"
+            />
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={stockMin}
+              onChange={(e) => { setStockMin(e.target.value); setPage(0); }}
+              placeholder="最低库存"
+            />
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={stockMax}
+              onChange={(e) => { setStockMax(e.target.value); setPage(0); }}
+              placeholder="最高库存"
+            />
           </div>
 
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -531,6 +619,7 @@ function ProductsPageInner() {
                   <TableHead className="text-right">买家价</TableHead>
                   <TableHead className="text-right">折扣前价</TableHead>
                   <TableHead className="text-right">佣金</TableHead>
+                  <TableHead className="text-right">重量</TableHead>
                   <TableHead className="text-right">库存</TableHead>
                   <TableHead>上架时间</TableHead>
                   <TableHead>状态</TableHead>
@@ -618,6 +707,9 @@ function ProductsPageInner() {
                         )
                       ) : '-'}
                     </TableCell>
+                    <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                      {p.weight != null ? `${p.weight} g` : '-'}
+                    </TableCell>
                     <TableCell className="text-right">
                       {editingStock === p.id ? (
                         <div className="flex items-center gap-1 justify-end">
@@ -703,6 +795,7 @@ function ProductsPageInner() {
         onOpenChange={setBatchStockOpen}
         productIds={Array.from(selected)}
         warehouses={warehouses}
+        defaultWarehouseId={selectedWarehouseId}
         onSuccess={() => { setSelected(new Set()); loadProducts(); }}
       />
       <ProductDetailDialog
@@ -916,11 +1009,12 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
   );
 }
 
-function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSuccess }: {
+function BatchStockDialog({ open, onOpenChange, productIds, warehouses, defaultWarehouseId, onSuccess }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   productIds: string[];
   warehouses: OzonWarehouse[];
+  defaultWarehouseId?: number | null;
   onSuccess: () => void;
 }) {
   const [value, setValue] = useState('');
@@ -929,8 +1023,11 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
 
   useEffect(() => {
     if (!open) return;
-    setWarehouseId(warehouses[0] ? String(warehouses[0].warehouse_id) : '');
-  }, [open, warehouses]);
+    const defaultWarehouse = defaultWarehouseId
+      ? warehouses.find((warehouse) => warehouse.warehouse_id === defaultWarehouseId)
+      : null;
+    setWarehouseId(defaultWarehouse ? String(defaultWarehouse.warehouse_id) : (warehouses[0] ? String(warehouses[0].warehouse_id) : ''));
+  }, [open, warehouses, defaultWarehouseId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -965,7 +1062,7 @@ function BatchStockDialog({ open, onOpenChange, productIds, warehouses, onSucces
       <DialogContent>
         <DialogHeader>
           <DialogTitle>批量修改库存</DialogTitle>
-          <DialogDescription>将为选中的 {productIds.length} 件商品设置新库存</DialogDescription>
+          <DialogDescription>将为选中的 {productIds.length} 件商品在目标仓库设置新库存</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
