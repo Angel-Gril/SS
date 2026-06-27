@@ -382,6 +382,45 @@ describe('collectRoutes batch upsert', () => {
     }
   });
 
+  it('rejects empty domestic source shell captures before they pollute the source list', async () => {
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect',
+        payload: {
+          title: '拼多多批发 - 拼多多官方采购批发平台，多多批发',
+          sourceTitleRaw: '拼多多批发 - 拼多多官方采购批发平台，多多批发',
+          sourceUrl: 'https://pifa.pinduoduo.com/',
+          sourcePlatform: 'pdd',
+          sourceProductId: 'cmqwo1qoj00515o7oafa0lbj9',
+          sku: 'cmqwo1qoj00515o7oafa0lbj9',
+          images: [],
+          priceText: '¥0',
+          skuItems: [],
+          variants: [],
+          extractionDiagnostics: {
+            titleFound: true,
+            imageCount: 0,
+            skuCount: 0,
+            fieldConfidence: { price: 'missing', images: 'missing', sku: 'missing' },
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        msg: expect.stringContaining('采集结果不完整'),
+      });
+      expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+      expect(mocks.transferSourceProductImages).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
   it('creates a new Ozon collect record for repeated manual collection', async () => {
     const app = await buildApp();
 

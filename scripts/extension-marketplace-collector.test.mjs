@@ -60,6 +60,50 @@ assert.equal(taobaoResult.attributes[0].name, '材质成分');
 assert.equal(taobaoResult.description, '三条装纯棉内裤，日常舒适穿着。');
 assert.equal(taobaoResult.extractionDiagnostics.fieldConfidence.sku, 'strong');
 
+const realTaobaoSkuCoreResult = api.extractTaobaoProduct({
+  platform: 'taobao',
+  sources: [{
+    data: {
+      item: {
+        itemId: '620149924159',
+        title: '珍珠抓夹女2026新款高级感发夹后脑勺鲨鱼夹大号夹子头饰发卡',
+        images: ['//img.alicdn.com/imgextra/i1/620149924159/O1CN-main.jpg'],
+        seller: { shopName: '先流饰品' },
+      },
+      skuBase: {
+        props: [
+          {
+            pid: '1627207',
+            name: '颜色分类',
+            values: [
+              { vid: '28341', name: '香槟色大号 10cm', image: '//img.alicdn.com/imgextra/i1/620149924159/O1CN-sku-a.jpg' },
+              { vid: '28342', name: '一排珍珠小号 9.5cm', image: '//img.alicdn.com/imgextra/i2/620149924159/O1CN-sku-b.jpg' },
+            ],
+          },
+        ],
+      },
+      skuCore: {
+        sku2info: {
+          '1627207:28341': { skuId: 'tb-28341', price: { priceText: '1.69' }, quantity: 3000 },
+          '1627207:28342': { skuId: 'tb-28342', price: { priceMoney: 1299 }, quantity: 900 },
+        },
+      },
+    },
+  }],
+  pageText: '珍珠抓夹女2026新款高级感发夹后脑勺鲨鱼夹大号夹子头饰发卡 平台补贴后 ¥1.69 优惠前 ¥12.99',
+  url: 'https://item.taobao.com/item.htm?id=620149924159',
+  host: 'item.taobao.com',
+});
+
+assert.equal(realTaobaoSkuCoreResult.productId, '620149924159');
+assert.equal(realTaobaoSkuCoreResult.title, '珍珠抓夹女2026新款高级感发夹后脑勺鲨鱼夹大号夹子头饰发卡');
+assert.equal(realTaobaoSkuCoreResult.price, '1.69');
+assert.equal(realTaobaoSkuCoreResult.skuItems.length, 2);
+assert.equal(realTaobaoSkuCoreResult.skuItems[0].name, '香槟色大号 10cm');
+assert.equal(realTaobaoSkuCoreResult.skuItems[1].price, 12.99);
+assert.equal(realTaobaoSkuCoreResult.variants[0].attrs['颜色分类'], '香槟色大号 10cm');
+assert.deepEqual(realTaobaoSkuCoreResult.variants[1].images, ['https://img.alicdn.com/imgextra/i2/620149924159/O1CN-sku-b.jpg']);
+
 const tmallResult = api.extractTmallProduct({
   platform: 'tmall',
   sources: [{

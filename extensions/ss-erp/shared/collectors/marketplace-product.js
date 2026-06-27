@@ -56,9 +56,11 @@
       pickFirstValue(product.shop, ['shopName', 'sellerName', 'storeName', 'nick', 'sellerNick']) ||
       ''
     );
-    var priceNumber = pickMarketplacePrice(product);
     var images = pickImages(product, sources);
+    addImageCollection(images, ctx.domImages);
     var skuItems = normalizeMarketplaceSkus(product);
+    var priceNumber = pickMarketplacePrice(product);
+    if (!(priceNumber > 0)) priceNumber = pickMinSkuPrice(skuItems);
     var dimensions = parseDimensions(
       pickFirstValue(product, ['dimension', 'dimensions', 'size', 'specSize']) ||
       pageText
@@ -129,11 +131,15 @@
     var candidates = [];
     (Array.isArray(sources) ? sources : []).forEach(function (source) {
       if (!source || typeof source !== 'object') return;
+      var merged = mergeMarketplaceContainer(source);
+      if (merged) candidates.push(merged);
       candidates.push(source);
       ['item', 'itemDO', 'idleItem', 'auction', 'goods', 'data', 'detail', 'apiStack'].forEach(function (key) {
         if (source[key] && typeof source[key] === 'object') candidates.push(source[key]);
       });
       if (source.data && typeof source.data === 'object') {
+        var mergedData = mergeMarketplaceContainer(source.data);
+        if (mergedData) candidates.push(mergedData);
         ['item', 'itemDO', 'idleItem', 'auction', 'goods'].forEach(function (key) {
           if (source.data[key] && typeof source.data[key] === 'object') candidates.push(source.data[key]);
         });
@@ -147,31 +153,46 @@
     return candidates[0] || null;
   }
 
+  function mergeMarketplaceContainer(source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    var item = source.item || source.itemDO || source.idleItem || source.auction || source.goods || null;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    var merged = Object.assign({}, item);
+    ['skuCore', 'skuBase', 'skuMap', 'skuProps', 'props', 'price', 'seller', 'shop'].forEach(function (key) {
+      if (source[key] != null && merged[key] == null) merged[key] = source[key];
+    });
+    return merged;
+  }
+
   function normalizeMarketplaceSkus(product) {
     var skuMap = product && (product.skuMap || product.sku_map || product.skuCore || product.skuCoreMap);
     if (skuMap && skuMap.sku2info) skuMap = skuMap.sku2info;
+    var skuBaseProps = product && product.skuBase && Array.isArray(product.skuBase.props) ? product.skuBase.props : [];
     var props = Array.isArray(product && product.skuProps) ? product.skuProps
-      : (Array.isArray(product && product.props) ? product.props.filter(function (row) { return Array.isArray(row.values); }) : []);
+      : (skuBaseProps.length ? skuBaseProps : (Array.isArray(product && product.props) ? product.props.filter(function (row) { return Array.isArray(row.values); }) : []));
     var propNames = props.map(function (prop, index) {
       return normalizeText(pickFirstValue(prop, ['propName', 'name', 'title']) || ('规格' + (index + 1)));
     });
+    var valueLookup = buildSkuValueLookup(props);
     var out = [];
     if (skuMap && typeof skuMap === 'object' && !Array.isArray(skuMap)) {
       Object.keys(skuMap).forEach(function (key, index) {
         var row = skuMap[key] || {};
-        var values = key.split(';').map(normalizeText).filter(Boolean);
+        var entries = parseSkuKeyEntries(key, valueLookup, propNames);
+        var values = entries.map(function (entry) { return entry.value; }).filter(Boolean);
         var attrs = {};
-        values.forEach(function (value, valueIndex) {
-          attrs[propNames[valueIndex] || ('规格' + (valueIndex + 1))] = value;
+        entries.forEach(function (entry, valueIndex) {
+          attrs[entry.name || propNames[valueIndex] || ('规格' + (valueIndex + 1))] = entry.value;
         });
         var price = pickMarketplacePrice(row);
+        var imageUrl = normalizeUrl(pickFirstValue(row, ['image', 'imageUrl', 'imgUrl', 'thumbUrl']) || entries.map(function (entry) { return entry.imageUrl; }).find(Boolean));
         out.push({
           skuId: normalizeText(pickFirstValue(row, ['skuId', 'sku_id', 'id']) || ('marketplace-sku-' + index)),
           name: values.join(' / '),
           specText: Object.keys(attrs).map(function (name) { return name + ': ' + attrs[name]; }).join(' / '),
           price: price,
           stock: parseInteger(pickFirstValue(row, ['stock', 'quantity', 'stockNum', 'quantityText'])),
-          imageUrl: normalizeUrl(pickFirstValue(row, ['image', 'imageUrl', 'imgUrl', 'thumbUrl'])),
+          imageUrl: imageUrl,
           attrs: attrs
         });
       });
@@ -179,12 +200,52 @@
     return out.slice(0, 200);
   }
 
+  function buildSkuValueLookup(props) {
+    var lookup = {};
+    (Array.isArray(props) ? props : []).forEach(function (prop, index) {
+      if (!prop || typeof prop !== 'object') return;
+      var propId = normalizeText(pickFirstValue(prop, ['pid', 'propId', 'id']) || String(index));
+      var propName = normalizeText(pickFirstValue(prop, ['propName', 'name', 'title']) || ('规格' + (index + 1)));
+      (Array.isArray(prop.values) ? prop.values : []).forEach(function (value) {
+        if (!value || typeof value !== 'object') return;
+        var valueId = normalizeText(pickFirstValue(value, ['vid', 'valueId', 'id']));
+        var valueName = normalizeText(pickFirstValue(value, ['name', 'value', 'text', 'title']));
+        if (!valueId || !valueName) return;
+        lookup[propId + ':' + valueId] = {
+          name: propName,
+          value: valueName,
+          imageUrl: normalizeUrl(pickFirstValue(value, ['image', 'imageUrl', 'imgUrl', 'thumbUrl']))
+        };
+      });
+    });
+    return lookup;
+  }
+
+  function parseSkuKeyEntries(key, lookup, propNames) {
+    var parts = String(key || '').split(';').map(normalizeText).filter(Boolean);
+    return parts.map(function (part, index) {
+      var hit = lookup && lookup[part];
+      if (hit) return hit;
+      var tokens = part.split(':');
+      var fallbackValue = normalizeText(tokens[tokens.length - 1] || part);
+      return { name: propNames[index] || ('规格' + (index + 1)), value: fallbackValue, imageUrl: '' };
+    }).filter(function (entry) { return entry && entry.value; });
+  }
+
+  function pickMinSkuPrice(skuItems) {
+    var prices = (Array.isArray(skuItems) ? skuItems : [])
+      .map(function (item) { return item && item.price; })
+      .filter(function (value) { return typeof value === 'number' && Number.isFinite(value) && value > 0; })
+      .sort(function (a, b) { return a - b; });
+    return prices.length ? prices[0] : null;
+  }
+
   function pickMarketplacePrice(value) {
     if (!value || typeof value !== 'object') return parseMoney(value, '');
-    var direct = pickFirstEntry(value, ['priceText', 'price_text', 'price', 'salePrice', 'sale_price', 'reservePrice', 'currentPrice', 'current_price', 'soldPrice', 'cent', 'priceCent', 'priceInCent']);
+    var direct = pickFirstEntry(value, ['priceText', 'price_text', 'price', 'salePrice', 'sale_price', 'reservePrice', 'currentPrice', 'current_price', 'soldPrice', 'priceMoney', 'cent', 'priceCent', 'priceInCent']);
     if (direct) return parseMoney(direct.value, direct.key);
     if (value.price && typeof value.price === 'object') {
-      var nested = pickFirstEntry(value.price, ['priceText', 'price', 'value', 'cent']);
+      var nested = pickFirstEntry(value.price, ['priceText', 'price', 'value', 'priceMoney', 'cent']);
       if (nested) return parseMoney(nested.value, nested.key);
     }
     return null;
@@ -198,6 +259,7 @@
     if (!raw) return null;
     var number = Number(raw);
     if (!Number.isFinite(number)) return null;
+    if (!(number > 0)) return null;
     if (raw.indexOf('.') >= 0 || /[￥¥元]/.test(text)) return roundMoney(number);
     var keyText = String(key || '');
     if (/cent|fen/i.test(keyText) || number >= 1000) return roundMoney(number / 100);

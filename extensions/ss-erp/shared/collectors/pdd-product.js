@@ -37,15 +37,19 @@
       ctx.documentTitle ||
       ''
     );
+    if (isGenericPddTitle(title)) title = '';
+    if (!title) title = pickPddTitleFromPageText(pageText);
     var shopName = normalizeText(
       pickFirstValue(globals && globals.store, ['storeName', 'store_name', 'mallName', 'mall_name']) ||
       pickFirstValue(goods, ['mallName', 'mall_name', 'storeName', 'store_name', 'supplierName']) ||
       ''
     );
     var priceNumber = pickPddPrice(goods) != null ? pickPddPrice(goods) : pickPddPrice(globals);
+    if (!(priceNumber > 0)) priceNumber = pickPddPriceFromPageText(pageText);
     var shipping = pickPddShipping(goods, globals, pageText);
     var totalCostCny = priceNumber != null ? roundMoney(priceNumber + (Number(shipping.value) || 0)) : null;
     var images = pickPddImages(goods, sources);
+    addImageCollection(images, ctx.domImages);
     var grossWeightGrams = pickPddWeight(goods, pageText);
     var dimensions = pickDimensions(goods, pageText);
     var categoryId = normalizeText(pickFirstValue(goods, ['catId', 'cat_id', 'categoryId']) || pickFirstValue(globals, ['catId', 'cat_id', 'categoryId']));
@@ -53,6 +57,7 @@
     var description = pickPddDescription(goods, globals, pageText);
     var skuList = pickSkuList(goods);
     var internalSkuItems = normalizePddSkus(skuList);
+    if (!internalSkuItems.length) internalSkuItems = pickPddSkuItemsFromPageText(pageText);
     var skuItems = internalSkuItems.map(toPublicSkuItem);
     var attributes = pickPddAttributes(goods);
     var sourceVideos = pickPddVideos(goods, globals);
@@ -83,8 +88,8 @@
       sourceHost: host,
       shopName: shopName,
       supplier: shopName,
-      price: priceNumber != null ? formatMoney(priceNumber) : '',
-      priceText: priceNumber != null ? '¥' + formatMoney(priceNumber) : '',
+      price: priceNumber != null && priceNumber > 0 ? formatMoney(priceNumber) : '',
+      priceText: priceNumber != null && priceNumber > 0 ? '¥' + formatMoney(priceNumber) : '',
       currency: 'CNY',
       shippingCny: shipping.value,
       shippingText: shipping.text,
@@ -109,7 +114,7 @@
       attributes: attributes,
       extractionDiagnostics: extractionDiagnostics,
       titleZh: title || '',
-      priceCny: priceNumber,
+      priceCny: priceNumber != null && priceNumber > 0 ? priceNumber : null,
       shop: shopName,
       skus: internalSkuItems.map(skuItemToLegacySku),
       debug: {
@@ -166,8 +171,25 @@
 
   function parseGoodsIdFromUrl(url) {
     var text = String(url || '');
-    var match = text.match(/[?&]goods_id=(\d+)/i) || text.match(/\/goods(?:\.html)?\/?(\d+)/i) || text.match(/[?&]goodsId=(\d+)/i);
+    var match = text.match(/[?&]goods_id=([^&#]+)/i) || text.match(/\/goods(?:\.html)?\/?(\d+)/i) || text.match(/[?&]goodsId=([^&#]+)/i);
     return match ? match[1] : '';
+  }
+
+  function isGenericPddTitle(value) {
+    var text = normalizeText(value);
+    if (!text) return false;
+    return /拼多多批发\s*-\s*拼多多官方采购批发平台|拼多多官方采购批发平台|多多批发首页|PDD\s*商品$/i.test(text);
+  }
+
+  function pickPddTitleFromPageText(pageText) {
+    var text = normalizeText(pageText)
+      .replace(/拼多多批发\s*-\s*拼多多官方采购批发平台，多多批发/g, ' ')
+      .replace(/拼多多批发\s*-\s*拼多多官方采购批发平台/g, ' ')
+      .replace(/多多批发首页|我是供货商|购物车\(\d*\)|已购买\(\d*\)|欢迎来到拼多多批发，请先登录\/注册/g, ' ');
+    var match = text.match(/([\u3400-\u9fff][\u3400-\u9fffA-Za-z0-9\s【】（）()、.,，：:\/-]{8,140}?)(?=\s*(?:批发价|原价|平台补贴|款式|颜色|规格|已售|起批量|¥|￥))/);
+    if (!match || !match[1]) return '';
+    var title = normalizeText(match[1]).replace(/^(?:商品标题|标题)[:：]?\s*/g, '');
+    return isGenericPddTitle(title) ? '' : title.slice(0, 180);
   }
 
   function pickPddPrice(obj) {
@@ -191,7 +213,33 @@
     var explicitCents = /fen|cent|priceCent|priceInCent/i.test(keyText)
       || /^(minNormalPrice|minGroupPrice|min_normal_price|min_group_price|normalPrice|groupPrice|normal_price|group_price|marketPrice|freightFee|freight_fee|shippingFee|shipping_fee|postage|deliveryFee|delivery_fee)$/i.test(keyText);
     var likelyCents = explicitCents || (/^(price|salePrice)$/i.test(keyText) && Number.isInteger(num) && num >= 1000);
-    return likelyCents ? roundMoney(num / 100) : roundMoney(num);
+    var parsed = likelyCents ? roundMoney(num / 100) : roundMoney(num);
+    return parsed > 0 ? parsed : null;
+  }
+
+  function pickPddPriceFromPageText(pageText) {
+    var summary = pickSelectedPddSummaryPrice(pageText);
+    if (summary != null) return summary;
+    var selectedSku = pickPddSkuItemsFromPageText(pageText).find(function (row) { return row && row.selected && row.price > 0; });
+    if (selectedSku) return selectedSku.price;
+    var range = String(pageText || '').match(/[¥￥]\s*(\d[\d.,]*)\s*(?:-|~|—|–|至|到)\s*(?:[¥￥]\s*)?(\d[\d.,]*)/);
+    if (range) {
+      var max = Math.max(parsePddMoney(range[1], 'pageText'), parsePddMoney(range[2], 'pageText'));
+      if (max > 0) return roundMoney(max);
+    }
+    return null;
+  }
+
+  function pickSelectedPddSummaryPrice(pageText) {
+    var text = normalizeText(pageText || '');
+    var selected = text.match(/已(?:选择|选)\s*(?:共)?\s*(\d+)\s*(?:件|个|只|款)?[\s\S]{0,80}?(?:商品金额|货品金额|小计|合计)\s*[¥￥]\s*(\d[\d.,]*)/);
+    if (selected) {
+      var quantity = Number(selected[1]);
+      var amount = parsePddMoney(selected[2], 'pageText');
+      if (quantity > 0 && amount > 0) return roundMoney(amount / quantity);
+    }
+    var direct = text.match(/(?:商品金额|货品金额|小计|合计)\s*[¥￥]\s*(\d[\d.,]*)/);
+    return direct ? parsePddMoney(direct[1], 'pageText') : null;
   }
 
   function pickPddShipping(goods, globals, pageText) {
@@ -325,6 +373,46 @@
       });
     });
     return out.slice(0, 200);
+  }
+
+  function pickPddSkuItemsFromPageText(pageText) {
+    var text = normalizeText(pageText || '');
+    if (!text) return [];
+    var rows = [];
+    var regex = /([^\s¥￥]{2,80}?)\s*[¥￥]\s*(\d[\d.,]*)\s*(?:库存|现货)\s*(\d+)?/g;
+    var match;
+    while ((match = regex.exec(text))) {
+      var name = cleanPddSkuName(match[1]);
+      var price = parsePddMoney(match[2], 'pageText');
+      if (!name || !(price > 0)) continue;
+      if (/批发价|原价|优惠前|平台补贴|商品金额|货品金额|合计|小计/.test(name)) continue;
+      rows.push({
+        skuId: 'pdd-dom-' + (rows.length + 1),
+        name: name,
+        specText: name,
+        price: price,
+        stock: parseInteger(match[3]),
+        grossWeightGrams: null,
+        imageUrl: null,
+        attrs: { spec: name },
+        selected: false
+      });
+    }
+    var selectedPrice = pickSelectedPddSummaryPrice(text);
+    if (selectedPrice != null) {
+      rows.forEach(function (row) {
+        row.selected = Math.abs((Number(row.price) || 0) - selectedPrice) < 0.01;
+      });
+    }
+    return rows.slice(0, 200);
+  }
+
+  function cleanPddSkuName(value) {
+    return normalizeText(value)
+      .replace(/^(?:款式|颜色|规格|型号|SKU|sku)\s*/g, '')
+      .replace(/(?:批发价|原价|优惠前|平台补贴).*$/g, '')
+      .replace(/^[,，、;；:\s]+|[,，、;；:\s]+$/g, '')
+      .slice(0, 120);
   }
 
   function extractSkuAttrs(sku) {

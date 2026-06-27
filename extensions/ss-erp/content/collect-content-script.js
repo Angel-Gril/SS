@@ -2227,6 +2227,7 @@
         ...context,
         url: location.href,
         host: location.hostname,
+        domImages: pickImages(context.sources),
         documentTitle: document.title || ""
       });
     }
@@ -2296,6 +2297,7 @@
         ...context,
         url: location.href,
         host: location.hostname,
+        domImages: pickImages(context.sources),
         documentTitle: document.title || ""
       });
     }
@@ -2315,6 +2317,7 @@
         ...context,
         url: location.href,
         host: location.hostname,
+        domImages: pickImages(context.sources),
         documentTitle: document.title || ""
       });
     }
@@ -2334,6 +2337,7 @@
         ...context,
         url: location.href,
         host: location.hostname,
+        domImages: pickImages(context.sources),
         documentTitle: document.title || ""
       });
     }

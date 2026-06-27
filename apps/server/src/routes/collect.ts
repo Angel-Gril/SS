@@ -1334,6 +1334,55 @@ function isDomesticCollectedSource(value: unknown): boolean {
   return ['1688', 'pdd', 'pinduoduo', 'taobao', 'tmall', 'xianyu', 'goofish'].includes(String(value || '').trim().toLowerCase());
 }
 
+function parsePositiveSourceMoney(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const raw = String(value).replace(/,/g, '').match(/([0-9]+(?:\.[0-9]+)?)/)?.[1];
+  if (!raw) return null;
+  const number = Number(raw);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function isGenericDomesticSourceTitle(value: unknown, platform: unknown): boolean {
+  const title = String(value || '').trim();
+  const source = String(platform || '').trim().toLowerCase();
+  if (!title) return true;
+  if (source === 'pdd' || source === 'pinduoduo') {
+    return /拼多多批发\s*-\s*拼多多官方采购批发平台|拼多多官方采购批发平台|多多批发首页|^PDD\s*商品$/i.test(title);
+  }
+  if (source === 'taobao') return /淘宝网首页|网页无障碍|^淘宝商品$/i.test(title);
+  if (source === 'tmall') return /天猫tmall|天猫首页|^天猫商品$/i.test(title);
+  if (source === 'xianyu' || source === 'goofish') return /闲鱼首页|^闲鱼商品$/i.test(title);
+  return false;
+}
+
+function validateDomesticCollectPayload(input: Record<string, unknown>): string | null {
+  if (!isDomesticCollectedSource(input.sourcePlatform)) return null;
+  const platform = input.sourcePlatform;
+  const title = input.sourceTitleRaw || input.title;
+  if (isGenericDomesticSourceTitle(title, platform)) {
+    return '采集结果不完整：当前只读到了平台页标题，没有读到商品标题。请等页面商品信息加载完成后重新采集。';
+  }
+
+  const images = [
+    ...(Array.isArray(input.images) ? input.images : []),
+    ...(Array.isArray(input.sourceMainImages) ? input.sourceMainImages : []),
+  ].filter(Boolean);
+  const skuCount = [
+    ...(Array.isArray(input.skuItems) ? input.skuItems : []),
+    ...(Array.isArray(input.variants) ? input.variants : []),
+  ].filter(Boolean).length;
+  const attributes = Array.isArray(input.attributes) ? input.attributes.filter(Boolean).length : 0;
+  const positivePrice = parsePositiveSourceMoney(input.priceText)
+    ?? parsePositiveSourceMoney(input.price)
+    ?? parsePositiveSourceMoney(input.totalCostCny);
+  const description = String(input.description || '').trim();
+
+  if (!images.length && !skuCount && !positivePrice && !attributes && description.length < 20) {
+    return '采集结果不完整：标题、价格、SKU、图片和详情都没有形成有效命中，已阻止保存空壳商品。';
+  }
+  return null;
+}
+
 async function prepareCollectedSourceImageMetadata(input: {
   images?: unknown;
   sourceMainImages?: unknown;
@@ -3257,6 +3306,10 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     const d = parsed.data;
+    const validationError = validateDomesticCollectPayload(d as Record<string, unknown>);
+    if (validationError) {
+      return reply.status(400).send({ code: 0, msg: validationError });
+    }
     const sourceProductId = normalizeProductId(d.sourceProductId || d.sku);
     const weightNote = d.weightG ? `重量: ${d.weightG}g` : (d.weight ? `重量: ${d.weight}g` : '');
     const sourceDescription = sanitizePublishDescription(d.description);
@@ -3320,6 +3373,8 @@ export async function collectRoutes(app: FastifyInstance) {
     const errors: { sku?: string; sourceProductId?: string; title?: string; error: string }[] = [];
     for (const item of body.items.slice(0, 50)) {
       try {
+        const validationError = validateDomesticCollectPayload(item as Record<string, unknown>);
+        if (validationError) throw new Error(validationError);
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
         const imageState = await prepareCollectedSourceImageMetadata(item, userId);
         const metadata: Record<string, unknown> = {

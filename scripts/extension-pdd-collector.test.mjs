@@ -208,4 +208,35 @@ assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.price, 'stron
 assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.sku, 'strong');
 assert.equal(wholesaleResult.extractionDiagnostics.fieldConfidence.package, 'strong');
 
+const domFallbackResult = api.extractPddProduct({
+  platform: 'pdd',
+  sources: [],
+  pageText: [
+    '拼多多批发 - 拼多多官方采购批发平台，多多批发',
+    '新款通勤鲨鱼发夹森系大号珍珠夹子女盘发发抓发卡后脑勺轻奢头饰',
+    '批发价 ¥7.75 - 15.59',
+    '10.5厘米【珍珠】 ¥11.67 库存 945个',
+    '8厘米【珍珠】 ¥9.71 库存 1200个',
+    '已选择 共1件 ￥11.67 商品金额 ￥11.67',
+  ].join(' '),
+  domImages: [
+    'https://img.pddpic.com/product/hair-claw-main-800x800.jpeg',
+  ],
+  documentTitle: '拼多多批发 - 拼多多官方采购批发平台，多多批发',
+  url: 'https://pifa.pinduoduo.com/goods/detail?goods_id=1053841893222',
+  host: 'pifa.pinduoduo.com',
+});
+
+assert.equal(domFallbackResult.productId, '1053841893222');
+assert.equal(domFallbackResult.title, '新款通勤鲨鱼发夹森系大号珍珠夹子女盘发发抓发卡后脑勺轻奢头饰');
+assert.equal(domFallbackResult.price, '11.67');
+assert.equal(domFallbackResult.priceText, '¥11.67');
+assert.equal(domFallbackResult.priceCny, 11.67);
+assert.deepEqual(domFallbackResult.images, ['https://img.pddpic.com/product/hair-claw-main-800x800.jpeg']);
+assert.equal(domFallbackResult.skuItems.length, 2);
+assert.equal(domFallbackResult.skuItems[0].price, 11.67);
+assert.equal(domFallbackResult.extractionDiagnostics.fieldConfidence.title, 'strong');
+assert.equal(domFallbackResult.extractionDiagnostics.fieldConfidence.price, 'strong');
+assert.equal(domFallbackResult.extractionDiagnostics.fieldConfidence.images, 'strong');
+
 console.log('PASS PDD extension collector');
