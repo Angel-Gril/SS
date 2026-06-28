@@ -1,6 +1,13 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { getOzonCdnStorageBackend, getStorageBackend, type ImageStorageBackend } from './image-storage.js';
+import {
+  isLikelyNonImageMediaUrl,
+  isOzonDirectImageMime,
+  sanitizeOzonPublishImageBuffer,
+} from './ozon-image-sanitizer.js';
+
+const MAX_OZON_IMAGE_SANITIZE_BYTES = 20 * 1024 * 1024;
 
 function previewUrl(value: string): string {
   return value.length > 120 ? `${value.slice(0, 117)}...` : value;
@@ -184,7 +191,10 @@ export async function resolveImageUrls(
   let ozonCdnError: string | null = null;
 
   // 过滤空字符串，防止透传给 OZON 导致 invalid URL
-  const validImages = images.filter((raw) => String(raw || '').trim().length > 0);
+  const validImages = images.filter((raw) => {
+    const text = String(raw || '').trim();
+    return text.length > 0 && !isLikelyNonImageMediaUrl(text);
+  });
 
   for (const raw of validImages) {
     let img = String(raw || '').trim();
@@ -221,17 +231,153 @@ export async function resolveImageUrls(
         throw new Error(`水印图文件不存在: ${img}（请重新点击"打水印"刷新）`);
       }
       const filename = img.split('/').pop() || 'img.jpg';
+      const sanitized = await sanitizeOzonPublishImageBuffer(buf, filename);
       const category = img.startsWith('/watermarked/') ? 'watermarked' : 'raw';
-      const result = await uploadBackend.uploadBuffer(buf, filename, undefined, { category, ownerId });
+      const result = await uploadBackend.uploadBuffer(
+        sanitized.buffer,
+        sanitized.filename,
+        sanitized.mimeType,
+        { category, ownerId },
+      );
       const normalized = normalizeOzonPublishImageUrl(result.url);
       await waitForOzonImageReady(normalized);
       resolved.push(normalized);
       queueOzonImageDiagnostic(normalized, ozonCdnBackend ? 'ozon-cdn' : category);
     } else {
       const normalized = normalizeOzonPublishImageUrl(img);
-      resolved.push(normalized);
-      queueOzonImageDiagnostic(normalized, 'source');
+      const compatible = await resolvePublicOzonCompatibleImageUrl(
+        normalized,
+        shopId,
+        ownerId,
+        options,
+        () => ozonCdnBackend,
+        (value) => { ozonCdnBackend = value; },
+        () => ozonCdnError,
+        (value) => { ozonCdnError = value; },
+        () => backend,
+        (value) => { backend = value; },
+        () => backendError,
+        (value) => { backendError = value; },
+      );
+      resolved.push(compatible);
+      queueOzonImageDiagnostic(compatible, compatible === normalized ? 'source' : 'sanitized-source');
     }
   }
   return resolved;
+}
+
+async function resolvePublicOzonCompatibleImageUrl(
+  normalized: string,
+  shopId: string,
+  ownerId: string | undefined,
+  options: { preferOzonCdn?: boolean },
+  getOzonCdnBackend: () => ImageStorageBackend | null,
+  setOzonCdnBackend: (value: ImageStorageBackend | null) => void,
+  getOzonCdnError: () => string | null,
+  setOzonCdnError: (value: string | null) => void,
+  getBackend: () => ImageStorageBackend | null,
+  setBackend: (value: ImageStorageBackend | null) => void,
+  getBackendError: () => string | null,
+  setBackendError: (value: string | null) => void,
+): Promise<string> {
+  if (!shouldInspectPublicImageForOzonCompatibility(normalized)) return normalized;
+
+  const diag = await diagnoseOzonImageUrl(normalized);
+  const contentType = diag.contentType || '';
+  if (diag.ok && isOzonDirectImageMime(contentType)) return normalized;
+  if (!diag.ok || !String(contentType).toLowerCase().startsWith('image/')) return normalized;
+
+  const uploadBackend = await ensureUploadBackend(
+    shopId,
+    options,
+    getOzonCdnBackend,
+    setOzonCdnBackend,
+    getOzonCdnError,
+    setOzonCdnError,
+    getBackend,
+    setBackend,
+    getBackendError,
+    setBackendError,
+  );
+  if (!uploadBackend) {
+    throw new Error(
+      `图片格式为 ${contentType}，OZON 可能拒绝；但当前无法转成 JPEG/PNG：${getBackendError() || getOzonCdnError() || '存储后端未配置'}`,
+    );
+  }
+
+  const res = await fetch(normalized, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(15000),
+    headers: { 'user-agent': 'Mozilla/5.0' },
+  });
+  if (!res.ok) throw new Error(`图片格式转换前下载失败: ${res.status} ${previewUrl(normalized)}`);
+
+  const buf = await readLimitedImageBuffer(res, MAX_OZON_IMAGE_SANITIZE_BYTES);
+  const sanitized = await sanitizeOzonPublishImageBuffer(buf, filenameFromUrl(normalized), res.headers.get('content-type') || contentType);
+  const result = await uploadBackend.uploadBuffer(sanitized.buffer, sanitized.filename, sanitized.mimeType, {
+    category: 'raw',
+    ownerId,
+  });
+  const convertedUrl = normalizeOzonPublishImageUrl(result.url);
+  await waitForOzonImageReady(convertedUrl);
+  return convertedUrl;
+}
+
+function shouldInspectPublicImageForOzonCompatibility(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.toLowerCase();
+    return /\/api\/cdn\//i.test(path) || /\.(?:webp|gif|avif|tiff?)(?:$|[?#])/i.test(`${path}${url.search}`);
+  } catch {
+    return /\.(?:webp|gif|avif|tiff?)(?:$|[?#])/i.test(String(raw || '').toLowerCase());
+  }
+}
+
+async function ensureUploadBackend(
+  shopId: string,
+  options: { preferOzonCdn?: boolean },
+  getOzonCdnBackend: () => ImageStorageBackend | null,
+  setOzonCdnBackend: (value: ImageStorageBackend | null) => void,
+  getOzonCdnError: () => string | null,
+  setOzonCdnError: (value: string | null) => void,
+  getBackend: () => ImageStorageBackend | null,
+  setBackend: (value: ImageStorageBackend | null) => void,
+  getBackendError: () => string | null,
+  setBackendError: (value: string | null) => void,
+): Promise<ImageStorageBackend | null> {
+  if (options.preferOzonCdn && !getOzonCdnBackend() && !getOzonCdnError()) {
+    try {
+      setOzonCdnBackend(await getOzonCdnStorageBackend(shopId));
+    } catch (e: any) {
+      setOzonCdnError(e?.message || 'OZON CDN 未配置');
+    }
+  }
+  if (!getOzonCdnBackend() && !getBackend() && !getBackendError()) {
+    try {
+      setBackend(await getStorageBackend(shopId));
+    } catch (e: any) {
+      setBackendError(e?.message || '存储后端未配置');
+    }
+  }
+  return getOzonCdnBackend() || getBackend();
+}
+
+async function readLimitedImageBuffer(res: Response, maxBytes: number): Promise<Buffer> {
+  const contentLength = Number(res.headers.get('content-length') || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`remote image exceeds ${maxBytes} bytes`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > maxBytes) throw new Error(`remote image exceeds ${maxBytes} bytes`);
+  return buf;
+}
+
+function filenameFromUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const name = decodeURIComponent(url.pathname.split('/').pop() || '').replace(/[^\w.\-]/g, '_').slice(0, 120);
+    return name || 'source.jpg';
+  } catch {
+    return 'source.jpg';
+  }
 }

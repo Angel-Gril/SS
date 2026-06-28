@@ -2,6 +2,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import sharp from 'sharp';
 import { getStorageBackend } from './image-storage.js';
+import { isLikelyNonImageMediaUrl, sanitizeOzonPublishImageBuffer } from './ozon-image-sanitizer.js';
 
 const MAX_SOURCE_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_TRANSFER_IMAGES = 20;
@@ -120,6 +121,7 @@ function normalizeSourceImageUrl(value: unknown): string {
   if (text.startsWith('//')) text = `https:${text}`;
   if (!/^https?:\/\//i.test(text)) return '';
   const lower = text.toLowerCase();
+  if (isLikelyNonImageMediaUrl(lower)) return '';
   if (/\.(svg)(?:[?#]|$)/i.test(lower)) return '';
   if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/)/i.test(lower)) return '';
   if (/[-_]tps[-_]\d{1,4}[-x]\d{1,4}|55-tps|\b2-tps\b|gg_dtc|[-_/]rate(?:[._/-]|$)/i.test(lower)) return '';
@@ -174,7 +176,8 @@ async function transferSingleSourceImage(
   if (!mime || !ALLOWED_IMAGE_MIME.has(mime)) throw new Error(`不支持的图片类型: ${contentType || detected.format}`);
 
   const filename = safeSourceImageFilename(remoteUrl, mime);
-  return backend.uploadBuffer(buf, filename, mime, { category: 'raw', ownerId: userId });
+  const sanitized = await sanitizeOzonPublishImageBuffer(buf, filename, mime);
+  return backend.uploadBuffer(sanitized.buffer, sanitized.filename, sanitized.mimeType, { category: 'raw', ownerId: userId });
 }
 
 async function readLimitedResponseBuffer(res: Response, maxBytes: number): Promise<Buffer> {

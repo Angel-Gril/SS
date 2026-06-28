@@ -7,6 +7,7 @@ import { getRandomizeConfig, randomOfferIdFrom, jitterDimensionMm, bucketWeightG
 import { randomSuffix, chunkArray } from '../lib/util.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { normalizeOzonPublishImageUrl, resolveImageUrls } from '../services/ozon-image-resolver.js';
+import { isLikelyNonImageMediaUrl } from '../services/ozon-image-sanitizer.js';
 import { convertOzonRawAttrs, isOzonVideoMediaAttributeId, shouldSkipOzonPublishAttr } from '../services/ozon-attributes.js';
 import {
   createPrismaOzonAttributeDictionaryCacheStore,
@@ -2707,6 +2708,7 @@ function normalizePublishImageList(value: unknown): string[] {
   for (const raw of value) {
     let image = String(raw || '').trim();
     if (!image) continue;
+    if (isLikelyNonImageMediaUrl(image)) continue;
     if (/^(https?:)?\/\//i.test(image)) {
       try {
         image = normalizeOzonPublishImageUrl(image);
@@ -2714,6 +2716,7 @@ function normalizePublishImageList(value: unknown): string[] {
         // Keep the original value so the publish resolver can return the existing validation error.
       }
     }
+    if (isLikelyNonImageMediaUrl(image)) continue;
     if (seen.has(image)) continue;
     seen.add(image);
     out.push(image);

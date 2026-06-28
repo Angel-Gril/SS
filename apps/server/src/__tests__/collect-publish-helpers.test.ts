@@ -111,6 +111,32 @@ describe('collect publish helpers', () => {
     });
   });
 
+  it('keeps collected videos out of Ozon publish image lists', () => {
+    const images = resolveBasePublishImages({
+      images: [
+        'https://cdn.example.com/main.jpg',
+        'https://cloud.video.taobao.com/play/u/2218578938240/p/2/e/6/t/1/511445810400.mp4',
+        'https://cdn.example.com/detail.webp',
+        'https://cdn.example.com/video/master.m3u8?auth=1',
+      ],
+    });
+
+    expect(images).toEqual([
+      'https://cdn.example.com/main.jpg',
+      'https://cdn.example.com/detail.webp',
+    ]);
+
+    const offerImageLists: Record<string, string[]> = {};
+    const offerImages: Record<string, string> = {};
+    recordOfferPublishImages(offerImageLists, offerImages, 'offer-1', [
+      'https://cdn.example.com/variant.mp4',
+      'https://cdn.example.com/variant.jpg',
+    ]);
+
+    expect(offerImageLists['offer-1']).toEqual(['https://cdn.example.com/variant.jpg']);
+    expect(offerImages['offer-1']).toBe('https://cdn.example.com/variant.jpg');
+  });
+
   it('detects Chinese text in publish names', () => {
     expect(containsCjkText('Чехол для iPad')).toBe(false);
     expect(containsCjkText('保护套 для iPad')).toBe(true);
