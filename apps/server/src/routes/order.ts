@@ -49,6 +49,10 @@ const orderQuerySchema = z.object({
   endDate: z.string().optional(),
 });
 
+const labelPrintLogsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
 export function buildOrderCreatedAtRange(startDate?: string, endDate?: string): Record<string, Date> | undefined {
   const range: Record<string, Date> = {};
   if (startDate) {
@@ -423,6 +427,59 @@ export async function orderRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get('/label-print-logs', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const query = labelPrintLogsQuerySchema.parse(request.query);
+
+    const userShops = await prisma.shop.findMany({
+      where: { userId },
+      select: { id: true },
+    });
+    const shopIds = userShops.map((shop) => shop.id);
+    if (shopIds.length === 0) {
+      return reply.send({ code: 1, msg: 'ok', data: { rows: [] } });
+    }
+
+    const rows = await prisma.warehouseLog.findMany({
+      where: {
+        operationType: 'label_print',
+        order: { shopId: { in: shopIds } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit,
+      select: {
+        id: true,
+        orderId: true,
+        trackingNumber: true,
+        createdAt: true,
+        order: {
+          select: {
+            postingNumber: true,
+            platformOrderId: true,
+            status: true,
+            shop: { select: { name: true, platform: true } },
+          },
+        },
+      },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: {
+        rows: rows.map((row) => ({
+          id: row.id,
+          orderId: row.orderId,
+          postingNumber: row.order.postingNumber || row.order.platformOrderId,
+          trackingNumber: row.trackingNumber,
+          printedAt: row.createdAt,
+          status: row.order.status,
+          shop: row.order.shop,
+        })),
+      },
+    });
+  });
+
   app.get('/:id', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
@@ -436,10 +493,25 @@ export async function orderRoutes(app: FastifyInstance) {
       return reply.status(404).send({ code: 0, msg: '订单不存在' });
     }
 
+    const warehouseLogs = await prisma.warehouseLog.findMany({
+      where: { orderId: id, operationType: { in: ['scan_in', 'scan_out', 'label_print'] } },
+      orderBy: { createdAt: 'desc' },
+      select: { operationType: true, createdAt: true },
+    });
+    const warehouseScanInAt = warehouseLogs.find((log) => log.operationType === 'scan_in')?.createdAt ?? null;
+    const warehouseScanOutAt = warehouseLogs.find((log) => log.operationType === 'scan_out')?.createdAt ?? null;
+    const labelPrintedAt = warehouseLogs.find((log) => log.operationType === 'label_print')?.createdAt ?? null;
+
     return {
       code: 1,
       msg: 'ok',
-      data: { ...order, totalAmount: order.totalAmount?.toString() ?? '0' },
+      data: {
+        ...order,
+        totalAmount: order.totalAmount?.toString() ?? '0',
+        warehouseScanInAt,
+        warehouseScanOutAt,
+        labelPrintedAt,
+      },
     };
   });
 

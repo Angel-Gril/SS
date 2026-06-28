@@ -35,6 +35,8 @@ interface PrintHistoryItem {
   printedAt: string;
   success: boolean;
   errorMsg?: string;
+  trackingNumber?: string | null;
+  shop?: { name: string; platform: string };
 }
 
 interface OrderForPrint {
@@ -71,6 +73,7 @@ export default function PrintPage() {
   useEffect(() => {
     inputRef.current?.focus();
     loadPrintableOrders();
+    loadPrintHistory();
   }, []);
 
   // Check agent status when mode changes
@@ -94,6 +97,23 @@ export default function PrintPage() {
       setBatchOrders(res.data.rows);
     }
     setLoadingOrders(false);
+  }
+
+  async function loadPrintHistory() {
+    const res = await api.get<{ rows: Array<{
+      id: string;
+      orderId: string;
+      postingNumber: string;
+      printedAt: string;
+      trackingNumber: string | null;
+      shop: { name: string; platform: string };
+    }> }>('/api/orders/label-print-logs?limit=50');
+    if (res.code === 1 && res.data) {
+      setHistory(res.data.rows.map((item) => ({
+        ...item,
+        success: true,
+      })));
+    }
   }
 
   /** Scan and auto-print */
@@ -139,6 +159,7 @@ export default function PrintPage() {
         const success = await printViaAgent(agentConfig.url, blob);
         if (success) {
           addHistory(orderId, postingNumber, true);
+          loadPrintHistory();
           toast({ title: '打印成功', description: `${postingNumber} 已通过代理打印` });
           return;
         }
@@ -149,6 +170,7 @@ export default function PrintPage() {
 
     await printViaBrowser(blob);
     addHistory(orderId, postingNumber, true);
+    loadPrintHistory();
     toast({ title: '打印成功', description: `${postingNumber} 已发送到打印机` });
   }
 
@@ -379,7 +401,7 @@ export default function PrintPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Printer className="h-5 w-5" />
-            今日打印记录 ({history.length})
+            最近打印记录 ({history.length})
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -401,6 +423,11 @@ export default function PrintPage() {
                     )}
                     <div>
                       <p className="font-mono text-sm font-medium">{item.postingNumber}</p>
+                      {item.success && (
+                        <p className="text-xs text-muted-foreground">
+                          {item.shop?.name || '未知店铺'} · {item.trackingNumber || '无物流单号'}
+                        </p>
+                      )}
                       {item.errorMsg && (
                         <p className="text-xs text-red-500">{item.errorMsg}</p>
                       )}
@@ -416,7 +443,7 @@ export default function PrintPage() {
                         <Printer className="h-4 w-4" />
                       </Button>
                     )}
-                    <span className="text-xs text-muted-foreground">{formatDate(item.printedAt)}</span>
+                    <span className="text-xs text-muted-foreground">面单打印时间：{formatDate(item.printedAt)}</span>
                   </div>
                 </div>
               ))}

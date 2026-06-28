@@ -620,6 +620,7 @@ export default function OrdersPage() {
                   <TableHead>状态</TableHead>
                   <TableHead>标签</TableHead>
                   <TableHead>物流</TableHead>
+                  <TableHead>面单打印</TableHead>
                   <TableHead>创建时间</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
@@ -782,6 +783,9 @@ export default function OrdersPage() {
                             </div>
                           );
                         })()}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {order.labelPrintedAt ? formatDate(order.labelPrintedAt) : '-'}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {formatDate(order.createdAt)}
@@ -1037,6 +1041,7 @@ function OrderDetailDialog({ orderId, onClose }: {
                 <div><span className="text-muted-foreground">创建：</span>{formatDate(detail.createdAt)}</div>
                 <div><span className="text-muted-foreground">受理：</span>{detail.inProcessAt ? formatDate(detail.inProcessAt) : '-'}</div>
                 <div><span className="text-muted-foreground">发货：</span>{detail.shipmentDate ? formatDate(detail.shipmentDate) : '-'}</div>
+                <div><span className="text-muted-foreground">面单打印：</span>{detail.labelPrintedAt ? formatDate(detail.labelPrintedAt) : '-'}</div>
                 <div><span className="text-muted-foreground">配送：</span>{detail.deliveringDate ? formatDate(detail.deliveringDate) : '-'}</div>
                 <div><span className="text-muted-foreground">送达：</span>{detail.deliveredAt ? formatDate(detail.deliveredAt) : '-'}</div>
                 <div><span className="text-muted-foreground">更新：</span>{detail.updatedAt ? formatDate(detail.updatedAt) : '-'}</div>
