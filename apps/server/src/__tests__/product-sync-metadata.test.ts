@@ -5,6 +5,7 @@ import {
   getWarehouseStock,
   matchesProductListComputedFilters,
   normalizeOzonSku,
+  resolveOzonPackageWeightG,
   resolveOzonProductImages,
 } from '../services/product-sync-metadata.js';
 
@@ -94,6 +95,12 @@ describe('product sync metadata helpers', () => {
     expect(normalizeOzonSku(0)).toBeNull();
     expect(normalizeOzonSku('0')).toBeNull();
     expect(normalizeOzonSku(' 12345 ')).toBe('12345');
+  });
+
+  it('normalizes Ozon package weight from product attributes into grams', () => {
+    expect(resolveOzonPackageWeightG({ weight: 180, weight_unit: 'g' })).toBe(180);
+    expect(resolveOzonPackageWeightG({ weight: 0.2, weight_unit: 'kg' })).toBe(200);
+    expect(resolveOzonPackageWeightG({ weight: 12, weight_unit: 'lb' })).toBeNull();
   });
 
   it('filters products by price, weight and selected warehouse stock mode', () => {

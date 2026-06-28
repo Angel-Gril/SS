@@ -116,6 +116,15 @@ export function resolveOzonProductImages(
   return out;
 }
 
+export function resolveOzonPackageWeightG(attributes?: { weight?: unknown; weight_unit?: unknown } | null): number | null {
+  const weight = finiteNumber(attributes?.weight);
+  if (weight == null || weight <= 0) return null;
+  const unit = String(attributes?.weight_unit || 'g').trim().toLowerCase();
+  if (unit === 'g' || unit === 'gram' || unit === 'grams') return Math.round(weight);
+  if (unit === 'kg' || unit === 'kilogram' || unit === 'kilograms') return Math.round(weight * 1000);
+  return null;
+}
+
 function getOzonStatusTone(values: unknown[]): OzonStatusTone {
   const text = values.map((value) => String(value || '').trim()).filter(Boolean).join(' ').toLowerCase();
   if (!text) return 'muted';
