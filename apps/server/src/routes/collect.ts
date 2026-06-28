@@ -626,6 +626,25 @@ function sanitizeSourceSizeVariantValue(value: unknown): string {
   return candidates[0] || '';
 }
 
+function sourceInternationalSizeToRussianSize(value: unknown): string {
+  const text = sanitizeSourceSizeVariantValue(value).toUpperCase();
+  const normalized = text.replace(/\s+/g, '');
+  const map: Record<string, string> = {
+    XS: '44',
+    S: '46',
+    M: '48',
+    L: '50',
+    XL: '52',
+    XXL: '54',
+    '2XL': '54',
+    XXXL: '56',
+    '3XL': '56',
+    XXXXL: '58',
+    '4XL': '58',
+  };
+  return map[normalized] || text;
+}
+
 function sanitizeVariantAttrValueForTitle(name: unknown, value: unknown): string {
   if (isStrictColorVariantName(name)) {
     const color = extractSafeColorValue(value);
@@ -695,7 +714,7 @@ export function sanitizeVariantAttrsForOzonPublish(
     if (sourceKind === 'size') {
       const value = sanitizeSourceSizeVariantValue(rawValue);
       if (value) {
-        out['Российский размер'] = value;
+        out['Российский размер'] = sourceInternationalSizeToRussianSize(value);
         out['Размер производителя'] = value;
       }
       continue;
@@ -2041,7 +2060,7 @@ function sourceStandardOzonAttributeKey(attr: { id?: unknown; name?: unknown }):
   if (Number(attr.id) === 85 || /^(бренд|brand)$/.test(name)) return 'brand';
   if (/название цвета|color name|colour name/.test(name)) return null;
   if (/цвет|color|colour/.test(name)) return 'colors';
-  if (/размер|size/.test(name)) return 'sizes';
+  if (name === 'российский размер' || Number(attr.id) === 4295 || Number(attr.id) === 9689 || Number(attr.id) === 9695) return 'sizes';
   if (/материал|состав|material|composition|ткань|fabric/.test(name)) return 'materials';
   if (/^(пол|gender)$/.test(name) || /для кого|кому подходит/.test(name)) return 'gender';
   if (/сезон|season/.test(name)) return 'seasons';
@@ -2059,7 +2078,7 @@ function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStan
       ? standard.colors.map((value) => translateSourceColorValueToOzon(value) || String(value || '').trim()).filter(Boolean)
       : [];
   }
-  if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes) : [];
+  if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes).map(sourceInternationalSizeToRussianSize) : [];
   if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map((value) => String(value || '').trim()).filter(Boolean) : [];
   if (key === 'gender') {
     const value = String(standard.gender?.value || '').trim();

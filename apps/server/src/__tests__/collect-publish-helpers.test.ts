@@ -552,7 +552,7 @@ describe('collect publish helpers', () => {
       '尺码': 'M',
     }, { variantIndex: 0 })).toEqual({
       'Цвет': 'белый',
-      'Российский размер': 'M',
+      'Российский размер': '48',
       'Размер производителя': 'M',
     });
 
@@ -561,7 +561,7 @@ describe('collect publish helpers', () => {
       '尺码': '2XL',
     }, { variantIndex: 1 })).toEqual({
       'Цвет': 'коричневый',
-      'Российский размер': '2XL',
+      'Российский размер': '54',
       'Размер производителя': '2XL',
     });
   });
@@ -1718,7 +1718,7 @@ describe('collect publish helpers', () => {
     expect(plan.candidates).toEqual([
       { standardKey: 'brand', attributeId: 85, attributeName: 'Бренд', required: true, dictionaryId: 100, needsDictionaryResolution: true, values: ['Без бренда'] },
       { standardKey: 'colors', attributeId: 10096, attributeName: 'Цвет', required: true, dictionaryId: 200, needsDictionaryResolution: true, values: ['черный'] },
-      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['M'] },
+      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['48'] },
       { standardKey: 'materials', attributeId: 9001, attributeName: 'Материал', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['хлопок'] },
       { standardKey: 'gender', attributeId: 9002, attributeName: 'Пол', required: true, dictionaryId: 300, needsDictionaryResolution: true, values: ['Женский'] },
     ]);
@@ -1744,8 +1744,30 @@ describe('collect publish helpers', () => {
     ]);
 
     expect(plan.candidates).toEqual([
-      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['S', 'M', 'XL', '2XL', '3XL'] },
+      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['46', '48', '52', '54', '56'] },
     ]);
+  });
+
+  it('does not inject source sizes into Ozon size grid or model-size attributes', () => {
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: ['белый'],
+      sizes: ['M', 'L', 'XL', '2XL'],
+      materials: [],
+      gender: { value: 'male' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: [],
+    }, [
+      { id: 13164, name: 'Таблица размеров JSON', is_required: false },
+      { id: 4508, name: 'Размер на модели', is_required: false, dictionary_id: 945 },
+      { id: 4295, name: 'Российский размер', is_required: true, dictionary_id: 835 },
+      { id: 9533, name: 'Размер производителя', is_required: false },
+    ]);
+
+    expect(plan.candidates.map((candidate) => candidate.attributeId)).toEqual([4295]);
   });
 
   it('injects resolvable source standard attributes into Ozon publish attributes', async () => {
@@ -1771,7 +1793,7 @@ describe('collect publish helpers', () => {
       getAttributeDictValues: async (attributeId) => {
         if (attributeId === 9163) return [{ id: 22881, value: 'Мужской' }];
         if (attributeId === 10096) return [{ id: 61571, value: 'белый' }];
-        if (attributeId === 4295) return [{ id: 1001, value: 'M' }];
+        if (attributeId === 4295) return [{ id: 1001, value: '48' }];
         return [];
       },
     });
@@ -1779,7 +1801,7 @@ describe('collect publish helpers', () => {
     expect(result.attributes).toEqual([
       { id: 9163, complex_id: 0, values: [{ value: 'Мужской', dictionary_value_id: 22881 }] },
       { id: 10096, complex_id: 0, values: [{ value: 'белый', dictionary_value_id: 61571 }] },
-      { id: 4295, complex_id: 0, values: [{ value: 'M', dictionary_value_id: 1001 }] },
+      { id: 4295, complex_id: 0, values: [{ value: '48', dictionary_value_id: 1001 }] },
     ]);
     expect(result.applied.map((entry) => entry.attributeId)).toEqual([9163, 10096, 4295]);
   });
