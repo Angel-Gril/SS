@@ -30,6 +30,8 @@ import {
   shouldApplyCollectedVariantAttrOverride,
   buildCollectedGoodsMetadata,
   buildSourceStandardOzonAttributePlan,
+  buildSourceStandardOzonPublishAttributes,
+  getCollectedSourceStandardAttributes,
   sourceCategorySignature,
   buildSourceOzonCategoryCandidates,
   loadSourceOzonCategoryCatalogForCandidates,
@@ -367,6 +369,22 @@ describe('collect publish helpers', () => {
       ],
     });
   });
+  it('does not publish source rich content drafts as Ozon RichContentJson', () => {
+    expect(getCollectedRichDescriptionJson({
+      metadata: {
+        sourcePlatform: '1688',
+        sourceRichContentDraft: {
+          status: 'ai_generated_reviewable',
+          source: 'ai_product_content',
+          locale: 'ru',
+          blocks: [
+            { type: 'text', text: 'Описание для карточки.' },
+            { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+          ],
+        },
+      },
+    })).toBe('');
+  });
   it('does not treat source HTML image fragments as Russian descriptions', () => {
     const metadata = buildCollectedGoodsMetadata({
       title: 'U家舒服蕾细肩带内衣女士薄款无痕聚拢防下垂法式V领蕾丝文胸罩',
@@ -378,6 +396,55 @@ describe('collect publish helpers', () => {
 
     expect(metadata.sourceDescriptionRaw).toContain('<img');
     expect(metadata).not.toHaveProperty('sourceDescriptionRu');
+  });
+
+  it('infers source gender from Chinese product titles when source attributes omit gender', () => {
+    const metadata = buildCollectedGoodsMetadata({
+      title: '白色polo衫男短袖夏季修身镂空冰丝针织薄款商务休闲男士翻领t恤',
+      sourceTitleRaw: '白色polo衫男短袖夏季修身镂空冰丝针织薄款商务休闲男士翻领t恤',
+      sourcePlatform: '1688',
+      attributes: [
+        { name: '颜色', value: '白色、黑色' },
+        { name: '尺码', value: 'M L XL' },
+      ],
+      variants: [
+        { attrs: { 颜色: '白色', 尺码: 'M' } },
+      ],
+    });
+
+    expect(metadata.sourceStandardAttributes).toMatchObject({
+      gender: { value: 'male', source: 'title' },
+    });
+  });
+
+  it('repairs legacy source standard gender at publish time from the source title', () => {
+    const standard = getCollectedSourceStandardAttributes({
+      title: '白色polo衫男短袖夏季修身镂空冰丝针织薄款商务休闲男士翻领t恤',
+      variants: [
+        { attrs: { 颜色: '白色', 尺码: 'M' } },
+      ],
+      metadata: {
+        sourcePlatform: '1688',
+        sourceStandardAttributes: {
+          brand: { value: '其它', source: 'sourceAttributes', isBrandless: true },
+          colors: ['白色'],
+          sizes: ['M'],
+          materials: ['聚酯纤维'],
+          gender: { value: '' },
+          seasons: ['summer'],
+          packageWeightG: null,
+          packageDimensionsMm: null,
+          categoryHints: [],
+          missingForOzon: ['性别/季节'],
+        },
+      },
+    });
+
+    expect(standard).toMatchObject({
+      gender: { value: 'male', source: 'title' },
+      colors: ['白色'],
+      sizes: ['M'],
+    });
   });
 
   it('persists source product profile packaging reasons for collection details', () => {
@@ -476,6 +543,26 @@ describe('collect publish helpers', () => {
       'Размер': '52 RU / XL',
     })).toEqual({
       'Размер': '52 RU / XL',
+    });
+  });
+
+  it('maps source Chinese color and size variants to Ozon publish attributes', () => {
+    expect(sanitizeVariantAttrsForOzonPublish({
+      '颜色': '白色',
+      '尺码': 'M',
+    }, { variantIndex: 0 })).toEqual({
+      'Цвет': 'белый',
+      'Российский размер': 'M',
+      'Размер производителя': 'M',
+    });
+
+    expect(sanitizeVariantAttrsForOzonPublish({
+      '颜色': '咖啡色',
+      '尺码': '2XL',
+    }, { variantIndex: 1 })).toEqual({
+      'Цвет': 'коричневый',
+      'Российский размер': '2XL',
+      'Размер производителя': '2XL',
     });
   });
 
@@ -1659,6 +1746,42 @@ describe('collect publish helpers', () => {
     expect(plan.candidates).toEqual([
       { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['S', 'M', 'XL', '2XL', '3XL'] },
     ]);
+  });
+
+  it('injects resolvable source standard attributes into Ozon publish attributes', async () => {
+    const result = await buildSourceStandardOzonPublishAttributes({
+      standard: {
+        brand: { value: '', isBrandless: true },
+        colors: ['白色'],
+        sizes: ['M'],
+        materials: [],
+        gender: { value: 'male' },
+        seasons: [],
+        packageDimensionsMm: null,
+        packageWeightG: null,
+        categoryHints: [],
+        missingForOzon: [],
+      },
+      categoryAttrs: [
+        { id: 9163, name: 'Пол', is_required: true, dictionary_id: 300 },
+        { id: 10096, name: 'Цвет товара', is_required: true, dictionary_id: 200 },
+        { id: 4295, name: 'Российский размер', is_required: true, dictionary_id: 835 },
+      ],
+      existingAttributes: [],
+      getAttributeDictValues: async (attributeId) => {
+        if (attributeId === 9163) return [{ id: 22881, value: 'Мужской' }];
+        if (attributeId === 10096) return [{ id: 61571, value: 'белый' }];
+        if (attributeId === 4295) return [{ id: 1001, value: 'M' }];
+        return [];
+      },
+    });
+
+    expect(result.attributes).toEqual([
+      { id: 9163, complex_id: 0, values: [{ value: 'Мужской', dictionary_value_id: 22881 }] },
+      { id: 10096, complex_id: 0, values: [{ value: 'белый', dictionary_value_id: 61571 }] },
+      { id: 4295, complex_id: 0, values: [{ value: 'M', dictionary_value_id: 1001 }] },
+    ]);
+    expect(result.applied.map((entry) => entry.attributeId)).toEqual([9163, 10096, 4295]);
   });
 
   it('prefers each collected item category over batch fallback category', () => {

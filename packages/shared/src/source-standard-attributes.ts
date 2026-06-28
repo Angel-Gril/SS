@@ -139,11 +139,21 @@ function normalizeBrand(item: SourceItemLike): SourceStandardAttributes['brand']
   return { value, isBrandless, source: value ? 'sourceAttributes' : undefined };
 }
 
+function inferGender(value: unknown, source: string): SourceStandardAttributeValue | null {
+  const raw = text(value);
+  if (!raw) return null;
+  if (/男女|情侣|通用|中性|unisex/i.test(raw)) return { value: 'unisex', source };
+  if (/女装|女士|女款|女性|女人|女童|女孩|women|woman|female|girl/i.test(raw)) return { value: 'female', source };
+  if (/男装|男士|男款|男性|男人|男童|男孩|men|man|male|boy/i.test(raw)) return { value: 'male', source };
+  return null;
+}
+
 function normalizeGender(item: SourceItemLike): SourceStandardAttributeValue {
   const raw = valuesByName(item, /性别|适用性别|适用人群|适合人群|gender/i)[0] || '';
-  if (/女|女士|女性|women|woman|female|girl/i.test(raw)) return { value: 'female', source: 'sourceAttributes' };
-  if (/男|男士|男性|men|man|male|boy/i.test(raw)) return { value: 'male', source: 'sourceAttributes' };
-  if (/通用|中性|unisex/i.test(raw)) return { value: 'unisex', source: 'sourceAttributes' };
+  const fromAttributes = inferGender(raw, 'sourceAttributes');
+  if (fromAttributes) return fromAttributes;
+  const fromTitle = inferGender(item.title, 'title');
+  if (fromTitle) return fromTitle;
   return { value: raw, source: raw ? 'sourceAttributes' : undefined };
 }
 

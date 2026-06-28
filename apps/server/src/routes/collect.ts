@@ -53,6 +53,25 @@ const OZON_COLOR_PREFIX_RE = /^(?:светло|темно|тёмно|ярко|н
 const OZON_COMPOUND_COLOR_PREFIX_RE = /^(?:бело|черно|чёрно|красно|сине|голубо|зелено|зелёно|желто|жёлто|розово|фиолетово|серо|бежево|коричнево|бирюзово|салатово|графитово|серебристо|золотисто|оранжево|бордово|молочно|кремово|оливково|сиренево|лилово|изумрудно|лавандово|мятно|пудрово|кораллово|терракотово|персиково|бронзово|винно)$/iu;
 const OZON_COLOR_TAIL_RE = /^(?:сапфир|матов\p{L}*|глянцев\p{L}*|жемчуж\p{L}*|перламутр\p{L}*|металлик\p{L}*|металлическ\p{L}*|мрамор\p{L}*|меланж\p{L}*|карбон\p{L}*|неон\p{L}*|хамелеон\p{L}*)$/iu;
 const OZON_COLOR_NOISE_RE = /^(?:хлопок|лен|лён|шерсть|кожа|замша|шелк|шёлк|сатин|атлас|полиэстер|вискоза|кашемир|акрил|для|на|с|со|и|по|из|от|к)$/iu;
+const SOURCE_COLOR_TO_OZON: Array<[RegExp, string]> = [
+  [/酒红|枣红|葡萄红/i, 'бордовый'],
+  [/浅蓝|天蓝|湖蓝/i, 'голубой'],
+  [/深蓝|藏青|宝蓝/i, 'синий'],
+  [/米白|乳白|奶白|象牙白/i, 'молочный'],
+  [/咖啡|棕|褐|驼/i, 'коричневый'],
+  [/卡其/i, 'хаки'],
+  [/米色|杏色|裸色|肤色/i, 'бежевый'],
+  [/灰/i, 'серый'],
+  [/白/i, 'белый'],
+  [/黑/i, 'черный'],
+  [/红/i, 'красный'],
+  [/绿/i, 'зеленый'],
+  [/蓝/i, 'синий'],
+  [/黄/i, 'желтый'],
+  [/粉/i, 'розовый'],
+  [/紫/i, 'фиолетовый'],
+  [/橙/i, 'оранжевый'],
+];
 
 const collectSchema = z.object({
   title: z.string().min(1),
@@ -574,6 +593,39 @@ function sanitizeVariantAttrValueForOzonPublish(
   return sanitizeOzonAttrText(value);
 }
 
+function sourceVariantAttrKind(name: unknown): 'color' | 'size' | null {
+  const text = String(name || '').normalize('NFKC').trim();
+  if (/颜色|色号|颜色分类/i.test(text)) return 'color';
+  if (/尺码|尺寸|规格/i.test(text)) return 'size';
+  return null;
+}
+
+function translateSourceColorSegmentToOzon(value: unknown): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text) return '';
+  if (!containsCjkText(text)) return extractStrictOzonColorValue(text) || extractSafeColorValue(text);
+  for (const [pattern, color] of SOURCE_COLOR_TO_OZON) {
+    if (pattern.test(text)) return color;
+  }
+  return '';
+}
+
+function translateSourceColorValueToOzon(value: unknown): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text) return '';
+  if (!containsCjkText(text)) return extractStrictOzonColorValue(text) || extractSafeColorValue(text);
+  const parts = text.split(/[,\uFF0C、;；/|\s]+/u).map((part) => part.trim()).filter(Boolean);
+  const colors = compactColorSegments(parts.map(translateSourceColorSegmentToOzon).filter(Boolean));
+  return colors.join(', ');
+}
+
+function sanitizeSourceSizeVariantValue(value: unknown): string {
+  const candidates = sanitizeSourceStandardSizeValues([value])
+    .map((candidate) => sanitizeOzonAttrText(candidate))
+    .filter((candidate) => candidate && !containsCjkText(candidate));
+  return candidates[0] || '';
+}
+
 function sanitizeVariantAttrValueForTitle(name: unknown, value: unknown): string {
   if (isStrictColorVariantName(name)) {
     const color = extractSafeColorValue(value);
@@ -632,6 +684,22 @@ export function sanitizeVariantAttrsForOzonPublish(
   const out: Record<string, string> = {};
   for (const [rawName, rawValue] of Object.entries(variantAttrs)) {
     const name = String(rawName || '').trim();
+    const sourceKind = sourceVariantAttrKind(name);
+    if (sourceKind === 'color' || (isStrictColorVariantName(name) && containsCjkText(rawValue))) {
+      const value = translateSourceColorValueToOzon(rawValue);
+      if (value) {
+        out['Цвет'] = value;
+      }
+      continue;
+    }
+    if (sourceKind === 'size') {
+      const value = sanitizeSourceSizeVariantValue(rawValue);
+      if (value) {
+        out['Российский размер'] = value;
+        out['Размер производителя'] = value;
+      }
+      continue;
+    }
     const value = sanitizeVariantAttrValueForOzonPublish(name, rawValue, options);
     if (!value && isStrictColorVariantName(name)) {
       const codeLike = normalizeCodeLikeVariantLabel(rawValue);
@@ -670,6 +738,10 @@ export function sanitizeVariantAttrSetsForOzonPublish(
     if (!rawColorEntry || !safeColorEntry) continue;
     const rawColorKey = normalizeOzonDictionaryText(rawColorEntry[1]);
     const safeColorKey = normalizeOzonDictionaryText(safeColorEntry[1]);
+    const translatedSourceColorKey = containsCjkText(rawColorEntry[1])
+      ? normalizeOzonDictionaryText(translateSourceColorValueToOzon(rawColorEntry[1]))
+      : '';
+    if (translatedSourceColorKey && translatedSourceColorKey === safeColorKey) continue;
     if (rawColorKey && safeColorKey && rawColorKey !== safeColorKey) {
       attrs['Название цвета'] = neutralSupplementalVariantLabel({ variantIndex: index });
     }
@@ -1967,7 +2039,8 @@ type SourceStandardOzonAttributePlanGap = {
 function sourceStandardOzonAttributeKey(attr: { id?: unknown; name?: unknown }): SourceStandardOzonAttributeKey | null {
   const name = normalizeOzonDictionaryText(attr.name);
   if (Number(attr.id) === 85 || /^(бренд|brand)$/.test(name)) return 'brand';
-  if (/^(цвет|color|colour)$/.test(name)) return 'colors';
+  if (/название цвета|color name|colour name/.test(name)) return null;
+  if (/цвет|color|colour/.test(name)) return 'colors';
   if (/размер|size/.test(name)) return 'sizes';
   if (/материал|состав|material|composition|ткань|fabric/.test(name)) return 'materials';
   if (/^(пол|gender)$/.test(name) || /для кого|кому подходит/.test(name)) return 'gender';
@@ -1981,7 +2054,11 @@ function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStan
     if (value) return [value];
     return standard.brand?.isBrandless ? ['Без бренда'] : [];
   }
-  if (key === 'colors') return Array.isArray(standard.colors) ? standard.colors.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  if (key === 'colors') {
+    return Array.isArray(standard.colors)
+      ? standard.colors.map((value) => translateSourceColorValueToOzon(value) || String(value || '').trim()).filter(Boolean)
+      : [];
+  }
   if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes) : [];
   if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map((value) => String(value || '').trim()).filter(Boolean) : [];
   if (key === 'gender') {
@@ -2041,6 +2118,77 @@ export function buildSourceStandardOzonAttributePlan(
     }
   }
   return { candidates, missingRequired };
+}
+
+type SourceStandardOzonPublishAttributeInput = {
+  standard: Record<string, any>;
+  categoryAttrs: SourceStandardOzonAttributeDef[] | null | undefined;
+  existingAttributes?: Array<{ id: number; complex_id?: number; values?: any[] }> | null | undefined;
+  getAttributeDictValues?: (attributeId: number, candidate: SourceStandardOzonAttributePlanCandidate) => Promise<OzonDictionaryEntry[]> | OzonDictionaryEntry[];
+};
+
+type SourceStandardOzonPublishAttributeApplied = {
+  standardKey: SourceStandardOzonAttributeKey;
+  attributeId: number;
+  attributeName: string;
+  matchType: 'exact' | 'split' | 'partial' | 'text-fallback' | 'empty';
+  valueCount: number;
+};
+
+export async function buildSourceStandardOzonPublishAttributes(input: SourceStandardOzonPublishAttributeInput): Promise<{
+  attributes: Array<{ id: number; complex_id: number; values: OzonResolvedAttributeValue[] }>;
+  applied: SourceStandardOzonPublishAttributeApplied[];
+  missingRequired: SourceStandardOzonAttributePlanGap[];
+}> {
+  const existingAttributes = Array.isArray(input.existingAttributes) ? input.existingAttributes : [];
+  const plan = buildSourceStandardOzonAttributePlan(input.standard || {}, input.categoryAttrs, existingAttributes);
+  const attributes: Array<{ id: number; complex_id: number; values: OzonResolvedAttributeValue[] }> = [];
+  const applied: SourceStandardOzonPublishAttributeApplied[] = [];
+
+  for (const candidate of plan.candidates) {
+    const dictionaryId = Number(candidate.dictionaryId);
+    let resolvedValues: OzonResolvedAttributeValue[] = [];
+    let matchType: SourceStandardOzonPublishAttributeApplied['matchType'] = 'text-fallback';
+
+    if (Number.isFinite(dictionaryId) && dictionaryId > 0 && input.getAttributeDictValues) {
+      const dict = await input.getAttributeDictValues(candidate.attributeId, candidate);
+      const allowTextFallback = false;
+      const allowPartialDictionaryValues = candidate.standardKey === 'colors';
+      const collected: OzonResolvedAttributeValue[] = [];
+      for (const value of candidate.values) {
+        const resolved = resolveOzonDictionaryAttributeValues(value, dict, {
+          allowTextFallback,
+          allowPartialDictionaryValues,
+        });
+        matchType = resolved.matchType;
+        for (const item of resolved.values) {
+          if (!collected.some((existing) => existing.dictionary_value_id === item.dictionary_value_id)) collected.push(item);
+        }
+      }
+      resolvedValues = collected;
+    } else if (!Number.isFinite(dictionaryId) || dictionaryId <= 0) {
+      resolvedValues = candidate.values
+        .map((value) => sanitizeOzonAttrText(value))
+        .filter((value) => value && !containsCjkText(value))
+        .map((value) => ({ value, dictionary_value_id: 0 }));
+    }
+
+    if (!resolvedValues.length) continue;
+    attributes.push({
+      id: candidate.attributeId,
+      complex_id: 0,
+      values: resolvedValues,
+    });
+    applied.push({
+      standardKey: candidate.standardKey,
+      attributeId: candidate.attributeId,
+      attributeName: candidate.attributeName,
+      matchType,
+      valueCount: resolvedValues.length,
+    });
+  }
+
+  return { attributes, applied, missingRequired: plan.missingRequired };
 }
 
 function normalizeSourceCategoryToken(value: unknown): string {
@@ -2477,6 +2625,7 @@ export function getCollectedRichDescriptionJson(item: { metadata?: unknown }): s
   const richDescriptionJson = meta.sourceRichDescriptionJson;
   if (typeof richDescriptionJson === 'string' && richDescriptionJson.trim()) return richDescriptionJson.trim();
   if (richDescriptionJson && typeof richDescriptionJson === 'object') return JSON.stringify(richDescriptionJson);
+  if (isDomesticCollectedSource(meta.sourcePlatform)) return '';
   const richContentDraft = meta.sourceRichContentDraft;
   if (typeof richContentDraft === 'string' && richContentDraft.trim()) return richContentDraft.trim();
   if (richContentDraft && typeof richContentDraft === 'object') return JSON.stringify(richContentDraft);
@@ -2488,10 +2637,48 @@ function getCollectedSourceVideos(item: { metadata?: unknown }): unknown[] {
   return Array.isArray(meta.sourceVideos) ? meta.sourceVideos : [];
 }
 
-function getCollectedSourceStandardAttributes(item: { metadata?: unknown }): Record<string, any> | null {
+function mergeSourceStandardAttributes(
+  existing: Record<string, any>,
+  inferred: Record<string, any>,
+): Record<string, any> {
+  const out: Record<string, any> = { ...inferred, ...existing };
+  for (const key of ['colors', 'sizes', 'materials', 'seasons', 'categoryHints'] as const) {
+    if (!Array.isArray(existing[key]) || existing[key].length === 0) out[key] = inferred[key];
+  }
+  if (!existing.gender?.value && inferred.gender?.value) out.gender = inferred.gender;
+  if (!existing.brand?.value && !existing.brand?.isBrandless && inferred.brand) out.brand = inferred.brand;
+  if (!existing.packageWeightG && inferred.packageWeightG) out.packageWeightG = inferred.packageWeightG;
+  if (!existing.packageDimensionsMm && inferred.packageDimensionsMm) out.packageDimensionsMm = inferred.packageDimensionsMm;
+  return out;
+}
+
+export function getCollectedSourceStandardAttributes(item: {
+  title?: unknown;
+  variants?: unknown;
+  sourcePlatform?: unknown;
+  metadata?: unknown;
+}): Record<string, any> | null {
   const meta = metadataRecord(item.metadata);
   const standard = meta.sourceStandardAttributes;
-  return standard && typeof standard === 'object' && !Array.isArray(standard) ? standard as Record<string, any> : null;
+  const existing = standard && typeof standard === 'object' && !Array.isArray(standard) ? standard as Record<string, any> : {};
+  if (!isDomesticCollectedSource(item.sourcePlatform ?? meta.sourcePlatform)) {
+    return Object.keys(existing).length ? existing : null;
+  }
+  const inferred = normalizeSourceStandardAttributes({
+    title: item.title ?? meta.sourceTitleRaw,
+    variants: Array.isArray(item.variants) ? item.variants : meta.skuItems,
+    metadata: {
+      sourceAttributes: Array.isArray(meta.sourceAttributes) ? meta.sourceAttributes : [],
+      sourcePackagingRows: Array.isArray(meta.sourcePackagingRows) ? meta.sourcePackagingRows : [],
+      categoryPath: Array.isArray(meta.categoryPath) ? meta.categoryPath : [],
+      categoryName: meta.categoryName,
+      weightG: finiteMetadataNumber(meta.weightG),
+      lengthMm: finiteMetadataNumber(meta.lengthMm),
+      widthMm: finiteMetadataNumber(meta.widthMm),
+      heightMm: finiteMetadataNumber(meta.heightMm),
+    },
+  });
+  return mergeSourceStandardAttributes(existing, inferred as any);
 }
 
 function normalizePublishImageList(value: unknown): string[] {
@@ -4721,9 +4908,9 @@ export async function collectRoutes(app: FastifyInstance) {
 
           if (importItem._sourceStandardAttributes) {
             const traceKey = String(group.categoryId) + ':' + String(group.typeId) + ':' + String(importItem.offer_id || '');
+            const plan = buildSourceStandardOzonAttributePlan(importItem._sourceStandardAttributes, allAttrs, importItem.attributes);
             if (!sourceStandardAttributeTraceSeen.has(traceKey)) {
               sourceStandardAttributeTraceSeen.add(traceKey);
-              const plan = buildSourceStandardOzonAttributePlan(importItem._sourceStandardAttributes, allAttrs, importItem.attributes);
               if (plan.candidates.length || plan.missingRequired.length) {
                 sourceStandardAttributeTrace.push({
                   offerId: importItem.offer_id,
@@ -4736,6 +4923,16 @@ export async function collectRoutes(app: FastifyInstance) {
                   missingRequired: plan.missingRequired,
                 });
               }
+            }
+            const standardAttrs = await buildSourceStandardOzonPublishAttributes({
+              standard: importItem._sourceStandardAttributes,
+              categoryAttrs: allAttrs,
+              existingAttributes: importItem.attributes,
+              getAttributeDictValues: (attributeId) => getAttributeDictValues(group.categoryId, group.typeId, attributeId),
+            });
+            if (standardAttrs.attributes.length) {
+              importItem.attributes.push(...standardAttrs.attributes);
+              console.log(`[publish-ozon source-standard] offer=${importItem.offer_id} injected attrs=${standardAttrs.applied.map((entry) => `${entry.attributeId}:${entry.standardKey}:${entry.matchType}`).join(',')} category=${group.categoryId}/${group.typeId}`);
             }
           }
 
