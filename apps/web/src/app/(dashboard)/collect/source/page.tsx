@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
 import { formatDate } from '@/lib/utils';
@@ -441,6 +442,58 @@ function sourceVariantLabel(variant: Record<string, unknown>, index: number): st
     ? Object.entries(variant.attrs as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`).join(' / ')
     : '';
   return String(variant.name || variant.specText || attrs || variant.skuId || `SKU ${index + 1}`).replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeStableOfferPart(value: unknown): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 48);
+}
+
+function sourceOfferPlatformCode(value: unknown): string {
+  const platform = normalizePlatform(value);
+  if (platform === '1688') return '1688';
+  if (platform === 'pdd') return 'PDD';
+  if (platform === 'taobao') return 'TB';
+  if (platform === 'tmall') return 'TM';
+  if (platform === 'xianyu') return 'XY';
+  return 'SRC';
+}
+
+function buildStableSourceOfferId(item: SourceCollectItem): string {
+  const platform = sourceOfferPlatformCode(item.sourcePlatform || item.metadata?.sourcePlatform);
+  const identity = sanitizeStableOfferPart(item.sourceProductId)
+    || sanitizeStableOfferPart(item.metadata?.sourceProductId)
+    || sanitizeStableOfferPart(item.sku)
+    || sanitizeStableOfferPart(item.id)
+    || 'ITEM';
+  return `SRC-${platform}-${identity}`.slice(0, 80);
+}
+
+function buildStableSourceVariantOfferIds(item: SourceCollectItem): Record<string, string> {
+  const base = buildStableSourceOfferId(item);
+  return sourceVariants(item).reduce<Record<string, string>>((acc, variant, index) => {
+    const key = String(variant.sku || index).trim();
+    if (key) acc[key] = `${base}-V${index + 1}`.slice(0, 80);
+    return acc;
+  }, {});
+}
+
+function parseSourcePublishNumber(value: unknown, fallback = 0): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function sourcePublishPricePreview(item: SourceCollectItem, markupPct: string, markupAmount: string): string {
+  const base = Number(item.purchasePrice);
+  if (!Number.isFinite(base) || base <= 0) return '-';
+  const pct = parseSourcePublishNumber(markupPct, 0);
+  const fixed = parseSourcePublishNumber(markupAmount, 0);
+  return `¥${Math.ceil(base * (1 + pct / 100) + fixed)}`;
 }
 
 const SOURCE_VARIANT_STOP_LABEL_RE = /^(里料成分|产地|货号|颜色|尺码|规格|型号|容量|尺寸|套餐|版本|口味|是否进口|上市时间|罩杯型|排扣类型|肩带类型|主面料成分含量|风格|里料成分含量|品牌|材质|成分|面料|货源类别|货源类型|淘货类别|裤型|裤长|腰型|是否有腰带|裤门襟|图案|误差范围|适合季节|是否库存|库存类型|适合人群|上市年份\/季节|上市年份季节|适用场景|裤脚口款式|款式细节|弹力|类别|原创设计货源|有无质检报告|质检报告编号|是否加绒|领标|吊牌|适用体型|适用对象|款式|厚薄|工艺)$/;
@@ -879,10 +932,14 @@ function SourceProductRow({
               >
                 <Calculator className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0" asChild>
-                <a href={`/collect?sourceGroup=source&selected=${encodeURIComponent(item.id)}`} title="上架到OZON">
-                  <Upload className="h-4 w-4" />
-                </a>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => onDetail(item, 'listing')}
+                title="上架到OZON"
+              >
+                <Upload className="h-4 w-4" />
               </Button>
               {item.sourceUrl ? (
                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0" asChild>
@@ -1230,8 +1287,16 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [packageSaving, setPackageSaving] = useState(false);
   const [packageMessage, setPackageMessage] = useState('');
   const [packageError, setPackageError] = useState('');
+  const [publishMarkupPct, setPublishMarkupPct] = useState('');
+  const [publishMarkupAmount, setPublishMarkupAmount] = useState('0');
+  const [publishing, setPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState('');
+  const [publishError, setPublishError] = useState('');
   const candidates = categoryData?.candidates || [];
   const selectedCandidate = candidates.find((candidate) => ozonCategoryCandidateKey(candidate) === selectedCandidateKey) || candidates[0];
+  const stableOfferId = buildStableSourceOfferId(item);
+  const stableVariantOfferIds = buildStableSourceVariantOfferIds(item);
+  const stableVariantOfferCount = Object.keys(stableVariantOfferIds).length;
   const packagingEvidence = sourcePackagingEvidence(item);
   const sourceAssets = [
     { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
@@ -1266,6 +1331,8 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     });
     setPackageMessage('');
     setPackageError('');
+    setPublishMessage('');
+    setPublishError('');
   }, [item.id, item.metadata]);
 
   useEffect(() => {
@@ -1369,19 +1436,142 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     }
   }
 
+  async function saveSourcePublishInputs(weightG: number, lengthMm: number, widthMm: number, heightMm: number) {
+    if (!selectedCandidate) throw new Error('请选择 Ozon 类目候选');
+    const res = await api.post('/api/collect/save-customization', {
+      id: item.id,
+      categoryId: selectedCandidate.categoryId,
+      typeId: selectedCandidate.typeId,
+      weightG,
+      lengthMm,
+      widthMm,
+      heightMm,
+    });
+    if (res.code !== 1) throw new Error(res.msg || '保存源商品发布参数失败');
+    const metadata = {
+      ...(item.metadata || {}),
+      descriptionCategoryId: selectedCandidate.categoryId,
+      typeId: selectedCandidate.typeId,
+      weightG,
+      lengthMm,
+      widthMm,
+      heightMm,
+    };
+    onItemUpdate({ ...item, metadata });
+    return metadata;
+  }
+
+  async function handleSourcePublish() {
+    if (publishing) return;
+    setPublishMessage('');
+    setPublishError('');
+    setPackageError('');
+    if (!shopId) {
+      setPublishError('请选择目标 Ozon 店铺');
+      return;
+    }
+    if (!selectedCandidate) {
+      setPublishError('请选择 Ozon 类目候选');
+      return;
+    }
+    const weightG = packageNumber(packageForm.weightG);
+    const lengthMm = packageNumber(packageForm.lengthMm);
+    const widthMm = packageNumber(packageForm.widthMm);
+    const heightMm = packageNumber(packageForm.heightMm);
+    if (!weightG || !lengthMm || !widthMm || !heightMm) {
+      setPackageError('发布前需要完整填写重量、长、宽、高');
+      return;
+    }
+
+    setPublishing(true);
+    try {
+      const savedMetadata = await saveSourcePublishInputs(weightG, lengthMm, widthMm, heightMm);
+      const variantOfferIds = buildStableSourceVariantOfferIds(item);
+      const res = await api.post('/api/collect/publish-ozon', {
+        ids: [item.id],
+        shopId,
+        categoryId: selectedCandidate.categoryId,
+        typeId: selectedCandidate.typeId,
+        weight: weightG,
+        depth: lengthMm,
+        width: widthMm,
+        height: heightMm,
+        markupPct: parseSourcePublishNumber(publishMarkupPct, 0),
+        markupAmount: parseSourcePublishNumber(publishMarkupAmount, 0),
+        mode: 'clone',
+        followBrand: false,
+        randomOfferId: false,
+        useItemCategory: true,
+        source: 'source-publish-page',
+        offerIds: { [item.id]: stableOfferId },
+        ...(Object.keys(variantOfferIds).length ? { variantOfferIds: { [item.id]: variantOfferIds } } : {}),
+      });
+      if (res.code === 1) {
+        const message = res.msg || '已提交源商品上架任务';
+        setPublishMessage(message);
+        toast({ title: message });
+        onItemUpdate({ ...item, metadata: savedMetadata, status: 'listed' });
+      } else {
+        throw new Error(res.msg || '源商品上架失败');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '源商品上架失败';
+      setPublishError(message);
+      toast({ title: '上架失败', description: message, variant: 'destructive', duration: 8000 });
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   return (
     <div className="space-y-3">
-      <InfoPanel title="上架到OZON" count={readiness.status === 'ready' ? '可发布' : '需补齐'}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-muted-foreground">
-            当前页负责采集、文案、类目和件重尺准备；确认后进入发布台选择店铺、价格策略并提交 Ozon。
+      <InfoPanel title="源商品上架" count={readiness.status === 'ready' ? '可发布' : '需补齐'}>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <KeyValue
+                label="Ozon 类目"
+                value={selectedCandidate ? `${selectedCandidate.categoryNameZh || selectedCandidate.categoryName} / ${selectedCandidate.typeNameZh || selectedCandidate.typeName}` : '先选择候选'}
+              />
+              <KeyValue label="稳定货号" value={stableVariantOfferCount ? `${stableOfferId} / 变体 ${stableVariantOfferCount}` : stableOfferId} />
+              <KeyValue label="件重尺" value={sourceStandardPackageText(sourceStandardAttributeModel({ ...item, metadata: { ...(item.metadata || {}), ...packageForm } }))} />
+              <KeyValue label="预计售价" value={sourcePublishPricePreview(item, publishMarkupPct, publishMarkupAmount)} />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {sourceAssets.map((asset) => (
+                <Badge
+                  key={asset.label}
+                  variant="outline"
+                  className={asset.done ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}
+                >
+                  {asset.done ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertTriangle className="mr-1 h-3 w-3" />}
+                  {asset.label}
+                </Badge>
+              ))}
+            </div>
+            {publishMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{publishMessage}</div> : null}
+            {publishError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{publishError}</div> : null}
           </div>
-          <Button type="button" size="sm" asChild>
-            <a href={`/collect?sourceGroup=source&selected=${encodeURIComponent(item.id)}`}>
-              <Upload className="mr-2 h-4 w-4" />
-              去Ozon上架台
-            </a>
-          </Button>
+          <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">加价%</span>
+              <Input value={publishMarkupPct} onChange={(event) => setPublishMarkupPct(event.target.value)} type="number" className="h-8" />
+            </label>
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">固定加价(CNY)</span>
+              <Input value={publishMarkupAmount} onChange={(event) => setPublishMarkupAmount(event.target.value)} type="number" className="h-8" />
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              className="w-full"
+              onClick={handleSourcePublish}
+              disabled={publishing || !shopId || !selectedCandidate}
+            >
+              {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+              确认发布到Ozon
+            </Button>
+          </div>
         </div>
       </InfoPanel>
       <InfoPanel title="上架检查" count={sourceListingStatusLabel(readiness.status)}>

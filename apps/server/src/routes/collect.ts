@@ -2573,6 +2573,24 @@ export function hasOwnPublishCategory(item: { metadata?: unknown }): boolean {
   return !!positiveInt(meta.descriptionCategoryId) && !!positiveInt(meta.typeId);
 }
 
+export function shouldUseProductImportForPublishItem(
+  item: { metadata?: unknown; sourcePlatform?: unknown; sourceProductId?: unknown; sku?: unknown },
+  source?: unknown,
+): boolean {
+  const meta = metadataRecord(item.metadata);
+  if (Array.isArray(meta.ozonAttributes) && meta.ozonAttributes.length > 0) return true;
+  if (source !== 'source-publish-page') return false;
+  const platform = String(item.sourcePlatform || meta.sourcePlatform || '').trim().toLowerCase();
+  const sourceProductId = String(item.sourceProductId || meta.sourceProductId || '').trim();
+  const hasSourceIdentity = Boolean(
+    sourceProductId
+      || (platform && platform !== 'ozon')
+      || meta.sourceProductProfile
+      || meta.sourceStandardAttributes,
+  );
+  return hasSourceIdentity && hasOwnPublishCategory(item);
+}
+
 export function groupPublishItemsByCategory<T extends { description_category_id?: unknown; type_id?: unknown }>(
   items: T[],
 ): Array<{ categoryId: number; typeId: number; items: T[] }> {
@@ -3887,7 +3905,7 @@ export async function collectRoutes(app: FastifyInstance) {
       priceOverrides?: Record<string, Record<string | number, number>>;
       offerIds?: Record<string, string>;
       variantOfferIds?: Record<string, Record<string | number, string>>;
-      source?: 'collect-page' | 'listing-page' | 'batch-collect-page';
+      source?: 'collect-page' | 'listing-page' | 'batch-collect-page' | 'source-publish-page';
       forceRecreate?: boolean;
     };
 
@@ -3929,15 +3947,9 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: e?.message || '上架标题校验失败' });
     }
 
-    // 分流：有属性的走 /v3/product/import，没属性的走 /v1/product/import-by-sku (fallback)
-    const withAttrs = items.filter((it) => {
-      const meta = it.metadata as any;
-      return meta?.ozonAttributes?.length;
-    });
-    const noAttrs = items.filter((it) => {
-      const meta = it.metadata as any;
-      return !meta?.ozonAttributes?.length;
-    });
+    // 分流：Ozon SKU 跟卖 fallback 只适用于真实 Ozon product_id；源商品上架走 product/import 创建新卡片。
+    const withAttrs = items.filter((it) => shouldUseProductImportForPublishItem(it, body.source));
+    const noAttrs = items.filter((it) => !shouldUseProductImportForPublishItem(it, body.source));
 
     const markupPct = Number.isFinite(body.markupPct) ? body.markupPct : 0;
     const markupAmount = Number(body.markupAmount) || 0;

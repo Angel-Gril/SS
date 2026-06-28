@@ -150,13 +150,39 @@ assert.match(
   /api\.post<[\s\S]*\/api\/collect\/save-customization|api\.post\(['"`]\/api\/collect\/save-customization/,
   'source listing detail should save manual package weight and dimensions via collect customization API',
 );
-for (const label of ['去Ozon上架台', '上架到OZON']) {
-  assert.match(page, new RegExp(label), `source collection page should expose Ozon publish entry: ${label}`);
-}
 assert.match(
   page,
   /Upload/,
   'source collection row should expose a publish action icon',
+);
+assert.doesNotMatch(
+  page,
+  /\/collect\?sourceGroup=source/,
+  'source collection page should not hand source products back to the SKU follow publish page',
+);
+assert.doesNotMatch(
+  page,
+  /去Ozon上架台/,
+  'source collection page should not label the old mixed publish handoff as the source publish entry',
+);
+for (const label of ['上架到OZON', '源商品上架', '确认发布到Ozon', '稳定货号']) {
+  assert.match(page, new RegExp(label), `source collection page should expose in-page source publish control: ${label}`);
+}
+for (const token of [
+  'handleSourcePublish',
+  '/api/collect/publish-ozon',
+  "source: 'source-publish-page'",
+  'useItemCategory: true',
+  'randomOfferId: false',
+  'buildStableSourceOfferId',
+  'buildStableSourceVariantOfferIds',
+]) {
+  assert.match(page, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `source publish flow should contain ${token}`);
+}
+assert.match(
+  page,
+  /categoryId:\s*selectedCandidate\.categoryId[\s\S]*typeId:\s*selectedCandidate\.typeId/,
+  'source publish should submit the selected source Ozon category candidate instead of a title-search category',
 );
 
 const skuCollectPage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');
@@ -167,23 +193,13 @@ assert.match(
 );
 assert.match(
   skuCollectPage,
-  /sourceGroup:\s*collectSourceGroup/,
-  'SKU publish page should pass the selected source group to the collect API',
+  /sourceGroup:\s*defaultCollectSourceGroup/,
+  'SKU publish page should only request Ozon collect records',
 );
-assert.match(
+assert.doesNotMatch(
   skuCollectPage,
-  /useSearchParams/,
-  'SKU publish page should read URL parameters for source collection handoff',
-);
-assert.match(
-  skuCollectPage,
-  /sourceGroupParam|collectSourceGroup|sourceGroupFromQuery/,
-  'SKU publish page should support sourceGroup query parameter while keeping Ozon as the default',
-);
-assert.match(
-  skuCollectPage,
-  /selected|selectId|preselect/i,
-  'SKU publish page should support preselecting a source item from the collection page handoff',
+  /sourceGroupParam|collectSourceGroup|sourceGroupFromQuery|sourceGroup\s*===\s*['"]source['"]|货源商品上架台|1688\/PDD 货源商品/,
+  'SKU publish page should no longer support the old sourceGroup=source mixed publish mode',
 );
 
 console.log('PASS web source collect routing');

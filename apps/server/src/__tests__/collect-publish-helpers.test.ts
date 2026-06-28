@@ -22,6 +22,7 @@ import {
   resolveBasePublishImages,
   resolveItemPublishCategory,
   resolvePublishOfferId,
+  shouldUseProductImportForPublishItem,
   resolvePublishName,
   findVariantAttributeConflicts,
   resolveVariantPublishImages,
@@ -2287,6 +2288,27 @@ describe('collect publish helpers', () => {
       userRandomOfferId: false,
       suffixFactory: () => 'safe',
     })).toBe('3399297127-safe');
+  });
+
+  it('routes source publish items with category metadata through product import even without cloned Ozon attributes', () => {
+    expect(shouldUseProductImportForPublishItem({
+      sku: '1688-888888',
+      sourcePlatform: '1688',
+      sourceProductId: '888888',
+      metadata: {
+        descriptionCategoryId: 17031663,
+        typeId: 970448812,
+        sourceStandardAttributes: {
+          packageWeightG: 180,
+          packageDimensionsMm: { length: 300, width: 220, height: 30 },
+        },
+      },
+    }, 'source-publish-page')).toBe(true);
+
+    expect(shouldUseProductImportForPublishItem({
+      sku: '3399297127',
+      metadata: {},
+    }, 'collect-page')).toBe(false);
   });
   it('does not surface adult Ozon categories for normal underwear source products', () => {
     const candidates = buildSourceOzonCategoryCandidates({

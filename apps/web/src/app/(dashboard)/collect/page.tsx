@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { ShoppingCart, Loader2, Search, Trash2, ExternalLink, Upload, Edit2, Save, ArrowRight, Download, Sparkles, Image as ImageIcon, Layers, ChevronDown, ChevronUp, KeyRound, Shuffle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -192,11 +192,7 @@ interface RandomizeConfig {
 
 export default function CollectPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const sourceGroupParam = searchParams.get('sourceGroup');
-  const selectedFromQuery = searchParams.get('selected') || '';
   const defaultCollectSourceGroup = 'ozon';
-  const collectSourceGroup = sourceGroupParam === 'source' ? 'source' : defaultCollectSourceGroup;
   const [items, setItems] = useState<CollectedItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -274,7 +270,7 @@ export default function CollectPage() {
   const [wmSelectedTemplate, setWmSelectedTemplate] = useState<string>('');
   const limit = 20;
 
-  useEffect(() => { fetchData(); }, [search, page, statusFilter, collectSourceGroup, selectedFromQuery]);
+  useEffect(() => { fetchData(); }, [search, page, statusFilter]);
   useEffect(() => { loadShops(); loadWmTemplates(); loadRandomizeConfig(); }, []);
   useEffect(() => {
     setCategoryCatalogResults([]);
@@ -335,16 +331,13 @@ export default function CollectPage() {
 
   async function fetchData() {
     setLoading(true);
-    const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit), sourceGroup: collectSourceGroup });
+    const params = new URLSearchParams({ offset: String(page * limit), limit: String(limit), sourceGroup: defaultCollectSourceGroup });
     if (search) params.set('search', search);
     if (statusFilter) params.set('status', statusFilter);
     const res = await api.get<{ total: number; rows: CollectedItem[] }>(`/api/collect?${params}`);
     if (res.code === 1 && res.data) {
       setItems(res.data.rows);
       setTotal(res.data.total);
-      if (selectedFromQuery && res.data.rows.some((item) => item.id === selectedFromQuery)) {
-        setSelectedIds(new Set([selectedFromQuery]));
-      }
     }
     setLoading(false);
   }
@@ -1097,9 +1090,9 @@ export default function CollectPage() {
       <div className="sticky top-0 z-20 -mx-2 border-b bg-background/95 px-2 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{collectSourceGroup === 'source' ? '货源商品上架台' : 'SKU采集跟卖'}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">SKU采集跟卖</h1>
             <p className="text-muted-foreground text-sm mt-1">
-              {collectSourceGroup === 'source' ? '1688/PDD 货源商品 → 改价/补件重尺 → 一键上架到 OZON' : '扩展采集 → 改价 → 一键上架到 OZON'}
+              扩展采集 → 改价 → 一键上架到 OZON
             </p>
           </div>
           <div className="flex gap-2">
@@ -1164,7 +1157,7 @@ export default function CollectPage() {
           ) : items.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p>{collectSourceGroup === 'source' ? '暂无货源商品，请先到 1688商品采集 页采集' : '暂无数据，使用扩展采集或批量导入SKU'}</p>
+              <p>暂无数据，使用扩展采集或批量导入SKU</p>
             </div>
           ) : (
             <div className="space-y-3">
