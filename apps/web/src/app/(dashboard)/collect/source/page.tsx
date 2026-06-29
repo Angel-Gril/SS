@@ -158,6 +158,55 @@ function sourceVideoCount(item: SourceCollectItem): number {
   return Array.isArray(videos) ? videos.length : 0;
 }
 
+function sourceVideoRows(item: SourceCollectItem): Array<Record<string, unknown>> {
+  return sourceMetadataArray(item, 'sourceVideos')
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
+}
+
+function sourceVideoTransferEntries(item: SourceCollectItem): Array<Record<string, unknown>> {
+  const transfer = sourceRecord(item.metadata?.sourceVideoTransfer);
+  const entries = transfer.entries;
+  return Array.isArray(entries)
+    ? entries.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry))
+    : [];
+}
+
+function sourceVideoStatusLabel(value: unknown): string {
+  const status = String(value || '').trim();
+  if (status === 'uploaded') return '已转存';
+  if (status === 'ozon_cdn_ready') return 'Ozon视频可自动绑定';
+  if (status === 'playlist_unsupported') return 'm3u8暂不支持';
+  if (status === 'blocked') return '防盗链/不可直连';
+  if (status === 'not_video') return '非视频响应';
+  if (status === 'too_large') return '视频过大';
+  if (status === 'failed' || status === 'transfer_failed') return '转存失败';
+  if (status === 'skipped') return '未转存';
+  return status || '待诊断';
+}
+
+function sourceVideoStatusClass(value: unknown): string {
+  const status = String(value || '').trim();
+  if (status === 'uploaded' || status === 'ozon_cdn_ready') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'blocked' || status === 'playlist_unsupported' || status === 'failed' || status === 'transfer_failed') return 'border-amber-200 bg-amber-50 text-amber-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function sourceVideoTransferSummary(item: SourceCollectItem): string {
+  const transfer = sourceRecord(item.metadata?.sourceVideoTransfer);
+  const entries = sourceVideoTransferEntries(item);
+  if (!Object.keys(transfer).length && !entries.length) return sourceVideoCount(item) ? '待诊断' : '无视频';
+  const transferred = Number(transfer.transferred || 0);
+  const skipped = Number(transfer.skipped || 0);
+  const failed = Array.isArray(transfer.errors) ? transfer.errors.length : 0;
+  const ozonReady = entries.filter((entry) => String(entry.status || '') === 'ozon_cdn_ready').length;
+  return [
+    transferred ? `已转存 ${transferred}` : '',
+    ozonReady ? `Ozon视频可自动绑定 ${ozonReady}` : '',
+    skipped ? `未转存 ${skipped}` : '',
+    failed ? `失败 ${failed}` : '',
+  ].filter(Boolean).join(' / ') || '待诊断';
+}
+
 function sourceMetadataArray(item: SourceCollectItem, key: string): unknown[] {
   const value = item.metadata?.[key];
   return Array.isArray(value) ? value : [];
@@ -1040,7 +1089,10 @@ function SourceOverviewSection({ item }: { item: SourceCollectItem }) {
         <MetricBlock label="过滤图片" value={String(sourceRejectedAssetCount(item))} />
       </div>
       <InfoPanel title="采集诊断" count={null}>
-        <div className="text-muted-foreground">{extractionDiagnosticText(item) || '暂无诊断信息'}</div>
+        <div className="space-y-1 text-muted-foreground">
+          <div>{extractionDiagnosticText(item) || '暂无诊断信息'}</div>
+          <div>视频转存 {sourceVideoTransferSummary(item)}</div>
+        </div>
       </InfoPanel>
       <InfoPanel title="字段级采集质量" count={null}>
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -1183,6 +1235,7 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
   const detailImages = sourceDetailPreviewImages(item);
   const watermarked = metadataArray(item, 'watermarkedImages');
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
+  const videos = sourceVideoRows(item);
   return (
     <div className="space-y-3">
       <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
@@ -1199,6 +1252,49 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
           <ImageStatusList images={edited} empty="暂无改图结果" />
         </InfoPanel>
       </div>
+      <InfoPanel title="视频转存" count={sourceVideoTransferSummary(item)}>
+        <SourceVideoList videos={videos} empty="未采集到视频素材" />
+      </InfoPanel>
+    </div>
+  );
+}
+
+function SourceVideoList({ videos, empty }: { videos: Array<Record<string, unknown>>; empty: string }) {
+  if (!videos.length) return <div className="text-muted-foreground">{empty}</div>;
+  return (
+    <div className="space-y-2">
+      {videos.map((video, index) => {
+        const url = String(video.url || '').trim();
+        const originalUrl = String(video.originalUrl || '').trim();
+        const status = String(video.transferStatus || video.status || video.transferReason || '').trim();
+        const reason = String(video.transferReason || video.reason || '').trim();
+        return (
+          <div key={`${url || originalUrl || index}`} className="rounded border bg-muted/30 px-3 py-2 text-xs">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className={sourceVideoStatusClass(status || reason)}>
+                {sourceVideoStatusLabel(status || reason)}
+              </Badge>
+              {video.title ? <span className="font-medium">{String(video.title)}</span> : null}
+            </div>
+            <div className="space-y-1 text-muted-foreground">
+              {url ? (
+                <button
+                  type="button"
+                  className="flex max-w-full items-center gap-1 break-all text-left text-primary hover:underline"
+                  onClick={() => window.open(url, '_blank')}
+                >
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                  {url}
+                </button>
+              ) : null}
+              {originalUrl && originalUrl !== url ? (
+                <div className="break-all">原始视频 {originalUrl}</div>
+              ) : null}
+              {reason && reason !== status ? <div>原因 {sourceVideoStatusLabel(reason)}</div> : null}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

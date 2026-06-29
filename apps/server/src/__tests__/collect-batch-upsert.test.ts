@@ -61,6 +61,10 @@ const mocks = vi.hoisted(() => {
       images: Array.isArray(images) ? images : [],
       diagnostic: null,
     })),
+    transferSourceProductVideos: vi.fn(async ({ sourceVideos }: any): Promise<{ videos: any[]; diagnostic: any }> => ({
+      videos: Array.isArray(sourceVideos) ? sourceVideos : [],
+      diagnostic: null,
+    })),
   };
 });
 
@@ -90,6 +94,10 @@ vi.mock('../services/collect-pricing.js', () => ({
 
 vi.mock('../services/source-image-transfer.js', () => ({
   transferSourceProductImages: mocks.transferSourceProductImages,
+}));
+
+vi.mock('../services/source-video-transfer.js', () => ({
+  transferSourceProductVideos: mocks.transferSourceProductVideos,
 }));
 
 async function buildApp() {
@@ -156,6 +164,31 @@ describe('collectRoutes batch upsert', () => {
         transferred: 1,
         skipped: 0,
         errors: [],
+      },
+    });
+    mocks.transferSourceProductVideos.mockResolvedValueOnce({
+      videos: [{
+        url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
+        originalUrl: 'https://video.example.com/a.mp4',
+        coverUrl: 'https://img.example.com/video.jpg',
+        transferStatus: 'uploaded',
+        transferReason: 'direct_video',
+      }],
+      diagnostic: {
+        enabled: true,
+        backend: 'oss',
+        attempted: 1,
+        transferred: 1,
+        skipped: 0,
+        errors: [],
+        entries: [{
+          originalUrl: 'https://video.example.com/a.mp4',
+          url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
+          status: 'uploaded',
+          reason: 'direct_video',
+          contentType: 'video/mp4',
+          contentLength: '12345',
+        }],
       },
     });
     const app = await buildApp();
@@ -264,6 +297,11 @@ describe('collectRoutes batch upsert', () => {
         sourcePlatform: '1688',
         userId: 'user-1',
       });
+      expect(mocks.transferSourceProductVideos).toHaveBeenCalledWith({
+        sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
+        sourcePlatform: '1688',
+        userId: 'user-1',
+      });
       expect(createArgs.data.metadata).toMatchObject({
         titleNeedsReview: true,
         sourcePlatform: '1688',
@@ -290,7 +328,13 @@ describe('collectRoutes batch upsert', () => {
             { type: 'image', url: 'https://ss-erp.com/api/cdn/users/user-1/raw/1688-detail-1.jpg' },
           ],
         },
-        sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
+        sourceVideos: [{
+          url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
+          originalUrl: 'https://video.example.com/a.mp4',
+          coverUrl: 'https://img.example.com/video.jpg',
+          transferStatus: 'uploaded',
+          transferReason: 'direct_video',
+        }],
         categoryPath: ['日用百货', '杯具', '保温杯'],
         categoryName: '保温杯',
         sourceAttributes: [
@@ -342,6 +386,22 @@ describe('collectRoutes batch upsert', () => {
           transferred: 1,
           skipped: 0,
           errors: [],
+        },
+        sourceVideoTransfer: {
+          enabled: true,
+          backend: 'oss',
+          attempted: 1,
+          transferred: 1,
+          skipped: 0,
+          errors: [],
+          entries: [{
+            originalUrl: 'https://video.example.com/a.mp4',
+            url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
+            status: 'uploaded',
+            reason: 'direct_video',
+            contentType: 'video/mp4',
+            contentLength: '12345',
+          }],
         },
       });
       expect(createArgs.data.metadata).not.toHaveProperty('sourceDescriptionRu');

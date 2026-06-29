@@ -40,6 +40,7 @@ import { createPrismaAiUsageStore } from '../services/ai-usage.js';
 import { generateProductContentDraft, type ProductContentField } from '../services/product-content-ai.js';
 import { buildSourceProductProfile } from '../services/source-product-profile.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
+import { transferSourceProductVideos } from '../services/source-video-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { normalizeSourceStandardAttributes, sanitizeSourceStandardSizeValues } from 'shared/source-standard-attributes';
 
@@ -1479,6 +1480,7 @@ async function prepareCollectedSourceImageMetadata(input: {
   images?: unknown;
   sourceMainImages?: unknown;
   sourceDetailImages?: unknown;
+  sourceVideos?: unknown;
   sourcePlatform?: unknown;
   sourceRichContentDraft?: unknown;
 }, userId: string): Promise<{
@@ -1512,6 +1514,16 @@ async function prepareCollectedSourceImageMetadata(input: {
       if (detailImages[index]) replacements.set(url, detailImages[index]!);
     });
     metadataPatch.sourceRichContentDraft = rewriteSourceRichContentDraftImages(input.sourceRichContentDraft, replacements);
+  }
+
+  if (isSource) {
+    const videoTransfer = await transferSourceProductVideos({
+      sourceVideos: input.sourceVideos,
+      sourcePlatform: input.sourcePlatform,
+      userId,
+    });
+    if (videoTransfer.videos.length) metadataPatch.sourceVideos = videoTransfer.videos;
+    if (videoTransfer.diagnostic) metadataPatch.sourceVideoTransfer = videoTransfer.diagnostic;
   }
 
   return { images: mainTransfer.images, metadataPatch };

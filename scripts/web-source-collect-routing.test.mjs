@@ -83,6 +83,12 @@ for (const label of ['俄语本地化', '生成Ozon文案草稿', 'AI 搜索标�
 for (const label of ['详情图原始素材', '包装信息', '原始富内容待处理', '富内容待处理']) {
   assert.match(page, new RegExp(label), `source collection page should expose 1688 source asset workflow label: ${label}`);
 }
+for (const label of ['视频转存', '已转存', '防盗链/不可直连', 'Ozon视频可自动绑定']) {
+  assert.match(page, new RegExp(label), `source collection page should expose source video diagnostic label: ${label}`);
+}
+for (const helper of ['sourceVideoTransferSummary', 'sourceVideoRows', 'sourceVideoStatusLabel']) {
+  assert.match(page, new RegExp(helper), `source collection page should expose source video diagnostic helper: ${helper}`);
+}
 for (const helper of ['sourceDetailPreviewImages', 'sourcePackagingRows', 'sourceRichContentDraft']) {
   assert.match(page, new RegExp(helper), `source collection page should read 1688 source asset helper: ${helper}`);
 }
