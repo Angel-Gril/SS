@@ -133,6 +133,66 @@ describe('ozon category catalog', () => {
     expect(catalog.map((entry) => entry.displayPathZh).join(' ')).not.toMatch(/[А-Яа-яЁё]/);
   });
 
+  it('translates Ozon sleepwear category types through the local dictionary', () => {
+    expect(translateOzonCategoryText('Ночная сорочка')).toBe('睡裙');
+    expect(translateOzonCategoryText('Пижама')).toBe('睡衣');
+    expect(translateOzonCategoryText('Пеньюар')).toBe('睡袍');
+
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 200000933,
+        category_name: 'Одежда',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 200000933,
+            category_name: 'Одежда',
+            disabled: false,
+            children: [
+              { type_id: 970960142, type_name: 'Ночная сорочка', disabled: false, children: [] },
+              { type_id: 93176, type_name: 'Пижама', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+      {
+        description_category_id: 200001517,
+        category_name: 'Белье',
+        disabled: false,
+        children: [
+          { type_id: 93170, type_name: 'Пеньюар', disabled: false, children: [] },
+        ],
+      },
+    ]);
+
+    expect(catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        descriptionCategoryId: 200000933,
+        typeId: 970960142,
+        displayPathZh: '服装 / 服装 / 睡裙',
+        typeNameZh: '睡裙',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+      }),
+      expect.objectContaining({
+        descriptionCategoryId: 200000933,
+        typeId: 93176,
+        displayPathZh: '服装 / 服装 / 睡衣',
+        typeNameZh: '睡衣',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+      }),
+      expect.objectContaining({
+        descriptionCategoryId: 200001517,
+        typeId: 93170,
+        displayPathZh: '内衣 / 睡袍',
+        typeNameZh: '睡袍',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+      }),
+    ]));
+  });
+
   it('records category levels and translation gaps without leaking Russian into Chinese display paths', () => {
     const catalog = buildOzonCategoryCatalog([
       {

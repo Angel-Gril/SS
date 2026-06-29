@@ -90,6 +90,10 @@ const CATEGORY_TRANSLATIONS: Record<string, string> = {
   'бюстгальтер': '文胸',
   'бюстгальтеры': '文胸',
   'аксессуар для бюстгальтера': '文胸配件',
+  'ночная сорочка': '睡裙',
+  'пижама': '睡衣',
+  'пижамы': '睡衣',
+  'пеньюар': '睡袍',
   'наматрасник': '床垫保护套',
   'держатель простыни, одеяла': '床单/被子固定夹',
   'веревка бельевая': '晾衣绳',
@@ -114,6 +118,7 @@ const KEYWORD_EXPANSIONS: Array<[RegExp, string[]]> = [
   [/радиоуправляем|遥控/iu, ['遥控玩具', '遥控模型', 'радиоуправляемые игрушки']],
   [/мобил|кроватк|婴儿床铃|床挂/iu, ['婴儿床铃', '床挂玩具', 'мобиль']],
   [/бюстгальтер|лифчик|белье|бельё|文胸|胸罩|内衣|bra|lingerie/iu, ['文胸', '胸罩', '内衣', 'bra', 'lingerie', 'бюстгальтер']],
+  [/ночн|сорочк|пижам|пеньюар|睡裙|睡衣|睡袍|nightgown|nightdress|pajamas?|pyjamas?|sleepwear/iu, ['睡裙', '睡衣', '睡袍', 'ночная сорочка', 'пижама', 'пеньюар']],
 ];
 
 export function translateOzonCategoryText(value: unknown): string {
@@ -133,6 +138,9 @@ export function translateOzonCategoryText(value: unknown): string {
   out = out.replace(/Бюстгалтер/giu, '文胸');
   out = out.replace(/Бюстгальтеры?/giu, '文胸');
   out = out.replace(/Аксессуар для бюстгальтера/giu, '文胸配件');
+  out = out.replace(/Ночная сорочка/giu, '睡裙');
+  out = out.replace(/Пижамы?/giu, '睡衣');
+  out = out.replace(/Пеньюар/giu, '睡袍');
   out = out.replace(/Наматрасник/giu, '床垫保护套');
   out = out.replace(/Держатель простыни, одеяла/giu, '床单/被子固定夹');
   out = out.replace(/Веревка бельевая/giu, '晾衣绳');
