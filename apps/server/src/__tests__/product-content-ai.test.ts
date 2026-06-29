@@ -93,7 +93,7 @@ describe('product content AI drafts', () => {
     });
 
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe('AI product generation disabled');
+    if (!result.ok) expect(result.error).toBe('商品内容生成未启用，请在超管设置中开启 AI 商品内容生成');
     expect(generateText).not.toHaveBeenCalled();
   });
 
@@ -287,7 +287,7 @@ describe('product content AI drafts', () => {
       generateText,
     })).resolves.toMatchObject({
       ok: false,
-      error: 'Generated title is unsafe for Ozon',
+      error: 'AI 标题草稿不符合 Ozon 上架要求',
     });
 
     const retry = await generateProductContentDraft({
@@ -323,7 +323,7 @@ describe('product content AI drafts', () => {
       generateText,
     })).resolves.toMatchObject({
       ok: false,
-      error: 'Generated title is unsafe for Ozon',
+      error: 'AI 标题草稿不符合 Ozon 上架要求',
     });
   });
 

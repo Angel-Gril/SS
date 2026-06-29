@@ -327,18 +327,18 @@ function buildProductContentInput(item: ProductContentAiItem, field: ProductCont
 }
 
 function validateGeneratedText(field: ProductContentField, text: string): string | null {
-  if (!text) return field === 'title' ? 'Generated title is unsafe for Ozon' : 'Generated description is unsafe for Ozon';
+  if (!text) return field === 'title' ? 'AI 标题草稿不符合 Ozon 上架要求' : 'AI 描述草稿不符合 Ozon 上架要求';
   if (HTML_OR_URL_RE.test(text) || SOURCE_COMMERCE_NOISE_RE.test(text)) {
-    return field === 'title' ? 'Generated title is unsafe for Ozon' : 'Generated description is unsafe for Ozon';
+    return field === 'title' ? 'AI 标题草稿不符合 Ozon 上架要求' : 'AI 描述草稿不符合 Ozon 上架要求';
   }
   if (field === 'title') {
     if (text.length < 5 || text.length > 200 || CJK_RE.test(text) || !CYRILLIC_RE.test(text)) {
-      return 'Generated title is unsafe for Ozon';
+      return 'AI 标题草稿不符合 Ozon 上架要求';
     }
   }
   if (field === 'description') {
     if (text.length < 10 || text.length > 5000 || CJK_RE.test(text) || !CYRILLIC_RE.test(text)) {
-      return 'Generated description is unsafe for Ozon';
+      return 'AI 描述草稿不符合 Ozon 上架要求';
     }
   }
   return null;
@@ -370,9 +370,9 @@ function aiConfigForField(config: ProductContentAiConfig, field: ProductContentF
 
 export async function generateProductContentDraft(params: GenerateProductContentDraftParams): Promise<ProductContentDraftResult> {
   const drafts: Partial<Record<ProductContentField, ProductContentDraft>> = {};
-  if (!params.config.enabled) return { ok: false, error: 'AI product generation disabled', drafts };
+  if (!params.config.enabled) return { ok: false, error: '商品内容生成未启用，请在超管设置中开启 AI 商品内容生成', drafts };
   if (params.config.provider !== 'custom' || !params.config.baseUrl || !params.config.apiKey || params.fields.some((field) => !modelForField(params.config, field))) {
-    return { ok: false, error: 'AI provider config incomplete', drafts };
+    return { ok: false, error: 'AI 服务配置不完整，请检查服务来源、Base URL、API Key 和模型名称', drafts };
   }
 
   const now = params.now?.() || new Date();
@@ -381,7 +381,7 @@ export async function generateProductContentDraft(params: GenerateProductContent
 
   for (const field of params.fields) {
     const prompt = promptForField(params.config, field).trim();
-    if (!prompt) return { ok: false, error: `AI ${field} prompt is empty`, drafts, limit: latestLimit };
+    if (!prompt) return { ok: false, error: field === 'title' ? 'AI 商品标题提示词为空' : 'AI 商品描述提示词为空', drafts, limit: latestLimit };
     const namespace = namespaceForField(field);
     const inputText = buildProductContentInput(params.item, field);
     const effectivePrompt = buildEffectivePrompt(field, prompt);
