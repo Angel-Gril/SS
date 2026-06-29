@@ -1090,7 +1090,7 @@ function SourceDetailContent({
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
       {activeSection === 'sku' ? <SourceSkuSection item={item} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
-      {activeSection === 'images' ? <SourceImagesSection item={item} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
@@ -1253,13 +1253,34 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
   );
 }
 
-function SourceImagesSection({ item }: { item: SourceCollectItem }) {
+function SourceImagesSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
   const images = sourcePreviewImages(item);
   const detailImages = sourceDetailPreviewImages(item);
   const watermarked = metadataArray(item, 'watermarkedImages');
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   const videos = sourceVideoRows(item);
   const videoTransferEntries = sourceVideoTransferEntries(item);
+  const [retransferring, setRetransferring] = useState(false);
+  const [retransferMessage, setRetransferMessage] = useState('');
+  const [retransferError, setRetransferError] = useState('');
+
+  async function retransferVideos() {
+    if (retransferring) return;
+    setRetransferring(true);
+    setRetransferMessage('');
+    setRetransferError('');
+    const res = await api.post<{ item: SourceCollectItem }>(`/api/collect/${item.id}/videos/retransfer`);
+    setRetransferring(false);
+    if (res.code === 1 && res.data?.item) {
+      onItemUpdate(res.data.item);
+      setRetransferMessage(res.msg || '视频重新转存完成');
+      toast({ title: res.msg || '视频重新转存完成' });
+    } else {
+      const message = res.msg || '视频重新转存失败';
+      setRetransferError(message);
+      toast({ title: '视频重新转存失败', description: message, variant: 'destructive', duration: 8000 });
+    }
+  }
   return (
     <div className="space-y-3">
       <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
@@ -1277,7 +1298,17 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
         </InfoPanel>
       </div>
       <InfoPanel title="视频转存" count={sourceVideoTransferSummary(item)}>
-        <SourceVideoList videos={videos} transferEntries={videoTransferEntries} empty="未采集到视频素材" />
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={retransferVideos} disabled={retransferring || !videos.length}>
+              {retransferring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              {retransferring ? '正在重新转存' : '重新转存视频'}
+            </Button>
+            {retransferMessage ? <span className="text-xs text-emerald-700">{retransferMessage}</span> : null}
+            {retransferError ? <span className="text-xs text-destructive">{retransferError}</span> : null}
+          </div>
+          <SourceVideoList videos={videos} transferEntries={videoTransferEntries} empty="未采集到视频素材" />
+        </div>
       </InfoPanel>
     </div>
   );

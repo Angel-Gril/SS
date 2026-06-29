@@ -410,6 +410,143 @@ describe('collectRoutes batch upsert', () => {
     }
   });
 
+  it('retransfers failed source videos without reuploading already transferred videos', async () => {
+    mocks.supplyGoodsFindFirst.mockResolvedValueOnce({
+      id: 'source-1',
+      userId: 'user-1',
+      title: '吊带短睡裙',
+      sourceUrl: 'https://detail.1688.com/offer/1002159365821.html',
+      sourcePlatform: '1688',
+      sourceProductId: '1002159365821',
+      sku: '1002159365821',
+      images: [],
+      purchasePrice: { toString: () => '25.00' },
+      currency: 'CNY',
+      originalPrice: null,
+      originalCurrency: null,
+      exchangeRateUsed: null,
+      priceNeedsReview: false,
+      notes: null,
+      metadata: {
+        sourcePlatform: '1688',
+        sourceVideos: [
+          {
+            url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+            coverUrl: 'https://img.example.com/failed.jpg',
+            transferStatus: 'failed',
+            transferReason: 'download_timeout',
+          },
+          {
+            url: 'https://ss-erp.com/api/cdn/users/user-1/video/done.mp4',
+            originalUrl: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/done.mp4',
+            transferStatus: 'uploaded',
+            transferReason: 'direct_video',
+          },
+        ],
+        sourceVideoTransfer: {
+          enabled: true,
+          attempted: 1,
+          transferred: 0,
+          skipped: 0,
+          errors: [{ url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4', error: 'timeout' }],
+        },
+      },
+      variants: [],
+      modelId: null,
+      status: 'collected',
+      createdAt: new Date('2026-06-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-18T00:00:00.000Z'),
+    } as any);
+    mocks.transferSourceProductVideos.mockResolvedValueOnce({
+      videos: [{
+        url: 'https://ss-erp.com/api/cdn/users/user-1/video/failed.mp4',
+        originalUrl: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+        coverUrl: 'https://img.example.com/failed.jpg',
+        transferStatus: 'uploaded',
+        transferReason: 'direct_video',
+      }],
+      diagnostic: {
+        enabled: true,
+        backend: 'oss',
+        attempted: 1,
+        transferred: 1,
+        skipped: 0,
+        errors: [],
+        entries: [{
+          originalUrl: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+          url: 'https://ss-erp.com/api/cdn/users/user-1/video/failed.mp4',
+          status: 'uploaded',
+          reason: 'direct_video',
+          contentType: 'video/mp4',
+          contentLength: '1712183',
+        }],
+      },
+    });
+    mocks.supplyGoodsUpdate.mockImplementationOnce(async ({ where, data }: any) => ({
+      id: where.id,
+      userId: 'user-1',
+      title: '吊带短睡裙',
+      sourcePlatform: '1688',
+      metadata: data.metadata,
+      updatedAt: new Date('2026-06-18T01:00:00.000Z'),
+    }));
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/source-1/videos/retransfer',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(mocks.transferSourceProductVideos).toHaveBeenCalledWith({
+        sourceVideos: [{
+          url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+          coverUrl: 'https://img.example.com/failed.jpg',
+        }],
+        sourcePlatform: '1688',
+        userId: 'user-1',
+      });
+      const updateArgs = mocks.supplyGoodsUpdate.mock.calls[0]?.[0];
+      expect(updateArgs.where).toEqual({ id: 'source-1' });
+      expect(updateArgs.data.metadata.sourceVideos).toEqual([
+        {
+          url: 'https://ss-erp.com/api/cdn/users/user-1/video/failed.mp4',
+          originalUrl: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+          coverUrl: 'https://img.example.com/failed.jpg',
+          transferStatus: 'uploaded',
+          transferReason: 'direct_video',
+        },
+        {
+          url: 'https://ss-erp.com/api/cdn/users/user-1/video/done.mp4',
+          originalUrl: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/done.mp4',
+          transferStatus: 'uploaded',
+          transferReason: 'direct_video',
+        },
+      ]);
+      expect(updateArgs.data.metadata.sourceVideoTransfer).toMatchObject({
+        enabled: true,
+        transferred: 1,
+      });
+      expect(response.json()).toMatchObject({
+        code: 1,
+        msg: '视频重新转存完成',
+        data: {
+          item: {
+            id: 'source-1',
+            metadata: {
+              sourceVideoTransfer: {
+                transferred: 1,
+              },
+            },
+          },
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('filters the collect list between Ozon follow records and domestic source records', async () => {
     const app = await buildApp();
 

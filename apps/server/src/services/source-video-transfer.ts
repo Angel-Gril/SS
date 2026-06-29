@@ -6,6 +6,10 @@ import { isDomesticSourcePlatform } from './source-image-transfer.js';
 const MAX_SOURCE_VIDEO_BYTES = 80 * 1024 * 1024;
 const MAX_TRANSFER_VIDEOS = 4;
 const TRANSFER_CONCURRENCY = 2;
+const FULL_DOWNLOAD_ATTEMPTS = 3;
+const FULL_DOWNLOAD_TIMEOUT_MS = 30000;
+const RANGE_DOWNLOAD_TIMEOUT_MS = 15000;
+const RANGE_CHUNK_BYTES = 1024 * 1024;
 const DIRECT_VIDEO_MIME = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
 
 type VideoFetch = (
@@ -24,6 +28,11 @@ type ResponseLike = {
   url: string;
   headers: { get(name: string): string | null };
   arrayBuffer?: () => Promise<ArrayBuffer | SharedArrayBuffer>;
+};
+
+type DownloadedVideoBuffer = {
+  buffer: Buffer;
+  mime: string;
 };
 
 export type SourceVideoDiagnosticStatus =
@@ -204,7 +213,7 @@ export async function transferSourceProductVideos(
       diagnostic.attempted += 1;
       try {
         if (!backend) backend = await getStorageBackend();
-        const transferred = await transferSingleSourceVideo(backend, video, input.userId, input.fetchImpl);
+        const transferred = await transferSingleSourceVideo(backend, video, input.userId, input.fetchImpl, diag);
         return { index, video: transferred.video, diag, backend: transferred.backend };
       } catch (error: any) {
         const reason = transferFailureReason(error);
@@ -258,25 +267,19 @@ async function transferSingleSourceVideo(
   video: SourceVideo,
   userId: string,
   fetchImpl: VideoFetch = fetch as VideoFetch,
+  diagnostic?: SourceVideoUrlDiagnostic,
 ): Promise<{ video: SourceVideo; backend: string }> {
-  const remoteUrl = await validateRemoteVideoUrl(video.url, { skipDnsCheck: fetchImpl !== fetch });
-  const res = await fetchImpl(remoteUrl.href, {
-    redirect: 'follow',
-    signal: AbortSignal.timeout(30000),
-    headers: {
-      'user-agent': 'Mozilla/5.0',
-      referer: sourceRefererFor(remoteUrl),
-    },
+  const originalUrl = await validateRemoteVideoUrl(video.url, { skipDnsCheck: fetchImpl !== fetch });
+  const preferredUrl = normalizeVideoUrl(diagnostic?.finalUrl) || originalUrl.href;
+  const remoteUrl = await validateRemoteVideoUrl(preferredUrl, { skipDnsCheck: fetchImpl !== fetch });
+  const downloaded = await downloadRemoteVideo(remoteUrl, {
+    fetchImpl,
+    refererUrl: originalUrl,
+    contentLength: diagnostic?.contentLength,
+    contentType: diagnostic?.contentType,
   });
-  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-  const contentType = normalizeMime(res.headers.get('content-type') || '');
-  if (!isDirectVideoMime(contentType) && !isDirectVideoFileUrl(remoteUrl.href)) {
-    throw new Error(`不支持的视频类型: ${contentType || 'unknown'}`);
-  }
-  const buffer = await readLimitedResponseBuffer(res, MAX_SOURCE_VIDEO_BYTES);
-  const mime = isDirectVideoMime(contentType) ? contentType : mimeFromVideoUrl(remoteUrl.href);
-  const filename = safeSourceVideoFilename(remoteUrl, mime);
-  const uploaded = await backend.uploadBuffer(buffer, filename, mime, { category: 'video', ownerId: userId });
+  const filename = safeSourceVideoFilename(remoteUrl, downloaded.mime);
+  const uploaded = await backend.uploadBuffer(downloaded.buffer, filename, downloaded.mime, { category: 'video', ownerId: userId });
   return {
     backend: uploaded.backend,
     video: {
@@ -286,6 +289,109 @@ async function transferSingleSourceVideo(
       transferStatus: 'uploaded',
       transferReason: 'direct_video',
     },
+  };
+}
+
+async function downloadRemoteVideo(
+  remoteUrl: URL,
+  options: {
+    fetchImpl: VideoFetch;
+    refererUrl: URL;
+    contentLength?: string | null;
+    contentType?: string | null;
+  },
+): Promise<DownloadedVideoBuffer> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= FULL_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await downloadFullVideo(remoteUrl, options);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const contentLength = Number(options.contentLength || 0);
+  if (Number.isFinite(contentLength) && contentLength > 0 && contentLength <= MAX_SOURCE_VIDEO_BYTES) {
+    try {
+      return await downloadVideoByRange(remoteUrl, options, contentLength);
+    } catch (rangeError) {
+      throw new Error(`video download failed after retries: ${shortError(lastError)}; range fallback failed: ${shortError(rangeError)}`);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(shortError(lastError));
+}
+
+async function downloadFullVideo(
+  remoteUrl: URL,
+  options: {
+    fetchImpl: VideoFetch;
+    refererUrl: URL;
+    contentType?: string | null;
+  },
+): Promise<DownloadedVideoBuffer> {
+  const res = await options.fetchImpl(remoteUrl.href, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(FULL_DOWNLOAD_TIMEOUT_MS),
+    headers: sourceVideoRequestHeaders(options.refererUrl),
+  });
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+  const contentType = normalizeMime(res.headers.get('content-type') || '');
+  const responseUrl = res.url || remoteUrl.href;
+  if (!isDirectVideoMime(contentType) && !isDirectVideoFileUrl(responseUrl) && !isDirectVideoFileUrl(remoteUrl.href)) {
+    throw new Error(`不支持的视频类型: ${contentType || 'unknown'}`);
+  }
+  const buffer = await readLimitedResponseBuffer(res, MAX_SOURCE_VIDEO_BYTES);
+  const mime = isDirectVideoMime(contentType) ? contentType : mimeFromVideoUrl(responseUrl || remoteUrl.href);
+  return { buffer, mime };
+}
+
+async function downloadVideoByRange(
+  remoteUrl: URL,
+  options: {
+    fetchImpl: VideoFetch;
+    refererUrl: URL;
+    contentType?: string | null;
+  },
+  contentLength: number,
+): Promise<DownloadedVideoBuffer> {
+  const chunks: Buffer[] = [];
+  let observedMime = normalizeMime(String(options.contentType || ''));
+  for (let start = 0; start < contentLength; start += RANGE_CHUNK_BYTES) {
+    const end = Math.min(contentLength - 1, start + RANGE_CHUNK_BYTES - 1);
+    const expectedLength = end - start + 1;
+    const res = await options.fetchImpl(remoteUrl.href, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(RANGE_DOWNLOAD_TIMEOUT_MS),
+      headers: sourceVideoRequestHeaders(options.refererUrl, `bytes=${start}-${end}`),
+    });
+    if (!res.ok) throw new Error(`range fetch failed: ${res.status}`);
+    const contentType = normalizeMime(res.headers.get('content-type') || '');
+    if (contentType) observedMime = contentType;
+    const responseUrl = res.url || remoteUrl.href;
+    if (!isDirectVideoMime(observedMime) && !isDirectVideoFileUrl(responseUrl) && !isDirectVideoFileUrl(remoteUrl.href)) {
+      throw new Error(`不支持的视频类型: ${observedMime || 'unknown'}`);
+    }
+    const buffer = await readLimitedResponseBuffer(res, MAX_SOURCE_VIDEO_BYTES);
+    if (res.status === 200 && start === 0 && buffer.length === contentLength) {
+      return {
+        buffer,
+        mime: isDirectVideoMime(observedMime) ? observedMime : mimeFromVideoUrl(responseUrl || remoteUrl.href),
+      };
+    }
+    if (buffer.length !== expectedLength) {
+      throw new Error(`range length mismatch: expected ${expectedLength}, got ${buffer.length}`);
+    }
+    chunks.push(buffer);
+  }
+  const buffer = Buffer.concat(chunks);
+  if (buffer.length !== contentLength) {
+    throw new Error(`range download incomplete: expected ${contentLength}, got ${buffer.length}`);
+  }
+  return {
+    buffer,
+    mime: isDirectVideoMime(observedMime) ? observedMime : mimeFromVideoUrl(remoteUrl.href),
   };
 }
 
@@ -308,7 +414,7 @@ async function fetchVideoHeadOrRange(url: string, fetchImpl: VideoFetch): Promis
     method: 'HEAD',
     redirect: 'follow',
     signal: AbortSignal.timeout(8000),
-    headers: { 'user-agent': 'Mozilla/5.0' },
+    headers: sourceVideoRequestHeaders(new URL(url)),
   }));
   if (head.ok && (isDirectVideoMime(head.contentType) || isDirectVideoFileUrl(head.finalUrl || url))) return head;
 
@@ -316,7 +422,7 @@ async function fetchVideoHeadOrRange(url: string, fetchImpl: VideoFetch): Promis
     method: 'GET',
     redirect: 'follow',
     signal: AbortSignal.timeout(10000),
-    headers: { 'user-agent': 'Mozilla/5.0', range: 'bytes=0-0' },
+    headers: sourceVideoRequestHeaders(new URL(url), 'bytes=0-0'),
   }));
   return ranged.ok ? ranged : head;
 }
@@ -497,6 +603,14 @@ function sourceRefererFor(url: URL): string {
     return 'https://item.taobao.com/';
   }
   return `${url.protocol}//${url.hostname}/`;
+}
+
+function sourceVideoRequestHeaders(refererUrl: URL, range?: string): Record<string, string> {
+  return {
+    'user-agent': 'Mozilla/5.0',
+    referer: sourceRefererFor(refererUrl),
+    ...(range ? { range } : {}),
+  };
 }
 
 function transferFailureReason(error: unknown): string {

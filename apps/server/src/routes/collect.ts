@@ -2669,6 +2669,56 @@ function getCollectedSourceVideos(item: { metadata?: unknown }): unknown[] {
   return Array.isArray(meta.sourceVideos) ? meta.sourceVideos : [];
 }
 
+function collectItemResponse(row: any): any {
+  return {
+    ...row,
+    purchasePrice: row?.purchasePrice?.toString?.() ?? row?.purchasePrice ?? null,
+    originalPrice: row?.originalPrice?.toString?.() ?? row?.originalPrice ?? null,
+    exchangeRateUsed: row?.exchangeRateUsed?.toString?.() ?? row?.exchangeRateUsed ?? null,
+  };
+}
+
+function sourceVideoRetryKey(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const row = value as Record<string, unknown>;
+  return String(row.originalUrl || row.url || row.videoUrl || row.src || row.link || '').trim();
+}
+
+function sourceVideosNeedingRetransfer(value: unknown[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const status = String(row.transferStatus || row.status || '').trim();
+    const reason = String(row.transferReason || row.reason || '').trim();
+    if (status === 'uploaded' || status === 'ozon_cdn_ready' || reason === 'ozon_cdn_ready') continue;
+    const url = sourceVideoRetryKey(row);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const retry: Record<string, unknown> = { url };
+    const coverUrl = String(row.coverUrl || row.cover || row.poster || row.preview || row.thumbnail || '').trim();
+    const title = String(row.title || row.name || row.caption || '').trim();
+    if (coverUrl) retry.coverUrl = coverUrl;
+    if (title) retry.title = title;
+    out.push(retry);
+  }
+  return out;
+}
+
+function mergeRetransferredSourceVideos(original: unknown[], retryVideos: Array<Record<string, unknown>>, transferredVideos: unknown[]): unknown[] {
+  const replacementByKey = new Map<string, unknown>();
+  retryVideos.forEach((retryVideo, index) => {
+    const key = sourceVideoRetryKey(retryVideo);
+    const replacement = transferredVideos[index];
+    if (key && replacement) replacementByKey.set(key, replacement);
+  });
+  return original.map((item) => {
+    const key = sourceVideoRetryKey(item);
+    return key && replacementByKey.has(key) ? replacementByKey.get(key) : item;
+  });
+}
+
 function mergeSourceStandardAttributes(
   existing: Record<string, any>,
   inferred: Record<string, any>,
@@ -3718,6 +3768,50 @@ export async function collectRoutes(app: FastifyInstance) {
         ? (errors.length ? `成功采集 ${saved} 件商品，${errors.length} 件失败` : `成功采集 ${saved} 件商品`)
         : (errors.length ? `采集失败：${errors[0]!.error}` : '采集失败'),
       data: { saved, errors },
+    });
+  });
+
+  app.post('/:id/videos/retransfer', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+    const meta = metadataRecord(item.metadata);
+    const sourcePlatform = item.sourcePlatform || meta.sourcePlatform;
+    if (!isDomesticCollectedSource(sourcePlatform)) {
+      return reply.status(400).send({ code: 0, msg: '只有 1688/PDD/淘宝/闲鱼货源商品支持视频重新转存' });
+    }
+    const sourceVideos = getCollectedSourceVideos(item);
+    const retryVideos = sourceVideosNeedingRetransfer(sourceVideos);
+    if (!retryVideos.length) {
+      return reply.send({
+        code: 1,
+        msg: '没有需要重新转存的视频',
+        data: { item: collectItemResponse(item) },
+      });
+    }
+
+    const videoTransfer = await transferSourceProductVideos({
+      sourceVideos: retryVideos,
+      sourcePlatform,
+      userId,
+    });
+    meta.sourceVideos = mergeRetransferredSourceVideos(sourceVideos, retryVideos, videoTransfer.videos);
+    if (videoTransfer.diagnostic) {
+      meta.sourceVideoTransfer = {
+        ...videoTransfer.diagnostic,
+        manualRetry: true,
+        retriedAt: new Date().toISOString(),
+      };
+    }
+    const updated = await prisma.supplyGoods.update({
+      where: { id },
+      data: { metadata: meta as any },
+    });
+    return reply.send({
+      code: 1,
+      msg: '视频重新转存完成',
+      data: { item: collectItemResponse(updated) },
     });
   });
 
