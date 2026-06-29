@@ -1826,6 +1826,57 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('extracts apparel size tokens from Chinese weight-range source labels', () => {
+    expect(sanitizeVariantAttrsForOzonPublish({
+      '颜色': '黑色',
+      '尺码': 'L80-110斤',
+    })).toEqual({
+      'Цвет': 'черный',
+      'Российский размер': '50',
+      'Размер производителя': 'L',
+    });
+
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: ['黑色'],
+      sizes: ['L80-110斤', 'XL110-135斤', '2XL130-155斤', '3XL155-175斤'],
+      materials: [],
+      gender: { value: '' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: [],
+    }, [
+      { id: 4295, name: 'Российский размер', is_required: true, dictionary_id: 835 },
+    ]);
+
+    expect(plan.candidates).toEqual([
+      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: 835, needsDictionaryResolution: true, values: ['50', '52', '54', '56'] },
+    ]);
+  });
+
+  it('uses multicolor when source standard colors exceed Ozon five-color limit', () => {
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: ['黑色', '白色', '肤色', '紫色', '粉色', '蓝色'],
+      sizes: [],
+      materials: [],
+      gender: { value: '' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: [],
+    }, [
+      { id: 10096, name: 'Цвет товара', is_required: true, dictionary_id: 1494 },
+    ]);
+
+    expect(plan.candidates).toEqual([
+      { standardKey: 'colors', attributeId: 10096, attributeName: 'Цвет товара', required: true, dictionaryId: 1494, needsDictionaryResolution: true, values: ['Разноцветный'] },
+    ]);
+  });
+
   it('does not inject source sizes into Ozon size grid or model-size attributes', () => {
     const plan = buildSourceStandardOzonAttributePlan({
       brand: { value: '', isBrandless: true },

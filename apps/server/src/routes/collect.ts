@@ -641,11 +641,22 @@ function translateSourceMaterialValueToOzon(value: unknown): string {
   return text;
 }
 
+function extractSourceApparelSizeToken(value: unknown): string {
+  const text = String(value || '').normalize('NFKC').trim();
+  const match = text.match(/^(\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)(?=\s|\d|[-_/、,，]|斤|公斤|kg|кг|$)/i)
+    || text.match(/^(\d{2,3})$/i);
+  if (!match?.[1]) return '';
+  return match[1].replace(/\s+/g, '').toUpperCase();
+}
+
 function sanitizeSourceSizeVariantValue(value: unknown): string {
-  const candidates = sanitizeSourceStandardSizeValues([value])
-    .map((candidate) => sanitizeOzonAttrText(candidate))
-    .filter((candidate) => candidate && !containsCjkText(candidate));
-  return candidates[0] || '';
+  for (const candidate of sanitizeSourceStandardSizeValues([value])) {
+    const sizeToken = extractSourceApparelSizeToken(candidate);
+    if (sizeToken) return sizeToken;
+    const text = sanitizeOzonAttrText(candidate);
+    if (text && !containsCjkText(text)) return text;
+  }
+  return '';
 }
 
 function sourceInternationalSizeToRussianSize(value: unknown): string {
@@ -2102,11 +2113,11 @@ function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStan
     return standard.brand?.isBrandless ? ['Без бренда'] : [];
   }
   if (key === 'colors') {
-    return Array.isArray(standard.colors)
-      ? standard.colors.map((value) => translateSourceColorValueToOzon(value) || String(value || '').trim()).filter(Boolean)
-      : [];
+    if (!Array.isArray(standard.colors)) return [];
+    const colors = standard.colors.map((value) => translateSourceColorValueToOzon(value) || String(value || '').trim()).filter(Boolean);
+    return colors.length > 5 ? ['Разноцветный'] : colors;
   }
-  if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes).map(sourceInternationalSizeToRussianSize) : [];
+  if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes).map(sourceInternationalSizeToRussianSize).filter(Boolean) : [];
   if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map(translateSourceMaterialValueToOzon).filter(Boolean) : [];
   if (key === 'gender') {
     const value = String(standard.gender?.value || '').trim();
