@@ -17,6 +17,7 @@
   var syncOfficialBtn = document.getElementById('syncOfficialBtn');
   var refreshLogisticsBtn = document.getElementById('refreshLogisticsBtn');
   var sellerDiagnosticHarBtn = document.getElementById('sellerDiagnosticHarBtn');
+  var videoUploadDiagnosticHarBtn = document.getElementById('videoUploadDiagnosticHarBtn');
   var officialDiagnosticHarBtn = document.getElementById('officialDiagnosticHarBtn');
   var autoCommissionSyncInput = document.getElementById('autoCommissionSyncInput');
   var syncCommissionRatesBtn = document.getElementById('syncCommissionRatesBtn');
@@ -812,6 +813,10 @@
 
   on(sellerDiagnosticHarBtn, 'click', function () {
     exportCapturedHar('seller', '已导出后台诊断数据');
+  });
+
+  on(videoUploadDiagnosticHarBtn, 'click', function () {
+    exportCapturedHar('ozon-video-upload', '已导出视频上传诊断 HAR');
   });
 
   on(officialDiagnosticHarBtn, 'click', function () {

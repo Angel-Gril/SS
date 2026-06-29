@@ -456,6 +456,21 @@ function parseOzonVideoUrl(rawUrl: unknown): ParsedOzonVideoUrl | null {
   }
 }
 
+function normalizeOzonTemporaryVideoUrl(rawUrl: unknown): string | null {
+  const url = normalizeImageUrl(rawUrl);
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!/^cdn\d*\.ozone\.ru$/i.test(parsed.hostname)) return null;
+    if (!/^\/s3\/sc-temporary\/.+\.mp4$/i.test(parsed.pathname)) return null;
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 function normalizeOzonVideoCoverUrl(rawUrl: unknown, parsedVideo: ParsedOzonVideoUrl): string {
   const coverUrl = normalizeImageUrl(rawUrl);
   if (coverUrl) {
@@ -478,10 +493,18 @@ function videoAttr(id: number, complexId: number, value: string): OzonVideoMedia
 export function buildOzonVideoMediaAttributesFromSourceVideos(input: unknown): OzonVideoMediaAttribute[] {
   if (!Array.isArray(input) || !input.length) return [];
   const parsedVideos: Array<{ video: ParsedOzonVideoUrl; coverUrl: string }> = [];
+  const temporaryVideoUrls: string[] = [];
   const seen = new Set<string>();
   for (const item of input) {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
+    const temporaryVideoUrl = normalizeOzonTemporaryVideoUrl(row.url || row.videoUrl || row.src || row.link);
+    if (temporaryVideoUrl && !seen.has(temporaryVideoUrl)) {
+      seen.add(temporaryVideoUrl);
+      temporaryVideoUrls.push(temporaryVideoUrl);
+      if (temporaryVideoUrls.length >= 1) break;
+      continue;
+    }
     const video = parseOzonVideoUrl(row.url || row.videoUrl || row.src || row.link);
     if (!video || seen.has(video.videoId)) continue;
     seen.add(video.videoId);
@@ -493,6 +516,11 @@ export function buildOzonVideoMediaAttributesFromSourceVideos(input: unknown): O
   }
 
   const attrs: OzonVideoMediaAttribute[] = [];
+  const temporaryVideoUrl = temporaryVideoUrls[0];
+  if (temporaryVideoUrl) {
+    attrs.push(videoAttr(21841, 100001, temporaryVideoUrl));
+    return attrs;
+  }
   const primary = parsedVideos[0];
   if (primary) {
     attrs.push(

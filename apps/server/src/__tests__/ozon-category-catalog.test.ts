@@ -364,7 +364,7 @@ describe('ozon category catalog', () => {
     ];
     const executeRaw = vi.fn(async () => 1);
     let prisma!: PrismaOzonCategoryCatalogClient;
-    const transaction = vi.fn(async <T>(fn: (tx: PrismaOzonCategoryCatalogClient) => Promise<T>) => fn(prisma));
+    const transaction = vi.fn(async <T>(fn: (tx: PrismaOzonCategoryCatalogClient) => Promise<T>, _options?: unknown) => fn(prisma));
     prisma = {
       $queryRaw: (async <T = unknown>() => rows as T) as PrismaOzonCategoryCatalogClient['$queryRaw'],
       $executeRaw: executeRaw as PrismaOzonCategoryCatalogClient['$executeRaw'],
@@ -390,6 +390,10 @@ describe('ozon category catalog', () => {
       { description_category_id: 11, category_name: 'Женские джинсы', type_id: 101, type_name: 'Джинсы', disabled: false, children: [] },
     ]), new Date('2026-06-25T00:00:00.000Z'))).resolves.toBe(1);
     expect(transaction).toHaveBeenCalledTimes(1);
+    expect(transaction).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
+      maxWait: expect.any(Number),
+      timeout: expect.any(Number),
+    }));
     expect(executeRaw).toHaveBeenCalledTimes(2);
   });
   it('enriches missing Ozon category labels through cache-backed translation and rebuilds display/search text', async () => {

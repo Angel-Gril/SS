@@ -16,6 +16,7 @@ import {
   Search,
   Store,
   Save,
+  Trash2,
   Upload,
   Wand2,
 } from 'lucide-react';
@@ -163,6 +164,21 @@ function sourceVideoRows(item: SourceCollectItem): Array<Record<string, unknown>
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
 }
 
+function sourceVideoMaterialRows(item: SourceCollectItem): Array<Record<string, unknown>> {
+  return sourceVideoRows(item).map((row) => {
+    const url = String(row.originalUrl || row.url || '').trim();
+    const coverUrl = String(row.coverUrl || row.cover || row.poster || row.preview || row.thumbnail || '').trim();
+    const title = String(row.title || row.name || row.caption || '').trim();
+    return {
+      ...(url ? { url } : {}),
+      ...(coverUrl ? { coverUrl } : {}),
+      ...(title ? { title } : {}),
+      transferStatus: 'collected',
+      transferReason: 'publish_time_ozon_upload',
+    };
+  }).filter((row) => String(row.url || '').trim());
+}
+
 function sourceVideoTransferEntries(item: SourceCollectItem): Array<Record<string, unknown>> {
   const transfer = sourceRecord(item.metadata?.sourceVideoTransfer);
   const entries = transfer.entries;
@@ -173,6 +189,8 @@ function sourceVideoTransferEntries(item: SourceCollectItem): Array<Record<strin
 
 function sourceVideoStatusLabel(value: unknown): string {
   const status = String(value || '').trim();
+  if (status === 'collected') return '已采集源视频';
+  if (status === 'publish_time_ozon_upload') return '发布时上传Ozon视频';
   if (status === 'uploaded') return '已转存';
   if (status === 'ozon_cdn_ready') return 'Ozon视频可自动绑定';
   if (status === 'playlist_unsupported') return 'm3u8暂不支持';
@@ -197,6 +215,7 @@ function sourceVideoEffectiveStatus(statusValue: unknown, reasonValue: unknown, 
 
 function sourceVideoStatusClass(value: unknown): string {
   const status = String(value || '').trim();
+  if (status === 'collected' || status === 'publish_time_ozon_upload') return 'border-blue-200 bg-blue-50 text-blue-700';
   if (status === 'uploaded' || status === 'ozon_cdn_ready') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   if (status === 'blocked' || status === 'playlist_unsupported' || status === 'failed' || status === 'transfer_failed' || status === 'download_timeout') return 'border-amber-200 bg-amber-50 text-amber-700';
   return 'border-slate-200 bg-slate-50 text-slate-600';
@@ -879,9 +898,11 @@ function isSourceCollectItem(item: SourceCollectItem): boolean {
 function SourceProductRow({
   item,
   onDetail,
+  onDelete,
 }: {
   item: SourceCollectItem;
   onDetail: (item: SourceCollectItem, section?: DetailSection) => void;
+  onDelete: (item: SourceCollectItem) => void;
 }) {
   const preview = sourceMainPreviewImage(item);
   const missing = sourceMissingFields(item);
@@ -1020,6 +1041,15 @@ function SourceProductRow({
                   </a>
                 </Button>
               ) : null}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                onClick={() => onDelete(item)}
+                title="删除采集记录"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
@@ -1090,7 +1120,7 @@ function SourceDetailContent({
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
       {activeSection === 'sku' ? <SourceSkuSection item={item} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
-      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
@@ -1253,34 +1283,12 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
   );
 }
 
-function SourceImagesSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
+function SourceImagesSection({ item }: { item: SourceCollectItem }) {
   const images = sourcePreviewImages(item);
   const detailImages = sourceDetailPreviewImages(item);
   const watermarked = metadataArray(item, 'watermarkedImages');
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
-  const videos = sourceVideoRows(item);
-  const videoTransferEntries = sourceVideoTransferEntries(item);
-  const [retransferring, setRetransferring] = useState(false);
-  const [retransferMessage, setRetransferMessage] = useState('');
-  const [retransferError, setRetransferError] = useState('');
-
-  async function retransferVideos() {
-    if (retransferring) return;
-    setRetransferring(true);
-    setRetransferMessage('');
-    setRetransferError('');
-    const res = await api.post<{ item: SourceCollectItem }>(`/api/collect/${item.id}/videos/retransfer`);
-    setRetransferring(false);
-    if (res.code === 1 && res.data?.item) {
-      onItemUpdate(res.data.item);
-      setRetransferMessage(res.msg || '视频重新转存完成');
-      toast({ title: res.msg || '视频重新转存完成' });
-    } else {
-      const message = res.msg || '视频重新转存失败';
-      setRetransferError(message);
-      toast({ title: '视频重新转存失败', description: message, variant: 'destructive', duration: 8000 });
-    }
-  }
+  const videos = sourceVideoMaterialRows(item);
   return (
     <div className="space-y-3">
       <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
@@ -1297,17 +1305,10 @@ function SourceImagesSection({ item, onItemUpdate }: { item: SourceCollectItem; 
           <ImageStatusList images={edited} empty="暂无改图结果" />
         </InfoPanel>
       </div>
-      <InfoPanel title="视频转存" count={sourceVideoTransferSummary(item)}>
+      <InfoPanel title="视频素材" count={videos.length ? `已采集源视频 ${videos.length}` : '无视频'}>
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={retransferVideos} disabled={retransferring || !videos.length}>
-              {retransferring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              {retransferring ? '正在重新转存' : '重新转存视频'}
-            </Button>
-            {retransferMessage ? <span className="text-xs text-emerald-700">{retransferMessage}</span> : null}
-            {retransferError ? <span className="text-xs text-destructive">{retransferError}</span> : null}
-          </div>
-          <SourceVideoList videos={videos} transferEntries={videoTransferEntries} empty="未采集到视频素材" />
+          <div className="text-xs text-muted-foreground">发布时上传Ozon视频：在上架检查选择目标店铺后，系统会用该店铺登录态上传到 Ozon CDN 并生成视频属性。</div>
+          <SourceVideoList videos={videos} transferEntries={[]} empty="未采集到视频素材" />
         </div>
       </InfoPanel>
     </div>
@@ -2016,6 +2017,19 @@ export default function SourceCollectPage() {
     setDetailItem((current) => (current?.id === next.id ? next : current));
   }
 
+  async function handleDelete(item: SourceCollectItem) {
+    if (!window.confirm(`确认删除采集记录「${sourceDisplayTitle(item)}」？`)) return;
+    const id = item.id;
+    const res = await api.delete(`/api/collect/${id}`);
+    if (res.code === 1) {
+      setItems((prev) => prev.filter((row) => row.id !== id));
+      setDetailItem((current) => (current?.id === id ? null : current));
+      toast({ title: '已删除采集记录' });
+    } else {
+      toast({ title: res.msg || '删除采集记录失败', variant: 'destructive' });
+    }
+  }
+
   useEffect(() => {
     loadItems();
   }, []);
@@ -2098,6 +2112,7 @@ export default function SourceCollectPage() {
                   setDetailItem(next);
                   setActiveDetailSection(section);
                 }}
+                onDelete={handleDelete}
               />
             ))}
           </div>

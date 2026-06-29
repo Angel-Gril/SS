@@ -1537,13 +1537,8 @@ async function prepareCollectedSourceImageMetadata(input: {
   }
 
   if (isSource) {
-    const videoTransfer = await transferSourceProductVideos({
-      sourceVideos: input.sourceVideos,
-      sourcePlatform: input.sourcePlatform,
-      userId,
-    });
-    if (videoTransfer.videos.length) metadataPatch.sourceVideos = videoTransfer.videos;
-    if (videoTransfer.diagnostic) metadataPatch.sourceVideoTransfer = videoTransfer.diagnostic;
+    const sourceVideos = normalizeCollectedSourceVideos(input.sourceVideos);
+    if (sourceVideos.length) metadataPatch.sourceVideos = sourceVideos;
   }
 
   return { images: mainTransfer.images, metadataPatch };
@@ -3795,8 +3790,14 @@ export async function collectRoutes(app: FastifyInstance) {
   app.post('/:id/videos/retransfer', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
+    const body = (request.body || {}) as { shopId?: string };
+    const shopId = String(body.shopId || '').trim();
     const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
     if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+    if (shopId) {
+      const shop = await prisma.shop.findFirst({ where: { id: shopId, userId, platform: 'OZON' } });
+      if (!shop) return reply.status(400).send({ code: 0, msg: '请选择有效的 OZON 店铺' });
+    }
     const meta = metadataRecord(item.metadata);
     const sourcePlatform = item.sourcePlatform || meta.sourcePlatform;
     if (!isDomesticCollectedSource(sourcePlatform)) {
@@ -3816,6 +3817,7 @@ export async function collectRoutes(app: FastifyInstance) {
       sourceVideos: retryVideos,
       sourcePlatform,
       userId,
+      ...(shopId ? { shopId } : {}),
     });
     meta.sourceVideos = mergeRetransferredSourceVideos(sourceVideos, retryVideos, videoTransfer.videos);
     if (videoTransfer.diagnostic) {
@@ -3829,9 +3831,21 @@ export async function collectRoutes(app: FastifyInstance) {
       where: { id },
       data: { metadata: meta as any },
     });
+    const diagnostic = videoTransfer.diagnostic;
+    const attempted = Number(diagnostic?.attempted || 0);
+    const transferred = Number(diagnostic?.transferred || 0);
+    const failed = Array.isArray(diagnostic?.errors) ? diagnostic.errors.length : 0;
+    if (attempted > 0 && transferred === 0 && failed > 0) {
+      const firstError = String(diagnostic?.errors?.[0]?.error || '').trim();
+      return reply.send({
+        code: 0,
+        msg: firstError ? `视频重新转存失败: ${firstError}` : '视频重新转存失败',
+        data: { item: collectItemResponse(updated) },
+      });
+    }
     return reply.send({
       code: 1,
-      msg: '视频重新转存完成',
+      msg: failed > 0 ? `视频重新转存部分完成，失败 ${failed} 个` : '视频重新转存完成',
       data: { item: collectItemResponse(updated) },
     });
   });
@@ -4751,7 +4765,20 @@ export async function collectRoutes(app: FastifyInstance) {
       const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
       const itemDescription = resolvePublishDescription(item, cloned?.description);
       const sourceRichDescriptionJson = getCollectedRichDescriptionJson(item);
-      const sourceVideos = getCollectedSourceVideos(item);
+      let sourceVideos = getCollectedSourceVideos(item);
+      let sourceVideoTransferDiagnostic: any = null;
+      const sourcePlatform = item.sourcePlatform || metadataRecord(item.metadata).sourcePlatform;
+      if (sourceVideos.length && isDomesticCollectedSource(sourcePlatform)) {
+        const videoTransfer = await transferSourceProductVideos({
+          sourceVideos,
+          sourcePlatform,
+          userId,
+          shopId: body.shopId,
+          preferOzonCdn: true,
+        });
+        sourceVideos = videoTransfer.videos;
+        sourceVideoTransferDiagnostic = videoTransfer.diagnostic;
+      }
       const sourceStandardAttributes = getCollectedSourceStandardAttributes(item);
 
       const variants = enrichOzonVariantSpecs(Array.isArray(item.variants) ? (item.variants as any[]) : []);
@@ -4784,6 +4811,7 @@ export async function collectRoutes(app: FastifyInstance) {
           _sourceModelId: item.modelId || null,
           _sourceRichDescriptionJson: sourceRichDescriptionJson || null,
           _sourceVideos: sourceVideos,
+          _sourceVideoTransferDiagnostic: sourceVideoTransferDiagnostic,
           _sourceStandardAttributes: sourceStandardAttributes,
         }];
       }
@@ -4870,6 +4898,7 @@ export async function collectRoutes(app: FastifyInstance) {
           _hasOwnAttrs: !!variantAttrs,
           _sourceRichDescriptionJson: sourceRichDescriptionJson || null,
           _sourceVideos: sourceVideos,
+          _sourceVideoTransferDiagnostic: sourceVideoTransferDiagnostic,
           _sourceStandardAttributes: sourceStandardAttributes,
           _isVariantItem: true,
         };
@@ -5019,6 +5048,10 @@ export async function collectRoutes(app: FastifyInstance) {
             }
           }
 
+          const videoTransferDiagnostic = metadataRecord(importItem._sourceVideoTransferDiagnostic);
+          const videoTransferErrors = Array.isArray(videoTransferDiagnostic.errors) ? videoTransferDiagnostic.errors : [];
+          const videoTransferAttempted = Number(videoTransferDiagnostic.attempted || 0);
+          const videoTransferTransferred = Number(videoTransferDiagnostic.transferred || 0);
           const videoAttrsResult = appendCollectedOzonVideoMediaAttributes(importItem.attributes, importItem._sourceVideos);
           if (videoAttrsResult.generatedCount > 0) {
             importItem.attributes = videoAttrsResult.attributes;
@@ -5029,6 +5062,17 @@ export async function collectRoutes(app: FastifyInstance) {
                 status: 'pending',
                 reason: 'ozon_video_media_attributes_generated',
                 message: 'Generated Ozon video media attributes from collected Ozon CDN sourceVideos; Ozon will process them with the product import task.',
+                sourceVideos: Array.isArray(importItem._sourceVideos) ? importItem._sourceVideos : [],
+              });
+            }
+          } else if (videoTransferAttempted > 0 && videoTransferTransferred === 0 && videoTransferErrors.length > 0) {
+            if (!videoTraceSeen.has(importItem.offer_id)) {
+              videoTraceSeen.add(importItem.offer_id);
+              videoTrace.push({
+                offerId: importItem.offer_id,
+                status: 'failed',
+                reason: 'ozon_cdn_upload_failed',
+                message: String(videoTransferErrors[0]?.error || 'Ozon CDN video upload failed'),
                 sourceVideos: Array.isArray(importItem._sourceVideos) ? importItem._sourceVideos : [],
               });
             }
@@ -5186,6 +5230,7 @@ export async function collectRoutes(app: FastifyInstance) {
           _hasOwnAttrs,
           _sourceRichDescriptionJson,
           _sourceVideos,
+          _sourceVideoTransferDiagnostic,
           _sourceStandardAttributes,
           _isVariantItem,
           ...rest
@@ -5205,6 +5250,14 @@ export async function collectRoutes(app: FastifyInstance) {
             recordVideoPublishDiagnostic(finalVideoTrace, {
               offerId: plan.offerId,
               status: 'pending',
+              sourceVideos: plan.sourceVideos,
+              reason: plan.reason,
+              message: plan.message,
+            });
+          } else if (plan.status === 'failed') {
+            recordVideoPublishDiagnostic(finalVideoTrace, {
+              offerId: plan.offerId,
+              status: 'failed',
               sourceVideos: plan.sourceVideos,
               reason: plan.reason,
               message: plan.message,

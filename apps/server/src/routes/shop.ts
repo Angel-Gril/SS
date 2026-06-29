@@ -16,6 +16,11 @@ import {
   normalizePromotionProducts,
   summarizePromotionDeactivateResult,
 } from '../services/product-promotions.js';
+import { getOzonCdnStorageBackend } from '../services/image-storage.js';
+import {
+  parseOzonVideoProbeDataUrl,
+  probeOzonVideoUpload,
+} from '../services/ozon-video-upload-probe.js';
 
 const createShopSchema = z.object({
   platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']),
@@ -40,6 +45,8 @@ const promotionProductsQuerySchema = z.object({
 const deactivatePromotionProductsSchema = z.object({
   productIds: z.array(z.coerce.number().int().positive()).min(1).max(100),
 });
+
+const OZON_VIDEO_PROBE_BODY_LIMIT = 12 * 1024 * 1024;
 
 function parseOptionalFiniteNumber(value: unknown): number | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -1175,5 +1182,48 @@ export async function shopRoutes(app: FastifyInstance) {
         updatedAt: config.ozonCdnUpdatedAt || null,
       },
     });
+  });
+
+  app.post('/:id/ozon-video-probe', { bodyLimit: OZON_VIDEO_PROBE_BODY_LIMIT }, async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const body = (request.body || {}) as { dataUrl?: string; filename?: string };
+
+    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+    if (shop.platform !== 'OZON') {
+      return reply.status(400).send({ code: 0, msg: '视频探针仅支持 OZON 店铺' });
+    }
+
+    let payload: ReturnType<typeof parseOzonVideoProbeDataUrl> | null = null;
+    if (body.dataUrl) {
+      try {
+        payload = parseOzonVideoProbeDataUrl(body.dataUrl, body.filename);
+      } catch (e: any) {
+        return reply.status(400).send({ code: 0, msg: e?.message || '视频探针文件格式错误' });
+      }
+    }
+
+    try {
+      const backend = await getOzonCdnStorageBackend(id);
+      const result = await probeOzonVideoUpload({
+        backend,
+        ownerId: userId,
+        ...(payload ? {
+          buffer: payload.buffer,
+          filename: payload.filename,
+          mimeType: payload.mimeType,
+        } : {}),
+      });
+      return reply.send({
+        code: 1,
+        msg: result.ok ? '视频探针完成：可自动挂载商品视频' : '视频探针完成：暂不可自动挂载商品视频',
+        data: result,
+      });
+    } catch (e: any) {
+      const msg = e?.message || '视频探针初始化失败';
+      const status = /cookie|company_id|登录态|未同步/i.test(String(msg)) ? 400 : 500;
+      return reply.status(status).send({ code: 0, msg });
+    }
   });
 }

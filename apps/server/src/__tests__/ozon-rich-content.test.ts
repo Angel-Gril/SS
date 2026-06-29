@@ -230,4 +230,18 @@ describe('Ozon rich content publishing', () => {
       { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg' },
     ])).toEqual([]);
   });
+
+  it('builds editable Ozon video URL attributes from Seller temporary video uploads', () => {
+    const attrs = buildOzonVideoMediaAttributesFromSourceVideos([
+      { url: 'https://cdn1.ozone.ru/s3/sc-temporary/ce/8b/ce8bf080c9ce8fb34994cc73c2f561a2.mp4?token=demo' },
+    ]);
+
+    expect(attrs).toEqual([
+      {
+        id: 21841,
+        complex_id: 100001,
+        values: [{ value: 'https://cdn1.ozone.ru/s3/sc-temporary/ce/8b/ce8bf080c9ce8fb34994cc73c2f561a2.mp4' }],
+      },
+    ]);
+  });
 });

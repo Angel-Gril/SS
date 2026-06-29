@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => {
     })),
     supplyGoodsCount: vi.fn(async () => 1),
     supplyGoodsFindMany: vi.fn(async () => [{ ...record, updatedAt: new Date('2026-06-18T01:00:00.000Z') }]),
+    shopFindFirst: vi.fn(async (_args?: any): Promise<any> => null),
     resolveCollectedPrice: vi.fn(async () => ({
       purchasePriceCny: 99,
       originalPrice: 799,
@@ -83,7 +84,7 @@ vi.mock('../lib/prisma.js', () => ({
       delete: vi.fn(),
     },
     shop: {
-      findFirst: vi.fn(async () => null),
+      findFirst: mocks.shopFindFirst,
     },
   },
 }));
@@ -164,31 +165,6 @@ describe('collectRoutes batch upsert', () => {
         transferred: 1,
         skipped: 0,
         errors: [],
-      },
-    });
-    mocks.transferSourceProductVideos.mockResolvedValueOnce({
-      videos: [{
-        url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
-        originalUrl: 'https://video.example.com/a.mp4',
-        coverUrl: 'https://img.example.com/video.jpg',
-        transferStatus: 'uploaded',
-        transferReason: 'direct_video',
-      }],
-      diagnostic: {
-        enabled: true,
-        backend: 'oss',
-        attempted: 1,
-        transferred: 1,
-        skipped: 0,
-        errors: [],
-        entries: [{
-          originalUrl: 'https://video.example.com/a.mp4',
-          url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
-          status: 'uploaded',
-          reason: 'direct_video',
-          contentType: 'video/mp4',
-          contentLength: '12345',
-        }],
       },
     });
     const app = await buildApp();
@@ -297,11 +273,7 @@ describe('collectRoutes batch upsert', () => {
         sourcePlatform: '1688',
         userId: 'user-1',
       });
-      expect(mocks.transferSourceProductVideos).toHaveBeenCalledWith({
-        sourceVideos: [{ url: 'https://video.example.com/a.mp4', coverUrl: 'https://img.example.com/video.jpg' }],
-        sourcePlatform: '1688',
-        userId: 'user-1',
-      });
+      expect(mocks.transferSourceProductVideos).not.toHaveBeenCalled();
       expect(createArgs.data.metadata).toMatchObject({
         titleNeedsReview: true,
         sourcePlatform: '1688',
@@ -329,11 +301,8 @@ describe('collectRoutes batch upsert', () => {
           ],
         },
         sourceVideos: [{
-          url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
-          originalUrl: 'https://video.example.com/a.mp4',
+          url: 'https://video.example.com/a.mp4',
           coverUrl: 'https://img.example.com/video.jpg',
-          transferStatus: 'uploaded',
-          transferReason: 'direct_video',
         }],
         categoryPath: ['日用百货', '杯具', '保温杯'],
         categoryName: '保温杯',
@@ -387,22 +356,6 @@ describe('collectRoutes batch upsert', () => {
           skipped: 0,
           errors: [],
         },
-        sourceVideoTransfer: {
-          enabled: true,
-          backend: 'oss',
-          attempted: 1,
-          transferred: 1,
-          skipped: 0,
-          errors: [],
-          entries: [{
-            originalUrl: 'https://video.example.com/a.mp4',
-            url: 'https://ss-erp.com/api/cdn/users/user-1/video/a.mp4',
-            status: 'uploaded',
-            reason: 'direct_video',
-            contentType: 'video/mp4',
-            contentLength: '12345',
-          }],
-        },
       });
       expect(createArgs.data.metadata).not.toHaveProperty('sourceDescriptionRu');
     } finally {
@@ -411,6 +364,11 @@ describe('collectRoutes batch upsert', () => {
   });
 
   it('retransfers failed source videos without reuploading already transferred videos', async () => {
+    mocks.shopFindFirst.mockResolvedValueOnce({
+      id: 'shop-1',
+      userId: 'user-1',
+      platform: 'OZON',
+    });
     mocks.supplyGoodsFindFirst.mockResolvedValueOnce({
       id: 'source-1',
       userId: 'user-1',
@@ -496,9 +454,13 @@ describe('collectRoutes batch upsert', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/collect/source-1/videos/retransfer',
+        payload: { shopId: 'shop-1' },
       });
 
       expect(response.statusCode).toBe(200);
+      expect(mocks.shopFindFirst).toHaveBeenCalledWith({
+        where: { id: 'shop-1', userId: 'user-1', platform: 'OZON' },
+      });
       expect(mocks.transferSourceProductVideos).toHaveBeenCalledWith({
         sourceVideos: [{
           url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
@@ -506,6 +468,7 @@ describe('collectRoutes batch upsert', () => {
         }],
         sourcePlatform: '1688',
         userId: 'user-1',
+        shopId: 'shop-1',
       });
       const updateArgs = mocks.supplyGoodsUpdate.mock.calls[0]?.[0];
       expect(updateArgs.where).toEqual({ id: 'source-1' });
@@ -537,6 +500,107 @@ describe('collectRoutes batch upsert', () => {
             metadata: {
               sourceVideoTransfer: {
                 transferred: 1,
+              },
+            },
+          },
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('reports manual source video retransfer failure when every attempted video fails', async () => {
+    mocks.shopFindFirst.mockResolvedValueOnce({
+      id: 'shop-1',
+      userId: 'user-1',
+      platform: 'OZON',
+    });
+    mocks.supplyGoodsFindFirst.mockResolvedValueOnce({
+      id: 'source-1',
+      userId: 'user-1',
+      title: '吊带短睡裙',
+      sourceUrl: 'https://detail.1688.com/offer/1002159365821.html',
+      sourcePlatform: '1688',
+      sourceProductId: '1002159365821',
+      sku: '1002159365821',
+      images: [],
+      purchasePrice: { toString: () => '25.00' },
+      currency: 'CNY',
+      originalPrice: null,
+      originalCurrency: null,
+      exchangeRateUsed: null,
+      priceNeedsReview: false,
+      notes: null,
+      metadata: {
+        sourcePlatform: '1688',
+        sourceVideos: [
+          {
+            url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+            transferStatus: 'failed',
+            transferReason: 'transfer_failed',
+          },
+        ],
+      },
+      variants: [],
+      modelId: null,
+      status: 'collected',
+      createdAt: new Date('2026-06-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-18T00:00:00.000Z'),
+    } as any);
+    mocks.transferSourceProductVideos.mockResolvedValueOnce({
+      videos: [{
+        url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+        transferStatus: 'failed',
+        transferReason: 'transfer_failed',
+      }],
+      diagnostic: {
+        enabled: true,
+        backend: undefined,
+        attempted: 1,
+        transferred: 0,
+        skipped: 0,
+        errors: [{ url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4', error: 'OZON 视频上传连接失败 — 底层错误: ERR_HTTP2_STREAM_ERROR' }],
+        entries: [{
+          originalUrl: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/failed.mp4',
+          status: 'failed',
+          reason: 'transfer_failed',
+          message: 'OZON 视频上传连接失败 — 底层错误: ERR_HTTP2_STREAM_ERROR',
+        }],
+      },
+    });
+    mocks.supplyGoodsUpdate.mockImplementationOnce(async ({ where, data }: any) => ({
+      id: where.id,
+      userId: 'user-1',
+      title: '吊带短睡裙',
+      sourcePlatform: '1688',
+      metadata: data.metadata,
+      updatedAt: new Date('2026-06-18T01:00:00.000Z'),
+    }));
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/source-1/videos/retransfer',
+        payload: { shopId: 'shop-1' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        msg: expect.stringContaining('视频重新转存失败'),
+        data: {
+          item: {
+            metadata: {
+              sourceVideoTransfer: {
+                attempted: 1,
+                transferred: 0,
+                errors: [
+                  expect.objectContaining({
+                    error: expect.stringContaining('ERR_HTTP2_STREAM_ERROR'),
+                  }),
+                ],
               },
             },
           },

@@ -501,7 +501,10 @@ export async function searchOrRefreshOzonCategoryCatalogForShop(
 export type PrismaOzonCategoryCatalogClient = {
   $queryRaw<T = unknown>(strings: TemplateStringsArray, ...values: any[]): Promise<T>;
   $executeRaw(strings: TemplateStringsArray, ...values: any[]): Promise<number>;
-  $transaction?<T>(fn: (tx: PrismaOzonCategoryCatalogClient) => Promise<T>): Promise<T>;
+  $transaction?<T>(
+    fn: (tx: PrismaOzonCategoryCatalogClient) => Promise<T>,
+    options?: { maxWait?: number; timeout?: number },
+  ): Promise<T>;
 };
 
 function stringArray(value: unknown): string[] {
@@ -681,7 +684,7 @@ export function createPrismaOzonCategoryCatalogStore(
         return entries.length;
       };
 
-      return prisma.$transaction ? prisma.$transaction(run) : run(prisma);
+      return prisma.$transaction ? prisma.$transaction(run, { maxWait: 10000, timeout: 120000 }) : run(prisma);
     },
   };
 }

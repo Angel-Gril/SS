@@ -83,16 +83,22 @@ for (const label of ['俄语本地化', '生成Ozon文案草稿', 'AI 搜索标�
 for (const label of ['详情图原始素材', '包装信息', '原始富内容待处理', '富内容待处理']) {
   assert.match(page, new RegExp(label), `source collection page should expose 1688 source asset workflow label: ${label}`);
 }
-for (const label of ['视频转存', '已转存', '防盗链/不可直连', 'Ozon视频可自动绑定', '源站下载超时', '重新转存视频', '正在重新转存']) {
+for (const label of ['视频素材', '已采集源视频', '发布时上传Ozon视频', '防盗链/不可直连', 'Ozon视频可自动绑定', '源站下载超时']) {
   assert.match(page, new RegExp(label), `source collection page should expose source video diagnostic label: ${label}`);
 }
 for (const helper of ['sourceVideoTransferSummary', 'sourceVideoRows', 'sourceVideoStatusLabel', 'sourceVideoEffectiveStatus']) {
   assert.match(page, new RegExp(helper), `source collection page should expose source video diagnostic helper: ${helper}`);
 }
 assert.match(
-  page,
-  /\/api\/collect\/\$\{item\.id\}\/videos\/retransfer/,
-  'source video diagnostics should call the manual video retransfer endpoint',
+  fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8'),
+  /\/:id\/videos\/retransfer/,
+  'server should keep the manual video retransfer endpoint available for explicit maintenance flows',
+);
+const sourceImagesSection = page.match(/function SourceImagesSection\([\s\S]*?\nfunction SourceVideoList/)?.[0] || '';
+assert.doesNotMatch(
+  sourceImagesSection,
+  /videos\/retransfer|重新转存视频|api\.get<OzonShopOption\[\]>\(['"`]\/api\/shops['"`]\)/,
+  'source image material panel should not upload videos before the publish step selects an Ozon shop',
 );
 assert.match(
   page,
@@ -152,9 +158,14 @@ for (const label of ['价格来源', '过滤图片', '字段级采集质量', '�
 for (const label of ['概览', 'SKU', '属性', '图片', '翻译', '上架检查']) {
   assert.match(page, new RegExp(label), `source detail dialog should expose section: ${label}`);
 }
-for (const icon of ['Languages', 'Droplets', 'Wand2', 'Calculator']) {
+for (const icon of ['Languages', 'Droplets', 'Wand2', 'Calculator', 'Trash2']) {
   assert.match(page, new RegExp(icon), `source collection row should expose ${icon} action entry`);
 }
+assert.match(
+  page,
+  /api\.delete\(`\/api\/collect\/\$\{id\}`\)/,
+  'source collection page should delete domestic source records through the collect delete API',
+);
 for (const label of ['真实商品标题', '俄文标题/描述', 'Ozon 类目/type', '颜色尺码变体', '重量', '包装尺寸']) {
   assert.match(page, new RegExp(label), `source detail should expose missing field label: ${label}`);
 }
@@ -202,6 +213,13 @@ assert.match(
   page,
   /categoryId:\s*selectedCandidate\.categoryId[\s\S]*typeId:\s*selectedCandidate\.typeId/,
   'source publish should submit the selected source Ozon category candidate instead of a title-search category',
+);
+
+const collectRoute = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
+assert.match(
+  collectRoute,
+  /transferSourceProductVideos\(\{[\s\S]*shopId:\s*body\.shopId[\s\S]*\}\)/,
+  'source publish should upload collected source videos with the selected Ozon shop before generating video attributes',
 );
 
 const skuCollectPage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');

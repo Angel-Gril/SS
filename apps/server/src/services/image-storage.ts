@@ -64,7 +64,7 @@ interface OzonCdnConfig {
   relayUrl?: string;
 }
 
-class OzonCdnBackend implements ImageStorageBackend {
+export class OzonCdnBackend implements ImageStorageBackend {
   private config: OzonCdnConfig;
   private etcCookie: string | null = null;
   private etcExpiry = 0;
@@ -124,6 +124,10 @@ class OzonCdnBackend implements ImageStorageBackend {
     mimeType?: string,
     options?: ImageUploadOptions,
   ): Promise<ImageUploadResult> {
+    if (options?.category === 'video') {
+      return this.uploadVideoBuffer(buffer, filename, mimeType);
+    }
+
     const boundary = `----WebKitFormBoundary${randomBoundary()}`;
     const mime = mimeType || guessMime(filename);
 
@@ -199,6 +203,82 @@ class OzonCdnBackend implements ImageStorageBackend {
       throw new Error(`OZON CDN 返回数据异常: ${JSON.stringify(data).slice(0, 200)}`);
     }
     return { url: data.url, filename: data.name || filename, backend: 'ozon-cdn' };
+  }
+
+  private async uploadVideoBuffer(
+    buffer: Buffer,
+    filename: string,
+    mimeType?: string,
+  ): Promise<ImageUploadResult> {
+    const boundary = `----WebKitFormBoundary${randomBoundary()}`;
+    const mime = mimeType || guessMime(filename);
+    const safeFilename = filename.replace(/[\r\n"]/g, '_') || 'video.mp4';
+    const textPart = (name: string, value: string) => Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+      'utf-8',
+    );
+    const fileHeader = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="body"; filename="${safeFilename}"\r\nContent-Type: ${mime}\r\n\r\n`,
+      'utf-8',
+    );
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf-8');
+    const body = Buffer.concat([
+      textPart('file_name', safeFilename),
+      textPart('tmp', 'true'),
+      fileHeader,
+      buffer,
+      footer,
+    ]);
+
+    const cleanCookie = this.config.cookie.replace(/[\r\n]/g, '').trim();
+    if (!cleanCookie) {
+      throw new Error('OZON CDN cookie 为空，请通过浏览器扩展同步该店铺登录态');
+    }
+
+    let res: Response;
+    try {
+      res = await httpFetch('https://api.seller.ozon.ru/api/media-storage/upload-file', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+          'cookie': cleanCookie,
+          'x-o3-app-name': 'seller-ui',
+          'x-o3-company-id': this.config.companyId,
+          'x-o3-language': 'zh-Hans',
+          'x-o3-page-type': 'products-other',
+          'origin': 'https://seller.ozon.ru',
+          'referer': 'https://seller.ozon.ru/',
+          'user-agent': 'Mozilla/5.0',
+        },
+        body,
+        signal: AbortSignal.timeout(120000),
+      });
+    } catch (e: any) {
+      const cause = e?.cause?.code || e?.cause?.message || e?.code || '';
+      const hint = cause === 'ENOTFOUND' || cause === 'EAI_AGAIN'
+        ? 'DNS 解析失败：api.seller.ozon.ru 在当前网络不可达'
+        : cause === 'ECONNREFUSED' || cause === 'ECONNRESET'
+        ? '连接被拒绝/中断，可能是网络代理或防火墙拦截'
+        : cause === 'UND_ERR_HEADERS_TIMEOUT' || /timeout/i.test(String(cause))
+        ? '请求超时'
+        : `底层错误: ${cause || e?.message || 'unknown'}`;
+      throw new Error(`OZON 视频上传连接失败 — ${hint}`);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(`OZON 视频上传鉴权失败 (HTTP ${res.status}) — cookie 已过期或 company_id 不匹配，请重新通过扩展同步登录态`);
+      }
+      throw new Error(`OZON 视频上传失败: HTTP ${res.status} - ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json() as { url?: string; name?: string; error?: unknown };
+    if (!data?.url) {
+      throw new Error(`OZON 视频上传返回数据异常: ${JSON.stringify(data).slice(0, 200)}`);
+    }
+    return { url: data.url, filename: data.name || safeFilename, backend: 'ozon-cdn' };
   }
 }
 

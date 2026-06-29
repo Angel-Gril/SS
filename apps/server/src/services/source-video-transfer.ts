@@ -1,6 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import { getStorageBackend, type ImageStorageBackend } from './image-storage.js';
+import { getOzonCdnStorageBackend, getStorageBackend, type ImageStorageBackend } from './image-storage.js';
 import { isDomesticSourcePlatform } from './source-image-transfer.js';
 
 const MAX_SOURCE_VIDEO_BYTES = 80 * 1024 * 1024;
@@ -88,6 +88,8 @@ export type TransferSourceProductVideosInput = {
   sourceVideos: unknown;
   sourcePlatform?: unknown;
   userId: string;
+  shopId?: string;
+  preferOzonCdn?: boolean;
   storageBackend?: ImageStorageBackend;
   fetchImpl?: VideoFetch;
 };
@@ -212,7 +214,11 @@ export async function transferSourceProductVideos(
 
       diagnostic.attempted += 1;
       try {
-        if (!backend) backend = await getStorageBackend();
+        if (!backend) {
+          backend = input.preferOzonCdn
+            ? await getOzonCdnStorageBackend(String(input.shopId || ''))
+            : await getStorageBackend(input.shopId);
+        }
         const transferred = await transferSingleSourceVideo(backend, video, input.userId, input.fetchImpl, diag);
         return { index, video: transferred.video, diag, backend: transferred.backend };
       } catch (error: any) {
