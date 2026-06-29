@@ -623,6 +623,7 @@ function translateSourceColorValueToOzon(value: unknown): string {
 
 const SOURCE_MATERIAL_TO_OZON: Array<[RegExp, string]> = [
   [/色丁|satin/i, 'Сатин'],
+  [/乳胶|latex|латекс/i, 'Латекс'],
   [/聚酯纤维|涤纶|полиэстер|polyester/i, 'Полиэстер'],
   [/棉|хлопок|cotton/i, 'Хлопок'],
   [/锦纶|尼龙|nylon|полиамид/i, 'Полиамид'],
@@ -643,7 +644,7 @@ function translateSourceMaterialValueToOzon(value: unknown): string {
 
 function extractSourceApparelSizeToken(value: unknown): string {
   const text = String(value || '').normalize('NFKC').trim();
-  const match = text.match(/^(\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)(?=\s|\d|[-_/、,，]|斤|公斤|kg|кг|$)/i)
+  const match = text.match(/^(\d+\s*XL|XXXXL|XXXL|XXL|XL|XS|L|M|S|均码)(?=\s|\d|[-_/、,，()[\]【】]|斤|公斤|kg|кг|$)/i)
     || text.match(/^(\d{2,3})$/i);
   if (!match?.[1]) return '';
   return match[1].replace(/\s+/g, '').toUpperCase();
@@ -1148,6 +1149,20 @@ function buildAiRichContentDraft(meta: Record<string, unknown>, descriptionDraft
   };
 }
 
+function isPublishableSourceRichContentDraft(value: unknown): boolean {
+  const draft = metadataRecord(value);
+  if (!draft || !Object.keys(draft).length) return false;
+  const status = String(draft.status || '').trim();
+  const source = String(draft.source || '').trim();
+  const locale = String(draft.locale || '').trim().toLowerCase();
+  const blocks = Array.isArray(draft.blocks) ? draft.blocks : [];
+  if (status !== 'ai_generated_reviewable' && source !== 'ai_product_content' && locale !== 'ru') return false;
+  return blocks.some((block) => {
+    const row = metadataRecord(block);
+    return String(row.type || '') === 'text' && containsRussianText(row.text);
+  });
+}
+
 export function applyAiContentDraftsToPublishMetadata(input: unknown): { metadata: Record<string, unknown>; applied: string[] } {
   const metadata = metadataRecord(input);
   const drafts = metadataRecord(metadata.aiContentDrafts);
@@ -1184,7 +1199,7 @@ export function applyAiContentDraftsToPublishMetadata(input: unknown): { metadat
     }
   }
 
-  if (!String(metadata.sourceRichDescriptionJson || '').trim() && !metadata.sourceRichContentDraft) {
+  if (!String(metadata.sourceRichDescriptionJson || '').trim() && !isPublishableSourceRichContentDraft(metadata.sourceRichContentDraft)) {
     const richContentDraft = buildAiRichContentDraft(metadata, descriptionDraft);
     if (richContentDraft) {
       metadata.sourceRichContentDraft = richContentDraft;
@@ -2053,11 +2068,12 @@ export function normalizeOzonOriginCountryForChinaSeller<T extends { id: number;
   attributes: T[] | null | undefined,
   originCountryDict: OzonDictionaryEntry[] = [],
 ): Array<T | { id: number; complex_id?: number; values: { value: string; dictionary_value_id: number }[] }> {
-  if (!Array.isArray(attributes)) return [];
+  const attrs = Array.isArray(attributes) ? attributes : [];
   const china = findOzonOriginChinaEntry(originCountryDict);
   const chinaValue = String(china?.value || 'Китай').trim();
   const chinaDictionaryId = Number(china?.id) || 0;
-  return attributes.map((attr) => {
+  const hasOriginCountryAttr = attrs.some((attr) => Number(attr.id) === OZON_ORIGIN_COUNTRY_ATTR_ID);
+  const normalized: Array<T | { id: number; complex_id?: number; values: { value: string; dictionary_value_id: number }[] }> = attrs.map((attr) => {
     if (Number(attr.id) !== OZON_ORIGIN_COUNTRY_ATTR_ID) return attr;
     const values = Array.isArray(attr.values) ? attr.values : [];
     if (!values.some((value) => isOzonOriginRussiaValue(value, originCountryDict))) return attr;
@@ -2066,6 +2082,14 @@ export function normalizeOzonOriginCountryForChinaSeller<T extends { id: number;
       values: [{ value: chinaValue, dictionary_value_id: chinaDictionaryId }],
     };
   });
+  if (!hasOriginCountryAttr && chinaDictionaryId > 0) {
+    normalized.push({
+      id: OZON_ORIGIN_COUNTRY_ATTR_ID,
+      complex_id: 0,
+      values: [{ value: chinaValue, dictionary_value_id: chinaDictionaryId }],
+    });
+  }
+  return normalized;
 }
 
 type SourceStandardOzonAttributeKey = 'brand' | 'colors' | 'sizes' | 'materials' | 'gender' | 'seasons';
@@ -2684,8 +2708,8 @@ export function getCollectedRichDescriptionJson(item: { metadata?: unknown }): s
   const richDescriptionJson = meta.sourceRichDescriptionJson;
   if (typeof richDescriptionJson === 'string' && richDescriptionJson.trim()) return richDescriptionJson.trim();
   if (richDescriptionJson && typeof richDescriptionJson === 'object') return JSON.stringify(richDescriptionJson);
-  if (isDomesticCollectedSource(meta.sourcePlatform)) return '';
   const richContentDraft = meta.sourceRichContentDraft;
+  if (isDomesticCollectedSource(meta.sourcePlatform) && !isPublishableSourceRichContentDraft(richContentDraft)) return '';
   if (typeof richContentDraft === 'string' && richContentDraft.trim()) return richContentDraft.trim();
   if (richContentDraft && typeof richContentDraft === 'object') return JSON.stringify(richContentDraft);
   return '';
@@ -5002,7 +5026,7 @@ export async function collectRoutes(app: FastifyInstance) {
         }
 
         let originCountryValues: { id: number; value: string; info: string; picture: string }[] = [];
-        if (originCountryAttrDef && group.items.some((item: any) => Array.isArray(item.attributes) && item.attributes.some((attr: any) => Number(attr.id) === OZON_ORIGIN_COUNTRY_ATTR_ID))) {
+        if (originCountryAttrDef) {
           try {
             originCountryValues = await getAttributeDictValues(group.categoryId, group.typeId, OZON_ORIGIN_COUNTRY_ATTR_ID) as any;
           } catch (e: any) {

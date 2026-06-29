@@ -412,8 +412,8 @@ describe('collect publish helpers', () => {
       ],
     });
   });
-  it('does not publish source rich content drafts as Ozon RichContentJson', () => {
-    expect(getCollectedRichDescriptionJson({
+  it('publishes domestic AI rich content drafts as Ozon RichContentJson', () => {
+    const richJson = getCollectedRichDescriptionJson({
       metadata: {
         sourcePlatform: '1688',
         sourceRichContentDraft: {
@@ -426,7 +426,60 @@ describe('collect publish helpers', () => {
           ],
         },
       },
+    });
+
+    expect(JSON.parse(richJson)).toMatchObject({
+      status: 'ai_generated_reviewable',
+      blocks: [
+        { type: 'text', text: 'Описание для карточки.' },
+        { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+      ],
+    });
+  });
+
+  it('does not publish raw domestic source rich content drafts as Ozon RichContentJson', () => {
+    expect(getCollectedRichDescriptionJson({
+      metadata: {
+        sourcePlatform: '1688',
+        sourceRichContentDraft: {
+          status: 'raw_source_requires_processing',
+          source: '1688',
+          locale: 'zh-CN',
+          blocks: [
+            { type: 'text', text: '<div>源站详情</div>' },
+            { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
+          ],
+        },
+      },
     })).toBe('');
+  });
+
+  it('replaces raw domestic rich drafts with AI rich content when applying AI publish metadata', () => {
+    const result = applyAiContentDraftsToPublishMetadata({
+      sourcePlatform: '1688',
+      sourceDetailImages: ['https://img.example.com/detail-1.jpg'],
+      sourceRichContentDraft: {
+        status: 'raw_source_requires_processing',
+        source: '1688',
+        locale: 'zh-CN',
+        blocks: [{ type: 'text', text: '<div>源站详情</div>' }],
+      },
+      aiContentDrafts: {
+        description: {
+          text: 'Женский топ с кружевной отделкой.',
+          structured: {
+            richContentBlocks: ['Кружевной топ для повседневных образов.'],
+          },
+        },
+      },
+    });
+
+    expect(result.applied).toContain('sourceRichContentDraft');
+    expect(result.metadata.sourceRichContentDraft).toMatchObject({
+      status: 'ai_generated_reviewable',
+      source: 'ai_product_content',
+      locale: 'ru',
+    });
   });
   it('does not treat source HTML image fragments as Russian descriptions', () => {
     const metadata = buildCollectedGoodsMetadata({
@@ -487,6 +540,23 @@ describe('collect publish helpers', () => {
       gender: { value: 'male', source: 'title' },
       colors: ['白色'],
       sizes: ['M'],
+    });
+  });
+
+  it('infers female gender from compact Chinese source titles like 女修身', () => {
+    const metadata = buildCollectedGoodsMetadata({
+      title: '夏季蕾丝V领网纱镂空带胸垫吊带女修身ins氛围感打底上衣纯欲背心',
+      sourceTitleRaw: '夏季蕾丝V领网纱镂空带胸垫吊带女修身ins氛围感打底上衣纯欲背心',
+      sourcePlatform: '1688',
+      attributes: [
+        { name: '颜色', value: '黑色、白色、灰色' },
+        { name: '尺码', value: 'M【80~100】、L【100~120】' },
+        { name: '季节', value: '四季通用' },
+      ],
+    });
+
+    expect(metadata.sourceStandardAttributes).toMatchObject({
+      gender: { value: 'female', source: 'title' },
     });
   });
 
@@ -928,6 +998,18 @@ describe('collect publish helpers', () => {
       complex_id: 0,
       values: [{ value: 'Без бренда', dictionary_value_id: 97021 }],
     });
+  });
+
+  it('injects China as origin country when the Ozon category supports origin country but the source item has none', () => {
+    const attrs = normalizeOzonOriginCountryForChinaSeller([], [
+      { id: 156, value: 'Китай' },
+    ]);
+
+    expect(attrs).toEqual([{
+      id: 4389,
+      complex_id: 0,
+      values: [{ value: 'Китай', dictionary_value_id: 156 }],
+    }]);
   });
 
   it('keeps official SKU variant attributes instead of overwriting them with collected web aspects', () => {
@@ -1870,6 +1952,57 @@ describe('collect publish helpers', () => {
 
     expect(plan.candidates).toEqual([
       { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: 835, needsDictionaryResolution: true, values: ['50', '52', '54', '56'] },
+    ]);
+  });
+
+  it('extracts apparel size tokens from bracketed Chinese weight-range labels', () => {
+    expect(sanitizeVariantAttrsForOzonPublish({
+      '颜色': '黑色',
+      '尺码': 'M【80~100】',
+    })).toEqual({
+      'Цвет': 'черный',
+      'Российский размер': '48',
+      'Размер производителя': 'M',
+    });
+
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: ['黑色'],
+      sizes: ['M【80~100】', 'L【100~120】'],
+      materials: [],
+      gender: { value: '' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: [],
+    }, [
+      { id: 4295, name: 'Российский размер', is_required: true, dictionary_id: 835 },
+    ]);
+
+    expect(plan.candidates).toEqual([
+      { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: 835, needsDictionaryResolution: true, values: ['48', '50'] },
+    ]);
+  });
+
+  it('translates latex source material into Russian Ozon material values', () => {
+    const plan = buildSourceStandardOzonAttributePlan({
+      brand: { value: '', isBrandless: true },
+      colors: [],
+      sizes: [],
+      materials: ['乳胶', '锦纶/尼龙'],
+      gender: { value: '' },
+      seasons: [],
+      packageDimensionsMm: null,
+      packageWeightG: null,
+      categoryHints: [],
+      missingForOzon: [],
+    }, [
+      { id: 4496, name: 'Материал', is_required: true },
+    ]);
+
+    expect(plan.candidates).toEqual([
+      { standardKey: 'materials', attributeId: 4496, attributeName: 'Материал', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['Латекс', 'Полиамид'] },
     ]);
   });
 
