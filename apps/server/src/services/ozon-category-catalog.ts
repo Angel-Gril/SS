@@ -94,6 +94,10 @@ const CATEGORY_TRANSLATIONS: Record<string, string> = {
   'пижама': '睡衣',
   'пижамы': '睡衣',
   'пеньюар': '睡袍',
+  'пеньюар для стрижки': '理发围布',
+  'футболка': 'T恤',
+  'красота и гигиена': '美容卫生',
+  'мебель и оборудование для салонов красоты': '美容院家具设备',
   'наматрасник': '床垫保护套',
   'держатель простыни, одеяла': '床单/被子固定夹',
   'веревка бельевая': '晾衣绳',
@@ -138,9 +142,13 @@ export function translateOzonCategoryText(value: unknown): string {
   out = out.replace(/Бюстгалтер/giu, '文胸');
   out = out.replace(/Бюстгальтеры?/giu, '文胸');
   out = out.replace(/Аксессуар для бюстгальтера/giu, '文胸配件');
+  out = out.replace(/Пеньюар для стрижки/giu, '理发围布');
   out = out.replace(/Ночная сорочка/giu, '睡裙');
   out = out.replace(/Пижамы?/giu, '睡衣');
   out = out.replace(/Пеньюар/giu, '睡袍');
+  out = out.replace(/Футболка/giu, 'T恤');
+  out = out.replace(/Красота и гигиена/giu, '美容卫生');
+  out = out.replace(/Мебель и оборудование для салонов красоты/giu, '美容院家具设备');
   out = out.replace(/Наматрасник/giu, '床垫保护套');
   out = out.replace(/Держатель простыни, одеяла/giu, '床单/被子固定夹');
   out = out.replace(/Веревка бельевая/giu, '晾衣绳');

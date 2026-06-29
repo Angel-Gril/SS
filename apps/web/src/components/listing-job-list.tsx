@@ -42,14 +42,14 @@ export interface JobRow {
     videoTrace?: Array<{
       offerId: string;
       productId?: number | null;
-      status: 'uploaded' | 'failed' | 'pending' | 'skipped';
+      status: 'uploaded' | 'failed' | 'pending' | 'skipped' | 'manual_required';
       videoCount?: number;
       videoUrl?: string;
       name?: string;
       reason?: string;
       message?: string;
     }> | null;
-    videoPublishStatus?: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending';
+    videoPublishStatus?: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending' | 'manual_required' | 'partial_manual_required';
     videoPublishedCount?: number;
     videoPublishFailedCount?: number;
     videoPublishSkippedCount?: number;

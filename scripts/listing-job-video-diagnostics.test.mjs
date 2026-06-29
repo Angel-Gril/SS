@@ -24,5 +24,20 @@ assert.match(
   /未自动上架/,
   'listing job detail dialog should explain skipped videos instead of hiding them',
 );
+assert.match(
+  jobList,
+  /manual_required/,
+  'listing job payload type should distinguish manual-required videos from failed uploads',
+);
+assert.match(
+  detailDialog,
+  /manual_required/,
+  'listing job detail dialog should render manual-required video status',
+);
+assert.match(
+  detailDialog,
+  /待手动处理/,
+  'listing job detail dialog should not present manual-required videos as upload failures',
+);
 
 console.log('PASS listing job video diagnostics UI');

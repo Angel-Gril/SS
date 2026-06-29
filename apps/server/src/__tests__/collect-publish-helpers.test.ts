@@ -1797,7 +1797,7 @@ describe('collect publish helpers', () => {
       { standardKey: 'brand', attributeId: 85, attributeName: 'Бренд', required: true, dictionaryId: 100, needsDictionaryResolution: true, values: ['Без бренда'] },
       { standardKey: 'colors', attributeId: 10096, attributeName: 'Цвет', required: true, dictionaryId: 200, needsDictionaryResolution: true, values: ['черный'] },
       { standardKey: 'sizes', attributeId: 4295, attributeName: 'Российский размер', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['48'] },
-      { standardKey: 'materials', attributeId: 9001, attributeName: 'Материал', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['хлопок'] },
+      { standardKey: 'materials', attributeId: 9001, attributeName: 'Материал', required: true, dictionaryId: null, needsDictionaryResolution: false, values: ['Хлопок'] },
       { standardKey: 'gender', attributeId: 9002, attributeName: 'Пол', required: true, dictionaryId: 300, needsDictionaryResolution: true, values: ['Женский'] },
     ]);
     expect(plan.missingRequired).toEqual([
@@ -1882,6 +1882,37 @@ describe('collect publish helpers', () => {
       { id: 4295, complex_id: 0, values: [{ value: '48', dictionary_value_id: 1001 }] },
     ]);
     expect(result.applied.map((entry) => entry.attributeId)).toEqual([9163, 10096, 4295]);
+  });
+
+  it('translates common Chinese source material names before resolving Ozon dictionaries', async () => {
+    const result = await buildSourceStandardOzonPublishAttributes({
+      standard: {
+        brand: { value: '', isBrandless: true },
+        colors: [],
+        sizes: [],
+        materials: ['色丁'],
+        gender: { value: '' },
+        seasons: [],
+        packageDimensionsMm: null,
+        packageWeightG: null,
+        categoryHints: [],
+        missingForOzon: [],
+      },
+      categoryAttrs: [
+        { id: 4496, name: 'Материал', is_required: false, dictionary_id: 1503 },
+      ],
+      existingAttributes: [],
+      getAttributeDictValues: async () => [
+        { id: 912345, value: 'Сатин' },
+      ],
+    });
+
+    expect(result.attributes).toEqual([
+      { id: 4496, complex_id: 0, values: [{ value: 'Сатин', dictionary_value_id: 912345 }] },
+    ]);
+    expect(result.applied).toEqual([
+      { standardKey: 'materials', attributeId: 4496, attributeName: 'Материал', matchType: 'exact', valueCount: 1 },
+    ]);
   });
 
   it('prefers each collected item category over batch fallback category', () => {
@@ -2856,6 +2887,13 @@ describe('collect publish helpers', () => {
             { type_id: 324689473, type_name: 'Имитатор женской груди', children: [] },
           ],
         },
+        {
+          description_category_id: 56253863,
+          category_name: 'Красота и гигиена / Мебель и оборудование для салонов красоты',
+          children: [
+            { type_id: 93977, type_name: 'Пеньюар для стрижки', children: [] },
+          ],
+        },
       ],
       categoryCatalog: [
         {
@@ -2926,10 +2964,28 @@ describe('collect publish helpers', () => {
           keywords: ['成人用品', '女性胸部模拟器'],
           searchText: 'товары для взрослых имитатор женской груди 成人用品 女性胸部模拟器',
         },
+        {
+          descriptionCategoryId: 56253863,
+          typeId: 93977,
+          categoryPathRu: ['Красота и гигиена', 'Мебель и оборудование для салонов красоты'],
+          categoryPathZh: ['', ''],
+          categoryLevels: [],
+          categoryNameRu: 'Мебель и оборудование для салонов красоты',
+          categoryNameZh: '',
+          typeNameRu: 'Пеньюар для стрижки',
+          typeNameZh: '',
+          displayPathRu: 'Красота и гигиена / Мебель и оборудование для салонов красоты / Пеньюар для стрижки',
+          displayPathZh: '待翻译类目1 / 待翻译类目2 / 待翻译类型',
+          translationStatus: 'missing',
+          untranslatedTerms: ['Красота и гигиена', 'Мебель и оборудование для салонов красоты', 'Пеньюар для стрижки'],
+          keywords: ['Красота и гигиена', 'Пеньюар для стрижки'],
+          searchText: 'красота и гигиена мебель и оборудование для салонов красоты пеньюар для стрижки',
+        },
       ],
     });
 
     expect(candidates.map((candidate) => candidate.typeId)).not.toContain(324689473);
+    expect(candidates.map((candidate) => candidate.typeId)).not.toContain(93977);
     expect(candidates[0]?.displayPathZh).toMatch(/睡衣|睡裙/);
     expect(candidates[0]?.typeId).not.toBe(93065);
   });

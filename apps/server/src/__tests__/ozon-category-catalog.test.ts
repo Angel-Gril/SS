@@ -137,6 +137,7 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Ночная сорочка')).toBe('睡裙');
     expect(translateOzonCategoryText('Пижама')).toBe('睡衣');
     expect(translateOzonCategoryText('Пеньюар')).toBe('睡袍');
+    expect(translateOzonCategoryText('Пеньюар для стрижки')).toBe('理发围布');
 
     const catalog = buildOzonCategoryCatalog([
       {
@@ -244,6 +245,7 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Бюстгальтер')).toBe('文胸');
     expect(translateOzonCategoryText('Бюстгальтеры')).toBe('文胸');
     expect(translateOzonCategoryText('Аксессуар для бюстгальтера')).toBe('文胸配件');
+    expect(translateOzonCategoryText('Футболка')).toBe('T恤');
     expect(translateOzonCategoryText('Наматрасник')).toBe('床垫保护套');
     expect(translateOzonCategoryText('Держатель простыни, одеяла')).toBe('床单/被子固定夹');
     expect(translateOzonCategoryText('Веревка бельевая')).toBe('晾衣绳');

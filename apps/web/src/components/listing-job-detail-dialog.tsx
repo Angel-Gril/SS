@@ -66,6 +66,7 @@ function videoStatusLabel(status: string): string {
     case 'pending':
       return '待确认';
     case 'skipped':
+    case 'manual_required':
       return '未自动上架';
     case 'failed':
       return '失败';
@@ -81,6 +82,7 @@ function videoStatusBadgeClass(status: string): string {
     case 'pending':
       return 'bg-blue-600';
     case 'skipped':
+    case 'manual_required':
       return 'bg-amber-500';
     case 'failed':
       return 'bg-destructive';
@@ -99,8 +101,12 @@ function videoPublishStatusLabel(status?: string): string {
       return '部分视频待确认';
     case 'partial_failed':
       return '部分视频未上架';
+    case 'manual_required':
+      return '视频待手动处理';
+    case 'partial_manual_required':
+      return '部分视频待手动处理';
     case 'failed':
-      return '视频未自动上架';
+      return '视频上架失败';
     default:
       return '视频诊断';
   }
@@ -164,8 +170,11 @@ export function ListingJobDetailDialog({
   const videoFailedCount = Number(data?.payload?.videoPublishFailedCount || 0);
   const videoSkippedCount = Number(data?.payload?.videoPublishSkippedCount || 0);
   const videoPendingCount = Number(data?.payload?.videoPublishPendingCount || 0);
-  const videoProblemCount = videoFailedCount + videoSkippedCount;
+  const videoProblemCount = videoFailedCount;
   const videoPublishStatus = data?.payload?.videoPublishStatus;
+  const normalizedVideoPublishStatus = videoPublishStatus === 'failed' && videoFailedCount === 0 && videoSkippedCount > 0
+    ? 'manual_required'
+    : videoPublishStatus;
   const pictureStage = data
     ? resolveListingPictureStage({ status: data.status, payload: data.payload })
     : null;
@@ -351,7 +360,7 @@ export function ListingJobDetailDialog({
                     variant={videoProblemCount ? 'destructive' : 'outline'}
                     className={`text-[10px] ${videoProblemCount ? '' : 'border-blue-300 text-blue-700 bg-blue-50 dark:bg-blue-950 dark:text-blue-300'}`}
                   >
-                    {videoPublishStatusLabel(videoPublishStatus)}
+                    {videoPublishStatusLabel(normalizedVideoPublishStatus)}
                   </Badge>
                 </div>
                 <div className="px-3 py-2 text-xs border-t bg-muted/40">

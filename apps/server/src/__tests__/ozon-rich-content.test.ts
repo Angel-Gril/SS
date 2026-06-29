@@ -189,7 +189,7 @@ describe('Ozon rich content publishing', () => {
       offerId: 'offer-1',
       status: 'manual_required',
       reason: OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
-      message: expect.stringContaining('VK Video'),
+      message: expect.stringContaining('暂不能通过 Seller API 自动上传'),
       sourceVideos: [
         { url: 'https://cdn.example.com/video.mp4', coverUrl: 'https://cdn.example.com/cover.jpg', title: 'Обзор' },
       ],

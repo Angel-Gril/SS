@@ -43,7 +43,7 @@ export interface OzonVideoMediaAttribute {
 }
 
 export const OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON = 'ozon_video_publish_requires_official_media_or_xls_flow';
-export const OZON_VIDEO_PUBLISH_UNSUPPORTED_MESSAGE = 'Ozon official video documentation supports upload through the Seller media tab, XLS template, or Ozon Seller app using VK Video, Yandex Disk, or Rutube links. No documented Seller API video import endpoint is available here.';
+export const OZON_VIDEO_PUBLISH_UNSUPPORTED_MESSAGE = '采集视频已保存，但暂不能通过 Seller API 自动上传到 Ozon。请在 Ozon Seller 后台媒体页、XLS 模板或 Ozon Seller App 中使用 VK Video、Yandex Disk、Rutube 链接手动处理。';
 const RICH_TEXT_MAX_LENGTH = 900;
 const RICH_BLOCK_MAX_COUNT = 30;
 const MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;

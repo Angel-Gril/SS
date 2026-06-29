@@ -621,6 +621,26 @@ function translateSourceColorValueToOzon(value: unknown): string {
   return colors.join(', ');
 }
 
+const SOURCE_MATERIAL_TO_OZON: Array<[RegExp, string]> = [
+  [/色丁|satin/i, 'Сатин'],
+  [/聚酯纤维|涤纶|полиэстер|polyester/i, 'Полиэстер'],
+  [/棉|хлопок|cotton/i, 'Хлопок'],
+  [/锦纶|尼龙|nylon|полиамид/i, 'Полиамид'],
+  [/氨纶|spandex|эластан/i, 'Эластан'],
+  [/蕾丝|lace|кружев/i, 'Кружево'],
+  [/真丝|桑蚕丝|silk|шелк|шёлк/i, 'Шелк'],
+  [/粘纤|粘胶|viscose|вискоз/i, 'Вискоза'],
+];
+
+function translateSourceMaterialValueToOzon(value: unknown): string {
+  const text = sanitizeOzonAttrText(value);
+  if (!text) return '';
+  for (const [pattern, material] of SOURCE_MATERIAL_TO_OZON) {
+    if (pattern.test(text)) return material;
+  }
+  return text;
+}
+
 function sanitizeSourceSizeVariantValue(value: unknown): string {
   const candidates = sanitizeSourceStandardSizeValues([value])
     .map((candidate) => sanitizeOzonAttrText(candidate))
@@ -2092,7 +2112,7 @@ function sourceStandardOzonValues(standard: Record<string, any>, key: SourceStan
       : [];
   }
   if (key === 'sizes') return Array.isArray(standard.sizes) ? sanitizeSourceStandardSizeValues(standard.sizes).map(sourceInternationalSizeToRussianSize) : [];
-  if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  if (key === 'materials') return Array.isArray(standard.materials) ? standard.materials.map(translateSourceMaterialValueToOzon).filter(Boolean) : [];
   if (key === 'gender') {
     const value = String(standard.gender?.value || '').trim();
     if (value === 'female') return ['Женский'];
@@ -2408,6 +2428,7 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
   if (/睡衣|睡裙|睡袍|家居服|sleepwear|nightdress|nightgown|pajamas?|pyjamas?|пижам|ночн|сорочк|пеньюар/.test(sourceText)) {
     if (/пижам|ночн|сорочк|пеньюар|домашн|халат|sleepwear|nightdress|nightgown/.test(haystack)) score += 42;
     if (/бюстгальтер|лифчик|bra|аксессуар для бюстгальтера/.test(haystack)) score -= 28;
+    if (/красот|гигиен|салон|стрижк|парикмахер|оборудование для салонов|beauty|haircut|barber/.test(haystack)) score -= 180;
   }
   if (/遥控玩具|радиоуправляем|remote control|rc toy/.test(sourceText)) {
     if (/радиоуправляем|игрушк/.test(haystack)) score += 34;
@@ -5176,7 +5197,7 @@ export async function collectRoutes(app: FastifyInstance) {
       const taskId = result.result.task_id;
 
       let finalVideoTrace = videoTrace;
-      let videoPublishStatus: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending' = videoTrace.length ? 'failed' : 'not_applicable';
+      let videoPublishStatus: 'not_applicable' | 'success' | 'partial_failed' | 'failed' | 'pending' | 'partial_pending' | 'manual_required' | 'partial_manual_required' = videoTrace.length ? 'manual_required' : 'not_applicable';
       if (videoTrace.length) {
         finalVideoTrace = [];
         for (const plan of videoTrace) {
@@ -5208,9 +5229,11 @@ export async function collectRoutes(app: FastifyInstance) {
         const videoBlockedCount = videoFailedCount + videoSkippedCount;
         videoPublishStatus = videoPendingCount > 0
           ? (videoUploadedCount > 0 || videoBlockedCount > 0 ? 'partial_pending' : 'pending')
-          : videoBlockedCount > 0
-            ? (videoUploadedCount > 0 ? 'partial_failed' : 'failed')
-            : 'success';
+          : videoFailedCount > 0
+            ? (videoUploadedCount > 0 || videoSkippedCount > 0 ? 'partial_failed' : 'failed')
+            : videoSkippedCount > 0
+              ? (videoUploadedCount > 0 ? 'partial_manual_required' : 'manual_required')
+              : 'success';
       }
 
       const mainOfferImages: Record<string, string> = {};
