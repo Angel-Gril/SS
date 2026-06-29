@@ -386,8 +386,10 @@ async function readOzonSellerCookieValueFromOpenTabForSync(name) {
 async function getOzonSellerCookiesForSync() {
   const queries = [
     { url: 'https://seller.ozon.ru/' },
+    { url: 'https://api.seller.ozon.ru/' },
     { domain: '.ozon.ru' },
     { domain: 'seller.ozon.ru' },
+    { domain: 'api.seller.ozon.ru' },
   ];
   const merged = [];
   const seen = new Set();

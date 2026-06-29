@@ -237,23 +237,40 @@ export class OzonCdnBackend implements ImageStorageBackend {
 
     let res: Response;
     try {
+      const headers = {
+        'accept': 'application/json, text/plain, */*',
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'cookie': cleanCookie,
+        'x-o3-app-name': 'seller-ui',
+        'x-o3-company-id': this.config.companyId,
+        'x-o3-language': 'zh-Hans',
+        'x-o3-page-type': 'products-other',
+        'origin': 'https://seller.ozon.ru',
+        'referer': 'https://seller.ozon.ru/',
+        'user-agent': 'Mozilla/5.0',
+      };
       res = await httpFetch('https://api.seller.ozon.ru/api/media-storage/upload-file', {
         method: 'POST',
-        headers: {
-          'accept': 'application/json, text/plain, */*',
-          'content-type': `multipart/form-data; boundary=${boundary}`,
-          'cookie': cleanCookie,
-          'x-o3-app-name': 'seller-ui',
-          'x-o3-company-id': this.config.companyId,
-          'x-o3-language': 'zh-Hans',
-          'x-o3-page-type': 'products-other',
-          'origin': 'https://seller.ozon.ru',
-          'referer': 'https://seller.ozon.ru/',
-          'user-agent': 'Mozilla/5.0',
-        },
+        redirect: 'manual',
+        headers,
         body,
         signal: AbortSignal.timeout(120000),
       });
+      if ((res.status === 307 || res.status === 308) && res.headers.get('location')) {
+        const etcCookie = extractOzonEtcCookie(res.headers);
+        if (etcCookie) {
+          res = await httpFetch(res.headers.get('location')!, {
+            method: 'POST',
+            redirect: 'manual',
+            headers: {
+              ...headers,
+              cookie: mergeCookieHeaderReplacing(headers.cookie, etcCookie),
+            },
+            body,
+            signal: AbortSignal.timeout(120000),
+          });
+        }
+      }
     } catch (e: any) {
       const cause = e?.cause?.code || e?.cause?.message || e?.code || '';
       const hint = cause === 'ENOTFOUND' || cause === 'EAI_AGAIN'
@@ -280,6 +297,27 @@ export class OzonCdnBackend implements ImageStorageBackend {
     }
     return { url: data.url, filename: data.name || safeFilename, backend: 'ozon-cdn' };
   }
+}
+
+function extractOzonEtcCookie(headers: Headers): string {
+  const anyHeaders = headers as any;
+  const setCookies: string[] = typeof anyHeaders.getSetCookie === 'function'
+    ? anyHeaders.getSetCookie()
+    : (headers.get('set-cookie') ? [headers.get('set-cookie')!] : []);
+  return setCookies
+    .map((cookie) => cookie.split(';')[0]!.trim())
+    .find((cookie) => cookie.startsWith('__Secure-ETC='))
+    || '';
+}
+
+function mergeCookieHeaderReplacing(cookieHeader: string, replacementCookie: string): string {
+  const replacementName = replacementCookie.split('=')[0]?.trim();
+  const parts = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part && (!replacementName || !part.startsWith(`${replacementName}=`)));
+  if (replacementCookie.trim()) parts.push(replacementCookie.trim());
+  return parts.join('; ');
 }
 
 // ─── OSS 对象存储（S3 兼容：阿里云/腾讯云/CF R2/AWS/MinIO） ───

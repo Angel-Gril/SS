@@ -53,4 +53,45 @@ describe('Ozon CDN video upload', () => {
     expect(bodyText).toContain('Content-Type: video/mp4');
     expect(bodyText).toContain('mp4-bytes');
   });
+
+  it('replays video uploads with Ozon ETC cookie after media-storage redirects', async () => {
+    for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
+      vi.stubEnv(name, '');
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!String(url).includes('__rr=1')) {
+        return new Response('<html>redirect</html>', {
+          status: 307,
+          headers: {
+            location: 'https://api.seller.ozon.ru/api/media-storage/upload-file?__rr=1',
+            'set-cookie': '__Secure-ETC=fresh-etc; Path=/; Secure; HttpOnly',
+          },
+        });
+      }
+      return new Response(JSON.stringify({
+        url: 'https://cdn1.ozone.ru/s3/sc-temporary/ce/8b/demo.mp4',
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { OzonCdnBackend } = await import('../services/image-storage.js');
+    const backend = new OzonCdnBackend({ cookie: 'sid=demo; __Secure-ETC=stale-etc', companyId: '4494016' });
+
+    const result = await backend.uploadBuffer(Buffer.from('mp4-bytes'), 'demo.mp4', 'video/mp4', {
+      category: 'video',
+      ownerId: 'user-1',
+    });
+
+    expect(result.url).toBe('https://cdn1.ozone.ru/s3/sc-temporary/ce/8b/demo.mp4');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [string, {
+      headers: Record<string, string>;
+    }];
+    expect(retryInit.headers.cookie).toContain('sid=demo');
+    expect(retryInit.headers.cookie).toContain('__Secure-ETC=fresh-etc');
+    expect(retryInit.headers.cookie).not.toContain('__Secure-ETC=stale-etc');
+  });
 });

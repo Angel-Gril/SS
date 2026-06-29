@@ -24,6 +24,18 @@ assert.match(
 
 assert.match(
   serviceWorker,
+  /https:\/\/api\.seller\.ozon\.ru\//,
+  'cookie sync should include api.seller.ozon.ru cookies required by Seller media upload APIs',
+);
+
+assert.match(
+  serviceWorker,
+  /domain:\s*['"]api\.seller\.ozon\.ru['"]/,
+  'cookie sync should query api.seller.ozon.ru host-only cookies, not only shared ozon.ru cookies',
+);
+
+assert.match(
+  serviceWorker,
   /payloadCompanyId\s*\|\|\s*capturedCompanyId\s*\|\|\s*cookieCompanyId\s*\|\|\s*storedCompanyId/,
   'companyId fallback order should include saved shop companyId after current browser evidence',
 );
