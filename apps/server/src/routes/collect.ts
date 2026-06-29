@@ -3051,6 +3051,18 @@ function recordVideoPublishDiagnostic(
   });
 }
 
+export function sourceVideoTransferFailureTraceKey(importItem: { offer_id?: unknown; _sourceItemId?: unknown }, message?: unknown): string {
+  const sourceItemId = String(importItem?._sourceItemId || '').trim();
+  const offerId = String(importItem?.offer_id || '').trim();
+  const errorKey = String(message || '').trim().slice(0, 180);
+  return `source-video-transfer-failed:${sourceItemId || offerId}:${errorKey}`;
+}
+
+export function sourceVideoTransferFailureMessage(message?: unknown): string {
+  const detail = String(message || 'Ozon CDN video upload failed').trim();
+  return `源视频未自动附加到 Ozon 商品，不影响商品主体上架：${detail}`;
+}
+
 export function planFallbackPictureUploads(
   payloadInput: unknown,
   importItemsInput: unknown,
@@ -5076,13 +5088,15 @@ export async function collectRoutes(app: FastifyInstance) {
               });
             }
           } else if (videoTransferAttempted > 0 && videoTransferTransferred === 0 && videoTransferErrors.length > 0) {
-            if (!videoTraceSeen.has(importItem.offer_id)) {
-              videoTraceSeen.add(importItem.offer_id);
+            const message = String(videoTransferErrors[0]?.error || 'Ozon CDN video upload failed');
+            const traceKey = sourceVideoTransferFailureTraceKey(importItem, message);
+            if (!videoTraceSeen.has(traceKey)) {
+              videoTraceSeen.add(traceKey);
               videoTrace.push({
                 offerId: importItem.offer_id,
                 status: 'failed',
                 reason: 'ozon_cdn_upload_failed',
-                message: String(videoTransferErrors[0]?.error || 'Ozon CDN video upload failed'),
+                message: sourceVideoTransferFailureMessage(message),
                 sourceVideos: Array.isArray(importItem._sourceVideos) ? importItem._sourceVideos : [],
               });
             }

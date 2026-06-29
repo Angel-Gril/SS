@@ -49,6 +49,8 @@ import {
   normalizeCollectedSourceVideos,
   applyAiContentDraftsToPublishMetadata,
   getCollectedRichDescriptionJson,
+  sourceVideoTransferFailureTraceKey,
+  sourceVideoTransferFailureMessage,
 } from '../routes/collect.js';
 
 describe('collect publish helpers', () => {
@@ -109,6 +111,21 @@ describe('collect publish helpers', () => {
       attributes: existing,
       generatedCount: 0,
     });
+  });
+
+  it('deduplicates shared source video upload failures by source item instead of variant offer', () => {
+    const first = sourceVideoTransferFailureTraceKey({
+      offer_id: 'SRC-1688-805366042163-V1',
+      _sourceItemId: 'source-item-1',
+    }, 'OZON 视频上传连接失败 — 底层错误: ERR_HTTP2_STREAM_ERROR');
+    const second = sourceVideoTransferFailureTraceKey({
+      offer_id: 'SRC-1688-805366042163-V24',
+      _sourceItemId: 'source-item-1',
+    }, 'OZON 视频上传连接失败 — 底层错误: ERR_HTTP2_STREAM_ERROR');
+
+    expect(first).toBe(second);
+    expect(sourceVideoTransferFailureMessage('OZON 视频上传连接失败 — 底层错误: ERR_HTTP2_STREAM_ERROR'))
+      .toBe('源视频未自动附加到 Ozon 商品，不影响商品主体上架：OZON 视频上传连接失败 — 底层错误: ERR_HTTP2_STREAM_ERROR');
   });
 
   it('keeps collected videos out of Ozon publish image lists', () => {
