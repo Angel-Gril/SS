@@ -4774,7 +4774,6 @@ export async function collectRoutes(app: FastifyInstance) {
           sourcePlatform,
           userId,
           shopId: body.shopId,
-          preferOzonCdn: true,
         });
         sourceVideos = videoTransfer.videos;
         sourceVideoTransferDiagnostic = videoTransfer.diagnostic;
