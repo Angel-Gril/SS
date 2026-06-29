@@ -83,12 +83,17 @@ for (const label of ['俄语本地化', '生成Ozon文案草稿', 'AI 搜索标�
 for (const label of ['详情图原始素材', '包装信息', '原始富内容待处理', '富内容待处理']) {
   assert.match(page, new RegExp(label), `source collection page should expose 1688 source asset workflow label: ${label}`);
 }
-for (const label of ['视频转存', '已转存', '防盗链/不可直连', 'Ozon视频可自动绑定']) {
+for (const label of ['视频转存', '已转存', '防盗链/不可直连', 'Ozon视频可自动绑定', '源站下载超时']) {
   assert.match(page, new RegExp(label), `source collection page should expose source video diagnostic label: ${label}`);
 }
-for (const helper of ['sourceVideoTransferSummary', 'sourceVideoRows', 'sourceVideoStatusLabel']) {
+for (const helper of ['sourceVideoTransferSummary', 'sourceVideoRows', 'sourceVideoStatusLabel', 'sourceVideoEffectiveStatus']) {
   assert.match(page, new RegExp(helper), `source collection page should expose source video diagnostic helper: ${helper}`);
 }
+assert.match(
+  page,
+  /sourceVideoTransferEntries\(item\)[\s\S]*<SourceVideoList/,
+  'source video list should merge stored transfer diagnostics so legacy transfer_failed timeout rows render clearly',
+);
 for (const helper of ['sourceDetailPreviewImages', 'sourcePackagingRows', 'sourceRichContentDraft']) {
   assert.match(page, new RegExp(helper), `source collection page should read 1688 source asset helper: ${helper}`);
 }
@@ -173,6 +178,9 @@ assert.doesNotMatch(
 );
 for (const label of ['上架到OZON', '源商品上架', '确认发布到Ozon', '稳定货号']) {
   assert.match(page, new RegExp(label), `source collection page should expose in-page source publish control: ${label}`);
+}
+for (const label of ['候选待确认', '点击确认类目后解除 Ozon 类目/type 阻断']) {
+  assert.match(page, new RegExp(label), `source Ozon category candidate panel should clarify confirmation state: ${label}`);
 }
 for (const token of [
   'handleSourcePublish',

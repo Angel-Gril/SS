@@ -143,8 +143,8 @@ function inferGender(value: unknown, source: string): SourceStandardAttributeVal
   const raw = text(value);
   if (!raw) return null;
   if (/男女|情侣|通用|中性|unisex/i.test(raw)) return { value: 'unisex', source };
-  if (/女装|女士|女款|女性|女人|女童|女孩|women|woman|female|girl/i.test(raw)) return { value: 'female', source };
-  if (/男装|男士|男款|男性|男人|男童|男孩|men|man|male|boy/i.test(raw)) return { value: 'male', source };
+  if (/(?:^|[\s,，、/|])女(?:$|[\s,，、/|])|女装|女士|女款|女性|女人|女童|女孩|睡裙|连衣裙|半身裙|新娘服|婚纱|文胸|胸罩|women|woman|female|girl/i.test(raw)) return { value: 'female', source };
+  if (/(?:^|[\s,，、/|])男(?:$|[\s,，、/|])|男装|男士|男款|男性|男人|男童|男孩|men|man|male|boy/i.test(raw)) return { value: 'male', source };
   return null;
 }
 

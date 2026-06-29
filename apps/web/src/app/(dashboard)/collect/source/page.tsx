@@ -179,15 +179,26 @@ function sourceVideoStatusLabel(value: unknown): string {
   if (status === 'blocked') return '防盗链/不可直连';
   if (status === 'not_video') return '非视频响应';
   if (status === 'too_large') return '视频过大';
+  if (status === 'download_timeout') return '源站下载超时';
   if (status === 'failed' || status === 'transfer_failed') return '转存失败';
   if (status === 'skipped') return '未转存';
   return status || '待诊断';
 }
 
+function sourceVideoEffectiveStatus(statusValue: unknown, reasonValue: unknown, messageValue: unknown): string {
+  const status = String(statusValue || '').trim();
+  const reason = String(reasonValue || '').trim();
+  const message = String(messageValue || '').trim();
+  if (status === 'download_timeout' || reason === 'download_timeout' || /timeout|timed out|aborted|超时/i.test(message)) {
+    return 'download_timeout';
+  }
+  return status || reason;
+}
+
 function sourceVideoStatusClass(value: unknown): string {
   const status = String(value || '').trim();
   if (status === 'uploaded' || status === 'ozon_cdn_ready') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (status === 'blocked' || status === 'playlist_unsupported' || status === 'failed' || status === 'transfer_failed') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (status === 'blocked' || status === 'playlist_unsupported' || status === 'failed' || status === 'transfer_failed' || status === 'download_timeout') return 'border-amber-200 bg-amber-50 text-amber-700';
   return 'border-slate-200 bg-slate-50 text-slate-600';
 }
 
@@ -205,6 +216,18 @@ function sourceVideoTransferSummary(item: SourceCollectItem): string {
     skipped ? `未转存 ${skipped}` : '',
     failed ? `失败 ${failed}` : '',
   ].filter(Boolean).join(' / ') || '待诊断';
+}
+
+function sourceVideoTransferEntryFor(video: Record<string, unknown>, entries: Array<Record<string, unknown>>): Record<string, unknown> | null {
+  const keys = new Set([
+    String(video.url || '').trim(),
+    String(video.originalUrl || '').trim(),
+  ].filter(Boolean));
+  return entries.find((entry) => {
+    const url = String(entry.url || '').trim();
+    const originalUrl = String(entry.originalUrl || '').trim();
+    return (url && keys.has(url)) || (originalUrl && keys.has(originalUrl));
+  }) || null;
 }
 
 function sourceMetadataArray(item: SourceCollectItem, key: string): unknown[] {
@@ -1236,6 +1259,7 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
   const watermarked = metadataArray(item, 'watermarkedImages');
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   const videos = sourceVideoRows(item);
+  const videoTransferEntries = sourceVideoTransferEntries(item);
   return (
     <div className="space-y-3">
       <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
@@ -1253,26 +1277,32 @@ function SourceImagesSection({ item }: { item: SourceCollectItem }) {
         </InfoPanel>
       </div>
       <InfoPanel title="视频转存" count={sourceVideoTransferSummary(item)}>
-        <SourceVideoList videos={videos} empty="未采集到视频素材" />
+        <SourceVideoList videos={videos} transferEntries={videoTransferEntries} empty="未采集到视频素材" />
       </InfoPanel>
     </div>
   );
 }
 
-function SourceVideoList({ videos, empty }: { videos: Array<Record<string, unknown>>; empty: string }) {
+function SourceVideoList({ videos, transferEntries, empty }: { videos: Array<Record<string, unknown>>; transferEntries: Array<Record<string, unknown>>; empty: string }) {
   if (!videos.length) return <div className="text-muted-foreground">{empty}</div>;
   return (
     <div className="space-y-2">
       {videos.map((video, index) => {
         const url = String(video.url || '').trim();
         const originalUrl = String(video.originalUrl || '').trim();
-        const status = String(video.transferStatus || video.status || video.transferReason || '').trim();
-        const reason = String(video.transferReason || video.reason || '').trim();
+        const transferEntry = sourceVideoTransferEntryFor(video, transferEntries);
+        const entryStatus = String(transferEntry?.status || '').trim();
+        const entryReason = String(transferEntry?.reason || '').trim();
+        const entryMessage = String(transferEntry?.message || '').trim();
+        const status = String(video.transferStatus || video.status || entryStatus || '').trim();
+        const reason = String(video.transferReason || video.reason || entryReason || '').trim();
+        const effectiveStatus = sourceVideoEffectiveStatus(status, reason, entryMessage);
+        const reasonLabel = effectiveStatus !== status ? effectiveStatus : reason;
         return (
           <div key={`${url || originalUrl || index}`} className="rounded border bg-muted/30 px-3 py-2 text-xs">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className={sourceVideoStatusClass(status || reason)}>
-                {sourceVideoStatusLabel(status || reason)}
+              <Badge variant="outline" className={sourceVideoStatusClass(effectiveStatus)}>
+                {sourceVideoStatusLabel(effectiveStatus)}
               </Badge>
               {video.title ? <span className="font-medium">{String(video.title)}</span> : null}
             </div>
@@ -1290,7 +1320,8 @@ function SourceVideoList({ videos, empty }: { videos: Array<Record<string, unkno
               {originalUrl && originalUrl !== url ? (
                 <div className="break-all">原始视频 {originalUrl}</div>
               ) : null}
-              {reason && reason !== status ? <div>原因 {sourceVideoStatusLabel(reason)}</div> : null}
+              {reasonLabel && reasonLabel !== status ? <div>原因 {sourceVideoStatusLabel(reasonLabel)}</div> : null}
+              {entryMessage ? <div>诊断 {entryMessage}</div> : null}
             </div>
           </div>
         );
@@ -1390,6 +1421,13 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [publishError, setPublishError] = useState('');
   const candidates = categoryData?.candidates || [];
   const selectedCandidate = candidates.find((candidate) => ozonCategoryCandidateKey(candidate) === selectedCandidateKey) || candidates[0];
+  const confirmedCategoryId = Number(item.metadata?.descriptionCategoryId || item.metadata?.ozonCategoryId || 0);
+  const confirmedTypeId = Number(item.metadata?.typeId || item.metadata?.ozonTypeId || 0);
+  const selectedCandidateConfirmed = Boolean(
+    selectedCandidate
+      && confirmedCategoryId === Number(selectedCandidate.categoryId)
+      && confirmedTypeId === Number(selectedCandidate.typeId),
+  );
   const stableOfferId = buildStableSourceOfferId(item);
   const stableVariantOfferIds = buildStableSourceVariantOfferIds(item);
   const stableVariantOfferCount = Object.keys(stableVariantOfferIds).length;
@@ -1752,6 +1790,14 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
           ) : null}
           {candidateError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{candidateError}</div> : null}
           {confirmMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{confirmMessage}</div> : null}
+          {selectedCandidate ? (
+            <div className={`flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs ${selectedCandidateConfirmed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+              <Badge variant="outline" className={selectedCandidateConfirmed ? 'border-emerald-200 bg-white text-emerald-700' : 'border-amber-200 bg-white text-amber-700'}>
+                {selectedCandidateConfirmed ? '已确认类目' : '候选待确认'}
+              </Badge>
+              <span>{selectedCandidateConfirmed ? '已写入上架参数。' : '点击确认类目后解除 Ozon 类目/type 阻断；发布时也会保存当前候选。'}</span>
+            </div>
+          ) : null}
 
           {!candidateLoading && !candidateError && candidates.length === 0 ? (
             <div className="text-sm text-muted-foreground">暂无可用候选</div>

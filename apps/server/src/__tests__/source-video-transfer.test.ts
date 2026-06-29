@@ -140,4 +140,52 @@ describe('source video transfer', () => {
       ],
     });
   });
+
+  it('records source download timeouts separately from generic transfer failures', async () => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'AbortError' });
+
+    const result = await transferSourceProductVideos({
+      sourceVideos: [{ url: 'https://cloud.video.taobao.com/play/u/1/p/2/e/6/t/1/demo.mp4' }],
+      sourcePlatform: '1688',
+      userId: 'user-1',
+      fetchImpl: async (_url, init) => {
+        if (init?.method === 'HEAD') {
+          return {
+            ok: true,
+            status: 200,
+            url: 'https://caiyuanbao.alicdn.com/demo.mp4',
+            headers: {
+              get(name: string) {
+                if (name === 'content-type') return 'video/mp4';
+                if (name === 'content-length') return '1712183';
+                return null;
+              },
+            },
+          } as any;
+        }
+        throw timeout;
+      },
+      storageBackend: {
+        upload: vi.fn(),
+        uploadBuffer: vi.fn(),
+      },
+    });
+
+    expect(result.videos[0]).toMatchObject({
+      transferStatus: 'failed',
+      transferReason: 'download_timeout',
+    });
+    expect(result.diagnostic).toMatchObject({
+      attempted: 1,
+      transferred: 0,
+      entries: [
+        expect.objectContaining({
+          status: 'failed',
+          reason: 'download_timeout',
+          contentType: 'video/mp4',
+          contentLength: '1712183',
+        }),
+      ],
+    });
+  });
 });

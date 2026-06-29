@@ -207,7 +207,8 @@ export async function transferSourceProductVideos(
         const transferred = await transferSingleSourceVideo(backend, video, input.userId, input.fetchImpl);
         return { index, video: transferred.video, diag, backend: transferred.backend };
       } catch (error: any) {
-        return { index, video: { ...video, transferStatus: 'failed' as const, transferReason: 'transfer_failed' }, diag, error: shortError(error) };
+        const reason = transferFailureReason(error);
+        return { index, video: { ...video, transferStatus: 'failed' as const, transferReason: reason }, diag, error: shortError(error) };
       }
     }));
 
@@ -496,6 +497,15 @@ function sourceRefererFor(url: URL): string {
     return 'https://item.taobao.com/';
   }
   return `${url.protocol}//${url.hostname}/`;
+}
+
+function transferFailureReason(error: unknown): string {
+  const name = String((error as any)?.name || '');
+  const message = shortError(error);
+  if (name === 'AbortError' || name === 'TimeoutError' || /timeout|timed out|aborted/i.test(message)) {
+    return 'download_timeout';
+  }
+  return 'transfer_failed';
 }
 
 function shortError(error: unknown): string {

@@ -1425,6 +1425,58 @@ describe('collect publish helpers', () => {
     expect(candidates[1]).toMatchObject({ categoryId: 170002, typeId: 91002, selected: false });
   });
 
+  it('repairs legacy source gender before reporting Ozon category required attribute gaps', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '吊带刺绣领口缎面开叉吊带短睡裙睡衣法式新娘服欧码纯欲居家服',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          sourceStandardAttributes: {
+            brand: { value: '九时小寝', source: 'sourceAttributes', isBrandless: false },
+            colors: ['白色', '黑色'],
+            sizes: ['S', 'M', 'L'],
+            materials: ['色丁'],
+            gender: { value: '' },
+            seasons: ['all-season'],
+            packageDimensionsMm: null,
+            packageWeightG: null,
+            categoryHints: [],
+            missingForOzon: ['性别/季节', '重量', '包装尺寸'],
+          },
+        },
+      },
+      categoryTree: [
+        { description_category_id: 200000933, category_name: 'Одежда', type_id: 970960142, type_name: 'Ночная сорочка', children: [] },
+      ],
+      attributesByCategory: {
+        '200000933:970960142': [
+          { id: 85, name: 'Бренд', is_required: true, dictionary_id: 100 },
+          { id: 10096, name: 'Цвет', is_required: true, dictionary_id: 200 },
+          { id: 4295, name: 'Российский размер', is_required: true },
+          { id: 9001, name: 'Материал', is_required: true },
+          { id: 9002, name: 'Пол', is_required: true, dictionary_id: 300 },
+          { id: 9003, name: 'Сезон', is_required: true, dictionary_id: 400 },
+        ],
+      },
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200000933,
+      typeId: 970960142,
+      typeName: 'Ночная сорочка',
+    });
+    expect(candidates[0]?.attributePlan.candidates.map((candidate: any) => candidate.standardKey)).toEqual([
+      'brand',
+      'colors',
+      'sizes',
+      'materials',
+      'gender',
+      'seasons',
+    ]);
+    expect(candidates[0]?.attributePlan.missingRequired).toEqual([]);
+  });
+
   it('extracts Ozon type leaves from parent category nodes and matches Chinese source terms', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {

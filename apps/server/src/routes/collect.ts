@@ -2423,7 +2423,7 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
 }
 
 export function buildSourceOzonCategoryCandidates(input: {
-  item: { sourcePlatform?: unknown; metadata?: unknown; title?: unknown };
+  item: { sourcePlatform?: unknown; metadata?: unknown; title?: unknown; variants?: unknown };
   categoryTree?: SourceOzonCategoryTreeNode[] | null;
   categoryCatalog?: OzonCategoryCatalogEntry[] | null;
   attributesByCategory?: Record<string, SourceStandardOzonAttributeDef[]>;
@@ -2431,7 +2431,7 @@ export function buildSourceOzonCategoryCandidates(input: {
 }): SourceOzonCategoryCandidate[] {
   const signature = sourceCategorySignature(input.item);
   const meta = metadataRecord(input.item.metadata);
-  const standard = metadataRecord(meta.sourceStandardAttributes);
+  const standard = getCollectedSourceStandardAttributes(input.item) || metadataRecord(meta.sourceStandardAttributes);
   const sourceProfile = buildSourceProductProfile({
     title: input.item.title == null ? null : String(input.item.title),
     sourcePlatform: input.item.sourcePlatform == null ? null : String(input.item.sourcePlatform),

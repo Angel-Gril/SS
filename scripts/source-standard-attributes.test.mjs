@@ -147,5 +147,26 @@ const item = {
   assert.equal(result.missingForOzon.includes('包装尺寸'), true);
 }
 
-console.log('PASS source standard attributes');
+{
+  const result = standard.normalizeSourceStandardAttributes({
+    title: '吊带刺绣领口缎面开叉吊带短睡裙睡衣法式新娘服欧码纯欲居家服',
+    metadata: {
+      sourceAttributes: [
+        { name: '品牌', value: '九时小寝' },
+        { name: '主面料成分', value: '色丁' },
+        { name: '适合季节', value: '四季' },
+        { name: '颜色', value: '白色、黑色' },
+        { name: '尺码', value: 'S、M、L' },
+      ],
+    },
+    variants: [
+      { attrs: { 颜色: '白色', 尺码: 'S' }, stock: 3 },
+      { attrs: { 颜色: '黑色', 尺码: 'M' }, stock: 3 },
+    ],
+  });
+  assert.equal(result.gender.value, 'female');
+  assert.equal(result.gender.source, 'title');
+  assert.equal(result.missingForOzon.includes('性别/季节'), false);
+}
 
+console.log('PASS source standard attributes');
