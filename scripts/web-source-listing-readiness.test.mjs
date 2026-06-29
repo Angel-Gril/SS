@@ -75,6 +75,64 @@ function item(overrides = {}) {
 }
 
 {
+  const diagnostics = readiness.evaluateSourceListingFieldDiagnostics(item());
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(diagnostics.filter((row) => ['title', 'description', 'category', 'gender', 'originCountry', 'package'].includes(row.key)).map((row) => [row.key, row.status]))),
+    [
+      ['title', 'auto'],
+      ['description', 'auto'],
+      ['category', 'auto'],
+      ['gender', 'auto'],
+      ['originCountry', 'auto'],
+      ['package', 'auto'],
+    ],
+  );
+  assert.ok(diagnostics.find((row) => row.key === 'originCountry')?.value.includes('Китай'));
+  assert.ok(diagnostics.find((row) => row.key === 'package')?.evidence.includes('120g'));
+}
+
+{
+  const result = readiness.evaluateSourceListingFieldDiagnostics(item({
+    metadata: {
+      ...item().metadata,
+      weightG: undefined,
+      lengthMm: undefined,
+      widthMm: undefined,
+      heightMm: undefined,
+      extractionDiagnostics: {
+        packaging: {
+          status: 'partial',
+          reasonLabel: '只采到重量，缺包装尺寸',
+        },
+      },
+    },
+  }));
+  const packageRow = result.find((row) => row.key === 'package');
+  assert.equal(packageRow?.status, 'blocked');
+  assert.equal(packageRow?.confidence, 'missing');
+  assert.match(packageRow?.action || '', /填写重量、长、宽、高/);
+}
+
+{
+  const result = readiness.evaluateSourceListingFieldDiagnostics(item({
+    metadata: {
+      ...item().metadata,
+      publishTitleRu: '',
+      sourceDescriptionRu: '',
+      aiContentDrafts: {
+        title: { text: 'Женский топ на бретелях с кружевом' },
+        description: {
+          text: 'Женский топ с кружевной отделкой.',
+          structured: { confidence: 0.62 },
+        },
+      },
+    },
+  }));
+  assert.equal(result.find((row) => row.key === 'title')?.source, 'AI 草稿');
+  assert.equal(result.find((row) => row.key === 'description')?.status, 'review');
+}
+
+{
   const result = readiness.evaluateSourceListingReadiness(item({
     metadata: {
       ...item().metadata,

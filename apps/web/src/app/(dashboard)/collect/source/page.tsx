@@ -27,7 +27,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
-import { evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
+import { evaluateSourceListingFieldDiagnostics, evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
+import type { SourceListingFieldDiagnostic, SourceListingFieldDiagnosticStatus } from '@/lib/source-listing-readiness';
 import { formatDate } from '@/lib/utils';
 import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
 
@@ -1425,6 +1426,7 @@ function SourceTranslationSection({ item, onItemUpdate }: { item: SourceCollectI
 
 function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
   const readiness = evaluateSourceListingReadiness(item);
+  const fieldDiagnostics = evaluateSourceListingFieldDiagnostics(item);
   const missing = readiness.missingFields;
   const standard = sourceStandardAttributeModel(item);
   const standardDims = standard.packageDimensionsMm;
@@ -1740,6 +1742,9 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
           </div>
         </div>
       </InfoPanel>
+      <InfoPanel title="发布字段诊断" count={fieldDiagnostics.filter((row) => row.status === 'blocked').length ? `阻断 ${fieldDiagnostics.filter((row) => row.status === 'blocked').length}` : '自动检查'}>
+        <SourcePublishFieldDiagnostics rows={fieldDiagnostics} />
+      </InfoPanel>
       <InfoPanel title="上架检查" count={sourceListingStatusLabel(readiness.status)}>
         <div className="mb-2 flex flex-wrap gap-2">
           <Badge
@@ -1919,6 +1924,51 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
           ))}
         </div>
       </InfoPanel>
+    </div>
+  );
+}
+
+function sourcePublishDiagnosticLabel(status: SourceListingFieldDiagnosticStatus): string {
+  if (status === 'auto') return '自动填充';
+  if (status === 'blocked') return '阻断缺失';
+  if (status === 'manual') return '人工补录';
+  return '需要确认';
+}
+
+function sourcePublishDiagnosticClass(status: SourceListingFieldDiagnosticStatus): string {
+  if (status === 'auto') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+  if (status === 'blocked') return 'border-red-200 bg-red-50 text-red-700';
+  if (status === 'manual') return 'border-blue-200 bg-blue-50 text-blue-700';
+  return 'border-amber-200 bg-amber-50 text-amber-700';
+}
+
+function SourcePublishFieldDiagnostics({ rows }: { rows: SourceListingFieldDiagnostic[] }) {
+  return (
+    <div className="space-y-2">
+      {rows.map((row) => (
+        <div key={row.key} className="rounded-md border bg-muted/20 px-3 py-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{row.label}</span>
+                <Badge variant="outline" className={sourcePublishDiagnosticClass(row.status)}>
+                  {sourcePublishDiagnosticLabel(row.status)}
+                </Badge>
+                <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">
+                  {row.confidence}
+                </Badge>
+              </div>
+              <div className="mt-1 break-words text-xs text-muted-foreground">
+                {row.source} · {row.evidence}
+              </div>
+            </div>
+            <div className="min-w-0 text-left sm:max-w-[42%] sm:text-right">
+              <div className="break-words text-sm">{row.value}</div>
+              <div className="mt-1 text-xs text-muted-foreground">{row.action}</div>
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

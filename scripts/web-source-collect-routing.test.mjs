@@ -195,6 +195,12 @@ assert.doesNotMatch(
 for (const label of ['上架到OZON', '源商品上架', '确认发布到Ozon', '稳定货号']) {
   assert.match(page, new RegExp(label), `source collection page should expose in-page source publish control: ${label}`);
 }
+for (const label of ['发布字段诊断', '自动填充', '需要确认', '阻断缺失', '人工补录']) {
+  assert.match(page, new RegExp(label), `source publish confirmation should expose field diagnostic label: ${label}`);
+}
+for (const helper of ['evaluateSourceListingFieldDiagnostics', 'SourcePublishFieldDiagnostics']) {
+  assert.match(page, new RegExp(helper), `source publish confirmation should use ${helper}`);
+}
 for (const label of ['候选待确认', '点击确认类目后解除 Ozon 类目/type 阻断']) {
   assert.match(page, new RegExp(label), `source Ozon category candidate panel should clarify confirmation state: ${label}`);
 }
