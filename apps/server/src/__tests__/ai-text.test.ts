@@ -26,7 +26,7 @@ describe('AI text client', () => {
     expect(result).toMatchObject({
       ok: false,
       provider: 'disabled',
-      error: 'AI provider disabled',
+      error: 'AI 服务未启用',
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -72,6 +72,33 @@ describe('AI text client', () => {
       usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
     });
   });
+
+  it('returns a localized message when the AI endpoint rejects the request', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+    }));
+
+    const result = await generateAiText({
+      messages: [{ role: 'user', content: 'Generate title' }],
+      config: config({
+        provider: 'custom',
+        providerLabel: 'DeepSeek',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'secret-token',
+        model: 'bad-model',
+      }),
+      fetchImpl: fetchMock,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: 'AI 请求失败：HTTP 400',
+    });
+  });
+
   it('reports a token-budget hint when a reasoning model returns empty final content', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
@@ -100,7 +127,7 @@ describe('AI text client', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      error: 'AI response empty: model used the token budget for reasoning; increase max tokens or use a non-reasoning chat model',
+      error: 'AI 没有返回正文：模型把输出额度用于推理，请增加 max_tokens 或改用非推理聊天模型',
     });
   });
   it('retries once with a larger completion budget when reasoning consumes the first response', async () => {

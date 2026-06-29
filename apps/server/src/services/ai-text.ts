@@ -66,7 +66,7 @@ function normalizeUsage(value: any): AiTextUsage | null {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error || 'unknown error');
+  return error instanceof Error ? error.message : String(error || '未知错误');
 }
 
 function reasoningRetryMaxTokens(value: unknown): number | null {
@@ -80,16 +80,16 @@ export async function generateAiText(params: GenerateAiTextParams): Promise<AiTe
   const config = params.config;
   const provider = config.provider || 'disabled';
   if (provider === 'disabled') {
-    return { ok: false, provider: 'disabled', providerLabel: config.providerLabel, model: config.model, error: 'AI provider disabled' };
+    return { ok: false, provider: 'disabled', providerLabel: config.providerLabel, model: config.model, error: 'AI 服务未启用' };
   }
 
   const baseUrl = cleanBaseUrl(config.baseUrl);
   if (!baseUrl || !config.apiKey || !config.model) {
-    return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: 'AI provider config incomplete' };
+    return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: 'AI 服务配置不完整，请检查 Base URL、API Key 和模型名称' };
   }
 
   const fetchImpl = params.fetchImpl || (globalThis.fetch as unknown as FetchLike);
-  if (!fetchImpl) return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: 'fetch unavailable' };
+  if (!fetchImpl) return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: '当前运行环境不支持发起 AI 请求' };
 
   const timeoutMs = Math.max(1000, Number(config.timeoutMs) || 30000);
   const maxTokenAttempts: Array<number | undefined> = [params.maxTokens];
@@ -116,7 +116,7 @@ export async function generateAiText(params: GenerateAiTextParams): Promise<AiTe
       });
 
       if (!res.ok) {
-        return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, status: res.status, error: `AI request failed: HTTP ${res.status || 'unknown'}` };
+        return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, status: res.status, error: `AI 请求失败：HTTP ${res.status || 'unknown'}` };
       }
 
       const data = await res.json();
@@ -133,8 +133,8 @@ export async function generateAiText(params: GenerateAiTextParams): Promise<AiTe
           continue;
         }
         const error = reasoning && finishReason === 'length'
-          ? 'AI response empty: model used the token budget for reasoning; increase max tokens or use a non-reasoning chat model'
-          : 'AI response empty';
+          ? 'AI 没有返回正文：模型把输出额度用于推理，请增加 max_tokens 或改用非推理聊天模型'
+          : 'AI 没有返回正文';
         return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error };
       }
 
@@ -154,5 +154,5 @@ export async function generateAiText(params: GenerateAiTextParams): Promise<AiTe
     }
   }
 
-  return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: 'AI response empty' };
+  return { ok: false, provider, providerLabel: config.providerLabel, model: config.model, error: 'AI 没有返回正文' };
 }
