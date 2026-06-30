@@ -79,6 +79,9 @@ function isTranslatedDisplayText(value: unknown): boolean {
 
 const CATEGORY_TRANSLATIONS: Record<string, string> = {
   'одежда': '服装',
+  'бдсм': '成人情趣用品',
+  'электронные книги, переводчики и словари': '电子书/翻译器/词典',
+  'ala': '硫辛酸',
   'женская одежда': '女装',
   'мужская одежда': '男装',
   'женские джинсы': '女式牛仔裤',
@@ -421,7 +424,21 @@ export interface EnrichOzonCategoryCatalogTranslationDeps {
   translateTerm: OzonCategoryTermTranslator;
 }
 
-function isValidAiCategoryTranslation(value: unknown): boolean {
+export interface BackfillOzonCategoryCatalogTranslationDeps extends EnrichOzonCategoryCatalogTranslationDeps {
+  maxTerms?: number;
+}
+
+export interface BackfillOzonCategoryCatalogTranslationResult {
+  catalog: OzonCategoryCatalogEntry[];
+  attemptedTerms: number;
+  translatedTerms: number;
+  rejectedTerms: number;
+  failedTerms: number;
+  remainingTerms: string[];
+  changed: boolean;
+}
+
+export function isValidOzonCategoryAiTranslation(value: unknown): boolean {
   const text = cleanText(value);
   if (!text) return false;
   if (!hasCjkText(text) || hasCyrillicText(text)) return false;
@@ -501,22 +518,62 @@ export async function enrichMissingOzonCategoryCatalogTranslations(
   catalog: OzonCategoryCatalogEntry[],
   deps: EnrichOzonCategoryCatalogTranslationDeps,
 ): Promise<OzonCategoryCatalogEntry[]> {
+  const result = await backfillOzonCategoryCatalogTranslations(catalog, deps);
+  return result.catalog;
+}
+
+export async function backfillOzonCategoryCatalogTranslations(
+  catalog: OzonCategoryCatalogEntry[],
+  deps: BackfillOzonCategoryCatalogTranslationDeps,
+): Promise<BackfillOzonCategoryCatalogTranslationResult> {
   const localCatalog = applyOzonCategoryCatalogLocalTranslations(catalog);
   const missingTerms = unique(localCatalog.flatMap((entry) => entry.untranslatedTerms));
-  if (!missingTerms.length) return localCatalog.map((entry) => ({ ...entry }));
+  if (!missingTerms.length) {
+    return {
+      catalog: localCatalog.map((entry) => ({ ...entry })),
+      attemptedTerms: 0,
+      translatedTerms: 0,
+      rejectedTerms: 0,
+      failedTerms: 0,
+      remainingTerms: [],
+      changed: categoryCatalogTranslationFingerprint(localCatalog) !== categoryCatalogTranslationFingerprint(catalog),
+    };
+  }
 
   const translatedTerms = new Map<string, string>();
-  for (const term of missingTerms) {
+  let rejectedTerms = 0;
+  let failedTerms = 0;
+  const maxTerms = Number.isFinite(Number(deps.maxTerms)) && Number(deps.maxTerms) > 0
+    ? Math.trunc(Number(deps.maxTerms))
+    : missingTerms.length;
+  const termsToTranslate = missingTerms.slice(0, maxTerms);
+  for (const term of termsToTranslate) {
     try {
       const result = await deps.translateTerm(term);
       const translated = cleanText(result.outputText);
-      if (isValidAiCategoryTranslation(translated)) translatedTerms.set(term, translated);
+      if (isValidOzonCategoryAiTranslation(translated)) {
+        translatedTerms.set(term, translated);
+      } else {
+        rejectedTerms += 1;
+      }
     } catch {
+      failedTerms += 1;
       // Category translation is best-effort; invalid or failed provider calls must not poison the catalog.
     }
   }
 
-  return localCatalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms));
+  const rebuiltCatalog = translatedTerms.size > 0
+    ? localCatalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms))
+    : localCatalog.map((entry) => ({ ...entry }));
+  return {
+    catalog: rebuiltCatalog,
+    attemptedTerms: termsToTranslate.length,
+    translatedTerms: translatedTerms.size,
+    rejectedTerms,
+    failedTerms,
+    remainingTerms: unique(rebuiltCatalog.flatMap((entry) => entry.untranslatedTerms)),
+    changed: categoryCatalogTranslationFingerprint(rebuiltCatalog) !== categoryCatalogTranslationFingerprint(catalog),
+  };
 }
 export function searchOzonCategoryCatalog(
   catalog: OzonCategoryCatalogEntry[],

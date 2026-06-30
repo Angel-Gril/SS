@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildOzonCategoryCatalog,
+  backfillOzonCategoryCatalogTranslations,
   enrichMissingOzonCategoryCatalogTranslations,
   createPrismaOzonCategoryCatalogStore,
   getOzonCategoryLocalRuleStats,
@@ -254,6 +255,9 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Держатель простыни, одеяла')).toBe('床单/被子固定夹');
     expect(translateOzonCategoryText('Веревка бельевая')).toBe('晾衣绳');
     expect(translateOzonCategoryText('Обувь')).toBe('鞋靴');
+    expect(translateOzonCategoryText('БДСМ')).toBe('成人情趣用品');
+    expect(translateOzonCategoryText('Электронные книги, переводчики и словари')).toBe('电子书/翻译器/词典');
+    expect(translateOzonCategoryText('ALA')).toBe('硫辛酸');
   });
 
   it('fully translates Ozon apparel category candidates from source listing screenshots', () => {
@@ -661,6 +665,88 @@ describe('ozon category catalog', () => {
       displayPathZh: '待翻译类目1 / 文胸',
       translationStatus: 'partial',
       untranslatedTerms: ['Женское белье'],
+    });
+  });
+
+  it('backfills missing category translations in bounded batches and reports remaining gaps', async () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 700001,
+        category_name: 'Спорт и отдых',
+        disabled: false,
+        children: [
+          { type_id: 800001, type_name: 'Коврик туристический', disabled: false, children: [] },
+        ],
+      },
+      {
+        description_category_id: 700002,
+        category_name: 'Автотовары',
+        disabled: false,
+        children: [
+          { type_id: 800002, type_name: 'Чехол автомобильный', disabled: false, children: [] },
+        ],
+      },
+    ]);
+    const translate = vi.fn(async (term: string) => ({
+      outputText: term === 'Спорт и отдых' ? '运动户外' : '旅行垫',
+      source: 'provider' as const,
+    }));
+
+    const result = await backfillOzonCategoryCatalogTranslations(catalog, {
+      translateTerm: translate,
+      maxTerms: 2,
+    });
+
+    expect(translate).toHaveBeenCalledTimes(2);
+    expect(translate.mock.calls.map((call) => call[0])).toEqual(['Спорт и отдых', 'Коврик туристический']);
+    expect(result).toMatchObject({
+      attemptedTerms: 2,
+      translatedTerms: 2,
+      rejectedTerms: 0,
+      failedTerms: 0,
+      changed: true,
+    });
+    expect(result.remainingTerms).toEqual(['Автотовары', 'Чехол автомобильный']);
+    expect(result.catalog[0]).toMatchObject({
+      displayPathZh: '运动户外 / 旅行垫',
+      translationStatus: 'complete',
+      untranslatedTerms: [],
+    });
+    expect(result.catalog[0]?.searchText).toContain('旅行垫');
+    expect(result.catalog[1]).toMatchObject({
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      translationStatus: 'missing',
+      untranslatedTerms: ['Автотовары', 'Чехол автомобильный'],
+    });
+  });
+
+  it('backfill rejects invalid category translations and keeps catalog gaps visible', async () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 700001,
+        category_name: 'Строительство и ремонт',
+        disabled: false,
+        children: [
+          { type_id: 800001, type_name: 'Крепеж', disabled: false, children: [] },
+        ],
+      },
+    ]);
+
+    const result = await backfillOzonCategoryCatalogTranslations(catalog, {
+      translateTerm: async () => ({ outputText: 'Перевод: 建筑维修', source: 'provider' as const }),
+    });
+
+    expect(result).toMatchObject({
+      attemptedTerms: 2,
+      translatedTerms: 0,
+      rejectedTerms: 2,
+      failedTerms: 0,
+      changed: false,
+      remainingTerms: ['Строительство и ремонт', 'Крепеж'],
+    });
+    expect(result.catalog[0]).toMatchObject({
+      displayPathZh: '待翻译类目1 / 待翻译类型',
+      translationStatus: 'missing',
     });
   });
   it('applies missing-term enrichment when refreshing from Ozon tree', async () => {
