@@ -29,9 +29,13 @@ function loadTsModule(modulePath, injected = {}) {
 }
 
 const standard = loadTsModule('packages/shared/src/source-standard-attributes.ts');
+const richPlan = loadTsModule('packages/shared/src/source-rich-content-plan.ts', {
+  './source-standard-attributes': standard,
+});
 const sourcePath = 'apps/web/src/lib/source-listing-readiness.ts';
 const readiness = loadTsModule(sourcePath, {
   'shared/source-standard-attributes': standard,
+  'shared/source-rich-content-plan': richPlan,
 });
 
 function item(overrides = {}) {
@@ -188,6 +192,9 @@ function item(overrides = {}) {
   const diagnostics = readiness.evaluateSourceListingFieldDiagnostics(item({
     metadata: {
       ...item().metadata,
+      sourceTitleRaw: '女士睡裙',
+      categoryName: '睡裙',
+      categoryPath: ['服装', '睡裙'],
       sourceRichDescriptionJson: undefined,
       sourceRichContentDraft: {
         status: 'ai_generated_reviewable',
@@ -199,9 +206,29 @@ function item(overrides = {}) {
     },
   }));
   const richContentRow = diagnostics.find((row) => row.key === 'richContent');
-  assert.match(richContentRow?.value || '', /本地草稿 2 块/);
+  assert.match(richContentRow?.value || '', /内衣富内容模板|本地草稿 2 块/);
   assert.match(richContentRow?.evidence || '', /发布时会尝试转换并附加到 Ozon RichContentJson/);
   assert.doesNotMatch(richContentRow?.evidence || '', /发布前会转换为 Ozon RichContentJson$/);
+}
+{
+  const diagnostics = readiness.evaluateSourceListingFieldDiagnostics(item({
+    title: '女士睡裙',
+    metadata: {
+      ...item().metadata,
+      sourceTitleRaw: '女士睡裙',
+      categoryName: '睡裙',
+      categoryPath: ['服装', '睡裙'],
+      sourceRichDescriptionJson: undefined,
+      sourceRichContentDraft: {
+        status: 'ai_generated_reviewable',
+        blocks: [{ type: 'text', text: 'Описание.' }],
+      },
+    },
+  }));
+  const richContentRow = diagnostics.find((row) => row.key === 'richContent');
+  assert.match(richContentRow?.value || '', /睡衣\/睡裙富内容模板/);
+  assert.match(richContentRow?.evidence || '', /尺码表：内置映射表/);
+  assert.match(richContentRow?.action || '', /生成尺码表图片/);
 }
 
 {

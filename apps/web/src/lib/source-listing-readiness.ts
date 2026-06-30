@@ -1,4 +1,5 @@
 import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
+import { buildSourceRichContentPlan } from 'shared/source-rich-content-plan';
 
 export type SourceListingReadinessStatus = 'ready' | 'needs_review' | 'blocked';
 
@@ -155,10 +156,30 @@ function richContentValue(item: SourceListingItemLike): string {
   if (hasMetadataValue(item, ['sourceRichDescriptionJson'])) return '本地 RichContentJson 字段';
   const draft = item.metadata?.sourceRichContentDraft;
   if (draft && typeof draft === 'object' && !Array.isArray(draft)) {
+    const plan = richContentPlan(item);
+    if (plan.templateLabel) return `${plan.templateLabel} / ${plan.sizeChartLabel || '尺码待诊断'}`;
     const blocks = (draft as Record<string, unknown>).blocks;
     if (Array.isArray(blocks) && blocks.length) return `本地草稿 ${blocks.length} 块`;
   }
   return '';
+}
+
+function richContentPlan(item: SourceListingItemLike): { templateLabel: string; sizeChartLabel: string; action: string } {
+  const draft = item.metadata?.sourceRichContentDraft;
+  const existingPlan = draft && typeof draft === 'object' && !Array.isArray(draft)
+    ? (draft as Record<string, unknown>).plan
+    : null;
+  const plan = existingPlan && typeof existingPlan === 'object' && !Array.isArray(existingPlan)
+    ? existingPlan as Record<string, unknown>
+    : buildSourceRichContentPlan(item);
+  const sizeChart = plan.sizeChart && typeof plan.sizeChart === 'object' && !Array.isArray(plan.sizeChart)
+    ? plan.sizeChart as Record<string, unknown>
+    : {};
+  return {
+    templateLabel: stringValue(plan.templateLabel),
+    sizeChartLabel: stringValue(sizeChart.label),
+    action: stringValue(sizeChart.action),
+  };
 }
 
 function diagnosticRow(input: SourceListingFieldDiagnostic): SourceListingFieldDiagnostic {
@@ -181,6 +202,8 @@ export function evaluateSourceListingFieldDiagnostics(item: SourceListingItemLik
   const hasPartialPackage = Boolean(standard.packageWeightG || standard.packageDimensionsMm);
   const title = publishTitle || aiTitle;
   const description = publishDescription || aiDescription;
+  const richPlan = richContentPlan(item);
+  const richValue = richContentValue(item);
 
   const rows: SourceListingFieldDiagnostic[] = [
     diagnosticRow({
@@ -256,12 +279,14 @@ export function evaluateSourceListingFieldDiagnostics(item: SourceListingItemLik
     diagnosticRow({
       key: 'richContent',
       label: '富内容',
-      status: richContentValue(item) ? 'review' : 'review',
-      confidence: richContentValue(item) ? 'weak' : 'missing',
-      value: richContentValue(item) || '未生成',
-      source: richContentValue(item) ? '本地采集/AI 草稿' : '缺失',
-      evidence: richContentValue(item) ? '发布时会尝试转换并附加到 Ozon RichContentJson，最终以发布任务/Ozon 审核结果为准' : '不阻断主体上架',
-      action: richContentValue(item) ? '发布后查看任务富内容结果' : '可先发布主体，后续补富内容',
+      status: richValue ? 'review' : 'review',
+      confidence: richValue ? 'weak' : 'missing',
+      value: richValue || '未生成',
+      source: richValue ? '自动模板/本地采集/AI 草稿' : '缺失',
+      evidence: richValue
+        ? `发布时会尝试转换并附加到 Ozon RichContentJson，最终以发布任务/Ozon 审核结果为准${richPlan.sizeChartLabel ? `；尺码表：${richPlan.sizeChartLabel}` : ''}`
+        : '不阻断主体上架',
+      action: richValue ? (richPlan.action || '发布后查看任务富内容结果') : '可先发布主体，后续补富内容',
     }),
   ];
 

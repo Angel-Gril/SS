@@ -92,6 +92,43 @@ describe('Ozon rich content publishing', () => {
     });
   });
 
+  it('renders generated size chart blocks as uploaded rich content images', async () => {
+    const uploadedCharts: any[] = [];
+    const attr = await buildOzonRichContentAttribute(JSON.stringify({
+      blocks: [
+        { type: 'text', text: 'Описание товара.' },
+        {
+          type: 'size_chart',
+          title: 'Таблица размеров',
+          columns: ['尺码', '俄罗斯尺码', '国际尺码'],
+          rows: [
+            { size: 'M', ruSize: '44', intSize: 'M' },
+            { size: 'L', ruSize: '46', intSize: 'L' },
+          ],
+        },
+        { imageUrl: 'https://cdn.example.com/detail.jpg' },
+      ],
+    }), {
+      imageMapper: async (url) => `https://erp.example.com/rich/${url.split('/').pop()}`,
+      sizeChartImageMapper: async (chart) => {
+        uploadedCharts.push(chart);
+        return 'https://erp.example.com/rich/size-chart.jpg';
+      },
+    });
+
+    expect(uploadedCharts).toHaveLength(1);
+    expect(uploadedCharts[0]).toMatchObject({
+      title: 'Таблица размеров',
+      rows: [
+        { size: 'M', ruSize: '44', intSize: 'M' },
+        { size: 'L', ruSize: '46', intSize: 'L' },
+      ],
+    });
+    const richJson = JSON.parse(attr!.values[0]!.value);
+    expect(JSON.stringify(richJson)).toContain('https://erp.example.com/rich/size-chart.jpg');
+    expect(JSON.stringify(richJson)).not.toContain('Таблица размеров');
+  });
+
   it('preserves collected Ozon rich content templates while rewriting nested images', async () => {
     const attr = await buildOzonRichContentAttribute(JSON.stringify({
       version: 0.3,

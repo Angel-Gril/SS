@@ -1,5 +1,6 @@
 import { getStorageBackend } from './image-storage.js';
 import { normalizeOzonPublishImageUrl, waitForOzonImageReady } from './ozon-image-resolver.js';
+import sharp from 'sharp';
 
 export const OZON_RICH_CONTENT_ATTR_ID = 22336;
 export const OZON_LEGACY_RICH_CONTENT_ATTR_ID = 11254;
@@ -10,7 +11,8 @@ export const OZON_RICH_CONTENT_ATTR_IDS = [
 
 export type ParsedRichContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'image'; url: string };
+  | { type: 'image'; url: string }
+  | { type: 'size_chart'; title: string; columns: string[]; rows: Array<Record<string, string>> };
 
 export interface ParsedRichContent {
   blocks: ParsedRichContentBlock[];
@@ -49,6 +51,13 @@ const RICH_BLOCK_MAX_COUNT = 30;
 const MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
 const RICH_IMAGE_URL_KEYS = new Set(['imageurl', 'originalurl', 'src', 'srcmobile', 'picture', 'cover']);
 const RICH_TEXT_VALUE_KEYS = new Set(['title', 'description', 'content', 'value', 'text', 'caption']);
+const SIZE_CHART_COLUMN_LABELS: Record<string, string> = {
+  size: 'Размер',
+  ruSize: 'Российский размер',
+  intSize: 'INT',
+  footLengthCm: 'Длина стопы, см',
+  note: 'Примечание',
+};
 
 export function isOzonRichContentAttributeId(value: unknown): boolean {
   const id = Number(value);
@@ -183,6 +192,25 @@ function pushImage(out: ParsedRichContentBlock[], seen: Set<string>, value: unkn
   out.push({ type: 'image', url });
 }
 
+function pushSizeChart(out: ParsedRichContentBlock[], seen: Set<string>, row: Record<string, unknown>) {
+  const rows = Array.isArray(row.rows)
+    ? row.rows
+      .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry))
+      .map((entry) => Object.fromEntries(Object.entries(entry).map(([key, value]) => [key, normalizeText(value).slice(0, 80)])))
+      .filter((entry) => Object.values(entry).some(Boolean))
+    : [];
+  if (!rows.length) return;
+  const columns = Array.isArray(row.columns)
+    ? row.columns.map((value) => normalizeText(value).slice(0, 60)).filter(Boolean)
+    : Object.keys(rows[0] || {}).map((key) => SIZE_CHART_COLUMN_LABELS[key] || key);
+  if (!columns.length) return;
+  const title = normalizeText(row.title || 'Таблица размеров').slice(0, 120) || 'Таблица размеров';
+  const key = `size_chart:${title}:${JSON.stringify(rows)}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({ type: 'size_chart', title, columns, rows });
+}
+
 function visitRichNode(node: unknown, out: ParsedRichContentBlock[], seen: Set<string>, keyHint = '') {
   if (out.length >= RICH_BLOCK_MAX_COUNT) return;
   if (node == null) return;
@@ -201,6 +229,11 @@ function visitRichNode(node: unknown, out: ParsedRichContentBlock[], seen: Set<s
 
   if (typeof node !== 'object') return;
   const row = node as Record<string, unknown>;
+
+  if (String(row.type || '') === 'size_chart') {
+    pushSizeChart(out, seen, row);
+    return;
+  }
 
   if (Array.isArray(row.textRs)) {
     for (const item of row.textRs) {
@@ -279,6 +312,7 @@ function buildFallbackRichContent(blocks: ParsedRichContentBlock[]) {
       textLines.push(...block.text.split('\n').map((line) => line.trim()).filter(Boolean));
       continue;
     }
+    if (block.type === 'size_chart') continue;
     imageUrls.push(block.url);
   }
 
@@ -301,6 +335,7 @@ export async function buildOzonRichContentAttribute(
   options: {
     attributeId?: number;
     imageMapper?: (url: string) => Promise<string>;
+    sizeChartImageMapper?: (chart: Extract<ParsedRichContentBlock, { type: 'size_chart' }>) => Promise<string>;
     maxBlocks?: number;
   } = {},
 ): Promise<OzonRichContentAttribute | null> {
@@ -328,6 +363,13 @@ export async function buildOzonRichContentAttribute(
       blocks.push(block);
       continue;
     }
+    if (block.type === 'size_chart') {
+      if (!options.sizeChartImageMapper) continue;
+      const chartUrl = await options.sizeChartImageMapper(block);
+      const normalizedChartUrl = normalizeImageUrl(chartUrl);
+      if (normalizedChartUrl) blocks.push({ type: 'image', url: normalizedChartUrl });
+      continue;
+    }
     const mappedUrl = options.imageMapper ? await options.imageMapper(block.url) : block.url;
     const normalizedUrl = normalizeImageUrl(mappedUrl);
     if (normalizedUrl) blocks.push({ type: 'image', url: normalizedUrl });
@@ -343,6 +385,81 @@ export async function buildOzonRichContentAttribute(
     complex_id: 0,
     values: [{ value: JSON.stringify(generated), dictionary_value_id: 0 }],
   };
+}
+
+function escapeSvg(value: unknown): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function sizeChartCellValue(row: Record<string, string>, label: string): string {
+  const known = Object.entries(SIZE_CHART_COLUMN_LABELS).find(([, value]) => value === label);
+  if (known) return row[known[0]] || '';
+  if (/尺码|размер/i.test(label) && !/рос|ru|俄/i.test(label)) return row.size || '';
+  if (/俄罗斯|рос|ru/i.test(label)) return row.ruSize || '';
+  if (/国际|int/i.test(label)) return row.intSize || '';
+  if (/脚长|стоп/i.test(label)) return row.footLengthCm || '';
+  if (/说明|примеч/i.test(label)) return row.note || '';
+  return row[label] || '';
+}
+
+export function renderSizeChartSvg(chart: Extract<ParsedRichContentBlock, { type: 'size_chart' }>): string {
+  const columns = chart.columns.slice(0, 6);
+  const rows = chart.rows.slice(0, 12);
+  const width = Math.max(760, columns.length * 180);
+  const titleHeight = 76;
+  const rowHeight = 54;
+  const headerHeight = 56;
+  const height = titleHeight + headerHeight + rows.length * rowHeight + 36;
+  const colWidth = width / columns.length;
+  const headerY = titleHeight;
+  const bodyY = titleHeight + headerHeight;
+  const cells: string[] = [];
+
+  columns.forEach((column, index) => {
+    const x = index * colWidth;
+    cells.push(`<rect x="${x}" y="${headerY}" width="${colWidth}" height="${headerHeight}" fill="${index === 0 ? '#e6eef8' : '#f2f5f9'}"/>`);
+    cells.push(`<text x="${x + 18}" y="${headerY + 35}" font-size="22" font-weight="700" fill="#27313d">${escapeSvg(column)}</text>`);
+  });
+
+  rows.forEach((row, rowIndex) => {
+    const y = bodyY + rowIndex * rowHeight;
+    const fill = rowIndex % 2 === 0 ? '#ffffff' : '#f5f7fa';
+    cells.push(`<rect x="0" y="${y}" width="${width}" height="${rowHeight}" fill="${fill}"/>`);
+    columns.forEach((column, colIndex) => {
+      const x = colIndex * colWidth;
+      const value = sizeChartCellValue(row, column);
+      cells.push(`<text x="${x + 18}" y="${y + 34}" font-size="21" fill="#394452">${escapeSvg(value)}</text>`);
+    });
+  });
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="24" y="46" font-size="28" font-weight="700" fill="#1f2937">${escapeSvg(chart.title || 'Таблица размеров')}</text>
+<line x1="24" y1="66" x2="${width - 24}" y2="66" stroke="#d8dee8" stroke-width="2"/>
+${cells.join('')}
+<rect x="0" y="${headerY}" width="${width}" height="${headerHeight + rows.length * rowHeight}" fill="none" stroke="#d8dee8" stroke-width="2"/>
+</svg>`;
+}
+
+export async function uploadGeneratedSizeChartImage(
+  chart: Extract<ParsedRichContentBlock, { type: 'size_chart' }>,
+  shopId: string,
+  ownerId?: string,
+): Promise<string> {
+  const svg = renderSizeChartSvg(chart);
+  const buffer = await sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
+  const backend = await getStorageBackend(shopId);
+  const uploaded = await backend.uploadBuffer(buffer, 'source-size-chart.jpg', 'image/jpeg', {
+    category: 'raw',
+    ownerId,
+  });
+  const normalized = normalizeOzonPublishImageUrl(uploaded.url);
+  await waitForOzonImageReady(normalized);
+  return normalized;
 }
 
 export function appendOzonRichContentAttribute<T extends { id: number; complex_id?: number; values: any[] }>(

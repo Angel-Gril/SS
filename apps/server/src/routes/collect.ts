@@ -31,6 +31,7 @@ import {
   planCollectedVideoPublish,
   resolveOzonRichContentAttributeDef,
   transferRichContentImage,
+  uploadGeneratedSizeChartImage,
 } from '../services/ozon-rich-content.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { getConfig } from '../config/system-config-schema.js';
@@ -43,6 +44,7 @@ import { transferSourceProductImages } from '../services/source-image-transfer.j
 import { transferSourceProductVideos } from '../services/source-video-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
 import { normalizeSourceStandardAttributes, sanitizeSourceStandardSizeValues } from 'shared/source-standard-attributes';
+import { buildSourceRichContentPlan } from 'shared/source-rich-content-plan';
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
@@ -1147,6 +1149,7 @@ function buildAiRichContentDraft(meta: Record<string, unknown>, descriptionDraft
     status: 'ai_generated_reviewable',
     source: 'ai_product_content',
     locale: 'ru',
+    plan: buildSourceRichContentPlan({ title: meta.sourceTitleRaw || meta.publishTitleRu || meta.title, metadata: meta, variants: meta.skuItems }),
     blocks,
   };
 }
@@ -1163,6 +1166,40 @@ function isPublishableSourceRichContentDraft(value: unknown): boolean {
     const row = metadataRecord(block);
     return String(row.type || '') === 'text' && containsRussianText(row.text);
   });
+}
+
+function publishableSourceRichContentPayload(value: unknown): string {
+  const draft = metadataRecord(value);
+  if (!isPublishableSourceRichContentDraft(draft)) return '';
+  const blocks = Array.isArray(draft.blocks) ? [...draft.blocks] : [];
+  const sizeChartBlock = buildPublishableSizeChartBlock(draft.plan);
+  if (sizeChartBlock) {
+    const firstImageIndex = blocks.findIndex((block) => metadataRecord(block).type === 'image');
+    if (firstImageIndex >= 0) blocks.splice(firstImageIndex, 0, sizeChartBlock);
+    else blocks.push(sizeChartBlock);
+  }
+  return JSON.stringify({ blocks });
+}
+
+function buildPublishableSizeChartBlock(planInput: unknown): Record<string, unknown> | null {
+  const plan = metadataRecord(planInput);
+  const sizeChart = metadataRecord(plan.sizeChart);
+  const tableRows = Array.isArray(sizeChart.tableRows)
+    ? sizeChart.tableRows
+      .map((row) => metadataRecord(row))
+      .filter((row) => Object.values(row).some((value) => String(value || '').trim()))
+      .slice(0, 12)
+    : [];
+  if (!tableRows.length) return null;
+  const columns = Array.isArray(sizeChart.tableColumns)
+    ? sizeChart.tableColumns.map((value) => cleanPublishName(value).slice(0, 60)).filter(Boolean).slice(0, 6)
+    : [];
+  return {
+    type: 'size_chart',
+    title: 'Таблица размеров',
+    columns: columns.length ? columns : ['尺码', '俄罗斯尺码'],
+    rows: tableRows,
+  };
 }
 
 export function applyAiContentDraftsToPublishMetadata(input: unknown): { metadata: Record<string, unknown>; applied: string[] } {
@@ -2712,6 +2749,8 @@ export function getCollectedRichDescriptionJson(item: { metadata?: unknown }): s
   if (richDescriptionJson && typeof richDescriptionJson === 'object') return JSON.stringify(richDescriptionJson);
   const richContentDraft = meta.sourceRichContentDraft;
   if (isDomesticCollectedSource(meta.sourcePlatform) && !isPublishableSourceRichContentDraft(richContentDraft)) return '';
+  const publishablePayload = publishableSourceRichContentPayload(richContentDraft);
+  if (publishablePayload) return publishablePayload;
   if (typeof richContentDraft === 'string' && richContentDraft.trim()) return richContentDraft.trim();
   if (richContentDraft && typeof richContentDraft === 'object') return JSON.stringify(richContentDraft);
   return '';
@@ -5070,6 +5109,7 @@ export async function collectRoutes(app: FastifyInstance) {
                     const attribute = await buildOzonRichContentAttribute(richSource, {
                       attributeId: Number(richContentAttrDef.id),
                       imageMapper: (url) => transferRichContentImage(url, body.shopId, userId),
+                      sizeChartImageMapper: (chart) => uploadGeneratedSizeChartImage(chart, body.shopId, userId),
                     });
                     return { status: attribute ? 'generated' : 'empty', attribute };
                   } catch (e: any) {

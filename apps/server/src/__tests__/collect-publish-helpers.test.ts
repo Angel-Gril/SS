@@ -333,6 +333,14 @@ describe('collect publish helpers', () => {
   it('applies safe AI content drafts to publish metadata without overwriting manual copy', () => {
     const result = applyAiContentDraftsToPublishMetadata({
       titleNeedsReview: true,
+      sourceTitleRaw: '女士高腰棉质内裤',
+      sourceAttributes: [
+        { name: '尺码', value: 'M【80~100斤】、L【100~120斤】' },
+        { name: '主面料成分', value: '棉' },
+      ],
+      skuItems: [
+        { attrs: { 颜色: '白色', 尺码: 'M【80~100斤】' } },
+      ],
       sourceDetailImages: ['https://img.example.com/detail-1.jpg'],
       aiContentDrafts: {
         title: {
@@ -372,6 +380,14 @@ describe('collect publish helpers', () => {
       status: 'ai_generated_reviewable',
       source: 'ai_product_content',
       locale: 'ru',
+      plan: {
+        templateKey: 'apparel_underwear',
+        templateLabel: '内衣富内容模板',
+        sizeChart: {
+          status: 'mapped',
+          normalizedSizes: expect.arrayContaining(['M']),
+        },
+      },
       blocks: [
         { type: 'text', text: 'Женские трусы для ежедневного использования.' },
         { type: 'text', text: 'Мягкий хлопковый материал комфортен для дома и на каждый день.' },
@@ -420,6 +436,19 @@ describe('collect publish helpers', () => {
           status: 'ai_generated_reviewable',
           source: 'ai_product_content',
           locale: 'ru',
+          plan: {
+            templateLabel: '睡衣/睡裙富内容模板',
+            sizeChart: {
+              status: 'mapped',
+              label: '内置映射表',
+              tableColumns: ['尺码', '俄罗斯尺码', '国际尺码'],
+              tableRows: [
+                { size: 'M', ruSize: '44', intSize: 'M' },
+                { size: 'L', ruSize: '46', intSize: 'L' },
+              ],
+              richText: 'Таблица размеров создана по встроенному соответствию.',
+            },
+          },
           blocks: [
             { type: 'text', text: 'Описание для карточки.' },
             { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
@@ -428,13 +457,25 @@ describe('collect publish helpers', () => {
       },
     });
 
-    expect(JSON.parse(richJson)).toMatchObject({
-      status: 'ai_generated_reviewable',
+    const parsed = JSON.parse(richJson);
+    expect(parsed).toMatchObject({
       blocks: [
         { type: 'text', text: 'Описание для карточки.' },
+        {
+          type: 'size_chart',
+          title: 'Таблица размеров',
+          columns: ['尺码', '俄罗斯尺码', '国际尺码'],
+          rows: [
+            { size: 'M', ruSize: '44', intSize: 'M' },
+            { size: 'L', ruSize: '46', intSize: 'L' },
+          ],
+        },
         { type: 'image', url: 'https://img.example.com/detail-1.jpg' },
       ],
     });
+    expect(parsed).not.toHaveProperty('plan');
+    expect(JSON.stringify(parsed)).not.toContain('睡衣/睡裙富内容模板');
+    expect(JSON.stringify(parsed)).not.toContain('Доступные размеры');
   });
 
   it('does not publish raw domestic source rich content drafts as Ozon RichContentJson', () => {
