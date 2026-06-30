@@ -111,6 +111,74 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
 {
   const plan = planner.buildSourceRichContentPlan({
+    title: '男士短袖T恤大码上衣',
+    metadata: {
+      categoryName: '男装',
+      sourceAttributes: [{ name: '尺码', value: 'M、L、XL、2XL、3XL' }],
+    },
+    variants: [{ attrs: { 颜色: '黑色', 尺码: 'XL' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'apparel_mens');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'men_apparel');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'XL' && row.ruSize === '50'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '3XL' && row.ruSize === '54'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '儿童睡衣宝宝家居服',
+    metadata: {
+      categoryName: '童装',
+      sourceAttributes: [{ name: '尺码', value: '90cm、100cm、110cm、120cm' }],
+    },
+    variants: [{ attrs: { 颜色: '蓝色', 尺码: '100cm' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'apparel_children');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'children_apparel');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '100' && row.ruSize === '100'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '120' && row.ruSize === '120'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '男鞋运动鞋休闲鞋',
+    metadata: {
+      categoryName: '男鞋',
+      sourceAttributes: [{ name: '尺码', value: '40、41、42、43、44' }],
+    },
+    variants: [{ attrs: { 颜色: '白色', 尺码: '42' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'shoes_men');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'men_shoes');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '42' && row.footLengthCm === '26'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '44' && row.footLengthCm === '27'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '女士中筒袜袜子',
+    metadata: {
+      categoryName: '袜子',
+      sourceAttributes: [{ name: '尺码', value: '35-39码、39-42码' }],
+    },
+    variants: [{ attrs: { 颜色: '白色', 尺码: '35-39码' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'socks');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'socks');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '35-39' && row.ruSize === '35-39'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '39-42' && row.ruSize === '39-42'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
     title: '女士文胸',
     metadata: {
       categoryName: '文胸',
