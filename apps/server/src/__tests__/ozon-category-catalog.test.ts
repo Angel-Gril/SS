@@ -252,6 +252,74 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Обувь')).toBe('鞋靴');
   });
 
+  it('uses imported Ozon mapping knowledge for target translations and source search terms', () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 200001242,
+        category_name: 'Красота и гигиена',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 200001242,
+            category_name: 'Ватно-бумажная продукция',
+            disabled: false,
+            children: [
+              { type_id: 93458, type_name: 'Ватные палочки', disabled: false, children: [] },
+              { type_id: 970713340, type_name: 'Покрытие на сиденье унитаза', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+      {
+        description_category_id: 17027908,
+        category_name: 'Дом и сад',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 17027908,
+            category_name: 'Вешалки для одежды',
+            disabled: false,
+            children: [
+              { type_id: 93676, type_name: 'Крючок для дома', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        descriptionCategoryId: 200001242,
+        typeId: 93458,
+        displayPathZh: '美容卫生 / 棉纸用品 / 棉签',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+        keywords: expect.arrayContaining(['棉签', '棉棒', 'cotton swab', 'cotton bud']),
+      }),
+      expect.objectContaining({
+        descriptionCategoryId: 200001242,
+        typeId: 970713340,
+        displayPathZh: '美容卫生 / 棉纸用品 / 马桶坐垫纸',
+        keywords: expect.arrayContaining(['马桶坐垫纸', 'toilet seat cover']),
+      }),
+      expect.objectContaining({
+        descriptionCategoryId: 17027908,
+        typeId: 93676,
+        displayPathZh: '家居园艺 / 衣架挂钩 / 家用挂钩',
+        keywords: expect.arrayContaining(['家用挂钩', '粘钩', 'wall hook']),
+      }),
+    ]));
+
+    expect(searchOzonCategoryCatalog(catalog, '一次性双头棉签')[0]).toMatchObject({
+      descriptionCategoryId: 200001242,
+      typeId: 93458,
+    });
+    expect(searchOzonCategoryCatalog(catalog, '免打孔粘钩挂钩')[0]).toMatchObject({
+      descriptionCategoryId: 17027908,
+      typeId: 93676,
+    });
+  });
+
   it('searches by Chinese terms, Russian terms, ids, and product title hints', () => {
     const catalog = buildOzonCategoryCatalog([
       {

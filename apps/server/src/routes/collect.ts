@@ -2475,8 +2475,12 @@ function isGenericSourceCategorySignature(signature: string): boolean {
   return unique.every((part) => /^(服装|服饰|服饰内衣|衣服|clothing|одежда)$/.test(part));
 }
 
-function categoryTextScore(sourceTerms: string[], candidate: { categoryName: string; typeName: string }): number {
-  const haystack = normalizeSourceCategoryToken(String(candidate.categoryName || '') + ' ' + String(candidate.typeName || ''));
+function categoryTextScore(sourceTerms: string[], candidate: { categoryName: string; typeName: string }, extraSearchText = ''): number {
+  const haystack = normalizeSourceCategoryToken([
+    candidate.categoryName,
+    candidate.typeName,
+    extraSearchText,
+  ].filter(Boolean).join(' '));
   let score = 0;
   for (const term of sourceTerms) {
     if (!term) continue;
@@ -2620,7 +2624,7 @@ export function buildSourceOzonCategoryCandidates(input: {
     const historyTextScore = categoryTextScore(sourceTerms, {
       categoryName: String(mapping.categoryName || catalog?.categoryNameRu || tree?.categoryName || ''),
       typeName: String(mapping.typeName || catalog?.typeNameRu || tree?.typeName || ''),
-    });
+    }, catalog ? [catalog.displayPathZh, catalog.searchText, ...catalog.keywords].join(' ') : '');
     if (genericSignature && historyTextScore <= 0) continue;
     const baseScore = genericSignature
       ? 45 + historyTextScore + confirmations * 4
@@ -2630,7 +2634,8 @@ export function buildSourceOzonCategoryCandidates(input: {
 
   const sourceIsAdult = isAdultSourceCategoryTerms(sourceTerms);
   for (const row of treeRows) {
-    const textScore = categoryTextScore(sourceTerms, row);
+    const catalog = catalogByKey.get(sourceOzonCategoryKey(row.categoryId, row.typeId));
+    const textScore = categoryTextScore(sourceTerms, row, catalog ? [catalog.displayPathZh, catalog.searchText, ...catalog.keywords].join(' ') : '');
     if (!sourceIsAdult && isAdultOzonCategoryCandidate(row)) continue;
     if (textScore <= 0) continue;
     addCandidate(row, 30 + textScore, 'tree_match', ['类目名称相似', '源商品画像'], 0);

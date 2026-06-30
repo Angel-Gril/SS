@@ -1802,6 +1802,100 @@ describe('collect publish helpers', () => {
     expect(candidates[0]?.reasons).toContain('类目名称相似');
   });
 
+  it('uses imported Ozon mapping terms to rank source category candidates', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '一次性双头棉签化妆清洁棉棒批发',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['日用百货', '个人护理'],
+          categoryName: '棉签',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: [],
+            sizes: [],
+            materials: ['棉'],
+            gender: { value: '' },
+            seasons: [],
+            packageDimensionsMm: { length: 120, width: 80, height: 30 },
+            packageWeightG: 80,
+            categoryHints: ['棉签', '棉棒'],
+            missingForOzon: [],
+          },
+        },
+      },
+      categoryTree: [
+        { description_category_id: 17028718, category_name: 'Дом и сад', type_id: 970869623, type_name: 'Щетка для уборки', children: [] },
+        { description_category_id: 200001242, category_name: 'Красота и гигиена', type_id: 93458, type_name: 'Ватные палочки', children: [] },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 17028718,
+          typeId: 970869623,
+          categoryPathRu: ['Дом и сад', 'Инвентарь для уборки'],
+          categoryPathZh: ['家居园艺', '清洁工具'],
+          categoryLevels: [],
+          categoryNameRu: 'Инвентарь для уборки',
+          categoryNameZh: '清洁工具',
+          typeNameRu: 'Щетка для уборки',
+          typeNameZh: '清洁刷',
+          displayPathRu: 'Дом и сад / Инвентарь для уборки / Щетка для уборки',
+          displayPathZh: '家居园艺 / 清洁工具 / 清洁刷',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['清洁刷', 'cleaning brush'],
+          searchText: 'дом и сад инвентарь для уборки щетка для уборки 家居园艺 清洁工具 清洁刷 cleaning brush',
+        },
+        {
+          descriptionCategoryId: 200001242,
+          typeId: 93458,
+          categoryPathRu: ['Красота и гигиена', 'Ватно-бумажная продукция'],
+          categoryPathZh: ['美容卫生', '棉纸用品'],
+          categoryLevels: [],
+          categoryNameRu: 'Ватно-бумажная продукция',
+          categoryNameZh: '棉纸用品',
+          typeNameRu: 'Ватные палочки',
+          typeNameZh: '棉签',
+          displayPathRu: 'Красота и гигиена / Ватно-бумажная продукция / Ватные палочки',
+          displayPathZh: '美容卫生 / 棉纸用品 / 棉签',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['棉签', '棉棒', 'cotton swab', 'cotton bud'],
+          searchText: 'красота и гигиена ватно-бумажная продукция ватные палочки 美容卫生 棉纸用品 棉签 棉棒 cotton swab cotton bud',
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200001242,
+      typeId: 93458,
+      typeName: 'Ватные палочки',
+      selected: true,
+      source: 'tree_match',
+    });
+  });
+
+  it('does not create source category candidates from imported terms without an Ozon target', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '一次性双头棉签化妆清洁棉棒批发',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['日用百货', '个人护理'],
+          categoryName: '棉签',
+        },
+      },
+      categoryTree: [
+        { description_category_id: 17028718, category_name: 'Дом и сад', type_id: 970869623, type_name: 'Щетка для уборки', children: [] },
+      ],
+      categoryCatalog: [],
+    });
+
+    expect(candidates).toHaveLength(0);
+  });
+
   it('shows Chinese labels for toy and baby Ozon category candidates', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {
