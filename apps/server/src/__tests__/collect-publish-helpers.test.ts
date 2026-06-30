@@ -1896,6 +1896,48 @@ describe('collect publish helpers', () => {
     expect(candidates).toHaveLength(0);
   });
 
+  it('uses imported source title terms to rank existing Ozon category targets', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '一次性双头棉棒化妆清洁用品',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          categoryPath: ['日用百货'],
+        },
+      },
+      categoryTree: [
+        { description_category_id: 17028718, category_name: 'Дом и сад', type_id: 970869623, type_name: 'Щетка для уборки', children: [] },
+        { description_category_id: 200001242, category_name: 'Красота и гигиена', type_id: 93458, type_name: 'Ватные палочки', children: [] },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 200001242,
+          typeId: 93458,
+          categoryPathRu: ['Красота и гигиена', 'Ватно-бумажная продукция'],
+          categoryPathZh: ['美容卫生', '棉纸用品'],
+          categoryLevels: [],
+          categoryNameRu: 'Ватно-бумажная продукция',
+          categoryNameZh: '棉纸用品',
+          typeNameRu: 'Ватные палочки',
+          typeNameZh: '棉签',
+          displayPathRu: 'Красота и гигиена / Ватно-бумажная продукция / Ватные палочки',
+          displayPathZh: '美容卫生 / 棉纸用品 / 棉签',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['棉签', '棉棒', 'cotton swab', 'cotton bud'],
+          searchText: 'красота и гигиена ватно-бумажная продукция ватные палочки 美容卫生 棉纸用品 棉签 棉棒 cotton swab cotton bud',
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200001242,
+      typeId: 93458,
+      source: 'tree_match',
+    });
+  });
+
   it('shows Chinese labels for toy and baby Ozon category candidates', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {

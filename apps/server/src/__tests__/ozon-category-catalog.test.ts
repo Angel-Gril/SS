@@ -3,6 +3,8 @@ import {
   buildOzonCategoryCatalog,
   enrichMissingOzonCategoryCatalogTranslations,
   createPrismaOzonCategoryCatalogStore,
+  getOzonCategoryLocalRuleStats,
+  getOzonCategoryLocalSearchTermsForTarget,
   searchOzonCategoryCatalog,
   searchOrRefreshOzonCategoryCatalogForShop,
   translateOzonCategoryText,
@@ -318,6 +320,58 @@ describe('ozon category catalog', () => {
       descriptionCategoryId: 17027908,
       typeId: 93676,
     });
+  });
+
+  it('indexes imported Ozon mapping rules without turning them into forced mappings', () => {
+    expect(getOzonCategoryLocalRuleStats()).toMatchObject({
+      ozonConfirmedTargetCount: 29,
+    });
+
+    expect(getOzonCategoryLocalSearchTermsForTarget(200001242, 970713340)).toEqual(expect.objectContaining({
+      keywords: expect.arrayContaining(['马桶坐垫纸', 'toilet seat cover']),
+      excludes: expect.arrayContaining(['toilet brush', '马桶刷']),
+    }));
+  });
+
+  it('uses imported Ozon mapping excludes to reduce false category search matches', () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 200001242,
+        category_name: 'Красота и гигиена',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 200001242,
+            category_name: 'Ватно-бумажная продукция',
+            disabled: false,
+            children: [
+              { type_id: 970713340, type_name: 'Покрытие на сиденье унитаза', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+      {
+        description_category_id: 17028718,
+        category_name: 'Дом и сад',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 17028718,
+            category_name: 'Инвентарь для уборки',
+            disabled: false,
+            children: [
+              { type_id: 970869623, type_name: 'Щетка для уборки', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(searchOzonCategoryCatalog(catalog, 'toilet brush')[0]).not.toMatchObject({
+      descriptionCategoryId: 200001242,
+      typeId: 970713340,
+    });
+    expect(searchOzonCategoryCatalog(catalog, '马桶刷')).toHaveLength(0);
   });
 
   it('searches by Chinese terms, Russian terms, ids, and product title hints', () => {

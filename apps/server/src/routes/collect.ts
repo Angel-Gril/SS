@@ -24,6 +24,7 @@ import {
   type OzonCategoryCatalogStore,
   type OzonCategoryTranslationStatus,
 } from '../services/ozon-category-catalog.js';
+import { getOzonCategoryLocalKeywordExpansions } from '../services/ozon-category-local-rules.js';
 import {
   appendOzonRichContentAttribute,
   buildOzonRichContentAttribute,
@@ -2431,7 +2432,10 @@ function flattenOzonCategoryTree(nodes: SourceOzonCategoryTreeNode[] | null | un
 function sourceCategorySearchTerms(value: unknown): string[] {
   const term = normalizeSourceCategoryToken(value);
   if (!term) return [];
-  const out = [term];
+  const out = [
+    term,
+    ...getOzonCategoryLocalKeywordExpansions([term]).map(normalizeSourceCategoryToken),
+  ];
   const expansions: Array<[RegExp, string[]]> = [
     [/牛仔裤|牛仔|jeans?/i, ['джинсы', 'denim', 'jeans']],
     [/裤子|长裤|直筒裤|休闲裤|pants?|trousers?/i, ['брюки', 'штаны', 'pants', 'trousers']],

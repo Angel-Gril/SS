@@ -1,4 +1,15 @@
 import { randomUUID } from 'crypto';
+import {
+  getOzonCategoryLocalExcludeExpansions,
+  getOzonCategoryLocalKeywordExpansions,
+  getOzonCategoryLocalSearchTermsForTarget,
+  getOzonCategoryLocalTranslation,
+} from './ozon-category-local-rules.js';
+
+export {
+  getOzonCategoryLocalRuleStats,
+  getOzonCategoryLocalSearchTermsForTarget,
+} from './ozon-category-local-rules.js';
 
 export interface OzonCategoryTreeNode {
   description_category_id?: number | string | null;
@@ -175,23 +186,13 @@ const KEYWORD_EXPANSIONS: Array<[RegExp, string[]]> = [
   [/мобил|кроватк|婴儿床铃|床挂/iu, ['婴儿床铃', '床挂玩具', 'мобиль']],
   [/бюстгальтер|лифчик|белье|бельё|文胸|胸罩|内衣|bra|lingerie/iu, ['文胸', '胸罩', '内衣', 'bra', 'lingerie', 'бюстгальтер']],
   [/ночн|сорочк|пижам|пеньюар|睡裙|睡衣|睡袍|nightgown|nightdress|pajamas?|pyjamas?|sleepwear/iu, ['睡裙', '睡衣', '睡袍', 'ночная сорочка', 'пижама', 'пеньюар']],
-  [/ватные палочки|棉签|棉棒|cotton swab|cotton bud/iu, ['棉签', '棉棒', 'cotton swab', 'cotton bud']],
-  [/покрытие на сиденье унитаза|马桶坐垫|坐垫纸|toilet seat cover|toilet seat pad/iu, ['马桶坐垫纸', '一次性坐垫纸', 'toilet seat cover']],
-  [/крючок для дома|wall hook|home hook|adhesive hook|挂钩|粘钩|免打孔/iu, ['家用挂钩', '粘钩', '免打孔挂钩', 'wall hook']],
-  [/коробка для хранения|органайзер для хранения|storage box|storage organizer|收纳盒|整理盒/iu, ['收纳盒', '整理盒', 'storage box', 'storage organizer']],
-  [/булавка|safety pin|别针|安全别针/iu, ['别针', '安全别针', 'safety pin']],
-  [/нитевдеватель|needle threader|穿针器|引线器/iu, ['穿针器', '引线器', 'needle threader']],
-  [/распарыватель|seam ripper|拆线器/iu, ['拆线器', 'seam ripper']],
-  [/пяльцы|embroidery hoop|绣绷|绣圈/iu, ['绣绷', '绣圈', 'embroidery hoop']],
-  [/мел портновский|tailor chalk|fabric marker|裁缝粉笔|划粉/iu, ['裁缝粉笔', '划粉', 'tailor chalk', 'fabric marker']],
-  [/маска для сна|sleep mask|睡眠眼罩|眼罩/iu, ['睡眠眼罩', '眼罩', 'sleep mask']],
-  [/спонж косметический|makeup sponge|化妆海绵|美妆蛋/iu, ['化妆海绵', '美妆蛋', 'makeup sponge']],
-  [/мягкая игрушка|plush toy|毛绒玩具|公仔/iu, ['毛绒玩具', '公仔', 'plush toy']],
 ];
 
 export function translateOzonCategoryText(value: unknown): string {
   const text = cleanText(value);
   if (!text) return '';
+  const local = getOzonCategoryLocalTranslation(text);
+  if (local) return local;
   const exact = CATEGORY_TRANSLATIONS[normalizeToken(text)];
   if (exact) return exact;
 
@@ -312,7 +313,7 @@ function unique(values: string[]): string[] {
 
 function buildKeywords(parts: string[]): string[] {
   const base = unique(parts.flatMap((part) => [part, translateOzonCategoryText(part)]));
-  const expanded = [...base];
+  const expanded = [...base, ...getOzonCategoryLocalKeywordExpansions(base)];
   const text = base.join(' ');
   for (const [pattern, words] of KEYWORD_EXPANSIONS) {
     if (pattern.test(text)) expanded.push(...words);
@@ -528,6 +529,7 @@ export function searchOzonCategoryCatalog(
     ...raw.split(/[\s,/|;:，。；：、]+/u),
     ...buildKeywords([raw]),
   ]).map(normalizeToken);
+  const queryExcludeTerms = getOzonCategoryLocalExcludeExpansions([raw]).map(normalizeToken);
 
   return catalog
     .map((entry) => {
@@ -537,6 +539,10 @@ export function searchOzonCategoryCatalog(
         if (entry.searchText.includes(term)) score += term.length > 2 ? 12 : 4;
         if (String(entry.descriptionCategoryId) === term || String(entry.typeId) === term) score += 80;
       }
+      const targetExcludes = getOzonCategoryLocalSearchTermsForTarget(entry.descriptionCategoryId, entry.typeId)
+        .excludes
+        .map(normalizeToken);
+      if (queryExcludeTerms.some((term) => targetExcludes.includes(term))) score -= 200;
       return { entry, score };
     })
     .filter((row) => row.score > 0)
