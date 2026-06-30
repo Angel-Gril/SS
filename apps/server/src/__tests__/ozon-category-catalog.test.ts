@@ -240,6 +240,8 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Спецодежда')).toBe('工装/职业服');
     expect(translateOzonCategoryText('Джинсы для малышей')).toBe('婴幼儿牛仔裤');
     expect(translateOzonCategoryText('Брюки тактические')).toBe('战术裤');
+    expect(translateOzonCategoryText('Брюки рабочие')).toBe('工作裤');
+    expect(translateOzonCategoryText('Штаны для прессотерапии')).toBe('压力治疗裤');
     expect(translateOzonCategoryText('Брюки для малышей')).toBe('婴幼儿裤子');
     expect(translateOzonCategoryText('Термобрюки')).toBe('保暖裤');
     expect(translateOzonCategoryText('Белье')).toBe('内衣');
@@ -252,6 +254,63 @@ describe('ozon category catalog', () => {
     expect(translateOzonCategoryText('Держатель простыни, одеяла')).toBe('床单/被子固定夹');
     expect(translateOzonCategoryText('Веревка бельевая')).toBe('晾衣绳');
     expect(translateOzonCategoryText('Обувь')).toBe('鞋靴');
+  });
+
+  it('fully translates Ozon apparel category candidates from source listing screenshots', () => {
+    const catalog = buildOzonCategoryCatalog([
+      {
+        description_category_id: 200001521,
+        category_name: 'Одежда',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 200001521,
+            category_name: 'Спецодежда',
+            disabled: false,
+            children: [
+              { type_id: 93059, type_name: 'Брюки рабочие', disabled: false, children: [] },
+              { type_id: 970806010, type_name: 'Брюки тактические', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+      {
+        description_category_id: 17028985,
+        category_name: 'Красота и гигиена',
+        disabled: false,
+        children: [
+          {
+            description_category_id: 17028985,
+            category_name: 'Инструменты для макияжа, маникюра, бани и солярия',
+            disabled: false,
+            children: [
+              { type_id: 970576838, type_name: 'Штаны для прессотерапии', disabled: false, children: [] },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(catalog).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        typeId: 93059,
+        displayPathZh: '服装 / 工装/职业服 / 工作裤',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+      }),
+      expect.objectContaining({
+        typeId: 970806010,
+        displayPathZh: '服装 / 工装/职业服 / 战术裤',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+      }),
+      expect.objectContaining({
+        typeId: 970576838,
+        displayPathZh: '美容卫生 / 美妆美甲沐浴日晒工具 / 压力治疗裤',
+        translationStatus: 'complete',
+        untranslatedTerms: [],
+      }),
+    ]));
   });
 
   it('uses imported Ozon mapping knowledge for target translations and source search terms', () => {
