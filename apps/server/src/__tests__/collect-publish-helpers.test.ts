@@ -1683,6 +1683,125 @@ describe('collect publish helpers', () => {
     expect(candidates[0]?.attributePlan.missingRequired).toEqual([]);
   });
 
+  it('does not let generic clothing history outrank a specific men casual pants title', () => {
+    const sourceItem = {
+      title: '复古抽绳直筒亚麻休闲裤男士松紧腰宽松透气青年小脚九分裤潮610',
+      sourcePlatform: '1688',
+      metadata: {
+        sourcePlatform: '1688',
+        categoryPath: ['服装', '服装'],
+        categoryName: '服装',
+        sourceStandardAttributes: {
+          brand: { value: '', isBrandless: true },
+          colors: ['白色', '藏青色'],
+          sizes: ['S', 'M', 'L', 'XL'],
+          materials: ['亚麻'],
+          gender: { value: 'male' },
+          seasons: ['spring'],
+          packageDimensionsMm: null,
+          packageWeightG: 300,
+          categoryHints: ['男式休闲裤', '休闲裤'],
+          missingForOzon: ['包装尺寸'],
+        },
+      },
+    };
+    const signature = sourceCategorySignature(sourceItem);
+    expect(signature).toBe('1688|服装>服装');
+
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: sourceItem,
+      categoryTree: [
+        { description_category_id: 200000933, category_name: 'Одежда', type_id: 970960142, type_name: 'Ночная сорочка', children: [] },
+        { description_category_id: 200000933, category_name: 'Одежда', type_id: 93080, type_name: 'Джинсы', children: [] },
+        { description_category_id: 200001517, category_name: 'Белье', type_id: 93065, type_name: 'Бюстгальтер', children: [] },
+        { description_category_id: 200000933, category_name: 'Одежда', type_id: 93079, type_name: 'Брюки', children: [] },
+      ],
+      categoryCatalog: [
+        {
+          descriptionCategoryId: 200000933,
+          typeId: 970960142,
+          categoryPathRu: ['Одежда', 'Одежда'],
+          categoryPathZh: ['服装', '服装'],
+          categoryLevels: [],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Ночная сорочка',
+          typeNameZh: '睡裙',
+          displayPathRu: 'Одежда / Одежда / Ночная сорочка',
+          displayPathZh: '服装 / 服装 / 睡裙',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '睡裙'],
+          searchText: 'одежда ночная сорочка 服装 睡裙',
+        },
+        {
+          descriptionCategoryId: 200000933,
+          typeId: 93080,
+          categoryPathRu: ['Одежда', 'Одежда'],
+          categoryPathZh: ['服装', '服装'],
+          categoryLevels: [],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Джинсы',
+          typeNameZh: '牛仔裤',
+          displayPathRu: 'Одежда / Одежда / Джинсы',
+          displayPathZh: '服装 / 服装 / 牛仔裤',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '牛仔裤'],
+          searchText: 'одежда джинсы 服装 牛仔裤',
+        },
+        {
+          descriptionCategoryId: 200001517,
+          typeId: 93065,
+          categoryPathRu: ['Одежда', 'Белье'],
+          categoryPathZh: ['服装', '内衣'],
+          categoryLevels: [],
+          categoryNameRu: 'Белье',
+          categoryNameZh: '内衣',
+          typeNameRu: 'Бюстгальтер',
+          typeNameZh: '文胸',
+          displayPathRu: 'Одежда / Белье / Бюстгальтер',
+          displayPathZh: '服装 / 内衣 / 文胸',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '内衣', '文胸'],
+          searchText: 'одежда белье бюстгальтер 服装 内衣 文胸',
+        },
+        {
+          descriptionCategoryId: 200000933,
+          typeId: 93079,
+          categoryPathRu: ['Одежда', 'Одежда'],
+          categoryPathZh: ['服装', '服装'],
+          categoryLevels: [],
+          categoryNameRu: 'Одежда',
+          categoryNameZh: '服装',
+          typeNameRu: 'Брюки',
+          typeNameZh: '休闲裤',
+          displayPathRu: 'Одежда / Одежда / Брюки',
+          displayPathZh: '服装 / 服装 / 休闲裤',
+          translationStatus: 'complete',
+          untranslatedTerms: [],
+          keywords: ['服装', '休闲裤', '裤子'],
+          searchText: 'одежда брюки 服装 休闲裤 裤子',
+        },
+      ],
+      confirmedMappings: [
+        { signature, categoryId: 200000933, typeId: 970960142, categoryName: 'Одежда', typeName: 'Ночная сорочка', confirmations: 1 },
+        { signature, categoryId: 200000933, typeId: 93080, categoryName: 'Одежда', typeName: 'Джинсы', confirmations: 1 },
+        { signature, categoryId: 200001517, typeId: 93065, categoryName: 'Белье', typeName: 'Бюстгальтер', confirmations: 1 },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200000933,
+      typeId: 93079,
+      typeName: 'Брюки',
+      selected: true,
+    });
+    expect(candidates[0]?.reasons).toContain('类目名称相似');
+  });
+
   it('shows Chinese labels for toy and baby Ozon category candidates', () => {
     const candidates = buildSourceOzonCategoryCandidates({
       item: {

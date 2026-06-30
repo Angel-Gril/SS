@@ -70,5 +70,30 @@ assert.match(
   /domPackagingRows[\s\S]{0,120}allSources\.push/,
   '1688 DOM packaging rows should be passed into the shared core parser sources',
 );
+assert.doesNotMatch(
+  collectContentScript,
+  /cells\.length\s*>=\s*4/,
+  '1688 DOM packaging scan must not skip real three-column tables such as color / size / weight(g)',
+);
+assert.match(
+  collectContentScript,
+  /cells\.length\s*>=\s*3/,
+  '1688 DOM packaging scan should keep three-column SKU weight tables',
+);
+assert.match(
+  collectContentScript,
+  /const hasSkuIdentity = \/\(颜色\|色号\|color\)/,
+  '1688 DOM packaging header detection should look for color in weight-only SKU tables',
+);
+assert.match(
+  collectContentScript,
+  /\(尺码\|规格\|尺寸\|size\|spec\)/,
+  '1688 DOM packaging header detection should look for size/spec in weight-only SKU tables',
+);
+assert.match(
+  collectContentScript,
+  /return \/\(重量\|weight\)\/i\.test\(text\) && \(hasDimensions \|\| hasSkuIdentity\)/,
+  '1688 DOM packaging header detection should accept color / size / weight-only tables',
+);
 
 console.log('PASS source collect enters ERP workflow');

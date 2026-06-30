@@ -2434,7 +2434,7 @@ function sourceCategorySearchTerms(value: unknown): string[] {
   const out = [term];
   const expansions: Array<[RegExp, string[]]> = [
     [/牛仔裤|牛仔|jeans?/i, ['джинсы', 'denim', 'jeans']],
-    [/裤子|长裤|直筒裤|休闲裤|pants?|trousers?/i, ['брюки', 'штаны', 'джинсы', 'pants', 'trousers']],
+    [/裤子|长裤|直筒裤|休闲裤|pants?|trousers?/i, ['брюки', 'штаны', 'pants', 'trousers']],
     [/男装|男士|男款|男人|男性|\bmen'?s?\b|male/i, ['мужская', 'мужской', 'мужские', 'men', 'male']],
     [/女装|女士|女款|女人|女性|\bwomen'?s?\b|female/i, ['женская', 'женский', 'женские', 'women', 'female']],
     [/t恤|体恤|短袖|футбол/i, ['футболка', 'футболки', 't-shirt']],
@@ -2466,6 +2466,15 @@ function isAdultOzonCategoryCandidate(candidate: { categoryName?: string | null;
   const text = normalizeSourceCategoryToken(String(candidate.categoryName || '') + ' ' + String(candidate.typeName || ''));
   return /товары для взрослых|секс|интим|эротич|анальн|вагинальн|эрекц|adult|成人用品|情趣/.test(text);
 }
+
+function isGenericSourceCategorySignature(signature: string): boolean {
+  const rawParts = String(signature || '').split('|')[1] || '';
+  const parts = rawParts.split('>').map(normalizeSourceCategoryToken).filter(Boolean);
+  if (parts.length === 0) return true;
+  const unique = Array.from(new Set(parts));
+  return unique.every((part) => /^(服装|服饰|服饰内衣|衣服|clothing|одежда)$/.test(part));
+}
+
 function categoryTextScore(sourceTerms: string[], candidate: { categoryName: string; typeName: string }): number {
   const haystack = normalizeSourceCategoryToken(String(candidate.categoryName || '') + ' ' + String(candidate.typeName || ''));
   let score = 0;
@@ -2477,6 +2486,10 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
   if (/牛仔裤|джинсы|jeans?/.test(sourceText)) {
     if (/джинсы|jeans?/.test(haystack)) score += 28;
     if (/брюки|штаны|pants|trousers/.test(haystack) && !/джинсы|jeans?/.test(haystack)) score -= 12;
+  }
+  if (/裤子|长裤|直筒裤|休闲裤|брюки|штаны|pants?|trousers?/.test(sourceText) && !/牛仔裤|джинсы|jeans?/.test(sourceText)) {
+    if (/брюки|штаны|pants|trousers/.test(haystack)) score += 32;
+    if (/джинсы|jeans?/.test(haystack)) score -= 18;
   }
   if (/\bmale\b|мужск|男装|男士|男款|男人|男性/.test(sourceText)) {
     if (/мужск|men|male/.test(haystack)) score += 16;
@@ -2598,10 +2611,21 @@ export function buildSourceOzonCategoryCandidates(input: {
     if (!existing || candidate.score > existing.score) byKey.set(key, candidate);
   };
 
+  const genericSignature = isGenericSourceCategorySignature(signature);
   for (const mapping of input.confirmedMappings || []) {
     if (mapping.signature !== signature) continue;
     const confirmations = Math.max(1, Number(mapping.confirmations) || 1);
-    addCandidate(mapping, 80 + confirmations * 8, 'shared_history', ['全局历史确认', '确认 ' + confirmations + ' 次'], confirmations);
+    const tree = treeRowsByKey.get(sourceOzonCategoryKey(mapping.categoryId, mapping.typeId));
+    const catalog = catalogByKey.get(sourceOzonCategoryKey(mapping.categoryId, mapping.typeId));
+    const historyTextScore = categoryTextScore(sourceTerms, {
+      categoryName: String(mapping.categoryName || catalog?.categoryNameRu || tree?.categoryName || ''),
+      typeName: String(mapping.typeName || catalog?.typeNameRu || tree?.typeName || ''),
+    });
+    if (genericSignature && historyTextScore <= 0) continue;
+    const baseScore = genericSignature
+      ? 45 + historyTextScore + confirmations * 4
+      : 80 + confirmations * 8;
+    addCandidate(mapping, baseScore, 'shared_history', ['全局历史确认', '确认 ' + confirmations + ' 次'], confirmations);
   }
 
   const sourceIsAdult = isAdultSourceCategoryTerms(sourceTerms);

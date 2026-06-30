@@ -1047,7 +1047,7 @@
       if (!isLikely1688PackagingTableText(tableText)) return;
       const tableRows = Array.from(table.querySelectorAll("tr"))
         .map((tr) => Array.from(tr.querySelectorAll("th,td")).map((cell) => normalizeWhitespace(cell.innerText || cell.textContent || "")))
-        .filter((cells) => cells.length >= 4 && cells.some(Boolean));
+        .filter((cells) => cells.length >= 3 && cells.some(Boolean));
       if (!tableRows.length) return;
       const headerIndex = tableRows.findIndex((cells) => isLikely1688PackagingHeader(cells));
       if (headerIndex < 0) return;
@@ -1067,10 +1067,12 @@
 
   function isLikely1688PackagingHeader(cells) {
     const text = cells.join(" ");
-    return /(长|length)/i.test(text)
+    const hasDimensions = /(长|length)/i.test(text)
       && /(宽|width)/i.test(text)
-      && /(高|height)/i.test(text)
-      && /(重量|weight)/i.test(text);
+      && /(高|height)/i.test(text);
+    const hasSkuIdentity = /(颜色|色号|color)/i.test(text)
+      && /(尺码|规格|尺寸|size|spec)/i.test(text);
+    return /(重量|weight)/i.test(text) && (hasDimensions || hasSkuIdentity);
   }
 
   function build1688DomPackagingRow(headers, cells) {
