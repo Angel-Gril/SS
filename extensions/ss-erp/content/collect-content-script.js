@@ -122,6 +122,10 @@
     if (jsonLd.length) {
       allSources.push(...jsonLd);
     }
+    if (platform === "1688") {
+      const domPackagingRows = collect1688DomPackagingRows();
+      if (domPackagingRows.length) allSources.push({ domPackagingRows });
+    }
 
     const extractor = PLATFORM_EXTRACTORS[platform] || extractGenericProduct;
     const data = extractor({
@@ -1035,6 +1039,62 @@
     return results;
   }
 
+  function collect1688DomPackagingRows() {
+    const rows = [];
+    const tables = Array.from(document.querySelectorAll("table"));
+    tables.forEach((table) => {
+      const tableText = normalizeWhitespace(table.innerText || table.textContent || "");
+      if (!isLikely1688PackagingTableText(tableText)) return;
+      const tableRows = Array.from(table.querySelectorAll("tr"))
+        .map((tr) => Array.from(tr.querySelectorAll("th,td")).map((cell) => normalizeWhitespace(cell.innerText || cell.textContent || "")))
+        .filter((cells) => cells.length >= 4 && cells.some(Boolean));
+      if (!tableRows.length) return;
+      const headerIndex = tableRows.findIndex((cells) => isLikely1688PackagingHeader(cells));
+      if (headerIndex < 0) return;
+      const headers = tableRows[headerIndex];
+      tableRows.slice(headerIndex + 1).forEach((cells) => {
+        const row = build1688DomPackagingRow(headers, cells);
+        if (row) rows.push(row);
+      });
+    });
+    return dedupe1688PackagingRows(rows).slice(0, 200);
+  }
+
+  function isLikely1688PackagingTableText(text) {
+    return /(商品件重尺|包装信息|包装尺寸|重量\(g\)|体积\(cm)/i.test(text)
+      || (/(长|宽|高)/.test(text) && /(重量|体积)/.test(text));
+  }
+
+  function isLikely1688PackagingHeader(cells) {
+    const text = cells.join(" ");
+    return /(长|length)/i.test(text)
+      && /(宽|width)/i.test(text)
+      && /(高|height)/i.test(text)
+      && /(重量|weight)/i.test(text);
+  }
+
+  function build1688DomPackagingRow(headers, cells) {
+    const out = {};
+    headers.forEach((header, index) => {
+      const name = normalizeWhitespace(header);
+      const value = normalizeWhitespace(cells[index] || "");
+      if (!name || !value) return;
+      if (/颜色|色号|color/i.test(name)) out.color = value;
+      else if (/尺码|规格|尺寸|size|spec/i.test(name)) out.size = value;
+      else if (/^长|length/i.test(name)) out.length = value;
+      else if (/^宽|width/i.test(name)) out.width = value;
+      else if (/^高|height/i.test(name)) out.height = value;
+      else if (/体积|volume/i.test(name)) out.volume = value;
+      else if (/重量|weight/i.test(name)) {
+        out.weight = value;
+        out.weightUnit = name;
+      }
+    });
+    if (!out.color && !out.size && !out.length && !out.width && !out.height && !out.weight) return null;
+    out.unit = headers.join(" ");
+    return out;
+  }
+
   function extract1688Product(context) {
     const result = buildProductResult(context, {
       monthlySalesKeywords: [/月销量[:：]?\s*([0-9.,万wW+]+)/i, /近30天成交[:：]?\s*([0-9.,万wW+]+)/i, /已售[:：]?\s*([0-9.,万wW+]+)/i],
@@ -1469,7 +1529,7 @@
     const widthMm = dimensionToMm(pickFirstValue(row, ["widthMm", "width", "wid", "宽", "宽(cm)"]), unit);
     const heightMm = dimensionToMm(pickFirstValue(row, ["heightMm", "height", "hgt", "高", "高(cm)"]), unit);
     const weightRaw = pickFirstValue(row, ["weightG", "weight", "grossWeight", "重量", "重量(g)"]);
-    const weightG = normalize1688PackagingWeight(weightRaw, weightUnit);
+    const weightG = normalize1688PackagingWeight(weightRaw, normalize1688PackagingWeightUnitHint(weightUnit, weightRaw));
     const volumeRaw = pickFirstValue(row, ["volumeCm3", "volume", "体积", "体积(cm³)", "体积(cm3)"]);
     const volumeCm3 = parseLooseNumber(volumeRaw);
     if (!color && !size) return null;
@@ -1494,6 +1554,16 @@
     if (/kg|千克|公斤/.test(unit)) return Math.round(numeric * 1000);
     if (/斤/.test(unit)) return Math.round(numeric * 500);
     return Math.round(numeric);
+  }
+
+  function normalize1688PackagingWeightUnitHint(unitHint, weightValue) {
+    const valueText = String(weightValue == null ? "" : weightValue);
+    if (/(kg|g|克|千克|公斤|斤|lb|pound|磅|oz|ounce)/i.test(valueText)) return valueText;
+    const hint = String(unitHint || "");
+    const header = hint.match(/(?:重量|weight)\s*[（(]\s*(kg|g|克|千克|公斤|斤|lb|pound|磅|oz|ounce)\s*[）)]/i);
+    if (header) return header[1];
+    if (/^(kg|g|克|千克|公斤|斤|lb|pound|磅|oz|ounce)$/i.test(hint.trim())) return hint.trim();
+    return "";
   }
 
   function dedupe1688PackagingRows(rows) {

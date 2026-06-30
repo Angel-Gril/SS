@@ -431,6 +431,34 @@ test('1688 core extracts packaging rows when the table includes volume before we
   });
 });
 
+test('1688 core treats weight(g) table column as grams even when size labels contain jin', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/977824333829.html?offerId=977824333829',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 白色 卡其色 尺码 M (95-110) 斤 L (110-125) 斤',
+      '包装信息 商品件重尺 颜色 尺码 长(cm) 宽(cm) 高(cm) 体积(cm³) 重量(g)',
+      '白色 M (95-110) 斤 37 32 6 7104 200',
+      '白色 L (110-125) 斤 37 32 6 7104 211',
+      '卡其色 M (95-110) 斤 37 32 6 7104 199',
+      '商品详情',
+    ].join(' '),
+    sources: [{
+      offerId: '977824333829',
+      subject: '亚麻裤子男款春秋纯棉休闲长裤',
+      priceInfo: { price: '48.8' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 3);
+  assert.equal(result.sourcePackagingRows.some((row) => row.color === '白色' && row.size === 'M (95-110) 斤' && row.weightG === 200), true);
+  assert.equal(result.sourcePackagingRows.some((row) => row.color === '卡其色' && row.size === 'M (95-110) 斤' && row.weightG === 199), true);
+  assert.equal(result.sourcePackagingRows.some((row) => row.weightG > 1000), false);
+});
+
 test('1688 core does not leak packaging weight headers into sale attribute matrix', () => {
   const core = loadCore();
 

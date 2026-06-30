@@ -1518,7 +1518,8 @@
     var lengthMm = dimensionToMm(pickFirstValue(value, ['lengthMm', 'length', 'len', 'long', '长', '长(cm)']), unit);
     var widthMm = dimensionToMm(pickFirstValue(value, ['widthMm', 'width', 'wid', '宽', '宽(cm)']), unit);
     var heightMm = dimensionToMm(pickFirstValue(value, ['heightMm', 'height', 'hgt', '高', '高(cm)']), unit);
-    var weightG = convertWeightToGrams(pickFirstValue(value, ['weightG', 'weight', 'grossWeight', '重量', '重量(g)']), weightUnit);
+    var weightRaw = pickFirstValue(value, ['weightG', 'weight', 'grossWeight', '重量', '重量(g)']);
+    var weightG = convertWeightToGrams(weightRaw, normalize1688WeightUnitHint(weightUnit, weightRaw));
     var volumeCm3 = parseLooseNumber(pickFirstValue(value, ['volumeCm3', 'volume', '体积', '体积(cm³)', '体积(cm3)']));
     if (!color && !size && !lengthMm && !widthMm && !heightMm && !weightG && !volumeCm3) return null;
     var out = {};
@@ -1530,6 +1531,16 @@
     if (volumeCm3 != null) out.volumeCm3 = volumeCm3;
     if (weightG) out.weightG = weightG;
     return out;
+  }
+
+  function normalize1688WeightUnitHint(unitHint, weightValue) {
+    var valueText = String(weightValue == null ? '' : weightValue);
+    if (/(kg|g|克|千克|斤|lb|pound|磅|oz|ounce)/i.test(valueText)) return valueText;
+    var hint = String(unitHint || '');
+    var header = hint.match(/(?:重量|weight)\s*[（(]\s*(kg|g|克|千克|斤|lb|pound|磅|oz|ounce)\s*[）)]/i);
+    if (header) return header[1];
+    if (/^(kg|g|克|千克|斤|lb|pound|磅|oz|ounce)$/i.test(hint.trim())) return hint.trim();
+    return '';
   }
 
   function dimensionToMm(value, unitHint) {

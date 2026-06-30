@@ -4249,6 +4249,8 @@ export async function collectRoutes(app: FastifyInstance) {
       title?: string;
       description?: string;
       images?: string[];
+      sourceMainImages?: string[];
+      sourceDetailImages?: string[];
       weightG?: number;
       lengthMm?: number;
       widthMm?: number;
@@ -4257,7 +4259,16 @@ export async function collectRoutes(app: FastifyInstance) {
       typeId?: number;
       publishTitle?: string;
       publishOfferId?: string;
-      variants?: Array<{ sku: string; price?: string; stock?: number; publishOfferId?: string }>;
+      variants?: Array<{
+        sku: string;
+        price?: string;
+        stock?: number;
+        publishOfferId?: string;
+        weightG?: number;
+        lengthMm?: number;
+        widthMm?: number;
+        heightMm?: number;
+      }>;
     };
     if (!body?.id) return reply.status(400).send({ code: 0, msg: '缺少 id' });
 
@@ -4290,7 +4301,9 @@ export async function collectRoutes(app: FastifyInstance) {
     }
     // 历史字段名叫 watermarkedImages；这里实际表示改款表单确认后的商品级发布图片。
     // publish-ozon 会把变体封面排在它前面，避免多 SKU 主图被商品级图片覆盖。
-    if (body.images?.length) meta.watermarkedImages = body.images;
+    if (Array.isArray(body.images)) meta.watermarkedImages = body.images;
+    if (Array.isArray(body.sourceMainImages)) meta.sourceMainImages = body.sourceMainImages;
+    if (Array.isArray(body.sourceDetailImages)) meta.sourceDetailImages = body.sourceDetailImages;
 
     const updateData: any = { metadata: meta };
     if (body.title) updateData.title = body.title;
@@ -4299,13 +4312,22 @@ export async function collectRoutes(app: FastifyInstance) {
     // 变体价格/库存覆盖（保留原 attrs/sku）
     if (body.variants?.length) {
       const oldVariants = Array.isArray(it.variants) ? (it.variants as any[]) : [];
-      const overrideMap = new Map(body.variants.map((v) => [v.sku, v]));
+      const overrideMap = new Map<string, NonNullable<typeof body.variants>[number]>();
+      for (const variantOverride of body.variants) {
+        const key = String(variantOverride.sku || '').trim();
+        if (key) overrideMap.set(key, variantOverride);
+      }
       updateData.variants = oldVariants.map((v) => {
-        const o = overrideMap.get(v.sku);
+        const variantKey = String(v.sku || v.skuId || v.id || '').trim();
+        const o = overrideMap.get(variantKey);
         if (!o) return v;
         const next = { ...v };
         if (o.price !== undefined) next.price = o.price;
         if (o.stock !== undefined) next.stock = o.stock;
+        if (typeof o.weightG === 'number' && Number.isFinite(o.weightG) && o.weightG > 0) next.weight = Math.round(o.weightG);
+        if (typeof o.lengthMm === 'number' && Number.isFinite(o.lengthMm) && o.lengthMm > 0) next.depth = Math.round(o.lengthMm);
+        if (typeof o.widthMm === 'number' && Number.isFinite(o.widthMm) && o.widthMm > 0) next.width = Math.round(o.widthMm);
+        if (typeof o.heightMm === 'number' && Number.isFinite(o.heightMm) && o.heightMm > 0) next.height = Math.round(o.heightMm);
         if (o.publishOfferId !== undefined) {
           const publishOfferId = String(o.publishOfferId || '').trim();
           if (publishOfferId) next.publishOfferId = publishOfferId;

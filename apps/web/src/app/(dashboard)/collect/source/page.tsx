@@ -113,6 +113,13 @@ interface SourceOzonCategoryCandidateResponse {
   candidates: SourceOzonCategoryCandidate[];
 }
 
+interface PackageFormState {
+  weightG: string;
+  lengthMm: string;
+  widthMm: string;
+  heightMm: string;
+}
+
 const platformTabs: Array<{ key: PlatformFilter; label: string }> = [
   { key: 'all', label: '全部' },
   { key: '1688', label: '1688' },
@@ -535,6 +542,27 @@ function sourceVariantLabel(variant: Record<string, unknown>, index: number): st
     ? Object.entries(variant.attrs as Record<string, unknown>).map(([key, value]) => `${key}: ${String(value)}`).join(' / ')
     : '';
   return String(variant.name || variant.specText || attrs || variant.skuId || `SKU ${index + 1}`).replace(/\s+/g, ' ').trim();
+}
+
+function sourceVariantKey(variant: Record<string, unknown>, index: number): string {
+  return String(variant.sku || variant.skuId || variant.id || index).trim();
+}
+
+function positiveVariantNumber(value: unknown): string {
+  const number = Math.round(Number(value));
+  return Number.isFinite(number) && number > 0 ? String(number) : '';
+}
+
+function buildVariantPackageForms(item: SourceCollectItem, fallback: PackageFormState): Record<string, PackageFormState> {
+  return sourceDisplayVariants(item).reduce<Record<string, PackageFormState>>((acc, variant, index) => {
+    acc[sourceVariantKey(variant, index)] = {
+      weightG: positiveVariantNumber(variant.weight) || fallback.weightG,
+      lengthMm: positiveVariantNumber(variant.depth) || positiveVariantNumber(variant.lengthMm) || fallback.lengthMm,
+      widthMm: positiveVariantNumber(variant.width) || positiveVariantNumber(variant.widthMm) || fallback.widthMm,
+      heightMm: positiveVariantNumber(variant.height) || positiveVariantNumber(variant.heightMm) || fallback.heightMm,
+    };
+    return acc;
+  }, {});
 }
 
 function sanitizeStableOfferPart(value: unknown): string {
@@ -1122,7 +1150,7 @@ function SourceDetailContent({
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
       {activeSection === 'sku' ? <SourceSkuSection item={item} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
-      {activeSection === 'images' ? <SourceImagesSection item={item} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
@@ -1285,20 +1313,72 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
   );
 }
 
-function SourceImagesSection({ item }: { item: SourceCollectItem }) {
-  const images = sourcePreviewImages(item);
-  const detailImages = sourceDetailPreviewImages(item);
+function SourceImagesSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
+  const [images, setImages] = useState<string[]>(() => sourcePreviewImages(item));
+  const [detailImages, setDetailImages] = useState<string[]>(() => sourceDetailPreviewImages(item));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
   const watermarked = metadataArray(item, 'watermarkedImages');
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   const videos = sourceVideoMaterialRows(item);
+
+  useEffect(() => {
+    setImages(sourcePreviewImages(item));
+    setDetailImages(sourceDetailPreviewImages(item));
+    setMessage('');
+    setError('');
+  }, [item.id, item.images, item.metadata]);
+
+  async function saveFilteredImages() {
+    if (saving) return;
+    setSaving(true);
+    setMessage('');
+    setError('');
+    const nextImages = images;
+    const nextDetailImages = detailImages;
+    const res = await api.post('/api/collect/save-customization', {
+      id: item.id,
+      images: nextImages,
+      sourceMainImages: nextImages,
+      sourceDetailImages: nextDetailImages,
+    });
+    setSaving(false);
+    if (res.code === 1) {
+      const metadata = { ...(item.metadata || {}), sourceMainImages: nextImages, sourceDetailImages: nextDetailImages, watermarkedImages: nextImages };
+      onItemUpdate({ ...item, images: nextImages, metadata });
+      setMessage('已保存图片筛选，发布时会使用保留的图片');
+    } else {
+      setError(res.msg || '保存图片筛选失败');
+    }
+  }
+
   return (
     <div className="space-y-3">
       <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
-        <SourceImageGrid images={images} empty="未采集到可预览商品图片" limit={32} />
+        <SourceImageGrid
+          images={images}
+          empty="未采集到可预览商品图片"
+          limit={32}
+          onRemove={(image) => setImages((current) => current.filter((entry) => entry !== image))}
+        />
       </InfoPanel>
       <InfoPanel title="详情图原始素材" count={`${detailImages.length} / ${sourceDetailImageCount(item)}`}>
-        <SourceImageGrid images={detailImages} empty="未采集到详情图原始素材" limit={50} />
+        <SourceImageGrid
+          images={detailImages}
+          empty="未采集到详情图原始素材"
+          limit={50}
+          onRemove={(image) => setDetailImages((current) => current.filter((entry) => entry !== image))}
+        />
       </InfoPanel>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="outline" onClick={saveFilteredImages} disabled={saving}>
+          {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+          保存图片筛选
+        </Button>
+        {message ? <span className="text-xs text-emerald-700">{message}</span> : null}
+        {error ? <span className="text-xs text-destructive">{error}</span> : null}
+      </div>
       <div className="grid gap-3 md:grid-cols-2">
         <InfoPanel title="水印图" count={watermarked.length}>
           <ImageStatusList images={watermarked} empty="暂无水印图" />
@@ -1447,6 +1527,8 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     widthMm: standardDims ? String(standardDims.width) : '',
     heightMm: standardDims ? String(standardDims.height) : '',
   });
+  const [packageMode, setPackageMode] = useState<'group' | 'variant'>('group');
+  const [variantPackageForms, setVariantPackageForms] = useState<Record<string, PackageFormState>>({});
   const [packageSaving, setPackageSaving] = useState(false);
   const [packageMessage, setPackageMessage] = useState('');
   const [packageError, setPackageError] = useState('');
@@ -1467,6 +1549,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const stableOfferId = buildStableSourceOfferId(item);
   const stableVariantOfferIds = buildStableSourceVariantOfferIds(item);
   const stableVariantOfferCount = Object.keys(stableVariantOfferIds).length;
+  const displayVariants = sourceDisplayVariants(item);
   const packagingEvidence = sourcePackagingEvidence(item);
   const sourceAssets = [
     { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
@@ -1517,11 +1600,17 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       widthMm: nextDims ? String(nextDims.width) : '',
       heightMm: nextDims ? String(nextDims.height) : '',
     });
+    setVariantPackageForms(buildVariantPackageForms(item, {
+      weightG: nextStandard.packageWeightG ? String(nextStandard.packageWeightG) : '',
+      lengthMm: nextDims ? String(nextDims.length) : '',
+      widthMm: nextDims ? String(nextDims.width) : '',
+      heightMm: nextDims ? String(nextDims.height) : '',
+    }));
     setPackageMessage('');
     setPackageError('');
     setPublishMessage('');
     setPublishError('');
-  }, [item.id, item.metadata]);
+  }, [item.id, item.metadata, item.variants]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1585,6 +1674,31 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     setPackageError('');
   }
 
+  function setVariantPackageField(variantKey: string, key: keyof PackageFormState, value: string) {
+    setVariantPackageForms((current) => ({
+      ...current,
+      [variantKey]: {
+        ...(current[variantKey] || { weightG: '', lengthMm: '', widthMm: '', heightMm: '' }),
+        [key]: value,
+      },
+    }));
+    setPackageMessage('');
+    setPackageError('');
+  }
+
+  function applyGroupPackageToVariants() {
+    setVariantPackageForms((current) => {
+      const next = { ...current };
+      displayVariants.forEach((variant, index) => {
+        next[sourceVariantKey(variant, index)] = { ...packageForm };
+      });
+      return next;
+    });
+    setPackageMode('variant');
+    setPackageMessage('已应用到全部SKU，保存后发布会按 SKU 使用');
+    setPackageError('');
+  }
+
   function packageNumber(value: string): number | null {
     const number = Math.round(Number(value));
     return Number.isFinite(number) && number > 0 ? number : null;
@@ -1621,6 +1735,50 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       setPackageMessage('已保存件重尺，发布时会优先使用这组数据');
     } else {
       setPackageError(res.msg || '保存件重尺失败');
+    }
+  }
+
+  async function saveVariantPackages() {
+    if (packageSaving) return;
+    const variants = displayVariants.map((variant, index) => {
+      const key = sourceVariantKey(variant, index);
+      const form = variantPackageForms[key] || { weightG: '', lengthMm: '', widthMm: '', heightMm: '' };
+      return {
+        sku: key,
+        weightG: packageNumber(form.weightG) || undefined,
+        lengthMm: packageNumber(form.lengthMm) || undefined,
+        widthMm: packageNumber(form.widthMm) || undefined,
+        heightMm: packageNumber(form.heightMm) || undefined,
+      };
+    }).filter((variant) => variant.weightG || variant.lengthMm || variant.widthMm || variant.heightMm);
+    if (!variants.length) {
+      setPackageError('请至少给一个 SKU 填写有效的重量或尺寸');
+      return;
+    }
+
+    setPackageSaving(true);
+    setPackageMessage('');
+    setPackageError('');
+    const res = await api.post('/api/collect/save-customization', { id: item.id, variants });
+    setPackageSaving(false);
+    if (res.code === 1) {
+      const overrideMap = new Map(variants.map((variant) => [variant.sku, variant]));
+      const nextVariants = sourceVariants(item).map((variant, index) => {
+        const key = sourceVariantKey(variant, index);
+        const override = overrideMap.get(key);
+        if (!override) return variant;
+        return {
+          ...variant,
+          ...(override.weightG ? { weight: override.weightG } : {}),
+          ...(override.lengthMm ? { depth: override.lengthMm } : {}),
+          ...(override.widthMm ? { width: override.widthMm } : {}),
+          ...(override.heightMm ? { height: override.heightMm } : {}),
+        };
+      });
+      onItemUpdate({ ...item, variants: nextVariants });
+      setPackageMessage('已保存SKU件重尺，发布时会优先使用各 SKU 数据');
+    } else {
+      setPackageError(res.msg || '保存SKU件重尺失败');
     }
   }
 
@@ -1799,32 +1957,84 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       </InfoPanel>
       <InfoPanel title="手动补录件重尺" count={sourceStandardPackageText(sourceStandardAttributeModel({ ...item, metadata: { ...(item.metadata || {}), ...packageForm } })) || null}>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <label className="space-y-1 text-xs">
-              <span className="text-muted-foreground">重量(g)</span>
-              <Input value={packageForm.weightG} onChange={(event) => setPackageField('weightG', event.target.value)} type="number" min="1" className="h-8" />
-            </label>
-            <label className="space-y-1 text-xs">
-              <span className="text-muted-foreground">长(mm)</span>
-              <Input value={packageForm.lengthMm} onChange={(event) => setPackageField('lengthMm', event.target.value)} type="number" min="1" className="h-8" />
-            </label>
-            <label className="space-y-1 text-xs">
-              <span className="text-muted-foreground">宽(mm)</span>
-              <Input value={packageForm.widthMm} onChange={(event) => setPackageField('widthMm', event.target.value)} type="number" min="1" className="h-8" />
-            </label>
-            <label className="space-y-1 text-xs">
-              <span className="text-muted-foreground">高(mm)</span>
-              <Input value={packageForm.heightMm} onChange={(event) => setPackageField('heightMm', event.target.value)} type="number" min="1" className="h-8" />
-            </label>
-          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={saveManualPackage} disabled={packageSaving}>
-              {packageSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              保存件重尺
+            <Button type="button" size="sm" variant={packageMode === 'group' ? 'default' : 'outline'} onClick={() => setPackageMode('group')}>
+              通用件重尺
             </Button>
-            {packageMessage ? <span className="text-xs text-emerald-700">{packageMessage}</span> : null}
-            {packageError ? <span className="text-xs text-destructive">{packageError}</span> : null}
+            {displayVariants.length ? (
+              <Button type="button" size="sm" variant={packageMode === 'variant' ? 'default' : 'outline'} onClick={() => setPackageMode('variant')}>
+                按 SKU 补录
+              </Button>
+            ) : null}
+            {displayVariants.length ? (
+              <Button type="button" size="sm" variant="outline" onClick={applyGroupPackageToVariants}>
+                应用到全部SKU
+              </Button>
+            ) : null}
           </div>
+          {packageMode === 'group' ? (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <label className="space-y-1 text-xs">
+                  <span className="text-muted-foreground">重量(g)</span>
+                  <Input value={packageForm.weightG} onChange={(event) => setPackageField('weightG', event.target.value)} type="number" min="1" className="h-8" />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="text-muted-foreground">长(mm)</span>
+                  <Input value={packageForm.lengthMm} onChange={(event) => setPackageField('lengthMm', event.target.value)} type="number" min="1" className="h-8" />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="text-muted-foreground">宽(mm)</span>
+                  <Input value={packageForm.widthMm} onChange={(event) => setPackageField('widthMm', event.target.value)} type="number" min="1" className="h-8" />
+                </label>
+                <label className="space-y-1 text-xs">
+                  <span className="text-muted-foreground">高(mm)</span>
+                  <Input value={packageForm.heightMm} onChange={(event) => setPackageField('heightMm', event.target.value)} type="number" min="1" className="h-8" />
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={saveManualPackage} disabled={packageSaving}>
+                  {packageSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  保存件重尺
+                </Button>
+                {packageMessage ? <span className="text-xs text-emerald-700">{packageMessage}</span> : null}
+                {packageError ? <span className="text-xs text-destructive">{packageError}</span> : null}
+              </div>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <div className="max-h-80 overflow-auto rounded-md border">
+                <div className="grid min-w-[760px] grid-cols-[minmax(180px,1fr)_110px_110px_110px_110px] bg-muted/50 px-3 py-2 text-xs font-medium">
+                  <div>SKU</div>
+                  <div>重量(g)</div>
+                  <div>长(mm)</div>
+                  <div>宽(mm)</div>
+                  <div>高(mm)</div>
+                </div>
+                {displayVariants.map((variant, index) => {
+                  const key = sourceVariantKey(variant, index);
+                  const form = variantPackageForms[key] || { weightG: '', lengthMm: '', widthMm: '', heightMm: '' };
+                  return (
+                    <div key={key} className="grid min-w-[760px] grid-cols-[minmax(180px,1fr)_110px_110px_110px_110px] gap-2 border-t px-3 py-2 text-xs">
+                      <div className="break-words">{sourceVariantLabel(variant, index)}</div>
+                      <Input value={form.weightG} onChange={(event) => setVariantPackageField(key, 'weightG', event.target.value)} type="number" min="1" className="h-8" />
+                      <Input value={form.lengthMm} onChange={(event) => setVariantPackageField(key, 'lengthMm', event.target.value)} type="number" min="1" className="h-8" />
+                      <Input value={form.widthMm} onChange={(event) => setVariantPackageField(key, 'widthMm', event.target.value)} type="number" min="1" className="h-8" />
+                      <Input value={form.heightMm} onChange={(event) => setVariantPackageField(key, 'heightMm', event.target.value)} type="number" min="1" className="h-8" />
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={saveVariantPackages} disabled={packageSaving}>
+                  {packageSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                  保存SKU件重尺
+                </Button>
+                {packageMessage ? <span className="text-xs text-emerald-700">{packageMessage}</span> : null}
+                {packageError ? <span className="text-xs text-destructive">{packageError}</span> : null}
+              </div>
+            </div>
+          )}
         </div>
       </InfoPanel>
       <InfoPanel title="Ozon 类目候选" count={selectedCandidate ? ozonCandidateLabelText(selectedCandidate.label) : null}>
@@ -2047,21 +2257,34 @@ function InfoPanel({ title, count, children }: { title: string; count: string | 
   );
 }
 
-function SourceImageGrid({ images, empty, limit }: { images: string[]; empty: string; limit: number }) {
+function SourceImageGrid({ images, empty, limit, onRemove }: { images: string[]; empty: string; limit: number; onRemove?: (image: string) => void }) {
   if (!images.length) return <div className="text-muted-foreground">{empty}</div>;
   return (
     <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
       {images.slice(0, limit).map((image, index) => (
-        <a key={index} href={image} target="_blank" rel="noreferrer" className="block aspect-square overflow-hidden rounded border bg-muted">
-          <img
-            src={image}
-            alt=""
-            className="h-full w-full object-cover"
-            onError={(event) => {
-              event.currentTarget.parentElement?.classList.add('hidden');
-            }}
-          />
-        </a>
+        <div key={index} className="group relative aspect-square overflow-hidden rounded border bg-muted">
+          <a href={image} target="_blank" rel="noreferrer" className="block h-full w-full">
+            <img
+              src={image}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={(event) => {
+                event.currentTarget.parentElement?.parentElement?.classList.add('hidden');
+              }}
+            />
+          </a>
+          {onRemove ? (
+            <button
+              type="button"
+              aria-label="删除图片"
+              title="删除图片"
+              className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white/95 text-red-600 opacity-0 shadow-sm transition hover:bg-red-50 group-hover:opacity-100"
+              onClick={() => onRemove(image)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
       ))}
     </div>
   );

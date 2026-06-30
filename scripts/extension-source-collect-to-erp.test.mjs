@@ -60,5 +60,15 @@ assert.match(
   /!structured\.fromCore[\s\S]{0,160}infer1688SkuItemsFromText/,
   '1688 merge should not infer sku rows from full page text when shared core already extracted product data',
 );
+assert.match(
+  collectContentScript,
+  /collect1688DomPackagingRows/,
+  '1688 source collection should scan visible DOM packaging tables instead of relying only on document.body text',
+);
+assert.match(
+  collectContentScript,
+  /domPackagingRows[\s\S]{0,120}allSources\.push/,
+  '1688 DOM packaging rows should be passed into the shared core parser sources',
+);
 
 console.log('PASS source collect enters ERP workflow');

@@ -172,10 +172,21 @@ for (const label of ['真实商品标题', '俄文标题/描述', 'Ozon 类目/t
 for (const label of ['手动补录件重尺', '重量(g)', '长(mm)', '宽(mm)', '高(mm)', '保存件重尺']) {
   assert.match(page, new RegExp(label.replace(/[()]/g, '\\$&')), `source listing detail should expose manual package edit control: ${label}`);
 }
+for (const label of ['通用件重尺', '按 SKU 补录', '应用到全部SKU', '保存SKU件重尺']) {
+  assert.match(page, new RegExp(label.replace(/[()]/g, '\\$&')), `source listing detail should expose variant package edit control: ${label}`);
+}
 assert.match(
   page,
   /api\.post<[\s\S]*\/api\/collect\/save-customization|api\.post\(['"`]\/api\/collect\/save-customization/,
   'source listing detail should save manual package weight and dimensions via collect customization API',
+);
+for (const label of ['删除图片', '保存图片筛选']) {
+  assert.match(page, new RegExp(label), `source image material panel should expose manual image filtering control: ${label}`);
+}
+assert.match(
+  page,
+  /images:\s*nextImages|sourceMainImages:\s*nextImages/,
+  'source image material panel should persist filtered source images through collect customization API',
 );
 assert.match(
   page,

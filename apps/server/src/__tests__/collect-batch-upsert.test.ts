@@ -144,6 +144,47 @@ describe('collectRoutes batch upsert', () => {
     vi.clearAllMocks();
   });
 
+  it('saves manual package overrides per source variant SKU', async () => {
+    mocks.supplyGoodsFindFirst.mockResolvedValueOnce({
+      id: 'source-1',
+      userId: 'user-1',
+      title: '1688 product',
+      sourcePlatform: '1688',
+      sku: '977824333829',
+      images: [],
+      metadata: { weightG: 200, lengthMm: 370, widthMm: 320, heightMm: 60 },
+      variants: [
+        { sku: 'white-m', attrs: { 颜色: '白色', 尺码: 'M' }, price: '48.8' },
+        { sku: 'white-l', attrs: { 颜色: '白色', 尺码: 'L' }, price: '49.8' },
+      ],
+    } as any);
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/save-customization',
+        payload: {
+          id: 'source-1',
+          variants: [
+            { sku: 'white-m', weightG: 200, lengthMm: 370, widthMm: 320, heightMm: 60 },
+            { sku: 'white-l', weightG: 211, lengthMm: 370, widthMm: 320, heightMm: 60 },
+          ],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1 });
+      const updateArgs = mocks.supplyGoodsUpdate.mock.calls[0]?.[0];
+      expect(updateArgs.data.variants).toEqual([
+        expect.objectContaining({ sku: 'white-m', weight: 200, depth: 370, width: 320, height: 60 }),
+        expect.objectContaining({ sku: 'white-l', weight: 211, depth: 370, width: 320, height: 60 }),
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('creates a source collect record with complete 1688 metadata through the single collect endpoint', async () => {
     mocks.transferSourceProductImages.mockResolvedValueOnce({
       images: ['https://ss-erp.com/api/cdn/users/user-1/raw/1688-main.jpg'],
