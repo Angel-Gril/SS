@@ -36,6 +36,45 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 });
 
 {
+  const keys = new Set(sizeChartCatalog.BUILT_IN_SIZE_CHART_TEMPLATES.map((template) => template.key));
+  for (const key of [
+    'children_tights',
+    'children_gloves',
+    'children_socks',
+    'children_hats',
+    'jeans',
+    'adult_hats',
+    'shoes_children',
+    'shoe_fullness',
+    'shoes_women',
+    'apparel_children',
+    'apparel_mens',
+    'apparel_general',
+    'shoes_men',
+    'bra',
+    'socks_adult',
+    'adult_tights',
+    'rings',
+    'bracelets',
+    'necklaces',
+    'helmets_hats',
+    'sports_gloves',
+    'gloves_women',
+    'gloves_men',
+    'football_shields',
+    'knee_pads',
+    'skates_women',
+    'skates_men',
+    'game_masks',
+    'diving_boots',
+    'wetsuits',
+    'cycling_clothing',
+  ]) {
+    assert.equal(keys.has(key), true, `${key} should be in built-in size chart catalog`);
+  }
+}
+
+{
   const plan = planner.buildSourceRichContentPlan({
     title: '女士睡裙吊带睡衣',
     metadata: {
@@ -245,6 +284,111 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.sizeChart.mappingProfile, 'children_tights');
   assert.ok(plan.sizeChart.tableColumns.includes('身高(cm)'));
   assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '02S' && row.ruSize === '02S' && row['年龄'] === '9个月'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '成人棒球帽遮阳帽',
+    metadata: {
+      categoryName: '成人帽子',
+      sourceAttributes: [{ name: '尺码', value: 'S、M、L' }],
+    },
+    variants: [{ attrs: { 颜色: '黑色', 尺码: 'M' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'adult_hats');
+  assert.equal(plan.sizeChart.mappingProfile, 'adult_hats');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row['头围(cm)'] === '58-59'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '童鞋宝宝运动鞋',
+    metadata: {
+      categoryName: '童鞋',
+      sourceAttributes: [{ name: '尺码', value: '16、20、28' }],
+    },
+    variants: [{ attrs: { 颜色: '白色', 尺码: '20' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'shoes_children');
+  assert.equal(plan.sizeChart.mappingProfile, 'children_shoes');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '20' && row.footLengthCm === '12.5'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '成人袜子中筒袜',
+    metadata: {
+      categoryName: '成人袜子',
+      sourceAttributes: [{ name: '尺码', value: '23、25、27' }],
+    },
+    variants: [{ attrs: { 颜色: '白色', 尺码: '25' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'socks_adult');
+  assert.equal(plan.sizeChart.mappingProfile, 'adult_socks');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '25' && row['鞋码范围'] === '39-40'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '女士戒指饰品',
+    metadata: {
+      categoryName: '戒指',
+      sourceAttributes: [{ name: '尺码', value: '16、17、18' }],
+    },
+    variants: [{ attrs: { 颜色: '银色', 尺码: '17' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'rings');
+  assert.equal(plan.sizeChart.mappingProfile, 'rings');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '17' && row['周长(mm)'] === '53'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '运动护膝篮球护膝',
+    metadata: {
+      categoryName: '护膝',
+      sourceAttributes: [{ name: '尺码', value: 'M、L、XL' }],
+    },
+    variants: [{ attrs: { 颜色: '黑色', 尺码: 'L' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'knee_pads');
+  assert.equal(plan.sizeChart.mappingProfile, 'knee_pads');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'L' && row['膝上围(cm)'] === '40-45'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '潜水靴涉水鞋',
+    metadata: {
+      categoryName: '潜水靴',
+      sourceAttributes: [{ name: '尺码', value: 'M、L、XL' }],
+    },
+    variants: [{ attrs: { 颜色: '黑色', 尺码: 'L' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'diving_boots');
+  assert.equal(plan.sizeChart.mappingProfile, 'diving_boots');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'L' && row.ruSize === '42' && row.footLengthCm === '27'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '潜水服连体保暖',
+    metadata: {
+      categoryName: '潜水服',
+      sourceAttributes: [{ name: '尺码', value: 'S、M、L' }],
+    },
+    variants: [{ attrs: { 颜色: '黑色', 尺码: 'M' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'wetsuits');
+  assert.equal(plan.sizeChart.mappingProfile, 'wetsuits');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row['胸围(cm)'] === '100'));
 }
 
 {
