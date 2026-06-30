@@ -29,8 +29,10 @@ function loadTsModule(modulePath, injected = {}) {
 }
 
 const standard = loadTsModule('packages/shared/src/source-standard-attributes.ts');
+const sizeChartCatalog = loadTsModule('packages/shared/src/source-size-chart-template-catalog.ts');
 const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', {
   './source-standard-attributes': standard,
+  './source-size-chart-template-catalog': sizeChartCatalog,
 });
 
 {
@@ -158,6 +160,91 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.sizeChart.mappingProfile, 'men_shoes');
   assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '42' && row.footLengthCm === '26'));
   assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '44' && row.footLengthCm === '27'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '女士高腰牛仔裤直筒裤',
+    metadata: {
+      categoryName: '牛仔裤',
+      sourceAttributes: [{ name: '尺码', value: 'W26/L28、W27/L30、W28/L32' }],
+    },
+    variants: [{ attrs: { 颜色: '蓝色', 尺码: 'W28/L32' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'jeans');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'jeans');
+  assert.ok(plan.sizeChart.tableColumns.includes('腰围(cm)'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'W28/L32' && row.ruSize === '44' && row['腰围(cm)'] === '70-72'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '儿童帽子宝宝渔夫帽',
+    metadata: {
+      categoryName: '儿童帽子',
+      sourceAttributes: [{ name: '尺码', value: '44、46、48、49' }],
+    },
+    variants: [{ attrs: { 颜色: '黄色', 尺码: '48' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'children_hats');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'children_hats');
+  assert.ok(plan.sizeChart.tableColumns.includes('头围(cm)'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '48' && row.ruSize === '48' && row['年龄'] === '1.5年'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '儿童袜子宝宝短袜',
+    metadata: {
+      categoryName: '儿童袜子',
+      sourceAttributes: [{ name: '尺码', value: '16-17、18-19、20-23、28-32' }],
+    },
+    variants: [{ attrs: { 颜色: '白色', 尺码: '28-32' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'children_socks');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'children_socks');
+  assert.ok(plan.sizeChart.tableColumns.includes('脚长(cm)'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '28-32' && row.ruSize === '20' && row['脚长(cm)'] === '19-20.4'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '儿童手套保暖手套',
+    metadata: {
+      categoryName: '儿童手套',
+      sourceAttributes: [{ name: '尺码', value: '2、3、4、5' }],
+    },
+    variants: [{ attrs: { 颜色: '粉色', 尺码: '4' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'children_gloves');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'children_gloves');
+  assert.ok(plan.sizeChart.tableColumns.includes('手掌周长(cm)'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '4' && row.ruSize === '4' && row['国际尺码'] === 'S'));
+}
+
+{
+  const plan = planner.buildSourceRichContentPlan({
+    title: '儿童紧身衣连裤袜',
+    metadata: {
+      categoryName: '儿童紧身衣',
+      sourceAttributes: [{ name: '尺码', value: '01S、02S、03S、04S' }],
+    },
+    variants: [{ attrs: { 颜色: '白色', 尺码: '02S' }, stock: 2 }],
+  });
+
+  assert.equal(plan.templateKey, 'children_tights');
+  assert.equal(plan.sizeChart.status, 'mapped');
+  assert.equal(plan.sizeChart.mappingProfile, 'children_tights');
+  assert.ok(plan.sizeChart.tableColumns.includes('身高(cm)'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '02S' && row.ruSize === '02S' && row['年龄'] === '9个月'));
 }
 
 {

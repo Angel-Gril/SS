@@ -1,15 +1,14 @@
 import { normalizeSourceStandardAttributes } from './source-standard-attributes';
+import {
+  buildBuiltInSizeChartRows,
+  getBuiltInSizeChartTemplateByKey,
+  matchBuiltInSizeChartTemplate,
+  type BuiltInSizeChartMappingProfile,
+  type BuiltInSizeChartTemplateKey,
+} from './source-size-chart-template-catalog';
 
 export type SourceRichContentTemplateKey =
-  | 'bra'
-  | 'shoes_men'
-  | 'shoes_women'
-  | 'socks'
-  | 'apparel_mens'
-  | 'apparel_children'
-  | 'apparel_underwear'
-  | 'apparel_sleepwear'
-  | 'apparel_general'
+  | BuiltInSizeChartTemplateKey
   | 'general_product';
 
 export type SourceSizeChartStatus =
@@ -20,14 +19,7 @@ export type SourceSizeChartStatus =
   | 'missing';
 
 export type SourceSizeChartMappingProfile =
-  | 'women_apparel'
-  | 'men_apparel'
-  | 'children_apparel'
-  | 'underwear'
-  | 'bra'
-  | 'men_shoes'
-  | 'women_shoes'
-  | 'socks'
+  | BuiltInSizeChartMappingProfile
   | 'none';
 
 export interface SourceSizeChartRow {
@@ -36,6 +28,7 @@ export interface SourceSizeChartRow {
   intSize?: string;
   footLengthCm?: string;
   note?: string;
+  [key: string]: string | undefined;
 }
 
 export interface SourceRichContentPlanModule {
@@ -112,33 +105,8 @@ function contextText(item: SourceItemLike): string {
 
 function templateForItem(item: SourceItemLike): Pick<SourceRichContentPlan, 'templateKey' | 'templateLabel' | 'confidence'> {
   const ctx = contextText(item);
-  if (/文胸|胸罩|bra|бюстгальтер/i.test(ctx)) {
-    return { templateKey: 'bra', templateLabel: '文胸富内容模板', confidence: 'strong' };
-  }
-  if (/袜|袜子|丝袜|短袜|长袜|socks?|носк|колгот/i.test(ctx)) {
-    return { templateKey: 'socks', templateLabel: '袜子/丝袜富内容模板', confidence: 'strong' };
-  }
-  if (/男鞋|男士鞋|男款鞋|мужск[а-я\s-]*обув|обув[а-я\s-]*муж/i.test(ctx)) {
-    return { templateKey: 'shoes_men', templateLabel: '男鞋富内容模板', confidence: 'strong' };
-  }
-  if (/女鞋|单鞋|凉鞋|拖鞋|靴|鞋|shoe|обув/i.test(ctx)) {
-    return { templateKey: 'shoes_women', templateLabel: '女鞋富内容模板', confidence: 'strong' };
-  }
-  if (/内衣|内裤|трус/i.test(ctx)) {
-    return { templateKey: 'apparel_underwear', templateLabel: '内衣富内容模板', confidence: 'strong' };
-  }
-  if (/童装|儿童|宝宝|婴儿|男童|女童|детск|реб[её]н/i.test(ctx)) {
-    return { templateKey: 'apparel_children', templateLabel: '童装富内容模板', confidence: 'strong' };
-  }
-  if (/男装|男士|男款|мужск/i.test(ctx)) {
-    return { templateKey: 'apparel_mens', templateLabel: '男装富内容模板', confidence: 'strong' };
-  }
-  if (/睡裙|睡衣|家居服|ночная\s*сорочка|пижам/i.test(ctx)) {
-    return { templateKey: 'apparel_sleepwear', templateLabel: '睡衣/睡裙富内容模板', confidence: 'strong' };
-  }
-  if (/服装|女装|男装|童装|连衣裙|上衣|裤|юбк|плать|одежд/i.test(ctx)) {
-    return { templateKey: 'apparel_general', templateLabel: '服装通用富内容模板', confidence: 'weak' };
-  }
+  const matched = matchBuiltInSizeChartTemplate(ctx);
+  if (matched) return { templateKey: matched.key, templateLabel: matched.label, confidence: matched.confidence };
   return { templateKey: 'general_product', templateLabel: '通用商品富内容模板', confidence: 'weak' };
 }
 
@@ -216,164 +184,17 @@ function unique(values: string[]): string[] {
   return out;
 }
 
-const WOMEN_APPAREL_RU: Record<string, string> = {
-  XS: '40',
-  S: '42',
-  M: '44',
-  L: '46',
-  XL: '48',
-  XXL: '50',
-  '2XL': '50',
-  XXXL: '52',
-  '3XL': '52',
-};
-
-const MEN_APPAREL_RU: Record<string, string> = {
-  XS: '42',
-  S: '44',
-  M: '46',
-  L: '48',
-  XL: '50',
-  XXL: '52',
-  '2XL': '52',
-  XXXL: '54',
-  '3XL': '54',
-  XXXXL: '56',
-  '4XL': '56',
-  XXXXXL: '58',
-  '5XL': '58',
-};
-
-const UNDERWEAR_RU: Record<string, string> = {
-  XS: '40',
-  S: '42',
-  M: '44',
-  L: '46',
-  XL: '48',
-  XXL: '50',
-  '2XL': '50',
-  XXXL: '52',
-  '3XL': '52',
-};
-
-const CHILDREN_HEIGHT_RU = new Set([
-  '70', '74', '80', '86', '90', '92', '98', '100', '104', '110', '116', '120', '122',
-  '128', '130', '134', '140', '146', '150', '152', '158', '160', '164',
-]);
-
-const WOMEN_SHOE_FOOT_LENGTH: Record<string, string> = {
-  '34': '22',
-  '35': '22.5',
-  '36': '23',
-  '37': '23.5',
-  '38': '24',
-  '39': '24.5',
-  '40': '25',
-  '41': '25.5',
-  '42': '26',
-};
-
-const MEN_SHOE_FOOT_LENGTH: Record<string, string> = {
-  '39': '24.5',
-  '40': '25',
-  '41': '25.5',
-  '42': '26',
-  '43': '26.5',
-  '44': '27',
-  '45': '27.5',
-  '46': '28',
-  '47': '28.5',
-};
-
-function sizeKey(value: string): string {
-  return value.replace(/^(\d)\s*XL$/i, '$1XL').toUpperCase();
-}
-
 function buildMappedRows(
   sizes: string[],
   profile: SourceSizeChartMappingProfile,
 ): { columns: string[]; rows: SourceSizeChartRow[] } {
-  const rows: SourceSizeChartRow[] = [];
-  if (profile === 'women_shoes' || profile === 'men_shoes') {
-    const footLengthTable = profile === 'men_shoes' ? MEN_SHOE_FOOT_LENGTH : WOMEN_SHOE_FOOT_LENGTH;
-    for (const size of sizes) {
-      const numeric = size.replace(',', '.').match(/\d{2}(?:\.\d)?/)?.[0] || '';
-      if (!numeric) continue;
-      rows.push({
-        size: numeric,
-        ruSize: numeric,
-        footLengthCm: footLengthTable[numeric] || '',
-      });
-    }
-    return {
-      columns: ['尺码', '俄罗斯尺码', '脚长(cm)'],
-      rows,
-    };
-  }
-
-  if (profile === 'children_apparel') {
-    for (const size of sizes) {
-      const height = size.match(/\d{2,3}/)?.[0] || '';
-      if (!height || !CHILDREN_HEIGHT_RU.has(height)) continue;
-      rows.push({ size: height, ruSize: height, note: '童装身高尺码' });
-    }
-    return {
-      columns: ['尺码', '俄罗斯尺码', '说明'],
-      rows,
-    };
-  }
-
-  if (profile === 'socks') {
-    for (const size of sizes) {
-      const range = size.match(/^(\d{2})-(\d{2})$/);
-      if (!range) continue;
-      const value = `${range[1]}-${range[2]}`;
-      rows.push({ size: value, ruSize: value, note: '按鞋码范围选择' });
-    }
-    return {
-      columns: ['尺码', '俄罗斯尺码', '说明'],
-      rows,
-    };
-  }
-
-  if (profile === 'bra') {
-    for (const size of sizes) {
-      if (!/^\d{2,3}[A-ZА-Я]{1,3}$/i.test(size)) continue;
-      rows.push({ size, ruSize: size, note: '保留文胸围度/杯型体系' });
-    }
-    return {
-      columns: ['尺码', '俄罗斯尺码', '说明'],
-      rows,
-    };
-  }
-
-  const table = profile === 'underwear'
-    ? UNDERWEAR_RU
-    : profile === 'men_apparel'
-      ? MEN_APPAREL_RU
-      : WOMEN_APPAREL_RU;
-  for (const size of sizes) {
-    const key = sizeKey(size);
-    const ruSize = table[key];
-    if (!ruSize) continue;
-    rows.push({ size: key, ruSize, intSize: key });
-  }
-  return {
-    columns: ['尺码', '俄罗斯尺码', '国际尺码'],
-    rows,
-  };
+  if (profile === 'none') return { columns: [], rows: [] };
+  return buildBuiltInSizeChartRows(sizes, profile);
 }
 
 function mappingProfileForTemplate(templateKey: SourceRichContentTemplateKey): SourceSizeChartMappingProfile {
-  if (templateKey === 'shoes_men') return 'men_shoes';
-  if (templateKey === 'shoes_women') return 'women_shoes';
-  if (templateKey === 'bra') return 'bra';
-  if (templateKey === 'socks') return 'socks';
-  if (templateKey === 'apparel_mens') return 'men_apparel';
-  if (templateKey === 'apparel_children') return 'children_apparel';
-  if (templateKey === 'apparel_underwear') return 'underwear';
-  if (templateKey === 'apparel_sleepwear' || templateKey === 'apparel_general') return 'women_apparel';
-  return 'none';
+  if (templateKey === 'general_product') return 'none';
+  return getBuiltInSizeChartTemplateByKey(templateKey)?.profile || 'none';
 }
 
 function buildSizeChartPlan(item: SourceItemLike): SourceSizeChartPlan {

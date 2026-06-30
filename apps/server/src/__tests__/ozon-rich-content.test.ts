@@ -6,6 +6,7 @@ import {
   OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
   parseCollectedRichContent,
   planCollectedVideoPublish,
+  renderSizeChartSvg,
 } from '../services/ozon-rich-content.js';
 
 describe('Ozon rich content publishing', () => {
@@ -127,6 +128,21 @@ describe('Ozon rich content publishing', () => {
     const richJson = JSON.parse(attr!.values[0]!.value);
     expect(JSON.stringify(richJson)).toContain('https://erp.example.com/rich/size-chart.jpg');
     expect(JSON.stringify(richJson)).not.toContain('Таблица размеров');
+  });
+
+  it('renders dynamic size chart columns from built-in template rows', () => {
+    const svg = renderSizeChartSvg({
+      type: 'size_chart',
+      title: 'Таблица размеров детских шапок',
+      columns: ['尺码', '俄罗斯尺码', '头围(cm)', '身高(cm)', '年龄'],
+      rows: [
+        { size: '48', ruSize: '48', '头围(cm)': '48', '身高(cm)': '80-86', '年龄': '1.5年' },
+      ],
+    });
+
+    expect(svg).toContain('头围(cm)');
+    expect(svg).toContain('80-86');
+    expect(svg).toContain('1.5年');
   });
 
   it('preserves collected Ozon rich content templates while rewriting nested images', async () => {

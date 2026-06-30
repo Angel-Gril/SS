@@ -29,8 +29,10 @@ function loadTsModule(modulePath, injected = {}) {
 }
 
 const standard = loadTsModule('packages/shared/src/source-standard-attributes.ts');
+const sizeChartCatalog = loadTsModule('packages/shared/src/source-size-chart-template-catalog.ts');
 const richPlan = loadTsModule('packages/shared/src/source-rich-content-plan.ts', {
   './source-standard-attributes': standard,
+  './source-size-chart-template-catalog': sizeChartCatalog,
 });
 const sourcePath = 'apps/web/src/lib/source-listing-readiness.ts';
 const readiness = loadTsModule(sourcePath, {
