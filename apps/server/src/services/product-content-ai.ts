@@ -90,6 +90,8 @@ const PRODUCT_COPYWRITING_GUARDRAIL = [
   'Use only facts present in the source JSON. Do not invent materials, cup type, effects, age range, brand, certification, discounts, shipping, or guarantees.',
   'Prefer natural Russian retail wording used by Russian sellers over literal machine translation.',
   'Start the title with the concrete Russian product type, then add only verified attributes such as gender, material, color, size, pack count, or use case.',
+  'For multi-variant products, generate the base product title only; do not list every color or size in the base title because the publish pipeline appends variant values per SKU.',
+  'Treat one-size/universal-size as variant evidence; mention it only when the entire product has no separate size variants.',
   'Do not literally translate livestream, factory, wholesale, hot-sale, SKU noise, or holiday slogans; omit source-platform and supplier wording instead.',
   'Do not mention 1688, PDD, Taobao, wholesale, supplier, factory, JSON, SKU internals, or source-system fields.',
   'Return Russian only, with no Chinese, no markdown, no HTML, no URLs, and no explanation outside the requested JSON contract.',

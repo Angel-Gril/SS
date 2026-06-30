@@ -202,6 +202,9 @@ describe('product content AI drafts', () => {
     expect(titleSystemMessage).toContain('Ozon localization contract');
     expect(titleSystemMessage).toContain('Start the title with the concrete Russian product type');
     expect(titleSystemMessage).toContain('Do not literally translate livestream, factory, wholesale, hot-sale, SKU noise, or holiday slogans');
+    expect(titleSystemMessage).toContain('For multi-variant products');
+    expect(titleSystemMessage).toContain('do not list every color or size in the base title');
+    expect(titleSystemMessage).toContain('one-size/universal-size');
   });
 
   it('routes product copy fields to field-specific models and parses rich content blocks', async () => {

@@ -152,11 +152,11 @@ function extractionPackagingReason(item: SourceListingItemLike): string {
 }
 
 function richContentValue(item: SourceListingItemLike): string {
-  if (hasMetadataValue(item, ['sourceRichDescriptionJson'])) return 'Ozon RichContentJson';
+  if (hasMetadataValue(item, ['sourceRichDescriptionJson'])) return '本地 RichContentJson 字段';
   const draft = item.metadata?.sourceRichContentDraft;
   if (draft && typeof draft === 'object' && !Array.isArray(draft)) {
     const blocks = (draft as Record<string, unknown>).blocks;
-    if (Array.isArray(blocks) && blocks.length) return `结构化草稿 ${blocks.length} 块`;
+    if (Array.isArray(blocks) && blocks.length) return `本地草稿 ${blocks.length} 块`;
   }
   return '';
 }
@@ -259,9 +259,9 @@ export function evaluateSourceListingFieldDiagnostics(item: SourceListingItemLik
       status: richContentValue(item) ? 'review' : 'review',
       confidence: richContentValue(item) ? 'weak' : 'missing',
       value: richContentValue(item) || '未生成',
-      source: richContentValue(item) ? '采集/AI 草稿' : '缺失',
-      evidence: richContentValue(item) ? '发布前会转换为 Ozon RichContentJson' : '不阻断主体上架',
-      action: richContentValue(item) ? '建议预览后发布' : '可先发布主体，后续补富内容',
+      source: richContentValue(item) ? '本地采集/AI 草稿' : '缺失',
+      evidence: richContentValue(item) ? '发布时会尝试转换并附加到 Ozon RichContentJson，最终以发布任务/Ozon 审核结果为准' : '不阻断主体上架',
+      action: richContentValue(item) ? '发布后查看任务富内容结果' : '可先发布主体，后续补富内容',
     }),
   ];
 

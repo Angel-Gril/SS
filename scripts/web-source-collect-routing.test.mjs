@@ -195,6 +195,14 @@ assert.doesNotMatch(
 for (const label of ['上架到OZON', '源商品上架', '确认发布到Ozon', '稳定货号']) {
   assert.match(page, new RegExp(label), `source collection page should expose in-page source publish control: ${label}`);
 }
+for (const token of ['SOURCE_PUBLISH_SHOP_STORAGE_KEY', 'localStorage.getItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY)', 'localStorage.setItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY']) {
+  assert.match(page, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `source publish shop selector should remember the last manually used Ozon shop via ${token}`);
+}
+assert.match(
+  page,
+  /上次使用的店铺|店铺不可用/,
+  'source publish shop selector should explain remembered shop fallback in Chinese',
+);
 for (const label of ['发布字段诊断', '自动填充', '需要确认', '阻断缺失', '人工补录']) {
   assert.match(page, new RegExp(label), `source publish confirmation should expose field diagnostic label: ${label}`);
 }

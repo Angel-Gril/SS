@@ -134,6 +134,7 @@ const detailSections: Array<{ key: DetailSection; label: string }> = [
 const sourceListingStatusLegend = '可上架 / 待复核 / 阻断 / 真实商品标题 / 俄文标题/描述 / Ozon 类目/type / Ozon 必填属性/字典值 / 颜色尺码变体 / 重量 / 包装尺寸 / 销售受限/出口限制';
 const SOURCE_CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
 const SOURCE_CJK_TEXT_RE = /[\u3400-\u9fff]/;
+const SOURCE_PUBLISH_SHOP_STORAGE_KEY = 'ss-erp:source-publish:last-ozon-shop-id';
 
 function normalizePlatform(value: unknown): PlatformFilter | 'other' {
   const text = String(value || '').trim().toLowerCase();
@@ -1436,6 +1437,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [categoryData, setCategoryData] = useState<SourceOzonCategoryCandidateResponse | null>(null);
   const [candidateLoading, setCandidateLoading] = useState(false);
   const [candidateError, setCandidateError] = useState('');
+  const [shopSelectionMessage, setShopSelectionMessage] = useState('');
   const [confirmMessage, setConfirmMessage] = useState('');
   const [selectedCandidateKey, setSelectedCandidateKey] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -1481,7 +1483,25 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       if (res.code === 1 && res.data) {
         const ozonShops = res.data.filter((shop) => shop.platform === 'OZON');
         setShops(ozonShops);
-        setShopId((current) => current || ozonShops[0]?.id || '');
+        let rememberedShopId = '';
+        try {
+          rememberedShopId = localStorage.getItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY) || '';
+        } catch {
+          rememberedShopId = '';
+        }
+        const rememberedShop = ozonShops.find((shop) => shop.id === rememberedShopId);
+        const fallbackShop = ozonShops[0];
+        setShopId((current) => {
+          if (current && ozonShops.some((shop) => shop.id === current)) return current;
+          return rememberedShop?.id || fallbackShop?.id || '';
+        });
+        if (rememberedShop) {
+          setShopSelectionMessage(`已选择上次使用的店铺：${rememberedShop.name}`);
+        } else if (rememberedShopId && fallbackShop) {
+          setShopSelectionMessage(`上次使用的店铺不可用，已切换到：${fallbackShop.name}`);
+        } else {
+          setShopSelectionMessage('');
+        }
       }
       setShopsLoading(false);
     });
@@ -1627,6 +1647,18 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     };
     onItemUpdate({ ...item, metadata });
     return metadata;
+  }
+
+  function handleSourcePublishShopChange(nextShopId: string) {
+    setShopId(nextShopId);
+    const shop = shops.find((entry) => entry.id === nextShopId);
+    try {
+      if (nextShopId) localStorage.setItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY, nextShopId);
+      else localStorage.removeItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY);
+    } catch {
+      // localStorage can be unavailable in strict browser privacy modes.
+    }
+    setShopSelectionMessage(shop ? `已记住上次使用的店铺：${shop.name}` : '');
   }
 
   async function handleSourcePublish() {
@@ -1803,7 +1835,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               <span className="shrink-0">店铺</span>
               <select
                 value={shopId}
-                onChange={(event) => setShopId(event.target.value)}
+                onChange={(event) => handleSourcePublishShopChange(event.target.value)}
                 disabled={shopsLoading || candidateLoading}
                 className="h-8 min-w-0 rounded-md border bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               >
@@ -1826,6 +1858,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
             </div>
           ) : null}
           {candidateError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{candidateError}</div> : null}
+          {shopSelectionMessage && !candidateError ? <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{shopSelectionMessage}</div> : null}
           {confirmMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{confirmMessage}</div> : null}
           {selectedCandidate ? (
             <div className={`flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs ${selectedCandidateConfirmed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>

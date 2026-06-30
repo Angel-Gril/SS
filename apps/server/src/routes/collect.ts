@@ -653,7 +653,7 @@ function extractSourceApparelSizeToken(value: unknown): string {
 function sanitizeSourceSizeVariantValue(value: unknown): string {
   for (const candidate of sanitizeSourceStandardSizeValues([value])) {
     const sizeToken = extractSourceApparelSizeToken(candidate);
-    if (sizeToken) return sizeToken;
+    if (sizeToken) return sizeToken === '均码' ? 'Универсальный' : sizeToken;
     const text = sanitizeOzonAttrText(candidate);
     if (text && !containsCjkText(text)) return text;
   }
@@ -661,8 +661,10 @@ function sanitizeSourceSizeVariantValue(value: unknown): string {
 }
 
 function sourceInternationalSizeToRussianSize(value: unknown): string {
-  const text = sanitizeSourceSizeVariantValue(value).toUpperCase();
-  const normalized = text.replace(/\s+/g, '');
+  const text = sanitizeSourceSizeVariantValue(value);
+  if (/^(?:均码|one\s*size|one-size|universal|универсальн\p{L}*|os)$/iu.test(text)) return 'Универсальный';
+  const upperText = text.toUpperCase();
+  const normalized = upperText.replace(/\s+/g, '');
   const map: Record<string, string> = {
     XS: '44',
     S: '46',

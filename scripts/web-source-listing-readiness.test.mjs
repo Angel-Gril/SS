@@ -185,6 +185,26 @@ function item(overrides = {}) {
 }
 
 {
+  const diagnostics = readiness.evaluateSourceListingFieldDiagnostics(item({
+    metadata: {
+      ...item().metadata,
+      sourceRichDescriptionJson: undefined,
+      sourceRichContentDraft: {
+        status: 'ai_generated_reviewable',
+        blocks: [
+          { type: 'text', text: 'Описание.' },
+          { type: 'image', url: 'https://cdn.example.com/detail.jpg' },
+        ],
+      },
+    },
+  }));
+  const richContentRow = diagnostics.find((row) => row.key === 'richContent');
+  assert.match(richContentRow?.value || '', /本地草稿 2 块/);
+  assert.match(richContentRow?.evidence || '', /发布时会尝试转换并附加到 Ozon RichContentJson/);
+  assert.doesNotMatch(richContentRow?.evidence || '', /发布前会转换为 Ozon RichContentJson$/);
+}
+
+{
   const result = readiness.evaluateSourceListingReadiness(item({
     title: '【直播专供】红内裤女',
     metadata: {

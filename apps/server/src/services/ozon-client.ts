@@ -650,6 +650,9 @@ function buildOzonPublicErrorMessage(status: number, path: string, body: string,
   ].filter((v) => typeof v === 'string' && v.trim());
 
   const message = candidates[0] || body || `HTTP ${status}`;
+  if (status === 403 && /company\s+is\s+blocked|company\s+blocked|компан\p{L}*\s+заблок/iu.test(String(message))) {
+    return '当前 Ozon 店铺或公司已被平台限制，无法调用该接口。请选择其他店铺，或到 Ozon Seller 后台/客服确认店铺状态。';
+  }
   return `${message}`.replace(/\s+/g, ' ').slice(0, 500) || `OZON API ${path} 返回 HTTP ${status}`;
 }
 

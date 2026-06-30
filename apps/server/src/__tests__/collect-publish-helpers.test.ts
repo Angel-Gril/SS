@@ -1985,6 +1985,46 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('maps Chinese one-size labels to Russian universal size without leaking Chinese text', async () => {
+    expect(sanitizeVariantAttrsForOzonPublish({
+      '颜色': '白色',
+      '尺码': '均码【适合80-125斤】',
+    })).toEqual({
+      'Цвет': 'белый',
+      'Российский размер': 'Универсальный',
+      'Размер производителя': 'Универсальный',
+    });
+
+    const result = await buildSourceStandardOzonPublishAttributes({
+      standard: {
+        brand: { value: '', isBrandless: true },
+        colors: [],
+        sizes: ['均码'],
+        materials: [],
+        gender: { value: '' },
+        seasons: [],
+        packageDimensionsMm: null,
+        packageWeightG: null,
+        categoryHints: [],
+        missingForOzon: [],
+      },
+      categoryAttrs: [
+        { id: 4295, name: 'Российский размер', is_required: true, dictionary_id: 835 },
+      ],
+      existingAttributes: [],
+      getAttributeDictValues: async () => [{ id: 7001, value: 'Универсальный' }],
+    });
+
+    expect(result.attributes).toEqual([
+      { id: 4295, complex_id: 0, values: [{ value: 'Универсальный', dictionary_value_id: 7001 }] },
+    ]);
+    expect(result.applied).toContainEqual(expect.objectContaining({
+      standardKey: 'sizes',
+      attributeId: 4295,
+      matchType: 'exact',
+    }));
+  });
+
   it('translates latex source material into Russian Ozon material values', () => {
     const plan = buildSourceStandardOzonAttributePlan({
       brand: { value: '', isBrandless: true },
