@@ -1160,7 +1160,7 @@ function SourceDetailContent({
       </div>
 
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
-      {activeSection === 'sku' ? <SourceSkuSection item={item} /> : null}
+      {activeSection === 'sku' ? <SourceSkuSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
       {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
@@ -1234,7 +1234,7 @@ function packagingRowMeta(row: Record<string, unknown>): string {
   ].filter(Boolean).join(' · ');
 }
 
-function SourceSkuSection({ item }: { item: SourceCollectItem }) {
+function SourceSkuSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
   const variants = sourceDisplayVariants(item);
   const packagingRows = sourcePackagingRows(item);
   const packagingProfile = sourcePackagingProfile(item);
@@ -1242,6 +1242,29 @@ function SourceSkuSection({ item }: { item: SourceCollectItem }) {
   const standard = sourceStandardAttributeModel(item);
   const packageSummary = sourceStandardPackageText(standard);
   const packagingCount = packagingRows.length || (packageSummary !== '-' ? 1 : 0);
+  const [deletingVariantSku, setDeletingVariantSku] = useState('');
+
+  async function handleDeleteSourceVariant(variant: Record<string, unknown>, index: number) {
+    const sku = sourceVariantKey(variant, index);
+    if (!sku || sku === String(index)) {
+      toast({ title: '该 SKU 缺少可删除标识', variant: 'destructive' });
+      return;
+    }
+    if (!window.confirm(`确认删除SKU「${sourceVariantLabel(variant, index)}」？删除后发布到 Ozon 时不会包含这个 SKU。`)) return;
+    setDeletingVariantSku(sku);
+    try {
+      const res = await api.delete<{ count: number }>(`/api/collect/${item.id}/variants/${encodeURIComponent(sku)}`);
+      if (res.code !== 1) throw new Error(res.msg || '删除SKU失败');
+      const nextVariants = sourceVariants(item).filter((entry, entryIndex) => sourceVariantKey(entry, entryIndex) !== sku);
+      onItemUpdate({ ...item, variants: nextVariants.length ? nextVariants : null });
+      toast({ title: res.msg || '已删除SKU' });
+    } catch (error) {
+      toast({ title: error instanceof Error ? error.message : '删除SKU失败', variant: 'destructive' });
+    } finally {
+      setDeletingVariantSku('');
+    }
+  }
+
   return (
     <div className="space-y-3">
       <InfoPanel title="SKU / 变体" count={variants.length}>
@@ -1249,7 +1272,23 @@ function SourceSkuSection({ item }: { item: SourceCollectItem }) {
           <div className="grid gap-2 md:grid-cols-2">
             {variants.slice(0, 80).map((variant, index) => (
               <div key={index} className="rounded border bg-muted/30 px-3 py-2 text-xs">
-                <div className="break-words">{sourceVariantLabel(variant, index)}</div>
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1 break-words">{sourceVariantLabel(variant, index)}</div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => handleDeleteSourceVariant(variant, index)}
+                    disabled={deletingVariantSku === sourceVariantKey(variant, index)}
+                    title="删除SKU"
+                    aria-label="删除SKU"
+                  >
+                    {deletingVariantSku === sourceVariantKey(variant, index)
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <Trash2 className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
                 <div className="mt-1 flex gap-3 text-muted-foreground">
                   {variant.price != null ? <span>¥{String(variant.price)}</span> : null}
                   {variant.stock != null ? <span>库存 {String(variant.stock)}</span> : null}

@@ -2898,7 +2898,14 @@ function mergeSourceStandardAttributes(
   }
   if (!existing.gender?.value && inferred.gender?.value) out.gender = inferred.gender;
   if (!existing.brand?.value && !existing.brand?.isBrandless && inferred.brand) out.brand = inferred.brand;
-  if (!existing.packageWeightG && inferred.packageWeightG) out.packageWeightG = inferred.packageWeightG;
+  const existingPackageWeight = Number(existing.packageWeightG);
+  const existingHasPackageDimensions = !!existing.packageDimensionsMm;
+  if (
+    inferred.packageWeightG
+    && (!existing.packageWeightG || (Number.isFinite(existingPackageWeight) && existingPackageWeight <= 5 && !existingHasPackageDimensions))
+  ) {
+    out.packageWeightG = inferred.packageWeightG;
+  }
   if (!existing.packageDimensionsMm && inferred.packageDimensionsMm) out.packageDimensionsMm = inferred.packageDimensionsMm;
   return out;
 }
@@ -2948,11 +2955,22 @@ function normalizePublishImageList(value: unknown): string[] {
       }
     }
     if (isLikelyNonImageMediaUrl(image)) continue;
+    if (isKnownLowResolutionSourceThumbnail(image)) continue;
     if (seen.has(image)) continue;
     seen.add(image);
     out.push(image);
   }
   return out;
+}
+
+function isKnownLowResolutionSourceThumbnail(raw: string): boolean {
+  try {
+    const url = new URL(raw.startsWith('//') ? `https:${raw}` : raw);
+    const path = decodeURIComponent(url.pathname).toLowerCase();
+    return /\.(?:220x220|310x310|search|summ)\.(?:jpe?g|png|webp)(?:$|[?#])/i.test(path);
+  } catch {
+    return /\.(?:220x220|310x310|search|summ)\.(?:jpe?g|png|webp)(?:$|[?#])/i.test(String(raw || '').toLowerCase());
+  }
 }
 
 function mergePublishImageLists(...lists: unknown[]): string[] {

@@ -129,6 +129,33 @@ test('1688 core normalizes structured sku props, sku map, price model and source
   });
 });
 
+test('1688 core strips dot-suffixed thumbnail variants from collected image lists', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/964838561364.html?offerId=964838561364',
+    host: 'detail.1688.com',
+    sources: [{
+      offerId: '964838561364',
+      subject: '秋季新款日系复古宽松九分裤男女ins纯色简约情侣阔腿工装裤薄款',
+      imageList: [
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.220x220.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.search.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.summ.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.310x310.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01uWOifK1d84Z6x1d0F_!!2207548823690-0-cib.jpg',
+      ],
+      priceInfo: { price: '29' },
+    }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.images)), [
+    'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.jpg',
+    'https://cbu01.alicdn.com/img/ibank/O1CN01uWOifK1d84Z6x1d0F_!!2207548823690-0-cib.jpg',
+  ]);
+});
+
 test('1688 core rejects merchant metrics and product attributes as sku rows', () => {
   const core = loadCore();
 

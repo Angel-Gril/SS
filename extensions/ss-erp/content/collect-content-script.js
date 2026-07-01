@@ -208,6 +208,10 @@
     let text = String(raw || "").trim();
     if (!text) return "";
     if (text.startsWith("//")) text = "https:" + text;
+    text = text
+      .replace(/\.(jpe?g|png|webp)_(?:\d{2,4}x\d{2,4}|q\d+)\.(?:jpe?g|png|webp)(?=$|[?#])/i, ".$1")
+      .replace(/\.(jpe?g|png|webp)_\.webp(?=$|[?#])/i, ".$1")
+      .replace(/\.(?:220x220|310x310|search|summ)\.(jpe?g|png|webp)(?=$|[?#])/i, ".$1");
     try {
       const url = new URL(text);
       const host = url.hostname.toLowerCase();
@@ -1047,7 +1051,7 @@
       if (!isLikely1688PackagingTableText(tableText)) return;
       const tableRows = Array.from(table.querySelectorAll("tr"))
         .map((tr) => Array.from(tr.querySelectorAll("th,td")).map((cell) => normalizeWhitespace(cell.innerText || cell.textContent || "")))
-        .filter((cells) => cells.length >= 3 && cells.some(Boolean));
+        .filter((cells) => cells.length >= 1 && cells.some(Boolean));
       if (!tableRows.length) return;
       const headerIndex = tableRows.findIndex((cells) => isLikely1688PackagingHeader(cells));
       if (headerIndex < 0) return;
@@ -1072,7 +1076,7 @@
       && /(高|height)/i.test(text);
     const hasSkuIdentity = /(颜色|色号|color)/i.test(text)
       && /(尺码|规格|尺寸|size|spec)/i.test(text);
-    return /(重量|weight)/i.test(text) && (hasDimensions || hasSkuIdentity);
+    return /(重量|weight)/i.test(text) && (hasDimensions || hasSkuIdentity || cells.length === 1);
   }
 
   function build1688DomPackagingRow(headers, cells) {
@@ -1459,6 +1463,7 @@
       path = path.replace(/\.(jpe?g|png|webp)_\.webp$/i, ".$1");
       path = path.replace(/\.(jpe?g|png|webp)_(?:sum|b)\.(?:jpe?g|png|webp)$/i, ".$1");
       path = path.replace(/\.(jpe?g|png|webp)_(?:\d{2,4}x\d{2,4}|q\d+)\.(?:jpe?g|png|webp)$/i, ".$1");
+      path = path.replace(/\.(?:220x220|310x310|search|summ)\.(jpe?g|png|webp)$/i, ".$1");
       url.pathname = path;
       return url.href;
     } catch (_error) {
@@ -1534,7 +1539,6 @@
     const weightG = normalize1688PackagingWeight(weightRaw, normalize1688PackagingWeightUnitHint(weightUnit, weightRaw));
     const volumeRaw = pickFirstValue(row, ["volumeCm3", "volume", "体积", "体积(cm³)", "体积(cm3)"]);
     const volumeCm3 = parseLooseNumber(volumeRaw);
-    if (!color && !size) return null;
     if (!color && !size && !lengthMm && !widthMm && !heightMm && !weightG && !volumeCm3) return null;
     const out = {};
     if (color) out.color = color;

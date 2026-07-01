@@ -599,6 +599,48 @@ assert.equal(aliGeneralPackageWeightResponse.data.weightG, 20);
 assert.equal(aliGeneralPackageWeightResponse.data.grossWeightGrams, 20);
 assert.deepEqual(plain(aliGeneralPackageWeightResponse.data.sourcePackagingRows), []);
 
+const aliDomWeightOnlyPackagingResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/6095051852380.html',
+  title: '1688 dom weight-only packaging table',
+  bodyText: '儿童小医生玩具套装 包装信息 商品件重尺 重量(g) 800 商品详情',
+  selectors: {
+    h1: '儿童小医生玩具套装女孩过家家医疗箱看病宝宝3-6岁礼物',
+    '.price': '¥8.00',
+  },
+  queryAll(selector) {
+    if (selector === 'table') {
+      const makeCell = (text) => ({ innerText: text, textContent: text });
+      const makeRow = (cells) => ({
+        querySelectorAll(cellSelector) {
+          return cellSelector === 'th,td' ? cells.map(makeCell) : [];
+        },
+      });
+      return [{
+        innerText: '包装信息 商品件重尺 重量(g) 800',
+        textContent: '包装信息 商品件重尺 重量(g) 800',
+        querySelectorAll(rowSelector) {
+          return rowSelector === 'tr'
+            ? [makeRow(['重量(g)']), makeRow(['800'])]
+            : [];
+        },
+      }];
+    }
+    return [];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '6095051852380',
+        subject: '儿童小医生玩具套装女孩过家家医疗箱看病宝宝3-6岁礼物',
+      },
+    },
+  },
+});
+
+assert.equal(aliDomWeightOnlyPackagingResponse.ok, true);
+assert.equal(aliDomWeightOnlyPackagingResponse.data.grossWeightGrams, 800);
+assert.deepEqual(plain(aliDomWeightOnlyPackagingResponse.data.sourcePackagingRows), [{ weightG: 800 }]);
+
 const aliCleanStructuredAttributesResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/945335480485.html',
   title: '1688 clean attributes source detail',
@@ -706,8 +748,8 @@ assert.deepEqual(plain(aliDomFallbackSourceResponse.data.attributes), [
 ]);
 assert.equal(aliDomFallbackSourceResponse.data.description, '适合跨境上架的夏季女装连衣裙，轻薄透气。');
 assert.deepEqual(plain(aliDomFallbackSourceResponse.data.images), [
-  'https://cbu01.alicdn.com/img/ibank/O1CN01main_!!2200-0-cib.jpg_.webp',
-  'https://cbu01.alicdn.com/img/ibank/O1CN01detail_!!2200-0-cib.jpg_.webp',
+  'https://cbu01.alicdn.com/img/ibank/O1CN01main_!!2200-0-cib.jpg',
+  'https://cbu01.alicdn.com/img/ibank/O1CN01detail_!!2200-0-cib.jpg',
 ]);
 assert.deepEqual(plain(aliDomFallbackSourceResponse.data.extractionDiagnostics), {
   titleFound: true,

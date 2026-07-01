@@ -135,7 +135,7 @@ for (const label of ['页面没有包装表', '只采到重量，缺包装尺寸
 for (const field of ['sourceProductProfile', 'reasonCode', 'reasonLabel', 'extractionDiagnostics']) {
   assert.match(page, new RegExp(field), `source collection detail should consume packaging diagnostic field: ${field}`);
 }
-const sourceSkuSection = page.match(/function SourceSkuSection\(\{ item \}: \{ item: SourceCollectItem \}\) \{[\s\S]*?\nfunction SourceAttributesSection/)?.[0] || '';
+const sourceSkuSection = page.match(/function SourceSkuSection\(\{ item[\s\S]*?\nfunction SourceAttributesSection/)?.[0] || '';
 assert.match(
   sourceSkuSection,
   /sourceStandardAttributeModel\(item\)/,
@@ -184,6 +184,9 @@ for (const label of ['手动补录件重尺', '重量(g)', '长(mm)', '宽(mm)',
 }
 for (const label of ['通用件重尺', '按 SKU 补录', '应用到全部SKU', '保存SKU件重尺']) {
   assert.match(page, new RegExp(label.replace(/[()]/g, '\\$&')), `source listing detail should expose variant package edit control: ${label}`);
+}
+for (const token of ['handleDeleteSourceVariant', '/api/collect/${item.id}/variants/${encodeURIComponent(sku)}', '删除SKU']) {
+  assert.match(page, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `source SKU detail should expose variant delete control: ${token}`);
 }
 assert.match(
   page,

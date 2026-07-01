@@ -177,10 +177,15 @@ function normalizePackage(item: SourceItemLike): Pick<SourceStandardAttributes, 
   const directWidth = positiveNumber(item.metadata?.widthMm);
   const directHeight = positiveNumber(item.metadata?.heightMm);
 
-  let packageWeightG = directWeight;
-  let dimensions = directLength && directWidth && directHeight
-    ? { length: directLength, width: directWidth, height: directHeight }
-    : null;
+  if (directWeight && directLength && directWidth && directHeight) {
+    return {
+      packageDimensionsMm: { length: directLength, width: directWidth, height: directHeight },
+      packageWeightG: directWeight,
+    };
+  }
+
+  let packageWeightG: number | null = null;
+  let dimensions: { length: number; width: number; height: number } | null = null;
 
   for (const row of rows) {
     if (!packageWeightG) packageWeightG = positiveNumber(row.weightG);
@@ -191,6 +196,11 @@ function normalizePackage(item: SourceItemLike): Pick<SourceStandardAttributes, 
       if (length && width && height) dimensions = { length, width, height };
     }
     if (packageWeightG && dimensions) break;
+  }
+
+  if (!packageWeightG) packageWeightG = directWeight;
+  if (!dimensions && directLength && directWidth && directHeight) {
+    dimensions = { length: directLength, width: directWidth, height: directHeight };
   }
 
   return { packageDimensionsMm: dimensions, packageWeightG };

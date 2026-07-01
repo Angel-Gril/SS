@@ -3245,9 +3245,110 @@ async function collectOzonProductsToErp(productIds, options = {}) {
   return pushResult;
 }
 
+async function syncShopAnalyticsToErp(shopId, companyIdInput) {
+  const companyId = await getSellerCompanyId(companyIdInput);
+  let analyticsItems = [];
+
+  try {
+    const dateTo = new Date();
+    const dateFrom = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+    const dateFromStr = dateFrom.toISOString().slice(0, 10);
+    const dateToStr = dateTo.toISOString().slice(0, 10);
+    const prevFrom = new Date(Date.now() - 60 * 24 * 3600 * 1000);
+    const prevFromStr = prevFrom.toISOString().slice(0, 10);
+    const prevToStr = dateFromStr;
+    const PAGE_SIZE = 50;
+    const MAX_PAGES = 20;
+    let offset = 0;
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const tableResult = await sellerTabFetchJson(
+        OZON_ENDPOINTS.chartsV3TableBySku,
+        {
+          current_period: { date_from: dateFromStr, date_to: dateToStr },
+          previous_period: { date_from: prevFromStr, date_to: prevToStr },
+          filters: { desc_type_ids: [], category_3_ids: [], category_2_ids: [] },
+          limit: String(PAGE_SIZE), offset: String(offset),
+          metrics: ["search_position", "search_views", "ordered_units", "revenue", "conv_pdp_views_to_cart", "pdp_views", "cancelled_units", "returned_units"],
+          sort: { key: "ordered_units_sort", order: "desc" }
+        },
+        companyId
+      );
+      const pageItems = tableResult && Array.isArray(tableResult.items) ? tableResult.items : [];
+      if (!pageItems.length) break;
+      pageItems.forEach(function (item) {
+        const info = item.productInfo || {};
+        const m = item.metrics || {};
+        analyticsItems.push({
+          sku: info.sku || "",
+          name: info.name || info.sku || "",
+          image: info.image || "",
+          article: info.article || "",
+          soldCount: Number(m.orderedUnits) || 0,
+          soldSum: Number(m.revenue) || 0,
+          views: Number(m.pdpViews) || 0,
+          searchViews: Number(m.searchViews) || 0,
+          searchPosition: Number(m.searchPosition) || 0,
+          convToCartPdp: Number(m.convPdpViewsToCart) || 0,
+          cancellations: Number(m.cancelledUnits) || 0,
+          returns: Number(m.returnedUnits) || 0,
+          _source: "charts_v3_table"
+        });
+      });
+      if (pageItems.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+  } catch (e) {
+    const messageText = e.message || String(e);
+    if (isOzonCompanyPermissionError(messageText)) return { ok: false, error: messageText };
+    return { ok: false, error: "获取分析数据失败。请确认已登录 seller.ozon.ru 并打开了卖家后台页面。错误: " + messageText };
+  }
+
+  if (!analyticsItems.length) return { ok: false, error: "未获取到分析数据，请确认已登录 seller.ozon.ru" };
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl) return { ok: false, error: "请先在设置中配置 ERP 后端地址" };
+  if (!conn.token) return { ok: false, error: "请先在设置中配置 ERP Token" };
+  if (!shopId) return { ok: false, error: "请指定店铺 ID" };
+
+  const pushResponse = await fetch(conn.baseUrl + "/api/shops/" + shopId + "/analytics", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token
+    },
+    body: JSON.stringify({ items: analyticsItems, period: "30d" })
+  });
+  const pushText = await pushResponse.text();
+  if (!pushResponse.ok) return { ok: false, error: "ERP 返回 HTTP " + pushResponse.status + ": " + pushText.slice(0, 300) };
+  let pushParsed = {};
+  try { pushParsed = JSON.parse(pushText); } catch (e) {}
+  return { ok: true, data: { itemCount: analyticsItems.length, erpResponse: pushParsed } };
+}
+
+async function syncShopGraphsToErp(shopId, companyIdInput, period) {
+  const companyId = await getSellerCompanyId(companyIdInput);
+  const v3Result = await syncShopGraphsWithFallback(companyId, period || 30);
+  if (shopId) {
+    const graphConn = await getStoredErpConnection();
+    if (graphConn.baseUrl && graphConn.token) {
+      await fetch(graphConn.baseUrl + "/api/shops/" + shopId + "/analytics-graphs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json;charset=utf-8",
+          "Authorization": "Bearer " + graphConn.token
+        },
+        body: JSON.stringify(v3Result)
+      });
+    }
+  }
+  return { ok: true, data: v3Result };
+}
+
 globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_BACKGROUND || {}, {
   aggregateOzonProductInsights,
   collectOzonProductsToErp,
+  syncShopAnalyticsToErp,
+  syncShopGraphsToErp,
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -3285,148 +3386,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "spb-self-hosted:check-logins":
         return { ok: true, logins: await checkPlatformLogins() };
       case "spb-self-hosted:sync-shop-analytics": {
-        // 从 seller.ozon.ru 获取商品分析数据并推送到 ERP
-        // 使用 chartsV3TableBySku（已验证可用），不再依赖 what_to_sell/data/v3
-        const companyId = await getSellerCompanyId(message.companyId);
-        let analyticsItems = [];
-
-        try {
-          const dateTo = new Date();
-          const dateFrom = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-          const dateFromStr = dateFrom.toISOString().slice(0, 10);
-          const dateToStr = dateTo.toISOString().slice(0, 10);
-          const prevFrom = new Date(Date.now() - 60 * 24 * 3600 * 1000);
-          const prevFromStr = prevFrom.toISOString().slice(0, 10);
-          const prevToStr = dateFromStr;
-
-          const PAGE_SIZE = 50;
-          const MAX_PAGES = 20;
-          let offset = 0;
-
-          for (let page = 0; page < MAX_PAGES; page++) {
-            const tableResult = await sellerTabFetchJson(
-              OZON_ENDPOINTS.chartsV3TableBySku,
-              {
-                current_period: { date_from: dateFromStr, date_to: dateToStr },
-                previous_period: { date_from: prevFromStr, date_to: prevToStr },
-                filters: { desc_type_ids: [], category_3_ids: [], category_2_ids: [] },
-                limit: String(PAGE_SIZE), offset: String(offset),
-                metrics: ["search_position", "search_views", "ordered_units", "revenue", "conv_pdp_views_to_cart", "pdp_views", "cancelled_units", "returned_units"],
-                sort: { key: "ordered_units_sort", order: "desc" }
-              },
-              companyId
-            );
-
-            const pageItems = tableResult && Array.isArray(tableResult.items) ? tableResult.items : [];
-            if (!pageItems.length) break;
-
-            pageItems.forEach(function (item) {
-              const info = item.productInfo || {};
-              const m = item.metrics || {};
-              analyticsItems.push({
-                sku: info.sku || "",
-                name: info.name || info.sku || "",
-                image: info.image || "",
-                article: info.article || "",
-                soldCount: Number(m.orderedUnits) || 0,
-                soldSum: Number(m.revenue) || 0,
-                views: Number(m.pdpViews) || 0,
-                searchViews: Number(m.searchViews) || 0,
-                searchPosition: Number(m.searchPosition) || 0,
-                convToCartPdp: Number(m.convPdpViewsToCart) || 0,
-                cancellations: Number(m.cancelledUnits) || 0,
-                returns: Number(m.returnedUnits) || 0,
-                _source: "charts_v3_table"
-              });
-            });
-
-            if (pageItems.length < PAGE_SIZE) break;
-            offset += PAGE_SIZE;
-          }
-        } catch (e) {
-          const messageText = e.message || String(e);
-          if (isOzonCompanyPermissionError(messageText)) {
-            return { ok: false, error: messageText };
-          }
-          return { ok: false, error: "获取分析数据失败。请确认已登录 seller.ozon.ru 并打开了卖家后台页面。错误: " + messageText };
-        }
-
-        if (!analyticsItems.length) {
-          return { ok: false, error: "未获取到分析数据，请确认已登录 seller.ozon.ru" };
-        }
-
-        // 获取 ERP 连接配置
-        const conn = await getStoredErpConnection();
-        const baseUrl = conn.baseUrl;
-        const token = conn.token;
-
-        if (!baseUrl) {
-          return { ok: false, error: "请先在设置中配置 ERP 后端地址" };
-        }
-        if (!token) {
-          return { ok: false, error: "请先在设置中配置 ERP Token" };
-        }
-
-        // 需要 shopId，从消息中获取
-        const shopId = message.shopId;
-        if (!shopId) {
-          return { ok: false, error: "请指定店铺 ID" };
-        }
-
-        const pushUrl = baseUrl + "/api/shops/" + shopId + "/analytics";
-        const pushResponse = await fetch(pushUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json;charset=utf-8",
-            "Authorization": "Bearer " + token
-          },
-          body: JSON.stringify({
-            items: analyticsItems,
-            period: "30d"
-          })
-        });
-
-        const pushText = await pushResponse.text();
-        if (!pushResponse.ok) {
-          return { ok: false, error: "ERP 返回 HTTP " + pushResponse.status + ": " + pushText.slice(0, 300) };
-        }
-
-        let pushParsed = {};
-        try { pushParsed = JSON.parse(pushText); } catch (e) {}
-
-        return {
-          ok: true,
-          data: {
-            itemCount: analyticsItems.length,
-            erpResponse: pushParsed
-          }
-        };
+        return await syncShopAnalyticsToErp(message.shopId, message.companyId);
       }
       case "spb-self-hosted:sync-shop-graphs": {
-        const companyId = await getSellerCompanyId(message.companyId);
-        const period = message.period || 30;
-
-        const v3Result = await syncShopGraphsWithFallback(companyId, period);
-
-        const graphShopId = message.shopId;
-        if (graphShopId) {
-          const graphConn = await getStoredErpConnection();
-          const graphBaseUrl = graphConn.baseUrl;
-          const graphToken = graphConn.token;
-
-          if (graphBaseUrl && graphToken) {
-            await fetch(graphBaseUrl + "/api/shops/" + graphShopId + "/analytics-graphs", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json;charset=utf-8",
-                "Authorization": "Bearer " + graphToken
-              },
-              body: JSON.stringify(v3Result)
-            });
-          }
-        }
-
-        return { ok: true, data: v3Result };
+        return await syncShopGraphsToErp(message.shopId, message.companyId, message.period || 30);
       }
       case "spb-self-hosted:test-market-apis": {
         const companyId = await getSellerCompanyId(message.companyId);

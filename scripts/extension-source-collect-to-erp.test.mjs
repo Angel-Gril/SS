@@ -78,8 +78,8 @@ assert.doesNotMatch(
 );
 assert.match(
   collectContentScript,
-  /cells\.length\s*>=\s*3/,
-  '1688 DOM packaging scan should keep three-column SKU weight tables',
+  /cells\.length\s*>=\s*1/,
+  '1688 DOM packaging scan should keep single-column weight-only tables',
 );
 assert.match(
   collectContentScript,
@@ -93,8 +93,8 @@ assert.match(
 );
 assert.match(
   collectContentScript,
-  /return \/\(重量\|weight\)\/i\.test\(text\) && \(hasDimensions \|\| hasSkuIdentity\)/,
-  '1688 DOM packaging header detection should accept color / size / weight-only tables',
+  /return \/\(重量\|weight\)\/i\.test\(text\) && \(hasDimensions \|\| hasSkuIdentity \|\| cells\.length === 1\)/,
+  '1688 DOM packaging header detection should accept color / size / single-column weight-only tables',
 );
 assert.match(
   pageBridge,

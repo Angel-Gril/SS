@@ -1117,6 +1117,21 @@
     });
   }
 
+  function triggerOzonAutoSyncMaintenance() {
+    sendRuntimeMessage({
+      type: 'ozon-calc:auto-sync-maintenance',
+      payload: { reason: 'popup_open' }
+    }, function (response) {
+      if (!response || response.skipped) return;
+      chrome.storage.local.get([SYNC_STORAGE_KEY], function (result) {
+        var times = result[SYNC_STORAGE_KEY] || {};
+        renderSyncTime(cookieSyncTime, times.cookie);
+        renderSyncTime(analyticsSyncTime, times.analytics);
+        renderSyncTime(graphsSyncTime, times.graphs);
+      });
+    });
+  }
+
   // Init
   if (primaryActionBtn) {
     primaryActionBtn.addEventListener('click', runPrimaryAction);
@@ -1136,4 +1151,5 @@
   loadCalculatorStatus();
   loadCookieSyncTime();
   loadShopsToSelect();
+  triggerOzonAutoSyncMaintenance();
 }());

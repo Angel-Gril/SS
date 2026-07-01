@@ -15,7 +15,8 @@
     "scripting",
     "tabs",
     "downloads",
-    "cookies"
+    "cookies",
+    "alarms"
   ],
   "host_permissions": [
     "file:///*",

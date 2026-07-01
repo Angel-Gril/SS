@@ -154,6 +154,24 @@ describe('collect publish helpers', () => {
     expect(offerImages['offer-1']).toBe('https://cdn.example.com/variant.jpg');
   });
 
+  it('keeps low-resolution 1688 thumbnail derivatives out of Ozon publish image lists', () => {
+    const images = resolveBasePublishImages({
+      images: [
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.220x220.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.search.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.summ.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.310x310.jpg',
+        'https://cbu01.alicdn.com/img/ibank/O1CN01uWOifK1d84Z6x1d0F_!!2207548823690-0-cib.jpg',
+      ],
+    });
+
+    expect(images).toEqual([
+      'https://cbu01.alicdn.com/img/ibank/O1CN01E7pTXF1d84Z61WQY8_!!2207548823690-0-cib.jpg',
+      'https://cbu01.alicdn.com/img/ibank/O1CN01uWOifK1d84Z6x1d0F_!!2207548823690-0-cib.jpg',
+    ]);
+  });
+
   it('detects Chinese text in publish names', () => {
     expect(containsCjkText('Чехол для iPad')).toBe(false);
     expect(containsCjkText('保护套 для iPad')).toBe(true);
@@ -581,6 +599,36 @@ describe('collect publish helpers', () => {
       gender: { value: 'male', source: 'title' },
       colors: ['白色'],
       sizes: ['M'],
+    });
+  });
+
+  it('repairs weak legacy source package weight from stronger packaging rows at publish time', () => {
+    const standard = getCollectedSourceStandardAttributes({
+      title: '儿童小医生玩具套装女孩过家家医疗箱',
+      variants: [
+        { attrs: { 颜色: '粉色', 规格: '58件套' } },
+      ],
+      metadata: {
+        sourcePlatform: '1688',
+        sourcePackagingRows: [{ weightG: 800 }],
+        sourceStandardAttributes: {
+          brand: { value: '其它', source: 'sourceAttributes', isBrandless: true },
+          colors: ['粉色'],
+          sizes: ['58件套'],
+          materials: [],
+          gender: { value: 'unisex' },
+          seasons: [],
+          packageWeightG: 1,
+          packageDimensionsMm: null,
+          categoryHints: [],
+          missingForOzon: ['材质/成分', '性别/季节', '包装尺寸'],
+        },
+      },
+    });
+
+    expect(standard).toMatchObject({
+      packageWeightG: 800,
+      packageDimensionsMm: null,
     });
   });
 

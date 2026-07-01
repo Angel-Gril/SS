@@ -955,7 +955,8 @@
     if (text.startsWith('//')) text = 'https:' + text;
     text = text
       .replace(/\.(jpe?g|png|webp)_(?:\d{2,4}x\d{2,4}|q\d+)\.(?:jpe?g|png|webp)(?=$|[?#])/i, '.$1')
-      .replace(/\.(jpe?g|png|webp)_\.webp(?=$|[?#])/i, '.$1');
+      .replace(/\.(jpe?g|png|webp)_\.webp(?=$|[?#])/i, '.$1')
+      .replace(/\.(?:220x220|310x310|search|summ)\.(jpe?g|png|webp)(?=$|[?#])/i, '.$1');
     try {
       var url = new URL(text);
       url.hash = '';
@@ -964,6 +965,7 @@
       path = path.replace(/\.(jpe?g|png|webp)_\.webp$/i, '.$1');
       path = path.replace(/\.(jpe?g|png|webp)_(?:sum|b)\.(?:jpe?g|png|webp)$/i, '.$1');
       path = path.replace(/\.(jpe?g|png|webp)_(?:\d{2,4}x\d{2,4}|q\d+)\.(?:jpe?g|png|webp)$/i, '.$1');
+      path = path.replace(/\.(?:220x220|310x310|search|summ)\.(jpe?g|png|webp)$/i, '.$1');
       url.pathname = path;
       return url.href;
     } catch (e) {

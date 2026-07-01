@@ -149,6 +149,25 @@ const item = {
 
 {
   const result = standard.normalizeSourceStandardAttributes({
+    title: '儿童小医生玩具套装',
+    metadata: {
+      sourceAttributes: [
+        { name: '品牌', value: '其他' },
+        { name: '颜色', value: '粉色' },
+        { name: '尺码', value: '58件套' },
+      ],
+      sourcePackagingRows: [{ weightG: 800 }],
+      weightG: 1,
+    },
+    variants: [
+      { attrs: { 颜色: '粉色', 规格: '58件套' }, stock: 2000 },
+    ],
+  });
+  assert.equal(result.packageWeightG, 800);
+}
+
+{
+  const result = standard.normalizeSourceStandardAttributes({
     title: '吊带刺绣领口缎面开叉吊带短睡裙睡衣法式新娘服欧码纯欲居家服',
     metadata: {
       sourceAttributes: [
