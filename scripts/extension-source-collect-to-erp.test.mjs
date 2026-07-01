@@ -4,6 +4,7 @@ import fs from 'node:fs';
 const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const collectContentScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
+const pageBridge = fs.readFileSync('extensions/ss-erp/content/page-bridge.js', 'utf8');
 
 assert.match(
   popupJs,
@@ -94,6 +95,11 @@ assert.match(
   collectContentScript,
   /return \/\(重量\|weight\)\/i\.test\(text\) && \(hasDimensions \|\| hasSkuIdentity\)/,
   '1688 DOM packaging header detection should accept color / size / weight-only tables',
+);
+assert.match(
+  pageBridge,
+  /["']context["']/,
+  '1688 page bridge should expose window.context so productPackInfo packaging data reaches the collector',
 );
 
 console.log('PASS source collect enters ERP workflow');

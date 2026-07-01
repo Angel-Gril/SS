@@ -13,6 +13,7 @@
     "__GLOBAL_DATA__",
     "__ICE_APP_DATA__",
     "__APOLLO_STATE__",
+    "context",
     "pageData",
     "globalData",
     "offerDetailData",

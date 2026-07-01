@@ -210,6 +210,7 @@
     }
     var packagingRows = pick1688PackagingRows(sources, pageText, attributes);
     var packageWeightG = pick1688PackageWeightG(sources, pageText) || pick1688PackageWeightGFromRows(packagingRows);
+    var packageDimensionsMm = pick1688PackageDimensionsMmFromRows(packagingRows);
     var description = pick1688Description(sources, pageText, assets.detailImages);
     var sourceRichContentDraft = build1688RichContentDraft(description, assets.detailImages);
     var diagnostics = build1688Diagnostics({
@@ -259,6 +260,10 @@
       attributes: attributes,
       weightG: packageWeightG || null,
       grossWeightGrams: packageWeightG || null,
+      lengthMm: packageDimensionsMm ? packageDimensionsMm.lengthMm : null,
+      widthMm: packageDimensionsMm ? packageDimensionsMm.widthMm : null,
+      heightMm: packageDimensionsMm ? packageDimensionsMm.heightMm : null,
+      dimensionsMm: packageDimensionsMm || null,
       sourcePackagingRows: packagingRows,
       description: description,
       sourceRichContentDraft: sourceRichContentDraft,
@@ -1336,7 +1341,7 @@
     (Array.isArray(sources) ? sources : []).forEach(function (source) {
       walkObject(source, [], function (value, path) {
         var pathText = path.join('.');
-        if (!/(package|packaging|packing|skuPackage|skuPackaging|商品件重尺|包装|件重尺)/i.test(pathText)) return;
+        if (!/(package|packaging|packing|packInfo|productPackInfo|pieceWeightScale|weightScale|skuPackage|skuPackaging|商品件重尺|包装|件重尺)/i.test(pathText)) return;
         if (/(^|\.)(packageSize|packageDimensions|packageDimension|packSize|packDimensions)$/i.test(pathText)) return;
         if (Array.isArray(value)) {
           value.forEach(function (entry) {
@@ -1364,6 +1369,17 @@
       return row && Number(row.weightG) > 0;
     });
     return found ? Number(found.weightG) : null;
+  }
+
+  function pick1688PackageDimensionsMmFromRows(rows) {
+    var found = (Array.isArray(rows) ? rows : []).find(function (row) {
+      return row && Number(row.lengthMm) > 0 && Number(row.widthMm) > 0 && Number(row.heightMm) > 0;
+    });
+    return found ? {
+      lengthMm: Number(found.lengthMm),
+      widthMm: Number(found.widthMm),
+      heightMm: Number(found.heightMm)
+    } : null;
   }
 
   function pick1688PackageWeightGFromSources(sources) {
@@ -1513,8 +1529,8 @@
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     var unit = pickFirstValue(value, ['unit', 'dimensionUnit', 'sizeUnit', 'lengthUnit', '尺寸单位']) || '';
     var weightUnit = pickFirstValue(value, ['weightUnit', '重量单位']) || '';
-    var color = normalizeWhitespace(pickFirstValue(value, ['color', 'colour', '颜色', '颜色分类']) || '');
-    var size = normalizeWhitespace(pickFirstValue(value, ['size', 'spec', 'specText', '尺码', '规格', '容量']) || '');
+    var color = normalizeWhitespace(pickFirstValue(value, ['color', 'colour', 'sku1', 'skuName1', '颜色', '颜色分类']) || '');
+    var size = normalizeWhitespace(pickFirstValue(value, ['size', 'spec', 'specText', 'sku2', 'skuName2', '尺码', '规格', '容量']) || '');
     var lengthMm = dimensionToMm(pickFirstValue(value, ['lengthMm', 'length', 'len', 'long', '长', '长(cm)']), unit);
     var widthMm = dimensionToMm(pickFirstValue(value, ['widthMm', 'width', 'wid', '宽', '宽(cm)']), unit);
     var heightMm = dimensionToMm(pickFirstValue(value, ['heightMm', 'height', 'hgt', '高', '高(cm)']), unit);

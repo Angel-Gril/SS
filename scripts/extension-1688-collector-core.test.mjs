@@ -431,6 +431,68 @@ test('1688 core extracts packaging rows when the table includes volume before we
   });
 });
 
+test('1688 core extracts packaging rows from 1688 productPackInfo pieceWeightScaleInfo', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/965347477991.html?offerId=965347477991',
+    host: 'detail.1688.com',
+    pageText: '25欧美跨境亚马逊秋季男透气棉麻长裤temu宽松休闲运动亚麻直筒裤',
+    sources: [{
+      result: {
+        data: {
+          productPackInfo: {
+            fields: {
+              unitWeight: 0,
+              label: '商品件重尺',
+              pieceWeightScale: {
+                pieceWeightScaleInfo: [
+                  { sku1: '白色', sku2: 'S', length: 35, width: 27, height: 1, volume: 945, weight: 300, skuId: 5907368477973 },
+                  { sku1: '白色', sku2: 'M', length: 35, width: 27, height: 1, volume: 945, weight: 300, skuId: 5907368477974 },
+                  { sku1: '藏青色', sku2: 'S', length: 35, width: 27, height: 1, volume: 945, weight: 300, skuId: 5907368477979 },
+                ],
+              },
+            },
+          },
+        },
+      },
+      resultData: {
+        global: {
+          globalData: {
+            model: {
+              offerId: 965347477991,
+              subject: '25欧美跨境亚马逊秋季男透气棉麻长裤temu宽松休闲运动亚麻直筒裤',
+              offerBaseInfo: {
+                skuProps: [
+                  { prop: '颜色', value: [{ name: '白色' }, { name: '藏青色' }] },
+                  { prop: '尺码', value: [{ name: 'S' }, { name: 'M' }] },
+                ],
+              },
+              tradeModel: {
+                priceDisplay: '29.99',
+              },
+            },
+          },
+        },
+      },
+    }],
+  });
+
+  assert.equal(result.sourcePackagingRows.length, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.sourcePackagingRows[0])), {
+    color: '白色',
+    size: 'S',
+    lengthMm: 350,
+    widthMm: 270,
+    heightMm: 10,
+    volumeCm3: 945,
+    weightG: 300,
+  });
+  assert.equal(result.weightG, 300);
+  assert.equal(result.grossWeightGrams, 300);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.dimensionsMm)), { lengthMm: 350, widthMm: 270, heightMm: 10 });
+});
+
 test('1688 core treats weight(g) table column as grams even when size labels contain jin', () => {
   const core = loadCore();
 
