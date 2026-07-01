@@ -576,6 +576,42 @@ test('1688 core extracts SKU packaging rows when 1688 table only has weight colu
   assert.equal(result.grossWeightGrams, 150);
 });
 
+test('1688 core decodes sku spec text and recovers color size attrs', () => {
+  const core = loadCore();
+
+  const result = core.extract1688ProductFromSources({
+    url: 'https://detail.1688.com/offer/964838561364.html?offerId=964838561364',
+    host: 'detail.1688.com',
+    pageText: [
+      '商品属性 颜色 黑色 绿色 卡其色 尺码 M L XL 2XL 3XL',
+      '包装信息 商品件重尺 颜色 尺码 重量(g)',
+      '黑色 M 300 黑色 L 300 黑色 XL 300 黑色 2XL 300 黑色 3XL 300',
+      '绿色 M 300 绿色 L 300 绿色 XL 300 绿色 2XL 300 绿色 3XL 300',
+      '卡其色 M 300 卡其色 L 300 卡其色 XL 300 卡其色 2XL 300 卡其色 3XL 300',
+    ].join(' '),
+    sources: [{
+      offerId: '964838561364',
+      subject: '秋季新款日系复古宽松九分裤男女ins纯色简约情侣阔腿工装裤薄款',
+      skuModel: {
+        skuProps: [
+          { prop: '颜色', value: [{ name: '黑色' }, { name: '绿色' }, { name: '卡其色' }] },
+          { prop: '尺码', value: [{ name: 'M' }, { name: 'L' }, { name: 'XL' }, { name: '2XL' }, { name: '3XL' }] },
+        ],
+        skuMap: {
+          '6070619094476': { skuId: '6070619094476', name: '黑色&gt;2XL', stock: 2000 },
+        },
+      },
+      priceInfo: { price: '29' },
+      imageList: ['https://cbu01.alicdn.com/img/ibank/O1CN-main.jpg'],
+    }],
+  });
+
+  assert.equal(result.skuItems.length, 1);
+  assert.equal(result.skuItems[0].name, '黑色 / 2XL');
+  assert.equal(result.skuItems[0].specText, '黑色 / 2XL');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.skuItems[0].attrs)), { '颜色': '黑色', '尺码': '2XL' });
+});
+
 test('1688 core separates lingerie attribute table fields from sale sizes', () => {
   const core = loadCore();
 

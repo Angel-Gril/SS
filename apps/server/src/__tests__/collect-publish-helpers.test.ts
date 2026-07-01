@@ -2164,6 +2164,54 @@ describe('collect publish helpers', () => {
     expect(candidates.map((candidate) => candidate.typeName)).not.toContain('MIDI-контроллер');
   });
 
+  it('matches loose cargo cropped pants titles to generic trouser categories', () => {
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '秋季新款日系复古宽松九分裤男女ins纯色简约情侣阔腿工装裤薄款',
+        sourcePlatform: '1688',
+        metadata: {
+          sourcePlatform: '1688',
+          sourceStandardAttributes: {
+            brand: { value: '', isBrandless: true },
+            colors: ['черный', 'хаки'],
+            sizes: ['M', 'L', 'XL'],
+            materials: ['полиэстер'],
+            gender: { value: 'unisex' },
+            seasons: ['spring', 'autumn'],
+            packageDimensionsMm: null,
+            packageWeightG: 300,
+            categoryHints: [],
+            missingForOzon: ['包装尺寸'],
+          },
+        },
+      },
+      categoryTree: [
+        {
+          description_category_id: 17028706,
+          category_name: 'Одежда',
+          children: [
+            {
+              description_category_id: 200000933,
+              category_name: 'Одежда',
+              children: [{ type_id: 93079, type_name: 'Брюки', children: [] }],
+            },
+            {
+              description_category_id: 200001519,
+              category_name: 'Одежда для малышей',
+              children: [{ type_id: 972076151, type_name: 'Брюки для малышей', children: [] }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 200000933,
+      typeId: 93079,
+      typeName: 'Брюки',
+    });
+  });
+
   it('maps source standard attributes to Ozon category candidates and required gaps', () => {
     const plan = buildSourceStandardOzonAttributePlan({
       brand: { value: '', isBrandless: true },

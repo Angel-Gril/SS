@@ -357,11 +357,22 @@ function sourcePackagingReasonText(item: SourceCollectItem): string {
   return '';
 }
 
+function sourcePackagingRowsHaveCompletePackage(rows: unknown[]): boolean {
+  return rows.some((row) => {
+    const record = sourceRecord(row);
+    return Boolean(record.weightG && record.lengthMm && record.widthMm && record.heightMm);
+  });
+}
+
 function sourcePackagingEvidence(item: SourceCollectItem): { metric: string; checklistLabel: string; done: boolean; reasonLabel: string } {
   const rows = sourcePackagingRows(item);
   const packaging = sourcePackagingProfile(item);
   const reasonLabel = sourcePackagingReasonText(item);
-  if (rows.length) return { metric: String(rows.length), checklistLabel: `包装信息 ${rows.length}`, done: true, reasonLabel };
+  const marker = String(packaging.status || packaging.reasonCode || packaging.reason || '').trim();
+  const hasCompleteRows = sourcePackagingRowsHaveCompletePackage(rows);
+  if (hasCompleteRows || marker === 'complete' || marker === 'complete_rows' || marker === 'parsed_rows') {
+    return { metric: String(rows.length || 1), checklistLabel: `包装信息 ${rows.length || 1}`, done: true, reasonLabel };
+  }
 
   const standard = sourceStandardAttributeModel(item);
   const parts = [
@@ -384,8 +395,9 @@ function sourcePackagingBadge(item: SourceCollectItem): ReadinessBadge {
   const reasonCode = String(packaging.reasonCode || packaging.reason || '').trim();
   const reasonLabel = sourcePackagingReasonText(item);
   const marker = status || reasonCode;
+  const hasCompleteRows = sourcePackagingRowsHaveCompletePackage(rows);
 
-  if (rows.length || marker === 'complete' || marker === 'complete_rows' || marker === 'parsed_rows') {
+  if (hasCompleteRows || marker === 'complete' || marker === 'complete_rows' || marker === 'parsed_rows') {
     return { label: '包装完整', tone: 'ok', title: reasonLabel || `包装行 ${rows.length || 1}` };
   }
   if (marker === 'weight_only') {

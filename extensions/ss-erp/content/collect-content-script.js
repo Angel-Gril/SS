@@ -1973,12 +1973,18 @@
 
   function normalize1688SkuMapEntry(key, row, skuProps) {
     const data = row && typeof row === "object" ? row : {};
+    const explicitSpecText = normalizeWhitespace(
+      pickFirstValue(data, ["spec", "specText", "specValue", "skuSpec", "attributeValue", "name", "title", "skuName", "displayName"])
+      || ""
+    );
     const attrs = Object.assign(
       {},
       parse1688SkuKeyAttrs(key, skuProps),
+      parse1688SkuKeyAttrs(explicitSpecText, skuProps),
       normalizeSkuAttrs(pickFirstValue(data, ["attrs", "attributes", "skuAttrs", "skuAttributes", "properties", "props"]))
     );
-    return normalize1688SkuObject({ ...data, attrs, specText: Object.keys(attrs).map((name) => attrs[name]).join(" / ") || key }, skuProps);
+    const resolvedSpecText = Object.keys(attrs).map((name) => attrs[name]).join(" / ") || explicitSpecText || key;
+    return normalize1688SkuObject({ ...data, attrs, specText: resolvedSpecText }, skuProps);
   }
 
   function normalize1688SkuObject(row, skuProps) {

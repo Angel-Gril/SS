@@ -116,6 +116,16 @@ assert.match(
   /sourcePackagingBadge/,
   'source collection row should render a dedicated packaging status badge',
 );
+assert.match(
+  page,
+  /marker === 'complete'[\s\S]*包装完整/,
+  'source collection row should show complete packaging only for complete packaging diagnostics',
+);
+assert.doesNotMatch(
+  page,
+  /rows\.length[\s\S]{0,220}包装完整/,
+  'source collection row should not mark rows with weight-only packaging as complete',
+);
 for (const label of ['包装完整', '缺包装尺寸', '无包装表', '包装解析失败']) {
   assert.match(page, new RegExp(label), `source collection row should expose packaging status label: ${label}`);
 }

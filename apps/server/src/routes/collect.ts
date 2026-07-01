@@ -2458,7 +2458,7 @@ function sourceCategorySearchTerms(value: unknown): string[] {
   ];
   const expansions: Array<[RegExp, string[]]> = [
     [/牛仔裤|牛仔|jeans?/i, ['джинсы', 'denim', 'jeans']],
-    [/裤子|长裤|直筒裤|休闲裤|pants?|trousers?/i, ['брюки', 'штаны', 'pants', 'trousers']],
+    [/裤子|长裤|直筒裤|休闲裤|工装裤|阔腿裤|九分裤|哈伦裤|小脚裤|西裤|运动裤|卫裤|亚麻裤|棉麻裤|pants?|trousers?/i, ['брюки', 'штаны', 'pants', 'trousers']],
     [/男装|男士|男款|男人|男性|\bmen'?s?\b|male/i, ['мужская', 'мужской', 'мужские', 'men', 'male']],
     [/女装|女士|女款|女人|女性|\bwomen'?s?\b|female/i, ['женская', 'женский', 'женские', 'women', 'female']],
     [/t恤|体恤|短袖|футбол/i, ['футболка', 'футболки', 't-shirt']],
@@ -2515,7 +2515,7 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
     if (/джинсы|jeans?/.test(haystack)) score += 28;
     if (/брюки|штаны|pants|trousers/.test(haystack) && !/джинсы|jeans?/.test(haystack)) score -= 12;
   }
-  if (/裤子|长裤|直筒裤|休闲裤|брюки|штаны|pants?|trousers?/.test(sourceText) && !/牛仔裤|джинсы|jeans?/.test(sourceText)) {
+  if (/裤子|长裤|直筒裤|休闲裤|工装裤|阔腿裤|九分裤|哈伦裤|小脚裤|西裤|运动裤|卫裤|亚麻裤|棉麻裤|брюки|штаны|pants?|trousers?/.test(sourceText) && !/牛仔裤|джинсы|jeans?/.test(sourceText)) {
     if (/брюки|штаны|pants|trousers/.test(haystack)) score += 32;
     if (/джинсы|jeans?/.test(haystack)) score -= 18;
   }

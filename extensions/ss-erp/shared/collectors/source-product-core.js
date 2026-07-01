@@ -69,8 +69,18 @@
     return 'g';
   }
 
+  function decodeHtmlEntities(value) {
+    return String(value || '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'");
+  }
+
   function normalizeWhitespace(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim();
+    return decodeHtmlEntities(value).replace(/\s+/g, ' ').trim();
   }
 
   function collectDataSources(pageState) {
@@ -452,14 +462,20 @@
 
   function normalize1688SkuMapEntry(key, row, skuProps) {
     var data = row && typeof row === 'object' ? row : {};
+    var explicitSpecText = normalizeWhitespace(
+      pickFirstValue(data, ['spec', 'specText', 'specValue', 'skuSpec', 'attributeValue', 'name', 'title', 'skuName', 'displayName'])
+      || ''
+    );
     var attrs = Object.assign(
       {},
       parse1688SkuKeyAttrs(key, skuProps),
+      parse1688SkuKeyAttrs(explicitSpecText, skuProps),
       normalize1688Attrs(pickFirstValue(data, ['attrs', 'attributes', 'skuAttrs', 'skuAttributes', 'properties', 'props']))
     );
+    var resolvedSpecText = Object.keys(attrs).map(function (name) { return attrs[name]; }).join(' / ') || explicitSpecText || key;
     return normalize1688SkuObject(Object.assign({}, data, {
       attrs: attrs,
-      specText: Object.keys(attrs).map(function (name) { return attrs[name]; }).join(' / ') || key
+      specText: resolvedSpecText
     }), skuProps);
   }
 
