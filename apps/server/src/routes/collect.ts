@@ -1998,6 +1998,26 @@ function toOzonResolvedAttributeValue(entry: OzonDictionaryEntry): OzonResolvedA
   };
 }
 
+function resolveUnisexAdultGenderDictionaryValues(dict: OzonDictionaryEntry[]): OzonResolvedAttributeValue[] {
+  const entries = Array.isArray(dict) ? dict.filter((entry) => Number.isFinite(Number(entry.id)) && String(entry.value || '').trim()) : [];
+  const findExact = (aliases: string[]) => aliases
+    .map((alias) => entries.find((entry) => normalizeOzonDictionaryText(entry.value) === normalizeOzonDictionaryText(alias)))
+    .find((entry): entry is OzonDictionaryEntry => !!entry) || null;
+
+  const male = findExact(['Мужской', 'Для мужчин', 'Мужчины', 'Male']);
+  const female = findExact(['Женский', 'Для женщин', 'Женщины', 'Female']);
+  if (!male || !female) return [];
+
+  const seen = new Set<number>();
+  return [male, female]
+    .map(toOzonResolvedAttributeValue)
+    .filter((value) => {
+      if (seen.has(value.dictionary_value_id)) return false;
+      seen.add(value.dictionary_value_id);
+      return true;
+    });
+}
+
 function normalizeOzonDictionaryText(value: unknown): string {
   return String(value || '')
     .normalize('NFKC')
@@ -2306,6 +2326,10 @@ export async function buildSourceStandardOzonPublishAttributes(input: SourceStan
         for (const item of resolved.values) {
           if (!collected.some((existing) => existing.dictionary_value_id === item.dictionary_value_id)) collected.push(item);
         }
+      }
+      if (!collected.length && candidate.standardKey === 'gender' && candidate.values.some((value) => normalizeOzonDictionaryText(value) === 'унисекс')) {
+        collected.push(...resolveUnisexAdultGenderDictionaryValues(dict));
+        if (collected.length) matchType = 'exact';
       }
       resolvedValues = collected;
     } else if (!Number.isFinite(dictionaryId) || dictionaryId <= 0) {

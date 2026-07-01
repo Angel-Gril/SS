@@ -2469,6 +2469,38 @@ describe('collect publish helpers', () => {
     expect(result.applied.map((entry) => entry.attributeId)).toEqual([9163, 10096, 4295]);
   });
 
+  it('maps unisex source gender to adult male and female when Ozon category dictionary has no unisex value', async () => {
+    const result = await buildSourceStandardOzonPublishAttributes({
+      standard: {
+        gender: { value: 'unisex', source: 'title' },
+      },
+      categoryAttrs: [
+        { id: 9163, name: 'Пол', is_required: true, dictionary_id: 300 },
+      ],
+      existingAttributes: [],
+      getAttributeDictValues: async () => [
+        { id: 22880, value: 'Мужской' },
+        { id: 22881, value: 'Женский' },
+        { id: 22882, value: 'Девочки' },
+        { id: 22883, value: 'Мальчики' },
+      ],
+    });
+
+    expect(result.attributes).toEqual([
+      {
+        id: 9163,
+        complex_id: 0,
+        values: [
+          { value: 'Мужской', dictionary_value_id: 22880 },
+          { value: 'Женский', dictionary_value_id: 22881 },
+        ],
+      },
+    ]);
+    expect(result.applied).toEqual([
+      { standardKey: 'gender', attributeId: 9163, attributeName: 'Пол', matchType: 'exact', valueCount: 2 },
+    ]);
+  });
+
   it('translates common Chinese source material names before resolving Ozon dictionaries', async () => {
     const result = await buildSourceStandardOzonPublishAttributes({
       standard: {
