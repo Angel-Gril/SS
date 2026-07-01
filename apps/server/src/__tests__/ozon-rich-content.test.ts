@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendOzonRichContentAttribute,
+  buildOzonSizeChartAttribute,
   buildOzonRichContentAttribute,
   buildOzonVideoMediaAttributesFromSourceVideos,
   OZON_VIDEO_PUBLISH_UNSUPPORTED_REASON,
   parseCollectedRichContent,
   planCollectedVideoPublish,
   renderSizeChartSvg,
+  resolveOzonSizeChartAttributeDef,
 } from '../services/ozon-rich-content.js';
 
 describe('Ozon rich content publishing', () => {
@@ -93,7 +95,7 @@ describe('Ozon rich content publishing', () => {
     });
   });
 
-  it('renders generated size chart blocks as uploaded rich content images', async () => {
+  it('builds native size chart tables while preserving rich text and images', async () => {
     const uploadedCharts: any[] = [];
     const attr = await buildOzonRichContentAttribute(JSON.stringify({
       blocks: [
@@ -117,17 +119,116 @@ describe('Ozon rich content publishing', () => {
       },
     });
 
-    expect(uploadedCharts).toHaveLength(1);
-    expect(uploadedCharts[0]).toMatchObject({
-      title: 'Таблица размеров',
-      rows: [
-        { size: 'M', ruSize: '44', intSize: 'M' },
-        { size: 'L', ruSize: '46', intSize: 'L' },
-      ],
-    });
+    expect(uploadedCharts).toHaveLength(0);
     const richJson = JSON.parse(attr!.values[0]!.value);
-    expect(JSON.stringify(richJson)).toContain('https://erp.example.com/rich/size-chart.jpg');
-    expect(JSON.stringify(richJson)).not.toContain('Таблица размеров');
+    expect(richJson.content[0]).toMatchObject({
+      widgetName: 'tcTable',
+      table: {
+        body: [
+          { data: [['RU', 'Российский размер'], '44', '46'] },
+          { data: [['INT', 'Международный размер'], 'M', 'L'] },
+        ],
+      },
+    });
+    expect(richJson.content[2]).toMatchObject({
+      widgetName: 'raShowcase',
+      blocks: [{
+        img: {
+          src: 'https://erp.example.com/rich/detail.jpg',
+          srcMobile: 'https://erp.example.com/rich/detail.jpg',
+        },
+        text: {
+          content: ['Описание товара.'],
+        },
+      }],
+    });
+    expect(JSON.stringify(richJson)).not.toContain('https://erp.example.com/rich/size-chart.jpg');
+  });
+
+  it('builds native Ozon tcTable JSON from generated size chart blocks', async () => {
+    const uploadedCharts: any[] = [];
+    const attr = await buildOzonRichContentAttribute(JSON.stringify({
+      blocks: [
+        { type: 'text', text: 'Описание товара.' },
+        {
+          type: 'size_chart',
+          title: 'Таблица размеров женской одежды',
+          columns: ['尺码', '俄罗斯尺码', '国际尺码', '胸围(cm)', '腰围(cm)'],
+          rows: [
+            { size: 'M', ruSize: '44', intSize: 'M', '胸围(cm)': '88-92', '腰围(cm)': '70-74' },
+            { size: 'L', ruSize: '46', intSize: 'L', '胸围(cm)': '93-97', '腰围(cm)': '75-78' },
+          ],
+        },
+      ],
+    }), {
+      sizeChartImageMapper: async (chart) => {
+        uploadedCharts.push(chart);
+        return 'https://erp.example.com/rich/size-chart.jpg';
+      },
+    });
+
+    expect(uploadedCharts).toHaveLength(0);
+    const richJson = JSON.parse(attr!.values[0]!.value);
+    expect(richJson.version).toBe(0.1);
+    expect(richJson.content[0]).toMatchObject({
+      widgetName: 'tcTable',
+      table: {
+        title: 'Таблица размеров женской одежды',
+        body: [
+          { data: [['RU', 'Российский размер'], '44', '46'] },
+          { data: [['INT', 'Международный размер'], 'M', 'L'] },
+          { data: [['Ог, см', 'Обхват груди'], '88-92', '93-97'] },
+          { data: [['От, см', 'Обхват талии'], '70-74', '75-78'] },
+        ],
+      },
+    });
+    expect(richJson.content[1]).toMatchObject({
+      widgetName: 'tcInstruction',
+      instruction: { view: 'women_clothing' },
+    });
+  });
+
+  it('builds a dedicated Ozon size chart JSON attribute when the category exposes it', () => {
+    const attrDef = resolveOzonSizeChartAttributeDef([
+      { id: 13164, name: 'Таблица размеров JSON' },
+      { id: 22336, name: 'Rich-контент JSON' },
+    ]);
+    expect(attrDef?.id).toBe(13164);
+
+    const attr = buildOzonSizeChartAttribute(JSON.stringify({
+      blocks: [{
+        type: 'size_chart',
+        title: 'Таблица размеров мужской одежды',
+        columns: ['尺码', '俄罗斯尺码', '国际尺码', '胸围(cm)', '腰围(cm)', '臀围(cm)', '领围(cm)'],
+        rows: [
+          { size: 'M', ruSize: '48', intSize: 'M', '胸围(cm)': '96-99', '腰围(cm)': '85-87', '臀围(cm)': '102-105', '领围(cm)': '40' },
+          { size: 'L', ruSize: '50', intSize: 'L', '胸围(cm)': '100-103', '腰围(cm)': '88-90', '臀围(cm)': '106-108', '领围(cm)': '41' },
+        ],
+      }],
+    }), { attributeId: Number(attrDef!.id) });
+
+    expect(attr?.id).toBe(13164);
+    const value = JSON.parse(attr!.values[0]!.value);
+    expect(value).toMatchObject({
+      version: 0.1,
+      content: [{
+        widgetName: 'tcTable',
+        table: {
+          title: 'Таблица размеров мужской одежды',
+          body: [
+            { data: [['RU', 'Российский размер'], '48', '50'] },
+            { data: [['INT', 'Международный размер'], 'M', 'L'] },
+            { data: [['Ог, см', 'Обхват груди'], '96-99', '100-103'] },
+            { data: [['От, см', 'Обхват талии'], '85-87', '88-90'] },
+            { data: [['Об, см', 'Обхват бедер'], '102-105', '106-108'] },
+            { data: [['Ош', 'Обхват шеи, см'], '40', '41'] },
+          ],
+        },
+      }, {
+        widgetName: 'tcInstruction',
+        instruction: { view: 'women_clothing' },
+      }],
+    });
   });
 
   it('renders dynamic size chart columns from built-in template rows', () => {

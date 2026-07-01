@@ -42,6 +42,7 @@ export interface SourceSizeChartPlan {
   status: SourceSizeChartStatus;
   label: string;
   mappingProfile: SourceSizeChartMappingProfile;
+  tableTitle?: string;
   tableColumns: string[];
   tableRows: SourceSizeChartRow[];
   normalizedSizes: string[];
@@ -187,7 +188,7 @@ function unique(values: string[]): string[] {
 function buildMappedRows(
   sizes: string[],
   profile: SourceSizeChartMappingProfile,
-): { columns: string[]; rows: SourceSizeChartRow[] } {
+): { columns: string[]; rows: SourceSizeChartRow[]; tableTitle?: string; source?: string } {
   if (profile === 'none') return { columns: [], rows: [] };
   return buildBuiltInSizeChartRows(sizes, profile);
 }
@@ -227,19 +228,22 @@ function buildSizeChartPlan(item: SourceItemLike): SourceSizeChartPlan {
   }
 
   if (mapped.rows.length) {
+    const isOzonTemplate = mapped.source === 'ozon_template';
+    const mappedLabel = isOzonTemplate ? 'Ozon 官方尺码表' : '内置映射表';
     return {
       status: 'mapped',
-      label: measurementEvidence.length ? '源尺码证据 + 内置映射表' : '内置映射表',
+      label: measurementEvidence.length ? `源尺码证据 + ${mappedLabel}` : mappedLabel,
       mappingProfile,
+      tableTitle: mapped.tableTitle,
       tableColumns: mapped.columns,
       tableRows: mapped.rows,
       normalizedSizes,
       measurementEvidence,
       richText: measurementEvidence.length
-        ? `Размеры: ${measurementEvidence.join('; ')}. Таблица размеров создана по встроенному соответствию.`
-        : `Таблица размеров создана по встроенному соответствию: ${mapped.rows.map((row) => `${row.size} - ${row.ruSize || row.footLengthCm || row.note}`).join('; ')}.`,
-      source: measurementEvidence.length ? '源尺码属性/SKU + 内置映射表' : '内置映射表',
-      action: '发布时会自动生成尺码表图片，建议发布前快速复核',
+        ? `Размеры: ${measurementEvidence.join('; ')}. Таблица размеров создана по ${isOzonTemplate ? 'официальному шаблону Ozon' : 'встроенному соответствию'}.`
+        : `Таблица размеров создана по ${isOzonTemplate ? 'официальному шаблону Ozon' : 'встроенному соответствию'}: ${mapped.rows.map((row) => `${row.size} - ${row.ruSize || row.footLengthCm || row.note}`).join('; ')}.`,
+      source: measurementEvidence.length ? `源尺码属性/SKU + ${mappedLabel}` : mappedLabel,
+      action: '发布时优先生成 Ozon JSON 尺码表，建议发布前快速复核',
     };
   }
 

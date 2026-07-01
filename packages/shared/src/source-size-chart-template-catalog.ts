@@ -1,3 +1,5 @@
+import { buildOzonSizeChartRows } from './ozon-size-chart-template-catalog';
+
 export type BuiltInSizeChartTemplateKey =
   | 'bra'
   | 'jeans'
@@ -84,6 +86,13 @@ export interface BuiltInSizeChartRow {
   footLengthCm?: string;
   note?: string;
   [key: string]: string | undefined;
+}
+
+export interface BuiltInSizeChartBuildResult {
+  columns: string[];
+  rows: BuiltInSizeChartRow[];
+  tableTitle?: string;
+  source?: 'ozon_template' | 'built_in';
 }
 
 export const BUILT_IN_SIZE_CHART_TEMPLATES: BuiltInSizeChartTemplate[] = [
@@ -742,7 +751,17 @@ export function getBuiltInSizeChartTemplateByKey(key: BuiltInSizeChartTemplateKe
 export function buildBuiltInSizeChartRows(
   sizes: string[],
   profile: BuiltInSizeChartMappingProfile,
-): { columns: string[]; rows: BuiltInSizeChartRow[] } {
+): BuiltInSizeChartBuildResult {
+  const ozonTemplate = buildOzonSizeChartRows(sizes, profile);
+  if (ozonTemplate.rows.length) {
+    return {
+      columns: ozonTemplate.columns,
+      rows: ozonTemplate.rows,
+      tableTitle: ozonTemplate.title,
+      source: 'ozon_template',
+    };
+  }
+
   const rows: BuiltInSizeChartRow[] = [];
   if (profile === 'adult_hats') {
     return buildRowsFromLookup(sizes, profile, ['尺码', '国际尺码', '头围(cm)']);

@@ -463,7 +463,7 @@ describe('collect publish helpers', () => {
         { type: 'text', text: 'Описание для карточки.' },
         {
           type: 'size_chart',
-          title: 'Таблица размеров',
+          title: 'Таблица размеров женской одежды',
           columns: ['尺码', '俄罗斯尺码', '国际尺码'],
           rows: [
             { size: 'M', ruSize: '44', intSize: 'M' },

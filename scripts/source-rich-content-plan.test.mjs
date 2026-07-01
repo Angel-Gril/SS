@@ -29,11 +29,35 @@ function loadTsModule(modulePath, injected = {}) {
 }
 
 const standard = loadTsModule('packages/shared/src/source-standard-attributes.ts');
-const sizeChartCatalog = loadTsModule('packages/shared/src/source-size-chart-template-catalog.ts');
+const ozonSizeChartCatalog = loadTsModule('packages/shared/src/ozon-size-chart-template-catalog.ts');
+const sizeChartCatalog = loadTsModule('packages/shared/src/source-size-chart-template-catalog.ts', {
+  './ozon-size-chart-template-catalog': ozonSizeChartCatalog,
+});
 const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', {
   './source-standard-attributes': standard,
+  './ozon-size-chart-template-catalog': ozonSizeChartCatalog,
   './source-size-chart-template-catalog': sizeChartCatalog,
 });
+
+{
+  assert.equal(ozonSizeChartCatalog.OZON_SIZE_CHART_TEMPLATES.length, 31);
+  const women = ozonSizeChartCatalog.buildOzonSizeChartRows(['M', 'L'], 'women_apparel');
+  assert.equal(women.title, 'Таблица размеров женской одежды');
+  assert.deepEqual(JSON.parse(JSON.stringify(women.columns.slice(0, 4))), [
+    'RU / Российский размер',
+    'INT / Международный размер',
+    'Ог, см / Обхват груди',
+    'От, см / Обхват талии',
+  ]);
+  assert.ok(women.rows.some((row) => row.size === 'M' && row.ruSize === '46' && row['Ог, см / Обхват груди'] === '93-97'));
+
+  const men = ozonSizeChartCatalog.buildOzonSizeChartRows(['XL'], 'men_apparel');
+  assert.equal(men.title, 'Таблица размеров мужской одежды');
+  assert.ok(men.rows.some((row) => row.size === 'XL' && row.ruSize === '54' && row['Ош / Обхват шеи, см'] === '42'));
+
+  const childrenShoes = ozonSizeChartCatalog.buildOzonSizeChartRows(['20'], 'children_shoes');
+  assert.ok(childrenShoes.rows.some((row) => row.size === '20' && row.ruSize === '20' && row.footLengthCm === '12,5'));
+}
 
 {
   const keys = new Set(sizeChartCatalog.BUILT_IN_SIZE_CHART_TEMPLATES.map((template) => template.key));
@@ -94,8 +118,9 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateLabel, '睡衣/睡裙富内容模板');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'women_apparel');
-  assert.deepEqual(JSON.parse(JSON.stringify(plan.sizeChart.tableColumns.slice(0, 3))), ['尺码', '俄罗斯尺码', '国际尺码']);
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row.ruSize === '44'));
+  assert.equal(plan.sizeChart.tableTitle, 'Таблица размеров женской одежды');
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.sizeChart.tableColumns.slice(0, 3))), ['RU / Российский размер', 'INT / Международный размер', 'Ог, см / Обхват груди']);
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row.ruSize === '46' && row['Ог, см / Обхват груди'] === '93-97'));
   assert.ok(plan.modules.some((module) => module.key === 'size_note'));
 }
 
@@ -116,7 +141,10 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'bra');
   assert.ok(plan.sizeChart.measurementEvidence.some((row) => row.includes('70AB')));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '70AB' && row.ruSize === '70AB'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '70AB' && row.ruSize === '70A'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '70AB' && row.ruSize === '70B'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '75AB' && row.ruSize === '75A'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '75AB' && row.ruSize === '75B'));
   assert.match(plan.sizeChart.richText, /Размеры/);
 }
 
@@ -163,8 +191,9 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'apparel_mens');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'men_apparel');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'XL' && row.ruSize === '50'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '3XL' && row.ruSize === '54'));
+  assert.equal(plan.sizeChart.tableTitle, 'Таблица размеров мужской одежды');
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'XL' && row.ruSize === '54'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '3XL' && row.ruSize === '60'));
 }
 
 {
@@ -180,8 +209,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'apparel_children');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'children_apparel');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '100' && row.ruSize === '100'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '120' && row.ruSize === '120'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '100CM' && row.ruSize === '30' && row['Рост, см'] === '99-104'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '120' && row.ruSize === '34' && row['Рост, см'] === '117-122'));
 }
 
 {
@@ -197,8 +226,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'shoes_men');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'men_shoes');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '42' && row.footLengthCm === '26'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '44' && row.footLengthCm === '27'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '42' && row.footLengthCm === '27'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '44' && row.footLengthCm === '28,3'));
 }
 
 {
@@ -214,8 +243,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'jeans');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'jeans');
-  assert.ok(plan.sizeChart.tableColumns.includes('腰围(cm)'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'W28/L32' && row.ruSize === '44' && row['腰围(cm)'] === '70-72'));
+  assert.ok(plan.sizeChart.tableColumns.includes('От, см / Обхват талии, см'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'W28/L32' && row.ruSize === '44' && row['От, см / Обхват талии, см'] === '70-72'));
 }
 
 {
@@ -231,8 +260,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'children_hats');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'children_hats');
-  assert.ok(plan.sizeChart.tableColumns.includes('头围(cm)'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '48' && row.ruSize === '48' && row['年龄'] === '1.5年'));
+  assert.ok(plan.sizeChart.tableColumns.includes('Ог, см / Обхват головы, см'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '48' && row['Ог, см / Обхват головы, см'] === '48' && row['Возраст'] === '1,5 года'));
 }
 
 {
@@ -248,8 +277,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'children_socks');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'children_socks');
-  assert.ok(plan.sizeChart.tableColumns.includes('脚长(cm)'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '28-32' && row.ruSize === '20' && row['脚长(cm)'] === '19-20.4'));
+  assert.ok(plan.sizeChart.tableColumns.includes('Дс, см / Длина стопы, см'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '28-32' && row.ruSize === '20' && row.footLengthCm === '19-20,4'));
 }
 
 {
@@ -265,8 +294,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'children_gloves');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'children_gloves');
-  assert.ok(plan.sizeChart.tableColumns.includes('手掌周长(cm)'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '4' && row.ruSize === '4' && row['国际尺码'] === 'S'));
+  assert.ok(plan.sizeChart.tableColumns.includes('Ол, см / Обхват ладони, см'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '4' && row.ruSize === '4' && row.intSize === 'S'));
 }
 
 {
@@ -282,8 +311,8 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
   assert.equal(plan.templateKey, 'children_tights');
   assert.equal(plan.sizeChart.status, 'mapped');
   assert.equal(plan.sizeChart.mappingProfile, 'children_tights');
-  assert.ok(plan.sizeChart.tableColumns.includes('身高(cm)'));
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '02S' && row.ruSize === '02S' && row['年龄'] === '9个月'));
+  assert.ok(plan.sizeChart.tableColumns.includes('Рост, см'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '02S' && row.ruSize === '74' && row['Возраст'] === '9 месяцев'));
 }
 
 {
@@ -298,7 +327,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'adult_hats');
   assert.equal(plan.sizeChart.mappingProfile, 'adult_hats');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row['头围(cm)'] === '58-59'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row['Ог, см / Обхват головы, см'] === '58-59'));
 }
 
 {
@@ -313,7 +342,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'shoes_children');
   assert.equal(plan.sizeChart.mappingProfile, 'children_shoes');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '20' && row.footLengthCm === '12.5'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '20' && row.ruSize === '20' && row.footLengthCm === '12,5'));
 }
 
 {
@@ -328,7 +357,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'socks_adult');
   assert.equal(plan.sizeChart.mappingProfile, 'adult_socks');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '25' && row['鞋码范围'] === '39-40'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '25' && row.ruSize === '25' && row['RU обувь / Российский размер обуви'] === '39-40'));
 }
 
 {
@@ -343,7 +372,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'rings');
   assert.equal(plan.sizeChart.mappingProfile, 'rings');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '17' && row['周长(mm)'] === '53'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === '17' && row['Длина, мм'] === '53'));
 }
 
 {
@@ -358,7 +387,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'knee_pads');
   assert.equal(plan.sizeChart.mappingProfile, 'knee_pads');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'L' && row['膝上围(cm)'] === '40-45'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'L' && row['Обхват, см / Выше колена'] === '40 – 45'));
 }
 
 {
@@ -373,7 +402,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'diving_boots');
   assert.equal(plan.sizeChart.mappingProfile, 'diving_boots');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'L' && row.ruSize === '42' && row.footLengthCm === '27'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'L' && row.EU === '42' && row['Длина, см'] === '27'));
 }
 
 {
@@ -388,7 +417,7 @@ const planner = loadTsModule('packages/shared/src/source-rich-content-plan.ts', 
 
   assert.equal(plan.templateKey, 'wetsuits');
   assert.equal(plan.sizeChart.mappingProfile, 'wetsuits');
-  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row['胸围(cm)'] === '100'));
+  assert.ok(plan.sizeChart.tableRows.some((row) => row.size === 'M' && row['Ог, см / Обхват груди'] === '100'));
 }
 
 {

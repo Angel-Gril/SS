@@ -8,6 +8,7 @@ export const OZON_RICH_CONTENT_ATTR_IDS = [
   OZON_RICH_CONTENT_ATTR_ID,
   OZON_LEGACY_RICH_CONTENT_ATTR_ID,
 ] as const;
+export const OZON_SIZE_CHART_ATTR_ID = 13164;
 
 export type ParsedRichContentBlock =
   | { type: 'text'; text: string }
@@ -75,6 +76,24 @@ export function resolveOzonRichContentAttributeDef<T extends { id?: unknown; nam
   return attributes.find((attr) => (
     /rich[-\s]*контент\s+json/i.test(String(attr.name || ''))
     || /rich[-\s]*content\s+json/i.test(String(attr.name || ''))
+  )) || null;
+}
+
+export function isOzonSizeChartAttributeId(value: unknown): boolean {
+  return Number(value) === OZON_SIZE_CHART_ATTR_ID;
+}
+
+export function resolveOzonSizeChartAttributeDef<T extends { id?: unknown; name?: unknown }>(
+  attributes: T[] | null | undefined,
+): T | null {
+  if (!Array.isArray(attributes)) return null;
+  const byId = attributes.find((attr) => isOzonSizeChartAttributeId(attr.id));
+  if (byId) return byId;
+  return attributes.find((attr) => (
+    /таблиц[аы]\s+размеров\s+json/i.test(String(attr.name || ''))
+    || /размерн(?:ая|ой)\s+(?:сетк|таблиц)[\s\p{L}-]*json/iu.test(String(attr.name || ''))
+    || /size\s*chart\s*json/i.test(String(attr.name || ''))
+    || /(?:尺码表|尺寸表)\s*json/i.test(String(attr.name || ''))
   )) || null;
 }
 
@@ -330,6 +349,125 @@ function buildFallbackRichContent(blocks: ParsedRichContentBlock[]) {
   };
 }
 
+type SizeChartBlock = Extract<ParsedRichContentBlock, { type: 'size_chart' }>;
+
+const OZON_TC_INSTRUCTION_DISCLAIMER = {
+  title: 'Обратите внимание',
+  body: 'У товара отсутствует российский размер. Мы рекомендуем принимать решение о покупке на основе примерки, а также использовать таблицу размеров.',
+};
+
+function ozonTcColumnDefinition(label: string): [string, string] {
+  const normalized = normalizeText(label);
+  if (/^(?:ru|рос|российский)|российск|россия|рус|俄罗斯/i.test(normalized)) return ['RU', 'Российский размер'];
+  if (/^(?:int|международ)|международн|international|国际/i.test(normalized)) return ['INT', 'Международный размер'];
+  if (/胸围|груд|ог\b|chest/i.test(normalized)) return ['Ог, см', 'Обхват груди'];
+  if (/腰围|талии|от\b|waist/i.test(normalized)) return ['От, см', 'Обхват талии'];
+  if (/臀围|бед[её]р|об\b|hip/i.test(normalized)) return ['Об, см', 'Обхват бедер'];
+  if (/领围|脖围|颈围|шеи|ош\b|neck/i.test(normalized)) return ['Ош', 'Обхват шеи, см'];
+  if (/脚长|стоп|foot/i.test(normalized)) return ['Дс, см', 'Длина стопы, см'];
+  if (/鞋垫|стельк|insole/i.test(normalized)) return ['Дст, см', 'Длина стельки, см'];
+  if (/头围|голов|head/i.test(normalized)) return ['Огл, см', 'Обхват головы'];
+  if (/手掌周长|掌围|palm.*circum/i.test(normalized)) return ['Ол, см', 'Обхват ладони'];
+  if (/掌宽|palm.*width/i.test(normalized)) return ['Шл, см', 'Ширина ладони'];
+  if (/身高|рост|height/i.test(normalized)) return ['Рост, см', 'Рост'];
+  if (/年龄|возраст|age/i.test(normalized)) return ['Возраст', 'Возраст'];
+  if (/说明|примеч|note/i.test(normalized)) return ['Примечание', 'Примечание'];
+  if (/尺码|размер|size/i.test(normalized)) return ['Размер', 'Размер'];
+  return [normalized.slice(0, 24) || 'Параметр', normalized.slice(0, 80) || 'Параметр'];
+}
+
+function shouldSkipSourceSizeColumn(label: string, columns: string[]): boolean {
+  const normalized = normalizeText(label);
+  if (!/(?:尺码|размер|size)/i.test(normalized)) return false;
+  if (/(?:рос|ru|俄|международ|int|国际)/i.test(normalized)) return false;
+  return columns.some((column) => column !== label && /(?:рос|ru|俄|международ|int|国际)/i.test(normalizeText(column)));
+}
+
+function buildOzonTcTableWidget(chart: SizeChartBlock): Record<string, unknown> | null {
+  const columns = chart.columns.map(normalizeText).filter(Boolean);
+  const rows = chart.rows
+    .map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, normalizeText(value)])))
+    .filter((row) => Object.values(row).some(Boolean));
+  if (!rows.length) return null;
+
+  const body: Array<{ data: unknown[] }> = [];
+  const seen = new Set<string>();
+  for (const column of columns) {
+    if (shouldSkipSourceSizeColumn(column, columns)) continue;
+    const definition = ozonTcColumnDefinition(column);
+    const key = definition.join('|').toLocaleLowerCase('ru-RU');
+    if (seen.has(key)) continue;
+    const values = rows.map((row) => sizeChartCellValue(row, column));
+    if (!values.some(Boolean)) continue;
+    seen.add(key);
+    body.push({ data: [definition, ...values] });
+  }
+
+  if (!body.length) {
+    const values = rows.map((row) => normalizeText(row.size));
+    if (values.some(Boolean)) body.push({ data: [['Размер', 'Размер'], ...values] });
+  }
+  if (!body.length) return null;
+
+  return {
+    widgetName: 'tcTable',
+    table: {
+      title: normalizeText(chart.title) || 'Таблица размеров',
+      body,
+    },
+  };
+}
+
+function buildOzonTcInstructionWidget(): Record<string, unknown> {
+  return {
+    widgetName: 'tcInstruction',
+    instruction: {
+      view: 'women_clothing',
+    },
+    disclaimer: OZON_TC_INSTRUCTION_DISCLAIMER,
+  };
+}
+
+function buildNativeOzonSizeChartRichContent(
+  blocks: ParsedRichContentBlock[],
+  options: { includeRichBlocks?: boolean } = {},
+): Record<string, unknown> | null {
+  const chart = blocks.find((block): block is SizeChartBlock => block.type === 'size_chart');
+  if (!chart) return null;
+  const table = buildOzonTcTableWidget(chart);
+  if (!table) return null;
+
+  const content: unknown[] = [table, buildOzonTcInstructionWidget()];
+  const nonChartBlocks = options.includeRichBlocks === false
+    ? []
+    : blocks.filter((block) => block.type !== 'size_chart');
+  if (nonChartBlocks.length) {
+    const fallback = buildFallbackRichContent(nonChartBlocks);
+    if (Array.isArray(fallback.content)) content.push(...fallback.content);
+  }
+  return {
+    version: 0.1,
+    content,
+  };
+}
+
+export function buildOzonSizeChartAttribute(
+  input: unknown,
+  options: { attributeId?: number } = {},
+): OzonRichContentAttribute | null {
+  const parsed = parseCollectedRichContent(input);
+  if (!parsed.blocks.some((block) => block.type === 'size_chart')) return null;
+  const generated = buildNativeOzonSizeChartRichContent(parsed.blocks, { includeRichBlocks: false });
+  if (!generated) return null;
+  return {
+    id: options.attributeId && Number.isInteger(options.attributeId) && options.attributeId > 0
+      ? options.attributeId
+      : OZON_SIZE_CHART_ATTR_ID,
+    complex_id: 0,
+    values: [{ value: JSON.stringify(generated), dictionary_value_id: 0 }],
+  };
+}
+
 export async function buildOzonRichContentAttribute(
   input: unknown,
   options: {
@@ -337,6 +475,7 @@ export async function buildOzonRichContentAttribute(
     imageMapper?: (url: string) => Promise<string>;
     sizeChartImageMapper?: (chart: Extract<ParsedRichContentBlock, { type: 'size_chart' }>) => Promise<string>;
     maxBlocks?: number;
+    includeNativeSizeChart?: boolean;
   } = {},
 ): Promise<OzonRichContentAttribute | null> {
   const templated = await buildTemplateRichContent(input, {
@@ -364,10 +503,8 @@ export async function buildOzonRichContentAttribute(
       continue;
     }
     if (block.type === 'size_chart') {
-      if (!options.sizeChartImageMapper) continue;
-      const chartUrl = await options.sizeChartImageMapper(block);
-      const normalizedChartUrl = normalizeImageUrl(chartUrl);
-      if (normalizedChartUrl) blocks.push({ type: 'image', url: normalizedChartUrl });
+      if (options.includeNativeSizeChart === false) continue;
+      blocks.push(block);
       continue;
     }
     const mappedUrl = options.imageMapper ? await options.imageMapper(block.url) : block.url;
@@ -376,7 +513,7 @@ export async function buildOzonRichContentAttribute(
   }
 
   if (!blocks.length) return null;
-  const generated = buildFallbackRichContent(blocks);
+  const generated = buildNativeOzonSizeChartRichContent(blocks) || buildFallbackRichContent(blocks);
 
   return {
     id: options.attributeId && Number.isInteger(options.attributeId) && options.attributeId > 0
@@ -470,6 +607,17 @@ export function appendOzonRichContentAttribute<T extends { id: number; complex_i
     ? attributes.filter((attr) => !isOzonRichContentAttributeId(attr.id))
     : [];
   return richContentAttribute ? [...attrs, richContentAttribute] : attrs;
+}
+
+export function appendOzonSizeChartAttribute<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  sizeChartAttribute: OzonRichContentAttribute | null | undefined,
+): Array<T | OzonRichContentAttribute> {
+  const generatedId = Number(sizeChartAttribute?.id);
+  const attrs = Array.isArray(attributes)
+    ? attributes.filter((attr) => !isOzonSizeChartAttributeId(attr.id) && Number(attr.id) !== generatedId)
+    : [];
+  return sizeChartAttribute ? [...attrs, sizeChartAttribute] : attrs;
 }
 
 function filenameFromUrl(rawUrl: string, contentType = ''): string {

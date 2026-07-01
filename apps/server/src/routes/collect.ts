@@ -27,10 +27,13 @@ import {
 import { getOzonCategoryLocalKeywordExpansions } from '../services/ozon-category-local-rules.js';
 import {
   appendOzonRichContentAttribute,
+  appendOzonSizeChartAttribute,
   buildOzonRichContentAttribute,
+  buildOzonSizeChartAttribute,
   buildOzonVideoMediaAttributesFromSourceVideos,
   planCollectedVideoPublish,
   resolveOzonRichContentAttributeDef,
+  resolveOzonSizeChartAttributeDef,
   transferRichContentImage,
   uploadGeneratedSizeChartImage,
 } from '../services/ozon-rich-content.js';
@@ -1182,6 +1185,23 @@ function publishableSourceRichContentPayload(value: unknown): string {
   return JSON.stringify({ blocks });
 }
 
+function publishableSizeChartTitle(plan: Record<string, unknown>, sizeChart: Record<string, unknown>): string {
+  const tableTitle = cleanPublishName(sizeChart.tableTitle).slice(0, 120);
+  if (tableTitle) return tableTitle;
+  const templateKey = String(plan.templateKey || '').toLowerCase();
+  const templateLabel = String(plan.templateLabel || '').toLowerCase();
+  const profile = String(sizeChart.mappingProfile || '').toLowerCase();
+  const context = `${templateKey} ${templateLabel} ${profile}`;
+  if (/men_apparel|apparel_mens|муж|男装|男士/.test(context)) return 'Таблица размеров мужской одежды';
+  if (/children_apparel|apparel_children|童装|детск/.test(context)) return 'Таблица размеров детской одежды';
+  if (/women_shoes|shoes_women|女鞋/.test(context)) return 'Таблица размеров женской обуви';
+  if (/men_shoes|shoes_men|男鞋/.test(context)) return 'Таблица размеров мужской обуви';
+  if (/bra|文胸|胸罩/.test(context)) return 'Таблица размеров бюстгальтеров';
+  if (/underwear|apparel_underwear|内衣|内裤|трус/.test(context)) return 'Таблица размеров нижнего белья';
+  if (/women_apparel|apparel_sleepwear|女装|睡衣|睡裙/.test(context)) return 'Таблица размеров женской одежды';
+  return 'Таблица размеров';
+}
+
 function buildPublishableSizeChartBlock(planInput: unknown): Record<string, unknown> | null {
   const plan = metadataRecord(planInput);
   const sizeChart = metadataRecord(plan.sizeChart);
@@ -1197,7 +1217,7 @@ function buildPublishableSizeChartBlock(planInput: unknown): Record<string, unkn
     : [];
   return {
     type: 'size_chart',
-    title: 'Таблица размеров',
+    title: publishableSizeChartTitle(plan, sizeChart),
     columns: columns.length ? columns : ['尺码', '俄罗斯尺码'],
     rows: tableRows,
   };
@@ -5082,6 +5102,9 @@ export async function collectRoutes(app: FastifyInstance) {
     const richContentTrace: any[] = [];
     const richContentTraceSeen = new Set<string>();
     const richContentAttrCache = new Map<string, Promise<{ status: string; attribute: any | null; error?: string }>>();
+    const sizeChartTrace: any[] = [];
+    const sizeChartTraceSeen = new Set<string>();
+    const sizeChartAttrCache = new Map<string, Promise<{ status: string; attribute: any | null; error?: string }>>();
     const videoTrace: any[] = [];
     const videoTraceSeen = new Set<string>();
     const sourceStandardAttributeTrace: any[] = [];
@@ -5102,8 +5125,9 @@ export async function collectRoutes(app: FastifyInstance) {
         const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
         const originCountryAttrDef = allAttrs.find((a) => a.id === OZON_ORIGIN_COUNTRY_ATTR_ID);
         const richContentAttrDef = resolveOzonRichContentAttributeDef(allAttrs);
+        const sizeChartAttrDef = resolveOzonSizeChartAttributeDef(allAttrs);
 
-        console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}, rich=${richContentAttrDef?.id || 'NOT_FOUND'}`);
+        console.log(`[publish-ozon] category attrs ${group.categoryId}/${group.typeId}: total=${allAttrs.length}, required=${requiredAttrs.length}, brand=${brandAttrDef?.id || 'NOT_FOUND'}, manufacturer=${mfrAttrDef?.id || 'NOT_FOUND'}, rich=${richContentAttrDef?.id || 'NOT_FOUND'}, sizeChart=${sizeChartAttrDef?.id || 'NOT_FOUND'}`);
 
         let noBrandDictId: number | null = null;
         if (brandAttrDef) {
@@ -5145,6 +5169,38 @@ export async function collectRoutes(app: FastifyInstance) {
           if (richSource) {
             const sourceKey = String(importItem._sourceItemId || importItem.offer_id || 'unknown');
             const traceKey = `${group.categoryId}:${group.typeId}:${sourceKey}`;
+            let hasDedicatedSizeChartAttribute = false;
+            if (sizeChartAttrDef) {
+              if (!sizeChartAttrCache.has(traceKey)) {
+                sizeChartAttrCache.set(traceKey, Promise.resolve().then(() => {
+                  try {
+                    const attribute = buildOzonSizeChartAttribute(richSource, {
+                      attributeId: Number(sizeChartAttrDef.id),
+                    });
+                    return { status: attribute ? 'generated' : 'empty', attribute };
+                  } catch (e: any) {
+                    return { status: 'failed', attribute: null, error: e?.message ? String(e.message).slice(0, 300) : 'unknown error' };
+                  }
+                }));
+              }
+              const sizeChartResult = await sizeChartAttrCache.get(traceKey)!;
+              if (!sizeChartTraceSeen.has(traceKey)) {
+                sizeChartTraceSeen.add(traceKey);
+                sizeChartTrace.push({
+                  sourceItemId: importItem._sourceItemId || null,
+                  offerId: importItem.offer_id,
+                  categoryId: group.categoryId,
+                  typeId: group.typeId,
+                  status: sizeChartResult.status,
+                  attributeId: sizeChartResult.attribute?.id || null,
+                  error: sizeChartResult.error || null,
+                });
+              }
+              if (sizeChartResult.attribute) {
+                hasDedicatedSizeChartAttribute = true;
+                importItem.attributes = appendOzonSizeChartAttribute(importItem.attributes, sizeChartResult.attribute);
+              }
+            }
             if (!richContentAttrDef) {
               if (!richContentTraceSeen.has(traceKey)) {
                 richContentTraceSeen.add(traceKey);
@@ -5165,6 +5221,7 @@ export async function collectRoutes(app: FastifyInstance) {
                       attributeId: Number(richContentAttrDef.id),
                       imageMapper: (url) => transferRichContentImage(url, body.shopId, userId),
                       sizeChartImageMapper: (chart) => uploadGeneratedSizeChartImage(chart, body.shopId, userId),
+                      includeNativeSizeChart: !hasDedicatedSizeChartAttribute,
                     });
                     return { status: attribute ? 'generated' : 'empty', attribute };
                   } catch (e: any) {
@@ -5461,6 +5518,7 @@ export async function collectRoutes(app: FastifyInstance) {
             offerImageLists: Object.keys(mainOfferImageLists).length ? mainOfferImageLists : null,
             variantTrace: variantTrace.length ? variantTrace : null,
             richContentTrace: richContentTrace.length ? richContentTrace : null,
+            sizeChartTrace: sizeChartTrace.length ? sizeChartTrace : null,
             videoTrace: finalVideoTrace.length ? finalVideoTrace : null,
             sourceStandardAttributeTrace: sourceStandardAttributeTrace.length ? sourceStandardAttributeTrace : null,
             videoPublishStatus,

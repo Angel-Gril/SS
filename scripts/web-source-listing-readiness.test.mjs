@@ -29,9 +29,13 @@ function loadTsModule(modulePath, injected = {}) {
 }
 
 const standard = loadTsModule('packages/shared/src/source-standard-attributes.ts');
-const sizeChartCatalog = loadTsModule('packages/shared/src/source-size-chart-template-catalog.ts');
+const ozonSizeChartCatalog = loadTsModule('packages/shared/src/ozon-size-chart-template-catalog.ts');
+const sizeChartCatalog = loadTsModule('packages/shared/src/source-size-chart-template-catalog.ts', {
+  './ozon-size-chart-template-catalog': ozonSizeChartCatalog,
+});
 const richPlan = loadTsModule('packages/shared/src/source-rich-content-plan.ts', {
   './source-standard-attributes': standard,
+  './ozon-size-chart-template-catalog': ozonSizeChartCatalog,
   './source-size-chart-template-catalog': sizeChartCatalog,
 });
 const sourcePath = 'apps/web/src/lib/source-listing-readiness.ts';
@@ -229,8 +233,8 @@ function item(overrides = {}) {
   }));
   const richContentRow = diagnostics.find((row) => row.key === 'richContent');
   assert.match(richContentRow?.value || '', /睡衣\/睡裙富内容模板/);
-  assert.match(richContentRow?.evidence || '', /尺码表：内置映射表/);
-  assert.match(richContentRow?.action || '', /生成尺码表图片/);
+  assert.match(richContentRow?.evidence || '', /尺码表：Ozon 官方尺码表/);
+  assert.match(richContentRow?.action || '', /生成 Ozon JSON 尺码表/);
 }
 
 {
