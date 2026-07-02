@@ -82,8 +82,10 @@ export default function WarehouseTemplatesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">仓库模板管理</h1>
-          <p className="text-muted-foreground mt-1">配置 OZON 仓库标准参数，下发给用户应用到自己的店铺</p>
+          <h1 className="text-2xl font-semibold tracking-tight">OZON 仓库物流模板</h1>
+          <p className="text-muted-foreground mt-1">
+            维护 Ozon 仓库/物流方式照填模板。Ozon 后台没有稳定公开的物流创建/导入接口，这里不会直接写入 Ozon；用户按模板复制或参考后在 Ozon 后台配置。
+          </p>
         </div>
         <Button onClick={() => { setEditing(null); setShowDialog(true); }}><Plus className="h-4 w-4 mr-1" />新增模板</Button>
       </div>
@@ -94,7 +96,7 @@ export default function WarehouseTemplatesPage() {
           {loading ? (
             <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : list.length === 0 ? (
-            <p className="text-center py-10 text-muted-foreground">暂无模板，点击右上角新增</p>
+            <p className="text-center py-10 text-muted-foreground">暂无模板，点击右上角新增照填模板</p>
           ) : (
             <div className="space-y-2">
               {list.map((t) => (
@@ -332,7 +334,7 @@ function TemplateDialog({ template, onClose, onSuccess }: { template: WarehouseT
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{template ? '编辑仓库模板' : '新增仓库模板'}</DialogTitle>
+          <DialogTitle>{template ? '编辑 Ozon 仓库物流模板' : '新增 Ozon 仓库物流模板'}</DialogTitle>
         </DialogHeader>
 
         {/* Stepper 头 */}

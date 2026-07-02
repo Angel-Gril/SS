@@ -132,7 +132,7 @@ export default function LandingPage() {
           <Feature icon={Package} title="商品采集与上架" desc="浏览器扩展采集 1688/淘宝/拼多多商品，自动提取标题、属性、图片。支持批量打水印、一键上架 OZON。" />
           <Feature icon={ImageIcon} title="图片水印与存储" desc="内置水印模板，支持 R2/OSS/本地存储。图片自动压缩、格式转换，减少存储成本。" />
           <Feature icon={Store} title="OZON 店铺同步" desc="多店铺统一管理，自动同步商品、订单、库存。支持子账号权限分级。" />
-          <Feature icon={ShoppingCart} title="订单与物流处理" desc="订单自动拉取，批量打单、发货跟踪。支持扫码出库、仓库指令、第三方代理对接。" />
+          <Feature icon={ShoppingCart} title="订单与物流处理" desc="订单自动拉取，批量打单、发货跟踪。支持扫码出库、仓库作业和第三方代理对接。" />
           <Feature icon={BarChart3} title="财务与利润统计" desc="OZON 账单同步、成本快照、月度利润统计。支持多币种汇率、费用模板。" />
           <Feature icon={Users} title="团队协作与权限" desc="子账号管理、角色权限、操作审计。适合多人协作的中小团队。" />
         </div>

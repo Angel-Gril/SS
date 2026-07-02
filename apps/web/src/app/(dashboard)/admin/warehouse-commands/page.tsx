@@ -81,12 +81,16 @@ export default function WarehouseCommandsAdminPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">仓库指令</h1>
-          <p className="text-muted-foreground mt-1">下发仓库切换指令给用户，用户接受后由 OZON 异步执行</p>
+          <h1 className="text-2xl font-semibold tracking-tight">历史仓库指令</h1>
+          <p className="text-muted-foreground mt-1">
+            旧版 Ozon 仓库/物流自动执行记录，仅用于追踪历史任务。当前主流程请使用「OZON 仓库物流模板」指导用户在 Ozon 后台照填配置。
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />刷新</Button>
-          <Button onClick={() => setShowDispatch(true)}><Send className="h-4 w-4 mr-1" />下发指令</Button>
+          <Button disabled title="Ozon 没有稳定公开的物流创建/导入接口，旧版自动下发入口已停用">
+            <Send className="h-4 w-4 mr-1" />旧版下发已停用
+          </Button>
         </div>
       </div>
 

@@ -201,6 +201,8 @@ model ShopDeliveryMethod {
   name                String
   status              String?
   providerId          Int?     @map("provider_id")
+  providerName        String?  @map("provider_name")
+  tplDropoffPointId   String?  @map("tpl_dropoff_point_id")
   cutoff              String?
   slaCutIn            Int?     @map("sla_cut_in")
   tplIntegrationType  String?  @map("tpl_integration_type")
@@ -1074,11 +1076,22 @@ model OzonPickupPoint {
   note         String?                                         // 备注：资费/限重/对接 OZON 仓等
   isActive     Boolean  @default(true) @map("is_active")
   sortOrder    Int      @default(0) @map("sort_order")
+  source       String   @default("manual")                     // manual | ozon_seller
+  externalId   String?  @map("external_id")                    // Ozon 发运点 ID
+  providerId   Int?     @map("provider_id")
+  providerName String?  @map("provider_name")
+  shopId       String?  @map("shop_id")                        // 同步来源店铺
+  syncedAt     DateTime? @map("synced_at")
+  rawData      Json?    @map("raw_data")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@index([city])
   @@index([isActive])
+  @@index([source])
+  @@index([externalId])
+  @@index([providerId])
+  @@index([shopId])
   @@map("ozon_pickup_points")
 }
 

@@ -319,6 +319,10 @@ export async function shopRoutes(app: FastifyInstance) {
               name: dm.name,
               status: dm.status,
               providerId: dm.provider_id,
+              providerName: dm.provider_name || null,
+              tplDropoffPointId: dm.tpl_dropoff_point_id != null
+                ? String(dm.tpl_dropoff_point_id)
+                : (dm.tpl_dropoff_point?.code ? String(dm.tpl_dropoff_point.code) : null),
               cutoff: dm.cutoff || null,
               slaCutIn: dm.sla_cut_in || null,
               tplIntegrationType: dm.tpl_integration_type || null,
@@ -332,6 +336,10 @@ export async function shopRoutes(app: FastifyInstance) {
               name: dm.name,
               status: dm.status,
               providerId: dm.provider_id,
+              providerName: dm.provider_name || null,
+              tplDropoffPointId: dm.tpl_dropoff_point_id != null
+                ? String(dm.tpl_dropoff_point_id)
+                : (dm.tpl_dropoff_point?.code ? String(dm.tpl_dropoff_point.code) : null),
               cutoff: dm.cutoff || null,
               slaCutIn: dm.sla_cut_in || null,
               tplIntegrationType: dm.tpl_integration_type || null,

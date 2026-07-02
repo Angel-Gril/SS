@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +25,18 @@ interface PickupPoint {
   note: string | null;
   isActive: boolean;
   sortOrder: number;
+  source?: string | null;
+  externalId?: string | null;
+  providerId?: number | null;
+  providerName?: string | null;
+  syncedAt?: string | null;
   createdAt: string;
+}
+
+interface ShopOption {
+  id: string;
+  name: string;
+  platform: string;
 }
 
 const TYPE_OPTIONS = [
@@ -49,25 +60,38 @@ const emptyForm = {
   sortOrder: 0,
 };
 
-// __CONTINUE_HERE__
-
 export default function AdminOzonPickupPointsPage() {
   const systemDialog = useSystemDialog();
   const [items, setItems] = useState<PickupPoint[]>([]);
+  const [shops, setShops] = useState<ShopOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
   const [editing, setEditing] = useState<PickupPoint | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [filterCity, setFilterCity] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncShopId, setSyncShopId] = useState('');
+  const [filterKeyword, setFilterKeyword] = useState('');
 
-  useEffect(() => { fetchList(); }, []);
+  useEffect(() => {
+    fetchList();
+    fetchShops();
+  }, []);
 
   async function fetchList() {
     setLoading(true);
     const res = await api.get<PickupPoint[]>('/api/ozon-pickup-points?includeInactive=1');
     if (res.code === 1 && res.data) setItems(res.data);
     setLoading(false);
+  }
+
+  async function fetchShops() {
+    const res = await api.get<ShopOption[] | { rows?: ShopOption[] }>('/api/shops?limit=200');
+    if (res.code !== 1 || !res.data) return;
+    const rows = Array.isArray(res.data) ? res.data : (res.data.rows || []);
+    const ozonShops = rows.filter((shop) => shop.platform === 'OZON');
+    setShops(ozonShops);
+    setSyncShopId((current) => current || ozonShops[0]?.id || '');
   }
 
   function openCreate() {
@@ -143,28 +167,95 @@ export default function AdminOzonPickupPointsPage() {
     }
   }
 
-  const filtered = filterCity
-    ? items.filter((i) => i.city.includes(filterCity) || (i.province || '').includes(filterCity))
+  async function syncOzonDropoffPoints() {
+    if (!syncShopId) {
+      toast({ title: '请选择 Ozon 店铺', variant: 'destructive' });
+      return;
+    }
+    setSyncing(true);
+    const res = await api.post<{
+      created: number;
+      updated: number;
+      totalPoints: number;
+      providerCount: number;
+      providerErrors?: { providerId: number; message: string }[];
+    }>('/api/ozon-pickup-points/sync-ozon-dropoffs', { shopId: syncShopId });
+    setSyncing(false);
+    if (res.code === 1 && res.data) {
+      toast({
+        title: '同步Ozon发运点完成',
+        description: `发运点 ${res.data.totalPoints} 个，provider ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}`,
+      });
+      fetchList();
+    } else {
+      toast({ title: res.msg || '同步Ozon发运点失败', variant: 'destructive' });
+    }
+  }
+
+  const filtered = filterKeyword
+    ? items.filter((i) => {
+      const keyword = filterKeyword.toLowerCase();
+      return [i.city, i.province, i.name, i.address, i.contact, i.phone, i.providerName, i.externalId]
+        .some((value) => String(value || '').toLowerCase().includes(keyword));
+    })
     : items;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">OZON 揽收点管理</h1>
-          <p className="text-muted-foreground mt-1">维护 OZON 在中国境内的集运点 / 发运点。所有用户可查看启用状态的记录。</p>
+          <h1 className="text-2xl font-semibold tracking-tight">OZON 发运点同步</h1>
+          <p className="text-muted-foreground mt-1">从 Ozon Seller 读取店铺可见的中国境内发运点 / 揽收点 / 仓库地址。同步记录和手工记录都会保存到数据库，所有用户可查看启用状态的记录。</p>
         </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" />新增</Button>
+        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" />新增手工点</Button>
       </div>
 
       <Card>
-        <CardHeader>
-          <Input
-            placeholder="按城市/省份过滤"
-            value={filterCity}
-            onChange={(e) => setFilterCity(e.target.value)}
-            className="max-w-xs"
-          />
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <RefreshCw className="h-4 w-4" />
+            Ozon接口同步
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            选择已同步登录态的 Ozon 店铺，一键读取该账号在 Ozon 后台可见的中国发运点/揽收点/仓库地址，并写入本系统供用户搜索选择。
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <Label>Ozon 店铺</Label>
+              <select
+                value={syncShopId}
+                onChange={(event) => setSyncShopId(event.target.value)}
+                className="h-9 min-w-[240px] rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {shops.length ? shops.map((shop) => (
+                  <option key={shop.id} value={shop.id}>{shop.name}</option>
+                )) : <option value="">无可同步店铺</option>}
+              </select>
+            </div>
+            <Button onClick={syncOzonDropoffPoints} disabled={syncing || !syncShopId}>
+              {syncing ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+              从Ozon读取发运点/揽收点
+            </Button>
+          </div>
+          <div className="mt-3 text-xs text-muted-foreground">
+            需要该店铺已保存 Ozon 登录 cookie 和 company_id；同步失败时先到店铺页更新登录态，再回到这里重试。
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="text-base">已保存发运点/揽收点</CardTitle>
+            <Input
+              placeholder="按城市/省份/名称/地址/provider/发运点ID过滤"
+              value={filterKeyword}
+              onChange={(e) => setFilterKeyword(e.target.value)}
+              className="max-w-md"
+            />
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -180,6 +271,9 @@ export default function AdminOzonPickupPointsPage() {
                       <span className="font-medium">{it.name}</span>
                       <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>{typeLabel(it.type)}</Badge>
                       <Badge variant="outline">{it.province ? `${it.province} · ` : ''}{it.city}</Badge>
+                      {it.source === 'ozon_seller' && <Badge variant="outline">Ozon同步</Badge>}
+                      {it.providerName && <Badge variant="outline">{it.providerName}</Badge>}
+                      {it.externalId && <Badge variant="outline">ID {it.externalId}</Badge>}
                       {!it.isActive && <Badge variant="outline" className="text-muted-foreground">已停用</Badge>}
                       {it.sortOrder !== 0 && <span className="text-xs text-muted-foreground">序 {it.sortOrder}</span>}
                     </div>
@@ -201,7 +295,6 @@ export default function AdminOzonPickupPointsPage() {
           )}
         </CardContent>
       </Card>
-{/* __DIALOG_HERE__ */}
 
       <Dialog open={showDialog} onOpenChange={(v) => !v && setShowDialog(false)}>
         <DialogContent className="max-w-lg">
@@ -267,5 +360,3 @@ export default function AdminOzonPickupPointsPage() {
     </div>
   );
 }
-
-

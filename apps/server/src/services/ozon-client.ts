@@ -824,9 +824,11 @@ export interface OzonDeliveryMethod {
   status: string;
   warehouse_id: number;
   provider_id: number;
+  provider_name?: string;
   cutoff?: string;
   sla_cut_in?: number;
   tpl_integration_type?: string;
+  tpl_dropoff_point_id?: string | number;
   tpl_dropoff_point?: {
     address?: string;
     name?: string;

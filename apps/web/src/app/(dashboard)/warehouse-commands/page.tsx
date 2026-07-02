@@ -70,15 +70,15 @@ export default function WarehouseCommandsUserPage() {
     const cmd = commands.find((c) => c.id === id);
     const label = cmd?.commandType === 'update_delivery_method' ? '更新物流方式' : '创建/更新仓库';
     const confirmed = await systemDialog.confirm({
-      title: '执行仓库指令',
-      message: `确认执行「${label}」？此操作将调用 OZON 接口。`,
-      confirmText: '执行',
+      title: '执行旧版仓库指令',
+      message: `确认执行「${label}」？这是旧版自动执行流程；新流程建议按 Ozon 仓库物流模板在 Ozon 后台照填配置。`,
+      confirmText: '继续执行',
     });
     if (!confirmed) return;
     setAcceptingId(id);
     const res = await api.post(`/api/warehouse-commands/${id}/accept`);
     setAcceptingId(null);
-    if (res.code === 1) { toast({ title: '已提交，等待 OZON 异步执行' }); load(); }
+    if (res.code === 1) { toast({ title: '已提交旧版指令任务' }); load(); }
     else toast({ title: res.msg || '操作失败', variant: 'destructive' });
   }
 
@@ -102,8 +102,8 @@ export default function WarehouseCommandsUserPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">仓库指令</h1>
-          <p className="text-muted-foreground mt-1">管理员下发的仓库/物流切换指令，确认后将调用 OZON 接口完成更新</p>
+          <h1 className="text-2xl font-semibold tracking-tight">历史仓库指令</h1>
+          <p className="text-muted-foreground mt-1">旧版 Ozon 仓库/物流自动执行记录，仅用于兼容历史任务。新流程请按管理员维护的 Ozon 仓库物流模板在 Ozon 后台照填配置。</p>
         </div>
         <Button variant="outline" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />刷新</Button>
         {shops.size > 0 && (

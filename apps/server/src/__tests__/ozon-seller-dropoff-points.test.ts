@@ -1,0 +1,124 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  extractSellerDeliveryMethods,
+  fetchOzonSellerDropoffPoints,
+  toOzonPickupPointData,
+} from '../services/ozon-seller-dropoff-points.js';
+
+describe('Ozon seller drop-off points', () => {
+  it('extracts provider and tpl drop-off ids from seller warehouse facade payloads', () => {
+    const methods = extractSellerDeliveryMethods({
+      result: {
+        warehouses: [
+          {
+            deliveryMethods: [
+              {
+                id: 32672640,
+                name: 'RETS Standard Extra Small Courier',
+                providerId: 1079,
+                providerName: 'RETS Standard Extra Small',
+                tplDropoffPointId: 5802718,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(methods).toEqual([
+      {
+        id: 32672640,
+        name: 'RETS Standard Extra Small Courier',
+        providerId: 1079,
+        providerName: 'RETS Standard Extra Small',
+        tplDropoffPointId: 5802718,
+      },
+    ]);
+  });
+
+  it('uses provider_id with company auth to fetch and merge visible drop-off points', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        return jsonResponse({
+          deliveryMethods: [
+            { id: 1, name: 'RETS Standard', providerId: 1079, providerName: 'RETS', tplDropoffPointId: 5802718 },
+            { id: 2, name: 'RETS Budget', providerId: 1268, providerName: 'RETS Budget', tplDropoffPointId: 26433091 },
+          ],
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        expect(body.company_id).toBe('4494016');
+        expect(body.provider_id).toEqual(expect.any(Number));
+        expect((init?.headers as Record<string, string>)['x-o3-company-id']).toBe('4494016');
+        return jsonResponse({
+          result: [
+            { id: body.provider_id === 1079 ? 5802718 : 26433091, name: 'RETS广州中心仓', address: '广东省广州市白云区龙归街南村3号' },
+          ],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result.providers).toEqual([
+      { providerId: 1079, providerName: 'RETS' },
+      { providerId: 1268, providerName: 'RETS Budget' },
+    ]);
+    expect(result.points).toEqual([
+      expect.objectContaining({
+        externalId: '5802718',
+        providerId: 1079,
+        providerName: 'RETS',
+        name: 'RETS广州中心仓',
+        address: '广东省广州市白云区龙归街南村3号',
+        boundMethodIds: [1],
+      }),
+      expect.objectContaining({
+        externalId: '26433091',
+        providerId: 1268,
+        providerName: 'RETS Budget',
+        boundMethodIds: [2],
+      }),
+    ]);
+  });
+
+  it('builds searchable pickup point data from seller drop-off points', () => {
+    const data = toOzonPickupPointData({
+      externalId: '5802718',
+      name: 'RETS广州中心仓',
+      address: '广东省广州市白云区龙归街南村3号',
+      providerId: 1079,
+      providerName: 'RETS Standard Extra Small',
+      boundMethodIds: [32672640],
+    }, 'shop-1');
+
+    expect(data).toMatchObject({
+      city: '广州',
+      province: '广东',
+      type: 'dispatch',
+      source: 'ozon_seller',
+      externalId: '5802718',
+      providerId: 1079,
+      providerName: 'RETS Standard Extra Small',
+      shopId: 'shop-1',
+      isActive: true,
+    });
+    expect(data.note).toContain('32672640');
+  });
+});
+
+function jsonResponse(payload: unknown): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as Response;
+}

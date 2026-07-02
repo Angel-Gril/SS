@@ -1,0 +1,142 @@
+import Fastify from 'fastify';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ozonPickupPointRoutes } from '../routes/ozon-pickup-point.js';
+
+const mocks = vi.hoisted(() => ({
+  authenticate: vi.fn(async (request: any) => {
+    request.user = { userId: 'admin-1', role: 'ADMIN' };
+  }),
+  requireRole: vi.fn(() => async () => undefined),
+  pickupFindMany: vi.fn(),
+  pickupFindFirst: vi.fn(),
+  pickupCreate: vi.fn(),
+  pickupUpdate: vi.fn(),
+  shopFindFirst: vi.fn(),
+  fetchSellerDropoffs: vi.fn(),
+}));
+
+vi.mock('../lib/auth.js', () => ({
+  authenticate: mocks.authenticate,
+  requireRole: mocks.requireRole,
+}));
+
+vi.mock('../lib/prisma.js', () => ({
+  prisma: {
+    shop: {
+      findFirst: mocks.shopFindFirst,
+    },
+    ozonPickupPoint: {
+      findMany: mocks.pickupFindMany,
+      findFirst: mocks.pickupFindFirst,
+      create: mocks.pickupCreate,
+      update: mocks.pickupUpdate,
+      delete: vi.fn(),
+    },
+  },
+}));
+
+vi.mock('../services/ozon-seller-dropoff-points.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/ozon-seller-dropoff-points.js')>();
+  return {
+    ...actual,
+    fetchOzonSellerDropoffPoints: mocks.fetchSellerDropoffs,
+  };
+});
+
+async function buildApp() {
+  const app = Fastify();
+  await app.register(ozonPickupPointRoutes, { prefix: '/api/ozon-pickup-points' });
+  await app.ready();
+  return app;
+}
+
+describe('ozon pickup point routes', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('searches pickup points by name, address, provider and external id', async () => {
+    mocks.pickupFindMany.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points?q=RETS&type=dispatch',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        isActive: true,
+        type: 'dispatch',
+        OR: expect.arrayContaining([
+          { city: { contains: 'RETS', mode: 'insensitive' } },
+          { name: { contains: 'RETS', mode: 'insensitive' } },
+          { address: { contains: 'RETS', mode: 'insensitive' } },
+          { providerName: { contains: 'RETS', mode: 'insensitive' } },
+          { externalId: { contains: 'RETS', mode: 'insensitive' } },
+        ]),
+      }),
+    }));
+
+    await app.close();
+  });
+
+  it('syncs Ozon seller drop-off points from a shop cookie and company id', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.fetchSellerDropoffs.mockResolvedValue({
+      methods: [],
+      providers: [{ providerId: 1079, providerName: 'RETS' }],
+      providerErrors: [],
+      points: [
+        {
+          externalId: '5802718',
+          name: 'RETS广州中心仓',
+          address: '广东省广州市白云区龙归街南村3号',
+          providerId: 1079,
+          providerName: 'RETS',
+          boundMethodIds: [32672640],
+        },
+      ],
+    });
+    mocks.pickupFindFirst.mockResolvedValue(null);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/sync-ozon-dropoffs',
+      payload: { shopId: 'shop-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.fetchSellerDropoffs).toHaveBeenCalledWith(expect.objectContaining({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+    }));
+    expect(mocks.pickupCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        source: 'ozon_seller',
+        externalId: '5802718',
+        providerId: 1079,
+        shopId: 'shop-1',
+        city: '广州',
+      }),
+    }));
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: 1,
+        updated: 0,
+        totalPoints: 1,
+        providerCount: 1,
+      },
+    });
+
+    await app.close();
+  });
+});

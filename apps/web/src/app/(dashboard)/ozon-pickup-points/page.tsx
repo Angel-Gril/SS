@@ -20,11 +20,13 @@ interface PickupPoint {
   phone: string | null;
   workingHours: string | null;
   note: string | null;
+  source?: string | null;
+  externalId?: string | null;
+  providerId?: number | null;
+  providerName?: string | null;
 }
 
 const typeLabel = (t: string) => (t === 'collect' ? '集运点' : t === 'dispatch' ? '发运点' : t);
-
-// __CONTINUE_HERE__
 
 export default function OzonPickupPointsPage() {
   const [items, setItems] = useState<PickupPoint[]>([]);
@@ -33,11 +35,18 @@ export default function OzonPickupPointsPage() {
   const [keyword, setKeyword] = useState('');
   const [typeFilter, setTypeFilter] = useState<'' | 'collect' | 'dispatch'>('');
 
-  useEffect(() => { fetchList(); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { fetchList(); }, keyword || typeFilter ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [keyword, typeFilter]);
 
   async function fetchList() {
     setLoading(true);
-    const res = await api.get<PickupPoint[]>('/api/ozon-pickup-points');
+    const params = new URLSearchParams();
+    if (keyword.trim()) params.set('q', keyword.trim());
+    if (typeFilter) params.set('type', typeFilter);
+    const query = params.toString();
+    const res = await api.get<PickupPoint[]>(`/api/ozon-pickup-points${query ? `?${query}` : ''}`);
     if (res.code === 1 && res.data) setItems(res.data);
     setLoading(false);
   }
@@ -79,6 +88,8 @@ export default function OzonPickupPointsPage() {
     const k = keyword.toLowerCase();
     return [it.city, it.province, it.name, it.address].some(
       (v) => (v || '').toLowerCase().includes(k),
+    ) || [it.providerName, it.externalId].some(
+      (v) => (v || '').toLowerCase().includes(k),
     );
   });
 
@@ -89,9 +100,9 @@ export default function OzonPickupPointsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">OZON 揽收点</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">OZON 发运点查询</h1>
         <p className="text-muted-foreground mt-1">
-          自建仓主请把货物送至距离最近的 OZON 中国境内集运点 / 发运点
+          查询管理员从 Ozon Seller 同步的中国境内发运点 / 揽收点 / 仓库地址，自建仓主可按距离和站点信息安排送货
         </p>
       </div>
 
@@ -123,7 +134,6 @@ export default function OzonPickupPointsPage() {
           </div>
         </CardContent>
       </Card>
-{/* __LIST_HERE__ */}
 
       <Card>
         <CardHeader><CardTitle className="text-base">揽收点列表（{matched.length}）</CardTitle></CardHeader>
@@ -144,6 +154,9 @@ export default function OzonPickupPointsPage() {
                         <span className="font-medium">{it.name}</span>
                         <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>{typeLabel(it.type)}</Badge>
                         <Badge variant="outline">{it.province ? `${it.province} · ` : ''}{it.city}</Badge>
+                        {it.source === 'ozon_seller' && <Badge variant="outline">Ozon同步</Badge>}
+                        {it.providerName && <Badge variant="outline">{it.providerName}</Badge>}
+                        {it.externalId && <Badge variant="outline">ID {it.externalId}</Badge>}
                         {hit && <Badge variant="outline" className="text-orange-600 border-orange-300">同城</Badge>}
                       </div>
                       <div className="text-sm text-muted-foreground mt-1">{it.address}</div>
@@ -164,6 +177,4 @@ export default function OzonPickupPointsPage() {
     </div>
   );
 }
-
-
 
