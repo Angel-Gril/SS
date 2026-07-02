@@ -259,7 +259,7 @@ function parseSellerDropoffAddress(value: string): { address: string; contact?: 
   const phoneMatch = original.match(/(?:\+?86[-\s]?)?(1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8})/);
   const phone = normalizeContactPhone(phoneMatch?.[0] || '');
   const contactLabel = original.match(/(?:联系人|联络人|收件人|负责人)\s*[:：]?\s*([^,，;；)）\]】\r\n]*)/i);
-  const contact = contactLabel
+  let contact = contactLabel
     ? cleanupContactName(contactLabel[1] || '')
     : '';
   let address = original;
@@ -270,10 +270,31 @@ function parseSellerDropoffAddress(value: string): { address: string; contact?: 
       .replace(phoneMatch[0], '')
       .replace(/(?:电话|手机|联系方式)\s*[:：]?\s*/gi, '');
   }
+  if (!contact) {
+    const suffixContact = extractUnlabeledContactSuffix(address);
+    if (suffixContact.contact) {
+      contact = suffixContact.contact;
+      address = suffixContact.address;
+    }
+  }
   return {
     address: cleanupAddress(address) || original,
     ...(contact ? { contact } : {}),
     ...(phone ? { phone } : {}),
+  };
+}
+
+function extractUnlabeledContactSuffix(value: string): { address: string; contact?: string } {
+  const text = stringValue(value).replace(/\s+/g, ' ').trim();
+  if (!text) return { address: '' };
+  const contactSuffix = text.match(/(?:^|[\s,，;；、])([\u3400-\u9fff·]{1,6}(?:先生|女士|小姐|老师|经理|老板|主任|主管|师傅|总))\s*([)）\]】]*)$/);
+  if (!contactSuffix || typeof contactSuffix.index !== 'number') return { address: text };
+  const contact = cleanupContactName(contactSuffix[1] || '');
+  if (!contact) return { address: text };
+  const closing = contactSuffix[2] || '';
+  return {
+    address: `${text.slice(0, contactSuffix.index)}${closing}`,
+    contact,
   };
 }
 
@@ -286,10 +307,34 @@ function cleanupContactName(value: string): string {
 }
 
 function cleanupAddress(value: string): string {
-  return stringValue(value)
+  let text = stringValue(value)
     .replace(/\s+/g, ' ')
-    .replace(/[()（）\[\]【】,，;；\s]+$/g, '')
+    .replace(/[（(\[【,，;；\s]+$/g, '')
     .trim();
+  text = stripDanglingTrailingClosingBrackets(text)
+    .replace(/[（(\[【,，;；\s]+$/g, '')
+    .trim();
+  return text;
+}
+
+function stripDanglingTrailingClosingBrackets(value: string): string {
+  let text = value;
+  const pairs: Record<string, string> = {
+    '）': '（',
+    ')': '(',
+    ']': '[',
+    '】': '【',
+  };
+  while (text) {
+    const trailing = text.at(-1);
+    const opening = trailing ? pairs[trailing] : '';
+    if (!opening) return text;
+    const openCount = (text.match(new RegExp(`\\${opening}`, 'g')) || []).length;
+    const closeCount = (text.match(new RegExp(`\\${trailing}`, 'g')) || []).length;
+    if (openCount >= closeCount) return text;
+    text = text.slice(0, -1).trimEnd();
+  }
+  return text;
 }
 
 function normalizeContactPhone(value: unknown): string {

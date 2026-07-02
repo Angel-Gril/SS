@@ -271,6 +271,46 @@ describe('Ozon seller drop-off points', () => {
       phone: '13799969119',
     });
   });
+
+  it('extracts unlabeled honorific contact names from address suffixes', () => {
+    const data = toOzonPickupPointData({
+      externalId: 'xy-jinjiang-suffix',
+      name: '圆航国际晋江五里工业仓',
+      address: '（晋江五里工业仓）福建省晋江市五里工业区中华路16号盛辉物流园内; 吴先生',
+      phone: '13799969119',
+      providerId: 1072,
+      providerName: 'OYX Economy Extra Small',
+      boundMethodIds: [],
+    }, 'shop-1');
+
+    expect(data).toMatchObject({
+      city: '晋江',
+      province: '福建',
+      address: '（晋江五里工业仓）福建省晋江市五里工业区中华路16号盛辉物流园内',
+      contact: '吴先生',
+      phone: '13799969119',
+    });
+  });
+
+  it('extracts contact names from trailing warehouse parentheses without removing warehouse text', () => {
+    const data = toOzonPickupPointData({
+      externalId: 'guoo-jinjiang',
+      name: 'GW-JINJIANG01',
+      address: '福建省晋江市池店镇赤塘村沈海高速金福小区南侧约160米（李乐体育用品正大门）右侧（GUOO泉州集货仓 许先生）',
+      phone: '18059980205',
+      providerId: 1050,
+      providerName: 'GUOO Standard Extra Small',
+      boundMethodIds: [],
+    }, 'shop-1');
+
+    expect(data).toMatchObject({
+      city: '晋江',
+      province: '福建',
+      address: '福建省晋江市池店镇赤塘村沈海高速金福小区南侧约160米（李乐体育用品正大门）右侧（GUOO泉州集货仓）',
+      contact: '许先生',
+      phone: '18059980205',
+    });
+  });
 });
 
 function jsonResponse(payload: unknown): Response {
