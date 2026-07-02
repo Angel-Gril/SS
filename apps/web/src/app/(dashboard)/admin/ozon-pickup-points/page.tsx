@@ -112,15 +112,6 @@ function sendToExtension<T>(message: Record<string, unknown>, timeoutMs = 65000)
   });
 }
 
-function shouldFallbackToServerSync(error: string | undefined): boolean {
-  return /未检测到|版本过旧|no response|Receiving end does not exist|Could not establish connection|Extension context invalidated/i
-    .test(String(error || ''));
-}
-
-function isLocalBrowserRuntime(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-}
 
 export default function AdminOzonPickupPointsPage() {
   const systemDialog = useSystemDialog();
@@ -251,27 +242,11 @@ export default function AdminOzonPickupPointsPage() {
         shopId: syncShopId,
         ...extensionResult.data,
       });
-    } else if (isLocalBrowserRuntime() && shouldFallbackToServerSync(extensionResult.error)) {
-      setSyncing(false);
-      toast({
-        title: '本地版需要浏览器扩展读取 Ozon Seller 发运点',
-        description: `${extensionResult.error || '扩展未响应'}。请在 chrome://extensions 重载 SS ERP Local 扩展，刷新本页，并确认 seller.ozon.ru 已登录对应店铺。`,
-        variant: 'destructive',
-      });
-      return;
-    } else if (shouldFallbackToServerSync(extensionResult.error)) {
-      res = await api.post<{
-        created: number;
-        updated: number;
-        totalPoints: number;
-        providerCount: number;
-        providerErrors?: { providerId: number; message: string }[];
-      }>('/api/ozon-pickup-points/sync-ozon-dropoffs', { shopId: syncShopId });
     } else {
       setSyncing(false);
       toast({
-        title: '扩展读取Ozon发运点失败',
-        description: extensionResult.error || '请确认已打开并登录 seller.ozon.ru',
+        title: '需要通过浏览器扩展读取 Ozon 可选发运点池',
+        description: `${extensionResult.error || '扩展未响应'}。请打开 seller.ozon.ru 并切到目标店铺，重载 SS ERP 扩展和本页后再试。`,
         variant: 'destructive',
       });
       return;
@@ -279,12 +254,12 @@ export default function AdminOzonPickupPointsPage() {
     setSyncing(false);
     if (res.code === 1 && res.data) {
       toast({
-        title: '同步Ozon发运点完成',
-        description: `发运点 ${res.data.totalPoints} 个，provider ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}`,
+        title: '可选发运点池已更新',
+        description: `可选点 ${res.data.totalPoints} 个，承运商 ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}`,
       });
       fetchList();
     } else {
-      toast({ title: res.msg || '同步Ozon发运点失败', variant: 'destructive' });
+      toast({ title: res.msg || '导入 Ozon 可选发运点失败', variant: 'destructive' });
     }
   }
 
@@ -300,8 +275,8 @@ export default function AdminOzonPickupPointsPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">OZON 发运点同步</h1>
-          <p className="text-muted-foreground mt-1">从 Ozon Seller 读取店铺可见的中国境内发运点 / 揽收点 / 仓库地址。同步记录和手工记录都会保存到数据库，所有用户可查看启用状态的记录。</p>
+          <h1 className="text-2xl font-semibold tracking-tight">OZON 可选发运点池</h1>
+          <p className="text-muted-foreground mt-1">管理员从 Ozon Seller 读取当前账号可选择的中国境内发运点/集运仓，保存后用户可按地址、城市和承运商查询选择。</p>
         </div>
         <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" />新增手工点</Button>
       </div>
@@ -310,10 +285,10 @@ export default function AdminOzonPickupPointsPage() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <RefreshCw className="h-4 w-4" />
-            Ozon接口同步
+            Ozon Seller 可选点采集
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            选择已同步登录态的 Ozon 店铺，一键读取该账号在 Ozon 后台可见的中国发运点/揽收点/仓库地址，并写入本系统供用户搜索选择。
+            选择 ERP 店铺后，通过浏览器扩展复用已登录的 seller.ozon.ru 页面，读取该账号在 Ozon 后台可选的发运点池。
           </p>
         </CardHeader>
         <CardContent>
@@ -332,11 +307,11 @@ export default function AdminOzonPickupPointsPage() {
             </div>
             <Button onClick={syncOzonDropoffPoints} disabled={syncing || !syncShopId}>
               {syncing ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-              从Ozon读取发运点/揽收点
+              读取可选发运点池
             </Button>
           </div>
           <div className="mt-3 text-xs text-muted-foreground">
-            本地版会优先通过浏览器扩展复用已登录的 seller.ozon.ru 页面读取；没有扩展或扩展版本过旧时，才尝试使用店铺保存的 cookie/company_id 服务端读取。
+            这一步必须通过浏览器扩展在真实 Seller 页面执行；服务端官方 API 只能读已绑定物流方式，不能代替可选发运点池采集。
           </div>
         </CardContent>
       </Card>
@@ -344,7 +319,7 @@ export default function AdminOzonPickupPointsPage() {
       <Card>
         <CardHeader className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle className="text-base">已保存发运点/揽收点</CardTitle>
+            <CardTitle className="text-base">已保存可选点/自建点</CardTitle>
             <Input
               placeholder="按城市/省份/名称/地址/provider/发运点ID过滤"
               value={filterKeyword}
@@ -367,7 +342,7 @@ export default function AdminOzonPickupPointsPage() {
                       <span className="font-medium">{it.name}</span>
                       <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>{typeLabel(it.type)}</Badge>
                       <Badge variant="outline">{it.province ? `${it.province} · ` : ''}{it.city}</Badge>
-                      {it.source === 'ozon_seller' && <Badge variant="outline">Ozon同步</Badge>}
+                      {it.source === 'ozon_seller' ? <Badge variant="outline">Ozon可选池</Badge> : <Badge variant="outline">ERP自建</Badge>}
                       {it.providerName && <Badge variant="outline">{it.providerName}</Badge>}
                       {it.externalId && <Badge variant="outline">ID {it.externalId}</Badge>}
                       {!it.isActive && <Badge variant="outline" className="text-muted-foreground">已停用</Badge>}

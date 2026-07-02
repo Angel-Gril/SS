@@ -35,7 +35,10 @@ const importedDropoffSchema = z.object({
     name: z.string().optional().default(''),
     providerId: z.coerce.number(),
     providerName: z.string().optional().default(''),
-    tplDropoffPointId: z.coerce.number().nullable().optional(),
+    tplDropoffPointId: z.union([
+      z.coerce.number(),
+      z.string().trim().min(1),
+    ]).nullable().optional(),
   })).optional().default([]),
   providers: z.array(z.object({
     providerId: z.coerce.number(),
@@ -60,14 +63,17 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
 
   // 用户列表：普通用户只看启用点；管理员页面可通过 includeInactive 查看全部。
   app.get('/', async (request, reply) => {
-    const { city, q, type, includeInactive } = request.query as {
-      city?: string; q?: string; type?: string; includeInactive?: string;
+    const { city, q, type, includeInactive, providerId, source } = request.query as {
+      city?: string; q?: string; type?: string; includeInactive?: string; providerId?: string; source?: string;
     };
     const user = (request as any).user || {};
     const keyword = String(q || city || '').trim();
+    const providerIdNumber = Number(providerId);
     const where: any = {};
     if (!includeInactive || user.role !== 'ADMIN') where.isActive = true;
     if (type) where.type = type;
+    if (Number.isFinite(providerIdNumber) && providerIdNumber > 0) where.providerId = providerIdNumber;
+    if (source === 'manual' || source === 'ozon_seller') where.source = source;
     if (keyword) {
       where.OR = [
         { city: { contains: keyword, mode: 'insensitive' } },

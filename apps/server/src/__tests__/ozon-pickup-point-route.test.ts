@@ -94,6 +94,27 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 
+  it('filters pickup points by provider and source', async () => {
+    mocks.pickupFindMany.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points?q=厦门&providerId=1164&source=ozon_seller',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        isActive: true,
+        providerId: 1164,
+        source: 'ozon_seller',
+      }),
+    }));
+
+    await app.close();
+  });
+
   it('keeps inactive pickup points hidden from non-admin users even when includeInactive is requested', async () => {
     mocks.authenticate.mockImplementationOnce(async (request: any) => {
       request.user = { userId: 'user-1', role: 'USER' };
@@ -320,6 +341,56 @@ describe('ozon pickup point routes', () => {
         providerCount: 1,
       },
     });
+
+    await app.close();
+  });
+
+  it('imports browser-fetched Ozon seller drop-off points with string drop-off codes', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindFirst.mockResolvedValue(null);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [{
+          id: 26168680,
+          name: 'CEL Standard Budget',
+          providerId: 1164,
+          providerName: 'CEL',
+          tplDropoffPointId: 'CEL0030AN',
+        }],
+        providers: [{ providerId: 1164, providerName: 'CEL' }],
+        providerErrors: [],
+        points: [
+          {
+            externalId: 'CEL0030AN',
+            name: 'CEL福建厦门集货仓',
+            address: '厦门市海沧区东孚街道凤山西路6号1层',
+            providerId: 1164,
+            providerName: 'CEL',
+            boundMethodIds: [26168680],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        externalId: 'CEL0030AN',
+        providerId: 1164,
+        city: '厦门',
+      }),
+    }));
 
     await app.close();
   });
