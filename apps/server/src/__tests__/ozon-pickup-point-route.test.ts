@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ozonPickupPointRoutes } from '../routes/ozon-pickup-point.js';
 
@@ -456,6 +457,141 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 
+  it('touches unchanged Ozon seller points without rewriting full row data', async () => {
+    const point = {
+      externalId: '5802718',
+      name: 'RETS广州中心仓',
+      address: '广东省广州市白云区龙归街南村3号',
+      providerId: 1079,
+      providerName: 'RETS',
+      boundMethodIds: [],
+    };
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindMany.mockResolvedValue([
+      {
+        id: 'existing-1',
+        externalId: point.externalId,
+        providerId: point.providerId,
+        isActive: true,
+        syncHash: pickupPointSyncHash({
+          city: '广州',
+          province: '广东',
+          type: 'dispatch',
+          name: point.name,
+          address: point.address,
+          contact: null,
+          phone: null,
+          workingHours: null,
+          note: 'Ozon provider 1079 RETS; 未匹配当前物流方式',
+          isActive: true,
+          sortOrder: 100,
+          source: 'ozon_seller',
+          externalId: point.externalId,
+          providerId: point.providerId,
+          providerName: point.providerName,
+          shopId: 'shop-1',
+          rawData: point,
+        }),
+      },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [],
+        providers: [{ providerId: 1079, providerName: 'RETS' }],
+        providerErrors: [],
+        points: [point],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupUpdate).not.toHaveBeenCalled();
+    expect(mocks.pickupCreate).not.toHaveBeenCalled();
+    expect(mocks.pickupUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: { in: ['existing-1'] } },
+      data: { syncedAt: expect.any(Date) },
+    }));
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: 0,
+        updated: 0,
+        unchanged: 1,
+      },
+    });
+
+    await app.close();
+  });
+
+  it('rewrites existing Ozon seller points when their synced content changes', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindMany.mockResolvedValue([
+      {
+        id: 'existing-1',
+        externalId: '5802718',
+        providerId: 1079,
+        isActive: true,
+        syncHash: 'old-hash',
+      },
+    ]);
+    mocks.pickupUpdate.mockResolvedValue({ id: 'existing-1' });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [],
+        providers: [{ providerId: 1079, providerName: 'RETS' }],
+        providerErrors: [],
+        points: [
+          {
+            externalId: '5802718',
+            name: 'RETS广州新仓',
+            address: '广东省广州市白云区龙归街南村3号',
+            providerId: 1079,
+            providerName: 'RETS',
+            boundMethodIds: [],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'existing-1' },
+      data: expect.objectContaining({
+        name: 'RETS广州新仓',
+        syncHash: expect.any(String),
+      }),
+    }));
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: 0,
+        updated: 1,
+        unchanged: 0,
+      },
+    });
+
+    await app.close();
+  });
+
   it('imports browser-fetched Ozon seller drop-off points with string drop-off codes', async () => {
     mocks.shopFindFirst.mockResolvedValue({
       id: 'shop-1',
@@ -719,3 +855,14 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 });
+
+function pickupPointSyncHash(data: Record<string, unknown>): string {
+  return createHash('sha256').update(stableStringify(data)).digest('hex');
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+}

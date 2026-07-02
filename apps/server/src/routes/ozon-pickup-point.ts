@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../lib/auth.js';
@@ -29,6 +30,7 @@ const updateSchema = createSchema.partial();
 const OZON_DROPOFF_IMPORT_BODY_LIMIT = 20 * 1024 * 1024;
 const DEFAULT_PICKUP_POINT_PAGE_SIZE = 100;
 const MAX_PICKUP_POINT_PAGE_SIZE = 200;
+const OZON_SYNC_TOUCH_BATCH_SIZE = 500;
 const pickupPointListSelect = {
   id: true,
   city: true,
@@ -390,27 +392,43 @@ function buildSellerDropoffResultFromDeliveryMethods(deliveryMethods: OzonDelive
 async function upsertOzonSellerDropoffPoints(shopId: string, result: SellerDropoffFetchResult) {
   let created = 0;
   let updated = 0;
+  let unchanged = 0;
   const syncedAt = new Date();
   const existingRows = await prisma.ozonPickupPoint.findMany({
     where: { source: 'ozon_seller', shopId },
-    select: { id: true, externalId: true, providerId: true },
+    select: { id: true, externalId: true, providerId: true, isActive: true, syncHash: true },
   });
   const existingByKey = new Map(
     existingRows
       .filter((row) => row.externalId && row.providerId !== null)
-      .map((row) => [`${row.providerId}:${row.externalId}`, row.id]),
+      .map((row) => [`${row.providerId}:${row.externalId}`, row]),
   );
+  const unchangedIds: string[] = [];
 
   for (const point of result.points) {
-    const data = { ...toOzonPickupPointData(point, shopId), syncedAt };
-    const existingId = existingByKey.get(`${data.providerId}:${data.externalId}`);
-    if (existingId) {
-      await prisma.ozonPickupPoint.update({ where: { id: existingId }, data });
+    const baseData = toOzonPickupPointData(point, shopId);
+    const syncHash = buildOzonPickupPointSyncHash(baseData);
+    const data = { ...baseData, syncedAt, syncHash };
+    const existing = existingByKey.get(`${data.providerId}:${data.externalId}`);
+    if (existing) {
+      if (existing.isActive && existing.syncHash === syncHash) {
+        unchangedIds.push(existing.id);
+        unchanged += 1;
+        continue;
+      }
+      await prisma.ozonPickupPoint.update({ where: { id: existing.id }, data });
       updated += 1;
     } else {
       await prisma.ozonPickupPoint.create({ data });
       created += 1;
     }
+  }
+  for (let index = 0; index < unchangedIds.length; index += OZON_SYNC_TOUCH_BATCH_SIZE) {
+    const ids = unchangedIds.slice(index, index + OZON_SYNC_TOUCH_BATCH_SIZE);
+    await prisma.ozonPickupPoint.updateMany({
+      where: { id: { in: ids } },
+      data: { syncedAt },
+    });
   }
 
   let deactivatedCount = 0;
@@ -430,12 +448,44 @@ async function upsertOzonSellerDropoffPoints(shopId: string, result: SellerDropo
   return {
     created,
     updated,
+    unchanged,
     deactivated: deactivatedCount,
     totalPoints: result.points.length,
     providerCount: result.providers.length,
     methodCount: result.methods.length,
     providerErrors: result.providerErrors,
   };
+}
+
+function buildOzonPickupPointSyncHash(data: ReturnType<typeof toOzonPickupPointData>): string {
+  return createHash('sha256')
+    .update(stableStringify({
+      city: data.city,
+      province: data.province ?? null,
+      type: data.type,
+      name: data.name,
+      address: data.address,
+      contact: data.contact ?? null,
+      phone: data.phone ?? null,
+      workingHours: data.workingHours ?? null,
+      note: data.note ?? null,
+      isActive: data.isActive,
+      sortOrder: data.sortOrder,
+      source: data.source,
+      externalId: data.externalId,
+      providerId: data.providerId,
+      providerName: data.providerName,
+      shopId: data.shopId,
+      rawData: data.rawData,
+    }))
+    .digest('hex');
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
 }
 
 function normalizeImportedSellerDropoffResult(input: z.infer<typeof importedDropoffSchema>): SellerDropoffFetchResult {

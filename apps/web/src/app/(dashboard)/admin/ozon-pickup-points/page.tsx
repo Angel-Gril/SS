@@ -272,6 +272,7 @@ export default function AdminOzonPickupPointsPage() {
       res = await api.post<{
         created: number;
         updated: number;
+        unchanged?: number;
         deactivated?: number;
         totalPoints: number;
         providerCount: number;
@@ -293,7 +294,7 @@ export default function AdminOzonPickupPointsPage() {
     if (res.code === 1 && res.data) {
       toast({
         title: '可选发运点池已更新',
-        description: `可选点 ${res.data.totalPoints} 个，承运商 ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}，停用 ${res.data.deactivated || 0}`,
+        description: `可选点 ${res.data.totalPoints} 个，承运商 ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}，未变化 ${res.data.unchanged || 0}，停用 ${res.data.deactivated || 0}`,
       });
       setPage(1);
       fetchList();
