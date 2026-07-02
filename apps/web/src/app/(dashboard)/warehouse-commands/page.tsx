@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -43,6 +44,7 @@ const STATUS_CONFIG: Record<string, { label: string; variant: 'default' | 'secon
 };
 
 export default function WarehouseCommandsUserPage() {
+  const systemDialog = useSystemDialog();
   const [commands, setCommands] = useState<Command[]>([]);
   const [loading, setLoading] = useState(true);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
@@ -67,7 +69,12 @@ export default function WarehouseCommandsUserPage() {
   async function handleAccept(id: string) {
     const cmd = commands.find((c) => c.id === id);
     const label = cmd?.commandType === 'update_delivery_method' ? '更新物流方式' : '创建/更新仓库';
-    if (!confirm(`确认执行「${label}」？此操作将调用 OZON 接口`)) return;
+    const confirmed = await systemDialog.confirm({
+      title: '执行仓库指令',
+      message: `确认执行「${label}」？此操作将调用 OZON 接口。`,
+      confirmText: '执行',
+    });
+    if (!confirmed) return;
     setAcceptingId(id);
     const res = await api.post(`/api/warehouse-commands/${id}/accept`);
     setAcceptingId(null);
@@ -76,7 +83,13 @@ export default function WarehouseCommandsUserPage() {
   }
 
   async function handleReject(id: string) {
-    if (!confirm('确认拒绝该指令？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '拒绝仓库指令',
+      message: '确认拒绝该指令？',
+      confirmText: '拒绝',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.post(`/api/warehouse-commands/${id}/reject`);
     if (res.code === 1) { toast({ title: '已拒绝' }); load(); }
     else toast({ title: res.msg || '操作失败', variant: 'destructive' });

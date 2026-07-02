@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -24,6 +25,7 @@ interface Staff {
 }
 
 export default function StaffPage() {
+  const systemDialog = useSystemDialog();
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -45,7 +47,13 @@ export default function StaffPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确定删除该员工账号？此操作不可恢复。')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除员工账号',
+      message: '确定删除该员工账号？此操作不可恢复。',
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/staff/${id}`);
     if (res.code === 1) { toast({ title: '已删除' }); fetchStaff(); }
     else toast({ title: res.msg, variant: 'destructive' });

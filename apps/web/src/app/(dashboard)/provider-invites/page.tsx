@@ -5,6 +5,7 @@ import { Loader2, Check, X, Mailbox } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -24,6 +25,7 @@ interface InviteRow {
 }
 
 export default function ProviderInvitesPage() {
+  const systemDialog = useSystemDialog();
   const [invites, setInvites] = useState<InviteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [actingId, setActingId] = useState<string | null>(null);
@@ -38,7 +40,12 @@ export default function ProviderInvitesPage() {
   useEffect(() => { void load(); }, []);
 
   async function handleAccept(id: string) {
-    if (!confirm('接受邀请后，您的订单将由该代理打包发货并按其费率扣费。是否确认？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '接受代理邀请',
+      message: '接受邀请后，您的订单将由该代理打包发货并按其费率扣费。是否确认？',
+      confirmText: '接受邀请',
+    });
+    if (!confirmed) return;
     setActingId(id);
     const res = await api.post(`/api/provider/clients/${id}/accept`);
     setActingId(null);
@@ -47,7 +54,13 @@ export default function ProviderInvitesPage() {
   }
 
   async function handleReject(id: string) {
-    if (!confirm('拒绝邀请后，对方将无法再次邀请您。是否确认？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '拒绝代理邀请',
+      message: '拒绝邀请后，对方将无法再次邀请您。是否确认？',
+      confirmText: '拒绝邀请',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     setActingId(id);
     const res = await api.post(`/api/provider/clients/${id}/reject`);
     setActingId(null);

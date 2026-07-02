@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'next-themes';
 import { useState } from 'react';
+import { SystemDialogProvider } from '@/components/system-dialog-provider';
 import { Toaster } from '@/components/ui/toaster';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -22,8 +23,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
       <QueryClientProvider client={client}>
-        {children}
-        <Toaster />
+        <SystemDialogProvider>
+          {children}
+          <Toaster />
+        </SystemDialogProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

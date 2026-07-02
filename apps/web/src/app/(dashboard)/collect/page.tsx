@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -192,6 +193,7 @@ interface RandomizeConfig {
 
 export default function CollectPage() {
   const router = useRouter();
+  const systemDialog = useSystemDialog();
   const defaultCollectSourceGroup = 'ozon';
   const [items, setItems] = useState<CollectedItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -433,7 +435,13 @@ export default function CollectPage() {
 
   async function handleDeleteVariant(itemId: string, sku?: string) {
     if (!sku) { toast({ title: '该变体缺少 SKU，无法删除', variant: 'destructive' }); return; }
-    if (!window.confirm(`确认删除变体 SKU ${sku}？`)) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除变体 SKU',
+      message: `确认删除变体 SKU ${sku}？`,
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/collect/${itemId}/variants/${encodeURIComponent(sku)}`);
     if (res.code === 1) {
       toast({ title: '已删除变体' });
@@ -447,7 +455,13 @@ export default function CollectPage() {
   async function handleBatchDeleteVariants(item: CollectedItem) {
     const skus = getSelectedVariantSkus(item.id);
     if (!skus.length) { toast({ title: '请先选择要删除的变体', variant: 'destructive' }); return; }
-    if (!window.confirm(`确认删除选中的 ${skus.length} 个变体？`)) return;
+    const confirmed = await systemDialog.confirm({
+      title: '批量删除变体',
+      message: `确认删除选中的 ${skus.length} 个变体？`,
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.post<{ removed?: number; missingSkus?: string[] }>(`/api/collect/${item.id}/variants/batch-delete`, { skus });
     if (res.code === 1) {
       clearVariantLocalState(item.id, skus);

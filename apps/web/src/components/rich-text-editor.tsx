@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Bold, Italic, Underline, List, ListOrdered, Link as LinkIcon, Image as ImageIcon, Heading1, Heading2, Quote, Undo, Redo } from 'lucide-react';
 import { api } from '@/lib/api';
 import { sanitizeHtml } from '@/lib/sanitize-html';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 
 interface RichTextEditorProps {
@@ -14,6 +15,7 @@ interface RichTextEditorProps {
 }
 
 export function RichTextEditor({ value, onChange, placeholder, minHeight = 240 }: RichTextEditorProps) {
+  const systemDialog = useSystemDialog();
   const editorRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -42,8 +44,13 @@ export function RichTextEditor({ value, onChange, placeholder, minHeight = 240 }
     emitChange();
   }
 
-  function insertLink() {
-    const url = prompt('请输入链接地址（必须以 http:// 或 https:// 开头）');
+  async function insertLink() {
+    const url = await systemDialog.prompt({
+      title: '插入链接',
+      message: '请输入链接地址（必须以 http:// 或 https:// 开头）。',
+      placeholder: 'https://example.com',
+      confirmText: '插入链接',
+    });
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) {
       toast({ title: '链接必须以 http:// 或 https:// 开头', variant: 'destructive' });

@@ -13,6 +13,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { api, uploadDirect } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
@@ -107,6 +108,7 @@ const emptyQr = {
 };
 
 export default function AdminPaymentsPage() {
+  const systemDialog = useSystemDialog();
   const [view, setView] = useState<ViewKey>('recharges');
   const [providers, setProviders] = useState<Provider[]>([]);
   const [qrcodes, setQrcodes] = useState<ManualQr[]>([]);
@@ -144,7 +146,13 @@ export default function AdminPaymentsPage() {
   }
 
   async function reject(id: string) {
-    const reason = window.prompt('拒绝原因');
+    const reason = await systemDialog.prompt({
+      title: '拒绝充值',
+      message: '请输入拒绝原因。',
+      placeholder: '例如：凭证不清晰、金额不一致',
+      confirmText: '确认拒绝',
+      tone: 'destructive',
+    });
     if (!reason) return;
     const res = await api.post(`/api/admin/payments/recharges/${id}/reject`, { reason });
     if (res.code === 1) {

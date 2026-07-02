@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -51,6 +52,7 @@ const emptyForm = {
 // __CONTINUE_HERE__
 
 export default function AdminOzonPickupPointsPage() {
+  const systemDialog = useSystemDialog();
   const [items, setItems] = useState<PickupPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
@@ -125,7 +127,13 @@ export default function AdminOzonPickupPointsPage() {
   }
 
   async function remove(item: PickupPoint) {
-    if (!confirm(`确认删除 ${item.city} · ${item.name}？`)) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除揽收点',
+      message: `确认删除 ${item.city} · ${item.name}？`,
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/ozon-pickup-points/${item.id}`);
     if (res.code === 1) {
       toast({ title: '已删除' });
@@ -259,6 +267,5 @@ export default function AdminOzonPickupPointsPage() {
     </div>
   );
 }
-
 
 

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -30,6 +31,7 @@ const PRESET_COLORS = [
 ];
 
 export default function UserColorTagsPage() {
+  const systemDialog = useSystemDialog();
   const [tags, setTags] = useState<UserTag[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -59,7 +61,13 @@ export default function UserColorTagsPage() {
     setShowDialog(true);
   }
   async function handleDelete(id: string) {
-    if (!confirm('确认删除该标签？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除颜色标签',
+      message: '确认删除该标签？',
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/user-service-tags/${id}`);
     if (res.code === 1) { toast({ title: '已删除' }); load(); }
     else toast({ title: res.msg || '删除失败', variant: 'destructive' });

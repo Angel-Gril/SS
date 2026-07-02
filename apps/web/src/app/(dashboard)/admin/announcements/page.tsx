@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -53,6 +54,7 @@ const emptyForm: FormState = {
 };
 
 export default function AdminAnnouncementsPage() {
+  const systemDialog = useSystemDialog();
   const [items, setItems] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Announcement | null>(null);
@@ -117,7 +119,13 @@ export default function AdminAnnouncementsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除该公告？已读记录会一并删除')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除公告',
+      message: '确认删除该公告？已读记录会一并删除。',
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/announcements/admin/${id}`);
     if (res.code === 1) {
       toast({ title: '已删除' });

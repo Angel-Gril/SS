@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -48,6 +49,7 @@ const STATUS_CONFIG: Record<string, { label: string; variant: 'default' | 'secon
 };
 
 export default function WarehouseCommandsAdminPage() {
+  const systemDialog = useSystemDialog();
   const [commands, setCommands] = useState<Command[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -63,7 +65,13 @@ export default function WarehouseCommandsAdminPage() {
   useEffect(() => { load(); }, [statusFilter]);
 
   async function handleRevoke(id: string) {
-    if (!confirm('确认撤回该指令？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '撤回仓库指令',
+      message: '确认撤回该指令？',
+      confirmText: '撤回',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/admin/warehouse/commands/${id}`);
     if (res.code === 1) { toast({ title: '已撤回' }); load(); }
     else toast({ title: res.msg || '撤回失败', variant: 'destructive' });

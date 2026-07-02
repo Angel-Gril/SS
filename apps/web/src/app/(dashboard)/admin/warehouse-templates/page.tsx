@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -63,6 +64,7 @@ const RETURN_CARRIERS = ['IML', 'CDEK', 'OZON Логистика', 'PickPoint', 
 const PREP_DAYS = [1, 2, 3, 4, 5, 7, 10, 14];
 
 export default function WarehouseTemplatesPage() {
+  const systemDialog = useSystemDialog();
   const [list, setList] = useState<WarehouseTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<WarehouseTemplate | null>(null);
@@ -116,7 +118,13 @@ export default function WarehouseTemplatesPage() {
                   </div>
                   <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditing(t); setShowDialog(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
                   <Button size="icon" variant="ghost" className="h-7 w-7" onClick={async () => {
-                    if (!confirm('确认删除该模板？')) return;
+                    const confirmed = await systemDialog.confirm({
+                      title: '删除仓库模板',
+                      message: '确认删除该模板？',
+                      confirmText: '删除',
+                      tone: 'destructive',
+                    });
+                    if (!confirmed) return;
                     const res = await api.delete(`/api/admin/warehouse/templates/${t.id}`);
                     if (res.code === 1) { toast({ title: '已删除' }); load(); }
                     else toast({ title: res.msg || '删除失败', variant: 'destructive' });
@@ -780,4 +788,3 @@ function Step3Returns({ form, set, shopId }: { form: FormState; set: (p: Partial
     </div>
   );
 }
-

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
 
@@ -75,6 +76,7 @@ export default function ImageProcessingPage() {
 }
 
 function WatermarkPanel() {
+  const systemDialog = useSystemDialog();
   const [templates, setTemplates] = useState<WatermarkTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
@@ -152,7 +154,13 @@ function WatermarkPanel() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确定删除此模板？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除水印模板',
+      message: '确定删除此模板？',
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/watermark-templates/${id}`);
     if (res.code === 1) { toast({ title: '已删除' }); fetchTemplates(); }
   }

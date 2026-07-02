@@ -13,6 +13,7 @@ import {
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -40,6 +41,7 @@ interface InventoryRecord {
 }
 
 export default function InventoryPage() {
+  const systemDialog = useSystemDialog();
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [records, setRecords] = useState<InventoryRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -88,7 +90,13 @@ export default function InventoryPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除此库存项？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除库存项',
+      message: '确认删除此库存项？',
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/inventory/${id}`);
     toast({ title: res.msg, variant: res.code === 1 ? 'default' : 'destructive' });
     if (res.code === 1) loadItems();

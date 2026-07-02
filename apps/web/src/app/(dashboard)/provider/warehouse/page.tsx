@@ -5,6 +5,7 @@ import { Loader2, Package, Truck, CheckCircle2, DollarSign, RefreshCw } from 'lu
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -22,6 +23,7 @@ interface ProviderOrder {
 }
 
 export default function ProviderWarehousePage() {
+  const systemDialog = useSystemDialog();
   const [orders, setOrders] = useState<ProviderOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'pending' | 'inspection' | 'shipped'>('pending');
@@ -39,7 +41,12 @@ export default function ProviderWarehousePage() {
   useEffect(() => { load(); }, [tab]);
 
   async function handleBill(orderId: string) {
-    if (!confirm('确认对该订单计费？将扣除子用户余额并记入您的收入')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '订单计费',
+      message: '确认对该订单计费？将扣除子用户余额并记入您的收入。',
+      confirmText: '确认计费',
+    });
+    if (!confirmed) return;
     setBillingId(orderId);
     const res = await api.post<{ clientFee: number; platformCut: number; providerIncome: number }>(
       '/api/provider/warehouse/bill-order',

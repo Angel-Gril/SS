@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -31,6 +32,7 @@ const TYPE_OPTIONS = [
 const typeLabel = (t: string) => TYPE_OPTIONS.find((o) => o.value === t)?.label || t;
 
 export default function FeeTemplatesPage() {
+  const systemDialog = useSystemDialog();
   const [templates, setTemplates] = useState<FeeTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
@@ -73,7 +75,13 @@ export default function FeeTemplatesPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确定删除该模板？')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除费用模板',
+      message: '确定删除该模板？',
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const res = await api.delete(`/api/admin/fee-templates/${id}`);
     if (res.code === 1) { toast({ title: '已删除' }); fetchTemplates(); }
     else toast({ title: res.msg || '删除失败', variant: 'destructive' });

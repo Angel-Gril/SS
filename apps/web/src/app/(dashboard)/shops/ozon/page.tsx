@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -56,6 +57,7 @@ interface OzonVideoProbeResult {
 const VIDEO_PROBE_MAX_BYTES = 8 * 1024 * 1024;
 
 export default function OzonShopsPage() {
+  const systemDialog = useSystemDialog();
   const [shops, setShops] = useState<Shop[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
@@ -161,7 +163,13 @@ export default function OzonShopsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('确认删除此店铺？此操作会删除该店铺下所有商品和订单数据。')) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除 Ozon 店铺',
+      message: '确认删除此店铺？此操作会删除该店铺下所有商品和订单数据。',
+      confirmText: '删除店铺',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     setActionLoading((s) => ({ ...s, [id]: 'delete' }));
     try {
       const res = await api.delete(`/api/shops/${id}`);

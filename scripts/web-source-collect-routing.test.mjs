@@ -189,6 +189,16 @@ for (const token of ['handleDeleteSourceVariant', '/api/collect/${item.id}/varia
   assert.match(page, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `source SKU detail should expose variant delete control: ${token}`);
 }
 assert.match(
+  sourceSkuSection,
+  /pendingDeleteVariant/,
+  'source SKU delete confirmation should use in-system dialog state instead of a native browser confirm',
+);
+assert.doesNotMatch(
+  sourceSkuSection,
+  /window\.confirm/,
+  'source SKU delete confirmation should not use the disconnected browser confirm dialog',
+);
+assert.match(
   page,
   /api\.post<[\s\S]*\/api\/collect\/save-customization|api\.post\(['"`]\/api\/collect\/save-customization/,
   'source listing detail should save manual package weight and dimensions via collect customization API',

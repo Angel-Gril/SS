@@ -23,8 +23,9 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { evaluateSourceListingFieldDiagnostics, evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
@@ -1243,20 +1244,32 @@ function SourceSkuSection({ item, onItemUpdate }: { item: SourceCollectItem; onI
   const packageSummary = sourceStandardPackageText(standard);
   const packagingCount = packagingRows.length || (packageSummary !== '-' ? 1 : 0);
   const [deletingVariantSku, setDeletingVariantSku] = useState('');
+  const [pendingDeleteVariant, setPendingDeleteVariant] = useState<{
+    variant: Record<string, unknown>;
+    index: number;
+    sku: string;
+    label: string;
+  } | null>(null);
 
-  async function handleDeleteSourceVariant(variant: Record<string, unknown>, index: number) {
+  function handleDeleteSourceVariant(variant: Record<string, unknown>, index: number) {
     const sku = sourceVariantKey(variant, index);
     if (!sku || sku === String(index)) {
       toast({ title: '该 SKU 缺少可删除标识', variant: 'destructive' });
       return;
     }
-    if (!window.confirm(`确认删除SKU「${sourceVariantLabel(variant, index)}」？删除后发布到 Ozon 时不会包含这个 SKU。`)) return;
+    setPendingDeleteVariant({ variant, index, sku, label: sourceVariantLabel(variant, index) });
+  }
+
+  async function confirmDeleteSourceVariant() {
+    if (!pendingDeleteVariant) return;
+    const { sku } = pendingDeleteVariant;
     setDeletingVariantSku(sku);
     try {
       const res = await api.delete<{ count: number }>(`/api/collect/${item.id}/variants/${encodeURIComponent(sku)}`);
       if (res.code !== 1) throw new Error(res.msg || '删除SKU失败');
       const nextVariants = sourceVariants(item).filter((entry, entryIndex) => sourceVariantKey(entry, entryIndex) !== sku);
       onItemUpdate({ ...item, variants: nextVariants.length ? nextVariants : null });
+      setPendingDeleteVariant(null);
       toast({ title: res.msg || '已删除SKU' });
     } catch (error) {
       toast({ title: error instanceof Error ? error.message : '删除SKU失败', variant: 'destructive' });
@@ -1327,6 +1340,42 @@ function SourceSkuSection({ item, onItemUpdate }: { item: SourceCollectItem; onI
           </div>
         ) : <div className="text-muted-foreground">未采集到包装信息</div>}
       </InfoPanel>
+
+      <Dialog
+        open={!!pendingDeleteVariant}
+        onOpenChange={(open) => {
+          if (!open && !deletingVariantSku) setPendingDeleteVariant(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>删除SKU</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>确认删除「{pendingDeleteVariant?.label || '该 SKU'}」？</p>
+            <p className="text-muted-foreground">删除后发布到 Ozon 时不会包含这个 SKU。</p>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPendingDeleteVariant(null)}
+              disabled={!!deletingVariantSku}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={confirmDeleteSourceVariant}
+              disabled={!!deletingVariantSku}
+            >
+              {deletingVariantSku ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              删除SKU
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -2347,6 +2396,7 @@ function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }
 }
 
 export default function SourceCollectPage() {
+  const systemDialog = useSystemDialog();
   const [items, setItems] = useState<SourceCollectItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -2375,7 +2425,13 @@ export default function SourceCollectPage() {
   }
 
   async function handleDelete(item: SourceCollectItem) {
-    if (!window.confirm(`确认删除采集记录「${sourceDisplayTitle(item)}」？`)) return;
+    const confirmed = await systemDialog.confirm({
+      title: '删除采集记录',
+      message: `确认删除采集记录「${sourceDisplayTitle(item)}」？`,
+      confirmText: '删除',
+      tone: 'destructive',
+    });
+    if (!confirmed) return;
     const id = item.id;
     const res = await api.delete(`/api/collect/${id}`);
     if (res.code === 1) {
