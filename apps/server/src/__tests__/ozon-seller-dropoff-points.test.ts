@@ -40,7 +40,7 @@ describe('Ozon seller drop-off points', () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
         const body = JSON.parse(String(init?.body || '{}'));
-        expect(body.company_id).toBe('4494016');
+        expect(body.company_id).toBe(4494016);
         return jsonResponse({
           deliveryMethods: [
             { id: 1, name: 'RETS Standard', providerId: 1079, providerName: 'RETS', tplDropoffPointId: 5802718 },

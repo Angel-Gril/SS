@@ -55,8 +55,8 @@ assert.match(
 );
 assert.match(
   extensionBackground,
-  /sellerWarehouseList[\s\S]{0,180}\{\s*company_id:\s*String\(companyId\)\s*\}/,
-  'extension should include company_id in the Ozon seller warehouse list request body',
+  /sellerWarehouseList[\s\S]{0,220}\{\s*company_id:\s*toOzonSellerWarehouseCompanyId\(companyId\)\s*\}/,
+  'extension should include numeric company_id in the Ozon seller warehouse list request body',
 );
 
 console.log('PASS web ozon pickup points');

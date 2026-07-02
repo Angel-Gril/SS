@@ -1026,6 +1026,12 @@ function toPositiveNumber(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
+function toOzonSellerWarehouseCompanyId(companyId) {
+  var text = String(companyId == null ? "" : companyId).trim();
+  var number = Number(text);
+  return /^\d+$/.test(text) && Number.isSafeInteger(number) && number > 0 ? number : text;
+}
+
 function toCleanString(value) {
   return String(value == null ? "" : value).trim();
 }
@@ -1061,7 +1067,11 @@ function extractOzonSellerDeliveryMethods(payload) {
 
 async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
   var companyId = await getSellerCompanyId(companyIdInput);
-  var warehousePayload = await sellerTabFetchJson(OZON_ENDPOINTS.sellerWarehouseList, { company_id: String(companyId) }, companyId);
+  var warehousePayload = await sellerTabFetchJson(
+    OZON_ENDPOINTS.sellerWarehouseList,
+    { company_id: toOzonSellerWarehouseCompanyId(companyId) },
+    companyId
+  );
   var methods = extractOzonSellerDeliveryMethods(warehousePayload);
   var providerMap = new Map();
   methods.forEach(function (method) {

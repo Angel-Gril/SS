@@ -99,7 +99,7 @@ export async function fetchOzonSellerDropoffPoints(params: {
   const warehousePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${WAREHOUSE_LIST_PATH}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ company_id: companyId }),
+    body: JSON.stringify({ company_id: toWarehouseCompanyId(companyId) }),
   });
   const methods = extractSellerDeliveryMethods(warehousePayload);
   const providerMap = new Map<number, string>();
@@ -277,6 +277,12 @@ function numberValue(value: unknown): number | null {
 
 function stringValue(value: unknown): string {
   return String(value ?? '').trim();
+}
+
+function toWarehouseCompanyId(companyId: string): string | number {
+  const trimmed = String(companyId || '').trim();
+  const numeric = Number(trimmed);
+  return /^\d+$/.test(trimmed) && Number.isSafeInteger(numeric) && numeric > 0 ? numeric : trimmed;
 }
 
 function uniqueNumbers(values: number[]): number[] {
