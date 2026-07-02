@@ -33,6 +33,8 @@ const OZON_ENDPOINTS = {
   chartsV3Recommendation: "https://seller.ozon.ru/api/site/seller-analytics/charts/v3/recommendation",
   salesFunnelRevenue: "https://seller.ozon.ru/api/site/seller-analytics/sales-funnel/v2/get_chart_revenue",
   sellerCategoryTree: "https://seller.ozon.ru/api/site/seller-analytics/charts/seller-category-tree",
+  sellerWarehouseList: "https://seller.ozon.ru/api/site/logistic-service/v5/facade/warehouse/list",
+  sellerDropoffByProvider: "https://seller.ozon.ru/api/delivery-method-service/v1/drop-off/list/by-provider",
   // Market data (may require Premium)
   whatToSellAllQueries: "https://seller.ozon.ru/api/site/seller-analytics/what_to_sell/all_queries/v2",
   whatToSellTrends: "https://seller.ozon.ru/api/site/seller-analytics/what_to_sell/trends/v2",
@@ -999,6 +1001,125 @@ async function sellerTabFetchJson(url, body, companyId) {
     throw new Error(result.error || "seller.ozon.ru 请求失败");
   }
   return result.data;
+}
+
+function collectOzonDeliveryMethodArrays(value, out) {
+  if (Array.isArray(value)) {
+    value.forEach(function (item) { collectOzonDeliveryMethodArrays(item, out); });
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  Object.keys(value).forEach(function (key) {
+    var child = value[key];
+    if ((key === "deliveryMethods" || key === "delivery_methods") && Array.isArray(child)) {
+      out.push(child);
+      return;
+    }
+    if (child && (Array.isArray(child) || typeof child === "object")) {
+      collectOzonDeliveryMethodArrays(child, out);
+    }
+  });
+}
+
+function toPositiveNumber(value) {
+  var number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function toCleanString(value) {
+  return String(value == null ? "" : value).trim();
+}
+
+function uniqueSortedNumbers(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : []).filter(function (value) {
+    return Number.isFinite(value);
+  }))).sort(function (a, b) { return a - b; });
+}
+
+function extractOzonSellerDeliveryMethods(payload) {
+  var arrays = [];
+  var byId = new Map();
+  collectOzonDeliveryMethodArrays(payload, arrays);
+  arrays.forEach(function (array) {
+    array.forEach(function (item) {
+      if (!item || typeof item !== "object") return;
+      var id = toPositiveNumber(item.id || item.methodId || item.method_id);
+      var providerId = toPositiveNumber(item.providerId || item.provider_id || item.tplProviderId || item.tpl_provider_id);
+      if (!id || !providerId) return;
+      var tplDropoffPointId = toPositiveNumber(item.tplDropoffPointId || item.tpl_dropoff_point_id || item.dropoffPointId || item.dropoff_point_id);
+      byId.set(id, {
+        id: id,
+        name: toCleanString(item.name) || "物流方式 " + id,
+        providerId: providerId,
+        providerName: toCleanString(item.providerName || item.provider_name || item.tplProvider || item.tpl_provider) || "Provider " + providerId,
+        tplDropoffPointId: tplDropoffPointId || null
+      });
+    });
+  });
+  return Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
+}
+
+async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
+  var companyId = await getSellerCompanyId(companyIdInput);
+  var warehousePayload = await sellerTabFetchJson(OZON_ENDPOINTS.sellerWarehouseList, {}, companyId);
+  var methods = extractOzonSellerDeliveryMethods(warehousePayload);
+  var providerMap = new Map();
+  methods.forEach(function (method) {
+    if (!providerMap.has(method.providerId)) providerMap.set(method.providerId, method.providerName);
+  });
+
+  var points = new Map();
+  var providerErrors = [];
+  for (var providerEntry of providerMap.entries()) {
+    var providerId = providerEntry[0];
+    var providerName = providerEntry[1];
+    try {
+      var payload = await sellerTabFetchJson(
+        OZON_ENDPOINTS.sellerDropoffByProvider,
+        { company_id: String(companyId), provider_id: providerId },
+        companyId
+      );
+      var rows = payload && Array.isArray(payload.result) ? payload.result : [];
+      rows.forEach(function (row) {
+        if (!row || typeof row !== "object") return;
+        var externalId = toCleanString(row.id);
+        if (!externalId) return;
+        var boundMethodIds = methods
+          .filter(function (method) {
+            return method.providerId === providerId && String(method.tplDropoffPointId || "") === externalId;
+          })
+          .map(function (method) { return method.id; });
+        var existing = points.get(externalId);
+        if (existing) {
+          existing.boundMethodIds = uniqueSortedNumbers(existing.boundMethodIds.concat(boundMethodIds));
+          return;
+        }
+        points.set(externalId, {
+          externalId: externalId,
+          name: toCleanString(row.name) || "发运点 " + externalId,
+          address: toCleanString(row.address),
+          providerId: providerId,
+          providerName: providerName,
+          boundMethodIds: uniqueSortedNumbers(boundMethodIds)
+        });
+      });
+    } catch (error) {
+      providerErrors.push({
+        providerId: providerId,
+        message: error && error.message ? error.message : String(error)
+      });
+    }
+  }
+
+  return {
+    companyId: String(companyId),
+    methods: methods,
+    providers: Array.from(providerMap.entries()).map(function (entry) {
+      return { providerId: entry[0], providerName: entry[1] };
+    }),
+    points: Array.from(points.values()).sort(function (a, b) { return Number(a.externalId) - Number(b.externalId); }),
+    providerErrors: providerErrors
+  };
 }
 
 function buildOzonAnalyticsRequestBody(productId) {
@@ -3387,6 +3508,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return { ok: true, logins: await checkPlatformLogins() };
       case "spb-self-hosted:sync-shop-analytics": {
         return await syncShopAnalyticsToErp(message.shopId, message.companyId);
+      }
+      case "spb-self-hosted:fetch-ozon-dropoff-points": {
+        return { ok: true, data: await fetchOzonSellerDropoffPointsViaTab(message.companyId) };
       }
       case "spb-self-hosted:sync-shop-graphs": {
         return await syncShopGraphsToErp(message.shopId, message.companyId, message.period || 30);

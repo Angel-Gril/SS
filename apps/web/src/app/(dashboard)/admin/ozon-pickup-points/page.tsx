@@ -39,6 +39,27 @@ interface ShopOption {
   platform: string;
 }
 
+interface OzonDropoffSyncPayload {
+  companyId?: string;
+  methods: unknown[];
+  providers: { providerId: number; providerName: string }[];
+  points: {
+    externalId: string;
+    name: string;
+    address: string;
+    providerId: number;
+    providerName: string;
+    boundMethodIds: number[];
+  }[];
+  providerErrors?: { providerId: number; message: string }[];
+}
+
+interface ExtensionBridgeResponse<T = unknown> {
+  ok?: boolean;
+  data?: T;
+  error?: string;
+}
+
 const TYPE_OPTIONS = [
   { value: 'collect', label: '集运点' },
   { value: 'dispatch', label: '发运点' },
@@ -59,6 +80,42 @@ const emptyForm = {
   isActive: true,
   sortOrder: 0,
 };
+
+function sendToExtension<T>(message: Record<string, unknown>, timeoutMs = 65000): Promise<ExtensionBridgeResponse<T>> {
+  if (typeof window === 'undefined') {
+    return Promise.resolve({ ok: false, error: '当前环境无法连接扩展' });
+  }
+  const requestId = `ozon-dropoff-sync-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return new Promise((resolve) => {
+    let done = false;
+    let timer: number;
+    let onMessage: (event: MessageEvent) => void;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('message', onMessage);
+      clearTimeout(timer);
+    };
+    onMessage = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      const data = event.data as any;
+      if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
+      cleanup();
+      resolve((data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse<T>);
+    };
+    timer = window.setTimeout(() => {
+      cleanup();
+      resolve({ ok: false, error: '未检测到 SS ERP 扩展或扩展版本过旧' });
+    }, timeoutMs);
+    window.addEventListener('message', onMessage);
+    window.postMessage({ direction: 'ss-erp:to-extension', requestId, message }, window.location.origin);
+  });
+}
+
+function shouldFallbackToServerSync(error: string | undefined): boolean {
+  return /未检测到|版本过旧|no response|Receiving end does not exist|Could not establish connection|Extension context invalidated/i
+    .test(String(error || ''));
+}
 
 export default function AdminOzonPickupPointsPage() {
   const systemDialog = useSystemDialog();
@@ -173,13 +230,39 @@ export default function AdminOzonPickupPointsPage() {
       return;
     }
     setSyncing(true);
-    const res = await api.post<{
-      created: number;
-      updated: number;
-      totalPoints: number;
-      providerCount: number;
-      providerErrors?: { providerId: number; message: string }[];
-    }>('/api/ozon-pickup-points/sync-ozon-dropoffs', { shopId: syncShopId });
+    const extensionResult = await sendToExtension<OzonDropoffSyncPayload>({
+      type: 'spb-self-hosted:fetch-ozon-dropoff-points',
+      shopId: syncShopId,
+    });
+    let res;
+    if (extensionResult.ok && extensionResult.data) {
+      res = await api.post<{
+        created: number;
+        updated: number;
+        totalPoints: number;
+        providerCount: number;
+        providerErrors?: { providerId: number; message: string }[];
+      }>('/api/ozon-pickup-points/import-ozon-dropoffs', {
+        shopId: syncShopId,
+        ...extensionResult.data,
+      });
+    } else if (shouldFallbackToServerSync(extensionResult.error)) {
+      res = await api.post<{
+        created: number;
+        updated: number;
+        totalPoints: number;
+        providerCount: number;
+        providerErrors?: { providerId: number; message: string }[];
+      }>('/api/ozon-pickup-points/sync-ozon-dropoffs', { shopId: syncShopId });
+    } else {
+      setSyncing(false);
+      toast({
+        title: '扩展读取Ozon发运点失败',
+        description: extensionResult.error || '请确认已打开并登录 seller.ozon.ru',
+        variant: 'destructive',
+      });
+      return;
+    }
     setSyncing(false);
     if (res.code === 1 && res.data) {
       toast({
@@ -240,7 +323,7 @@ export default function AdminOzonPickupPointsPage() {
             </Button>
           </div>
           <div className="mt-3 text-xs text-muted-foreground">
-            需要该店铺已保存 Ozon 登录 cookie 和 company_id；同步失败时先到店铺页更新登录态，再回到这里重试。
+            本地版会优先通过浏览器扩展复用已登录的 seller.ozon.ru 页面读取；没有扩展或扩展版本过旧时，才尝试使用店铺保存的 cookie/company_id 服务端读取。
           </div>
         </CardContent>
       </Card>

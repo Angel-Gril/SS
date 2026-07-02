@@ -189,12 +189,51 @@ function collectDeliveryMethodArrays(value: unknown, out: unknown[][]) {
 }
 
 async function fetchJson(fetchImpl: typeof globalThis.fetch, url: string, init: RequestInit): Promise<unknown> {
-  const res = await fetchImpl(url, init);
+  const res = await fetchImpl(url, { ...init, redirect: 'manual' });
+  if (isRedirectStatus(res.status)) {
+    const refreshedEtc = extractOzonEtcCookie(res.headers);
+    if (refreshedEtc) {
+      const headers = {
+        ...((init.headers || {}) as Record<string, string>),
+        cookie: mergeCookieHeaderReplacing(String(((init.headers || {}) as Record<string, string>).cookie || ''), refreshedEtc),
+      };
+      const retried = await fetchImpl(url, { ...init, headers, redirect: 'manual' });
+      if (retried.ok) return retried.json();
+      const text = await retried.text().catch(() => '');
+      throw new Error(`Ozon Seller API HTTP ${retried.status}: ${text.slice(0, 200)}`);
+    }
+    throw new Error(`Ozon Seller API redirected without __Secure-ETC cookie (HTTP ${res.status})`);
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Ozon Seller API HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json();
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function extractOzonEtcCookie(headers: Headers): string {
+  const anyHeaders = headers as any;
+  const setCookies: string[] = typeof anyHeaders.getSetCookie === 'function'
+    ? anyHeaders.getSetCookie()
+    : (headers.get('set-cookie') ? [headers.get('set-cookie')!] : []);
+  return setCookies
+    .map((cookie) => cookie.split(';')[0]!.trim())
+    .find((cookie) => cookie.startsWith('__Secure-ETC='))
+    || '';
+}
+
+function mergeCookieHeaderReplacing(cookieHeader: string, replacementCookie: string): string {
+  const replacementName = replacementCookie.split('=')[0]?.trim();
+  const parts = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part && (!replacementName || !part.startsWith(`${replacementName}=`)));
+  if (replacementCookie.trim()) parts.push(replacementCookie.trim());
+  return parts.join('; ');
 }
 
 function sellerHeaders(cookie: string, companyId: string): Record<string, string> {

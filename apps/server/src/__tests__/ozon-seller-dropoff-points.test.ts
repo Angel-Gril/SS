@@ -89,6 +89,35 @@ describe('Ozon seller drop-off points', () => {
     ]);
   });
 
+  it('retries seller API requests with refreshed __Secure-ETC cookie after Ozon redirects', async () => {
+    const seenCookies: string[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        throw new Error(`unexpected url ${url}`);
+      }
+      expect(init?.redirect).toBe('manual');
+      const cookie = String((init?.headers as Record<string, string>)?.cookie || '');
+      seenCookies.push(cookie);
+      if (!cookie.includes('__Secure-ETC=fresh-etc')) {
+        return redirectResponse('__Secure-ETC=fresh-etc; Path=/; Secure; HttpOnly');
+      }
+      return jsonResponse({ deliveryMethods: [] });
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo; __Secure-ETC=stale-etc',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.methods).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(seenCookies[0]).toContain('__Secure-ETC=stale-etc');
+    expect(seenCookies[1]).toContain('sid=demo');
+    expect(seenCookies[1]).toContain('__Secure-ETC=fresh-etc');
+    expect(seenCookies[1]).not.toContain('__Secure-ETC=stale-etc');
+  });
+
   it('builds searchable pickup point data from seller drop-off points', () => {
     const data = toOzonPickupPointData({
       externalId: '5802718',
@@ -120,5 +149,15 @@ function jsonResponse(payload: unknown): Response {
     status: 200,
     json: async () => payload,
     text: async () => JSON.stringify(payload),
+  } as Response;
+}
+
+function redirectResponse(setCookie: string): Response {
+  return {
+    ok: false,
+    status: 307,
+    headers: new Headers({ 'set-cookie': setCookie }),
+    json: async () => ({}),
+    text: async () => '',
   } as Response;
 }

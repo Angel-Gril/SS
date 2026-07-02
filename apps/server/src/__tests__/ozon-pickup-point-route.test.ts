@@ -139,4 +139,152 @@ describe('ozon pickup point routes', () => {
 
     await app.close();
   });
+
+  it('returns an actionable message when Ozon blocks server-side seller API requests', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.fetchSellerDropoffs.mockRejectedValue(new Error(
+      'Ozon Seller API HTTP 403: {"challengeURL":"https://seller.ozon.ru/challenge.html?incidentId=fab_chlg_demo"}',
+    ));
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/sync-ozon-dropoffs',
+      payload: { shopId: 'shop-1' },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      code: 0,
+      msg: expect.stringContaining('Ozon Seller 触发浏览器验证'),
+    });
+
+    await app.close();
+  });
+
+  it('imports browser-fetched Ozon seller drop-off points from the extension', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindFirst.mockResolvedValue(null);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [{ id: 32672640, name: 'FBS', providerId: 1079, providerName: 'RETS', tplDropoffPointId: 5802718 }],
+        providers: [{ providerId: 1079, providerName: 'RETS' }],
+        providerErrors: [],
+        points: [
+          {
+            externalId: '5802718',
+            name: 'RETS广州中心仓',
+            address: '广东省广州市白云区龙归街南村3号',
+            providerId: 1079,
+            providerName: 'RETS',
+            boundMethodIds: [32672640],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.fetchSellerDropoffs).not.toHaveBeenCalled();
+    expect(mocks.pickupCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        source: 'ozon_seller',
+        externalId: '5802718',
+        providerId: 1079,
+        shopId: 'shop-1',
+        city: '广州',
+      }),
+    }));
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: 1,
+        updated: 0,
+        totalPoints: 1,
+        providerCount: 1,
+      },
+    });
+
+    await app.close();
+  });
+
+  it('accepts an empty browser-fetched drop-off list when the seller account has no visible points', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [],
+        providers: [],
+        providerErrors: [],
+        points: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupCreate).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: 0,
+        updated: 0,
+        totalPoints: 0,
+      },
+    });
+
+    await app.close();
+  });
+
+  it('rejects extension imports when the active Ozon company does not match the selected shop', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '9999999',
+        methods: [],
+        providers: [],
+        providerErrors: [],
+        points: [],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      code: 0,
+      msg: expect.stringContaining('当前 Ozon Seller 店铺'),
+    });
+    expect(mocks.pickupCreate).not.toHaveBeenCalled();
+
+    await app.close();
+  });
 });
