@@ -9,6 +9,7 @@ var SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_KEY = "ss_erp_ozon_company_id_session
 var SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY = "ss_erp_ozon_company_id_session_captured_at";
 var SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id_invalid";
 var SS_ERP_COLLECT_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
+var SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY = 6;
 
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
@@ -1097,10 +1098,47 @@ async function fetchOzonSellerProviderTemplates(companyId) {
   return extractOzonSellerProvidersFromTemplates(payload);
 }
 
-async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
+function sendExtensionProgress(sender, requestId, progress) {
+  if (!requestId || !sender || !sender.tab || !sender.tab.id) return;
+  try {
+    chrome.tabs.sendMessage(sender.tab.id, {
+      type: "ss-erp:extension-progress",
+      requestId: requestId,
+      progress: progress || {}
+    }, function () {
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {}
+}
+
+async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
+  var onProgress = options && typeof options.onProgress === "function" ? options.onProgress : null;
+  function reportProgress(progress) {
+    if (!onProgress) return;
+    try {
+      onProgress(Object.assign({ at: new Date().toISOString() }, progress || {}));
+    } catch (error) {}
+  }
+
+  reportProgress({
+    phase: "company",
+    label: "确认 Ozon Seller 店铺",
+    providerDone: 0,
+    providerTotal: 0,
+    pointCount: 0,
+    errorCount: 0
+  });
   var companyId = await getSellerCompanyId(companyIdInput);
   var methods = [];
   var providerMap = new Map();
+  reportProgress({
+    phase: "providers",
+    label: "读取承运商列表",
+    providerDone: 0,
+    providerTotal: 0,
+    pointCount: 0,
+    errorCount: 0
+  });
   try {
     var warehousePayload = await sellerTabFetchJson(
       OZON_ENDPOINTS.sellerWarehouseList,
@@ -1123,47 +1161,87 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
 
   var points = new Map();
   var providerErrors = [];
-  for (var providerEntry of providerMap.entries()) {
-    var providerId = providerEntry[0];
-    var providerName = providerEntry[1];
-    try {
-      var payload = await sellerTabFetchJson(
-        OZON_ENDPOINTS.sellerDropoffByProvider,
-        { company_id: String(companyId), provider_id: providerId },
-        companyId
-      );
-      var rows = payload && Array.isArray(payload.result) ? payload.result : [];
-      rows.forEach(function (row) {
-        if (!row || typeof row !== "object") return;
-        var externalId = toCleanString(row.id);
-        if (!externalId) return;
-        var boundMethodIds = methods
-          .filter(function (method) {
-            return method.providerId === providerId && String(method.tplDropoffPointId || "") === externalId;
-          })
-          .map(function (method) { return method.id; });
-        var pointKey = providerId + ":" + externalId;
-        var existing = points.get(pointKey);
-        if (existing) {
-          existing.boundMethodIds = uniqueSortedNumbers(existing.boundMethodIds.concat(boundMethodIds));
-          return;
-        }
-        points.set(pointKey, {
-          externalId: externalId,
-          name: toCleanString(row.name) || "发运点 " + externalId,
-          address: toCleanString(row.address),
-          providerId: providerId,
-          providerName: providerName,
-          boundMethodIds: uniqueSortedNumbers(boundMethodIds)
+  var providerEntries = Array.from(providerMap.entries());
+  var providerIndex = 0;
+  var providerDone = 0;
+  reportProgress({
+    phase: "dropoffs",
+    label: "读取承运商发运点",
+    providerDone: 0,
+    providerTotal: providerEntries.length,
+    pointCount: 0,
+    errorCount: 0
+  });
+  async function fetchNextProviderDropoffs() {
+    while (providerIndex < providerEntries.length) {
+      var providerEntry = providerEntries[providerIndex++];
+      var providerId = providerEntry[0];
+      var providerName = providerEntry[1];
+      try {
+        var payload = await sellerTabFetchJson(
+          OZON_ENDPOINTS.sellerDropoffByProvider,
+          { company_id: String(companyId), provider_id: providerId },
+          companyId
+        );
+        var rows = payload && Array.isArray(payload.result) ? payload.result : [];
+        rows.forEach(function (row) {
+          if (!row || typeof row !== "object") return;
+          var externalId = toCleanString(row.id);
+          if (!externalId) return;
+          var boundMethodIds = methods
+            .filter(function (method) {
+              return method.providerId === providerId && String(method.tplDropoffPointId || "") === externalId;
+            })
+            .map(function (method) { return method.id; });
+          var pointKey = providerId + ":" + externalId;
+          var existing = points.get(pointKey);
+          if (existing) {
+            existing.boundMethodIds = uniqueSortedNumbers(existing.boundMethodIds.concat(boundMethodIds));
+            return;
+          }
+          var contact = toCleanString(row.contact || row.contactName || row.contact_name || row.manager || row.receiver);
+          var phone = toCleanString(row.phone || row.mobile || row.telephone || row.contactPhone || row.contact_phone);
+          points.set(pointKey, {
+            externalId: externalId,
+            name: toCleanString(row.name) || "发运点 " + externalId,
+            address: toCleanString(row.address),
+            ...(contact ? { contact: contact } : {}),
+            ...(phone ? { phone: phone } : {}),
+            providerId: providerId,
+            providerName: providerName,
+            boundMethodIds: uniqueSortedNumbers(boundMethodIds)
+          });
         });
-      });
-    } catch (error) {
-      providerErrors.push({
-        providerId: providerId,
-        message: error && error.message ? error.message : String(error)
-      });
+      } catch (error) {
+        providerErrors.push({
+          providerId: providerId,
+          message: error && error.message ? error.message : String(error)
+        });
+      } finally {
+        providerDone += 1;
+        reportProgress({
+          phase: "dropoffs",
+          label: "读取承运商发运点",
+          providerDone: providerDone,
+          providerTotal: providerEntries.length,
+          pointCount: points.size,
+          errorCount: providerErrors.length,
+          providerId: providerId,
+          providerName: providerName
+        });
+      }
     }
   }
+  var workerCount = Math.min(SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY, providerEntries.length);
+  await Promise.all(Array.from({ length: workerCount }, fetchNextProviderDropoffs));
+  reportProgress({
+    phase: "complete",
+    label: "采集完成，准备导入 ERP",
+    providerDone: providerEntries.length,
+    providerTotal: providerEntries.length,
+    pointCount: points.size,
+    errorCount: providerErrors.length
+  });
 
   return {
     companyId: String(companyId),
@@ -3529,8 +3607,11 @@ globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_B
   syncShopGraphsToErp,
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || !message.type || !message.type.startsWith('spb-self-hosted:')) {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || !message.type) {
+    return false;
+  }
+  if (!message.type.startsWith('spb-self-hosted:')) {
     return false;
   }
 
@@ -3567,7 +3648,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return await syncShopAnalyticsToErp(message.shopId, message.companyId);
       }
       case "spb-self-hosted:fetch-ozon-dropoff-points": {
-        return { ok: true, data: await fetchOzonSellerDropoffPointsViaTab(message.companyId) };
+        return {
+          ok: true,
+          data: await fetchOzonSellerDropoffPointsViaTab(message.companyId, {
+            onProgress: function (progress) {
+              sendExtensionProgress(sender, message.requestId, progress);
+            }
+          })
+        };
       }
       case "spb-self-hosted:sync-shop-graphs": {
         return await syncShopGraphsToErp(message.shopId, message.companyId, message.period || 30);

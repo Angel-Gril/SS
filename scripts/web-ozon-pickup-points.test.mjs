@@ -4,6 +4,8 @@ import fs from 'node:fs';
 const adminPage = fs.readFileSync('apps/web/src/app/(dashboard)/admin/ozon-pickup-points/page.tsx', 'utf8');
 const userPage = fs.readFileSync('apps/web/src/app/(dashboard)/ozon-pickup-points/page.tsx', 'utf8');
 const extensionBackground = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+const extensionBridge = fs.readFileSync('extensions/ss-erp/content/erp-collect-bridge.js', 'utf8');
+const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 
 for (const token of [
   '/api/ozon-pickup-points/import-ozon-dropoffs',
@@ -26,8 +28,28 @@ assert.match(
 
 assert.match(
   adminPage,
-  /api\.get<OzonCdnAuthStatus>\(`\/api\/shops\/\$\{syncShopId\}\/ozon-cdn-auth`\)[\s\S]{0,650}sendToExtension[\s\S]{0,260}\.\.\.\(companyId \? \{ companyId \} : \{\}\)/,
+  /api\.get<OzonCdnAuthStatus>\(`\/api\/shops\/\$\{syncShopId\}\/ozon-cdn-auth`\)/,
+  'admin pickup sync should read the ERP-stored Ozon companyId before calling the browser extension',
+);
+assert.match(
+  adminPage,
+  /sendToExtension<OzonDropoffSyncPayload>[\s\S]{0,420}\.\.\.\(companyId \? \{ companyId \} : \{\}\)/,
   'admin pickup sync should pass the ERP-stored Ozon companyId to the browser extension',
+);
+assert.match(
+  adminPage,
+  /sendToExtension<\{ version\?: string \}>\(\s*\{\s*type:\s*'ss-erp:ping'\s*\}/,
+  'admin pickup sync should ping the extension before starting the long Ozon drop-off collection',
+);
+assert.match(
+  adminPage,
+  /syncProgress[\s\S]{0,1800}role="progressbar"[\s\S]{0,600}providerDone[\s\S]{0,1800}pointCount/,
+  'admin pickup sync should render provider progress and collected point count while extension collection is running',
+);
+assert.match(
+  adminPage,
+  /sendToExtension<OzonDropoffSyncPayload>[\s\S]{0,900}setSyncProgress/,
+  'admin pickup sync should update progress from extension events during Ozon drop-off collection',
 );
 
 assert.match(
@@ -49,6 +71,11 @@ assert.match(
   userPage,
   /providerName|externalId/,
   'user pickup point page should display or search synced Ozon provider metadata',
+);
+assert.doesNotMatch(
+  userPage,
+  /api\.(put|delete)\(`\/api\/ozon-pickup-points|Pencil|Trash2|编辑|保存/,
+  'user pickup point page should remain view/search only without edit or delete controls',
 );
 assert.match(
   adminPage,
@@ -85,6 +112,36 @@ assert.match(
   extensionBackground,
   /sellerWarehouseList[\s\S]{0,220}\{\s*company_id:\s*String\(companyId\)\s*\}/,
   'extension should include string company_id in the Ozon seller warehouse list request body',
+);
+assert.match(
+  serviceWorker,
+  /message\.type === ['"]ss-erp:ping['"][\s\S]*?hasCollectModule/,
+  'extension service worker should answer the ERP page ping with collect-module diagnostics',
+);
+assert.doesNotMatch(
+  extensionBackground,
+  /message\.type === ['"]ss-erp:ping['"]/,
+  'extension collect background should not shadow the service-worker ping diagnostics',
+);
+assert.match(
+  extensionBackground,
+  /SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY\s*=\s*6/,
+  'extension should fetch provider drop-off lists with a bounded concurrency',
+);
+assert.match(
+  extensionBackground,
+  /sendExtensionProgress[\s\S]{0,700}ss-erp:extension-progress[\s\S]{0,900}requestId/,
+  'extension background should send request-scoped progress events back to the ERP tab',
+);
+assert.match(
+  extensionBackground,
+  /fetchOzonSellerDropoffPointsViaTab\(message\.companyId,\s*\{[\s\S]{0,700}onProgress[\s\S]{0,700}sendExtensionProgress\(sender,\s*message\.requestId/,
+  'extension drop-off fetch command should wire progress events to the current ERP request',
+);
+assert.match(
+  extensionBridge,
+  /ss-erp:extension-progress[\s\S]{0,260}requestId:\s*msg\.requestId[\s\S]{0,260}progress:\s*msg\.progress/,
+  'extension content bridge should forward background progress events to the ERP page with the matching request id',
 );
 
 console.log('PASS web ozon pickup points');

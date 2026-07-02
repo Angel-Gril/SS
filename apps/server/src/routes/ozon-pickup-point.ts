@@ -75,6 +75,8 @@ const importedDropoffSchema = z.object({
     externalId: z.coerce.string().min(1),
     name: z.string().optional().default(''),
     address: z.string().optional().default(''),
+    contact: z.string().optional(),
+    phone: z.string().optional(),
     providerId: z.coerce.number(),
     providerName: z.string().optional().default(''),
     boundMethodIds: z.array(z.coerce.number()).optional().default([]),
@@ -502,10 +504,14 @@ function normalizeImportedSellerDropoffResult(input: z.infer<typeof importedDrop
 
   const points: SellerDropoffPoint[] = input.points.map((point) => {
     const providerName = point.providerName || providerMap.get(point.providerId) || `Provider ${point.providerId}`;
+    const contact = stringValue(point.contact);
+    const phone = stringValue(point.phone);
     return {
       externalId: point.externalId,
       name: point.name || `发运点 ${point.externalId}`,
       address: point.address,
+      ...(contact ? { contact } : {}),
+      ...(phone ? { phone } : {}),
       providerId: point.providerId,
       providerName,
       boundMethodIds: [...new Set(point.boundMethodIds.filter((value) => Number.isFinite(value)))].sort((a, b) => a - b),

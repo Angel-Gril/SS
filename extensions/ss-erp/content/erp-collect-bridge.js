@@ -41,7 +41,8 @@
       var message = event.data.message;
       if (!message || !message.type) return;
 
-      chrome.runtime.sendMessage(message, function (response) {
+      var runtimeMessage = Object.assign({}, message, { requestId: requestId });
+      chrome.runtime.sendMessage(runtimeMessage, function (response) {
         var lastError = chrome.runtime.lastError;
         var safeResponse = response || { ok: false, error: 'no response' };
         if (lastError) {
@@ -66,6 +67,13 @@
           direction: DIRECTION_FROM_EXT,
           broadcast: true,
           event: msg,
+        }, '*');
+      }
+      if (msg.type === 'ss-erp:extension-progress') {
+        window.postMessage({
+          direction: DIRECTION_FROM_EXT,
+          requestId: msg.requestId,
+          progress: msg.progress || null,
         }, '*');
       }
     });

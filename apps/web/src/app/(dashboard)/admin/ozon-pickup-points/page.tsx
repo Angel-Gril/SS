@@ -72,6 +72,17 @@ interface ExtensionBridgeResponse<T = unknown> {
   error?: string;
 }
 
+interface OzonDropoffSyncProgress {
+  phase?: string;
+  label?: string;
+  providerDone?: number;
+  providerTotal?: number;
+  pointCount?: number;
+  errorCount?: number;
+  providerId?: number;
+  providerName?: string;
+}
+
 const TYPE_OPTIONS = [
   { value: 'collect', label: '集运点' },
   { value: 'dispatch', label: '发运点' },
@@ -79,6 +90,8 @@ const TYPE_OPTIONS = [
 
 const typeLabel = (t: string) => TYPE_OPTIONS.find((o) => o.value === t)?.label || t;
 const PAGE_SIZE = 100;
+const EXTENSION_PING_TIMEOUT_MS = 5000;
+const OZON_DROPOFF_EXTENSION_TIMEOUT_MS = 300000;
 
 const emptyForm = {
   city: '',
@@ -94,7 +107,12 @@ const emptyForm = {
   sortOrder: 0,
 };
 
-function sendToExtension<T>(message: Record<string, unknown>, timeoutMs = 65000): Promise<ExtensionBridgeResponse<T>> {
+function sendToExtension<T>(
+  message: Record<string, unknown>,
+  timeoutMs = 65000,
+  timeoutError = '未检测到 SS ERP 扩展或扩展版本过旧',
+  onProgress?: (progress: OzonDropoffSyncProgress) => void,
+): Promise<ExtensionBridgeResponse<T>> {
   if (typeof window === 'undefined') {
     return Promise.resolve({ ok: false, error: '当前环境无法连接扩展' });
   }
@@ -113,16 +131,54 @@ function sendToExtension<T>(message: Record<string, unknown>, timeoutMs = 65000)
       if (event.source !== window) return;
       const data = event.data as any;
       if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
+      if (data.progress) {
+        onProgress?.(data.progress as OzonDropoffSyncProgress);
+        return;
+      }
       cleanup();
       resolve((data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse<T>);
     };
     timer = window.setTimeout(() => {
       cleanup();
-      resolve({ ok: false, error: '未检测到 SS ERP 扩展或扩展版本过旧' });
+      resolve({ ok: false, error: timeoutError });
     }, timeoutMs);
     window.addEventListener('message', onMessage);
     window.postMessage({ direction: 'ss-erp:to-extension', requestId, message }, window.location.origin);
   });
+}
+
+function normalizeProgressValue(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function getSyncProgressPercent(progress: OzonDropoffSyncProgress | null): number {
+  if (!progress) return 0;
+  if (progress.phase === 'complete') return 100;
+  if (progress.phase === 'importing') return 96;
+  if (progress.phase === 'error') return 100;
+  const providerDone = normalizeProgressValue(progress.providerDone);
+  const providerTotal = normalizeProgressValue(progress.providerTotal);
+  if (providerTotal > 0) {
+    return Math.max(12, Math.min(95, Math.round((providerDone / providerTotal) * 92)));
+  }
+  if (progress.phase === 'providers') return 10;
+  if (progress.phase === 'company') return 5;
+  return 8;
+}
+
+function mergeSyncProgress(
+  current: OzonDropoffSyncProgress | null,
+  incoming: OzonDropoffSyncProgress,
+): OzonDropoffSyncProgress {
+  return {
+    ...(current || {}),
+    ...incoming,
+    providerDone: incoming.providerDone ?? current?.providerDone ?? 0,
+    providerTotal: incoming.providerTotal ?? current?.providerTotal ?? 0,
+    pointCount: incoming.pointCount ?? current?.pointCount ?? 0,
+    errorCount: incoming.errorCount ?? current?.errorCount ?? 0,
+  };
 }
 
 
@@ -136,6 +192,7 @@ export default function AdminOzonPickupPointsPage() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<OzonDropoffSyncProgress | null>(null);
   const [syncShopId, setSyncShopId] = useState('');
   const [filterKeyword, setFilterKeyword] = useState('');
   const [page, setPage] = useState(1);
@@ -258,17 +315,58 @@ export default function AdminOzonPickupPointsPage() {
       return;
     }
     setSyncing(true);
+    setSyncProgress({
+      phase: 'company',
+      label: '检查 ERP 店铺和浏览器扩展',
+      providerDone: 0,
+      providerTotal: 0,
+      pointCount: 0,
+      errorCount: 0,
+    });
     const authRes = await api.get<OzonCdnAuthStatus>(`/api/shops/${syncShopId}/ozon-cdn-auth`);
     const companyId = authRes.code === 1 && authRes.data?.companyId
       ? String(authRes.data.companyId).trim()
       : '';
+    const extensionPing = await sendToExtension<{ version?: string }>(
+      { type: 'ss-erp:ping' },
+      EXTENSION_PING_TIMEOUT_MS,
+      '未检测到 SS ERP 扩展桥，请刷新当前 ERP 页面；如果仍失败，请在 Chrome 扩展管理页重新加载 SS ERP 扩展',
+    );
+    if (!extensionPing.ok) {
+      setSyncProgress((current) => mergeSyncProgress(current, {
+        phase: 'error',
+        label: '浏览器扩展未连接',
+      }));
+      setSyncing(false);
+      toast({
+        title: '浏览器扩展未连接',
+        description: extensionPing.error || '请重新加载 SS ERP 扩展和当前 ERP 页面后再试。',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setSyncProgress((current) => mergeSyncProgress(current, {
+      phase: 'dropoffs',
+      label: '扩展已连接，开始读取 Ozon 可选发运点',
+    }));
     const extensionResult = await sendToExtension<OzonDropoffSyncPayload>({
       type: 'spb-self-hosted:fetch-ozon-dropoff-points',
       shopId: syncShopId,
       ...(companyId ? { companyId } : {}),
+    }, OZON_DROPOFF_EXTENSION_TIMEOUT_MS, 'Ozon 可选发运点采集超过 5 分钟仍未完成，请确认 seller.ozon.ru 已登录并保持页面打开，然后重试', (progress) => {
+      setSyncProgress((current) => mergeSyncProgress(current, progress));
     });
     let res;
     if (extensionResult.ok && extensionResult.data) {
+      const dropoffData = extensionResult.data;
+      setSyncProgress((current) => mergeSyncProgress(current, {
+        phase: 'importing',
+        label: '写入 ERP 数据库',
+        providerDone: dropoffData.providers.length,
+        providerTotal: dropoffData.providers.length,
+        pointCount: dropoffData.points.length,
+        errorCount: dropoffData.providerErrors?.length || 0,
+      }));
       res = await api.post<{
         created: number;
         updated: number;
@@ -279,9 +377,13 @@ export default function AdminOzonPickupPointsPage() {
         providerErrors?: { providerId: number; message: string }[];
       }>('/api/ozon-pickup-points/import-ozon-dropoffs', {
         shopId: syncShopId,
-        ...extensionResult.data,
+        ...dropoffData,
       });
     } else {
+      setSyncProgress((current) => mergeSyncProgress(current, {
+        phase: 'error',
+        label: '扩展采集失败',
+      }));
       setSyncing(false);
       toast({
         title: '需要通过浏览器扩展读取 Ozon 可选发运点池',
@@ -292,6 +394,14 @@ export default function AdminOzonPickupPointsPage() {
     }
     setSyncing(false);
     if (res.code === 1 && res.data) {
+      setSyncProgress({
+        phase: 'complete',
+        label: '已完成同步',
+        providerDone: res.data.providerCount,
+        providerTotal: res.data.providerCount,
+        pointCount: res.data.totalPoints,
+        errorCount: res.data.providerErrors?.length || 0,
+      });
       toast({
         title: '可选发运点池已更新',
         description: `可选点 ${res.data.totalPoints} 个，承运商 ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}，未变化 ${res.data.unchanged || 0}，停用 ${res.data.deactivated || 0}`,
@@ -299,9 +409,19 @@ export default function AdminOzonPickupPointsPage() {
       setPage(1);
       fetchList();
     } else {
+      setSyncProgress((current) => mergeSyncProgress(current, {
+        phase: 'error',
+        label: '写入 ERP 失败',
+      }));
       toast({ title: res.msg || '导入 Ozon 可选发运点失败', variant: 'destructive' });
     }
   }
+
+  const progressPercent = getSyncProgressPercent(syncProgress);
+  const providerDone = normalizeProgressValue(syncProgress?.providerDone);
+  const providerTotal = normalizeProgressValue(syncProgress?.providerTotal);
+  const pointCount = normalizeProgressValue(syncProgress?.pointCount);
+  const errorCount = normalizeProgressValue(syncProgress?.errorCount);
 
   return (
     <div className="space-y-6">
@@ -345,6 +465,29 @@ export default function AdminOzonPickupPointsPage() {
           <div className="mt-3 text-xs text-muted-foreground">
             这一步必须通过浏览器扩展在真实 Seller 页面执行；服务端官方 API 只能读已绑定物流方式，不能代替可选发运点池采集。
           </div>
+          {syncProgress && (
+            <div className="mt-4 rounded-md border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <div className="font-medium">{syncProgress.label || '正在同步 Ozon 可选发运点'}</div>
+                <div className="text-muted-foreground">{progressPercent}%</div>
+              </div>
+              <div
+                className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressPercent}
+              >
+                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progressPercent}%` }} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>承运商：{providerDone}/{providerTotal || '-'}</span>
+                <span>已读取发运点：{pointCount}</span>
+                <span>失败承运商：{errorCount}</span>
+                {syncProgress.providerName && <span>当前：{syncProgress.providerName}</span>}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -422,7 +565,7 @@ export default function AdminOzonPickupPointsPage() {
 
       <Dialog open={showDialog} onOpenChange={(v) => !v && setShowDialog(false)}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>{editing ? '编辑揽收点' : '新增揽收点'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editing ? '编辑发运点' : '新增发运点'}</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">

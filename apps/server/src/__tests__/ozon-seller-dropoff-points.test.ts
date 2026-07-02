@@ -231,6 +231,46 @@ describe('Ozon seller drop-off points', () => {
     });
     expect(data.note).toContain('32672640');
   });
+
+  it('extracts contact and phone from seller drop-off address suffixes', () => {
+    const data = toOzonPickupPointData({
+      externalId: 'ural-jinjiang',
+      name: 'Ural乌拉尔泉州（晋江仓）',
+      address: '福建省晋江市永和镇上宅村新丝路物流园一期12号与13号月台Ural泉州揽收仓 联系人：班昊 19560457781)',
+      providerId: 877,
+      providerName: 'Ural Express HK',
+      boundMethodIds: [],
+    }, 'shop-1');
+
+    expect(data).toMatchObject({
+      city: '晋江',
+      province: '福建',
+      address: '福建省晋江市永和镇上宅村新丝路物流园一期12号与13号月台Ural泉州揽收仓',
+      contact: '班昊',
+      phone: '19560457781',
+    });
+  });
+
+  it('keeps separately provided seller drop-off contact fields out of the address', () => {
+    const data = toOzonPickupPointData({
+      externalId: 'xy-jinjiang',
+      name: '圆航国际晋江五里工业仓',
+      address: '（晋江五里工业仓）福建省晋江市五里工业区中华路16号盛辉物流园内',
+      contact: '吴先生',
+      phone: '13799969119',
+      providerId: 1042,
+      providerName: 'XY Economy Extra Small',
+      boundMethodIds: [],
+    }, 'shop-1');
+
+    expect(data).toMatchObject({
+      city: '晋江',
+      province: '福建',
+      address: '（晋江五里工业仓）福建省晋江市五里工业区中华路16号盛辉物流园内',
+      contact: '吴先生',
+      phone: '13799969119',
+    });
+  });
 });
 
 function jsonResponse(payload: unknown): Response {

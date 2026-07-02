@@ -621,7 +621,7 @@ describe('ozon pickup point routes', () => {
           {
             externalId: 'CEL0030AN',
             name: 'CEL福建厦门集货仓',
-            address: '厦门市海沧区东孚街道凤山西路6号1层',
+            address: '厦门市海沧区东孚街道凤山西路6号1层 联系人：张三 19560457781',
             providerId: 1164,
             providerName: 'CEL',
             boundMethodIds: [26168680],
@@ -636,6 +636,9 @@ describe('ozon pickup point routes', () => {
         externalId: 'CEL0030AN',
         providerId: 1164,
         city: '厦门',
+        address: '厦门市海沧区东孚街道凤山西路6号1层',
+        contact: '张三',
+        phone: '19560457781',
       }),
     }));
 

@@ -28,6 +28,8 @@ export interface SellerDropoffPoint {
   externalId: string;
   name: string;
   address: string;
+  contact?: string;
+  phone?: string;
   providerId: number;
   providerName: string;
   boundMethodIds: number[];
@@ -130,10 +132,14 @@ export async function fetchOzonSellerDropoffPoints(params: {
           existing.boundMethodIds = uniqueNumbers([...existing.boundMethodIds, ...boundMethodIds]);
           continue;
         }
+        const contact = stringValue(row.contact ?? row.contactName ?? row.contact_name ?? row.manager ?? row.receiver);
+        const phone = normalizeContactPhone(stringValue(row.phone ?? row.mobile ?? row.telephone ?? row.contactPhone ?? row.contact_phone));
         points.set(pointKey, {
           externalId,
           name: stringValue(row.name) || `发运点 ${externalId}`,
           address: stringValue(row.address),
+          ...(contact ? { contact } : {}),
+          ...(phone ? { phone } : {}),
           providerId,
           providerName,
           boundMethodIds: uniqueNumbers(boundMethodIds),
@@ -221,14 +227,20 @@ function uniqueProvidersFromMethods(methods: SellerDeliveryMethodRef[]): { provi
 }
 
 export function toOzonPickupPointData(point: SellerDropoffPoint, shopId: string): OzonPickupPointData {
-  const place = inferChinesePlace(point.address || point.name);
+  const parsedAddress = parseSellerDropoffAddress(point.address || point.name);
+  const address = parsedAddress.address || point.name;
+  const contact = stringValue(point.contact) || parsedAddress.contact;
+  const phone = normalizeContactPhone(point.phone) || parsedAddress.phone;
+  const place = inferChinesePlace(address || point.name);
   const bound = point.boundMethodIds.length ? `绑定物流方式: ${point.boundMethodIds.join(', ')}` : '未匹配当前物流方式';
   return {
     city: place.city || '未知',
     ...(place.province ? { province: place.province } : {}),
     type: 'dispatch',
     name: point.name,
-    address: point.address || point.name,
+    address,
+    ...(contact ? { contact } : {}),
+    ...(phone ? { phone } : {}),
     note: `Ozon provider ${point.providerId} ${point.providerName}; ${bound}`,
     isActive: true,
     sortOrder: 100,
@@ -240,6 +252,51 @@ export function toOzonPickupPointData(point: SellerDropoffPoint, shopId: string)
     syncedAt: new Date(),
     rawData: point as unknown as Prisma.InputJsonValue,
   };
+}
+
+function parseSellerDropoffAddress(value: string): { address: string; contact?: string; phone?: string } {
+  const original = stringValue(value).replace(/\s+/g, ' ');
+  const phoneMatch = original.match(/(?:\+?86[-\s]?)?(1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8})/);
+  const phone = normalizeContactPhone(phoneMatch?.[0] || '');
+  const contactLabel = original.match(/(?:联系人|联络人|收件人|负责人)\s*[:：]?\s*([^,，;；)）\]】\r\n]*)/i);
+  const contact = contactLabel
+    ? cleanupContactName(contactLabel[1] || '')
+    : '';
+  let address = original;
+  if (contactLabel && typeof contactLabel.index === 'number') {
+    address = original.slice(0, contactLabel.index);
+  } else if (phoneMatch) {
+    address = address
+      .replace(phoneMatch[0], '')
+      .replace(/(?:电话|手机|联系方式)\s*[:：]?\s*/gi, '');
+  }
+  return {
+    address: cleanupAddress(address) || original,
+    ...(contact ? { contact } : {}),
+    ...(phone ? { phone } : {}),
+  };
+}
+
+function cleanupContactName(value: string): string {
+  return value
+    .replace(/(?:\+?86[-\s]?)?(1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8})/g, '')
+    .replace(/(?:电话|手机|联系方式)\s*[:：]?\s*/gi, '')
+    .replace(/[()（）\[\]【】,，;；\s]+$/g, '')
+    .trim();
+}
+
+function cleanupAddress(value: string): string {
+  return stringValue(value)
+    .replace(/\s+/g, ' ')
+    .replace(/[()（）\[\]【】,，;；\s]+$/g, '')
+    .trim();
+}
+
+function normalizeContactPhone(value: unknown): string {
+  const text = stringValue(value);
+  if (!text) return '';
+  const match = text.match(/(?:\+?86[-\s]?)?(1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8})/);
+  return match ? match[1]!.replace(/[^\d]/g, '') : '';
 }
 
 function collectDeliveryMethodArrays(value: unknown, out: unknown[][]) {
@@ -331,7 +388,7 @@ function inferChinesePlace(text: string): { province?: string; city?: string } {
 }
 
 function inferKnownCity(text: string): string {
-  const cities = ['广州', '深圳', '义乌', '东莞', '佛山', '厦门', '杭州', '宁波', '上海', '北京', '天津', '重庆', '苏州', '成都', '武汉'];
+  const cities = ['广州', '深圳', '义乌', '东莞', '佛山', '厦门', '杭州', '宁波', '上海', '北京', '天津', '重庆', '苏州', '成都', '武汉', '泉州', '晋江'];
   return cities.find((city) => text.includes(city)) || '';
 }
 
