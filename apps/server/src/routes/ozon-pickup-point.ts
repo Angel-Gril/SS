@@ -27,6 +27,30 @@ const createSchema = z.object({
 
 const updateSchema = createSchema.partial();
 const OZON_DROPOFF_IMPORT_BODY_LIMIT = 20 * 1024 * 1024;
+const DEFAULT_PICKUP_POINT_PAGE_SIZE = 100;
+const MAX_PICKUP_POINT_PAGE_SIZE = 200;
+const pickupPointListSelect = {
+  id: true,
+  city: true,
+  province: true,
+  type: true,
+  name: true,
+  address: true,
+  contact: true,
+  phone: true,
+  workingHours: true,
+  note: true,
+  isActive: true,
+  sortOrder: true,
+  source: true,
+  externalId: true,
+  providerId: true,
+  providerName: true,
+  shopId: true,
+  syncedAt: true,
+  createdAt: true,
+  updatedAt: true,
+};
 
 const importedDropoffSchema = z.object({
   shopId: z.string().min(1),
@@ -64,35 +88,88 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
 
   // 用户列表：普通用户只看启用点；管理员页面可通过 includeInactive 查看全部。
   app.get('/', async (request, reply) => {
-    const { city, q, type, includeInactive, providerId, source } = request.query as {
-      city?: string; q?: string; type?: string; includeInactive?: string; providerId?: string; source?: string;
+    const { city, q, type, includeInactive, providerId, source, page, pageSize } = request.query as {
+      city?: string; q?: string; type?: string; includeInactive?: string; providerId?: string; source?: string; page?: string; pageSize?: string;
     };
     const user = (request as any).user || {};
     const keyword = String(q || city || '').trim();
+    const currentPage = parsePositiveInt(page, 1);
+    const currentPageSize = Math.min(parsePositiveInt(pageSize, DEFAULT_PICKUP_POINT_PAGE_SIZE), MAX_PICKUP_POINT_PAGE_SIZE);
     const providerIdNumber = Number(providerId);
-    const where: any = {};
-    if (!includeInactive || user.role !== 'ADMIN') where.isActive = true;
-    if (type) where.type = type;
-    if (Number.isFinite(providerIdNumber) && providerIdNumber > 0) where.providerId = providerIdNumber;
-    if (source === 'manual' || source === 'ozon_seller') where.source = source;
-    if (keyword) {
-      where.OR = [
-        { city: { contains: keyword, mode: 'insensitive' } },
-        { province: { contains: keyword, mode: 'insensitive' } },
-        { name: { contains: keyword, mode: 'insensitive' } },
-        { address: { contains: keyword, mode: 'insensitive' } },
-        { contact: { contains: keyword, mode: 'insensitive' } },
-        { phone: { contains: keyword, mode: 'insensitive' } },
-        { providerName: { contains: keyword, mode: 'insensitive' } },
-        { externalId: { contains: keyword, mode: 'insensitive' } },
-      ];
-    }
-
-    const list = await prisma.ozonPickupPoint.findMany({
-      where,
-      orderBy: [{ sortOrder: 'asc' }, { city: 'asc' }, { providerId: 'asc' }, { createdAt: 'desc' }],
+    const where = buildOzonPickupPointWhere({
+      keyword,
+      type,
+      includeInactive,
+      providerIdNumber,
+      source,
+      role: user.role,
     });
-    return reply.send({ code: 1, msg: 'ok', data: list });
+
+    const [total, list] = await Promise.all([
+      prisma.ozonPickupPoint.count({ where }),
+      prisma.ozonPickupPoint.findMany({
+        where,
+        select: pickupPointListSelect,
+        orderBy: [{ sortOrder: 'asc' }, { city: 'asc' }, { providerId: 'asc' }, { createdAt: 'desc' }],
+        skip: (currentPage - 1) * currentPageSize,
+        take: currentPageSize,
+      }),
+    ]);
+    const totalPages = Math.max(1, Math.ceil(total / currentPageSize));
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: list,
+      meta: {
+        page: currentPage,
+        pageSize: currentPageSize,
+        total,
+        totalPages,
+        hasNext: currentPage < totalPages,
+      },
+    });
+  });
+
+  app.get('/providers', async (request, reply) => {
+    const { includeInactive, source, type } = request.query as {
+      includeInactive?: string; source?: string; type?: string;
+    };
+    const user = (request as any).user || {};
+    const where = buildOzonPickupPointWhere({
+      keyword: '',
+      type,
+      includeInactive,
+      providerIdNumber: Number.NaN,
+      source,
+      role: user.role,
+    });
+    where.providerId = { not: null };
+    const rows = await prisma.ozonPickupPoint.groupBy({
+      by: ['providerId', 'providerName'],
+      where,
+      _count: { _all: true },
+    });
+    const providerMap = new Map<number, { providerId: number; providerName: string; count: number }>();
+    for (const row of rows) {
+      const providerId = Number(row.providerId);
+      if (!Number.isFinite(providerId) || providerId <= 0) continue;
+      const existing = providerMap.get(providerId);
+      if (existing) {
+        existing.count += row._count._all;
+        if (row.providerName && existing.providerName.startsWith('Provider ')) {
+          existing.providerName = row.providerName;
+        }
+      } else {
+        providerMap.set(providerId, {
+          providerId,
+          providerName: row.providerName || `Provider ${providerId}`,
+          count: row._count._all,
+        });
+      }
+    }
+    const providers = [...providerMap.values()]
+      .sort((a, b) => a.providerName.localeCompare(b.providerName, 'zh-Hans-CN', { numeric: true }));
+    return reply.send({ code: 1, msg: 'ok', data: providers });
   });
 
   // 以下仅超管可操作
@@ -197,6 +274,40 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
   });
 }
 
+function buildOzonPickupPointWhere(params: {
+  keyword: string;
+  type?: string;
+  includeInactive?: string;
+  providerIdNumber: number;
+  source?: string;
+  role?: string;
+}) {
+  const where: any = {};
+  const { keyword, type, includeInactive, providerIdNumber, source, role } = params;
+  if (!includeInactive || role !== 'ADMIN') where.isActive = true;
+  if (type) where.type = type;
+  if (Number.isFinite(providerIdNumber) && providerIdNumber > 0) where.providerId = providerIdNumber;
+  if (source === 'manual' || source === 'ozon_seller') where.source = source;
+  if (keyword) {
+    where.OR = [
+      { city: { contains: keyword, mode: 'insensitive' } },
+      { province: { contains: keyword, mode: 'insensitive' } },
+      { name: { contains: keyword, mode: 'insensitive' } },
+      { address: { contains: keyword, mode: 'insensitive' } },
+      { contact: { contains: keyword, mode: 'insensitive' } },
+      { phone: { contains: keyword, mode: 'insensitive' } },
+      { providerName: { contains: keyword, mode: 'insensitive' } },
+      { externalId: { contains: keyword, mode: 'insensitive' } },
+    ];
+  }
+  return where;
+}
+
+function parsePositiveInt(value: unknown, fallback: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+}
+
 async function fetchOzonDropoffsFromOfficialDeliveryMethods(shop: {
   clientId?: string | null;
   apiKeyEncrypted?: string | null;
@@ -279,19 +390,22 @@ function buildSellerDropoffResultFromDeliveryMethods(deliveryMethods: OzonDelive
 async function upsertOzonSellerDropoffPoints(shopId: string, result: SellerDropoffFetchResult) {
   let created = 0;
   let updated = 0;
+  const syncedAt = new Date();
+  const existingRows = await prisma.ozonPickupPoint.findMany({
+    where: { source: 'ozon_seller', shopId },
+    select: { id: true, externalId: true, providerId: true },
+  });
+  const existingByKey = new Map(
+    existingRows
+      .filter((row) => row.externalId && row.providerId !== null)
+      .map((row) => [`${row.providerId}:${row.externalId}`, row.id]),
+  );
 
   for (const point of result.points) {
-    const data = toOzonPickupPointData(point, shopId);
-    const existing = await prisma.ozonPickupPoint.findFirst({
-      where: {
-        source: 'ozon_seller',
-        externalId: data.externalId,
-        providerId: data.providerId,
-        shopId,
-      },
-    });
-    if (existing) {
-      await prisma.ozonPickupPoint.update({ where: { id: existing.id }, data });
+    const data = { ...toOzonPickupPointData(point, shopId), syncedAt };
+    const existingId = existingByKey.get(`${data.providerId}:${data.externalId}`);
+    if (existingId) {
+      await prisma.ozonPickupPoint.update({ where: { id: existingId }, data });
       updated += 1;
     } else {
       await prisma.ozonPickupPoint.create({ data });
@@ -299,9 +413,24 @@ async function upsertOzonSellerDropoffPoints(shopId: string, result: SellerDropo
     }
   }
 
+  let deactivatedCount = 0;
+  if (result.providerErrors.length === 0) {
+    const deactivated = await prisma.ozonPickupPoint.updateMany({
+      where: {
+        source: 'ozon_seller',
+        shopId,
+        isActive: true,
+        OR: [{ syncedAt: null }, { syncedAt: { lt: syncedAt } }],
+      },
+      data: { isActive: false },
+    });
+    deactivatedCount = deactivated.count;
+  }
+
   return {
     created,
     updated,
+    deactivated: deactivatedCount,
     totalPoints: result.points.length,
     providerCount: result.providers.length,
     methodCount: result.methods.length,

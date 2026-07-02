@@ -37,8 +37,28 @@ assert.match(
 );
 assert.match(
   userPage,
+  /\/api\/ozon-pickup-points\/providers/,
+  'user pickup point page should load provider options from the provider endpoint instead of a full point list',
+);
+assert.match(
+  userPage,
+  /params\.set\('pageSize',\s*String\(PAGE_SIZE\)\)/,
+  'user pickup point page should request paged pickup point results',
+);
+assert.match(
+  userPage,
   /providerName|externalId/,
   'user pickup point page should display or search synced Ozon provider metadata',
+);
+assert.match(
+  adminPage,
+  /params\.set\('q',\s*filterKeyword\.trim\(\)\)[\s\S]*params\.toString\(\)/,
+  'admin pickup point page should send keyword filtering to the backend',
+);
+assert.match(
+  adminPage,
+  /pageSize:\s*String\(PAGE_SIZE\)/,
+  'admin pickup point page should request paged admin results',
 );
 
 assert.match(

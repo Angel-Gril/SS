@@ -1092,6 +1092,10 @@ model OzonPickupPoint {
   @@index([externalId])
   @@index([providerId])
   @@index([shopId])
+  @@index([source, providerId, city])
+  @@index([source, shopId, syncedAt])
+  @@index([source, shopId, providerId, externalId])
+  @@index([isActive, source, city])
   @@map("ozon_pickup_points")
 }
 

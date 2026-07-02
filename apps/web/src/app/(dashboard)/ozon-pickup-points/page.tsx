@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Copy, Loader2, MapPin, Crosshair, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Copy, Loader2, MapPin, Crosshair, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -26,12 +26,29 @@ interface PickupPoint {
   providerName?: string | null;
 }
 
+interface ProviderOption {
+  providerId: number;
+  providerName: string;
+  count: number;
+}
+
+interface PageMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+}
+
 const typeLabel = (t: string) => (t === 'collect' ? '集运点' : t === 'dispatch' ? '发运点' : t);
 
 const sourceLabel = (source: string | null | undefined) => (source === 'ozon_seller' ? 'Ozon可选池' : 'ERP自建');
+const PAGE_SIZE = 100;
 
 export default function OzonPickupPointsPage() {
   const [items, setItems] = useState<PickupPoint[]>([]);
+  const [providers, setProviders] = useState<ProviderOption[]>([]);
+  const [meta, setMeta] = useState<PageMeta>({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1, hasNext: false });
   const [loading, setLoading] = useState(true);
   const [locating, setLocating] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -39,10 +56,21 @@ export default function OzonPickupPointsPage() {
 
   const [providerFilter, setProviderFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [keyword, typeFilter, providerFilter, sourceFilter]);
+
+  useEffect(() => {
+    setProviderFilter('');
+    fetchProviders();
+  }, [typeFilter, sourceFilter]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => { fetchList(); }, keyword || typeFilter || providerFilter || sourceFilter ? 250 : 0);
     return () => window.clearTimeout(timer);
-  }, [keyword, typeFilter, providerFilter, sourceFilter]);
+  }, [keyword, typeFilter, providerFilter, sourceFilter, page]);
 
   async function fetchList() {
     setLoading(true);
@@ -51,10 +79,24 @@ export default function OzonPickupPointsPage() {
     if (typeFilter) params.set('type', typeFilter);
     if (providerFilter) params.set('providerId', providerFilter);
     if (sourceFilter) params.set('source', sourceFilter);
+    params.set('page', String(page));
+    params.set('pageSize', String(PAGE_SIZE));
     const query = params.toString();
     const res = await api.get<PickupPoint[]>(`/api/ozon-pickup-points${query ? `?${query}` : ''}`);
-    if (res.code === 1 && res.data) setItems(res.data);
+    if (res.code === 1 && res.data) {
+      setItems(res.data);
+      setMeta((res.meta as PageMeta | undefined) || { page, pageSize: PAGE_SIZE, total: res.data.length, totalPages: 1, hasNext: false });
+    }
     setLoading(false);
+  }
+
+  async function fetchProviders() {
+    const params = new URLSearchParams();
+    if (typeFilter) params.set('type', typeFilter);
+    if (sourceFilter) params.set('source', sourceFilter);
+    const query = params.toString();
+    const res = await api.get<ProviderOption[]>(`/api/ozon-pickup-points/providers${query ? `?${query}` : ''}`);
+    if (res.code === 1 && res.data) setProviders(res.data);
   }
 
   // 浏览器定位 → OSM Nominatim 反查 → 自动填中文城市
@@ -88,31 +130,12 @@ export default function OzonPickupPointsPage() {
     }
   }
 
-  const providerOptions = [...new Map(items
-    .filter((it) => it.providerId)
-    .map((it) => [String(it.providerId), it.providerName || `Provider ${it.providerId}`] as const))]
-    .map(([value, label]) => ({ value, label }))
-    .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN', { numeric: true }));
-
-  const matched = items.filter((it) => {
-    if (typeFilter && it.type !== typeFilter) return false;
-    if (providerFilter && String(it.providerId || '') !== providerFilter) return false;
-    if (sourceFilter && it.source !== sourceFilter) return false;
-    if (!keyword) return true;
-    const k = keyword.toLowerCase();
-    return [it.city, it.province, it.name, it.address].some(
-      (v) => (v || '').toLowerCase().includes(k),
-    ) || [it.providerName, it.externalId].some(
-      (v) => (v || '').toLowerCase().includes(k),
-    );
-  });
-
   const cityMatched = (it: PickupPoint) =>
     keyword && (it.city.toLowerCase().includes(keyword.toLowerCase())
       || (it.province || '').toLowerCase().includes(keyword.toLowerCase()));
 
 
-  const ranked = [...matched].sort((a, b) => {
+  const ranked = [...items].sort((a, b) => {
     const cityScore = Number(Boolean(cityMatched(b))) - Number(Boolean(cityMatched(a)));
     if (cityScore) return cityScore;
     const sourceScore = Number(a.source === 'ozon_seller') - Number(b.source === 'ozon_seller');
@@ -183,8 +206,10 @@ export default function OzonPickupPointsPage() {
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
               >
                 <option value="">全部</option>
-                {providerOptions.map((provider) => (
-                  <option key={provider.value} value={provider.value}>{provider.label}</option>
+                {providers.map((provider) => (
+                  <option key={provider.providerId} value={provider.providerId}>
+                    {provider.providerName}（{provider.count}）
+                  </option>
                 ))}
               </select>
             </div>
@@ -199,7 +224,7 @@ export default function OzonPickupPointsPage() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">可选发运点 / ERP自建点（{ranked.length}）</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">可选发运点 / ERP自建点（{meta.total}）</CardTitle></CardHeader>
         <CardContent>
           {loading ? (
             <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
@@ -244,9 +269,29 @@ export default function OzonPickupPointsPage() {
               })}
             </div>
           )}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>第 {meta.page} / {meta.totalPages} 页，每页 {meta.pageSize} 条</span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                disabled={loading || meta.page <= 1}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />上一页
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((value) => value + 1)}
+                disabled={loading || !meta.hasNext}
+              >
+                下一页<ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 }
-

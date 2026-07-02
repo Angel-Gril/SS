@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Plus, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -58,6 +58,14 @@ interface OzonDropoffSyncPayload {
   providerErrors?: { providerId: number; message: string }[];
 }
 
+interface PageMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+}
+
 interface ExtensionBridgeResponse<T = unknown> {
   ok?: boolean;
   data?: T;
@@ -70,6 +78,7 @@ const TYPE_OPTIONS = [
 ];
 
 const typeLabel = (t: string) => TYPE_OPTIONS.find((o) => o.value === t)?.label || t;
+const PAGE_SIZE = 100;
 
 const emptyForm = {
   city: '',
@@ -129,16 +138,35 @@ export default function AdminOzonPickupPointsPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncShopId, setSyncShopId] = useState('');
   const [filterKeyword, setFilterKeyword] = useState('');
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState<PageMeta>({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1, hasNext: false });
 
   useEffect(() => {
-    fetchList();
     fetchShops();
   }, []);
 
+  useEffect(() => {
+    setPage(1);
+  }, [filterKeyword]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { fetchList(); }, filterKeyword ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [filterKeyword, page]);
+
   async function fetchList() {
     setLoading(true);
-    const res = await api.get<PickupPoint[]>('/api/ozon-pickup-points?includeInactive=1');
-    if (res.code === 1 && res.data) setItems(res.data);
+    const params = new URLSearchParams({
+      includeInactive: '1',
+      page: String(page),
+      pageSize: String(PAGE_SIZE),
+    });
+    if (filterKeyword.trim()) params.set('q', filterKeyword.trim());
+    const res = await api.get<PickupPoint[]>(`/api/ozon-pickup-points?${params.toString()}`);
+    if (res.code === 1 && res.data) {
+      setItems(res.data);
+      setMeta((res.meta as PageMeta | undefined) || { page, pageSize: PAGE_SIZE, total: res.data.length, totalPages: 1, hasNext: false });
+    }
     setLoading(false);
   }
 
@@ -244,6 +272,7 @@ export default function AdminOzonPickupPointsPage() {
       res = await api.post<{
         created: number;
         updated: number;
+        deactivated?: number;
         totalPoints: number;
         providerCount: number;
         providerErrors?: { providerId: number; message: string }[];
@@ -264,21 +293,14 @@ export default function AdminOzonPickupPointsPage() {
     if (res.code === 1 && res.data) {
       toast({
         title: '可选发运点池已更新',
-        description: `可选点 ${res.data.totalPoints} 个，承运商 ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}`,
+        description: `可选点 ${res.data.totalPoints} 个，承运商 ${res.data.providerCount} 个，新建 ${res.data.created}，更新 ${res.data.updated}，停用 ${res.data.deactivated || 0}`,
       });
+      setPage(1);
       fetchList();
     } else {
       toast({ title: res.msg || '导入 Ozon 可选发运点失败', variant: 'destructive' });
     }
   }
-
-  const filtered = filterKeyword
-    ? items.filter((i) => {
-      const keyword = filterKeyword.toLowerCase();
-      return [i.city, i.province, i.name, i.address, i.contact, i.phone, i.providerName, i.externalId]
-        .some((value) => String(value || '').toLowerCase().includes(keyword));
-    })
-    : items;
 
   return (
     <div className="space-y-6">
@@ -328,7 +350,7 @@ export default function AdminOzonPickupPointsPage() {
       <Card>
         <CardHeader className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle className="text-base">已保存可选点/自建点</CardTitle>
+            <CardTitle className="text-base">已保存可选点/自建点（{meta.total}）</CardTitle>
             <Input
               placeholder="按城市/省份/名称/地址/provider/发运点ID过滤"
               value={filterKeyword}
@@ -340,11 +362,11 @@ export default function AdminOzonPickupPointsPage() {
         <CardContent>
           {loading ? (
             <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : filtered.length === 0 ? (
+          ) : items.length === 0 ? (
             <p className="text-center py-10 text-muted-foreground">暂无数据</p>
           ) : (
             <div className="space-y-2">
-              {filtered.map((it) => (
+              {items.map((it) => (
                 <div key={it.id} className="flex items-start gap-3 p-3 rounded-lg border hover:bg-muted/30">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -373,6 +395,27 @@ export default function AdminOzonPickupPointsPage() {
               ))}
             </div>
           )}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>第 {meta.page} / {meta.totalPages} 页，每页 {meta.pageSize} 条</span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                disabled={loading || meta.page <= 1}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />上一页
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((value) => value + 1)}
+                disabled={loading || !meta.hasNext}
+              >
+                下一页<ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

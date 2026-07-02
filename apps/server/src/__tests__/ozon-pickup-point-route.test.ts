@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ozonPickupPointRoutes } from '../routes/ozon-pickup-point.js';
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   pickupFindFirst: vi.fn(),
   pickupCreate: vi.fn(),
   pickupUpdate: vi.fn(),
+  pickupUpdateMany: vi.fn(),
+  pickupCount: vi.fn(),
+  pickupGroupBy: vi.fn(),
   shopFindFirst: vi.fn(),
   fetchSellerDropoffs: vi.fn(),
   ozonListDeliveryMethods: vi.fn(),
@@ -32,6 +35,9 @@ vi.mock('../lib/prisma.js', () => ({
       findFirst: mocks.pickupFindFirst,
       create: mocks.pickupCreate,
       update: mocks.pickupUpdate,
+      updateMany: mocks.pickupUpdateMany,
+      count: mocks.pickupCount,
+      groupBy: mocks.pickupGroupBy,
       delete: vi.fn(),
     },
   },
@@ -63,13 +69,18 @@ async function buildApp() {
 }
 
 describe('ozon pickup point routes', () => {
+  beforeEach(() => {
+    mocks.pickupFindMany.mockResolvedValue([]);
+    mocks.pickupCount.mockResolvedValue(0);
+    mocks.pickupGroupBy.mockResolvedValue([]);
+    mocks.pickupUpdateMany.mockResolvedValue({ count: 0 });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
 
   it('searches pickup points by name, address, provider and external id', async () => {
-    mocks.pickupFindMany.mockResolvedValue([]);
-
     const app = await buildApp();
     const response = await app.inject({
       method: 'GET',
@@ -345,6 +356,106 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 
+  it('marks previously synced Ozon seller points missing from the latest import as inactive', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindMany.mockResolvedValue([]);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+    mocks.pickupUpdateMany.mockResolvedValue({ count: 7 });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [],
+        providers: [{ providerId: 1079, providerName: 'RETS' }],
+        providerErrors: [],
+        points: [
+          {
+            externalId: '5802718',
+            name: 'RETS广州中心仓',
+            address: '广东省广州市白云区龙归街南村3号',
+            providerId: 1079,
+            providerName: 'RETS',
+            boundMethodIds: [],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        source: 'ozon_seller',
+        shopId: 'shop-1',
+        isActive: true,
+        OR: [{ syncedAt: null }, { syncedAt: { lt: expect.any(Date) } }],
+      }),
+      data: expect.objectContaining({
+        isActive: false,
+      }),
+    }));
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        deactivated: 7,
+      },
+    });
+
+    await app.close();
+  });
+
+  it('does not deactivate existing Ozon seller points when provider fetches have errors', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindMany.mockResolvedValue([]);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [],
+        providers: [{ providerId: 1079, providerName: 'RETS' }],
+        providerErrors: [{ providerId: 1268, message: 'HTTP 429' }],
+        points: [
+          {
+            externalId: '5802718',
+            name: 'RETS广州中心仓',
+            address: '广东省广州市白云区龙归街南村3号',
+            providerId: 1079,
+            providerName: 'RETS',
+            boundMethodIds: [],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupUpdateMany).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        deactivated: 0,
+        providerErrors: [{ providerId: 1268, message: 'HTTP 429' }],
+      },
+    });
+
+    await app.close();
+  });
+
   it('imports browser-fetched Ozon seller drop-off points with string drop-off codes', async () => {
     mocks.shopFindFirst.mockResolvedValue({
       id: 'shop-1',
@@ -391,6 +502,107 @@ describe('ozon pickup point routes', () => {
         city: '厦门',
       }),
     }));
+
+    await app.close();
+  });
+
+  it('paginates pickup point lists and omits raw data from list rows', async () => {
+    mocks.pickupCount.mockResolvedValue(9741);
+    mocks.pickupFindMany.mockResolvedValue([
+      {
+        id: 'point-1',
+        city: '厦门',
+        province: '福建',
+        type: 'dispatch',
+        name: 'CEL福建厦门集货仓',
+        address: '厦门市海沧区东孚街道凤山西路6号1层',
+        contact: null,
+        phone: null,
+        workingHours: null,
+        note: null,
+        isActive: true,
+        sortOrder: 100,
+        source: 'ozon_seller',
+        externalId: 'CEL0030AN',
+        providerId: 1164,
+        providerName: 'CEL',
+        shopId: 'shop-1',
+        syncedAt: new Date('2026-07-02T00:00:00Z'),
+        createdAt: new Date('2026-07-02T00:00:00Z'),
+        updatedAt: new Date('2026-07-02T00:00:00Z'),
+      },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points?q=厦门&page=3&pageSize=50&source=ozon_seller',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupCount).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        isActive: true,
+        source: 'ozon_seller',
+      }),
+    }));
+    expect(mocks.pickupFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      skip: 100,
+      take: 50,
+      select: expect.objectContaining({
+        id: true,
+        city: true,
+        providerName: true,
+      }),
+    }));
+    const findArgs = mocks.pickupFindMany.mock.calls[0]?.[0];
+    expect(findArgs).toBeTruthy();
+    expect(Object.keys(findArgs!.select)).not.toContain('rawData');
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: [expect.objectContaining({ id: 'point-1' })],
+      meta: {
+        page: 3,
+        pageSize: 50,
+        total: 9741,
+        totalPages: 195,
+        hasNext: true,
+      },
+    });
+
+    await app.close();
+  });
+
+  it('returns provider options without loading all pickup points', async () => {
+    mocks.pickupGroupBy.mockResolvedValue([
+      { providerId: 1079, providerName: 'RETS Standard Extra Small', _count: { _all: 19 } },
+      { providerId: 1079, providerName: null, _count: { _all: 3 } },
+      { providerId: 1164, providerName: 'CEL', _count: { _all: 32 } },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points/providers?source=ozon_seller',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupGroupBy).toHaveBeenCalledWith(expect.objectContaining({
+      by: ['providerId', 'providerName'],
+      where: expect.objectContaining({
+        isActive: true,
+        source: 'ozon_seller',
+        providerId: { not: null },
+      }),
+    }));
+    expect(mocks.pickupFindMany).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: [
+        { providerId: 1164, providerName: 'CEL', count: 32 },
+        { providerId: 1079, providerName: 'RETS Standard Extra Small', count: 22 },
+      ],
+    });
 
     await app.close();
   });
