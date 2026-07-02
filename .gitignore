@@ -14,6 +14,7 @@ coverage/
 *.tsbuildinfo
 
 # Packaged runtime artifacts
+/ss-erp-app-*.tar.gz
 build/dist/
 build/runtime/
 build/tmp-*/
@@ -43,6 +44,7 @@ apps/web/.env.local
 !.env.example
 
 # Runtime data, logs, and generated files
+tmp/
 logs/
 backups/
 data/
