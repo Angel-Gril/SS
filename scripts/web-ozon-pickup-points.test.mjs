@@ -9,6 +9,8 @@ for (const token of [
   '/api/ozon-pickup-points/sync-ozon-dropoffs',
   '/api/ozon-pickup-points/import-ozon-dropoffs',
   'spb-self-hosted:fetch-ozon-dropoff-points',
+  'isLocalBrowserRuntime',
+  '本地版需要浏览器扩展读取 Ozon Seller 发运点',
   '同步Ozon发运点',
   'Ozon接口同步',
   '从Ozon读取发运点/揽收点',
@@ -22,6 +24,12 @@ assert.match(
   adminPage,
   /filterKeyword[\s\S]*providerName[\s\S]*externalId/,
   'admin pickup point filter should search provider name and Ozon external id',
+);
+
+assert.match(
+  adminPage,
+  /isLocalBrowserRuntime\(\)[\s\S]{0,900}本地版需要浏览器扩展读取 Ozon Seller 发运点/,
+  'local ERP should not silently fall back to server-side Ozon Seller sync when the extension is missing or stale',
 );
 
 assert.match(

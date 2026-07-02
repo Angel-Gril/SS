@@ -117,6 +117,11 @@ function shouldFallbackToServerSync(error: string | undefined): boolean {
     .test(String(error || ''));
 }
 
+function isLocalBrowserRuntime(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+}
+
 export default function AdminOzonPickupPointsPage() {
   const systemDialog = useSystemDialog();
   const [items, setItems] = useState<PickupPoint[]>([]);
@@ -246,6 +251,14 @@ export default function AdminOzonPickupPointsPage() {
         shopId: syncShopId,
         ...extensionResult.data,
       });
+    } else if (isLocalBrowserRuntime() && shouldFallbackToServerSync(extensionResult.error)) {
+      setSyncing(false);
+      toast({
+        title: '本地版需要浏览器扩展读取 Ozon Seller 发运点',
+        description: `${extensionResult.error || '扩展未响应'}。请在 chrome://extensions 重载 SS ERP Local 扩展，刷新本页，并确认 seller.ozon.ru 已登录对应店铺。`,
+        variant: 'destructive',
+      });
+      return;
     } else if (shouldFallbackToServerSync(extensionResult.error)) {
       res = await api.post<{
         created: number;
