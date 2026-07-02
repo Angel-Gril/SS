@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   pickupUpdate: vi.fn(),
   shopFindFirst: vi.fn(),
   fetchSellerDropoffs: vi.fn(),
+  ozonListDeliveryMethods: vi.fn(),
+  decrypt: vi.fn((value: string) => value),
 }));
 
 vi.mock('../lib/auth.js', () => ({
@@ -42,6 +44,16 @@ vi.mock('../services/ozon-seller-dropoff-points.js', async (importOriginal) => {
     fetchOzonSellerDropoffPoints: mocks.fetchSellerDropoffs,
   };
 });
+
+vi.mock('../services/ozon-client.js', () => ({
+  OzonClient: class {
+    listDeliveryMethods = mocks.ozonListDeliveryMethods;
+  },
+}));
+
+vi.mock('../lib/crypto.js', () => ({
+  decrypt: mocks.decrypt,
+}));
 
 async function buildApp() {
   const app = Fastify();
@@ -154,6 +166,76 @@ describe('ozon pickup point routes', () => {
         updated: 0,
         totalPoints: 1,
         providerCount: 1,
+      },
+    });
+
+    await app.close();
+  });
+
+  it('syncs bound Ozon drop-off points from official delivery methods before using private seller endpoints', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      clientId: 'client',
+      apiKeyEncrypted: 'encrypted-key',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.ozonListDeliveryMethods.mockResolvedValueOnce([
+      {
+        id: 26168680,
+        name: 'CEL Standard Budget',
+        warehouse_id: 1020005012470660,
+        provider_id: 1164,
+        provider_name: 'CEL',
+        tpl_dropoff_point: {
+          code: 'CEL0030AN',
+          name: 'CEL福建厦门集货仓',
+          address: '厦门市海沧区东孚街道凤山西路6号1层',
+        },
+      },
+      {
+        id: 26168681,
+        name: 'CEL Standard Budget PUDO',
+        warehouse_id: 1020005012470660,
+        provider_id: 1164,
+        provider_name: 'CEL',
+        tpl_dropoff_point: {
+          code: 'CEL0030AN',
+          name: 'CEL福建厦门集货仓',
+          address: '厦门市海沧区东孚街道凤山西路6号1层',
+        },
+      },
+    ]);
+    mocks.pickupFindFirst.mockResolvedValue(null);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/sync-ozon-dropoffs',
+      payload: { shopId: 'shop-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.fetchSellerDropoffs).not.toHaveBeenCalled();
+    expect(mocks.pickupCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        source: 'ozon_seller',
+        externalId: 'CEL0030AN',
+        providerId: 1164,
+        providerName: 'CEL',
+        shopId: 'shop-1',
+        city: '厦门',
+      }),
+    }));
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: 1,
+        updated: 0,
+        totalPoints: 1,
+        providerCount: 1,
+        methodCount: 2,
       },
     });
 

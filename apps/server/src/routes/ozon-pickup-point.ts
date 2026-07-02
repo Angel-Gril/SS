@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireRole } from '../lib/auth.js';
+import { decrypt } from '../lib/crypto.js';
 import { prisma } from '../lib/prisma.js';
+import { OzonClient, type OzonDeliveryMethod } from '../services/ozon-client.js';
 import {
   fetchOzonSellerDropoffPoints,
   toOzonPickupPointData,
@@ -99,17 +101,33 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       const config = (shop.config as any) || {};
       const cookie = String(config.ozonCdnCookie || '').trim();
       const companyId = String(config.ozonCompanyId || '').trim();
-      if (!cookie || !companyId) {
-        return reply.status(400).send({ code: 0, msg: '该店铺未同步 Ozon seller cookie/company_id，请先通过扩展或店铺页同步登录态' });
-      }
 
       let result: SellerDropoffFetchResult;
+      let officialApiError = '';
       try {
-        result = await fetchOzonSellerDropoffPoints({ cookie, companyId });
+        result = await fetchOzonDropoffsFromOfficialDeliveryMethods(shop);
       } catch (error) {
-        const message = formatOzonSellerDropoffSyncError(error);
-        return reply.status(502).send({ code: 0, msg: message });
+        officialApiError = error instanceof Error ? error.message : String(error || '');
+        result = { methods: [], providers: [], points: [], providerErrors: [] };
       }
+
+      if (!result.points.length) {
+        if (!cookie || !companyId) {
+          const suffix = officialApiError ? `；官方 API 读取物流方式失败：${officialApiError.slice(0, 160)}` : '';
+          return reply.status(400).send({
+            code: 0,
+            msg: `该店铺未同步 Ozon seller cookie/company_id，且官方 API 未读取到可用揽收点。请先通过扩展或店铺页同步登录态${suffix}`,
+          });
+        }
+
+        try {
+          result = await fetchOzonSellerDropoffPoints({ cookie, companyId });
+        } catch (error) {
+          const message = formatOzonSellerDropoffSyncError(error);
+          return reply.status(502).send({ code: 0, msg: message });
+        }
+      }
+
       const summary = await upsertOzonSellerDropoffPoints(shop.id, result);
 
       return reply.send({
@@ -170,6 +188,85 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       return reply.send({ code: 1, msg: '已删除' });
     });
   });
+}
+
+async function fetchOzonDropoffsFromOfficialDeliveryMethods(shop: {
+  clientId?: string | null;
+  apiKeyEncrypted?: string | null;
+}): Promise<SellerDropoffFetchResult> {
+  if (!shop.clientId || !shop.apiKeyEncrypted) {
+    return { methods: [], providers: [], points: [], providerErrors: [] };
+  }
+
+  const client = new OzonClient({
+    clientId: shop.clientId,
+    apiKey: decrypt(shop.apiKeyEncrypted),
+  });
+  const deliveryMethods = await fetchAllOzonDeliveryMethods(client);
+  return buildSellerDropoffResultFromDeliveryMethods(deliveryMethods);
+}
+
+async function fetchAllOzonDeliveryMethods(client: OzonClient): Promise<OzonDeliveryMethod[]> {
+  const all: OzonDeliveryMethod[] = [];
+  const pageSize = 50;
+  let offset = 0;
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const page = await client.listDeliveryMethods({ limit: pageSize, offset });
+    all.push(...page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function buildSellerDropoffResultFromDeliveryMethods(deliveryMethods: OzonDeliveryMethod[]): SellerDropoffFetchResult {
+  const providerMap = new Map<number, string>();
+  const points = new Map<string, SellerDropoffPoint>();
+  const methods = deliveryMethods
+    .map<SellerDropoffFetchResult['methods'][number] | null>((method) => {
+      const id = positiveNumber(method.id);
+      const providerId = positiveNumber(method.provider_id);
+      if (!id || !providerId) return null;
+      const providerName = stringValue(method.provider_name) || `Provider ${providerId}`;
+      const dropoffRef = stringValue(method.tpl_dropoff_point?.code ?? method.tpl_dropoff_point_id);
+      providerMap.set(providerId, providerName);
+
+      if (dropoffRef && (method.tpl_dropoff_point?.name || method.tpl_dropoff_point?.address)) {
+        const pointKey = `${providerId}:${dropoffRef}`;
+        const existing = points.get(pointKey);
+        if (existing) {
+          existing.boundMethodIds = uniqueNumbers([...existing.boundMethodIds, id]);
+        } else {
+          points.set(pointKey, {
+            externalId: dropoffRef,
+            name: stringValue(method.tpl_dropoff_point?.name) || `发运点 ${dropoffRef}`,
+            address: stringValue(method.tpl_dropoff_point?.address),
+            providerId,
+            providerName,
+            boundMethodIds: [id],
+          });
+        }
+      }
+
+      return {
+        id,
+        name: stringValue(method.name) || `物流方式 ${id}`,
+        providerId,
+        providerName,
+        tplDropoffPointId: dropoffRef || null,
+      };
+    })
+    .filter((method): method is SellerDropoffFetchResult['methods'][number] => Boolean(method))
+    .sort((a, b) => a.id - b.id);
+
+  return {
+    methods,
+    providers: [...providerMap.entries()]
+      .map(([providerId, providerName]) => ({ providerId, providerName }))
+      .sort((a, b) => a.providerId - b.providerId),
+    points: [...points.values()].sort(compareSellerDropoffPoints),
+    providerErrors: [],
+  };
 }
 
 async function upsertOzonSellerDropoffPoints(shopId: string, result: SellerDropoffFetchResult) {
@@ -240,9 +337,27 @@ function normalizeImportedSellerDropoffResult(input: z.infer<typeof importedDrop
     providers: [...providerMap.entries()]
       .map(([providerId, providerName]) => ({ providerId, providerName }))
       .sort((a, b) => a.providerId - b.providerId),
-    points: points.sort((a, b) => Number(a.externalId) - Number(b.externalId)),
+    points: points.sort(compareSellerDropoffPoints),
     providerErrors: input.providerErrors,
   };
+}
+
+function positiveNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function stringValue(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  return [...new Set(values.filter((value) => Number.isFinite(value)))].sort((a, b) => a - b);
+}
+
+function compareSellerDropoffPoints(a: SellerDropoffPoint, b: SellerDropoffPoint): number {
+  if (a.providerId !== b.providerId) return a.providerId - b.providerId;
+  return a.externalId.localeCompare(b.externalId, 'zh-Hans-CN', { numeric: true });
 }
 
 function formatOzonSellerDropoffSyncError(error: unknown): string {

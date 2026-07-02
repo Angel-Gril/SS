@@ -242,10 +242,10 @@ export class OzonClient {
   }
 
   async listDeliveryMethods(params: { limit?: number; offset?: number; filter?: { provider_id?: number; status?: string; warehouse_id?: number | null } } = {}): Promise<OzonDeliveryMethod[]> {
-    const res = await this.request<{ result: OzonDeliveryMethod[] }>('/v2/delivery-method/list', {
+    const res = await this.request<{ result?: OzonDeliveryMethod[]; delivery_methods?: OzonDeliveryMethod[] }>('/v2/delivery-method/list', {
       body: { limit: params.limit ?? 50, offset: params.offset ?? 0, filter: params.filter ?? {} },
     });
-    return res.result ?? [];
+    return res.delivery_methods ?? res.result ?? [];
   }
 
   async listDeliveryPoints(): Promise<OzonDeliveryPoint[]> {
@@ -258,13 +258,22 @@ export class OzonClient {
   // 搜索 FBS 仓库的 drop-off 点（按地址搜索，对应官方"在地图上选择"+ 自动匹配）
   async searchFbsDropOffPoints(params: {
     address?: string;
+    coordinates?: { latitude: number; longitude: number };
+    countryCode?: string;
+    isKgt?: boolean;
     types?: string[];
     warehouseId?: number;
   } = {}): Promise<OzonDropOffPoint[]> {
+    if (!hasValidCoordinates(params.coordinates)) {
+      throw new Error('搜索 FBS 揽收点需要仓库经纬度，请先选择或填写仓库位置');
+    }
     const res = await this.request<{ points?: OzonDropOffPoint[]; result?: OzonDropOffPoint[] }>(
       '/v1/warehouse/fbs/create/drop-off/list',
       {
         body: {
+          coordinates: params.coordinates,
+          country_code: params.countryCode ?? 'CN',
+          is_kgt: params.isKgt ?? false,
           search: { address: params.address ?? '', types: params.types ?? ['PPZ'] },
           warehouse_id: params.warehouseId ?? 0,
         },
@@ -602,6 +611,12 @@ export class OzonClient {
     };
     return this.request<OzonFinanceTransactionListResponse>('/v3/finance/transaction/list', { body });
   }
+}
+
+function hasValidCoordinates(value: { latitude: number; longitude: number } | undefined): value is { latitude: number; longitude: number } {
+  if (!value) return false;
+  if (!Number.isFinite(value.latitude) || !Number.isFinite(value.longitude)) return false;
+  return value.latitude !== 0 || value.longitude !== 0;
 }
 
 export class OzonApiError extends Error {

@@ -398,8 +398,13 @@ function Step1WarehouseInfo({ form, set, shopId }: { form: FormState; set: (p: P
     const fullAddr = [form.city, form.street, form.building].filter(Boolean).join(' ');
     if (!fullAddr) { toast({ title: '请先填写城市和街道' }); return; }
     setSearching(true);
+    const latitude = Number(form.latitude);
+    const longitude = Number(form.longitude);
     const res = await api.post<any[]>(`/api/shops/${shopId}/drop-off-points/search`, {
       address: fullAddr,
+      ...(Number.isFinite(latitude) && Number.isFinite(longitude) && (latitude !== 0 || longitude !== 0)
+        ? { coordinates: { latitude, longitude } }
+        : {}),
       types: ['PPZ'],
     });
     setSearching(false);

@@ -476,7 +476,12 @@ export async function shopRoutes(app: FastifyInstance) {
   app.post('/:id/drop-off-points/search', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const body = request.body as { address?: string; types?: string[]; warehouseId?: number };
+    const body = request.body as {
+      address?: string;
+      coordinates?: { latitude: number; longitude: number };
+      types?: string[];
+      warehouseId?: number;
+    };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
@@ -486,6 +491,7 @@ export async function shopRoutes(app: FastifyInstance) {
     try {
       const points = await client.searchFbsDropOffPoints({
         address: body?.address,
+        coordinates: body?.coordinates,
         types: body?.types,
         warehouseId: body?.warehouseId,
       });

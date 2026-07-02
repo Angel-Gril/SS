@@ -19,7 +19,7 @@ export interface SellerDeliveryMethodRef {
   name: string;
   providerId: number;
   providerName: string;
-  tplDropoffPointId: number | null;
+  tplDropoffPointId: number | string | null;
 }
 
 export interface SellerDropoffPoint {
