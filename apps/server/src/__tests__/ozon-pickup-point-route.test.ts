@@ -82,6 +82,26 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 
+  it('keeps inactive pickup points hidden from non-admin users even when includeInactive is requested', async () => {
+    mocks.authenticate.mockImplementationOnce(async (request: any) => {
+      request.user = { userId: 'user-1', role: 'USER' };
+    });
+    mocks.pickupFindMany.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points?includeInactive=1',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ isActive: true }),
+    }));
+
+    await app.close();
+  });
+
   it('syncs Ozon seller drop-off points from a shop cookie and company id', async () => {
     mocks.shopFindFirst.mockResolvedValue({
       id: 'shop-1',

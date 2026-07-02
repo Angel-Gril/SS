@@ -56,14 +56,15 @@ const importedDropoffSchema = z.object({
 export async function ozonPickupPointRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
-  // 用户列表：所有登录用户均可查看；可按 city / type / isActive 过滤
+  // 用户列表：普通用户只看启用点；管理员页面可通过 includeInactive 查看全部。
   app.get('/', async (request, reply) => {
     const { city, q, type, includeInactive } = request.query as {
       city?: string; q?: string; type?: string; includeInactive?: string;
     };
+    const user = (request as any).user || {};
     const keyword = String(q || city || '').trim();
     const where: any = {};
-    if (!includeInactive) where.isActive = true;
+    if (!includeInactive || user.role !== 'ADMIN') where.isActive = true;
     if (type) where.type = type;
     if (keyword) {
       where.OR = [
