@@ -34,6 +34,7 @@ const OZON_ENDPOINTS = {
   salesFunnelRevenue: "https://seller.ozon.ru/api/site/seller-analytics/sales-funnel/v2/get_chart_revenue",
   sellerCategoryTree: "https://seller.ozon.ru/api/site/seller-analytics/charts/seller-category-tree",
   sellerWarehouseList: "https://seller.ozon.ru/api/site/logistic-service/v5/facade/warehouse/list",
+  sellerProviderTemplateByLocation: "https://seller.ozon.ru/api/delivery-method-service/v2/provider/template/by-location/list",
   sellerDropoffByProvider: "https://seller.ozon.ru/api/delivery-method-service/v1/drop-off/list/by-provider",
   // Market data (may require Premium)
   whatToSellAllQueries: "https://seller.ozon.ru/api/site/seller-analytics/what_to_sell/all_queries/v2",
@@ -390,7 +391,9 @@ function isOzonCompanyPermissionError(message) {
 
 function formatOzonCompanyPermissionError(companyId, rawError) {
   const suffix = companyId ? "当前 company_id=" + companyId + "。" : "";
-  return "OZON 拒绝访问该店铺 Seller 接口：" + suffix + "请在 seller.ozon.ru 确认已登录有权限的卖家账号，切换到对应店铺后刷新 seller 页面，并在扩展里重新同步 Cookie/company_id。原始错误: " + normalizeErrorMessage(rawError);
+  const raw = normalizeErrorMessage(rawError);
+  const rawSuffix = raw ? "原始错误: " + raw.slice(0, 120) : "";
+  return "OZON 拒绝访问该店铺 Seller 接口：" + suffix + "请在 seller.ozon.ru 确认已登录有权限的卖家账号，切换到对应店铺后刷新 seller 页面，并在扩展里重新同步 Cookie/company_id。" + rawSuffix;
 }
 
 function chromePermissionsContains(permissions) {
@@ -893,6 +896,11 @@ async function getSellerCompanyId(preferredCompanyId) {
     return rememberRuntimeOzonCompanyId(preferred);
   }
 
+  const capturedCompanyId = await getCapturedOzonCompanyId();
+  if (capturedCompanyId) {
+    return capturedCompanyId;
+  }
+
   try {
     const tabCompanyId = normalizeOzonCompanyId(await readOzonSellerCookieValueFromOpenTab("sc_company_id"));
     if (tabCompanyId) {
@@ -919,11 +927,6 @@ async function getSellerCompanyId(preferredCompanyId) {
     } catch (error) {
       console.warn("[SS ERP] read Ozon company cookie failed:", error);
     }
-  }
-
-  const capturedCompanyId = await getCapturedOzonCompanyId();
-  if (capturedCompanyId) {
-    return capturedCompanyId;
   }
 
   throw new Error("未检测到 Ozon Seller Company ID。请在本机打开 seller.ozon.ru，选择对应店铺并进入商品/数据分析页面，等待扩展自动捕获 x-o3-company-id 后再重试；也可以在扩展的 Cookie 同步区域手动填写 company_id 并同步。");
@@ -1026,14 +1029,14 @@ function toPositiveNumber(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-function toOzonSellerWarehouseCompanyId(companyId) {
+function toCleanString(value) {
+  return String(value == null ? "" : value).trim();
+}
+
+function toOzonSellerTemplateCompanyId(companyId) {
   var text = String(companyId == null ? "" : companyId).trim();
   var number = Number(text);
   return /^\d+$/.test(text) && Number.isSafeInteger(number) && number > 0 ? number : text;
-}
-
-function toCleanString(value) {
-  return String(value == null ? "" : value).trim();
 }
 
 function uniqueSortedNumbers(values) {
@@ -1065,18 +1068,58 @@ function extractOzonSellerDeliveryMethods(payload) {
   return Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
 }
 
-async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
-  var companyId = await getSellerCompanyId(companyIdInput);
-  var warehousePayload = await sellerTabFetchJson(
-    OZON_ENDPOINTS.sellerWarehouseList,
-    { company_id: toOzonSellerWarehouseCompanyId(companyId) },
+function extractOzonSellerProvidersFromTemplates(payload) {
+  var templates = payload && Array.isArray(payload.provider_templates) ? payload.provider_templates
+    : (payload && payload.result && Array.isArray(payload.result.provider_templates) ? payload.result.provider_templates : []);
+  var byId = new Map();
+  templates.forEach(function (item) {
+    if (!item || typeof item !== "object") return;
+    var providerId = toPositiveNumber(item.provider_id || item.providerId);
+    if (!providerId || byId.has(providerId)) return;
+    byId.set(providerId, toCleanString(item.provider_name || item.providerName) || "Provider " + providerId);
+  });
+  return Array.from(byId.entries()).map(function (entry) {
+    return { providerId: entry[0], providerName: entry[1] };
+  }).sort(function (a, b) { return a.providerId - b.providerId; });
+}
+
+async function fetchOzonSellerProviderTemplates(companyId) {
+  var payload = await sellerTabFetchJson(
+    OZON_ENDPOINTS.sellerProviderTemplateByLocation,
+    {
+      available_integration_type: 1,
+      company_id: toOzonSellerTemplateCompanyId(companyId),
+      item_info: {},
+      point: { latitude: 24.480107, longitude: 118.085348 }
+    },
     companyId
   );
-  var methods = extractOzonSellerDeliveryMethods(warehousePayload);
+  return extractOzonSellerProvidersFromTemplates(payload);
+}
+
+async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
+  var companyId = await getSellerCompanyId(companyIdInput);
+  var methods = [];
   var providerMap = new Map();
+  try {
+    var warehousePayload = await sellerTabFetchJson(
+      OZON_ENDPOINTS.sellerWarehouseList,
+      { company_id: String(companyId) },
+      companyId
+    );
+    methods = extractOzonSellerDeliveryMethods(warehousePayload);
+  } catch (error) {
+    console.warn("[SS ERP] Ozon warehouse/list provider discovery failed, falling back to provider templates:", error);
+  }
   methods.forEach(function (method) {
     if (!providerMap.has(method.providerId)) providerMap.set(method.providerId, method.providerName);
   });
+  if (providerMap.size === 0) {
+    var templateProviders = await fetchOzonSellerProviderTemplates(companyId);
+    templateProviders.forEach(function (provider) {
+      if (!providerMap.has(provider.providerId)) providerMap.set(provider.providerId, provider.providerName);
+    });
+  }
 
   var points = new Map();
   var providerErrors = [];
@@ -1099,12 +1142,13 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
             return method.providerId === providerId && String(method.tplDropoffPointId || "") === externalId;
           })
           .map(function (method) { return method.id; });
-        var existing = points.get(externalId);
+        var pointKey = providerId + ":" + externalId;
+        var existing = points.get(pointKey);
         if (existing) {
           existing.boundMethodIds = uniqueSortedNumbers(existing.boundMethodIds.concat(boundMethodIds));
           return;
         }
-        points.set(externalId, {
+        points.set(pointKey, {
           externalId: externalId,
           name: toCleanString(row.name) || "发运点 " + externalId,
           address: toCleanString(row.address),
@@ -1127,7 +1171,10 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
     providers: Array.from(providerMap.entries()).map(function (entry) {
       return { providerId: entry[0], providerName: entry[1] };
     }),
-    points: Array.from(points.values()).sort(function (a, b) { return Number(a.externalId) - Number(b.externalId); }),
+    points: Array.from(points.values()).sort(function (a, b) {
+      if (a.providerId !== b.providerId) return a.providerId - b.providerId;
+      return String(a.externalId).localeCompare(String(b.externalId), "zh-Hans-CN", { numeric: true });
+    }),
     providerErrors: providerErrors
   };
 }

@@ -47,7 +47,7 @@ Ozon 搜图、候选货源、批量同步、店铺维护这类低频或多步骤
 - 1688/PDD 物流查询桥接。
 - 1688、淘宝/天猫、PDD 等页面的基础商品采集脚本。
 - ERP 连接配置、Ozon Cookie 同步、店铺分析同步。
-- Ozon Seller Cookie/company_id 同步已增加无感兜底：优先读取已打开 `seller.ozon.ru` 标签页里的 `document.cookie`，再回退到 `chrome.cookies`、网络捕获的 `x-o3-company-id` 和 ERP 已保存店铺配置，减少用户反复手动同步 Cookie 的情况。
+- Ozon Seller Cookie/company_id 同步已增加无感兜底：优先使用当前 seller 页面网络请求里的 `x-o3-company-id`，再回退到已打开 `seller.ozon.ru` 标签页里的 `document.cookie`、`chrome.cookies` 和 ERP 已保存店铺配置，减少用户反复手动同步 Cookie 的情况。
 - Popup 已收敛为一个智能主动作，连接状态和计算器数据保留在首屏，Cookie/店铺分析/经营图表同步放进“同步与维护”折叠区。
 - Ozon 商品页“核价找货源”已接入 1688/PDD/淘宝主图搜图第一版：popup 采集当前商品主图并转码，service worker 只为用户已勾选的平台创建搜图任务，各平台页面桥负责上传图片并跳转结果。
 - Ozon 商品采集会保存富文本简介和源视频元数据到 ERP metadata；富文本会优先用完整商品 slug 请求 Ozon 第二页详情 `layout_page_index=2`，再兜底短 `product_id` 路径。采集器现在不仅识别 `richAnnotationJson / richAnnotation` 老结构，也会兼容 `content / blocks / children / items / nodes / widgets` 这类新版富内容结构。发布时会优先保留 Ozon 原始富内容模板（如 `version: 0.3` / `raShowcase`），重新转存富内容图片并清洗文本，再按类目支持的 `22336` 或 `11254` 富内容属性写入；源视频仍只采集保存和记录诊断，不自动发布。

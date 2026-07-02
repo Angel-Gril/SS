@@ -6,14 +6,12 @@ const userPage = fs.readFileSync('apps/web/src/app/(dashboard)/ozon-pickup-point
 const extensionBackground = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 
 for (const token of [
-  '/api/ozon-pickup-points/sync-ozon-dropoffs',
   '/api/ozon-pickup-points/import-ozon-dropoffs',
   'spb-self-hosted:fetch-ozon-dropoff-points',
-  'isLocalBrowserRuntime',
-  '本地版需要浏览器扩展读取 Ozon Seller 发运点',
-  '同步Ozon发运点',
-  'Ozon接口同步',
-  '从Ozon读取发运点/揽收点',
+  '/ozon-cdn-auth',
+  '读取可选发运点池',
+  '需要通过浏览器扩展读取 Ozon 可选发运点池',
+  '这一步必须通过浏览器扩展在真实 Seller 页面执行',
   'providerName',
   'externalId',
 ]) {
@@ -28,8 +26,8 @@ assert.match(
 
 assert.match(
   adminPage,
-  /isLocalBrowserRuntime\(\)[\s\S]{0,900}本地版需要浏览器扩展读取 Ozon Seller 发运点/,
-  'local ERP should not silently fall back to server-side Ozon Seller sync when the extension is missing or stale',
+  /api\.get<OzonCdnAuthStatus>\(`\/api\/shops\/\$\{syncShopId\}\/ozon-cdn-auth`\)[\s\S]{0,650}sendToExtension[\s\S]{0,260}\.\.\.\(companyId \? \{ companyId \} : \{\}\)/,
+  'admin pickup sync should pass the ERP-stored Ozon companyId to the browser extension',
 );
 
 assert.match(
@@ -55,8 +53,18 @@ assert.match(
 );
 assert.match(
   extensionBackground,
-  /sellerWarehouseList[\s\S]{0,220}\{\s*company_id:\s*toOzonSellerWarehouseCompanyId\(companyId\)\s*\}/,
-  'extension should include numeric company_id in the Ozon seller warehouse list request body',
+  /delivery-method-service\/v2\/provider\/template\/by-location\/list/,
+  'extension should discover Ozon providers through the seller provider template endpoint when warehouse/list is unavailable',
+);
+assert.match(
+  extensionBackground,
+  /Ozon warehouse\/list provider discovery failed[\s\S]{0,900}fetchOzonSellerProviderTemplates\(companyId\)/,
+  'extension should fall back to provider templates after warehouse/list rejects the request',
+);
+assert.match(
+  extensionBackground,
+  /sellerWarehouseList[\s\S]{0,220}\{\s*company_id:\s*String\(companyId\)\s*\}/,
+  'extension should include string company_id in the Ozon seller warehouse list request body',
 );
 
 console.log('PASS web ozon pickup points');

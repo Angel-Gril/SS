@@ -3,7 +3,9 @@ import type { Prisma } from '@prisma/client';
 
 const SELLER_BASE_URL = 'https://seller.ozon.ru';
 const WAREHOUSE_LIST_PATH = '/api/site/logistic-service/v5/facade/warehouse/list';
+const PROVIDER_TEMPLATE_BY_LOCATION_PATH = '/api/delivery-method-service/v2/provider/template/by-location/list';
 const DROPOFF_BY_PROVIDER_PATH = '/api/delivery-method-service/v1/drop-off/list/by-provider';
+const DEFAULT_PROVIDER_TEMPLATE_POINT = { latitude: 24.480107, longitude: 118.085348 };
 
 const PROXY_URL =
   process.env.HTTPS_PROXY || process.env.https_proxy ||
@@ -96,15 +98,13 @@ export async function fetchOzonSellerDropoffPoints(params: {
 
   const fetchImpl = params.fetchImpl || defaultFetch;
   const headers = sellerHeaders(cookie, companyId);
-  const warehousePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${WAREHOUSE_LIST_PATH}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ company_id: toWarehouseCompanyId(companyId) }),
-  });
-  const methods = extractSellerDeliveryMethods(warehousePayload);
+  const { methods, providers } = await fetchSellerDeliveryMethodRefs(fetchImpl, headers, companyId);
   const providerMap = new Map<number, string>();
   for (const method of methods) {
     if (!providerMap.has(method.providerId)) providerMap.set(method.providerId, method.providerName);
+  }
+  for (const provider of providers) {
+    if (!providerMap.has(provider.providerId)) providerMap.set(provider.providerId, provider.providerName);
   }
 
   const points = new Map<string, SellerDropoffPoint>();
@@ -121,7 +121,8 @@ export async function fetchOzonSellerDropoffPoints(params: {
         if (!isRecord(row)) continue;
         const externalId = stringValue(row.id);
         if (!externalId) continue;
-        const existing = points.get(externalId);
+        const pointKey = `${providerId}:${externalId}`;
+        const existing = points.get(pointKey);
         const boundMethodIds = methods
           .filter((method) => method.providerId === providerId && String(method.tplDropoffPointId || '') === externalId)
           .map((method) => method.id);
@@ -129,7 +130,7 @@ export async function fetchOzonSellerDropoffPoints(params: {
           existing.boundMethodIds = uniqueNumbers([...existing.boundMethodIds, ...boundMethodIds]);
           continue;
         }
-        points.set(externalId, {
+        points.set(pointKey, {
           externalId,
           name: stringValue(row.name) || `发运点 ${externalId}`,
           address: stringValue(row.address),
@@ -146,9 +147,77 @@ export async function fetchOzonSellerDropoffPoints(params: {
   return {
     methods,
     providers: [...providerMap.entries()].map(([providerId, providerName]) => ({ providerId, providerName })),
-    points: [...points.values()].sort((a, b) => Number(a.externalId) - Number(b.externalId)),
+    points: [...points.values()].sort(compareSellerDropoffPoints),
     providerErrors,
   };
+}
+
+async function fetchSellerDeliveryMethodRefs(
+  fetchImpl: typeof globalThis.fetch,
+  headers: Record<string, string>,
+  companyId: string,
+): Promise<{ methods: SellerDeliveryMethodRef[]; providers: { providerId: number; providerName: string }[] }> {
+  let warehouseError = '';
+  try {
+    const warehousePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${WAREHOUSE_LIST_PATH}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ company_id: companyId }),
+    });
+    const methods = extractSellerDeliveryMethods(warehousePayload);
+    const providers = uniqueProvidersFromMethods(methods);
+    if (providers.length) return { methods, providers };
+  } catch (error) {
+    warehouseError = error instanceof Error ? error.message : String(error || '');
+  }
+
+  try {
+    const templatePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${PROVIDER_TEMPLATE_BY_LOCATION_PATH}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        available_integration_type: 1,
+        company_id: toTemplateCompanyId(companyId),
+        item_info: {},
+        point: DEFAULT_PROVIDER_TEMPLATE_POINT,
+      }),
+    });
+    return { methods: [], providers: extractSellerProvidersFromTemplates(templatePayload) };
+  } catch (error) {
+    const templateError = error instanceof Error ? error.message : String(error || '');
+    if (warehouseError) {
+      throw new Error(`Ozon Seller provider discovery failed: warehouse/list ${warehouseError}; provider/template ${templateError}`);
+    }
+    throw error;
+  }
+}
+
+function extractSellerProvidersFromTemplates(payload: unknown): { providerId: number; providerName: string }[] {
+  const templates = Array.isArray((payload as any)?.provider_templates)
+    ? (payload as any).provider_templates
+    : (Array.isArray((payload as any)?.result?.provider_templates)
+      ? (payload as any).result.provider_templates
+      : []);
+  const providerMap = new Map<number, string>();
+  for (const item of templates) {
+    if (!isRecord(item)) continue;
+    const providerId = numberValue(item.provider_id ?? item.providerId);
+    if (!providerId || providerMap.has(providerId)) continue;
+    providerMap.set(providerId, stringValue(item.provider_name ?? item.providerName) || `Provider ${providerId}`);
+  }
+  return [...providerMap.entries()]
+    .map(([providerId, providerName]) => ({ providerId, providerName }))
+    .sort((a, b) => a.providerId - b.providerId);
+}
+
+function uniqueProvidersFromMethods(methods: SellerDeliveryMethodRef[]): { providerId: number; providerName: string }[] {
+  const providerMap = new Map<number, string>();
+  for (const method of methods) {
+    if (!providerMap.has(method.providerId)) providerMap.set(method.providerId, method.providerName);
+  }
+  return [...providerMap.entries()]
+    .map(([providerId, providerName]) => ({ providerId, providerName }))
+    .sort((a, b) => a.providerId - b.providerId);
 }
 
 export function toOzonPickupPointData(point: SellerDropoffPoint, shopId: string): OzonPickupPointData {
@@ -279,10 +348,15 @@ function stringValue(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function toWarehouseCompanyId(companyId: string): string | number {
+function toTemplateCompanyId(companyId: string): string | number {
   const trimmed = String(companyId || '').trim();
   const numeric = Number(trimmed);
   return /^\d+$/.test(trimmed) && Number.isSafeInteger(numeric) && numeric > 0 ? numeric : trimmed;
+}
+
+function compareSellerDropoffPoints(a: SellerDropoffPoint, b: SellerDropoffPoint): number {
+  if (a.providerId !== b.providerId) return a.providerId - b.providerId;
+  return a.externalId.localeCompare(b.externalId, 'zh-Hans-CN', { numeric: true });
 }
 
 function uniqueNumbers(values: number[]): number[] {

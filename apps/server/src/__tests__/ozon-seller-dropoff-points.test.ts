@@ -40,7 +40,7 @@ describe('Ozon seller drop-off points', () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
         const body = JSON.parse(String(init?.body || '{}'));
-        expect(body.company_id).toBe(4494016);
+        expect(body.company_id).toBe('4494016');
         return jsonResponse({
           deliveryMethods: [
             { id: 1, name: 'RETS Standard', providerId: 1079, providerName: 'RETS', tplDropoffPointId: 5802718 },
@@ -94,6 +94,9 @@ describe('Ozon seller drop-off points', () => {
   it('retries seller API requests with refreshed __Secure-ETC cookie after Ozon redirects', async () => {
     const seenCookies: string[] = [];
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({ provider_templates: [] });
+      }
       if (!url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
         throw new Error(`unexpected url ${url}`);
       }
@@ -113,11 +116,96 @@ describe('Ozon seller drop-off points', () => {
     });
 
     expect(result.methods).toEqual([]);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(seenCookies[0]).toContain('__Secure-ETC=stale-etc');
     expect(seenCookies[1]).toContain('sid=demo');
     expect(seenCookies[1]).toContain('__Secure-ETC=fresh-etc');
     expect(seenCookies[1]).not.toContain('__Secure-ETC=stale-etc');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('falls back to provider templates when warehouse facade refuses company id', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        return errorResponse(403, {
+          error: {
+            code: 'PermissionDenied',
+            detail: 'rpc error: code = PermissionDenied desc = Failed to get body company ID',
+          },
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        expect(body.company_id).toBe(4494016);
+        return jsonResponse({
+          provider_templates: [
+            { provider_id: 1079, provider_name: 'RETS Standard Extra Small' },
+            { provider_id: 1164, provider_name: 'CEL' },
+            { provider_id: 1079, provider_name: 'RETS duplicate' },
+          ],
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        expect(body.company_id).toBe('4494016');
+        return jsonResponse({
+          result: [
+            { id: `${body.provider_id}-point`, name: `Provider ${body.provider_id} 仓`, address: '中国仓地址' },
+          ],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.methods).toEqual([]);
+    expect(result.providers).toEqual([
+      { providerId: 1079, providerName: 'RETS Standard Extra Small' },
+      { providerId: 1164, providerName: 'CEL' },
+    ]);
+    expect(result.points).toHaveLength(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps same drop-off ids from different providers as separate points', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        return errorResponse(403, { error: { code: 'PermissionDenied' } });
+      }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({
+          provider_templates: [
+            { provider_id: 1079, provider_name: 'RETS' },
+            { provider_id: 1268, provider_name: 'RETS Budget' },
+          ],
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({
+          result: [
+            { id: 'same-dropoff', name: `Provider ${body.provider_id} 仓`, address: '中国仓地址' },
+          ],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.points).toHaveLength(2);
+    expect(result.points.map((point) => `${point.providerId}:${point.externalId}`)).toEqual([
+      '1079:same-dropoff',
+      '1268:same-dropoff',
+    ]);
   });
 
   it('builds searchable pickup point data from seller drop-off points', () => {
@@ -161,5 +249,15 @@ function redirectResponse(setCookie: string): Response {
     headers: new Headers({ 'set-cookie': setCookie }),
     json: async () => ({}),
     text: async () => '',
+  } as Response;
+}
+
+function errorResponse(status: number, payload: unknown): Response {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(),
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
   } as Response;
 }

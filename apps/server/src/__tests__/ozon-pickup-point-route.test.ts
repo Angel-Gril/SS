@@ -395,6 +395,52 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 
+  it('accepts a full browser-fetched Ozon seller drop-off import payload over the default body limit', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      platform: 'OZON',
+      config: { ozonCdnCookie: 'sid=demo', ozonCompanyId: '4494016' },
+    });
+    mocks.pickupFindFirst.mockResolvedValue(null);
+    mocks.pickupCreate.mockResolvedValue({ id: 'point-1' });
+
+    const longAddress = '广东省广州市白云区龙归街南村龙河西南横二路3号'.repeat(60);
+    const points = Array.from({ length: 500 }, (_, index) => ({
+      externalId: `large-${index}`,
+      name: `发运点 ${index}`,
+      address: `${longAddress}-${index}`,
+      providerId: 1079,
+      providerName: 'RETS',
+      boundMethodIds: [],
+    }));
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ozon-pickup-points/import-ozon-dropoffs',
+      payload: {
+        shopId: 'shop-1',
+        companyId: '4494016',
+        methods: [],
+        providers: [{ providerId: 1079, providerName: 'RETS' }],
+        providerErrors: [],
+        points,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.pickupCreate).toHaveBeenCalledTimes(points.length);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        created: points.length,
+        totalPoints: points.length,
+      },
+    });
+
+    await app.close();
+  });
+
   it('accepts an empty browser-fetched drop-off list when the seller account has no visible points', async () => {
     mocks.shopFindFirst.mockResolvedValue({
       id: 'shop-1',

@@ -64,4 +64,10 @@ assert.match(
   'seller company id lookup should specifically use the seller tab cookie fallback for sc_company_id',
 );
 
+assert.match(
+  collectBackground,
+  /const capturedCompanyId = await getCapturedOzonCompanyId\(\);[\s\S]{0,260}readOzonSellerCookieValueFromOpenTab\("sc_company_id"\)/,
+  'seller API collection should prefer the current seller x-o3-company-id capture before stale sc_company_id cookies',
+);
+
 console.log('PASS Ozon sync maintenance guards');

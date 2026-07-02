@@ -39,6 +39,10 @@ interface ShopOption {
   platform: string;
 }
 
+interface OzonCdnAuthStatus {
+  companyId?: string | null;
+}
+
 interface OzonDropoffSyncPayload {
   companyId?: string;
   methods: unknown[];
@@ -226,9 +230,14 @@ export default function AdminOzonPickupPointsPage() {
       return;
     }
     setSyncing(true);
+    const authRes = await api.get<OzonCdnAuthStatus>(`/api/shops/${syncShopId}/ozon-cdn-auth`);
+    const companyId = authRes.code === 1 && authRes.data?.companyId
+      ? String(authRes.data.companyId).trim()
+      : '';
     const extensionResult = await sendToExtension<OzonDropoffSyncPayload>({
       type: 'spb-self-hosted:fetch-ozon-dropoff-points',
       shopId: syncShopId,
+      ...(companyId ? { companyId } : {}),
     });
     let res;
     if (extensionResult.ok && extensionResult.data) {

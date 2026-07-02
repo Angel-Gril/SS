@@ -26,6 +26,7 @@ const createSchema = z.object({
 });
 
 const updateSchema = createSchema.partial();
+const OZON_DROPOFF_IMPORT_BODY_LIMIT = 20 * 1024 * 1024;
 
 const importedDropoffSchema = z.object({
   shopId: z.string().min(1),
@@ -143,7 +144,7 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       });
     });
 
-    admin.post('/import-ozon-dropoffs', async (request, reply) => {
+    admin.post('/import-ozon-dropoffs', { bodyLimit: OZON_DROPOFF_IMPORT_BODY_LIMIT }, async (request, reply) => {
       const parsed = importedDropoffSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
