@@ -53,5 +53,10 @@ assert.match(
   /delivery-method-service\/v1\/drop-off\/list\/by-provider/,
   'extension should fetch Ozon drop-off points by provider from the seller tab context',
 );
+assert.match(
+  extensionBackground,
+  /sellerWarehouseList[\s\S]{0,180}\{\s*company_id:\s*String\(companyId\)\s*\}/,
+  'extension should include company_id in the Ozon seller warehouse list request body',
+);
 
 console.log('PASS web ozon pickup points');

@@ -39,6 +39,8 @@ describe('Ozon seller drop-off points', () => {
   it('uses provider_id with company auth to fetch and merge visible drop-off points', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        expect(body.company_id).toBe('4494016');
         return jsonResponse({
           deliveryMethods: [
             { id: 1, name: 'RETS Standard', providerId: 1079, providerName: 'RETS', tplDropoffPointId: 5802718 },

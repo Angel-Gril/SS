@@ -390,7 +390,7 @@ function isOzonCompanyPermissionError(message) {
 
 function formatOzonCompanyPermissionError(companyId, rawError) {
   const suffix = companyId ? "当前 company_id=" + companyId + "。" : "";
-  return "OZON 拒绝访问该店铺分析数据：" + suffix + "请在 seller.ozon.ru 确认已登录有权限的卖家账号，切换到对应店铺后刷新 seller 页面，并在扩展里重新同步 Cookie/company_id。原始错误: " + normalizeErrorMessage(rawError);
+  return "OZON 拒绝访问该店铺 Seller 接口：" + suffix + "请在 seller.ozon.ru 确认已登录有权限的卖家账号，切换到对应店铺后刷新 seller 页面，并在扩展里重新同步 Cookie/company_id。原始错误: " + normalizeErrorMessage(rawError);
 }
 
 function chromePermissionsContains(permissions) {
@@ -1061,7 +1061,7 @@ function extractOzonSellerDeliveryMethods(payload) {
 
 async function fetchOzonSellerDropoffPointsViaTab(companyIdInput) {
   var companyId = await getSellerCompanyId(companyIdInput);
-  var warehousePayload = await sellerTabFetchJson(OZON_ENDPOINTS.sellerWarehouseList, {}, companyId);
+  var warehousePayload = await sellerTabFetchJson(OZON_ENDPOINTS.sellerWarehouseList, { company_id: String(companyId) }, companyId);
   var methods = extractOzonSellerDeliveryMethods(warehousePayload);
   var providerMap = new Map();
   methods.forEach(function (method) {

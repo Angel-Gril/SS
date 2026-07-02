@@ -99,7 +99,7 @@ export async function fetchOzonSellerDropoffPoints(params: {
   const warehousePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${WAREHOUSE_LIST_PATH}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({}),
+    body: JSON.stringify({ company_id: companyId }),
   });
   const methods = extractSellerDeliveryMethods(warehousePayload);
   const providerMap = new Map<number, string>();
