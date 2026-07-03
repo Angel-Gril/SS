@@ -16,7 +16,6 @@ import {
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
-import { OzonExtensionSyncStatus } from '@/components/ozon/extension-sync-status';
 
 interface Shop {
   id: string;
@@ -77,6 +76,34 @@ interface AnalyticsData {
 type SortKey = 'soldCount' | 'soldSum' | 'convToCartPdp' | 'views' | 'stock' | 'avgPrice';
 
 type ActiveTab = 'what_to_sell' | 'graphs' | 'promotions';
+
+function toFiniteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text || /^(-|—|не число|nan|not a number)$/i.test(text)) return null;
+    const normalized = text.replace(/\s+/g, '').replace(/%/g, '').replace(',', '.');
+    const num = Number(normalized);
+    return Number.isFinite(num) ? num : null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function numericOrZero(value: unknown): number {
+  return toFiniteNumber(value) ?? 0;
+}
+
+function formatMetric(value: unknown, options?: Intl.NumberFormatOptions): string {
+  const num = toFiniteNumber(value);
+  return num == null ? '-' : num.toLocaleString('ru-RU', options);
+}
+
+function formatPercentMetric(value: unknown): string {
+  const num = toFiniteNumber(value);
+  return num == null ? '-' : `${num.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%`;
+}
 
 interface GraphsSnapshotData {
   type: 'graphs';
@@ -1013,8 +1040,8 @@ function ShopAnalyticsContent() {
   const sortedItems = useMemo(() => {
     if (!items.length) return [];
     const sorted = [...items].sort((a, b) => {
-      const aVal = Number(a[sortKey]) || 0;
-      const bVal = Number(b[sortKey]) || 0;
+      const aVal = numericOrZero(a[sortKey]);
+      const bVal = numericOrZero(b[sortKey]);
       return sortAsc ? aVal - bVal : bVal - aVal;
     });
     return sorted;
@@ -1029,12 +1056,15 @@ function ShopAnalyticsContent() {
     }
   }
 
-  const totalSales = analytics?.latest?.totalSales ? Number(analytics.latest.totalSales) : 0;
+  const totalSales = numericOrZero(analytics?.latest?.totalSales);
   const totalOrders = analytics?.latest?.totalOrders || 0;
   const productCount = analytics?.latest?.productCount || 0;
-  const avgCartRate = items.length
-    ? (items.reduce((sum, i) => sum + (Number(i.convToCartPdp) || 0), 0) / items.length).toFixed(2)
-    : '0';
+  const validCartRates = items
+    .map((item) => toFiniteNumber(item.convToCartPdp))
+    .filter((value): value is number => value != null);
+  const avgCartRate = validCartRates.length
+    ? (validCartRates.reduce((sum, value) => sum + value, 0) / validCartRates.length).toLocaleString('ru-RU', { maximumFractionDigits: 2 })
+    : '-';
 
   return (
     <div className="space-y-6">
@@ -1060,8 +1090,6 @@ function ShopAnalyticsContent() {
           </select>
         </div>
       </div>
-
-      <OzonExtensionSyncStatus dense />
 
       {/* Tab Switcher */}
       <div className="flex gap-1 border-b">
@@ -1164,7 +1192,7 @@ function ShopAnalyticsContent() {
                 <BarChart3 className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold tabular-nums">{avgCartRate}%</div>
+                <div className="text-2xl font-bold tabular-nums">{avgCartRate === '-' ? '-' : `${avgCartRate}%`}</div>
               </CardContent>
             </Card>
           </div>
@@ -1211,18 +1239,18 @@ function ShopAnalyticsContent() {
                             <span className="truncate" title={item.name}>{item.name}</span>
                           </div>
                         </TableCell>
-                        <TableCell className="tabular-nums">{item.soldCount}</TableCell>
+                        <TableCell className="tabular-nums">{formatMetric(item.soldCount, { maximumFractionDigits: 0 })}</TableCell>
                         <TableCell className="tabular-nums">
-                          {Number(item.soldSum).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
+                          {formatMetric(item.soldSum, { maximumFractionDigits: 0 })}
                         </TableCell>
                         <TableCell className="tabular-nums">
-                          {Number(item.avgPrice).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
+                          {formatMetric(item.avgPrice, { maximumFractionDigits: 0 })}
                         </TableCell>
-                        <TableCell className="tabular-nums">{item.convToCartPdp}%</TableCell>
+                        <TableCell className="tabular-nums">{formatPercentMetric(item.convToCartPdp)}</TableCell>
                         <TableCell className="tabular-nums">
-                          {Number(item.views).toLocaleString()}
+                          {formatMetric(item.views, { maximumFractionDigits: 0 })}
                         </TableCell>
-                        <TableCell className="tabular-nums">{item.stock}</TableCell>
+                        <TableCell className="tabular-nums">{formatMetric(item.stock, { maximumFractionDigits: 0 })}</TableCell>
                         <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate" title={`${item.category1} > ${item.category3}`}>
                           {item.category3 || item.category1}
                         </TableCell>
@@ -1258,7 +1286,7 @@ function ShopAnalyticsContent() {
                         <TableCell>{h.period}</TableCell>
                         <TableCell className="text-right tabular-nums">{h.productCount}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {h.totalSales ? Number(h.totalSales).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) : '-'}
+                          {formatMetric(h.totalSales, { maximumFractionDigits: 0 })}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{h.totalOrders ?? '-'}</TableCell>
                       </TableRow>

@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import {
   Search, RefreshCw, Loader2, ImageOff, Pencil, Check, X,
   Package, DollarSign, Boxes, Upload, AlertTriangle,
-  Save, ImageIcon, Trash2, Plus, Clock, SlidersHorizontal,
+  Save, ImageIcon, Trash2, Plus, Clock, SlidersHorizontal, ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -22,7 +22,6 @@ import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
 import { formatOrderAmount } from '@/lib/utils';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
-import { OzonExtensionSyncStatus } from '@/components/ozon/extension-sync-status';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 
 interface Product {
@@ -178,6 +177,12 @@ function formatDateTime(value?: string | null): string {
   }).format(date);
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
 function isProductMutable(product: Product): boolean {
   const visibility = String(product.visibility || '').toUpperCase();
   const syncStatus = String(product.syncStatus || '').toUpperCase();
@@ -187,6 +192,12 @@ function isProductMutable(product: Product): boolean {
 function getDisplaySku(product: { sku?: string | null }): string | null {
   const sku = String(product.sku || '').trim();
   return sku && sku !== '0' ? sku : null;
+}
+
+function getOzonProductUrl(product: Product): string | null {
+  const id = String(product.platformProductId || '').trim();
+  if (!/^\d+$/.test(id)) return null;
+  return `https://www.ozon.ru/product/${id}`;
 }
 
 // PLACEHOLDER_INNER_COMPONENT
@@ -428,9 +439,11 @@ function ProductsPageInner() {
   const selectedCount = selected.size;
   const hasAdvancedFilters = warehouseStockMode !== 'all'
     || Boolean(priceMin || priceMax || weightMin || weightMax || stockMin || stockMax);
+  const selectedShop = shops.find((shop) => shop.id === shopId);
+  const selectedShopLabel = selectedShop ? `[${selectedShop.platform}] ${selectedShop.name}` : '未选择店铺';
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">商品管理</h1>
@@ -438,10 +451,8 @@ function ProductsPageInner() {
         </div>
       </div>
 
-      <OzonExtensionSyncStatus dense />
-
       <Card>
-        <CardContent className="p-3 md:p-4 space-y-3">
+        <CardContent className="space-y-3 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={shopId}
@@ -452,7 +463,7 @@ function ProductsPageInner() {
                 setSelectedWarehouseId(null);
                 setWarehouseStockMode('all');
               }}
-              className="h-9 min-w-[220px] rounded-md border border-input bg-background px-3 text-sm"
+              className="h-8 min-w-[190px] rounded-md border border-input bg-background px-2.5 text-xs"
             >
               <option value="">全部店铺</option>
               {shops.map((s) => (
@@ -470,7 +481,7 @@ function ProductsPageInner() {
                   setPage(0);
                   setSelected(new Set());
                 }}
-                className="h-9 min-w-[220px] rounded-md border border-input bg-background px-3 text-sm"
+                className="h-8 min-w-[220px] rounded-md border border-input bg-background px-2.5 text-xs"
               >
                 <option value="">库存视图：全部仓库（总库存）</option>
                 {warehouses.map((w) => (
@@ -479,33 +490,35 @@ function ProductsPageInner() {
               </select>
             )}
 
-            <form onSubmit={handleSearch} className="flex min-w-[260px] flex-1 items-center gap-2 md:max-w-md">
+            <form onSubmit={handleSearch} className="flex min-w-[280px] flex-1 items-center gap-2 md:max-w-xl">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="搜索 SKU / Offer ID / 标题"
-                  className="h-9 pl-9"
+                  className="h-8 pl-8 text-xs"
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                 />
               </div>
-              <Button type="submit" size="sm" variant="outline">搜索</Button>
+              <Button type="submit" size="sm" variant="outline" className="h-8">查询</Button>
             </form>
 
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
               <Button
                 size="sm"
-                variant="outline"
+                variant="default"
+                className="h-8"
                 onClick={handleSyncProducts}
                 disabled={!shops.length}
                 title="选择店铺后从 OZON 同步商品、状态、库存和上架时间"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                同步 OZON
+                同步在线商品
               </Button>
               <Button
                 size="sm"
                 variant="outline"
+                className="h-8"
                 onClick={handleSyncCommissions}
                 disabled={syncingCommissions}
                 title="从 OZON 同步真实佣金率"
@@ -516,6 +529,7 @@ function ProductsPageInner() {
               <Button
                 size="sm"
                 variant="outline"
+                className="h-8"
                 onClick={() => setStockSyncOpen(true)}
                 disabled={!shopId}
                 title="检查并推送本地库存到 OZON"
@@ -523,15 +537,14 @@ function ProductsPageInner() {
                 <Upload className="h-3.5 w-3.5" />
                 库存推送
               </Button>
-              <Button size="sm" variant="outline" onClick={loadProducts} disabled={loading}>
+              <Button size="sm" variant="ghost" className="h-8 px-2" onClick={loadProducts} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-                刷新本页
               </Button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-            <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="商品状态筛选">
+          <div className="flex flex-wrap items-end justify-between gap-2 border-t pt-2">
+            <div className="flex flex-wrap items-center gap-5" role="tablist" aria-label="商品状态筛选">
               {PRODUCT_STATUS_TABS.map((tab) => {
                 const active = statusFilter === tab.value;
                 return (
@@ -541,14 +554,16 @@ function ProductsPageInner() {
                     role="tab"
                     aria-selected={active}
                     onClick={() => handleStatusTab(tab.value)}
-                    className={`h-8 rounded-md border px-3 text-xs font-medium transition-colors ${
+                    className={`border-b-2 pb-1 text-sm font-medium transition-colors ${
                       active
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
+                        ? 'border-primary text-primary'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     {tab.label}
-                    <span className={`ml-2 tabular-nums ${active ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                    <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] tabular-nums ${
+                      active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+                    }`}>
                       {statusCounts[tab.value]}
                     </span>
                   </button>
@@ -560,15 +575,18 @@ function ProductsPageInner() {
               <Button
                 size="sm"
                 variant={advancedFiltersOpen || hasAdvancedFilters ? 'secondary' : 'outline'}
+                className="h-8"
                 onClick={() => setAdvancedFiltersOpen((open) => !open)}
               >
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 高级筛选
                 {hasAdvancedFilters && <Badge variant="outline" className="ml-1 h-5 px-1.5 text-[10px]">已启用</Badge>}
               </Button>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
                 <Clock className="h-3.5 w-3.5" />
-                <span>最后同步：{lastProductSyncAt ? formatDateTime(lastProductSyncAt) : '从未同步'}</span>
+                <span title={selectedShopLabel}>{selectedShopLabel}</span>
+                <span className="hidden sm:inline">·</span>
+                <span>同步 {lastProductSyncAt ? formatDateTime(lastProductSyncAt) : '从未同步'}</span>
                 <span className="hidden sm:inline">·</span>
                 <span>当前 {total} 件</span>
               </div>
@@ -711,10 +729,22 @@ function ProductsPageInner() {
               暂无商品。请先在店铺管理中执行同步。
             </div>
           ) : (
-            <Table>
+            <Table className="min-w-[1460px] table-fixed text-xs">
+              <colgroup>
+                <col className="w-[40px]" />
+                <col className="w-[430px]" />
+                <col className="w-[120px]" />
+                <col className="w-[110px]" />
+                <col className="w-[135px]" />
+                <col className="w-[90px]" />
+                <col className="w-[85px]" />
+                <col className="w-[180px]" />
+                <col className="w-[150px]" />
+                <col className="w-[120px]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10">
+                  <TableHead className="w-10 whitespace-nowrap">
                     <input
                       type="checkbox"
                       checked={selected.size === products.length && products.length > 0}
@@ -722,21 +752,30 @@ function ProductsPageInner() {
                       className="rounded border-gray-300"
                     />
                   </TableHead>
-                  <TableHead className="min-w-[360px]">商品 / Ozon 信息</TableHead>
-                  <TableHead className="min-w-[150px] text-right">价格 / 佣金</TableHead>
-                  <TableHead className="min-w-[120px] text-right">库存 / 规格</TableHead>
-                  <TableHead className="min-w-[150px]">状态</TableHead>
-                  <TableHead className="min-w-[145px]">时间</TableHead>
-                  <TableHead className="w-16">操作</TableHead>
+                  <TableHead className="whitespace-nowrap">商品信息</TableHead>
+                  <TableHead className="whitespace-nowrap">类目 / 佣金</TableHead>
+                  <TableHead className="whitespace-nowrap">状态</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">价格</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">库存</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">重量</TableHead>
+                  <TableHead className="whitespace-nowrap">Ozon / 同步</TableHead>
+                  <TableHead className="whitespace-nowrap">时间</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {products.map((p) => {
                   const mutable = isProductMutable(p);
                   const displaySku = getDisplaySku(p);
+                  const ozonProductUrl = getOzonProductUrl(p);
+                  const priceNumber = toFiniteNumber(p.price);
+                  const commissionRate = toFiniteNumber(p.commissionRate);
+                  const commissionAmount = priceNumber != null && commissionRate != null
+                    ? priceNumber * commissionRate / 100
+                    : null;
                   return (
                   <TableRow key={p.id} className={selected.has(p.id) ? 'bg-muted/30' : ''}>
-                    <TableCell>
+                    <TableCell className="px-3 py-2">
                       <input
                         type="checkbox"
                         checked={selected.has(p.id)}
@@ -744,26 +783,73 @@ function ProductsPageInner() {
                         className="rounded border-gray-300"
                       />
                     </TableCell>
-                    <TableCell className="min-w-[360px]">
-                      <div className="flex items-start gap-3">
-                        <ProductImage src={p.images?.[0]} />
+                    <TableCell className="min-w-0 px-3 py-2">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <button type="button" onClick={() => setPreviewProductId(p.id)} className="shrink-0">
+                          <ProductImage src={p.images?.[0]} />
+                        </button>
                         <div className="min-w-0 flex-1 space-y-1">
-                          <p
-                            className="line-clamp-2 cursor-pointer text-sm font-medium leading-5 hover:text-primary hover:underline"
-                            onClick={() => setPreviewProductId(p.id)}
-                          >
-                            {p.title}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
+                          {ozonProductUrl ? (
+                            <a
+                              href={ozonProductUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block truncate text-sm font-medium leading-5 text-blue-600 hover:underline dark:text-blue-400"
+                              title={p.title}
+                            >
+                              {p.title}
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              className="block max-w-full truncate text-left text-sm font-medium leading-5 hover:text-primary hover:underline"
+                              onClick={() => setPreviewProductId(p.id)}
+                              title={p.title}
+                            >
+                              {p.title}
+                            </button>
+                          )}
+                          <div className="flex min-w-0 items-center gap-x-2 overflow-hidden font-mono text-[11px] text-muted-foreground">
                             {displaySku ? <span>SKU {displaySku}</span> : <span>SKU 待生成</span>}
-                            {p.offerId && <span>Offer {p.offerId}</span>}
-                            {p.platformProductId && <span>PID {p.platformProductId}</span>}
+                            {p.offerId && <span className="min-w-0 truncate">Offer {p.offerId}</span>}
                           </div>
-                          {p.categoryId && <div className="text-[11px] text-muted-foreground">类目 {p.categoryId}</div>}
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-right align-top">
+                    <TableCell className="px-3 py-2 align-top">
+                      <div className="space-y-1 text-[11px] leading-5">
+                        {p.categoryId && (
+                          <div className="truncate text-muted-foreground" title={p.categoryId}>
+                            类目 {p.categoryId}
+                          </div>
+                        )}
+                        {commissionRate != null && (
+                          <div className="font-medium tabular-nums">
+                            佣金 {commissionRate.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%
+                          </div>
+                        )}
+                        {commissionAmount != null && (
+                          <div className="text-muted-foreground tabular-nums">
+                            ≈ {commissionAmount.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}
+                          </div>
+                        )}
+                        {!p.categoryId && commissionRate == null && (
+                          <div className="text-muted-foreground">待同步类目/佣金</div>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="px-3 py-2 align-top">
+                      <StatusBadge
+                        status={p.status}
+                        visibility={p.visibility}
+                        syncStatus={p.syncStatus}
+                        ozonStatusName={p.ozonStatusName}
+                        ozonStatusDescription={p.ozonStatusDescription}
+                        ozonModerateStatus={p.ozonModerateStatus}
+                        ozonStatusTone={p.ozonStatusTone}
+                      />
+                    </TableCell>
+                    <TableCell className="px-3 py-2 text-right align-top">
                       {editingPrice === p.id ? (
                         <div className="flex items-center gap-1 justify-end">
                           <Input
@@ -796,26 +882,12 @@ function ProductsPageInner() {
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
                         </div>
                       )}
-                      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                      <div className="mt-1 space-y-0.5 whitespace-nowrap text-[11px] text-muted-foreground">
                         <div>折前 {p.oldPrice ? `${p.oldPrice} ${p.currency || 'USD'}` : '-'}</div>
-                        <div>
-                          佣金 {p.price ? (
-                            p.commissionRate ? (
-                              <span title={`佣金率: ${p.commissionRate}%`}>
-                                {(Number(p.price) * Number(p.commissionRate) / 100).toFixed(2)}
-                                <span className="ml-1 opacity-60">({p.commissionRate}%)</span>
-                              </span>
-                            ) : (
-                              <span className="opacity-60" title="估算值(15%)">
-                                {(Number(p.price) * 0.15).toFixed(2)}~
-                              </span>
-                            )
-                          ) : '-'}
-                        </div>
                         {p.minPrice && <div>最低 {p.minPrice}</div>}
                       </div>
                     </TableCell>
-                    <TableCell className="text-right align-top">
+                    <TableCell className="px-3 py-2 text-right align-top">
                       {editingStock === p.id ? (
                         <div className="flex items-center gap-1 justify-end">
                           <Input
@@ -851,29 +923,40 @@ function ProductsPageInner() {
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
                         </div>
                       )}
-                      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
-                        <div>{p.weight != null ? `${p.weight} g` : '重量 -'}</div>
-                        <div>{selectedWarehouseId ? '当前仓库存' : '总库存'}</div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap px-3 py-2 text-right align-top tabular-nums">
+                      <div>{p.weight != null ? `${p.weight} g` : '-'}</div>
+                      <div className="text-[11px] text-muted-foreground">{selectedWarehouseId ? '当前仓' : '总库存'}</div>
+                    </TableCell>
+                    <TableCell className="px-3 py-2 align-top text-[11px] text-muted-foreground">
+                      <div className="truncate font-mono" title={p.platformProductId || undefined}>
+                        PID {p.platformProductId || '-'}
                       </div>
+                      <div className="truncate" title={p.offerId || undefined}>Offer {p.offerId || '-'}</div>
+                      <div>同步 {formatDateTime(p.lastOzonSyncAt)}</div>
                     </TableCell>
-                    <TableCell className="align-top">
-                      <StatusBadge
-                        status={p.status}
-                        visibility={p.visibility}
-                        syncStatus={p.syncStatus}
-                        ozonStatusName={p.ozonStatusName}
-                        ozonStatusDescription={p.ozonStatusDescription}
-                        ozonModerateStatus={p.ozonModerateStatus}
-                        ozonStatusTone={p.ozonStatusTone}
-                      />
-                    </TableCell>
-                    <TableCell className="align-top text-xs text-muted-foreground">
+                    <TableCell className="whitespace-nowrap px-3 py-2 align-top text-xs text-muted-foreground">
                       <div>创建 {formatDateTime(p.ozonCreatedAt || p.createdAt)}</div>
                       <div>更新 {formatDateTime(p.ozonUpdatedAt || p.updatedAt)}</div>
-                      {p.lastOzonSyncAt && <div>同步 {formatDateTime(p.lastOzonSyncAt)}</div>}
                     </TableCell>
-                    <TableCell className="align-top">
-                      <button type="button" onClick={() => setDetailProductId(p.id)} className="text-xs text-primary hover:underline">编辑</button>
+                    <TableCell className="px-3 py-2 text-right align-top">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button type="button" size="sm" className="h-7 px-2" onClick={() => setDetailProductId(p.id)}>
+                          <Pencil className="h-3 w-3" />
+                          编辑
+                        </Button>
+                        {ozonProductUrl && (
+                          <a
+                            href={ozonProductUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                            title="打开 Ozon 商品页"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                   );
