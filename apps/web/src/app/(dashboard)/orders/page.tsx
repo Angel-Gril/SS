@@ -150,7 +150,7 @@ function ProductImagePreview({ items }: { items: any[] }) {
   const imageUrl = firstItem?.image || firstItem?.primary_image || firstItem?.picture || firstItem?.images?.[0];
 
   return (
-    <div className="flex min-w-[250px] items-start gap-2">
+    <div className="flex w-full min-w-0 items-start gap-2">
       {imageUrl ? (
         <div className="relative" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
           <img src={imageUrl} alt="" className="w-11 h-11 rounded border object-cover shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
@@ -162,7 +162,7 @@ function ProductImagePreview({ items }: { items: any[] }) {
           )}
         </div>
       ) : null}
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="min-w-0 flex-1 overflow-hidden space-y-1">
         {items.slice(0, 2).map((item: any, i: number) => (
           <div key={i} className="min-w-0">
             <div className="flex min-w-0 items-start gap-1.5">
@@ -172,20 +172,20 @@ function ProductImagePreview({ items }: { items: any[] }) {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="min-w-0 truncate text-xs font-medium leading-5 hover:text-primary hover:underline"
+                  className="block min-w-0 flex-1 truncate text-xs font-medium leading-5 hover:text-primary hover:underline"
                   title={item.name}
                 >
                   {item.name || '-'}
                 </a>
               ) : (
-                <div className="min-w-0 truncate text-xs font-medium leading-5" title={item.name}>{item.name || '-'}</div>
+                <div className="min-w-0 flex-1 truncate text-xs font-medium leading-5" title={item.name}>{item.name || '-'}</div>
               )}
               <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">x{item.quantity || 1}</span>
             </div>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
-              {(item.offer_id || item.offerId) && <span>Offer {item.offer_id || item.offerId}</span>}
-              {item.sku && <span>SKU {item.sku}</span>}
-              {item.price && <span>{item.price} {item.currency_code || item.currency || 'RUB'}</span>}
+            <div className="flex min-w-0 items-center gap-x-2 overflow-hidden text-[10px] text-muted-foreground">
+              {(item.offer_id || item.offerId) && <span className="shrink-0">Offer {item.offer_id || item.offerId}</span>}
+              {item.sku && <span className="min-w-0 truncate">SKU {item.sku}</span>}
+              {item.price && <span className="shrink-0">{item.price} {item.currency_code || item.currency || 'RUB'}</span>}
             </div>
           </div>
         ))}
@@ -651,10 +651,22 @@ export default function OrdersPage() {
               暂无订单数据。请先同步订单。
             </div>
           ) : (
-            <Table className="min-w-[1040px] text-xs">
+            <Table className="min-w-[1280px] table-fixed text-xs">
+              <colgroup>
+                <col className="w-[38px]" />
+                <col className="w-[135px]" />
+                <col className="w-[330px]" />
+                <col className="w-[104px]" />
+                <col className="w-[86px]" />
+                <col className="w-[100px]" />
+                <col className="w-[104px]" />
+                <col className="w-[165px]" />
+                <col className="w-[115px]" />
+                <col className="w-[103px]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10">
+                  <TableHead className="w-10 whitespace-nowrap">
                     <input
                       type="checkbox"
                       checked={selectedOrders.size === orders.length && orders.length > 0}
@@ -662,15 +674,15 @@ export default function OrdersPage() {
                       className="rounded border-input"
                     />
                   </TableHead>
-                  <TableHead className="w-[110px]">订单 / 店铺</TableHead>
-                  <TableHead className="w-[290px]">商品信息</TableHead>
-                  <TableHead className="w-[78px] text-right">金额</TableHead>
-                  <TableHead className="w-[60px]">状态</TableHead>
-                  <TableHead className="w-[65px]">个人标记</TableHead>
-                  <TableHead className="w-[65px]">服务标签</TableHead>
-                  <TableHead className="w-[125px]">物流</TableHead>
-                  <TableHead className="w-[90px]">时间</TableHead>
-                  <TableHead className="w-[60px] text-right">操作</TableHead>
+                  <TableHead className="whitespace-nowrap">订单 / 店铺</TableHead>
+                  <TableHead className="whitespace-nowrap">商品信息</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">金额</TableHead>
+                  <TableHead className="whitespace-nowrap">状态</TableHead>
+                  <TableHead className="whitespace-nowrap">个人标记</TableHead>
+                  <TableHead className="whitespace-nowrap">服务标签</TableHead>
+                  <TableHead className="whitespace-nowrap">物流</TableHead>
+                  <TableHead className="whitespace-nowrap">时间</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -679,11 +691,21 @@ export default function OrdersPage() {
                   const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
                   const orderTags = order.serviceTags || [];
                   const userTags = order.userColorTags || [];
+                  const resolvedUserTags = userTags
+                    .map((tagId) => userColorTags.find((t) => t.id === tagId))
+                    .filter((tag): tag is UserColorTag => Boolean(tag));
+                  const visibleUserTags = resolvedUserTags.slice(0, 1);
+                  const hiddenUserTagCount = resolvedUserTags.length - visibleUserTags.length;
+                  const resolvedServiceTags = orderTags
+                    .map((tagId) => serviceTags.find((t) => t.id === tagId))
+                    .filter((tag): tag is ServiceTag => Boolean(tag));
+                  const visibleServiceTags = resolvedServiceTags.slice(0, 1);
+                  const hiddenServiceTagCount = resolvedServiceTags.length - visibleServiceTags.length;
                   const primaryTracking = order.trackingNumber || order.internationalTrackingNumber || order.postingNumber;
                   const externalTrackNumber = order.trackingNumber || order.internationalTrackingNumber;
                   return (
                     <TableRow key={order.id} className="align-top">
-                      <TableCell className="px-3 py-2">
+                      <TableCell className="px-2.5 py-2">
                         <input
                           type="checkbox"
                           checked={selectedOrders.has(order.id)}
@@ -691,32 +713,33 @@ export default function OrdersPage() {
                           className="rounded border-input"
                         />
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-xs">
+                      <TableCell className="px-2.5 py-2 text-xs">
                         <button
                           type="button"
-                          className="font-mono text-left text-[12px] font-medium hover:text-primary hover:underline"
+                          className="block max-w-full truncate font-mono text-left text-[12px] font-medium hover:text-primary hover:underline"
                           onClick={() => setDetailOrderId(order.id)}
+                          title={order.postingNumber || order.platformOrderId}
                         >
                           {order.postingNumber || order.platformOrderId}
                         </button>
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{order.shop.platform}</Badge>
-                          <span className="max-w-[120px] truncate text-muted-foreground" title={order.shop.name}>{order.shop.name}</span>
+                        <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                          <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">{order.shop.platform}</Badge>
+                          <span className="min-w-0 truncate text-muted-foreground" title={order.shop.name}>{order.shop.name}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="px-3 py-2">
+                      <TableCell className="min-w-0 px-2.5 py-2">
                         {order.items && Array.isArray(order.items) ? (
                           <ProductImagePreview items={order.items as any[]} />
                         ) : '-'}
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-right tabular-nums font-medium">
+                      <TableCell className="whitespace-nowrap px-2.5 py-2 text-right tabular-nums font-medium">
                         {(() => {
                           const f = formatOrderAmount(order.totalAmount, order.currency, order.totalAmountCny);
                           return (
-                            <div title={f.isApprox ? `原币 ${f.original}（估算汇率）` : `原币 ${f.original}`}>
+                            <div className="space-y-0.5 leading-5" title={f.isApprox ? `原币 ${f.original}（估算汇率）` : `原币 ${f.original}`}>
                               <div>{f.display}</div>
                               {order.currency !== 'CNY' ? (
-                                <div className="text-xs text-muted-foreground font-normal">
+                                <div className="text-[11px] text-muted-foreground font-normal">
                                   {f.isApprox ? '≈ ' : ''}{f.original}
                                 </div>
                               ) : null}
@@ -724,73 +747,77 @@ export default function OrdersPage() {
                           );
                         })()}
                       </TableCell>
-                      <TableCell className="px-3 py-2">
-                        <div className="space-y-1">
-                          <OrderStatusBadge status={order.status} />
+                      <TableCell className="px-2.5 py-2">
+                        <div className="flex flex-col items-start gap-1 whitespace-nowrap">
+                          <OrderStatusBadge status={order.status} className="h-5 px-1.5 text-[10px]" />
                           <ShipmentCountdownMini shipmentDate={order.shipmentDate} status={order.status} />
                         </div>
                       </TableCell>
-                      <TableCell className="px-3 py-2">
-                        <div className="flex flex-wrap items-center gap-1">
-                          {userTags.length > 0 ? (
-                            userTags.map((tagId) => {
-                              const tag = userColorTags.find((t) => t.id === tagId);
-                              if (!tag) return null;
-                              return (
+                      <TableCell className="px-2.5 py-2">
+                        <div className="flex min-w-0 items-center gap-1 whitespace-nowrap">
+                          {visibleUserTags.length > 0 ? (
+                            <>
+                              {visibleUserTags.map((tag) => (
                                 <span
-                                  key={tagId}
-                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                  key={tag.id}
+                                  className="inline-flex min-w-0 max-w-[76px] items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                                   style={{ backgroundColor: `${tag.color}1F`, color: tag.color }}
+                                  title={tag.name}
                                 >
-                                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
-                                  {tag.name}
+                                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} />
+                                  <span className="truncate">{tag.name}</span>
                                 </span>
-                              );
-                            })
+                              ))}
+                              {hiddenUserTagCount > 0 && (
+                                <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">+{hiddenUserTagCount}</span>
+                              )}
+                            </>
                           ) : (
                             <span className="text-[11px] text-muted-foreground">未标记</span>
                           )}
                           <button
                             type="button"
                             onClick={() => setUserTagDialogOrder(order)}
-                            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                             title="设置个人标记"
                           >
                             <Palette className="h-3 w-3" />
                           </button>
                         </div>
                       </TableCell>
-                      <TableCell className="px-3 py-2">
-                        <div className="flex items-center gap-1 flex-wrap">
-                          {orderTags.length > 0 ? (
-                            orderTags.map((tagId) => {
-                              const tag = serviceTags.find((t) => t.id === tagId);
-                              if (!tag) return null;
-                              return (
+                      <TableCell className="px-2.5 py-2">
+                        <div className="flex min-w-0 items-center gap-1 whitespace-nowrap">
+                          {visibleServiceTags.length > 0 ? (
+                            <>
+                              {visibleServiceTags.map((tag) => (
                                 <span
-                                  key={tagId}
-                                  className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                                  key={tag.id}
+                                  className="inline-flex min-w-0 max-w-[76px] items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
                                   style={{ backgroundColor: tag.color + '20', color: tag.color }}
+                                  title={tag.name}
                                 >
-                                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
-                                  {tag.name}
+                                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} />
+                                  <span className="truncate">{tag.name}</span>
                                 </span>
-                              );
-                            })
+                              ))}
+                              {hiddenServiceTagCount > 0 && (
+                                <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">+{hiddenServiceTagCount}</span>
+                              )}
+                            </>
                           ) : (
                             <span className="text-[11px] text-muted-foreground">未设置</span>
                           )}
                           <button
                             type="button"
                             onClick={() => setTagDialogOrder(order)}
-                            className="inline-flex items-center justify-center w-5 h-5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                             title="设置服务标签"
                           >
                             <Tag className="h-3 w-3" />
                           </button>
                         </div>
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-xs">
+                      <TableCell className="px-2.5 py-2 text-xs">
                         {(() => {
                           const meta = describeSubstatus(order.subStatus);
                           const fulfillmentStage = resolveOrderFulfillmentStage(order);
@@ -810,14 +837,16 @@ export default function OrdersPage() {
                           const hasInternationalTracking = !!externalTrackNumber;
 
                           return (
-                            <div className="space-y-1">
-                              <Badge variant={fulfillmentStage.variant} className="h-5 px-1.5 text-[10px]">{fulfillmentStage.label}</Badge>
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                                <Badge variant={fulfillmentStage.variant} className="h-5 shrink-0 px-1.5 text-[10px]">{fulfillmentStage.label}</Badge>
+                                {showStatus && formattedTime && (
+                                  <span className="truncate text-[10px] text-muted-foreground">{formattedTime}</span>
+                                )}
+                              </div>
                               {showStatus && (
-                                <div className="text-xs">
-                                  <div className="font-medium">{meta.text}</div>
-                                  {formattedTime && (
-                                    <div className="text-muted-foreground">{formattedTime}</div>
-                                  )}
+                                <div className="min-w-0 truncate text-[11px] font-medium" title={meta.text}>
+                                  {meta.text}
                                 </div>
                               )}
                               {primaryTracking && (
@@ -826,7 +855,7 @@ export default function OrdersPage() {
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   onClick={(e) => e.stopPropagation()}
-                                  className="inline-flex max-w-[110px] items-center gap-1 rounded border bg-background px-1.5 py-0.5 font-mono text-[11px] hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                                  className="inline-flex max-w-full items-center gap-1 rounded border bg-background px-1.5 py-0.5 font-mono text-[11px] hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
                                   title="打开 Ozon 物流追踪"
                                 >
                                   <span className="truncate">{primaryTracking}</span>
@@ -836,7 +865,7 @@ export default function OrdersPage() {
                               {order.shippingMethod && (
                                 <div className="truncate text-[10px] text-muted-foreground" title={order.shippingMethod}>{order.shippingMethod}</div>
                               )}
-                              <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+                              <div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[10px]">
                                 {/* 国内物流：显示菜鸟国际 */}
                                 {hasDomesticTracking && (
                                   <a
@@ -844,53 +873,40 @@ export default function OrdersPage() {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={(e) => e.stopPropagation()}
-                                    className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border bg-background hover:bg-primary/5 hover:border-primary/40 hover:text-primary transition-colors normal-case"
+                                    className="inline-flex shrink-0 items-center gap-0.5 rounded border bg-background px-1 py-0.5 normal-case transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
                                     title="在菜鸟国际查询国内物流"
                                   >
                                     菜鸟国际
                                     <ExternalLink className="h-2.5 w-2.5" />
                                   </a>
                                 )}
-                                {/* 国际物流：显示 OZON Track 和 17TRACK */}
+                                {/* 国际物流：单号本身已经是 OZON Track 入口，这里只保留 17TRACK。 */}
                                 {hasInternationalTracking && (
-                                  <>
-                                    <a
-                                      href={defaultTrackUrl(primaryTracking!)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border bg-background hover:bg-primary/5 hover:border-primary/40 hover:text-primary transition-colors normal-case"
-                                      title="在 OZON 查询国际物流"
-                                    >
-                                      OZON Track
-                                      <ExternalLink className="h-2.5 w-2.5" />
-                                    </a>
-                                    <a
-                                      href={`https://t.17track.net/zh-cn#nums=${encodeURIComponent(externalTrackNumber!)}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded border bg-background hover:bg-primary/5 hover:border-primary/40 hover:text-primary transition-colors normal-case"
-                                      title="在 17TRACK 查询国际物流"
-                                    >
-                                      17TRACK
-                                      <ExternalLink className="h-2.5 w-2.5" />
-                                    </a>
-                                  </>
+                                  <a
+                                    href={`https://t.17track.net/zh-cn#nums=${encodeURIComponent(externalTrackNumber!)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="inline-flex shrink-0 items-center gap-0.5 rounded border bg-background px-1 py-0.5 normal-case transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                                    title="在 17TRACK 查询国际物流"
+                                  >
+                                    17TRACK
+                                    <ExternalLink className="h-2.5 w-2.5" />
+                                  </a>
                                 )}
                               </div>
                             </div>
                           );
                         })()}
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-xs text-muted-foreground">
-                        <div className="space-y-1">
+                      <TableCell className="whitespace-nowrap px-2.5 py-2 text-xs text-muted-foreground">
+                        <div className="space-y-0.5 leading-5">
                           <div><span className="text-muted-foreground/80">创建</span> {formatCompactDate(order.createdAt)}</div>
                           {order.labelPrintedAt && <div><span className="text-muted-foreground/80">面单</span> {formatCompactDate(order.labelPrintedAt)}</div>}
                           {order.shipmentDate && <div><span className="text-muted-foreground/80">发货</span> {formatCompactDate(order.shipmentDate)}</div>}
                         </div>
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-right">
+                      <TableCell className="whitespace-nowrap px-2.5 py-2 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             size="icon"
@@ -1068,13 +1084,13 @@ function ShipmentCountdownMini({ shipmentDate, status }: { shipmentDate: string 
 
   const diff = new Date(shipmentDate).getTime() - Date.now();
   if (diff <= 0) {
-    return <span className="text-[10px] text-red-600 font-medium">已超时</span>;
+    return <span className="whitespace-nowrap text-[10px] text-red-600 font-medium">已超时</span>;
   }
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
   const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   const isUrgent = diff < 24 * 60 * 60 * 1000;
   const text = days > 0 ? `剩${days}天${hours}时` : `剩${hours}小时`;
-  return <span className={`text-[10px] font-medium ${isUrgent ? 'text-amber-600' : 'text-muted-foreground'}`}>{text}</span>;
+  return <span className={`whitespace-nowrap text-[10px] font-medium ${isUrgent ? 'text-amber-600' : 'text-muted-foreground'}`}>{text}</span>;
 }
 
 function OrderDetailDialog({ orderId, onClose }: {
@@ -1581,7 +1597,7 @@ function TrackingTimeline({ orderId, postingNumber, trackingNumber }: { orderId:
   );
 }
 
-function OrderStatusBadge({ status }: { status: string }) {
+function OrderStatusBadge({ status, className }: { status: string; className?: string }) {
   const map: Record<string, { label: string; variant: 'success' | 'warning' | 'secondary' | 'destructive' | 'default' }> = {
     awaiting_packaging: { label: '待打包', variant: 'warning' },
     awaiting_deliver: { label: '待发货', variant: 'warning' },
@@ -1590,7 +1606,7 @@ function OrderStatusBadge({ status }: { status: string }) {
     cancelled: { label: '已取消', variant: 'destructive' },
   };
   const info = map[status] || { label: status, variant: 'secondary' as const };
-  return <Badge variant={info.variant}>{info.label}</Badge>;
+  return <Badge variant={info.variant} className={cn('whitespace-nowrap', className)}>{info.label}</Badge>;
 }
 
 function StatMini({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
