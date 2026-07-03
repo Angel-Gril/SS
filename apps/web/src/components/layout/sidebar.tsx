@@ -33,7 +33,7 @@ interface NavItem {
 }
 
 const navigation: NavItem[] = [
-  { label: '首页', icon: LayoutDashboard, href: '/', roles: ['ADMIN'] },
+  { label: '首页', icon: LayoutDashboard, href: '/', roles: ['ADMIN', 'USER'] },
   {
     label: '店铺管理',
     icon: Store,
@@ -143,6 +143,7 @@ const navigation: NavItem[] = [
       { label: '安全设置', href: '/admin/security', superAdminOnly: true },
       { label: '运维状态', href: '/admin/ops', superAdminOnly: true },
       { label: '公告管理', href: '/admin/announcements' },
+      { label: '首页内容管理', href: '/admin/dashboard-content' },
       { label: '服务标签设置', href: '/admin/service-tags' },
       { label: '费用模板', href: '/admin/fee-templates' },
       { label: '用户管理', href: '/admin/users' },

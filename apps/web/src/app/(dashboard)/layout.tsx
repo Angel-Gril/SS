@@ -18,7 +18,6 @@ function getEffectiveRole(user: AuthUser): 'ADMIN' | 'USER' | 'STAFF' {
 /** 根据角色返回默认首页 */
 function getDefaultPath(role: string): string {
   if (role === 'STAFF') return '/warehouse';
-  if (role === 'USER') return '/orders';
   return '/';
 }
 

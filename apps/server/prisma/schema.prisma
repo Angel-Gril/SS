@@ -98,6 +98,7 @@ model User {
   userServiceTags UserServiceTag[]
   createdAnnouncements Announcement[] @relation("AnnouncementCreator")
   announcementReads    AnnouncementRead[]
+  createdDashboardContentBlocks DashboardContentBlock[] @relation("DashboardContentBlockCreator")
   auditLogs    AuditLog[]
   ozonAnalyticsCaches OzonAnalyticsCache[]
 
@@ -1234,6 +1235,29 @@ enum AnnouncementTargetRole {
   USER
   ADMIN
   STAFF
+}
+
+model DashboardContentBlock {
+  id          String                 @id @default(cuid())
+  key         String                 @unique
+  type        String
+  title       String
+  subtitle    String?
+  content     Json
+  targetRole  AnnouncementTargetRole @default(ALL) @map("target_role")
+  enabled     Boolean                @default(true)
+  sortOrder   Int                    @default(0) @map("sort_order")
+  publishedAt DateTime?              @map("published_at")
+  expiresAt   DateTime?              @map("expires_at")
+  createdBy   String                 @map("created_by")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+
+  creator     User                   @relation("DashboardContentBlockCreator", fields: [createdBy], references: [id])
+
+  @@index([enabled, targetRole, sortOrder])
+  @@index([publishedAt])
+  @@map("dashboard_content_blocks")
 }
 
 model Announcement {
