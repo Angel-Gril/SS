@@ -57,6 +57,14 @@ const DELIVERING_SUBSTATUS_PARTS = [
   'in_cariage',
 ];
 const DELIVERED_SUBSTATUS_PARTS = ['delivered', 'received'];
+const AWAITING_SHIPMENT_SUBSTATUS_PARTS = [
+  'awaiting_registration',
+  'not_in_process',
+  'awaiting_packaging',
+  'in_packaging',
+  'awaiting_deliver',
+  'awaiting_passport_data',
+];
 
 const INSPECTION_DELAY_MS = 30 * 60 * 1000;
 
@@ -116,6 +124,30 @@ export function resolveOrderFulfillmentStage(
   }
 
   return STAGES.purchased;
+}
+
+export function isOrderAwaitingSellerShipment(order: OrderFulfillmentStageInput): boolean {
+  const status = normalize(order.status);
+  const subStatus = normalize(order.subStatus);
+
+  if (
+    DELIVERED_STATUSES.has(status)
+    || DELIVERING_STATUSES.has(status)
+    || !!order.deliveringDate
+    || !!order.deliveredAt
+    || hasAnyPart(status, ABNORMAL_STATUS_PARTS)
+    || hasAnyPart(subStatus, ABNORMAL_STATUS_PARTS)
+    || hasAnyPart(subStatus, DELIVERING_SUBSTATUS_PARTS)
+    || hasAnyPart(subStatus, DELIVERED_SUBSTATUS_PARTS)
+  ) {
+    return false;
+  }
+
+  return (
+    PACKAGING_STATUSES.has(status)
+    || AWAITING_LABEL_STATUSES.has(status)
+    || hasAnyPart(subStatus, AWAITING_SHIPMENT_SUBSTATUS_PARTS)
+  );
 }
 
 function normalize(value: string | null | undefined): string {

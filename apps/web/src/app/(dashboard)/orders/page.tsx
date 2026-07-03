@@ -23,7 +23,7 @@ import { api } from '@/lib/api';
 import { cn, formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
 import { defaultTrackUrl } from '@/lib/tracking';
-import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
+import { isOrderAwaitingSellerShipment, resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 
 interface Order {
@@ -97,6 +97,8 @@ interface Shop {
   name: string;
   platform: string;
 }
+
+type ShipmentCountdownOrder = Pick<Order, 'status' | 'subStatus' | 'shipmentDate' | 'deliveringDate' | 'deliveredAt'>;
 
 const STATUS_TABS = [
   { key: '', label: '全部', icon: Package },
@@ -750,7 +752,7 @@ export default function OrdersPage() {
                       <TableCell className="px-2.5 py-2">
                         <div className="flex flex-col items-start gap-1 whitespace-nowrap">
                           <OrderStatusBadge status={order.status} className="h-5 px-1.5 text-[10px]" />
-                          <ShipmentCountdownMini shipmentDate={order.shipmentDate} status={order.status} />
+                          <ShipmentCountdownMini order={order} />
                         </div>
                       </TableCell>
                       <TableCell className="px-2.5 py-2">
@@ -1028,8 +1030,9 @@ export default function OrdersPage() {
   );
 }
 
-function ShipmentCountdown({ shipmentDate, status }: { shipmentDate: string | null; status: string }) {
+function ShipmentCountdown({ order }: { order: ShipmentCountdownOrder }) {
   const [now, setNow] = useState(Date.now());
+  const shipmentDate = order.shipmentDate;
 
   useEffect(() => {
     if (!shipmentDate) return;
@@ -1038,8 +1041,7 @@ function ShipmentCountdown({ shipmentDate, status }: { shipmentDate: string | nu
   }, [shipmentDate]);
 
   if (!shipmentDate) return null;
-  const needsShip = status === 'awaiting_packaging' || status === 'awaiting_deliver';
-  if (!needsShip) return null;
+  if (!isOrderAwaitingSellerShipment(order)) return null;
 
   const deadline = new Date(shipmentDate).getTime();
   const diff = deadline - now;
@@ -1077,10 +1079,10 @@ function ShipmentCountdown({ shipmentDate, status }: { shipmentDate: string | nu
   );
 }
 
-function ShipmentCountdownMini({ shipmentDate, status }: { shipmentDate: string | null; status: string }) {
+function ShipmentCountdownMini({ order }: { order: ShipmentCountdownOrder }) {
+  const shipmentDate = order.shipmentDate;
   if (!shipmentDate) return null;
-  const needsShip = status === 'awaiting_packaging' || status === 'awaiting_deliver';
-  if (!needsShip) return null;
+  if (!isOrderAwaitingSellerShipment(order)) return null;
 
   const diff = new Date(shipmentDate).getTime() - Date.now();
   if (diff <= 0) {
@@ -1165,7 +1167,7 @@ function OrderDetailDialog({ orderId, onClose }: {
             </div>
 
             {/* 发货倒计时 */}
-            <ShipmentCountdown shipmentDate={detail.shipmentDate} status={detail.status} />
+            <ShipmentCountdown order={detail} />
 
             <div className="border rounded-md">
               <div className="px-3 py-2 text-xs font-medium border-b bg-muted/40">发货流程</div>

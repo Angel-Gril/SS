@@ -9,6 +9,7 @@ import { getRate } from '../services/exchange-rate.js';
 import { fetchLabelAsync } from '../services/ozon-label.js';
 import { syncOrdersDirect, DirectSyncError, humanizeSyncError } from '../services/order-sync-direct.js';
 import {
+  isOrderAwaitingSellerShipment,
   resolveOrderFulfillmentStage,
   type FulfillmentStageKey,
   type OrderFulfillmentStageInput,
@@ -32,6 +33,12 @@ type WarehouseStageLogInput = {
   orderId: string;
   operationType: string;
   createdAt: Date;
+};
+
+type ShipmentUrgency = 'overdue' | 'today' | 'tomorrow' | 'within3d';
+
+type OrderShipmentUrgencyInput = OrderFulfillmentStageInput & {
+  id: string;
 };
 
 const orderQuerySchema = z.object({
@@ -98,6 +105,68 @@ export function filterOrderIdsByFulfillmentStage(
     .map((order) => order.id);
 }
 
+export function filterOrderIdsByShipmentUrgency(
+  orders: OrderShipmentUrgencyInput[],
+  shipmentUrgency: ShipmentUrgency,
+  now: Date = new Date(),
+): string[] {
+  return orders
+    .filter((order) => matchesShipmentUrgency(order, shipmentUrgency, now))
+    .map((order) => order.id);
+}
+
+function matchesShipmentUrgency(
+  order: OrderShipmentUrgencyInput,
+  shipmentUrgency: ShipmentUrgency,
+  now: Date,
+): boolean {
+  if (!isOrderAwaitingSellerShipment(order)) return false;
+  const deadline = toValidDate(order.shipmentDate);
+  if (!deadline) return false;
+
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  const endOfTomorrow = new Date(now);
+  endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
+  endOfTomorrow.setHours(23, 59, 59, 999);
+  const endOfThirdDay = new Date(now);
+  endOfThirdDay.setDate(endOfThirdDay.getDate() + 3);
+  endOfThirdDay.setHours(23, 59, 59, 999);
+
+  switch (shipmentUrgency) {
+    case 'overdue':
+      return deadline < now;
+    case 'today':
+      return deadline >= now && deadline <= endOfToday;
+    case 'tomorrow':
+      return deadline > endOfToday && deadline <= endOfTomorrow;
+    case 'within3d':
+      return deadline >= now && deadline <= endOfThirdDay;
+  }
+}
+
+function buildShipmentDeadlineRange(shipmentUrgency: ShipmentUrgency, now: Date): Record<string, Date> {
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  const endOfTomorrow = new Date(now);
+  endOfTomorrow.setDate(endOfTomorrow.getDate() + 1);
+  endOfTomorrow.setHours(23, 59, 59, 999);
+  const endOfThirdDay = new Date(now);
+  endOfThirdDay.setDate(endOfThirdDay.getDate() + 3);
+  endOfThirdDay.setHours(23, 59, 59, 999);
+
+  switch (shipmentUrgency) {
+    case 'overdue':
+      return { lt: now };
+    case 'today':
+      return { gte: now, lte: endOfToday };
+    case 'tomorrow':
+      return { gt: endOfToday, lte: endOfTomorrow };
+    case 'within3d':
+      return { gte: now, lte: endOfThirdDay };
+  }
+}
+
 function parseDateAtUtcStartOfDay(value: string): Date {
   const trimmed = value.trim();
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
@@ -125,6 +194,12 @@ function buildLatestWarehouseLogMap(
     latestWarehouseLogByOrder.set(log.orderId, current);
   }
   return latestWarehouseLogByOrder;
+}
+
+function toValidDate(value: string | Date | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
 }
 
 export async function orderRoutes(app: FastifyInstance) {
@@ -395,27 +470,22 @@ export async function orderRoutes(app: FastifyInstance) {
 
     if (query.shipmentUrgency) {
       const now = new Date();
-      const eod = new Date(now); eod.setHours(23, 59, 59, 999);
-      const tomorrowEod = new Date(now); tomorrowEod.setDate(tomorrowEod.getDate() + 1); tomorrowEod.setHours(23, 59, 59, 999);
-      const in3dEod = new Date(now); in3dEod.setDate(in3dEod.getDate() + 3); in3dEod.setHours(23, 59, 59, 999);
-      switch (query.shipmentUrgency) {
-        case 'overdue':
-          where.shipmentDate = { lt: now };
-          where.status = 'awaiting_deliver';
-          break;
-        case 'today':
-          where.shipmentDate = { gte: now, lte: eod };
-          where.status = 'awaiting_deliver';
-          break;
-        case 'tomorrow':
-          where.shipmentDate = { gt: eod, lte: tomorrowEod };
-          where.status = 'awaiting_deliver';
-          break;
-        case 'within3d':
-          where.shipmentDate = { gte: now, lte: in3dEod };
-          where.status = 'awaiting_deliver';
-          break;
+      where.shipmentDate = buildShipmentDeadlineRange(query.shipmentUrgency, now);
+      if (!query.status) {
+        where.status = { in: ['awaiting_packaging', 'awaiting_deliver'] };
       }
+      const candidateOrders = await prisma.order.findMany({
+        where: where as any,
+        select: {
+          id: true,
+          status: true,
+          subStatus: true,
+          shipmentDate: true,
+          deliveringDate: true,
+          deliveredAt: true,
+        },
+      });
+      where.id = { in: filterOrderIdsByShipmentUrgency(candidateOrders, query.shipmentUrgency, now) };
     }
 
     if (query.startDate || query.endDate) {
