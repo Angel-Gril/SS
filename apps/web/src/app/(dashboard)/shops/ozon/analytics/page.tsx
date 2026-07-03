@@ -16,6 +16,7 @@ import {
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/use-toast';
+import { OzonExtensionSyncStatus } from '@/components/ozon/extension-sync-status';
 
 interface Shop {
   id: string;
@@ -1059,6 +1060,8 @@ function ShopAnalyticsContent() {
           </select>
         </div>
       </div>
+
+      <OzonExtensionSyncStatus dense />
 
       {/* Tab Switcher */}
       <div className="flex gap-1 border-b">

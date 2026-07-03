@@ -49,6 +49,18 @@ assert.match(
 
 assert.match(
   serviceWorker,
+  /async function readOzonAutoSyncStatus\(\)/,
+  'service worker should expose a read-only Ozon auto sync status helper',
+);
+
+assert.match(
+  serviceWorker,
+  /message\.type === 'ozon-calc:auto-sync-status'[\s\S]{0,220}readOzonAutoSyncStatus\(\)/,
+  'service worker should answer ERP auto sync status requests without forcing maintenance',
+);
+
+assert.match(
+  serviceWorker,
   /SS_ERP_COLLECT_BACKGROUND[\s\S]*syncShopAnalyticsToErp/,
   'auto maintenance should directly call the collect background analytics sync flow',
 );

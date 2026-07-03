@@ -356,7 +356,7 @@ Goal: Move from manual workflows to controlled automation.
 **Verification:**
 - Admin can update homepage content and user dashboard reflects it without redeploy.
 
-- [ ] **Unit 5: Extension Auto-Sync Visibility**
+- [x] **Unit 5: Extension Auto-Sync Visibility**
 
 **Goal:** Expose existing extension auto-sync state in ERP UI before changing sync mechanics.
 

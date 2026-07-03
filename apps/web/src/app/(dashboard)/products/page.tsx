@@ -22,6 +22,7 @@ import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
 import { formatOrderAmount } from '@/lib/utils';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
+import { OzonExtensionSyncStatus } from '@/components/ozon/extension-sync-status';
 
 interface Product {
   id: string;
@@ -397,6 +398,8 @@ function ProductsPageInner() {
           <p className="text-muted-foreground mt-1">查看、编辑价格/库存，批量操作商品</p>
         </div>
       </div>
+
+      <OzonExtensionSyncStatus dense />
 
       <Card>
         <CardContent className="p-4 space-y-3">

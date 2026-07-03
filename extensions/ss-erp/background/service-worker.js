@@ -617,6 +617,31 @@ async function runOzonAutoSyncMaintenance(options) {
   return result;
 }
 
+async function readOzonAutoSyncStatus() {
+  const [connection, stateRow] = await Promise.all([
+    getOzonAutoSyncConnection(),
+    chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]),
+  ]);
+  const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
+    ? { ...stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] }
+    : {};
+  try {
+    const capturedCompanyId = normalizeOzonCompanyIdForSync(
+      await getCapturedOzonCompanyIdForSync() || await readOzonSellerCookieValueFromOpenTabForSync('sc_company_id')
+    );
+    if (capturedCompanyId && !state.lastCompanyId) state.lastCompanyId = capturedCompanyId;
+  } catch (_) {
+    // Status reads must stay non-blocking; the maintenance action performs the real diagnostics.
+  }
+  return {
+    ok: true,
+    hasErpConnection: Boolean(connection.apiBase && connection.token),
+    apiBase: connection.apiBase || '',
+    intervalMinutes: SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES,
+    state,
+  };
+}
+
 if (chrome.alarms && chrome.alarms.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (!alarm || alarm.name !== SS_ERP_OZON_AUTO_SYNC_ALARM_NAME) return;
@@ -2460,6 +2485,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'ozon-calc:auto-sync-maintenance') {
     runOzonAutoSyncMaintenance(message.payload || {}).then((result) => {
+      sendResponse(result);
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ozon-calc:auto-sync-status') {
+    readOzonAutoSyncStatus().then((result) => {
       sendResponse(result);
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
