@@ -15,6 +15,7 @@ import {
 } from '../services/product-sync-metadata.js';
 import type { ProductSyncJobOptions } from '../services/post-publish-sync.js';
 import { getMissingPlatformProductIds, parseOzonDate } from '../services/product-sync-state.js';
+import { upsertSyncedOzonProduct } from '../services/product-sync-upsert.js';
 
 const QUEUE_NAME = 'product-sync';
 
@@ -125,11 +126,15 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
         type_id: info.type_id || productAttributes?.type_id,
       }, warehouseStocks);
       const syncCategory = getProductSyncCategory(syncMeta);
-      await prisma.product.upsert({
-        where: { shopId_platformProductId: { shopId, platformProductId: String(info.id) } },
+      const platformProductId = String(info.id);
+      await upsertSyncedOzonProduct({
+        product: prisma.product,
+        shopId,
+        platformProductId,
+        offerId: info.offer_id,
         create: {
           shopId,
-          platformProductId: String(info.id),
+          platformProductId,
           sku: ozonSku,
           offerId: info.offer_id,
           title: info.name,
