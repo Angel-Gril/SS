@@ -41,6 +41,7 @@ const orderQuerySchema = z.object({
   search: z.string().optional(),
   searchField: z.enum(['all', 'posting', 'tracking', 'sku', 'product', 'purchase']).optional(),
   serviceTagId: z.string().optional(),
+  userColorTagId: z.string().optional(),
   shipmentUrgency: z.enum(['overdue', 'today', 'tomorrow', 'within3d']).optional(),
   hasTracking: z.enum(['yes', 'no']).optional(),
   offset: z.coerce.number().int().min(0).default(0),
@@ -51,6 +52,15 @@ const orderQuerySchema = z.object({
 
 const labelPrintLogsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+const userColorTagsBodySchema = z.object({
+  tagIds: z.array(z.string()),
+});
+
+const batchUserColorTagsBodySchema = z.object({
+  orderIds: z.array(z.string()).min(1, '请提供订单ID'),
+  tagIds: z.array(z.string()),
 });
 
 export function buildOrderCreatedAtRange(startDate?: string, endDate?: string): Record<string, Date> | undefined {
@@ -220,6 +230,88 @@ export async function orderRoutes(app: FastifyInstance) {
     });
   });
 
+  // PUT /api/orders/:id/user-color-tags — 用户个人订单颜色标签，仅自己可见
+  app.put('/:id/user-color-tags', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const parsed = userColorTagsBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const tagIds = Array.from(new Set(parsed.data.tagIds.filter(Boolean)));
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: { shop: { select: { userId: true } } },
+    });
+    if (!order || order.shop.userId !== userId) {
+      return reply.status(404).send({ code: 0, msg: '订单不存在' });
+    }
+
+    if (tagIds.length > 0) {
+      const owned = await prisma.userServiceTag.count({
+        where: { id: { in: tagIds }, userId },
+      });
+      if (owned !== tagIds.length) {
+        return reply.status(400).send({ code: 0, msg: '存在非法标签 ID' });
+      }
+    }
+
+    const updated = await prisma.order.update({
+      where: { id },
+      data: { userColorTags: tagIds },
+      select: { id: true, userColorTags: true },
+    });
+
+    return reply.send({ code: 1, msg: '已保存', data: updated });
+  });
+
+  // POST /api/orders/batch-user-color-tags — 批量设置用户个人订单颜色标签
+  app.post('/batch-user-color-tags', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = batchUserColorTagsBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const orderIds = Array.from(new Set(parsed.data.orderIds.filter(Boolean)));
+    const tagIds = Array.from(new Set(parsed.data.tagIds.filter(Boolean)));
+    if (orderIds.length === 0) {
+      return reply.status(400).send({ code: 0, msg: '请提供订单ID' });
+    }
+
+    if (tagIds.length > 0) {
+      const owned = await prisma.userServiceTag.count({
+        where: { id: { in: tagIds }, userId },
+      });
+      if (owned !== tagIds.length) {
+        return reply.status(400).send({ code: 0, msg: '存在非法标签 ID' });
+      }
+    }
+
+    const userShops = await prisma.shop.findMany({ where: { userId }, select: { id: true } });
+    const shopIds = userShops.map((s) => s.id);
+    const orders = await prisma.order.findMany({
+      where: { id: { in: orderIds }, shopId: { in: shopIds } },
+      select: { id: true },
+    });
+    const validIds = orders.map((order) => order.id);
+    if (validIds.length === 0) {
+      return reply.send({ code: 1, msg: '没有可更新的订单', data: { updated: 0 } });
+    }
+
+    const result = await prisma.order.updateMany({
+      where: { id: { in: validIds } },
+      data: { userColorTags: tagIds },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: `批量颜色标签完成: ${result.count} 个订单已更新`,
+      data: { updated: result.count },
+    });
+  });
+
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
     const query = orderQuerySchema.parse(request.query);
@@ -289,6 +381,10 @@ export async function orderRoutes(app: FastifyInstance) {
 
     if (query.serviceTagId) {
       where.serviceTags = { array_contains: [query.serviceTagId] };
+    }
+
+    if (query.userColorTagId) {
+      where.userColorTags = { array_contains: [query.userColorTagId] };
     }
 
     if (query.hasTracking === 'yes') {
@@ -394,6 +490,7 @@ export async function orderRoutes(app: FastifyInstance) {
           purchaseOrderId: true,
           purchasePlatform: true,
           serviceTags: true,
+          userColorTags: true,
           serviceFee: true,
           inspectionStatus: true,
           shop: { select: { name: true, platform: true } },

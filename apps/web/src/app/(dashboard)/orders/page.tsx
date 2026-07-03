@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink } from 'lucide-react';
+import { RefreshCw, Loader2, Package, Truck, CheckCircle, XCircle, Clock, Send, Ban, FileDown, Printer, Tag, AlertTriangle, Warehouse, Plane, ShoppingCart, ExternalLink, Palette } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -20,8 +20,9 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
-import { formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
+import { cn, formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
+import { defaultTrackUrl } from '@/lib/tracking';
 import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
 import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 
@@ -52,6 +53,7 @@ interface Order {
   purchaseOrderId: string | null;
   purchasePlatform: string | null;
   serviceTags: string[] | null;
+  userColorTags: string[] | null;
   serviceFee: number | null;
   inspectionStatus: string | null;
   warehouseScanInAt: string | null;
@@ -67,6 +69,14 @@ interface ServiceTag {
   description: string | null;
   fee: string;
   needInspection: boolean;
+}
+
+interface UserColorTag {
+  id: string;
+  name: string;
+  color: string;
+  description: string | null;
+  sortOrder: number;
 }
 
 interface PipelineStage {
@@ -115,6 +125,23 @@ const PIPELINE_LABELS: Record<string, string> = {
   abnormal: '异常',
 };
 
+function getOzonProductUrl(item: any): string | null {
+  const rawId = item?.sku ?? item?.product_id ?? item?.productId;
+  const id = rawId == null ? '' : String(rawId).trim();
+  if (!/^\d+$/.test(id)) return null;
+  return `https://www.ozon.ru/product/${id}`;
+}
+
+function formatCompactDate(value: string | Date): string {
+  const d = typeof value === 'string' ? new Date(value) : value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+}
+
 function ProductImagePreview({ items }: { items: any[] }) {
   const [hover, setHover] = useState(false);
   if (!items || items.length === 0) return <span className="text-muted-foreground">-</span>;
@@ -123,10 +150,10 @@ function ProductImagePreview({ items }: { items: any[] }) {
   const imageUrl = firstItem?.image || firstItem?.primary_image || firstItem?.picture || firstItem?.images?.[0];
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-[250px] items-start gap-2">
       {imageUrl ? (
         <div className="relative" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-          <img src={imageUrl} alt="" className="w-10 h-10 rounded border object-cover shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          <img src={imageUrl} alt="" className="w-11 h-11 rounded border object-cover shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           {hover && (
             <div className="absolute z-50 left-12 top-0 p-1 bg-background border rounded-lg shadow-xl">
               <img src={imageUrl} alt="" className="w-[180px] h-[180px] rounded object-contain" />
@@ -135,10 +162,26 @@ function ProductImagePreview({ items }: { items: any[] }) {
           )}
         </div>
       ) : null}
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="min-w-0 flex-1 space-y-1">
         {items.slice(0, 2).map((item: any, i: number) => (
           <div key={i} className="min-w-0">
-            <div className="truncate text-xs font-medium">{item.name} x{item.quantity}</div>
+            <div className="flex min-w-0 items-start gap-1.5">
+              {getOzonProductUrl(item) ? (
+                <a
+                  href={getOzonProductUrl(item)!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="min-w-0 truncate text-xs font-medium leading-5 hover:text-primary hover:underline"
+                  title={item.name}
+                >
+                  {item.name || '-'}
+                </a>
+              ) : (
+                <div className="min-w-0 truncate text-xs font-medium leading-5" title={item.name}>{item.name || '-'}</div>
+              )}
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">x{item.quantity || 1}</span>
+            </div>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
               {(item.offer_id || item.offerId) && <span>Offer {item.offer_id || item.offerId}</span>}
               {item.sku && <span>SKU {item.sku}</span>}
@@ -233,8 +276,11 @@ export default function OrdersPage() {
   const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [pipelineActive, setPipelineActive] = useState<string | null>(null);
   const [serviceTags, setServiceTags] = useState<ServiceTag[]>([]);
+  const [userColorTags, setUserColorTags] = useState<UserColorTag[]>([]);
   const [tagDialogOrder, setTagDialogOrder] = useState<Order | null>(null);
+  const [userTagDialogOrder, setUserTagDialogOrder] = useState<Order | null>(null);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
+  const [batchUserTagDialogOpen, setBatchUserTagDialogOpen] = useState(false);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
 
   const [status, setStatus] = useState('');
@@ -243,6 +289,7 @@ export default function OrdersPage() {
   const [searchInput, setSearchInput] = useState('');
   const [searchField, setSearchField] = useState<'all' | 'posting' | 'tracking' | 'sku' | 'product' | 'purchase'>('all');
   const [serviceTagId, setServiceTagId] = useState('');
+  const [userColorTagId, setUserColorTagId] = useState('');
   const [shipmentUrgency, setShipmentUrgency] = useState<'' | 'overdue' | 'today' | 'tomorrow' | 'within3d'>('');
   const [hasTracking, setHasTracking] = useState<'' | 'yes' | 'no'>('');
   const [startDate, setStartDate] = useState(() => {
@@ -273,6 +320,9 @@ export default function OrdersPage() {
     api.get<ServiceTag[]>('/api/orders/service-tags').then((res) => {
       if (res.code === 1 && res.data) setServiceTags(res.data);
     });
+    api.get<UserColorTag[]>('/api/user-service-tags').then((res) => {
+      if (res.code === 1 && res.data) setUserColorTags(res.data);
+    });
   }, [loadPipeline]);
 
   async function loadOrders() {
@@ -286,6 +336,7 @@ export default function OrdersPage() {
     if (search) params.set('search', search);
     if (search && searchField !== 'all') params.set('searchField', searchField);
     if (serviceTagId) params.set('serviceTagId', serviceTagId);
+    if (userColorTagId) params.set('userColorTagId', userColorTagId);
     if (shipmentUrgency) params.set('shipmentUrgency', shipmentUrgency);
     if (hasTracking) params.set('hasTracking', hasTracking);
     if (startDate) params.set('startDate', startDate);
@@ -302,7 +353,7 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders();
-  }, [status, shopId, search, searchField, serviceTagId, shipmentUrgency, hasTracking, page, startDate, endDate, pipelineActive]);
+  }, [status, shopId, search, searchField, serviceTagId, userColorTagId, shipmentUrgency, hasTracking, page, startDate, endDate, pipelineActive]);
 
   function handleSync(fullSync = false) {
     if (!shopId && shops.length === 0) {
@@ -519,12 +570,24 @@ export default function OrdersPage() {
             </form>
 
             <select
+              value={userColorTagId}
+              onChange={(e) => { setUserColorTagId(e.target.value); setPage(0); }}
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              title="按个人标记筛选"
+            >
+              <option value="">个人标记</option>
+              {userColorTags.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+
+            <select
               value={serviceTagId}
               onChange={(e) => { setServiceTagId(e.target.value); setPage(0); }}
               className="h-9 rounded-md border border-input bg-background px-2 text-sm"
               title="按服务标签筛选"
             >
-              <option value="">全部标签</option>
+              <option value="">服务标签</option>
               {serviceTags.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
@@ -561,9 +624,13 @@ export default function OrdersPage() {
           {selectedOrders.size > 0 && (
             <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
               <span className="text-sm text-muted-foreground">已选 {selectedOrders.size} 项</span>
+              <Button size="sm" variant="outline" onClick={() => setBatchUserTagDialogOpen(true)}>
+                <Palette className="h-3.5 w-3.5" />
+                批量个人标记
+              </Button>
               <Button size="sm" variant="outline" onClick={() => setBatchTagDialogOpen(true)}>
                 <Tag className="h-3.5 w-3.5" />
-                批量打标签
+                批量服务标签
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setSelectedOrders(new Set())}>
                 取消选择
@@ -584,7 +651,7 @@ export default function OrdersPage() {
               暂无订单数据。请先同步订单。
             </div>
           ) : (
-            <Table>
+            <Table className="min-w-[1040px] text-xs">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10">
@@ -595,15 +662,15 @@ export default function OrdersPage() {
                       className="rounded border-input"
                     />
                   </TableHead>
-                  <TableHead>订单 / 店铺</TableHead>
-                  <TableHead>商品</TableHead>
-                  <TableHead className="text-right">金额</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>标签</TableHead>
-                  <TableHead>物流</TableHead>
-                  <TableHead>面单打印</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableHead className="w-[110px]">订单 / 店铺</TableHead>
+                  <TableHead className="w-[290px]">商品信息</TableHead>
+                  <TableHead className="w-[78px] text-right">金额</TableHead>
+                  <TableHead className="w-[60px]">状态</TableHead>
+                  <TableHead className="w-[65px]">个人标记</TableHead>
+                  <TableHead className="w-[65px]">服务标签</TableHead>
+                  <TableHead className="w-[125px]">物流</TableHead>
+                  <TableHead className="w-[90px]">时间</TableHead>
+                  <TableHead className="w-[60px] text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -611,9 +678,12 @@ export default function OrdersPage() {
                   const canShip = order.status === 'awaiting_packaging' || order.status === 'awaiting_deliver';
                   const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
                   const orderTags = order.serviceTags || [];
+                  const userTags = order.userColorTags || [];
+                  const primaryTracking = order.trackingNumber || order.internationalTrackingNumber || order.postingNumber;
+                  const externalTrackNumber = order.trackingNumber || order.internationalTrackingNumber;
                   return (
-                    <TableRow key={order.id}>
-                      <TableCell>
+                    <TableRow key={order.id} className="align-top">
+                      <TableCell className="px-3 py-2">
                         <input
                           type="checkbox"
                           checked={selectedOrders.has(order.id)}
@@ -621,25 +691,25 @@ export default function OrdersPage() {
                           className="rounded border-input"
                         />
                       </TableCell>
-                      <TableCell className="text-xs">
+                      <TableCell className="px-3 py-2 text-xs">
                         <button
                           type="button"
-                          className="font-mono text-left hover:text-primary hover:underline"
+                          className="font-mono text-left text-[12px] font-medium hover:text-primary hover:underline"
                           onClick={() => setDetailOrderId(order.id)}
                         >
                           {order.postingNumber || order.platformOrderId}
                         </button>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="text-[10px]">{order.shop.platform}</Badge>
-                          <span className="text-muted-foreground">{order.shop.name}</span>
+                          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{order.shop.platform}</Badge>
+                          <span className="max-w-[120px] truncate text-muted-foreground" title={order.shop.name}>{order.shop.name}</span>
                         </div>
                       </TableCell>
-                      <TableCell className="max-w-xs">
+                      <TableCell className="px-3 py-2">
                         {order.items && Array.isArray(order.items) ? (
                           <ProductImagePreview items={order.items as any[]} />
                         ) : '-'}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">
+                      <TableCell className="px-3 py-2 text-right tabular-nums font-medium">
                         {(() => {
                           const f = formatOrderAmount(order.totalAmount, order.currency, order.totalAmountCny);
                           return (
@@ -654,13 +724,43 @@ export default function OrdersPage() {
                           );
                         })()}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="px-3 py-2">
                         <div className="space-y-1">
                           <OrderStatusBadge status={order.status} />
                           <ShipmentCountdownMini shipmentDate={order.shipmentDate} status={order.status} />
                         </div>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-1">
+                          {userTags.length > 0 ? (
+                            userTags.map((tagId) => {
+                              const tag = userColorTags.find((t) => t.id === tagId);
+                              if (!tag) return null;
+                              return (
+                                <span
+                                  key={tagId}
+                                  className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                                  style={{ backgroundColor: `${tag.color}1F`, color: tag.color }}
+                                >
+                                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
+                                  {tag.name}
+                                </span>
+                              );
+                            })
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">未标记</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setUserTagDialogOrder(order)}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            title="设置个人标记"
+                          >
+                            <Palette className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </TableCell>
+                      <TableCell className="px-3 py-2">
                         <div className="flex items-center gap-1 flex-wrap">
                           {orderTags.length > 0 ? (
                             orderTags.map((tagId) => {
@@ -677,18 +777,20 @@ export default function OrdersPage() {
                                 </span>
                               );
                             })
-                          ) : null}
+                          ) : (
+                            <span className="text-[11px] text-muted-foreground">未设置</span>
+                          )}
                           <button
                             type="button"
                             onClick={() => setTagDialogOrder(order)}
                             className="inline-flex items-center justify-center w-5 h-5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                            title="打标签"
+                            title="设置服务标签"
                           >
                             <Tag className="h-3 w-3" />
                           </button>
                         </div>
                       </TableCell>
-                      <TableCell className="text-xs">
+                      <TableCell className="px-3 py-2 text-xs">
                         {(() => {
                           const meta = describeSubstatus(order.subStatus);
                           const fulfillmentStage = resolveOrderFulfillmentStage(order);
@@ -705,11 +807,11 @@ export default function OrdersPage() {
 
                           // 判断显示哪些跟踪链接
                           const hasDomesticTracking = !!order.domesticTrackingNumber;
-                          const hasInternationalTracking = !!order.trackingNumber;
+                          const hasInternationalTracking = !!externalTrackNumber;
 
                           return (
                             <div className="space-y-1">
-                              <Badge variant={fulfillmentStage.variant}>{fulfillmentStage.label}</Badge>
+                              <Badge variant={fulfillmentStage.variant} className="h-5 px-1.5 text-[10px]">{fulfillmentStage.label}</Badge>
                               {showStatus && (
                                 <div className="text-xs">
                                   <div className="font-medium">{meta.text}</div>
@@ -717,6 +819,22 @@ export default function OrdersPage() {
                                     <div className="text-muted-foreground">{formattedTime}</div>
                                   )}
                                 </div>
+                              )}
+                              {primaryTracking && (
+                                <a
+                                  href={defaultTrackUrl(primaryTracking)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex max-w-[110px] items-center gap-1 rounded border bg-background px-1.5 py-0.5 font-mono text-[11px] hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                                  title="打开 Ozon 物流追踪"
+                                >
+                                  <span className="truncate">{primaryTracking}</span>
+                                  <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                                </a>
+                              )}
+                              {order.shippingMethod && (
+                                <div className="truncate text-[10px] text-muted-foreground" title={order.shippingMethod}>{order.shippingMethod}</div>
                               )}
                               <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
                                 {/* 国内物流：显示菜鸟国际 */}
@@ -737,7 +855,7 @@ export default function OrdersPage() {
                                 {hasInternationalTracking && (
                                   <>
                                     <a
-                                      href={`https://tracking.ozon.ru/?track=${encodeURIComponent(order.trackingNumber!)}&local=zh-Hans`}
+                                      href={defaultTrackUrl(primaryTracking!)}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       onClick={(e) => e.stopPropagation()}
@@ -748,7 +866,7 @@ export default function OrdersPage() {
                                       <ExternalLink className="h-2.5 w-2.5" />
                                     </a>
                                     <a
-                                      href={`https://t.17track.net/zh-cn#nums=${encodeURIComponent(order.trackingNumber!)}`}
+                                      href={`https://t.17track.net/zh-cn#nums=${encodeURIComponent(externalTrackNumber!)}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       onClick={(e) => e.stopPropagation()}
@@ -765,13 +883,14 @@ export default function OrdersPage() {
                           );
                         })()}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {order.labelPrintedAt ? formatDate(order.labelPrintedAt) : '-'}
+                      <TableCell className="px-3 py-2 text-xs text-muted-foreground">
+                        <div className="space-y-1">
+                          <div><span className="text-muted-foreground/80">创建</span> {formatCompactDate(order.createdAt)}</div>
+                          {order.labelPrintedAt && <div><span className="text-muted-foreground/80">面单</span> {formatCompactDate(order.labelPrintedAt)}</div>}
+                          {order.shipmentDate && <div><span className="text-muted-foreground/80">发货</span> {formatCompactDate(order.shipmentDate)}</div>}
+                        </div>
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {formatDate(order.createdAt)}
-                      </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             size="icon"
@@ -854,12 +973,25 @@ export default function OrdersPage() {
         onClose={() => setTagDialogOrder(null)}
         onSuccess={() => { setTagDialogOrder(null); loadOrders(); }}
       />
+      <UserColorTagDialog
+        order={userTagDialogOrder}
+        tags={userColorTags}
+        onClose={() => setUserTagDialogOrder(null)}
+        onSuccess={() => { setUserTagDialogOrder(null); loadOrders(); }}
+      />
       <BatchServiceTagDialog
         open={batchTagDialogOpen}
         orderIds={Array.from(selectedOrders)}
         tags={serviceTags}
         onClose={() => setBatchTagDialogOpen(false)}
         onSuccess={() => { setBatchTagDialogOpen(false); setSelectedOrders(new Set()); loadOrders(); }}
+      />
+      <BatchUserColorTagDialog
+        open={batchUserTagDialogOpen}
+        orderIds={Array.from(selectedOrders)}
+        tags={userColorTags}
+        onClose={() => setBatchUserTagDialogOpen(false)}
+        onSuccess={() => { setBatchUserTagDialogOpen(false); setSelectedOrders(new Set()); loadOrders(); }}
       />
       <OzonSyncActionDialog
         open={syncDialogOpen}
@@ -1476,6 +1608,92 @@ function StatMini({ label, value, highlight }: { label: string; value: string; h
   );
 }
 
+function UserColorTagDialog({ order, tags, onClose, onSuccess }: {
+  order: Order | null;
+  tags: UserColorTag[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setSelectedTags(new Set(order?.userColorTags || []));
+  }, [order?.id]);
+
+  function toggleTag(tagId: string) {
+    setSelectedTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagId)) next.delete(tagId);
+      else next.add(tagId);
+      return next;
+    });
+  }
+
+  async function handleSubmit() {
+    if (!order) return;
+    setSubmitting(true);
+    const res = await api.put(`/api/orders/${order.id}/user-color-tags`, {
+      tagIds: Array.from(selectedTags),
+    });
+    setSubmitting(false);
+    if (res.code === 1) {
+      toast({ title: '个人标记已保存' });
+      onSuccess();
+    } else {
+      toast({ title: res.msg || '保存失败', variant: 'destructive' });
+    }
+  }
+
+  return (
+    <Dialog open={!!order} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>设置个人标记</DialogTitle>
+        </DialogHeader>
+        {order && (
+          <div className="space-y-4">
+            <div className="text-sm">
+              <span className="text-muted-foreground">订单号：</span>
+              <span className="font-mono">{order.postingNumber || order.platformOrderId}</span>
+            </div>
+            {tags.length === 0 ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                暂无个人颜色标签，可先到“我的颜色标签”创建。
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {tags.map((tag) => (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() => toggleTag(tag.id)}
+                    className={cn(
+                      'flex items-center gap-2 rounded-md border p-2 text-left text-sm transition-colors',
+                      selectedTags.has(tag.id) ? 'border-primary bg-primary/5' : 'border-input hover:bg-muted',
+                    )}
+                  >
+                    <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} />
+                    <span className="min-w-0 truncate font-medium">{tag.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">个人标记只影响你自己的订单视图，不会进入仓库服务费和验视流程。</p>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palette className="h-4 w-4" />}
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ServiceTagDialog({ order, tags, onClose, onSuccess }: {
   order: Order | null;
   tags: ServiceTag[];
@@ -1668,6 +1886,90 @@ function BatchServiceTagDialog({ open, orderIds, tags, onClose, onSuccess }: {
           <Button onClick={handleSubmit} disabled={submitting || selectedTags.size === 0}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tag className="h-4 w-4" />}
             确认打标签
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BatchUserColorTagDialog({ open, orderIds, tags, onClose, onSuccess }: {
+  open: boolean;
+  orderIds: string[];
+  tags: UserColorTag[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) setSelectedTags(new Set());
+  }, [open]);
+
+  function toggleTag(tagId: string) {
+    setSelectedTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagId)) next.delete(tagId);
+      else next.add(tagId);
+      return next;
+    });
+  }
+
+  async function handleSubmit() {
+    if (orderIds.length === 0) return;
+    setSubmitting(true);
+    const res = await api.post('/api/orders/batch-user-color-tags', {
+      orderIds,
+      tagIds: Array.from(selectedTags),
+    });
+    setSubmitting(false);
+    if (res.code === 1) {
+      toast({ title: res.msg || '批量个人标记完成' });
+      onSuccess();
+    } else {
+      toast({ title: res.msg || '操作失败', variant: 'destructive' });
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>批量个人标记</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="text-sm text-muted-foreground">
+            将为 {orderIds.length} 个订单设置个人标记；不选择任何标签即清空个人标记。
+          </div>
+          {tags.length === 0 ? (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              暂无个人颜色标签，可先到“我的颜色标签”创建。
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {tags.map((tag) => (
+                <button
+                  key={tag.id}
+                  type="button"
+                  onClick={() => toggleTag(tag.id)}
+                  className={cn(
+                    'flex items-center gap-2 rounded-md border p-2 text-left text-sm transition-colors',
+                    selectedTags.has(tag.id) ? 'border-primary bg-primary/5' : 'border-input hover:bg-muted',
+                  )}
+                >
+                  <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: tag.color }} />
+                  <span className="min-w-0 truncate font-medium">{tag.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>取消</Button>
+          <Button onClick={handleSubmit} disabled={submitting || orderIds.length === 0}>
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Palette className="h-4 w-4" />}
+            确认
           </Button>
         </DialogFooter>
       </DialogContent>
