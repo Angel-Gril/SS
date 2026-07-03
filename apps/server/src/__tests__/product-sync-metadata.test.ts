@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildProductSyncMeta,
+  buildProductStatusCounts,
   getOzonStatusDisplay,
+  getProductStatusBucket,
   getWarehouseStock,
   matchesProductListComputedFilters,
   normalizeOzonSku,
@@ -140,5 +142,29 @@ describe('product sync metadata helpers', () => {
       warehouseId: '10',
       warehouseStockMode: 'in_stock',
     })).toBe(true);
+  });
+
+  it('counts product status buckets for product list tabs', () => {
+    const rows = [
+      { visibility: 'VISIBLE', syncStatus: 'SYNCED' },
+      { visibility: 'ARCHIVED', syncStatus: 'SYNCED' },
+      { visibility: 'MISSING', syncStatus: 'SYNCED' },
+      { visibility: 'VISIBLE', syncStatus: 'MISSING' },
+      { visibility: 'visible', syncStatus: null },
+    ];
+
+    expect(rows.map(getProductStatusBucket)).toEqual([
+      'current',
+      'archived',
+      'missing',
+      'missing',
+      'current',
+    ]);
+    expect(buildProductStatusCounts(rows)).toEqual({
+      current: 2,
+      archived: 1,
+      missing: 2,
+      all: 5,
+    });
   });
 });

@@ -5,10 +5,13 @@ import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import {
+  buildProductStatusCounts,
   getOzonStatusDisplay,
   getWarehouseStock,
   matchesProductListComputedFilters,
+  matchesProductStatusFilter,
   normalizeOzonSku,
+  type ProductStatusFilter,
   type WarehouseStockMode,
 } from '../services/product-sync-metadata.js';
 import {
@@ -52,6 +55,45 @@ function parseOptionalFiniteNumber(value: unknown): number | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+const PRODUCT_STATUS_FILTERS: ProductStatusFilter[] = ['current', 'archived', 'missing', 'all'];
+
+function productStatusWhere(statusFilter: ProductStatusFilter): Record<string, unknown> | null {
+  if (statusFilter === 'all') return null;
+  if (statusFilter === 'current') {
+    return {
+      NOT: [
+        { visibility: { in: ['ARCHIVED', 'archived', 'MISSING', 'missing'] } },
+        { syncStatus: { in: ['MISSING', 'missing'] } },
+      ],
+    };
+  }
+  if (statusFilter === 'archived') {
+    return { visibility: { in: ['ARCHIVED', 'archived'] } };
+  }
+  return {
+    OR: [
+      { visibility: { in: ['MISSING', 'missing'] } },
+      { syncStatus: { in: ['MISSING', 'missing'] } },
+    ],
+  };
+}
+
+function appendProductAndFilter(where: Record<string, unknown>, filter: Record<string, unknown> | null): Record<string, unknown> {
+  if (!filter) return where;
+  const existing = Array.isArray(where.AND) ? where.AND as Record<string, unknown>[] : [];
+  return { ...where, AND: [...existing, filter] };
+}
+
+async function countProductStatusTabs(baseWhere: Record<string, unknown>) {
+  const [current, archived, missing, all] = await Promise.all([
+    prisma.product.count({ where: appendProductAndFilter(baseWhere, productStatusWhere('current')) as any }),
+    prisma.product.count({ where: appendProductAndFilter(baseWhere, productStatusWhere('archived')) as any }),
+    prisma.product.count({ where: appendProductAndFilter(baseWhere, productStatusWhere('missing')) as any }),
+    prisma.product.count({ where: baseWhere as any }),
+  ]);
+  return { current, archived, missing, all };
 }
 
 export async function shopRoutes(app: FastifyInstance) {
@@ -1035,8 +1077,8 @@ export async function shopRoutes(app: FastifyInstance) {
     const hasComputedFilters = Object.entries(computedFilters).some(([key, value]) => (
       key === 'warehouseStockMode' ? value !== 'all' : key !== 'warehouseId' && value != null
     ));
-    const statusFilter = ['current', 'archived', 'missing', 'all'].includes(query.statusFilter || '')
-      ? query.statusFilter!
+    const statusFilter = PRODUCT_STATUS_FILTERS.includes(query.statusFilter as ProductStatusFilter)
+      ? query.statusFilter! as ProductStatusFilter
       : 'current';
 
     const andFilters: Record<string, unknown>[] = [];
@@ -1047,25 +1089,9 @@ export async function shopRoutes(app: FastifyInstance) {
         { offerId: { contains: search, mode: 'insensitive' } },
       ] });
     }
-    if (statusFilter === 'current') {
-      andFilters.push({
-        NOT: [
-          { visibility: { in: ['ARCHIVED', 'archived', 'MISSING', 'missing'] } },
-          { syncStatus: { in: ['MISSING', 'missing'] } },
-        ],
-      });
-    } else if (statusFilter === 'archived') {
-      andFilters.push({ visibility: { in: ['ARCHIVED', 'archived'] } });
-    } else if (statusFilter === 'missing') {
-      andFilters.push({
-        OR: [
-          { visibility: { in: ['MISSING', 'missing'] } },
-          { syncStatus: { in: ['MISSING', 'missing'] } },
-        ],
-      });
-    }
-    const where: Record<string, unknown> = { shopId: id };
-    if (andFilters.length) where.AND = andFilters;
+    const baseWhere: Record<string, unknown> = { shopId: id };
+    if (andFilters.length) baseWhere.AND = andFilters;
+    const where = appendProductAndFilter(baseWhere, productStatusWhere(statusFilter));
 
     const productSelect = {
       id: true,
@@ -1099,18 +1125,21 @@ export async function shopRoutes(app: FastifyInstance) {
 
     let total: number;
     let rows: any[];
+    let statusCounts: { current: number; archived: number; missing: number; all: number };
     if (hasComputedFilters) {
       const allRows = await prisma.product.findMany({
-        where: where as any,
+        where: baseWhere as any,
         orderBy: productOrderBy,
         select: productSelect,
       });
       const filtered = allRows.filter((row) => matchesProductListComputedFilters(row, computedFilters));
-      total = filtered.length;
-      rows = filtered.slice(offset, offset + limit);
+      statusCounts = buildProductStatusCounts(filtered);
+      const statusRows = filtered.filter((row) => matchesProductStatusFilter(row, statusFilter));
+      total = statusCounts[statusFilter];
+      rows = statusRows.slice(offset, offset + limit);
     } else {
-      [total, rows] = await Promise.all([
-        prisma.product.count({ where: where as any }),
+      [statusCounts, rows] = await Promise.all([
+        countProductStatusTabs(baseWhere),
         prisma.product.findMany({
           where: where as any,
           skip: offset,
@@ -1119,6 +1148,7 @@ export async function shopRoutes(app: FastifyInstance) {
           select: productSelect,
         }),
       ]);
+      total = statusCounts[statusFilter];
     }
 
     return reply.send({
@@ -1146,6 +1176,7 @@ export async function shopRoutes(app: FastifyInstance) {
         }),
         lastSyncAt: shop.lastSyncAt,
         statusFilter,
+        statusCounts,
       },
     });
   });

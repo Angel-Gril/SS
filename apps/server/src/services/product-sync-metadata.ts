@@ -18,6 +18,15 @@ export interface ProductSyncMeta {
 
 export type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
 export type WarehouseStockMode = 'all' | 'in_stock' | 'out_of_stock';
+export type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
+export type ProductStatusBucket = Exclude<ProductStatusFilter, 'all'>;
+
+export interface ProductStatusCounts {
+  current: number;
+  archived: number;
+  missing: number;
+  all: number;
+}
 
 export interface ProductListComputedFilters {
   priceMin?: number | null;
@@ -37,10 +46,49 @@ interface ProductListFilterTarget {
   variants?: unknown;
 }
 
+interface ProductStatusTarget {
+  visibility?: unknown;
+  syncStatus?: unknown;
+}
+
 export function normalizeOzonSku(value: unknown): string | null {
   const sku = String(value ?? '').trim();
   if (!sku || sku === '0') return null;
   return sku;
+}
+
+function statusText(value: unknown): string {
+  return String(value || '').trim().toUpperCase();
+}
+
+function isArchivedProduct(product: ProductStatusTarget): boolean {
+  return statusText(product.visibility) === 'ARCHIVED';
+}
+
+function isMissingProduct(product: ProductStatusTarget): boolean {
+  return statusText(product.visibility) === 'MISSING' || statusText(product.syncStatus) === 'MISSING';
+}
+
+export function getProductStatusBucket(product: ProductStatusTarget): ProductStatusBucket {
+  if (isArchivedProduct(product)) return 'archived';
+  if (isMissingProduct(product)) return 'missing';
+  return 'current';
+}
+
+export function matchesProductStatusFilter(product: ProductStatusTarget, filter: ProductStatusFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'archived') return isArchivedProduct(product);
+  if (filter === 'missing') return isMissingProduct(product);
+  return !isArchivedProduct(product) && !isMissingProduct(product);
+}
+
+export function buildProductStatusCounts(products: ProductStatusTarget[]): ProductStatusCounts {
+  return {
+    current: products.filter((product) => matchesProductStatusFilter(product, 'current')).length,
+    archived: products.filter((product) => matchesProductStatusFilter(product, 'archived')).length,
+    missing: products.filter((product) => matchesProductStatusFilter(product, 'missing')).length,
+    all: products.length,
+  };
 }
 
 const OZON_STATUS_LABELS: Record<string, string> = {

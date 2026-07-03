@@ -389,7 +389,7 @@ Goal: Move from manual workflows to controlled automation.
 **Verification:**
 - Users can see whether automatic Ozon maintenance is working without opening the extension popup.
 
-- [ ] **Unit 6: Product Page Compact Toolbar And Status Tabs**
+- [x] **Unit 6: Product Page Compact Toolbar And Status Tabs**
 
 **Goal:** Improve product page workflow density and operator clarity.
 

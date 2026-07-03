@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   Search, RefreshCw, Loader2, ImageOff, Pencil, Check, X,
-  Archive, ArchiveRestore, Package, DollarSign, Boxes, Upload, AlertTriangle,
-  Save, ImageIcon, Trash2, Plus, Clock,
+  Package, DollarSign, Boxes, Upload, AlertTriangle,
+  Save, ImageIcon, Trash2, Plus, Clock, SlidersHorizontal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -59,6 +59,7 @@ interface ProductListResponse {
   rows: Product[];
   lastSyncAt: string | null;
   statusFilter: ProductStatusFilter;
+  statusCounts?: ProductStatusCounts;
 }
 
 interface Shop {
@@ -73,11 +74,33 @@ interface OzonWarehouse {
 }
 
 type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
+type BatchAction = 'price' | 'stock' | 'archive' | 'restore';
 type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
 type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
 type WarehouseStockMode = 'all' | 'in_stock' | 'out_of_stock';
 
 const PRODUCT_FILTERS_STORAGE_KEY = 'ss-erp:products:filters';
+
+interface ProductStatusCounts {
+  current: number;
+  archived: number;
+  missing: number;
+  all: number;
+}
+
+const EMPTY_STATUS_COUNTS: ProductStatusCounts = {
+  current: 0,
+  archived: 0,
+  missing: 0,
+  all: 0,
+};
+
+const PRODUCT_STATUS_TABS: Array<{ value: ProductStatusFilter; label: string }> = [
+  { value: 'current', label: '当前商品' },
+  { value: 'archived', label: '已归档' },
+  { value: 'missing', label: '同步缺失' },
+  { value: 'all', label: '全部记录' },
+];
 
 const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: string; placeholder: string }[] = [
   { value: 'set', label: '统一价', inputLabel: '新价格 (RUB)', placeholder: '输入统一价格' },
@@ -193,6 +216,9 @@ function ProductsPageInner() {
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [warehouseStockMode, setWarehouseStockMode] = useState<WarehouseStockMode>('all');
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>('current');
+  const [statusCounts, setStatusCounts] = useState<ProductStatusCounts>(EMPTY_STATUS_COUNTS);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
+  const [batchAction, setBatchAction] = useState<BatchAction>('price');
   const [priceMin, setPriceMin] = useState('');
   const [priceMax, setPriceMax] = useState('');
   const [weightMin, setWeightMin] = useState('');
@@ -289,6 +315,7 @@ function ProductsPageInner() {
       setProducts(res.data.rows);
       setTotal(res.data.total);
       setLastProductSyncAt(res.data.lastSyncAt);
+      setStatusCounts(res.data.statusCounts || EMPTY_STATUS_COUNTS);
     }
     setLoading(false);
   }, [filtersRestored, shopId, page, search, selectedWarehouseId, warehouseStockMode, statusFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
@@ -387,8 +414,29 @@ function ProductsPageInner() {
     }
   }
 
+  function handleStatusTab(nextStatus: ProductStatusFilter) {
+    if (nextStatus === statusFilter) return;
+    setStatusFilter(nextStatus);
+    setPage(0);
+    setSelected(new Set());
+  }
+
+  function runBatchAction() {
+    if (batchAction === 'price') {
+      setBatchPriceOpen(true);
+      return;
+    }
+    if (batchAction === 'stock') {
+      setBatchStockOpen(true);
+      return;
+    }
+    handleArchive(batchAction === 'archive');
+  }
+
   const totalPages = Math.ceil(total / limit);
   const selectedCount = selected.size;
+  const hasAdvancedFilters = warehouseStockMode !== 'all'
+    || Boolean(priceMin || priceMax || weightMin || weightMax || stockMin || stockMax);
 
   return (
     <div className="space-y-6">
@@ -402,8 +450,8 @@ function ProductsPageInner() {
       <OzonExtensionSyncStatus dense />
 
       <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center gap-3 flex-wrap">
+        <CardContent className="p-3 md:p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={shopId}
               onChange={(e) => {
@@ -413,7 +461,7 @@ function ProductsPageInner() {
                 setSelectedWarehouseId(null);
                 setWarehouseStockMode('all');
               }}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              className="h-9 min-w-[220px] rounded-md border border-input bg-background px-3 text-sm"
             >
               <option value="">全部店铺</option>
               {shops.map((s) => (
@@ -431,7 +479,7 @@ function ProductsPageInner() {
                   setPage(0);
                   setSelected(new Set());
                 }}
-                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-9 min-w-[220px] rounded-md border border-input bg-background px-3 text-sm"
               >
                 <option value="">库存视图：全部仓库（总库存）</option>
                 {warehouses.map((w) => (
@@ -440,34 +488,12 @@ function ProductsPageInner() {
               </select>
             )}
 
-            <select
-              value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value as ProductStatusFilter); setPage(0); setSelected(new Set()); }}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="current">当前商品</option>
-              <option value="archived">已归档</option>
-              <option value="missing">同步缺失</option>
-              <option value="all">全部记录</option>
-            </select>
-
-            <select
-              value={warehouseStockMode}
-              onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
-              disabled={!selectedWarehouseId}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
-            >
-              <option value="all">仓库库存：全部</option>
-              <option value="in_stock">该仓有库存</option>
-              <option value="out_of_stock">该仓无库存</option>
-            </select>
-
-            <form onSubmit={handleSearch} className="flex items-center gap-2 flex-1 max-w-md">
+            <form onSubmit={handleSearch} className="flex min-w-[260px] flex-1 items-center gap-2 md:max-w-md">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="搜索 SKU / Offer ID / 标题"
-                  className="pl-9"
+                  className="h-9 pl-9"
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                 />
@@ -475,7 +501,7 @@ function ProductsPageInner() {
               <Button type="submit" size="sm" variant="outline">搜索</Button>
             </form>
 
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
               <Button
                 size="sm"
                 variant="outline"
@@ -510,84 +536,173 @@ function ProductsPageInner() {
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 刷新本页
               </Button>
-              <span className="text-sm text-muted-foreground">共 {total} 件</span>
             </div>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <Input
-              type="number"
-              min="0"
-              step="0.01"
-              value={priceMin}
-              onChange={(e) => { setPriceMin(e.target.value); setPage(0); }}
-              placeholder="最低售价"
-            />
-            <Input
-              type="number"
-              min="0"
-              step="0.01"
-              value={priceMax}
-              onChange={(e) => { setPriceMax(e.target.value); setPage(0); }}
-              placeholder="最高售价"
-            />
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              value={weightMin}
-              onChange={(e) => { setWeightMin(e.target.value); setPage(0); }}
-              placeholder="最低重量(g)"
-            />
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              value={weightMax}
-              onChange={(e) => { setWeightMax(e.target.value); setPage(0); }}
-              placeholder="最高重量(g)"
-            />
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              value={stockMin}
-              onChange={(e) => { setStockMin(e.target.value); setPage(0); }}
-              placeholder="最低库存"
-            />
-            <Input
-              type="number"
-              min="0"
-              step="1"
-              value={stockMax}
-              onChange={(e) => { setStockMax(e.target.value); setPage(0); }}
-              placeholder="最高库存"
-            />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+            <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="商品状态筛选">
+              {PRODUCT_STATUS_TABS.map((tab) => {
+                const active = statusFilter === tab.value;
+                return (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => handleStatusTab(tab.value)}
+                    className={`h-8 rounded-md border px-3 text-xs font-medium transition-colors ${
+                      active
+                        ? 'border-primary bg-primary text-primary-foreground'
+                        : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
+                    }`}
+                  >
+                    {tab.label}
+                    <span className={`ml-2 tabular-nums ${active ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                      {statusCounts[tab.value]}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant={advancedFiltersOpen || hasAdvancedFilters ? 'secondary' : 'outline'}
+                onClick={() => setAdvancedFiltersOpen((open) => !open)}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                高级筛选
+                {hasAdvancedFilters && <Badge variant="outline" className="ml-1 h-5 px-1.5 text-[10px]">已启用</Badge>}
+              </Button>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Clock className="h-3.5 w-3.5" />
+                <span>最后同步：{lastProductSyncAt ? formatDateTime(lastProductSyncAt) : '从未同步'}</span>
+                <span className="hidden sm:inline">·</span>
+                <span>当前 {total} 件</span>
+              </div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Clock className="h-3.5 w-3.5" />
-            <span>最后同步：{lastProductSyncAt ? formatDateTime(lastProductSyncAt) : '从未同步'}</span>
-          </div>
+          {advancedFiltersOpen && (
+            <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={warehouseStockMode}
+                  onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
+                  disabled={!selectedWarehouseId}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                >
+                  <option value="all">仓库库存：全部</option>
+                  <option value="in_stock">该仓有库存</option>
+                  <option value="out_of_stock">该仓无库存</option>
+                </select>
+                {!selectedWarehouseId && (
+                  <span className="text-xs text-muted-foreground">选择具体仓库后可按该仓库存筛选</span>
+                )}
+                {hasAdvancedFilters && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setWarehouseStockMode('all');
+                      setPriceMin('');
+                      setPriceMax('');
+                      setWeightMin('');
+                      setWeightMax('');
+                      setStockMin('');
+                      setStockMax('');
+                      setPage(0);
+                      setSelected(new Set());
+                    }}
+                  >
+                    清空筛选
+                  </Button>
+                )}
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={priceMin}
+                  onChange={(e) => { setPriceMin(e.target.value); setPage(0); }}
+                  placeholder="最低售价"
+                  className="h-9"
+                />
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={priceMax}
+                  onChange={(e) => { setPriceMax(e.target.value); setPage(0); }}
+                  placeholder="最高售价"
+                  className="h-9"
+                />
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={weightMin}
+                  onChange={(e) => { setWeightMin(e.target.value); setPage(0); }}
+                  placeholder="最低重量(g)"
+                  className="h-9"
+                />
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={weightMax}
+                  onChange={(e) => { setWeightMax(e.target.value); setPage(0); }}
+                  placeholder="最高重量(g)"
+                  className="h-9"
+                />
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={stockMin}
+                  onChange={(e) => { setStockMin(e.target.value); setPage(0); }}
+                  placeholder="最低库存"
+                  className="h-9"
+                />
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={stockMax}
+                  onChange={(e) => { setStockMax(e.target.value); setPage(0); }}
+                  placeholder="最高库存"
+                  className="h-9"
+                />
+              </div>
+            </div>
+          )}
 
           {selectedCount > 0 && (
-            <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-md">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
               <span className="text-sm font-medium">已选 {selectedCount} 件</span>
-              <Button size="sm" variant="outline" onClick={() => setBatchPriceOpen(true)}>
-                <DollarSign className="h-3.5 w-3.5" /> 批量改价
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setBatchStockOpen(true)}>
-                <Boxes className="h-3.5 w-3.5" /> 批量改库存
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => handleArchive(true)}>
-                <Archive className="h-3.5 w-3.5" /> 下架
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => handleArchive(false)}>
-                <ArchiveRestore className="h-3.5 w-3.5" /> 上架
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-                <X className="h-3.5 w-3.5" /> 取消
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={batchAction}
+                  onChange={(e) => setBatchAction(e.target.value as BatchAction)}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                >
+                  <option value="price">批量改价</option>
+                  <option value="stock">批量改库存</option>
+                  <option value="archive">下架/归档</option>
+                  <option value="restore">上架恢复</option>
+                </select>
+                <Button size="sm" onClick={runBatchAction}>
+                  {batchAction === 'price' && <DollarSign className="h-3.5 w-3.5" />}
+                  {batchAction === 'stock' && <Boxes className="h-3.5 w-3.5" />}
+                  执行
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                  <X className="h-3.5 w-3.5" /> 取消选择
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>
