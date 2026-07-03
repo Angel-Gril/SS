@@ -1214,6 +1214,57 @@ export async function shopRoutes(app: FastifyInstance) {
     const categoryCatalogByKey = new Map(
       categoryCatalogRows.map((row) => [categoryCatalogKey(row.descriptionCategoryId, row.typeId), formatCategoryCatalogLabel(row)]),
     );
+    const platformProductIds = rows
+      .map((row) => String(row.platformProductId || '').trim())
+      .filter((value) => value);
+    const buyerCostByProductId = new Map<string, { priceCny: string; sourcePlatform: string | null }>();
+    if (platformProductIds.length) {
+      const quoteRows = await prisma.sourceQuote.findMany({
+        where: {
+          userId,
+          ozonProductId: { in: platformProductIds },
+          costCny: { not: null },
+        },
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          ozonProductId: true,
+          costCny: true,
+          sourcePlatform: true,
+        },
+      });
+      for (const quote of quoteRows) {
+        const productId = String(quote.ozonProductId || '').trim();
+        if (!productId || buyerCostByProductId.has(productId) || !quote.costCny) continue;
+        buyerCostByProductId.set(productId, {
+          priceCny: quote.costCny.toString(),
+          sourcePlatform: quote.sourcePlatform || null,
+        });
+      }
+      const missingProductIds = platformProductIds.filter((productId) => !buyerCostByProductId.has(productId));
+      if (missingProductIds.length) {
+        const candidateRows = await prisma.sourceCandidate.findMany({
+          where: {
+            userId,
+            ozonProductId: { in: missingProductIds },
+            sourceTotalCost: { not: null },
+          },
+          orderBy: { updatedAt: 'desc' },
+          select: {
+            ozonProductId: true,
+            sourceTotalCost: true,
+            sourcePlatform: true,
+          },
+        });
+        for (const candidate of candidateRows) {
+          const productId = String(candidate.ozonProductId || '').trim();
+          if (!productId || buyerCostByProductId.has(productId) || !candidate.sourceTotalCost) continue;
+          buyerCostByProductId.set(productId, {
+            priceCny: candidate.sourceTotalCost.toString(),
+            sourcePlatform: candidate.sourcePlatform || null,
+          });
+        }
+      }
+    }
 
     return reply.send({
       code: 1,
@@ -1230,6 +1281,7 @@ export async function shopRoutes(app: FastifyInstance) {
           const categoryLabel = descriptionCategoryId && typeId
             ? categoryCatalogByKey.get(categoryCatalogKey(descriptionCategoryId, typeId)) || null
             : null;
+          const buyerCost = r.platformProductId ? buyerCostByProductId.get(String(r.platformProductId)) : null;
           return {
             ...rest,
             sku: normalizeOzonSku(r.sku),
@@ -1240,6 +1292,8 @@ export async function shopRoutes(app: FastifyInstance) {
             oldPrice: r.oldPrice?.toString() ?? null,
             commissionRate: r.commissionRate?.toString() ?? null,
             minPrice: r.minPrice?.toString() ?? null,
+            buyerPriceCny: buyerCost?.priceCny ?? null,
+            buyerSourcePlatform: buyerCost?.sourcePlatform ?? null,
             ozonStatusName: statusDisplay.name,
             ozonStatusDescription: statusDisplay.description,
             ozonModerateStatus: statusDisplay.moderateStatus,

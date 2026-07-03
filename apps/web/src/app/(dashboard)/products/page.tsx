@@ -49,6 +49,8 @@ interface Product {
   categoryLabel?: string | null;
   commissionRate: string | null;
   minPrice: string | null;
+  buyerPriceCny?: string | null;
+  buyerSourcePlatform?: string | null;
   ozonCreatedAt: string | null;
   ozonUpdatedAt: string | null;
   lastOzonSyncAt: string | null;
@@ -183,6 +185,28 @@ function toFiniteNumber(value: unknown): number | null {
   if (value == null || value === '') return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function compactCurrencySymbol(currency?: string | null): string {
+  const code = String(currency || '').trim().toUpperCase();
+  if (code === 'RUB') return '₽';
+  if (code === 'USD') return '$';
+  if (code === 'EUR') return '€';
+  if (code === 'KZT') return '₸';
+  return '¥';
+}
+
+function formatCompactMoney(
+  value: unknown,
+  currency?: string | null,
+  options: { minimumFractionDigits?: number; maximumFractionDigits?: number } = {},
+): string | null {
+  const num = toFiniteNumber(value);
+  if (num == null) return null;
+  return `${compactCurrencySymbol(currency)} ${num.toLocaleString('ru-RU', {
+    minimumFractionDigits: options.minimumFractionDigits ?? 2,
+    maximumFractionDigits: options.maximumFractionDigits ?? 2,
+  })}`;
 }
 
 function isProductMutable(product: Product): boolean {
@@ -734,10 +758,10 @@ function ProductsPageInner() {
             <Table className="min-w-[1460px] table-fixed text-xs">
               <colgroup>
                 <col className="w-[40px]" />
-                <col className="w-[400px]" />
+                <col className="w-[375px]" />
                 <col className="w-[150px]" />
                 <col className="w-[110px]" />
-                <col className="w-[135px]" />
+                <col className="w-[160px]" />
                 <col className="w-[90px]" />
                 <col className="w-[85px]" />
                 <col className="w-[180px]" />
@@ -757,7 +781,12 @@ function ProductsPageInner() {
                   <TableHead className="whitespace-nowrap">商品信息</TableHead>
                   <TableHead className="whitespace-nowrap">类目 / 佣金</TableHead>
                   <TableHead className="whitespace-nowrap">状态</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">价格</TableHead>
+                  <TableHead className="whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      价格
+                      <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                    </div>
+                  </TableHead>
                   <TableHead className="whitespace-nowrap text-right">库存</TableHead>
                   <TableHead className="whitespace-nowrap text-right">重量</TableHead>
                   <TableHead className="whitespace-nowrap">Ozon / 同步</TableHead>
@@ -775,6 +804,11 @@ function ProductsPageInner() {
                   const commissionAmount = priceNumber != null && commissionRate != null
                     ? priceNumber * commissionRate / 100
                     : null;
+                  const salePrice = formatCompactMoney(p.price, p.currency);
+                  const oldPrice = formatCompactMoney(p.oldPrice, p.currency);
+                  const minPrice = formatCompactMoney(p.minPrice, p.currency);
+                  const promoPrice = formatCompactMoney(p.price, p.currency, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                  const buyerPrice = formatCompactMoney(p.buyerPriceCny, 'CNY');
                   return (
                   <TableRow key={p.id} className={selected.has(p.id) ? 'bg-muted/30' : ''}>
                     <TableCell className="px-3 py-2">
@@ -851,7 +885,7 @@ function ProductsPageInner() {
                         ozonStatusTone={p.ozonStatusTone}
                       />
                     </TableCell>
-                    <TableCell className="px-3 py-2 text-right align-top">
+                    <TableCell className="px-3 py-2 align-top">
                       {editingPrice === p.id ? (
                         <div className="flex items-center gap-1 justify-end">
                           <Input
@@ -869,25 +903,59 @@ function ProductsPageInner() {
                           </Button>
                         </div>
                       ) : (
-                        <div
-                          className={`group inline-flex items-center gap-1 ${mutable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-                          onClick={() => {
-                            if (!mutable) {
-                              toast({ title: '商品不可操作，请先同步并确认仍在售', variant: 'destructive' });
-                              return;
-                            }
-                            setEditingPrice(p.id);
-                            setPriceValue(p.price || '');
-                          }}
-                        >
-                          <span className="tabular-nums font-medium">{p.price ? `${p.price} ${p.currency || 'USD'}` : '-'}</span>
-                          <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
+                        <div className={`group flex items-center justify-between gap-2 ${mutable ? '' : 'opacity-60'}`}>
+                          <button
+                            type="button"
+                            className={`min-w-0 flex-1 space-y-1 text-left leading-4 ${mutable ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+                            onClick={() => {
+                              if (!mutable) {
+                                toast({ title: '商品不可操作，请先同步并确认仍在售', variant: 'destructive' });
+                                return;
+                              }
+                              setEditingPrice(p.id);
+                              setPriceValue(p.price || '');
+                            }}
+                          >
+                            <div className="flex items-baseline gap-1 whitespace-nowrap">
+                              <span className="text-muted-foreground">销售价:</span>
+                              <span className="tabular-nums font-semibold text-foreground">{salePrice || '-'}</span>
+                            </div>
+                            <div className="flex items-baseline gap-1 whitespace-nowrap">
+                              <span className="text-muted-foreground">划线价:</span>
+                              <span className="tabular-nums text-muted-foreground line-through decoration-muted-foreground/70">
+                                {oldPrice || '未设置'}
+                              </span>
+                            </div>
+                            <div className="flex items-baseline gap-1 whitespace-nowrap">
+                              <span className="text-muted-foreground">最低价:</span>
+                              <span className="tabular-nums text-muted-foreground">{minPrice || '未设置'}</span>
+                            </div>
+                            <div className="flex items-baseline gap-1 whitespace-nowrap">
+                              <span className="text-muted-foreground">促销后:</span>
+                              <span className="tabular-nums font-medium text-rose-500">{promoPrice || '-'}</span>
+                            </div>
+                            {buyerPrice && (
+                              <div className="flex items-baseline gap-1 whitespace-nowrap text-[10px] text-amber-600">
+                                <span>买手价格:</span>
+                                <span className="tabular-nums">{buyerPrice}</span>
+                              </div>
+                            )}
+                          </button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 shrink-0 p-0 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                            disabled={!mutable}
+                            title="修改价格"
+                            onClick={() => {
+                              setEditingPrice(p.id);
+                              setPriceValue(p.price || '');
+                            }}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
                       )}
-                      <div className="mt-1 space-y-0.5 whitespace-nowrap text-[11px] text-muted-foreground">
-                        <div>折前 {p.oldPrice ? `${p.oldPrice} ${p.currency || 'USD'}` : '-'}</div>
-                        {p.minPrice && <div>最低 {p.minPrice}</div>}
-                      </div>
                     </TableCell>
                     <TableCell className="px-3 py-2 text-right align-top">
                       {editingStock === p.id ? (
