@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { deriveOzonExtensionSyncStatus } from 'shared/ozon-extension-sync-status';
+import {
+  deriveOzonExtensionSyncStatus,
+  formatOzonExtensionBridgeError,
+} from 'shared/ozon-extension-sync-status';
 
 describe('ozon extension sync status', () => {
   it('reports disconnected when the extension is unavailable', () => {
@@ -57,5 +60,11 @@ describe('ozon extension sync status', () => {
     expect(status.overallTone).toBe('danger');
     expect(status.lastError).toBe('Cookie：Failed to get body company ID');
     expect(status.items.find((item) => item.key === 'graphs')?.label).toBe('图表失败');
+  });
+
+  it('normalizes Chrome runtime port errors for ERP extension bridge users', () => {
+    expect(formatOzonExtensionBridgeError('The message port closed before a response was received.')).toBe(
+      '扩展后台暂时未响应，请刷新当前 ERP 页面或在扩展管理页重新加载 SS ERP 扩展。',
+    );
   });
 });

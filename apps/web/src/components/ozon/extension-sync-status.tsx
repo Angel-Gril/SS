@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Cable, Loader2, PlayCircle, RefreshCw } from 'lucide-react';
 import {
   deriveOzonExtensionSyncStatus,
+  formatOzonExtensionBridgeError,
   type OzonExtensionAutoSyncState,
   type OzonExtensionSyncTone,
 } from 'shared/ozon-extension-sync-status';
@@ -53,7 +54,8 @@ function sendToExtension<T>(
       const data = event.data as any;
       if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
       cleanup();
-      resolve((data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse<T>);
+      const response = (data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse<T>;
+      resolve({ ...response, error: response.error ? formatOzonExtensionBridgeError(response.error) : response.error });
     };
 
     timer = window.setTimeout(() => {
@@ -127,6 +129,7 @@ export function OzonExtensionSyncStatus({ className, dense = false }: OzonExtens
   }), [extensionAvailable, rawStatus]);
 
   const visibleError = status.lastError || lastError;
+  const isBridgeUnavailable = !extensionAvailable && !!lastError;
 
   return (
     <Card className={className}>
@@ -177,7 +180,12 @@ export function OzonExtensionSyncStatus({ className, dense = false }: OzonExtens
         </div>
 
         {visibleError && (
-          <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <div className={cn(
+            'rounded-md border px-3 py-2 text-xs',
+            isBridgeUnavailable
+              ? 'border-muted bg-muted/30 text-muted-foreground'
+              : 'border-destructive/20 bg-destructive/5 text-destructive',
+          )}>
             {visibleError}
           </div>
         )}

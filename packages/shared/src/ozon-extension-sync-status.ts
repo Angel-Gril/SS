@@ -65,6 +65,21 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim();
 }
 
+export function formatOzonExtensionBridgeError(value: unknown): string {
+  const message = text(value);
+  if (!message) return '扩展未返回结果';
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('message port closed before a response was received')
+    || lower.includes('receiving end does not exist')
+    || lower.includes('extension context invalidated')
+  ) {
+    return '扩展后台暂时未响应，请刷新当前 ERP 页面或在扩展管理页重新加载 SS ERP 扩展。';
+  }
+  if (lower === 'no response') return '扩展未返回结果，请刷新当前 ERP 页面后重试。';
+  return message;
+}
+
 function numberValue(value: unknown): number | null {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
