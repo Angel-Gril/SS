@@ -6,7 +6,12 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import { calculateBatchPrice } from '../services/product-pricing.js';
 import { getProductMutationBlockReason, resolveOzonBatchUpdateResults } from '../services/product-operations.js';
-import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
+import {
+  buildProductSyncMeta,
+  getProductSyncCategory,
+  resolveOzonProductImages,
+  resolveOzonSalesCommissionPercent,
+} from '../services/product-sync-metadata.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -631,10 +636,9 @@ export async function productRoutes(app: FastifyInstance) {
             const product = products.find((p) => Number(p.platformProductId) === item.product_id);
             if (!product) continue;
 
-            const fbsCommission = item.commissions?.find((c) => c.sale_schema === 'fbs' || c.sale_schema === 'FBS');
-            const commission = fbsCommission || item.commissions?.[0];
-            const commissionRate = commission?.percent ?? null;
-            const minPrice = item.price?.min_price ? parseFloat(item.price.min_price) : null;
+            const commissionRate = resolveOzonSalesCommissionPercent(item);
+            const minPriceValue = Number(item.price?.min_price);
+            const minPrice = Number.isFinite(minPriceValue) && minPriceValue > 0 ? minPriceValue : null;
 
             await prisma.product.update({
               where: { id: product.id },
@@ -896,6 +900,14 @@ export async function productRoutes(app: FastifyInstance) {
       attributes: found.attributes as any,
       images: resolveOzonProductImages(info || {}, found) as any,
     };
+    const syncMeta = buildProductSyncMeta({
+      statuses: (product.variants as any)?.ozonStatus,
+      description_category_id: info?.description_category_id || found.description_category_id,
+      type_id: info?.type_id || found.type_id,
+    }, (product.variants as any)?.ozonStocks || []);
+    const syncCategory = getProductSyncCategory(syncMeta);
+    updateData.variants = { ...((product.variants as any) || {}), ozonCategory: syncMeta.ozonCategory };
+    if (syncCategory) updateData.categoryId = String(syncCategory.descriptionCategoryId);
     if (info) {
       if (info.name) updateData.title = info.name;
       if (info.description) updateData.description = info.description;

@@ -7,9 +7,11 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import {
   buildProductSyncMeta,
+  getProductSyncCategory,
   normalizeOzonSku,
   resolveOzonPackageWeightG,
   resolveOzonProductImages,
+  resolveOzonSalesCommissionPercent,
 } from '../services/product-sync-metadata.js';
 import type { ProductSyncJobOptions } from '../services/post-publish-sync.js';
 import { getMissingPlatformProductIds, parseOzonDate } from '../services/product-sync-state.js';
@@ -113,11 +115,16 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
         ? warehouseStocks.reduce((sum, s) => sum + (Number(s.present) || 0) + (Number(s.reserved) || 0), 0)
         : info.stocks?.stocks?.reduce((sum, s) => sum + s.present, 0) ?? 0;
       const modelId = info.model_info?.model_id ? String(info.model_info.model_id) : null;
-      const syncMeta = buildProductSyncMeta(info, warehouseStocks);
       const productAttributes = attributesByProductId.get(String(info.id));
       const images = resolveOzonProductImages(info, productAttributes);
       const weight = resolveOzonPackageWeightG(productAttributes);
       const ozonSku = normalizeOzonSku(info.sku);
+      const syncMeta = buildProductSyncMeta({
+        ...info,
+        description_category_id: info.description_category_id || productAttributes?.description_category_id,
+        type_id: info.type_id || productAttributes?.type_id,
+      }, warehouseStocks);
+      const syncCategory = getProductSyncCategory(syncMeta);
       await prisma.product.upsert({
         where: { shopId_platformProductId: { shopId, platformProductId: String(info.id) } },
         create: {
@@ -127,6 +134,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           offerId: info.offer_id,
           title: info.name,
           description: info.description || '',
+          categoryId: syncCategory ? String(syncCategory.descriptionCategoryId) : null,
           price: info.price ? parseFloat(info.price) : null,
           oldPrice: info.old_price ? parseFloat(info.old_price) : null,
           currency: info.currency_code || 'RUB',
@@ -146,6 +154,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           sku: ozonSku,
           title: info.name,
           description: info.description || undefined,
+          categoryId: syncCategory ? String(syncCategory.descriptionCategoryId) : undefined,
           price: info.price ? parseFloat(info.price) : null,
           oldPrice: info.old_price ? parseFloat(info.old_price) : null,
           currency: info.currency_code || 'RUB',
@@ -210,10 +219,9 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
       for (const item of priceItems) {
         const product = allProducts.find((p) => Number(p.platformProductId) === item.product_id);
         if (!product) continue;
-        const fbsCommission = item.commissions?.find((c) => c.sale_schema === 'fbs' || c.sale_schema === 'FBS');
-        const commission = fbsCommission || item.commissions?.[0];
-        const commissionRate = commission?.percent ?? null;
-        const minPrice = item.price?.min_price ? parseFloat(item.price.min_price) : null;
+        const commissionRate = resolveOzonSalesCommissionPercent(item);
+        const minPriceValue = Number(item.price?.min_price);
+        const minPrice = Number.isFinite(minPriceValue) && minPriceValue > 0 ? minPriceValue : null;
         await prisma.product.update({
           where: { id: product.id },
           data: {

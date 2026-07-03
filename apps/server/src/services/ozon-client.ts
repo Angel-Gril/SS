@@ -535,11 +535,11 @@ export class OzonClient {
   }
 
   async getProductPrices(productIds: number[]): Promise<OzonProductPrice[]> {
-    const res = await this.request<{ result: { items: OzonProductPrice[] } }>(
-      '/v4/product/info/prices',
+    const res = await this.request<{ items?: OzonProductPrice[]; result?: { items?: OzonProductPrice[] } }>(
+      '/v5/product/info/prices',
       { body: { filter: { product_id: productIds }, limit: 1000 } },
     );
-    return res.result.items;
+    return res.items ?? res.result?.items ?? [];
   }
 
   async getReturnsList(params: {
@@ -1051,8 +1051,15 @@ export interface OzonReturn {
 export interface OzonProductPrice {
   product_id: number;
   offer_id: string;
-  price: { price: string; old_price: string; min_price: string; currency_code: string };
-  commissions: { percent: number; min_value: number; value: number; sale_schema: string; delivery_amount: number; return_amount: number }[];
+  price: { price: string | number; old_price: string | number; min_price: string | number; currency_code: string };
+  commissions:
+    | { percent: number; min_value: number; value: number; sale_schema: string; delivery_amount: number; return_amount: number }[]
+    | {
+      sales_percent_fbo?: number;
+      sales_percent_fbs?: number;
+      sales_percent_rfbs?: number;
+      sales_percent_fbp?: number;
+    };
 }
 
 export interface OzonProductAttributesItem {

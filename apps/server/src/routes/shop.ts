@@ -6,6 +6,7 @@ import { encrypt, decrypt } from '../lib/crypto.js';
 import { OzonClient } from '../services/ozon-client.js';
 import {
   buildProductStatusCounts,
+  getProductSyncCategory,
   getOzonStatusDisplay,
   getWarehouseStock,
   matchesProductListComputedFilters,
@@ -50,6 +51,34 @@ const deactivatePromotionProductsSchema = z.object({
 });
 
 const OZON_VIDEO_PROBE_BODY_LIMIT = 12 * 1024 * 1024;
+
+function positiveInt(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return Math.trunc(num);
+}
+
+function categoryCatalogKey(categoryId: number, typeId: number): string {
+  return `${categoryId}:${typeId}`;
+}
+
+function formatCategoryCatalogLabel(row: {
+  displayPathZh?: string | null;
+  displayPathRu?: string | null;
+  categoryNameZh?: string | null;
+  categoryNameRu?: string | null;
+  typeNameZh?: string | null;
+  typeNameRu?: string | null;
+}): string | null {
+  const direct = String(row.displayPathZh || row.displayPathRu || '').trim();
+  if (direct) return direct;
+  const parts = [
+    row.categoryNameZh || row.categoryNameRu,
+    row.typeNameZh || row.typeNameRu,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return parts.length ? parts.join(' > ') : null;
+}
 
 function parseOptionalFiniteNumber(value: unknown): number | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -1151,6 +1180,41 @@ export async function shopRoutes(app: FastifyInstance) {
       total = statusCounts[statusFilter];
     }
 
+    const categoryPairs = rows.map((row) => {
+      const syncCategory = getProductSyncCategory(row.variants);
+      const descriptionCategoryId = positiveInt(row.categoryId) ?? syncCategory?.descriptionCategoryId ?? null;
+      const typeId = syncCategory?.typeId ?? null;
+      return descriptionCategoryId && typeId ? { descriptionCategoryId, typeId } : null;
+    }).filter((row): row is { descriptionCategoryId: number; typeId: number } => !!row);
+    const uniqueCategoryPairs = Array.from(
+      new Map(categoryPairs.map((row) => [categoryCatalogKey(row.descriptionCategoryId, row.typeId), row])).values(),
+    );
+    const categoryCatalogRows = uniqueCategoryPairs.length
+      ? await prisma.ozonCategoryCatalog.findMany({
+        where: {
+          shopId: id,
+          language: 'DEFAULT',
+          OR: uniqueCategoryPairs.map((row) => ({
+            descriptionCategoryId: row.descriptionCategoryId,
+            typeId: row.typeId,
+          })),
+        },
+        select: {
+          descriptionCategoryId: true,
+          typeId: true,
+          displayPathZh: true,
+          displayPathRu: true,
+          categoryNameZh: true,
+          categoryNameRu: true,
+          typeNameZh: true,
+          typeNameRu: true,
+        },
+      })
+      : [];
+    const categoryCatalogByKey = new Map(
+      categoryCatalogRows.map((row) => [categoryCatalogKey(row.descriptionCategoryId, row.typeId), formatCategoryCatalogLabel(row)]),
+    );
+
     return reply.send({
       code: 1,
       msg: 'ok',
@@ -1160,9 +1224,18 @@ export async function shopRoutes(app: FastifyInstance) {
           const { variants, ...rest } = r;
           const statusDisplay = getOzonStatusDisplay(variants, r.status);
           const warehouseStock = warehouseId ? getWarehouseStock(variants, warehouseId) : null;
+          const syncCategory = getProductSyncCategory(variants);
+          const descriptionCategoryId = positiveInt(r.categoryId) ?? syncCategory?.descriptionCategoryId ?? null;
+          const typeId = syncCategory?.typeId ?? null;
+          const categoryLabel = descriptionCategoryId && typeId
+            ? categoryCatalogByKey.get(categoryCatalogKey(descriptionCategoryId, typeId)) || null
+            : null;
           return {
             ...rest,
             sku: normalizeOzonSku(r.sku),
+            categoryId: descriptionCategoryId != null ? String(descriptionCategoryId) : null,
+            categoryTypeId: typeId != null ? String(typeId) : null,
+            categoryLabel,
             price: r.price?.toString() ?? null,
             oldPrice: r.oldPrice?.toString() ?? null,
             commissionRate: r.commissionRate?.toString() ?? null,

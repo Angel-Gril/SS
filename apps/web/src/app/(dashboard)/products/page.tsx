@@ -45,6 +45,8 @@ interface Product {
   warehouseStock?: number | null;
   syncStatus: string | null;
   categoryId: string | null;
+  categoryTypeId?: string | null;
+  categoryLabel?: string | null;
   commissionRate: string | null;
   minPrice: string | null;
   ozonCreatedAt: string | null;
@@ -732,8 +734,8 @@ function ProductsPageInner() {
             <Table className="min-w-[1460px] table-fixed text-xs">
               <colgroup>
                 <col className="w-[40px]" />
-                <col className="w-[430px]" />
-                <col className="w-[120px]" />
+                <col className="w-[400px]" />
+                <col className="w-[150px]" />
                 <col className="w-[110px]" />
                 <col className="w-[135px]" />
                 <col className="w-[90px]" />
@@ -818,19 +820,19 @@ function ProductsPageInner() {
                     </TableCell>
                     <TableCell className="px-3 py-2 align-top">
                       <div className="space-y-1 text-[11px] leading-5">
-                        {p.categoryId && (
-                          <div className="truncate text-muted-foreground" title={p.categoryId}>
-                            类目 {p.categoryId}
+                        {(p.categoryLabel || p.categoryId) && (
+                          <div className="truncate text-muted-foreground" title={p.categoryLabel || p.categoryId || undefined}>
+                            {p.categoryLabel || `类目 ${p.categoryId}${p.categoryTypeId ? ` / ${p.categoryTypeId}` : ''}`}
                           </div>
                         )}
                         {commissionRate != null && (
                           <div className="font-medium tabular-nums">
-                            佣金 {commissionRate.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%
+                            rFBS {commissionRate.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%
                           </div>
                         )}
                         {commissionAmount != null && (
                           <div className="text-muted-foreground tabular-nums">
-                            ≈ {commissionAmount.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}
+                            佣金 {p.currency || 'CNY'} {commissionAmount.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}
                           </div>
                         )}
                         {!p.categoryId && commissionRate == null && (

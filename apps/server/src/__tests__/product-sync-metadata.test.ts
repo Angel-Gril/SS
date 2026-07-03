@@ -4,11 +4,13 @@ import {
   buildProductStatusCounts,
   getOzonStatusDisplay,
   getProductStatusBucket,
+  getProductSyncCategory,
   getWarehouseStock,
   matchesProductListComputedFilters,
   normalizeOzonSku,
   resolveOzonPackageWeightG,
   resolveOzonProductImages,
+  resolveOzonSalesCommissionPercent,
 } from '../services/product-sync-metadata.js';
 
 describe('product sync metadata helpers', () => {
@@ -42,6 +44,44 @@ describe('product sync metadata helpers', () => {
     ]);
 
     expect(getWarehouseStock(meta, 10)).toBe(0);
+  });
+
+  it('keeps Ozon category identifiers from product info in sync metadata', () => {
+    const meta = buildProductSyncMeta({
+      statuses: { status: 'price_sent' },
+      description_category_id: 200001517,
+      type_id: 93065,
+    });
+
+    expect(getProductSyncCategory(meta)).toEqual({
+      descriptionCategoryId: 200001517,
+      typeId: 93065,
+    });
+  });
+
+  it('resolves sales commission percent from Ozon v5 price response', () => {
+    expect(resolveOzonSalesCommissionPercent({
+      commissions: {
+        sales_percent_fbo: 17,
+        sales_percent_fbs: 20.5,
+        sales_percent_rfbs: 12,
+      },
+    })).toBe(12);
+    expect(resolveOzonSalesCommissionPercent({
+      commissions: {
+        sales_percent_fbo: 17,
+        sales_percent_fbs: 20.5,
+      },
+    })).toBe(20.5);
+  });
+
+  it('still resolves sales commission percent from legacy array responses', () => {
+    expect(resolveOzonSalesCommissionPercent({
+      commissions: [
+        { sale_schema: 'fbo', percent: 17 },
+        { sale_schema: 'fbs', percent: 20.5 },
+      ],
+    })).toBe(20.5);
   });
 
   it('falls back to Chinese labels for raw Ozon lifecycle states', () => {

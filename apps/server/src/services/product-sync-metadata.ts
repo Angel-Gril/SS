@@ -13,6 +13,10 @@ export interface ProductSyncMeta {
     present?: number;
     reserved?: number;
   }>;
+  ozonCategory?: {
+    descriptionCategoryId?: number;
+    typeId?: number;
+  } | null;
   ozonSyncedAt?: string;
 }
 
@@ -49,6 +53,12 @@ interface ProductListFilterTarget {
 interface ProductStatusTarget {
   visibility?: unknown;
   syncStatus?: unknown;
+}
+
+function positiveInt(value: unknown): number | null {
+  const num = finiteNumber(value);
+  if (num == null || num <= 0) return null;
+  return Math.trunc(num);
 }
 
 export function normalizeOzonSku(value: unknown): string | null {
@@ -173,6 +183,36 @@ export function resolveOzonPackageWeightG(attributes?: { weight?: unknown; weigh
   return null;
 }
 
+export function getProductSyncCategory(meta: unknown): { descriptionCategoryId: number; typeId: number | null } | null {
+  const record = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta as ProductSyncMeta : {};
+  const descriptionCategoryId = positiveInt(record.ozonCategory?.descriptionCategoryId);
+  if (!descriptionCategoryId) return null;
+  return {
+    descriptionCategoryId,
+    typeId: positiveInt(record.ozonCategory?.typeId),
+  };
+}
+
+export function resolveOzonSalesCommissionPercent(item: unknown): number | null {
+  const record = item && typeof item === 'object' && !Array.isArray(item) ? item as any : {};
+  const commissions = record.commissions;
+
+  if (Array.isArray(commissions)) {
+    const fbs = commissions.find((entry) => String(entry?.sale_schema || '').toLowerCase() === 'fbs');
+    const first = fbs || commissions[0];
+    return finiteNumber(first?.percent);
+  }
+
+  if (commissions && typeof commissions === 'object') {
+    return finiteNumber((commissions as any).sales_percent_rfbs)
+      ?? finiteNumber((commissions as any).sales_percent_fbs)
+      ?? finiteNumber((commissions as any).sales_percent_fbo)
+      ?? finiteNumber((commissions as any).sales_percent_fbp);
+  }
+
+  return null;
+}
+
 function getOzonStatusTone(values: unknown[]): OzonStatusTone {
   const text = values.map((value) => String(value || '').trim()).filter(Boolean).join(' ').toLowerCase();
   if (!text) return 'muted';
@@ -196,10 +236,20 @@ function getOzonStatusTone(values: unknown[]): OzonStatusTone {
   return 'muted';
 }
 
-export function buildProductSyncMeta(info: { statuses?: ProductSyncMeta['ozonStatus'] }, stocks: ProductSyncMeta['ozonStocks'] = []): ProductSyncMeta {
+export function buildProductSyncMeta(
+  info: {
+    statuses?: ProductSyncMeta['ozonStatus'];
+    description_category_id?: unknown;
+    type_id?: unknown;
+  },
+  stocks: ProductSyncMeta['ozonStocks'] = [],
+): ProductSyncMeta {
+  const descriptionCategoryId = positiveInt(info.description_category_id);
+  const typeId = positiveInt(info.type_id);
   return {
     ozonStatus: info.statuses || null,
     ozonStocks: Array.isArray(stocks) ? stocks : [],
+    ozonCategory: descriptionCategoryId ? { descriptionCategoryId, typeId: typeId ?? undefined } : null,
     ozonSyncedAt: new Date().toISOString(),
   };
 }
