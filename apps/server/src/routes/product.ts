@@ -29,6 +29,7 @@ const batchPriceSchema = z.object({
     productId: z.string(),
     price: z.string().min(1),
     oldPrice: z.string().optional(),
+    minPrice: z.string().optional(),
   })).min(1).max(100).optional(),
   productIds: z.array(z.string()).min(1).max(100).optional(),
   mode: z.enum(['set', 'multiply', 'discount', 'increase']).optional(),
@@ -103,7 +104,11 @@ export async function productRoutes(app: FastifyInstance) {
 
     await prisma.product.update({
       where: { id },
-      data: { price: parseFloat(price), oldPrice: oldPrice ? parseFloat(oldPrice) : null },
+      data: {
+        price: parseFloat(price),
+        oldPrice: oldPrice ? parseFloat(oldPrice) : null,
+        minPrice: minPrice ? parseFloat(minPrice) : null,
+      },
     });
 
     return reply.send({ code: 1, msg: '价格更新成功，已同步到 OZON' });
@@ -312,16 +317,18 @@ export async function productRoutes(app: FastifyInstance) {
           product: p,
           price,
           oldPrice: item?.oldPrice || price,
+          minPrice: item?.minPrice,
         };
       }).filter((item): item is NonNullable<typeof item> => item !== null);
 
       if (!prepared.length) continue;
 
-      const priceItems = prepared.map(({ product, price, oldPrice }) => {
+      const priceItems = prepared.map(({ product, price, oldPrice, minPrice }) => {
         return {
           product_id: Number(product.platformProductId),
           price,
           old_price: oldPrice,
+          min_price: minPrice,
           currency_code: product.currency || 'CNY',
         };
       });
@@ -339,10 +346,14 @@ export async function productRoutes(app: FastifyInstance) {
       }
 
       for (const index of updateResult.successfulIndexes) {
-        const { product, price, oldPrice } = prepared[index]!;
+        const { product, price, oldPrice, minPrice } = prepared[index]!;
         await prisma.product.update({
           where: { id: product.id },
-          data: { price: parseFloat(price), oldPrice: oldPrice ? parseFloat(oldPrice) : null },
+          data: {
+            price: parseFloat(price),
+            oldPrice: oldPrice ? parseFloat(oldPrice) : null,
+            ...(minPrice !== undefined ? { minPrice: minPrice ? parseFloat(minPrice) : null } : {}),
+          },
         });
         updated++;
       }

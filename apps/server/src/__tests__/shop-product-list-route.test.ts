@@ -54,6 +54,35 @@ function statusFromWhere(where: any): 'current' | 'archived' | 'missing' | 'all'
   return 'all';
 }
 
+function productRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'product-1',
+    platformProductId: '100',
+    sku: 'sku-1',
+    offerId: 'offer-1',
+    title: 'Ozon product',
+    price: { toString: () => '122.00' },
+    oldPrice: { toString: () => '147.00' },
+    currency: 'RUB',
+    stock: 1,
+    weight: null,
+    images: [],
+    status: 'price_sent',
+    visibility: 'VISIBLE',
+    syncStatus: 'SYNCED',
+    categoryId: null,
+    commissionRate: { toString: () => '12' },
+    minPrice: null,
+    variants: null,
+    ozonCreatedAt: null,
+    ozonUpdatedAt: null,
+    lastOzonSyncAt: null,
+    createdAt: new Date('2026-07-03T07:00:00.000Z'),
+    updatedAt: new Date('2026-07-03T07:00:00.000Z'),
+    ...overrides,
+  };
+}
+
 describe('shop product list route', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -101,31 +130,7 @@ describe('shop product list route', () => {
     const lastSyncAt = new Date('2026-07-03T08:00:00.000Z');
     mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', lastSyncAt });
     mocks.productCount.mockResolvedValue(1);
-    mocks.productFindMany.mockResolvedValue([{
-      id: 'product-1',
-      platformProductId: '100',
-      sku: 'sku-1',
-      offerId: 'offer-1',
-      title: 'Ozon product',
-      price: { toString: () => '122.00' },
-      oldPrice: { toString: () => '147.00' },
-      currency: 'RUB',
-      stock: 1,
-      weight: null,
-      images: [],
-      status: 'price_sent',
-      visibility: 'VISIBLE',
-      syncStatus: 'SYNCED',
-      categoryId: null,
-      commissionRate: null,
-      minPrice: null,
-      variants: null,
-      ozonCreatedAt: null,
-      ozonUpdatedAt: null,
-      lastOzonSyncAt: null,
-      createdAt: new Date('2026-07-03T07:00:00.000Z'),
-      updatedAt: new Date('2026-07-03T07:00:00.000Z'),
-    }]);
+    mocks.productFindMany.mockResolvedValue([productRow({ commissionRate: null })]);
     mocks.sourceQuoteFindMany.mockResolvedValue([{
       ozonProductId: '100',
       costCny: { toString: () => '36.36' },
@@ -151,6 +156,39 @@ describe('shop product list route', () => {
       }),
     }));
     expect(mocks.sourceCandidateFindMany).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('filters product list by computed profitability using buyer quote data', async () => {
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', lastSyncAt: null });
+    mocks.productFindMany.mockResolvedValue([
+      productRow({ id: 'great', platformProductId: '100', price: { toString: () => '122.00' } }),
+      productRow({ id: 'loss', platformProductId: '200', price: { toString: () => '122.00' } }),
+    ]);
+    mocks.sourceQuoteFindMany.mockResolvedValue([
+      { ozonProductId: '100', costCny: { toString: () => '5.00' }, sourcePlatform: '1688', profitCny: null, marginPct: null },
+      { ozonProductId: '200', costCny: { toString: () => '11.00' }, sourcePlatform: '1688', profitCny: null, marginPct: null },
+    ]);
+    mocks.sourceCandidateFindMany.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/shops/shop-1/products?profitFilter=very_profitable&limit=20&offset=0',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      total: 1,
+      rows: [
+        {
+          id: 'great',
+          buyerPriceCny: '5.00',
+          profitTier: 'very_profitable',
+        },
+      ],
+    });
 
     await app.close();
   });

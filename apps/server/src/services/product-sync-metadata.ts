@@ -24,6 +24,8 @@ export type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info'
 export type WarehouseStockMode = 'all' | 'in_stock' | 'out_of_stock';
 export type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
 export type ProductStatusBucket = Exclude<ProductStatusFilter, 'all'>;
+export type ProductProfitFilter = 'all' | 'unprofitable' | 'medium' | 'profitable' | 'very_profitable' | 'unknown';
+export type ProductProfitTier = Exclude<ProductProfitFilter, 'all'>;
 
 export interface ProductStatusCounts {
   current: number;
@@ -41,10 +43,17 @@ export interface ProductListComputedFilters {
   stockMax?: number | null;
   warehouseId?: string | number | null;
   warehouseStockMode?: WarehouseStockMode;
+  profitFilter?: ProductProfitFilter;
+  rubToCnyRate?: number;
 }
 
 interface ProductListFilterTarget {
   price?: unknown;
+  currency?: unknown;
+  commissionRate?: unknown;
+  buyerPriceCny?: unknown;
+  profitCny?: unknown;
+  profitMarginPct?: unknown;
   weight?: unknown;
   stock?: unknown;
   variants?: unknown;
@@ -301,6 +310,64 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+const DEFAULT_RUB_TO_CNY_RATE = 0.095;
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function currencyToCnyRate(currency: unknown, rubToCnyRate?: number): number | null {
+  const code = String(currency || 'RUB').trim().toUpperCase();
+  if (code === 'CNY') return 1;
+  if (code === 'RUB' || code === 'RUR') return rubToCnyRate && rubToCnyRate > 0 ? rubToCnyRate : DEFAULT_RUB_TO_CNY_RATE;
+  return null;
+}
+
+export function resolveProductProfitSnapshot(
+  product: ProductListFilterTarget,
+  options: { rubToCnyRate?: number } = {},
+): { tier: ProductProfitTier; profitCny: number | null; marginPct: number | null; saleAmountCny: number | null } {
+  const price = finiteNumber(product.price);
+  const rate = currencyToCnyRate(product.currency, options.rubToCnyRate);
+  const buyerCost = finiteNumber(product.buyerPriceCny);
+  const saleAmountCny = price != null && rate != null ? price * rate : null;
+  if (price == null || price <= 0 || rate == null || buyerCost == null) {
+    const existingProfit = finiteNumber(product.profitCny);
+    const existingMargin = finiteNumber(product.profitMarginPct);
+    if (existingMargin != null) {
+      return {
+        tier: tierFromMargin(existingMargin, existingProfit),
+        profitCny: existingProfit != null ? round2(existingProfit) : null,
+        marginPct: round2(existingMargin),
+        saleAmountCny: saleAmountCny != null ? round2(saleAmountCny) : null,
+      };
+    }
+    return { tier: 'unknown', profitCny: null, marginPct: null, saleAmountCny: saleAmountCny != null ? round2(saleAmountCny) : null };
+  }
+
+  const currentSaleAmountCny = price * rate;
+  const commissionRate = Math.max(0, finiteNumber(product.commissionRate) ?? 0);
+  const commissionCny = currentSaleAmountCny * commissionRate / 100;
+  const profitCny = currentSaleAmountCny - commissionCny - buyerCost;
+  const marginPct = currentSaleAmountCny > 0 ? profitCny / currentSaleAmountCny * 100 : null;
+
+  return {
+    tier: tierFromMargin(marginPct, profitCny),
+    profitCny: round2(profitCny),
+    marginPct: marginPct == null ? null : round2(marginPct),
+    saleAmountCny: round2(currentSaleAmountCny),
+  };
+}
+
+function tierFromMargin(marginPct: number | null, profitCny: number | null): ProductProfitTier {
+  if (profitCny != null && profitCny < 0) return 'unprofitable';
+  if (marginPct == null) return 'unknown';
+  if (marginPct < 0) return 'unprofitable';
+  if (marginPct < 20) return 'medium';
+  if (marginPct < 40) return 'profitable';
+  return 'very_profitable';
+}
+
 function matchesRange(value: unknown, min?: number | null, max?: number | null): boolean {
   if (min == null && max == null) return true;
   const numeric = finiteNumber(value);
@@ -320,6 +387,11 @@ export function matchesProductListComputedFilters(
   const warehouseStock = filters.warehouseId ? getWarehouseStock(product.variants, filters.warehouseId) : null;
   const stockForRange = warehouseStock == null ? product.stock : warehouseStock;
   if (!matchesRange(stockForRange, filters.stockMin, filters.stockMax)) return false;
+
+  if (filters.profitFilter && filters.profitFilter !== 'all') {
+    const snapshot = resolveProductProfitSnapshot(product, { rubToCnyRate: filters.rubToCnyRate });
+    if (snapshot.tier !== filters.profitFilter) return false;
+  }
 
   if (filters.warehouseStockMode === 'in_stock') return warehouseStock != null && warehouseStock > 0;
   if (filters.warehouseStockMode === 'out_of_stock') return warehouseStock == null || warehouseStock <= 0;

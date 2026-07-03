@@ -8,6 +8,7 @@ import {
   getWarehouseStock,
   matchesProductListComputedFilters,
   normalizeOzonSku,
+  resolveProductProfitSnapshot,
   resolveOzonPackageWeightG,
   resolveOzonProductImages,
   resolveOzonSalesCommissionPercent,
@@ -182,6 +183,57 @@ describe('product sync metadata helpers', () => {
       warehouseId: '10',
       warehouseStockMode: 'in_stock',
     })).toBe(true);
+  });
+
+  it('classifies product profitability from Ozon price, commission and buyer cost', () => {
+    expect(resolveProductProfitSnapshot({
+      price: { toString: () => '122.00' },
+      currency: 'RUB',
+      commissionRate: { toString: () => '12' },
+      buyerPriceCny: { toString: () => '5.00' },
+    })).toMatchObject({
+      tier: 'very_profitable',
+      marginPct: 44.86,
+    });
+
+    expect(resolveProductProfitSnapshot({
+      price: { toString: () => '122.00' },
+      currency: 'RUB',
+      commissionRate: { toString: () => '12' },
+      buyerPriceCny: { toString: () => '11.00' },
+    })?.tier).toBe('unprofitable');
+
+    expect(matchesProductListComputedFilters({
+      price: { toString: () => '122.00' },
+      currency: 'RUB',
+      commissionRate: { toString: () => '12' },
+      buyerPriceCny: { toString: () => '5.00' },
+    }, {
+      profitFilter: 'very_profitable',
+    })).toBe(true);
+
+    expect(matchesProductListComputedFilters({
+      price: { toString: () => '122.00' },
+      currency: 'RUB',
+      commissionRate: { toString: () => '12' },
+      buyerPriceCny: null,
+    }, {
+      profitFilter: 'unknown',
+    })).toBe(true);
+  });
+
+  it('prefers current Ozon price over stale stored profitability when buyer cost is available', () => {
+    expect(resolveProductProfitSnapshot({
+      price: { toString: () => '122.00' },
+      currency: 'RUB',
+      commissionRate: { toString: () => '12' },
+      buyerPriceCny: { toString: () => '5.00' },
+      profitCny: { toString: () => '-10.00' },
+      profitMarginPct: { toString: () => '-20.00' },
+    })).toMatchObject({
+      tier: 'very_profitable',
+      marginPct: 44.86,
+    });
   });
 
   it('counts product status buckets for product list tabs', () => {

@@ -6,6 +6,7 @@ import {
   Search, RefreshCw, Loader2, ImageOff, Pencil, Check, X,
   Package, DollarSign, Boxes, Upload, AlertTriangle,
   Save, ImageIcon, Trash2, Plus, Clock, SlidersHorizontal, ExternalLink,
+  Archive, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -51,6 +52,9 @@ interface Product {
   minPrice: string | null;
   buyerPriceCny?: string | null;
   buyerSourcePlatform?: string | null;
+  profitCny?: string | null;
+  profitMarginPct?: string | null;
+  profitTier?: ProductProfitFilter | null;
   ozonCreatedAt: string | null;
   ozonUpdatedAt: string | null;
   lastOzonSyncAt: string | null;
@@ -78,8 +82,10 @@ interface OzonWarehouse {
 }
 
 type BatchPriceMode = 'set' | 'multiply' | 'discount' | 'increase';
+type BatchPriceField = 'price' | 'oldPrice' | 'minPrice';
 type BatchAction = 'price' | 'stock' | 'archive' | 'restore';
 type ProductStatusFilter = 'current' | 'archived' | 'missing' | 'all';
+type ProductProfitFilter = 'all' | 'unprofitable' | 'medium' | 'profitable' | 'very_profitable' | 'unknown';
 type OzonStatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'info';
 type WarehouseStockMode = 'all' | 'in_stock' | 'out_of_stock';
 
@@ -113,11 +119,30 @@ const BATCH_PRICE_MODES: { value: BatchPriceMode; label: string; inputLabel: str
   { value: 'increase', label: '加价%', inputLabel: '加价比例 %', placeholder: '例如 20 表示涨价20%' },
 ];
 
+const PROFIT_FILTER_OPTIONS: Array<{ value: ProductProfitFilter; label: string }> = [
+  { value: 'all', label: '收益：全部' },
+  { value: 'unprofitable', label: '不利' },
+  { value: 'medium', label: '中等' },
+  { value: 'profitable', label: '有利' },
+  { value: 'very_profitable', label: '超级有利' },
+  { value: 'unknown', label: '未计算' },
+];
+
+const BATCH_PRICE_FIELDS: Record<BatchPriceField, { label: string; shortLabel: string }> = {
+  price: { label: '销售价', shortLabel: '售价' },
+  oldPrice: { label: '划线价', shortLabel: '划线' },
+  minPrice: { label: '最低价', shortLabel: '最低' },
+};
+
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+
 function readStoredProductFilters(): {
   shopId?: string;
   warehouseId?: number | null;
   warehouseStockMode?: WarehouseStockMode;
   statusFilter?: ProductStatusFilter;
+  profitFilter?: ProductProfitFilter;
+  pageSize?: number;
   priceMin?: string;
   priceMax?: string;
   weightMin?: string;
@@ -136,12 +161,18 @@ function readStoredProductFilters(): {
     const warehouseStockMode = ['all', 'in_stock', 'out_of_stock'].includes(String(data.warehouseStockMode || ''))
       ? data.warehouseStockMode as WarehouseStockMode
       : (data.warehouseInStockOnly === true ? 'in_stock' : undefined);
+    const profitFilter = ['all', 'unprofitable', 'medium', 'profitable', 'very_profitable', 'unknown'].includes(String(data.profitFilter || ''))
+      ? data.profitFilter as ProductProfitFilter
+      : undefined;
+    const pageSize = Number(data.pageSize);
     const warehouseId = Number(data.warehouseId);
     return {
       shopId: typeof data.shopId === 'string' ? data.shopId : undefined,
       warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : null,
       warehouseStockMode,
       statusFilter,
+      profitFilter,
+      pageSize: PAGE_SIZE_OPTIONS.includes(pageSize) ? pageSize : undefined,
       priceMin: typeof data.priceMin === 'string' ? data.priceMin : undefined,
       priceMax: typeof data.priceMax === 'string' ? data.priceMax : undefined,
       weightMin: typeof data.weightMin === 'string' ? data.weightMin : undefined,
@@ -163,10 +194,6 @@ function calculateProductBatchPreview(price: unknown, mode: BatchPriceMode, rawV
   if (mode === 'multiply') return Math.round(base * value * 100) / 100;
   if (mode === 'discount') return value >= 100 ? null : Math.round(base * (1 - value / 100) * 100) / 100;
   return Math.round(base * (1 + value / 100) * 100) / 100;
-}
-
-function formatRubPrice(value: number | null): string {
-  return value == null ? '-' : `${value.toFixed(2)} RUB`;
 }
 
 function formatDateTime(value?: string | null): string {
@@ -226,7 +253,36 @@ function getOzonProductUrl(product: Product): string | null {
   return `https://www.ozon.ru/product/${id}`;
 }
 
-// PLACEHOLDER_INNER_COMPONENT
+function ProfitBadge({ tier, marginPct }: { tier?: ProductProfitFilter | null; marginPct?: string | null }) {
+  if (!tier || tier === 'all' || tier === 'unknown') return null;
+  const config: Record<Exclude<ProductProfitFilter, 'all' | 'unknown'>, { label: string; className: string }> = {
+    unprofitable: {
+      label: '不利',
+      className: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+    },
+    medium: {
+      label: '中等',
+      className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+    },
+    profitable: {
+      label: '有利',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
+    },
+    very_profitable: {
+      label: '超级有利',
+      className: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300',
+    },
+  };
+  const item = config[tier as keyof typeof config];
+  if (!item) return null;
+  const margin = toFiniteNumber(marginPct);
+  return (
+    <span className={`inline-flex w-fit items-center rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${item.className}`}>
+      {item.label}
+      {margin != null && <span className="ml-1 tabular-nums">{margin.toFixed(1)}%</span>}
+    </span>
+  );
+}
 
 function ProductsPageInner() {
   const searchParams = useSearchParams();
@@ -243,7 +299,7 @@ function ProductsPageInner() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editingPrice, setEditingPrice] = useState<string | null>(null);
   const [editingStock, setEditingStock] = useState<string | null>(null);
-  const [priceValue, setPriceValue] = useState('');
+  const [priceForm, setPriceForm] = useState({ price: '', oldPrice: '', minPrice: '' });
   const [stockValue, setStockValue] = useState('');
   const [batchPriceOpen, setBatchPriceOpen] = useState(false);
   const [batchStockOpen, setBatchStockOpen] = useState(false);
@@ -254,6 +310,7 @@ function ProductsPageInner() {
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<number | null>(null);
   const [warehouseStockMode, setWarehouseStockMode] = useState<WarehouseStockMode>('all');
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>('current');
+  const [profitFilter, setProfitFilter] = useState<ProductProfitFilter>('all');
   const [statusCounts, setStatusCounts] = useState<ProductStatusCounts>(EMPTY_STATUS_COUNTS);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [batchAction, setBatchAction] = useState<BatchAction>('price');
@@ -267,8 +324,8 @@ function ProductsPageInner() {
   const [syncingCommissions, setSyncingCommissions] = useState(false);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [lastProductSyncAt, setLastProductSyncAt] = useState<string | null>(null);
-
-  const limit = 20;
+  const [pageSize, setPageSize] = useState(20);
+  const [pageJumpInput, setPageJumpInput] = useState('');
 
   useEffect(() => {
     const stored = readStoredProductFilters();
@@ -276,6 +333,8 @@ function ProductsPageInner() {
     if (stored.warehouseId) setSelectedWarehouseId(stored.warehouseId);
     if (stored.warehouseStockMode) setWarehouseStockMode(stored.warehouseStockMode);
     if (stored.statusFilter) setStatusFilter(stored.statusFilter);
+    if (stored.profitFilter) setProfitFilter(stored.profitFilter);
+    if (stored.pageSize) setPageSize(stored.pageSize);
     setPriceMin(stored.priceMin || '');
     setPriceMax(stored.priceMax || '');
     setWeightMin(stored.weightMin || '');
@@ -319,6 +378,8 @@ function ProductsPageInner() {
       warehouseId: selectedWarehouseId,
       warehouseStockMode,
       statusFilter,
+      profitFilter,
+      pageSize,
       priceMin,
       priceMax,
       weightMin,
@@ -326,14 +387,14 @@ function ProductsPageInner() {
       stockMin,
       stockMax,
     }));
-  }, [filtersRestored, shopId, selectedWarehouseId, warehouseStockMode, statusFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
+  }, [filtersRestored, shopId, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, pageSize, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   const loadProducts = useCallback(async () => {
     if (!filtersRestored || !shopId) return;
     setLoading(true);
     const params = new URLSearchParams({
-      offset: String(page * limit),
-      limit: String(limit),
+      offset: String(page * pageSize),
+      limit: String(pageSize),
       statusFilter,
     });
     if (search) params.set('search', search);
@@ -345,6 +406,7 @@ function ProductsPageInner() {
     if (stockMin.trim()) params.set('stockMin', stockMin.trim());
     if (stockMax.trim()) params.set('stockMax', stockMax.trim());
     if (warehouseStockMode !== 'all') params.set('warehouseStockMode', warehouseStockMode);
+    if (profitFilter !== 'all') params.set('profitFilter', profitFilter);
 
     const res = await api.get<ProductListResponse>(
       `/api/shops/${shopId}/products?${params}`,
@@ -356,7 +418,7 @@ function ProductsPageInner() {
       setStatusCounts(res.data.statusCounts || EMPTY_STATUS_COUNTS);
     }
     setLoading(false);
-  }, [filtersRestored, shopId, page, search, selectedWarehouseId, warehouseStockMode, statusFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
+  }, [filtersRestored, shopId, page, pageSize, search, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -384,8 +446,12 @@ function ProductsPageInner() {
   }
 
   async function savePrice(productId: string) {
-    if (!priceValue.trim()) return;
-    const res = await api.put(`/api/products/${productId}/price`, { price: priceValue });
+    if (!priceForm.price.trim()) return;
+    const res = await api.put(`/api/products/${productId}/price`, {
+      price: priceForm.price,
+      oldPrice: priceForm.oldPrice.trim() || undefined,
+      minPrice: priceForm.minPrice.trim() || undefined,
+    });
     if (res.code === 1) {
       toast({ title: '价格已更新' });
       setEditingPrice(null);
@@ -438,6 +504,24 @@ function ProductsPageInner() {
     }
   }
 
+  async function handleArchiveProduct(productId: string, archive: boolean) {
+    const res = await api.post('/api/products/archive', {
+      productIds: [productId],
+      archive,
+    });
+    if (res.code === 1) {
+      toast({ title: res.msg });
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(productId);
+        return next;
+      });
+      loadProducts();
+    } else {
+      toast({ title: res.msg, variant: 'destructive' });
+    }
+  }
+
   async function handleSyncProducts() {
     setSyncDialogOpen(true);
   }
@@ -461,9 +545,18 @@ function ProductsPageInner() {
     handleArchive(batchAction === 'archive');
   }
 
-  const totalPages = Math.ceil(total / limit);
+  function jumpToPage(rawValue: string) {
+    const target = Number(rawValue);
+    if (!Number.isFinite(target)) return;
+    const nextPage = Math.min(totalPages - 1, Math.max(0, Math.trunc(target) - 1));
+    setPage(nextPage);
+    setPageJumpInput('');
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const selectedCount = selected.size;
   const hasAdvancedFilters = warehouseStockMode !== 'all'
+    || profitFilter !== 'all'
     || Boolean(priceMin || priceMax || weightMin || weightMax || stockMin || stockMax);
   const selectedShop = shops.find((shop) => shop.id === shopId);
   const selectedShopLabel = selectedShop ? `[${selectedShop.platform}] ${selectedShop.name}` : '未选择店铺';
@@ -623,6 +716,16 @@ function ProductsPageInner() {
             <div className="rounded-md border bg-muted/30 p-3 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <select
+                  value={profitFilter}
+                  onChange={(e) => { setProfitFilter(e.target.value as ProductProfitFilter); setPage(0); setSelected(new Set()); }}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  title="按售价、佣金和买手成本估算收益"
+                >
+                  {PROFIT_FILTER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <select
                   value={warehouseStockMode}
                   onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
                   disabled={!selectedWarehouseId}
@@ -641,6 +744,7 @@ function ProductsPageInner() {
                     variant="ghost"
                     onClick={() => {
                       setWarehouseStockMode('all');
+                      setProfitFilter('all');
                       setPriceMin('');
                       setPriceMax('');
                       setWeightMin('');
@@ -887,20 +991,43 @@ function ProductsPageInner() {
                     </TableCell>
                     <TableCell className="px-3 py-2 align-top">
                       {editingPrice === p.id ? (
-                        <div className="flex items-center gap-1 justify-end">
-                          <Input
-                            className="w-24 h-7 text-xs"
-                            value={priceValue}
-                            onChange={(e) => setPriceValue(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') savePrice(p.id); if (e.key === 'Escape') setEditingPrice(null); }}
-                            autoFocus
-                          />
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => savePrice(p.id)}>
-                            <Check className="h-3 w-3 text-emerald-600" />
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setEditingPrice(null)}>
-                            <X className="h-3 w-3" />
-                          </Button>
+                        <div className="space-y-1.5">
+                          <div className="grid grid-cols-[42px_1fr] items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground">售价</span>
+                            <Input
+                              className="h-7 text-xs"
+                              value={priceForm.price}
+                              onChange={(e) => setPriceForm((form) => ({ ...form, price: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') savePrice(p.id); if (e.key === 'Escape') setEditingPrice(null); }}
+                              autoFocus
+                            />
+                          </div>
+                          <div className="grid grid-cols-[42px_1fr] items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground">划线</span>
+                            <Input
+                              className="h-7 text-xs"
+                              value={priceForm.oldPrice}
+                              onChange={(e) => setPriceForm((form) => ({ ...form, oldPrice: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') savePrice(p.id); if (e.key === 'Escape') setEditingPrice(null); }}
+                            />
+                          </div>
+                          <div className="grid grid-cols-[42px_1fr] items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground">最低</span>
+                            <Input
+                              className="h-7 text-xs"
+                              value={priceForm.minPrice}
+                              onChange={(e) => setPriceForm((form) => ({ ...form, minPrice: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') savePrice(p.id); if (e.key === 'Escape') setEditingPrice(null); }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-end gap-1">
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => savePrice(p.id)}>
+                              <Check className="h-3 w-3 text-emerald-600" />
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setEditingPrice(null)}>
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
                         </div>
                       ) : (
                         <div className={`group flex items-center justify-between gap-2 ${mutable ? '' : 'opacity-60'}`}>
@@ -913,7 +1040,7 @@ function ProductsPageInner() {
                                 return;
                               }
                               setEditingPrice(p.id);
-                              setPriceValue(p.price || '');
+                              setPriceForm({ price: p.price || '', oldPrice: p.oldPrice || '', minPrice: p.minPrice || '' });
                             }}
                           >
                             <div className="flex items-baseline gap-1 whitespace-nowrap">
@@ -940,6 +1067,9 @@ function ProductsPageInner() {
                                 <span className="tabular-nums">{buyerPrice}</span>
                               </div>
                             )}
+                            {p.profitTier && p.profitTier !== 'unknown' && (
+                              <ProfitBadge tier={p.profitTier} marginPct={p.profitMarginPct} />
+                            )}
                           </button>
                           <Button
                             size="sm"
@@ -949,7 +1079,7 @@ function ProductsPageInner() {
                             title="修改价格"
                             onClick={() => {
                               setEditingPrice(p.id);
-                              setPriceValue(p.price || '');
+                              setPriceForm({ price: p.price || '', oldPrice: p.oldPrice || '', minPrice: p.minPrice || '' });
                             }}
                           >
                             <Pencil className="h-3.5 w-3.5" />
@@ -1026,6 +1156,18 @@ function ProductsPageInner() {
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>
                         )}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2"
+                          disabled={!p.platformProductId}
+                          title={String(p.visibility || '').toUpperCase() === 'ARCHIVED' ? '恢复到 Ozon 在售列表' : '快捷归档到 Ozon'}
+                          onClick={() => handleArchiveProduct(p.id, String(p.visibility || '').toUpperCase() !== 'ARCHIVED')}
+                        >
+                          <Archive className="h-3 w-3" />
+                          {String(p.visibility || '').toUpperCase() === 'ARCHIVED' ? '恢复' : '归档'}
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -1035,15 +1177,74 @@ function ProductsPageInner() {
             </Table>
           )}
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between p-4 border-t">
-              <span className="text-sm text-muted-foreground">第 {page + 1} / {totalPages} 页</span>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}>上一页</Button>
-                <Button size="sm" variant="outline" onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}>下一页</Button>
-              </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <span>
+                共 {total} 件
+                {total > 0 && (
+                  <>，显示 {page * pageSize + 1}-{Math.min(total, (page + 1) * pageSize)}</>
+                )}
+              </span>
+              <label className="flex items-center gap-1.5">
+                <span>每页</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); setSelected(new Set()); }}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>{size} 条</option>
+                  ))}
+                </select>
+              </label>
             </div>
-          )}
+
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => setPage(0)} disabled={page === 0}>
+                <ChevronsLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, index) => {
+                const start = Math.min(Math.max(page - 2, 0), Math.max(totalPages - 5, 0));
+                const pageNumber = start + index;
+                return (
+                  <Button
+                    key={pageNumber}
+                    size="sm"
+                    variant={page === pageNumber ? 'default' : 'outline'}
+                    className="h-8 min-w-8 px-2 text-xs tabular-nums"
+                    onClick={() => setPage(pageNumber)}
+                  >
+                    {pageNumber + 1}
+                  </Button>
+                );
+              })}
+              <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" className="h-8 w-8 p-0" onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1}>
+                <ChevronsRight className="h-3.5 w-3.5" />
+              </Button>
+              <form
+                className="ml-1 flex items-center gap-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  jumpToPage(pageJumpInput);
+                }}
+              >
+                <Input
+                  value={pageJumpInput}
+                  onChange={(e) => setPageJumpInput(e.target.value)}
+                  className="h-8 w-16 text-xs"
+                  inputMode="numeric"
+                  placeholder={`${page + 1}/${totalPages}`}
+                />
+                <Button size="sm" variant="outline" className="h-8 px-2 text-xs" type="submit">跳转</Button>
+              </form>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -1171,14 +1372,58 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
 }) {
   const [value, setValue] = useState('');
   const [mode, setMode] = useState<BatchPriceMode>('set');
+  const [priceField, setPriceField] = useState<BatchPriceField>('price');
   const [submitting, setSubmitting] = useState(false);
   const activeMode = BATCH_PRICE_MODES.find((item) => item.value === mode) || BATCH_PRICE_MODES[0]!;
+  const activeField = BATCH_PRICE_FIELDS[priceField];
+  const getFieldValue = (product: Product, field: BatchPriceField) => {
+    if (field === 'oldPrice') return product.oldPrice;
+    if (field === 'minPrice') return product.minPrice;
+    return product.price;
+  };
   const previewRows = products.map((product) => ({
     product,
-    current: Number(product.price),
-    next: calculateProductBatchPreview(product.price, mode, value),
+    current: Number(getFieldValue(product, priceField)),
+    next: calculateProductBatchPreview(getFieldValue(product, priceField), mode, value),
   }));
-  const hasValidInput = previewRows.some((row) => row.next != null);
+  const hasValidInput = value.trim() ? previewRows.some((row) => row.next != null) : false;
+
+  useEffect(() => {
+    if (!open) return;
+    setValue('');
+    setMode('set');
+    setPriceField('price');
+  }, [open]);
+
+  function buildPriceItem(product: Product, nextValue: number) {
+    const next = nextValue.toFixed(2);
+    const currentPrice = toFiniteNumber(product.price);
+    const currentOldPrice = toFiniteNumber(product.oldPrice);
+    const currentMinPrice = toFiniteNumber(product.minPrice);
+    if (priceField === 'price') {
+      return {
+        productId: product.id,
+        price: next,
+        oldPrice: (currentOldPrice ?? nextValue).toFixed(2),
+        ...(currentMinPrice != null ? { minPrice: currentMinPrice.toFixed(2) } : {}),
+      };
+    }
+    if (currentPrice == null || currentPrice <= 0) return null;
+    if (priceField === 'oldPrice') {
+      return {
+        productId: product.id,
+        price: currentPrice.toFixed(2),
+        oldPrice: next,
+        ...(currentMinPrice != null ? { minPrice: currentMinPrice.toFixed(2) } : {}),
+      };
+    }
+    return {
+      productId: product.id,
+      price: currentPrice.toFixed(2),
+      oldPrice: (currentOldPrice ?? currentPrice).toFixed(2),
+      minPrice: next,
+    };
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1190,25 +1435,23 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
     }
     setSubmitting(true);
 
-    const payload = mode === 'set'
-      ? {
-          items: productIds.map((id) => ({
-            productId: id,
-            price: numericValue.toFixed(2),
-          })),
-        }
-      : {
-          productIds,
-          mode,
-          value: numericValue,
-        };
+    const items = previewRows
+      .map(({ product, next }) => (next == null ? null : buildPriceItem(product, next)))
+      .filter((item): item is NonNullable<ReturnType<typeof buildPriceItem>> => item != null);
 
-    const res = await api.post('/api/products/batch-price', payload);
+    if (!items.length) {
+      setSubmitting(false);
+      toast({ title: '没有可计算新价格的商品', variant: 'destructive' });
+      return;
+    }
+
+    const res = await api.post('/api/products/batch-price', { items });
     setSubmitting(false);
     if (res.code === 1) {
       toast({ title: res.msg });
       setValue('');
       setMode('set');
+      setPriceField('price');
       onOpenChange(false);
       onSuccess();
     } else {
@@ -1221,9 +1464,25 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
       <DialogContent>
         <DialogHeader>
           <DialogTitle>批量修改价格</DialogTitle>
-          <DialogDescription>将为选中的 {productIds.length} 件商品计算并同步新价格</DialogDescription>
+          <DialogDescription>将为选中的 {productIds.length} 件商品计算并同步售价、划线价或最低价</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>修改字段</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {(Object.entries(BATCH_PRICE_FIELDS) as Array<[BatchPriceField, { label: string; shortLabel: string }]>).map(([field, item]) => (
+                <Button
+                  key={field}
+                  type="button"
+                  size="sm"
+                  variant={priceField === field ? 'default' : 'outline'}
+                  onClick={() => setPriceField(field)}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </div>
+          </div>
           <div className="grid grid-cols-4 gap-2">
             {BATCH_PRICE_MODES.map((item) => (
               <Button
@@ -1238,7 +1497,7 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
             ))}
           </div>
           <div className="space-y-2">
-            <Label>{activeMode.inputLabel}</Label>
+            <Label>{activeField.shortLabel} · {activeMode.inputLabel}</Label>
             <Input
               type="number"
               step="0.01"
@@ -1251,7 +1510,7 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
           </div>
           {value.trim() && (
             <div className="rounded-md border bg-muted/30 p-2">
-              <div className="mb-1 text-xs font-medium">价格变更预览</div>
+              <div className="mb-1 text-xs font-medium">{activeField.label}变更预览</div>
               <div className="max-h-44 space-y-1 overflow-y-auto text-xs">
                 {previewRows.slice(0, 10).map(({ product, current, next }) => (
                   <div key={product.id} className="grid grid-cols-[1fr_auto] gap-3 rounded bg-background/70 px-2 py-1">
@@ -1260,8 +1519,11 @@ function BatchPriceDialog({ open, onOpenChange, productIds, products, onSuccess 
                       <div className="font-mono text-[10px] text-muted-foreground truncate">{product.offerId || product.sku || '-'}</div>
                     </div>
                     <div className="text-right tabular-nums">
-                      <div>{Number.isFinite(current) ? current.toFixed(2) : '-'} → {formatRubPrice(next)}</div>
-                      {next == null && <div className="text-[10px] text-destructive">缺少有效当前价</div>}
+                      <div>{Number.isFinite(current) ? current.toFixed(2) : '-'} → {formatCompactMoney(next, product.currency) || '-'}</div>
+                      {next == null && <div className="text-[10px] text-destructive">缺少有效当前{activeField.shortLabel}</div>}
+                      {next != null && priceField !== 'price' && !toFiniteNumber(product.price) && (
+                        <div className="text-[10px] text-destructive">缺少售价，无法提交</div>
+                      )}
                     </div>
                   </div>
                 ))}

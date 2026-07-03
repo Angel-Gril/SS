@@ -12,6 +12,8 @@ import {
   matchesProductListComputedFilters,
   matchesProductStatusFilter,
   normalizeOzonSku,
+  resolveProductProfitSnapshot,
+  type ProductProfitFilter,
   type ProductStatusFilter,
   type WarehouseStockMode,
 } from '../services/product-sync-metadata.js';
@@ -87,6 +89,7 @@ function parseOptionalFiniteNumber(value: unknown): number | null {
 }
 
 const PRODUCT_STATUS_FILTERS: ProductStatusFilter[] = ['current', 'archived', 'missing', 'all'];
+const PRODUCT_PROFIT_FILTERS: ProductProfitFilter[] = ['all', 'unprofitable', 'medium', 'profitable', 'very_profitable', 'unknown'];
 
 function productStatusWhere(statusFilter: ProductStatusFilter): Record<string, unknown> | null {
   if (statusFilter === 'all') return null;
@@ -123,6 +126,88 @@ async function countProductStatusTabs(baseWhere: Record<string, unknown>) {
     prisma.product.count({ where: baseWhere as any }),
   ]);
   return { current, archived, missing, all };
+}
+
+type ProductBuyerCost = {
+  priceCny: string;
+  sourcePlatform: string | null;
+  profitCny: string | null;
+  marginPct: string | null;
+};
+
+async function fetchProductBuyerCosts(userId: string, platformProductIds: string[]): Promise<Map<string, ProductBuyerCost>> {
+  const uniqueProductIds = Array.from(new Set(platformProductIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  const buyerCostByProductId = new Map<string, ProductBuyerCost>();
+  if (!uniqueProductIds.length) return buyerCostByProductId;
+
+  const quoteRows = await prisma.sourceQuote.findMany({
+    where: {
+      userId,
+      ozonProductId: { in: uniqueProductIds },
+      costCny: { not: null },
+    },
+    orderBy: { updatedAt: 'desc' },
+    select: {
+      ozonProductId: true,
+      costCny: true,
+      sourcePlatform: true,
+      profitCny: true,
+      marginPct: true,
+    },
+  });
+  for (const quote of quoteRows) {
+    const productId = String(quote.ozonProductId || '').trim();
+    if (!productId || buyerCostByProductId.has(productId) || !quote.costCny) continue;
+    buyerCostByProductId.set(productId, {
+      priceCny: quote.costCny.toString(),
+      sourcePlatform: quote.sourcePlatform || null,
+      profitCny: quote.profitCny?.toString() ?? null,
+      marginPct: quote.marginPct?.toString() ?? null,
+    });
+  }
+
+  const missingProductIds = uniqueProductIds.filter((productId) => !buyerCostByProductId.has(productId));
+  if (!missingProductIds.length) return buyerCostByProductId;
+
+  const candidateRows = await prisma.sourceCandidate.findMany({
+    where: {
+      userId,
+      ozonProductId: { in: missingProductIds },
+      sourceTotalCost: { not: null },
+    },
+    orderBy: { updatedAt: 'desc' },
+    select: {
+      ozonProductId: true,
+      sourceTotalCost: true,
+      sourcePlatform: true,
+    },
+  });
+  for (const candidate of candidateRows) {
+    const productId = String(candidate.ozonProductId || '').trim();
+    if (!productId || buyerCostByProductId.has(productId) || !candidate.sourceTotalCost) continue;
+    buyerCostByProductId.set(productId, {
+      priceCny: candidate.sourceTotalCost.toString(),
+      sourcePlatform: candidate.sourcePlatform || null,
+      profitCny: null,
+      marginPct: null,
+    });
+  }
+
+  return buyerCostByProductId;
+}
+
+function enrichProductBuyerCost<T extends { platformProductId?: unknown }>(
+  row: T,
+  buyerCostByProductId: Map<string, ProductBuyerCost>,
+): T & { buyerPriceCny?: string | null; buyerSourcePlatform?: string | null; profitCny?: string | null; profitMarginPct?: string | null } {
+  const buyerCost = row.platformProductId ? buyerCostByProductId.get(String(row.platformProductId)) : null;
+  return {
+    ...row,
+    buyerPriceCny: buyerCost?.priceCny ?? null,
+    buyerSourcePlatform: buyerCost?.sourcePlatform ?? null,
+    profitCny: buyerCost?.profitCny ?? null,
+    profitMarginPct: buyerCost?.marginPct ?? null,
+  };
 }
 
 export async function shopRoutes(app: FastifyInstance) {
@@ -1076,6 +1161,7 @@ export async function shopRoutes(app: FastifyInstance) {
       stockMin?: string;
       stockMax?: string;
       statusFilter?: string;
+      profitFilter?: string;
     };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId } });
@@ -1093,6 +1179,9 @@ export async function shopRoutes(app: FastifyInstance) {
     const warehouseStockMode: WarehouseStockMode = warehouseId
       ? (query.warehouseInStock === '1' ? 'in_stock' : requestedWarehouseStockMode)
       : 'all';
+    const profitFilter = PRODUCT_PROFIT_FILTERS.includes(query.profitFilter as ProductProfitFilter)
+      ? query.profitFilter as ProductProfitFilter
+      : 'all';
     const computedFilters = {
       priceMin: parseOptionalFiniteNumber(query.priceMin),
       priceMax: parseOptionalFiniteNumber(query.priceMax),
@@ -1102,9 +1191,10 @@ export async function shopRoutes(app: FastifyInstance) {
       stockMax: parseOptionalFiniteNumber(query.stockMax),
       warehouseId,
       warehouseStockMode,
+      profitFilter,
     };
     const hasComputedFilters = Object.entries(computedFilters).some(([key, value]) => (
-      key === 'warehouseStockMode' ? value !== 'all' : key !== 'warehouseId' && value != null
+      key === 'warehouseStockMode' || key === 'profitFilter' ? value !== 'all' : key !== 'warehouseId' && value != null
     ));
     const statusFilter = PRODUCT_STATUS_FILTERS.includes(query.statusFilter as ProductStatusFilter)
       ? query.statusFilter! as ProductStatusFilter
@@ -1155,13 +1245,23 @@ export async function shopRoutes(app: FastifyInstance) {
     let total: number;
     let rows: any[];
     let statusCounts: { current: number; archived: number; missing: number; all: number };
+    let buyerCostByProductId = new Map<string, ProductBuyerCost>();
     if (hasComputedFilters) {
       const allRows = await prisma.product.findMany({
         where: baseWhere as any,
         orderBy: productOrderBy,
         select: productSelect,
       });
-      const filtered = allRows.filter((row) => matchesProductListComputedFilters(row, computedFilters));
+      if (profitFilter !== 'all') {
+        buyerCostByProductId = await fetchProductBuyerCosts(
+          userId,
+          allRows.map((row) => String(row.platformProductId || '').trim()).filter(Boolean),
+        );
+      }
+      const filterRows = profitFilter === 'all'
+        ? allRows
+        : allRows.map((row) => enrichProductBuyerCost(row, buyerCostByProductId));
+      const filtered = filterRows.filter((row) => matchesProductListComputedFilters(row, computedFilters));
       statusCounts = buildProductStatusCounts(filtered);
       const statusRows = filtered.filter((row) => matchesProductStatusFilter(row, statusFilter));
       total = statusCounts[statusFilter];
@@ -1217,52 +1317,11 @@ export async function shopRoutes(app: FastifyInstance) {
     const platformProductIds = rows
       .map((row) => String(row.platformProductId || '').trim())
       .filter((value) => value);
-    const buyerCostByProductId = new Map<string, { priceCny: string; sourcePlatform: string | null }>();
-    if (platformProductIds.length) {
-      const quoteRows = await prisma.sourceQuote.findMany({
-        where: {
-          userId,
-          ozonProductId: { in: platformProductIds },
-          costCny: { not: null },
-        },
-        orderBy: { updatedAt: 'desc' },
-        select: {
-          ozonProductId: true,
-          costCny: true,
-          sourcePlatform: true,
-        },
-      });
-      for (const quote of quoteRows) {
-        const productId = String(quote.ozonProductId || '').trim();
-        if (!productId || buyerCostByProductId.has(productId) || !quote.costCny) continue;
-        buyerCostByProductId.set(productId, {
-          priceCny: quote.costCny.toString(),
-          sourcePlatform: quote.sourcePlatform || null,
-        });
-      }
-      const missingProductIds = platformProductIds.filter((productId) => !buyerCostByProductId.has(productId));
-      if (missingProductIds.length) {
-        const candidateRows = await prisma.sourceCandidate.findMany({
-          where: {
-            userId,
-            ozonProductId: { in: missingProductIds },
-            sourceTotalCost: { not: null },
-          },
-          orderBy: { updatedAt: 'desc' },
-          select: {
-            ozonProductId: true,
-            sourceTotalCost: true,
-            sourcePlatform: true,
-          },
-        });
-        for (const candidate of candidateRows) {
-          const productId = String(candidate.ozonProductId || '').trim();
-          if (!productId || buyerCostByProductId.has(productId) || !candidate.sourceTotalCost) continue;
-          buyerCostByProductId.set(productId, {
-            priceCny: candidate.sourceTotalCost.toString(),
-            sourcePlatform: candidate.sourcePlatform || null,
-          });
-        }
+    const missingBuyerCostIds = platformProductIds.filter((productId) => !buyerCostByProductId.has(productId));
+    if (missingBuyerCostIds.length) {
+      const pageBuyerCosts = await fetchProductBuyerCosts(userId, missingBuyerCostIds);
+      for (const [productId, cost] of pageBuyerCosts) {
+        buyerCostByProductId.set(productId, cost);
       }
     }
 
@@ -1282,6 +1341,12 @@ export async function shopRoutes(app: FastifyInstance) {
             ? categoryCatalogByKey.get(categoryCatalogKey(descriptionCategoryId, typeId)) || null
             : null;
           const buyerCost = r.platformProductId ? buyerCostByProductId.get(String(r.platformProductId)) : null;
+          const profit = resolveProductProfitSnapshot({
+            ...r,
+            buyerPriceCny: buyerCost?.priceCny ?? null,
+            profitCny: buyerCost?.profitCny ?? null,
+            profitMarginPct: buyerCost?.marginPct ?? null,
+          });
           return {
             ...rest,
             sku: normalizeOzonSku(r.sku),
@@ -1294,6 +1359,9 @@ export async function shopRoutes(app: FastifyInstance) {
             minPrice: r.minPrice?.toString() ?? null,
             buyerPriceCny: buyerCost?.priceCny ?? null,
             buyerSourcePlatform: buyerCost?.sourcePlatform ?? null,
+            profitCny: profit.profitCny != null ? profit.profitCny.toFixed(2) : null,
+            profitMarginPct: profit.marginPct != null ? profit.marginPct.toFixed(2) : null,
+            profitTier: profit.tier,
             ozonStatusName: statusDisplay.name,
             ozonStatusDescription: statusDisplay.description,
             ozonModerateStatus: statusDisplay.moderateStatus,
