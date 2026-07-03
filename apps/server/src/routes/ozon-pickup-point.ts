@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma.js';
 import { OzonClient, type OzonDeliveryMethod } from '../services/ozon-client.js';
 import {
   fetchOzonSellerDropoffPoints,
+  normalizeSellerDropoffContactFields,
   toOzonPickupPointData,
   type SellerDropoffFetchResult,
   type SellerDropoffPoint,
@@ -30,7 +31,10 @@ const updateSchema = createSchema.partial();
 const OZON_DROPOFF_IMPORT_BODY_LIMIT = 20 * 1024 * 1024;
 const DEFAULT_PICKUP_POINT_PAGE_SIZE = 100;
 const MAX_PICKUP_POINT_PAGE_SIZE = 200;
+const MAX_GROUPED_PICKUP_POINT_ROWS = 50000;
 const OZON_SYNC_TOUCH_BATCH_SIZE = 500;
+const SERVICE_LEVELS = ['Economy', 'Standard', 'Express'] as const;
+const WEIGHT_TIERS = ['Premium Big', 'Premium Small', 'Extra Small', 'Budget', 'Small', 'Big'] as const;
 const pickupPointListSelect = {
   id: true,
   city: true,
@@ -92,8 +96,32 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
 
   // 用户列表：普通用户只看启用点；管理员页面可通过 includeInactive 查看全部。
   app.get('/', async (request, reply) => {
-    const { city, q, type, includeInactive, providerId, source, page, pageSize } = request.query as {
-      city?: string; q?: string; type?: string; includeInactive?: string; providerId?: string; source?: string; page?: string; pageSize?: string;
+    const {
+      city,
+      q,
+      type,
+      includeInactive,
+      providerId,
+      source,
+      page,
+      pageSize,
+      view,
+      carrier,
+      serviceLevel,
+      weightTier,
+    } = request.query as {
+      city?: string;
+      q?: string;
+      type?: string;
+      includeInactive?: string;
+      providerId?: string;
+      source?: string;
+      page?: string;
+      pageSize?: string;
+      view?: string;
+      carrier?: string;
+      serviceLevel?: string;
+      weightTier?: string;
     };
     const user = (request as any).user || {};
     const keyword = String(q || city || '').trim();
@@ -106,8 +134,38 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       includeInactive,
       providerIdNumber,
       source,
+      carrier,
+      serviceLevel,
+      weightTier,
       role: user.role,
     });
+
+    if (isWarehouseView(view)) {
+      const rows = await prisma.ozonPickupPoint.findMany({
+        where,
+        select: pickupPointListSelect,
+        orderBy: [{ sortOrder: 'asc' }, { city: 'asc' }, { providerName: 'asc' }, { createdAt: 'desc' }],
+        take: MAX_GROUPED_PICKUP_POINT_ROWS,
+      });
+      const groups = groupPickupPointRowsByWarehouse(rows.map(normalizePickupPointListRowForDisplay));
+      const total = groups.length;
+      const totalPages = Math.max(1, Math.ceil(total / currentPageSize));
+      const pageGroups = groups.slice((currentPage - 1) * currentPageSize, currentPage * currentPageSize);
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: pageGroups,
+        meta: {
+          page: currentPage,
+          pageSize: currentPageSize,
+          total,
+          totalRows: rows.length,
+          totalPages,
+          hasNext: currentPage < totalPages,
+          truncated: rows.length >= MAX_GROUPED_PICKUP_POINT_ROWS,
+        },
+      });
+    }
 
     const [total, list] = await Promise.all([
       prisma.ozonPickupPoint.count({ where }),
@@ -123,7 +181,7 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
     return reply.send({
       code: 1,
       msg: 'ok',
-      data: list,
+      data: list.map(normalizePickupPointListRowForDisplay),
       meta: {
         page: currentPage,
         pageSize: currentPageSize,
@@ -145,6 +203,9 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       includeInactive,
       providerIdNumber: Number.NaN,
       source,
+      carrier: '',
+      serviceLevel: '',
+      weightTier: '',
       role: user.role,
     });
     where.providerId = { not: null };
@@ -153,7 +214,14 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       where,
       _count: { _all: true },
     });
-    const providerMap = new Map<number, { providerId: number; providerName: string; count: number }>();
+    const providerMap = new Map<number, {
+      providerId: number;
+      providerName: string;
+      carrierName: string;
+      serviceLevel: string;
+      weightTier: string;
+      count: number;
+    }>();
     for (const row of rows) {
       const providerId = Number(row.providerId);
       if (!Number.isFinite(providerId) || providerId <= 0) continue;
@@ -161,12 +229,20 @@ export async function ozonPickupPointRoutes(app: FastifyInstance) {
       if (existing) {
         existing.count += row._count._all;
         if (row.providerName && existing.providerName.startsWith('Provider ')) {
+          const service = parseOzonProviderName(row.providerName);
           existing.providerName = row.providerName;
+          existing.carrierName = service.carrierName;
+          existing.serviceLevel = service.serviceLevel;
+          existing.weightTier = service.weightTier;
         }
       } else {
+        const service = parseOzonProviderName(row.providerName || '');
         providerMap.set(providerId, {
           providerId,
           providerName: row.providerName || `Provider ${providerId}`,
+          carrierName: service.carrierName,
+          serviceLevel: service.serviceLevel,
+          weightTier: service.weightTier,
           count: row._count._all,
         });
       }
@@ -284,14 +360,23 @@ function buildOzonPickupPointWhere(params: {
   includeInactive?: string;
   providerIdNumber: number;
   source?: string;
+  carrier?: string;
+  serviceLevel?: string;
+  weightTier?: string;
   role?: string;
 }) {
   const where: any = {};
-  const { keyword, type, includeInactive, providerIdNumber, source, role } = params;
+  const { keyword, type, includeInactive, providerIdNumber, source, carrier, serviceLevel, weightTier, role } = params;
   if (!includeInactive || role !== 'ADMIN') where.isActive = true;
   if (type) where.type = type;
   if (Number.isFinite(providerIdNumber) && providerIdNumber > 0) where.providerId = providerIdNumber;
   if (source === 'manual' || source === 'ozon_seller') where.source = source;
+  const andFilters = [
+    providerNameFilter(carrier),
+    providerNameFilter(serviceLevel),
+    providerNameFilter(weightTier),
+  ].filter(Boolean);
+  if (andFilters.length) where.AND = andFilters;
   if (keyword) {
     where.OR = [
       { city: { contains: keyword, mode: 'insensitive' } },
@@ -305,6 +390,185 @@ function buildOzonPickupPointWhere(params: {
     ];
   }
   return where;
+}
+
+function providerNameFilter(value: unknown) {
+  const keyword = stringValue(value);
+  if (!keyword) return null;
+  return { providerName: { contains: keyword, mode: 'insensitive' } };
+}
+
+function normalizePickupPointListRowForDisplay(row: Record<string, any>) {
+  if (row.source !== 'ozon_seller') return row;
+  const normalized = normalizeSellerDropoffContactFields({
+    address: row.address,
+    name: row.name,
+    contact: row.contact,
+    phone: row.phone,
+  });
+  return {
+    ...row,
+    address: normalized.address || row.address,
+    contact: normalized.contact || row.contact,
+    phone: normalized.phone || row.phone,
+  };
+}
+
+function isWarehouseView(value: unknown): boolean {
+  const view = String(value || '').trim().toLowerCase();
+  return view === 'warehouse' || view === 'grouped' || view === 'group' || view === '1' || view === 'true';
+}
+
+function groupPickupPointRowsByWarehouse(rows: Array<Record<string, any>>) {
+  const groups = new Map<string, any>();
+  for (const row of rows) {
+    const key = buildWarehouseGroupKey(row);
+    const service = buildPickupPointService(row);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        id: `warehouse_${createHash('sha1').update(key).digest('hex').slice(0, 16)}`,
+        city: row.city,
+        province: row.province,
+        type: row.type,
+        name: row.name,
+        address: row.address,
+        contact: row.contact,
+        phone: row.phone,
+        workingHours: row.workingHours,
+        source: row.source,
+        shopId: row.shopId,
+        isActive: Boolean(row.isActive),
+        sortOrder: Number(row.sortOrder) || 0,
+        serviceCount: 0,
+        activeServiceCount: 0,
+        carriers: [] as string[],
+        serviceLevels: [] as string[],
+        weightTiers: [] as string[],
+        services: [service],
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        syncedAt: row.syncedAt,
+      });
+      continue;
+    }
+    existing.services.push(service);
+    existing.isActive = existing.isActive || Boolean(row.isActive);
+    if (!existing.contact && row.contact) existing.contact = row.contact;
+    if (!existing.phone && row.phone) existing.phone = row.phone;
+    if (!existing.workingHours && row.workingHours) existing.workingHours = row.workingHours;
+    if ((Number(row.sortOrder) || 0) < existing.sortOrder) existing.sortOrder = Number(row.sortOrder) || 0;
+    existing.updatedAt = maxDateValue(existing.updatedAt, row.updatedAt);
+    existing.syncedAt = maxDateValue(existing.syncedAt, row.syncedAt);
+  }
+
+  const result = [...groups.values()].map((group) => {
+    group.services.sort(comparePickupPointServices);
+    group.serviceCount = group.services.length;
+    group.activeServiceCount = group.services.filter((service: any) => service.isActive).length;
+    group.carriers = uniqueStrings(group.services.map((service: any) => service.carrierName));
+    group.serviceLevels = uniqueStrings(group.services.map((service: any) => service.serviceLevel));
+    group.weightTiers = uniqueStrings(group.services.map((service: any) => service.weightTier));
+    return group;
+  });
+
+  return result.sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    const city = String(a.city || '').localeCompare(String(b.city || ''), 'zh-Hans-CN', { numeric: true });
+    if (city) return city;
+    return String(a.name || a.address || '').localeCompare(String(b.name || b.address || ''), 'zh-Hans-CN', { numeric: true });
+  });
+}
+
+function buildPickupPointService(row: Record<string, any>) {
+  const parsed = parseOzonProviderName(row.providerName || '');
+  return {
+    id: row.id,
+    name: row.name,
+    address: row.address,
+    contact: row.contact,
+    phone: row.phone,
+    workingHours: row.workingHours,
+    note: row.note,
+    isActive: Boolean(row.isActive),
+    sortOrder: Number(row.sortOrder) || 0,
+    source: row.source,
+    externalId: row.externalId,
+    providerId: row.providerId,
+    providerName: row.providerName,
+    carrierName: parsed.carrierName,
+    serviceLevel: parsed.serviceLevel,
+    weightTier: parsed.weightTier,
+    shopId: row.shopId,
+    syncedAt: row.syncedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function buildWarehouseGroupKey(row: Record<string, any>): string {
+  const addressKey = normalizeWarehouseGroupText(row.address);
+  const fallbackNameKey = normalizeWarehouseGroupText(row.name);
+  const locationKey = addressKey || [stringValue(row.city), fallbackNameKey || stringValue(row.id)].join('|');
+  return [
+    stringValue(row.source) || 'manual',
+    stringValue(row.shopId),
+    stringValue(row.type),
+    locationKey,
+  ].join('|');
+}
+
+function normalizeWarehouseGroupText(value: unknown): string {
+  return stringValue(value)
+    .toLowerCase()
+    .replace(/[\s,，;；。.\-—_()（）\[\]【】]/g, '');
+}
+
+function parseOzonProviderName(providerName: string): { carrierName: string; serviceLevel: string; weightTier: string } {
+  const name = stringValue(providerName);
+  if (!name) return { carrierName: '', serviceLevel: '', weightTier: '' };
+  const tokens = name.split(/\s+/).filter(Boolean);
+  const serviceIndex = tokens.findIndex((token) => SERVICE_LEVELS.some((level) => level.toLowerCase() === token.toLowerCase()));
+  const carrierName = serviceIndex > 0 ? tokens.slice(0, serviceIndex).join(' ') : tokens[0] || name;
+  const serviceLevel = serviceIndex >= 0 ? tokens[serviceIndex] || '' : '';
+  const tail = serviceIndex >= 0 ? tokens.slice(serviceIndex + 1).join(' ') : tokens.slice(1).join(' ');
+  const weightTier = WEIGHT_TIERS.find((tier) => new RegExp(`(^|\\s)${escapeRegExp(tier)}($|\\s)`, 'i').test(tail)) || '';
+  return { carrierName, serviceLevel, weightTier };
+}
+
+function comparePickupPointServices(a: any, b: any): number {
+  const carrier = String(a.carrierName || '').localeCompare(String(b.carrierName || ''), 'zh-Hans-CN', { numeric: true });
+  if (carrier) return carrier;
+  const serviceLevel = serviceLevelRank(a.serviceLevel) - serviceLevelRank(b.serviceLevel);
+  if (serviceLevel) return serviceLevel;
+  const weight = weightTierRank(a.weightTier) - weightTierRank(b.weightTier);
+  if (weight) return weight;
+  return String(a.providerName || '').localeCompare(String(b.providerName || ''), 'zh-Hans-CN', { numeric: true });
+}
+
+function serviceLevelRank(value: string): number {
+  const index = SERVICE_LEVELS.findIndex((level) => level.toLowerCase() === String(value || '').toLowerCase());
+  return index >= 0 ? index : SERVICE_LEVELS.length;
+}
+
+function weightTierRank(value: string): number {
+  const index = WEIGHT_TIERS.findIndex((tier) => tier.toLowerCase() === String(value || '').toLowerCase());
+  return index >= 0 ? index : WEIGHT_TIERS.length;
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.map((value) => stringValue(value)).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN', { numeric: true }));
+}
+
+function maxDateValue(a: unknown, b: unknown) {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(a as any).getTime() >= new Date(b as any).getTime() ? a : b;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function parsePositiveInt(value: unknown, fallback: number): number {

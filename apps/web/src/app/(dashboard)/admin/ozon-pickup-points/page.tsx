@@ -33,6 +33,50 @@ interface PickupPoint {
   createdAt: string;
 }
 
+interface PickupPointService {
+  id: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  phone: string | null;
+  workingHours: string | null;
+  note: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  source?: string | null;
+  externalId?: string | null;
+  providerId?: number | null;
+  providerName?: string | null;
+  carrierName?: string | null;
+  serviceLevel?: string | null;
+  weightTier?: string | null;
+  syncedAt?: string | null;
+  createdAt: string;
+}
+
+interface PickupPointGroup {
+  id: string;
+  city: string;
+  province: string | null;
+  type: 'collect' | 'dispatch';
+  name: string;
+  address: string;
+  contact: string | null;
+  phone: string | null;
+  workingHours: string | null;
+  source?: string | null;
+  shopId?: string | null;
+  isActive: boolean;
+  serviceCount: number;
+  activeServiceCount: number;
+  carriers: string[];
+  serviceLevels: string[];
+  weightTiers: string[];
+  services: PickupPointService[];
+  syncedAt?: string | null;
+  createdAt: string;
+}
+
 interface ShopOption {
   id: string;
   name: string;
@@ -89,6 +133,7 @@ const TYPE_OPTIONS = [
 ];
 
 const typeLabel = (t: string) => TYPE_OPTIONS.find((o) => o.value === t)?.label || t;
+const sourceLabel = (source: string | null | undefined) => (source === 'ozon_seller' ? 'Ozon可选池' : 'ERP自建');
 const PAGE_SIZE = 100;
 const EXTENSION_PING_TIMEOUT_MS = 5000;
 const OZON_DROPOFF_EXTENSION_TIMEOUT_MS = 300000;
@@ -184,7 +229,7 @@ function mergeSyncProgress(
 
 export default function AdminOzonPickupPointsPage() {
   const systemDialog = useSystemDialog();
-  const [items, setItems] = useState<PickupPoint[]>([]);
+  const [items, setItems] = useState<PickupPointGroup[]>([]);
   const [shops, setShops] = useState<ShopOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
@@ -215,11 +260,12 @@ export default function AdminOzonPickupPointsPage() {
     setLoading(true);
     const params = new URLSearchParams({
       includeInactive: '1',
+      view: 'warehouse',
       page: String(page),
       pageSize: String(PAGE_SIZE),
     });
     if (filterKeyword.trim()) params.set('q', filterKeyword.trim());
-    const res = await api.get<PickupPoint[]>(`/api/ozon-pickup-points?${params.toString()}`);
+    const res = await api.get<PickupPointGroup[]>(`/api/ozon-pickup-points?${params.toString()}`);
     if (res.code === 1 && res.data) {
       setItems(res.data);
       setMeta((res.meta as PageMeta | undefined) || { page, pageSize: PAGE_SIZE, total: res.data.length, totalPages: 1, hasNext: false });
@@ -307,6 +353,29 @@ export default function AdminOzonPickupPointsPage() {
     } else {
       toast({ title: res.msg || '删除失败', variant: 'destructive' });
     }
+  }
+
+  function pointFromService(group: PickupPointGroup, service: PickupPointService): PickupPoint {
+    return {
+      id: service.id,
+      city: group.city,
+      province: group.province,
+      type: group.type,
+      name: service.name || group.name,
+      address: service.address || group.address,
+      contact: service.contact || group.contact,
+      phone: service.phone || group.phone,
+      workingHours: service.workingHours || group.workingHours,
+      note: service.note,
+      isActive: service.isActive,
+      sortOrder: service.sortOrder,
+      source: service.source || group.source,
+      externalId: service.externalId,
+      providerId: service.providerId,
+      providerName: service.providerName,
+      syncedAt: service.syncedAt || group.syncedAt,
+      createdAt: service.createdAt || group.createdAt,
+    };
   }
 
   async function syncOzonDropoffPoints() {
@@ -494,9 +563,9 @@ export default function AdminOzonPickupPointsPage() {
       <Card>
         <CardHeader className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle className="text-base">已保存可选点/自建点（{meta.total}）</CardTitle>
+            <CardTitle className="text-base">已保存仓点/自建点（{meta.total}）</CardTitle>
             <Input
-              placeholder="按城市/省份/名称/地址/provider/发运点ID过滤"
+              placeholder="按城市/省份/名称/地址/物流商/重量/发运点ID过滤"
               value={filterKeyword}
               onChange={(e) => setFilterKeyword(e.target.value)}
               className="max-w-md"
@@ -511,17 +580,17 @@ export default function AdminOzonPickupPointsPage() {
           ) : (
             <div className="space-y-2">
               {items.map((it) => (
-                <div key={it.id} className="flex items-start gap-3 p-3 rounded-lg border hover:bg-muted/30">
+                <div key={it.id} className="rounded-lg border p-3 hover:bg-muted/30">
+                  <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">{it.name}</span>
                       <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>{typeLabel(it.type)}</Badge>
                       <Badge variant="outline">{it.province ? `${it.province} · ` : ''}{it.city}</Badge>
-                      {it.source === 'ozon_seller' ? <Badge variant="outline">Ozon可选池</Badge> : <Badge variant="outline">ERP自建</Badge>}
-                      {it.providerName && <Badge variant="outline">{it.providerName}</Badge>}
-                      {it.externalId && <Badge variant="outline">ID {it.externalId}</Badge>}
+                      <Badge variant="outline">{sourceLabel(it.source)}</Badge>
+                      {it.carriers.slice(0, 4).map((carrier) => <Badge key={carrier} variant="outline">{carrier}</Badge>)}
+                      <Badge variant="outline">{it.activeServiceCount || 0}/{it.serviceCount} 启用</Badge>
                       {!it.isActive && <Badge variant="outline" className="text-muted-foreground">已停用</Badge>}
-                      {it.sortOrder !== 0 && <span className="text-xs text-muted-foreground">序 {it.sortOrder}</span>}
                     </div>
                     <div className="text-sm text-muted-foreground mt-1">{it.address}</div>
                     <div className="text-xs text-muted-foreground mt-1 flex gap-3 flex-wrap">
@@ -529,11 +598,30 @@ export default function AdminOzonPickupPointsPage() {
                       {it.phone && <span>电话：{it.phone}</span>}
                       {it.workingHours && <span>{it.workingHours}</span>}
                     </div>
-                    {it.note && <div className="text-xs text-muted-foreground mt-1">备注：{it.note}</div>}
                   </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(it)}><Pencil className="h-3.5 w-3.5" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => remove(it)}><Trash2 className="h-3.5 w-3.5 text-destructive" /></Button>
+                  <div className="text-xs text-muted-foreground shrink-0">服务 {it.serviceCount}</div>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {it.services.map((service) => (
+                      <div key={service.id} className="flex items-center gap-2 rounded-md bg-muted/30 px-2 py-1.5 text-xs">
+                        <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5">
+                          <span className="font-medium">{service.providerName || service.carrierName || '未命名服务'}</span>
+                          {service.serviceLevel && <Badge variant="outline" className="h-5 px-1.5 text-[11px]">{service.serviceLevel}</Badge>}
+                          {service.weightTier && <Badge variant="outline" className="h-5 px-1.5 text-[11px]">{service.weightTier}</Badge>}
+                          {service.externalId && <span className="text-muted-foreground">ID {service.externalId}</span>}
+                          {!service.isActive && <span className="text-muted-foreground">已停用</span>}
+                          {service.note && <span className="truncate text-muted-foreground">{service.note}</span>}
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <Button size="sm" variant="ghost" onClick={() => openEdit(pointFromService(it, service))} title="编辑服务变体">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => remove(pointFromService(it, service))} title="删除服务变体">
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ))}

@@ -9,7 +9,26 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
-interface PickupPoint {
+interface PickupPointService {
+  id: string;
+  name: string;
+  address: string;
+  contact: string | null;
+  phone: string | null;
+  workingHours: string | null;
+  note: string | null;
+  isActive?: boolean;
+  sortOrder?: number;
+  source?: string | null;
+  externalId?: string | null;
+  providerId?: number | null;
+  providerName?: string | null;
+  carrierName?: string | null;
+  serviceLevel?: string | null;
+  weightTier?: string | null;
+}
+
+interface PickupPointGroup {
   id: string;
   city: string;
   province: string | null;
@@ -19,16 +38,23 @@ interface PickupPoint {
   contact: string | null;
   phone: string | null;
   workingHours: string | null;
-  note: string | null;
   source?: string | null;
-  externalId?: string | null;
-  providerId?: number | null;
-  providerName?: string | null;
+  shopId?: string | null;
+  isActive?: boolean;
+  serviceCount: number;
+  activeServiceCount?: number;
+  carriers: string[];
+  serviceLevels: string[];
+  weightTiers: string[];
+  services: PickupPointService[];
 }
 
 interface ProviderOption {
   providerId: number;
   providerName: string;
+  carrierName?: string | null;
+  serviceLevel?: string | null;
+  weightTier?: string | null;
   count: number;
 }
 
@@ -46,7 +72,7 @@ const sourceLabel = (source: string | null | undefined) => (source === 'ozon_sel
 const PAGE_SIZE = 100;
 
 export default function OzonPickupPointsPage() {
-  const [items, setItems] = useState<PickupPoint[]>([]);
+  const [items, setItems] = useState<PickupPointGroup[]>([]);
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [meta, setMeta] = useState<PageMeta>({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1, hasNext: false });
   const [loading, setLoading] = useState(true);
@@ -54,35 +80,43 @@ export default function OzonPickupPointsPage() {
   const [keyword, setKeyword] = useState('');
   const [typeFilter, setTypeFilter] = useState<'' | 'collect' | 'dispatch'>('');
 
-  const [providerFilter, setProviderFilter] = useState('');
+  const [carrierFilter, setCarrierFilter] = useState('');
+  const [serviceLevelFilter, setServiceLevelFilter] = useState('');
+  const [weightTierFilter, setWeightTierFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [page, setPage] = useState(1);
 
   useEffect(() => {
     setPage(1);
-  }, [keyword, typeFilter, providerFilter, sourceFilter]);
+  }, [keyword, typeFilter, carrierFilter, serviceLevelFilter, weightTierFilter, sourceFilter]);
 
   useEffect(() => {
-    setProviderFilter('');
+    setCarrierFilter('');
+    setServiceLevelFilter('');
+    setWeightTierFilter('');
     fetchProviders();
   }, [typeFilter, sourceFilter]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { fetchList(); }, keyword || typeFilter || providerFilter || sourceFilter ? 250 : 0);
+    const hasFilter = keyword || typeFilter || carrierFilter || serviceLevelFilter || weightTierFilter || sourceFilter;
+    const timer = window.setTimeout(() => { fetchList(); }, hasFilter ? 250 : 0);
     return () => window.clearTimeout(timer);
-  }, [keyword, typeFilter, providerFilter, sourceFilter, page]);
+  }, [keyword, typeFilter, carrierFilter, serviceLevelFilter, weightTierFilter, sourceFilter, page]);
 
   async function fetchList() {
     setLoading(true);
     const params = new URLSearchParams();
+    params.set('view', 'warehouse');
     if (keyword.trim()) params.set('q', keyword.trim());
     if (typeFilter) params.set('type', typeFilter);
-    if (providerFilter) params.set('providerId', providerFilter);
+    if (carrierFilter) params.set('carrier', carrierFilter);
+    if (serviceLevelFilter) params.set('serviceLevel', serviceLevelFilter);
+    if (weightTierFilter) params.set('weightTier', weightTierFilter);
     if (sourceFilter) params.set('source', sourceFilter);
     params.set('page', String(page));
     params.set('pageSize', String(PAGE_SIZE));
     const query = params.toString();
-    const res = await api.get<PickupPoint[]>(`/api/ozon-pickup-points${query ? `?${query}` : ''}`);
+    const res = await api.get<PickupPointGroup[]>(`/api/ozon-pickup-points${query ? `?${query}` : ''}`);
     if (res.code === 1 && res.data) {
       setItems(res.data);
       setMeta((res.meta as PageMeta | undefined) || { page, pageSize: PAGE_SIZE, total: res.data.length, totalPages: 1, hasNext: false });
@@ -130,7 +164,7 @@ export default function OzonPickupPointsPage() {
     }
   }
 
-  const cityMatched = (it: PickupPoint) =>
+  const cityMatched = (it: PickupPointGroup) =>
     keyword && (it.city.toLowerCase().includes(keyword.toLowerCase())
       || (it.province || '').toLowerCase().includes(keyword.toLowerCase()));
 
@@ -143,12 +177,22 @@ export default function OzonPickupPointsPage() {
     return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
   });
 
-  async function copyPoint(it: PickupPoint) {
+  const carrierOptions = aggregateProviderOptions(providers, 'carrierName');
+  const serviceLevelOptions = aggregateProviderOptions(providers, 'serviceLevel');
+  const weightTierOptions = aggregateProviderOptions(providers, 'weightTier');
+
+  async function copyPoint(it: PickupPointGroup) {
+    const services = it.services
+      .map((service) => {
+        const id = service.externalId ? `ID ${service.externalId}` : '';
+        return [service.providerName, service.serviceLevel, service.weightTier, id].filter(Boolean).join(' / ');
+      })
+      .slice(0, 20);
     const text = [
       it.name,
       it.address,
-      it.providerName ? `承运商: ${it.providerName}` : '',
-      it.externalId ? `Ozon发运点ID: ${it.externalId}` : '',
+      it.carriers.length ? `物流商: ${it.carriers.join(', ')}` : '',
+      services.length ? `服务: ${services.join('; ')}` : '',
       it.phone ? `电话: ${it.phone}` : '',
     ].filter(Boolean).join('\n');
     try {
@@ -169,7 +213,7 @@ export default function OzonPickupPointsPage() {
 
       <Card>
         <CardContent className="pt-4">
-          <div className="grid grid-cols-1 md:grid-cols-[minmax(220px,2fr)_minmax(120px,auto)_minmax(140px,auto)_minmax(160px,auto)_auto_auto] gap-3 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-[minmax(220px,2fr)_minmax(110px,auto)_minmax(120px,auto)_minmax(140px,auto)_minmax(120px,auto)_minmax(140px,auto)_auto_auto] gap-3 items-end">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">仓库地址 / 城市 / 站点关键字</label>
               <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="如：厦门海沧、义乌、广州、CEL" />
@@ -199,16 +243,46 @@ export default function OzonPickupPointsPage() {
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">承运商</label>
+              <label className="text-xs text-muted-foreground">物流商</label>
               <select
-                value={providerFilter}
-                onChange={(e) => setProviderFilter(e.target.value)}
+                value={carrierFilter}
+                onChange={(e) => setCarrierFilter(e.target.value)}
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
               >
                 <option value="">全部</option>
-                {providers.map((provider) => (
-                  <option key={provider.providerId} value={provider.providerId}>
-                    {provider.providerName}（{provider.count}）
+                {carrierOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.value}（{option.count}）
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">服务</label>
+              <select
+                value={serviceLevelFilter}
+                onChange={(e) => setServiceLevelFilter(e.target.value)}
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">全部</option>
+                {serviceLevelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.value}（{option.count}）
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">重量/规格</label>
+              <select
+                value={weightTierFilter}
+                onChange={(e) => setWeightTierFilter(e.target.value)}
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">全部</option>
+                {weightTierOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.value}（{option.count}）
                   </option>
                 ))}
               </select>
@@ -224,7 +298,7 @@ export default function OzonPickupPointsPage() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">可选发运点 / ERP自建点（{meta.total}）</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">可选仓点 / ERP自建点（{meta.total}）</CardTitle></CardHeader>
         <CardContent>
           {loading ? (
             <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
@@ -243,8 +317,8 @@ export default function OzonPickupPointsPage() {
                         <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>{typeLabel(it.type)}</Badge>
                         <Badge variant="outline">{it.province ? `${it.province} · ` : ''}{it.city}</Badge>
                         <Badge variant="outline">{sourceLabel(it.source)}</Badge>
-                        {it.providerName && <Badge variant="outline">{it.providerName}</Badge>}
-                        {it.externalId && <Badge variant="outline">ID {it.externalId}</Badge>}
+                        {it.carriers.slice(0, 3).map((carrier) => <Badge key={carrier} variant="outline">{carrier}</Badge>)}
+                        <Badge variant="outline">{it.serviceCount} 个服务</Badge>
                         {hit && <Badge variant="outline" className="text-orange-600 border-orange-300">同城</Badge>}
                       </div>
                       <div className="text-sm text-muted-foreground mt-1">{it.address}</div>
@@ -253,7 +327,24 @@ export default function OzonPickupPointsPage() {
                         {it.phone && <span>电话：{it.phone}</span>}
                         {it.workingHours && <span>{it.workingHours}</span>}
                       </div>
-                      {it.note && <div className="text-xs text-muted-foreground mt-1">备注：{it.note}</div>}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {it.services.slice(0, 12).map((service) => (
+                          <span
+                            key={service.id}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs text-foreground"
+                            title={service.providerName || undefined}
+                          >
+                            <span className="font-medium">{service.providerName || service.carrierName || '未命名服务'}</span>
+                            {service.weightTier && <span className="text-muted-foreground">{service.weightTier}</span>}
+                            {service.externalId && <span className="text-muted-foreground">ID {service.externalId}</span>}
+                          </span>
+                        ))}
+                        {it.services.length > 12 && (
+                          <span className="inline-flex items-center rounded-md border bg-muted px-2 py-1 text-xs text-muted-foreground">
+                            +{it.services.length - 12} 个
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <Button
                       size="sm"
@@ -294,4 +385,19 @@ export default function OzonPickupPointsPage() {
       </Card>
     </div>
   );
+}
+
+function aggregateProviderOptions(
+  providers: ProviderOption[],
+  field: 'carrierName' | 'serviceLevel' | 'weightTier',
+): { value: string; count: number }[] {
+  const map = new Map<string, number>();
+  for (const provider of providers) {
+    const value = String(provider[field] || '').trim();
+    if (!value) continue;
+    map.set(value, (map.get(value) || 0) + provider.count);
+  }
+  return [...map.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => a.value.localeCompare(b.value, 'zh-Hans-CN', { numeric: true }));
 }

@@ -712,6 +712,183 @@ describe('ozon pickup point routes', () => {
     await app.close();
   });
 
+  it('groups Ozon seller service variants by warehouse address for operator search', async () => {
+    const sharedAddress = '福建省三明市三元区列东街道高岩路26号梅狮新村-76栋';
+    mocks.pickupFindMany.mockResolvedValue([
+      {
+        id: 'point-1',
+        city: '三明',
+        province: '福建',
+        type: 'dispatch',
+        name: 'GW-SANMING01',
+        address: sharedAddress,
+        contact: null,
+        phone: null,
+        workingHours: null,
+        note: 'Ozon provider 1050 GUOO Standard Extra Small; 未匹配当前物流方式',
+        isActive: true,
+        sortOrder: 100,
+        source: 'ozon_seller',
+        externalId: '179998800',
+        providerId: 1050,
+        providerName: 'GUOO Standard Extra Small',
+        shopId: 'shop-1',
+        syncedAt: new Date('2026-07-02T00:00:00Z'),
+        createdAt: new Date('2026-07-02T00:00:00Z'),
+        updatedAt: new Date('2026-07-02T00:00:00Z'),
+      },
+      {
+        id: 'point-2',
+        city: '三明',
+        province: '福建',
+        type: 'dispatch',
+        name: 'GW-SANMING01',
+        address: sharedAddress,
+        contact: null,
+        phone: null,
+        workingHours: null,
+        note: 'Ozon provider 1051 GUOO Economy Extra Small; 未匹配当前物流方式',
+        isActive: true,
+        sortOrder: 100,
+        source: 'ozon_seller',
+        externalId: '179998799',
+        providerId: 1051,
+        providerName: 'GUOO Economy Extra Small',
+        shopId: 'shop-1',
+        syncedAt: new Date('2026-07-02T00:00:00Z'),
+        createdAt: new Date('2026-07-02T00:00:00Z'),
+        updatedAt: new Date('2026-07-02T00:00:00Z'),
+      },
+      {
+        id: 'point-3',
+        city: '三明',
+        province: '福建',
+        type: 'dispatch',
+        name: 'GW-SANMING01',
+        address: sharedAddress,
+        contact: null,
+        phone: null,
+        workingHours: null,
+        note: 'Ozon provider 1244 GUOO Economy Budget; 未匹配当前物流方式',
+        isActive: true,
+        sortOrder: 100,
+        source: 'ozon_seller',
+        externalId: '179998802',
+        providerId: 1244,
+        providerName: 'GUOO Economy Budget',
+        shopId: 'shop-1',
+        syncedAt: new Date('2026-07-02T00:00:00Z'),
+        createdAt: new Date('2026-07-02T00:00:00Z'),
+        updatedAt: new Date('2026-07-02T00:00:00Z'),
+      },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points?view=warehouse&q=三明&page=1&pageSize=20&source=ozon_seller',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toMatchObject({
+      code: 1,
+      data: [
+        expect.objectContaining({
+          city: '三明',
+          address: sharedAddress,
+          serviceCount: 3,
+          carriers: ['GUOO'],
+          services: expect.arrayContaining([
+            expect.objectContaining({
+              id: 'point-2',
+              providerName: 'GUOO Economy Extra Small',
+              carrierName: 'GUOO',
+              serviceLevel: 'Economy',
+              weightTier: 'Extra Small',
+            }),
+            expect.objectContaining({
+              id: 'point-3',
+              providerName: 'GUOO Economy Budget',
+              carrierName: 'GUOO',
+              serviceLevel: 'Economy',
+              weightTier: 'Budget',
+            }),
+            expect.objectContaining({
+              id: 'point-1',
+              providerName: 'GUOO Standard Extra Small',
+              carrierName: 'GUOO',
+              serviceLevel: 'Standard',
+              weightTier: 'Extra Small',
+            }),
+          ]),
+        }),
+      ],
+      meta: expect.objectContaining({
+        total: 1,
+        totalRows: 3,
+        totalPages: 1,
+        hasNext: false,
+      }),
+    });
+    expect(body.data).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it('normalizes imported Ozon contact suffixes when listing existing rows', async () => {
+    mocks.pickupFindMany.mockResolvedValue([
+      {
+        id: 'point-1',
+        city: '义乌',
+        province: null,
+        type: 'dispatch',
+        name: '【义乌山颂揽收仓】',
+        address: '【义乌山颂揽收仓】后宅街道城北路L10号3号电梯5楼502 冉文欣',
+        contact: null,
+        phone: '13157045678',
+        workingHours: null,
+        note: 'Ozon provider 1093 ZTO Express Extra Small; 未匹配当前物流方式',
+        isActive: true,
+        sortOrder: 100,
+        source: 'ozon_seller',
+        externalId: '175612499',
+        providerId: 1093,
+        providerName: 'ZTO Express Extra Small',
+        shopId: 'shop-1',
+        syncedAt: new Date('2026-07-02T00:00:00Z'),
+        createdAt: new Date('2026-07-02T00:00:00Z'),
+        updatedAt: new Date('2026-07-02T00:00:00Z'),
+      },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/ozon-pickup-points?view=warehouse&q=义乌&page=1&pageSize=20&source=ozon_seller',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: [
+        expect.objectContaining({
+          address: '【义乌山颂揽收仓】后宅街道城北路L10号3号电梯5楼502',
+          contact: '冉文欣',
+          phone: '13157045678',
+          services: [
+            expect.objectContaining({
+              address: '【义乌山颂揽收仓】后宅街道城北路L10号3号电梯5楼502',
+              contact: '冉文欣',
+            }),
+          ],
+        }),
+      ],
+    });
+
+    await app.close();
+  });
+
   it('returns provider options without loading all pickup points', async () => {
     mocks.pickupGroupBy.mockResolvedValue([
       { providerId: 1079, providerName: 'RETS Standard Extra Small', _count: { _all: 19 } },

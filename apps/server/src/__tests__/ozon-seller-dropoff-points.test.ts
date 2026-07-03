@@ -292,6 +292,25 @@ describe('Ozon seller drop-off points', () => {
     });
   });
 
+  it('extracts unlabeled plain contact names from address suffixes when a phone is available', () => {
+    const data = toOzonPickupPointData({
+      externalId: 'zto-yiwu',
+      name: '【义乌山颂揽收仓】',
+      address: '【义乌山颂揽收仓】后宅街道城北路L10号3号电梯5楼502 冉文欣',
+      phone: '13157045678',
+      providerId: 1093,
+      providerName: 'ZTO Express Extra Small',
+      boundMethodIds: [],
+    }, 'shop-1');
+
+    expect(data).toMatchObject({
+      city: '义乌',
+      address: '【义乌山颂揽收仓】后宅街道城北路L10号3号电梯5楼502',
+      contact: '冉文欣',
+      phone: '13157045678',
+    });
+  });
+
   it('extracts contact names from trailing warehouse parentheses without removing warehouse text', () => {
     const data = toOzonPickupPointData({
       externalId: 'guoo-jinjiang',

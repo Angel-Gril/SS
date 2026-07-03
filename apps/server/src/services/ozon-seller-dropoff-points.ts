@@ -227,10 +227,15 @@ function uniqueProvidersFromMethods(methods: SellerDeliveryMethodRef[]): { provi
 }
 
 export function toOzonPickupPointData(point: SellerDropoffPoint, shopId: string): OzonPickupPointData {
-  const parsedAddress = parseSellerDropoffAddress(point.address || point.name);
-  const address = parsedAddress.address || point.name;
-  const contact = stringValue(point.contact) || parsedAddress.contact;
-  const phone = normalizeContactPhone(point.phone) || parsedAddress.phone;
+  const normalizedContact = normalizeSellerDropoffContactFields({
+    address: point.address || point.name,
+    name: point.name,
+    contact: point.contact,
+    phone: point.phone,
+  });
+  const address = normalizedContact.address || point.name;
+  const contact = normalizedContact.contact;
+  const phone = normalizedContact.phone;
   const place = inferChinesePlace(address || point.name);
   const bound = point.boundMethodIds.length ? `绑定物流方式: ${point.boundMethodIds.join(', ')}` : '未匹配当前物流方式';
   return {
@@ -254,7 +259,24 @@ export function toOzonPickupPointData(point: SellerDropoffPoint, shopId: string)
   };
 }
 
-function parseSellerDropoffAddress(value: string): { address: string; contact?: string; phone?: string } {
+export function normalizeSellerDropoffContactFields(input: {
+  address?: string | null;
+  name?: string | null;
+  contact?: string | null;
+  phone?: string | null;
+}): { address: string; contact?: string; phone?: string } {
+  const providedPhone = normalizeContactPhone(input.phone);
+  const parsedAddress = parseSellerDropoffAddress(input.address || input.name || '', Boolean(providedPhone));
+  const contact = stringValue(input.contact) || parsedAddress.contact;
+  const phone = providedPhone || parsedAddress.phone;
+  return {
+    address: parsedAddress.address || stringValue(input.address) || stringValue(input.name),
+    ...(contact ? { contact } : {}),
+    ...(phone ? { phone } : {}),
+  };
+}
+
+function parseSellerDropoffAddress(value: string, hasKnownPhone = false): { address: string; contact?: string; phone?: string } {
   const original = stringValue(value).replace(/\s+/g, ' ');
   const phoneMatch = original.match(/(?:\+?86[-\s]?)?(1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8})/);
   const phone = normalizeContactPhone(phoneMatch?.[0] || '');
@@ -271,7 +293,7 @@ function parseSellerDropoffAddress(value: string): { address: string; contact?: 
       .replace(/(?:电话|手机|联系方式)\s*[:：]?\s*/gi, '');
   }
   if (!contact) {
-    const suffixContact = extractUnlabeledContactSuffix(address);
+    const suffixContact = extractUnlabeledContactSuffix(address, Boolean(phone) || hasKnownPhone);
     if (suffixContact.contact) {
       contact = suffixContact.contact;
       address = suffixContact.address;
@@ -284,18 +306,26 @@ function parseSellerDropoffAddress(value: string): { address: string; contact?: 
   };
 }
 
-function extractUnlabeledContactSuffix(value: string): { address: string; contact?: string } {
+function extractUnlabeledContactSuffix(value: string, allowPlainName = false): { address: string; contact?: string } {
   const text = stringValue(value).replace(/\s+/g, ' ').trim();
   if (!text) return { address: '' };
   const contactSuffix = text.match(/(?:^|[\s,，;；、])([\u3400-\u9fff·]{1,6}(?:先生|女士|小姐|老师|经理|老板|主任|主管|师傅|总))\s*([)）\]】]*)$/);
-  if (!contactSuffix || typeof contactSuffix.index !== 'number') return { address: text };
-  const contact = cleanupContactName(contactSuffix[1] || '');
-  if (!contact) return { address: text };
-  const closing = contactSuffix[2] || '';
+  const plainNameSuffix = allowPlainName
+    ? text.match(/(?:^|[\s,，;；、])([\u3400-\u9fff·]{2,4})\s*([)）\]】]*)$/)
+    : null;
+  const suffix = contactSuffix || plainNameSuffix;
+  if (!suffix || typeof suffix.index !== 'number') return { address: text };
+  const contact = cleanupContactName(suffix[1] || '');
+  if (!contact || isLikelyAddressSuffixWord(contact)) return { address: text };
+  const closing = suffix[2] || '';
   return {
-    address: `${text.slice(0, contactSuffix.index)}${closing}`,
+    address: `${text.slice(0, suffix.index)}${closing}`.trim(),
     contact,
   };
+}
+
+function isLikelyAddressSuffixWord(value: string): boolean {
+  return /(?:省|市|区|县|镇|街|路|号|楼|层|栋|门|室|村|园|仓|部|店|场|公司|物流|中心|营业部)$/.test(value);
 }
 
 function cleanupContactName(value: string): string {
