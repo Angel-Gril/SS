@@ -23,6 +23,7 @@ import { api } from '@/lib/api';
 import { formatDate, formatCurrency, formatOrderAmount, convertToCny } from '@/lib/utils';
 import { describeSubstatus, PHASE_COLORS } from '@/lib/ozon-substatus';
 import { resolveOrderFulfillmentStage } from 'shared/order-fulfillment-stage';
+import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 
 interface Order {
   id: string;
@@ -136,7 +137,14 @@ function ProductImagePreview({ items }: { items: any[] }) {
       ) : null}
       <div className="min-w-0 flex-1 space-y-0.5">
         {items.slice(0, 2).map((item: any, i: number) => (
-          <div key={i} className="text-xs truncate">{item.name} x{item.quantity}</div>
+          <div key={i} className="min-w-0">
+            <div className="truncate text-xs font-medium">{item.name} x{item.quantity}</div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+              {(item.offer_id || item.offerId) && <span>Offer {item.offer_id || item.offerId}</span>}
+              {item.sku && <span>SKU {item.sku}</span>}
+              {item.price && <span>{item.price} {item.currency_code || item.currency || 'RUB'}</span>}
+            </div>
+          </div>
         ))}
         {items.length > 2 && <div className="text-xs text-muted-foreground">+{items.length - 2} 件</div>}
       </div>
@@ -220,7 +228,8 @@ export default function OrdersPage() {
   const [shops, setShops] = useState<Shop[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [syncSinceDays, setSyncSinceDays] = useState(90);
   const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [pipelineActive, setPipelineActive] = useState<string | null>(null);
   const [serviceTags, setServiceTags] = useState<ServiceTag[]>([]);
@@ -295,40 +304,13 @@ export default function OrdersPage() {
     loadOrders();
   }, [status, shopId, search, searchField, serviceTagId, shipmentUrgency, hasTracking, page, startDate, endDate, pipelineActive]);
 
-  async function handleSync(fullSync = false) {
+  function handleSync(fullSync = false) {
     if (!shopId && shops.length === 0) {
       toast({ title: '请先添加店铺', variant: 'destructive' });
       return;
     }
-    const targetShopId = shopId || shops[0]?.id;
-    if (!targetShopId) return;
-
-    setSyncing(true);
-    const body: Record<string, string> = { shopId: targetShopId };
-    if (fullSync) {
-      body.since = new Date(Date.now() - 365 * 24 * 3600 * 1000).toISOString();
-    }
-    const res = await api.post<{ created: number; updated: number; total: number }>('/api/orders/sync', body);
-    setSyncing(false);
-
-    if (res.code === 1) {
-      toast({
-        title: '同步完成',
-        description: res.msg,
-      });
-      // 刷新数据
-      loadOrders();
-      loadPipeline();
-      api.get<OrderStats>('/api/orders/stats').then((r) => {
-        if (r.code === 1 && r.data) setStats(r.data);
-      });
-    } else {
-      toast({
-        title: '同步失败',
-        description: res.msg,
-        variant: 'destructive',
-      });
-    }
+    setSyncSinceDays(fullSync ? 365 : 90);
+    setSyncDialogOpen(true);
   }
 
   function handleSearch(e: React.FormEvent) {
@@ -374,11 +356,11 @@ export default function OrdersPage() {
           <p className="text-muted-foreground mt-1">查看和处理所有平台订单</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => handleSync(false)} disabled={syncing}>
-            {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {syncing ? '同步中...' : '同步订单'}
+          <Button onClick={() => handleSync(false)} disabled={!shops.length}>
+            <RefreshCw className="h-4 w-4" />
+            同步订单
           </Button>
-          <Button variant="outline" onClick={() => handleSync(true)} disabled={syncing} title="拉取最近一年所有订单">
+          <Button variant="outline" onClick={() => handleSync(true)} disabled={!shops.length} title="拉取最近一年所有订单">
             全量同步
           </Button>
           <Button
@@ -613,8 +595,7 @@ export default function OrdersPage() {
                       className="rounded border-input"
                     />
                   </TableHead>
-                  <TableHead>订单号</TableHead>
-                  <TableHead>店铺</TableHead>
+                  <TableHead>订单 / 店铺</TableHead>
                   <TableHead>商品</TableHead>
                   <TableHead className="text-right">金额</TableHead>
                   <TableHead>状态</TableHead>
@@ -640,18 +621,18 @@ export default function OrdersPage() {
                           className="rounded border-input"
                         />
                       </TableCell>
-                      <TableCell className="font-mono text-xs">
+                      <TableCell className="text-xs">
                         <button
                           type="button"
-                          className="text-left hover:text-primary hover:underline"
+                          className="font-mono text-left hover:text-primary hover:underline"
                           onClick={() => setDetailOrderId(order.id)}
                         >
                           {order.postingNumber || order.platformOrderId}
                         </button>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        <Badge variant="outline">{order.shop.platform}</Badge>
-                        <span className="ml-1.5">{order.shop.name}</span>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline" className="text-[10px]">{order.shop.platform}</Badge>
+                          <span className="text-muted-foreground">{order.shop.name}</span>
+                        </div>
                       </TableCell>
                       <TableCell className="max-w-xs">
                         {order.items && Array.isArray(order.items) ? (
@@ -879,6 +860,21 @@ export default function OrdersPage() {
         tags={serviceTags}
         onClose={() => setBatchTagDialogOpen(false)}
         onSuccess={() => { setBatchTagDialogOpen(false); setSelectedOrders(new Set()); loadOrders(); }}
+      />
+      <OzonSyncActionDialog
+        open={syncDialogOpen}
+        onOpenChange={setSyncDialogOpen}
+        defaultShopId={shopId}
+        defaultTypes={['ORDER_PULL']}
+        defaultSinceDays={syncSinceDays}
+        title={syncSinceDays >= 365 ? '全量同步 Ozon 订单' : '同步 Ozon 订单'}
+        onQueued={() => {
+          loadOrders();
+          loadPipeline();
+          api.get<OrderStats>('/api/orders/stats').then((r) => {
+            if (r.code === 1 && r.data) setStats(r.data);
+          });
+        }}
       />
     </div>
   );

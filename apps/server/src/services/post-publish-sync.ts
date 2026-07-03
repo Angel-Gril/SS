@@ -2,6 +2,11 @@ type ProductSyncJob = { id?: unknown };
 export interface ProductSyncJobOptions {
   delayMs?: number;
   jobId?: string;
+  syncJobId?: string;
+  trigger?: string;
+  eventType?: string;
+  eventKey?: string;
+  payload?: Record<string, unknown>;
 }
 type ProductSyncJobAdder = (shopId: string, options?: ProductSyncJobOptions) => Promise<ProductSyncJob>;
 const POST_PUBLISH_FOLLOW_UP_DELAY_MS = 5 * 60 * 1000;

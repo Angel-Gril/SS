@@ -13,27 +13,44 @@ const QUEUE_NAME = 'order-sync';
 
 export const orderSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 
-export async function addOrderSyncJob(shopId: string, since?: string) {
-  const sinceDate = since || new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
-  if (redisDisabled) {
-    runOrderSyncInline(shopId, sinceDate).catch((e) => {
-      console.error(`[OrderSync inline] shop ${shopId} failed:`, e.message);
-    });
-    return { id: 'inline-' + Date.now() };
-  }
-  return orderSyncQueue!.add(
-    'sync',
-    { shopId, since: sinceDate },
-    {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-      removeOnComplete: 50,
-      removeOnFail: 20,
-    },
-  );
+export interface OrderSyncJobOptions {
+  syncJobId?: string;
+  jobId?: string;
+  trigger?: string;
+  eventType?: string;
+  eventKey?: string;
+  payload?: Record<string, unknown>;
 }
 
-async function runOrderSyncInline(shopId: string, since: string) {
+export async function addOrderSyncJob(shopId: string, since?: string, options: OrderSyncJobOptions = {}) {
+  const sinceDate = since || new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+  const syncJobId = options.syncJobId || await createPendingSyncJob(shopId, sinceDate, options);
+  if (redisDisabled) {
+    runOrderSyncInline(shopId, sinceDate, syncJobId).catch((e) => {
+      console.error(`[OrderSync inline] shop ${shopId} failed:`, e.message);
+    });
+    return { id: 'inline-' + Date.now(), syncJobId };
+  }
+  try {
+    const job = await orderSyncQueue!.add(
+      'sync',
+      { shopId, since: sinceDate, syncJobId },
+      {
+        jobId: options.jobId,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: 50,
+        removeOnFail: 20,
+      },
+    );
+    return { id: job.id, syncJobId };
+  } catch (e: any) {
+    await markSyncJobFailed(syncJobId, e);
+    throw e;
+  }
+}
+
+async function runOrderSyncInline(shopId: string, since: string, syncJobId?: string) {
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
     include: { user: { include: { account: true } } },
@@ -41,20 +58,16 @@ async function runOrderSyncInline(shopId: string, since: string) {
   if (!shop || shop.status !== 'ACTIVE') {
     throw new Error(`Shop ${shopId} not found or inactive`);
   }
-  await prisma.syncJob.create({
-    data: { shopId, type: 'ORDER_PULL', status: 'RUNNING', startedAt: new Date() },
-  });
+  const runId = syncJobId || await createPendingSyncJob(shopId, since, {});
+  await markSyncJobRunning(runId);
   try {
     const result = await syncOrdersCore(shopId, since, shop);
-    await prisma.syncJob.updateMany({
-      where: { shopId, type: 'ORDER_PULL', status: 'RUNNING' },
+    await prisma.syncJob.update({
+      where: { id: runId },
       data: { status: 'SUCCESS', finishedAt: new Date(), result },
     });
   } catch (e: any) {
-    await prisma.syncJob.updateMany({
-      where: { shopId, type: 'ORDER_PULL', status: 'RUNNING' },
-      data: { status: 'FAILED', finishedAt: new Date(), errorMessage: e.message },
-    });
+    await markSyncJobFailed(runId, e);
     throw e;
   }
 }
@@ -240,7 +253,7 @@ export function startOrderSyncWorker() {
   const worker = new Worker(
     QUEUE_NAME,
     async (job) => {
-      const { shopId, since } = job.data;
+      const { shopId, since, syncJobId } = job.data;
       const shop = await prisma.shop.findUnique({
         where: { id: shopId },
         include: { user: { include: { account: true } } },
@@ -248,12 +261,11 @@ export function startOrderSyncWorker() {
       if (!shop || shop.status !== 'ACTIVE') {
         throw new Error(`Shop ${shopId} not found or inactive`);
       }
-      await prisma.syncJob.create({
-        data: { shopId, type: 'ORDER_PULL', status: 'RUNNING', startedAt: new Date() },
-      });
+      const runId = syncJobId || await createPendingSyncJob(shopId, since, {});
+      await markSyncJobRunning(runId);
       const result = await syncOrdersCore(shopId, since, shop);
-      await prisma.syncJob.updateMany({
-        where: { shopId, type: 'ORDER_PULL', status: 'RUNNING' },
+      await prisma.syncJob.update({
+        where: { id: runId },
         data: { status: 'SUCCESS', finishedAt: new Date(), result },
       });
       return result;
@@ -267,10 +279,14 @@ export function startOrderSyncWorker() {
 
   worker.on('failed', async (job, err) => {
     if (job) {
-      await prisma.syncJob.updateMany({
-        where: { shopId: job.data.shopId, type: 'ORDER_PULL', status: 'RUNNING' },
-        data: { status: 'FAILED', finishedAt: new Date(), errorMessage: err.message },
-      });
+      if (job.data.syncJobId) {
+        await markSyncJobFailed(job.data.syncJobId, err);
+      } else {
+        await prisma.syncJob.updateMany({
+          where: { shopId: job.data.shopId, type: 'ORDER_PULL', status: 'RUNNING' },
+          data: { status: 'FAILED', finishedAt: new Date(), errorMessage: err.message },
+        });
+      }
     }
     console.error(`[OrderSync] Job ${job?.id} failed:`, err.message);
   });
@@ -369,4 +385,39 @@ function pickFirstImage(raw: unknown): string | null {
     }
   }
   return null;
+}
+
+function buildSyncPayload(since: string, options: OrderSyncJobOptions): Record<string, unknown> {
+  const payload: Record<string, unknown> = { since };
+  if (options.trigger) payload.trigger = options.trigger;
+  if (options.eventType) payload.eventType = options.eventType;
+  if (options.eventKey) payload.eventKey = options.eventKey;
+  if (options.payload && Object.keys(options.payload).length) payload.notification = options.payload;
+  return payload;
+}
+
+async function createPendingSyncJob(shopId: string, since: string, options: OrderSyncJobOptions): Promise<string> {
+  const syncJob = await prisma.syncJob.create({
+    data: {
+      shopId,
+      type: 'ORDER_PULL',
+      status: 'PENDING',
+      payload: buildSyncPayload(since, options) as any,
+    },
+  });
+  return syncJob.id;
+}
+
+async function markSyncJobRunning(syncJobId: string) {
+  await prisma.syncJob.update({
+    where: { id: syncJobId },
+    data: { status: 'RUNNING', startedAt: new Date(), errorMessage: null },
+  });
+}
+
+async function markSyncJobFailed(syncJobId: string, error: Error & { message?: string }) {
+  await prisma.syncJob.update({
+    where: { id: syncJobId },
+    data: { status: 'FAILED', finishedAt: new Date(), errorMessage: error.message || '同步失败' },
+  });
 }

@@ -23,6 +23,7 @@ import { api, apiUrl } from '@/lib/api';
 import { formatOrderAmount } from '@/lib/utils';
 import { getOzonAttrName } from '@/lib/ozon-attr-names';
 import { OzonExtensionSyncStatus } from '@/components/ozon/extension-sync-status';
+import { OzonSyncActionDialog } from '@/components/ozon/sync-action-dialog';
 
 interface Product {
   id: string;
@@ -227,7 +228,7 @@ function ProductsPageInner() {
   const [stockMax, setStockMax] = useState('');
   const [filtersRestored, setFiltersRestored] = useState(false);
   const [syncingCommissions, setSyncingCommissions] = useState(false);
-  const [syncingProducts, setSyncingProducts] = useState(false);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [lastProductSyncAt, setLastProductSyncAt] = useState<string | null>(null);
 
   const limit = 20;
@@ -401,17 +402,7 @@ function ProductsPageInner() {
   }
 
   async function handleSyncProducts() {
-    if (!shopId) return;
-    setSyncingProducts(true);
-    const res = await api.post(`/api/shops/${shopId}/sync-products`);
-    setSyncingProducts(false);
-    if (res.code === 1) {
-      toast({ title: 'OZON 同步任务已创建', description: '列表会先刷新本地数据，OZON 处理中的新品可能需要稍后再刷新。' });
-      loadProducts();
-      window.setTimeout(loadProducts, 8000);
-    } else {
-      toast({ title: res.msg, variant: 'destructive' });
-    }
+    setSyncDialogOpen(true);
   }
 
   function handleStatusTab(nextStatus: ProductStatusFilter) {
@@ -506,10 +497,10 @@ function ProductsPageInner() {
                 size="sm"
                 variant="outline"
                 onClick={handleSyncProducts}
-                disabled={!shopId || syncingProducts}
-                title="从 OZON 同步当前商品、状态、库存和上架时间"
+                disabled={!shops.length}
+                title="选择店铺后从 OZON 同步商品、状态、库存和上架时间"
               >
-                {syncingProducts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                <RefreshCw className="h-3.5 w-3.5" />
                 同步 OZON
               </Button>
               <Button
@@ -731,16 +722,11 @@ function ProductsPageInner() {
                       className="rounded border-gray-300"
                     />
                   </TableHead>
-                  <TableHead className="w-14">图片</TableHead>
-                  <TableHead>商品标题</TableHead>
-                  <TableHead>SKU / Offer ID</TableHead>
-                  <TableHead className="text-right">买家价</TableHead>
-                  <TableHead className="text-right">折扣前价</TableHead>
-                  <TableHead className="text-right">佣金</TableHead>
-                  <TableHead className="text-right">重量</TableHead>
-                  <TableHead className="text-right">库存</TableHead>
-                  <TableHead>上架时间</TableHead>
-                  <TableHead>状态</TableHead>
+                  <TableHead className="min-w-[360px]">商品 / Ozon 信息</TableHead>
+                  <TableHead className="min-w-[150px] text-right">价格 / 佣金</TableHead>
+                  <TableHead className="min-w-[120px] text-right">库存 / 规格</TableHead>
+                  <TableHead className="min-w-[150px]">状态</TableHead>
+                  <TableHead className="min-w-[145px]">时间</TableHead>
                   <TableHead className="w-16">操作</TableHead>
                 </TableRow>
               </TableHeader>
@@ -758,22 +744,26 @@ function ProductsPageInner() {
                         className="rounded border-gray-300"
                       />
                     </TableCell>
-                    <TableCell><ProductImage src={p.images?.[0]} /></TableCell>
-                    <TableCell className="max-w-xs">
-                      <p
-                        className="line-clamp-2 font-medium text-sm cursor-pointer hover:text-primary hover:underline"
-                        onClick={() => setPreviewProductId(p.id)}
-                      >
-                        {p.title}
-                      </p>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      <div className="space-y-0.5">
-                        {displaySku ? <div>SKU: {displaySku}</div> : <div className="text-muted-foreground">Ozon SKU 待生成</div>}
-                        {p.offerId && <div className="text-muted-foreground">{p.offerId}</div>}
+                    <TableCell className="min-w-[360px]">
+                      <div className="flex items-start gap-3">
+                        <ProductImage src={p.images?.[0]} />
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <p
+                            className="line-clamp-2 cursor-pointer text-sm font-medium leading-5 hover:text-primary hover:underline"
+                            onClick={() => setPreviewProductId(p.id)}
+                          >
+                            {p.title}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
+                            {displaySku ? <span>SKU {displaySku}</span> : <span>SKU 待生成</span>}
+                            {p.offerId && <span>Offer {p.offerId}</span>}
+                            {p.platformProductId && <span>PID {p.platformProductId}</span>}
+                          </div>
+                          {p.categoryId && <div className="text-[11px] text-muted-foreground">类目 {p.categoryId}</div>}
+                        </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-top">
                       {editingPrice === p.id ? (
                         <div className="flex items-center gap-1 justify-end">
                           <Input
@@ -806,29 +796,26 @@ function ProductsPageInner() {
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
                         </div>
                       )}
+                      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                        <div>折前 {p.oldPrice ? `${p.oldPrice} ${p.currency || 'USD'}` : '-'}</div>
+                        <div>
+                          佣金 {p.price ? (
+                            p.commissionRate ? (
+                              <span title={`佣金率: ${p.commissionRate}%`}>
+                                {(Number(p.price) * Number(p.commissionRate) / 100).toFixed(2)}
+                                <span className="ml-1 opacity-60">({p.commissionRate}%)</span>
+                              </span>
+                            ) : (
+                              <span className="opacity-60" title="估算值(15%)">
+                                {(Number(p.price) * 0.15).toFixed(2)}~
+                              </span>
+                            )
+                          ) : '-'}
+                        </div>
+                        {p.minPrice && <div>最低 {p.minPrice}</div>}
+                      </div>
                     </TableCell>
-                    <TableCell className="text-right text-muted-foreground tabular-nums text-xs">
-                      {p.oldPrice ? `${p.oldPrice} ${p.currency || 'USD'}` : '-'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
-                      {p.price ? (
-                        p.commissionRate ? (
-                          <span title={`佣金率: ${p.commissionRate}%`}>
-                            {(Number(p.price) * Number(p.commissionRate) / 100).toFixed(2)}
-                            <span className="ml-1 text-[10px] opacity-60">({p.commissionRate}%)</span>
-                          </span>
-                        ) : (
-                          <span className="opacity-50" title="估算值(15%)">
-                            {(Number(p.price) * 0.15).toFixed(2)}
-                            <span className="ml-1 text-[10px]">~</span>
-                          </span>
-                        )
-                      ) : '-'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
-                      {p.weight != null ? `${p.weight} g` : '-'}
-                    </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-top">
                       {editingStock === p.id ? (
                         <div className="flex items-center gap-1 justify-end">
                           <Input
@@ -864,11 +851,12 @@ function ProductsPageInner() {
                           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-50" />
                         </div>
                       )}
+                      <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                        <div>{p.weight != null ? `${p.weight} g` : '重量 -'}</div>
+                        <div>{selectedWarehouseId ? '当前仓库存' : '总库存'}</div>
+                      </div>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatDateTime(p.ozonCreatedAt || p.createdAt)}
-                    </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top">
                       <StatusBadge
                         status={p.status}
                         visibility={p.visibility}
@@ -879,7 +867,12 @@ function ProductsPageInner() {
                         ozonStatusTone={p.ozonStatusTone}
                       />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top text-xs text-muted-foreground">
+                      <div>创建 {formatDateTime(p.ozonCreatedAt || p.createdAt)}</div>
+                      <div>更新 {formatDateTime(p.ozonUpdatedAt || p.updatedAt)}</div>
+                      {p.lastOzonSyncAt && <div>同步 {formatDateTime(p.lastOzonSyncAt)}</div>}
+                    </TableCell>
+                    <TableCell className="align-top">
                       <button type="button" onClick={() => setDetailProductId(p.id)} className="text-xs text-primary hover:underline">编辑</button>
                     </TableCell>
                   </TableRow>
@@ -933,6 +926,17 @@ function ProductsPageInner() {
         warehouses={warehouses}
         onClose={() => setStockSyncOpen(false)}
         onSynced={loadProducts}
+      />
+      <OzonSyncActionDialog
+        open={syncDialogOpen}
+        onOpenChange={setSyncDialogOpen}
+        defaultShopId={shopId}
+        defaultTypes={['PRODUCT_PULL']}
+        title="同步 Ozon 在线商品"
+        onQueued={() => {
+          loadProducts();
+          window.setTimeout(loadProducts, 8000);
+        }}
       />
     </div>
   );

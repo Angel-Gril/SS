@@ -12,6 +12,7 @@ import {
   Loader2,
   Package,
   PlayCircle,
+  RefreshCw,
   ShoppingCart,
   Sparkles,
   Store,
@@ -96,6 +97,7 @@ const fallbackStepGroups: StepGroup[] = [
 
 const fallbackQuickLinks: QuickLinkItem[] = [
   { label: 'Ozon 店铺', href: '/shops/ozon', description: '授权、Cookie、API', icon: 'store' },
+  { label: 'Ozon 同步中心', href: '/shops/ozon/sync-center', description: '通知触发、同步记录', icon: 'sync' },
   { label: '商品管理', href: '/products', description: '同步、价格、库存', icon: 'package' },
   { label: 'SKU采集跟卖', href: '/collect', description: '采集、改款、上架', icon: 'sparkles' },
   { label: '店铺分析', href: '/shops/ozon/analytics', description: '分析、图表、促销', icon: 'chart' },
@@ -125,6 +127,7 @@ function iconFor(name?: string) {
     case 'book': return BookOpen;
     case 'play': return PlayCircle;
     case 'sparkles': return Sparkles;
+    case 'sync': return RefreshCw;
     case 'package':
     default: return Package;
   }

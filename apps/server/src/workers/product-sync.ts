@@ -19,46 +19,49 @@ const QUEUE_NAME = 'product-sync';
 export const productSyncQueue: Queue | null = redisDisabled ? null : new Queue(QUEUE_NAME, { connection });
 
 export async function addProductSyncJob(shopId: string, options: ProductSyncJobOptions = {}) {
+  const syncJobId = options.syncJobId || await createPendingSyncJob(shopId, options);
   if (redisDisabled) {
     // Redis 不在时直接同步执行，避免前端转圈
     const run = () => {
-      runProductSyncInline(shopId).catch((e) => {
+      runProductSyncInline(shopId, syncJobId).catch((e) => {
         console.error(`[ProductSync inline] shop ${shopId} failed:`, e.message);
       });
     };
     if (options.delayMs && options.delayMs > 0) setTimeout(run, options.delayMs);
     else run();
-    return { id: 'inline-' + Date.now() };
+    return { id: 'inline-' + Date.now(), syncJobId };
   }
-  return productSyncQueue!.add('sync', { shopId }, {
-    delay: options.delayMs,
-    jobId: options.jobId,
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 5000 },
-    removeOnComplete: 50,
-    removeOnFail: 20,
-  });
+  try {
+    const job = await productSyncQueue!.add('sync', { shopId, syncJobId }, {
+      delay: options.delayMs,
+      jobId: options.jobId,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: 50,
+      removeOnFail: 20,
+    });
+    return { id: job.id, syncJobId };
+  } catch (e: any) {
+    await markSyncJobFailed(syncJobId, e);
+    throw e;
+  }
 }
 
-async function runProductSyncInline(shopId: string) {
+async function runProductSyncInline(shopId: string, syncJobId?: string) {
   const shop = await prisma.shop.findUnique({ where: { id: shopId } });
   if (!shop || shop.status !== 'ACTIVE') {
     throw new Error(`Shop ${shopId} not found or inactive`);
   }
-  await prisma.syncJob.create({
-    data: { shopId, type: 'PRODUCT_PULL', status: 'RUNNING', startedAt: new Date() },
-  });
+  const runId = syncJobId || await createPendingSyncJob(shopId, {});
+  await markSyncJobRunning(runId);
   try {
     const totalSynced = await syncProductsCore(shopId, shop);
-    await prisma.syncJob.updateMany({
-      where: { shopId, type: 'PRODUCT_PULL', status: 'RUNNING' },
+    await prisma.syncJob.update({
+      where: { id: runId },
       data: { status: 'SUCCESS', finishedAt: new Date(), result: { totalSynced } },
     });
   } catch (e: any) {
-    await prisma.syncJob.updateMany({
-      where: { shopId, type: 'PRODUCT_PULL', status: 'RUNNING' },
-      data: { status: 'FAILED', finishedAt: new Date(), errorMessage: e.message },
-    });
+    await markSyncJobFailed(runId, e);
     throw e;
   }
 }
@@ -233,17 +236,16 @@ export function startProductSyncWorker() {
   const worker = new Worker(
     QUEUE_NAME,
     async (job) => {
-      const { shopId } = job.data;
+      const { shopId, syncJobId } = job.data;
       const shop = await prisma.shop.findUnique({ where: { id: shopId } });
       if (!shop || shop.status !== 'ACTIVE') {
         throw new Error(`Shop ${shopId} not found or inactive`);
       }
-      await prisma.syncJob.create({
-        data: { shopId, type: 'PRODUCT_PULL', status: 'RUNNING', startedAt: new Date() },
-      });
+      const runId = syncJobId || await createPendingSyncJob(shopId, {});
+      await markSyncJobRunning(runId);
       const totalSynced = await syncProductsCore(shopId, shop);
-      await prisma.syncJob.updateMany({
-        where: { shopId, type: 'PRODUCT_PULL', status: 'RUNNING' },
+      await prisma.syncJob.update({
+        where: { id: runId },
         data: { status: 'SUCCESS', finishedAt: new Date(), result: { totalSynced } },
       });
       return { totalSynced };
@@ -257,10 +259,14 @@ export function startProductSyncWorker() {
 
   worker.on('failed', async (job, err) => {
     if (job) {
-      await prisma.syncJob.updateMany({
-        where: { shopId: job.data.shopId, type: 'PRODUCT_PULL', status: 'RUNNING' },
-        data: { status: 'FAILED', finishedAt: new Date(), errorMessage: err.message },
-      });
+      if (job.data.syncJobId) {
+        await markSyncJobFailed(job.data.syncJobId, err);
+      } else {
+        await prisma.syncJob.updateMany({
+          where: { shopId: job.data.shopId, type: 'PRODUCT_PULL', status: 'RUNNING' },
+          data: { status: 'FAILED', finishedAt: new Date(), errorMessage: err.message },
+        });
+      }
     }
     console.error(`[ProductSync] Job ${job?.id} failed:`, err.message);
   });
@@ -275,4 +281,39 @@ export function startProductSyncWorker() {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildSyncPayload(options: ProductSyncJobOptions): Record<string, unknown> | undefined {
+  const payload: Record<string, unknown> = {};
+  if (options.trigger) payload.trigger = options.trigger;
+  if (options.eventType) payload.eventType = options.eventType;
+  if (options.eventKey) payload.eventKey = options.eventKey;
+  if (options.payload && Object.keys(options.payload).length) payload.notification = options.payload;
+  return Object.keys(payload).length ? payload : undefined;
+}
+
+async function createPendingSyncJob(shopId: string, options: ProductSyncJobOptions): Promise<string> {
+  const syncJob = await prisma.syncJob.create({
+    data: {
+      shopId,
+      type: 'PRODUCT_PULL',
+      status: 'PENDING',
+      payload: buildSyncPayload(options) as any,
+    },
+  });
+  return syncJob.id;
+}
+
+async function markSyncJobRunning(syncJobId: string) {
+  await prisma.syncJob.update({
+    where: { id: syncJobId },
+    data: { status: 'RUNNING', startedAt: new Date(), errorMessage: null },
+  });
+}
+
+async function markSyncJobFailed(syncJobId: string, error: Error & { message?: string }) {
+  await prisma.syncJob.update({
+    where: { id: syncJobId },
+    data: { status: 'FAILED', finishedAt: new Date(), errorMessage: error.message || '同步失败' },
+  });
 }

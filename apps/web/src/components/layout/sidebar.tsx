@@ -41,6 +41,7 @@ const navigation: NavItem[] = [
     children: [
       { label: 'OZON 店铺', href: '/shops/ozon' },
       { label: '店铺分析', href: '/shops/ozon/analytics' },
+      { label: 'OZON 同步中心', href: '/shops/ozon/sync-center' },
       { label: 'Yandex 店铺', href: '/shops/yandex' },
       { label: 'Kaspi 店铺', href: '/shops/kaspi' },
       { label: 'Wildberries 店铺', href: '/shops/wildberries' },
