@@ -78,6 +78,8 @@ export default function LogisticsBillPage() {
   useEffect(() => { loadBills(); }, [page, statusFilter]);
 
   const totalPages = Math.ceil(total / limit);
+  const pendingBills = bills.filter((b) => b.status === 'pending');
+  const allPendingSelected = pendingBills.length > 0 && pendingBills.every((b) => selected.has(b.id));
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -135,41 +137,48 @@ export default function LogisticsBillPage() {
           </select>
         </CardHeader>
         <CardContent className="p-0">
-          {loading && bills.length === 0 ? (
-            <div className="p-8 flex justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : bills.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">暂无账单</div>
-          ) : (
-            <Table>
-              <TableHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    checked={allPendingSelected}
+                    disabled={pendingBills.length === 0}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelected(new Set(pendingBills.map((b) => b.id)));
+                      } else {
+                        setSelected(new Set());
+                      }
+                    }}
+                    className="rounded"
+                  />
+                </TableHead>
+                <TableHead>物流单号</TableHead>
+                <TableHead>重量(g)</TableHead>
+                <TableHead>费用</TableHead>
+                <TableHead>国家</TableHead>
+                <TableHead>运输方式</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>时间</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading && bills.length === 0 ? (
                 <TableRow>
-                  <TableHead className="w-10">
-                    <input
-                      type="checkbox"
-                      checked={bills.filter((b) => b.status === 'pending').every((b) => selected.has(b.id))}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelected(new Set(bills.filter((b) => b.status === 'pending').map((b) => b.id)));
-                        } else {
-                          setSelected(new Set());
-                        }
-                      }}
-                      className="rounded"
-                    />
-                  </TableHead>
-                  <TableHead>物流单号</TableHead>
-                  <TableHead>重量(g)</TableHead>
-                  <TableHead>费用</TableHead>
-                  <TableHead>国家</TableHead>
-                  <TableHead>运输方式</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>时间</TableHead>
+                  <TableCell colSpan={8} className="h-48 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {bills.map((bill) => (
+              ) : bills.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="h-48 text-center text-muted-foreground">
+                    暂无账单
+                  </TableCell>
+                </TableRow>
+              ) : (
+                bills.map((bill) => (
                   <TableRow key={bill.id}>
                     <TableCell>
                       {bill.status === 'pending' && (
@@ -193,10 +202,10 @@ export default function LogisticsBillPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDate(bill.createdAt)}</TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                ))
+              )}
+            </TableBody>
+          </Table>
           {totalPages > 1 && (
             <div className="flex items-center justify-between p-4 border-t">
               <span className="text-sm text-muted-foreground">第 {page + 1} / {totalPages} 页 · 共 {total} 条</span>

@@ -135,26 +135,34 @@ export default function AdminUsersPage() {
           </form>
         </CardHeader>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          ) : users.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">暂无数据</div>
-          ) : (
-            <Table>
-              <TableHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>账号</TableHead>
+                <TableHead>昵称</TableHead>
+                <TableHead>手机号</TableHead>
+                <TableHead>角色</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>裂变</TableHead>
+                <TableHead>创建时间</TableHead>
+                <TableHead>操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>账号</TableHead>
-                  <TableHead>昵称</TableHead>
-                  <TableHead>手机号</TableHead>
-                  <TableHead>角色</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>裂变</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead>操作</TableHead>
+                  <TableCell colSpan={8} className="h-48 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((u) => {
+              ) : users.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="h-48 text-center text-muted-foreground">
+                    暂无数据
+                  </TableCell>
+                </TableRow>
+              ) : (
+                users.map((u) => {
                   const roleMeta = getRoleMeta(u);
                   return (
                     <TableRow key={u.id}>
@@ -181,10 +189,10 @@ export default function AdminUsersPage() {
                       </TableCell>
                     </TableRow>
                   );
-                })}
-              </TableBody>
-            </Table>
-          )}
+                })
+              )}
+            </TableBody>
+          </Table>
           {totalPages > 1 && (
             <div className="flex items-center justify-between p-4 border-t">
               <span className="text-sm text-muted-foreground">第 {page + 1} / {totalPages} 页</span>

@@ -260,33 +260,37 @@ export default function OzonShopsPage() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="p-8 flex justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : shops.length === 0 ? (
-            <div className="p-12 text-center">
-              <p className="text-muted-foreground">还没有添加任何 OZON 店铺</p>
-              <Button className="mt-4" onClick={() => setAddOpen(true)}>
-                <Plus className="h-4 w-4" />
-                添加第一个店铺
-              </Button>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>店铺名称</TableHead>
+                <TableHead>Client ID</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead className="text-right">商品数</TableHead>
+                <TableHead className="text-right">订单数</TableHead>
+                <TableHead>最近同步</TableHead>
+                <TableHead className="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>店铺名称</TableHead>
-                  <TableHead>Client ID</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead className="text-right">商品数</TableHead>
-                  <TableHead className="text-right">订单数</TableHead>
-                  <TableHead>最近同步</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableCell colSpan={7} className="h-48 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {shops.map((shop) => (
+              ) : shops.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="h-48 text-center">
+                    <p className="text-muted-foreground">还没有添加任何 OZON 店铺</p>
+                    <Button className="mt-4" onClick={() => setAddOpen(true)}>
+                      <Plus className="h-4 w-4" />
+                      添加第一个店铺
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                shops.map((shop) => (
                   <TableRow key={shop.id}>
                     <TableCell className="font-medium">{shop.name}</TableCell>
                     <TableCell className="text-muted-foreground font-mono text-xs">
@@ -390,10 +394,10 @@ export default function OzonShopsPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                ))
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

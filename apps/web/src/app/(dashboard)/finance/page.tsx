@@ -227,26 +227,32 @@ export default function FinancePage() {
           </select>
         </CardHeader>
         <CardContent className="p-0">
-          {loading && transactions.length === 0 ? (
-            <div className="p-8 flex justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : transactions.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">暂无记录</div>
-          ) : (
-            <Table>
-              <TableHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>类型</TableHead>
+                <TableHead className="text-right">金额</TableHead>
+                <TableHead className="text-right">余额</TableHead>
+                <TableHead>关联订单</TableHead>
+                <TableHead>说明</TableHead>
+                <TableHead>时间</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading && transactions.length === 0 ? (
                 <TableRow>
-                  <TableHead>类型</TableHead>
-                  <TableHead className="text-right">金额</TableHead>
-                  <TableHead className="text-right">余额</TableHead>
-                  <TableHead>关联订单</TableHead>
-                  <TableHead>说明</TableHead>
-                  <TableHead>时间</TableHead>
+                  <TableCell colSpan={6} className="h-48 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {transactions.map((txn) => (
+              ) : transactions.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="h-48 text-center text-muted-foreground">
+                    暂无记录
+                  </TableCell>
+                </TableRow>
+              ) : (
+                transactions.map((txn) => (
                   <TableRow key={txn.id}>
                     <TableCell><TxnTypeBadge type={txn.type} /></TableCell>
                     <TableCell className="text-right tabular-nums font-medium">
@@ -259,10 +265,10 @@ export default function FinancePage() {
                     <TableCell className="text-muted-foreground">{txn.description || '-'}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDate(txn.createdAt)}</TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                ))
+              )}
+            </TableBody>
+          </Table>
           {totalPages > 1 && (
             <div className="flex items-center justify-between p-4 border-t">
               <span className="text-sm text-muted-foreground">第 {page + 1} / {totalPages} 页</span>

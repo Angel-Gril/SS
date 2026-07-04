@@ -73,28 +73,34 @@ export default function StaffPage() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="py-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : staff.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">
-              <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              暂无员工账号。点击"添加员工"创建子账号。
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>昵称</TableHead>
+                <TableHead>手机号</TableHead>
+                <TableHead>角色</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>最后登录</TableHead>
+                <TableHead>创建时间</TableHead>
+                <TableHead className="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>昵称</TableHead>
-                  <TableHead>手机号</TableHead>
-                  <TableHead>角色</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>最后登录</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableCell colSpan={7} className="h-48 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {staff.map((s) => (
+              ) : staff.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="h-48 text-center text-muted-foreground">
+                    <Users className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                    暂无员工账号。点击"添加员工"创建子账号。
+                  </TableCell>
+                </TableRow>
+              ) : (
+                staff.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="font-medium">{s.nickname || '-'}</TableCell>
                     <TableCell className="font-mono text-sm">{s.phone}</TableCell>
@@ -127,10 +133,10 @@ export default function StaffPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                ))
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 

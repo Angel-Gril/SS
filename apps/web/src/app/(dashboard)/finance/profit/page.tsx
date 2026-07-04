@@ -144,27 +144,35 @@ export default function ProfitPage() {
           <CardTitle className="text-base">订单利润明细</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="py-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : rows.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">暂无数据，请调整筛选条件后点击"计算"</div>
-          ) : (
-            <Table>
-              <TableHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>订单号</TableHead>
+                <TableHead>店铺</TableHead>
+                <TableHead className="text-right">营收(CNY)</TableHead>
+                <TableHead className="text-right">采购成本</TableHead>
+                <TableHead className="text-right">佣金</TableHead>
+                <TableHead className="text-right">物流</TableHead>
+                <TableHead className="text-right">利润</TableHead>
+                <TableHead className="text-right">利润率</TableHead>
+                <TableHead>日期</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>订单号</TableHead>
-                  <TableHead>店铺</TableHead>
-                  <TableHead className="text-right">营收(CNY)</TableHead>
-                  <TableHead className="text-right">采购成本</TableHead>
-                  <TableHead className="text-right">佣金</TableHead>
-                  <TableHead className="text-right">物流</TableHead>
-                  <TableHead className="text-right">利润</TableHead>
-                  <TableHead className="text-right">利润率</TableHead>
-                  <TableHead>日期</TableHead>
+                  <TableCell colSpan={9} className="h-48 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r) => {
+              ) : rows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="h-48 text-center text-muted-foreground">
+                    暂无数据，请调整筛选条件后点击"计算"
+                  </TableCell>
+                </TableRow>
+              ) : (
+                rows.map((r) => {
                   const profitNum = Number(r.profit);
                   return (
                     <TableRow key={r.id}>
@@ -185,10 +193,10 @@ export default function ProfitPage() {
                       <TableCell className="text-xs text-muted-foreground">{formatDate(r.createdAt)}</TableCell>
                     </TableRow>
                   );
-                })}
-              </TableBody>
-            </Table>
-          )}
+                })
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
     </div>
