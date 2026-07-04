@@ -55,6 +55,11 @@ interface Product {
   profitCny?: string | null;
   profitMarginPct?: string | null;
   profitTier?: ProductProfitFilter | null;
+  ozonPriceIndexTier?: ProductProfitFilter | null;
+  ozonPriceIndexColor?: 'red' | 'yellow' | 'green' | 'unknown' | null;
+  marketingPrice?: string | null;
+  competitorMinPrice?: string | null;
+  competitorCurrency?: string | null;
   ozonCreatedAt: string | null;
   ozonUpdatedAt: string | null;
   lastOzonSyncAt: string | null;
@@ -128,6 +133,15 @@ const PROFIT_FILTER_OPTIONS: Array<{ value: ProductProfitFilter; label: string }
   { value: 'unknown', label: '未计算' },
 ];
 
+const OZON_PRICE_INDEX_FILTER_OPTIONS: Array<{ value: ProductProfitFilter; label: string }> = [
+  { value: 'all', label: 'Ozon价格：全部' },
+  { value: 'unprofitable', label: 'Ozon价格：不利' },
+  { value: 'medium', label: 'Ozon价格：中等' },
+  { value: 'profitable', label: 'Ozon价格：有利' },
+  { value: 'very_profitable', label: 'Ozon价格：超级有利' },
+  { value: 'unknown', label: 'Ozon价格：未检测' },
+];
+
 const BATCH_PRICE_FIELDS: Record<BatchPriceField, { label: string; shortLabel: string }> = {
   price: { label: '销售价', shortLabel: '售价' },
   oldPrice: { label: '划线价', shortLabel: '划线' },
@@ -142,6 +156,7 @@ function readStoredProductFilters(): {
   warehouseStockMode?: WarehouseStockMode;
   statusFilter?: ProductStatusFilter;
   profitFilter?: ProductProfitFilter;
+  ozonPriceIndexFilter?: ProductProfitFilter;
   pageSize?: number;
   priceMin?: string;
   priceMax?: string;
@@ -164,6 +179,9 @@ function readStoredProductFilters(): {
     const profitFilter = ['all', 'unprofitable', 'medium', 'profitable', 'very_profitable', 'unknown'].includes(String(data.profitFilter || ''))
       ? data.profitFilter as ProductProfitFilter
       : undefined;
+    const ozonPriceIndexFilter = ['all', 'unprofitable', 'medium', 'profitable', 'very_profitable', 'unknown'].includes(String(data.ozonPriceIndexFilter || ''))
+      ? data.ozonPriceIndexFilter as ProductProfitFilter
+      : undefined;
     const pageSize = Number(data.pageSize);
     const warehouseId = Number(data.warehouseId);
     return {
@@ -172,6 +190,7 @@ function readStoredProductFilters(): {
       warehouseStockMode,
       statusFilter,
       profitFilter,
+      ozonPriceIndexFilter,
       pageSize: PAGE_SIZE_OPTIONS.includes(pageSize) ? pageSize : undefined,
       priceMin: typeof data.priceMin === 'string' ? data.priceMin : undefined,
       priceMax: typeof data.priceMax === 'string' ? data.priceMax : undefined,
@@ -284,6 +303,39 @@ function ProfitBadge({ tier, marginPct }: { tier?: ProductProfitFilter | null; m
   );
 }
 
+function OzonPriceIndexBadge({ tier, competitorPrice }: { tier?: ProductProfitFilter | null; competitorPrice?: string | null }) {
+  if (!tier || tier === 'all' || tier === 'unknown') return null;
+  const config: Record<Exclude<ProductProfitFilter, 'all' | 'unknown'>, { label: string; className: string }> = {
+    unprofitable: {
+      label: 'Ozon不利',
+      className: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300',
+    },
+    medium: {
+      label: 'Ozon中等',
+      className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300',
+    },
+    profitable: {
+      label: 'Ozon有利',
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300',
+    },
+    very_profitable: {
+      label: 'Ozon超级有利',
+      className: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300',
+    },
+  };
+  const item = config[tier as keyof typeof config];
+  if (!item) return null;
+  return (
+    <span
+      className={`inline-flex w-fit items-center rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${item.className}`}
+      title={competitorPrice ? `对手价格：${competitorPrice}` : undefined}
+    >
+      {item.label}
+      {competitorPrice && <span className="ml-1 tabular-nums">{competitorPrice}</span>}
+    </span>
+  );
+}
+
 function ProductsPageInner() {
   const searchParams = useSearchParams();
   const initialShopId = searchParams.get('shopId') || '';
@@ -311,6 +363,7 @@ function ProductsPageInner() {
   const [warehouseStockMode, setWarehouseStockMode] = useState<WarehouseStockMode>('all');
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>('current');
   const [profitFilter, setProfitFilter] = useState<ProductProfitFilter>('all');
+  const [ozonPriceIndexFilter, setOzonPriceIndexFilter] = useState<ProductProfitFilter>('all');
   const [statusCounts, setStatusCounts] = useState<ProductStatusCounts>(EMPTY_STATUS_COUNTS);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [batchAction, setBatchAction] = useState<BatchAction>('price');
@@ -334,6 +387,7 @@ function ProductsPageInner() {
     if (stored.warehouseStockMode) setWarehouseStockMode(stored.warehouseStockMode);
     if (stored.statusFilter) setStatusFilter(stored.statusFilter);
     if (stored.profitFilter) setProfitFilter(stored.profitFilter);
+    if (stored.ozonPriceIndexFilter) setOzonPriceIndexFilter(stored.ozonPriceIndexFilter);
     if (stored.pageSize) setPageSize(stored.pageSize);
     setPriceMin(stored.priceMin || '');
     setPriceMax(stored.priceMax || '');
@@ -379,6 +433,7 @@ function ProductsPageInner() {
       warehouseStockMode,
       statusFilter,
       profitFilter,
+      ozonPriceIndexFilter,
       pageSize,
       priceMin,
       priceMax,
@@ -387,7 +442,7 @@ function ProductsPageInner() {
       stockMin,
       stockMax,
     }));
-  }, [filtersRestored, shopId, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, pageSize, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
+  }, [filtersRestored, shopId, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, ozonPriceIndexFilter, pageSize, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   const loadProducts = useCallback(async () => {
     if (!filtersRestored || !shopId) return;
@@ -407,6 +462,7 @@ function ProductsPageInner() {
     if (stockMax.trim()) params.set('stockMax', stockMax.trim());
     if (warehouseStockMode !== 'all') params.set('warehouseStockMode', warehouseStockMode);
     if (profitFilter !== 'all') params.set('profitFilter', profitFilter);
+    if (ozonPriceIndexFilter !== 'all') params.set('ozonPriceIndexFilter', ozonPriceIndexFilter);
 
     const res = await api.get<ProductListResponse>(
       `/api/shops/${shopId}/products?${params}`,
@@ -418,7 +474,7 @@ function ProductsPageInner() {
       setStatusCounts(res.data.statusCounts || EMPTY_STATUS_COUNTS);
     }
     setLoading(false);
-  }, [filtersRestored, shopId, page, pageSize, search, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
+  }, [filtersRestored, shopId, page, pageSize, search, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, ozonPriceIndexFilter, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
 
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
@@ -557,6 +613,7 @@ function ProductsPageInner() {
   const selectedCount = selected.size;
   const hasAdvancedFilters = warehouseStockMode !== 'all'
     || profitFilter !== 'all'
+    || ozonPriceIndexFilter !== 'all'
     || Boolean(priceMin || priceMax || weightMin || weightMax || stockMin || stockMax);
   const selectedShop = shops.find((shop) => shop.id === shopId);
   const selectedShopLabel = selectedShop ? `[${selectedShop.platform}] ${selectedShop.name}` : '未选择店铺';
@@ -726,6 +783,16 @@ function ProductsPageInner() {
                   ))}
                 </select>
                 <select
+                  value={ozonPriceIndexFilter}
+                  onChange={(e) => { setOzonPriceIndexFilter(e.target.value as ProductProfitFilter); setPage(0); setSelected(new Set()); }}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  title="按 Ozon 价格指数和对手价格筛选"
+                >
+                  {OZON_PRICE_INDEX_FILTER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <select
                   value={warehouseStockMode}
                   onChange={(e) => { setWarehouseStockMode(e.target.value as WarehouseStockMode); setPage(0); setSelected(new Set()); }}
                   disabled={!selectedWarehouseId}
@@ -745,6 +812,7 @@ function ProductsPageInner() {
                     onClick={() => {
                       setWarehouseStockMode('all');
                       setProfitFilter('all');
+                      setOzonPriceIndexFilter('all');
                       setPriceMin('');
                       setPriceMax('');
                       setWeightMin('');
@@ -911,8 +979,9 @@ function ProductsPageInner() {
                   const salePrice = formatCompactMoney(p.price, p.currency);
                   const oldPrice = formatCompactMoney(p.oldPrice, p.currency);
                   const minPrice = formatCompactMoney(p.minPrice, p.currency);
-                  const promoPrice = formatCompactMoney(p.price, p.currency, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                  const promoPrice = formatCompactMoney(p.marketingPrice ?? p.price, p.currency, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
                   const buyerPrice = formatCompactMoney(p.buyerPriceCny, 'CNY');
+                  const competitorPrice = formatCompactMoney(p.competitorMinPrice, p.competitorCurrency || p.currency);
                   return (
                   <TableRow key={p.id} className={selected.has(p.id) ? 'bg-muted/30' : ''}>
                     <TableCell className="px-3 py-2">
@@ -1069,6 +1138,9 @@ function ProductsPageInner() {
                             )}
                             {p.profitTier && p.profitTier !== 'unknown' && (
                               <ProfitBadge tier={p.profitTier} marginPct={p.profitMarginPct} />
+                            )}
+                            {p.ozonPriceIndexTier && p.ozonPriceIndexTier !== 'unknown' && (
+                              <OzonPriceIndexBadge tier={p.ozonPriceIndexTier} competitorPrice={competitorPrice} />
                             )}
                           </button>
                           <Button

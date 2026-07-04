@@ -17,6 +17,16 @@ export interface ProductSyncMeta {
     descriptionCategoryId?: number;
     typeId?: number;
   } | null;
+  ozonPrice?: {
+    tier?: ProductProfitTier;
+    color?: 'red' | 'yellow' | 'green' | 'unknown';
+    currentPrice?: number | null;
+    marketingPrice?: number | null;
+    competitorMinPrice?: number | null;
+    competitorCurrency?: string | null;
+    rawIndex?: unknown;
+    syncedAt?: string;
+  } | null;
   ozonSyncedAt?: string;
 }
 
@@ -44,6 +54,7 @@ export interface ProductListComputedFilters {
   warehouseId?: string | number | null;
   warehouseStockMode?: WarehouseStockMode;
   profitFilter?: ProductProfitFilter;
+  ozonPriceIndexFilter?: ProductProfitFilter;
   rubToCnyRate?: number;
 }
 
@@ -310,6 +321,117 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const num = finiteNumber(value);
+    if (num != null) return num;
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function normalizeOzonPriceIndexColor(value: unknown): 'red' | 'yellow' | 'green' | 'unknown' {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (!text) return 'unknown';
+  if (text.includes('red') || text.includes('unprofitable') || text.includes('negative')) return 'red';
+  if (text.includes('yellow') || text.includes('average') || text.includes('medium')) return 'yellow';
+  if (text.includes('green') || text.includes('profitable') || text.includes('positive')) return 'green';
+  return 'unknown';
+}
+
+function resolveCompetitorPriceData(indexData: Record<string, unknown>): { price: number | null; currency: string | null } {
+  const sources = [
+    asRecord(indexData.external_index_data),
+    asRecord(indexData.ozon_index_data),
+    asRecord(indexData.self_marketplaces_index_data),
+    indexData,
+  ];
+  let price: number | null = null;
+  let currency: string | null = null;
+  for (const source of sources) {
+    const candidate = firstFiniteNumber(
+      source.minimal_price,
+      source.min_price,
+      source.competitor_min_price,
+      source.market_min_price,
+    );
+    if (candidate != null && candidate > 0 && (price == null || candidate < price)) {
+      price = candidate;
+      currency = firstString(
+        source.minimal_price_currency,
+        source.min_price_currency,
+        source.currency_code,
+        source.currency,
+      );
+    }
+  }
+  return { price, currency };
+}
+
+export function resolveOzonPriceIndexSnapshot(item: unknown): ProductSyncMeta['ozonPrice'] {
+  const record = asRecord(item);
+  const price = asRecord(record.price);
+  const indexData = asRecord(record.price_indexes ?? record.price_index);
+  const currentPrice = firstFiniteNumber(price.price, record.price);
+  const marketingPrice = firstFiniteNumber(
+    price.marketing_price,
+    price.marketing_seller_price,
+    price.auto_action_enabled_price,
+    record.marketing_price,
+  );
+  const color = normalizeOzonPriceIndexColor(firstString(
+    indexData.color_index,
+    indexData.price_index,
+    indexData.index,
+    asRecord(indexData.external_index_data).price_index,
+    asRecord(indexData.ozon_index_data).price_index,
+    asRecord(indexData.self_marketplaces_index_data).price_index,
+  ));
+  const competitor = resolveCompetitorPriceData(indexData);
+  let tier: ProductProfitTier = 'unknown';
+  if (color === 'red') tier = 'unprofitable';
+  else if (color === 'yellow') tier = 'medium';
+  else if (color === 'green') {
+    tier = competitor.price != null && currentPrice != null && currentPrice > 0 && currentPrice <= competitor.price * 0.9
+      ? 'very_profitable'
+      : 'profitable';
+  }
+  return {
+    tier,
+    color,
+    currentPrice,
+    marketingPrice,
+    competitorMinPrice: competitor.price,
+    competitorCurrency: competitor.currency ?? firstString(price.currency_code, record.currency_code),
+    rawIndex: Object.keys(indexData).length ? indexData : null,
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+export function getOzonPriceIndexSnapshot(meta: unknown): ProductSyncMeta['ozonPrice'] {
+  const record = asRecord(meta) as ProductSyncMeta;
+  return record.ozonPrice && typeof record.ozonPrice === 'object' ? record.ozonPrice : null;
+}
+
+export function mergeProductOzonPriceMeta(meta: unknown, item: unknown): Record<string, unknown> {
+  const base = asRecord(meta) as ProductSyncMeta;
+  return {
+    ...base,
+    ozonPrice: resolveOzonPriceIndexSnapshot(item),
+  };
+}
+
 const DEFAULT_RUB_TO_CNY_RATE = 0.095;
 
 function round2(value: number): number {
@@ -391,6 +513,12 @@ export function matchesProductListComputedFilters(
   if (filters.profitFilter && filters.profitFilter !== 'all') {
     const snapshot = resolveProductProfitSnapshot(product, { rubToCnyRate: filters.rubToCnyRate });
     if (snapshot.tier !== filters.profitFilter) return false;
+  }
+
+  if (filters.ozonPriceIndexFilter && filters.ozonPriceIndexFilter !== 'all') {
+    const snapshot = getOzonPriceIndexSnapshot(product.variants);
+    const tier = snapshot?.tier ?? 'unknown';
+    if (tier !== filters.ozonPriceIndexFilter) return false;
   }
 
   if (filters.warehouseStockMode === 'in_stock') return warehouseStock != null && warehouseStock > 0;

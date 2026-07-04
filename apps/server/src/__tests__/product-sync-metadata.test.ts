@@ -8,6 +8,7 @@ import {
   getWarehouseStock,
   matchesProductListComputedFilters,
   normalizeOzonSku,
+  resolveOzonPriceIndexSnapshot,
   resolveProductProfitSnapshot,
   resolveOzonPackageWeightG,
   resolveOzonProductImages,
@@ -219,6 +220,62 @@ describe('product sync metadata helpers', () => {
       buyerPriceCny: null,
     }, {
       profitFilter: 'unknown',
+    })).toBe(true);
+  });
+
+  it('extracts Ozon price index and competitor price from price info response', () => {
+    expect(resolveOzonPriceIndexSnapshot({
+      price: { price: '122.00', marketing_price: '118.00', currency_code: 'RUB' },
+      price_indexes: {
+        color_index: 'COLOR_INDEX_GREEN',
+        external_index_data: {
+          minimal_price: '150.00',
+          minimal_price_currency: 'RUB',
+        },
+      },
+    })).toMatchObject({
+      tier: 'very_profitable',
+      color: 'green',
+      currentPrice: 122,
+      marketingPrice: 118,
+      competitorMinPrice: 150,
+      competitorCurrency: 'RUB',
+    });
+
+    expect(resolveOzonPriceIndexSnapshot({
+      price: { price: '122.00', currency_code: 'RUB' },
+      price_indexes: {
+        price_index: 'COLOR_INDEX_RED',
+        ozon_index_data: { minimal_price: '90.00', minimal_price_currency: 'RUB' },
+      },
+    })?.tier).toBe('unprofitable');
+  });
+
+  it('filters product list by stored Ozon price index snapshot', () => {
+    expect(matchesProductListComputedFilters({
+      variants: {
+        ozonPrice: {
+          tier: 'unprofitable',
+          competitorMinPrice: 90,
+          competitorCurrency: 'RUB',
+        },
+      },
+    }, {
+      ozonPriceIndexFilter: 'unprofitable',
+    })).toBe(true);
+
+    expect(matchesProductListComputedFilters({
+      variants: {
+        ozonPrice: { tier: 'profitable' },
+      },
+    }, {
+      ozonPriceIndexFilter: 'unprofitable',
+    })).toBe(false);
+
+    expect(matchesProductListComputedFilters({
+      variants: {},
+    }, {
+      ozonPriceIndexFilter: 'unknown',
     })).toBe(true);
   });
 

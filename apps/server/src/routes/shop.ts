@@ -7,6 +7,7 @@ import { OzonClient } from '../services/ozon-client.js';
 import {
   buildProductStatusCounts,
   getProductSyncCategory,
+  getOzonPriceIndexSnapshot,
   getOzonStatusDisplay,
   getWarehouseStock,
   matchesProductListComputedFilters,
@@ -1162,6 +1163,7 @@ export async function shopRoutes(app: FastifyInstance) {
       stockMax?: string;
       statusFilter?: string;
       profitFilter?: string;
+      ozonPriceIndexFilter?: string;
     };
 
     const shop = await prisma.shop.findFirst({ where: { id, userId } });
@@ -1182,6 +1184,9 @@ export async function shopRoutes(app: FastifyInstance) {
     const profitFilter = PRODUCT_PROFIT_FILTERS.includes(query.profitFilter as ProductProfitFilter)
       ? query.profitFilter as ProductProfitFilter
       : 'all';
+    const ozonPriceIndexFilter = PRODUCT_PROFIT_FILTERS.includes(query.ozonPriceIndexFilter as ProductProfitFilter)
+      ? query.ozonPriceIndexFilter as ProductProfitFilter
+      : 'all';
     const computedFilters = {
       priceMin: parseOptionalFiniteNumber(query.priceMin),
       priceMax: parseOptionalFiniteNumber(query.priceMax),
@@ -1192,9 +1197,12 @@ export async function shopRoutes(app: FastifyInstance) {
       warehouseId,
       warehouseStockMode,
       profitFilter,
+      ozonPriceIndexFilter,
     };
     const hasComputedFilters = Object.entries(computedFilters).some(([key, value]) => (
-      key === 'warehouseStockMode' || key === 'profitFilter' ? value !== 'all' : key !== 'warehouseId' && value != null
+      key === 'warehouseStockMode' || key === 'profitFilter' || key === 'ozonPriceIndexFilter'
+        ? value !== 'all'
+        : key !== 'warehouseId' && value != null
     ));
     const statusFilter = PRODUCT_STATUS_FILTERS.includes(query.statusFilter as ProductStatusFilter)
       ? query.statusFilter! as ProductStatusFilter
@@ -1333,6 +1341,7 @@ export async function shopRoutes(app: FastifyInstance) {
         rows: rows.map((r) => {
           const { variants, ...rest } = r;
           const statusDisplay = getOzonStatusDisplay(variants, r.status);
+          const ozonPrice = getOzonPriceIndexSnapshot(variants);
           const warehouseStock = warehouseId ? getWarehouseStock(variants, warehouseId) : null;
           const syncCategory = getProductSyncCategory(variants);
           const descriptionCategoryId = positiveInt(r.categoryId) ?? syncCategory?.descriptionCategoryId ?? null;
@@ -1366,6 +1375,11 @@ export async function shopRoutes(app: FastifyInstance) {
             ozonStatusDescription: statusDisplay.description,
             ozonModerateStatus: statusDisplay.moderateStatus,
             ozonStatusTone: statusDisplay.tone,
+            ozonPriceIndexTier: ozonPrice?.tier ?? 'unknown',
+            ozonPriceIndexColor: ozonPrice?.color ?? 'unknown',
+            marketingPrice: ozonPrice?.marketingPrice != null ? ozonPrice.marketingPrice.toFixed(2) : null,
+            competitorMinPrice: ozonPrice?.competitorMinPrice != null ? ozonPrice.competitorMinPrice.toFixed(2) : null,
+            competitorCurrency: ozonPrice?.competitorCurrency ?? null,
             warehouseStock,
           };
         }),

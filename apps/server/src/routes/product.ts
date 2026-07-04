@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -9,6 +10,7 @@ import { getProductMutationBlockReason, resolveOzonBatchUpdateResults } from '..
 import {
   buildProductSyncMeta,
   getProductSyncCategory,
+  mergeProductOzonPriceMeta,
   resolveOzonProductImages,
   resolveOzonSalesCommissionPercent,
 } from '../services/product-sync-metadata.js';
@@ -626,7 +628,7 @@ export async function productRoutes(app: FastifyInstance) {
     for (const shop of shops) {
       const products = await prisma.product.findMany({
         where: { shopId: shop.id, platformProductId: { not: null } },
-        select: { id: true, platformProductId: true },
+        select: { id: true, platformProductId: true, variants: true },
       });
 
       if (products.length === 0) continue;
@@ -656,6 +658,7 @@ export async function productRoutes(app: FastifyInstance) {
               data: {
                 commissionRate: commissionRate != null ? commissionRate : undefined,
                 minPrice: minPrice != null ? minPrice : undefined,
+                variants: mergeProductOzonPriceMeta(product.variants, item) as Prisma.InputJsonValue,
               },
             });
             totalUpdated++;

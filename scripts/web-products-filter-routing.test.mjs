@@ -11,10 +11,11 @@ assert.match(source, /stockMin/i, 'products page should keep a minimum stock fil
 assert.match(source, /stockMax/i, 'products page should keep a maximum stock filter');
 assert.match(source, /warehouseStockMode/i, 'products page should keep an explicit warehouse stock mode');
 assert.match(source, /profitFilter/i, 'products page should keep a profitability filter');
+assert.match(source, /ozonPriceIndexFilter/i, 'products page should keep an Ozon price index filter');
 assert.match(source, /pageSize/i, 'products page should keep a page size selector');
 assert.match(source, /pageJumpInput/i, 'products page should keep a direct page jump input');
 
-for (const param of ['priceMin', 'priceMax', 'weightMin', 'weightMax', 'stockMin', 'stockMax', 'warehouseStockMode', 'profitFilter']) {
+for (const param of ['priceMin', 'priceMax', 'weightMin', 'weightMax', 'stockMin', 'stockMax', 'warehouseStockMode', 'profitFilter', 'ozonPriceIndexFilter']) {
   assert.match(source, new RegExp(`params\\.set\\('${param}'`), `products page should send ${param} to the product list API`);
 }
 
@@ -34,6 +35,7 @@ assert.match(
 );
 
 assert.match(source, /value:\s*'very_profitable'|value="very_profitable"/, 'products page should support a very profitable filter option');
+assert.match(source, /Ozon价格：不利|Ozon 价格：不利/, 'products page should support an unfavorable Ozon price index option');
 assert.match(source, /priceField/i, 'batch price dialog should support choosing which price field to modify');
 assert.match(source, /minPrice/i, 'batch price dialog should support the Ozon minimum price field');
 

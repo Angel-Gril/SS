@@ -1051,7 +1051,16 @@ export interface OzonReturn {
 export interface OzonProductPrice {
   product_id: number;
   offer_id: string;
-  price: { price: string | number; old_price: string | number; min_price: string | number; currency_code: string };
+  price: {
+    price: string | number;
+    old_price: string | number;
+    min_price: string | number;
+    marketing_price?: string | number;
+    marketing_seller_price?: string | number;
+    auto_action_enabled_price?: string | number;
+    currency_code: string;
+  };
+  price_indexes?: Record<string, unknown>;
   commissions:
     | { percent: number; min_value: number; value: number; sale_schema: string; delivery_amount: number; return_amount: number }[]
     | {

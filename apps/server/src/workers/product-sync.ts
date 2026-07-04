@@ -1,4 +1,5 @@
 import { Queue, Worker } from 'bullmq';
+import type { Prisma } from '@prisma/client';
 import { redis, redisDisabled } from '../lib/redis.js';
 import { connection } from '../lib/bullmq-connection.js';
 import { registerWorker } from '../lib/worker-registry.js';
@@ -8,6 +9,7 @@ import { OzonClient } from '../services/ozon-client.js';
 import {
   buildProductSyncMeta,
   getProductSyncCategory,
+  mergeProductOzonPriceMeta,
   normalizeOzonSku,
   resolveOzonPackageWeightG,
   resolveOzonProductImages,
@@ -214,7 +216,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
   try {
     const allProducts = await prisma.product.findMany({
       where: { shopId, platformProductId: { in: Array.from(syncedPlatformProductIds) } },
-      select: { id: true, platformProductId: true },
+      select: { id: true, platformProductId: true, variants: true },
     });
     const allProductIds = allProducts.map((p) => Number(p.platformProductId));
     const priceBatchSize = 1000;
@@ -232,6 +234,7 @@ async function syncProductsCore(shopId: string, shop: any): Promise<number> {
           data: {
             commissionRate: commissionRate != null ? commissionRate : undefined,
             minPrice: minPrice != null ? minPrice : undefined,
+            variants: mergeProductOzonPriceMeta(product.variants, item) as Prisma.InputJsonValue,
           },
         });
       }

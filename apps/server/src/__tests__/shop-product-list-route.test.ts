@@ -192,4 +192,35 @@ describe('shop product list route', () => {
 
     await app.close();
   });
+
+  it('filters product list by stored Ozon price index', async () => {
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', lastSyncAt: null });
+    mocks.productFindMany.mockResolvedValue([
+      productRow({ id: 'bad-price', variants: { ozonPrice: { tier: 'unprofitable', competitorMinPrice: 90, competitorCurrency: 'RUB' } } }),
+      productRow({ id: 'good-price', variants: { ozonPrice: { tier: 'profitable', competitorMinPrice: 150, competitorCurrency: 'RUB' } } }),
+    ]);
+    mocks.sourceQuoteFindMany.mockResolvedValue([]);
+    mocks.sourceCandidateFindMany.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/shops/shop-1/products?ozonPriceIndexFilter=unprofitable&limit=20&offset=0',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      total: 1,
+      rows: [
+        {
+          id: 'bad-price',
+          ozonPriceIndexTier: 'unprofitable',
+          competitorMinPrice: '90.00',
+          competitorCurrency: 'RUB',
+        },
+      ],
+    });
+
+    await app.close();
+  });
 });
