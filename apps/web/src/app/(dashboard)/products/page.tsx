@@ -136,11 +136,15 @@ const PROFIT_FILTER_OPTIONS: Array<{ value: ProductProfitFilter; label: string }
 const OZON_PRICE_INDEX_FILTER_OPTIONS: Array<{ value: ProductProfitFilter; label: string }> = [
   { value: 'all', label: 'Ozon价格：全部' },
   { value: 'unprofitable', label: 'Ozon价格：不利' },
-  { value: 'medium', label: 'Ozon价格：中等' },
   { value: 'profitable', label: 'Ozon价格：有利' },
+  { value: 'medium', label: 'Ozon价格：中等' },
   { value: 'very_profitable', label: 'Ozon价格：超级有利' },
   { value: 'unknown', label: 'Ozon价格：未检测' },
 ];
+
+function getOzonPriceIndexFilterLabel(value: ProductProfitFilter): string {
+  return OZON_PRICE_INDEX_FILTER_OPTIONS.find((option) => option.value === value)?.label.replace('Ozon价格：', '') ?? '全部';
+}
 
 const BATCH_PRICE_FIELDS: Record<BatchPriceField, { label: string; shortLabel: string }> = {
   price: { label: '销售价', shortLabel: '售价' },
@@ -366,6 +370,7 @@ function ProductsPageInner() {
   const [ozonPriceIndexFilter, setOzonPriceIndexFilter] = useState<ProductProfitFilter>('all');
   const [statusCounts, setStatusCounts] = useState<ProductStatusCounts>(EMPTY_STATUS_COUNTS);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
+  const [priceFilterMenuOpen, setPriceFilterMenuOpen] = useState(false);
   const [batchAction, setBatchAction] = useState<BatchAction>('price');
   const [priceMin, setPriceMin] = useState('');
   const [priceMax, setPriceMax] = useState('');
@@ -379,6 +384,7 @@ function ProductsPageInner() {
   const [lastProductSyncAt, setLastProductSyncAt] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState(20);
   const [pageJumpInput, setPageJumpInput] = useState('');
+  const priceFilterMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const stored = readStoredProductFilters();
@@ -443,6 +449,16 @@ function ProductsPageInner() {
       stockMax,
     }));
   }, [filtersRestored, shopId, selectedWarehouseId, warehouseStockMode, statusFilter, profitFilter, ozonPriceIndexFilter, pageSize, priceMin, priceMax, weightMin, weightMax, stockMin, stockMax]);
+
+  useEffect(() => {
+    if (!priceFilterMenuOpen) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (priceFilterMenuRef.current?.contains(event.target as Node)) return;
+      setPriceFilterMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [priceFilterMenuOpen]);
 
   const loadProducts = useCallback(async () => {
     if (!filtersRestored || !shopId) return;
@@ -617,6 +633,7 @@ function ProductsPageInner() {
     || Boolean(priceMin || priceMax || weightMin || weightMax || stockMin || stockMax);
   const selectedShop = shops.find((shop) => shop.id === shopId);
   const selectedShopLabel = selectedShop ? `[${selectedShop.platform}] ${selectedShop.name}` : '未选择店铺';
+  const priceFilterLabel = getOzonPriceIndexFilterLabel(ozonPriceIndexFilter);
 
   return (
     <div className="space-y-4">
@@ -954,9 +971,45 @@ function ProductsPageInner() {
                   <TableHead className="whitespace-nowrap">类目 / 佣金</TableHead>
                   <TableHead className="whitespace-nowrap">状态</TableHead>
                   <TableHead className="whitespace-nowrap">
-                    <div className="flex items-center justify-center gap-1">
-                      价格
-                      <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                    <div ref={priceFilterMenuRef} className="relative flex items-center justify-center">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={ozonPriceIndexFilter === 'all' ? 'ghost' : 'secondary'}
+                        className="h-7 gap-1 px-2 text-xs font-medium"
+                        aria-label="按 Ozon 价格指数筛选"
+                        aria-expanded={priceFilterMenuOpen}
+                        onClick={() => setPriceFilterMenuOpen((open) => !open)}
+                      >
+                        价格
+                        {ozonPriceIndexFilter !== 'all' && (
+                          <span className="max-w-[64px] truncate text-[11px] text-primary">{priceFilterLabel}</span>
+                        )}
+                        <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                      {priceFilterMenuOpen && (
+                        <div className="absolute left-1/2 top-full z-30 mt-2 w-36 -translate-x-1/2 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg">
+                          {OZON_PRICE_INDEX_FILTER_OPTIONS.map((option) => {
+                            const selectedOption = option.value === ozonPriceIndexFilter;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                className={`flex h-8 w-full items-center justify-between rounded-md px-2.5 text-left text-xs hover:bg-muted ${selectedOption ? 'bg-primary/10 text-primary' : 'text-foreground'}`}
+                                onClick={() => {
+                                  setOzonPriceIndexFilter(option.value);
+                                  setPriceFilterMenuOpen(false);
+                                  setPage(0);
+                                  setSelected(new Set());
+                                }}
+                              >
+                                <span>{getOzonPriceIndexFilterLabel(option.value)}</span>
+                                {selectedOption && <Check className="h-3.5 w-3.5" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </TableHead>
                   <TableHead className="whitespace-nowrap text-right">库存</TableHead>

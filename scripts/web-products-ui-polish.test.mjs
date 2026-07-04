@@ -27,6 +27,16 @@ assert.match(
   /className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:bg-muted hover:text-foreground"/,
   'price edit button should use neutral ghost styling',
 );
+assert.match(
+  products,
+  /aria-label="按 Ozon 价格指数筛选"/,
+  'price column header should be an accessible filter trigger',
+);
+assert.match(
+  products,
+  /setPriceFilterMenuOpen\(\(open\) => !open\)/,
+  'price column header should toggle the Ozon price filter menu',
+);
 
 assert.doesNotMatch(sidebar, /border-orange-200/, 'sidebar child rail should use neutral border color');
 assert.doesNotMatch(sidebar, /from-orange|to-orange|hover:bg-orange|text-orange/, 'sidebar should not hard-code orange utility colors');
