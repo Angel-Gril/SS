@@ -934,17 +934,7 @@ function ProductsPageInner() {
 
       <Card>
         <CardContent className="p-0">
-          {loading && products.length === 0 ? (
-            <div className="p-8 flex justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : products.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">
-              <Package className="h-10 w-10 mx-auto mb-3 opacity-50" />
-              暂无商品。请先在店铺管理中执行同步。
-            </div>
-          ) : (
-            <Table className="min-w-[1460px] table-fixed text-xs">
+          <Table className="min-w-[1460px] table-fixed text-xs">
               <colgroup>
                 <col className="w-[40px]" />
                 <col className="w-[375px]" />
@@ -1020,7 +1010,26 @@ function ProductsPageInner() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((p) => {
+                {loading && products.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={10} className="h-48 text-center">
+                      <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                    </TableCell>
+                  </TableRow>
+                ) : products.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={10} className="h-48 text-center text-muted-foreground">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Package className="h-10 w-10 opacity-50" />
+                        <div>
+                          {hasAdvancedFilters || search.trim()
+                            ? '没有符合当前筛选条件的商品。请清空筛选后重试。'
+                            : '暂无商品。请先在店铺管理中执行同步。'}
+                        </div>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : products.map((p) => {
                   const mutable = isProductMutable(p);
                   const displaySku = getDisplaySku(p);
                   const ozonProductUrl = getOzonProductUrl(p);
@@ -1300,7 +1309,6 @@ function ProductsPageInner() {
                 })}
               </TableBody>
             </Table>
-          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">

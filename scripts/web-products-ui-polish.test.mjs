@@ -47,6 +47,16 @@ assert.match(
   /min-w-0 flex-1 truncate/,
   'price filter menu labels should have stable width and truncate cleanly',
 );
+assert.match(
+  products,
+  /<TableCell colSpan=\{10\}/,
+  'empty product results should keep the table header and render the empty state inside the table body',
+);
+assert.match(
+  products,
+  /没有符合当前筛选条件的商品/,
+  'filtered empty product results should explain that filters produced no matches',
+);
 
 assert.doesNotMatch(sidebar, /border-orange-200/, 'sidebar child rail should use neutral border color');
 assert.doesNotMatch(sidebar, /from-orange|to-orange|hover:bg-orange|text-orange/, 'sidebar should not hard-code orange utility colors');
