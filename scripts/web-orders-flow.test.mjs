@@ -34,5 +34,25 @@ assert.doesNotMatch(
   /awaiting_label/,
   'logistics page should not depend on the removed awaiting_label stage key',
 );
+assert.doesNotMatch(
+  ordersPage,
+  /orders\.length === 0 \? \([\s\S]{0,180}<div[\s\S]{0,500}<Table/,
+  'orders page should keep the table header visible when filters return no orders',
+);
+assert.doesNotMatch(
+  logisticsPage,
+  /orders\.length === 0 \? \([\s\S]{0,180}<div[\s\S]{0,500}<Table/,
+  'orders logistics page should keep the table header visible when filters return no orders',
+);
+assert.match(
+  ordersPage,
+  /<TableCell colSpan=\{10\}/,
+  'orders page should render empty results as a full-width table body row',
+);
+assert.match(
+  logisticsPage,
+  /<TableCell colSpan=\{7\}/,
+  'orders logistics page should render empty results as a full-width table body row',
+);
 
 console.log('PASS web orders flow');

@@ -644,16 +644,7 @@ export default function OrdersPage() {
 
       <Card>
         <CardContent className="p-0">
-          {loading && orders.length === 0 ? (
-            <div className="p-8 flex justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : orders.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">
-              暂无订单数据。请先同步订单。
-            </div>
-          ) : (
-            <Table className="min-w-[1280px] table-fixed text-xs">
+          <Table className="min-w-[1280px] table-fixed text-xs">
               <colgroup>
                 <col className="w-[38px]" />
                 <col className="w-[135px]" />
@@ -688,7 +679,19 @@ export default function OrdersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => {
+                {loading && orders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={10} className="h-48 text-center">
+                      <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                    </TableCell>
+                  </TableRow>
+                ) : orders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={10} className="h-48 text-center text-muted-foreground">
+                      没有符合当前筛选条件的订单。请清空筛选后重试。
+                    </TableCell>
+                  </TableRow>
+                ) : orders.map((order) => {
                   const canShip = order.status === 'awaiting_packaging' || order.status === 'awaiting_deliver';
                   const canCancel = order.status !== 'delivered' && order.status !== 'cancelled';
                   const orderTags = order.serviceTags || [];
@@ -947,7 +950,6 @@ export default function OrdersPage() {
                 })}
               </TableBody>
             </Table>
-          )}
 
           {totalPages > 1 && (
             <div className="flex items-center justify-between p-4 border-t">

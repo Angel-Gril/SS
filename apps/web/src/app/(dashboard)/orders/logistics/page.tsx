@@ -154,14 +154,7 @@ export default function LogisticsPage() {
 
       <Card>
         <CardContent className="p-0">
-          {loading && orders.length === 0 ? (
-            <div className="p-8 flex justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : orders.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">暂无订单数据</div>
-          ) : (
-            <Table>
+          <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>订单号</TableHead>
@@ -174,7 +167,19 @@ export default function LogisticsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {orders.map((order) => (
+                {loading && orders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-48 text-center">
+                      <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
+                    </TableCell>
+                  </TableRow>
+                ) : orders.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-48 text-center text-muted-foreground">
+                      没有符合当前筛选条件的物流订单。请清空筛选后重试。
+                    </TableCell>
+                  </TableRow>
+                ) : orders.map((order) => (
                   <TableRow key={order.id}>
                     <TableCell className="font-mono text-xs">
                       {order.postingNumber || order.platformOrderId}
@@ -263,7 +268,6 @@ export default function LogisticsPage() {
                 ))}
               </TableBody>
             </Table>
-          )}
 
           {totalPages > 1 && (
             <div className="flex items-center justify-between p-4 border-t">
