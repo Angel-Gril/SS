@@ -232,15 +232,15 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
     >
       <div className="h-16 flex items-center justify-center border-b border-border/50 shrink-0">
         {collapsed && !shouldExpand ? (
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center text-white font-bold text-lg shadow-lg">
+          <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground font-bold text-lg shadow-sm">
             SS
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center text-white font-bold shadow-md">
+            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground font-bold shadow-sm">
               SS
             </div>
-            <span className="text-lg font-semibold tracking-tight bg-gradient-to-r from-orange-500 to-orange-600 bg-clip-text text-transparent">
+            <span className="text-lg font-semibold tracking-tight text-primary">
               松鼠跨境 ERP
             </span>
           </div>
@@ -279,11 +279,12 @@ function NavGroup({
         className={cn(
           'dock-item flex items-center gap-3 px-4 py-3 mb-1 rounded-xl text-sm font-medium transition-all',
           pathname === item.href
-            ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white menu-active'
-            : 'text-foreground/70 hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-950/30',
+            ? 'bg-primary/5 text-primary'
+            : 'text-foreground/70 hover:bg-muted hover:text-foreground',
           collapsed && 'justify-center px-0 w-12 h-12 mx-auto',
         )}
       >
+        {pathname === item.href && <span aria-hidden className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60" />}
         <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-4.5 w-4.5')} />
         {!collapsed && <span>{item.label}</span>}
       </Link>
@@ -297,11 +298,12 @@ function NavGroup({
         className={cn(
           'dock-item w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all',
           isActive
-            ? 'text-orange-600 dark:text-orange-400'
-            : 'text-foreground/70 hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-950/30',
+            ? 'bg-primary/5 text-primary'
+            : 'text-foreground/70 hover:bg-muted hover:text-foreground',
           collapsed && 'justify-center px-0 w-12 h-12 mx-auto',
         )}
       >
+        {isActive && <span aria-hidden className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60" />}
         <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-4.5 w-4.5')} />
         {!collapsed && (
           <>
@@ -313,7 +315,7 @@ function NavGroup({
         )}
       </button>
       {!collapsed && open && (
-        <div className="ml-4 pl-4 border-l-2 border-orange-200 dark:border-orange-900/50 space-y-1 mt-1">
+        <div className="ml-4 pl-4 border-l-2 border-border space-y-1 mt-1">
           {item.children!.map((child) => (
             <Link
               key={child.href}
@@ -321,10 +323,11 @@ function NavGroup({
               className={cn(
                 'dock-item block px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
                 pathname === child.href
-                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white menu-active'
-                  : 'text-foreground/60 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30',
+                  ? 'bg-primary/5 text-primary'
+                  : 'text-foreground/60 hover:bg-muted hover:text-foreground',
               )}
             >
+              {pathname === child.href && <span aria-hidden className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60" />}
               {child.label}
             </Link>
           ))}

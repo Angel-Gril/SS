@@ -934,7 +934,7 @@ function ProductsPageInner() {
                               href={ozonProductUrl}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="block truncate text-sm font-medium leading-5 text-blue-600 hover:underline dark:text-blue-400"
+                              className="block truncate text-sm font-medium leading-5 text-foreground hover:text-primary hover:underline"
                               title={p.title}
                             >
                               {p.title}
@@ -1074,7 +1074,7 @@ function ProductsPageInner() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-7 w-7 shrink-0 p-0 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                            className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
                             disabled={!mutable}
                             title="修改价格"
                             onClick={() => {
@@ -1141,7 +1141,7 @@ function ProductsPageInner() {
                     </TableCell>
                     <TableCell className="px-3 py-2 text-right align-top">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button type="button" size="sm" className="h-7 px-2" onClick={() => setDetailProductId(p.id)}>
+                        <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setDetailProductId(p.id)}>
                           <Pencil className="h-3 w-3" />
                           编辑
                         </Button>
