@@ -37,6 +37,16 @@ assert.match(
   /setPriceFilterMenuOpen\(\(open\) => !open\)/,
   'price column header should toggle the Ozon price filter menu',
 );
+assert.match(
+  products,
+  /z-50 mt-2 w-40 .*bg-white .*shadow-xl .*ring-1 .*dark:bg-slate-950/,
+  'price filter menu should render as an opaque high-layer panel instead of transparent overlay text',
+);
+assert.match(
+  products,
+  /min-w-0 flex-1 truncate/,
+  'price filter menu labels should have stable width and truncate cleanly',
+);
 
 assert.doesNotMatch(sidebar, /border-orange-200/, 'sidebar child rail should use neutral border color');
 assert.doesNotMatch(sidebar, /from-orange|to-orange|hover:bg-orange|text-orange/, 'sidebar should not hard-code orange utility colors');

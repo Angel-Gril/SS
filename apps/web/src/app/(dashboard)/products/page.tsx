@@ -988,14 +988,14 @@ function ProductsPageInner() {
                         <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                       </Button>
                       {priceFilterMenuOpen && (
-                        <div className="absolute left-1/2 top-full z-30 mt-2 w-36 -translate-x-1/2 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg">
+                        <div className="absolute left-1/2 top-full z-50 mt-2 w-40 -translate-x-1/2 rounded-lg border border-border bg-white p-1 text-slate-900 shadow-xl ring-1 ring-black/5 dark:bg-slate-950 dark:text-slate-100 dark:ring-white/10">
                           {OZON_PRICE_INDEX_FILTER_OPTIONS.map((option) => {
                             const selectedOption = option.value === ozonPriceIndexFilter;
                             return (
                               <button
                                 key={option.value}
                                 type="button"
-                                className={`flex h-8 w-full items-center justify-between rounded-md px-2.5 text-left text-xs hover:bg-muted ${selectedOption ? 'bg-primary/10 text-primary' : 'text-foreground'}`}
+                                className={`flex h-8 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs hover:bg-muted ${selectedOption ? 'bg-primary/10 text-primary' : 'text-slate-700 dark:text-slate-200'}`}
                                 onClick={() => {
                                   setOzonPriceIndexFilter(option.value);
                                   setPriceFilterMenuOpen(false);
@@ -1003,7 +1003,7 @@ function ProductsPageInner() {
                                   setSelected(new Set());
                                 }}
                               >
-                                <span>{getOzonPriceIndexFilterLabel(option.value)}</span>
+                                <span className="min-w-0 flex-1 truncate">{getOzonPriceIndexFilterLabel(option.value)}</span>
                                 {selectedOption && <Check className="h-3.5 w-3.5" />}
                               </button>
                             );
