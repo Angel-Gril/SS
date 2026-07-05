@@ -208,6 +208,11 @@ assert.match(
 );
 assert.match(
   overlay,
+  /function\s+buildListWorkbenchExcelHtml[\s\S]*return\s+html;/,
+  'Ozon list workbench Excel export should return the generated HTML instead of downloading "undefined"',
+);
+assert.match(
+  overlay,
   /application\/vnd\.ms-excel/,
   'Ozon list workbench export should use an Excel MIME type',
 );
@@ -250,6 +255,21 @@ assert.match(
   overlay,
   /function\s+setListWorkbenchMode/,
   'Ozon list workbench should update mode state through one function',
+);
+assert.match(
+  overlay,
+  /function\s+getListWorkbenchModeTitle/,
+  'Ozon list workbench should give each quick-action mode a distinct title',
+);
+assert.match(
+  overlay,
+  /data-role="workbench-title"/,
+  'Ozon list workbench should expose a title element that changes by mode',
+);
+assert.match(
+  overlay,
+  /data-role="workbench-subtitle"/,
+  'Ozon list workbench should expose a subtitle element that explains the current mode',
 );
 for (const mode of ['data', 'profit', 'publish']) {
   assert.match(

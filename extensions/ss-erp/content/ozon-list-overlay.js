@@ -1859,6 +1859,19 @@
     return '一键上架';
   }
 
+  function getListWorkbenchModeTitle(mode) {
+    if (mode === 'data') return 'SS ERP 选品数据工作台';
+    if (mode === 'profit') return 'SS ERP 利润测算工作台';
+    return 'SS ERP 一键上架工作台';
+  }
+
+  function getListWorkbenchModeSubtitle(mode, count) {
+    const base = `Ozon 列表页 ${count} 个 SKU`;
+    if (mode === 'data') return `${base} · 数据查看 / 规则筛选 / Excel 导出`;
+    if (mode === 'profit') return `${base} · 成本 / 物流费 / 佣金测算`;
+    return `${base} · 选择店铺后提交上架`;
+  }
+
   function readListWorkbenchColumnWidths() {
     try {
       const raw = localStorage.getItem(LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY);
@@ -1983,6 +1996,15 @@
     });
     const status = modal.querySelector('[data-role="workbench-status"]');
     if (status) status.textContent = getListWorkbenchModeStatus(nextMode);
+    const title = modal.querySelector('[data-role="workbench-title"]');
+    if (title) title.textContent = getListWorkbenchModeTitle(nextMode);
+    const subtitle = modal.querySelector('[data-role="workbench-subtitle"]');
+    if (subtitle) {
+      const count = Array.isArray(modal.__ssErpListWorkbenchSkus)
+        ? modal.__ssErpListWorkbenchSkus.length
+        : getCurrentPageSkus().length;
+      subtitle.textContent = getListWorkbenchModeSubtitle(nextMode, count);
+    }
   }
 
   function setListQuickStatus(panel, text) {
@@ -2634,8 +2656,8 @@
       `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#293241;color:#f8fafc;box-shadow:0 1px 0 #1f2937;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#eff6ff!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-filter-toolbar"] select,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-batch-toolbar"] input{box-shadow:inset 0 1px 1px rgba(15,23,42,.04);}</style>`,
       '  <div style="min-height:56px;background:linear-gradient(135deg,#1d4ed8 0%,#0f766e 100%);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid #1e3a8a;">',
       '    <div>',
-      '      <div style="font-size:16px;font-weight:800;line-height:1.2;">SS ERP SKU 工作台</div>',
-      `      <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">Ozon 列表页 ${skus.length} 个 SKU</div>`,
+      `      <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getListWorkbenchModeTitle(modal.__ssErpWorkbenchFocus))}</div>`,
+      `      <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getListWorkbenchModeSubtitle(modal.__ssErpWorkbenchFocus, skus.length))}</div>`,
       '    </div>',
       '    <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">',
       `      <button type="button" data-role="workbench-view" data-mode="data" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'data')}">数据</button>`,
@@ -2952,6 +2974,7 @@
       '</table>',
       '</body></html>',
     ].join('');
+    return html;
   }
 
   function downloadListWorkbenchExcelFromPage(rows, filename) {
