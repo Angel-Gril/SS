@@ -173,6 +173,36 @@ assert.match(
 );
 assert.match(
   overlay,
+  /LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY/,
+  'Ozon list workbench should persist user-adjusted table column widths',
+);
+assert.match(
+  overlay,
+  /data-role="workbench-col-resize-handle"/,
+  'Ozon list workbench headers should expose drag handles for manual column width adjustment',
+);
+assert.match(
+  overlay,
+  /initListWorkbenchColumnResize\(modal\)/,
+  'Ozon list workbench should initialize column resize interactions when the modal opens',
+);
+assert.match(
+  overlay,
+  /downloadListWorkbenchExcel\(/,
+  'Ozon list workbench export should download an Excel-compatible table file',
+);
+assert.match(
+  overlay,
+  /application\/vnd\.ms-excel/,
+  'Ozon list workbench export should use an Excel MIME type',
+);
+assert.match(
+  overlay,
+  /\.xls/,
+  'Ozon list workbench export should create an .xls file that Excel can open',
+);
+assert.match(
+  overlay,
   /data-role="follow-brand"/,
   'Ozon list workbench should expose the follow-brand option before publishing',
 );
@@ -259,7 +289,7 @@ assert.match(
   /includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
   'Ozon list workbench should fetch slow seller-offer details only in publish mode',
 );
-for (const actionLabel of ['保存', '删除选中 SKU', '复制选中数据', '一键上架选中 SKU']) {
+for (const actionLabel of ['保存', '删除选中 SKU', '导出选中 SKU', '一键上架选中 SKU']) {
   assert.match(overlay, new RegExp(actionLabel), `Ozon list workbench footer should expose ${actionLabel}`);
 }
 assert.match(

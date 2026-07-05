@@ -40,6 +40,28 @@
   const LIST_FIELD_CONFIG_MODAL_ID = 'ss-erp-list-field-config-modal';
   const LIST_SELECTION_RULES_MODAL_ID = 'ss-erp-list-selection-rules-modal';
   const LIST_QUICK_ACTIONS_ID = 'ss-erp-list-quick-actions';
+  const LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY = 'ss-erp:ozon-list-workbench-column-widths';
+  const LIST_WORKBENCH_MIN_COLUMN_WIDTH = 56;
+  const LIST_WORKBENCH_COLUMNS = [
+    { key: 'select', label: '', width: 38, align: 'center', fixed: true, minWidth: 38 },
+    { key: 'sku', label: 'SKU', width: 180, align: 'left' },
+    { key: 'title', label: '标题', width: 220, align: 'left', minWidth: 140 },
+    { key: 'selection', label: '选品', width: 100, align: 'left' },
+    { key: 'price', label: '售价', width: 90, align: 'right' },
+    { key: 'soldCount', label: '月销量', width: 90, align: 'right' },
+    { key: 'soldSum', label: '月销售额', width: 110, align: 'right' },
+    { key: 'sellerCount', label: '跟卖数', width: 82, align: 'right' },
+    { key: 'minFollowPriceRub', label: '跟卖最低价', width: 100, align: 'right' },
+    { key: 'maxFollowPriceRub', label: '跟卖最高价', width: 100, align: 'right' },
+    { key: 'adExpenseShare', label: '广告费占比', width: 96, align: 'right' },
+    { key: 'returnCancelRate', label: '退货取消率', width: 96, align: 'right' },
+    { key: 'commissionRate', label: '佣金', width: 82, align: 'right' },
+    { key: 'profitMarginPct', label: '利润率', width: 82, align: 'right' },
+    { key: 'weightGrams', label: '重量', width: 86, align: 'right' },
+    { key: 'salesSchema', label: '发货模式', width: 92, align: 'left' },
+    { key: 'brand', label: '品牌', width: 110, align: 'left' },
+    { key: 'categoryPath', label: '类目', width: 180, align: 'left', minWidth: 120 },
+  ];
   const DEFAULT_DISPLAY_FIELD_IDS = [
     'sku',
     'category',
@@ -1622,6 +1644,114 @@
     return '一键上架';
   }
 
+  function readListWorkbenchColumnWidths() {
+    try {
+      const raw = localStorage.getItem(LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function getListWorkbenchColumnWidth(column, widths) {
+    const saved = Number(widths && widths[column.key]);
+    const minWidth = column.minWidth || LIST_WORKBENCH_MIN_COLUMN_WIDTH;
+    const fallback = Number(column.width) || minWidth;
+    return Math.max(minWidth, Math.min(520, Number.isFinite(saved) && saved > 0 ? Math.round(saved) : fallback));
+  }
+
+  function getListWorkbenchTableWidth(widths) {
+    return LIST_WORKBENCH_COLUMNS.reduce((total, column) => total + getListWorkbenchColumnWidth(column, widths), 0);
+  }
+
+  function listWorkbenchColGroupHtml(widths) {
+    return '<colgroup>' + LIST_WORKBENCH_COLUMNS.map((column) => {
+      const width = getListWorkbenchColumnWidth(column, widths);
+      return `<col data-col-key="${escapeHtml(column.key)}" style="width:${width}px;">`;
+    }).join('') + '</colgroup>';
+  }
+
+  function listWorkbenchHeaderCellHtml(column, widths) {
+    const width = getListWorkbenchColumnWidth(column, widths);
+    const handle = column.fixed
+      ? ''
+      : `<span data-role="workbench-col-resize-handle" data-col-key="${escapeHtml(column.key)}" title="拖拽调整列宽" style="position:absolute;right:-3px;top:0;width:7px;height:100%;cursor:col-resize;z-index:4;"></span>`;
+    return [
+      `<th data-col-key="${escapeHtml(column.key)}" style="position:sticky;top:0;width:${width}px;min-width:${width}px;max-width:${width}px;padding:9px 8px;border:1px solid #e5e7eb;text-align:${column.align};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;">`,
+      column.key === 'select'
+        ? '<input type="checkbox" data-role="select-all-workbench" checked>'
+        : `<span>${escapeHtml(column.label)}</span>${handle}`,
+      '</th>',
+    ].join('');
+  }
+
+  function listWorkbenchHeaderHtml(widths) {
+    return LIST_WORKBENCH_COLUMNS.map((column) => listWorkbenchHeaderCellHtml(column, widths)).join('');
+  }
+
+  function persistListWorkbenchColumnWidths(widths) {
+    try {
+      localStorage.setItem(LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(widths || {}));
+      if (typeof chrome !== 'undefined' && chrome && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ [LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY]: widths || {} });
+      }
+    } catch (error) {}
+  }
+
+  function applyListWorkbenchColumnWidth(modal, key, width) {
+    const column = LIST_WORKBENCH_COLUMNS.find((item) => item.key === key);
+    if (!column) return;
+    const nextWidth = getListWorkbenchColumnWidth(column, { [key]: width });
+    const escapedKey = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(key) : String(key).replace(/"/g, '\\"');
+    modal.querySelectorAll(`[data-col-key="${escapedKey}"]`).forEach((el) => {
+      el.style.width = `${nextWidth}px`;
+      if (el.tagName === 'TH') {
+        el.style.minWidth = `${nextWidth}px`;
+        el.style.maxWidth = `${nextWidth}px`;
+      }
+    });
+    const table = modal.querySelector('[data-role="workbench-table"]');
+    if (table) {
+      const widths = Object.assign({}, readListWorkbenchColumnWidths(), modal.__ssErpListWorkbenchColumnWidths || {}, { [key]: nextWidth });
+      table.style.minWidth = `${getListWorkbenchTableWidth(widths)}px`;
+      table.style.width = `${getListWorkbenchTableWidth(widths)}px`;
+    }
+  }
+
+  function initListWorkbenchColumnResize(modal) {
+    modal.__ssErpListWorkbenchColumnWidths = Object.assign({}, readListWorkbenchColumnWidths(), modal.__ssErpListWorkbenchColumnWidths || {});
+    modal.querySelectorAll('[data-role="workbench-col-resize-handle"]').forEach((handle) => {
+      handle.addEventListener('mousedown', (event) => {
+        const key = handle.getAttribute('data-col-key');
+        const column = LIST_WORKBENCH_COLUMNS.find((item) => item.key === key);
+        if (!key || !column || column.fixed) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const startX = event.clientX;
+        const startWidth = getListWorkbenchColumnWidth(column, modal.__ssErpListWorkbenchColumnWidths || {});
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        const onMove = (moveEvent) => {
+          const nextWidth = startWidth + (moveEvent.clientX - startX);
+          modal.__ssErpListWorkbenchColumnWidths = Object.assign({}, modal.__ssErpListWorkbenchColumnWidths || {}, {
+            [key]: getListWorkbenchColumnWidth(column, { [key]: nextWidth }),
+          });
+          applyListWorkbenchColumnWidth(modal, key, modal.__ssErpListWorkbenchColumnWidths[key]);
+        };
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          persistListWorkbenchColumnWidths(modal.__ssErpListWorkbenchColumnWidths || {});
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  }
+
   function setListWorkbenchMode(modal, mode) {
     const nextMode = normalizeListWorkbenchMode(mode);
     modal.__ssErpWorkbenchFocus = nextMode;
@@ -2251,6 +2381,8 @@
     modal.__ssErpListWorkbenchSkus = skus;
     modal.__ssErpRowFilter = initialRowFilter;
     modal.__ssErpWorkbenchFocus = normalizeListWorkbenchMode(options && options.focus);
+    modal.__ssErpListWorkbenchColumnWidths = readListWorkbenchColumnWidths();
+    const workbenchTableWidth = getListWorkbenchTableWidth(modal.__ssErpListWorkbenchColumnWidths);
     modal.style.cssText = [
       'position:fixed',
       'inset:0',
@@ -2300,27 +2432,11 @@
       `    <div style="margin-left:auto;font-size:12px;color:${SS_ERP_LIST_THEME.muted};" data-role="workbench-status">准备读取本页 SKU...</div>`,
       '  </div>',
       '  <div data-role="workbench-table-wrap" style="flex:1;overflow:auto;padding:0 18px 14px 18px;background:#fff;">',
-      `    <table style="width:100%;min-width:1780px;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed;border:1px solid #e5e7eb;">`,
+      `    <table data-role="workbench-table" style="width:${workbenchTableWidth}px;min-width:${workbenchTableWidth}px;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed;border:1px solid #e5e7eb;">`,
+      `      ${listWorkbenchColGroupHtml(modal.__ssErpListWorkbenchColumnWidths)}`,
       '      <thead style="background:#f8fafc;color:#334155;">',
       '        <tr>',
-      '          <th style="width:38px;padding:9px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="select-all-workbench" checked></th>',
-      '          <th style="width:180px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">SKU</th>',
-      '          <th style="width:220px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">标题</th>',
-      '          <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">选品</th>',
-      '          <th style="width:90px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">售价</th>',
-      '          <th style="width:90px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">月销量</th>',
-      '          <th style="width:110px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">月销售额</th>',
-      '          <th style="width:82px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖数</th>',
-      '          <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖最低价</th>',
-      '          <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖最高价</th>',
-      '          <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">广告费占比</th>',
-      '          <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">退货取消率</th>',
-      '          <th style="width:82px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">佣金</th>',
-      '          <th style="width:82px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">利润率</th>',
-      '          <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">重量</th>',
-      '          <th style="width:92px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">发货模式</th>',
-      '          <th style="width:110px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">品牌</th>',
-      '          <th style="width:180px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">类目</th>',
+      `          ${listWorkbenchHeaderHtml(modal.__ssErpListWorkbenchColumnWidths)}`,
       '        </tr>',
       '      </thead>',
       '      <tbody data-role="workbench-body"><tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">读取中...</td></tr></tbody>',
@@ -2330,7 +2446,7 @@
       '    <div data-role="workbench-footer-actions" style="display:flex;align-items:center;gap:8px;">',
       `      <button type="button" data-role="save-workbench-data" style="height:36px;border:1px solid #bfdbfe;background:#fff;color:#1d4ed8;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
       `      <button type="button" data-role="delete-selected-workbench-skus" style="height:36px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">删除选中 SKU</button>`,
-      `      <button type="button" data-role="export-workbench-skus" style="height:36px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">复制选中数据</button>`,
+      `      <button type="button" data-role="export-workbench-skus" style="height:36px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">导出选中 SKU</button>`,
       `      <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>`,
       '    </div>',
       '  </div>',
@@ -2357,6 +2473,7 @@
     modal.querySelector('[data-role="delete-selected-workbench-skus"]').addEventListener('click', () => deleteSelectedListWorkbenchSkus(modal));
     modal.querySelector('[data-role="export-workbench-skus"]').addEventListener('click', () => exportListWorkbenchSelectedSkus(modal));
     modal.querySelector('[data-role="publish-workbench"]').addEventListener('click', () => publishListWorkbenchSelectedRows(modal));
+    initListWorkbenchColumnResize(modal);
 
     setListWorkbenchMode(modal, modal.__ssErpWorkbenchFocus);
     loadListWorkbenchShops(modal);
@@ -2527,17 +2644,11 @@
     if (status) status.textContent = `已删除 ${selected.size} 个 SKU`;
   }
 
-  async function exportListWorkbenchSelectedSkus(modal) {
-    const selected = getSelectedListWorkbenchSkus(modal);
-    const status = modal.querySelector('[data-role="workbench-status"]');
-    if (!selected.length) {
-      if (status) status.textContent = '请先勾选 SKU';
-      return;
-    }
+  function getListWorkbenchExportRows(modal, selected) {
     const allRows = Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [];
     const rowBySku = new Map(allRows.map((row) => [String(row && row.sku || '').trim(), row]));
-    const lines = [
-      ['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目'].join('\t'),
+    return [
+      ['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目'],
       ...selected.map((sku) => {
         const row = rowBySku.get(sku) || {};
         const dom = getCardDomBySku(sku);
@@ -2558,14 +2669,70 @@
           row.weightGrams == null ? '' : row.weightGrams,
           row.brand || '',
           row.categoryPath || '',
-        ].map((value) => String(value).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t');
+        ];
       }),
     ];
+  }
+
+  function listWorkbenchRowsToTsv(rows) {
+    return rows
+      .map((row) => row.map((value) => String(value == null ? '' : value).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t'))
+      .join('\n');
+  }
+
+  function excelSafeText(value) {
+    const text = String(value == null ? '' : value).replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+    return /^[=+\-@]/.test(text) ? `'${text}` : text;
+  }
+
+  function downloadListWorkbenchExcel(rows, filename) {
+    const tableRows = rows.map((row, rowIndex) => {
+      const tag = rowIndex === 0 ? 'th' : 'td';
+      return '<tr>' + row.map((value) => {
+        const text = escapeHtml(excelSafeText(value));
+        return `<${tag} style="border:1px solid #d1d5db;padding:6px 8px;mso-number-format:'\\@';">${text}</${tag}>`;
+      }).join('') + '</tr>';
+    }).join('');
+    const html = [
+      '\ufeff',
+      '<html><head><meta charset="UTF-8"></head><body>',
+      '<table border="1" cellspacing="0" cellpadding="0">',
+      tableRows,
+      '</table>',
+      '</body></html>',
+    ].join('');
+    const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || 'ss-erp-ozon-sku.xls';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      link.remove();
+    }, 800);
+  }
+
+  async function exportListWorkbenchSelectedSkus(modal) {
+    const selected = getSelectedListWorkbenchSkus(modal);
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    if (!selected.length) {
+      if (status) status.textContent = '请先勾选 SKU';
+      return;
+    }
+    const exportRows = getListWorkbenchExportRows(modal, selected);
+    const filename = `ss-erp-ozon-sku-${new Date().toISOString().slice(0, 10)}.xls`;
     try {
-      await navigator.clipboard.writeText(lines.join('\n'));
-      if (status) status.textContent = `已复制 ${selected.length} 个 SKU 数据`;
+      downloadListWorkbenchExcel(exportRows, filename);
+      if (status) status.textContent = `已导出 ${selected.length} 个 SKU 到 Excel`;
     } catch (error) {
-      if (status) status.textContent = '复制失败：浏览器剪贴板权限不可用';
+      try {
+        await navigator.clipboard.writeText(listWorkbenchRowsToTsv(exportRows));
+        if (status) status.textContent = `Excel 下载失败，已复制 ${selected.length} 个 SKU 数据`;
+      } catch (clipboardError) {
+        if (status) status.textContent = '导出失败：浏览器下载与剪贴板权限不可用';
+      }
     }
   }
 
