@@ -216,6 +216,18 @@
     });
   }
 
+  function uniqueIds(values) {
+    var seen = {};
+    return (Array.isArray(values) ? values : []).map(function (value) {
+      var number = toNumber(value, 0);
+      return number > 0 ? String(Math.trunc(number)) : '';
+    }).filter(function (value) {
+      if (!value || seen[value]) return false;
+      seen[value] = true;
+      return true;
+    });
+  }
+
   function buildAliases(category, group) {
     var base = [category, group];
     var categoryText = toText(category);
@@ -311,9 +323,20 @@
     value = value && typeof value === 'object' ? value : {};
     var category = toText(value.category || value.name);
     var group = toText(value.group || value.categoryGroup);
+    var categoryIds = uniqueIds([
+      value.categoryId,
+      value.category1Id,
+      value.category2Id,
+      value.category3Id,
+      value.descriptionCategoryId,
+      value.description_category_id,
+      value.typeId,
+      value.type_id,
+    ].concat(Array.isArray(value.categoryIds) ? value.categoryIds : []));
     return {
       group: group,
       category: category,
+      categoryIds: categoryIds,
       aliases: uniqueStrings((Array.isArray(value.aliases) ? value.aliases : []).concat(buildAliases(category, group))),
       bands: (Array.isArray(value.bands) ? value.bands : []).map(normalizeBand).filter(function (band) {
         return band.rfbs > 0 || band.fbp > 0;
@@ -377,11 +400,18 @@
     return price > min && (max <= 0 || price <= max);
   }
 
-  function scoreRule(rule, hints) {
+  function scoreRule(rule, hints, categoryIds) {
     var normalizedHints = uniqueStrings(hints).map(normalizeKey).filter(Boolean);
-    if (!normalizedHints.length) return 0;
+    var normalizedCategoryIds = uniqueIds(categoryIds).map(normalizeKey).filter(Boolean);
+    if (!normalizedHints.length && !normalizedCategoryIds.length) return 0;
     var candidates = uniqueStrings([rule.category, rule.group].concat(rule.aliases || [])).map(normalizeKey).filter(Boolean);
+    var ruleCategoryIds = uniqueIds(rule.categoryIds).map(normalizeKey).filter(Boolean);
     var score = 0;
+    ruleCategoryIds.forEach(function (candidate) {
+      normalizedCategoryIds.forEach(function (hint) {
+        if (candidate && hint && candidate === hint) score = Math.max(score, 150);
+      });
+    });
     candidates.forEach(function (candidate) {
       normalizedHints.forEach(function (hint) {
         if (!candidate || !hint) return;
@@ -432,9 +462,10 @@
     var input = options && typeof options === 'object' ? options : {};
     var scheme = toText(input.scheme || 'rfbs').toLowerCase() === 'fbp' ? 'fbp' : 'rfbs';
     var hints = Array.isArray(input.categoryHints) ? input.categoryHints : [];
+    var categoryIds = Array.isArray(input.categoryIds) ? input.categoryIds : [];
     var priceRUB = toNumber(input.priceRUB, 0);
     var rankedRules = normalized.rules.map(function (rule) {
-      return { rule: rule, score: scoreRule(rule, hints) };
+      return { rule: rule, score: scoreRule(rule, hints, categoryIds) };
     }).filter(function (item) {
       return item.score > 0;
     }).sort(function (left, right) {

@@ -10,6 +10,10 @@ var SS_ERP_COLLECT_SESSION_OZON_COMPANY_ID_CAPTURED_AT_KEY = "ss_erp_ozon_compan
 var SS_ERP_COLLECT_OZON_INVALID_COMPANY_ID_STORAGE_KEY = "ss_erp_ozon_company_id_invalid";
 var SS_ERP_COLLECT_RECENT_COMPANY_ID_MS = 10 * 60 * 1000;
 var SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY = 6;
+var SS_ERP_OZON_COMMISSION_SNAPSHOT_KEY = "ozon-calculator:commission-snapshot";
+var OZON_WORKBENCH_INSIGHT_TTL_MS = 5 * 60 * 1000;
+var ozonWorkbenchInsightCache = new Map();
+var ozonWorkbenchInsightInFlight = new Map();
 
 const DEFAULT_CONFIG = {
   erpBaseUrl: "",
@@ -25,6 +29,7 @@ const DEFAULT_CONFIG = {
 const OZON_ENDPOINTS = {
   analytics: "https://seller.ozon.ru/api/site/seller-analytics/what_to_sell/data/v3",
   bundleByVariantId: "https://seller.ozon.ru/api/site/seller-prototype/create-bundle-by-variant-id",
+  search: "https://seller.ozon.ru/api/v1/search",
   chartsGraph: "https://seller.ozon.ru/api/site/seller-analytics/charts/graph",
   chartsTable: "https://seller.ozon.ru/api/site/seller-analytics/charts/table",
   // V3 API (richer data, period comparison)
@@ -162,6 +167,7 @@ async function runOzonCollectEnrichmentJob(job, erpConn) {
     if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {
         const insights = await getOzonInsights(pid);
+        productData.ozonInsights = normalizeOzonCollectionInsights(insights);
         repairOzonCollectedTitleFromInsights(productData, insights);
         if (insights.detail && Array.isArray(insights.detail.attributes)) {
           productData.ozonAttributes = insights.detail.attributes;
@@ -523,6 +529,58 @@ function normalizeOzonCompanyId(value) {
   return value == null ? "" : String(value).trim();
 }
 
+function getOzonSkuWorkbenchHelper() {
+  return globalThis.SS_ERP_OZON_SKU_WORKBENCH || {};
+}
+
+function normalizeOzonAnalyticsRow(row, fallbackSku) {
+  const helper = getOzonSkuWorkbenchHelper();
+  if (helper && typeof helper.normalizeOzonAnalyticsRow === "function") {
+    const normalized = helper.normalizeOzonAnalyticsRow(row || {});
+    if (!normalized.sku && fallbackSku) normalized.sku = String(fallbackSku);
+    return normalized;
+  }
+  return {
+    ...(row || {}),
+    sku: row && row.sku != null ? String(row.sku) : (fallbackSku ? String(fallbackSku) : ""),
+  };
+}
+
+function normalizeOzonCollectionInsights(insights) {
+  const item = insights && insights.item ? insights.item : {};
+  const specs = insights && insights.specs ? insights.specs : {};
+  const offers = insights && insights.offers ? insights.offers : {};
+  const productId = insights && insights.productId ? String(insights.productId) : "";
+  return {
+    source: insights && insights.source || "",
+    productId,
+    capturedAt: new Date().toISOString(),
+    metrics: normalizeOzonAnalyticsRow({ ...item, sku: item.sku || productId }, productId),
+    specs: {
+      weightGrams: specs.weightGrams != null ? specs.weightGrams : null,
+      productWeightGrams: specs.productWeightGrams != null ? specs.productWeightGrams : null,
+      lengthMm: specs.lengthMm != null ? specs.lengthMm : null,
+      widthMm: specs.widthMm != null ? specs.widthMm : null,
+      heightMm: specs.heightMm != null ? specs.heightMm : null,
+      volumeMm3: specs.volumeMm3 != null ? specs.volumeMm3 : null,
+    },
+    offers: {
+      sellerCount: offers.sellerCount != null ? Number(offers.sellerCount) : null,
+      minPrice: offers.minPrice != null ? Number(offers.minPrice) : null,
+      minFollowPriceRub: offers.minPrice != null ? Number(offers.minPrice) : null,
+      minPriceText: offers.minPriceText || "",
+      maxPrice: offers.maxPrice != null ? Number(offers.maxPrice) : null,
+      maxFollowPriceRub: offers.maxPrice != null ? Number(offers.maxPrice) : null,
+      maxPriceText: offers.maxPriceText || "",
+      sellerNames: Array.isArray(offers.sellerNames) ? offers.sellerNames.slice(0, 20) : [],
+      sellerListText: offers.sellerListText || (Array.isArray(offers.sellerNames) && offers.sellerNames.length
+        ? offers.sellerNames[0] + (offers.sellerNames.length > 1 ? " 等" + (offers.sellerCount || offers.sellerNames.length) + "个卖家" : "")
+        : ""),
+    },
+    variantId: item.variantId != null ? String(item.variantId) : "",
+  };
+}
+
 function buildOzonCollectBatchPayload(collected, options = {}) {
   return {
     collectPhase: options.phase || "collect",
@@ -554,6 +612,7 @@ function buildOzonCollectBatchPayload(collected, options = {}) {
       heightMm: p.height || null,
       manufacturerName: p.manufacturerName || null,
       brandName: p.brandName || null,
+      ozonInsights: p.ozonInsights || null,
       variants: Array.isArray(p.variants) && p.variants.length ? p.variants : null,
       modelId: p.modelId ? String(p.modelId) : null,
       widgetStatesDump: p.widgetStatesDump || null,
@@ -711,7 +770,12 @@ async function markSellerCompanyIdInvalid(companyId) {
 
 async function getConfig() {
   const saved = await storageGet(STORAGE_KEYS.config);
-  return { ...DEFAULT_CONFIG, ...(saved || {}) };
+  const next = { ...DEFAULT_CONFIG, ...(saved || {}) };
+  try {
+    const conn = await getStoredErpConnection();
+    if (!next.erpBaseUrl && conn && conn.baseUrl) next.erpBaseUrl = conn.baseUrl;
+  } catch (error) {}
+  return next;
 }
 
 async function saveConfig(config) {
@@ -1259,15 +1323,17 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
 
 function buildOzonAnalyticsRequestBody(productId) {
   return {
+    limit: "50",
+    offset: "0",
     filter: {
       stock: "any_stock",
+      period: "monthly",
+      categories: [],
       sku: String(productId)
     },
     sort: {
-      key: "sum_rating"
-    },
-    limit: 50,
-    offset: 0
+      key: "sum_gmv_desc"
+    }
   };
 }
 
@@ -1310,23 +1376,221 @@ function extractOzonSpecifications(productItem) {
   return result;
 }
 
-async function getOzonInsights(productId) {
-  const companyId = await getSellerCompanyId();
-  const analytics = await sellerTabFetchJson(
-    OZON_ENDPOINTS.analytics,
-    buildOzonAnalyticsRequestBody(productId),
-    companyId
-  );
+function buildOzonSellerSearchRequestBody(companyId, sku) {
+  return {
+    company_id: String(companyId || ""),
+    need_total: true,
+    filter: {
+      children_nodes: {
+        children_nodes: [{
+          input_leaf: { sku: { values: [String(sku || "")] } }
+        }],
+        operator: "AND"
+      }
+    },
+    pagination: { limit: "50" },
+    is_copy_allowed: false
+  };
+}
 
-  const firstItem = analytics && Array.isArray(analytics.items) && analytics.items.length ? analytics.items[0] : null;
+async function fetchOzonSellerSearchBySku(productId, companyId) {
+  const effectiveCompanyId = companyId || await getSellerCompanyId();
+  return await sellerTabFetchJson(
+    OZON_ENDPOINTS.search,
+    buildOzonSellerSearchRequestBody(effectiveCompanyId, productId),
+    effectiveCompanyId
+  );
+}
+
+function getOzonSearchObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function getOzonSearchValue(record, keys) {
+  const object = getOzonSearchObject(record);
+  for (const key of keys) {
+    const value = object[key];
+    if (value != null && value !== "") return value;
+  }
+  return null;
+}
+
+function collectOzonSellerSearchArrays(payload) {
+  const root = getOzonSearchObject(payload);
+  const data = getOzonSearchObject(root.data);
+  const result = getOzonSearchObject(root.result);
+  const arrays = [
+    root.variants,
+    root.items,
+    root.products,
+    data.variants,
+    data.items,
+    data.products,
+    result.variants,
+    result.items,
+    result.products
+  ];
+  return arrays.filter(Array.isArray);
+}
+
+function extractOzonSellerSearchImageUrl(image) {
+  if (typeof image === "string") return image;
+  const object = getOzonSearchObject(image);
+  const nested = getOzonSearchObject(object.url);
+  return object.url
+    || object.src
+    || object.originalUrl
+    || object.original_url
+    || object.file_name
+    || nested.original
+    || nested.default
+    || "";
+}
+
+function extractOzonSellerSearchImages(item) {
+  const object = getOzonSearchObject(item);
+  const imageSources = [
+    object.images,
+    object.photos,
+    object.photo,
+    object.media,
+    object.image_urls,
+    object.imageUrls,
+  ];
+  const images = [];
+  for (const source of imageSources) {
+    const list = Array.isArray(source) ? source : (source ? [source] : []);
+    for (const entry of list) {
+      const url = String(extractOzonSellerSearchImageUrl(entry) || "").trim();
+      if (url && images.indexOf(url) < 0) images.push(url);
+    }
+  }
+  return images;
+}
+
+function extractOzonSellerSearchCategories(item) {
+  const object = getOzonSearchObject(item);
+  const categories = Array.isArray(object.categories) ? object.categories : [];
+  const names = categories.map((category) => {
+    const categoryObject = getOzonSearchObject(category);
+    return String(categoryObject.name || categoryObject.title || categoryObject.category_name || "").trim();
+  }).filter(Boolean);
+  const category1 = getOzonSearchValue(object, ["category1", "category_1", "categoryLevel1"])
+    || names[0]
+    || "";
+  const category3 = getOzonSearchValue(object, ["category3", "category_3", "category", "categoryName"])
+    || names[names.length - 1]
+    || "";
+  return { category1, category3, categoryPath: [category1, category3].filter(Boolean).join(" / ") };
+}
+
+function normalizeOzonSellerSearchItem(rawItem, sku) {
+  const raw = getOzonSearchObject(rawItem);
+  if (!Object.keys(raw).length) return null;
+
+  const helper = getOzonSkuWorkbenchHelper();
+  const normalizeRow = helper && typeof helper.normalizeOzonAnalyticsRow === "function"
+    ? helper.normalizeOzonAnalyticsRow
+    : function () { return {}; };
+  const extractPrice = helper && typeof helper.extractOfferPrice === "function"
+    ? helper.extractOfferPrice
+    : null;
+
+  const itemSku = String(getOzonSearchValue(raw, ["sku", "productId", "product_id", "id"]) || sku || "");
+  const normalized = normalizeRow({ ...raw, sku: itemSku });
+  const categories = extractOzonSellerSearchCategories(raw);
+  const images = extractOzonSellerSearchImages(raw);
+  const price = extractPrice ? extractPrice(raw).value : null;
+
+  return {
+    ...raw,
+    ...normalized,
+    sku: itemSku,
+    variantId: getOzonSearchValue(raw, ["variantId", "variant_id"]) || normalized.variantId,
+    modelId: getOzonSearchValue(raw, ["modelId", "model_id", "modelID"]) || normalized.modelId,
+    title: getOzonSearchValue(raw, ["title", "name", "skuName", "productName"]) || normalized.title || "",
+    name: getOzonSearchValue(raw, ["name", "title", "skuName", "productName"]) || normalized.name || "",
+    brand: getOzonSearchValue(raw, ["brand", "brandName"]) || normalized.brand || "",
+    category1: normalized.category1 || categories.category1,
+    category3: normalized.category3 || categories.category3,
+    categoryPath: normalized.categoryPath || categories.categoryPath,
+    category: categories.category3 || normalized.category3 || "",
+    images: images.length ? images : (Array.isArray(raw.images) ? raw.images : []),
+    price: price || getOzonSearchValue(raw, ["price", "currentPrice", "current_price", "salePrice"]),
+    isCopyAllowed: getOzonSearchValue(raw, ["isCopyAllowed", "is_copy_allowed", "copyAllowed"]),
+    searchRaw: raw
+  };
+}
+
+function extractOzonSellerSearchItem(payload, sku) {
+  const normalizedSku = String(sku || "");
+  const arrays = collectOzonSellerSearchArrays(payload);
+  for (const list of arrays) {
+    const normalizedItems = list
+      .map((item) => normalizeOzonSellerSearchItem(item, normalizedSku))
+      .filter(Boolean);
+    const exact = normalizedItems.find((item) => String(item.sku || "") === normalizedSku);
+    if (exact) return exact;
+    if (normalizedItems.length) return normalizedItems[0];
+  }
+  return null;
+}
+
+async function getOzonInsights(productId, options = {}) {
+  const includeOffers = options.includeOffers !== false;
+  const companyId = await getSellerCompanyId();
+  let analytics = null;
+  let analyticsError = "";
+  try {
+    analytics = await sellerTabFetchJson(
+      OZON_ENDPOINTS.analytics,
+      buildOzonAnalyticsRequestBody(productId),
+      companyId
+    );
+  } catch (error) {
+    analyticsError = normalizeErrorMessage(error);
+  }
+
+  let search = null;
+  let searchItem = null;
+  let searchError = "";
+  try {
+    search = await fetchOzonSellerSearchBySku(productId, companyId);
+    searchItem = extractOzonSellerSearchItem(search, productId);
+  } catch (error) {
+    searchError = normalizeErrorMessage(error);
+  }
+
+  const firstItemRaw = analytics && Array.isArray(analytics.items) && analytics.items.length ? analytics.items[0] : null;
+  const mergedItemRaw = firstItemRaw || searchItem
+    ? { ...(searchItem || {}), ...(firstItemRaw || {}) }
+    : null;
+  const firstItem = mergedItemRaw ? {
+    ...mergedItemRaw,
+    ...normalizeOzonAnalyticsRow({ ...mergedItemRaw, sku: mergedItemRaw.sku || productId }, productId),
+  } : null;
+  let offers = null;
+  if (includeOffers) {
+    try {
+      const offerResult = await fetchOzonSellerOffers(productId);
+      if (offerResult && offerResult.ok && offerResult.data) {
+        offers = offerResult.data;
+      }
+    } catch (e) {}
+  }
   if (!firstItem) {
     return {
       source: "seller.ozon.ru analytics",
       productId: String(productId),
       analytics,
+      analyticsError,
+      search,
+      searchItem,
+      searchError,
       item: null,
       detail: null,
-      specs: null
+      specs: null,
+      offers
     };
   }
 
@@ -1351,9 +1615,14 @@ async function getOzonInsights(productId) {
     source: "seller.ozon.ru analytics + bundle detail",
     productId: String(productId),
     analytics,
+    analyticsError,
+    search,
+    searchItem,
+    searchError,
     item: firstItem,
     detail: detail && detail.item ? detail.item : null,
-    specs
+    specs,
+    offers
   };
 }
 
@@ -1400,6 +1669,7 @@ function mergeOzonInsightsIntoProduct(product, ozonInsights) {
   const item = ozonInsights.item || {};
   const specs = ozonInsights.specs || {};
   const detail = ozonInsights.detail || {};
+  const offers = ozonInsights.offers || {};
   repairOzonCollectedTitleFromInsights(product, ozonInsights);
 
   if (item.sku) {
@@ -1459,11 +1729,30 @@ function mergeOzonInsightsIntoProduct(product, ozonInsights) {
     brand: item.brand || "",
     category1: item.category1 || "",
     category3: item.category3 || "",
+    soldCount30d: item.soldCount != null ? Number(item.soldCount) : null,
     soldSumRub: item.soldSum != null ? Number(item.soldSum) : null,
     salesDynamicsPercent: item.salesDynamics != null ? Number(item.salesDynamics) : null,
     avgPriceRub: item.avgPrice != null ? Number(item.avgPrice) : null,
     minSellerPriceRub: item.minSellerPrice != null ? Number(item.minSellerPrice) : null,
+    sellerCount: offers.sellerCount != null ? Number(offers.sellerCount) : null,
+    minFollowPriceRub: offers.minPrice != null ? Number(offers.minPrice) : null,
+    maxFollowPriceRub: offers.maxPrice != null ? Number(offers.maxPrice) : null,
+    sellerListText: offers.sellerListText || (Array.isArray(offers.sellerNames) && offers.sellerNames.length
+      ? offers.sellerNames[0] + (offers.sellerNames.length > 1 ? " 等" + (offers.sellerCount || offers.sellerNames.length) + "个卖家" : "")
+      : ""),
     addToCartRatePercent: item.convToCartPdp != null ? Number(item.convToCartPdp) : null,
+    adExpenseShare: item.adExpenseShare != null ? Number(item.adExpenseShare) : null,
+    promoDays: item.promoDays != null ? Number(item.promoDays) : null,
+    promoDiscountPercent: item.promoDiscountPercent != null ? Number(item.promoDiscountPercent) : null,
+    promoConversionRate: item.promoConversionRate != null ? Number(item.promoConversionRate) : null,
+    paidPromotionDays: item.paidPromotionDays != null ? Number(item.paidPromotionDays) : null,
+    productCardViews: item.productCardViews != null ? Number(item.productCardViews) : null,
+    productCardAddToCartRate: item.productCardAddToCartRate != null ? Number(item.productCardAddToCartRate) : null,
+    searchCatalogViews: item.searchCatalogViews != null ? Number(item.searchCatalogViews) : null,
+    searchCatalogAddToCartRate: item.searchCatalogAddToCartRate != null ? Number(item.searchCatalogAddToCartRate) : null,
+    showConversionRate: item.showConversionRate != null ? Number(item.showConversionRate) : null,
+    productClickRate: item.productClickRate != null ? Number(item.productClickRate) : null,
+    returnCancelRate: item.returnCancelRate != null ? Number(item.returnCancelRate) : null,
     views: item.views != null ? Number(item.views) : null,
     stock: item.stock != null ? Number(item.stock) : null,
     avgDeliveryDays: item.avgDeliveryDays != null ? Number(item.avgDeliveryDays) : null,
@@ -2211,9 +2500,46 @@ function shouldFetchPublicProductFallback(item) {
     || !hasInsightValue(item.modelId);
 }
 
-async function aggregateOzonProductInsights(productId) {
+async function applyOzonCommissionToAggregatedItem(item, sku) {
+  if (!item || typeof item !== "object") return item;
+  const helper = getOzonSkuWorkbenchHelper();
+  const buildRow = helper && typeof helper.buildSkuWorkbenchRow === "function"
+    ? helper.buildSkuWorkbenchRow
+    : null;
+  if (!buildRow) return item;
+  const priceRub = toPositiveNumber(item.price)
+    || toPositiveNumber(item.avgPrice)
+    || toPositiveNumber(item.minFollowPriceRub)
+    || toPositiveNumber(item.minSellerPrice)
+    || 0;
+  const commissionSnapshot = await getOzonCommissionSnapshotForWorkbench();
+  const row = buildRow({
+    sku,
+    title: item.title || item.name || "",
+    image: Array.isArray(item.images) && item.images.length ? item.images[0] : "",
+    pagePrice: priceRub,
+    commissionSnapshot,
+    metrics: item,
+    offers: {
+      sellerCount: item.sellerCount || 0,
+      minPrice: item.minFollowPriceRub || item.minSellerPrice || null,
+      maxPrice: item.maxFollowPriceRub || null,
+      sellerListText: item.sellerListText || "",
+      sellerNames: Array.isArray(item.sellerNames) ? item.sellerNames : [],
+      offers: Array.isArray(item.sellerOffers) ? item.sellerOffers : [],
+    },
+    specs: item,
+  });
+  ["commissionRate", "commissionSource", "commissionMatch", "commissionCny", "rfbsCommission", "fbpCommission"].forEach((field) => {
+    if (item[field] == null && row[field] != null) item[field] = row[field];
+  });
+  return item;
+}
+
+async function aggregateOzonProductInsights(productId, options = {}) {
   const sku = String(productId || "").trim();
   if (!sku) return { ok: false, error: "缺少 productId" };
+  const includeOffers = options.includeOffers !== false;
 
   const sources = [];
   const sourceErrors = [];
@@ -2221,31 +2547,86 @@ async function aggregateOzonProductInsights(productId) {
 
   // 来源 1：seller-analytics（仅当登录 + 有 Premium 时成功）
   try {
-    const analytics = await getOzonInsights(sku);
+    const analytics = await getOzonInsights(sku, { includeOffers });
     if (analytics && analytics.item) {
-      sources.push("seller-analytics");
+      if (analytics.analytics && Array.isArray(analytics.analytics.items) && analytics.analytics.items.length) {
+        sources.push("seller-analytics");
+      }
+      if (analytics.searchItem) sources.push("seller-search");
       Object.assign(item, {
+        sku,
+        variantId: analytics.item.variantId,
+        modelId: analytics.item.modelId,
         soldCount: analytics.item.soldCount,
         soldSum: analytics.item.soldSum,
         salesDynamics: analytics.item.salesDynamics,
         avgPrice: analytics.item.avgPrice,
         minSellerPrice: analytics.item.minSellerPrice,
         convToCartPdp: analytics.item.convToCartPdp,
+        convToCartSearch: analytics.item.convToCartSearch,
+        convViewToOrder: analytics.item.convViewToOrder,
         views: analytics.item.views,
         stock: analytics.item.stock,
+        adExpenseShare: analytics.item.adExpenseShare,
+        promoDays: analytics.item.promoDays,
+        promoDiscountPercent: analytics.item.promoDiscountPercent,
+        promoConversionRate: analytics.item.promoConversionRate,
+        paidPromotionDays: analytics.item.paidPromotionDays,
+        daysWithTrafarets: analytics.item.daysWithTrafarets,
+        promoRevenueShare: analytics.item.promoRevenueShare,
+        productCardViews: analytics.item.productCardViews,
+        productCardAddToCartRate: analytics.item.productCardAddToCartRate,
+        searchCatalogViews: analytics.item.searchCatalogViews,
+        searchCatalogAddToCartRate: analytics.item.searchCatalogAddToCartRate,
+        showConversionRate: analytics.item.showConversionRate,
+        productClickRate: analytics.item.productClickRate,
+        returnCancelRate: analytics.item.returnCancelRate,
+        nullableRedemptionRate: analytics.item.nullableRedemptionRate,
         brand: analytics.item.brand,
         category1: analytics.item.category1,
         category3: analytics.item.category3,
+        category1Id: analytics.item.category1Id,
+        category2Id: analytics.item.category2Id,
+        category3Id: analytics.item.category3Id,
+        category: analytics.item.category,
+        categoryPath: analytics.item.categoryPath,
         title: analytics.item.name || analytics.item.title || item.title,
         name: analytics.item.name || analytics.item.title || item.name,
+        images: analytics.item.images || item.images,
+        price: analytics.item.price || item.price,
         sellerId: analytics.item.sellerId,
         sellerName: analytics.item.sellerName,
+        sellerCount: analytics.item.sellerCount,
+        hasFollowSales: analytics.item.hasFollowSales,
         avgDeliveryDays: analytics.item.avgDeliveryDays,
         salesSchema: analytics.item.salesSchema,
-        nullableCreateDate: analytics.item.nullableCreateDate,
+        nullableCreateDate: analytics.item.nullableCreateDate || analytics.item.createDate,
+        createDate: analytics.item.createDate,
+        commission: analytics.item.commission,
+        commissionRate: analytics.item.commissionRate,
+        rfbsCommission: analytics.item.rfbsCommission,
+        fbpCommission: analytics.item.fbpCommission,
+        ptj: analytics.item.ptj,
+        isCopyAllowed: analytics.item.isCopyAllowed,
       });
+      if (analytics.offers) {
+        const offerSellerCount = Number(analytics.offers.sellerCount);
+        Object.assign(item, {
+          sellerCount: Number.isFinite(offerSellerCount) && offerSellerCount > 0 ? offerSellerCount : item.sellerCount,
+          minFollowPriceRub: analytics.offers.minPrice != null ? analytics.offers.minPrice : item.minFollowPriceRub,
+          maxFollowPriceRub: analytics.offers.maxPrice != null ? analytics.offers.maxPrice : item.maxFollowPriceRub,
+          sellerListText: analytics.offers.sellerListText || (Array.isArray(analytics.offers.sellerNames) && analytics.offers.sellerNames.length
+            ? analytics.offers.sellerNames[0] + (analytics.offers.sellerNames.length > 1 ? " 等" + (analytics.offers.sellerCount || analytics.offers.sellerNames.length) + "个卖家" : "")
+            : ""),
+          sellerNames: Array.isArray(analytics.offers.sellerNames) ? analytics.offers.sellerNames.slice(0, 50) : [],
+          sellerOffers: Array.isArray(analytics.offers.offers) ? analytics.offers.offers.slice(0, 50) : [],
+        });
+      }
     } else {
       recordInsightSourceError(sourceErrors, "seller-analytics", "seller.ozon.ru 未返回该 SKU 的分析数据");
+    }
+    if (analytics && analytics.analyticsError) {
+      recordInsightSourceError(sourceErrors, "seller-analytics", analytics.analyticsError);
     }
     if (analytics && analytics.specs) {
       Object.assign(item, {
@@ -2257,6 +2638,12 @@ async function aggregateOzonProductInsights(productId) {
       });
     } else if (analytics && analytics.item) {
       recordInsightSourceError(sourceErrors, "seller-detail", "seller.ozon.ru 未返回该 SKU 的重量/尺寸明细");
+    }
+    if (analytics && analytics.item && analytics.item.weightGrams && !item.weightGrams) {
+      item.weightGrams = analytics.item.weightGrams;
+    }
+    if (analytics && analytics.searchError) {
+      recordInsightSourceError(sourceErrors, "seller-search", analytics.searchError);
     }
   } catch (e) {
     recordInsightSourceError(sourceErrors, "seller-analytics", e);
@@ -2343,6 +2730,8 @@ async function aggregateOzonProductInsights(productId) {
     } catch (e) {}
   }
 
+  await applyOzonCommissionToAggregatedItem(item, sku);
+
   return { ok: true, item, sources, sourceErrors };
 }
 
@@ -2359,6 +2748,574 @@ async function getStoredErpConnection() {
     baseUrl: String(endpointBase || conn.baseUrl || "").replace(/\/+$/, ""),
     token: String(result["ozon-calc:erp-token"] || conn.token || "").trim(),
   };
+}
+
+async function fetchOzonSellerOffers(productId) {
+  const sku = String(productId || "").trim();
+  if (!sku) return { ok: false, error: "缺少 productId" };
+  const helper = getOzonSkuWorkbenchHelper();
+  const parseOffers = helper && typeof helper.parseOzonSellerOffers === "function"
+    ? helper.parseOzonSellerOffers
+    : function () { return { offers: [], sellerCount: 0, minPrice: null, minPriceText: "" }; };
+
+  async function fetchViaOzonTab() {
+    const tab = await getOzonPublicTab();
+    if (!tab || !tab.id) return null;
+    const results = await executeScriptWithHostAccess({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      args: [sku],
+      func: async function (id) {
+        const path = "/modal/otherOffersFromSellers?product_id=" + encodeURIComponent(id) + "&page_changed=true";
+        const url = "/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(path);
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: {
+            "accept": "application/json, text/plain, */*",
+            "x-o3-language": "ru",
+            "x-requested-with": "XMLHttpRequest"
+          }
+        });
+        if (!response.ok) {
+          return { ok: false, error: "HTTP " + response.status };
+        }
+        return { ok: true, data: await response.json() };
+      }
+    });
+    return results && results[0] ? results[0].result : null;
+  }
+
+  async function fetchDirect() {
+    const path = "/modal/otherOffersFromSellers?product_id=" + encodeURIComponent(sku) + "&page_changed=true";
+    const url = "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=" + encodeURIComponent(path);
+    const response = await fetch(url, {
+      credentials: "include",
+      headers: {
+        "accept": "application/json, text/plain, */*",
+        "x-o3-language": "ru",
+        "x-requested-with": "XMLHttpRequest"
+      }
+    });
+    if (!response.ok) {
+      return { ok: false, error: "HTTP " + response.status };
+    }
+    return { ok: true, data: await response.json() };
+  }
+
+  let payload = null;
+  let lastError = "";
+  try {
+    const viaTab = await fetchViaOzonTab();
+    if (viaTab && viaTab.ok && viaTab.data) payload = viaTab.data;
+    else if (viaTab && viaTab.error) lastError = viaTab.error;
+  } catch (error) {
+    lastError = normalizeErrorMessage(error);
+  }
+  if (!payload) {
+    try {
+      const direct = await fetchDirect();
+      if (direct.ok && direct.data) payload = direct.data;
+      else lastError = direct.error || lastError;
+    } catch (error) {
+      lastError = normalizeErrorMessage(error);
+    }
+  }
+
+  if (!payload) {
+    return { ok: false, error: lastError || "未获取到 Ozon 跟卖数据" };
+  }
+
+  const parsed = helper && typeof helper.parseOzonSellerOffers === "function"
+    ? helper.parseOzonSellerOffers(payload)
+    : parseOffers(payload);
+  return { ok: true, productId: sku, data: parsed };
+}
+
+async function getOzonCommissionSnapshotForWorkbench() {
+  const fallback = globalThis.OZON_COMMISSION_FALLBACK_SNAPSHOT
+    && typeof globalThis.OZON_COMMISSION_FALLBACK_SNAPSHOT === "object"
+    ? globalThis.OZON_COMMISSION_FALLBACK_SNAPSHOT
+    : null;
+  try {
+    if (!chrome || !chrome.storage || !chrome.storage.local) return fallback;
+    const result = await chrome.storage.local.get([SS_ERP_OZON_COMMISSION_SNAPSHOT_KEY]);
+    const snapshot = result && result[SS_ERP_OZON_COMMISSION_SNAPSHOT_KEY];
+    return snapshot && typeof snapshot === "object" ? snapshot : fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function hasRichWorkbenchSeedRow(seed, options = {}) {
+  if (!seed || typeof seed !== "object") return false;
+  if (options.includeOffers !== false && !(Array.isArray(seed.sellerOffers) && seed.sellerOffers.length)) {
+    return false;
+  }
+  const fields = [
+    "soldCount",
+    "soldSum",
+    "adExpenseShare",
+    "returnCancelRate",
+    "nullableRedemptionRate",
+    "sellerCount",
+    "minFollowPriceRub",
+    "maxFollowPriceRub",
+    "commissionRate",
+    "weightGrams",
+    "salesSchema",
+    "brand",
+    "categoryPath",
+    "category1",
+    "category3",
+  ];
+  let count = 0;
+  for (const field of fields) {
+    const value = seed[field];
+    if (value != null && value !== "" && !(Array.isArray(value) && value.length === 0)) count += 1;
+    if (count >= 2) return true;
+  }
+  return false;
+}
+
+function getOzonWorkbenchInsightCacheKey(sku, includeOffers) {
+  const key = String(sku || "").trim();
+  return key ? key + ":" + (includeOffers ? "offers" : "base") : "";
+}
+
+function getCachedOzonWorkbenchInsight(sku, options = {}) {
+  const includeOffers = options.includeOffers !== false;
+  const fullKey = getOzonWorkbenchInsightCacheKey(sku, true);
+  const key = includeOffers ? fullKey : getOzonWorkbenchInsightCacheKey(sku, false);
+  if (!key) return null;
+  let hitKey = key;
+  let hit = ozonWorkbenchInsightCache.get(hitKey);
+  if (!hit && !includeOffers && fullKey) {
+    hitKey = fullKey;
+    hit = ozonWorkbenchInsightCache.get(hitKey);
+  }
+  if (!hit) return null;
+  if (Date.now() - hit.ts > OZON_WORKBENCH_INSIGHT_TTL_MS) {
+    ozonWorkbenchInsightCache.delete(hitKey);
+    return null;
+  }
+  return hit.data;
+}
+
+function setCachedOzonWorkbenchInsight(sku, data, options = {}) {
+  const key = getOzonWorkbenchInsightCacheKey(sku, options.includeOffers !== false);
+  if (!key || !data) return data;
+  ozonWorkbenchInsightCache.set(key, { data, ts: Date.now() });
+  return data;
+}
+
+async function fetchCachedOzonWorkbenchInsight(sku, options = {}) {
+  const includeOffers = options.includeOffers !== false;
+  const key = getOzonWorkbenchInsightCacheKey(sku, includeOffers);
+  if (!key) return null;
+  const cached = getCachedOzonWorkbenchInsight(sku, { includeOffers });
+  if (cached) return cached;
+  const inFlight = ozonWorkbenchInsightInFlight.get(key);
+  if (inFlight) return await inFlight;
+  const request = aggregateOzonProductInsights(sku, { includeOffers })
+    .then((data) => setCachedOzonWorkbenchInsight(sku, data, { includeOffers }))
+    .finally(() => {
+      ozonWorkbenchInsightInFlight.delete(key);
+    });
+  ozonWorkbenchInsightInFlight.set(key, request);
+  return await request;
+}
+
+function buildOzonWorkbenchRowFromSeed(buildRow, sku, seed, options, costMap, priceMap, commissionSnapshot) {
+  return buildRow({
+    sku,
+    title: seed.title || seed.name || "",
+    image: seed.image || (Array.isArray(seed.images) && seed.images.length ? seed.images[0] : ""),
+    pagePrice: priceMap[sku] != null ? priceMap[sku] : (seed.priceRub || seed.pagePrice || seed.price || seed.avgPrice || seed.minSellerPrice || 0),
+    costCny: costMap[sku] != null ? costMap[sku] : (seed.costCny != null ? seed.costCny : 0),
+    fxRate: options.fxRate,
+    commissionRate: options.commissionRate,
+    logisticsFeeCny: options.logisticsFeeCny,
+    commissionSnapshot: commissionSnapshot,
+    metrics: seed,
+    offers: {
+      sellerCount: seed.sellerCount || 0,
+      minPrice: seed.minFollowPriceRub || seed.minSellerPrice || null,
+      minPriceText: seed.minFollowPriceText || seed.minSellerPriceText || "",
+      maxPrice: seed.maxFollowPriceRub || null,
+      maxPriceText: seed.maxFollowPriceText || "",
+      sellerListText: seed.sellerListText || "",
+      sellerNames: Array.isArray(seed.sellerNames) ? seed.sellerNames : [],
+      offers: Array.isArray(seed.sellerOffers) ? seed.sellerOffers : [],
+    },
+    specs: seed,
+  });
+}
+
+async function fetchOzonWorkbenchRows(productIds, options = {}) {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean))).slice(0, 100);
+  if (!ids.length) return { ok: false, error: "缺少 productIds" };
+
+  const helper = getOzonSkuWorkbenchHelper();
+  const buildRow = helper && typeof helper.buildSkuWorkbenchRow === "function"
+    ? helper.buildSkuWorkbenchRow
+    : null;
+  if (!buildRow) return { ok: false, error: "Ozon SKU 工作台工具未加载" };
+
+  const rows = [];
+  const errors = [];
+  const costMap = options.costs && typeof options.costs === "object" ? options.costs : {};
+  const priceMap = options.prices && typeof options.prices === "object" ? options.prices : {};
+  const commissionSnapshot = options.commissionSnapshot || await getOzonCommissionSnapshotForWorkbench();
+  const includeOffers = options.includeOffers !== false;
+  const seedRowsBySku = new Map((Array.isArray(options.rows) ? options.rows : [])
+    .map((row) => [String(row && row.sku || "").trim(), row])
+    .filter(([sku]) => sku));
+  const workerCount = Math.min(ids.length, Math.max(1, Number(options.concurrency) || 6));
+  let nextIndex = 0;
+  async function workOne(index) {
+    const sku = ids[index];
+    const seed = seedRowsBySku.get(sku) || {};
+    try {
+      if (hasRichWorkbenchSeedRow(seed, { includeOffers })) {
+        rows[index] = buildOzonWorkbenchRowFromSeed(buildRow, sku, seed, options, costMap, priceMap, commissionSnapshot);
+        return;
+      }
+
+      const insights = await fetchCachedOzonWorkbenchInsight(sku, { includeOffers: options.includeOffers !== false });
+      const item = insights && insights.item ? insights.item : {};
+      const itemImage = Array.isArray(item.images) && item.images.length ? item.images[0] : "";
+      const offers = {
+        sellerCount: item.sellerCount || seed.sellerCount || 0,
+        minPrice: item.minFollowPriceRub || item.minSellerPrice || seed.minFollowPriceRub || seed.minSellerPrice || null,
+        minPriceText: item.minFollowPriceText || seed.minFollowPriceText || "",
+        maxPrice: item.maxFollowPriceRub || seed.maxFollowPriceRub || null,
+        maxPriceText: item.maxFollowPriceText || seed.maxFollowPriceText || "",
+        sellerListText: item.sellerListText || seed.sellerListText || "",
+        sellerNames: Array.isArray(item.sellerNames) ? item.sellerNames : (Array.isArray(seed.sellerNames) ? seed.sellerNames : []),
+        offers: Array.isArray(item.sellerOffers) ? item.sellerOffers : (Array.isArray(seed.sellerOffers) ? seed.sellerOffers : []),
+      };
+      rows[index] = buildRow({
+        sku,
+        title: item.title || item.name || seed.title || seed.name || "",
+        image: itemImage || seed.image || "",
+        pagePrice: priceMap[sku] != null ? priceMap[sku] : (item.price || item.avgPrice || seed.priceRub || seed.pagePrice || item.minSellerPrice || 0),
+        costCny: costMap[sku] != null ? costMap[sku] : 0,
+        fxRate: options.fxRate,
+        commissionRate: options.commissionRate,
+        logisticsFeeCny: options.logisticsFeeCny,
+        commissionSnapshot: commissionSnapshot,
+        metrics: Object.assign({}, seed, item),
+        offers,
+        specs: {
+          weightGrams: item.weightGrams || item.grossWeightGrams || item.weightG || seed.weightGrams || seed.grossWeightGrams || seed.weightG || null,
+          productWeightGrams: item.productWeightGrams || seed.productWeightGrams || null,
+          lengthMm: item.lengthMm || seed.lengthMm || null,
+          widthMm: item.widthMm || seed.widthMm || null,
+          heightMm: item.heightMm || seed.heightMm || null,
+        },
+      });
+    } catch (error) {
+      errors.push({ productId: sku, error: normalizeErrorMessage(error).slice(0, 240) });
+      rows[index] = buildRow({
+        sku,
+        title: seed.title || seed.name || "",
+        image: seed.image || "",
+        pagePrice: priceMap[sku] != null ? priceMap[sku] : (seed.priceRub || seed.pagePrice || 0),
+        costCny: costMap[sku] != null ? costMap[sku] : 0,
+        fxRate: options.fxRate,
+        commissionRate: options.commissionRate,
+        logisticsFeeCny: options.logisticsFeeCny,
+        commissionSnapshot: commissionSnapshot,
+        metrics: seed,
+        offers: {
+          sellerCount: seed.sellerCount || 0,
+          minPrice: seed.minFollowPriceRub || seed.minSellerPrice || null,
+          minPriceText: seed.minFollowPriceText || "",
+          maxPrice: seed.maxFollowPriceRub || null,
+          maxPriceText: seed.maxFollowPriceText || "",
+          sellerListText: seed.sellerListText || "",
+          sellerNames: Array.isArray(seed.sellerNames) ? seed.sellerNames : [],
+        },
+        specs: seed,
+      });
+    }
+  }
+
+  async function worker() {
+    while (nextIndex < ids.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await workOne(index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return { ok: true, data: { rows: rows.filter(Boolean), errors } };
+}
+
+async function fetchCollectedOzonItemsBySkus(erpBase, erpToken, skus) {
+  const rows = [];
+  for (let i = 0; i < skus.length; i++) {
+    const sku = String(skus[i] || "").trim();
+    if (!sku) continue;
+    const response = await fetch(erpBase + "/api/collect?search=" + encodeURIComponent(sku) + "&limit=5&offset=0", {
+      method: "GET",
+      headers: { "Authorization": "Bearer " + erpToken },
+    });
+    if (!response.ok) continue;
+    const parsed = await response.json().catch(() => null);
+    const hit = parsed && parsed.code === 1 && parsed.data && Array.isArray(parsed.data.rows)
+      ? parsed.data.rows.find((row) => String(row.sku || "") === sku)
+      : null;
+    if (hit) rows.push(hit);
+  }
+  return rows;
+}
+
+function normalizeOzonWorkbenchPublishIds(productIds) {
+  return Array.from(new Set((Array.isArray(productIds) ? productIds : [])
+    .map((id) => String(id || "").trim())
+    .filter((id) => /^\d+$/.test(id)))).slice(0, 1000);
+}
+
+function mapOzonWorkbenchRowsBySku(rows) {
+  const out = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const sku = String(row && row.sku || "").trim();
+    if (sku) out.set(sku, row);
+  });
+  return out;
+}
+
+function resolveOzonWorkbenchPublishPriceCny(row, markupPct) {
+  const direct = Number(row && row.priceCny);
+  const rub = Number(row && row.priceRub);
+  const fxRate = Number(row && row.fxRate) || 0.08;
+  const base = Number.isFinite(direct) && direct > 0
+    ? direct
+    : (Number.isFinite(rub) && rub > 0 ? rub * fxRate : 100);
+  const markup = Number(markupPct);
+  const price = base * (1 + (Number.isFinite(markup) ? markup : 0) / 100);
+  return Math.max(1, Math.round(price * 100) / 100);
+}
+
+function buildOzonWorkbenchDirectImportItems(ids, options, rows) {
+  const rowsBySku = mapOzonWorkbenchRowsBySku(rows);
+  const productUrls = Array.isArray(options.productUrls) ? options.productUrls : [];
+  const costMap = options.costs && typeof options.costs === "object" ? options.costs : {};
+  return ids.map((sku, index) => {
+    const row = rowsBySku.get(sku) || {};
+    const price = resolveOzonWorkbenchPublishPriceCny(row, options.markupPct);
+    const imageUrls = [];
+    if (row.image) imageUrls.push(String(row.image));
+    const commissionRate = row.commissionRate != null ? row.commissionRate : (options.commissionRate != null ? options.commissionRate : null);
+    const logisticsFeeCny = row.logisticsFeeCny != null ? row.logisticsFeeCny : (options.logisticsFeeCny != null ? options.logisticsFeeCny : null);
+    const costCny = row.costCny != null ? row.costCny : (costMap[sku] != null ? costMap[sku] : null);
+    return {
+      sku: Number(sku),
+      title: row.title || ("Ozon SKU " + sku),
+      price,
+      oldPrice: Math.ceil(price * 1.2),
+      currency: "CNY",
+      sourceUrl: productUrls[index] || ("https://www.ozon.ru/product/" + sku + "/"),
+      imageUrls,
+      brand: row.brand || "",
+      categoryPath: row.categoryPath || "",
+      salesSchema: row.salesSchema || "",
+      weightGrams: row.weightGrams != null ? row.weightGrams : null,
+      dimensionsText: row.dimensionsText || "",
+      commissionRate: commissionRate,
+      logisticsFeeCny: logisticsFeeCny,
+      costCny: costCny,
+      profitCny: row.profitCny != null ? row.profitCny : null,
+      profitMarginPct: row.profitMarginPct != null ? row.profitMarginPct : null,
+      soldCount: row.soldCount != null ? row.soldCount : null,
+      soldSum: row.soldSum != null ? row.soldSum : null,
+      returnCancelRate: row.returnCancelRate != null ? row.returnCancelRate : null,
+      nullableRedemptionRate: row.nullableRedemptionRate != null ? row.nullableRedemptionRate : null,
+      sellerCount: row.sellerCount != null ? row.sellerCount : null,
+      minFollowPriceRub: row.minFollowPriceRub != null ? row.minFollowPriceRub : null,
+      maxFollowPriceRub: row.maxFollowPriceRub != null ? row.maxFollowPriceRub : null,
+      sellerNames: Array.isArray(row.sellerNames) ? row.sellerNames.slice(0, 50) : [],
+      ozonMetrics: {
+        adExpenseShare: row.adExpenseShare != null ? row.adExpenseShare : null,
+        convToCartPdp: row.convToCartPdp != null ? row.convToCartPdp : null,
+        convToCartSearch: row.convToCartSearch != null ? row.convToCartSearch : null,
+        convViewToOrder: row.convViewToOrder != null ? row.convViewToOrder : null,
+        productCardViews: row.productCardViews != null ? row.productCardViews : null,
+        searchCatalogViews: row.searchCatalogViews != null ? row.searchCatalogViews : null,
+        productClickRate: row.productClickRate != null ? row.productClickRate : null,
+        promoDays: row.promoDays != null ? row.promoDays : null,
+        paidPromotionDays: row.paidPromotionDays != null ? row.paidPromotionDays : null,
+        ptj: row.ptj || "",
+      },
+    };
+  });
+}
+
+async function publishOzonWorkbenchRowsDirect(productIds, options = {}) {
+  const ids = normalizeOzonWorkbenchPublishIds(productIds);
+  if (!ids.length) {
+    return { ok: false, error: "请选择要上架的 SKU" };
+  }
+  const shopId = String(options.shopId || "").trim();
+  if (!shopId) return { ok: false, error: "请选择目标店铺" };
+
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+
+  let rows = Array.isArray(options.rows) ? options.rows : [];
+  const rowsBySku = mapOzonWorkbenchRowsBySku(rows);
+  const missingIds = ids.filter((id) => !rowsBySku.has(id));
+  if (missingIds.length && missingIds.length <= 100) {
+    const rowResult = await fetchOzonWorkbenchRows(missingIds, {
+      prices: options.prices,
+      costs: options.costs,
+      fxRate: options.fxRate,
+      commissionRate: options.commissionRate,
+      logisticsFeeCny: options.logisticsFeeCny,
+    });
+    if (rowResult && rowResult.ok && rowResult.data && Array.isArray(rowResult.data.rows)) {
+      rows = rows.concat(rowResult.data.rows);
+    }
+  }
+
+  const publishBody = {
+    shopId,
+    source: "extension-workbench-direct",
+    entry: options.entry || "extension-workbench",
+    mode: "follow-by-sku",
+    items: buildOzonWorkbenchDirectImportItems(ids, options, rows),
+  };
+
+  const publishResponse = await fetch(conn.baseUrl + "/api/listing/ozon/import-by-sku", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token,
+    },
+    body: JSON.stringify(publishBody),
+  });
+  const publishText = await publishResponse.text();
+  let publishParsed = {};
+  try { publishParsed = JSON.parse(publishText); } catch (e) {}
+  if (!publishResponse.ok || publishParsed.code === 0) {
+    return {
+      ok: false,
+      error: publishParsed.msg || ("ERP 快速上架失败: HTTP " + publishResponse.status + " " + publishText.slice(0, 200)),
+      data: { publish: publishParsed },
+    };
+  }
+
+  return { ok: true, data: { publish: publishParsed, items: publishBody.items } };
+}
+
+async function publishOzonWorkbenchRows(productIds, options = {}) {
+  if (options.directPublish === true || String(options.entry || "") === "ozon-list-page") {
+    return await publishOzonWorkbenchRowsDirect(productIds, options);
+  }
+
+  if (!Array.isArray(productIds) || !productIds.length) {
+    return { ok: false, error: "请选择要上架的 SKU" };
+  }
+  const shopId = String(options.shopId || "").trim();
+  if (!shopId) return { ok: false, error: "请选择目标店铺" };
+
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+
+  const collectResult = await collectOzonProductsToErp(productIds, {
+    productUrls: options.productUrls,
+    fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
+    mode: options.mode || "complete",
+  });
+  if (!collectResult || !collectResult.ok) {
+    return { ok: false, error: collectResult && collectResult.error || "采集到 ERP 失败", data: collectResult };
+  }
+
+  const rows = await fetchCollectedOzonItemsBySkus(conn.baseUrl, conn.token, productIds);
+  if (!rows.length) return { ok: false, error: "采集完成，但未在 ERP 中找到对应商品" };
+
+  const publishBody = {
+    ids: rows.map((row) => row.id),
+    shopId,
+    mode: options.publishMode === "follow" ? "follow" : "clone",
+    followBrand: options.followBrand === true,
+    markupPct: Number(options.markupPct) || 0,
+    useItemCategory: true,
+    randomOfferId: options.randomOfferId !== false,
+    source: options.entry === "ozon-product-detail" ? "ozon-product-detail-workbench" : "batch-collect-page",
+  };
+  if (options.categoryId) publishBody.categoryId = Number(options.categoryId);
+  if (options.typeId) publishBody.typeId = Number(options.typeId);
+
+  const publishResponse = await fetch(conn.baseUrl + "/api/collect/publish-ozon", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token,
+    },
+    body: JSON.stringify(publishBody),
+  });
+  const publishText = await publishResponse.text();
+  let publishParsed = {};
+  try { publishParsed = JSON.parse(publishText); } catch (e) {}
+  if (!publishResponse.ok || publishParsed.code === 0) {
+    return {
+      ok: false,
+      error: publishParsed.msg || ("ERP 上架失败: HTTP " + publishResponse.status + " " + publishText.slice(0, 200)),
+      data: { collectResult, publish: publishParsed },
+    };
+  }
+
+  return { ok: true, data: { collectResult, publish: publishParsed, items: rows } };
+}
+
+async function requestProductSelectionRuleCenter(path, options = {}) {
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+  const method = options.method || "GET";
+  const response = await fetch(conn.baseUrl + "/api/extension-config/product-selection/rules" + (path || ""), {
+    method: method,
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token,
+    },
+    body: options.body == null || method === "GET" ? undefined : JSON.stringify(options.body),
+  });
+  const text = await response.text();
+  let parsed = {};
+  try { parsed = JSON.parse(text); } catch (e) {}
+  if (!response.ok || parsed.code === 0) {
+    return { ok: false, error: parsed.msg || ("ERP 选品规则请求失败: HTTP " + response.status + " " + text.slice(0, 200)), data: parsed };
+  }
+  return { ok: true, data: parsed.data || parsed };
+}
+
+async function listProductSelectionRules() {
+  return await requestProductSelectionRuleCenter("", { method: "GET" });
+}
+
+async function saveProductSelectionRule(rule) {
+  return await requestProductSelectionRuleCenter("", { method: "POST", body: rule || {} });
+}
+
+async function toggleProductSelectionRule(ruleId, enabled) {
+  const id = String(ruleId || "").trim();
+  if (!id) return { ok: false, error: "缺少规则 ID" };
+  return await requestProductSelectionRuleCenter("/" + encodeURIComponent(id) + "/toggle", {
+    method: "POST",
+    body: enabled == null ? {} : { enabled: enabled === true },
+  });
+}
+
+async function deleteProductSelectionRule(ruleId) {
+  const id = String(ruleId || "").trim();
+  if (!id) return { ok: false, error: "缺少规则 ID" };
+  return await requestProductSelectionRuleCenter("/" + encodeURIComponent(id), { method: "DELETE" });
 }
 
 function normalizeOzonProductPathForFetch(link, fallbackProductId) {
@@ -3411,6 +4368,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {
         const insights = await getOzonInsights(pid);
+        productData.ozonInsights = normalizeOzonCollectionInsights(insights);
         repairOzonCollectedTitleFromInsights(productData, insights);
         if (insights.detail && Array.isArray(insights.detail.attributes)) {
           productData.ozonAttributes = insights.detail.attributes;
@@ -3603,6 +4561,9 @@ async function syncShopGraphsToErp(shopId, companyIdInput, period) {
 globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_BACKGROUND || {}, {
   aggregateOzonProductInsights,
   collectOzonProductsToErp,
+  fetchOzonSellerOffers,
+  fetchOzonWorkbenchRows,
+  publishOzonWorkbenchRows,
   syncShopAnalyticsToErp,
   syncShopGraphsToErp,
 });
@@ -3634,6 +4595,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           throw error;
         }
+      case "spb-self-hosted:get-ozon-seller-offers": {
+        return await fetchOzonSellerOffers(message.productId || parseOzonProductId(message.sourceUrl || ""));
+      }
+      case "spb-self-hosted:fetch-ozon-workbench-rows": {
+        return await fetchOzonWorkbenchRows(message.productIds, {
+          prices: message.prices,
+          costs: message.costs,
+          fxRate: message.fxRate,
+          commissionRate: message.commissionRate,
+          logisticsFeeCny: message.logisticsFeeCny,
+          rows: message.rows,
+          includeOffers: message.includeOffers,
+        });
+      }
+      case "spb-self-hosted:publish-ozon-workbench-rows": {
+        return await publishOzonWorkbenchRows(message.productIds, {
+          productUrls: message.productUrls,
+          rows: message.rows,
+          prices: message.prices,
+          costs: message.costs,
+          fxRate: message.fxRate,
+          commissionRate: message.commissionRate,
+          logisticsFeeCny: message.logisticsFeeCny,
+          shopId: message.shopId,
+          entry: message.entry,
+          publishMode: message.publishMode,
+          followBrand: message.followBrand === true,
+          markupPct: message.markupPct,
+          categoryId: message.categoryId,
+          typeId: message.typeId,
+          randomOfferId: message.randomOfferId,
+        });
+      }
+      case "spb-self-hosted:list-product-selection-rules": {
+        return await listProductSelectionRules();
+      }
+      case "spb-self-hosted:save-product-selection-rule": {
+        return await saveProductSelectionRule(message.rule);
+      }
+      case "spb-self-hosted:toggle-product-selection-rule": {
+        return await toggleProductSelectionRule(message.ruleId, message.enabled);
+      }
+      case "spb-self-hosted:delete-product-selection-rule": {
+        return await deleteProductSelectionRule(message.ruleId);
+      }
       case "spb-self-hosted:download-product":
         return await downloadProductJson(message.product);
       case "spb-self-hosted:track-logistics":

@@ -4,6 +4,22 @@
   const BRIDGE_ID = "spb-self-hosted-page-bridge";
   const PAGE_STATE_TIMEOUT_MS = 8000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
+  const OZON_WORKBENCH_MODAL_ID = "ss-erp-ozon-workbench-modal";
+  const OZON_QUICK_ACTIONS_ID = "ss-erp-ozon-quick-actions";
+  const SS_ERP_PRODUCT_THEME = {
+    primary: "#ea580c",
+    primaryDark: "#9a3412",
+    primaryDarker: "#7c2d12",
+    primarySoft: "#fff7ed",
+    border: "#fed7aa",
+    borderStrong: "#fdba74",
+    blue: "#1e88e5",
+    surface: "#f8fafc",
+    surfaceAlt: "#f9fafb",
+    text: "#111827",
+    muted: "#64748b",
+    headerGradient: "linear-gradient(135deg,#9a3412 0%,#ea580c 100%)",
+  };
   const SourceProductCore = globalThis.SS_ERP_SOURCE_PRODUCT_CORE || {};
   const detectPlatform = SourceProductCore.detectPlatform;
   const parseLooseNumber = SourceProductCore.parseLooseNumber;
@@ -698,9 +714,12 @@
       }
       lastOzonUrl = location.href;
       if (isOzonProductPage()) {
-        renderOzonPanel();
+        const productId = parseOzonProductIdFromUrl(location.href);
+        renderOzonQuickActions(productId);
+        renderOzonPanel({ expand: false });
       } else {
         removeOzonPanel();
+        removeOzonQuickActions();
       }
     };
 
@@ -725,13 +744,212 @@
     }
   }
 
-  async function renderOzonPanel() {
+  function removeOzonQuickActions() {
+    const panel = document.getElementById(OZON_QUICK_ACTIONS_ID);
+    if (panel) {
+      panel.remove();
+    }
+  }
+
+  function renderOzonQuickActions(productId) {
+    if (!productId || document.getElementById(OZON_QUICK_ACTIONS_ID)) {
+      return;
+    }
+
+    const panel = document.createElement("aside");
+    panel.id = OZON_QUICK_ACTIONS_ID;
+    panel.style.cssText = [
+      "position:fixed",
+      "right:10px",
+      "top:50%",
+      "transform:translateY(-50%)",
+      "z-index:2147483646",
+      "width:128px",
+      "background:#ffffff",
+      "border:1px solid #d1d5db",
+      "border-radius:4px",
+      "box-shadow:0 10px 28px rgba(15,23,42,0.16)",
+      "font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif",
+      "color:#111827",
+      "padding:8px",
+      "box-sizing:border-box",
+      "user-select:none"
+    ].join(";");
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:8px;border-bottom:1px solid #e5e7eb;padding-bottom:7px;">
+        <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>
+        <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>
+      </div>
+      <button type="button" data-role="quick-open-workbench" title="打开 SKU 工作台并提交上架" style="${quickActionButtonStyle("#ea580c", "#ffffff")}">一键上架</button>
+      <button type="button" data-role="quick-profit" title="查看售价、成本和利润率" style="${quickActionButtonStyle("#1d4ed8", "#ffffff")}">利润测算</button>
+      <button type="button" data-role="quick-pricing" title="打开加价和发布参数" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">定价策略</button>
+      <button type="button" data-role="quick-bind-cookie" title="检查 Ozon / ERP 登录状态并打开扩展设置" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
+      <button type="button" data-role="quick-open-insights" title="打开数据一览和选品指标" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">选品数据</button>
+      <button type="button" data-role="quick-selection-settings" title="打开选品规则设置入口" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">设置选品</button>
+      <div data-role="quick-status" style="min-height:15px;margin-top:5px;text-align:center;font-size:10px;line-height:1.25;color:#64748b;">SKU ${escapeHtml(productId)}</div>
+      <button type="button" data-role="quick-open-erp" title="进入 ERP 批量采集页" style="margin-top:5px;border:1px solid #cbd5e1;background:#f8fafc;color:#1d4ed8;font-size:10px;font-weight:800;cursor:pointer;width:100%;height:22px;padding:0;border-radius:3px;">ERP</button>
+    `;
+
+    document.body.appendChild(panel);
+    panel.querySelector("[data-role='quick-open-workbench']").addEventListener("click", () => {
+      showOzonSkuWorkbench(productId, "publish");
+      setOzonQuickStatus(panel, "已打开上架");
+    });
+    panel.querySelector("[data-role='quick-profit']").addEventListener("click", () => {
+      showOzonSkuWorkbench(productId, "profit");
+      setOzonQuickStatus(panel, "利润表已打开");
+    });
+    panel.querySelector("[data-role='quick-pricing']").addEventListener("click", () => {
+      showOzonSkuWorkbench(productId, "pricing");
+      setOzonQuickStatus(panel, "定价表已打开");
+    });
+    panel.querySelector("[data-role='quick-bind-cookie']").addEventListener("click", async () => {
+      setOzonQuickStatus(panel, "检查中...");
+      try {
+        const response = await sendRuntimeMessage({ type: "spb-self-hosted:check-logins" });
+        const logins = response && response.ok && response.logins ? response.logins : {};
+        const ozonOk = Boolean(logins.ozon || logins.sellerOzon || logins["seller.ozon.ru"]);
+        setOzonQuickStatus(panel, ozonOk ? "Cookie正常" : "打开设置");
+        if (!ozonOk) openExtensionSettingsPage("cookie");
+      } catch (error) {
+        setOzonQuickStatus(panel, "检查失败");
+      }
+    });
+    panel.querySelector("[data-role='quick-open-insights']").addEventListener("click", () => {
+      const existing = document.getElementById(OZON_PANEL_ID);
+      if (existing) {
+        existing.remove();
+        lastOzonUrl = "";
+      }
+      renderOzonPanel({ expand: true });
+      setOzonQuickStatus(panel, "选品已打开");
+    });
+    panel.querySelector("[data-role='quick-selection-settings']").addEventListener("click", () => {
+      openExtensionSettingsPage("selection");
+      setOzonQuickStatus(panel, "设置已打开");
+    });
+    panel.querySelector("[data-role='quick-open-erp']").addEventListener("click", () => {
+      openErpPage("/collect/batch");
+      setOzonQuickStatus(panel, "正在进入");
+    });
+  }
+
+  function quickActionButtonStyle(background, color, border) {
+    return [
+      "width:100%",
+      "height:24px",
+      "margin:4px 0",
+      "border:" + (border ? "1px solid " + border : "0"),
+      "border-radius:3px",
+      "background:" + background,
+      "color:" + color,
+      "font-size:11px",
+      "font-weight:800",
+      "line-height:22px",
+      "padding:0",
+      "cursor:pointer",
+      "white-space:nowrap",
+      "box-sizing:border-box",
+      "box-shadow:" + (border ? "none" : "0 1px 2px rgba(15,23,42,0.12)")
+    ].join(";");
+  }
+
+  function productWorkbenchFooterStyle() {
+    return [
+      "height:58px",
+      "border-top:1px solid #e5e7eb",
+      "background:" + SS_ERP_PRODUCT_THEME.surface,
+      "display:flex",
+      "align-items:center",
+      "justify-content:flex-end",
+      "padding:0 18px"
+    ].join(";");
+  }
+
+  function setOzonQuickStatus(panel, text) {
+    const status = panel && panel.querySelector("[data-role='quick-status']");
+    if (status) {
+      status.textContent = text || "";
+      status.style.color = /失败|请先/.test(String(text || "")) ? "#ef4444" : "#2563eb";
+    }
+  }
+
+  function workbenchModeButtonStyle(active) {
+    return [
+      "height:28px",
+      "min-width:48px",
+      "border:1px solid " + (active ? "rgba(255,255,255,0.82)" : "rgba(255,255,255,0.36)"),
+      "border-radius:3px",
+      "background:" + (active ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.10)"),
+      "color:#fff",
+      "font-size:12px",
+      "font-weight:800",
+      "padding:0 10px",
+      "cursor:pointer",
+      "box-sizing:border-box"
+    ].join(";");
+  }
+
+  function getWorkbenchModeStatus(mode) {
+    if (mode === "data") return "查看已采集的数据和 Ozon 指标";
+    if (mode === "profit") return "查看售价、成本和利润率";
+    if (mode === "pricing") return "调整加价后再提交上架";
+    return "选择店铺和 SKU 后提交上架";
+  }
+
+  function inferErpWebBaseUrl(value) {
+    const fallback = "http://localhost:3000";
+    const raw = String(value || "").trim();
+    if (!raw) return fallback;
+    try {
+      const url = new URL(raw.replace(/\/+$/, ""));
+      url.pathname = url.pathname.replace(/\/api\/.*$/, "").replace(/\/+$/, "");
+      url.search = "";
+      url.hash = "";
+      if (/^(localhost|127\.0\.0\.1)$/i.test(url.hostname) && url.port === "3001") {
+        url.port = "3000";
+      }
+      return url.href.replace(/\/+$/, "");
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function openExtensionSettingsPage(section) {
+    const hash = section ? "#" + encodeURIComponent(section) : "";
+    const url = chrome.runtime.getURL("pages/settings.html" + hash);
+    const tab = window.open(url, "_blank");
+    if (tab) {
+      try { tab.opener = null; } catch (error) {}
+    }
+  }
+
+  async function openErpPage(path) {
+    const tab = window.open("about:blank", "_blank");
+    if (tab) {
+      try { tab.opener = null; } catch (error) {}
+    }
+    let baseUrl = "http://localhost:3000";
+    try {
+      const response = await sendRuntimeMessage({ type: "spb-self-hosted:get-config" });
+      if (response && response.ok && response.config && response.config.erpBaseUrl) {
+        baseUrl = inferErpWebBaseUrl(response.config.erpBaseUrl);
+      }
+    } catch (error) {}
+    if (tab) {
+      tab.location.href = baseUrl + path;
+    } else {
+      window.location.href = baseUrl + path;
+    }
+  }
+
+  async function renderOzonPanel(options = {}) {
     const productId = parseOzonProductIdFromUrl(location.href);
     if (!productId || document.getElementById(OZON_PANEL_ID)) {
       return;
     }
 
-    const panel = createOzonPanelShell(productId);
+    const panel = createOzonPanelShell(productId, options);
     document.body.appendChild(panel);
 
     try {
@@ -746,6 +964,16 @@
       }
 
       fillOzonPanel(panel, response.data);
+      sendRuntimeMessage({
+        type: "spb-self-hosted:get-ozon-seller-offers",
+        productId,
+        sourceUrl: location.href
+      }).then((offerResponse) => {
+        if (!offerResponse || !offerResponse.ok || !offerResponse.data || !document.body.contains(panel)) {
+          return;
+        }
+        fillOzonPanel(panel, { ...response.data, offers: offerResponse.data });
+      }).catch(() => {});
     } catch (error) {
       const status = panel.querySelector("[data-role='status']");
       if (status) {
@@ -778,7 +1006,7 @@
     return text || "扩展后台未响应";
   }
 
-  function createOzonPanelShell(productId) {
+  function createOzonPanelShell(productId, options = {}) {
     const panel = document.createElement("section");
     panel.id = OZON_PANEL_ID;
     panel.style.cssText = [
@@ -789,8 +1017,10 @@
       "z-index:2147483646",
       "width:44px",
       "background:#ffffff",
-      "border-radius:0 12px 12px 0",
-      "box-shadow:2px 4px 24px rgba(15,23,40,0.12), 0 1px 4px rgba(15,23,40,0.06)",
+      "border:1px solid #d1d5db",
+      "border-left:0",
+      "border-radius:0 4px 4px 0",
+      "box-shadow:0 10px 28px rgba(15,23,42,0.16)",
       "font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif",
       "color:#1a2332",
       "overflow:hidden",
@@ -799,8 +1029,8 @@
     ].join(";");
 
     panel.innerHTML = `
-      <div data-role="tab" style="writing-mode:vertical-rl;text-orientation:mixed;padding:14px 10px;cursor:pointer;font-size:12px;font-weight:700;color:#9a3412;letter-spacing:0.05em;display:flex;align-items:center;gap:6px;white-space:nowrap;">
-        <span style="writing-mode:horizontal-tb;font-size:14px;">📊</span>
+      <div data-role="tab" style="writing-mode:vertical-rl;text-orientation:mixed;padding:14px 10px;cursor:pointer;font-size:12px;font-weight:800;color:#9a3412;letter-spacing:0;display:flex;align-items:center;gap:6px;white-space:nowrap;">
+        <span style="writing-mode:horizontal-tb;width:14px;height:14px;border-radius:3px;background:#ea580c;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;">D</span>
         <span>数据一览</span>
       </div>
       <div data-role="expanded" style="display:none;width:340px;">
@@ -810,9 +1040,9 @@
             <div style="font-size:11px;color:rgba(255,255,255,0.72);margin-top:2px;">SKU ${productId}</div>
           </div>
           <div style="display:flex;gap:5px;">
-            <button type="button" data-role="copy" title="复制数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">复制</button>
-            <button type="button" data-role="refresh" title="刷新数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600;transition:background 0.15s;">刷新</button>
-            <button type="button" data-role="collapse" style="border:0;background:rgba(255,255,255,0.12);color:#fff;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px;font-weight:700;transition:background 0.15s;">◀</button>
+            <button type="button" data-role="copy" title="复制数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:3px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;transition:background 0.15s;">复制</button>
+            <button type="button" data-role="refresh" title="刷新数据" style="border:0;background:rgba(255,255,255,0.18);color:#fff;border-radius:3px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;transition:background 0.15s;">刷新</button>
+            <button type="button" data-role="collapse" style="border:0;background:rgba(255,255,255,0.12);color:#fff;border-radius:3px;padding:4px 8px;cursor:pointer;font-size:12px;font-weight:800;transition:background 0.15s;">◀</button>
           </div>
         </div>
         <div data-role="body" style="padding:12px;max-height:70vh;overflow-y:auto;">
@@ -837,7 +1067,7 @@
     function expand() {
       expanded = true;
       panel.style.width = "340px";
-      panel.style.borderRadius = "0 12px 12px 0";
+      panel.style.borderRadius = "0 4px 4px 0";
       tab.style.display = "none";
       expandedArea.style.display = "block";
     }
@@ -855,8 +1085,9 @@
       collapse();
     });
 
-    // 默认展开数据一览窗
-    expand();
+    if (options.expand === true) {
+      expand();
+    }
 
     panel.querySelector("[data-role='refresh']").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -864,7 +1095,7 @@
       setTimeout(() => {
         panel.remove();
         lastOzonUrl = "";
-        renderOzonPanel();
+        renderOzonPanel({ expand: true });
       }, 200);
     });
 
@@ -904,6 +1135,7 @@
 
     const item = data.item || {};
     const specs = data.specs || {};
+    const offers = data.offers || {};
     window.__OZON_INSIGHTS_SPECS__ = specs;
     try {
       window.dispatchEvent(new CustomEvent("ss-erp:ozon-insights-specs", { detail: specs }));
@@ -919,6 +1151,13 @@
     status.textContent = "";
 
     const weightDisplay = buildWeightDisplay(specs);
+    const sellerNames = Array.isArray(offers.sellerNames) ? offers.sellerNames.filter(Boolean) : [];
+    const sellerCount = Number(offers.sellerCount);
+    const sellerListText = offers.sellerListText
+      || (sellerNames.length > 1 ? `${sellerNames[0]} 等${Number.isFinite(sellerCount) && sellerCount > 0 ? sellerCount : sellerNames.length}个卖家` : (sellerNames[0] || "-"));
+    const sellerListValue = sellerListText && sellerListText !== "-"
+      ? trustedOzonPanelHtml(`<button type="button" data-role="open-seller-list" style="border:0;background:transparent;color:#2563eb;font:inherit;font-weight:700;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px;text-align:left;">${escapeHtml(sellerListText)}</button>`)
+      : "-";
 
     const rows = [
       ["30天销量", formatNumber(item.soldCount)],
@@ -926,33 +1165,440 @@
       ["销售变化", formatPercent(item.salesDynamics)],
       ["平均售价", formatRub(item.avgPrice)],
       ["最低售价", formatRub(item.minSellerPrice)],
+      ["跟卖列表", sellerListValue],
+      ["跟卖最低价", formatRub(offers.minPrice != null ? offers.minPrice : item.minSellerPrice)],
+      ["跟卖最高价", formatRub(offers.maxPrice)],
       ["加购率", formatPercent(item.convToCartPdp)],
+      ["广告费占比", formatPercent(item.adExpenseShare)],
+      ["浏览下单率", formatPercent(item.convViewToOrder)],
+      ["搜索转换率", formatPercent(item.convToCartSearch)],
+      ["结单率", formatPercent(item.nullableRedemptionRate)],
+      ["参与促销天数", formatNumber(item.promoDays)],
+      ["参与促销的折扣", formatPercent(item.promoDiscountPercent)],
+      ["促销活动的转化率", formatPercent(item.promoConversionRate)],
+      ["付费推广天数", formatNumber(item.paidPromotionDays)],
+      ["模板活动天数", formatNumber(item.daysWithTrafarets)],
+      ["促销收入占比", formatPercent(item.promoRevenueShare)],
+      ["商品卡浏览量", formatNumber(item.productCardViews != null ? item.productCardViews : item.views)],
+      ["商品卡加购率", formatPercent(item.productCardAddToCartRate != null ? item.productCardAddToCartRate : item.convToCartPdp)],
+      ["搜索目录浏览量", formatNumber(item.searchCatalogViews != null ? item.searchCatalogViews : item.searchViews)],
+      ["搜索目录加购率", formatPercent(item.searchCatalogAddToCartRate)],
+      ["展示转化率", formatPercent(item.showConversionRate)],
+      ["商品点击率", formatPercent(item.productClickRate != null ? item.productClickRate : item.clickThroughRate)],
+      ["退货取消率", formatPercent(item.returnCancelRate)],
       ["曝光量", formatNumber(item.views)],
       ["库存", formatNumber(item.stock)],
       ["品牌", item.brand || "-"],
       ["一级类目", item.category1 || "-"],
       ["三级类目", item.category3 || "-"],
       ["卖家", item.sellerName || "-"],
+      ["佣金", formatPercent(item.commissionRate)],
+      ["价格指数", item.ptj || "-"],
       ["发货模式", item.salesSchema || "-"],
       ["配送天数", formatNumber(item.avgDeliveryDays)],
       ["产品净重", weightDisplay.productWeight],
       ["包装重量", weightDisplay.packageWeight],
       ["计算用重量", weightDisplay.calcWeight],
       ["尺寸", formatDimensions(specs)],
-      ["上架时间", formatDate(item.nullableCreateDate)],
+      ["上架时间", formatDate(item.nullableCreateDate || item.createDate)],
       ["variantId", item.variantId != null ? String(item.variantId) : "-"]
     ];
 
     grid.innerHTML = rows
       .map(
         ([label, value]) => `
-          <div style="padding:8px;border-radius:8px;background:#fff8f3;transition:background 0.15s;">
+          <div style="padding:8px;border-radius:3px;background:#fff7ed;transition:background 0.15s;">
             <div style="font-size:10px;color:#98a6ba;margin-bottom:3px;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(label)}</div>
-            <div style="font-size:12px;font-weight:600;word-break:break-word;color:#1a2332;">${escapeHtml(value)}</div>
+            <div style="font-size:12px;font-weight:600;word-break:break-word;color:#1a2332;">${renderOzonPanelValue(value)}</div>
           </div>
         `
       )
       .join("");
+    grid.querySelectorAll("[data-role='open-seller-list']").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showOzonSellerListModal(data);
+      });
+    });
+  }
+
+  function trustedOzonPanelHtml(html) {
+    return { __ssErpTrustedHtml: true, html: String(html || "") };
+  }
+
+  function renderOzonPanelValue(value) {
+    return value && value.__ssErpTrustedHtml ? value.html : escapeHtml(value);
+  }
+
+  function asPlainObject(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+
+  function offerValue(offer, keys) {
+    const object = asPlainObject(offer);
+    for (const key of keys) {
+      const value = object[key];
+      if (value != null && value !== "") return value;
+    }
+    return null;
+  }
+
+  function sellerNameFromOffer(offer) {
+    if (typeof offer === "string") return offer;
+    const object = asPlainObject(offer);
+    const seller = asPlainObject(object.seller);
+    return offerValue(object, ["sellerName", "name", "title", "sellerTitle", "merchantName", "shopName"])
+      || offerValue(seller, ["name", "title", "sellerName"])
+      || "";
+  }
+
+  function sellerLogoFromOffer(offer) {
+    const object = asPlainObject(offer);
+    const seller = asPlainObject(object.seller);
+    return offerValue(object, ["logoImageUrl", "logo", "image"])
+      || offerValue(seller, ["logoImageUrl", "logo", "image"])
+      || "";
+  }
+
+  function sellerPriceFromOffer(offer) {
+    const object = asPlainObject(offer);
+    const price = object.price;
+    if (typeof price === "string" || typeof price === "number") return String(price);
+    const priceObject = asPlainObject(price);
+    const cardPrice = asPlainObject(priceObject.cardPrice);
+    return offerValue(cardPrice, ["price", "value"])
+      || offerValue(priceObject, ["price", "value", "text"])
+      || offerValue(object, ["priceText", "displayPrice", "currentPrice", "amount"])
+      || "";
+  }
+
+  function sellerUrlFromOffer(offer) {
+    const object = asPlainObject(offer);
+    const seller = asPlainObject(object.seller);
+    const raw = offerValue(object, ["url", "link", "sellerUrl"])
+      || offerValue(seller, ["url", "link", "sellerUrl"])
+      || "";
+    if (!raw) return "";
+    const text = String(raw);
+    if (/^https?:\/\//i.test(text)) return text;
+    if (text.startsWith("/")) return "https://www.ozon.ru" + text;
+    return "";
+  }
+
+  function normalizeOzonSellerRows(data) {
+    const offers = asPlainObject(data && data.offers);
+    const rawOffers = Array.isArray(offers.sellerOffers)
+      ? offers.sellerOffers
+      : (Array.isArray(offers.offers) ? offers.offers : []);
+    const sellerNames = Array.isArray(offers.sellerNames) ? offers.sellerNames : [];
+    const rows = [];
+    rawOffers.forEach((offer) => {
+      const name = String(sellerNameFromOffer(offer) || "").trim();
+      if (!name) return;
+      rows.push({
+        name,
+        logo: sellerLogoFromOffer(offer),
+        price: sellerPriceFromOffer(offer),
+        url: sellerUrlFromOffer(offer)
+      });
+    });
+    sellerNames.forEach((name) => {
+      const text = String(name || "").trim();
+      if (text && !rows.some((row) => row.name === text)) {
+        rows.push({ name: text, logo: "", price: "", url: "" });
+      }
+    });
+    return rows;
+  }
+
+  function showOzonSellerListModal(data) {
+    const old = document.getElementById("ss-erp-ozon-seller-list-modal");
+    if (old) old.remove();
+    const offers = asPlainObject(data && data.offers);
+    const rows = normalizeOzonSellerRows(data);
+    const sellerCount = Number(offers.sellerCount);
+    const minPrice = offers.minPrice != null ? formatRub(offers.minPrice) : "-";
+    const maxPrice = offers.maxPrice != null ? formatRub(offers.maxPrice) : "-";
+    const modal = document.createElement("div");
+    modal.id = "ss-erp-ozon-seller-list-modal";
+    modal.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "background:rgba(15,23,42,0.30)",
+      "font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif",
+      "color:#111827"
+    ].join(";");
+    modal.innerHTML = `
+      <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,calc(100vw - 36px));max-height:min(680px,calc(100vh - 36px));background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.24);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;">
+        <div style="min-height:52px;background:${SS_ERP_PRODUCT_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px;border-bottom:1px solid ${SS_ERP_PRODUCT_THEME.primaryDark};">
+          <div>
+            <div style="font-size:15px;font-weight:800;line-height:1.2;">SS ERP 跟卖列表</div>
+            <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${Number.isFinite(sellerCount) && sellerCount > 0 ? formatNumber(sellerCount) : rows.length} 个卖家 · 最低 ${escapeHtml(minPrice)} · 最高 ${escapeHtml(maxPrice)}</div>
+          </div>
+          <button type="button" data-role="close-seller-list" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
+        </div>
+        <div style="overflow:auto;padding:12px 14px;background:#fff;">
+          <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:13px;border:1px solid ${SS_ERP_PRODUCT_THEME.border};">
+            <thead style="background:${SS_ERP_PRODUCT_THEME.primarySoft};color:${SS_ERP_PRODUCT_THEME.primaryDarker};">
+              <tr>
+                <th style="width:52px;padding:8px;border:1px solid #e5e7eb;text-align:center;">#</th>
+                <th style="padding:8px;border:1px solid #e5e7eb;text-align:left;">卖家</th>
+                <th style="width:130px;padding:8px;border:1px solid #e5e7eb;text-align:right;">价格</th>
+                <th style="width:72px;padding:8px;border:1px solid #e5e7eb;text-align:center;">链接</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.length ? rows.map((row, index) => `
+                <tr>
+                  <td style="padding:8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${index + 1}</td>
+                  <td style="padding:8px;border:1px solid #e5e7eb;">
+                    ${row.logo ? `<img src="${escapeHtml(row.logo)}" alt="" style="width:24px;height:24px;border-radius:3px;object-fit:cover;border:1px solid #e5e7eb;margin-right:7px;vertical-align:middle;">` : ""}
+                    <span style="font-weight:700;color:#111827;">${escapeHtml(row.name)}</span>
+                  </td>
+                  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${escapeHtml(row.price || "-")}</td>
+                  <td style="padding:8px;border:1px solid #e5e7eb;text-align:center;">${row.url ? `<a href="${escapeHtml(row.url)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700;text-decoration:underline;text-underline-offset:2px;">打开</a>` : "-"}</td>
+                </tr>
+              `).join("") : '<tr><td colspan="4" style="padding:22px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">当前接口没有返回卖家明细</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector("[data-role='close-seller-list']").addEventListener("click", () => modal.remove());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.remove();
+    });
+  }
+
+  function showOzonSkuWorkbench(productId, initialMode) {
+    const old = document.getElementById(OZON_WORKBENCH_MODAL_ID);
+    if (old) old.remove();
+    const activeMode = ["data", "profit", "pricing", "publish"].includes(initialMode) ? initialMode : "publish";
+
+    const modal = document.createElement("div");
+    modal.id = OZON_WORKBENCH_MODAL_ID;
+    modal.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "background:rgba(15,23,42,0.30)",
+      "font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Arial,sans-serif",
+      "color:#111827"
+    ].join(";");
+    modal.innerHTML = `
+      <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 48px));height:min(720px,calc(100vh - 48px));background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.24);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;">
+        <style>#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#f8fafc;color:#334155;box-shadow:0 1px 0 #e5e7eb;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#fff7ed!important;}</style>
+        <div style="min-height:56px;background:${SS_ERP_PRODUCT_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_PRODUCT_THEME.primaryDark};">
+          <div>
+            <div style="font-size:16px;font-weight:800;line-height:1.2;">SS ERP SKU 工作台</div>
+            <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">Ozon SKU ${escapeHtml(productId)}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+            <button type="button" data-role="workbench-view" data-mode="data" style="${workbenchModeButtonStyle(activeMode === "data")}">数据</button>
+            <button type="button" data-role="workbench-view" data-mode="profit" style="${workbenchModeButtonStyle(activeMode === "profit")}">利润</button>
+            <button type="button" data-role="workbench-view" data-mode="pricing" style="${workbenchModeButtonStyle(activeMode === "pricing")}">定价</button>
+            <button type="button" data-role="workbench-view" data-mode="publish" style="${workbenchModeButtonStyle(activeMode === "publish")}">上架</button>
+          </div>
+          <button type="button" data-role="close-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
+        </div>
+        <div data-role="workbench-toolbar" style="padding:12px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
+          <label style="font-size:12px;font-weight:700;color:#334155;">目标店铺</label>
+          <select data-role="shop-select" style="height:32px;min-width:180px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
+            <option value="">加载店铺中...</option>
+          </select>
+          <label style="font-size:12px;font-weight:700;color:#334155;margin-left:6px;">模式</label>
+          <select data-role="publish-mode" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
+            <option value="clone">复制源卡片</option>
+            <option value="follow">普通跟卖</option>
+          </select>
+          <label style="font-size:12px;font-weight:700;color:#334155;margin-left:6px;">加价%</label>
+          <input type="number" data-role="markup-pct" value="0" min="-90" max="500" step="1" style="height:32px;width:74px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;">
+            <input type="checkbox" data-role="follow-brand" style="margin:0;">
+            复制品牌
+          </label>
+          <button type="button" data-role="refresh-workbench" style="height:32px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;">刷新数据</button>
+          <div style="margin-left:auto;font-size:12px;color:${SS_ERP_PRODUCT_THEME.muted};" data-role="workbench-status">准备读取 SKU 数据...</div>
+        </div>
+        <div data-role="workbench-table-wrap" style="flex:1;overflow:auto;padding:0 18px 14px 18px;background:#fff;">
+          <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed;border:1px solid ${SS_ERP_PRODUCT_THEME.border};">
+            <thead style="background:${SS_ERP_PRODUCT_THEME.primaryDarker};color:#fff;">
+              <tr>
+                <th style="width:38px;padding:9px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="select-all-workbench" checked></th>
+                <th style="width:190px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">SKU</th>
+                <th style="width:90px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">售价</th>
+                <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖数量</th>
+                <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖最低价</th>
+                <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖最高价</th>
+                <th style="width:90px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">重量</th>
+                <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">利润率</th>
+                <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">30天销量</th>
+                <th style="width:110px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">30天销售额</th>
+                <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">加购率</th>
+                <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">广告费占比</th>
+                <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">促销天数</th>
+                <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">搜索浏览</th>
+                <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">搜索加购</th>
+                <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">商品点击率</th>
+                <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">退货取消率</th>
+                <th style="width:120px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">品牌</th>
+                <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">发货方式</th>
+              </tr>
+            </thead>
+            <tbody data-role="workbench-body">
+              <tr><td colspan="19" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">读取中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="${productWorkbenchFooterStyle()}">
+          <button type="button" data-role="publish-workbench" style="height:36px;border:0;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+    modal.querySelector("[data-role='close-workbench']").addEventListener("click", () => modal.remove());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.remove();
+    });
+    modal.querySelector("[data-role='refresh-workbench']").addEventListener("click", () => loadOzonWorkbenchRows(modal, productId));
+    modal.querySelectorAll("[data-role='workbench-view']").forEach((button) => {
+      button.addEventListener("click", () => {
+        const mode = String(button.getAttribute("data-mode") || "publish");
+        modal.querySelectorAll("[data-role='workbench-view']").forEach((item) => {
+          item.setAttribute("style", workbenchModeButtonStyle(item === button));
+        });
+        const status = modal.querySelector("[data-role='workbench-status']");
+        if (status) status.textContent = getWorkbenchModeStatus(mode);
+      });
+    });
+    modal.querySelector("[data-role='select-all-workbench']").addEventListener("change", (event) => {
+      modal.querySelectorAll("[data-role='workbench-row-check']").forEach((box) => { box.checked = event.target.checked; });
+    });
+    modal.querySelector("[data-role='publish-workbench']").addEventListener("click", () => publishSelectedOzonWorkbenchRows(modal));
+
+    loadOzonWorkbenchShops(modal);
+    loadOzonWorkbenchRows(modal, productId);
+  }
+
+  async function loadOzonWorkbenchShops(modal) {
+    const select = modal.querySelector("[data-role='shop-select']");
+    if (!select) return;
+    try {
+      const response = await sendRuntimeMessage({ type: "spb-self-hosted:get-ozon-shops" });
+      const shops = response && response.ok && Array.isArray(response.data) ? response.data : [];
+      select.innerHTML = '<option value="">选择 OZON 店铺</option>' + shops
+        .map((shop) => `<option value="${escapeHtml(shop.id)}">${escapeHtml(shop.name || shop.id)}</option>`)
+        .join("");
+    } catch (error) {
+      select.innerHTML = '<option value="">店铺加载失败</option>';
+    }
+  }
+
+  async function loadOzonWorkbenchRows(modal, productId) {
+    const status = modal.querySelector("[data-role='workbench-status']");
+    if (status) status.textContent = "读取 SKU 数据...";
+    try {
+      const response = await sendRuntimeMessage({
+        type: "spb-self-hosted:fetch-ozon-workbench-rows",
+        productIds: [productId],
+      });
+      if (!response || !response.ok) throw new Error(response && response.error || "读取 SKU 工作台数据失败");
+      const rows = response.data && Array.isArray(response.data.rows) ? response.data.rows : [];
+      renderOzonWorkbenchRows(modal, rows);
+      if (status) status.textContent = rows.length ? `已读取 ${rows.length} 条 SKU 数据` : "没有可展示的 SKU 数据";
+    } catch (error) {
+      const body = modal.querySelector("[data-role='workbench-body']");
+      if (body) {
+        body.innerHTML = `<tr><td colspan="19" style="padding:26px;text-align:center;color:#dc2626;border:1px solid #e5e7eb;">${escapeHtml(error && error.message ? error.message : String(error))}</td></tr>`;
+      }
+      if (status) status.textContent = "读取失败";
+    }
+  }
+
+  function renderOzonWorkbenchRows(modal, rows) {
+    const body = modal.querySelector("[data-role='workbench-body']");
+    if (!body) return;
+    modal.__ssErpOzonWorkbenchRows = Array.isArray(rows) ? rows : [];
+    if (!Array.isArray(rows) || !rows.length) {
+      body.innerHTML = '<tr><td colspan="19" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">暂无数据</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map((row) => `
+      <tr data-sku="${escapeHtml(row.sku)}" style="background:#fff;">
+        <td style="padding:8px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="workbench-row-check" value="${escapeHtml(row.sku)}" checked></td>
+        <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${row.image ? `<img src="${escapeHtml(row.image)}" alt="" style="width:30px;height:30px;object-fit:cover;border:1px solid #e5e7eb;margin-right:7px;display:inline-block;vertical-align:middle;">` : ""}
+          <span style="font-family:Consolas,monospace;font-weight:700;color:#1e88e5;">${escapeHtml(row.sku)}</span>
+        </td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatRub(row.priceRub)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatNumber(row.sellerCount)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.minFollowPriceRub ? formatRub(row.minFollowPriceRub) : "-"}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.maxFollowPriceRub ? formatRub(row.maxFollowPriceRub) : "-"}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.weightGrams ? `${formatNumber(row.weightGrams)} g` : "-"}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;color:${Number(row.profitMarginPct) >= 0 ? "#047857" : "#dc2626"};font-weight:700;">${formatPercent(row.profitMarginPct)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatNumber(row.soldCount)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatRub(row.soldSum)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercent(row.convToCartPdp)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercent(row.adExpenseShare)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatNumber(row.promoDays)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatNumber(row.searchCatalogViews)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercent(row.searchCatalogAddToCartRate)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercent(row.productClickRate)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercent(row.returnCancelRate)}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(row.brand || "-")}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;">${escapeHtml(row.salesSchema || "-")}</td>
+      </tr>
+    `).join("");
+  }
+
+  async function publishSelectedOzonWorkbenchRows(modal) {
+    const selected = Array.from(modal.querySelectorAll("[data-role='workbench-row-check']:checked"))
+      .map((box) => String(box.value || "").trim())
+      .filter(Boolean);
+    const shopId = String((modal.querySelector("[data-role='shop-select']") || {}).value || "").trim();
+    const publishMode = String((modal.querySelector("[data-role='publish-mode']") || {}).value || "clone");
+    const followBrand = Boolean((modal.querySelector("[data-role='follow-brand']") || {}).checked);
+    const markupPct = Number((modal.querySelector("[data-role='markup-pct']") || {}).value || 0);
+    const status = modal.querySelector("[data-role='workbench-status']");
+    const button = modal.querySelector("[data-role='publish-workbench']");
+
+    if (!selected.length) {
+      if (status) status.textContent = "请先勾选 SKU";
+      return;
+    }
+    if (!shopId) {
+      if (status) status.textContent = "请先选择目标店铺";
+      return;
+    }
+
+    if (button) button.disabled = true;
+    if (status) status.textContent = "正在采集并上架...";
+    try {
+      const rows = Array.isArray(modal.__ssErpOzonWorkbenchRows)
+        ? modal.__ssErpOzonWorkbenchRows.filter((row) => selected.includes(String(row && row.sku || "").trim()))
+        : [];
+      const response = await sendRuntimeMessage({
+        type: "spb-self-hosted:publish-ozon-workbench-rows",
+        productIds: selected,
+        productUrls: selected.map(() => location.href),
+        rows,
+        entry: "ozon-product-detail",
+        shopId,
+        publishMode,
+        followBrand,
+        markupPct: Number.isFinite(markupPct) ? markupPct : 0,
+        randomOfferId: true,
+      });
+      if (!response || !response.ok) throw new Error(response && response.error || "上架失败");
+      if (status) status.textContent = "上架任务已提交";
+    } catch (error) {
+      if (status) status.textContent = error && error.message ? error.message : String(error);
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   function buildWeightDisplay(specs) {

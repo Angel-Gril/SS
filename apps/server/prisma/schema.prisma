@@ -101,6 +101,7 @@ model User {
   createdDashboardContentBlocks DashboardContentBlock[] @relation("DashboardContentBlockCreator")
   auditLogs    AuditLog[]
   ozonAnalyticsCaches OzonAnalyticsCache[]
+  productSelectionRules ProductSelectionRule[]
 
   @@index([parentId])
   @@map("users")
@@ -925,6 +926,25 @@ model SystemConfig {
 
   @@index([group])
   @@map("system_configs")
+}
+
+// 扩展选品规则（用户维护，扩展本地只缓存启用快照）
+model ProductSelectionRule {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  tag          String
+  color        String   @default("#2563eb")
+  enabled      Boolean  @default(true)
+  autoFavorite Boolean  @default(false) @map("auto_favorite")
+  conditions   Json     @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, enabled])
+  @@index([userId, updatedAt])
+  @@map("product_selection_rules")
 }
 
 // 水印模板

@@ -1,6 +1,7 @@
 try { importScripts('../shared/currency/price-currency.js'); } catch (e) { console.warn('[SS ERP] price-currency load error:', e); }
 try { importScripts('../shared/ozon/variant-spec.js'); } catch (e) { console.warn('[SS ERP] ozon variant spec load error:', e); }
 try { importScripts('../shared/ozon/collection-policy.js'); } catch (e) { console.warn('[SS ERP] ozon collection policy load error:', e); }
+try { importScripts('../shared/ozon/sku-workbench.js'); } catch (e) { console.warn('[SS ERP] ozon sku workbench load error:', e); }
 
 // Import collect/analytics background module
 try { importScripts('collect-background.js'); } catch (e) { console.warn('[SS ERP] collect-background load error:', e); }
@@ -106,6 +107,7 @@ const OZON_COMMISSION_FALLBACK_SNAPSHOT = {
     fallbackReason: 'Ozon help pages can reject extension background fetches with 403 or redirect loops',
   },
 };
+globalThis.OZON_COMMISSION_FALLBACK_SNAPSHOT = OZON_COMMISSION_FALLBACK_SNAPSHOT;
 const OZON_FX_API_URL = 'https://open.er-api.com/v6/latest/CNY';
 const OZON_CALC_CAPTURE_LIMIT = 200;
 const OZON_CALC_VISIBLE_SNAPSHOT_LIMIT = 50;

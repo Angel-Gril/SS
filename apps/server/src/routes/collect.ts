@@ -1491,6 +1491,7 @@ export function buildCollectedGoodsMetadata(input: {
   if (selectedSku && typeof selectedSku === 'object') metadata.selectedSku = selectedSku;
   const skuItems = cloneMetadataJson(input.skuItems);
   if (Array.isArray(skuItems) && skuItems.length) metadata.skuItems = skuItems;
+  if (input.ozonInsights) metadata.ozonInsights = cloneMetadataJson(input.ozonInsights);
   const rawSourceProduct = cloneMetadataJson(input.rawSourceProduct);
   if (rawSourceProduct && typeof rawSourceProduct === 'object') metadata.rawSourceProduct = rawSourceProduct;
   const rejectedAssets = cloneMetadataJson(input.rejectedAssets);
@@ -4874,7 +4875,7 @@ export async function collectRoutes(app: FastifyInstance) {
     items = withAttrs;
 
     // 跟卖和复制都走 /v3/product/import：创建新卡片但属性/图片继承源商品
-    // 区别仅在 offer_id 命名策略：跟卖用 {sku}-{rand}，复制用 {sku}-{rand}（与企鹅店长一致）
+    // 区别仅在 offer_id 命名策略，避免不同发布任务之间互相覆盖。
     function getItemDimensions(item: any) {
       const meta = item.metadata as any;
       const baseWeight = meta?.weightG || body.weight || 500;

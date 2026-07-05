@@ -33,6 +33,79 @@
   const CARD_SCAN_FAST_MS = 500;
   const CARD_SCAN_SLOW_MS = 2000;
   const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
+  const DISPLAY_FIELDS_STORAGE_KEY = 'ss-erp:ozon-list-display-fields';
+  const PRODUCT_SELECTION_RULES_STORAGE_KEY = 'ss-erp:ozon-product-selection-rules';
+  const PRODUCT_SELECTION_RULES_CHROME_STORAGE_KEY = 'productSelectionRules';
+  const LIST_WORKBENCH_MODAL_ID = 'ss-erp-list-sku-workbench-modal';
+  const LIST_FIELD_CONFIG_MODAL_ID = 'ss-erp-list-field-config-modal';
+  const LIST_SELECTION_RULES_MODAL_ID = 'ss-erp-list-selection-rules-modal';
+  const LIST_QUICK_ACTIONS_ID = 'ss-erp-list-quick-actions';
+  const DEFAULT_DISPLAY_FIELD_IDS = [
+    'sku',
+    'category',
+    'brand',
+    'soldCount',
+    'soldSum',
+    'adExpenseShare',
+    'productCardViews',
+    'weight',
+  ];
+  const DISPLAY_FIELD_DEFS = [
+    { id: 'category', label: '类目', source: 'seller' },
+    { id: 'sku', label: 'SKU', source: 'supplement' },
+    { id: 'brand', label: '品牌', source: 'seller' },
+    { id: 'soldCount', label: '月销量', source: 'seller' },
+    { id: 'soldSum', label: '月销售额', source: 'seller' },
+    { id: 'salesDynamics', label: '月周转动态', source: 'seller' },
+    { id: 'adExpenseShare', label: '广告费占比', source: 'seller' },
+    { id: 'convViewToOrder', label: '浏览下单率', source: 'seller' },
+    { id: 'convToCartSearch', label: '搜索转换率', source: 'seller' },
+    { id: 'nullableRedemptionRate', label: '结单率', source: 'seller' },
+    { id: 'promoDays', label: '参与促销天数', source: 'seller' },
+    { id: 'promoDiscountPercent', label: '折扣', source: 'seller' },
+    { id: 'promoConversionRate', label: '促销转化率', source: 'seller' },
+    { id: 'paidPromotionDays', label: '付费推广天数', source: 'seller' },
+    { id: 'daysWithTrafarets', label: '模板活动天数', source: 'seller' },
+    { id: 'promoRevenueShare', label: '促销收入占比', source: 'seller' },
+    { id: 'productCardViews', label: '商品卡浏览量', source: 'seller' },
+    { id: 'productCardAddToCartRate', label: '商品卡加购率', source: 'seller' },
+    { id: 'searchCatalogViews', label: '搜索目录浏览量', source: 'seller' },
+    { id: 'searchCatalogAddToCartRate', label: '搜索目录加购率', source: 'seller' },
+    { id: 'showConversionRate', label: '展示转化率', source: 'seller' },
+    { id: 'salesSchema', label: '发货模式', source: 'seller' },
+    { id: 'createDate', label: '上架时间', source: 'seller' },
+    { id: 'dimensions', label: '长宽高', source: 'supplement' },
+    { id: 'weight', label: '重量', source: 'supplement' },
+    { id: 'sellerList', label: '跟卖列表', source: 'supplement' },
+    { id: 'minFollowPriceRub', label: '跟卖最低价', source: 'supplement' },
+    { id: 'maxFollowPriceRub', label: '跟卖最高价', source: 'supplement' },
+    { id: 'ptj', label: '价格指数', source: 'supplement' },
+    { id: 'productClickRate', label: '商品点击率', source: 'computed' },
+    { id: 'returnCancelRate', label: '退货取消率', source: 'computed' },
+    { id: 'commission', label: '佣金', source: 'computed' },
+    { id: 'rfbsCommission', label: 'rFBS佣金', source: 'computed' },
+    { id: 'fbpCommission', label: 'FBP佣金', source: 'computed' },
+  ];
+  const DISPLAY_FIELD_SOURCE_LABELS = {
+    seller: 'Ozon seller直出',
+    supplement: '接口补充',
+    computed: '规则/计算',
+  };
+  const SS_ERP_LIST_THEME = {
+    primary: '#ea580c',
+    primaryDark: '#9a3412',
+    primaryDarker: '#7c2d12',
+    primarySoft: '#fff7ed',
+    border: '#fed7aa',
+    borderStrong: '#fdba74',
+    blue: '#1e88e5',
+    surface: '#f8fafc',
+    surfaceAlt: '#f9fafb',
+    text: '#111827',
+    muted: '#64748b',
+    headerGradient: 'linear-gradient(135deg,#9a3412 0%,#ea580c 100%)',
+  };
+  const LIST_OVERLAY_STYLE_ID = 'ss-erp-list-overlay-style';
 
   // === 工具：缓存 ===
   const premiumCache = new Map();  // sku -> { data, ts }
@@ -43,6 +116,22 @@
   let overlayIdCounter = 0;
   let activeExpandedPanel = null;
   let expandedPanelListenersInstalled = false;
+  let productSelectionRulesCache = null;
+
+  function ensureListOverlayStyles() {
+    if (document.getElementById(LIST_OVERLAY_STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = LIST_OVERLAY_STYLE_ID;
+    style.textContent = [
+      '@keyframes ssErpModalIn{from{opacity:0;transform:translate(-50%,-48%) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}',
+      '@keyframes ssErpDockIn{from{opacity:0;transform:translate(8px,-50%) scale(.98)}to{opacity:1;transform:translate(0,-50%) scale(1)}}',
+      '@keyframes ssErpRowIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}',
+      `#${LIST_QUICK_ACTIONS_ID} button{transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .14s ease,box-shadow .14s ease;}`,
+      `#${LIST_QUICK_ACTIONS_ID} button:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(15,23,42,.14);}`,
+      `#${LIST_WORKBENCH_MODAL_ID} tbody tr{animation:ssErpRowIn .12s ease-out;}`,
+    ].join('\n');
+    document.documentElement.appendChild(style);
+  }
 
   function getCached(map, key, ttl) {
     const hit = map.get(key);
@@ -358,9 +447,21 @@
     }
     return null;
   }
+  function firstPresentValue(...values) {
+    for (const value of values) {
+      if (value != null && value !== '') return value;
+    }
+    return null;
+  }
   function pickSales(p) { const v = pickFirstFlat(p, ['soldCount', 'monthlySales', 'orderedUnits']); return v == null ? null : Number(v) || 0; }
-  function pickGmv(p) { const v = pickFlat(p, 'soldSum'); return v == null ? null : Math.round(Number(v)); }
-  function pickAddCart(p) { const v = pickFlat(p, 'convToCartPdp'); return v == null ? null : (Number(v) * 100).toFixed(1); }
+  function pickGmv(p) { const v = pickFirstFlat(p, ['soldSum', 'gmvSum', 'gmv']); return v == null ? null : Math.round(Number(v)); }
+  function normalizePercentMetric(value) {
+    if (value == null || value === '') return null;
+    const n = Number(String(value).replace('%', '').replace(',', '.'));
+    if (!Number.isFinite(n)) return null;
+    return n > 0 && n <= 1 ? n * 100 : n;
+  }
+  function pickAddCart(p) { const v = pickFlat(p, 'convToCartPdp'); const n = normalizePercentMetric(v); return n == null ? null : n.toFixed(1); }
   function pickViews(p) { const v = pickFlat(p, 'views'); return v == null ? null : Number(v); }
   function pickStock(p) { const v = pickFlat(p, 'stock'); return v == null ? null : Number(v); }
   function pickSeller(p) { return pickFlat(p, 'sellerName'); }
@@ -368,7 +469,7 @@
   function pickMinPrice(p) { const v = pickFlat(p, 'minSellerPrice'); return v == null ? null : Math.round(Number(v)); }
   function pickDeliveryDays(p) { return pickFlat(p, 'avgDeliveryDays'); }
   function pickSalesDynamics(p) { const v = pickFlat(p, 'salesDynamics'); return v == null ? null : Number(v).toFixed(1); }
-  function pickWeight(p) { return pickFirstFlat(p, ['weightGrams', 'grossWeightGrams', 'weightG', 'weight']); }
+  function pickWeight(p) { return pickFirstFlat(p, ['weightGrams', 'grossWeightGrams', 'weightG', 'pWeight', 'weight']); }
   function pickDims(p) {
     const dims = pickFlat(p, 'dimensionsMm');
     const l = pickFlat(p, 'lengthMm') || pickFlat(p, 'depth') || (dims && (dims.length || dims.depth));
@@ -377,10 +478,36 @@
     if (l == null && w == null && h == null) return null;
     return `${l || '?'}×${w || '?'}×${h || '?'}`;
   }
+  function pickRawCreateDate(p) {
+    return pickFirstFlat(p, ['nullableCreateDate', 'pCreateDate', 'createDate', 'createdAt', 'publishedAt']);
+  }
   function pickCreateDate(p) {
-    const v = pickFirstFlat(p, ['nullableCreateDate', 'createDate', 'createdAt', 'publishedAt']);
+    const v = pickRawCreateDate(p);
     return v ? formatDate(v) : null;
   }
+
+  function pickCategoryIds(p) {
+    const ids = [
+      pickFlat(p, 'category1Id'),
+      pickFlat(p, 'category2Id'),
+      pickFlat(p, 'category3Id'),
+      pickFlat(p, 'descriptionCategoryId'),
+      pickFlat(p, 'description_category_id'),
+    ].map((value) => String(value == null ? '' : value).trim()).filter(Boolean);
+    return Array.from(new Set(ids));
+  }
+
+  function formatCategoryDisplay(p) {
+    const path = pickFlat(p, 'categoryPath')
+      || pickFlat(p, 'category')
+      || [pickFlat(p, 'category1'), pickFlat(p, 'category3')].filter(Boolean).join(' / ');
+    const ids = pickCategoryIds(p);
+    const leafId = ids.length ? ids[ids.length - 1] : '';
+    if (path && leafId) return `#${leafId} · ${path}`;
+    if (path) return path;
+    return ids.length ? ids.join(' / ') : null;
+  }
+
   // === 工具：格式化 ===
   function formatNum(n) {
     if (n == null) return '--';
@@ -415,6 +542,569 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function trustedHtml(html) {
+    return { __ssErpTrustedHtml: true, html: String(html || '') };
+  }
+
+  function formatRub(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? `${formatNum(Math.round(number))} RUB` : '--';
+  }
+
+  function formatPercentValue(value) {
+    const number = normalizePercentMetric(value);
+    return number == null ? '--' : `${Math.round(number * 100) / 100}%`;
+  }
+
+  function asPlainObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+
+  function offerValue(offer, keys) {
+    const object = asPlainObject(offer);
+    for (const key of keys) {
+      const value = object[key];
+      if (value != null && value !== '') return value;
+    }
+    return null;
+  }
+
+  function sellerNameFromOffer(offer) {
+    if (typeof offer === 'string') return offer;
+    const object = asPlainObject(offer);
+    const seller = asPlainObject(object.seller);
+    return offerValue(object, ['sellerName', 'name', 'title'])
+      || offerValue(seller, ['name', 'title'])
+      || '';
+  }
+
+  function sellerLogoFromOffer(offer) {
+    const object = asPlainObject(offer);
+    const seller = asPlainObject(object.seller);
+    return offerValue(object, ['logoImageUrl', 'logo', 'image'])
+      || offerValue(seller, ['logoImageUrl', 'logo', 'image'])
+      || '';
+  }
+
+  function sellerPriceFromOffer(offer) {
+    const object = asPlainObject(offer);
+    const price = object.price;
+    if (typeof price === 'string' || typeof price === 'number') return String(price);
+    const priceObject = asPlainObject(price);
+    const cardPrice = asPlainObject(priceObject.cardPrice);
+    return offerValue(cardPrice, ['price', 'value'])
+      || offerValue(priceObject, ['price', 'value', 'text'])
+      || offerValue(object, ['priceText', 'displayPrice', 'currentPrice'])
+      || '';
+  }
+
+  function sellerUrlFromOffer(offer) {
+    const object = asPlainObject(offer);
+    const seller = asPlainObject(object.seller);
+    const raw = offerValue(object, ['url', 'link', 'sellerUrl'])
+      || offerValue(seller, ['url', 'link', 'sellerUrl'])
+      || '';
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(String(raw))) return String(raw);
+    if (String(raw).startsWith('/')) return 'https://www.ozon.ru' + raw;
+    return '';
+  }
+
+  function normalizeSellerRows(p) {
+    const rawOffers = pickFlat(p, 'sellerOffers') || pickFlat(p, 'offers') || [];
+    const sellerNames = pickFlat(p, 'sellerNames') || [];
+    const rows = [];
+    (Array.isArray(rawOffers) ? rawOffers : []).forEach((offer) => {
+      const name = sellerNameFromOffer(offer);
+      if (!name) return;
+      rows.push({
+        name,
+        logo: sellerLogoFromOffer(offer),
+        price: sellerPriceFromOffer(offer),
+        url: sellerUrlFromOffer(offer),
+      });
+    });
+    (Array.isArray(sellerNames) ? sellerNames : []).forEach((name) => {
+      const text = String(name || '').trim();
+      if (text && !rows.some((row) => row.name === text)) rows.push({ name: text, logo: '', price: '', url: '' });
+    });
+    return rows;
+  }
+
+  function formatSellerListTrigger(sku, p) {
+    const rows = normalizeSellerRows(p);
+    const count = Number(pickFlat(p, 'sellerCount')) || rows.length || 0;
+    const rawText = pickFlat(p, 'sellerListText') || pickSeller(p) || '';
+    const text = rawText || (rows.length ? `${rows[0].name}${count > 1 ? ` 等${count}个卖家` : ''}` : '');
+    if (!text) return { value: '--', locked: true };
+    return {
+      value: trustedHtml(`<button type="button" data-role="open-seller-list" data-sku="${escapeHtml(sku)}" style="border:0;background:transparent;color:#2563eb;font:inherit;font-weight:700;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(text)}</button>`),
+      locked: false,
+    };
+  }
+
+  function readSelectedDisplayFieldIds() {
+    try {
+      const raw = localStorage.getItem(DISPLAY_FIELDS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) {
+        const allowed = new Set(DISPLAY_FIELD_DEFS.map((field) => field.id));
+        const selected = parsed.map((id) => String(id || '')).filter((id) => allowed.has(id));
+        if (selected.length) return selected;
+      }
+    } catch (e) {}
+    return DEFAULT_DISPLAY_FIELD_IDS.slice();
+  }
+
+  function writeSelectedDisplayFieldIds(ids) {
+    const allowed = new Set(DISPLAY_FIELD_DEFS.map((field) => field.id));
+    const selected = (Array.isArray(ids) ? ids : []).map((id) => String(id || '')).filter((id) => allowed.has(id));
+    try {
+      localStorage.setItem(DISPLAY_FIELDS_STORAGE_KEY, JSON.stringify(selected.length ? selected : DEFAULT_DISPLAY_FIELD_IDS));
+    } catch (e) {}
+  }
+
+  function toFiniteNumber(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const normalized = String(value)
+      .replace('%', '')
+      .replace(/[^\d,.-]/g, '')
+      .replace(',', '.')
+      .trim();
+    if (!normalized) return null;
+    const number = Number(normalized);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function normalizeRuleNumber(value) {
+    const number = toFiniteNumber(value);
+    return number == null ? null : number;
+  }
+
+  function normalizeRuleBoolean(value) {
+    if (value === true || value === false) return value;
+    const text = String(value == null ? '' : value).trim().toLowerCase();
+    if (!text) return null;
+    if (text === 'true' || text === '1' || text === 'yes') return true;
+    if (text === 'false' || text === '0' || text === 'no') return false;
+    return null;
+  }
+
+  function normalizeSelectionRuleColor(value) {
+    const color = String(value || '').trim();
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : '#2563eb';
+  }
+
+  function normalizeProductSelectionRule(rule, index) {
+    const item = asPlainObject(rule);
+    const conditions = asPlainObject(item.conditions);
+    const ruleValue = (key) => firstPresentValue(item[key], conditions[key]);
+    const name = String(item.name || item.title || `选品规则 ${index + 1}`).trim();
+    return {
+      id: String(item.id || `local-${Date.now()}-${index}`),
+      name: name || `选品规则 ${index + 1}`,
+      enabled: item.enabled !== false && item.disabled !== true,
+      tag: String(item.tag || name || '命中').trim() || '命中',
+      color: normalizeSelectionRuleColor(item.color),
+      autoFavorite: normalizeRuleBoolean(firstPresentValue(item.autoFavorite, item.auto_favorite, conditions.autoFavorite, conditions.auto_favorite)) === true,
+      priority: normalizeRuleNumber(firstPresentValue(ruleValue('priority'), ruleValue('sort'), item.priority, item.sort)) || 0,
+      createdAt: firstPresentValue(item.createdAt, item.created_at, conditions.createdAt),
+      updatedAt: firstPresentValue(item.updatedAt, item.updated_at, conditions.updatedAt),
+      minSoldCount: normalizeRuleNumber(ruleValue('minSoldCount')),
+      minSoldSum: normalizeRuleNumber(ruleValue('minSoldSum')),
+      minPriceRub: normalizeRuleNumber(ruleValue('minPriceRub')),
+      maxPriceRub: normalizeRuleNumber(ruleValue('maxPriceRub')),
+      minSalesDynamics: normalizeRuleNumber(ruleValue('minSalesDynamics')),
+      maxSalesDynamics: normalizeRuleNumber(ruleValue('maxSalesDynamics')),
+      maxAdExpenseShare: normalizeRuleNumber(ruleValue('maxAdExpenseShare')),
+      maxReturnCancelRate: normalizeRuleNumber(ruleValue('maxReturnCancelRate')),
+      minProfitMarginPct: normalizeRuleNumber(ruleValue('minProfitMarginPct')),
+      maxSellerCount: normalizeRuleNumber(ruleValue('maxSellerCount')),
+      minSearchCatalogViews: normalizeRuleNumber(ruleValue('minSearchCatalogViews')),
+      minSearchCatalogAddToCartRate: normalizeRuleNumber(ruleValue('minSearchCatalogAddToCartRate')),
+      maxWeightGrams: normalizeRuleNumber(ruleValue('maxWeightGrams')),
+      minCreateDays: normalizeRuleNumber(ruleValue('minCreateDays')),
+      maxCreateDays: normalizeRuleNumber(ruleValue('maxCreateDays')),
+      minPromoDays: normalizeRuleNumber(ruleValue('minPromoDays')),
+      maxPromoDays: normalizeRuleNumber(ruleValue('maxPromoDays')),
+      minDiscountPercent: normalizeRuleNumber(ruleValue('minDiscountPercent')),
+      maxDiscountPercent: normalizeRuleNumber(ruleValue('maxDiscountPercent')),
+      minPromoRevenueShare: normalizeRuleNumber(ruleValue('minPromoRevenueShare')),
+      maxPromoRevenueShare: normalizeRuleNumber(ruleValue('maxPromoRevenueShare')),
+      minPaidPromotionDays: normalizeRuleNumber(ruleValue('minPaidPromotionDays')),
+      maxPaidPromotionDays: normalizeRuleNumber(ruleValue('maxPaidPromotionDays')),
+      minProductCardViews: normalizeRuleNumber(ruleValue('minProductCardViews')),
+      minProductCardAddToCartRate: normalizeRuleNumber(ruleValue('minProductCardAddToCartRate')),
+      minConvViewToOrder: normalizeRuleNumber(ruleValue('minConvViewToOrder')),
+      maxFollowMinPriceRub: normalizeRuleNumber(ruleValue('maxFollowMinPriceRub')),
+      salesSchema: String(ruleValue('salesSchema') || '').trim(),
+      brandContains: String(ruleValue('brandContains') || '').trim(),
+      hasBrand: normalizeRuleBoolean(ruleValue('hasBrand')),
+    };
+  }
+
+  function getProductSelectionRuleListSource(parsed) {
+    if (Array.isArray(parsed)) return parsed;
+    if (!parsed || typeof parsed !== 'object') return [];
+    if (Array.isArray(parsed.enabledRules)) return parsed.enabledRules;
+    if (Array.isArray(parsed.rules)) return parsed.rules;
+    if (Array.isArray(parsed.list)) return parsed.list;
+    if (Array.isArray(parsed.data)) return parsed.data;
+    return [];
+  }
+
+  function sortProductSelectionRulesByPriority(rules) {
+    return (Array.isArray(rules) ? rules : []).slice().sort((left, right) => {
+      const leftPriority = normalizeRuleNumber(left && left.priority) || 0;
+      const rightPriority = normalizeRuleNumber(right && right.priority) || 0;
+      return rightPriority - leftPriority;
+    });
+  }
+
+  function normalizeProductSelectionRuleList(rules) {
+    const normalized = (Array.isArray(rules) ? rules : [])
+      .map((rule, index) => normalizeProductSelectionRule(rule, index))
+      .filter((rule) => rule.name || rule.tag);
+    return sortProductSelectionRulesByPriority(normalized);
+  }
+
+  function readProductSelectionRulesFromLocalStorage() {
+    try {
+      const raw = localStorage.getItem(PRODUCT_SELECTION_RULES_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return normalizeProductSelectionRuleList(getProductSelectionRuleListSource(parsed));
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function readProductSelectionRules() {
+    if (Array.isArray(productSelectionRulesCache)) return productSelectionRulesCache.slice();
+    return readProductSelectionRulesFromLocalStorage();
+  }
+
+  function buildProductSelectionRulesSnapshot(rules) {
+    const normalized = normalizeProductSelectionRuleList(rules);
+    const enabledRules = normalized.filter((rule) => rule.enabled);
+    return {
+      enabledRuleIds: enabledRules.map((rule) => rule.id),
+      enabledRules,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  function persistProductSelectionRulesSnapshot(rules) {
+    const normalized = normalizeProductSelectionRuleList(rules);
+    productSelectionRulesCache = normalized;
+    const snapshot = buildProductSelectionRulesSnapshot(normalized);
+    try {
+      localStorage.setItem(PRODUCT_SELECTION_RULES_STORAGE_KEY, JSON.stringify(normalized));
+    } catch (e) {}
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({
+          [PRODUCT_SELECTION_RULES_STORAGE_KEY]: normalized,
+          [PRODUCT_SELECTION_RULES_CHROME_STORAGE_KEY]: snapshot,
+        });
+      }
+    } catch (e) {}
+    return normalized;
+  }
+
+  function writeProductSelectionRules(rules) {
+    return persistProductSelectionRulesSnapshot(rules);
+  }
+
+  function hydrateProductSelectionRulesFromStorage() {
+    try {
+      if (!chrome || !chrome.storage || !chrome.storage.local) return Promise.resolve(readProductSelectionRules());
+      return new Promise((resolve) => {
+        chrome.storage.local.get([PRODUCT_SELECTION_RULES_STORAGE_KEY, PRODUCT_SELECTION_RULES_CHROME_STORAGE_KEY], (result) => {
+          const storedRules = getProductSelectionRuleListSource(result && result[PRODUCT_SELECTION_RULES_STORAGE_KEY]);
+          const snapshotRules = getProductSelectionRuleListSource(result && result[PRODUCT_SELECTION_RULES_CHROME_STORAGE_KEY]);
+          const normalized = normalizeProductSelectionRuleList(storedRules.length ? storedRules : snapshotRules);
+          if (normalized.length) {
+            productSelectionRulesCache = normalized;
+            try { localStorage.setItem(PRODUCT_SELECTION_RULES_STORAGE_KEY, JSON.stringify(normalized)); } catch (e) {}
+            rerenderAllListMetrics();
+          }
+          resolve(normalized);
+        });
+      });
+    } catch (e) {
+      return Promise.resolve(readProductSelectionRules());
+    }
+  }
+
+  async function syncProductSelectionRulesFromCloud() {
+    const response = await send({ type: 'spb-self-hosted:list-product-selection-rules' }, 12000);
+    if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '选品规则同步失败');
+    const rules = response.data && Array.isArray(response.data.rules) ? response.data.rules : [];
+    return persistProductSelectionRulesSnapshot(rules);
+  }
+
+  async function saveProductSelectionRulesToCloud(rules) {
+    const saved = [];
+    for (const rule of normalizeProductSelectionRuleList(rules)) {
+      const response = await send({ type: 'spb-self-hosted:save-product-selection-rule', rule }, 12000);
+      if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '选品规则保存失败');
+      if (response.data && response.data.rule) saved.push(response.data.rule);
+      else saved.push(rule);
+    }
+    return persistProductSelectionRulesSnapshot(saved);
+  }
+
+  async function deleteProductSelectionRuleFromCloud(ruleId) {
+    const id = String(ruleId || '').trim();
+    if (!id || id.startsWith('local-')) return { ok: true };
+    return await send({ type: 'spb-self-hosted:delete-product-selection-rule', ruleId: id }, 12000);
+  }
+
+  function getSelectionMetric(row, keys, percent) {
+    const source = row || {};
+    for (const key of keys) {
+      const value = firstPresentValue(source[key], pickFlat(source, key));
+      const number = percent ? normalizePercentMetric(value) : toFiniteNumber(value);
+      if (number != null) return number;
+    }
+    return null;
+  }
+
+  function deriveSelectionReturnCancelRate(row) {
+    const direct = getSelectionMetric(row, ['returnCancelRate', 'cancelReturnRate', 'returnRate', 'cancelRate'], true);
+    if (direct != null) return direct;
+    const redemption = getSelectionMetric(row, ['nullableRedemptionRate', 'redemptionRate', 'redemption_rate'], true);
+    return redemption == null ? null : Math.max(0, Math.round((100 - redemption) * 100) / 100);
+  }
+
+  function deriveSelectionCreateDays(row) {
+    const direct = getSelectionMetric(row, ['createDays', 'daysSinceCreate'], false);
+    if (direct != null) return direct;
+    const rawDate = firstPresentValue(
+      row && row.nullableCreateDate,
+      row && row.pCreateDate,
+      row && row.createDate,
+      row && row.createdAt,
+      row && row.publishedAt,
+      pickRawCreateDate(row),
+    );
+    if (!rawDate) return null;
+    const createdAt = Date.parse(rawDate);
+    if (!Number.isFinite(createdAt)) return null;
+    return Math.max(0, Math.floor((Date.now() - createdAt) / 86400000));
+  }
+
+  function ruleNumberPass(actual, limit, direction) {
+    if (limit == null) return true;
+    if (actual == null) return false;
+    return direction === 'max' ? actual <= limit : actual >= limit;
+  }
+
+  function matchProductSelectionRules(row) {
+    const rules = readProductSelectionRules().filter((rule) => rule.enabled);
+    if (!rules.length) return [];
+    const source = row || {};
+    const metrics = {
+      soldCount: getSelectionMetric(source, ['soldCount', 'monthlySales', 'orderedUnits'], false),
+      soldSum: getSelectionMetric(source, ['soldSum', 'gmvSum', 'gmv'], false),
+      priceRub: getSelectionMetric(source, ['priceRub', 'pagePrice', 'avgPrice', 'price'], false),
+      salesDynamics: getSelectionMetric(source, ['salesDynamics'], true),
+      adExpenseShare: getSelectionMetric(source, ['adExpenseShare', 'drr'], true),
+      returnCancelRate: deriveSelectionReturnCancelRate(source),
+      profitMarginPct: getSelectionMetric(source, ['profitMarginPct', 'profitRate'], true),
+      sellerCount: getSelectionMetric(source, ['sellerCount', 'followSellerCount'], false),
+      followMinPriceRub: getSelectionMetric(source, ['minFollowPriceRub', 'followMinPriceRub', 'follow_min_price', 'followMinPrice'], false),
+      searchCatalogViews: getSelectionMetric(source, ['searchCatalogViews', 'sessionCountSearch'], false),
+      searchCatalogAddToCartRate: getSelectionMetric(source, ['searchCatalogAddToCartRate', 'convToCartSearch'], true),
+      weightGrams: getSelectionMetric(source, ['weightGrams', 'grossWeightGrams', 'weightG', 'weight'], false),
+      createDays: deriveSelectionCreateDays(source),
+      promoDays: getSelectionMetric(source, ['promoDays', 'daysInPromo'], false),
+      discountPercent: getSelectionMetric(source, ['promoDiscountPercent', 'discount'], true),
+      promoRevenueShare: getSelectionMetric(source, ['promoRevenueShare', 'promoConversionRate'], true),
+      paidPromotionDays: getSelectionMetric(source, ['paidPromotionDays', 'daysWithTrafarets'], false),
+      productCardViews: getSelectionMetric(source, ['productCardViews', 'qtyViewPdp'], false),
+      productCardAddToCartRate: getSelectionMetric(source, ['productCardAddToCartRate', 'convToCartPdp', 'pdpToCartConversion'], true),
+      convViewToOrder: getSelectionMetric(source, ['convViewToOrder', 'showConversionRate'], true),
+    };
+    const brand = String(firstPresentValue(source.brand, pickFlat(source, 'brand'), '') || '').toLowerCase();
+    const salesSchema = String(firstPresentValue(source.salesSchema, pickFlat(source, 'salesSchema'), '') || '').toLowerCase();
+
+    return rules.filter((rule) => {
+      if (!ruleNumberPass(metrics.soldCount, rule.minSoldCount, 'min')) return false;
+      if (!ruleNumberPass(metrics.soldSum, rule.minSoldSum, 'min')) return false;
+      if (!ruleNumberPass(metrics.priceRub, rule.minPriceRub, 'min')) return false;
+      if (!ruleNumberPass(metrics.priceRub, rule.maxPriceRub, 'max')) return false;
+      if (!ruleNumberPass(metrics.salesDynamics, rule.minSalesDynamics, 'min')) return false;
+      if (!ruleNumberPass(metrics.salesDynamics, rule.maxSalesDynamics, 'max')) return false;
+      if (!ruleNumberPass(metrics.adExpenseShare, rule.maxAdExpenseShare, 'max')) return false;
+      if (!ruleNumberPass(metrics.returnCancelRate, rule.maxReturnCancelRate, 'max')) return false;
+      if (!ruleNumberPass(metrics.profitMarginPct, rule.minProfitMarginPct, 'min')) return false;
+      if (!ruleNumberPass(metrics.sellerCount, rule.maxSellerCount, 'max')) return false;
+      if (!ruleNumberPass(metrics.followMinPriceRub, rule.maxFollowMinPriceRub, 'max')) return false;
+      if (!ruleNumberPass(metrics.searchCatalogViews, rule.minSearchCatalogViews, 'min')) return false;
+      if (!ruleNumberPass(metrics.searchCatalogAddToCartRate, rule.minSearchCatalogAddToCartRate, 'min')) return false;
+      if (!ruleNumberPass(metrics.weightGrams, rule.maxWeightGrams, 'max')) return false;
+      if (!ruleNumberPass(metrics.createDays, rule.minCreateDays, 'min')) return false;
+      if (!ruleNumberPass(metrics.createDays, rule.maxCreateDays, 'max')) return false;
+      if (!ruleNumberPass(metrics.promoDays, rule.minPromoDays, 'min')) return false;
+      if (!ruleNumberPass(metrics.promoDays, rule.maxPromoDays, 'max')) return false;
+      if (!ruleNumberPass(metrics.discountPercent, rule.minDiscountPercent, 'min')) return false;
+      if (!ruleNumberPass(metrics.discountPercent, rule.maxDiscountPercent, 'max')) return false;
+      if (!ruleNumberPass(metrics.promoRevenueShare, rule.minPromoRevenueShare, 'min')) return false;
+      if (!ruleNumberPass(metrics.promoRevenueShare, rule.maxPromoRevenueShare, 'max')) return false;
+      if (!ruleNumberPass(metrics.paidPromotionDays, rule.minPaidPromotionDays, 'min')) return false;
+      if (!ruleNumberPass(metrics.paidPromotionDays, rule.maxPaidPromotionDays, 'max')) return false;
+      if (!ruleNumberPass(metrics.productCardViews, rule.minProductCardViews, 'min')) return false;
+      if (!ruleNumberPass(metrics.productCardAddToCartRate, rule.minProductCardAddToCartRate, 'min')) return false;
+      if (!ruleNumberPass(metrics.convViewToOrder, rule.minConvViewToOrder, 'min')) return false;
+      if (rule.salesSchema && !salesSchema.includes(rule.salesSchema.toLowerCase())) return false;
+      if (rule.brandContains && !brand.includes(rule.brandContains.toLowerCase())) return false;
+      if (rule.hasBrand === true && !brand) return false;
+      if (rule.hasBrand === false && brand) return false;
+      return true;
+    }).map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      tag: rule.tag || rule.name,
+      color: rule.color,
+      autoFavorite: rule.autoFavorite === true,
+    }));
+  }
+
+  function buildSelectionMetricRow(sku, dom, row) {
+    const p = row || {};
+    const cardDom = dom || {};
+    return Object.assign({}, cardDom, p, {
+      sku,
+      priceRub: firstPresentValue(p.priceRub, p.pagePrice, p.avgPrice, cardDom.price),
+      soldCount: firstPresentValue(p.soldCount, p.monthlySales, pickSales(p)),
+      soldSum: firstPresentValue(p.soldSum, p.gmvSum, pickGmv(p)),
+      salesDynamics: firstPresentValue(p.salesDynamics),
+      adExpenseShare: firstPresentValue(p.adExpenseShare, p.drr),
+      returnCancelRate: deriveSelectionReturnCancelRate(p),
+      sellerCount: firstPresentValue(p.sellerCount, p.followSellerCount),
+      minFollowPriceRub: firstPresentValue(p.minFollowPriceRub, p.followMinPriceRub, p.follow_min_price),
+      searchCatalogViews: firstPresentValue(p.searchCatalogViews, p.sessionCountSearch),
+      searchCatalogAddToCartRate: firstPresentValue(p.searchCatalogAddToCartRate, p.convToCartSearch),
+      weightGrams: firstPresentValue(p.weightGrams, p.grossWeightGrams, pickWeight(p)),
+      createDays: firstPresentValue(p.createDays, deriveSelectionCreateDays(p)),
+      nullableCreateDate: firstPresentValue(p.nullableCreateDate, p.pCreateDate, p.createDate, pickRawCreateDate(p)),
+      promoDays: firstPresentValue(p.promoDays, p.daysInPromo),
+      discountPercent: firstPresentValue(p.promoDiscountPercent, p.discount),
+      promoRevenueShare: firstPresentValue(p.promoRevenueShare, p.promoConversionRate),
+      paidPromotionDays: firstPresentValue(p.paidPromotionDays, p.daysWithTrafarets),
+      productCardViews: firstPresentValue(p.productCardViews, p.qtyViewPdp),
+      productCardAddToCartRate: firstPresentValue(p.productCardAddToCartRate, p.convToCartPdp, p.pdpToCartConversion),
+      convViewToOrder: firstPresentValue(p.convViewToOrder, p.showConversionRate),
+      brand: firstPresentValue(p.brand, cardDom.brand),
+      salesSchema: firstPresentValue(p.salesSchema, cardDom.salesSchema),
+    });
+  }
+
+  function renderProductSelectionTags(wrap, matches) {
+    const tags = wrap.querySelector('.ss-erp-selection-tags');
+    const matched = Array.isArray(matches) && matches.length > 0;
+    wrap.setAttribute('data-ss-erp-selection-matched', matched ? '1' : '0');
+    wrap.dataset.ssErpSelectionMatched = matched ? '1' : '0';
+    wrap.style.borderColor = matched ? '#93c5fd' : '#fdba74';
+    wrap.style.background = matched ? 'linear-gradient(135deg,#eff6ff,#fff7ed)' : 'linear-gradient(135deg,#fff7ed,#ffedd5)';
+    if (!tags) return;
+    if (!matched) {
+      tags.style.display = 'none';
+      tags.innerHTML = '';
+      return;
+    }
+    tags.style.display = 'flex';
+    tags.innerHTML = matches.slice(0, 3).map((rule) => {
+      const color = normalizeSelectionRuleColor(rule.color);
+      return `<span title="${escapeHtml(rule.name)}" style="max-width:100%;border:1px solid ${color};background:#fff;color:${color};border-radius:3px;padding:2px 5px;font-size:10px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
+    }).join('');
+  }
+
+  function getDisplayFieldValue(fieldId, sku, dom, p) {
+    const lockedPremium = (value) => ({ value: value == null || value === '' ? '--' : value, locked: value == null || value === '' });
+    switch (fieldId) {
+      case 'sku':
+        return { value: sku, locked: false };
+      case 'category':
+        return lockedPremium(formatCategoryDisplay(p));
+      case 'brand':
+        return lockedPremium(pickFlat(p, 'brand'));
+      case 'soldCount':
+        return { value: pickSales(p) == null ? 'Premium' : formatNum(pickSales(p)), locked: pickSales(p) == null };
+      case 'soldSum':
+        return { value: pickGmv(p) == null ? 'Premium' : formatRub(pickGmv(p)), locked: pickGmv(p) == null };
+      case 'salesDynamics':
+        return { value: pickSalesDynamics(p) == null ? '--' : `${pickSalesDynamics(p)}%`, locked: pickSalesDynamics(p) == null };
+      case 'adExpenseShare':
+        return { value: formatPercentValue(pickFlat(p, 'adExpenseShare')), locked: pickFlat(p, 'adExpenseShare') == null };
+      case 'convViewToOrder':
+        return { value: formatPercentValue(pickFlat(p, 'convViewToOrder')), locked: pickFlat(p, 'convViewToOrder') == null };
+      case 'convToCartSearch':
+        return { value: formatPercentValue(pickFlat(p, 'convToCartSearch')), locked: pickFlat(p, 'convToCartSearch') == null };
+      case 'nullableRedemptionRate':
+        return { value: formatPercentValue(pickFlat(p, 'nullableRedemptionRate')), locked: pickFlat(p, 'nullableRedemptionRate') == null };
+      case 'promoDays':
+        return { value: pickFlat(p, 'promoDays') == null ? '--' : formatNum(pickFlat(p, 'promoDays')), locked: pickFlat(p, 'promoDays') == null };
+      case 'promoDiscountPercent':
+        return { value: formatPercentValue(pickFlat(p, 'promoDiscountPercent')), locked: pickFlat(p, 'promoDiscountPercent') == null };
+      case 'promoConversionRate':
+        return { value: formatPercentValue(pickFlat(p, 'promoConversionRate')), locked: pickFlat(p, 'promoConversionRate') == null };
+      case 'paidPromotionDays':
+        return { value: pickFlat(p, 'paidPromotionDays') == null ? '--' : formatNum(pickFlat(p, 'paidPromotionDays')), locked: pickFlat(p, 'paidPromotionDays') == null };
+      case 'daysWithTrafarets':
+        return { value: pickFlat(p, 'daysWithTrafarets') == null ? '--' : formatNum(pickFlat(p, 'daysWithTrafarets')), locked: pickFlat(p, 'daysWithTrafarets') == null };
+      case 'promoRevenueShare':
+        return { value: formatPercentValue(pickFlat(p, 'promoRevenueShare')), locked: pickFlat(p, 'promoRevenueShare') == null };
+      case 'productCardViews':
+        return { value: pickFlat(p, 'productCardViews') == null ? 'Premium' : formatNum(pickFlat(p, 'productCardViews')), locked: pickFlat(p, 'productCardViews') == null };
+      case 'productCardAddToCartRate':
+        return { value: formatPercentValue(firstPresentValue(pickFlat(p, 'productCardAddToCartRate'), pickFlat(p, 'convToCartPdp'))), locked: firstPresentValue(pickFlat(p, 'productCardAddToCartRate'), pickFlat(p, 'convToCartPdp')) == null };
+      case 'searchCatalogViews':
+        return { value: pickFlat(p, 'searchCatalogViews') == null ? 'Premium' : formatNum(pickFlat(p, 'searchCatalogViews')), locked: pickFlat(p, 'searchCatalogViews') == null };
+      case 'searchCatalogAddToCartRate':
+        return { value: formatPercentValue(pickFlat(p, 'searchCatalogAddToCartRate')), locked: pickFlat(p, 'searchCatalogAddToCartRate') == null };
+      case 'showConversionRate':
+        return { value: formatPercentValue(pickFlat(p, 'showConversionRate')), locked: pickFlat(p, 'showConversionRate') == null };
+      case 'productClickRate':
+        return { value: formatPercentValue(firstPresentValue(pickFlat(p, 'productClickRate'), pickFlat(p, 'clickThroughRate'))), locked: firstPresentValue(pickFlat(p, 'productClickRate'), pickFlat(p, 'clickThroughRate')) == null };
+      case 'salesSchema':
+        return lockedPremium(pickFlat(p, 'salesSchema'));
+      case 'returnCancelRate':
+        return { value: formatPercentValue(pickFlat(p, 'returnCancelRate')), locked: pickFlat(p, 'returnCancelRate') == null };
+      case 'dimensions':
+        return { value: pickDims(p) || '--', locked: !pickDims(p) };
+      case 'weight':
+        return { value: pickWeight(p) == null ? '--' : `${formatNum(pickWeight(p))}g`, locked: pickWeight(p) == null };
+      case 'createDate':
+        return { value: pickCreateDate(p) || '--', locked: !pickCreateDate(p) };
+      case 'sellerList':
+        return formatSellerListTrigger(sku, p);
+      case 'minFollowPriceRub':
+        return { value: pickFlat(p, 'minFollowPriceRub') == null ? (pickMinPrice(p) == null ? '--' : formatRub(pickMinPrice(p))) : formatRub(pickFlat(p, 'minFollowPriceRub')), locked: pickFlat(p, 'minFollowPriceRub') == null && pickMinPrice(p) == null };
+      case 'maxFollowPriceRub':
+        return { value: pickFlat(p, 'maxFollowPriceRub') == null ? '--' : formatRub(pickFlat(p, 'maxFollowPriceRub')), locked: pickFlat(p, 'maxFollowPriceRub') == null };
+      case 'commission':
+        return { value: formatPercentValue(firstPresentValue(pickFlat(p, 'commissionRate'), pickFlat(p, 'commission'))), locked: firstPresentValue(pickFlat(p, 'commissionRate'), pickFlat(p, 'commission')) == null };
+      case 'ptj':
+        return lockedPremium(pickFlat(p, 'ptj'));
+      case 'rfbsCommission':
+        return { value: formatPercentValue(firstPresentValue(pickFlat(p, 'rfbsCommission'), pickFlat(p, 'commissionRfbs'))), locked: firstPresentValue(pickFlat(p, 'rfbsCommission'), pickFlat(p, 'commissionRfbs')) == null };
+      case 'fbpCommission':
+        return { value: formatPercentValue(firstPresentValue(pickFlat(p, 'fbpCommission'), pickFlat(p, 'commissionFbp'))), locked: firstPresentValue(pickFlat(p, 'fbpCommission'), pickFlat(p, 'commissionFbp')) == null };
+      default:
+        return { value: '--', locked: true };
+    }
+  }
+
+  function rerenderAllListMetrics() {
+    document.querySelectorAll(`.${CARD_CLASS}`).forEach((wrap) => {
+      const sku = wrap.getAttribute('data-ss-erp-sku') || '';
+      renderMetrics(wrap, sku, wrap.__ssErpDom || {}, wrap.__ssErpPremium || null);
+    });
   }
 
   function isShelfCard(card) {
@@ -486,6 +1176,7 @@
       '  <span style="font-weight:700;color:#c2410c;font-size:13px">SS ERP</span>',
       '  <span class="ss-erp-status-pill" style="display:none">加载中…</span>',
       '</div>',
+      '<div class="ss-erp-selection-tags" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;margin:-2px 0 7px 0;min-height:0;"></div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
       '<div class="ss-erp-actions" style="display:flex;gap:6px">',
       '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
@@ -640,6 +1331,10 @@
   function renderMetrics(wrap, sku, dom, premium) {
     const grid = wrap.querySelector('.ss-erp-metrics');
     const pill = wrap.querySelector('.ss-erp-status-pill');
+    wrap.__ssErpDom = dom || {};
+    wrap.__ssErpPremium = premium || null;
+    const matchedRules = matchProductSelectionRules(buildSelectionMetricRow(sku, dom || {}, premium || {}));
+    renderProductSelectionTags(wrap, matchedRules);
 
     // 数据源徽章（替代原本的 ERP 状态徽章——不再依赖 ERP 检测）
     const sources = (premium && premium._sources) ? premium._sources : [];
@@ -665,18 +1360,22 @@
       pill.style.borderColor = '#cbd5e1';
     }
 
-    // 紧凑版字段（按用户要求：上架日期/30天销量/评论数/重量）
-    const createDate = pickCreateDate(premium);
-    const sales30d = pickSales(premium);
-    const reviews = dom.reviews;
-    const weight = pickWeight(premium);
-
-    grid.innerHTML = [
-      metricCell('上架日期', createDate || '--', !createDate),
-      metricCell('30天销量', sales30d == null ? '🔒' : formatNum(sales30d), sales30d == null),
-      metricCell('评论数', reviews != null ? formatNum(reviews) : '--', reviews == null),
-      metricCell('重量', weight == null ? '--' : weight + 'g', weight == null),
-    ].join('');
+    const selectedFields = readSelectedDisplayFieldIds();
+    grid.innerHTML = selectedFields
+      .map((fieldId) => {
+        const field = DISPLAY_FIELD_DEFS.find((item) => item.id === fieldId);
+        if (!field) return '';
+        const result = getDisplayFieldValue(fieldId, sku, dom || {}, premium);
+        return metricCell(field.label, result.value, result.locked);
+      })
+      .join('');
+    grid.querySelectorAll('[data-role="open-seller-list"]').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showSellerListModal(button.getAttribute('data-sku') || sku, premium);
+      });
+    });
 
     const expanded = getExpandedPanel(wrap);
     if (expanded && (expanded.style.display !== 'none' || expanded.getAttribute('data-rendered') === '1')) {
@@ -687,12 +1386,91 @@
   }
 
   function metricCell(label, value, locked) {
+    const valueHtml = value && typeof value === 'object' && value.__ssErpTrustedHtml
+      ? value.html
+      : escapeHtml(value);
     return [
       '<div style="background:#fff;border:1px solid #fed7aa;border-radius:6px;padding:5px 8px;display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden">',
       `  <span style="color:#a16207;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>`,
-      `  <span style="color:${locked ? '#cbd5e1' : '#0f172a'};font-weight:600;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(value)}</span>`,
+      `  <span style="color:${locked ? '#cbd5e1' : '#0f172a'};font-weight:600;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${valueHtml}</span>`,
       '</div>',
     ].join('');
+  }
+
+  function showSellerListModal(sku, premium) {
+    const rows = normalizeSellerRows(premium);
+    const old = document.getElementById('ss-erp-seller-list-modal');
+    if (old) old.remove();
+    const rowPrices = rows
+      .map((row) => parsePrice(row.price))
+      .filter((value) => value != null);
+    const sellerCount = Number(pickFlat(premium, 'sellerCount')) || rows.length || 0;
+    const minPrice = firstPresentValue(
+      pickFlat(premium, 'minFollowPriceRub'),
+      pickFlat(premium, 'minSellerPrice'),
+      pickFlat(premium, 'followMinPriceRub'),
+      rowPrices.length ? Math.min(...rowPrices) : null,
+    );
+    const maxPrice = firstPresentValue(
+      pickFlat(premium, 'maxFollowPriceRub'),
+      pickFlat(premium, 'maxSellerPrice'),
+      pickFlat(premium, 'followMaxPriceRub'),
+      rowPrices.length ? Math.max(...rowPrices) : null,
+    );
+    const modal = document.createElement('div');
+    modal.id = 'ss-erp-seller-list-modal';
+    modal.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'z-index:2147483647',
+      'background:rgba(15,23,42,0.28)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'color:#111827',
+    ].join(';');
+    const sellerText = pickFlat(premium, 'sellerListText') || '';
+    modal.innerHTML = [
+      '<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(680px,calc(100vw - 32px));max-height:min(640px,calc(100vh - 32px));background:#fff;border:1px solid #d1d5db;border-radius:6px;box-shadow:0 18px 48px rgba(15,23,42,0.24);display:flex;flex-direction:column;overflow:hidden;">',
+      `  <div style="height:50px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
+      `    <div style="min-width:0;"><div style="font-size:15px;font-weight:800;">SS ERP 跟卖列表</div><div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">SKU ${escapeHtml(sku)}</div></div>`,
+      '    <button type="button" data-role="close-seller-list" style="width:28px;height:28px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;border-radius:4px;cursor:pointer;font-size:18px;line-height:26px;">×</button>',
+      '  </div>',
+      '  <div style="padding:12px 16px;overflow:auto;">',
+      '    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px;">',
+      `      <div style="border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};border-radius:4px;padding:8px 10px;"><div style="font-size:11px;color:${SS_ERP_LIST_THEME.primaryDark};">跟卖数</div><div style="font-size:18px;font-weight:800;color:${SS_ERP_LIST_THEME.text};line-height:1.2;">${sellerCount ? formatNum(sellerCount) : '--'}</div></div>`,
+      `      <div style="border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};border-radius:4px;padding:8px 10px;"><div style="font-size:11px;color:${SS_ERP_LIST_THEME.primaryDark};">最低</div><div style="font-size:18px;font-weight:800;color:${SS_ERP_LIST_THEME.text};line-height:1.2;">${minPrice != null ? formatRub(minPrice) : '--'}</div></div>`,
+      `      <div style="border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};border-radius:4px;padding:8px 10px;"><div style="font-size:11px;color:${SS_ERP_LIST_THEME.primaryDark};">最高</div><div style="font-size:18px;font-weight:800;color:${SS_ERP_LIST_THEME.text};line-height:1.2;">${maxPrice != null ? formatRub(maxPrice) : '--'}</div></div>`,
+      '    </div>',
+      rows.length
+        ? [
+            `<table style="width:100%;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed;border:1px solid ${SS_ERP_LIST_THEME.border};">`,
+            `  <thead style="background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};"><tr>`,
+            `    <th style="padding:8px;border:1px solid ${SS_ERP_LIST_THEME.border};text-align:left;">卖家</th>`,
+            `    <th style="width:120px;padding:8px;border:1px solid ${SS_ERP_LIST_THEME.border};text-align:right;">价格</th>`,
+            '  </tr></thead>',
+            '  <tbody>',
+            rows.map((row) => [
+              '    <tr>',
+              `      <td style="padding:7px;border:1px solid ${SS_ERP_LIST_THEME.border};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">`,
+              row.logo ? `        <img src="${escapeHtml(row.logo)}" alt="" style="width:28px;height:28px;border:1px solid ${SS_ERP_LIST_THEME.border};border-radius:3px;object-fit:cover;margin-right:8px;vertical-align:middle;">` : `        <span style="display:inline-block;width:28px;height:28px;border:1px solid ${SS_ERP_LIST_THEME.border};border-radius:3px;background:${SS_ERP_LIST_THEME.primarySoft};margin-right:8px;vertical-align:middle;"></span>`,
+              row.url
+                ? `        <a href="${escapeHtml(row.url)}" target="_blank" rel="noopener noreferrer" style="color:${SS_ERP_LIST_THEME.blue};font-weight:700;text-decoration:underline;text-underline-offset:2px;">${escapeHtml(row.name)}</a>`
+                : `        <span style="font-weight:700;">${escapeHtml(row.name)}</span>`,
+              '      </td>',
+              `      <td style="padding:7px;border:1px solid ${SS_ERP_LIST_THEME.border};text-align:right;">${escapeHtml(row.price || '--')}</td>`,
+              '    </tr>',
+            ].join('')).join(''),
+            '  </tbody>',
+            '</table>',
+          ].join('')
+        : `<div style="padding:18px;border:1px dashed ${SS_ERP_LIST_THEME.borderStrong};border-radius:4px;color:${SS_ERP_LIST_THEME.muted};background:${SS_ERP_LIST_THEME.primarySoft};">${escapeHtml(sellerText || '当前数据源只返回了跟卖汇总，没有返回卖家明细。')}</div>`,
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(modal);
+    modal.querySelector('[data-role="close-seller-list"]').addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) modal.remove();
+    });
   }
 
   function renderExpandedFields(sku, dom, premium) {
@@ -722,7 +1500,8 @@
     // === 商品信息 ===
     f.push(['SKU', sku, false]);
     f.push(['品牌', pickFlat(p, 'brand') || '--', !pickFlat(p, 'brand')]);
-    f.push(['类目', pickFlat(p, 'category') || pickFlat(p, 'category3') || '--', !(pickFlat(p, 'category') || pickFlat(p, 'category3'))]);
+    f.push(['类目', formatCategoryDisplay(p) || '--', !formatCategoryDisplay(p)]);
+    f.push(['类目ID', pickCategoryIds(p).join(' / ') || '--', !pickCategoryIds(p).length]);
     f.push(['一级类目', pickFlat(p, 'category1') || '--', !pickFlat(p, 'category1')]);
     f.push(['图片数', p && Array.isArray(p.images) ? p.images.length : '--', !p]);
     f.push(['变体数', p && Array.isArray(p.variants) ? p.variants.length : '--', !p]);
@@ -733,16 +1512,1121 @@
     f.push(['平均价', pickAvgPrice(p) == null ? '--' : '₽' + formatNum(pickAvgPrice(p)), pickAvgPrice(p) == null]);
     f.push(['最低卖家价', pickMinPrice(p) == null ? '--' : '₽' + formatNum(pickMinPrice(p)), pickMinPrice(p) == null]);
     f.push(['加购率', pickAddCart(p) == null ? '🔒 Premium' : pickAddCart(p) + '%', pickAddCart(p) == null]);
+    f.push(['浏览下单率', pickFlat(p, 'convViewToOrder') == null ? '--' : formatPercentValue(pickFlat(p, 'convViewToOrder')), pickFlat(p, 'convViewToOrder') == null]);
+    f.push(['搜索转换率', pickFlat(p, 'convToCartSearch') == null ? '--' : formatPercentValue(pickFlat(p, 'convToCartSearch')), pickFlat(p, 'convToCartSearch') == null]);
+    f.push(['结单率', pickFlat(p, 'nullableRedemptionRate') == null ? '--' : formatPercentValue(pickFlat(p, 'nullableRedemptionRate')), pickFlat(p, 'nullableRedemptionRate') == null]);
     f.push(['浏览量', pickViews(p) == null ? '🔒 Premium' : formatNum(pickViews(p)), pickViews(p) == null]);
     f.push(['库存', pickStock(p) == null ? '🔒 Premium' : formatNum(pickStock(p)), pickStock(p) == null]);
+    f.push(['模板活动天数', pickFlat(p, 'daysWithTrafarets') == null ? '--' : formatNum(pickFlat(p, 'daysWithTrafarets')), pickFlat(p, 'daysWithTrafarets') == null]);
+    f.push(['促销收入占比', pickFlat(p, 'promoRevenueShare') == null ? '--' : formatPercentValue(pickFlat(p, 'promoRevenueShare')), pickFlat(p, 'promoRevenueShare') == null]);
     // === 卖家信息 ===
     f.push(['卖家', pickSeller(p) || '--', !pickSeller(p)]);
     f.push(['卖家ID', pickFlat(p, 'sellerId') || '--', !pickFlat(p, 'sellerId')]);
+    const commissionValue = firstPresentValue(pickFlat(p, 'commissionRate'), pickFlat(p, 'commission'));
+    f.push(['佣金', commissionValue == null ? '--' : formatPercentValue(commissionValue), commissionValue == null]);
+    f.push(['价格指数', pickFlat(p, 'ptj') || '--', !pickFlat(p, 'ptj')]);
     f.push(['配送天数', pickDeliveryDays(p) == null ? '--' : pickDeliveryDays(p) + '天', pickDeliveryDays(p) == null]);
     f.push(['发货模式', pickFlat(p, 'salesSchema') || '--', !pickFlat(p, 'salesSchema')]);
     f.push(['模型ID', pickFlat(p, 'modelId') || '--', !pickFlat(p, 'modelId')]);
     f.push(['数据源', sources || '--', false]);
     return f;
+  }
+
+  function getCurrentPageSkus() {
+    return Array.from(collectDistinctProductSkus(document.body)).slice(0, 1000);
+  }
+
+  function getCardDomBySku(sku) {
+    const card = document.querySelector(`[${SKU_ATTR}="${sku}"]`);
+    const wrap = card ? card.querySelector(`.${CARD_CLASS}`) : document.querySelector(`.${CARD_CLASS}[data-ss-erp-sku="${sku}"]`);
+    return wrap && wrap.__ssErpDom ? wrap.__ssErpDom : {};
+  }
+
+  function buildListWorkbenchSeedRows(skus) {
+    return (Array.isArray(skus) ? skus : [])
+      .map((sku) => String(sku || '').trim())
+      .filter(Boolean)
+      .map((sku) => {
+        const dom = getCardDomBySku(sku);
+        const premium = getCached(premiumCache, sku, PREMIUM_TTL_MS) || {};
+        const priceRub = firstPresentValue(pickFlat(premium, 'priceRub'), pickFlat(premium, 'price'), pickFlat(premium, 'avgPrice'), dom.price);
+        const image = firstPresentValue(pickFlat(premium, 'image'), Array.isArray(premium.images) && premium.images.length ? premium.images[0] : null, dom.image);
+        return Object.assign({}, premium, {
+          sku,
+          title: firstPresentValue(pickFlat(premium, 'title'), pickFlat(premium, 'name'), dom.title, `Ozon SKU ${sku}`),
+          image: image || '',
+          priceRub,
+          pagePrice: priceRub,
+          sourceUrl: dom.url || pickFlat(premium, 'sourceUrl') || `https://www.ozon.ru/product/${sku}/`,
+        });
+      });
+  }
+
+  function ensureListWorkbenchBar() {
+    document.querySelectorAll('.ss-erp-list-workbench-bar').forEach((bar) => bar.remove());
+  }
+
+  function quickActionButtonStyle(background, color, border) {
+    return [
+      'width:100%',
+      'height:25px',
+      'margin:4px 0',
+      `border:${border ? `1px solid ${border}` : '0'}`,
+      'border-radius:3px',
+      `background:${background}`,
+      `color:${color}`,
+      'font-size:11px',
+      'font-weight:800',
+      'line-height:23px',
+      'padding:0',
+      'cursor:pointer',
+      'white-space:nowrap',
+      'box-sizing:border-box',
+      `box-shadow:${border ? 'none' : '0 1px 2px rgba(15,23,42,0.12)'}`,
+    ].join(';');
+  }
+
+  function listWorkbenchFooterStyle() {
+    return [
+      'height:58px',
+      'border-top:1px solid #e5e7eb',
+      `background:${SS_ERP_LIST_THEME.surface}`,
+      'display:flex',
+      'align-items:center',
+      'justify-content:flex-end',
+      'padding:0 18px',
+    ].join(';');
+  }
+
+  function normalizeListWorkbenchMode(mode) {
+    return ['data', 'profit', 'publish'].includes(mode) ? mode : 'publish';
+  }
+
+  function listWorkbenchModeButtonStyle(active) {
+    return [
+      'height:28px',
+      'border-radius:3px',
+      'padding:0 11px',
+      'font-size:12px',
+      'font-weight:800',
+      'cursor:pointer',
+      `border:1px solid ${active ? 'rgba(255,255,255,0.78)' : 'rgba(255,255,255,0.28)'}`,
+      `background:${active ? '#ffffff' : 'rgba(255,255,255,0.12)'}`,
+      `color:${active ? SS_ERP_LIST_THEME.primaryDark : '#ffffff'}`,
+    ].join(';');
+  }
+
+  function getListWorkbenchModeStatus(mode) {
+    if (mode === 'data') return '数据模式';
+    if (mode === 'profit') return '利润测算';
+    return '一键上架';
+  }
+
+  function setListWorkbenchMode(modal, mode) {
+    const nextMode = normalizeListWorkbenchMode(mode);
+    modal.__ssErpWorkbenchFocus = nextMode;
+    modal.querySelectorAll('[data-role="workbench-view"]').forEach((button) => {
+      const active = String(button.getAttribute('data-mode') || '') === nextMode;
+      button.setAttribute('style', listWorkbenchModeButtonStyle(active));
+    });
+    modal.querySelectorAll('[data-mode-scope="publish"]').forEach((element) => {
+      const role = String(element.getAttribute('data-role') || '');
+      element.style.display = nextMode === 'publish' ? (role === 'publish-target-controls' ? 'flex' : '') : 'none';
+    });
+    modal.querySelectorAll('[data-mode-scope="pricing"]').forEach((element) => {
+      element.style.display = nextMode === 'data' ? 'none' : 'flex';
+    });
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    if (status) status.textContent = getListWorkbenchModeStatus(nextMode);
+  }
+
+  function setListQuickStatus(panel, text) {
+    const status = panel && panel.querySelector('[data-role="quick-status"]');
+    if (status) {
+      status.textContent = text || '';
+      status.style.color = /失败|请先|没有/.test(String(text || '')) ? '#dc2626' : '#2563eb';
+    }
+  }
+
+  function inferErpWebBaseUrl(value) {
+    const fallback = 'http://localhost:3000';
+    const raw = String(value || '').trim();
+    if (!raw) return fallback;
+    try {
+      const url = new URL(raw.replace(/\/+$/, ''));
+      url.pathname = url.pathname.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+      url.search = '';
+      url.hash = '';
+      if (/^(localhost|127\.0\.0\.1)$/i.test(url.hostname) && url.port === '3001') {
+        url.port = '3000';
+      }
+      return url.href.replace(/\/+$/, '');
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  async function openErpPage(path) {
+    const tab = window.open('about:blank', '_blank');
+    if (tab) {
+      try { tab.opener = null; } catch (error) {}
+    }
+    let baseUrl = 'http://localhost:3000';
+    try {
+      const response = await send({ type: 'spb-self-hosted:get-config' }, 8000);
+      if (response && response.ok && response.config && response.config.erpBaseUrl) {
+        baseUrl = inferErpWebBaseUrl(response.config.erpBaseUrl);
+      }
+    } catch (error) {}
+    const target = baseUrl + (path || '/');
+    if (tab) tab.location.href = target;
+    else window.location.href = target;
+  }
+
+  function openExtensionSettingsPage(section) {
+    const hash = section ? `#${encodeURIComponent(section)}` : '';
+    const url = chrome.runtime.getURL(`pages/settings.html${hash}`);
+    const tab = window.open(url, '_blank');
+    if (tab) {
+      try { tab.opener = null; } catch (error) {}
+    }
+  }
+
+  function ensureListQuickActions() {
+    if (!isProductPage()) return;
+    let panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
+    const count = getCurrentPageSkus().length;
+    const matchedCount = document.querySelectorAll(`.${CARD_CLASS}[data-ss-erp-selection-matched="1"]`).length;
+    if (!panel) {
+      panel = document.createElement('aside');
+      panel.id = LIST_QUICK_ACTIONS_ID;
+      panel.style.cssText = [
+        'position:fixed',
+        'right:10px',
+        'top:50%',
+        'transform:translateY(-50%)',
+        'z-index:2147483646',
+        'width:128px',
+        'background:#ffffff',
+        'border:1px solid #d1d5db',
+        'border-radius:4px',
+        'box-shadow:0 10px 28px rgba(15,23,42,0.16)',
+        'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+        'color:#111827',
+        'padding:8px',
+        'box-sizing:border-box',
+        'user-select:none',
+        'animation:ssErpDockIn .16s ease-out',
+      ].join(';');
+      panel.innerHTML = [
+        '<div style="display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:8px;border-bottom:1px solid #e5e7eb;padding-bottom:7px;">',
+        '  <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>',
+        '  <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>',
+        '</div>',
+        `<button type="button" data-role="quick-open-workbench" title="打开本页 SKU 工作台" style="${quickActionButtonStyle('#ea580c', '#ffffff')}">一键上架</button>`,
+        `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle('#1d4ed8', '#ffffff')}">利润测算</button>`,
+        `<button type="button" data-role="quick-pricing" title="打开本页 SKU 定价参数" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">定价策略</button>`,
+        `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">选品数据</button>`,
+        '<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>',
+        `<button type="button" data-role="quick-bind-cookie" title="检查 Ozon / ERP 登录状态并打开扩展设置" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">绑定Cookie</button>`,
+        `<button type="button" data-role="quick-selection-settings" title="设置选品规则" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">设置选品</button>`,
+        `<button type="button" data-role="quick-field-config" title="选择列表卡片展示字段" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">展示字段</button>`,
+        '<div data-role="quick-status" style="min-height:16px;margin-top:5px;text-align:center;font-size:10px;line-height:1.25;color:#64748b;"></div>',
+        '<button type="button" data-role="quick-open-erp" title="打开 ERP 批量采集页" style="margin-top:5px;border:1px solid #cbd5e1;background:#f8fafc;color:#1d4ed8;font-size:10px;font-weight:800;cursor:pointer;width:100%;height:22px;padding:0;border-radius:3px;">ERP</button>',
+      ].join('');
+      document.body.appendChild(panel);
+      panel.querySelector('[data-role="quick-open-workbench"]').addEventListener('click', () => {
+        openListSkuWorkbench({ rowFilter: 'all' });
+        setListQuickStatus(panel, '已打开工作台');
+      });
+      panel.querySelector('[data-role="quick-profit"]').addEventListener('click', () => {
+        openListSkuWorkbench({ rowFilter: 'all', focus: 'profit' });
+        setListQuickStatus(panel, '利润表已打开');
+      });
+      panel.querySelector('[data-role="quick-pricing"]').addEventListener('click', () => {
+        openListSkuWorkbench({ rowFilter: 'all', focus: 'publish' });
+        setListQuickStatus(panel, '定价已打开');
+      });
+      panel.querySelector('[data-role="quick-open-insights"]').addEventListener('click', () => {
+        openListSkuWorkbench({ rowFilter: 'all', focus: 'data' });
+        setListQuickStatus(panel, '数据已打开');
+      });
+      panel.querySelector('[data-role="quick-bind-cookie"]').addEventListener('click', async () => {
+        setListQuickStatus(panel, '检查中...');
+        try {
+          const response = await send({ type: 'spb-self-hosted:check-logins' }, 8000);
+          const logins = response && response.ok && response.logins ? response.logins : {};
+          const ozonOk = Boolean(logins.ozon || logins.sellerOzon || logins['seller.ozon.ru']);
+          setListQuickStatus(panel, ozonOk ? 'Cookie正常' : '打开设置');
+          if (!ozonOk) openExtensionSettingsPage('cookie');
+        } catch (error) {
+          setListQuickStatus(panel, '检查失败');
+        }
+      });
+      panel.querySelector('[data-role="quick-selection-settings"]').addEventListener('click', () => {
+        showProductSelectionRulesModal();
+        setListQuickStatus(panel, '设置已打开');
+      });
+      panel.querySelector('[data-role="quick-field-config"]').addEventListener('click', () => {
+        showListFieldConfigModal();
+        setListQuickStatus(panel, '字段已打开');
+      });
+      panel.querySelector('[data-role="quick-open-erp"]').addEventListener('click', () => {
+        openErpPage('/collect/batch');
+        setListQuickStatus(panel, '正在进入');
+      });
+    }
+    const matchSummary = panel.querySelector('[data-role="quick-match-summary"]');
+    if (matchSummary) matchSummary.textContent = `${count} SKU · 命中 ${matchedCount}`;
+    setListQuickStatus(panel, `${count} SKU · 命中 ${matchedCount}`);
+  }
+
+  function showListFieldConfigModal() {
+    const old = document.getElementById(LIST_FIELD_CONFIG_MODAL_ID);
+    if (old) old.remove();
+
+    const selected = new Set(readSelectedDisplayFieldIds());
+    const modal = document.createElement('div');
+    modal.id = LIST_FIELD_CONFIG_MODAL_ID;
+    modal.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'z-index:2147483647',
+      'background:rgba(15,23,42,0.36)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'color:#111827',
+    ].join(';');
+    modal.innerHTML = [
+      '<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(720px,calc(100vw - 32px));max-height:min(680px,calc(100vh - 32px));background:#fff;border:1px solid #d1d5db;border-radius:4px;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;overflow:hidden;animation:ssErpModalIn .16s ease-out;">',
+      `  <div style="height:50px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
+      '    <div style="font-size:15px;font-weight:800;">选择需要展示的数据</div>',
+      '    <button type="button" data-role="close-field-config" style="width:28px;height:28px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;border-radius:3px;cursor:pointer;font-size:18px;line-height:26px;">×</button>',
+      '  </div>',
+      '  <div style="padding:10px 16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:flex-end;background:#f9fafb;">',
+      '    <div style="display:flex;gap:6px;">',
+      '      <button type="button" data-role="select-all-fields" style="height:28px;border:1px solid #d1d5db;background:#fff;border-radius:3px;padding:0 10px;font-size:12px;cursor:pointer;">全选</button>',
+      '      <button type="button" data-role="select-default-fields" style="height:28px;border:1px solid #d1d5db;background:#fff;border-radius:3px;padding:0 10px;font-size:12px;cursor:pointer;">默认</button>',
+      '    </div>',
+      '  </div>',
+      '  <div style="padding:14px 16px;overflow:auto;">',
+      ['seller', 'supplement', 'computed'].map((source) => [
+        `    <div style="margin-bottom:14px;">`,
+        `      <div style="display:flex;align-items:center;gap:8px;margin:0 0 8px 0;">`,
+        `        <span style="font-size:12px;font-weight:800;color:#111827;">${escapeHtml(DISPLAY_FIELD_SOURCE_LABELS[source])}</span>`,
+        `        <span style="height:1px;flex:1;background:#e5e7eb;"></span>`,
+        '      </div>',
+        '      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">',
+        DISPLAY_FIELD_DEFS.filter((field) => field.source === source).map((field) => [
+          `        <label style="display:flex;align-items:center;gap:7px;min-height:32px;border:1px solid #e5e7eb;background:#fff;border-radius:3px;padding:0 9px;font-size:12px;color:#374151;cursor:pointer;">`,
+          `          <input type="checkbox" data-role="field-option" value="${escapeHtml(field.id)}" ${selected.has(field.id) ? 'checked' : ''} style="margin:0;">`,
+          `          <span>${escapeHtml(field.label)}</span>`,
+          '        </label>',
+        ].join('')).join(''),
+        '      </div>',
+        '    </div>',
+      ].join('')).join(''),
+      '  </div>',
+      '  <div style="height:54px;border-top:1px solid #e5e7eb;background:#f3f4f6;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 16px;">',
+      '    <button type="button" data-role="cancel-field-config" style="height:32px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:3px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;">取消</button>',
+      `    <button type="button" data-role="save-field-config" style="height:32px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">确定</button>`,
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(modal);
+
+    const close = () => modal.remove();
+    modal.querySelector('[data-role="close-field-config"]').addEventListener('click', close);
+    modal.querySelector('[data-role="cancel-field-config"]').addEventListener('click', close);
+    modal.querySelector('[data-role="select-all-fields"]').addEventListener('click', () => {
+      modal.querySelectorAll('[data-role="field-option"]').forEach((box) => { box.checked = true; });
+    });
+    modal.querySelector('[data-role="select-default-fields"]').addEventListener('click', () => {
+      modal.querySelectorAll('[data-role="field-option"]').forEach((box) => {
+        box.checked = DEFAULT_DISPLAY_FIELD_IDS.includes(box.value);
+      });
+    });
+    modal.querySelector('[data-role="save-field-config"]').addEventListener('click', () => {
+      const ids = Array.from(modal.querySelectorAll('[data-role="field-option"]:checked')).map((box) => box.value);
+      writeSelectedDisplayFieldIds(ids);
+      rerenderAllListMetrics();
+      close();
+    });
+  }
+
+  function createDefaultProductSelectionRule() {
+    return normalizeProductSelectionRule({
+      id: `local-${Date.now()}`,
+      name: '潜力 SKU',
+      enabled: true,
+      tag: '潜力',
+      color: '#2563eb',
+      minSoldCount: 10,
+      maxAdExpenseShare: 20,
+      maxReturnCancelRate: 30,
+      maxSellerCount: 8,
+    }, 0);
+  }
+
+  function selectionRuleField(label, role, value, placeholder, type) {
+    return [
+      '<label style="display:flex;flex-direction:column;gap:3px;min-width:0;">',
+      `  <span style="font-size:11px;font-weight:800;color:#475569;white-space:nowrap;">${escapeHtml(label)}</span>`,
+      `  <input type="${escapeHtml(type || 'number')}" data-role="${escapeHtml(role)}" value="${value == null ? '' : escapeHtml(value)}" placeholder="${escapeHtml(placeholder || label)}" style="height:30px;border:1px solid #d1d5db;border-radius:3px;padding:0 7px;font-size:12px;min-width:0;background:#fff;">`,
+      '</label>',
+    ].join('');
+  }
+
+  function selectionRuleSelect(label, role, value, options) {
+    const current = String(value == null ? '' : value);
+    const optionHtml = options.map((option) => {
+      const optionValue = String(option.value == null ? '' : option.value);
+      return `<option value="${escapeHtml(optionValue)}" ${optionValue === current ? 'selected' : ''}>${escapeHtml(option.label)}</option>`;
+    }).join('');
+    return [
+      '<label style="display:flex;flex-direction:column;gap:3px;min-width:0;">',
+      `  <span style="font-size:11px;font-weight:800;color:#475569;white-space:nowrap;">${escapeHtml(label)}</span>`,
+      `  <select data-role="${escapeHtml(role)}" style="height:30px;border:1px solid #d1d5db;border-radius:3px;padding:0 7px;font-size:12px;min-width:0;background:#fff;">${optionHtml}</select>`,
+      '</label>',
+    ].join('');
+  }
+
+  function selectionRuleToggle(label, role, checked) {
+    return [
+      '<label style="display:flex;align-items:center;gap:7px;height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 9px;font-size:12px;font-weight:800;color:#334155;min-width:0;">',
+      `  <input type="checkbox" data-role="${escapeHtml(role)}" ${checked ? 'checked' : ''} style="margin:0;">`,
+      `  <span style="white-space:nowrap;">${escapeHtml(label)}</span>`,
+      '</label>',
+    ].join('');
+  }
+
+  function selectionRuleSection(title, columns, fields) {
+    return [
+      '<section data-role="selection-rule-section" style="border-top:1px solid #e5e7eb;padding-top:12px;">',
+      '  <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">',
+      `    <span style="font-size:12px;font-weight:900;color:#111827;white-space:nowrap;">${escapeHtml(title)}</span>`,
+      '    <span style="height:1px;flex:1;background:#e5e7eb;"></span>',
+      '  </div>',
+      `  <div style="display:grid;grid-template-columns:repeat(${Number(columns) || 4},minmax(0,1fr));gap:10px;align-items:end;">`,
+      fields.join(''),
+      '  </div>',
+      '</section>',
+    ].join('');
+  }
+
+  function selectionRuleRange(label, minRole, minValue, maxRole, maxValue, unit, minPlaceholder, maxPlaceholder) {
+    return [
+      '<label style="display:flex;flex-direction:column;gap:3px;min-width:0;">',
+      `  <span style="font-size:11px;font-weight:800;color:#475569;white-space:nowrap;">${escapeHtml(label)}</span>`,
+      '  <span style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:6px;align-items:center;">',
+      `    <input type="number" data-role="${escapeHtml(minRole)}" value="${minValue == null ? '' : escapeHtml(minValue)}" placeholder="${escapeHtml(minPlaceholder || (label + '≥'))}" style="height:30px;border:1px solid #d1d5db;border-radius:3px;padding:0 7px;font-size:12px;min-width:0;background:#fff;">`,
+      '    <span style="font-size:11px;color:#94a3b8;">至</span>',
+      `    <input type="number" data-role="${escapeHtml(maxRole)}" value="${maxValue == null ? '' : escapeHtml(maxValue)}" placeholder="${escapeHtml(maxPlaceholder || (label + '≤'))}" style="height:30px;border:1px solid #d1d5db;border-radius:3px;padding:0 7px;font-size:12px;min-width:0;background:#fff;">`,
+      '  </span>',
+      unit ? `  <span style="font-size:10px;color:#94a3b8;">${escapeHtml(unit)}</span>` : '',
+      '</label>',
+    ].join('');
+  }
+
+  function selectionRuleTableRow(rule, index) {
+    const item = normalizeProductSelectionRule(rule, index);
+    const color = normalizeSelectionRuleColor(item.color);
+    return [
+      `<tr data-role="selection-rule-list-row" data-rule-id="${escapeHtml(item.id)}" data-index="${index}" style="animation:ssErpRowIn .12s ease-out;">`,
+      `  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;font-weight:700;color:#111827;"><span style="display:inline-block;width:8px;height:8px;border-radius:99px;background:${color};margin-right:7px;"></span>${escapeHtml(item.name)}</td>`,
+      `  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;"><span style="display:inline-block;border:1px solid ${color};color:${color};background:#fff;border-radius:3px;padding:2px 8px;font-size:12px;font-weight:800;">${escapeHtml(item.tag)}</span></td>`,
+      `  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;color:${item.autoFavorite ? '#1d4ed8' : '#64748b'};font-weight:700;">${item.autoFavorite ? '是' : '否'}</td>`,
+      `  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="toggle-rule-enabled" data-index="${index}" ${item.enabled ? 'checked' : ''}></td>`,
+      `  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:700;color:#334155;">${formatNum(item.priority || 0)}</td>`,
+      `  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;color:#64748b;">${escapeHtml(item.updatedAt ? formatDate(item.updatedAt) : '--')}</td>`,
+      '  <td style="padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;white-space:nowrap;">',
+      `    <button type="button" data-role="edit-selection-rule" data-index="${index}" style="height:28px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 10px;font-size:12px;font-weight:800;cursor:pointer;">编辑</button>`,
+      `    <button type="button" data-role="delete-selection-rule" data-index="${index}" style="height:28px;margin-left:6px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:3px;padding:0 10px;font-size:12px;font-weight:800;cursor:pointer;">删除</button>`,
+      '  </td>',
+      '</tr>',
+    ].join('');
+  }
+
+  function selectionRuleEditorRow(rule, index) {
+    const item = normalizeProductSelectionRule(rule, index);
+    const hasBrandValue = item.hasBrand == null ? '' : String(item.hasBrand);
+    return [
+      `<div data-role="selection-rule-editor-form" data-rule-id="${escapeHtml(item.id)}" data-index="${index}" style="display:flex;flex-direction:column;gap:12px;">`,
+      selectionRuleSection('规则基础', 6, [
+        selectionRuleToggle('是否启用', 'rule-enabled', item.enabled),
+        selectionRuleToggle('自动收藏', 'rule-auto-favorite', item.autoFavorite),
+        selectionRuleField('规则名称', 'rule-name', item.name, '规则名称', 'text'),
+        selectionRuleField('标签', 'rule-tag', item.tag, '标签', 'text'),
+        selectionRuleField('优先级', 'rule-priority', item.priority, '0-100'),
+        `<label style="display:flex;flex-direction:column;gap:3px;"><span style="font-size:11px;font-weight:800;color:#475569;white-space:nowrap;">颜色</span><input type="color" data-role="rule-color" value="${escapeHtml(item.color)}" title="标签颜色" style="width:52px;height:30px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:1px;"></label>`,
+      ]),
+      selectionRuleSection('商品基础', 4, [
+        selectionRuleField('品牌包含', 'brand-contains', item.brandContains, '品牌关键词', 'text'),
+        selectionRuleSelect('有品牌', 'has-brand', hasBrandValue, [{ value: '', label: '不限' }, { value: 'true', label: '有品牌' }, { value: 'false', label: '无品牌' }]),
+        selectionRuleField('发货模式', 'sales-schema', item.salesSchema, 'FBO/FBS/rFBS', 'text'),
+        selectionRuleField('重量≤', 'max-weight-grams', item.maxWeightGrams, '克'),
+      ]),
+      selectionRuleSection('销售与价格', 4, [
+        selectionRuleField('月销量≥', 'min-sold-count', item.minSoldCount, '件数'),
+        selectionRuleField('月销售额≥', 'min-sold-sum', item.minSoldSum, 'RUB'),
+        selectionRuleRange('价格', 'min-price-rub', item.minPriceRub, 'max-price-rub', item.maxPriceRub, 'RUB', '价格≥', '价格≤'),
+        selectionRuleRange('周转动态', 'min-sales-dynamics', item.minSalesDynamics, 'max-sales-dynamics', item.maxSalesDynamics, '%', '周转动态≥', '周转动态≤'),
+        selectionRuleField('广告%≤', 'max-ad-expense-share', item.maxAdExpenseShare, '%'),
+        selectionRuleField('退取%≤', 'max-return-cancel-rate', item.maxReturnCancelRate, '%'),
+        selectionRuleField('利润%≥', 'min-profit-margin-pct', item.minProfitMarginPct, '%'),
+      ]),
+      selectionRuleSection('流量转化', 4, [
+        selectionRuleField('搜索浏览≥', 'min-search-catalog-views', item.minSearchCatalogViews, '次数'),
+        selectionRuleField('搜索加购≥', 'min-search-catalog-add-to-cart-rate', item.minSearchCatalogAddToCartRate, '%'),
+        selectionRuleField('展示转化≥', 'min-conv-view-to-order', item.minConvViewToOrder, '%'),
+        selectionRuleField('商品卡浏览≥', 'min-product-card-views', item.minProductCardViews, '次数'),
+        selectionRuleField('商品卡加购≥', 'min-product-card-add-to-cart-rate', item.minProductCardAddToCartRate, '%'),
+      ]),
+      selectionRuleSection('促销与时间', 4, [
+        selectionRuleRange('上架天数', 'min-create-days', item.minCreateDays, 'max-create-days', item.maxCreateDays, '天', '上架天数≥', '上架天数≤'),
+        selectionRuleRange('促销天数', 'min-promo-days', item.minPromoDays, 'max-promo-days', item.maxPromoDays, '天', '促销天数≥', '促销天数≤'),
+        selectionRuleRange('折扣', 'min-discount-percent', item.minDiscountPercent, 'max-discount-percent', item.maxDiscountPercent, '%', '折扣≥', '折扣≤'),
+        selectionRuleRange('促销转化', 'min-promo-revenue-share', item.minPromoRevenueShare, 'max-promo-revenue-share', item.maxPromoRevenueShare, '%', '促销转化≥', '促销转化≤'),
+        selectionRuleRange('付费推广', 'min-paid-promotion-days', item.minPaidPromotionDays, 'max-paid-promotion-days', item.maxPaidPromotionDays, '天', '付费推广≥', '付费推广≤'),
+      ]),
+      selectionRuleSection('跟卖与利润', 4, [
+        selectionRuleField('跟卖≤', 'max-seller-count', item.maxSellerCount, '卖家数'),
+        selectionRuleField('跟卖最低≤', 'max-follow-min-price-rub', item.maxFollowMinPriceRub, 'RUB'),
+      ]),
+      '</div>',
+    ].join('');
+  }
+
+  function readRuleRowNumber(row, role) {
+    const input = row.querySelector(`[data-role="${role}"]`);
+    return normalizeRuleNumber(input && input.value);
+  }
+
+  function readRuleRowText(row, role) {
+    const input = row.querySelector(`[data-role="${role}"]`);
+    return input && input.value ? String(input.value).trim() : '';
+  }
+
+  function readRuleRowBoolean(row, role) {
+    const input = row.querySelector(`[data-role="${role}"]`);
+    return normalizeRuleBoolean(input && input.value);
+  }
+
+  function collectProductSelectionRuleFromEditor(editor, index, previous) {
+    const form = editor.querySelector('[data-role="selection-rule-editor-form"]') || editor;
+    return normalizeProductSelectionRule({
+      id: form.getAttribute('data-rule-id') || (previous && previous.id) || `local-${Date.now()}-${index}`,
+      enabled: Boolean((form.querySelector('[data-role="rule-enabled"]') || {}).checked),
+      autoFavorite: Boolean((form.querySelector('[data-role="rule-auto-favorite"]') || {}).checked),
+      name: readRuleRowText(form, 'rule-name'),
+      tag: readRuleRowText(form, 'rule-tag'),
+      color: readRuleRowText(form, 'rule-color'),
+      priority: readRuleRowNumber(form, 'rule-priority'),
+      brandContains: readRuleRowText(form, 'brand-contains'),
+      hasBrand: readRuleRowBoolean(form, 'has-brand'),
+      minSoldCount: readRuleRowNumber(form, 'min-sold-count'),
+      minSoldSum: readRuleRowNumber(form, 'min-sold-sum'),
+      minPriceRub: readRuleRowNumber(form, 'min-price-rub'),
+      maxPriceRub: readRuleRowNumber(form, 'max-price-rub'),
+      maxWeightGrams: readRuleRowNumber(form, 'max-weight-grams'),
+      minSalesDynamics: readRuleRowNumber(form, 'min-sales-dynamics'),
+      maxSalesDynamics: readRuleRowNumber(form, 'max-sales-dynamics'),
+      maxAdExpenseShare: readRuleRowNumber(form, 'max-ad-expense-share'),
+      maxReturnCancelRate: readRuleRowNumber(form, 'max-return-cancel-rate'),
+      minProfitMarginPct: readRuleRowNumber(form, 'min-profit-margin-pct'),
+      minCreateDays: readRuleRowNumber(form, 'min-create-days'),
+      maxCreateDays: readRuleRowNumber(form, 'max-create-days'),
+      minPromoDays: readRuleRowNumber(form, 'min-promo-days'),
+      maxPromoDays: readRuleRowNumber(form, 'max-promo-days'),
+      minDiscountPercent: readRuleRowNumber(form, 'min-discount-percent'),
+      maxDiscountPercent: readRuleRowNumber(form, 'max-discount-percent'),
+      minPromoRevenueShare: readRuleRowNumber(form, 'min-promo-revenue-share'),
+      maxPromoRevenueShare: readRuleRowNumber(form, 'max-promo-revenue-share'),
+      minPaidPromotionDays: readRuleRowNumber(form, 'min-paid-promotion-days'),
+      maxPaidPromotionDays: readRuleRowNumber(form, 'max-paid-promotion-days'),
+      minProductCardViews: readRuleRowNumber(form, 'min-product-card-views'),
+      minProductCardAddToCartRate: readRuleRowNumber(form, 'min-product-card-add-to-cart-rate'),
+      maxSellerCount: readRuleRowNumber(form, 'max-seller-count'),
+      minSearchCatalogViews: readRuleRowNumber(form, 'min-search-catalog-views'),
+      minSearchCatalogAddToCartRate: readRuleRowNumber(form, 'min-search-catalog-add-to-cart-rate'),
+      minConvViewToOrder: readRuleRowNumber(form, 'min-conv-view-to-order'),
+      maxFollowMinPriceRub: readRuleRowNumber(form, 'max-follow-min-price-rub'),
+      salesSchema: readRuleRowText(form, 'sales-schema'),
+      createdAt: previous && previous.createdAt,
+      updatedAt: previous && previous.updatedAt,
+    }, index);
+  }
+
+  function collectProductSelectionRuleRows(modal) {
+    return normalizeProductSelectionRuleList(modal.__ssErpSelectionRules || []);
+  }
+
+  function renderSelectionRulesTable(modal) {
+    const body = modal.querySelector('[data-role="selection-rules-list"]');
+    if (!body) return;
+    const rules = collectProductSelectionRuleRows(modal);
+    body.innerHTML = rules.length
+      ? rules.map((rule, index) => selectionRuleTableRow(rule, index)).join('')
+      : '<tr><td colspan="7" style="padding:28px;text-align:center;color:#64748b;border-bottom:1px solid #e5e7eb;">暂无规则</td></tr>';
+  }
+
+  function showSelectionRuleEditor(modal, rule, index) {
+    const old = modal.querySelector('[data-role="selection-rule-editor"]');
+    if (old) old.remove();
+    const item = normalizeProductSelectionRule(rule || createDefaultProductSelectionRule(), Math.max(index, 0));
+    const editor = document.createElement('div');
+    editor.setAttribute('data-role', 'selection-rule-editor');
+    editor.style.cssText = [
+      'position:absolute',
+      'inset:0',
+      'z-index:3',
+      'background:rgba(15,23,42,0.30)',
+      'display:flex',
+      'align-items:center',
+      'justify-content:center',
+      'padding:18px',
+      'box-sizing:border-box',
+    ].join(';');
+    editor.innerHTML = [
+      '<div style="width:min(820px,calc(100vw - 64px));max-height:min(680px,calc(100vh - 64px));background:#fff;border:1px solid #cbd5e1;border-radius:4px;box-shadow:0 18px 44px rgba(15,23,42,0.28);display:flex;flex-direction:column;overflow:hidden;animation:ssErpRowIn .14s ease-out;">',
+      '  <div style="height:48px;background:#f8fafc;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 16px;">',
+      `    <div style="font-size:15px;font-weight:800;color:#111827;">${index >= 0 ? '编辑选品规则' : '新增选品规则'}</div>`,
+      '    <button type="button" data-role="cancel-selection-rule-editor" style="width:28px;height:28px;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:3px;cursor:pointer;font-size:18px;line-height:26px;">×</button>',
+      '  </div>',
+      '  <div style="padding:14px 16px;overflow:auto;">',
+      selectionRuleEditorRow(item, index),
+      '  </div>',
+      '  <div style="height:54px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 16px;">',
+      '    <div data-role="selection-rule-editor-status" style="margin-right:auto;font-size:12px;color:#64748b;"></div>',
+      '    <button type="button" data-role="cancel-selection-rule-editor" style="height:32px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:3px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;">取消</button>',
+      `    <button type="button" data-role="save-selection-rule-editor" style="height:32px;border:0;background:${SS_ERP_LIST_THEME.blue};color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
+      '  </div>',
+      '</div>',
+    ].join('');
+    modal.appendChild(editor);
+    editor.querySelectorAll('[data-role="cancel-selection-rule-editor"]').forEach((button) => {
+      button.addEventListener('click', () => editor.remove());
+    });
+    editor.querySelector('[data-role="save-selection-rule-editor"]').addEventListener('click', () => {
+      const rules = collectProductSelectionRuleRows(modal);
+      const existing = index >= 0 ? rules[index] : null;
+      const nextRule = collectProductSelectionRuleFromEditor(editor, index >= 0 ? index : rules.length, existing);
+      if (!nextRule.name) {
+        const status = editor.querySelector('[data-role="selection-rule-editor-status"]');
+        if (status) status.textContent = '请填写规则名称';
+        return;
+      }
+      if (index >= 0) rules[index] = nextRule;
+      else rules.push(nextRule);
+      modal.__ssErpSelectionRules = normalizeProductSelectionRuleList(rules);
+      renderSelectionRulesTable(modal);
+      editor.remove();
+    });
+  }
+
+  function bindSelectionRulesModalEvents(modal) {
+    modal.querySelector('[data-role="close-selection-rules"]').addEventListener('click', () => modal.remove());
+    modal.querySelector('[data-role="cancel-selection-rules"]').addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) modal.remove();
+    });
+    modal.querySelector('[data-role="add-selection-rule"]').addEventListener('click', () => {
+      showSelectionRuleEditor(modal, createDefaultProductSelectionRule(), -1);
+    });
+    modal.addEventListener('click', (event) => {
+      const editButton = event.target && event.target.closest ? event.target.closest('[data-role="edit-selection-rule"]') : null;
+      if (editButton) {
+        const index = Number(editButton.getAttribute('data-index'));
+        const rules = collectProductSelectionRuleRows(modal);
+        if (rules[index]) showSelectionRuleEditor(modal, rules[index], index);
+        return;
+      }
+      const deleteButton = event.target && event.target.closest ? event.target.closest('[data-role="delete-selection-rule"]') : null;
+      if (!deleteButton) return;
+      const index = Number(deleteButton.getAttribute('data-index'));
+      const rules = collectProductSelectionRuleRows(modal);
+      const removed = rules.splice(index, 1)[0];
+      if (removed) deleteProductSelectionRuleFromCloud(removed.id).catch(() => {});
+      modal.__ssErpSelectionRules = normalizeProductSelectionRuleList(rules);
+      renderSelectionRulesTable(modal);
+    });
+    modal.addEventListener('change', (event) => {
+      const toggle = event.target && event.target.closest ? event.target.closest('[data-role="toggle-rule-enabled"]') : null;
+      if (!toggle) return;
+      const index = Number(toggle.getAttribute('data-index'));
+      const rules = collectProductSelectionRuleRows(modal);
+      if (!rules[index]) return;
+      rules[index].enabled = Boolean(toggle.checked);
+      modal.__ssErpSelectionRules = normalizeProductSelectionRuleList(rules);
+    });
+    modal.querySelector('[data-role="save-selection-rules"]').addEventListener('click', async () => {
+      const saveButton = modal.querySelector('[data-role="save-selection-rules"]');
+      const status = modal.querySelector('[data-role="selection-rules-status"]');
+      if (saveButton) saveButton.disabled = true;
+      if (status) status.textContent = '正在保存到 ERP...';
+      try {
+        const rules = await saveProductSelectionRulesToCloud(collectProductSelectionRuleRows(modal));
+        writeProductSelectionRules(rules);
+        rerenderAllListMetrics();
+        modal.remove();
+        const workbench = document.getElementById(LIST_WORKBENCH_MODAL_ID);
+        if (workbench) {
+          renderListWorkbenchRows(workbench, workbench.__ssErpListWorkbenchRows || [], workbench.__ssErpListWorkbenchSkus || []);
+        }
+      } catch (error) {
+        writeProductSelectionRules(collectProductSelectionRuleRows(modal));
+        if (status) status.textContent = `云端保存失败，已写入本地缓存：${error && error.message ? error.message : String(error)}`;
+      } finally {
+        if (saveButton) saveButton.disabled = false;
+      }
+    });
+  }
+
+  async function showProductSelectionRulesModal() {
+    const old = document.getElementById(LIST_SELECTION_RULES_MODAL_ID);
+    if (old) old.remove();
+    let rules = readProductSelectionRules();
+    try {
+      rules = await syncProductSelectionRulesFromCloud();
+    } catch (error) {}
+    const editableRules = normalizeProductSelectionRuleList(rules);
+    const modal = document.createElement('div');
+    modal.id = LIST_SELECTION_RULES_MODAL_ID;
+    modal.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'z-index:2147483647',
+      'background:rgba(15,23,42,0.34)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'color:#111827',
+    ].join(';');
+    modal.innerHTML = [
+      '<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1240px,calc(100vw - 32px));max-height:min(760px,calc(100vh - 32px));background:#fff;border:1px solid #d1d5db;border-radius:4px;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;overflow:hidden;animation:ssErpModalIn .16s ease-out;">',
+      `  <div style="height:52px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
+      '    <div style="font-size:15px;font-weight:800;line-height:1.2;">设置选品规则</div>',
+      '    <button type="button" data-role="close-selection-rules" style="width:28px;height:28px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;border-radius:3px;cursor:pointer;font-size:18px;line-height:26px;">×</button>',
+      '  </div>',
+      '  <div style="padding:10px 16px;border-bottom:1px solid #e5e7eb;background:#f9fafb;display:flex;align-items:center;justify-content:flex-end;gap:10px;">',
+      '    <button type="button" data-role="add-selection-rule" style="height:30px;border:1px solid #cbd5e1;background:#fff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:12px;font-weight:800;cursor:pointer;">新增规则</button>',
+      '  </div>',
+      '  <div style="padding:0 16px;overflow:auto;">',
+      '    <table data-role="selection-rule-list-table" style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;">',
+      '      <thead style="position:sticky;top:0;z-index:2;background:#f8fafc;color:#475569;">',
+      '        <tr>',
+      '          <th style="width:26%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:left;">规则名称</th>',
+      '          <th style="width:13%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">标签</th>',
+      '          <th style="width:10%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">自动收藏</th>',
+      '          <th style="width:10%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">是否启用</th>',
+      '          <th style="width:9%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">优先级</th>',
+      '          <th style="width:15%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">更新时间</th>',
+      '          <th style="width:17%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">操作</th>',
+      '        </tr>',
+      '      </thead>',
+      '      <tbody data-role="selection-rules-list"></tbody>',
+      '    </table>',
+      '  </div>',
+      '  <div style="height:56px;border-top:1px solid #e5e7eb;background:#f3f4f6;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 16px;">',
+      '    <div data-role="selection-rules-status" style="margin-right:auto;font-size:12px;color:#64748b;"></div>',
+      '    <button type="button" data-role="cancel-selection-rules" style="height:32px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:3px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;">取消</button>',
+      '    <button type="button" data-role="save-selection-rules" style="height:32px;border:0;background:#ea580c;color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">保存设置</button>',
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(modal);
+    modal.__ssErpSelectionRules = editableRules;
+    renderSelectionRulesTable(modal);
+    bindSelectionRulesModalEvents(modal);
+  }
+
+  function openListSkuWorkbench(options) {
+    const old = document.getElementById(LIST_WORKBENCH_MODAL_ID);
+    if (old) old.remove();
+    const skus = getCurrentPageSkus();
+    const initialRowFilter = options && options.rowFilter === 'matched'
+      ? 'matched'
+      : 'all';
+
+    const modal = document.createElement('div');
+    modal.id = LIST_WORKBENCH_MODAL_ID;
+    modal.__ssErpListWorkbenchRows = [];
+    modal.__ssErpListWorkbenchSkus = skus;
+    modal.__ssErpRowFilter = initialRowFilter;
+    modal.__ssErpWorkbenchFocus = normalizeListWorkbenchMode(options && options.focus);
+    modal.style.cssText = [
+      'position:fixed',
+      'inset:0',
+      'z-index:2147483647',
+      'background:rgba(15,23,42,0.30)',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'color:#111827',
+    ].join(';');
+    modal.innerHTML = [
+      `<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 40px));height:min(720px,calc(100vh - 40px));background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;animation:ssErpModalIn .16s ease-out;">`,
+      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#f8fafc;color:#334155;box-shadow:0 1px 0 #e5e7eb;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#fff7ed!important;}</style>`,
+      `  <div style="min-height:56px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
+      '    <div>',
+      '      <div style="font-size:16px;font-weight:800;line-height:1.2;">SS ERP SKU 工作台</div>',
+      `      <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">Ozon 列表页 ${skus.length} 个 SKU</div>`,
+      '    </div>',
+      '    <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">',
+      `      <button type="button" data-role="workbench-view" data-mode="data" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'data')}">数据</button>`,
+      `      <button type="button" data-role="workbench-view" data-mode="profit" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'profit')}">利润</button>`,
+      `      <button type="button" data-role="workbench-view" data-mode="publish" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'publish')}">上架</button>`,
+      '    </div>',
+      '    <button type="button" data-role="close-list-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>',
+      '  </div>',
+      `  <div data-role="workbench-filter-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
+      '    <div data-role="publish-target-controls" data-mode-scope="publish" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">',
+      `      <label style="font-size:12px;font-weight:800;color:#334155;">目标店铺</label>`,
+      '      <select data-role="shop-select" style="height:32px;min-width:180px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="">加载店铺中...</option></select>',
+      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">模式</label>`,
+      '      <select data-role="publish-mode" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="clone">复制源卡片</option><option value="follow">普通跟卖</option></select>',
+      `      <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;margin-left:4px;"><input type="checkbox" data-role="follow-brand" style="margin:0;">复制品牌</label>`,
+      '    </div>',
+      `    <label style="font-size:12px;font-weight:800;color:#334155;">范围</label>`,
+      `    <select data-role="row-filter" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="all" ${initialRowFilter === 'all' ? 'selected' : ''}>全部商品</option><option value="matched" ${initialRowFilter === 'matched' ? 'selected' : ''}>仅规则命中</option></select>`,
+      `    <button type="button" data-role="refresh-list-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新数据</button>`,
+      '  </div>',
+      `  <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
+      '    <div data-role="pricing-controls" data-mode-scope="pricing" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">',
+      `      <label style="font-size:12px;font-weight:800;color:#334155;">加价%</label>`,
+      '      <input type="number" data-role="markup-pct" value="0" min="-90" max="500" step="1" style="height:32px;width:74px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
+      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">成本¥</label>`,
+      '      <input type="number" data-role="cost-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
+      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">物流费¥</label>`,
+      '      <input type="number" data-role="logistics-fee-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
+      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">佣金%</label>`,
+      '      <input type="number" data-role="commission-rate" value="" min="0" max="100" step="0.1" placeholder="自动" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
+      '    </div>',
+      `    <div style="margin-left:auto;font-size:12px;color:${SS_ERP_LIST_THEME.muted};" data-role="workbench-status">准备读取本页 SKU...</div>`,
+      '  </div>',
+      '  <div data-role="workbench-table-wrap" style="flex:1;overflow:auto;padding:0 18px 14px 18px;background:#fff;">',
+      `    <table style="width:100%;min-width:1780px;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed;border:1px solid #e5e7eb;">`,
+      '      <thead style="background:#f8fafc;color:#334155;">',
+      '        <tr>',
+      '          <th style="width:38px;padding:9px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="select-all-workbench" checked></th>',
+      '          <th style="width:180px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">SKU</th>',
+      '          <th style="width:220px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">标题</th>',
+      '          <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">选品</th>',
+      '          <th style="width:90px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">售价</th>',
+      '          <th style="width:90px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">月销量</th>',
+      '          <th style="width:110px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">月销售额</th>',
+      '          <th style="width:82px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖数</th>',
+      '          <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖最低价</th>',
+      '          <th style="width:100px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">跟卖最高价</th>',
+      '          <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">广告费占比</th>',
+      '          <th style="width:96px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">退货取消率</th>',
+      '          <th style="width:82px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">佣金</th>',
+      '          <th style="width:82px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">利润率</th>',
+      '          <th style="width:86px;padding:9px 8px;border:1px solid #e5e7eb;text-align:right;">重量</th>',
+      '          <th style="width:92px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">发货模式</th>',
+      '          <th style="width:110px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">品牌</th>',
+      '          <th style="width:180px;padding:9px 8px;border:1px solid #e5e7eb;text-align:left;">类目</th>',
+      '        </tr>',
+      '      </thead>',
+      '      <tbody data-role="workbench-body"><tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">读取中...</td></tr></tbody>',
+      '    </table>',
+      '  </div>',
+      `  <div style="${listWorkbenchFooterStyle()}">`,
+      '    <div data-role="workbench-footer-actions" style="display:flex;align-items:center;gap:8px;">',
+      `      <button type="button" data-role="save-workbench-data" style="height:36px;border:1px solid #bfdbfe;background:#fff;color:#1d4ed8;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
+      `      <button type="button" data-role="delete-selected-workbench-skus" style="height:36px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">删除选中 SKU</button>`,
+      `      <button type="button" data-role="export-workbench-skus" style="height:36px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">复制选中数据</button>`,
+      `      <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>`,
+      '    </div>',
+      '  </div>',
+      '</div>',
+    ].join('');
+
+    document.body.appendChild(modal);
+    modal.querySelector('[data-role="close-list-workbench"]').addEventListener('click', () => modal.remove());
+    modal.querySelector('[data-role="refresh-list-workbench"]').addEventListener('click', () => loadListWorkbenchRows(modal));
+    modal.querySelectorAll('[data-role="workbench-view"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        setListWorkbenchMode(modal, button.getAttribute('data-mode'));
+        loadListWorkbenchRows(modal);
+      });
+    });
+    modal.querySelector('[data-role="row-filter"]').addEventListener('change', (event) => {
+      modal.__ssErpRowFilter = event.target.value === 'matched' ? 'matched' : 'all';
+      renderListWorkbenchRows(modal, modal.__ssErpListWorkbenchRows || [], modal.__ssErpListWorkbenchSkus || []);
+    });
+    modal.querySelector('[data-role="select-all-workbench"]').addEventListener('change', (event) => {
+      modal.querySelectorAll('[data-role="workbench-row-check"]').forEach((box) => { box.checked = event.target.checked; });
+    });
+    modal.querySelector('[data-role="save-workbench-data"]').addEventListener('click', () => saveListWorkbenchData(modal));
+    modal.querySelector('[data-role="delete-selected-workbench-skus"]').addEventListener('click', () => deleteSelectedListWorkbenchSkus(modal));
+    modal.querySelector('[data-role="export-workbench-skus"]').addEventListener('click', () => exportListWorkbenchSelectedSkus(modal));
+    modal.querySelector('[data-role="publish-workbench"]').addEventListener('click', () => publishListWorkbenchSelectedRows(modal));
+
+    setListWorkbenchMode(modal, modal.__ssErpWorkbenchFocus);
+    loadListWorkbenchShops(modal);
+    loadListWorkbenchRows(modal);
+  }
+
+  async function loadListWorkbenchShops(modal) {
+    const select = modal.querySelector('[data-role="shop-select"]');
+    if (!select) return;
+    try {
+      const response = await send({ type: 'spb-self-hosted:get-ozon-shops' }, 12000);
+      const shops = response && response.ok && Array.isArray(response.data) ? response.data : [];
+      select.innerHTML = '<option value="">选择 OZON 店铺</option>' + shops
+        .map((shop) => `<option value="${escapeHtml(shop.id)}">${escapeHtml(shop.name || shop.id)}</option>`)
+        .join('');
+    } catch (error) {
+      select.innerHTML = '<option value="">店铺加载失败</option>';
+    }
+  }
+
+  async function loadListWorkbenchRows(modal) {
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    const body = modal.querySelector('[data-role="workbench-body"]');
+    const skus = Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : getCurrentPageSkus();
+    modal.__ssErpListWorkbenchSkus = skus;
+    if (!skus.length) {
+      if (body) body.innerHTML = '<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">本页没有识别到 SKU</td></tr>';
+      if (status) status.textContent = '没有识别到 SKU';
+      return;
+    }
+    const seedRows = buildListWorkbenchSeedRows(skus);
+    modal.__ssErpListWorkbenchRows = seedRows;
+    renderListWorkbenchRows(modal, seedRows, skus);
+    if (status) status.textContent = `已显示 ${seedRows.length} 条缓存数据`;
+    try {
+      const costCny = readListWorkbenchNumber(modal, 'cost-cny');
+      const logisticsFeeCny = readListWorkbenchNumber(modal, 'logistics-fee-cny');
+      const commissionRate = readListWorkbenchNumber(modal, 'commission-rate');
+      const response = await send({
+        type: 'spb-self-hosted:fetch-ozon-workbench-rows',
+        productIds: skus,
+        rows: seedRows,
+        includeOffers: modal.__ssErpWorkbenchFocus === 'publish',
+        costs: costCny > 0 ? Object.fromEntries(skus.map((sku) => [String(sku), costCny])) : undefined,
+        logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
+        commissionRate: commissionRate > 0 ? commissionRate : undefined,
+      }, 120000);
+      if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '读取 SKU 工作台数据失败');
+      const enrichedRows = response.data && Array.isArray(response.data.rows) ? response.data.rows : [];
+      const rowBySku = new Map(seedRows.map((row) => [String(row.sku || ''), row]));
+      enrichedRows.forEach((row) => {
+        const sku = String(row && row.sku || '').trim();
+        if (!sku) return;
+        rowBySku.set(sku, Object.assign({}, rowBySku.get(sku) || {}, row));
+      });
+      const rows = skus.map((sku) => rowBySku.get(String(sku)) || { sku: String(sku) });
+      modal.__ssErpListWorkbenchRows = rows;
+      renderListWorkbenchRows(modal, rows, skus);
+      if (status) status.textContent = rows.length ? `已读取 ${rows.length} 条 SKU 数据` : '没有可展示的 SKU 数据';
+    } catch (error) {
+      if (!seedRows.length && body) {
+        body.innerHTML = `<tr><td colspan="18" style="padding:26px;text-align:center;color:#dc2626;border:1px solid #e5e7eb;">${escapeHtml(error && error.message ? error.message : String(error))}</td></tr>`;
+      }
+      if (status) status.textContent = seedRows.length ? `seller 数据补全失败，已保留本页缓存：${error && error.message ? error.message : String(error)}` : '读取失败';
+    }
+  }
+
+  function renderListWorkbenchRows(modal, rows, skus) {
+    const body = modal.querySelector('[data-role="workbench-body"]');
+    if (!body) return;
+    const rowBySku = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.sku || ''), row]));
+    const allRenderSkus = (Array.isArray(skus) && skus.length ? skus : rows.map((row) => String(row.sku || ''))).filter(Boolean);
+    const rowFilter = modal.__ssErpRowFilter === 'matched' ? 'matched' : 'all';
+    const decoratedRows = allRenderSkus.map((sku) => {
+      const row = rowBySku.get(String(sku)) || { sku };
+      const dom = getCardDomBySku(String(sku));
+      const selectionRow = buildSelectionMetricRow(String(sku), dom, row);
+      const matchedRules = matchProductSelectionRules(selectionRow);
+      return { sku: String(sku), row, dom, matchedRules };
+    });
+    const visibleRows = rowFilter === 'matched'
+      ? decoratedRows.filter((item) => item.matchedRules.length)
+      : decoratedRows;
+    if (!visibleRows.length) {
+      body.innerHTML = `<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">${rowFilter === 'matched' ? '暂无规则命中 SKU' : '暂无数据'}</td></tr>`;
+      return;
+    }
+    body.innerHTML = visibleRows.map(({ sku, row, dom, matchedRules }) => {
+      const title = row.title || dom.title || `Ozon SKU ${sku}`;
+      const image = row.image || dom.image || '';
+      const priceRub = firstPresentValue(row.priceRub, row.pagePrice, dom.price);
+      const selectionTags = matchedRules.length
+        ? matchedRules.slice(0, 2).map((rule) => {
+          const color = normalizeSelectionRuleColor(rule.color);
+          return `<span title="${escapeHtml(rule.name)}" style="display:inline-block;max-width:86px;border:1px solid ${color};background:#fff;color:${color};border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
+        }).join('')
+        : '<span style="color:#94a3b8;">--</span>';
+      return [
+        `<tr data-sku="${escapeHtml(sku)}" data-ss-erp-selection-matched="${matchedRules.length ? '1' : '0'}" style="background:${matchedRules.length ? '#f8fbff' : '#fff'};">`,
+        `  <td style="padding:8px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="workbench-row-check" value="${escapeHtml(sku)}" checked></td>`,
+        '  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">',
+        image ? `    <img src="${escapeHtml(image)}" alt="" style="width:30px;height:30px;object-fit:cover;border:1px solid #e5e7eb;margin-right:7px;display:inline-block;vertical-align:middle;">` : '',
+        `    <span style="font-family:Consolas,monospace;font-weight:700;color:#1e88e5;">${escapeHtml(sku)}</span>`,
+        '  </td>',
+        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${selectionTags}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${priceRub != null ? formatRub(priceRub) : '--'}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.soldCount == null ? '--' : formatNum(row.soldCount)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.soldSum == null ? '--' : formatRub(row.soldSum)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.sellerCount == null ? '--' : formatNum(row.sellerCount)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.minFollowPriceRub != null ? formatRub(row.minFollowPriceRub) : '--'}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.maxFollowPriceRub != null ? formatRub(row.maxFollowPriceRub) : '--'}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercentValue(row.adExpenseShare)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercentValue(row.returnCancelRate)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatPercentValue(row.commissionRate)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;color:${Number(row.profitMarginPct) >= 0 ? '#047857' : '#dc2626'};font-weight:700;">${formatPercentValue(row.profitMarginPct)}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.weightGrams == null ? '--' : `${formatNum(row.weightGrams)}g`}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(row.salesSchema || '--')}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(row.brand || '--')}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(row.categoryPath || '--')}</td>`,
+        '</tr>',
+      ].join('');
+    }).join('');
+  }
+
+  function readListWorkbenchNumber(modal, role) {
+    const input = modal.querySelector(`[data-role="${role}"]`);
+    const value = Number(input && input.value);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function getSelectedListWorkbenchSkus(modal) {
+    return Array.from(modal.querySelectorAll('[data-role="workbench-row-check"]:checked'))
+      .map((box) => String(box.value || '').trim())
+      .filter(Boolean);
+  }
+
+  function saveListWorkbenchData(modal) {
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    const payload = {
+      skus: Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : [],
+      rows: Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [],
+      savedAt: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem('ss-erp:ozon-list-workbench-data', JSON.stringify(payload));
+      if (chrome && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ 'ss-erp:ozon-list-workbench-data': payload });
+      }
+      if (status) status.textContent = `已保存 ${payload.rows.length} 条 SKU 数据`;
+    } catch (error) {
+      if (status) status.textContent = '保存失败';
+    }
+  }
+
+  function deleteSelectedListWorkbenchSkus(modal) {
+    const selected = new Set(getSelectedListWorkbenchSkus(modal));
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    if (!selected.size) {
+      if (status) status.textContent = '请先勾选 SKU';
+      return;
+    }
+    modal.__ssErpListWorkbenchSkus = (Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : [])
+      .filter((sku) => !selected.has(String(sku)));
+    modal.__ssErpListWorkbenchRows = (Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [])
+      .filter((row) => !selected.has(String(row && row.sku || '')));
+    renderListWorkbenchRows(modal, modal.__ssErpListWorkbenchRows, modal.__ssErpListWorkbenchSkus);
+    if (status) status.textContent = `已删除 ${selected.size} 个 SKU`;
+  }
+
+  async function exportListWorkbenchSelectedSkus(modal) {
+    const selected = getSelectedListWorkbenchSkus(modal);
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    if (!selected.length) {
+      if (status) status.textContent = '请先勾选 SKU';
+      return;
+    }
+    const allRows = Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [];
+    const rowBySku = new Map(allRows.map((row) => [String(row && row.sku || '').trim(), row]));
+    const lines = [
+      ['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目'].join('\t'),
+      ...selected.map((sku) => {
+        const row = rowBySku.get(sku) || {};
+        const dom = getCardDomBySku(sku);
+        return [
+          sku,
+          row.title || dom.title || '',
+          firstPresentValue(row.priceRub, row.pagePrice, dom.price, ''),
+          row.soldCount == null ? '' : row.soldCount,
+          row.soldSum == null ? '' : row.soldSum,
+          row.sellerCount == null ? '' : row.sellerCount,
+          row.minFollowPriceRub == null ? '' : row.minFollowPriceRub,
+          row.maxFollowPriceRub == null ? '' : row.maxFollowPriceRub,
+          row.adExpenseShare == null ? '' : row.adExpenseShare,
+          row.returnCancelRate == null ? '' : row.returnCancelRate,
+          row.commissionRate == null ? '' : row.commissionRate,
+          row.profitMarginPct == null ? '' : row.profitMarginPct,
+          row.salesSchema || '',
+          row.weightGrams == null ? '' : row.weightGrams,
+          row.brand || '',
+          row.categoryPath || '',
+        ].map((value) => String(value).replace(/\t/g, ' ').replace(/\r?\n/g, ' ')).join('\t');
+      }),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      if (status) status.textContent = `已复制 ${selected.length} 个 SKU 数据`;
+    } catch (error) {
+      if (status) status.textContent = '复制失败：浏览器剪贴板权限不可用';
+    }
+  }
+
+  async function publishListWorkbenchSelectedRows(modal) {
+    const selected = getSelectedListWorkbenchSkus(modal);
+    const shopId = String((modal.querySelector('[data-role="shop-select"]') || {}).value || '').trim();
+    const publishMode = String((modal.querySelector('[data-role="publish-mode"]') || {}).value || 'clone');
+    const markupPct = Number((modal.querySelector('[data-role="markup-pct"]') || {}).value || 0);
+    const costCny = readListWorkbenchNumber(modal, 'cost-cny');
+    const logisticsFeeCny = readListWorkbenchNumber(modal, 'logistics-fee-cny');
+    const commissionRate = readListWorkbenchNumber(modal, 'commission-rate');
+    const followBrand = Boolean((modal.querySelector('[data-role="follow-brand"]') || {}).checked);
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    const button = modal.querySelector('[data-role="publish-workbench"]');
+    if (!selected.length) {
+      if (status) status.textContent = '请先勾选 SKU';
+      return;
+    }
+    if (!shopId) {
+      if (status) status.textContent = '请先选择目标店铺';
+      return;
+    }
+
+    const allRows = Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [];
+    const rowBySku = new Map(allRows.map((row) => [String(row && row.sku || '').trim(), row]));
+    const rows = selected.map((sku) => {
+      const existing = rowBySku.get(sku);
+      if (existing) return existing;
+      const dom = getCardDomBySku(sku);
+      return {
+        sku,
+        title: dom.title || `Ozon SKU ${sku}`,
+        image: dom.image || '',
+        priceRub: dom.price || 0,
+      };
+    });
+    if (button) button.disabled = true;
+    if (status) status.textContent = '正在提交快速上架...';
+    try {
+      const response = await send({
+        type: 'spb-self-hosted:publish-ozon-workbench-rows',
+        productIds: selected,
+        productUrls: selected.map((sku) => (getCardDomBySku(sku).url || `https://www.ozon.ru/product/${sku}/`)),
+        rows,
+        entry: 'ozon-list-page',
+        shopId,
+        publishMode,
+        followBrand,
+        markupPct: Number.isFinite(markupPct) ? markupPct : 0,
+        costs: costCny > 0 ? Object.fromEntries(selected.map((sku) => [String(sku), costCny])) : undefined,
+        logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
+        commissionRate: commissionRate > 0 ? commissionRate : undefined,
+        randomOfferId: true,
+      }, 120000);
+      if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '上架失败');
+      if (status) status.textContent = '上架任务已提交';
+    } catch (error) {
+      if (status) status.textContent = error && error.message ? error.message : String(error);
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   // === 注入卡片 + 绑定事件 ===
@@ -840,6 +2724,8 @@
   function scan() {
     if (!isProductPage()) return;
     cleanupDetachedExpandedPanels();
+    ensureListWorkbenchBar();
+    ensureListQuickActions();
     const io = ensureIntersectionObserver();
     const targets = new Set();
 
@@ -871,6 +2757,8 @@
   function init() {
     if (!isProductPage()) return;
     const startedAt = Date.now();
+    ensureListOverlayStyles();
+    hydrateProductSelectionRulesFromStorage();
     scan();
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.body, { childList: true, subtree: true });

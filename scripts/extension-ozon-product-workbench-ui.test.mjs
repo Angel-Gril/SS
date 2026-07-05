@@ -1,0 +1,145 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+
+const content = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
+const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+test('Ozon product data panel keeps data actions separate from listing actions', () => {
+  assert.doesNotMatch(content, /data-role="open-workbench"/);
+  assert.match(content, /showOzonSkuWorkbench\(/);
+  assert.match(content, /ss-erp-ozon-workbench-modal/);
+  assert.match(content, /SS ERP SKU 工作台/);
+  assert.match(content, /一键上架选中 SKU/);
+  assert.match(content, /data-role="quick-open-workbench"/);
+  assert.match(content, /renderOzonPanel\(\{\s*expand:\s*false\s*\}\)/, 'product detail should keep the data panel collapsed on page load');
+  assert.match(content, /quick-open-insights[\s\S]*renderOzonPanel\(\{\s*expand:\s*true\s*\}\)/, 'product detail should expand data metrics from the quick action dock');
+  assert.doesNotMatch(content, /默认展开数据一览窗|📊/, 'product detail should not auto-open a second large floating panel or use emoji chrome');
+});
+
+test('Ozon product page exposes an SS ERP right quick action toolbar', () => {
+  assert.match(content, /ss-erp-ozon-quick-actions/);
+  assert.match(content, /renderOzonQuickActions\(/);
+  assert.match(content, /data-role="quick-open-workbench"/);
+  assert.match(content, /width:128px/, 'product quick toolbar should use the same width as the list quick toolbar');
+  assert.match(
+    content,
+    /quick-open-workbench[\s\S]*quickActionButtonStyle\("#ea580c",\s*"#ffffff"/,
+    'product quick toolbar should use ERP orange for the primary one-click listing action',
+  );
+  assert.match(
+    content,
+    /quick-pricing[\s\S]*quickActionButtonStyle\("#ffffff",\s*"#1f2937",\s*"#cbd5e1"\)/,
+    'product quick toolbar should keep pricing as a secondary action instead of a separate yellow theme',
+  );
+  for (const label of [
+    '一键上架',
+    '利润测算',
+    '定价策略',
+    '绑定Cookie',
+    '选品数据',
+    '设置选品',
+  ]) {
+    assert.match(content, new RegExp(label), `right toolbar should show ${label}`);
+  }
+  assert.doesNotMatch(content, /localhost:3002/, 'right toolbar ERP entry should not default to the old temporary 3002 test port');
+  assert.doesNotMatch(content, /background:rgba\(124,45,18/, 'product dialogs should not tint the whole Ozon page yellow/brown when a modal opens');
+  assert.match(content, /http:\/\/localhost:3000/, 'right toolbar ERP entry should default to the local web app on port 3000');
+  assert.match(content, /function\s+inferErpWebBaseUrl/, 'right toolbar should infer the ERP web URL from the configured API URL');
+  assert.match(content, /function\s+openExtensionSettingsPage/, 'right toolbar should expose a direct settings entry for Cookie and selection setup');
+  const competitorBrandPattern = new RegExp([
+    '\\u6bdb\\u5b50ERP',
+    '\\u4f01\\u9e45\\u52a9\\u624b',
+    '\\u4f01\\u9e45\\u5e97\\u957f',
+  ].join('|'));
+  assert.doesNotMatch(content, competitorBrandPattern);
+});
+
+test('Ozon product workbench fetches table rows and seller offer metrics through background', () => {
+  assert.match(content, /spb-self-hosted:fetch-ozon-workbench-rows/);
+  assert.match(content, /renderOzonWorkbenchRows\(/);
+  assert.match(content, /跟卖数量/);
+  assert.match(content, /跟卖最低价/);
+  assert.match(content, /跟卖最高价/);
+  assert.match(content, /利润率/);
+  assert.match(content, /SS_ERP_PRODUCT_THEME/, 'product workbench should share SS ERP product-page theme tokens');
+  assert.match(content, /function\s+productWorkbenchFooterStyle/, 'product workbench should centralize its footer surface style');
+  assert.match(
+    content,
+    /data-role="workbench-toolbar"[\s\S]*background:\$\{SS_ERP_PRODUCT_THEME\.surface\}/,
+    'product workbench toolbar should use a neutral surface instead of a large orange band',
+  );
+  assert.match(content, /data-role="workbench-table-wrap"/, 'product workbench should isolate table scrolling for sticky headers');
+  assert.match(content, /position:sticky;\s*top:0;\s*z-index:3/, 'product workbench header cells should stay above rows without piercing the toolbar');
+  assert.doesNotMatch(
+    content,
+    /<th[^>]+border:1px solid #4b5563/,
+    'product workbench header cells should use light grid lines instead of dark borders that look like table bleed-through',
+  );
+});
+
+test('Ozon workbench enrichment avoids duplicate slow seller fetches', () => {
+  assert.match(background, /OZON_WORKBENCH_INSIGHT_TTL_MS/, 'background should cache workbench insight aggregation results briefly');
+  assert.match(background, /ozonWorkbenchInsightCache/, 'background should keep an in-memory workbench insight cache');
+  assert.match(background, /ozonWorkbenchInsightInFlight/, 'background should de-duplicate concurrent workbench insight requests for the same SKU');
+  assert.match(background, /function\s+hasRichWorkbenchSeedRow/, 'background should detect rows that already have enough card or premium data');
+  assert.match(background, /hasRichWorkbenchSeedRow\(seed,\s*\{\s*includeOffers\s*\}\)/, 'fetchOzonWorkbenchRows should reuse rich seed rows with the current enrichment mode instead of re-fetching every SKU');
+});
+
+test('Ozon product data panel and workbench expose operating metrics from connected data sources', () => {
+  for (const label of [
+    '广告费占比',
+    '参与促销天数',
+    '参与促销的折扣',
+    '促销活动的转化率',
+    '付费推广天数',
+    '商品卡浏览量',
+    '商品卡加购率',
+    '搜索目录浏览量',
+    '搜索目录加购率',
+    '浏览下单率',
+    '搜索转换率',
+    '展示转化率',
+    '商品点击率',
+    '结单率',
+    '模板活动天数',
+    '促销收入占比',
+    '佣金',
+    '价格指数',
+    '跟卖列表',
+    '跟卖最高价',
+  ]) {
+    assert.match(content, new RegExp(label), `Ozon product UI should show ${label}`);
+  }
+  assert.match(content, /spb-self-hosted:get-ozon-seller-offers/);
+});
+
+test('Ozon product data panel opens a seller-list modal from follow seller data', () => {
+  assert.match(content, /function\s+showOzonSellerListModal/);
+  assert.match(content, /data-role=["']open-seller-list["']/);
+  assert.match(content, /sellerOffers/);
+  assert.match(content, /sellerNames/);
+  assert.match(content, /showOzonSellerListModal\(data\)/);
+});
+
+test('product-detail one-click listing keeps the normal collect-then-publish workflow', () => {
+  assert.match(background, /publishOzonWorkbenchRows\(/);
+  assert.match(background, /spb-self-hosted:publish-ozon-workbench-rows/);
+  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nfunction normalizeOzonProductPathForFetch/);
+  assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
+  assert.match(publishFunction[0], /ozon-product-detail/);
+  assert.match(publishFunction[0], /collectOzonProductsToErp\(productIds/);
+  assert.match(publishFunction[0], /fetchCollectedOzonItemsBySkus/);
+  assert.match(background, /\/api\/collect\?/);
+  assert.match(publishFunction[0], /\/api\/collect\/publish-ozon/);
+  assert.match(publishFunction[0], /useItemCategory:\s*true/);
+  assert.doesNotMatch(content, /选中后会先采集到 ERP，再走正常 Ozon 上架流程。/);
+  assert.match(content, /正在采集并上架/);
+  assert.match(content, /entry:\s*"ozon-product-detail"/);
+  assert.match(content, /markupPct/);
+});
+
+test('list-page SKU workbench can still use direct import-by-sku for batch speed', () => {
+  assert.match(background, /publishOzonWorkbenchRowsDirect\(/);
+  assert.match(background, /\/api\/listing\/ozon\/import-by-sku/);
+});

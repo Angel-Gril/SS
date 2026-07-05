@@ -7,6 +7,14 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 
@@ -60,6 +68,109 @@ function collectedVideoCount(item: BatchItem) {
   return Array.isArray(item.metadata?.sourceVideos) ? item.metadata.sourceVideos.length : 0;
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const normalized = value
+      .replace(/[\u00a0\u202f]/g, ' ')
+      .replace(/[₽¥￥$€₸]|руб\.?|RUB|CNY|RMB|KZT|BYN|USD|EUR|%/gi, '')
+      .replace(/\s+/g, '')
+      .replace(',', '.')
+      .trim();
+    if (!normalized) return null;
+    const num = Number(normalized);
+    return Number.isFinite(num) ? num : null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatNumberMetric(value: unknown, suffix = '') {
+  const num = toFiniteNumber(value);
+  if (num == null) return '-';
+  return `${num.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}${suffix}`;
+}
+
+function formatRubMetric(value: unknown) {
+  const num = toFiniteNumber(value);
+  if (num == null) return '-';
+  return `₽${num.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}`;
+}
+
+function formatPercentMetric(value: unknown) {
+  const num = toFiniteNumber(value);
+  if (num == null) return '-';
+  return `${num.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}%`;
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {};
+}
+
+function getOzonInsights(item: BatchItem): Record<string, any> {
+  return asRecord(item.metadata?.ozonInsights);
+}
+
+function firstInsightValue(insights: Record<string, any>, keys: string[]) {
+  const root = asRecord(insights);
+  const nested = [
+    root,
+    asRecord(root.metrics),
+    asRecord(root.item),
+    asRecord(root.offers),
+    asRecord(root.specs),
+  ];
+
+  for (const source of nested) {
+    for (const key of keys) {
+      const value = source[key];
+      if (value != null && value !== '') return value;
+    }
+  }
+  return null;
+}
+
+function normalizeRatePercentMetric(value: unknown): number | null {
+  const raw = String(value ?? '');
+  const hasPercentSign = raw.includes('%');
+  const number = toFiniteNumber(value);
+  if (number == null) return null;
+  if (!hasPercentSign && number > 0 && number <= 1) return Math.round(number * 10000) / 100;
+  return Math.round(number * 100) / 100;
+}
+
+function deriveReturnCancelRate(insights: Record<string, any>) {
+  const direct = normalizeRatePercentMetric(firstInsightValue(insights, [
+    'returnCancelRate',
+    'cancelReturnRate',
+    'returnRate',
+    'cancelRate',
+  ]));
+  if (direct != null) return direct;
+
+  const redemption = normalizeRatePercentMetric(firstInsightValue(insights, [
+    'nullableRedemptionRate',
+    'redemptionRate',
+    'redemption_rate',
+  ]));
+  return redemption == null ? null : Math.max(0, Math.round((100 - redemption) * 100) / 100);
+}
+
+function formatDimensions(insights: Record<string, any>) {
+  const root = asRecord(insights);
+  const dims = { ...asRecord(root.dimensionsMm), ...asRecord(asRecord(root.specs).dimensionsMm) };
+  const length = firstInsightValue({ ...root, ...dims }, ['lengthMm', 'length', 'depth']);
+  const width = firstInsightValue({ ...root, ...dims }, ['widthMm', 'width']);
+  const height = firstInsightValue({ ...root, ...dims }, ['heightMm', 'height']);
+  if (length == null && width == null && height == null) return '-';
+  return `${length || '?'} x ${width || '?'} x ${height || '?'} mm`;
+}
+
+function hasSourceCategory(item: BatchItem) {
+  return Boolean(item.metadata?.descriptionCategoryId && item.metadata?.typeId);
+}
+
 function sendToExtension(message: any, timeoutMs = 60000): Promise<any> {
   return new Promise((resolve) => {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -84,6 +195,7 @@ export default function BatchCollectPage() {
   const [shops, setShops] = useState<Shop[]>([]);
   const [collecting, setCollecting] = useState(false);
   const [collected, setCollected] = useState<BatchItem[]>([]);
+  const [selectedCollectedIds, setSelectedCollectedIds] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<string[]>([]);
 
   const [enableWatermark, setEnableWatermark] = useState(false);
@@ -149,6 +261,7 @@ export default function BatchCollectPage() {
 
     setCollecting(true);
     setCollected([]);
+    setSelectedCollectedIds(new Set());
     setErrors([]);
 
     const productIds = ok.map((p) => p.sku);
@@ -206,6 +319,7 @@ export default function BatchCollectPage() {
 
     const refreshed = await fetchCollectedBySkus(productIds);
     setCollected(refreshed);
+    setSelectedCollectedIds(new Set(refreshed.map((item) => item.id)));
     setCollecting(false);
   }
 
@@ -246,7 +360,10 @@ export default function BatchCollectPage() {
     setPublishUseItemCategory(inheritedCount > 0);
     if (inheritedCount > 0) {
       const refreshed = await fetchCollectedBySkus(productIds);
-      if (refreshed.length) setCollected(refreshed);
+      if (refreshed.length) {
+        setCollected(refreshed);
+        setSelectedCollectedIds(new Set(refreshed.filter((item) => selectedCollectedIds.has(item.id)).map((item) => item.id)));
+      }
     }
     if (first.descriptionCategoryId) setPublishCategoryId(String(first.descriptionCategoryId));
     if (first.weight) setPublishWeight(String(first.weight));
@@ -269,6 +386,7 @@ export default function BatchCollectPage() {
 
   async function handlePublish() {
     if (!collected.length) { toast({ title: '请先采集商品', variant: 'destructive' }); return; }
+    if (!selectedCollected.length) { toast({ title: '请先选择要上架的 SKU', variant: 'destructive' }); return; }
     if (!publishShopId) { toast({ title: '请选择目标店铺', variant: 'destructive' }); return; }
     if (!publishCategoryId || !publishTypeId) {
       toast({ title: '请填写或继承分类/类型 ID', variant: 'destructive' });
@@ -276,7 +394,7 @@ export default function BatchCollectPage() {
     }
     setPublishing(true);
     const res = await api.post('/api/collect/publish-ozon', {
-      ids: collected.map((c) => c.id),
+      ids: selectedCollected.map((c) => c.id),
       shopId: publishShopId,
       categoryId: Number(publishCategoryId),
       typeId: Number(publishTypeId),
@@ -295,6 +413,7 @@ export default function BatchCollectPage() {
     if (res.code === 1) {
       toast({ title: res.msg });
       setCollected([]);
+      setSelectedCollectedIds(new Set());
       setSkuInput('');
     } else {
       toast({ title: res.msg || '上架失败', variant: 'destructive' });
@@ -303,9 +422,30 @@ export default function BatchCollectPage() {
 
   function removeRow(id: string) {
     setCollected((prev) => prev.filter((r) => r.id !== id));
+    setSelectedCollectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleCollectedSelection(id: string, checked: boolean) {
+    setSelectedCollectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleAllCollected(checked: boolean) {
+    setSelectedCollectedIds(new Set(checked ? collected.map((item) => item.id) : []));
   }
 
   const previewParse = parseSkuLines(skuInput);
+  const selectedCollected = collected.filter((item) => selectedCollectedIds.has(item.id));
+  const allCollectedSelected = collected.length > 0 && selectedCollected.length === collected.length;
+  const selectedCategoryReadyCount = selectedCollected.filter(hasSourceCategory).length;
 
   return (
     <div className="space-y-4">
@@ -442,48 +582,156 @@ export default function BatchCollectPage() {
         <Card>
           <CardContent className="pt-4 pb-4 space-y-4">
             <div className="flex items-center justify-between">
-              <Label className="text-sm font-medium">③ 采集结果（{collected.length} 件）</Label>
+              <div>
+                <Label className="text-sm font-medium">③ SKU 工作台（{collected.length} 件）</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  选中 {selectedCollected.length} 件，{selectedCategoryReadyCount} 件已带源分类
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={() => setCollected([])}
+                onClick={() => { setCollected([]); setSelectedCollectedIds(new Set()); }}
                 className="text-xs text-muted-foreground hover:text-destructive"
               >
                 全部清空
               </button>
             </div>
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {collected.map((item) => (
-                <div key={item.id} className="flex items-center gap-3 p-2 rounded-md border bg-muted/20">
-                  {item.images?.[0] ? (
-                    <img src={item.images[0]} alt="" className="h-12 w-12 rounded border object-cover shrink-0" />
-                  ) : (
-                    <div className="h-12 w-12 rounded border bg-muted flex items-center justify-center shrink-0">
-                      <ShoppingCart className="h-4 w-4 opacity-30" />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium line-clamp-1">{item.title}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      {item.sku && <span className="font-mono text-[10px] text-muted-foreground">SKU {item.sku}</span>}
-                      {item.purchasePrice && <span className="text-[11px] text-primary tabular-nums">RMB {item.purchasePrice}</span>}
-                      {item.metadata?.watermarkApplied && <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-600 px-1 py-0">水印</Badge>}
-                      {item.metadata?.ozonAttributes && <Badge variant="outline" className="text-[10px] border-orange-300 text-orange-600 px-1 py-0">属性</Badge>}
-                      {item.metadata?.descriptionCategoryId && item.metadata?.typeId && <Badge variant="outline" className="text-[10px] border-green-300 text-green-700 px-1 py-0">源分类</Badge>}
-                      {hasCollectedDescription(item) && <Badge variant="outline" className="text-[10px] border-sky-300 text-sky-700 px-1 py-0">简介</Badge>}
-                      {hasCollectedRichContent(item) && <Badge variant="outline" className="text-[10px] border-violet-300 text-violet-700 px-1 py-0">富内容</Badge>}
-                      {collectedVideoCount(item) > 0 && <Badge variant="outline" className="text-[10px] border-rose-300 text-rose-700 px-1 py-0">视频 {collectedVideoCount(item)}</Badge>}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeRow(item.id)}
-                    className="p-1 rounded hover:bg-destructive/10"
-                    title="从本次列表移除（不删数据库）"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-destructive/70" />
-                  </button>
-                </div>
-              ))}
+            <div className="overflow-x-auto border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-slate-900 hover:bg-slate-900">
+                    <TableHead className="w-10 text-slate-100">
+                      <input
+                        type="checkbox"
+                        className="rounded border-slate-500"
+                        checked={allCollectedSelected}
+                        onChange={(e) => toggleAllCollected(e.target.checked)}
+                        aria-label="选中全部 SKU"
+                      />
+                    </TableHead>
+                    <TableHead className="min-w-[260px] text-slate-100">SKU</TableHead>
+                    <TableHead className="text-right text-slate-100">采购价</TableHead>
+                    <TableHead className="text-right text-slate-100">跟卖最低价</TableHead>
+                    <TableHead className="text-right text-slate-100">跟卖最高价</TableHead>
+                    <TableHead className="text-right text-slate-100">卖家数</TableHead>
+                    <TableHead className="text-right text-slate-100">30天销量</TableHead>
+                    <TableHead className="text-right text-slate-100">30天销售额</TableHead>
+                    <TableHead className="text-right text-slate-100">加购率</TableHead>
+                    <TableHead className="text-right text-slate-100">广告费占比</TableHead>
+                    <TableHead className="text-right text-slate-100">促销天数</TableHead>
+                    <TableHead className="text-right text-slate-100">搜索浏览</TableHead>
+                    <TableHead className="text-right text-slate-100">搜索加购</TableHead>
+                    <TableHead className="text-right text-slate-100">商品点击率</TableHead>
+                    <TableHead className="text-right text-slate-100">退货取消率</TableHead>
+                    <TableHead className="min-w-[150px] text-slate-100">重量/尺寸</TableHead>
+                    <TableHead className="min-w-[160px] text-slate-100">品牌/发货</TableHead>
+                    <TableHead className="min-w-[150px] text-slate-100">源分类</TableHead>
+                    <TableHead className="w-12 text-right text-slate-100">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {collected.map((item) => {
+                    const insights = getOzonInsights(item);
+                    const sellerCount = firstInsightValue(insights, ['sellerCount']);
+                    const minFollowPrice = firstInsightValue(insights, ['minFollowPriceRub', 'minSellerPriceRub', 'minSellerPrice', 'minPrice']);
+                    const maxFollowPrice = firstInsightValue(insights, ['maxFollowPriceRub', 'maxSellerPriceRub', 'maxSellerPrice', 'maxPrice']);
+                    const soldCount = firstInsightValue(insights, ['soldCount30d', 'soldCount', 'monthlySales', 'orderedUnits']);
+                    const soldSum = firstInsightValue(insights, ['soldSumRub', 'soldSum', 'gmvSum', 'gmv', 'revenue']);
+                    const addToCartRate = firstInsightValue(insights, ['addToCartRatePercent', 'convToCartPdp', 'pdpToCartConversion']);
+                    const adExpenseShare = firstInsightValue(insights, ['adExpenseShare', 'advExpenseShare', 'advertisingExpenseShare', 'drr', 'acos']);
+                    const promoDays = firstInsightValue(insights, ['promoDays', 'promotionDays', 'actionDays']);
+                    const searchCatalogViews = firstInsightValue(insights, ['searchCatalogViews', 'catalogSearchViews', 'searchViews']);
+                    const searchCatalogAddToCartRate = firstInsightValue(insights, ['searchCatalogAddToCartRate', 'searchCatalogToCartRate', 'searchToCartRate']);
+                    const productClickRate = firstInsightValue(insights, ['productClickRate', 'clickThroughRate', 'ctr']);
+                    const returnCancelRate = deriveReturnCancelRate(insights);
+                    const weight = firstInsightValue(insights, ['weightGrams', 'grossWeightGrams', 'weightG', 'weight']);
+                    const brand = firstInsightValue(insights, ['brand']);
+                    const salesSchema = firstInsightValue(insights, ['salesSchema']);
+                    const category = [firstInsightValue(insights, ['category1']), firstInsightValue(insights, ['category3'])]
+                      .filter(Boolean)
+                      .join(' / ');
+                    const selected = selectedCollectedIds.has(item.id);
+                    return (
+                      <TableRow key={item.id} className={selected ? 'bg-muted/30' : ''}>
+                        <TableCell>
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300"
+                            checked={selected}
+                            onChange={(e) => toggleCollectedSelection(item.id, e.target.checked)}
+                            aria-label={`选中 SKU ${item.sku || item.id}`}
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {item.images?.[0] ? (
+                              <img src={item.images[0]} alt="" className="h-12 w-12 border object-cover shrink-0" />
+                            ) : (
+                              <div className="h-12 w-12 border bg-muted flex items-center justify-center shrink-0">
+                                <ShoppingCart className="h-4 w-4 opacity-30" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium line-clamp-2" title={item.title}>{item.title}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                {item.sku && <span className="font-mono text-[10px] text-muted-foreground">SKU {item.sku}</span>}
+                                {item.metadata?.watermarkApplied && <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-600 px-1 py-0">水印</Badge>}
+                                {item.metadata?.ozonAttributes && <Badge variant="outline" className="text-[10px] border-orange-300 text-orange-600 px-1 py-0">属性</Badge>}
+                                {hasCollectedDescription(item) && <Badge variant="outline" className="text-[10px] border-sky-300 text-sky-700 px-1 py-0">简介</Badge>}
+                                {hasCollectedRichContent(item) && <Badge variant="outline" className="text-[10px] border-violet-300 text-violet-700 px-1 py-0">富内容</Badge>}
+                                {collectedVideoCount(item) > 0 && <Badge variant="outline" className="text-[10px] border-rose-300 text-rose-700 px-1 py-0">视频 {collectedVideoCount(item)}</Badge>}
+                              </div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{item.purchasePrice ? `RMB ${item.purchasePrice}` : '-'}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatRubMetric(minFollowPrice)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatRubMetric(maxFollowPrice)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatNumberMetric(sellerCount)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatNumberMetric(soldCount)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatRubMetric(soldSum)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatPercentMetric(addToCartRate)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatPercentMetric(adExpenseShare)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatNumberMetric(promoDays)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatNumberMetric(searchCatalogViews)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatPercentMetric(searchCatalogAddToCartRate)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatPercentMetric(productClickRate)}</TableCell>
+                        <TableCell className="text-right tabular-nums align-top">{formatPercentMetric(returnCancelRate)}</TableCell>
+                        <TableCell className="text-xs align-top">
+                          <div className="tabular-nums">{formatNumberMetric(weight, 'g')}</div>
+                          <div className="text-muted-foreground tabular-nums">{formatDimensions(insights)}</div>
+                        </TableCell>
+                        <TableCell className="text-xs align-top">
+                          <div className="font-medium truncate max-w-[180px]" title={String(brand || '')}>{brand || '-'}</div>
+                          <div className="text-muted-foreground truncate max-w-[180px]" title={String(salesSchema || category || '')}>{salesSchema || category || '-'}</div>
+                        </TableCell>
+                        <TableCell className="align-top">
+                          {hasSourceCategory(item) ? (
+                            <div className="space-y-1">
+                              <Badge variant="outline" className="text-[10px] border-green-300 text-green-700 px-1 py-0">源分类</Badge>
+                              <div className="text-[10px] text-muted-foreground font-mono">
+                                {item.metadata?.descriptionCategoryId}/{item.metadata?.typeId}
+                              </div>
+                            </div>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700 px-1 py-0">待继承</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right align-top">
+                          <button
+                            type="button"
+                            onClick={() => removeRow(item.id)}
+                            className="p-1 rounded hover:bg-destructive/10"
+                            title="从本次列表移除（不删数据库）"
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-destructive/70" />
+                          </button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
 
             {errors.length > 0 && (
@@ -564,10 +812,10 @@ export default function BatchCollectPage() {
                 size="lg"
                 className="w-full"
                 onClick={handlePublish}
-                disabled={publishing || !publishShopId || !publishCategoryId || !publishTypeId}
+                disabled={publishing || !selectedCollected.length || !publishShopId || !publishCategoryId || !publishTypeId}
               >
                 {publishing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Upload className="h-4 w-4 mr-2" />}
-                {publishing ? '上架中...' : `一键上架 ${collected.length} 件到 OZON`}
+                {publishing ? '上架中...' : `一键上架选中 ${selectedCollected.length} 件到 OZON`}
               </Button>
             </div>
           </CardContent>

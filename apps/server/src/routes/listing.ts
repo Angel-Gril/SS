@@ -9,6 +9,7 @@ import { summarizeOzonImportItems } from '../services/ozon-import-status.js';
 import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
+import { randomOfferIdFrom } from '../lib/randomize.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
@@ -33,6 +34,58 @@ const batchListSchema = z.object({
     })).optional(),
   })).min(1).max(100),
 });
+
+const directOzonImportBySkuSchema = z.object({
+  shopId: z.string().min(1),
+  source: z.string().optional(),
+  entry: z.string().optional(),
+  mode: z.string().optional(),
+  items: z.array(z.object({
+    sku: z.coerce.number().int().positive(),
+    offerId: z.string().trim().min(1).optional(),
+    title: z.string().trim().optional(),
+    price: z.coerce.number().positive().optional(),
+    oldPrice: z.coerce.number().positive().optional(),
+    currency: z.string().trim().default('CNY'),
+    sourceUrl: z.string().trim().optional(),
+    imageUrls: z.array(z.string().trim()).optional(),
+    brand: z.string().trim().optional(),
+    categoryPath: z.string().trim().optional(),
+    salesSchema: z.string().trim().optional(),
+    weightGrams: z.coerce.number().optional().nullable(),
+    dimensionsText: z.string().trim().optional(),
+    commissionRate: z.coerce.number().optional().nullable(),
+    logisticsFeeCny: z.coerce.number().optional().nullable(),
+    costCny: z.coerce.number().optional().nullable(),
+    profitCny: z.coerce.number().optional().nullable(),
+    profitMarginPct: z.coerce.number().optional().nullable(),
+    soldCount: z.coerce.number().optional().nullable(),
+    soldSum: z.coerce.number().optional().nullable(),
+    returnCancelRate: z.coerce.number().optional().nullable(),
+    nullableRedemptionRate: z.coerce.number().optional().nullable(),
+    sellerCount: z.coerce.number().optional().nullable(),
+    minFollowPriceRub: z.coerce.number().optional().nullable(),
+    maxFollowPriceRub: z.coerce.number().optional().nullable(),
+    sellerNames: z.array(z.string().trim()).optional(),
+    ozonMetrics: z.record(z.any()).optional(),
+  })).min(1).max(1000),
+});
+
+function buildDirectImportBySkuTitle(input: { title?: string; sku: number }): string {
+  const title = String(input.title || '').trim();
+  return title ? title.slice(0, 500) : `Ozon SKU ${input.sku}`;
+}
+
+function buildDirectImportBySkuPrice(input: { price?: number; oldPrice?: number }): { price: string; oldPrice: string } {
+  const price = Number.isFinite(input.price) && Number(input.price) > 0 ? Number(input.price) : 100;
+  const oldPrice = Number.isFinite(input.oldPrice) && Number(input.oldPrice) >= price
+    ? Number(input.oldPrice)
+    : Math.ceil(price * 1.2);
+  return {
+    price: String(Math.round(price * 100) / 100),
+    oldPrice: String(Math.round(oldPrice * 100) / 100),
+  };
+}
 
 export function isPictureUploadRepairJob(payload: Record<string, any>): boolean {
   if (payload.source === 'collect-publish-fallback' || payload.mode === 'follow-by-sku') return true;
@@ -425,6 +478,120 @@ export async function listingRoutes(app: FastifyInstance) {
       });
     } catch (e: any) {
       return reply.send({ code: 0, msg: `上架失败: ${e.message}` });
+    }
+  });
+
+  app.post('/ozon/import-by-sku', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = directOzonImportBySkuSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { shopId, items } = parsed.data;
+    const shop = await prisma.shop.findFirst({ where: { id: shopId, userId } });
+    if (!shop) {
+      return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+    }
+    if (shop.platform !== 'OZON') {
+      return reply.send({ code: 0, msg: '暂只支持 OZON 直接上架' });
+    }
+    if (shop.status !== 'ACTIVE') {
+      return reply.send({ code: 0, msg: '店铺状态异常，请先测试连接' });
+    }
+    if (!shop.clientId || !shop.apiKeyEncrypted) {
+      return reply.send({ code: 0, msg: '店铺 API 配置不完整' });
+    }
+
+    const client = new OzonClient({
+      clientId: shop.clientId,
+      apiKey: decrypt(shop.apiKeyEncrypted),
+    });
+
+    const seenOfferIds = new Set<string>();
+    const ozonItems = items.map((item) => {
+      const sourceSku = String(item.sku);
+      let offerId = String(item.offerId || '').trim() || randomOfferIdFrom(sourceSku);
+      while (seenOfferIds.has(offerId)) offerId = randomOfferIdFrom(sourceSku);
+      seenOfferIds.add(offerId);
+
+      const price = buildDirectImportBySkuPrice({ price: item.price, oldPrice: item.oldPrice });
+      return {
+        sku: item.sku,
+        name: buildDirectImportBySkuTitle({ title: item.title, sku: item.sku }),
+        offer_id: offerId,
+        price: price.price,
+        old_price: price.oldPrice,
+        currency_code: item.currency || 'CNY',
+        vat: '0',
+      };
+    });
+
+    try {
+      const result = await client.importBySku(ozonItems);
+      const taskId = result.result.task_id;
+      const unmatched = result.result.unmatched_sku_list || [];
+      const job = await prisma.syncJob.create({
+        data: {
+          shopId,
+          type: 'PRODUCT_PUSH',
+          status: 'RUNNING',
+          startedAt: new Date(),
+          payload: {
+            taskId,
+            itemCount: ozonItems.length,
+            source: parsed.data.source || 'extension-workbench-direct',
+            entry: parsed.data.entry || 'extension-workbench',
+            mode: parsed.data.mode || 'follow-by-sku',
+            sourceSkus: items.map((item) => String(item.sku)),
+            offerIds: ozonItems.map((item) => item.offer_id),
+            unmatched,
+            inputItems: items.map((item) => ({
+              sku: String(item.sku),
+              title: item.title || null,
+              price: item.price ?? null,
+              sourceUrl: item.sourceUrl || null,
+              imageUrls: item.imageUrls || null,
+              brand: item.brand || null,
+              categoryPath: item.categoryPath || null,
+              salesSchema: item.salesSchema || null,
+              weightGrams: item.weightGrams ?? null,
+              dimensionsText: item.dimensionsText || null,
+              commissionRate: item.commissionRate ?? null,
+              logisticsFeeCny: item.logisticsFeeCny ?? null,
+              costCny: item.costCny ?? null,
+              profitCny: item.profitCny ?? null,
+              profitMarginPct: item.profitMarginPct ?? null,
+              soldCount: item.soldCount ?? null,
+              soldSum: item.soldSum ?? null,
+              returnCancelRate: item.returnCancelRate ?? null,
+              nullableRedemptionRate: item.nullableRedemptionRate ?? null,
+              sellerCount: item.sellerCount ?? null,
+              minFollowPriceRub: item.minFollowPriceRub ?? null,
+              maxFollowPriceRub: item.maxFollowPriceRub ?? null,
+              sellerNames: item.sellerNames || [],
+              ozonMetrics: item.ozonMetrics || null,
+            })),
+          },
+        },
+        select: { id: true },
+      });
+
+      void enqueueProductSyncAfterPublish(shopId, 'extension-workbench-direct');
+
+      return reply.send({
+        code: 1,
+        msg: `已提交 ${ozonItems.length} 个 SKU 到 OZON`,
+        data: {
+          taskId,
+          jobId: job.id,
+          count: ozonItems.length,
+          unmatched,
+          offerIds: ozonItems.map((item) => item.offer_id),
+        },
+      });
+    } catch (e: any) {
+      return reply.send({ code: 0, msg: `快速上架失败: ${e.message?.slice(0, 300) || '未知错误'}` });
     }
   });
 
