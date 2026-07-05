@@ -213,7 +213,17 @@ assert.match(
 assert.match(
   overlay,
   /resize-grip/,
-  'Ozon list workbench resize handles should be visibly discoverable, not invisible hit targets',
+  'Ozon list workbench should keep resize hit targets for manual column width adjustment',
+);
+assert.match(
+  overlay,
+  /\.resize-grip::after[\s\S]*opacity:0/,
+  'Ozon list workbench resize grips should be visually hidden by default so header dividers do not appear in the middle of columns',
+);
+assert.match(
+  overlay,
+  /th:hover \.resize-grip::after[\s\S]*opacity:\.55/,
+  'Ozon list workbench resize grips should only become subtly visible on header hover',
 );
 assert.match(
   overlay,

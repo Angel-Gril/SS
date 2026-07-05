@@ -158,9 +158,10 @@
       `#${LIST_QUICK_ACTIONS_ID} button{transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .14s ease,box-shadow .14s ease;}`,
       `#${LIST_QUICK_ACTIONS_ID} button:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(15,23,42,.14);}`,
       `#${LIST_WORKBENCH_MODAL_ID} tbody tr{animation:ssErpRowIn .12s ease-out;}`,
-      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip{position:absolute;right:-5px;top:0;width:10px;height:100%;cursor:col-resize;z-index:5;display:flex;align-items:center;justify-content:center;}`,
-      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip::after{content:"";width:2px;height:20px;border-radius:999px;background:#94a3b8;opacity:.8;box-shadow:0 0 0 1px rgba(255,255,255,.72);}`,
-      `#${LIST_WORKBENCH_MODAL_ID} th:hover .resize-grip::after{background:#2563eb;opacity:1;}`,
+      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip{position:absolute;right:-4px;top:0;width:8px;height:100%;cursor:col-resize;z-index:5;display:flex;align-items:center;justify-content:center;}`,
+      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip::after{content:"";width:2px;height:18px;border-radius:999px;background:#60a5fa;opacity:0;transition:opacity .12s ease,background-color .12s ease;}`,
+      `#${LIST_WORKBENCH_MODAL_ID} th:hover .resize-grip::after{opacity:.55;}`,
+      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip.is-active::after{opacity:.85;background:#2563eb;}`,
     ].join('\n');
     document.documentElement.appendChild(style);
   }
@@ -1958,6 +1959,7 @@
         event.stopPropagation();
         const startX = event.clientX;
         const startWidth = getListWorkbenchColumnWidth(column, modal.__ssErpListWorkbenchColumnWidths || {});
+        handle.classList.add('is-active');
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
         const onMove = (moveEvent) => {
@@ -1972,6 +1974,7 @@
           document.removeEventListener('mouseup', onUp);
           document.body.style.cursor = '';
           document.body.style.userSelect = '';
+          handle.classList.remove('is-active');
           persistListWorkbenchColumnWidths(modal.__ssErpListWorkbenchColumnWidths || {});
         };
         document.addEventListener('mousemove', onMove);
