@@ -537,6 +537,37 @@ async function syncOzonCookieToShopForSync(shopId, options) {
   return { ok: true, shopId: normalizedShopId, companyId: companyId || '', data: data.data, syncedAt: now };
 }
 
+async function syncCurrentOzonCookieForSync(options) {
+  const connection = await getOzonAutoSyncConnection();
+  if (!connection.apiBase) throw new Error('请先在插件设置中配置 ERP 地址');
+  if (!connection.token) throw new Error('请先在插件设置中配置 ERP Token');
+
+  const capturedCompanyId = normalizeOzonCompanyIdForSync(
+    (options && options.companyId)
+    || await getCapturedOzonCompanyIdForSync()
+    || await readOzonSellerCookieValueFromOpenTabForSync('sc_company_id')
+  );
+  const shop = await resolveOzonAutoSyncShop(connection.apiBase, connection.token, capturedCompanyId);
+  if (!shop || !shop.id) {
+    throw new Error('未找到匹配的 Ozon 店铺，请先在扩展弹窗选择目标店铺，或在 seller.ozon.ru 切换到已绑定 company_id 的店铺');
+  }
+
+  const result = await syncOzonCookieToShopForSync(shop.id, { companyId: capturedCompanyId });
+  const stateRow = await chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]);
+  const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
+    ? stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY]
+    : {};
+  await chrome.storage.local.set({
+    [SS_ERP_OZON_AUTO_SYNC_STATE_KEY]: {
+      ...state,
+      cookieAt: Date.now(),
+      lastReason: 'quick_cookie_sync',
+      ...(result.companyId ? { lastCompanyId: result.companyId } : {}),
+    },
+  });
+  return result;
+}
+
 function shouldRunOzonAutoSyncSlot(state, key, now, force) {
   if (force) return true;
   const last = Number(state && state[key]) || 0;
@@ -2479,6 +2510,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       companyId: message.payload && message.payload.companyId,
     }).then((result) => {
       sendResponse({ ok: true, msg: 'Cookie 已同步到该店铺', data: result.data });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
+  }
+
+  if (message.type === 'ozon-calc:sync-current-ozon-cookie') {
+    syncCurrentOzonCookieForSync(message.payload || {}).then((result) => {
+      sendResponse({
+        ok: true,
+        msg: 'Cookie 已同步到当前 Ozon 店铺',
+        data: {
+          ...(result.data && typeof result.data === 'object' ? result.data : {}),
+          shopId: result.shopId,
+          companyId: result.companyId,
+          syncedAt: result.syncedAt,
+        },
+      });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });

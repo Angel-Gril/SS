@@ -782,8 +782,7 @@
       </div>
       <button type="button" data-role="quick-open-workbench" title="打开 SKU 工作台并提交上架" style="${quickActionButtonStyle("#ea580c", "#ffffff")}">一键上架</button>
       <button type="button" data-role="quick-profit" title="查看售价、成本和利润率" style="${quickActionButtonStyle("#1d4ed8", "#ffffff")}">利润测算</button>
-      <button type="button" data-role="quick-pricing" title="打开加价和发布参数" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">定价策略</button>
-      <button type="button" data-role="quick-bind-cookie" title="检查 Ozon / ERP 登录状态并打开扩展设置" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
+      <button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
       <button type="button" data-role="quick-open-insights" title="打开数据一览和选品指标" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">选品数据</button>
       <button type="button" data-role="quick-selection-settings" title="打开选品规则设置入口" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">设置选品</button>
       <div data-role="quick-status" style="min-height:15px;margin-top:5px;text-align:center;font-size:10px;line-height:1.25;color:#64748b;">SKU ${escapeHtml(productId)}</div>
@@ -799,21 +798,8 @@
       showOzonSkuWorkbench(productId, "profit");
       setOzonQuickStatus(panel, "利润表已打开");
     });
-    panel.querySelector("[data-role='quick-pricing']").addEventListener("click", () => {
-      showOzonSkuWorkbench(productId, "pricing");
-      setOzonQuickStatus(panel, "定价表已打开");
-    });
     panel.querySelector("[data-role='quick-bind-cookie']").addEventListener("click", async () => {
-      setOzonQuickStatus(panel, "检查中...");
-      try {
-        const response = await sendRuntimeMessage({ type: "spb-self-hosted:check-logins" });
-        const logins = response && response.ok && response.logins ? response.logins : {};
-        const ozonOk = Boolean(logins.ozon || logins.sellerOzon || logins["seller.ozon.ru"]);
-        setOzonQuickStatus(panel, ozonOk ? "Cookie正常" : "打开设置");
-        if (!ozonOk) openExtensionSettingsPage("cookie");
-      } catch (error) {
-        setOzonQuickStatus(panel, "检查失败");
-      }
+      await syncOzonCookieFromQuickAction(panel);
     });
     panel.querySelector("[data-role='quick-open-insights']").addEventListener("click", () => {
       const existing = document.getElementById(OZON_PANEL_ID);
@@ -893,8 +879,42 @@
   function getWorkbenchModeStatus(mode) {
     if (mode === "data") return "查看已采集的数据和 Ozon 指标";
     if (mode === "profit") return "查看售价、成本和利润率";
-    if (mode === "pricing") return "调整加价后再提交上架";
     return "选择店铺和 SKU 后提交上架";
+  }
+
+  function normalizeProductWorkbenchMode(mode) {
+    return ["data", "profit", "publish"].includes(mode) ? mode : "publish";
+  }
+
+  function getProductWorkbenchModeTitle(mode) {
+    if (mode === "data") return "SS ERP 选品数据工作台";
+    if (mode === "profit") return "SS ERP 利润测算工作台";
+    return "SS ERP 一键上架工作台";
+  }
+
+  function getProductWorkbenchModeSubtitle(mode, productId) {
+    const base = `Ozon SKU ${productId}`;
+    if (mode === "data") return `${base} · 数据查看 / 指标分析`;
+    if (mode === "profit") return `${base} · 成本 / 物流费 / 佣金测算`;
+    return `${base} · 选择店铺后提交上架`;
+  }
+
+  function setProductWorkbenchMode(modal, mode) {
+    const normalized = normalizeProductWorkbenchMode(mode);
+    modal.__ssErpProductWorkbenchMode = normalized;
+    const productId = modal.__ssErpProductId || "";
+    modal.querySelectorAll("[data-role='workbench-view']").forEach((button) => {
+      button.setAttribute("style", workbenchModeButtonStyle(button.getAttribute("data-mode") === normalized));
+    });
+    const title = modal.querySelector("[data-role='workbench-title']");
+    if (title) title.textContent = getProductWorkbenchModeTitle(normalized);
+    const subtitle = modal.querySelector("[data-role='workbench-subtitle']");
+    if (subtitle) subtitle.textContent = getProductWorkbenchModeSubtitle(normalized, productId);
+    const status = modal.querySelector("[data-role='workbench-status']");
+    if (status) status.textContent = getWorkbenchModeStatus(normalized);
+    modal.querySelectorAll("[data-mode-scope='publish']").forEach((node) => {
+      node.style.display = normalized === "publish" ? "" : "none";
+    });
   }
 
   function inferErpWebBaseUrl(value) {
@@ -921,6 +941,21 @@
     const tab = window.open(url, "_blank");
     if (tab) {
       try { tab.opener = null; } catch (error) {}
+    }
+  }
+
+  async function syncOzonCookieFromQuickAction(panel) {
+    setOzonQuickStatus(panel, "同步Cookie...");
+    try {
+      const response = await sendRuntimeMessage({ type: "ozon-calc:sync-current-ozon-cookie", payload: {} });
+      if (response && response.ok) {
+        const companyId = response.data && response.data.companyId ? ` · ${response.data.companyId}` : "";
+        setOzonQuickStatus(panel, `Cookie已同步${companyId}`);
+        return;
+      }
+      setOzonQuickStatus(panel, (response && response.error) || "同步失败");
+    } catch (error) {
+      setOzonQuickStatus(panel, error && error.message ? error.message : "同步失败");
     }
   }
 
@@ -1375,10 +1410,12 @@
   function showOzonSkuWorkbench(productId, initialMode) {
     const old = document.getElementById(OZON_WORKBENCH_MODAL_ID);
     if (old) old.remove();
-    const activeMode = ["data", "profit", "pricing", "publish"].includes(initialMode) ? initialMode : "publish";
+    const activeMode = normalizeProductWorkbenchMode(initialMode);
 
     const modal = document.createElement("div");
     modal.id = OZON_WORKBENCH_MODAL_ID;
+    modal.__ssErpProductId = productId;
+    modal.__ssErpProductWorkbenchMode = activeMode;
     modal.style.cssText = [
       "position:fixed",
       "inset:0",
@@ -1392,13 +1429,12 @@
         <style>#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#f8fafc;color:#334155;box-shadow:0 1px 0 #e5e7eb;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${OZON_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#fff7ed!important;}</style>
         <div style="min-height:56px;background:${SS_ERP_PRODUCT_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_PRODUCT_THEME.primaryDark};">
           <div>
-            <div style="font-size:16px;font-weight:800;line-height:1.2;">SS ERP SKU 工作台</div>
-            <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">Ozon SKU ${escapeHtml(productId)}</div>
+            <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getProductWorkbenchModeTitle(activeMode))}</div>
+            <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getProductWorkbenchModeSubtitle(activeMode, productId))}</div>
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
             <button type="button" data-role="workbench-view" data-mode="data" style="${workbenchModeButtonStyle(activeMode === "data")}">数据</button>
             <button type="button" data-role="workbench-view" data-mode="profit" style="${workbenchModeButtonStyle(activeMode === "profit")}">利润</button>
-            <button type="button" data-role="workbench-view" data-mode="pricing" style="${workbenchModeButtonStyle(activeMode === "pricing")}">定价</button>
             <button type="button" data-role="workbench-view" data-mode="publish" style="${workbenchModeButtonStyle(activeMode === "publish")}">上架</button>
           </div>
           <button type="button" data-role="close-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
@@ -1453,7 +1489,7 @@
           </table>
         </div>
         <div style="${productWorkbenchFooterStyle()}">
-          <button type="button" data-role="publish-workbench" style="height:36px;border:0;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>
+          <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>
         </div>
       </div>
     `;
@@ -1466,12 +1502,7 @@
     modal.querySelector("[data-role='refresh-workbench']").addEventListener("click", () => loadOzonWorkbenchRows(modal, productId));
     modal.querySelectorAll("[data-role='workbench-view']").forEach((button) => {
       button.addEventListener("click", () => {
-        const mode = String(button.getAttribute("data-mode") || "publish");
-        modal.querySelectorAll("[data-role='workbench-view']").forEach((item) => {
-          item.setAttribute("style", workbenchModeButtonStyle(item === button));
-        });
-        const status = modal.querySelector("[data-role='workbench-status']");
-        if (status) status.textContent = getWorkbenchModeStatus(mode);
+        setProductWorkbenchMode(modal, button.getAttribute("data-mode"));
       });
     });
     modal.querySelector("[data-role='select-all-workbench']").addEventListener("change", (event) => {
@@ -1479,6 +1510,7 @@
     });
     modal.querySelector("[data-role='publish-workbench']").addEventListener("click", () => publishSelectedOzonWorkbenchRows(modal));
 
+    setProductWorkbenchMode(modal, activeMode);
     loadOzonWorkbenchShops(modal);
     loadOzonWorkbenchRows(modal, productId);
   }

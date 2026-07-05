@@ -47,7 +47,22 @@ assert.doesNotMatch(
 assert.match(
   overlay,
   /function\s+openExtensionSettingsPage/,
-  'Ozon list quick toolbar should open the extension settings for cookie and selection setup',
+  'Ozon list quick toolbar should retain the extension settings helper for non-cookie setup flows',
+);
+assert.match(
+  overlay,
+  /function\s+syncOzonCookieFromQuickAction/,
+  'Ozon list quick Cookie button should sync cookies directly from the page toolbar',
+);
+assert.match(
+  overlay,
+  /ozon-calc:sync-current-ozon-cookie/,
+  'Ozon list quick Cookie button should reuse the popup Cookie sync backend path',
+);
+assert.doesNotMatch(
+  overlay,
+  /quick-bind-cookie[\s\S]{0,500}openExtensionSettingsPage\('cookie'\)/,
+  'Ozon list quick Cookie button should not navigate to settings.html#cookie from the Ozon page',
 );
 assert.match(
   overlay,
@@ -212,18 +227,18 @@ assert.match(
 );
 assert.match(
   overlay,
-  /function\s+buildListWorkbenchExcelHtml[\s\S]*return\s+html;/,
-  'Ozon list workbench Excel export should return the generated HTML instead of downloading "undefined"',
+  /function\s+buildListWorkbenchXlsxBytes[\s\S]*createZipArchive/,
+  'Ozon list workbench export should generate a real xlsx workbook instead of an HTML file with an Excel extension',
 );
 assert.match(
   overlay,
-  /application\/vnd\.ms-excel/,
-  'Ozon list workbench export should use an Excel MIME type',
+  /application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/,
+  'Ozon list workbench export should use the xlsx MIME type',
 );
 assert.match(
   overlay,
-  /\.xls/,
-  'Ozon list workbench export should create an .xls file that Excel can open',
+  /\.xlsx/,
+  'Ozon list workbench export should create a real .xlsx file that Excel can open without format-mismatch warnings',
 );
 assert.match(
   overlay,

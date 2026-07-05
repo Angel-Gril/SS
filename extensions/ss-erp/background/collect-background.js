@@ -2117,16 +2117,25 @@ async function downloadProductJson(product) {
 }
 
 async function downloadOzonWorkbenchExcel(payload) {
-  const html = String(payload && payload.html || "");
-  if (!html) {
-    return { ok: false, error: "缺少 Excel 导出内容" };
-  }
   const requestedFilename = String(payload && payload.filename || "ss-erp-ozon-sku.xls")
     .replace(/[\\/:*?"<>|]+/g, "-")
     .replace(/\s+/g, " ")
     .trim();
-  const filename = requestedFilename.endsWith(".xls") ? requestedFilename : `${requestedFilename || "ss-erp-ozon-sku"}.xls`;
-  const url = `data:application/vnd.ms-excel;charset=utf-8,${encodeURIComponent(html)}`;
+  const base64 = String(payload && payload.base64 || "").trim();
+  let filename = requestedFilename;
+  let url = "";
+  if (base64) {
+    filename = /\.xlsx$/i.test(filename) ? filename : `${filename.replace(/\.(xls|xlsx)$/i, "") || "ss-erp-ozon-sku"}.xlsx`;
+    const mime = String(payload && payload.mime || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    url = `data:${mime};base64,${base64}`;
+  } else {
+    const html = String(payload && payload.html || "");
+    if (!html) {
+      return { ok: false, error: "缺少 Excel 导出内容" };
+    }
+    filename = /\.xls$/i.test(filename) ? filename : `${filename || "ss-erp-ozon-sku"}.xls`;
+    url = `data:application/vnd.ms-excel;charset=utf-8,${encodeURIComponent(html)}`;
+  }
   const downloadId = await chrome.downloads.download({
     url,
     filename,

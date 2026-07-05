@@ -53,6 +53,18 @@ assert.match(
 );
 
 assert.match(
+  serviceWorker,
+  /syncCurrentOzonCookieForSync/,
+  'quick Cookie binding should have a background path that resolves the current Ozon shop automatically',
+);
+
+assert.match(
+  serviceWorker,
+  /ozon-calc:sync-current-ozon-cookie/,
+  'content-script quick Cookie buttons should call a direct sync message instead of opening settings.html#cookie',
+);
+
+assert.match(
   collectBackground,
   /readOzonSellerCookieValueFromOpenTab/,
   'seller API collection should also read sc_company_id from an already-open seller tab when chrome.cookies misses it',

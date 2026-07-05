@@ -9,7 +9,9 @@ test('Ozon product data panel keeps data actions separate from listing actions',
   assert.doesNotMatch(content, /data-role="open-workbench"/);
   assert.match(content, /showOzonSkuWorkbench\(/);
   assert.match(content, /ss-erp-ozon-workbench-modal/);
-  assert.match(content, /SS ERP SKU 工作台/);
+  assert.match(content, /SS ERP 一键上架工作台/);
+  assert.match(content, /SS ERP 利润测算工作台/);
+  assert.match(content, /SS ERP 选品数据工作台/);
   assert.match(content, /一键上架选中 SKU/);
   assert.match(content, /data-role="quick-open-workbench"/);
   assert.match(content, /renderOzonPanel\(\{\s*expand:\s*false\s*\}\)/, 'product detail should keep the data panel collapsed on page load');
@@ -27,15 +29,14 @@ test('Ozon product page exposes an SS ERP right quick action toolbar', () => {
     /quick-open-workbench[\s\S]*quickActionButtonStyle\("#ea580c",\s*"#ffffff"/,
     'product quick toolbar should use ERP orange for the primary one-click listing action',
   );
-  assert.match(
+  assert.doesNotMatch(
     content,
-    /quick-pricing[\s\S]*quickActionButtonStyle\("#ffffff",\s*"#1f2937",\s*"#cbd5e1"\)/,
-    'product quick toolbar should keep pricing as a secondary action instead of a separate yellow theme',
+    /data-role="quick-pricing"|定价策略/,
+    'product quick toolbar should not expose standalone pricing because pricing belongs inside the workbench controls',
   );
   for (const label of [
     '一键上架',
     '利润测算',
-    '定价策略',
     '绑定Cookie',
     '选品数据',
     '设置选品',
@@ -46,7 +47,9 @@ test('Ozon product page exposes an SS ERP right quick action toolbar', () => {
   assert.doesNotMatch(content, /background:rgba\(124,45,18/, 'product dialogs should not tint the whole Ozon page yellow/brown when a modal opens');
   assert.match(content, /http:\/\/localhost:3000/, 'right toolbar ERP entry should default to the local web app on port 3000');
   assert.match(content, /function\s+inferErpWebBaseUrl/, 'right toolbar should infer the ERP web URL from the configured API URL');
-  assert.match(content, /function\s+openExtensionSettingsPage/, 'right toolbar should expose a direct settings entry for Cookie and selection setup');
+  assert.match(content, /function\s+syncOzonCookieFromQuickAction/, 'right toolbar should sync Ozon cookies directly instead of opening a blocked extension settings page');
+  assert.match(content, /ozon-calc:sync-current-ozon-cookie/, 'product quick Cookie button should reuse the popup Cookie sync backend path');
+  assert.doesNotMatch(content, /quick-bind-cookie[\s\S]{0,500}openExtensionSettingsPage\("cookie"\)/, 'product quick Cookie button should not navigate to settings.html#cookie from the Ozon page');
   const competitorBrandPattern = new RegExp([
     '\\u6bdb\\u5b50ERP',
     '\\u4f01\\u9e45\\u52a9\\u624b',
@@ -71,6 +74,8 @@ test('Ozon product workbench fetches table rows and seller offer metrics through
   );
   assert.match(content, /data-role="workbench-table-wrap"/, 'product workbench should isolate table scrolling for sticky headers');
   assert.match(content, /position:sticky;\s*top:0;\s*z-index:3/, 'product workbench header cells should stay above rows without piercing the toolbar');
+  assert.doesNotMatch(content, /data-mode="pricing"/, 'product detail workbench should use the same data/profit/publish modes as the list workbench');
+  assert.match(content, /function\s+getProductWorkbenchModeTitle/, 'product workbench should show a mode-specific title so profit does not look like listing');
   assert.doesNotMatch(
     content,
     /<th[^>]+border:1px solid #4b5563/,

@@ -2081,6 +2081,21 @@
     }
   }
 
+  async function syncOzonCookieFromQuickAction(panel) {
+    setListQuickStatus(panel, '同步Cookie...');
+    try {
+      const response = await send({ type: 'ozon-calc:sync-current-ozon-cookie', payload: {} }, 30000);
+      if (response && response.ok) {
+        const companyId = response.data && response.data.companyId ? ` · ${response.data.companyId}` : '';
+        setListQuickStatus(panel, `Cookie已同步${companyId}`);
+        return;
+      }
+      setListQuickStatus(panel, (response && response.error) || '同步失败');
+    } catch (error) {
+      setListQuickStatus(panel, error && error.message ? error.message : '同步失败');
+    }
+  }
+
   function ensureListQuickActions() {
     if (!isProductPage()) return;
     let panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
@@ -2116,7 +2131,7 @@
         `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle('#1d4ed8', '#ffffff')}">利润测算</button>`,
         `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">选品数据</button>`,
         '<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>',
-        `<button type="button" data-role="quick-bind-cookie" title="检查 Ozon / ERP 登录状态并打开扩展设置" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">绑定Cookie</button>`,
+        `<button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">绑定Cookie</button>`,
         `<button type="button" data-role="quick-selection-settings" title="设置选品规则" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">设置选品</button>`,
         `<button type="button" data-role="quick-field-config" title="选择列表卡片展示字段" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">展示字段</button>`,
         '<div data-role="quick-status" style="min-height:16px;margin-top:5px;text-align:center;font-size:10px;line-height:1.25;color:#64748b;"></div>',
@@ -2136,16 +2151,7 @@
         setListQuickStatus(panel, '数据已打开');
       });
       panel.querySelector('[data-role="quick-bind-cookie"]').addEventListener('click', async () => {
-        setListQuickStatus(panel, '检查中...');
-        try {
-          const response = await send({ type: 'spb-self-hosted:check-logins' }, 8000);
-          const logins = response && response.ok && response.logins ? response.logins : {};
-          const ozonOk = Boolean(logins.ozon || logins.sellerOzon || logins['seller.ozon.ru']);
-          setListQuickStatus(panel, ozonOk ? 'Cookie正常' : '打开设置');
-          if (!ozonOk) openExtensionSettingsPage('cookie');
-        } catch (error) {
-          setListQuickStatus(panel, '检查失败');
-        }
+        await syncOzonCookieFromQuickAction(panel);
       });
       panel.querySelector('[data-role="quick-selection-settings"]').addEventListener('click', () => {
         showProductSelectionRulesModal();
@@ -3037,32 +3043,192 @@
     return /^[=+\-@]/.test(text) ? `'${text}` : text;
   }
 
-  function buildListWorkbenchExcelHtml(rows) {
-    const tableRows = rows.map((row, rowIndex) => {
-      const tag = rowIndex === 0 ? 'th' : 'td';
-      return '<tr>' + row.map((value) => {
-        const text = escapeHtml(excelSafeText(value));
-        return `<${tag} style="border:1px solid #d1d5db;padding:6px 8px;mso-number-format:'\\@';">${text}</${tag}>`;
-      }).join('') + '</tr>';
+  function xlsxXmlText(value) {
+    return excelSafeText(value)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function xlsxColumnName(index) {
+    let n = index + 1;
+    let name = '';
+    while (n > 0) {
+      const mod = (n - 1) % 26;
+      name = String.fromCharCode(65 + mod) + name;
+      n = Math.floor((n - mod) / 26);
+    }
+    return name;
+  }
+
+  function utf8Bytes(text) {
+    return new TextEncoder().encode(String(text || ''));
+  }
+
+  function concatBytes(parts) {
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    parts.forEach((part) => {
+      out.set(part, offset);
+      offset += part.length;
+    });
+    return out;
+  }
+
+  let listWorkbenchCrc32Table = null;
+  function getListWorkbenchCrc32Table() {
+    if (listWorkbenchCrc32Table) return listWorkbenchCrc32Table;
+    listWorkbenchCrc32Table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let c = i;
+      for (let j = 0; j < 8; j += 1) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      listWorkbenchCrc32Table[i] = c >>> 0;
+    }
+    return listWorkbenchCrc32Table;
+  }
+
+  function crc32Bytes(bytes) {
+    const table = getListWorkbenchCrc32Table();
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i += 1) {
+      crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function writeUint16(out, offset, value) {
+    out[offset] = value & 0xff;
+    out[offset + 1] = (value >>> 8) & 0xff;
+  }
+
+  function writeUint32(out, offset, value) {
+    out[offset] = value & 0xff;
+    out[offset + 1] = (value >>> 8) & 0xff;
+    out[offset + 2] = (value >>> 16) & 0xff;
+    out[offset + 3] = (value >>> 24) & 0xff;
+  }
+
+  function createZipArchive(entries) {
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    const now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+    const dosDate = ((Math.max(now.getFullYear(), 1980) - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+
+    entries.forEach((entry) => {
+      const nameBytes = utf8Bytes(entry.name);
+      const data = entry.data instanceof Uint8Array ? entry.data : utf8Bytes(entry.data);
+      const crc = crc32Bytes(data);
+      const local = new Uint8Array(30 + nameBytes.length + data.length);
+      writeUint32(local, 0, 0x04034b50);
+      writeUint16(local, 4, 20);
+      writeUint16(local, 6, 0x0800);
+      writeUint16(local, 8, 0);
+      writeUint16(local, 10, dosTime);
+      writeUint16(local, 12, dosDate);
+      writeUint32(local, 14, crc);
+      writeUint32(local, 18, data.length);
+      writeUint32(local, 22, data.length);
+      writeUint16(local, 26, nameBytes.length);
+      writeUint16(local, 28, 0);
+      local.set(nameBytes, 30);
+      local.set(data, 30 + nameBytes.length);
+      localParts.push(local);
+
+      const central = new Uint8Array(46 + nameBytes.length);
+      writeUint32(central, 0, 0x02014b50);
+      writeUint16(central, 4, 20);
+      writeUint16(central, 6, 20);
+      writeUint16(central, 8, 0x0800);
+      writeUint16(central, 10, 0);
+      writeUint16(central, 12, dosTime);
+      writeUint16(central, 14, dosDate);
+      writeUint32(central, 16, crc);
+      writeUint32(central, 20, data.length);
+      writeUint32(central, 24, data.length);
+      writeUint16(central, 28, nameBytes.length);
+      writeUint16(central, 30, 0);
+      writeUint16(central, 32, 0);
+      writeUint16(central, 34, 0);
+      writeUint16(central, 36, 0);
+      writeUint32(central, 38, 0);
+      writeUint32(central, 42, offset);
+      central.set(nameBytes, 46);
+      centralParts.push(central);
+      offset += local.length;
+    });
+
+    const centralStart = offset;
+    const centralBytes = concatBytes(centralParts);
+    const end = new Uint8Array(22);
+    writeUint32(end, 0, 0x06054b50);
+    writeUint16(end, 8, entries.length);
+    writeUint16(end, 10, entries.length);
+    writeUint32(end, 12, centralBytes.length);
+    writeUint32(end, 16, centralStart);
+    writeUint16(end, 20, 0);
+    return concatBytes(localParts.concat([centralBytes, end]));
+  }
+
+  function buildListWorkbenchSheetXml(rows) {
+    const sheetRows = rows.map((row, rowIndex) => {
+      const rowNumber = rowIndex + 1;
+      const cells = row.map((value, columnIndex) => {
+        const ref = `${xlsxColumnName(columnIndex)}${rowNumber}`;
+        return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xlsxXmlText(value)}</t></is></c>`;
+      }).join('');
+      return `<row r="${rowNumber}">${cells}</row>`;
     }).join('');
-    const html = [
-      '\ufeff',
-      '<html><head><meta charset="UTF-8"></head><body>',
-      '<table border="1" cellspacing="0" cellpadding="0">',
-      tableRows,
-      '</table>',
-      '</body></html>',
-    ].join('');
-    return html;
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows}</sheetData></worksheet>`;
+  }
+
+  function buildListWorkbenchXlsxBytes(rows) {
+    return createZipArchive([
+      {
+        name: '[Content_Types].xml',
+        data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+      },
+      {
+        name: '_rels/.rels',
+        data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+      },
+      {
+        name: 'xl/workbook.xml',
+        data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Ozon SKU" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      },
+      {
+        name: 'xl/_rels/workbook.xml.rels',
+        data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+      },
+      {
+        name: 'xl/worksheets/sheet1.xml',
+        data: buildListWorkbenchSheetXml(rows),
+      },
+    ]);
+  }
+
+  function bytesToBase64(bytes) {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
   }
 
   function downloadListWorkbenchExcelFromPage(rows, filename) {
-    const html = buildListWorkbenchExcelHtml(rows);
-    const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+    const bytes = buildListWorkbenchXlsxBytes(rows);
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = filename || 'ss-erp-ozon-sku.xls';
+    link.download = filename || 'ss-erp-ozon-sku.xlsx';
     document.body.appendChild(link);
     link.click();
     setTimeout(() => {
@@ -3072,11 +3238,12 @@
   }
 
   async function downloadListWorkbenchExcel(rows, filename) {
-    const html = buildListWorkbenchExcelHtml(rows);
+    const bytes = buildListWorkbenchXlsxBytes(rows);
     const response = await send({
       type: 'spb-self-hosted:download-ozon-workbench-excel',
-      filename: filename || 'ss-erp-ozon-sku.xls',
-      html,
+      filename: filename || 'ss-erp-ozon-sku.xlsx',
+      base64: bytesToBase64(bytes),
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     }, 30000);
     if (response && response.ok) return response;
     downloadListWorkbenchExcelFromPage(rows, filename);
@@ -3091,7 +3258,7 @@
       return;
     }
     const exportRows = getListWorkbenchExportRows(modal, selected);
-    const filename = `ss-erp-ozon-sku-${new Date().toISOString().slice(0, 10)}.xls`;
+    const filename = `ss-erp-ozon-sku-${new Date().toISOString().slice(0, 10)}.xlsx`;
     try {
       await downloadListWorkbenchExcel(exportRows, filename);
       if (status) status.textContent = `已导出 ${selected.length} 个 SKU 到 Excel`;
