@@ -32,7 +32,6 @@ assert.match(
 for (const role of [
   'quick-open-workbench',
   'quick-profit',
-  'quick-pricing',
   'quick-open-insights',
   'quick-bind-cookie',
   'quick-selection-settings',
@@ -40,6 +39,11 @@ for (const role of [
 ]) {
   assert.match(overlay, new RegExp(`data-role="${role}"`), `Ozon list quick toolbar should expose ${role}`);
 }
+assert.doesNotMatch(
+  overlay,
+  /data-role="quick-pricing"|定价策略|openErpPage\('\/products'\)/,
+  'Ozon list quick toolbar should not expose a standalone pricing strategy button unrelated to the current page',
+);
 assert.match(
   overlay,
   /function\s+openExtensionSettingsPage/,
@@ -285,11 +289,6 @@ assert.match(
 );
 assert.match(
   overlay,
-  /quick-pricing[\s\S]*openErpPage\('\/products'\)/,
-  'Ozon list pricing action should open the ERP product pricing area instead of the same SKU workbench',
-);
-assert.match(
-  overlay,
   /quick-open-insights[\s\S]*openListSkuWorkbench\(\{\s*rowFilter:\s*'all',\s*focus:\s*'data'\s*\}\)/,
   'Ozon list data action should open the list workbench in data mode',
 );
@@ -305,6 +304,7 @@ for (const role of [
   'pricing-controls',
   'workbench-footer-actions',
   'save-workbench-data',
+  'add-selected-workbench-skus-to-pool',
   'delete-selected-workbench-skus',
 ]) {
   assert.match(overlay, new RegExp(`data-role="${role}"`), `Ozon list workbench should expose ${role}`);
@@ -339,9 +339,14 @@ assert.match(
   /includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
   'Ozon list workbench should fetch slow seller-offer details only in publish mode',
 );
-for (const actionLabel of ['保存', '删除选中 SKU', '导出选中 SKU', '一键上架选中 SKU']) {
+for (const actionLabel of ['保存', '加入选品池', '删除选中 SKU', '导出选中 SKU', '一键上架选中 SKU']) {
   assert.match(overlay, new RegExp(actionLabel), `Ozon list workbench footer should expose ${actionLabel}`);
 }
+assert.match(
+  overlay,
+  /function\s+addSelectedListWorkbenchSkusToPool/,
+  'Ozon list workbench should let users manually add selected SKUs to the ERP selection pool',
+);
 assert.match(
   overlay,
   /仅规则命中/,
@@ -561,6 +566,21 @@ assert.match(
   overlay,
   /'广告费占比'[\s\S]*'退货取消率'[\s\S]*'佣金'[\s\S]*'利润率'[\s\S]*'发货模式'[\s\S]*'重量'/,
   'Ozon list workbench export should include richer KPI columns, not only SKU/title/price',
+);
+assert.match(
+  overlay,
+  /function\s+getListWorkbenchDynamicExportFields/,
+  'Ozon list workbench export should append currently selected display fields to the Excel file',
+);
+assert.match(
+  overlay,
+  /readSelectedDisplayFieldIds\(\)[\s\S]*DISPLAY_FIELD_DEFS/,
+  'Ozon list workbench export should use the same display-field configuration as the card panel',
+);
+assert.match(
+  overlay,
+  /getDisplayFieldValue\(field\.id,\s*sku,\s*dom,\s*row\)/,
+  'Ozon list workbench export should export the values users can show in the card display panel',
 );
 for (const label of [
   '类目',

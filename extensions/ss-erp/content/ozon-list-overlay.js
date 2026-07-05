@@ -1164,7 +1164,7 @@
     });
   }
 
-  function buildProductSelectionPoolItem(productId, dom, row, autoRules, priceRub, tags, note) {
+  function buildProductSelectionPoolItem(productId, dom, row, autoRules, priceRub, tags, note, source) {
     const cardDom = dom || {};
     const data = row || {};
     return {
@@ -1176,8 +1176,8 @@
       image: firstPresentValue(data.image, data.coverImage, cardDom.image, ''),
       priceRub: Number(priceRub) || null,
       currency: 'RUB',
-      source: 'extension-auto-rule',
-      ruleIds: autoRules.map((rule) => String(rule.id || '')).filter(Boolean),
+      source: source || 'extension-auto-rule',
+      ruleIds: (Array.isArray(autoRules) ? autoRules : []).map((rule) => String(rule.id || '')).filter(Boolean),
       tags,
       note,
       metrics: {
@@ -2114,7 +2114,6 @@
         '</div>',
         `<button type="button" data-role="quick-open-workbench" title="打开本页 SKU 工作台" style="${quickActionButtonStyle('#ea580c', '#ffffff')}">一键上架</button>`,
         `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle('#1d4ed8', '#ffffff')}">利润测算</button>`,
-        `<button type="button" data-role="quick-pricing" title="打开本页 SKU 定价参数" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">定价策略</button>`,
         `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">选品数据</button>`,
         '<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>',
         `<button type="button" data-role="quick-bind-cookie" title="检查 Ozon / ERP 登录状态并打开扩展设置" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">绑定Cookie</button>`,
@@ -2131,10 +2130,6 @@
       panel.querySelector('[data-role="quick-profit"]').addEventListener('click', () => {
         openProfitCalculatorFromQuickAction();
         setListQuickStatus(panel, '利润测算已打开');
-      });
-      panel.querySelector('[data-role="quick-pricing"]').addEventListener('click', () => {
-        openErpPage('/products');
-        setListQuickStatus(panel, '打开定价');
       });
       panel.querySelector('[data-role="quick-open-insights"]').addEventListener('click', () => {
         openListSkuWorkbench({ rowFilter: 'all', focus: 'data' });
@@ -2705,6 +2700,7 @@
       `  <div style="${listWorkbenchFooterStyle()}">`,
       '    <div data-role="workbench-footer-actions" style="display:flex;align-items:center;gap:8px;">',
       `      <button type="button" data-role="save-workbench-data" style="height:36px;border:1px solid #bfdbfe;background:#fff;color:#1d4ed8;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
+      `      <button type="button" data-role="add-selected-workbench-skus-to-pool" style="height:36px;border:1px solid #bbf7d0;background:#f0fdf4;color:#047857;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">加入选品池</button>`,
       `      <button type="button" data-role="delete-selected-workbench-skus" style="height:36px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">删除选中 SKU</button>`,
       `      <button type="button" data-role="export-workbench-skus" style="height:36px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">导出选中 SKU</button>`,
       `      <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>`,
@@ -2730,6 +2726,7 @@
       modal.querySelectorAll('[data-role="workbench-row-check"]').forEach((box) => { box.checked = event.target.checked; });
     });
     modal.querySelector('[data-role="save-workbench-data"]').addEventListener('click', () => saveListWorkbenchData(modal));
+    modal.querySelector('[data-role="add-selected-workbench-skus-to-pool"]').addEventListener('click', () => addSelectedListWorkbenchSkusToPool(modal));
     modal.querySelector('[data-role="delete-selected-workbench-skus"]').addEventListener('click', () => deleteSelectedListWorkbenchSkus(modal));
     modal.querySelector('[data-role="export-workbench-skus"]').addEventListener('click', () => exportListWorkbenchSelectedSkus(modal));
     modal.querySelector('[data-role="publish-workbench"]').addEventListener('click', () => publishListWorkbenchSelectedRows(modal));
@@ -2880,6 +2877,33 @@
       .filter(Boolean);
   }
 
+  function getListWorkbenchDynamicExportFields() {
+    const fixedLabels = new Set(['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目']);
+    const fixedIds = new Set(['sku', 'soldCount', 'soldSum', 'adExpenseShare', 'returnCancelRate', 'commission', 'salesSchema', 'weight', 'brand', 'category', 'minFollowPriceRub', 'maxFollowPriceRub']);
+    const selectedIds = readSelectedDisplayFieldIds();
+    return selectedIds
+      .map((id) => DISPLAY_FIELD_DEFS.find((field) => field.id === id))
+      .filter((field) => field && !fixedIds.has(field.id) && !fixedLabels.has(field.label));
+  }
+
+  function normalizeListWorkbenchExportCell(value) {
+    if (value && value.__ssErpTrustedHtml) {
+      return String(value.html || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    return value == null || value === '--' ? '' : value;
+  }
+
   function saveListWorkbenchData(modal) {
     const status = modal.querySelector('[data-role="workbench-status"]');
     const payload = {
@@ -2917,15 +2941,65 @@
     if (status) status.textContent = `已删除 ${selected.size} 个 SKU`;
   }
 
+  async function addSelectedListWorkbenchSkusToPool(modal) {
+    const selected = getSelectedListWorkbenchSkus(modal);
+    const status = modal.querySelector('[data-role="workbench-status"]');
+    const button = modal.querySelector('[data-role="add-selected-workbench-skus-to-pool"]');
+    if (!selected.length) {
+      if (status) status.textContent = '请先勾选 SKU';
+      return;
+    }
+    const allRows = Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [];
+    const rowBySku = new Map(allRows.map((row) => [String(row && row.sku || '').trim(), row]));
+    if (button) button.disabled = true;
+    if (status) status.textContent = `正在加入选品池 ${selected.length} 个 SKU...`;
+    let okCount = 0;
+    let lastError = '';
+    await Promise.all(selected.map(async (sku) => {
+      const row = rowBySku.get(String(sku)) || {};
+      const dom = getCardDomBySku(String(sku));
+      const priceRub = firstPresentValue(row.priceRub, row.pagePrice, row.avgPrice, dom.price, 0);
+      const tags = ['手动入池'];
+      const item = buildProductSelectionPoolItem(
+        String(sku),
+        dom,
+        row,
+        [],
+        priceRub,
+        tags,
+        '手动加入选品池',
+        'extension-manual-pool',
+      );
+      try {
+        const response = await syncProductSelectionPoolItem(item);
+        if (response && response.ok) {
+          okCount += 1;
+          markProductSelectionPoolStatus(String(sku), { inPool: true, source: 'erp', title: item.title, tags });
+        } else {
+          lastError = response && (response.error || response.msg) || '写入失败';
+        }
+      } catch (error) {
+        lastError = error && error.message ? error.message : String(error);
+      }
+    }));
+    if (button) button.disabled = false;
+    if (status) {
+      status.textContent = okCount === selected.length
+        ? `已加入选品池 ${okCount} 个 SKU`
+        : `已加入 ${okCount}/${selected.length} 个 SKU${lastError ? `：${lastError}` : ''}`;
+    }
+  }
+
   function getListWorkbenchExportRows(modal, selected) {
     const allRows = Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [];
     const rowBySku = new Map(allRows.map((row) => [String(row && row.sku || '').trim(), row]));
+    const dynamicFields = getListWorkbenchDynamicExportFields();
     return [
-      ['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目'],
+      ['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目', ...dynamicFields.map((field) => field.label)],
       ...selected.map((sku) => {
         const row = rowBySku.get(sku) || {};
         const dom = getCardDomBySku(sku);
-        return [
+        const fixedValues = [
           sku,
           row.title || dom.title || '',
           firstPresentValue(row.priceRub, row.pagePrice, dom.price, ''),
@@ -2943,6 +3017,11 @@
           row.brand || '',
           row.categoryPath || '',
         ];
+        const dynamicValues = dynamicFields.map((field) => {
+          const result = getDisplayFieldValue(field.id, sku, dom, row);
+          return normalizeListWorkbenchExportCell(result && result.value);
+        });
+        return fixedValues.concat(dynamicValues);
       }),
     ];
   }
