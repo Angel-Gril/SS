@@ -141,6 +141,7 @@
   let productSelectionRulesCache = null;
   const observedListSkuSet = new Set();
   let observedListSkuPageKey = '';
+  const autoFavoriteProductPoolSet = new Set();
 
   function ensureListOverlayStyles() {
     if (document.getElementById(LIST_OVERLAY_STYLE_ID)) return;
@@ -1065,6 +1066,51 @@
     }).join('');
   }
 
+  function maybeAutoFavoriteProductPool(sku, dom, row, matches) {
+    const autoRules = (Array.isArray(matches) ? matches : []).filter((rule) => rule && rule.autoFavorite === true);
+    const productId = String(sku || '').trim();
+    if (!productId || !autoRules.length) return;
+    const ruleKey = autoRules.map((rule) => String(rule.id || rule.tag || rule.name || '')).filter(Boolean).join('|');
+    const poolKey = `${getListSkuPageKey()}:${productId}:${ruleKey}`;
+    if (autoFavoriteProductPoolSet.has(poolKey)) return;
+    autoFavoriteProductPoolSet.add(poolKey);
+
+    const cardDom = dom || {};
+    const data = row || {};
+    const priceRub = firstPresentValue(data.priceRub, data.pagePrice, data.avgPrice, cardDom.price, 0);
+    const tags = ['选品规则'].concat(autoRules.map((rule) => rule.tag || rule.name).filter(Boolean)).slice(0, 8);
+    const note = `自动入池：${tags.slice(1).join('、') || '选品规则命中'}`;
+    send({
+      type: 'ozon-calc:product-pool-upsert',
+      payload: {
+        now: new Date().toISOString(),
+        product: {
+          productId,
+          sku: productId,
+          structuredSku: productId,
+          title: firstPresentValue(data.title, data.name, cardDom.title, `Ozon SKU ${productId}`),
+          url: firstPresentValue(cardDom.url, data.sourceUrl, data.url, `https://www.ozon.ru/product/${productId}/`),
+          pageType: 'list',
+          pagePriceValue: Number(priceRub) || 0,
+          currentPriceValue: Number(priceRub) || 0,
+          pagePriceCurrency: 'RUB',
+          currency: 'RUB',
+          weightG: Number(firstPresentValue(data.weightGrams, cardDom.weightGrams, 0)) || 0,
+          favorite: true,
+          tags,
+          note,
+        },
+        meta: {
+          favorite: true,
+          tags,
+          note,
+        },
+      },
+    }, 12000).then((response) => {
+      if (!response || !response.ok) autoFavoriteProductPoolSet.delete(poolKey);
+    });
+  }
+
   function getDisplayFieldValue(fieldId, sku, dom, p) {
     const lockedPremium = (value) => ({ value: value == null || value === '' ? '--' : value, locked: value == null || value === '' });
     switch (fieldId) {
@@ -1375,6 +1421,7 @@
     wrap.__ssErpDom = dom || {};
     wrap.__ssErpPremium = premium || null;
     const matchedRules = matchProductSelectionRules(buildSelectionMetricRow(sku, dom || {}, premium || {}));
+    maybeAutoFavoriteProductPool(sku, dom || {}, premium || {}, matchedRules);
     renderProductSelectionTags(wrap, matchedRules);
 
     // 数据源徽章（替代原本的 ERP 状态徽章——不再依赖 ERP 检测）
@@ -1832,6 +1879,28 @@
     else window.location.href = target;
   }
 
+  function openProfitCalculatorFromQuickAction() {
+    const drawer = document.getElementById('ozon-calc-drawer');
+    const drawerBody = drawer ? drawer.querySelector('.ozon-calc-body') : null;
+    if (drawer && drawerBody && window.OZON_CALC_OZON_PANEL && typeof window.OZON_CALC_OZON_PANEL.renderDrawerContent === 'function') {
+      drawer.classList.add('open');
+      drawer.style.left = '';
+      drawer.style.right = '16px';
+      drawer.style.top = '80px';
+      drawer.style.height = '';
+      const fab = document.getElementById('ozon-calc-fab');
+      if (fab) fab.style.display = 'none';
+      window.OZON_CALC_OZON_PANEL.renderDrawerContent(drawerBody);
+      return;
+    }
+    const fab = document.getElementById('ozon-calc-fab');
+    if (fab && typeof fab.click === 'function') {
+      fab.click();
+      return;
+    }
+    openErpPage('/finance/profit');
+  }
+
   function openExtensionSettingsPage(section) {
     const hash = section ? `#${encodeURIComponent(section)}` : '';
     const url = chrome.runtime.getURL(`pages/settings.html${hash}`);
@@ -1885,16 +1954,16 @@
       ].join('');
       document.body.appendChild(panel);
       panel.querySelector('[data-role="quick-open-workbench"]').addEventListener('click', () => {
-        openListSkuWorkbench({ rowFilter: 'all' });
+        openListSkuWorkbench({ rowFilter: 'all', focus: 'publish' });
         setListQuickStatus(panel, '已打开工作台');
       });
       panel.querySelector('[data-role="quick-profit"]').addEventListener('click', () => {
-        openListSkuWorkbench({ rowFilter: 'all', focus: 'profit' });
-        setListQuickStatus(panel, '利润表已打开');
+        openProfitCalculatorFromQuickAction();
+        setListQuickStatus(panel, '利润测算已打开');
       });
       panel.querySelector('[data-role="quick-pricing"]').addEventListener('click', () => {
-        openListSkuWorkbench({ rowFilter: 'all', focus: 'publish' });
-        setListQuickStatus(panel, '定价已打开');
+        openErpPage('/products');
+        setListQuickStatus(panel, '打开定价');
       });
       panel.querySelector('[data-role="quick-open-insights"]').addEventListener('click', () => {
         openListSkuWorkbench({ rowFilter: 'all', focus: 'data' });
@@ -2102,7 +2171,7 @@
       `<div data-role="selection-rule-editor-form" data-rule-id="${escapeHtml(item.id)}" data-index="${index}" style="display:flex;flex-direction:column;gap:12px;">`,
       selectionRuleSection('规则基础', 6, [
         selectionRuleToggle('是否启用', 'rule-enabled', item.enabled),
-        selectionRuleToggle('自动收藏', 'rule-auto-favorite', item.autoFavorite),
+        selectionRuleToggle('自动入池', 'rule-auto-favorite', item.autoFavorite),
         selectionRuleField('规则名称', 'rule-name', item.name, '规则名称', 'text'),
         selectionRuleField('标签', 'rule-tag', item.tag, '标签', 'text'),
         selectionRuleField('优先级', 'rule-priority', item.priority, '0-100'),
@@ -2363,7 +2432,7 @@
       '        <tr>',
       '          <th style="width:26%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:left;">规则名称</th>',
       '          <th style="width:13%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">标签</th>',
-      '          <th style="width:10%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">自动收藏</th>',
+      '          <th style="width:10%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">自动入池</th>',
       '          <th style="width:10%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">是否启用</th>',
       '          <th style="width:9%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">优先级</th>',
       '          <th style="width:15%;padding:9px 10px;border-bottom:1px solid #e5e7eb;text-align:center;">更新时间</th>',
@@ -2577,6 +2646,7 @@
       const dom = getCardDomBySku(String(sku));
       const selectionRow = buildSelectionMetricRow(String(sku), dom, row);
       const matchedRules = matchProductSelectionRules(selectionRow);
+      maybeAutoFavoriteProductPool(String(sku), dom, row, matchedRules);
       return { sku: String(sku), row, dom, matchedRules };
     });
     const visibleRows = rowFilter === 'matched'

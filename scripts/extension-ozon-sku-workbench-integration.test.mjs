@@ -96,8 +96,8 @@ test('Ozon workbench can skip slow offer enrichment for profit-only reads', () =
   assert.match(background, /if\s*\(includeOffers\)\s*\{[\s\S]*fetchOzonSellerOffers\(productId\)/);
   assert.match(
     overlay,
-    /focus:\s*'profit'[\s\S]*includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
-    'list data/profit actions should skip slow offer enrichment while publish mode keeps it',
+    /focus:\s*'data'[\s\S]*includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
+    'list data actions should skip slow offer enrichment while publish mode keeps it',
   );
 });
 

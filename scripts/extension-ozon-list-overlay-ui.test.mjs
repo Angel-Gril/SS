@@ -50,6 +50,11 @@ assert.match(
   /quick-open-workbench[\s\S]*quickActionButtonStyle\('#ea580c',\s*'#ffffff'/,
   'Ozon list quick toolbar should use ERP orange only for the primary one-click listing action',
 );
+assert.match(
+  overlay,
+  /quick-open-workbench[\s\S]*openListSkuWorkbench\(\{\s*rowFilter:\s*'all',\s*focus:\s*'publish'\s*\}\)/,
+  'Ozon list primary action should open the SKU publishing workbench',
+);
 assert.doesNotMatch(
   overlay,
   /data-role="quick-filter-matched"/,
@@ -255,13 +260,13 @@ for (const mode of ['data', 'profit', 'publish']) {
 }
 assert.match(
   overlay,
-  /quick-profit[\s\S]*openListSkuWorkbench\(\{\s*rowFilter:\s*'all',\s*focus:\s*'profit'\s*\}\)/,
-  'Ozon list profit action should open the list workbench in profit mode',
+  /quick-profit[\s\S]*openProfitCalculatorFromQuickAction\(\)/,
+  'Ozon list profit action should open the dedicated calculator entry instead of the same SKU workbench',
 );
 assert.match(
   overlay,
-  /quick-pricing[\s\S]*openListSkuWorkbench\(\{\s*rowFilter:\s*'all',\s*focus:\s*'publish'\s*\}\)/,
-  'Ozon list pricing action should open the list workbench in publish/pricing mode',
+  /quick-pricing[\s\S]*openErpPage\('\/products'\)/,
+  'Ozon list pricing action should open the ERP product pricing area instead of the same SKU workbench',
 );
 assert.match(
   overlay,
@@ -370,9 +375,14 @@ assert.doesNotMatch(
   /selection-rules-list">\$\{editableRules\.map\(\(rule,\s*index\)\s*=>\s*selectionRuleEditorRow/,
   'Ozon selection rules modal should not dump the full condition editor into the rule list',
 );
-for (const tableHeader of ['规则名称', '标签', '自动收藏', '是否启用', '优先级', '更新时间', '操作']) {
+for (const tableHeader of ['规则名称', '标签', '自动入池', '是否启用', '优先级', '更新时间', '操作']) {
   assert.match(overlay, new RegExp(tableHeader), `Ozon selection rule list should expose ${tableHeader}`);
 }
+assert.doesNotMatch(
+  overlay,
+  /自动收藏/,
+  'Ozon selection rule UI should not imply it writes to the Ozon favorite list',
+);
 assert.match(
   overlay,
   /rule-priority/,
@@ -397,6 +407,16 @@ assert.match(
   overlay,
   /autoFavorite:\s*normalizeRuleBoolean\([\s\S]*item\.autoFavorite[\s\S]*item\.auto_favorite[\s\S]*\)\s*===\s*true/,
   'Ozon selection rules should accept Maozi-style numeric/string auto_favorite snapshots',
+);
+assert.match(
+  overlay,
+  /function\s+maybeAutoFavoriteProductPool/,
+  'Ozon selection rules should apply auto-favorite matches to a concrete local product pool action',
+);
+assert.match(
+  overlay,
+  /ozon-calc:product-pool-upsert/,
+  'Ozon auto-favorite should write matched products into the extension product pool',
 );
 assert.match(
   overlay,
