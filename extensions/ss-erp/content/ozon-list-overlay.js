@@ -139,6 +139,8 @@
   let activeExpandedPanel = null;
   let expandedPanelListenersInstalled = false;
   let productSelectionRulesCache = null;
+  const observedListSkuSet = new Set();
+  let observedListSkuPageKey = '';
 
   function ensureListOverlayStyles() {
     if (document.getElementById(LIST_OVERLAY_STYLE_ID)) return;
@@ -151,6 +153,9 @@
       `#${LIST_QUICK_ACTIONS_ID} button{transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .14s ease,box-shadow .14s ease;}`,
       `#${LIST_QUICK_ACTIONS_ID} button:hover{transform:translateY(-1px);box-shadow:0 2px 6px rgba(15,23,42,.14);}`,
       `#${LIST_WORKBENCH_MODAL_ID} tbody tr{animation:ssErpRowIn .12s ease-out;}`,
+      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip{position:absolute;right:-5px;top:0;width:10px;height:100%;cursor:col-resize;z-index:5;display:flex;align-items:center;justify-content:center;}`,
+      `#${LIST_WORKBENCH_MODAL_ID} .resize-grip::after{content:"";width:2px;height:20px;border-radius:999px;background:#94a3b8;opacity:.8;box-shadow:0 0 0 1px rgba(255,255,255,.72);}`,
+      `#${LIST_WORKBENCH_MODAL_ID} th:hover .resize-grip::after{background:#2563eb;opacity:1;}`,
     ].join('\n');
     document.documentElement.appendChild(style);
   }
@@ -227,6 +232,20 @@
 
   function countDistinctProductSkus(root) {
     return collectDistinctProductSkus(root).size;
+  }
+
+  function getListSkuPageKey() {
+    return [location.origin, location.pathname, location.search].join('');
+  }
+
+  function rememberVisibleListSkus() {
+    const pageKey = getListSkuPageKey();
+    if (pageKey !== observedListSkuPageKey) {
+      observedListSkuSet.clear();
+      observedListSkuPageKey = pageKey;
+    }
+    collectDistinctProductSkus(document.body).forEach((sku) => observedListSkuSet.add(String(sku)));
+    return Array.from(observedListSkuSet).slice(0, 1000);
   }
 
   function findSingleSkuAncestor(link, boundary) {
@@ -1555,7 +1574,7 @@
   }
 
   function getCurrentPageSkus() {
-    return Array.from(collectDistinctProductSkus(document.body)).slice(0, 1000);
+    return rememberVisibleListSkus();
   }
 
   function getCardDomBySku(sku) {
@@ -1676,7 +1695,7 @@
     const width = getListWorkbenchColumnWidth(column, widths);
     const handle = column.fixed
       ? ''
-      : `<span data-role="workbench-col-resize-handle" data-col-key="${escapeHtml(column.key)}" title="拖拽调整列宽" style="position:absolute;right:-3px;top:0;width:7px;height:100%;cursor:col-resize;z-index:4;"></span>`;
+      : `<span class="resize-grip" data-role="workbench-col-resize-handle" data-col-key="${escapeHtml(column.key)}" title="拖拽调整列宽"></span>`;
     return [
       `<th data-col-key="${escapeHtml(column.key)}" style="position:sticky;top:0;width:${width}px;min-width:${width}px;max-width:${width}px;padding:9px 8px;border:1px solid #e5e7eb;text-align:${column.align};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box;">`,
       column.key === 'select'
@@ -2379,6 +2398,7 @@
     modal.id = LIST_WORKBENCH_MODAL_ID;
     modal.__ssErpListWorkbenchRows = [];
     modal.__ssErpListWorkbenchSkus = skus;
+    modal.__ssErpDeletedWorkbenchSkus = new Set();
     modal.__ssErpRowFilter = initialRowFilter;
     modal.__ssErpWorkbenchFocus = normalizeListWorkbenchMode(options && options.focus);
     modal.__ssErpListWorkbenchColumnWidths = readListWorkbenchColumnWidths();
@@ -2392,9 +2412,9 @@
       'color:#111827',
     ].join(';');
     modal.innerHTML = [
-      `<div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 40px));height:min(720px,calc(100vh - 40px));background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;animation:ssErpModalIn .16s ease-out;">`,
-      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#f8fafc;color:#334155;box-shadow:0 1px 0 #e5e7eb;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#fff7ed!important;}</style>`,
-      `  <div style="min-height:56px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
+      `<div data-role="workbench-shell" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 40px));height:min(720px,calc(100vh - 40px));min-width:min(920px,calc(100vw - 40px));min-height:min(520px,calc(100vh - 40px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);resize:both;background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;animation:ssErpModalIn .16s ease-out;">`,
+      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#293241;color:#f8fafc;box-shadow:0 1px 0 #1f2937;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#eff6ff!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-filter-toolbar"] select,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-batch-toolbar"] input{box-shadow:inset 0 1px 1px rgba(15,23,42,.04);}</style>`,
+      '  <div style="min-height:56px;background:linear-gradient(135deg,#1d4ed8 0%,#0f766e 100%);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid #1e3a8a;">',
       '    <div>',
       '      <div style="font-size:16px;font-weight:800;line-height:1.2;">SS ERP SKU 工作台</div>',
       `      <div style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">Ozon 列表页 ${skus.length} 个 SKU</div>`,
@@ -2497,7 +2517,12 @@
   async function loadListWorkbenchRows(modal) {
     const status = modal.querySelector('[data-role="workbench-status"]');
     const body = modal.querySelector('[data-role="workbench-body"]');
-    const skus = Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : getCurrentPageSkus();
+    const observedSkus = getCurrentPageSkus();
+    const existingSkus = Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : [];
+    const deletedSkus = modal.__ssErpDeletedWorkbenchSkus instanceof Set ? modal.__ssErpDeletedWorkbenchSkus : new Set();
+    const skus = Array.from(new Set([...existingSkus, ...observedSkus].map((sku) => String(sku || '').trim()).filter(Boolean)))
+      .filter((sku) => !deletedSkus.has(sku))
+      .slice(0, 1000);
     modal.__ssErpListWorkbenchSkus = skus;
     if (!skus.length) {
       if (body) body.innerHTML = '<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">本页没有识别到 SKU</td></tr>';
@@ -2636,6 +2661,10 @@
       if (status) status.textContent = '请先勾选 SKU';
       return;
     }
+    if (!(modal.__ssErpDeletedWorkbenchSkus instanceof Set)) {
+      modal.__ssErpDeletedWorkbenchSkus = new Set();
+    }
+    selected.forEach((sku) => modal.__ssErpDeletedWorkbenchSkus.add(String(sku)));
     modal.__ssErpListWorkbenchSkus = (Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : [])
       .filter((sku) => !selected.has(String(sku)));
     modal.__ssErpListWorkbenchRows = (Array.isArray(modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [])
@@ -2685,7 +2714,7 @@
     return /^[=+\-@]/.test(text) ? `'${text}` : text;
   }
 
-  function downloadListWorkbenchExcel(rows, filename) {
+  function buildListWorkbenchExcelHtml(rows) {
     const tableRows = rows.map((row, rowIndex) => {
       const tag = rowIndex === 0 ? 'th' : 'td';
       return '<tr>' + row.map((value) => {
@@ -2701,6 +2730,10 @@
       '</table>',
       '</body></html>',
     ].join('');
+  }
+
+  function downloadListWorkbenchExcelFromPage(rows, filename) {
+    const html = buildListWorkbenchExcelHtml(rows);
     const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2714,6 +2747,18 @@
     }, 800);
   }
 
+  async function downloadListWorkbenchExcel(rows, filename) {
+    const html = buildListWorkbenchExcelHtml(rows);
+    const response = await send({
+      type: 'spb-self-hosted:download-ozon-workbench-excel',
+      filename: filename || 'ss-erp-ozon-sku.xls',
+      html,
+    }, 30000);
+    if (response && response.ok) return response;
+    downloadListWorkbenchExcelFromPage(rows, filename);
+    return { ok: true, fallback: 'page-download' };
+  }
+
   async function exportListWorkbenchSelectedSkus(modal) {
     const selected = getSelectedListWorkbenchSkus(modal);
     const status = modal.querySelector('[data-role="workbench-status"]');
@@ -2724,7 +2769,7 @@
     const exportRows = getListWorkbenchExportRows(modal, selected);
     const filename = `ss-erp-ozon-sku-${new Date().toISOString().slice(0, 10)}.xls`;
     try {
-      downloadListWorkbenchExcel(exportRows, filename);
+      await downloadListWorkbenchExcel(exportRows, filename);
       if (status) status.textContent = `已导出 ${selected.length} 个 SKU 到 Excel`;
     } catch (error) {
       try {
@@ -2892,6 +2937,7 @@
     if (!isProductPage()) return;
     cleanupDetachedExpandedPanels();
     ensureListWorkbenchBar();
+    rememberVisibleListSkus();
     ensureListQuickActions();
     const io = ensureIntersectionObserver();
     const targets = new Set();

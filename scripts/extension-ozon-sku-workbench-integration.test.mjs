@@ -159,3 +159,9 @@ test('direct import-by-sku payload preserves workbench KPI context for ERP job m
     assert.match(directItems[0], new RegExp(`${field}:`), `direct import payload should keep ${field}`);
   }
 });
+
+test('background downloads Ozon workbench Excel exports through Chrome downloads API', () => {
+  assert.match(background, /spb-self-hosted:download-ozon-workbench-excel/);
+  assert.match(background, /chrome\.downloads\.download\(/);
+  assert.match(background, /application\/vnd\.ms-excel/);
+});

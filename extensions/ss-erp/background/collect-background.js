@@ -2116,6 +2116,25 @@ async function downloadProductJson(product) {
   return { ok: true, downloadId, filename };
 }
 
+async function downloadOzonWorkbenchExcel(payload) {
+  const html = String(payload && payload.html || "");
+  if (!html) {
+    return { ok: false, error: "缺少 Excel 导出内容" };
+  }
+  const requestedFilename = String(payload && payload.filename || "ss-erp-ozon-sku.xls")
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  const filename = requestedFilename.endsWith(".xls") ? requestedFilename : `${requestedFilename || "ss-erp-ozon-sku"}.xls`;
+  const url = `data:application/vnd.ms-excel;charset=utf-8,${encodeURIComponent(html)}`;
+  const downloadId = await chrome.downloads.download({
+    url,
+    filename,
+    saveAs: false
+  });
+  return { ok: true, downloadId, filename };
+}
+
 /**
  * 测试 OZON 数据 API 可用性
  * 市场数据（搜索词/趋势/爆品/竞争定位）已确认需要 Premium Plus，标记为不可用
@@ -4642,6 +4661,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "spb-self-hosted:download-product":
         return await downloadProductJson(message.product);
+      case "spb-self-hosted:download-ozon-workbench-excel":
+        return await downloadOzonWorkbenchExcel({
+          filename: message.filename,
+          html: message.html
+        });
       case "spb-self-hosted:track-logistics":
         return { ok: true, data: await trackOrderLogistics(message.orders, message.platform) };
       case "spb-self-hosted:check-premium": {

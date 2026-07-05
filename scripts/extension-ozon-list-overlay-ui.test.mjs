@@ -158,6 +158,11 @@ assert.match(
 );
 assert.match(
   overlay,
+  /data-role="workbench-shell"[\s\S]*resize:both/,
+  'Ozon list workbench shell should be manually resizable when the table needs more width',
+);
+assert.match(
+  overlay,
   /position:sticky;\s*top:0;\s*z-index:3/,
   'Ozon list workbench should stick individual header cells above table rows instead of letting the header pierce through content',
 );
@@ -183,6 +188,11 @@ assert.match(
 );
 assert.match(
   overlay,
+  /resize-grip/,
+  'Ozon list workbench resize handles should be visibly discoverable, not invisible hit targets',
+);
+assert.match(
+  overlay,
   /initListWorkbenchColumnResize\(modal\)/,
   'Ozon list workbench should initialize column resize interactions when the modal opens',
 );
@@ -200,6 +210,21 @@ assert.match(
   overlay,
   /\.xls/,
   'Ozon list workbench export should create an .xls file that Excel can open',
+);
+assert.match(
+  overlay,
+  /spb-self-hosted:download-ozon-workbench-excel/,
+  'Ozon list workbench Excel export should use the extension downloads API instead of relying only on page clipboard permissions',
+);
+assert.match(
+  overlay,
+  /observedListSkuSet/,
+  'Ozon list workbench should keep an accumulated SKU pool across Ozon virtual scrolling',
+);
+assert.match(
+  overlay,
+  /rememberVisibleListSkus\(\)/,
+  'Ozon list scans should remember newly visible SKUs before refreshing the quick action count',
 );
 assert.match(
   overlay,
