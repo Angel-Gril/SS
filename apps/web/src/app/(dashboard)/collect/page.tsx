@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ShoppingCart, Loader2, Search, Trash2, ExternalLink, Upload, Edit2, Save, ArrowRight, Download, Sparkles, Image as ImageIcon, Layers, ChevronDown, ChevronUp, KeyRound, Shuffle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -193,7 +193,9 @@ interface RandomizeConfig {
 
 export default function CollectPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const systemDialog = useSystemDialog();
+  const poolSkusAppliedRef = useRef(false);
   const defaultCollectSourceGroup = 'ozon';
   const [items, setItems] = useState<CollectedItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -274,6 +276,21 @@ export default function CollectPage() {
 
   useEffect(() => { fetchData(); }, [search, page, statusFilter]);
   useEffect(() => { loadShops(); loadWmTemplates(); loadRandomizeConfig(); }, []);
+  useEffect(() => {
+    if (poolSkusAppliedRef.current) return;
+    const poolSkus = searchParams.get('poolSkus');
+    if (!poolSkus) return;
+    const normalized = poolSkus
+      .split(/\r?\n|,/)
+      .map((sku) => sku.trim())
+      .filter(Boolean)
+      .join('\n');
+    if (!normalized) return;
+    poolSkusAppliedRef.current = true;
+    setOzonFetchInput(normalized);
+    setShowOzonFetch(true);
+    toast({ title: `已从选品池带入 ${normalized.split('\n').length} 个 SKU` });
+  }, [searchParams]);
   useEffect(() => {
     setCategoryCatalogResults([]);
     setCategoryCatalogTotal(0);

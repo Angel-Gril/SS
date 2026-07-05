@@ -102,6 +102,7 @@ model User {
   auditLogs    AuditLog[]
   ozonAnalyticsCaches OzonAnalyticsCache[]
   productSelectionRules ProductSelectionRule[]
+  productSelectionPoolItems ProductSelectionPoolItem[]
 
   @@index([parentId])
   @@map("users")
@@ -945,6 +946,36 @@ model ProductSelectionRule {
   @@index([userId, enabled])
   @@index([userId, updatedAt])
   @@map("product_selection_rules")
+}
+
+// 扩展选品池（规则命中/手动入池后写入 ERP，扩展本地只做加速缓存）
+model ProductSelectionPoolItem {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform       String   @default("ozon")
+  sku            String
+  productId      String?  @map("product_id")
+  title          String
+  url            String?
+  image          String?
+  priceRub       Decimal? @map("price_rub") @db.Decimal(12, 2)
+  currency       String   @default("RUB")
+  source         String   @default("extension")
+  ruleIds        Json?    @map("rule_ids")
+  tags           Json?
+  metrics        Json?
+  note           String?
+  status         String   @default("active")
+  firstMatchedAt DateTime @default(now()) @map("first_matched_at")
+  lastMatchedAt  DateTime @default(now()) @map("last_matched_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, platform, sku])
+  @@index([userId, status, updatedAt])
+  @@index([userId, platform, sku])
+  @@map("product_selection_pool_items")
 }
 
 // 水印模板

@@ -182,6 +182,7 @@ await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(appVersionRoutes, { prefix: '/api/app-version' });
 await app.register(adminAuthRoutes, { prefix: '/api/admin/auth' });
 await app.register(extensionConfigRoutes, { prefix: '/api/extension' });
+await app.register(extensionConfigRoutes, { prefix: '/api/extension-config' });
 await app.register(extensionDownloadRoutes, { prefix: '/api/extensions' });
 await app.register(announcementRoutes, { prefix: '/api/announcements' });
 await app.register(systemStatusRoutes, { prefix: '/api/admin/system-status' });

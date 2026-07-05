@@ -3337,6 +3337,40 @@ async function deleteProductSelectionRule(ruleId) {
   return await requestProductSelectionRuleCenter("/" + encodeURIComponent(id), { method: "DELETE" });
 }
 
+async function requestProductSelectionPool(path, options = {}) {
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+  const method = options.method || "GET";
+  const response = await fetch(conn.baseUrl + "/api/extension-config/product-selection/pool" + (path || ""), {
+    method: method,
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token,
+    },
+    body: options.body == null || method === "GET" ? undefined : JSON.stringify(options.body),
+  });
+  const text = await response.text();
+  let parsed = {};
+  try { parsed = JSON.parse(text); } catch (e) {}
+  if (!response.ok || parsed.code === 0) {
+    return { ok: false, error: parsed.msg || ("ERP 选品池请求失败: HTTP " + response.status + " " + text.slice(0, 200)), data: parsed };
+  }
+  return { ok: true, data: parsed.data || parsed };
+}
+
+async function upsertProductSelectionPoolItem(item) {
+  return await requestProductSelectionPool("/items", { method: "POST", body: item || {} });
+}
+
+async function getProductSelectionPoolStatus(skus, platform) {
+  const ids = Array.isArray(skus) ? skus.map(function (sku) { return String(sku || "").trim(); }).filter(Boolean) : [];
+  if (!ids.length) return { ok: true, data: { skus: [], items: [], itemsBySku: {} } };
+  return await requestProductSelectionPool("/status", {
+    method: "POST",
+    body: { skus: ids.slice(0, 500), platform: platform || "ozon" },
+  });
+}
+
 function normalizeOzonProductPathForFetch(link, fallbackProductId) {
   const raw = String(link || "").trim();
   let path = "";
@@ -4658,6 +4692,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "spb-self-hosted:delete-product-selection-rule": {
         return await deleteProductSelectionRule(message.ruleId);
+      }
+      case "spb-self-hosted:upsert-product-selection-pool-item": {
+        return await upsertProductSelectionPoolItem(message.item || message.product || {});
+      }
+      case "spb-self-hosted:get-product-selection-pool-status": {
+        return await getProductSelectionPoolStatus(message.skus || message.productIds || [], message.platform || "ozon");
       }
       case "spb-self-hosted:download-product":
         return await downloadProductJson(message.product);

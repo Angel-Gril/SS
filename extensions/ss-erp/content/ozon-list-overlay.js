@@ -29,6 +29,7 @@
 
   const PREMIUM_TTL_MS = 10 * 60 * 1000;
   const PREMIUM_FAILURE_TTL_MS = 90 * 1000;
+  const PRODUCT_SELECTION_POOL_STATUS_TTL_MS = 2 * 60 * 1000;
   const PREMIUM_CONCURRENCY = 3;
   const CARD_SCAN_FAST_MS = 500;
   const CARD_SCAN_SLOW_MS = 2000;
@@ -142,6 +143,9 @@
   const observedListSkuSet = new Set();
   let observedListSkuPageKey = '';
   const autoFavoriteProductPoolSet = new Set();
+  const productSelectionPoolStatusCache = new Map();
+  const productSelectionPoolStatusPending = new Set();
+  let productSelectionPoolStatusTimer = null;
 
   function ensureListOverlayStyles() {
     if (document.getElementById(LIST_OVERLAY_STYLE_ID)) return;
@@ -1066,6 +1070,139 @@
     }).join('');
   }
 
+  function normalizeProductSelectionPoolStatusItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    const sku = String(item.sku || item.productId || item.product_id || '').trim();
+    if (!sku) return null;
+    return {
+      sku,
+      inPool: item.inPool !== false && String(item.status || 'active') !== 'removed',
+      title: String(item.title || ''),
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      source: String(item.source || 'erp'),
+      checkedAt: Date.now(),
+    };
+  }
+
+  function getProductSelectionPoolStatus(sku) {
+    const key = String(sku || '').trim();
+    if (!key) return null;
+    const cached = productSelectionPoolStatusCache.get(key);
+    if (!cached) return null;
+    if (Date.now() - Number(cached.checkedAt || 0) > PRODUCT_SELECTION_POOL_STATUS_TTL_MS) {
+      productSelectionPoolStatusCache.delete(key);
+      return null;
+    }
+    return cached;
+  }
+
+  function markProductSelectionPoolStatus(sku, patch) {
+    const key = String(sku || '').trim();
+    if (!key) return;
+    productSelectionPoolStatusCache.set(key, Object.assign({
+      sku: key,
+      inPool: false,
+      checkedAt: Date.now(),
+      source: 'erp',
+    }, patch || {}, { checkedAt: Date.now() }));
+    updateProductSelectionPoolStatusViews(key);
+  }
+
+  function updateProductSelectionPoolStatusViews(sku) {
+    const targetSku = String(sku || '').trim();
+    if (!targetSku) return;
+    const status = getProductSelectionPoolStatus(targetSku);
+    document.querySelectorAll('[data-role="selection-pool-status"]').forEach((el) => {
+      if (String(el.getAttribute('data-ss-erp-pool-sku') || '') !== targetSku) return;
+      const inPool = Boolean(status && status.inPool);
+      el.style.display = inPool ? 'inline-flex' : 'none';
+      el.textContent = '已入池';
+      el.setAttribute('title', status && status.source === 'local' ? '已加入本地选品池，等待 ERP 同步' : '已加入 ERP 选品池');
+    });
+    document.querySelectorAll(`[${SKU_ATTR}="${targetSku}"] .${CARD_CLASS}`).forEach((wrap) => {
+      wrap.setAttribute('data-ss-erp-selection-pool', status && status.inPool ? '1' : '0');
+    });
+  }
+
+  function scheduleProductSelectionPoolStatusFetch(skus) {
+    const ids = (Array.isArray(skus) ? skus : [skus])
+      .map((sku) => String(sku || '').trim())
+      .filter(Boolean);
+    ids.forEach((sku) => {
+      if (getProductSelectionPoolStatus(sku)) return;
+      productSelectionPoolStatusPending.add(sku);
+    });
+    if (!productSelectionPoolStatusPending.size || productSelectionPoolStatusTimer) return;
+    productSelectionPoolStatusTimer = setTimeout(flushProductSelectionPoolStatusFetch, 180);
+  }
+
+  async function flushProductSelectionPoolStatusFetch() {
+    const skus = Array.from(productSelectionPoolStatusPending).slice(0, 500);
+    productSelectionPoolStatusPending.clear();
+    productSelectionPoolStatusTimer = null;
+    if (!skus.length) return;
+    const response = await send({
+      type: 'spb-self-hosted:get-product-selection-pool-status',
+      platform: 'ozon',
+      skus,
+    }, 15000);
+    const data = response && response.ok ? (response.data || {}) : {};
+    const items = Array.isArray(data.items)
+      ? data.items
+      : Object.values(data.itemsBySku || {});
+    const found = new Set();
+    items.forEach((item) => {
+      const normalized = normalizeProductSelectionPoolStatusItem(item);
+      if (!normalized) return;
+      found.add(normalized.sku);
+      productSelectionPoolStatusCache.set(normalized.sku, normalized);
+      updateProductSelectionPoolStatusViews(normalized.sku);
+    });
+    skus.forEach((sku) => {
+      if (found.has(sku)) return;
+      markProductSelectionPoolStatus(sku, { inPool: false, source: 'erp' });
+    });
+  }
+
+  function buildProductSelectionPoolItem(productId, dom, row, autoRules, priceRub, tags, note) {
+    const cardDom = dom || {};
+    const data = row || {};
+    return {
+      platform: 'ozon',
+      sku: productId,
+      productId,
+      title: firstPresentValue(data.title, data.name, cardDom.title, `Ozon SKU ${productId}`),
+      url: firstPresentValue(cardDom.url, data.sourceUrl, data.url, `https://www.ozon.ru/product/${productId}/`),
+      image: firstPresentValue(data.image, data.coverImage, cardDom.image, ''),
+      priceRub: Number(priceRub) || null,
+      currency: 'RUB',
+      source: 'extension-auto-rule',
+      ruleIds: autoRules.map((rule) => String(rule.id || '')).filter(Boolean),
+      tags,
+      note,
+      metrics: {
+        soldCount: firstPresentValue(data.soldCount, data.monthlySales),
+        soldSum: firstPresentValue(data.soldSum, data.gmvSum),
+        sellerCount: firstPresentValue(data.sellerCount, data.followSellerCount),
+        minFollowPriceRub: firstPresentValue(data.minFollowPriceRub, data.followMinPriceRub),
+        adExpenseShare: firstPresentValue(data.adExpenseShare, data.drr),
+        returnCancelRate: deriveSelectionReturnCancelRate(data),
+        profitMarginPct: firstPresentValue(data.profitMarginPct),
+        weightGrams: firstPresentValue(data.weightGrams, cardDom.weightGrams),
+        brand: firstPresentValue(data.brand, cardDom.brand),
+        salesSchema: firstPresentValue(data.salesSchema, cardDom.salesSchema),
+      },
+    };
+  }
+
+  async function syncProductSelectionPoolItem(item) {
+    if (!item || !item.sku) return { ok: false, error: '缺少 SKU' };
+    return await send({
+      type: 'spb-self-hosted:upsert-product-selection-pool-item',
+      item,
+    }, 15000);
+  }
+
   function maybeAutoFavoriteProductPool(sku, dom, row, matches) {
     const autoRules = (Array.isArray(matches) ? matches : []).filter((rule) => rule && rule.autoFavorite === true);
     const productId = String(sku || '').trim();
@@ -1080,6 +1217,7 @@
     const priceRub = firstPresentValue(data.priceRub, data.pagePrice, data.avgPrice, cardDom.price, 0);
     const tags = ['选品规则'].concat(autoRules.map((rule) => rule.tag || rule.name).filter(Boolean)).slice(0, 8);
     const note = `自动入池：${tags.slice(1).join('、') || '选品规则命中'}`;
+    const poolItem = buildProductSelectionPoolItem(productId, cardDom, data, autoRules, priceRub, tags, note);
     send({
       type: 'ozon-calc:product-pool-upsert',
       payload: {
@@ -1108,6 +1246,12 @@
       },
     }, 12000).then((response) => {
       if (!response || !response.ok) autoFavoriteProductPoolSet.delete(poolKey);
+      else markProductSelectionPoolStatus(productId, { inPool: true, source: 'local', title: poolItem.title, tags });
+    });
+    syncProductSelectionPoolItem(poolItem).then((response) => {
+      if (response && response.ok) {
+        markProductSelectionPoolStatus(productId, { inPool: true, source: 'erp', title: poolItem.title, tags });
+      }
     });
   }
 
@@ -1261,7 +1405,10 @@
     wrap.innerHTML = [
       '<div class="ss-erp-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">',
       '  <span style="font-weight:700;color:#c2410c;font-size:13px">SS ERP</span>',
-      '  <span class="ss-erp-status-pill" style="display:none">加载中…</span>',
+      '  <span style="display:flex;align-items:center;gap:5px;min-width:0;">',
+      `    <span data-role="selection-pool-status" data-ss-erp-pool-sku="${escapeHtml(sku)}" style="display:none;align-items:center;border:1px solid #93c5fd;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:1px 5px;font-size:10px;font-weight:800;line-height:1.4;white-space:nowrap;">已入池</span>`,
+      '    <span class="ss-erp-status-pill" style="display:none">加载中…</span>',
+      '  </span>',
       '</div>',
       '<div class="ss-erp-selection-tags" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;margin:-2px 0 7px 0;min-height:0;"></div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
@@ -1423,6 +1570,8 @@
     const matchedRules = matchProductSelectionRules(buildSelectionMetricRow(sku, dom || {}, premium || {}));
     maybeAutoFavoriteProductPool(sku, dom || {}, premium || {}, matchedRules);
     renderProductSelectionTags(wrap, matchedRules);
+    scheduleProductSelectionPoolStatusFetch(sku);
+    updateProductSelectionPoolStatusViews(sku);
 
     // 数据源徽章（替代原本的 ERP 状态徽章——不再依赖 ERP 检测）
     const sources = (premium && premium._sources) ? premium._sources : [];
@@ -2640,6 +2789,7 @@
     if (!body) return;
     const rowBySku = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.sku || ''), row]));
     const allRenderSkus = (Array.isArray(skus) && skus.length ? skus : rows.map((row) => String(row.sku || ''))).filter(Boolean);
+    scheduleProductSelectionPoolStatusFetch(allRenderSkus);
     const rowFilter = modal.__ssErpRowFilter === 'matched' ? 'matched' : 'all';
     const decoratedRows = allRenderSkus.map((sku) => {
       const row = rowBySku.get(String(sku)) || { sku };
@@ -2666,6 +2816,8 @@
           return `<span title="${escapeHtml(rule.name)}" style="display:inline-block;max-width:86px;border:1px solid ${color};background:#fff;color:${color};border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
         }).join('')
         : '<span style="color:#94a3b8;">--</span>';
+      const poolStatus = getProductSelectionPoolStatus(sku);
+      const poolBadge = `<span data-role="selection-pool-status" data-ss-erp-pool-sku="${escapeHtml(sku)}" style="display:${poolStatus && poolStatus.inPool ? 'inline-flex' : 'none'};align-items:center;border:1px solid #93c5fd;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;">已入池</span>`;
       return [
         `<tr data-sku="${escapeHtml(sku)}" data-ss-erp-selection-matched="${matchedRules.length ? '1' : '0'}" style="background:${matchedRules.length ? '#f8fbff' : '#fff'};">`,
         `  <td style="padding:8px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="workbench-row-check" value="${escapeHtml(sku)}" checked></td>`,
@@ -2674,7 +2826,7 @@
         `    <span style="font-family:Consolas,monospace;font-weight:700;color:#1e88e5;">${escapeHtml(sku)}</span>`,
         '  </td>',
         `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</td>`,
-        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${selectionTags}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow:hidden;">${poolBadge}${selectionTags}</span></td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${priceRub != null ? formatRub(priceRub) : '--'}</td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.soldCount == null ? '--' : formatNum(row.soldCount)}</td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.soldSum == null ? '--' : formatRub(row.soldSum)}</td>`,
