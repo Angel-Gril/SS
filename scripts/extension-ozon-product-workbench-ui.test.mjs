@@ -197,6 +197,12 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
   assert.match(content, /正在采集并上架/);
   assert.match(content, /entry:\s*"ozon-product-detail"/);
   assert.match(content, /markupPct/);
+  assert.match(content, /data-role="watermark-template"/, 'product SKU workbench should expose ERP watermark templates in the publish toolbar');
+  assert.match(content, /function\s+loadOzonWorkbenchWatermarkTemplates/, 'product SKU workbench should load ERP watermark templates');
+  assert.match(content, /shop-select['"\]\)][\s\S]*change[\s\S]*loadOzonWorkbenchWatermarkTemplates/, 'product SKU workbench should reload watermark templates when the selected shop changes');
+  assert.match(content, /function\s+buildOzonWorkbenchWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/, 'product SKU workbench watermark config should match the server watermark input fields');
+  assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*const watermark = buildOzonWorkbenchWatermarkConfig\(modal\)/, 'product SKU workbench publish should read the selected watermark template');
+  assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*watermark:\s*watermark/, 'product SKU workbench publish should pass watermark config through the normal collect-then-publish path');
   assert.match(panel, /function\s+buildPublishCardBody/, 'detail data panel should render a rich publish card');
   assert.match(panel, /data-publish-shop[\s\S]*data-publish-mode[\s\S]*data-publish-brand[\s\S]*data-publish-watermark/, 'detail publish card should expose shop, mode, brand, and watermark controls');
   assert.match(panel, /entry:\s*'ozon-product-detail'/, 'detail publish card should use the collect-then-publish entry');

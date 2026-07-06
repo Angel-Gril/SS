@@ -1481,6 +1481,10 @@
             <input type="checkbox" data-role="follow-brand" style="margin:0;">
             复制品牌
           </label>
+          <label style="font-size:12px;font-weight:700;color:#334155;margin-left:6px;">水印</label>
+          <select data-role="watermark-template" style="height:32px;min-width:150px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
+            <option value="">加载水印...</option>
+          </select>
           <button type="button" data-role="refresh-workbench" style="height:32px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;">刷新数据</button>
           <div style="margin-left:auto;font-size:12px;color:${SS_ERP_PRODUCT_THEME.muted};" data-role="workbench-status">准备读取 SKU 数据...</div>
         </div>
@@ -1525,6 +1529,9 @@
     modal.addEventListener("click", (event) => {
       if (event.target === modal) modal.remove();
     });
+    modal.querySelector("[data-role='shop-select']").addEventListener("change", (event) => {
+      loadOzonWorkbenchWatermarkTemplates(modal, event.target && event.target.value).catch(() => {});
+    });
     modal.querySelector("[data-role='refresh-workbench']").addEventListener("click", () => loadOzonWorkbenchRows(modal, productId));
     modal.querySelectorAll("[data-role='workbench-view']").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1542,6 +1549,7 @@
 
     setProductWorkbenchMode(modal, activeMode);
     loadOzonWorkbenchShops(modal);
+    loadOzonWorkbenchWatermarkTemplates(modal).catch(() => {});
     loadOzonWorkbenchRows(modal, productId);
   }
 
@@ -1636,6 +1644,53 @@
     }
   }
 
+  async function loadOzonWorkbenchWatermarkTemplates(modal, shopId) {
+    const select = modal.querySelector("[data-role='watermark-template']");
+    if (!select) return;
+    select.innerHTML = '<option value="">不使用</option>';
+    modal.__ssErpWatermarkTemplateMap = {};
+    try {
+      const response = await sendRuntimeMessage({
+        type: "spb-self-hosted:get-watermark-templates",
+        shopId: String(shopId || "").trim() || undefined,
+      });
+      const templates = response && response.ok && Array.isArray(response.data) ? response.data : [];
+      const map = {};
+      templates.forEach((tpl) => {
+        if (tpl && tpl.id) map[String(tpl.id)] = tpl;
+      });
+      modal.__ssErpWatermarkTemplateMap = map;
+      select.innerHTML = '<option value="">不使用</option>' + templates
+        .map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name || tpl.id)}${tpl.isDefault ? "（默认）" : ""}</option>`)
+        .join("");
+      const defaultTemplate = templates.find((tpl) => tpl && tpl.isDefault && tpl.id);
+      if (defaultTemplate) select.value = String(defaultTemplate.id);
+    } catch (error) {
+      select.innerHTML = '<option value="">水印加载失败</option>';
+    }
+  }
+
+  function buildOzonWorkbenchWatermarkConfig(modal) {
+    const select = modal.querySelector("[data-role='watermark-template']");
+    const templateId = String(select && select.value || "").trim();
+    if (!templateId) return null;
+    const map = modal.__ssErpWatermarkTemplateMap && typeof modal.__ssErpWatermarkTemplateMap === "object"
+      ? modal.__ssErpWatermarkTemplateMap
+      : {};
+    const tpl = map[templateId];
+    if (!tpl) return null;
+    return {
+      type: tpl.type || "text",
+      text: tpl.text || undefined,
+      imageUrl: tpl.imageUrl || undefined,
+      position: tpl.position || undefined,
+      opacity: tpl.opacity != null ? Number(tpl.opacity) : undefined,
+      fontSize: tpl.fontSize != null ? Number(tpl.fontSize) : undefined,
+      fontColor: tpl.fontColor || undefined,
+      scale: tpl.scale != null ? Number(tpl.scale) : undefined,
+    };
+  }
+
   async function loadOzonWorkbenchRows(modal, productId) {
     const status = modal.querySelector("[data-role='workbench-status']");
     if (status) status.textContent = "读取 SKU 数据...";
@@ -1708,6 +1763,7 @@
     const publishMode = String((modal.querySelector("[data-role='publish-mode']") || {}).value || "clone");
     const followBrand = Boolean((modal.querySelector("[data-role='follow-brand']") || {}).checked);
     const markupPct = Number((modal.querySelector("[data-role='markup-pct']") || {}).value || 0);
+    const watermark = buildOzonWorkbenchWatermarkConfig(modal);
     const status = modal.querySelector("[data-role='workbench-status']");
     const button = modal.querySelector("[data-role='publish-workbench']");
 
@@ -1721,7 +1777,7 @@
     }
 
     if (button) button.disabled = true;
-    if (status) status.textContent = "正在采集并上架...";
+    if (status) status.textContent = watermark ? "正在采集商品、打水印并上架..." : "正在采集并上架...";
     try {
       const rows = Array.isArray(modal.__ssErpOzonWorkbenchRows)
         ? modal.__ssErpOzonWorkbenchRows.filter((row) => selected.includes(String(row && row.sku || "").trim()))
@@ -1740,6 +1796,7 @@
         publishMode,
         followBrand,
         markupPct: Number.isFinite(markupPct) ? markupPct : 0,
+        watermark: watermark,
         randomOfferId: true,
       });
       if (!response || !response.ok) throw new Error(response && response.error || "上架失败");
