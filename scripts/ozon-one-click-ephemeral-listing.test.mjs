@@ -54,27 +54,25 @@ test('browser one-click listing uses temporary collect records instead of pollut
   );
 });
 
-test('Ozon list publish mode renders a lightweight publish confirmation instead of KPI table', () => {
-  const publishConfirmFunction = listOverlay.match(/function\s+renderListWorkbenchPublishConfirm[\s\S]*?\n  }\n\n  async function publishListWorkbenchSelectedRows/);
-  assert.ok(publishConfirmFunction, 'publish confirmation renderer should be present');
+test('Ozon list publish mode keeps the SKU/KPI table for pre-publish validation', () => {
   assert.match(
     listOverlay,
-    /data-role="publish-confirm-wrap"/,
-    'list workbench should have a dedicated publish confirmation surface',
+    /data-role="workbench-table-wrap"/,
+    'list publish workbench should use the existing SKU/KPI table surface',
   );
   assert.match(
     listOverlay,
-    /function\s+renderListWorkbenchPublishConfirm/,
-    'publish mode should render through a dedicated confirmation renderer',
-  );
-  assert.match(
-    listOverlay,
-    /modal\.__ssErpWorkbenchFocus\s*===\s*'publish'[\s\S]*renderListWorkbenchPublishConfirm/,
-    'publish mode should bypass the dense KPI table renderer',
+    /月销量|广告费占比|跟卖最低价|利润率/,
+    'list publish workbench should keep KPI columns visible before submission',
   );
   assert.doesNotMatch(
-    publishConfirmFunction[0],
-    /月销量|广告费占比|跟卖最低价/,
-    'publish confirmation should not render KPI/analytics columns',
+    listOverlay,
+    /data-role="publish-confirm-wrap"|function\s+renderListWorkbenchPublishConfirm/,
+    'list publish mode should not replace the SKU/KPI table with a lightweight confirmation surface',
+  );
+  assert.doesNotMatch(
+    listOverlay,
+    /if\s*\(\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'\s*\)\s*\{\s*renderListWorkbenchPublishConfirm[\s\S]*?return;/,
+    'list publish mode should not bypass seller/KPI enrichment before rendering rows',
   );
 });

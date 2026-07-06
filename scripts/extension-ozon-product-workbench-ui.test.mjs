@@ -114,28 +114,26 @@ test('Ozon product workbench fetches table rows and seller offer metrics through
   );
 });
 
-test('Ozon product publish mode renders a lightweight confirmation instead of the dense KPI table', () => {
-  const publishConfirmFunction = content.match(/function\s+renderOzonProductPublishConfirm[\s\S]*?\n  }\n\n  async function publishSelectedOzonWorkbenchRows/);
-  assert.ok(publishConfirmFunction, 'product publish confirmation renderer should be present');
+test('Ozon product publish mode keeps the SKU/KPI table for pre-publish validation', () => {
   assert.match(
     content,
-    /data-role="publish-confirm-wrap"/,
-    'product workbench should have a dedicated publish confirmation surface',
+    /data-role="workbench-table-wrap"/,
+    'product publish workbench should use the existing SKU/KPI table surface',
   );
   assert.match(
     content,
-    /function\s+renderOzonProductPublishConfirm/,
-    'product publish mode should render through a dedicated confirmation renderer',
-  );
-  assert.match(
-    content,
-    /modal\.__ssErpProductWorkbenchMode\s*===\s*"publish"[\s\S]*renderOzonProductPublishConfirm/,
-    'product publish mode should bypass the dense KPI table renderer',
+    /跟卖数量|跟卖最低价|跟卖最高价|利润率|30天销量|广告费占比/,
+    'product publish workbench should keep SKU/KPI columns visible before submission',
   );
   assert.doesNotMatch(
-    publishConfirmFunction[0],
-    /月销量|广告费占比|跟卖最低价|跟卖最高价/,
-    'product publish confirmation should not render KPI/analytics columns',
+    content,
+    /data-role="publish-confirm-wrap"|function\s+renderOzonProductPublishConfirm/,
+    'product publish mode should not replace the SKU/KPI table with a lightweight confirmation surface',
+  );
+  assert.doesNotMatch(
+    content,
+    /if\s*\(\s*modal\.__ssErpProductWorkbenchMode\s*===\s*"publish"\s*\)\s*\{\s*renderOzonProductPublishConfirm[\s\S]*?return;/,
+    'product publish mode should not bypass seller/KPI enrichment before rendering rows',
   );
 });
 

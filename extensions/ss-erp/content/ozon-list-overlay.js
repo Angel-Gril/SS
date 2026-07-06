@@ -2125,9 +2125,7 @@
       element.style.display = nextMode === 'data' ? 'none' : 'flex';
     });
     const tableWrap = modal.querySelector('[data-role="workbench-table-wrap"]');
-    if (tableWrap) tableWrap.style.display = nextMode === 'publish' ? 'none' : 'block';
-    const confirmWrap = modal.querySelector('[data-role="publish-confirm-wrap"]');
-    if (confirmWrap) confirmWrap.style.display = nextMode === 'publish' ? 'block' : 'none';
+    if (tableWrap) tableWrap.style.display = 'block';
     const status = modal.querySelector('[data-role="workbench-status"]');
     if (status) status.textContent = getListWorkbenchModeStatus(nextMode);
     const title = modal.querySelector('[data-role="workbench-title"]');
@@ -2953,7 +2951,6 @@
       '      <tbody data-role="workbench-body"><tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">读取中...</td></tr></tbody>',
       '    </table>',
       '  </div>',
-      '  <div data-role="publish-confirm-wrap" style="display:none;flex:1;overflow:auto;padding:18px;background:#fff;"></div>',
       `  <div style="${listWorkbenchFooterStyle()}">`,
       '    <div data-role="workbench-footer-actions" style="display:flex;align-items:center;gap:8px;">',
       `      <button type="button" data-role="save-workbench-data" style="height:36px;border:1px solid #bfdbfe;background:#fff;color:#1d4ed8;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
@@ -3071,7 +3068,6 @@
       .slice(0, 1000);
     modal.__ssErpListWorkbenchSkus = skus;
     if (!skus.length) {
-      if (modal.__ssErpWorkbenchFocus === 'publish') renderListWorkbenchPublishConfirm(modal, [], []);
       if (body) body.innerHTML = '<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">本页没有识别到 SKU</td></tr>';
       if (status) status.textContent = '没有识别到 SKU';
       return;
@@ -3080,10 +3076,6 @@
     modal.__ssErpListWorkbenchRows = seedRows;
     renderListWorkbenchRows(modal, seedRows, skus);
     if (status) status.textContent = `已显示 ${seedRows.length} 条缓存数据`;
-    if (modal.__ssErpWorkbenchFocus === 'publish') {
-      if (status) status.textContent = `已准备 ${skus.length} 个 SKU，选择店铺后可直接提交上架`;
-      return;
-    }
     try {
       const costCny = readListWorkbenchNumber(modal, 'cost-cny');
       const logisticsFeeCny = readListWorkbenchNumber(modal, 'logistics-fee-cny');
@@ -3118,10 +3110,6 @@
   }
 
   function renderListWorkbenchRows(modal, rows, skus) {
-    if (modal.__ssErpWorkbenchFocus === 'publish') {
-      renderListWorkbenchPublishConfirm(modal, rows, skus);
-      return;
-    }
     const body = modal.querySelector('[data-role="workbench-body"]');
     if (!body) return;
     const rowBySku = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.sku || ''), row]));
@@ -3586,91 +3574,6 @@
         if (status) status.textContent = '导出失败：浏览器下载与剪贴板权限不可用';
       }
     }
-  }
-
-  function renderListWorkbenchPublishConfirm(modal, rows, skus) {
-    const wrap = modal.querySelector('[data-role="publish-confirm-wrap"]');
-    if (!wrap) return;
-    const body = modal.querySelector('[data-role="workbench-body"]');
-    if (body) body.innerHTML = '';
-
-    const rowBySku = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row && row.sku || ''), row]));
-    const allRenderSkus = (Array.isArray(skus) && skus.length ? skus : (Array.isArray(rows) ? rows.map((row) => String(row && row.sku || '')) : []))
-      .map((sku) => String(sku || '').trim())
-      .filter(Boolean);
-    scheduleProductSelectionPoolStatusFetch(allRenderSkus);
-    const rowFilter = modal.__ssErpRowFilter === 'matched' ? 'matched' : 'all';
-    const decoratedRows = allRenderSkus.map((sku) => {
-      const row = rowBySku.get(String(sku)) || { sku };
-      const dom = getCardDomBySku(String(sku));
-      const selectionRow = buildSelectionMetricRow(String(sku), dom, row);
-      const matchedRules = matchProductSelectionRules(selectionRow);
-      maybeAutoFavoriteProductPool(String(sku), dom, row, matchedRules);
-      return { sku: String(sku), row, dom, matchedRules };
-    });
-    const visibleRows = rowFilter === 'matched'
-      ? decoratedRows.filter((item) => item.matchedRules.length)
-      : decoratedRows;
-    const matchedCount = decoratedRows.filter((item) => item.matchedRules.length).length;
-    const sampleRows = visibleRows.slice(0, 8);
-    const hiddenChecks = visibleRows
-      .map(({ sku }) => `<input type="checkbox" data-role="workbench-row-check" value="${escapeHtml(sku)}" checked style="display:none;">`)
-      .join('');
-
-    if (!visibleRows.length) {
-      wrap.innerHTML = [
-        hiddenChecks,
-        '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:13px;">',
-        rowFilter === 'matched' ? '暂无规则命中商品，可切换为全部商品后提交。' : '本页没有识别到可上架商品。',
-        '</div>',
-      ].join('');
-      return;
-    }
-
-    const sampleHtml = sampleRows.map(({ sku, row, dom, matchedRules }) => {
-      const title = row.title || dom.title || `Ozon SKU ${sku}`;
-      const image = row.image || dom.image || '';
-      const priceText = formatWorkbenchPrice(row, dom);
-      const tags = matchedRules.length
-        ? matchedRules.slice(0, 2).map((rule) => {
-          const tint = deriveSelectionRuleTint(rule.color);
-          return `<span style="display:inline-flex;border:1px solid ${tint.border};background:${tint.bg};color:${tint.text};border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;">${escapeHtml(rule.tag || rule.name)}</span>`;
-        }).join('')
-        : '<span style="color:#94a3b8;font-size:11px;">未命中规则</span>';
-      return [
-        '<div style="display:flex;align-items:center;gap:10px;min-width:0;border:1px solid #e5e7eb;background:#fff;border-radius:4px;padding:8px;">',
-        image ? `<img src="${escapeHtml(image)}" alt="" style="width:38px;height:38px;object-fit:cover;border:1px solid #e5e7eb;border-radius:3px;flex:none;">` : '<div style="width:38px;height:38px;border:1px solid #e5e7eb;border-radius:3px;background:#f8fafc;flex:none;"></div>',
-        '<div style="min-width:0;flex:1;">',
-        `<div style="font-family:Consolas,monospace;font-size:12px;font-weight:800;color:#1d4ed8;">${escapeHtml(sku)}</div>`,
-        `<div style="margin-top:2px;font-size:12px;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</div>`,
-        '<div style="margin-top:5px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;">',
-        tags,
-        '</div>',
-        '</div>',
-        `<div style="font-size:12px;font-weight:800;color:#334155;white-space:nowrap;">${priceText}</div>`,
-        '</div>',
-      ].join('');
-    }).join('');
-
-    wrap.innerHTML = [
-      hiddenChecks,
-      '<div style="max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">',
-      '<div style="border:1px solid #fed7aa;background:#fff7ed;border-radius:4px;padding:14px 16px;">',
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">',
-      '<div>',
-      '<div style="font-size:16px;font-weight:900;color:#9a3412;">准备提交一键上架</div>',
-      '</div>',
-      `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="border:1px solid #fdba74;background:#fff;color:#9a3412;border-radius:3px;padding:6px 9px;font-size:12px;font-weight:900;">待提交 ${visibleRows.length}</span><span style="border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:6px 9px;font-size:12px;font-weight:900;">规则命中 ${matchedCount}</span></div>`,
-      '</div>',
-      '</div>',
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;">',
-      sampleHtml,
-      '</div>',
-      visibleRows.length > sampleRows.length
-        ? `<div style="font-size:12px;color:#64748b;text-align:center;">另有 ${visibleRows.length - sampleRows.length} 个商品已纳入提交队列，确认目标店铺后点击底部“一键上架选中商品”。</div>`
-        : '',
-      '</div>',
-    ].join('');
   }
 
   async function publishListWorkbenchSelectedRows(modal) {
