@@ -951,6 +951,95 @@
   font-size: 12px;
 }
 
+/* T5：详情页上架操作区 */
+.ozon-calc-publish-card {
+  border-color: rgba(234, 88, 12, 0.22);
+  background:
+    radial-gradient(circle at 100% 0, rgba(245, 158, 11, 0.1), transparent 12rem),
+    linear-gradient(135deg, rgba(255, 247, 237, 0.96), rgba(255, 255, 255, 0.94));
+}
+
+.ozon-calc-publish-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ozon-calc-publish-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ozon-calc-publish-select-wide {
+  grid-column: 1 / -1;
+}
+
+.ozon-calc-publish-select > span {
+  color: var(--qe-calc-muted-2);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.ozon-calc-publish-select select,
+.ozon-calc-publish-select input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--qe-calc-line);
+  border-radius: 10px;
+  background: var(--qe-calc-surface-solid);
+  color: var(--qe-calc-text);
+  padding: 7px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ozon-calc-publish-select input {
+  cursor: text;
+  font-variant-numeric: tabular-nums;
+}
+
+.ozon-calc-publish-select select:focus,
+.ozon-calc-publish-select input:focus {
+  outline: none;
+  border-color: var(--qe-calc-primary-line);
+}
+
+.ozon-calc-publish-btn {
+  width: 100%;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, var(--qe-calc-primary), #f97316);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(234, 88, 12, 0.22);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ozon-calc-publish-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(234, 88, 12, 0.26);
+}
+
+.ozon-calc-publish-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+.ozon-calc-publish-status:not(:empty) {
+  margin-top: 8px;
+}
+
 @media (max-width: 480px) {
   #ozon-calc-drawer {
     top: 8px;
@@ -964,6 +1053,7 @@
 
 	  .ozon-calc-grid,
 	  .ozon-calc-specs,
+	  .ozon-calc-publish-controls,
 	  .ozon-calc-actions.stacked,
 	  .ozon-calc-actions.stacked.two-col {
     grid-template-columns: 1fr;

@@ -34,6 +34,11 @@
   const CARD_SCAN_FAST_MS = 500;
   const CARD_SCAN_SLOW_MS = 2000;
   const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
+  // T6 自动滚动：防风控节流——每步滚动间隔 + 到底判定的稳定轮次。
+  const AUTO_SCROLL_STEP_MS = 900;          // 每次滚动间隔（配合项目 1-2 req/s 约束，留足懒加载时间）
+  const AUTO_SCROLL_STEP_RATIO = 0.85;      // 每步滚动视口高度占比（略小于一屏，避免跳过懒加载触发点）
+  const AUTO_SCROLL_MAX_STABLE = 4;         // 连续 N 轮高度与 SKU 数都不增长即判定到底
+  const AUTO_SCROLL_MAX_STEPS = 400;        // 硬上限，防止异常页面无限滚动
   const DISPLAY_FIELDS_STORAGE_KEY = 'ss-erp:ozon-list-display-fields';
   const PRODUCT_SELECTION_RULES_STORAGE_KEY = 'ss-erp:ozon-product-selection-rules';
   const PRODUCT_SELECTION_RULES_CHROME_STORAGE_KEY = 'productSelectionRules';
@@ -119,6 +124,7 @@
     primaryDark: '#9a3412',
     primaryDarker: '#7c2d12',
     primarySoft: '#fff7ed',
+    primarySoftAlt: '#ffedd5',
     border: '#fed7aa',
     borderStrong: '#fdba74',
     blue: '#1e88e5',
@@ -126,7 +132,10 @@
     surfaceAlt: '#f9fafb',
     text: '#111827',
     muted: '#64748b',
+    danger: '#dc2626',
     headerGradient: 'linear-gradient(135deg,#9a3412 0%,#ea580c 100%)',
+    cardGradient: 'linear-gradient(135deg,#fff7ed,#ffedd5)',
+    tableHeader: '#33291f',
   };
   const LIST_OVERLAY_STYLE_ID = 'ss-erp-list-overlay-style';
 
@@ -742,7 +751,35 @@
 
   function normalizeSelectionRuleColor(value) {
     const color = String(value || '').trim();
-    return /^#[0-9a-f]{6}$/i.test(color) ? color : '#2563eb';
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : SS_ERP_LIST_THEME.primary;
+  }
+
+  // 把命中规则的 color 派生成 { border, text, bg } —— 标签/卡片共用一处，避免两份逻辑。
+  // 低透明度渐变底 + 规则 color 作描边/文字；无效 color 回退主题橙。
+  function deriveSelectionRuleTint(value) {
+    const color = normalizeSelectionRuleColor(value);
+    const hex = color.replace('#', '');
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return {
+      color,
+      border: color,
+      text: color,
+      bg: `linear-gradient(135deg,rgba(${r},${g},${b},0.16),rgba(${r},${g},${b},0.06))`,
+      cardBg: `linear-gradient(135deg,rgba(${r},${g},${b},0.14),rgba(${r},${g},${b},0.04))`,
+    };
+  }
+
+  // 多规则命中时挑选用于卡片底色的那条：priority 最大优先，相同则取数组第一条（即命中顺序）。
+  function pickSelectionRuleForCard(matches) {
+    if (!Array.isArray(matches) || matches.length === 0) return null;
+    let best = matches[0];
+    for (let i = 1; i < matches.length; i += 1) {
+      const cur = matches[i];
+      if (Number(cur && cur.priority || 0) > Number(best && best.priority || 0)) best = cur;
+    }
+    return best;
   }
 
   function normalizeProductSelectionRule(rule, index) {
@@ -1017,6 +1054,7 @@
       name: rule.name,
       tag: rule.tag || rule.name,
       color: rule.color,
+      priority: rule.priority || 0,
       autoFavorite: rule.autoFavorite === true,
     }));
   }
@@ -1056,8 +1094,15 @@
     const matched = Array.isArray(matches) && matches.length > 0;
     wrap.setAttribute('data-ss-erp-selection-matched', matched ? '1' : '0');
     wrap.dataset.ssErpSelectionMatched = matched ? '1' : '0';
-    wrap.style.borderColor = matched ? '#93c5fd' : '#fdba74';
-    wrap.style.background = matched ? 'linear-gradient(135deg,#eff6ff,#fff7ed)' : 'linear-gradient(135deg,#fff7ed,#ffedd5)';
+    if (matched) {
+      // T3：卡片底色取命中规则（priority 最高）的 color 派生浅渐变。
+      const cardTint = deriveSelectionRuleTint(pickSelectionRuleForCard(matches).color);
+      wrap.style.borderColor = cardTint.border;
+      wrap.style.background = cardTint.cardBg;
+    } else {
+      wrap.style.borderColor = SS_ERP_LIST_THEME.borderStrong;
+      wrap.style.background = SS_ERP_LIST_THEME.cardGradient;
+    }
     if (!tags) return;
     if (!matched) {
       tags.style.display = 'none';
@@ -1066,8 +1111,9 @@
     }
     tags.style.display = 'flex';
     tags.innerHTML = matches.slice(0, 3).map((rule) => {
-      const color = normalizeSelectionRuleColor(rule.color);
-      return `<span title="${escapeHtml(rule.name)}" style="max-width:100%;border:1px solid ${color};background:#fff;color:${color};border-radius:3px;padding:2px 5px;font-size:10px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
+      // T2：标签背景改规则色浅渐变，规则色作描边/文字。
+      const tint = deriveSelectionRuleTint(rule.color);
+      return `<span title="${escapeHtml(rule.name)}" style="max-width:100%;border:1px solid ${tint.border};background:${tint.bg};color:${tint.text};border-radius:3px;padding:2px 5px;font-size:10px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
     }).join('');
   }
 
@@ -1414,9 +1460,10 @@
       '<div class="ss-erp-selection-tags" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;margin:-2px 0 7px 0;min-height:0;"></div>',
       '<div class="ss-erp-metrics" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px"></div>',
       '<div class="ss-erp-actions" style="display:flex;gap:6px">',
-      '  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid #f97316;border-radius:6px;background:#f97316;color:#fff;cursor:pointer;font-size:11px;font-weight:600">采集到 ERP</button>',
-      '  <button class="ss-erp-expand-btn" type="button" style="padding:5px 10px;border:1px solid #fdba74;border-radius:6px;background:#fff7ed;color:#c2410c;cursor:pointer;font-size:11px">展开</button>',
+      `  <button class="ss-erp-collect-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid ${SS_ERP_LIST_THEME.primary};border-radius:6px;background:${SS_ERP_LIST_THEME.primary};color:#fff;cursor:pointer;font-size:11px;font-weight:700">采集到 ERP</button>`,
+      `  <button class="ss-erp-publish-btn" type="button" style="flex:1;padding:5px 8px;border:1px solid ${SS_ERP_LIST_THEME.primaryDark};border-radius:6px;background:${SS_ERP_LIST_THEME.primaryDark};color:#fff;cursor:pointer;font-size:11px;font-weight:700">一键上架</button>`,
       '</div>',
+      `<button class="ss-erp-expand-btn" type="button" style="width:100%;margin-top:6px;padding:5px 10px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};border-radius:6px;background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};cursor:pointer;font-size:11px;font-weight:600">展开</button>`,
     ].join('');
 
     renderMetrics(wrap, sku, dom, null);
@@ -1728,43 +1775,32 @@
   function collectExpandedFields(sku, dom, p) {
     const f = [];
     const sources = (p && p._sources) ? p._sources.join(',') : '';
-    // === 关键销售数据（最先展示，按用户要求重要的提前）===
-    f.push(['上架日期', pickCreateDate(p) || '--', !pickCreateDate(p)]);
-    f.push(['30天销量', pickSales(p) == null ? '🔒 Premium' : formatNum(pickSales(p)), pickSales(p) == null]);
+    // T7：主段与可配置网格 DISPLAY_FIELD_DEFS 同源——逐字段走 getDisplayFieldValue，
+    // 保证网格勾选的字段展开时必现，新增对标指标（rFBS/FBP佣金、搜索目录、展示转化率等）自动纳入，不再维护第二套清单。
+    DISPLAY_FIELD_DEFS.forEach((field) => {
+      const result = getDisplayFieldValue(field.id, sku, dom || {}, p);
+      let value = result.value;
+      // sellerList 等返回可信 HTML（按钮）——展开面板按纯文本渲染，跳过以免注入；卖家明细由下方"卖家"文本覆盖。
+      if (value && typeof value === 'object' && value.__ssErpTrustedHtml) return;
+      if (value == null || value === '') value = '--';
+      else if (result.locked && value === 'Premium') value = '🔒 Premium'; // 保留展开面板的锁标记观感
+      f.push([field.label, value, result.locked]);
+    });
+    // === 展开面板专属明细（不在网格 DISPLAY_FIELD_DEFS 中，仅展开时补充）===
     f.push(['评论数', dom.reviews != null ? formatNum(dom.reviews) : '--', dom.reviews == null]);
-    f.push(['重量', pickWeight(p) == null ? '--' : pickWeight(p) + 'g', pickWeight(p) == null]);
-    f.push(['尺寸(mm)', pickDims(p) || '--', !pickDims(p)]);
     f.push(['评分', dom.rating != null ? `${dom.rating} ⭐` : '--', dom.rating == null]);
-    // === 商品信息 ===
-    f.push(['SKU', sku, false]);
-    f.push(['品牌', pickFlat(p, 'brand') || '--', !pickFlat(p, 'brand')]);
-    f.push(['类目', formatCategoryDisplay(p) || '--', !formatCategoryDisplay(p)]);
     f.push(['类目ID', pickCategoryIds(p).join(' / ') || '--', !pickCategoryIds(p).length]);
     f.push(['一级类目', pickFlat(p, 'category1') || '--', !pickFlat(p, 'category1')]);
     f.push(['图片数', p && Array.isArray(p.images) ? p.images.length : '--', !p]);
     f.push(['变体数', p && Array.isArray(p.variants) ? p.variants.length : '--', !p]);
     f.push(['货币', pickFlat(p, 'currency') || 'RUB', false]);
-    // === Premium 销售指标 ===
-    f.push(['30天GMV', pickGmv(p) == null ? '🔒 Premium' : '₽' + formatNum(pickGmv(p)), pickGmv(p) == null]);
-    f.push(['销量环比', pickSalesDynamics(p) == null ? '--' : pickSalesDynamics(p) + '%', pickSalesDynamics(p) == null]);
     f.push(['平均价', pickAvgPrice(p) == null ? '--' : '₽' + formatNum(pickAvgPrice(p)), pickAvgPrice(p) == null]);
     f.push(['最低卖家价', pickMinPrice(p) == null ? '--' : '₽' + formatNum(pickMinPrice(p)), pickMinPrice(p) == null]);
-    f.push(['加购率', pickAddCart(p) == null ? '🔒 Premium' : pickAddCart(p) + '%', pickAddCart(p) == null]);
-    f.push(['浏览下单率', pickFlat(p, 'convViewToOrder') == null ? '--' : formatPercentValue(pickFlat(p, 'convViewToOrder')), pickFlat(p, 'convViewToOrder') == null]);
-    f.push(['搜索转换率', pickFlat(p, 'convToCartSearch') == null ? '--' : formatPercentValue(pickFlat(p, 'convToCartSearch')), pickFlat(p, 'convToCartSearch') == null]);
-    f.push(['结单率', pickFlat(p, 'nullableRedemptionRate') == null ? '--' : formatPercentValue(pickFlat(p, 'nullableRedemptionRate')), pickFlat(p, 'nullableRedemptionRate') == null]);
     f.push(['浏览量', pickViews(p) == null ? '🔒 Premium' : formatNum(pickViews(p)), pickViews(p) == null]);
     f.push(['库存', pickStock(p) == null ? '🔒 Premium' : formatNum(pickStock(p)), pickStock(p) == null]);
-    f.push(['模板活动天数', pickFlat(p, 'daysWithTrafarets') == null ? '--' : formatNum(pickFlat(p, 'daysWithTrafarets')), pickFlat(p, 'daysWithTrafarets') == null]);
-    f.push(['促销收入占比', pickFlat(p, 'promoRevenueShare') == null ? '--' : formatPercentValue(pickFlat(p, 'promoRevenueShare')), pickFlat(p, 'promoRevenueShare') == null]);
-    // === 卖家信息 ===
     f.push(['卖家', pickSeller(p) || '--', !pickSeller(p)]);
     f.push(['卖家ID', pickFlat(p, 'sellerId') || '--', !pickFlat(p, 'sellerId')]);
-    const commissionValue = firstPresentValue(pickFlat(p, 'commissionRate'), pickFlat(p, 'commission'));
-    f.push(['佣金', commissionValue == null ? '--' : formatPercentValue(commissionValue), commissionValue == null]);
-    f.push(['价格指数', pickFlat(p, 'ptj') || '--', !pickFlat(p, 'ptj')]);
     f.push(['配送天数', pickDeliveryDays(p) == null ? '--' : pickDeliveryDays(p) + '天', pickDeliveryDays(p) == null]);
-    f.push(['发货模式', pickFlat(p, 'salesSchema') || '--', !pickFlat(p, 'salesSchema')]);
     f.push(['模型ID', pickFlat(p, 'modelId') || '--', !pickFlat(p, 'modelId')]);
     f.push(['数据源', sources || '--', false]);
     return f;
@@ -2099,6 +2135,108 @@
     }
   }
 
+  // T6：企鹅店长式列表自动滚动——触发 Ozon 懒加载抓全所有 SKU 卡片。
+  // 单例状态：可启停、节流、连续多轮 SKU 无增长即判定到底自停，防风控。
+  const autoScrollState = {
+    running: false,
+    timer: null,
+    stableRounds: 0,
+    steps: 0,
+    lastCount: 0,
+    lastScrollHeight: 0,
+  };
+
+  function isAutoScrollRunning() {
+    return autoScrollState.running;
+  }
+
+  function updateAutoScrollButton() {
+    const btn = document.querySelector(`#${LIST_QUICK_ACTIONS_ID} [data-role="quick-auto-scroll"]`);
+    if (!btn) return;
+    const running = autoScrollState.running;
+    btn.textContent = running ? '停止滚动' : '自动滚动';
+    btn.style.cssText = running
+      ? quickActionButtonStyle(SS_ERP_LIST_THEME.danger, '#ffffff')
+      : quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1');
+  }
+
+  function stopAutoScroll(reason) {
+    if (autoScrollState.timer) {
+      clearTimeout(autoScrollState.timer);
+      autoScrollState.timer = null;
+    }
+    const wasRunning = autoScrollState.running;
+    autoScrollState.running = false;
+    autoScrollState.stableRounds = 0;
+    autoScrollState.steps = 0;
+    updateAutoScrollButton();
+    if (wasRunning) {
+      const panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
+      if (panel) setListQuickStatus(panel, reason || `已停止 · ${getCurrentPageSkus().length} SKU`);
+    }
+  }
+
+  function startAutoScroll() {
+    if (autoScrollState.running) return;
+    if (!isProductPage()) return;
+    autoScrollState.running = true;
+    autoScrollState.stableRounds = 0;
+    autoScrollState.steps = 0;
+    autoScrollState.lastCount = getCurrentPageSkus().length;
+    autoScrollState.lastScrollHeight = document.documentElement.scrollHeight || 0;
+    updateAutoScrollButton();
+
+    const step = () => {
+      if (!autoScrollState.running) return;
+      // 页面切后台时暂停一拍，避免空滚 + 减少无谓请求。
+      if (document.visibilityState !== 'visible') {
+        autoScrollState.timer = setTimeout(step, AUTO_SCROLL_STEP_MS);
+        return;
+      }
+      // 硬上限保护：异常页面（无限流）避免无限滚动。
+      if (autoScrollState.steps >= AUTO_SCROLL_MAX_STEPS) {
+        stopAutoScroll(`已达上限 · ${getCurrentPageSkus().length} SKU`);
+        return;
+      }
+      autoScrollState.steps += 1;
+      const beforeBottom = document.documentElement.scrollHeight - (window.scrollY + window.innerHeight);
+      window.scrollBy({ top: Math.max(window.innerHeight * AUTO_SCROLL_STEP_RATIO, 400), behavior: 'smooth' });
+      scheduleScan();
+
+      autoScrollState.timer = setTimeout(() => {
+        if (!autoScrollState.running) return;
+        const count = getCurrentPageSkus().length;
+        const scrollHeight = document.documentElement.scrollHeight || 0;
+        const grew = count > autoScrollState.lastCount || scrollHeight > autoScrollState.lastScrollHeight + 8;
+        autoScrollState.lastCount = count;
+        autoScrollState.lastScrollHeight = scrollHeight;
+        const atBottom = (scrollHeight - (window.scrollY + window.innerHeight)) < 24;
+        if (grew) {
+          autoScrollState.stableRounds = 0;
+        } else {
+          autoScrollState.stableRounds += 1;
+        }
+        const panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
+        if (panel) setListQuickStatus(panel, `滚动中 · ${count} SKU`);
+        // 连续多轮无新增 + 确实到底才自停；中途懒加载慢时继续滚，硬上限负责兜底。
+        if (autoScrollState.stableRounds >= AUTO_SCROLL_MAX_STABLE && atBottom) {
+          stopAutoScroll(`${beforeBottom < 24 ? '已加载完' : '已停止（无新增）'} · ${count} SKU`);
+          return;
+        }
+        step();
+      }, AUTO_SCROLL_STEP_MS);
+    };
+
+    step();
+    const panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
+    if (panel) setListQuickStatus(panel, '自动滚动已开始');
+  }
+
+  function toggleAutoScroll() {
+    if (autoScrollState.running) stopAutoScroll('已手动停止');
+    else startAutoScroll();
+  }
+
   function ensureListQuickActions() {
     if (!isProductPage()) return;
     let panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
@@ -2130,15 +2268,16 @@
         '  <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>',
         '  <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>',
         '</div>',
-        `<button type="button" data-role="quick-open-workbench" title="打开本页 SKU 工作台" style="${quickActionButtonStyle('#ea580c', '#ffffff')}">一键上架</button>`,
-        `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle('#1d4ed8', '#ffffff')}">利润测算</button>`,
-        `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">选品数据</button>`,
-        '<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>',
+        `<button type="button" data-role="quick-open-workbench" title="打开本页 SKU 工作台" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primary, '#ffffff')}">一键上架</button>`,
+        `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primaryDark, '#ffffff')}">利润测算</button>`,
+        `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', SS_ERP_LIST_THEME.text, SS_ERP_LIST_THEME.borderStrong)}">选品数据</button>`,
+        `<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>`,
         `<button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">绑定Cookie</button>`,
         `<button type="button" data-role="quick-selection-settings" title="设置选品规则" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">设置选品</button>`,
         `<button type="button" data-role="quick-field-config" title="选择列表卡片展示字段" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">展示字段</button>`,
+        `<button type="button" data-role="quick-auto-scroll" title="自动滚动列表触发懒加载，抓全所有 SKU" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">自动滚动</button>`,
         '<div data-role="quick-status" style="min-height:16px;margin-top:5px;text-align:center;font-size:10px;line-height:1.25;color:#64748b;"></div>',
-        '<button type="button" data-role="quick-open-erp" title="打开 ERP 批量采集页" style="margin-top:5px;border:1px solid #cbd5e1;background:#f8fafc;color:#1d4ed8;font-size:10px;font-weight:800;cursor:pointer;width:100%;height:22px;padding:0;border-radius:3px;">ERP</button>',
+        `<button type="button" data-role="quick-open-erp" title="打开 ERP 批量采集页" style="margin-top:5px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};font-size:10px;font-weight:800;cursor:pointer;width:100%;height:22px;padding:0;border-radius:3px;">ERP</button>`,
       ].join('');
       document.body.appendChild(panel);
       panel.querySelector('[data-role="quick-open-workbench"]').addEventListener('click', () => {
@@ -2164,6 +2303,9 @@
         showListFieldConfigModal();
         setListQuickStatus(panel, '字段已打开');
       });
+      panel.querySelector('[data-role="quick-auto-scroll"]').addEventListener('click', () => {
+        toggleAutoScroll();
+      });
       panel.querySelector('[data-role="quick-open-erp"]').addEventListener('click', () => {
         openErpPage('/collect/batch');
         setListQuickStatus(panel, '正在进入');
@@ -2171,7 +2313,9 @@
     }
     const matchSummary = panel.querySelector('[data-role="quick-match-summary"]');
     if (matchSummary) matchSummary.textContent = `${count} SKU · 命中 ${matchedCount}`;
-    setListQuickStatus(panel, `${count} SKU · 命中 ${matchedCount}`);
+    // 面板可能被周期性重建——同步自动滚动按钮态；滚动进行中时不覆盖其状态文案。
+    updateAutoScrollButton();
+    if (!isAutoScrollRunning()) setListQuickStatus(panel, `${count} SKU · 命中 ${matchedCount}`);
   }
 
   function showListFieldConfigModal() {
@@ -2491,7 +2635,7 @@
       '  <div style="height:54px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 16px;">',
       '    <div data-role="selection-rule-editor-status" style="margin-right:auto;font-size:12px;color:#64748b;"></div>',
       '    <button type="button" data-role="cancel-selection-rule-editor" style="height:32px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:3px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;">取消</button>',
-      `    <button type="button" data-role="save-selection-rule-editor" style="height:32px;border:0;background:${SS_ERP_LIST_THEME.blue};color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
+      `    <button type="button" data-role="save-selection-rule-editor" style="height:32px;border:0;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;border-radius:3px;padding:0 16px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
       '  </div>',
       '</div>',
     ].join('');
@@ -2633,7 +2777,12 @@
   function openListSkuWorkbench(options) {
     const old = document.getElementById(LIST_WORKBENCH_MODAL_ID);
     if (old) old.remove();
-    const skus = getCurrentPageSkus();
+    // 单卡片上架传入 { skus:[sku], lockSkus:true }，锁定后不再并入整页 SKU。
+    const lockSkus = Boolean(options && options.lockSkus);
+    const explicitSkus = Array.isArray(options && options.skus)
+      ? options.skus.map((sku) => String(sku || '').trim()).filter(Boolean)
+      : null;
+    const skus = explicitSkus && explicitSkus.length ? explicitSkus : getCurrentPageSkus();
     const initialRowFilter = options && options.rowFilter === 'matched'
       ? 'matched'
       : 'all';
@@ -2642,6 +2791,7 @@
     modal.id = LIST_WORKBENCH_MODAL_ID;
     modal.__ssErpListWorkbenchRows = [];
     modal.__ssErpListWorkbenchSkus = skus;
+    modal.__ssErpLockSkus = lockSkus;
     modal.__ssErpDeletedWorkbenchSkus = new Set();
     modal.__ssErpRowFilter = initialRowFilter;
     modal.__ssErpWorkbenchFocus = normalizeListWorkbenchMode(options && options.focus);
@@ -2657,8 +2807,8 @@
     ].join(';');
     modal.innerHTML = [
       `<div data-role="workbench-shell" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1320px,calc(100vw - 40px));height:min(720px,calc(100vh - 40px));min-width:min(920px,calc(100vw - 40px));min-height:min(520px,calc(100vh - 40px));max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);resize:both;background:#fff;border:1px solid #d1d5db;box-shadow:0 18px 48px rgba(15,23,42,0.26);display:flex;flex-direction:column;border-radius:6px;overflow:hidden;animation:ssErpModalIn .16s ease-out;">`,
-      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:#293241;color:#f8fafc;box-shadow:0 1px 0 #1f2937;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#eff6ff!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-filter-toolbar"] select,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-batch-toolbar"] input{box-shadow:inset 0 1px 1px rgba(15,23,42,.04);}</style>`,
-      '  <div style="min-height:56px;background:linear-gradient(135deg,#1d4ed8 0%,#0f766e 100%);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid #1e3a8a;">',
+      `<style>#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] table{border-collapse:separate!important;border-spacing:0!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{position:sticky;top:0;z-index:3;background:${SS_ERP_LIST_THEME.tableHeader};color:#f8fafc;box-shadow:0 1px 0 #241c14;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] td,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] th{border-color:#e5e7eb!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-table-wrap"] tbody tr:hover{background:#eff6ff!important;}#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-filter-toolbar"] select,#${LIST_WORKBENCH_MODAL_ID} [data-role="workbench-batch-toolbar"] input{box-shadow:inset 0 1px 1px rgba(15,23,42,.04);}</style>`,
+      `  <div style="min-height:56px;background:${SS_ERP_LIST_THEME.headerGradient};color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid ${SS_ERP_LIST_THEME.primaryDark};">`,
       '    <div>',
       `      <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getListWorkbenchModeTitle(modal.__ssErpWorkbenchFocus))}</div>`,
       `      <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getListWorkbenchModeSubtitle(modal.__ssErpWorkbenchFocus, skus.length))}</div>`,
@@ -2763,9 +2913,10 @@
   async function loadListWorkbenchRows(modal) {
     const status = modal.querySelector('[data-role="workbench-status"]');
     const body = modal.querySelector('[data-role="workbench-body"]');
-    const observedSkus = getCurrentPageSkus();
     const existingSkus = Array.isArray(modal.__ssErpListWorkbenchSkus) ? modal.__ssErpListWorkbenchSkus : [];
     const deletedSkus = modal.__ssErpDeletedWorkbenchSkus instanceof Set ? modal.__ssErpDeletedWorkbenchSkus : new Set();
+    // 单卡片上架锁定 SKU 时只保留传入的那一条，不并入整页扫描结果。
+    const observedSkus = modal.__ssErpLockSkus ? [] : getCurrentPageSkus();
     const skus = Array.from(new Set([...existingSkus, ...observedSkus].map((sku) => String(sku || '').trim()).filter(Boolean)))
       .filter((sku) => !deletedSkus.has(sku))
       .slice(0, 1000);
@@ -2840,14 +2991,17 @@
       const priceRub = firstPresentValue(row.priceRub, row.pagePrice, dom.price);
       const selectionTags = matchedRules.length
         ? matchedRules.slice(0, 2).map((rule) => {
-          const color = normalizeSelectionRuleColor(rule.color);
-          return `<span title="${escapeHtml(rule.name)}" style="display:inline-block;max-width:86px;border:1px solid ${color};background:#fff;color:${color};border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
+          // T2：与卡片标签共用同一派生函数，规则色浅渐变底 + 规则色描边/文字。
+          const tint = deriveSelectionRuleTint(rule.color);
+          return `<span title="${escapeHtml(rule.name)}" style="display:inline-block;max-width:86px;border:1px solid ${tint.border};background:${tint.bg};color:${tint.text};border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
         }).join('')
         : '<span style="color:#94a3b8;">--</span>';
       const poolStatus = getProductSelectionPoolStatus(sku);
       const poolBadge = `<span data-role="selection-pool-status" data-ss-erp-pool-sku="${escapeHtml(sku)}" style="display:${poolStatus && poolStatus.inPool ? 'inline-flex' : 'none'};align-items:center;border:1px solid #93c5fd;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;">已入池</span>`;
+      // T3：命中行底色/左边强调条取命中规则（priority 最高）的 color 派生，与卡片同源，算一次复用。
+      const rowTint = matchedRules.length ? deriveSelectionRuleTint(pickSelectionRuleForCard(matchedRules).color) : null;
       return [
-        `<tr data-sku="${escapeHtml(sku)}" data-ss-erp-selection-matched="${matchedRules.length ? '1' : '0'}" style="background:${matchedRules.length ? '#f8fbff' : '#fff'};">`,
+        `<tr data-sku="${escapeHtml(sku)}" data-ss-erp-selection-matched="${matchedRules.length ? '1' : '0'}" style="background:${rowTint ? rowTint.cardBg : '#fff'};box-shadow:${rowTint ? `inset 3px 0 0 ${rowTint.border}` : 'none'};">`,
         `  <td style="padding:8px 6px;border:1px solid #e5e7eb;text-align:center;"><input type="checkbox" data-role="workbench-row-check" value="${escapeHtml(sku)}" checked></td>`,
         '  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">',
         image ? `    <img src="${escapeHtml(image)}" alt="" style="width:30px;height:30px;object-fit:cover;border:1px solid #e5e7eb;margin-right:7px;display:inline-block;vertical-align:middle;">` : '',
@@ -3362,6 +3516,7 @@
     wrap.addEventListener('click', (e) => e.stopPropagation());
 
     const collectBtn = wrap.querySelector('.ss-erp-collect-btn');
+    const publishBtn = wrap.querySelector('.ss-erp-publish-btn');
     const expandBtn = wrap.querySelector('.ss-erp-expand-btn');
 
     expandBtn.addEventListener('click', (e) => {
@@ -3399,11 +3554,19 @@
         collectBtn.style.borderColor = '#ef4444';
         setTimeout(() => {
           collectBtn.textContent = oldText;
-          collectBtn.style.background = '#f97316';
-          collectBtn.style.borderColor = '#f97316';
+          collectBtn.style.background = SS_ERP_LIST_THEME.primary;
+          collectBtn.style.borderColor = SS_ERP_LIST_THEME.primary;
           collectBtn.style.opacity = '1';
         }, 4000);
       }
+    });
+
+    // 单卡片「一键上架」：复用工作台 publish 链路，scope 到当前 SKU（上架必须选店铺 + 模式，
+    // 打开已锁定单 SKU 的 publish 工作台，不另起后端、不复制 publish 逻辑）。
+    publishBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openListSkuWorkbench({ skus: [sku], lockSkus: true, focus: 'publish' });
     });
 
     // 进入视口后自动加载 Premium 数据，不等用户展开

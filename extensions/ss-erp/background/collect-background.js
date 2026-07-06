@@ -3267,6 +3267,49 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
   const rows = await fetchCollectedOzonItemsBySkus(conn.baseUrl, conn.token, productIds);
   if (!rows.length) return { ok: false, error: "采集完成，但未在 ERP 中找到对应商品" };
 
+  // 选了水印模板才在上架前多打一次水印（写回 metadata.watermarkedImages，随后 publish-ozon 自动读取）。
+  // 没选则完全跳过，行为与原链路一致，零副作用。
+  let watermarkResult = null;
+  if (options.watermark && typeof options.watermark === "object") {
+    const watermarkIds = rows.map((row) => row.id).filter(Boolean);
+    if (watermarkIds.length) {
+      try {
+        const watermarkResponse = await fetch(conn.baseUrl + "/api/collect/watermark", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json;charset=utf-8",
+            "Authorization": "Bearer " + conn.token,
+          },
+          body: JSON.stringify({
+            ids: watermarkIds,
+            type: options.watermark.type || "text",
+            text: options.watermark.text,
+            imageUrl: options.watermark.imageUrl,
+            position: options.watermark.position,
+            opacity: options.watermark.opacity,
+            fontSize: options.watermark.fontSize,
+            fontColor: options.watermark.fontColor,
+            scale: options.watermark.scale,
+          }),
+        });
+        const watermarkText = await watermarkResponse.text();
+        try { watermarkResult = JSON.parse(watermarkText); } catch (e) { watermarkResult = null; }
+        const watermarkFailedCount = Number(watermarkResult && watermarkResult.data && watermarkResult.data.failed) || 0;
+        if (!watermarkResponse.ok || !watermarkResult || watermarkResult.code !== 1 || watermarkFailedCount > 0) {
+          return {
+            ok: false,
+            error: watermarkFailedCount > 0
+              ? ((watermarkResult && watermarkResult.msg) || "水印处理失败") + `（${watermarkFailedCount} 张失败，已中断上架）`
+              : (watermarkResult && watermarkResult.msg) || ("水印处理失败: HTTP " + watermarkResponse.status + " " + watermarkText.slice(0, 200)),
+            data: { collectResult, watermark: watermarkResult },
+          };
+        }
+      } catch (e) {
+        return { ok: false, error: "水印处理失败: " + (e && e.message ? e.message : String(e)), data: { collectResult } };
+      }
+    }
+  }
+
   const publishBody = {
     ids: rows.map((row) => row.id),
     shopId,
@@ -3299,7 +3342,25 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
     };
   }
 
-  return { ok: true, data: { collectResult, publish: publishParsed, items: rows } };
+  return { ok: true, data: { collectResult, watermark: watermarkResult, publish: publishParsed, items: rows } };
+}
+
+async function getWatermarkTemplates(shopId) {
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+  try {
+    const query = shopId ? ("?shopId=" + encodeURIComponent(String(shopId))) : "";
+    const response = await fetch(conn.baseUrl + "/api/watermark-templates" + query, {
+      method: "GET",
+      headers: { "Authorization": "Bearer " + conn.token },
+    });
+    if (!response.ok) return { ok: false, error: "获取水印模板失败: HTTP " + response.status };
+    const parsed = await response.json();
+    if (parsed.code !== 1) return { ok: false, error: parsed.msg || "获取水印模板失败" };
+    return { ok: true, data: Array.isArray(parsed.data) ? parsed.data : [] };
+  } catch (e) {
+    return { ok: false, error: "获取水印模板失败: " + (e && e.message ? e.message : String(e)) };
+  }
 }
 
 async function requestProductSelectionRuleCenter(path, options = {}) {
@@ -4688,7 +4749,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           categoryId: message.categoryId,
           typeId: message.typeId,
           randomOfferId: message.randomOfferId,
+          watermark: message.watermark,
         });
+      }
+      case "spb-self-hosted:get-watermark-templates": {
+        return await getWatermarkTemplates(message.shopId);
       }
       case "spb-self-hosted:list-product-selection-rules": {
         return await listProductSelectionRules();
@@ -4713,7 +4778,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "spb-self-hosted:download-ozon-workbench-excel":
         return await downloadOzonWorkbenchExcel({
           filename: message.filename,
-          html: message.html
+          html: message.html,
+          base64: message.base64,
+          mime: message.mime,
         });
       case "spb-self-hosted:track-logistics":
         return { ok: true, data: await trackOrderLogistics(message.orders, message.platform) };

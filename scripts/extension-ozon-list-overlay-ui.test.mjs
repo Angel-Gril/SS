@@ -35,6 +35,7 @@ for (const role of [
   'quick-open-insights',
   'quick-bind-cookie',
   'quick-selection-settings',
+  'quick-auto-scroll',
   'quick-open-erp',
 ]) {
   assert.match(overlay, new RegExp(`data-role="${role}"`), `Ozon list quick toolbar should expose ${role}`);
@@ -66,8 +67,8 @@ assert.doesNotMatch(
 );
 assert.match(
   overlay,
-  /quick-open-workbench[\s\S]*quickActionButtonStyle\('#ea580c',\s*'#ffffff'/,
-  'Ozon list quick toolbar should use ERP orange only for the primary one-click listing action',
+  /quick-open-workbench[\s\S]*quickActionButtonStyle\(SS_ERP_LIST_THEME\.primary,\s*'#ffffff'/,
+  'Ozon list quick toolbar should use the shared ERP theme token for the primary one-click listing action',
 );
 assert.match(
   overlay,
@@ -256,6 +257,11 @@ assert.match(
   'Ozon list workbench Excel export should use the extension downloads API instead of relying only on page clipboard permissions',
 );
 assert.match(
+  background,
+  /base64:\s*message\.base64[\s\S]*mime:\s*message\.mime/,
+  'Ozon workbench Excel export should pass xlsx base64/mime through the background downloads API',
+);
+assert.match(
   overlay,
   /observedListSkuSet/,
   'Ozon list workbench should keep an accumulated SKU pool across Ozon virtual scrolling',
@@ -363,6 +369,31 @@ assert.match(
   overlay,
   /includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
   'Ozon list workbench should fetch slow seller-offer details only in publish mode',
+);
+assert.match(
+  overlay,
+  /const\s+lockSkus\s*=\s*Boolean\(options\s*&&\s*options\.lockSkus\)/,
+  'Ozon list single-card publish should support a locked SKU scope',
+);
+assert.match(
+  overlay,
+  /const\s+observedSkus\s*=\s*modal\.__ssErpLockSkus\s*\?\s*\[\]\s*:\s*getCurrentPageSkus\(\)/,
+  'Ozon list locked SKU workbench should not merge in the whole current page',
+);
+assert.match(
+  overlay,
+  /ss-erp-publish-btn[\s\S]*openListSkuWorkbench\(\{\s*skus:\s*\[sku\],\s*lockSkus:\s*true,\s*focus:\s*'publish'\s*\}\)/,
+  'Ozon list card publish action should open the workbench locked to that SKU',
+);
+assert.match(
+  overlay,
+  /AUTO_SCROLL_STEP_MS\s*=\s*900[\s\S]*AUTO_SCROLL_MAX_STEPS\s*=\s*400/,
+  'Ozon list auto-scroll should keep the requested throttle and hard step cap',
+);
+assert.match(
+  overlay,
+  /stableRounds\s*>=\s*AUTO_SCROLL_MAX_STABLE\s*&&\s*atBottom/,
+  'Ozon list auto-scroll should only stop as loaded when stable and actually at the bottom',
 );
 for (const actionLabel of ['保存', '加入选品池', '删除选中 SKU', '导出选中 SKU', '一键上架选中 SKU']) {
   assert.match(overlay, new RegExp(actionLabel), `Ozon list workbench footer should expose ${actionLabel}`);

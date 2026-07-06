@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const content = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
+const panel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 
 test('Ozon product data panel keeps data actions separate from listing actions', () => {
@@ -130,7 +131,7 @@ test('Ozon product data panel opens a seller-list modal from follow seller data'
 test('product-detail one-click listing keeps the normal collect-then-publish workflow', () => {
   assert.match(background, /publishOzonWorkbenchRows\(/);
   assert.match(background, /spb-self-hosted:publish-ozon-workbench-rows/);
-  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nfunction normalizeOzonProductPathForFetch/);
+  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nasync function getWatermarkTemplates/);
   assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
   assert.match(publishFunction[0], /ozon-product-detail/);
   assert.match(publishFunction[0], /collectOzonProductsToErp\(productIds/);
@@ -138,10 +139,17 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
   assert.match(background, /\/api\/collect\?/);
   assert.match(publishFunction[0], /\/api\/collect\/publish-ozon/);
   assert.match(publishFunction[0], /useItemCategory:\s*true/);
+  assert.match(publishFunction[0], /watermarkFailedCount[\s\S]*已中断上架/, 'selected watermark failures should stop publish before creating an Ozon listing');
   assert.doesNotMatch(content, /选中后会先采集到 ERP，再走正常 Ozon 上架流程。/);
   assert.match(content, /正在采集并上架/);
   assert.match(content, /entry:\s*"ozon-product-detail"/);
   assert.match(content, /markupPct/);
+  assert.match(panel, /function\s+buildPublishCardBody/, 'detail data panel should render a rich publish card');
+  assert.match(panel, /data-publish-shop[\s\S]*data-publish-mode[\s\S]*data-publish-brand[\s\S]*data-publish-watermark/, 'detail publish card should expose shop, mode, brand, and watermark controls');
+  assert.match(panel, /entry:\s*'ozon-product-detail'/, 'detail publish card should use the collect-then-publish entry');
+  assert.match(panel, /followBrand\s*=\s*String\(publishBrandSelect[\s\S]*!==\s*'strip'/, 'detail publish brand selector should map "no brand" to followBrand false');
+  assert.match(panel, /function\s+buildWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/, 'detail watermark config should match the server watermark input fields');
+  assert.equal((background.match(/case "spb-self-hosted:get-watermark-templates"/g) || []).length, 1, 'watermark template message case should be registered once');
 });
 
 test('list-page SKU workbench can still use direct import-by-sku for batch speed', () => {

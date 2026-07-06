@@ -651,6 +651,7 @@
       soldCount: metrics.soldCount,
       soldSum: metrics.soldSum,
       soldSumCny: metrics.soldSumCny,
+      salesDynamics: metrics.salesDynamics,
       avgOrdersOnAccDays: metrics.avgOrdersOnAccDays,
       avgGmvOnAccDays: metrics.avgGmvOnAccDays,
       avgGmvOnAccDaysCny: metrics.avgGmvOnAccDaysCny,
