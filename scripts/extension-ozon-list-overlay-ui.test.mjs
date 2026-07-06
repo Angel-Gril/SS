@@ -288,6 +288,26 @@ assert.match(
 );
 assert.match(
   overlay,
+  /loadListWorkbenchShops[\s\S]*if\s*\(\s*!response\s*\|\|\s*!response\.ok\s*\)\s*throw new Error/,
+  'Ozon list workbench should surface ERP shop loading errors instead of rendering an empty shop dropdown',
+);
+assert.match(
+  overlay,
+  /没有可用 OZON 店铺/,
+  'Ozon list workbench should explain when the current ERP account has no Ozon shops',
+);
+assert.match(
+  overlay,
+  /loadListWorkbenchWatermarkTemplates[\s\S]*if\s*\(\s*!response\s*\|\|\s*!response\.ok\s*\)\s*throw new Error/,
+  'Ozon list workbench should surface watermark loading errors instead of rendering an empty watermark dropdown',
+);
+assert.match(
+  overlay,
+  /没有可用水印/,
+  'Ozon list workbench should explain when the current ERP account has no watermark templates',
+);
+assert.match(
+  overlay,
   /function\s+buildListWorkbenchWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/,
   'Ozon list workbench should pass the same watermark fields as the detail publish panel',
 );

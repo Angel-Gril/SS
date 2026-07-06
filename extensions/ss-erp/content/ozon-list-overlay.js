@@ -2997,20 +2997,30 @@
 
   async function loadListWorkbenchShops(modal) {
     const select = modal.querySelector('[data-role="shop-select"]');
+    const status = modal.querySelector('[data-role="workbench-status"]');
     if (!select) return;
     try {
       const response = await send({ type: 'spb-self-hosted:get-ozon-shops' }, 12000);
-      const shops = response && response.ok && Array.isArray(response.data) ? response.data : [];
+      if (!response || !response.ok) throw new Error(response && response.error || response && response.msg || '获取店铺列表失败');
+      const shops = Array.isArray(response.data) ? response.data : [];
+      if (!shops.length) {
+        select.innerHTML = '<option value="">没有可用 OZON 店铺</option>';
+        if (status) status.textContent = '当前 ERP 账号没有可用 OZON 店铺';
+        return;
+      }
       select.innerHTML = '<option value="">选择 OZON 店铺</option>' + shops
         .map((shop) => `<option value="${escapeHtml(shop.id)}">${escapeHtml(shop.name || shop.id)}</option>`)
         .join('');
     } catch (error) {
-      select.innerHTML = '<option value="">店铺加载失败</option>';
+      const message = error && error.message ? error.message : '店铺加载失败';
+      select.innerHTML = `<option value="">${escapeHtml(message)}</option>`;
+      if (status) status.textContent = message;
     }
   }
 
   async function loadListWorkbenchWatermarkTemplates(modal, shopId) {
     const select = modal.querySelector('[data-role="watermark-template"]');
+    const status = modal.querySelector('[data-role="workbench-status"]');
     if (!select) return;
     select.innerHTML = '<option value="">不使用</option>';
     modal.__ssErpWatermarkTemplateMap = {};
@@ -3019,19 +3029,26 @@
         type: 'spb-self-hosted:get-watermark-templates',
         shopId: String(shopId || '').trim() || undefined,
       }, 12000);
-      const templates = response && response.ok && Array.isArray(response.data) ? response.data : [];
+      if (!response || !response.ok) throw new Error(response && response.error || response && response.msg || '获取水印模板失败');
+      const templates = Array.isArray(response.data) ? response.data : [];
       const map = {};
       templates.forEach((tpl) => {
         if (tpl && tpl.id) map[String(tpl.id)] = tpl;
       });
       modal.__ssErpWatermarkTemplateMap = map;
+      if (!templates.length) {
+        select.innerHTML = '<option value="">没有可用水印</option>';
+        return;
+      }
       select.innerHTML = '<option value="">不使用</option>' + templates
         .map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name || tpl.id)}${tpl.isDefault ? '（默认）' : ''}</option>`)
         .join('');
       const defaultTemplate = templates.find((tpl) => tpl && tpl.isDefault && tpl.id);
       if (defaultTemplate) select.value = String(defaultTemplate.id);
     } catch (error) {
-      select.innerHTML = '<option value="">水印加载失败</option>';
+      const message = error && error.message ? error.message : '水印加载失败';
+      select.innerHTML = `<option value="">${escapeHtml(message)}</option>`;
+      if (status) status.textContent = message;
     }
   }
 

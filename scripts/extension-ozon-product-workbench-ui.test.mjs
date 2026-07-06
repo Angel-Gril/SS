@@ -248,6 +248,10 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
   assert.match(content, /data-role="watermark-template"/, 'product SKU workbench should expose ERP watermark templates in the publish toolbar');
   assert.match(content, /function\s+loadOzonWorkbenchWatermarkTemplates/, 'product SKU workbench should load ERP watermark templates');
   assert.match(content, /shop-select['"\]\)][\s\S]*change[\s\S]*loadOzonWorkbenchWatermarkTemplates/, 'product SKU workbench should reload watermark templates when the selected shop changes');
+  assert.match(content, /loadOzonWorkbenchShops[\s\S]*if\s*\(\s*!response\s*\|\|\s*!response\.ok\s*\)\s*throw new Error/, 'product SKU workbench should surface ERP shop loading errors instead of rendering an empty shop dropdown');
+  assert.match(content, /没有可用 OZON 店铺/, 'product SKU workbench should explain when the current ERP account has no Ozon shops');
+  assert.match(content, /loadOzonWorkbenchWatermarkTemplates[\s\S]*if\s*\(\s*!response\s*\|\|\s*!response\.ok\s*\)\s*throw new Error/, 'product SKU workbench should surface watermark loading errors instead of rendering an empty watermark dropdown');
+  assert.match(content, /没有可用水印/, 'product SKU workbench should explain when the current ERP account has no watermark templates');
   assert.match(content, /function\s+buildOzonWorkbenchWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/, 'product SKU workbench watermark config should match the server watermark input fields');
   assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*const watermark = buildOzonWorkbenchWatermarkConfig\(modal\)/, 'product SKU workbench publish should read the selected watermark template');
   assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*watermark:\s*watermark/, 'product SKU workbench publish should pass watermark config through the normal collect-then-publish path');
