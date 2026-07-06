@@ -318,6 +318,21 @@ assert.match(
 );
 assert.match(
   overlay,
+  /const\s+LIST_WORKBENCH_PUBLISH_TIMEOUT_MS\s*=\s*10\s*\*\s*60\s*\*\s*1000/,
+  'Ozon list one-click publish should wait long enough for collect + watermark + publish jobs',
+);
+assert.match(
+  overlay,
+  /publishListWorkbenchSelectedRows[\s\S]*LIST_WORKBENCH_PUBLISH_TIMEOUT_MS/,
+  'Ozon list one-click publish should use the long publish timeout instead of the default short message timeout',
+);
+assert.match(
+  overlay,
+  /后台可能仍在执行，请勿重复提交/,
+  'Ozon list one-click publish timeout should warn that the backend may still be running to prevent duplicate submissions',
+);
+assert.match(
+  overlay,
   /data-role="row-filter"/,
   'Ozon list workbench should switch between all rows and selection-rule matched rows',
 );
