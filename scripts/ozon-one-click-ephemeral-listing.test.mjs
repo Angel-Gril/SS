@@ -24,17 +24,17 @@ test('browser one-click listing uses temporary collect records instead of pollut
   );
   assert.match(
     collectRoute,
-    /function\s+applyVisibleSupplyGoodsFilter/,
-    'collect list/status queries should share a visible-record filter',
+    /function\s+visibleSupplyGoodsWhereSql/,
+    'collect list queries should use a Postgres-compatible visible-record filter',
   );
   assert.match(
     collectRoute,
-    /metadata:\s*\{\s*path:\s*\['ephemeralListing'\],\s*equals:\s*true\s*\}/,
-    'visible-record filter should hide temporary one-click listing records by default',
+    /coalesce\(\(metadata->>'ephemeralListing'\)::boolean,\s*false\)\s+is\s+not\s+true/,
+    'visible-record filter should hide temporary records while keeping legacy records without ephemeralListing metadata visible',
   );
   assert.match(
     collectRoute,
-    /if\s*\(\s*query\.includeEphemeral\s*!==\s*'1'\s*\)/,
+    /query\.includeEphemeral\s*===\s*'1'/,
     'collect list endpoint should only show temporary records when explicitly requested',
   );
   assert.match(
@@ -47,10 +47,17 @@ test('browser one-click listing uses temporary collect records instead of pollut
     /function\s+purgeExpiredEphemeralListingRecords/,
     'server should have a best-effort cleanup for temporary records after restart',
   );
+  const purgeFn = collectRoute.match(/function\s+purgeExpiredEphemeralListingRecords[\s\S]*?\n}\n/);
+  assert.ok(purgeFn, 'restart-safe cleanup function should be present');
   assert.match(
-    collectRoute,
-    /status:\s*'listed'[\s\S]*updatedAt:\s*\{\s*lt:\s*new Date\(Date\.now\(\)\s*-\s*EPHEMERAL_LISTING_TTL_MS\)/,
-    'restart-safe cleanup should only purge successfully listed temporary records after the TTL',
+    purgeFn[0],
+    /updatedAt:\s*\{\s*lt:\s*new Date\(Date\.now\(\)\s*-\s*EPHEMERAL_LISTING_TTL_MS\)/,
+    'restart-safe cleanup should purge expired temporary records after the TTL',
+  );
+  assert.doesNotMatch(
+    purgeFn[0],
+    /status:\s*'listed'/,
+    'restart-safe cleanup should also purge temporary records that never reached listed status',
   );
 });
 

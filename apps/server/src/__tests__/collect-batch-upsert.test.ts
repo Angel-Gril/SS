@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => {
       id: 'collect-new',
       ...data,
     })),
+    supplyGoodsDeleteMany: vi.fn(async () => ({ count: 0 })),
     supplyGoodsUpdate: vi.fn(async ({ where, data }: any) => ({
       ...record,
       id: where.id,
@@ -51,6 +52,12 @@ const mocks = vi.hoisted(() => {
     supplyGoodsCount: vi.fn(async () => 1),
     supplyGoodsFindMany: vi.fn(async () => [{ ...record, updatedAt: new Date('2026-06-18T01:00:00.000Z') }]),
     shopFindFirst: vi.fn(async (_args?: any): Promise<any> => null),
+    prismaQueryRaw: vi.fn(async (query: any): Promise<any[]> => {
+      const text = String(query?.text || query?.sql || '');
+      if (/count\(\*\)/i.test(text)) return [{ count: 1 }];
+      if (/select\s+id/i.test(text)) return [{ id: 'collect-existing' }];
+      return [];
+    }),
     resolveCollectedPrice: vi.fn(async () => ({
       purchasePriceCny: 99,
       originalPrice: 799,
@@ -75,12 +82,14 @@ vi.mock('../lib/auth.js', () => ({
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
+    $queryRaw: mocks.prismaQueryRaw,
     supplyGoods: {
       findFirst: mocks.supplyGoodsFindFirst,
       create: mocks.supplyGoodsCreate,
       update: mocks.supplyGoodsUpdate,
       count: mocks.supplyGoodsCount,
       findMany: mocks.supplyGoodsFindMany,
+      deleteMany: mocks.supplyGoodsDeleteMany,
       delete: vi.fn(),
     },
     shop: {
@@ -656,29 +665,52 @@ describe('collectRoutes batch upsert', () => {
     const app = await buildApp();
 
     try {
+      mocks.prismaQueryRaw.mockClear();
       const ozonResponse = await app.inject({
         method: 'GET',
         url: '/api/collect?sourceGroup=ozon',
       });
       expect(ozonResponse.statusCode).toBe(200);
-      expect(mocks.supplyGoodsCount).toHaveBeenLastCalledWith({
-        where: expect.objectContaining({
-          userId: 'user-1',
-          sourcePlatform: 'ozon',
-        }),
-      });
+      const ozonSql = mocks.prismaQueryRaw.mock.calls.map((call) => call[0]?.text || call[0]?.sql || '').join('\n');
+      const ozonValues = mocks.prismaQueryRaw.mock.calls.flatMap((call) => call[0]?.values || []);
+      expect(ozonSql).toContain("coalesce((metadata->>'ephemeralListing')::boolean, false) is not true");
+      expect(ozonSql).toContain('source_platform =');
+      expect(ozonValues).toContain('user-1');
+      expect(ozonValues).toContain('ozon');
 
+      mocks.prismaQueryRaw.mockClear();
       const sourceResponse = await app.inject({
         method: 'GET',
         url: '/api/collect?sourceGroup=source',
       });
       expect(sourceResponse.statusCode).toBe(200);
-      expect(mocks.supplyGoodsCount).toHaveBeenLastCalledWith({
-        where: expect.objectContaining({
-          userId: 'user-1',
-          sourcePlatform: { in: ['1688', 'pdd', 'taobao', 'tmall', 'xianyu', 'goofish'] },
-        }),
+      const sourceSql = mocks.prismaQueryRaw.mock.calls.map((call) => call[0]?.text || call[0]?.sql || '').join('\n');
+      const sourceValues = mocks.prismaQueryRaw.mock.calls.flatMap((call) => call[0]?.values || []);
+      expect(sourceSql).toContain('source_platform in');
+      expect(sourceValues).toEqual(expect.arrayContaining(['user-1', '1688', 'pdd', 'taobao', 'tmall', 'xianyu', 'goofish']));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps manual collect records visible when ephemeralListing metadata is missing', async () => {
+    const app = await buildApp();
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/collect?sourceGroup=ozon&limit=20&offset=0',
       });
+
+      expect(response.statusCode).toBe(200);
+      const sql = mocks.prismaQueryRaw.mock.calls.map((call) => call[0]?.text || call[0]?.sql || '').join('\n');
+      expect(sql).toContain("coalesce((metadata->>'ephemeralListing')::boolean, false) is not true");
+      expect(mocks.supplyGoodsFindMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: {
+          userId: 'user-1',
+          id: { in: ['collect-existing'] },
+        },
+      }));
     } finally {
       await app.close();
     }
@@ -848,9 +880,8 @@ describe('collectRoutes batch upsert', () => {
         code: 1,
         data: { total: 1 },
       });
-      expect(mocks.supplyGoodsFindMany).toHaveBeenCalledWith(expect.objectContaining({
-        orderBy: { updatedAt: 'desc' },
-      }));
+      const sql = mocks.prismaQueryRaw.mock.calls.map((call) => call[0]?.text || call[0]?.sql || '').join('\n');
+      expect(sql).toContain('order by updated_at desc');
     } finally {
       await app.close();
     }
@@ -886,6 +917,12 @@ describe('collectRoutes batch upsert', () => {
       createdAt: new Date('2026-06-18T00:00:00.000Z'),
       updatedAt: new Date('2026-06-18T01:00:00.000Z'),
     };
+    mocks.prismaQueryRaw.mockImplementation(async (query: any): Promise<any[]> => {
+      const text = String(query?.text || query?.sql || '');
+      if (/count\(\*\)/i.test(text)) return [{ count: 1 }];
+      if (/select\s+id/i.test(text)) return [{ id: 'legacy-source-write-fails' }];
+      return [];
+    });
     mocks.supplyGoodsFindMany.mockResolvedValueOnce([legacySourceRow as any]);
     mocks.supplyGoodsUpdate.mockRejectedValueOnce(new Error('write conflict'));
 
@@ -958,6 +995,12 @@ describe('collectRoutes batch upsert', () => {
       createdAt: new Date('2026-06-18T00:00:00.000Z'),
       updatedAt: new Date('2026-06-18T01:00:00.000Z'),
     };
+    mocks.prismaQueryRaw.mockImplementation(async (query: any): Promise<any[]> => {
+      const text = String(query?.text || query?.sql || '');
+      if (/count\(\*\)/i.test(text)) return [{ count: 1 }];
+      if (/select\s+id/i.test(text)) return [{ id: 'legacy-source-1' }];
+      return [];
+    });
     mocks.supplyGoodsFindMany.mockResolvedValueOnce([legacySourceRow as any]);
 
     try {

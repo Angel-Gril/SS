@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import type { FastifyInstance } from 'fastify';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -2859,17 +2860,108 @@ function ephemeralListingMetadataWhere(): Record<string, unknown> {
   };
 }
 
-function applyVisibleSupplyGoodsFilter(where: Record<string, unknown>): Record<string, unknown> {
+const DOMESTIC_SOURCE_PLATFORMS = ['1688', 'pdd', 'taobao', 'tmall', 'xianyu', 'goofish'];
+
+function escapePostgresLike(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+function visibleSupplyGoodsWhereSql(input: {
+  userId: string;
+  status?: string;
+  sourceGroup?: string;
+  search?: string;
+}): Prisma.Sql {
+  const conditions: Prisma.Sql[] = [
+    Prisma.sql`user_id = ${input.userId}`,
+    Prisma.sql`coalesce((metadata->>'ephemeralListing')::boolean, false) is not true`,
+  ];
+  if (input.status) {
+    conditions.push(Prisma.sql`status = ${input.status}`);
+  }
+  if (input.sourceGroup === 'source') {
+    conditions.push(Prisma.sql`source_platform in (${Prisma.join(DOMESTIC_SOURCE_PLATFORMS)})`);
+  } else if (input.sourceGroup === 'ozon') {
+    conditions.push(Prisma.sql`source_platform = ${'ozon'}`);
+  }
+  if (input.search) {
+    const pattern = `%${escapePostgresLike(input.search)}%`;
+    conditions.push(Prisma.sql`(
+      title ilike ${pattern} escape '\\'
+      or sku ilike ${pattern} escape '\\'
+      or source_product_id ilike ${pattern} escape '\\'
+    )`);
+  }
+  return Prisma.join(conditions, ' AND ');
+}
+
+async function findVisibleSupplyGoodsPage(input: {
+  userId: string;
+  status?: string;
+  sourceGroup?: string;
+  search?: string;
+  offset: number;
+  limit: number;
+}): Promise<{ total: number; rows: any[] }> {
+  const whereSql = visibleSupplyGoodsWhereSql(input);
+  const [countRows, idRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ count: number | bigint | string }>>(Prisma.sql`
+      select count(*)::int as count
+      from supply_goods
+      where ${whereSql}
+    `),
+    prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      select id
+      from supply_goods
+      where ${whereSql}
+      order by updated_at desc
+      offset ${input.offset}
+      limit ${input.limit}
+    `),
+  ]);
+  const total = Number(countRows[0]?.count || 0);
+  const ids = idRows.map((row) => String(row.id)).filter(Boolean);
+  if (!ids.length) return { total, rows: [] };
+
+  const rows = await prisma.supplyGoods.findMany({
+    where: {
+      userId: input.userId,
+      id: { in: ids },
+    },
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
   return {
-    AND: [
-      where,
-      {
-        NOT: [
-          ephemeralListingMetadataWhere(),
-        ],
-      },
-    ],
+    total,
+    rows: ids.map((id) => byId.get(id)).filter(Boolean),
   };
+}
+
+function visibleSupplyGoodsSkuWhereSql(userId: string, skus: string[]): Prisma.Sql {
+  return Prisma.sql`
+    user_id = ${userId}
+    and coalesce((metadata->>'ephemeralListing')::boolean, false) is not true
+    and (source_product_id in (${Prisma.join(skus)}) or sku in (${Prisma.join(skus)}))
+  `;
+}
+
+async function findVisibleSupplyGoodsIdsBySku(userId: string, skus: string[], limit?: number): Promise<string[]> {
+  if (!skus.length) return [];
+  const whereSql = visibleSupplyGoodsSkuWhereSql(userId, skus);
+  const rows = limit
+    ? await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      select id
+      from supply_goods
+      where ${whereSql}
+      order by updated_at desc
+      limit ${limit}
+    `)
+    : await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      select id
+      from supply_goods
+      where ${whereSql}
+      order by updated_at desc
+    `);
+  return rows.map((row) => String(row.id)).filter(Boolean);
 }
 
 function scheduleEphemeralListingCleanup(items: Array<{ id: string; metadata?: unknown }>, userId: string, delayMs = EPHEMERAL_LISTING_TTL_MS): void {
@@ -2896,7 +2988,6 @@ function purgeExpiredEphemeralListingRecords(userId: string): Promise<unknown> {
   return prisma.supplyGoods.deleteMany({
     where: {
       userId,
-      status: 'listed',
       updatedAt: { lt: new Date(Date.now() - EPHEMERAL_LISTING_TTL_MS) },
       ...ephemeralListingMetadataWhere(),
     } as any,
@@ -3744,17 +3835,13 @@ export async function collectRoutes(app: FastifyInstance) {
     if (!sku) {
       return reply.status(400).send({ code: 0, msg: '缺少 sku 参数' });
     }
-    const goods = await prisma.supplyGoods.findFirst({
-      where: applyVisibleSupplyGoodsFilter({
-        userId,
-        OR: [
-          { sku },
-          { sourceProductId: sku },
-        ],
-      }),
-      orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true, status: true },
-    });
+    const ids = await findVisibleSupplyGoodsIdsBySku(userId, [sku], 1);
+    const goods = ids[0]
+      ? await prisma.supplyGoods.findFirst({
+        where: { id: ids[0], userId },
+        select: { id: true, title: true, status: true },
+      })
+      : null;
     return reply.send({
       code: 1,
       data: {
@@ -3779,29 +3866,32 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '缺少 skus 参数' });
     }
 
-    const records = await prisma.supplyGoods.findMany({
-      where: applyVisibleSupplyGoodsFilter({
-        userId,
-        OR: [
-          { sourceProductId: { in: skus } },
-          { sku: { in: skus } },
-        ],
-      }),
-      orderBy: { updatedAt: 'desc' },
-      select: {
-        id: true,
-        sourceProductId: true,
-        sku: true,
-        title: true,
-        sourceUrl: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-        purchasePrice: true,
-        images: true,
-        metadata: true,
-      },
-    });
+    const ids = await findVisibleSupplyGoodsIdsBySku(userId, skus);
+    const rawRecords = ids.length
+      ? await prisma.supplyGoods.findMany({
+        where: {
+          userId,
+          id: { in: ids },
+        },
+        select: {
+          id: true,
+          sourceProductId: true,
+          sku: true,
+          title: true,
+          sourceUrl: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          purchasePrice: true,
+          images: true,
+          metadata: true,
+        },
+      })
+      : [];
+    const byId = new Map(rawRecords.map((record) => [record.id, record]));
+    const records = ids
+      .map((id) => byId.get(id))
+      .filter((record): record is (typeof rawRecords)[number] => Boolean(record));
 
     const result: Record<string, any> = {};
     for (const r of records) {
@@ -3851,20 +3941,24 @@ export async function collectRoutes(app: FastifyInstance) {
 
     const offset = Math.max(0, Number(query.offset) || 0);
     const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));
-    let visibleWhere = where;
-    if (query.includeEphemeral !== '1') {
-      visibleWhere = applyVisibleSupplyGoodsFilter(where);
-    }
-
-    const [total, rows] = await Promise.all([
-      prisma.supplyGoods.count({ where: visibleWhere as any }),
-      prisma.supplyGoods.findMany({
-        where: visibleWhere as any,
-        skip: offset,
-        take: limit,
-        orderBy: { updatedAt: 'desc' },
-      }),
-    ]);
+    const { total, rows } = query.includeEphemeral === '1'
+      ? {
+        total: await prisma.supplyGoods.count({ where: where as any }),
+        rows: await prisma.supplyGoods.findMany({
+          where: where as any,
+          skip: offset,
+          take: limit,
+          orderBy: { updatedAt: 'desc' },
+        }),
+      }
+      : await findVisibleSupplyGoodsPage({
+        userId,
+        status: query.status,
+        sourceGroup,
+        search: query.search,
+        offset,
+        limit,
+      });
 
     const hydratedRows = await Promise.all(rows.map((row) => ensureSourceProductProfileForListRow(row)));
 
