@@ -55,6 +55,7 @@ const CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
 const OZON_MAX_PUBLISH_IMAGES = 30;
 const OZON_ORIGIN_COUNTRY_ATTR_ID = 4389;
+const EPHEMERAL_LISTING_TTL_MS = 5 * 60 * 1000;
 const OZON_MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
 const OZON_COLOR_TOKEN_RE = /^(?:бел|черн|красн|син|голуб|зел[её]н|желт|розов|фиолет|сер|беж|корич|хаки|бирюз|салатов|графит|серебрист|серебр|золот|оранж|бордов|молочн|крем|оливк|сиренев|лилов|изумруд|лаванд|мятн|пудров|коралл|терракот|персиков|бронз|сапфир|верблюд)\p{L}*$/iu;
 const OZON_COLOR_PREFIX_RE = /^(?:светло|темно|тёмно|ярко|нежно|бледно|пастельно|дымчато)$/iu;
@@ -2820,6 +2821,63 @@ function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
+function isEphemeralListingMetadata(value: unknown): boolean {
+  return metadataRecord(value).ephemeralListing === true;
+}
+
+function ephemeralListingMetadataWhere(): Record<string, unknown> {
+  return {
+    metadata: { path: ['ephemeralListing'], equals: true } as any,
+  };
+}
+
+function applyVisibleSupplyGoodsFilter(where: Record<string, unknown>): Record<string, unknown> {
+  return {
+    AND: [
+      where,
+      {
+        NOT: [
+          ephemeralListingMetadataWhere(),
+        ],
+      },
+    ],
+  };
+}
+
+function scheduleEphemeralListingCleanup(items: Array<{ id: string; metadata?: unknown }>, userId: string, delayMs = EPHEMERAL_LISTING_TTL_MS): void {
+  const ids = Array.from(new Set((Array.isArray(items) ? items : [])
+    .filter((item) => item && item.id && isEphemeralListingMetadata(item.metadata))
+    .map((item) => item.id)));
+  if (!ids.length) return;
+
+  const timeout = setTimeout(() => {
+    prisma.supplyGoods.deleteMany({
+      where: {
+        id: { in: ids },
+        userId,
+        ...ephemeralListingMetadataWhere(),
+      } as any,
+    }).catch((error) => {
+      console.warn('[ephemeral-listing] cleanup failed:', error?.message || error);
+    });
+  }, Math.max(0, delayMs));
+  timeout.unref?.();
+}
+
+function purgeExpiredEphemeralListingRecords(userId: string): Promise<unknown> {
+  return prisma.supplyGoods.deleteMany({
+    where: {
+      userId,
+      status: 'listed',
+      updatedAt: { lt: new Date(Date.now() - EPHEMERAL_LISTING_TTL_MS) },
+      ...ephemeralListingMetadataWhere(),
+    } as any,
+  }).catch((error) => {
+    console.warn('[ephemeral-listing] purge failed:', error?.message || error);
+    return null;
+  });
+}
+
 export function getCollectedRichDescriptionJson(item: { metadata?: unknown }): string {
   const meta = metadataRecord(item.metadata);
   const richDescriptionJson = meta.sourceRichDescriptionJson;
@@ -3653,13 +3711,13 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '缺少 sku 参数' });
     }
     const goods = await prisma.supplyGoods.findFirst({
-      where: {
+      where: applyVisibleSupplyGoodsFilter({
         userId,
         OR: [
           { sku },
           { sourceProductId: sku },
         ],
-      },
+      }),
       orderBy: { updatedAt: 'desc' },
       select: { id: true, title: true, status: true },
     });
@@ -3688,13 +3746,13 @@ export async function collectRoutes(app: FastifyInstance) {
     }
 
     const records = await prisma.supplyGoods.findMany({
-      where: {
+      where: applyVisibleSupplyGoodsFilter({
         userId,
         OR: [
           { sourceProductId: { in: skus } },
           { sku: { in: skus } },
         ],
-      },
+      }),
       orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
@@ -3738,7 +3796,8 @@ export async function collectRoutes(app: FastifyInstance) {
 
   app.get('/', async (request) => {
     const { userId } = (request as any).user;
-    const query = request.query as { status?: string; search?: string; offset?: string; limit?: string; sourceGroup?: string };
+    const query = request.query as { status?: string; search?: string; offset?: string; limit?: string; sourceGroup?: string; includeEphemeral?: string };
+    void purgeExpiredEphemeralListingRecords(userId);
 
     const where: Record<string, unknown> = { userId };
     if (query.status) where.status = query.status;
@@ -3758,11 +3817,15 @@ export async function collectRoutes(app: FastifyInstance) {
 
     const offset = Math.max(0, Number(query.offset) || 0);
     const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));
+    let visibleWhere = where;
+    if (query.includeEphemeral !== '1') {
+      visibleWhere = applyVisibleSupplyGoodsFilter(where);
+    }
 
     const [total, rows] = await Promise.all([
-      prisma.supplyGoods.count({ where: where as any }),
+      prisma.supplyGoods.count({ where: visibleWhere as any }),
       prisma.supplyGoods.findMany({
-        where: where as any,
+        where: visibleWhere as any,
         skip: offset,
         take: limit,
         orderBy: { updatedAt: 'desc' },
@@ -3850,7 +3913,12 @@ export async function collectRoutes(app: FastifyInstance) {
 
   app.post('/batch', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {
     const { userId } = (request as any).user;
-    const body = request.body as { items: any[]; collectPhase?: string };
+    const body = request.body as {
+      items: any[];
+      collectPhase?: string;
+      ephemeralListing?: boolean;
+      ephemeralListingSource?: string;
+    };
 
     if (!body?.items?.length) {
       return reply.status(400).send({ code: 0, msg: '请提供商品数据' });
@@ -3889,6 +3957,12 @@ export async function collectRoutes(app: FastifyInstance) {
         if (item.rawSourceProduct) metadata.rawSourceProduct = item.rawSourceProduct;
         // 调试用：未识别的 widget 全量 dump（扩展占位阶段使用）
         if (item.widgetStatesDump) metadata.widgetStatesDump = item.widgetStatesDump;
+        const ephemeralListing = body.ephemeralListing === true || item.ephemeralListing === true;
+        if (ephemeralListing) {
+          metadata.ephemeralListing = true;
+          metadata.ephemeralListingSource = String(item.ephemeralListingSource || body.ephemeralListingSource || 'browser-one-click-listing').slice(0, 120);
+          metadata.ephemeralListingExpiresAt = new Date(Date.now() + EPHEMERAL_LISTING_TTL_MS).toISOString();
+        }
 
         const hasVariants = Array.isArray(item.variants) && item.variants.length > 0;
         const sourceDescription = sanitizePublishDescription(item.description);
@@ -4777,6 +4851,7 @@ export async function collectRoutes(app: FastifyInstance) {
           for (const item of noAttrs) {
             await prisma.supplyGoods.update({ where: { id: item.id }, data: { status: 'listed' } });
           }
+          scheduleEphemeralListingCleanup(noAttrs, userId, 5 * 60 * 1000);
 
           const uploadedOfferIds = new Set(
             fallbackPictureUploads
@@ -5577,6 +5652,7 @@ export async function collectRoutes(app: FastifyInstance) {
       for (const item of items) {
         await prisma.supplyGoods.update({ where: { id: item.id }, data: { status: 'listed' } });
       }
+      scheduleEphemeralListingCleanup(items, userId, 5 * 60 * 1000);
 
       const variantNote = variantTrace.length ? `（含 ${variantTrace.length} 个子 SKU 展开）` : '';
       return reply.send({

@@ -584,6 +584,8 @@ function normalizeOzonCollectionInsights(insights) {
 function buildOzonCollectBatchPayload(collected, options = {}) {
   return {
     collectPhase: options.phase || "collect",
+    ephemeralListing: options.ephemeralListing === true,
+    ephemeralListingSource: options.ephemeralListingSource || undefined,
     items: collected.map((p) => ({
       title: p.title,
       publishTitle: p.publishTitle || p.title,
@@ -616,6 +618,8 @@ function buildOzonCollectBatchPayload(collected, options = {}) {
       variants: Array.isArray(p.variants) && p.variants.length ? p.variants : null,
       modelId: p.modelId ? String(p.modelId) : null,
       widgetStatesDump: p.widgetStatesDump || null,
+      ephemeralListing: options.ephemeralListing === true,
+      ephemeralListingSource: options.ephemeralListingSource || undefined,
     })),
   };
 }
@@ -3108,15 +3112,17 @@ async function fetchCollectedOzonItemsBySkus(erpBase, erpToken, skus) {
   for (let i = 0; i < skus.length; i++) {
     const sku = String(skus[i] || "").trim();
     if (!sku) continue;
-    const response = await fetch(erpBase + "/api/collect?search=" + encodeURIComponent(sku) + "&limit=5&offset=0", {
+    const response = await fetch(erpBase + "/api/collect?search=" + encodeURIComponent(sku) + "&limit=5&offset=0&includeEphemeral=1", {
       method: "GET",
       headers: { "Authorization": "Bearer " + erpToken },
     });
     if (!response.ok) continue;
     const parsed = await response.json().catch(() => null);
-    const hit = parsed && parsed.code === 1 && parsed.data && Array.isArray(parsed.data.rows)
-      ? parsed.data.rows.find((row) => String(row.sku || "") === sku)
-      : null;
+    const exactRows = parsed && parsed.code === 1 && parsed.data && Array.isArray(parsed.data.rows)
+      ? parsed.data.rows.filter((row) => String(row.sku || "") === sku)
+      : [];
+    const ephemeralHit = exactRows.find((row) => row && row.metadata && row.metadata.ephemeralListing === true);
+    const hit = ephemeralHit || exactRows[0] || null;
     if (hit) rows.push(hit);
   }
   return rows;
@@ -3136,6 +3142,9 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
     productUrls: options.productUrls,
     fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
     mode: options.mode || "complete",
+    ephemeralListing: true,
+    ephemeralListingSource: options.entry || "browser-one-click-listing",
+    broadcast: false,
   });
   if (!collectResult || !collectResult.ok) {
     return { ok: false, error: collectResult && collectResult.error || "采集到 ERP 失败", data: collectResult };
@@ -4447,7 +4456,7 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     return { ok: false, error: firstErr ? `全部采集失败：${firstErr}` : "全部采集失败", errors };
   }
 
-  const pushResult = await pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors);
+  const pushResult = await pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors, options);
   if (pushResult.ok && collectPolicy.mode === "balanced") {
     await enqueueOzonCollectEnrichmentJob({
       productIds: inputs.map((input) => input.productId),
