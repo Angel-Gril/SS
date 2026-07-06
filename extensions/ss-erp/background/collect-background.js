@@ -644,10 +644,35 @@ async function notifyErpCollectCompleted(collectedCount, errorCount, options = {
           collected: Number(collectedCount) || 0,
           errorCount: Number(errorCount) || 0,
           phase: options.phase || "collect",
+          connection: options.connection || null,
         });
       } catch (e) {}
     }
   } catch (e) {}
+}
+
+async function fetchErpIdentityForDiagnostics(erpBase, erpToken) {
+  try {
+    const response = await fetch(erpBase + "/api/user/me", {
+      method: "GET",
+      headers: { "Authorization": "Bearer " + erpToken },
+    });
+    if (!response.ok) return null;
+    const parsed = await response.json().catch(() => null);
+    const user = parsed && parsed.code === 1 && parsed.data && typeof parsed.data === "object"
+      ? parsed.data
+      : null;
+    if (!user) return null;
+    return {
+      id: user.id ? String(user.id) : "",
+      phone: user.phone ? String(user.phone) : "",
+      nickname: user.nickname ? String(user.nickname) : "",
+      accountCode: user.accountCode ? String(user.accountCode) : "",
+      role: user.role ? String(user.role) : "",
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, errors, options = {}) {
@@ -681,9 +706,13 @@ async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, erro
   }
 
   const shouldBroadcast = options.broadcast !== false;
+  const identity = await fetchErpIdentityForDiagnostics(erpBase, erpToken);
+  const connection = { baseUrl: erpBase, user: identity };
+
   if (shouldBroadcast) {
     await notifyErpCollectCompleted(collected.length, allErrors.length, {
       phase: options.phase || "collect",
+      connection: connection,
     });
   }
 
@@ -693,6 +722,7 @@ async function pushOzonCollectedProductsToErp(erpBase, erpToken, collected, erro
       collected: collected.length,
       pushed: pushParsed,
       errors: allErrors,
+      connection,
     },
   };
 }

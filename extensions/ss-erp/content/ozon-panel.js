@@ -25,6 +25,21 @@
     return Number.isFinite(number) ? number : (fallbackValue == null ? 0 : fallbackValue);
   }
 
+  function formatErpCollectTargetLabel(connection) {
+    connection = connection && typeof connection === 'object' ? connection : {};
+    var user = connection.user && typeof connection.user === 'object' ? connection.user : {};
+    var account = user.accountCode || user.phone || user.nickname || (user.id ? ('ID ' + String(user.id).slice(0, 8)) : '');
+    var baseUrl = String(connection.baseUrl || '').trim().replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+    var host = '';
+    try {
+      host = baseUrl ? new URL(baseUrl).host : '';
+    } catch (_error) {
+      host = baseUrl.replace(/^https?:\/\//, '');
+    }
+    var parts = [account, host].filter(Boolean);
+    return parts.length ? '（' + parts.join(' · ') + '）' : '';
+  }
+
   function uniqueTexts(values) {
     var seen = new Set();
     return (values || []).filter(function (value) {
@@ -1354,7 +1369,8 @@
           collectButton.disabled = false;
           collectButton.textContent = '采集此商品';
           if (response && response.ok) {
-            state.actionMessage = '采集成功，已发送到 ERP（含完整属性）。';
+            var targetLabel = formatErpCollectTargetLabel(response.data && response.data.connection);
+            state.actionMessage = '采集成功，已发送到 ERP（含完整属性）' + targetLabel + '。';
           } else {
             state.actionMessage = '采集失败：' + (response && response.error ? response.error : '未知错误');
           }

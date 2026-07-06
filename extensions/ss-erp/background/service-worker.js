@@ -1643,13 +1643,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     const baseUrl = endpoint.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
-    chrome.storage.local.set({
-      [OZON_CALC_ERP_ENDPOINT_KEY]: endpoint,
-      [OZON_CALC_ERP_TOKEN_KEY]: token,
-      ss_erp_connection: { baseUrl, token },
-    }).then(() => {
+    Promise.resolve().then(async () => {
+      let user = null;
+      if (token) {
+        const userResponse = await fetch(baseUrl + '/api/user/me', {
+          method: 'GET',
+          headers: { 'Authorization': 'Bearer ' + token },
+        });
+        const userPayload = await userResponse.json().catch(() => null);
+        if (!userResponse.ok || !userPayload || userPayload.code !== 1 || !userPayload.data) {
+          throw new Error((userPayload && userPayload.msg) || 'ERP Token 无效，请重新生成扩展 Token');
+        }
+        const boundUser = userPayload.data;
+        user = {
+          id: boundUser.id ? String(boundUser.id) : '',
+          phone: boundUser.phone ? String(boundUser.phone) : '',
+          nickname: boundUser.nickname ? String(boundUser.nickname) : '',
+          accountCode: boundUser.accountCode ? String(boundUser.accountCode) : '',
+          role: boundUser.role ? String(boundUser.role) : '',
+        };
+      }
+      await chrome.storage.local.set({
+        [OZON_CALC_ERP_ENDPOINT_KEY]: endpoint,
+        [OZON_CALC_ERP_TOKEN_KEY]: token,
+        ss_erp_connection: { baseUrl, token },
+      });
       if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
-      sendResponse({ ok: true, endpoint, hasToken: Boolean(token) });
+      sendResponse({ ok: true, endpoint, hasToken: Boolean(token), user: user });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });

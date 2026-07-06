@@ -17,6 +17,13 @@ interface ExtensionBridgeResponse {
   ok?: boolean;
   endpoint?: string;
   hasToken?: boolean;
+  user?: {
+    id?: string;
+    phone?: string;
+    nickname?: string;
+    accountCode?: string;
+    role?: string;
+  } | null;
   error?: string;
 }
 
@@ -43,6 +50,11 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function formatExtensionBoundUserLabel(user: ExtensionBridgeResponse['user']) {
+    if (!user) return '';
+    return user.accountCode || user.phone || user.nickname || (user.id ? `ID ${user.id.slice(0, 8)}` : '');
   }
 
   function sendToExtension(message: Record<string, unknown>): Promise<ExtensionBridgeResponse> {
@@ -101,8 +113,12 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
     setBinding(false);
 
     if (response.ok) {
-      setBindStatus(`扩展已连接：${response.endpoint || endpoint}`);
-      toast({ title: '扩展连接成功', description: 'ERP 地址和 Token 已写入当前浏览器扩展' });
+      const boundUser = formatExtensionBoundUserLabel(response.user);
+      setBindStatus(`扩展已连接：${boundUser ? `${boundUser} · ` : ''}${response.endpoint || endpoint}`);
+      toast({
+        title: '扩展连接成功',
+        description: boundUser ? `已绑定账号：${boundUser}` : 'ERP 地址和 Token 已写入当前浏览器扩展',
+      });
     } else {
       const msg = response.error || '扩展连接失败';
       setBindStatus(msg);

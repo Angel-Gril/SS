@@ -70,3 +70,107 @@ test('source collection diagnostics include the installed extension version', ()
     'source collection should read the version from the Chrome extension manifest',
   );
 });
+
+test('Ozon ERP collect response includes the target ERP account and backend for troubleshooting', () => {
+  const source = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+
+  assert.match(
+    source,
+    /async function fetchErpIdentityForDiagnostics\(erpBase,\s*erpToken\)/,
+    'background collection should fetch /api/user/me so success responses identify the target account',
+  );
+  assert.match(
+    source,
+    /const\s+connection\s*=\s*\{\s*baseUrl:\s*erpBase,\s*user:\s*identity\s*\}/,
+    'successful collection responses should build connection context from the ERP base URL and account identity',
+  );
+  assert.match(
+    source,
+    /data:\s*\{[\s\S]*connection,/,
+    'successful collection responses should return the connection context to callers',
+  );
+  assert.match(
+    source,
+    /notifyErpCollectCompleted\(collected\.length,\s*allErrors\.length,\s*\{[\s\S]*connection:/,
+    'collect-completed broadcasts should include the same connection context shown in the popup/page',
+  );
+});
+
+test('extension collection surfaces the target account instead of only saying sent to ERP', () => {
+  const popup = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
+  const panel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
+
+  for (const [name, source] of [['popup', popup], ['product panel', panel]]) {
+    assert.match(
+      source,
+      /formatErpCollectTargetLabel/,
+      `${name} should format the ERP account/backend returned by collection`,
+    );
+    assert.match(
+      source,
+      /connectionLabel|targetLabel/,
+      `${name} should append the target account/backend to the collect success message`,
+    );
+  }
+});
+
+test('ERP topbar shows a stable account identifier when nicknames are duplicated locally', () => {
+  const topbar = fs.readFileSync('apps/web/src/components/layout/topbar.tsx', 'utf8');
+
+  assert.match(
+    topbar,
+    /user\.phone/,
+    'topbar should show the phone number, not just a nickname that may be duplicated',
+  );
+  assert.match(
+    topbar,
+    /user\.id\.slice\(/,
+    'topbar should include a short account id fallback when accountCode is missing',
+  );
+});
+
+test('one-click extension binding validates the token and shows the bound ERP account', () => {
+  const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+  const dialog = fs.readFileSync('apps/web/src/components/extension-token-dialog.tsx', 'utf8');
+
+  assert.match(
+    serviceWorker,
+    /ozon-calc:erp-endpoint-save[\s\S]*\/api\/user\/me/,
+    'endpoint-save should validate the configured token against /api/user/me instead of only storing it',
+  );
+  assert.match(
+    serviceWorker,
+    /sendResponse\(\{[\s\S]*user:/,
+    'endpoint-save should return the bound user identity to the ERP page',
+  );
+  assert.match(
+    dialog,
+    /formatExtensionBoundUserLabel/,
+    'extension token dialog should format the bound account returned by the extension',
+  );
+  assert.match(
+    dialog,
+    /response\.user/,
+    'extension token dialog should display the account actually bound in the extension',
+  );
+});
+
+test('ERP collect page shows the extension write target after popup or dialog collection', () => {
+  const source = fs.readFileSync('apps/web/src/app/(dashboard)/collect/page.tsx', 'utf8');
+
+  assert.match(
+    source,
+    /formatErpCollectTargetLabel/,
+    'collect page should format the connection context returned by the extension',
+  );
+  assert.match(
+    source,
+    /evt\.connection/,
+    'collect-completed broadcasts should display the backend/account that received the write',
+  );
+  assert.match(
+    source,
+    /res\.data\?\.connection/,
+    'direct collect dialog success should display the backend/account that received the write',
+  );
+});

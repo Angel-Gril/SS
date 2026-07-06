@@ -148,6 +148,21 @@
     return text || '扩展后台未响应';
   }
 
+  function formatErpCollectTargetLabel(connection) {
+    connection = connection && typeof connection === 'object' ? connection : {};
+    var user = connection.user && typeof connection.user === 'object' ? connection.user : {};
+    var account = user.accountCode || user.phone || user.nickname || (user.id ? ('ID ' + String(user.id).slice(0, 8)) : '');
+    var baseUrl = normalizeErpBaseUrl(connection.baseUrl || '');
+    var host = '';
+    try {
+      host = baseUrl ? new URL(baseUrl).host : '';
+    } catch (_error) {
+      host = baseUrl.replace(/^https?:\/\//, '');
+    }
+    var parts = [account, host].filter(Boolean);
+    return parts.length ? '（' + parts.join(' · ') + '）' : '';
+  }
+
   function requestSellerOzonAccess(callback) {
     if (!chrome.permissions || typeof chrome.permissions.request !== 'function') {
       callback({ ok: true });
@@ -427,7 +442,8 @@
       restorePrimaryButton();
       if (response && response.ok) {
         var count = response.data && response.data.collected ? response.data.collected : 1;
-        setActionStatus('已采集 ' + count + ' 件商品', 'ok');
+        var connectionLabel = formatErpCollectTargetLabel(response.data && response.data.connection);
+        setActionStatus('已采集 ' + count + ' 件商品' + connectionLabel, 'ok');
       } else {
         setActionStatus((response && response.error) || '采集失败', 'fail');
       }
@@ -762,11 +778,15 @@
         method: 'GET',
         headers: { 'Authorization': 'Bearer ' + token }
       }).then(function (res) {
-        if (res.ok) {
-          setStatus(erpStatusRow, true, baseUrl.replace(/https?:\/\//, ''));
-        } else {
-          setStatus(erpStatusRow, false, 'Token 无效');
-        }
+        return res.json().catch(function () { return null; }).then(function (data) {
+          if (res.ok && data && data.code === 1 && data.data) {
+            setStatus(erpStatusRow, true, formatErpCollectTargetLabel({ baseUrl: baseUrl, user: data.data }).replace(/[（）]/g, ''));
+          } else if (res.ok) {
+            setStatus(erpStatusRow, true, baseUrl.replace(/https?:\/\//, ''));
+          } else {
+            setStatus(erpStatusRow, false, 'Token 无效');
+          }
+        });
       }).catch(function () {
         setStatus(erpStatusRow, false, '无法连接');
       });

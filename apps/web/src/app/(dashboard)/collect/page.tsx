@@ -69,6 +69,31 @@ interface ExtensionPingStatus {
   error?: string;
 }
 
+interface ErpCollectConnectionContext {
+  baseUrl?: string;
+  user?: {
+    id?: string;
+    phone?: string;
+    nickname?: string;
+    accountCode?: string;
+    role?: string;
+  } | null;
+}
+
+function formatErpCollectTargetLabel(connection?: ErpCollectConnectionContext | null) {
+  if (!connection) return '';
+  const user = connection.user || {};
+  const account = user.accountCode || user.phone || user.nickname || (user.id ? `ID ${user.id.slice(0, 8)}` : '');
+  const baseUrl = String(connection.baseUrl || '').trim().replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+  let host = '';
+  try {
+    host = baseUrl ? new URL(baseUrl).host : '';
+  } catch {
+    host = baseUrl.replace(/^https?:\/\//, '');
+  }
+  return [account, host].filter(Boolean).join(' · ');
+}
+
 function hasCjkText(value?: string | null) {
   return /[\u3400-\u9fff]/.test(String(value || ''));
 }
@@ -307,7 +332,11 @@ export default function CollectPage() {
       const evt = d.event;
       if (!evt || evt.type !== 'ss-erp:collect-completed') return;
       if (evt.phase !== 'enrichment') {
-        toast({ title: `扩展采集完成：${evt.collected} 件${evt.errorCount ? `，${evt.errorCount} 件失败` : ''}` });
+        const targetLabel = formatErpCollectTargetLabel(evt.connection);
+        toast({
+          title: `扩展采集完成：${evt.collected} 件${evt.errorCount ? `，${evt.errorCount} 件失败` : ''}`,
+          description: targetLabel ? `写入：${targetLabel}` : undefined,
+        });
       }
       fetchData();
     }
@@ -619,8 +648,12 @@ export default function CollectPage() {
       setExtFetchResults(res.data?.collected ? Array(res.data.collected).fill(null) : []);
       const errors = res.data?.errors?.map((e: any) => `${e.productId}: ${e.error}`) || [];
       setExtFetchErrors(errors);
-      setExtFetchStatus(`采集完成：成功 ${res.data?.collected || 0} 件${errors.length ? `，失败 ${errors.length} 件` : ''}`);
-      toast({ title: `成功采集 ${res.data?.collected || 0} 件商品` });
+      const connectionLabel = formatErpCollectTargetLabel(res.data?.connection);
+      setExtFetchStatus(`采集完成：成功 ${res.data?.collected || 0} 件${errors.length ? `，失败 ${errors.length} 件` : ''}${connectionLabel ? `；写入 ${connectionLabel}` : ''}`);
+      toast({
+        title: `成功采集 ${res.data?.collected || 0} 件商品`,
+        description: connectionLabel ? `写入：${connectionLabel}` : undefined,
+      });
       fetchData();
     } else {
       const error = res.error || res.msg || '扩展采集失败';

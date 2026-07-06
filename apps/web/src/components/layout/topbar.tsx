@@ -36,6 +36,7 @@ export function Topbar({ user, onToggle }: TopbarProps) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [recentNotifs, setRecentNotifs] = useState<NotifItem[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const stableAccountLabel = user.accountCode || `ID ${user.id.slice(0, 8)}`;
 
   useEffect(() => {
     loadUnreadCount();
@@ -174,6 +175,9 @@ export function Topbar({ user, onToggle }: TopbarProps) {
                   {user.accountCode}
                 </span>
               )}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {user.phone} · {stableAccountLabel}
             </span>
             {user.isSubAccount && user.parentAccountCode && (
               <span className="text-[10px] text-muted-foreground">
