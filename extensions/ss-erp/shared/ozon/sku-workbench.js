@@ -43,6 +43,16 @@
     return Number.isFinite(number) ? number : null;
   }
 
+  function normalizeCurrencyCode(value) {
+    var text = value == null ? '' : String(value).trim().toUpperCase();
+    if (!text) return '';
+    if (text === 'RMB' || text === '￥' || text === '¥' || text === 'CNY') return 'CNY';
+    if (text === '₽' || text === 'РУБ' || text === 'RUB') return 'RUB';
+    if (text === '₸' || text === 'KZT') return 'KZT';
+    if (text === 'BYN' || text === 'BR') return 'BYN';
+    return text;
+  }
+
   function round2(value) {
     var number = Number(value);
     return Number.isFinite(number) ? Math.round(number * 100) / 100 : null;
@@ -595,14 +605,50 @@
     };
   }
 
+  function resolveWorkbenchPrice(input, fxRate) {
+    var explicitRub = toNumber(input.priceRub);
+    var explicitCny = toNumber(input.priceCny);
+    var pagePrice = toNumber(input.pagePrice);
+    var currency = normalizeCurrencyCode(firstValue(input, [
+      'priceCurrency',
+      'pagePriceCurrency',
+      'sourcePriceCurrency',
+      'currency',
+    ]));
+
+    if (explicitCny != null && explicitCny > 0) {
+      return {
+        priceRub: explicitRub != null && explicitRub > 0 ? explicitRub : (fxRate > 0 ? (round2(explicitCny / fxRate) || 0) : 0),
+        priceCny: explicitCny,
+        priceCurrency: currency || 'CNY',
+      };
+    }
+
+    if (currency === 'CNY' && pagePrice != null && pagePrice > 0) {
+      return {
+        priceRub: fxRate > 0 ? (round2(pagePrice / fxRate) || 0) : 0,
+        priceCny: pagePrice,
+        priceCurrency: 'CNY',
+      };
+    }
+
+    var priceRub = explicitRub != null ? explicitRub : (pagePrice || 0);
+    return {
+      priceRub: priceRub,
+      priceCny: round2(priceRub * fxRate) || 0,
+      priceCurrency: currency || 'RUB',
+    };
+  }
+
   function buildSkuWorkbenchRow(input) {
     input = asObject(input);
     var metrics = normalizeOzonAnalyticsRow(input.metrics || {});
     var offers = asObject(input.offers);
     var specs = asObject(input.specs);
-    var priceRub = toNumber(input.priceRub != null ? input.priceRub : input.pagePrice) || 0;
     var fxRate = toNumber(input.fxRate) || 0.08;
-    var priceCny = round2(priceRub * fxRate) || 0;
+    var resolvedPrice = resolveWorkbenchPrice(input, fxRate);
+    var priceRub = resolvedPrice.priceRub || 0;
+    var priceCny = resolvedPrice.priceCny || 0;
     var costCny = toNumber(input.costCny) || 0;
     var logisticsFeeCny = toNumber(input.logisticsFeeCny) || 0;
     var inputCommissionRate = toNumber(input.commissionRate);
@@ -630,8 +676,11 @@
       sku: String(input.sku || metrics.sku || ''),
       title: String(input.title || metrics.name || ''),
       image: String(input.image || ''),
+      sourceUrl: String(input.sourceUrl || input.url || ''),
+      variantAttrs: input.variantAttrs || null,
       priceRub: priceRub,
       priceCny: priceCny,
+      priceCurrency: resolvedPrice.priceCurrency,
       costCny: costCny,
       logisticsFeeCny: logisticsFeeCny,
       commissionRate: commissionRate,

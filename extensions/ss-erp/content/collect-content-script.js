@@ -795,8 +795,8 @@
       setOzonQuickStatus(panel, "已打开上架");
     });
     panel.querySelector("[data-role='quick-profit']").addEventListener("click", () => {
-      showOzonSkuWorkbench(productId, "profit");
-      setOzonQuickStatus(panel, "利润表已打开");
+      openOzonProfitCalculatorFromQuickAction();
+      setOzonQuickStatus(panel, "利润测算已打开");
     });
     panel.querySelector("[data-role='quick-bind-cookie']").addEventListener("click", async () => {
       await syncOzonCookieFromQuickAction(panel);
@@ -818,6 +818,30 @@
       openErpPage("/collect/batch");
       setOzonQuickStatus(panel, "正在进入");
     });
+  }
+
+  function openOzonProfitCalculatorFromQuickAction() {
+    const drawer = document.getElementById("ozon-calc-drawer");
+    const drawerBody = drawer ? drawer.querySelector(".ozon-calc-body") : null;
+    if (drawer && drawerBody && window.OZON_CALC_OZON_PANEL && typeof window.OZON_CALC_OZON_PANEL.renderDrawerContent === "function") {
+      drawer.classList.add("open");
+      drawer.style.left = "";
+      drawer.style.right = "16px";
+      drawer.style.top = "80px";
+      drawer.style.height = "";
+      const fab = document.getElementById("ozon-calc-fab");
+      if (fab) fab.style.display = "none";
+      window.OZON_CALC_OZON_PANEL.renderDrawerContent(drawerBody);
+      return;
+    }
+
+    const fab = document.getElementById("ozon-calc-fab");
+    if (fab && typeof fab.click === "function") {
+      fab.click();
+      return;
+    }
+
+    renderOzonPanel({ expand: true });
   }
 
   function quickActionButtonStyle(background, color, border) {
@@ -1515,6 +1539,83 @@
     loadOzonWorkbenchRows(modal, productId);
   }
 
+  async function resolveOzonWorkbenchProductRows(productId) {
+    const fallbackId = String(productId || "").trim();
+    const fallback = { productIds: fallbackId ? [fallbackId] : [], variantSeedRows: [] };
+    try {
+      const snapshot = await collectOzonViaApi();
+      const variants = Array.isArray(snapshot && snapshot.variants) ? snapshot.variants : [];
+      const rows = [];
+      const seen = new Set();
+
+      function addRow(row) {
+        const sku = String(row && row.sku || "").trim();
+        if (!/^\d+$/.test(sku) || seen.has(sku)) return;
+        seen.add(sku);
+        rows.push(row);
+      }
+
+      addRow(buildOzonWorkbenchSeedRowFromSnapshot(snapshot, fallbackId));
+      variants.forEach((variant) => addRow(buildOzonWorkbenchSeedRowFromVariant(snapshot, variant)));
+
+      const productIds = rows.map((row) => String(row.sku)).filter(Boolean);
+      return productIds.length ? { productIds, variantSeedRows: rows } : fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function buildOzonWorkbenchSeedRowFromSnapshot(snapshot, productId) {
+    const currency = snapshot && (snapshot.pagePriceCurrency || snapshot.currency) || fallbackCurrencyByHostSafe(location.hostname);
+    const price = snapshot && (snapshot.pagePriceValue || snapshot.currentPriceValue || snapshot.price);
+    const image = snapshot && Array.isArray(snapshot.images) && snapshot.images.length ? snapshot.images[0] : "";
+    return normalizeOzonWorkbenchSeedPrice({
+      sku: String(productId || (snapshot && snapshot.productId) || "").trim(),
+      title: snapshot && snapshot.title || `Ozon SKU ${productId}`,
+      image,
+      sourceUrl: snapshot && snapshot.sourceUrl || location.href,
+      pagePrice: price,
+      pagePriceCurrency: currency,
+      priceCurrency: currency,
+    });
+  }
+
+  function buildOzonWorkbenchSeedRowFromVariant(snapshot, variant) {
+    const attrs = variant && variant.attrs && typeof variant.attrs === "object" && !Array.isArray(variant.attrs)
+      ? Object.values(variant.attrs).filter(Boolean).join(" / ")
+      : "";
+    const title = [snapshot && snapshot.title, attrs].filter(Boolean).join(" - ");
+    const image = variant && Array.isArray(variant.images) && variant.images.length
+      ? variant.images[0]
+      : (snapshot && Array.isArray(snapshot.images) && snapshot.images.length ? snapshot.images[0] : "");
+    const rawLink = String(variant && (variant.link || variant.url) || "").trim();
+    const sourceUrl = rawLink
+      ? (rawLink.startsWith("http") ? rawLink : new URL(rawLink, location.origin).href)
+      : location.href;
+    const currency = variant && variant.priceCurrency || snapshot && (snapshot.pagePriceCurrency || snapshot.currency) || fallbackCurrencyByHostSafe(location.hostname);
+    return normalizeOzonWorkbenchSeedPrice({
+      sku: String(variant && variant.sku || "").trim(),
+      title: title || (variant && variant.title) || `Ozon SKU ${variant && variant.sku || ""}`,
+      image,
+      sourceUrl,
+      pagePrice: variant && variant.price != null ? variant.price : (snapshot && (snapshot.pagePriceValue || snapshot.currentPriceValue || snapshot.price)),
+      pagePriceCurrency: currency,
+      priceCurrency: currency,
+      variantAttrs: variant && variant.attrs || null,
+    });
+  }
+
+  function normalizeOzonWorkbenchSeedPrice(row) {
+    const currency = String(row && (row.priceCurrency || row.pagePriceCurrency) || "").toUpperCase();
+    const price = Number(row && row.pagePrice);
+    const next = { ...row };
+    if (Number.isFinite(price) && price > 0) {
+      if (currency === "CNY") next.priceCny = price;
+      else next.priceRub = price;
+    }
+    return next;
+  }
+
   async function loadOzonWorkbenchShops(modal) {
     const select = modal.querySelector("[data-role='shop-select']");
     if (!select) return;
@@ -1533,9 +1634,13 @@
     const status = modal.querySelector("[data-role='workbench-status']");
     if (status) status.textContent = "读取 SKU 数据...";
     try {
+      const resolvedRows = await resolveOzonWorkbenchProductRows(productId);
+      const productIds = resolvedRows.productIds && resolvedRows.productIds.length ? resolvedRows.productIds : [productId];
+      const variantSeedRows = resolvedRows.variantSeedRows || [];
       const response = await sendRuntimeMessage({
         type: "spb-self-hosted:fetch-ozon-workbench-rows",
-        productIds: [productId],
+        productIds,
+        rows: variantSeedRows,
       });
       if (!response || !response.ok) throw new Error(response && response.error || "读取 SKU 工作台数据失败");
       const rows = response.data && Array.isArray(response.data.rows) ? response.data.rows : [];
@@ -1612,10 +1717,14 @@
       const rows = Array.isArray(modal.__ssErpOzonWorkbenchRows)
         ? modal.__ssErpOzonWorkbenchRows.filter((row) => selected.includes(String(row && row.sku || "").trim()))
         : [];
+      const rowBySku = new Map(rows.map((row) => [String(row && row.sku || "").trim(), row]));
       const response = await sendRuntimeMessage({
         type: "spb-self-hosted:publish-ozon-workbench-rows",
         productIds: selected,
-        productUrls: selected.map(() => location.href),
+        productUrls: selected.map((sku) => {
+          const row = rowBySku.get(String(sku));
+          return row && row.sourceUrl ? row.sourceUrl : location.href;
+        }),
         rows,
         entry: "ozon-product-detail",
         shopId,

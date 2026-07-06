@@ -353,6 +353,25 @@ test('builds a square-table SKU row with editable price, cost and profit data', 
   assert.equal(row.dimensionsText, '120 x 80 x 40 mm');
 });
 
+test('keeps translated CNY page prices as CNY instead of treating them as RUB', () => {
+  const workbench = loadWorkbench();
+  const row = workbench.buildSkuWorkbenchRow({
+    sku: '111222333',
+    pagePrice: 111.68,
+    pagePriceCurrency: 'CNY',
+    fxRate: 0.08,
+    commissionRate: 10,
+    metrics: {},
+    offers: {},
+    specs: {},
+  });
+
+  assert.equal(row.priceCurrency, 'CNY');
+  assert.equal(row.priceCny, 111.68);
+  assert.equal(row.priceRub, 1396);
+  assert.equal(row.commissionCny, 11.17);
+});
+
 test('builds SKU rows with analytics-only seller count, commission and extended metrics', () => {
   const workbench = loadWorkbench();
   const row = workbench.buildSkuWorkbenchRow({

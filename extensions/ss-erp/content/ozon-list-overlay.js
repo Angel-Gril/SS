@@ -348,8 +348,10 @@
       const t = (el.textContent || '').trim();
       if (/\d.*(?:₽|¥|￥|₸|\b(?:CNY|RMB|RUB|BYN|KZT)\b)/i.test(t) && t.length < 30) priceTexts.push(t);
     });
-    const price = parsePrice(priceTexts[0] || '');
-    const oldPrice = parsePrice(priceTexts[1] || '');
+    const parsedPrice = parsePriceWithCurrency(priceTexts[0] || '');
+    const parsedOldPrice = parsePriceWithCurrency(priceTexts[1] || '', parsedPrice.currency);
+    const price = parsedPrice.price;
+    const oldPrice = parsedOldPrice.price;
     const discount = (price && oldPrice && oldPrice > price)
       ? Math.round((1 - price / oldPrice) * 100)
       : null;
@@ -377,7 +379,45 @@
       }
     });
 
-    return { url, title, image, price, oldPrice, discount, rating, reviews };
+    return {
+      url,
+      title,
+      image,
+      price,
+      priceCurrency: parsedPrice.currency,
+      oldPrice,
+      oldPriceCurrency: parsedOldPrice.currency,
+      discount,
+      rating,
+      reviews,
+    };
+  }
+
+  function normalizePriceCurrency(value, fallback) {
+    const text = String(value == null ? '' : value).trim().toUpperCase();
+    if (!text) return fallback || null;
+    if (text === 'RMB' || text === '￥' || text === '¥') return 'CNY';
+    if (text === '₽' || text === 'РУБ') return 'RUB';
+    if (text === '₸') return 'KZT';
+    if (text === 'BR') return 'BYN';
+    return text;
+  }
+
+  function parsePriceWithCurrency(text, fallbackCurrency) {
+    const helper = globalThis.SS_ERP_PRICE_CURRENCY;
+    if (helper && typeof helper.parsePriceWithCurrency === 'function') {
+      const fallback = fallbackCurrency || (typeof helper.fallbackCurrencyByHost === 'function' ? helper.fallbackCurrencyByHost(location.hostname) : null);
+      const parsed = helper.parsePriceWithCurrency(text, fallback);
+      const n = parsed && parsed.price != null ? Number(parsed.price) : null;
+      return {
+        price: Number.isFinite(n) ? n : null,
+        currency: normalizePriceCurrency(parsed && parsed.currency, fallbackCurrency || null),
+      };
+    }
+    return {
+      price: parsePrice(text),
+      currency: normalizePriceCurrency(fallbackCurrency, null) || (/[¥￥]/.test(String(text || '')) ? 'CNY' : 'RUB'),
+    };
   }
 
   function parsePrice(text) {
@@ -607,6 +647,44 @@
   function formatRub(value) {
     const number = Number(value);
     return Number.isFinite(number) ? `${formatNum(Math.round(number))} RUB` : '--';
+  }
+
+  function formatCny(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? `¥${formatNum(Math.round(number * 100) / 100)}` : '--';
+  }
+
+  function formatWorkbenchPrice(row, dom) {
+    const data = row || {};
+    const cardDom = dom || {};
+    const currency = normalizePriceCurrency(
+      firstPresentValue(data.priceCurrency, data.pagePriceCurrency, data.currency, cardDom.priceCurrency),
+      'RUB',
+    );
+    if (currency === 'CNY') {
+      const cny = firstPresentValue(data.priceCny, data.pagePrice, cardDom.price);
+      return cny != null ? formatCny(cny) : '--';
+    }
+    const rub = firstPresentValue(data.priceRub, data.pagePrice, data.avgPrice, cardDom.price);
+    return rub != null ? formatRub(rub) : '--';
+  }
+
+  function resolvePriceRubEquivalent(row, dom) {
+    const data = row || {};
+    const cardDom = dom || {};
+    const directRub = firstPresentValue(data.priceRub, data.avgPrice);
+    if (directRub != null && directRub !== '') return Number(directRub) || 0;
+    const currency = normalizePriceCurrency(
+      firstPresentValue(data.priceCurrency, data.pagePriceCurrency, data.currency, cardDom.priceCurrency),
+      'RUB',
+    );
+    const pagePrice = firstPresentValue(data.pagePrice, data.price, cardDom.price, 0);
+    const number = Number(pagePrice) || 0;
+    if (currency === 'CNY') {
+      const fxRate = Number(data.fxRate) || 0.08;
+      return fxRate > 0 ? Math.round((number / fxRate) * 100) / 100 : 0;
+    }
+    return number;
   }
 
   function formatPercentValue(value) {
@@ -1261,7 +1339,7 @@
 
     const cardDom = dom || {};
     const data = row || {};
-    const priceRub = firstPresentValue(data.priceRub, data.pagePrice, data.avgPrice, cardDom.price, 0);
+    const priceRub = resolvePriceRubEquivalent(data, cardDom);
     const tags = ['选品规则'].concat(autoRules.map((rule) => rule.tag || rule.name).filter(Boolean)).slice(0, 8);
     const note = `自动入池：${tags.slice(1).join('、') || '选品规则命中'}`;
     const poolItem = buildProductSelectionPoolItem(productId, cardDom, data, autoRules, priceRub, tags, note);
@@ -1276,10 +1354,10 @@
           title: firstPresentValue(data.title, data.name, cardDom.title, `Ozon SKU ${productId}`),
           url: firstPresentValue(cardDom.url, data.sourceUrl, data.url, `https://www.ozon.ru/product/${productId}/`),
           pageType: 'list',
-          pagePriceValue: Number(priceRub) || 0,
-          currentPriceValue: Number(priceRub) || 0,
-          pagePriceCurrency: 'RUB',
-          currency: 'RUB',
+          pagePriceValue: Number(firstPresentValue(data.pagePrice, cardDom.price, priceRub)) || 0,
+          currentPriceValue: Number(firstPresentValue(data.pagePrice, cardDom.price, priceRub)) || 0,
+          pagePriceCurrency: normalizePriceCurrency(firstPresentValue(data.pagePriceCurrency, data.priceCurrency, cardDom.priceCurrency), 'RUB'),
+          currency: normalizePriceCurrency(firstPresentValue(data.pagePriceCurrency, data.priceCurrency, cardDom.priceCurrency), 'RUB'),
           weightG: Number(firstPresentValue(data.weightGrams, cardDom.weightGrams, 0)) || 0,
           favorite: true,
           tags,
@@ -1823,16 +1901,29 @@
       .map((sku) => {
         const dom = getCardDomBySku(sku);
         const premium = getCached(premiumCache, sku, PREMIUM_TTL_MS) || {};
-        const priceRub = firstPresentValue(pickFlat(premium, 'priceRub'), pickFlat(premium, 'price'), pickFlat(premium, 'avgPrice'), dom.price);
+        const premiumPrice = firstPresentValue(pickFlat(premium, 'priceRub'), pickFlat(premium, 'price'), pickFlat(premium, 'avgPrice'));
+        const hasPremiumPrice = premiumPrice != null && premiumPrice !== '';
+        const pagePrice = hasPremiumPrice ? premiumPrice : dom.price;
+        const pagePriceCurrency = hasPremiumPrice
+          ? normalizePriceCurrency(firstPresentValue(pickFlat(premium, 'priceCurrency'), pickFlat(premium, 'pagePriceCurrency'), pickFlat(premium, 'currency')), 'RUB')
+          : normalizePriceCurrency(dom.priceCurrency, 'RUB');
         const image = firstPresentValue(pickFlat(premium, 'image'), Array.isArray(premium.images) && premium.images.length ? premium.images[0] : null, dom.image);
-        return Object.assign({}, premium, {
+        const next = Object.assign({}, premium, {
           sku,
           title: firstPresentValue(pickFlat(premium, 'title'), pickFlat(premium, 'name'), dom.title, `Ozon SKU ${sku}`),
           image: image || '',
-          priceRub,
-          pagePrice: priceRub,
+          pagePrice,
+          pagePriceCurrency,
+          priceCurrency: pagePriceCurrency,
           sourceUrl: dom.url || pickFlat(premium, 'sourceUrl') || `https://www.ozon.ru/product/${sku}/`,
         });
+        if (pagePriceCurrency === 'CNY') {
+          next.priceCny = pagePrice;
+          delete next.priceRub;
+        } else {
+          next.priceRub = pagePrice;
+        }
+        return next;
       });
   }
 
@@ -2827,6 +2918,8 @@
       `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">模式</label>`,
       '      <select data-role="publish-mode" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="clone">复制源卡片</option><option value="follow">普通跟卖</option></select>',
       `      <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;margin-left:4px;"><input type="checkbox" data-role="follow-brand" style="margin:0;">复制品牌</label>`,
+      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">水印</label>`,
+      '      <select data-role="watermark-template" style="height:32px;min-width:150px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="">加载水印...</option></select>',
       '    </div>',
       `    <label style="font-size:12px;font-weight:800;color:#334155;">范围</label>`,
       `    <select data-role="row-filter" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="all" ${initialRowFilter === 'all' ? 'selected' : ''}>全部商品</option><option value="matched" ${initialRowFilter === 'matched' ? 'selected' : ''}>仅规则命中</option></select>`,
@@ -2871,6 +2964,9 @@
     document.body.appendChild(modal);
     modal.querySelector('[data-role="close-list-workbench"]').addEventListener('click', () => modal.remove());
     modal.querySelector('[data-role="refresh-list-workbench"]').addEventListener('click', () => loadListWorkbenchRows(modal));
+    modal.querySelector('[data-role="shop-select"]').addEventListener('change', (event) => {
+      loadListWorkbenchWatermarkTemplates(modal, event.target && event.target.value).catch(() => {});
+    });
     modal.querySelectorAll('[data-role="workbench-view"]').forEach((button) => {
       button.addEventListener('click', () => {
         setListWorkbenchMode(modal, button.getAttribute('data-mode'));
@@ -2893,6 +2989,7 @@
 
     setListWorkbenchMode(modal, modal.__ssErpWorkbenchFocus);
     loadListWorkbenchShops(modal);
+    loadListWorkbenchWatermarkTemplates(modal).catch(() => {});
     loadListWorkbenchRows(modal);
   }
 
@@ -2908,6 +3005,53 @@
     } catch (error) {
       select.innerHTML = '<option value="">店铺加载失败</option>';
     }
+  }
+
+  async function loadListWorkbenchWatermarkTemplates(modal, shopId) {
+    const select = modal.querySelector('[data-role="watermark-template"]');
+    if (!select) return;
+    select.innerHTML = '<option value="">不使用</option>';
+    modal.__ssErpWatermarkTemplateMap = {};
+    try {
+      const response = await send({
+        type: 'spb-self-hosted:get-watermark-templates',
+        shopId: String(shopId || '').trim() || undefined,
+      }, 12000);
+      const templates = response && response.ok && Array.isArray(response.data) ? response.data : [];
+      const map = {};
+      templates.forEach((tpl) => {
+        if (tpl && tpl.id) map[String(tpl.id)] = tpl;
+      });
+      modal.__ssErpWatermarkTemplateMap = map;
+      select.innerHTML = '<option value="">不使用</option>' + templates
+        .map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name || tpl.id)}${tpl.isDefault ? '（默认）' : ''}</option>`)
+        .join('');
+      const defaultTemplate = templates.find((tpl) => tpl && tpl.isDefault && tpl.id);
+      if (defaultTemplate) select.value = String(defaultTemplate.id);
+    } catch (error) {
+      select.innerHTML = '<option value="">水印加载失败</option>';
+    }
+  }
+
+  function buildListWorkbenchWatermarkConfig(modal) {
+    const select = modal.querySelector('[data-role="watermark-template"]');
+    const templateId = String(select && select.value || '').trim();
+    if (!templateId) return null;
+    const map = modal.__ssErpWatermarkTemplateMap && typeof modal.__ssErpWatermarkTemplateMap === 'object'
+      ? modal.__ssErpWatermarkTemplateMap
+      : {};
+    const tpl = map[templateId];
+    if (!tpl) return null;
+    return {
+      type: tpl.type || 'text',
+      text: tpl.text || undefined,
+      imageUrl: tpl.imageUrl || undefined,
+      position: tpl.position || undefined,
+      opacity: tpl.opacity != null ? Number(tpl.opacity) : undefined,
+      fontSize: tpl.fontSize != null ? Number(tpl.fontSize) : undefined,
+      fontColor: tpl.fontColor || undefined,
+      scale: tpl.scale != null ? Number(tpl.scale) : undefined,
+    };
   }
 
   async function loadListWorkbenchRows(modal) {
@@ -2988,7 +3132,6 @@
     body.innerHTML = visibleRows.map(({ sku, row, dom, matchedRules }) => {
       const title = row.title || dom.title || `Ozon SKU ${sku}`;
       const image = row.image || dom.image || '';
-      const priceRub = firstPresentValue(row.priceRub, row.pagePrice, dom.price);
       const selectionTags = matchedRules.length
         ? matchedRules.slice(0, 2).map((rule) => {
           // T2：与卡片标签共用同一派生函数，规则色浅渐变底 + 规则色描边/文字。
@@ -3009,7 +3152,7 @@
         '  </td>',
         `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow:hidden;">${poolBadge}${selectionTags}</span></td>`,
-        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${priceRub != null ? formatRub(priceRub) : '--'}</td>`,
+        `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${formatWorkbenchPrice(row, dom)}</td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.soldCount == null ? '--' : formatNum(row.soldCount)}</td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.soldSum == null ? '--' : formatRub(row.soldSum)}</td>`,
         `  <td style="padding:8px;border:1px solid #e5e7eb;text-align:right;">${row.sellerCount == null ? '--' : formatNum(row.sellerCount)}</td>`,
@@ -3121,7 +3264,7 @@
     await Promise.all(selected.map(async (sku) => {
       const row = rowBySku.get(String(sku)) || {};
       const dom = getCardDomBySku(String(sku));
-      const priceRub = firstPresentValue(row.priceRub, row.pagePrice, row.avgPrice, dom.price, 0);
+      const priceRub = resolvePriceRubEquivalent(row, dom);
       const tags = ['手动入池'];
       const item = buildProductSelectionPoolItem(
         String(sku),
@@ -3158,14 +3301,16 @@
     const rowBySku = new Map(allRows.map((row) => [String(row && row.sku || '').trim(), row]));
     const dynamicFields = getListWorkbenchDynamicExportFields();
     return [
-      ['SKU', '标题', '售价RUB', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目', ...dynamicFields.map((field) => field.label)],
+      ['SKU', '标题', '售价', '售价币种', '售价RUB等价', '月销量', '月销售额RUB', '跟卖数量', '跟卖最低价RUB', '跟卖最高价RUB', '广告费占比', '退货取消率', '佣金', '利润率', '发货模式', '重量', '品牌', '类目', ...dynamicFields.map((field) => field.label)],
       ...selected.map((sku) => {
         const row = rowBySku.get(sku) || {};
         const dom = getCardDomBySku(sku);
         const fixedValues = [
           sku,
           row.title || dom.title || '',
-          firstPresentValue(row.priceRub, row.pagePrice, dom.price, ''),
+          firstPresentValue(row.priceCny, row.pagePrice, row.priceRub, dom.price, ''),
+          normalizePriceCurrency(firstPresentValue(row.priceCurrency, row.pagePriceCurrency, row.currency, dom.priceCurrency), 'RUB'),
+          resolvePriceRubEquivalent(row, dom) || '',
           row.soldCount == null ? '' : row.soldCount,
           row.soldSum == null ? '' : row.soldSum,
           row.sellerCount == null ? '' : row.sellerCount,
@@ -3438,6 +3583,7 @@
     const logisticsFeeCny = readListWorkbenchNumber(modal, 'logistics-fee-cny');
     const commissionRate = readListWorkbenchNumber(modal, 'commission-rate');
     const followBrand = Boolean((modal.querySelector('[data-role="follow-brand"]') || {}).checked);
+    const watermark = buildListWorkbenchWatermarkConfig(modal);
     const status = modal.querySelector('[data-role="workbench-status"]');
     const button = modal.querySelector('[data-role="publish-workbench"]');
     if (!selected.length) {
@@ -3459,18 +3605,22 @@
         sku,
         title: dom.title || `Ozon SKU ${sku}`,
         image: dom.image || '',
-        priceRub: dom.price || 0,
+        pagePrice: dom.price || 0,
+        pagePriceCurrency: normalizePriceCurrency(dom.priceCurrency, 'RUB'),
+        priceCurrency: normalizePriceCurrency(dom.priceCurrency, 'RUB'),
+        priceRub: normalizePriceCurrency(dom.priceCurrency, 'RUB') === 'CNY' ? undefined : (dom.price || 0),
+        priceCny: normalizePriceCurrency(dom.priceCurrency, 'RUB') === 'CNY' ? (dom.price || 0) : undefined,
       };
     });
     if (button) button.disabled = true;
-    if (status) status.textContent = '正在提交快速上架...';
+    if (status) status.textContent = watermark ? '正在采集商品、打水印并提交上架...' : '正在采集商品并提交上架...';
     try {
       const response = await send({
         type: 'spb-self-hosted:publish-ozon-workbench-rows',
         productIds: selected,
         productUrls: selected.map((sku) => (getCardDomBySku(sku).url || `https://www.ozon.ru/product/${sku}/`)),
         rows,
-        entry: 'ozon-list-page',
+        entry: 'ozon-list-page-full',
         shopId,
         publishMode,
         followBrand,
@@ -3478,6 +3628,7 @@
         costs: costCny > 0 ? Object.fromEntries(selected.map((sku) => [String(sku), costCny])) : undefined,
         logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
         commissionRate: commissionRate > 0 ? commissionRate : undefined,
+        watermark: watermark,
         randomOfferId: true,
       }, 120000);
       if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '上架失败');

@@ -51,6 +51,21 @@ test('Ozon product page exposes an SS ERP right quick action toolbar', () => {
   assert.match(content, /function\s+syncOzonCookieFromQuickAction/, 'right toolbar should sync Ozon cookies directly instead of opening a blocked extension settings page');
   assert.match(content, /ozon-calc:sync-current-ozon-cookie/, 'product quick Cookie button should reuse the popup Cookie sync backend path');
   assert.doesNotMatch(content, /quick-bind-cookie[\s\S]{0,500}openExtensionSettingsPage\("cookie"\)/, 'product quick Cookie button should not navigate to settings.html#cookie from the Ozon page');
+  assert.doesNotMatch(
+    content,
+    /quick-profit[\s\S]{0,240}showOzonSkuWorkbench\(productId,\s*"profit"\)/,
+    'product quick Profit button should open the dedicated calculator panel instead of the SKU listing workbench',
+  );
+  assert.match(
+    content,
+    /quick-profit[\s\S]{0,500}openOzonProfitCalculatorFromQuickAction\(\)/,
+    'product quick Profit button should delegate to the dedicated Ozon calculator drawer',
+  );
+  assert.match(
+    content,
+    /function\s+openOzonProfitCalculatorFromQuickAction[\s\S]*OZON_CALC_OZON_PANEL[\s\S]*renderDrawerContent/,
+    'product quick Profit button should expand the rich calculator drawer when it is available',
+  );
   const competitorBrandPattern = new RegExp([
     '\\u6bdb\\u5b50ERP',
     '\\u4f01\\u9e45\\u52a9\\u624b',
@@ -81,6 +96,21 @@ test('Ozon product workbench fetches table rows and seller offer metrics through
     content,
     /<th[^>]+border:1px solid #4b5563/,
     'product workbench header cells should use light grid lines instead of dark borders that look like table bleed-through',
+  );
+  assert.match(
+    content,
+    /function\s+resolveOzonWorkbenchProductRows/,
+    'product workbench should expand current detail page variants before fetching rows',
+  );
+  assert.match(
+    content,
+    /rows:\s*variantSeedRows/,
+    'product workbench should pass parsed variant seed rows to the background row builder',
+  );
+  assert.doesNotMatch(
+    content,
+    /productIds:\s*\[productId\]/,
+    'product workbench should not be limited to only the current product id on multi-variant pages',
   );
 });
 
@@ -152,7 +182,22 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
   assert.equal((background.match(/case "spb-self-hosted:get-watermark-templates"/g) || []).length, 1, 'watermark template message case should be registered once');
 });
 
-test('list-page SKU workbench can still use direct import-by-sku for batch speed', () => {
-  assert.match(background, /publishOzonWorkbenchRowsDirect\(/);
-  assert.match(background, /\/api\/listing\/ozon\/import-by-sku/);
+test('list-page one-click listing uses collect-then-publish by default, not SKU-only direct import', () => {
+  const overlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
+  assert.match(background, /publishOzonWorkbenchRowsDirect\(/, 'explicit direct import helper may still exist for a future fast-follow mode');
+  assert.match(background, /\/api\/listing\/ozon\/import-by-sku/, 'direct SKU import endpoint should remain isolated behind directPublish');
+
+  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nasync function getWatermarkTemplates/);
+  assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
+  assert.match(publishFunction[0], /options\.directPublish\s*===\s*true/, 'only an explicit directPublish flag should use SKU-only import');
+  assert.doesNotMatch(
+    publishFunction[0],
+    /String\(options\.entry\s*\|\|\s*""\)\s*===\s*"ozon-list-page"/,
+    'ozon-list-page entries should no longer be silently downgraded to SKU-only import',
+  );
+
+  const listPublishFunction = overlay.match(/async function publishListWorkbenchSelectedRows[\s\S]*?\n  }\n\n  \/\/ === 注入卡片/);
+  assert.ok(listPublishFunction, 'list-page publish handler should be present');
+  assert.match(listPublishFunction[0], /entry:\s*'ozon-list-page-full'/, 'list-page default publish should use the full collect-then-publish entry');
+  assert.doesNotMatch(listPublishFunction[0], /entry:\s*'ozon-list-page'/, 'list-page default publish should not trigger direct import routing');
 });

@@ -2546,6 +2546,9 @@ async function applyOzonCommissionToAggregatedItem(item, sku) {
     title: item.title || item.name || "",
     image: Array.isArray(item.images) && item.images.length ? item.images[0] : "",
     pagePrice: priceRub,
+    pagePriceCurrency: item.priceCurrency || item.currency || "RUB",
+    priceCurrency: item.priceCurrency || item.currency || "RUB",
+    priceCny: item.priceCny,
     commissionSnapshot,
     metrics: item,
     offers: {
@@ -2954,11 +2957,17 @@ async function fetchCachedOzonWorkbenchInsight(sku, options = {}) {
 }
 
 function buildOzonWorkbenchRowFromSeed(buildRow, sku, seed, options, costMap, priceMap, commissionSnapshot) {
+  const pagePriceCurrency = seed.priceCurrency || seed.pagePriceCurrency || seed.currency || "RUB";
   return buildRow({
     sku,
     title: seed.title || seed.name || "",
     image: seed.image || (Array.isArray(seed.images) && seed.images.length ? seed.images[0] : ""),
+    sourceUrl: seed.sourceUrl || seed.url || "",
+    variantAttrs: seed.variantAttrs || null,
     pagePrice: priceMap[sku] != null ? priceMap[sku] : (seed.priceRub || seed.pagePrice || seed.price || seed.avgPrice || seed.minSellerPrice || 0),
+    priceCny: seed.priceCny,
+    pagePriceCurrency,
+    priceCurrency: pagePriceCurrency,
     costCny: costMap[sku] != null ? costMap[sku] : (seed.costCny != null ? seed.costCny : 0),
     fxRate: options.fxRate,
     commissionRate: options.commissionRate,
@@ -3028,7 +3037,12 @@ async function fetchOzonWorkbenchRows(productIds, options = {}) {
         sku,
         title: item.title || item.name || seed.title || seed.name || "",
         image: itemImage || seed.image || "",
+        sourceUrl: item.sourceUrl || item.url || seed.sourceUrl || seed.url || "",
+        variantAttrs: item.variantAttrs || seed.variantAttrs || null,
         pagePrice: priceMap[sku] != null ? priceMap[sku] : (item.price || item.avgPrice || seed.priceRub || seed.pagePrice || item.minSellerPrice || 0),
+        priceCny: item.priceCny || seed.priceCny,
+        pagePriceCurrency: item.priceCurrency || item.pagePriceCurrency || item.currency || seed.priceCurrency || seed.pagePriceCurrency || seed.currency || "RUB",
+        priceCurrency: item.priceCurrency || item.pagePriceCurrency || item.currency || seed.priceCurrency || seed.pagePriceCurrency || seed.currency || "RUB",
         costCny: costMap[sku] != null ? costMap[sku] : 0,
         fxRate: options.fxRate,
         commissionRate: options.commissionRate,
@@ -3050,7 +3064,12 @@ async function fetchOzonWorkbenchRows(productIds, options = {}) {
         sku,
         title: seed.title || seed.name || "",
         image: seed.image || "",
+        sourceUrl: seed.sourceUrl || seed.url || "",
+        variantAttrs: seed.variantAttrs || null,
         pagePrice: priceMap[sku] != null ? priceMap[sku] : (seed.priceRub || seed.pagePrice || 0),
+        priceCny: seed.priceCny,
+        pagePriceCurrency: seed.priceCurrency || seed.pagePriceCurrency || seed.currency || "RUB",
+        priceCurrency: seed.priceCurrency || seed.pagePriceCurrency || seed.currency || "RUB",
         costCny: costMap[sku] != null ? costMap[sku] : 0,
         fxRate: options.fxRate,
         commissionRate: options.commissionRate,
@@ -3242,7 +3261,7 @@ async function publishOzonWorkbenchRowsDirect(productIds, options = {}) {
 }
 
 async function publishOzonWorkbenchRows(productIds, options = {}) {
-  if (options.directPublish === true || String(options.entry || "") === "ozon-list-page") {
+  if (options.directPublish === true) {
     return await publishOzonWorkbenchRowsDirect(productIds, options);
   }
 

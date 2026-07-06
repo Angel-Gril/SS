@@ -278,6 +278,26 @@ assert.match(
 );
 assert.match(
   overlay,
+  /data-role="watermark-template"/,
+  'Ozon list workbench should expose watermark template selection before publishing',
+);
+assert.match(
+  overlay,
+  /function\s+loadListWorkbenchWatermarkTemplates/,
+  'Ozon list workbench should load ERP watermark templates for the selected shop',
+);
+assert.match(
+  overlay,
+  /function\s+buildListWorkbenchWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/,
+  'Ozon list workbench should pass the same watermark fields as the detail publish panel',
+);
+assert.match(
+  overlay,
+  /publishListWorkbenchSelectedRows[\s\S]*watermark:\s*watermark/,
+  'Ozon list publish should send watermark config through the normal collect-then-publish path',
+);
+assert.match(
+  overlay,
   /data-role="row-filter"/,
   'Ozon list workbench should switch between all rows and selection-rule matched rows',
 );
