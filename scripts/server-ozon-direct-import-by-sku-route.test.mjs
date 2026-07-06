@@ -4,13 +4,14 @@ import test from 'node:test';
 
 const listingRoute = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
 
-test('listing routes expose a direct Ozon import-by-sku endpoint for extension workbench publishing', () => {
+test('listing routes retain a direct Ozon import-by-sku endpoint for backend SKU follow workflows', () => {
   assert.match(listingRoute, /app\.post\('\/ozon\/import-by-sku'/);
   assert.match(listingRoute, /directOzonImportBySkuSchema/);
   assert.match(listingRoute, /client\.importBySku\(/);
   assert.match(listingRoute, /PRODUCT_PUSH/);
-  assert.match(listingRoute, /extension-workbench-direct/);
-  assert.match(listingRoute, /enqueueProductSyncAfterPublish\(shopId,\s*'extension-workbench-direct'\)/);
+  assert.match(listingRoute, /backend-sku-follow/);
+  assert.match(listingRoute, /enqueueProductSyncAfterPublish\(shopId,\s*'backend-sku-follow'\)/);
+  assert.doesNotMatch(listingRoute, /extension-workbench-direct/);
 
   const routeBody = listingRoute.match(/app\.post\('\/ozon\/import-by-sku'[\s\S]*?\n  \}\);/);
   assert.ok(routeBody, 'direct import-by-sku route body should be present');

@@ -2359,7 +2359,7 @@
         '  <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>',
         '  <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>',
         '</div>',
-        `<button type="button" data-role="quick-open-workbench" title="打开本页 SKU 工作台" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primary, '#ffffff')}">一键上架</button>`,
+        `<button type="button" data-role="quick-open-workbench" title="打开本页上架工作台" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primary, '#ffffff')}">一键上架</button>`,
         `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primaryDark, '#ffffff')}">利润测算</button>`,
         `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', SS_ERP_LIST_THEME.text, SS_ERP_LIST_THEME.borderStrong)}">选品数据</button>`,
         `<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>`,
@@ -2955,7 +2955,7 @@
       `      <button type="button" data-role="add-selected-workbench-skus-to-pool" style="height:36px;border:1px solid #bbf7d0;background:#f0fdf4;color:#047857;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">加入选品池</button>`,
       `      <button type="button" data-role="delete-selected-workbench-skus" style="height:36px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">删除选中 SKU</button>`,
       `      <button type="button" data-role="export-workbench-skus" style="height:36px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">导出选中 SKU</button>`,
-      `      <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>`,
+      `      <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中商品</button>`,
       '    </div>',
       '  </div>',
       '</div>',
@@ -3087,7 +3087,7 @@
         logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
         commissionRate: commissionRate > 0 ? commissionRate : undefined,
       }, 120000);
-      if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '读取 SKU 工作台数据失败');
+      if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || '读取工作台数据失败');
       const enrichedRows = response.data && Array.isArray(response.data.rows) ? response.data.rows : [];
       const rowBySku = new Map(seedRows.map((row) => [String(row.sku || ''), row]));
       enrichedRows.forEach((row) => {

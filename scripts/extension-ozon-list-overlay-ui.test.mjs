@@ -415,7 +415,7 @@ assert.match(
   /stableRounds\s*>=\s*AUTO_SCROLL_MAX_STABLE\s*&&\s*atBottom/,
   'Ozon list auto-scroll should only stop as loaded when stable and actually at the bottom',
 );
-for (const actionLabel of ['保存', '加入选品池', '删除选中 SKU', '导出选中 SKU', '一键上架选中 SKU']) {
+for (const actionLabel of ['保存', '加入选品池', '删除选中 SKU', '导出选中 SKU', '一键上架选中商品']) {
   assert.match(overlay, new RegExp(actionLabel), `Ozon list workbench footer should expose ${actionLabel}`);
 }
 assert.match(
@@ -616,7 +616,7 @@ assert.match(
 assert.match(
   overlay,
   /publishListWorkbenchSelectedRows[\s\S]*costs:\s*costCny > 0 \? Object\.fromEntries\(selected\.map\(\(sku\) => \[String\(sku\), costCny\]\)\) : undefined/,
-  'Ozon list workbench publish should pass selected SKU cost map to direct import metadata',
+  'Ozon list workbench publish should pass selected SKU cost context through the full publish request',
 );
 for (const label of [
   '广告费占比',

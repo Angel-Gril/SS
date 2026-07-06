@@ -780,7 +780,7 @@
         <span style="width:18px;height:18px;border-radius:3px;background:#111827;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;">SS</span>
         <span style="font-size:11px;font-weight:800;color:#111827;white-space:nowrap;">ERP 工具</span>
       </div>
-      <button type="button" data-role="quick-open-workbench" title="打开 SKU 工作台并提交上架" style="${quickActionButtonStyle("#ea580c", "#ffffff")}">一键上架</button>
+      <button type="button" data-role="quick-open-workbench" title="打开商品上架工作台" style="${quickActionButtonStyle("#ea580c", "#ffffff")}">一键上架</button>
       <button type="button" data-role="quick-profit" title="查看售价、成本和利润率" style="${quickActionButtonStyle("#1d4ed8", "#ffffff")}">利润测算</button>
       <button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
       <button type="button" data-role="quick-open-insights" title="打开数据一览和选品指标" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">选品数据</button>
@@ -1513,7 +1513,7 @@
           </table>
         </div>
         <div style="${productWorkbenchFooterStyle()}">
-          <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中 SKU</button>
+          <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中商品</button>
         </div>
       </div>
     `;
@@ -1642,7 +1642,7 @@
         productIds,
         rows: variantSeedRows,
       });
-      if (!response || !response.ok) throw new Error(response && response.error || "读取 SKU 工作台数据失败");
+      if (!response || !response.ok) throw new Error(response && response.error || "读取工作台数据失败");
       const rows = response.data && Array.isArray(response.data.rows) ? response.data.rows : [];
       renderOzonWorkbenchRows(modal, rows);
       if (status) status.textContent = rows.length ? `已读取 ${rows.length} 条 SKU 数据` : "没有可展示的 SKU 数据";

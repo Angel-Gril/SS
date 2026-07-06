@@ -13,7 +13,7 @@ test('Ozon product data panel keeps data actions separate from listing actions',
   assert.match(content, /SS ERP 一键上架工作台/);
   assert.match(content, /SS ERP 利润测算工作台/);
   assert.match(content, /SS ERP 选品数据工作台/);
-  assert.match(content, /一键上架选中 SKU/);
+  assert.match(content, /一键上架选中商品/);
   assert.match(content, /data-role="quick-open-workbench"/);
   assert.match(content, /renderOzonPanel\(\{\s*expand:\s*false\s*\}\)/, 'product detail should keep the data panel collapsed on page load');
   assert.match(content, /quick-open-insights[\s\S]*renderOzonPanel\(\{\s*expand:\s*true\s*\}\)/, 'product detail should expand data metrics from the quick action dock');
@@ -184,12 +184,24 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
 
 test('list-page one-click listing uses collect-then-publish by default, not SKU-only direct import', () => {
   const overlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
-  assert.match(background, /publishOzonWorkbenchRowsDirect\(/, 'explicit direct import helper may still exist for a future fast-follow mode');
-  assert.match(background, /\/api\/listing\/ozon\/import-by-sku/, 'direct SKU import endpoint should remain isolated behind directPublish');
+  assert.doesNotMatch(
+    background,
+    /publishOzonWorkbenchRowsDirect\(/,
+    'extension background should not keep a browser-panel fast-follow import-by-sku path',
+  );
+  assert.doesNotMatch(
+    background,
+    /\/api\/listing\/ozon\/import-by-sku/,
+    'browser extension publishing should not call the SKU-only import-by-sku route directly',
+  );
 
   const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nasync function getWatermarkTemplates/);
   assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
-  assert.match(publishFunction[0], /options\.directPublish\s*===\s*true/, 'only an explicit directPublish flag should use SKU-only import');
+  assert.doesNotMatch(
+    publishFunction[0],
+    /directPublish/,
+    'extension workbench publishing should not expose a directPublish escape hatch',
+  );
   assert.doesNotMatch(
     publishFunction[0],
     /String\(options\.entry\s*\|\|\s*""\)\s*===\s*"ozon-list-page"/,
@@ -200,4 +212,6 @@ test('list-page one-click listing uses collect-then-publish by default, not SKU-
   assert.ok(listPublishFunction, 'list-page publish handler should be present');
   assert.match(listPublishFunction[0], /entry:\s*'ozon-list-page-full'/, 'list-page default publish should use the full collect-then-publish entry');
   assert.doesNotMatch(listPublishFunction[0], /entry:\s*'ozon-list-page'/, 'list-page default publish should not trigger direct import routing');
+  assert.doesNotMatch(overlay, /SKU 快速跟卖|快速跟卖/, 'browser extension workbench should not expose a SKU fast-follow action');
+  assert.doesNotMatch(overlay, /一键上架选中 SKU/, 'full listing action should be worded as product listing, not SKU fast-follow');
 });

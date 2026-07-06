@@ -137,27 +137,15 @@ test('aggregate Ozon product insights applies category IDs and computed commissi
   );
 });
 
-test('direct import-by-sku payload preserves workbench KPI context for ERP job metadata', () => {
-  const directItems = background.match(/function buildOzonWorkbenchDirectImportItems[\s\S]*?\r?\n}\r?\n\r?\nasync function publishOzonWorkbenchRowsDirect/);
-  assert.ok(directItems, 'buildOzonWorkbenchDirectImportItems should be present');
-  for (const field of [
-    'brand',
-    'categoryPath',
-    'salesSchema',
-    'weightGrams',
-    'commissionRate',
-    'logisticsFeeCny',
-    'costCny',
-    'profitMarginPct',
-    'soldCount',
-    'soldSum',
-    'returnCancelRate',
-    'sellerCount',
-    'sellerNames',
-    'ozonMetrics',
-  ]) {
-    assert.match(directItems[0], new RegExp(`${field}:`), `direct import payload should keep ${field}`);
-  }
+test('extension workbench publish does not expose SKU-only import-by-sku', () => {
+  assert.doesNotMatch(background, /publishOzonWorkbenchRowsDirect/);
+  assert.doesNotMatch(background, /buildOzonWorkbenchDirectImportItems/);
+  assert.doesNotMatch(background, /\/api\/listing\/ozon\/import-by-sku/);
+  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nasync function getWatermarkTemplates/);
+  assert.ok(publishFunction, 'publishOzonWorkbenchRows should remain the browser workbench publish path');
+  assert.match(publishFunction[0], /collectOzonProductsToErp\(productIds/);
+  assert.match(publishFunction[0], /\/api\/collect\/publish-ozon/);
+  assert.doesNotMatch(publishFunction[0], /directPublish/);
 });
 
 test('background downloads Ozon workbench Excel exports through Chrome downloads API', () => {

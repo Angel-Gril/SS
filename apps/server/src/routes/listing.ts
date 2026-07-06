@@ -540,7 +540,7 @@ export async function listingRoutes(app: FastifyInstance) {
           payload: {
             taskId,
             itemCount: ozonItems.length,
-            source: parsed.data.source || 'extension-workbench-direct',
+            source: parsed.data.source || 'backend-sku-follow',
             entry: parsed.data.entry || 'extension-workbench',
             mode: parsed.data.mode || 'follow-by-sku',
             sourceSkus: items.map((item) => String(item.sku)),
@@ -577,7 +577,7 @@ export async function listingRoutes(app: FastifyInstance) {
         select: { id: true },
       });
 
-      void enqueueProductSyncAfterPublish(shopId, 'extension-workbench-direct');
+      void enqueueProductSyncAfterPublish(shopId, 'backend-sku-follow');
 
       return reply.send({
         code: 1,

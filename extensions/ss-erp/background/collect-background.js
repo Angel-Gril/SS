@@ -2998,7 +2998,7 @@ async function fetchOzonWorkbenchRows(productIds, options = {}) {
   const buildRow = helper && typeof helper.buildSkuWorkbenchRow === "function"
     ? helper.buildSkuWorkbenchRow
     : null;
-  if (!buildRow) return { ok: false, error: "Ozon SKU 工作台工具未加载" };
+  if (!buildRow) return { ok: false, error: "Ozon 工作台工具未加载" };
 
   const rows = [];
   const errors = [];
@@ -3122,149 +3122,7 @@ async function fetchCollectedOzonItemsBySkus(erpBase, erpToken, skus) {
   return rows;
 }
 
-function normalizeOzonWorkbenchPublishIds(productIds) {
-  return Array.from(new Set((Array.isArray(productIds) ? productIds : [])
-    .map((id) => String(id || "").trim())
-    .filter((id) => /^\d+$/.test(id)))).slice(0, 1000);
-}
-
-function mapOzonWorkbenchRowsBySku(rows) {
-  const out = new Map();
-  (Array.isArray(rows) ? rows : []).forEach((row) => {
-    const sku = String(row && row.sku || "").trim();
-    if (sku) out.set(sku, row);
-  });
-  return out;
-}
-
-function resolveOzonWorkbenchPublishPriceCny(row, markupPct) {
-  const direct = Number(row && row.priceCny);
-  const rub = Number(row && row.priceRub);
-  const fxRate = Number(row && row.fxRate) || 0.08;
-  const base = Number.isFinite(direct) && direct > 0
-    ? direct
-    : (Number.isFinite(rub) && rub > 0 ? rub * fxRate : 100);
-  const markup = Number(markupPct);
-  const price = base * (1 + (Number.isFinite(markup) ? markup : 0) / 100);
-  return Math.max(1, Math.round(price * 100) / 100);
-}
-
-function buildOzonWorkbenchDirectImportItems(ids, options, rows) {
-  const rowsBySku = mapOzonWorkbenchRowsBySku(rows);
-  const productUrls = Array.isArray(options.productUrls) ? options.productUrls : [];
-  const costMap = options.costs && typeof options.costs === "object" ? options.costs : {};
-  return ids.map((sku, index) => {
-    const row = rowsBySku.get(sku) || {};
-    const price = resolveOzonWorkbenchPublishPriceCny(row, options.markupPct);
-    const imageUrls = [];
-    if (row.image) imageUrls.push(String(row.image));
-    const commissionRate = row.commissionRate != null ? row.commissionRate : (options.commissionRate != null ? options.commissionRate : null);
-    const logisticsFeeCny = row.logisticsFeeCny != null ? row.logisticsFeeCny : (options.logisticsFeeCny != null ? options.logisticsFeeCny : null);
-    const costCny = row.costCny != null ? row.costCny : (costMap[sku] != null ? costMap[sku] : null);
-    return {
-      sku: Number(sku),
-      title: row.title || ("Ozon SKU " + sku),
-      price,
-      oldPrice: Math.ceil(price * 1.2),
-      currency: "CNY",
-      sourceUrl: productUrls[index] || ("https://www.ozon.ru/product/" + sku + "/"),
-      imageUrls,
-      brand: row.brand || "",
-      categoryPath: row.categoryPath || "",
-      salesSchema: row.salesSchema || "",
-      weightGrams: row.weightGrams != null ? row.weightGrams : null,
-      dimensionsText: row.dimensionsText || "",
-      commissionRate: commissionRate,
-      logisticsFeeCny: logisticsFeeCny,
-      costCny: costCny,
-      profitCny: row.profitCny != null ? row.profitCny : null,
-      profitMarginPct: row.profitMarginPct != null ? row.profitMarginPct : null,
-      soldCount: row.soldCount != null ? row.soldCount : null,
-      soldSum: row.soldSum != null ? row.soldSum : null,
-      returnCancelRate: row.returnCancelRate != null ? row.returnCancelRate : null,
-      nullableRedemptionRate: row.nullableRedemptionRate != null ? row.nullableRedemptionRate : null,
-      sellerCount: row.sellerCount != null ? row.sellerCount : null,
-      minFollowPriceRub: row.minFollowPriceRub != null ? row.minFollowPriceRub : null,
-      maxFollowPriceRub: row.maxFollowPriceRub != null ? row.maxFollowPriceRub : null,
-      sellerNames: Array.isArray(row.sellerNames) ? row.sellerNames.slice(0, 50) : [],
-      ozonMetrics: {
-        adExpenseShare: row.adExpenseShare != null ? row.adExpenseShare : null,
-        convToCartPdp: row.convToCartPdp != null ? row.convToCartPdp : null,
-        convToCartSearch: row.convToCartSearch != null ? row.convToCartSearch : null,
-        convViewToOrder: row.convViewToOrder != null ? row.convViewToOrder : null,
-        productCardViews: row.productCardViews != null ? row.productCardViews : null,
-        searchCatalogViews: row.searchCatalogViews != null ? row.searchCatalogViews : null,
-        productClickRate: row.productClickRate != null ? row.productClickRate : null,
-        promoDays: row.promoDays != null ? row.promoDays : null,
-        paidPromotionDays: row.paidPromotionDays != null ? row.paidPromotionDays : null,
-        ptj: row.ptj || "",
-      },
-    };
-  });
-}
-
-async function publishOzonWorkbenchRowsDirect(productIds, options = {}) {
-  const ids = normalizeOzonWorkbenchPublishIds(productIds);
-  if (!ids.length) {
-    return { ok: false, error: "请选择要上架的 SKU" };
-  }
-  const shopId = String(options.shopId || "").trim();
-  if (!shopId) return { ok: false, error: "请选择目标店铺" };
-
-  const conn = await getStoredErpConnection();
-  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
-
-  let rows = Array.isArray(options.rows) ? options.rows : [];
-  const rowsBySku = mapOzonWorkbenchRowsBySku(rows);
-  const missingIds = ids.filter((id) => !rowsBySku.has(id));
-  if (missingIds.length && missingIds.length <= 100) {
-    const rowResult = await fetchOzonWorkbenchRows(missingIds, {
-      prices: options.prices,
-      costs: options.costs,
-      fxRate: options.fxRate,
-      commissionRate: options.commissionRate,
-      logisticsFeeCny: options.logisticsFeeCny,
-    });
-    if (rowResult && rowResult.ok && rowResult.data && Array.isArray(rowResult.data.rows)) {
-      rows = rows.concat(rowResult.data.rows);
-    }
-  }
-
-  const publishBody = {
-    shopId,
-    source: "extension-workbench-direct",
-    entry: options.entry || "extension-workbench",
-    mode: "follow-by-sku",
-    items: buildOzonWorkbenchDirectImportItems(ids, options, rows),
-  };
-
-  const publishResponse = await fetch(conn.baseUrl + "/api/listing/ozon/import-by-sku", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json;charset=utf-8",
-      "Authorization": "Bearer " + conn.token,
-    },
-    body: JSON.stringify(publishBody),
-  });
-  const publishText = await publishResponse.text();
-  let publishParsed = {};
-  try { publishParsed = JSON.parse(publishText); } catch (e) {}
-  if (!publishResponse.ok || publishParsed.code === 0) {
-    return {
-      ok: false,
-      error: publishParsed.msg || ("ERP 快速上架失败: HTTP " + publishResponse.status + " " + publishText.slice(0, 200)),
-      data: { publish: publishParsed },
-    };
-  }
-
-  return { ok: true, data: { publish: publishParsed, items: publishBody.items } };
-}
-
 async function publishOzonWorkbenchRows(productIds, options = {}) {
-  if (options.directPublish === true) {
-    return await publishOzonWorkbenchRowsDirect(productIds, options);
-  }
-
   if (!Array.isArray(productIds) || !productIds.length) {
     return { ok: false, error: "请选择要上架的 SKU" };
   }
