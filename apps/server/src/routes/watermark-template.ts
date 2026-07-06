@@ -31,7 +31,18 @@ export async function watermarkTemplateRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { shopId } = request.query as { shopId?: string };
     const where: any = { userId };
-    if (shopId) where.OR = [{ shopId }, { shopId: null }];
+    if (shopId) {
+      const selectedShop = await prisma.shop.findFirst({
+        where: { id: shopId, userId },
+        select: { name: true },
+      });
+      const shopBindings = [{ shopId }, { shopId: null }];
+      const legacyShopName = String(selectedShop?.name || '').trim();
+      if (legacyShopName && legacyShopName !== shopId) {
+        shopBindings.push({ shopId: legacyShopName });
+      }
+      where.OR = shopBindings;
+    }
     const list = await prisma.watermarkTemplate.findMany({ where, orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }] });
     return reply.send({ code: 1, msg: 'ok', data: list });
   });

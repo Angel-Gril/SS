@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
       _count: { products: 0, orders: 0 },
     },
   ]),
+  shopFindFirst: vi.fn(async () => ({ name: 'Ozon Main' })),
   watermarkFindMany: vi.fn(async () => [
     {
       id: 'tpl-1',
@@ -51,6 +52,7 @@ vi.mock('../lib/prisma.js', () => ({
   prisma: {
     shop: {
       findMany: mocks.shopFindMany,
+      findFirst: mocks.shopFindFirst,
     },
     watermarkTemplate: {
       findMany: mocks.watermarkFindMany,
