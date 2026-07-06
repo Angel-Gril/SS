@@ -185,36 +185,6 @@
     return card;
   }
 
-  // T5：详情页上架操作区（店铺下拉 + 模式下拉 + 一键上架），复用工作台 publish 链路。
-  function buildPublishCardBody() {
-    return [
-      '<div class="ozon-calc-publish-controls">',
-      '  <label class="ozon-calc-publish-select">',
-      '    <span>目标店铺</span>',
-      '    <select data-publish-shop><option value="">加载店铺中...</option></select>',
-      '  </label>',
-      '  <label class="ozon-calc-publish-select">',
-      '    <span>上架模式</span>',
-      '    <select data-publish-mode><option value="clone">复制源卡片</option><option value="follow">普通跟卖</option></select>',
-      '  </label>',
-      '  <label class="ozon-calc-publish-select">',
-      '    <span>品牌</span>',
-      '    <select data-publish-brand><option value="follow">复制源品牌</option><option value="strip">无品牌</option></select>',
-      '  </label>',
-      '  <label class="ozon-calc-publish-select">',
-      '    <span>浮动加价 %</span>',
-      '    <input type="number" data-publish-markup step="1" placeholder="0">',
-      '  </label>',
-      '  <label class="ozon-calc-publish-select ozon-calc-publish-select-wide">',
-      '    <span>水印</span>',
-      '    <select data-publish-watermark><option value="">不使用</option></select>',
-      '  </label>',
-      '</div>',
-      '<button type="button" class="ozon-calc-publish-btn" data-action="publish-product">一键上架到 OZON</button>',
-      '<div class="ozon-calc-muted ozon-calc-publish-status" data-publish-status></div>',
-    ].join('');
-  }
-
   function formatCurrencyValue(value, currency) {
     var number = Number(value) || 0;
     if (!(number > 0)) return '--';
@@ -912,14 +882,6 @@
     }
     body.innerHTML = '';
 
-    // T5：详情页顶部上架操作区（仅详情页展示），复用工作台 publish 链路。
-    var publishCard = null;
-    if (product.pageType === 'detail') {
-      publishCard = createCard('上架到 OZON', buildPublishCardBody());
-      publishCard.className = 'ozon-calc-card ozon-calc-publish-card';
-      body.appendChild(publishCard);
-    }
-
     var summaryCard = createCard('利润概览', buildSummaryBanner(null));
     body.appendChild(summaryCard);
 
@@ -1404,115 +1366,6 @@
           compute();
         });
       });
-    }
-
-    if (publishCard) {
-      var publishShopSelect = publishCard.querySelector('[data-publish-shop]');
-      var publishModeSelect = publishCard.querySelector('[data-publish-mode]');
-      var publishBrandSelect = publishCard.querySelector('[data-publish-brand]');
-      var publishMarkupInput = publishCard.querySelector('[data-publish-markup]');
-      var publishWatermarkSelect = publishCard.querySelector('[data-publish-watermark]');
-      var publishButton = publishCard.querySelector('[data-action="publish-product"]');
-      var publishStatusNode = publishCard.querySelector('[data-publish-status]');
-      // 水印模板缓存：id -> 模板对象，上架时据所选 id 组装水印配置传给 background。
-      var watermarkTemplateMap = {};
-
-      function setPublishStatus(message) {
-        if (publishStatusNode) publishStatusNode.textContent = message || '';
-      }
-
-      // 复用工作台的店铺列表消息，同一后端接口。
-      sendRuntimeMessage({ type: 'spb-self-hosted:get-ozon-shops' }).then(function (response) {
-        var shops = response && response.ok && Array.isArray(response.data) ? response.data : [];
-        if (!publishShopSelect) return;
-        publishShopSelect.innerHTML = '<option value="">选择 OZON 店铺</option>' + shops.map(function (shop) {
-          return '<option value="' + escapeHtml(shop.id) + '">' + escapeHtml(shop.name || shop.id) + '</option>';
-        }).join('');
-      }).catch(function () {
-        if (publishShopSelect) publishShopSelect.innerHTML = '<option value="">店铺加载失败</option>';
-      });
-
-      // 拉水印模板列表填充下拉；失败时保留“不使用”，不阻断上架。
-      sendRuntimeMessage({ type: 'spb-self-hosted:get-watermark-templates' }).then(function (response) {
-        var templates = response && response.ok && Array.isArray(response.data) ? response.data : [];
-        if (!publishWatermarkSelect) return;
-        templates.forEach(function (tpl) {
-          if (tpl && tpl.id) watermarkTemplateMap[tpl.id] = tpl;
-        });
-        publishWatermarkSelect.innerHTML = '<option value="">不使用</option>' + templates.map(function (tpl) {
-          return '<option value="' + escapeHtml(tpl.id) + '">' + escapeHtml(tpl.name || tpl.id) + '</option>';
-        }).join('');
-      }).catch(function () {});
-
-      // 据所选模板 id 组装 /api/collect/watermark 的配置；未选返回 null（跳过水印）。
-      function buildWatermarkConfig() {
-        var templateId = String(publishWatermarkSelect ? publishWatermarkSelect.value : '').trim();
-        if (!templateId) return null;
-        var tpl = watermarkTemplateMap[templateId];
-        if (!tpl) return null;
-        return {
-          type: tpl.type || 'text',
-          text: tpl.text || undefined,
-          imageUrl: tpl.imageUrl || undefined,
-          position: tpl.position || undefined,
-          opacity: tpl.opacity != null ? Number(tpl.opacity) : undefined,
-          fontSize: tpl.fontSize != null ? Number(tpl.fontSize) : undefined,
-          fontColor: tpl.fontColor || undefined,
-          scale: tpl.scale != null ? Number(tpl.scale) : undefined,
-        };
-      }
-
-      if (publishButton) {
-        publishButton.addEventListener('click', function () {
-          if (product.pageType !== 'detail') {
-            setPublishStatus('请在商品详情页使用一键上架。');
-            return;
-          }
-          var shopId = String(publishShopSelect ? publishShopSelect.value : '').trim();
-          if (!shopId) {
-            setPublishStatus('请先选择目标店铺。');
-            return;
-          }
-          var pid = String(product.productId || parseProductIdFromUrl(window.location.href) || '').trim();
-          if (!pid) {
-            setPublishStatus('未识别到商品 ID，无法上架。');
-            return;
-          }
-          var publishMode = String(publishModeSelect ? publishModeSelect.value : 'clone') || 'clone';
-          var followBrand = String(publishBrandSelect ? publishBrandSelect.value : 'follow') !== 'strip';
-          var markupPct = publishMarkupInput ? toNumber(publishMarkupInput.value, 0) : 0;
-          var watermark = buildWatermarkConfig();
-          publishButton.disabled = true;
-          publishButton.textContent = '上架中...';
-          setPublishStatus(watermark ? '正在采集商品、打水印并提交上架...' : '正在采集商品并提交上架...');
-          // 走非直采 publish 链路（entry=ozon-product-detail）：采全属性 →（选了才）打水印 → /publish-ozon，
-          // 支持 clone/follow 模式，与详情页“上架模式”下拉一致；水印/品牌/浮动价格由 background 透传。
-          sendRuntimeMessage({
-            type: 'spb-self-hosted:publish-ozon-workbench-rows',
-            productIds: [pid],
-            productUrls: [window.location.href],
-            entry: 'ozon-product-detail',
-            shopId: shopId,
-            publishMode: publishMode,
-            followBrand: followBrand,
-            markupPct: markupPct,
-            watermark: watermark,
-            randomOfferId: true,
-          }).then(function (response) {
-            publishButton.disabled = false;
-            publishButton.textContent = '一键上架到 OZON';
-            if (response && response.ok) {
-              setPublishStatus('上架任务已提交。');
-            } else {
-              setPublishStatus('上架失败：' + (response && response.error ? response.error : '未知错误'));
-            }
-          }).catch(function (error) {
-            publishButton.disabled = false;
-            publishButton.textContent = '一键上架到 OZON';
-            setPublishStatus('上架失败：' + (error && error.message ? error.message : String(error)));
-          });
-        });
-      }
     }
 
     bindSharedSpecsRefresh();

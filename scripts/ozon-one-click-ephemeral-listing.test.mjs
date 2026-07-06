@@ -54,6 +54,34 @@ test('browser one-click listing uses temporary collect records instead of pollut
   );
 });
 
+test('manual Ozon ERP collection remains persistent and visible in SKU collect page', () => {
+  const currentTabCase = background.match(/case "spb-self-hosted:collect-current-tab":[\s\S]*?case "spb-self-hosted:get-ozon-insights":/);
+  assert.ok(currentTabCase, 'collect-current-tab message case should be present');
+  assert.match(
+    currentTabCase[0],
+    /collectFromCurrentTab\(\)/,
+    'manual current-tab collection should use the normal persistent collect path',
+  );
+  assert.doesNotMatch(
+    currentTabCase[0],
+    /ephemeralListing:\s*true/,
+    'manual current-tab collection must not create temporary one-click listing records',
+  );
+
+  const fetchToErpCase = background.match(/case "spb-self-hosted:fetch-ozon-product-to-erp":[\s\S]*?\n\s*}\n\s*\}\)/);
+  assert.ok(fetchToErpCase, 'fetch-ozon-product-to-erp message case should be present');
+  assert.match(
+    fetchToErpCase[0],
+    /collectOzonProductsToErp\(message\.productIds,\s*\{/,
+    'manual product-page ERP collection should call the normal collect endpoint',
+  );
+  assert.doesNotMatch(
+    fetchToErpCase[0],
+    /ephemeralListing:\s*true/,
+    'manual product-page ERP collection must persist in SKU collect instead of being hidden as temporary listing data',
+  );
+});
+
 test('Ozon list publish mode keeps the SKU/KPI table for pre-publish validation', () => {
   assert.match(
     listOverlay,

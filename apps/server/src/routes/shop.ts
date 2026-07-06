@@ -54,6 +54,11 @@ const deactivatePromotionProductsSchema = z.object({
 });
 
 const OZON_VIDEO_PROBE_BODY_LIMIT = 12 * 1024 * 1024;
+const extensionConfigReadRouteOptions = {
+  config: {
+    rateLimit: false,
+  },
+};
 
 function positiveInt(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -214,7 +219,7 @@ function enrichProductBuyerCost<T extends { platformProductId?: unknown }>(
 export async function shopRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
-  app.get('/', async (request) => {
+  app.get('/', extensionConfigReadRouteOptions, async (request) => {
     const { userId } = (request as any).user;
     const shops = await prisma.shop.findMany({
       where: { userId },

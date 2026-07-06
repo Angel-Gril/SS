@@ -18,11 +18,16 @@ const createSchema = z.object({
 });
 
 const updateSchema = createSchema.partial();
+const extensionConfigReadRouteOptions = {
+  config: {
+    rateLimit: false,
+  },
+};
 
 export async function watermarkTemplateRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
-  app.get('/', async (request, reply) => {
+  app.get('/', extensionConfigReadRouteOptions, async (request, reply) => {
     const { userId } = (request as any).user;
     const { shopId } = request.query as { shopId?: string };
     const where: any = { userId };

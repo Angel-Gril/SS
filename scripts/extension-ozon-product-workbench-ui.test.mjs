@@ -255,11 +255,10 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
   assert.match(content, /function\s+buildOzonWorkbenchWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/, 'product SKU workbench watermark config should match the server watermark input fields');
   assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*const watermark = buildOzonWorkbenchWatermarkConfig\(modal\)/, 'product SKU workbench publish should read the selected watermark template');
   assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*watermark:\s*watermark/, 'product SKU workbench publish should pass watermark config through the normal collect-then-publish path');
-  assert.match(panel, /function\s+buildPublishCardBody/, 'detail data panel should render a rich publish card');
-  assert.match(panel, /data-publish-shop[\s\S]*data-publish-mode[\s\S]*data-publish-brand[\s\S]*data-publish-watermark/, 'detail publish card should expose shop, mode, brand, and watermark controls');
-  assert.match(panel, /entry:\s*'ozon-product-detail'/, 'detail publish card should use the collect-then-publish entry');
-  assert.match(panel, /followBrand\s*=\s*String\(publishBrandSelect[\s\S]*!==\s*'strip'/, 'detail publish brand selector should map "no brand" to followBrand false');
-  assert.match(panel, /function\s+buildWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/, 'detail watermark config should match the server watermark input fields');
+  assert.doesNotMatch(panel, /function\s+buildPublishCardBody|上架到 OZON/, 'detail calculator/profit drawer should not render a separate publish card');
+  assert.doesNotMatch(panel, /data-publish-shop|data-publish-mode|data-publish-brand|data-publish-watermark|data-action="publish-product"/, 'publish controls belong in the SKU workbench, not the calculator drawer');
+  assert.doesNotMatch(panel, /sendRuntimeMessage\(\{\s*type:\s*'spb-self-hosted:publish-ozon-workbench-rows'[\s\S]*entry:\s*'ozon-product-detail'/, 'calculator drawer should not submit one-click listing jobs');
+  assert.doesNotMatch(panel, /function\s+buildWatermarkConfig/, 'calculator drawer should not duplicate workbench watermark logic');
   assert.equal((background.match(/case "spb-self-hosted:get-watermark-templates"/g) || []).length, 1, 'watermark template message case should be registered once');
 });
 
