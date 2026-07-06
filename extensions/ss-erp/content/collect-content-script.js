@@ -939,7 +939,11 @@
     const tableWrap = modal.querySelector("[data-role='workbench-table-wrap']");
     if (tableWrap) tableWrap.style.display = "block";
     modal.querySelectorAll("[data-mode-scope='publish']").forEach((node) => {
-      node.style.display = normalized === "publish" ? "" : "none";
+      const role = String(node.getAttribute("data-role") || "");
+      node.style.display = normalized === "publish" ? (role === "publish-target-controls" ? "flex" : "") : "none";
+    });
+    modal.querySelectorAll("[data-mode-scope='pricing']").forEach((node) => {
+      node.style.display = normalized === "data" ? "none" : "flex";
     });
   }
 
@@ -1465,27 +1469,39 @@
           </div>
           <button type="button" data-role="close-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
         </div>
-        <div data-role="workbench-toolbar" style="padding:12px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
-          <label style="font-size:12px;font-weight:700;color:#334155;">目标店铺</label>
-          <select data-role="shop-select" style="height:32px;min-width:180px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
-            <option value="">加载店铺中...</option>
-          </select>
-          <label style="font-size:12px;font-weight:700;color:#334155;margin-left:6px;">模式</label>
-          <select data-role="publish-mode" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
-            <option value="clone">复制源卡片</option>
-            <option value="follow">普通跟卖</option>
-          </select>
-          <label style="font-size:12px;font-weight:700;color:#334155;margin-left:6px;">加价%</label>
-          <input type="number" data-role="markup-pct" value="0" min="-90" max="500" step="1" style="height:32px;width:74px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;">
-            <input type="checkbox" data-role="follow-brand" style="margin:0;">
-            复制品牌
-          </label>
-          <label style="font-size:12px;font-weight:700;color:#334155;margin-left:6px;">水印</label>
-          <select data-role="watermark-template" style="height:32px;min-width:150px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
-            <option value="">加载水印...</option>
-          </select>
-          <button type="button" data-role="refresh-workbench" style="height:32px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:700;cursor:pointer;">刷新数据</button>
+        <div data-role="workbench-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
+          <div data-role="publish-target-controls" data-mode-scope="publish" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <label style="font-size:12px;font-weight:800;color:#334155;">目标店铺</label>
+            <select data-role="shop-select" style="height:32px;min-width:180px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
+              <option value="">加载店铺中...</option>
+            </select>
+            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">模式</label>
+            <select data-role="publish-mode" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
+              <option value="clone">复制源卡片</option>
+              <option value="follow">普通跟卖</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#334155;margin-left:4px;">
+              <input type="checkbox" data-role="follow-brand" style="margin:0;">
+              复制品牌
+            </label>
+            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">水印</label>
+            <select data-role="watermark-template" style="height:32px;min-width:150px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;">
+              <option value="">加载水印...</option>
+            </select>
+          </div>
+          <button type="button" data-role="refresh-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新数据</button>
+        </div>
+        <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
+          <div data-role="pricing-controls" data-mode-scope="pricing" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <label style="font-size:12px;font-weight:800;color:#334155;">加价%</label>
+            <input type="number" data-role="markup-pct" value="0" min="-90" max="500" step="1" style="height:32px;width:74px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
+            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">成本¥</label>
+            <input type="number" data-role="cost-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
+            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">物流费¥</label>
+            <input type="number" data-role="logistics-fee-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
+            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">佣金%</label>
+            <input type="number" data-role="commission-rate" value="" min="0" max="100" step="0.1" placeholder="自动" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
+          </div>
           <div style="margin-left:auto;font-size:12px;color:${SS_ERP_PRODUCT_THEME.muted};" data-role="workbench-status">准备读取 SKU 数据...</div>
         </div>
         <div data-role="workbench-table-wrap" style="flex:1;overflow:auto;padding:0 18px 14px 18px;background:#fff;">
@@ -1691,6 +1707,12 @@
     };
   }
 
+  function readOzonWorkbenchNumber(modal, role) {
+    const input = modal.querySelector(`[data-role="${role}"]`);
+    const value = Number(input && input.value);
+    return Number.isFinite(value) ? value : 0;
+  }
+
   async function loadOzonWorkbenchRows(modal, productId) {
     const status = modal.querySelector("[data-role='workbench-status']");
     if (status) status.textContent = "读取 SKU 数据...";
@@ -1698,6 +1720,9 @@
       const resolvedRows = await resolveOzonWorkbenchProductRows(productId);
       const productIds = resolvedRows.productIds && resolvedRows.productIds.length ? resolvedRows.productIds : [productId];
       const variantSeedRows = resolvedRows.variantSeedRows || [];
+      const costCny = readOzonWorkbenchNumber(modal, "cost-cny");
+      const logisticsFeeCny = readOzonWorkbenchNumber(modal, "logistics-fee-cny");
+      const commissionRate = readOzonWorkbenchNumber(modal, "commission-rate");
       modal.__ssErpOzonWorkbenchProductIds = productIds;
       modal.__ssErpOzonWorkbenchSeedRows = variantSeedRows;
       modal.__ssErpOzonWorkbenchRows = variantSeedRows;
@@ -1705,6 +1730,9 @@
         type: "spb-self-hosted:fetch-ozon-workbench-rows",
         productIds,
         rows: variantSeedRows,
+        costs: costCny > 0 ? Object.fromEntries(productIds.map((sku) => [String(sku), costCny])) : undefined,
+        logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
+        commissionRate: commissionRate > 0 ? commissionRate : undefined,
       });
       if (!response || !response.ok) throw new Error(response && response.error || "读取工作台数据失败");
       const rows = response.data && Array.isArray(response.data.rows) ? response.data.rows : [];
@@ -1763,6 +1791,9 @@
     const publishMode = String((modal.querySelector("[data-role='publish-mode']") || {}).value || "clone");
     const followBrand = Boolean((modal.querySelector("[data-role='follow-brand']") || {}).checked);
     const markupPct = Number((modal.querySelector("[data-role='markup-pct']") || {}).value || 0);
+    const costCny = readOzonWorkbenchNumber(modal, "cost-cny");
+    const logisticsFeeCny = readOzonWorkbenchNumber(modal, "logistics-fee-cny");
+    const commissionRate = readOzonWorkbenchNumber(modal, "commission-rate");
     const watermark = buildOzonWorkbenchWatermarkConfig(modal);
     const status = modal.querySelector("[data-role='workbench-status']");
     const button = modal.querySelector("[data-role='publish-workbench']");
@@ -1796,6 +1827,9 @@
         publishMode,
         followBrand,
         markupPct: Number.isFinite(markupPct) ? markupPct : 0,
+        costs: costCny > 0 ? Object.fromEntries(selected.map((sku) => [String(sku), costCny])) : undefined,
+        logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
+        commissionRate: commissionRate > 0 ? commissionRate : undefined,
         watermark: watermark,
         randomOfferId: true,
       });

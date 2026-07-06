@@ -137,6 +137,54 @@ test('Ozon product publish mode keeps the SKU/KPI table for pre-publish validati
   );
 });
 
+test('Ozon product workbench matches list publish controls for pricing and watermark params', () => {
+  for (const role of [
+    'publish-target-controls',
+    'pricing-controls',
+    'cost-cny',
+    'logistics-fee-cny',
+    'commission-rate',
+    'watermark-template',
+  ]) {
+    assert.match(content, new RegExp(`data-role="${role}"`), `product SKU workbench should expose ${role}`);
+  }
+  assert.match(
+    content,
+    /data-mode-scope="publish"/,
+    'product SKU workbench should mark publish-only controls so data/profit modes do not look like the same seller publish panel',
+  );
+  assert.match(
+    content,
+    /data-mode-scope="pricing"/,
+    'product SKU workbench should mark pricing controls so data mode can stay focused on metrics',
+  );
+  assert.match(
+    content,
+    /function\s+readOzonWorkbenchNumber/,
+    'product SKU workbench should use a shared numeric reader for pricing inputs',
+  );
+  assert.match(
+    content,
+    /loadOzonWorkbenchRows[\s\S]*const costCny = readOzonWorkbenchNumber\(modal,\s*"cost-cny"\)[\s\S]*const logisticsFeeCny = readOzonWorkbenchNumber\(modal,\s*"logistics-fee-cny"\)[\s\S]*const commissionRate = readOzonWorkbenchNumber\(modal,\s*"commission-rate"\)/,
+    'product SKU workbench data refresh should read cost, logistics fee, and commission rate',
+  );
+  assert.match(
+    content,
+    /loadOzonWorkbenchRows[\s\S]*costs:\s*costCny > 0 \? Object\.fromEntries\(productIds\.map\(\(sku\) => \[String\(sku\), costCny\]\)\) : undefined[\s\S]*logisticsFeeCny:\s*logisticsFeeCny > 0 \? logisticsFeeCny : undefined[\s\S]*commissionRate:\s*commissionRate > 0 \? commissionRate : undefined/,
+    'product SKU workbench data refresh should send pricing params to background enrichment',
+  );
+  assert.match(
+    content,
+    /publishSelectedOzonWorkbenchRows[\s\S]*const costCny = readOzonWorkbenchNumber\(modal,\s*"cost-cny"\)[\s\S]*const logisticsFeeCny = readOzonWorkbenchNumber\(modal,\s*"logistics-fee-cny"\)[\s\S]*const commissionRate = readOzonWorkbenchNumber\(modal,\s*"commission-rate"\)/,
+    'product SKU workbench publish should read cost, logistics fee, and commission rate',
+  );
+  assert.match(
+    content,
+    /publishSelectedOzonWorkbenchRows[\s\S]*costs:\s*costCny > 0 \? Object\.fromEntries\(selected\.map\(\(sku\) => \[String\(sku\), costCny\]\)\) : undefined[\s\S]*logisticsFeeCny:\s*logisticsFeeCny > 0 \? logisticsFeeCny : undefined[\s\S]*commissionRate:\s*commissionRate > 0 \? commissionRate : undefined/,
+    'product SKU workbench publish should pass pricing params through the normal collect-then-publish path',
+  );
+});
+
 test('Ozon workbench enrichment avoids duplicate slow seller fetches', () => {
   assert.match(background, /OZON_WORKBENCH_INSIGHT_TTL_MS/, 'background should cache workbench insight aggregation results briefly');
   assert.match(background, /ozonWorkbenchInsightCache/, 'background should keep an in-memory workbench insight cache');
