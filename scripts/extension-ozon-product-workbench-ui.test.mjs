@@ -114,6 +114,31 @@ test('Ozon product workbench fetches table rows and seller offer metrics through
   );
 });
 
+test('Ozon product publish mode renders a lightweight confirmation instead of the dense KPI table', () => {
+  const publishConfirmFunction = content.match(/function\s+renderOzonProductPublishConfirm[\s\S]*?\n  }\n\n  async function publishSelectedOzonWorkbenchRows/);
+  assert.ok(publishConfirmFunction, 'product publish confirmation renderer should be present');
+  assert.match(
+    content,
+    /data-role="publish-confirm-wrap"/,
+    'product workbench should have a dedicated publish confirmation surface',
+  );
+  assert.match(
+    content,
+    /function\s+renderOzonProductPublishConfirm/,
+    'product publish mode should render through a dedicated confirmation renderer',
+  );
+  assert.match(
+    content,
+    /modal\.__ssErpProductWorkbenchMode\s*===\s*"publish"[\s\S]*renderOzonProductPublishConfirm/,
+    'product publish mode should bypass the dense KPI table renderer',
+  );
+  assert.doesNotMatch(
+    publishConfirmFunction[0],
+    /月销量|广告费占比|跟卖最低价|跟卖最高价/,
+    'product publish confirmation should not render KPI/analytics columns',
+  );
+});
+
 test('Ozon workbench enrichment avoids duplicate slow seller fetches', () => {
   assert.match(background, /OZON_WORKBENCH_INSIGHT_TTL_MS/, 'background should cache workbench insight aggregation results briefly');
   assert.match(background, /ozonWorkbenchInsightCache/, 'background should keep an in-memory workbench insight cache');

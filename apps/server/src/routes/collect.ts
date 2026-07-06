@@ -812,6 +812,17 @@ export function sanitizeVariantAttrSetsForOzonPublish(
   const occupiedColorNames = new Set<string>();
   const needsNeutralColorName: Array<{ index: number; name: string }> = [];
 
+  function nextNeutralColorName(): string {
+    let suffix = 1;
+    let label = `Тип ${suffix}`;
+    while (occupiedColorNames.has(normalizeOzonDictionaryText(label))) {
+      suffix += 1;
+      label = `Тип ${suffix}`;
+    }
+    occupiedColorNames.add(normalizeOzonDictionaryText(label));
+    return label;
+  }
+
   for (let index = 0; index < sanitized.length; index += 1) {
     const attrs = sanitized[index]!;
     const colorNameEntry = Object.entries(attrs).find(([name]) => isColorNameVariantName(name));
@@ -838,14 +849,31 @@ export function sanitizeVariantAttrSetsForOzonPublish(
   }
 
   for (const entry of needsNeutralColorName) {
-    let suffix = 1;
-    let label = `Тип ${suffix}`;
-    while (occupiedColorNames.has(normalizeOzonDictionaryText(label))) {
-      suffix += 1;
-      label = `Тип ${suffix}`;
+    sanitized[entry.index]![entry.name] = nextNeutralColorName();
+  }
+
+  const duplicateSignatureGroups = new Map<string, number[]>();
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const attrs = sanitized[index]!;
+    if (Object.keys(attrs).some((name) => isColorNameVariantName(name))) continue;
+    if (!Object.keys(attrs).some((name) => isStrictColorVariantName(name))) continue;
+    const signature = Object.entries(attrs)
+      .map(([name, value]) => [cleanPublishName(name), cleanPublishName(value)] as const)
+      .filter(([name, value]) => name && value)
+      .sort(([a], [b]) => a.localeCompare(b, 'ru-RU'))
+      .map(([name, value]) => `${normalizeVariantConflictValue(name)}=${normalizeVariantConflictValue(value)}`)
+      .join('|');
+    if (!signature) continue;
+    const group = duplicateSignatureGroups.get(signature) || [];
+    group.push(index);
+    duplicateSignatureGroups.set(signature, group);
+  }
+
+  for (const indexes of duplicateSignatureGroups.values()) {
+    if (indexes.length < 2) continue;
+    for (const index of indexes) {
+      sanitized[index]!['Название цвета'] = nextNeutralColorName();
     }
-    sanitized[entry.index]![entry.name] = label;
-    occupiedColorNames.add(normalizeOzonDictionaryText(label));
   }
 
   return sanitized;
@@ -3559,8 +3587,14 @@ function assertPublishNamesAreSafe(items: { id: string; sku?: string | null; tit
   }
   if (variantConflicts.length) {
     const sample = variantConflicts.slice(0, 3).join('；');
-    throw new Error(`变体可变特性在清洗后出现重复，OZON 会拒绝合并上架。请先检查颜色/尺码等差异值是否被合并：${sample}`);
+    console.warn(`[publish-ozon] variant attribute conflicts: ${sample}`);
+    throw new Error(buildVariantAttributeConflictMessage(variantConflicts.length));
   }
+}
+
+export function buildVariantAttributeConflictMessage(conflictCount: number): string {
+  const count = Number(conflictCount) || 0;
+  return `变体属性重复，无法合并上架${count > 0 ? `（${count} 组）` : ''}。已避免提交到 Ozon；请保留单个同属性变体，或补齐颜色、尺码、型号等差异后再上架。`;
 }
 
 function getOzonPublishErrorMessage(e: any): string {

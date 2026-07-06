@@ -936,6 +936,17 @@
     if (subtitle) subtitle.textContent = getProductWorkbenchModeSubtitle(normalized, productId);
     const status = modal.querySelector("[data-role='workbench-status']");
     if (status) status.textContent = getWorkbenchModeStatus(normalized);
+    const tableWrap = modal.querySelector("[data-role='workbench-table-wrap']");
+    if (tableWrap) tableWrap.style.display = normalized === "publish" ? "none" : "block";
+    const confirmWrap = modal.querySelector("[data-role='publish-confirm-wrap']");
+    if (confirmWrap) confirmWrap.style.display = normalized === "publish" ? "block" : "none";
+    if (normalized === "publish") {
+      renderOzonProductPublishConfirm(
+        modal,
+        modal.__ssErpOzonWorkbenchRows || modal.__ssErpOzonWorkbenchSeedRows || [],
+        modal.__ssErpOzonWorkbenchProductIds || []
+      );
+    }
     modal.querySelectorAll("[data-mode-scope='publish']").forEach((node) => {
       node.style.display = normalized === "publish" ? "" : "none";
     });
@@ -1512,6 +1523,7 @@
             </tbody>
           </table>
         </div>
+        <div data-role="publish-confirm-wrap" style="display:none;flex:1;overflow:auto;padding:18px;background:#fff;"></div>
         <div style="${productWorkbenchFooterStyle()}">
           <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_PRODUCT_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中商品</button>
         </div>
@@ -1526,7 +1538,11 @@
     modal.querySelector("[data-role='refresh-workbench']").addEventListener("click", () => loadOzonWorkbenchRows(modal, productId));
     modal.querySelectorAll("[data-role='workbench-view']").forEach((button) => {
       button.addEventListener("click", () => {
-        setProductWorkbenchMode(modal, button.getAttribute("data-mode"));
+        const nextMode = button.getAttribute("data-mode");
+        setProductWorkbenchMode(modal, nextMode);
+        if (nextMode !== "publish" && !(modal.__ssErpOzonWorkbenchRows || []).length) {
+          loadOzonWorkbenchRows(modal, productId);
+        }
       });
     });
     modal.querySelector("[data-role='select-all-workbench']").addEventListener("change", (event) => {
@@ -1632,11 +1648,19 @@
 
   async function loadOzonWorkbenchRows(modal, productId) {
     const status = modal.querySelector("[data-role='workbench-status']");
-    if (status) status.textContent = "读取 SKU 数据...";
+    if (status) status.textContent = modal.__ssErpProductWorkbenchMode === "publish" ? "准备上架队列..." : "读取 SKU 数据...";
     try {
       const resolvedRows = await resolveOzonWorkbenchProductRows(productId);
       const productIds = resolvedRows.productIds && resolvedRows.productIds.length ? resolvedRows.productIds : [productId];
       const variantSeedRows = resolvedRows.variantSeedRows || [];
+      modal.__ssErpOzonWorkbenchProductIds = productIds;
+      modal.__ssErpOzonWorkbenchSeedRows = variantSeedRows;
+      modal.__ssErpOzonWorkbenchRows = variantSeedRows;
+      if (modal.__ssErpProductWorkbenchMode === "publish") {
+        renderOzonProductPublishConfirm(modal, variantSeedRows, productIds);
+        if (status) status.textContent = productIds.length ? `已准备 ${productIds.length} 个商品，选择店铺后可提交上架` : "没有可上架商品";
+        return;
+      }
       const response = await sendRuntimeMessage({
         type: "spb-self-hosted:fetch-ozon-workbench-rows",
         productIds,
@@ -1691,10 +1715,70 @@
     `).join("");
   }
 
+  function renderOzonProductPublishConfirm(modal, rows, productIds) {
+    const wrap = modal.querySelector("[data-role='publish-confirm-wrap']");
+    if (!wrap) return;
+    const body = modal.querySelector("[data-role='workbench-body']");
+    if (body) body.innerHTML = "";
+    const rowBySku = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row && row.sku || ""), row]));
+    const skus = Array.from(new Set((Array.isArray(productIds) && productIds.length ? productIds : (Array.isArray(rows) ? rows.map((row) => row && row.sku) : []))
+      .map((sku) => String(sku || "").trim())
+      .filter(Boolean)));
+    const visibleRows = skus.map((sku) => {
+      const row = rowBySku.get(sku) || { sku };
+      return { sku, row };
+    });
+    const hiddenChecks = visibleRows
+      .map(({ sku }) => `<input type="checkbox" data-role="workbench-row-check" value="${escapeHtml(sku)}" checked style="display:none;">`)
+      .join("");
+    if (!visibleRows.length) {
+      wrap.innerHTML = [
+        hiddenChecks,
+        '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:13px;">没有识别到可上架商品</div>',
+      ].join("");
+      return;
+    }
+    const sampleRows = visibleRows.slice(0, 8);
+    const sampleHtml = sampleRows.map(({ sku, row }) => {
+      const title = row.title || `Ozon SKU ${sku}`;
+      const image = row.image || "";
+      const price = row.priceCurrency === "CNY" || row.priceCny
+        ? (Number(row.priceCny || row.pagePrice) > 0 ? `¥${formatNumber(Number(row.priceCny || row.pagePrice))}` : "-")
+        : formatRub(row.priceRub != null ? row.priceRub : row.pagePrice);
+      return [
+        '<div style="display:flex;align-items:center;gap:10px;min-width:0;border:1px solid #e5e7eb;background:#fff;border-radius:4px;padding:8px;">',
+        image ? `<img src="${escapeHtml(image)}" alt="" style="width:38px;height:38px;object-fit:cover;border:1px solid #e5e7eb;border-radius:3px;flex:none;">` : '<div style="width:38px;height:38px;border:1px solid #e5e7eb;border-radius:3px;background:#f8fafc;flex:none;"></div>',
+        '<div style="min-width:0;flex:1;">',
+        `<div style="font-family:Consolas,monospace;font-size:12px;font-weight:800;color:#1d4ed8;">${escapeHtml(sku)}</div>`,
+        `<div style="margin-top:2px;font-size:12px;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</div>`,
+        '</div>',
+        `<div style="font-size:12px;font-weight:800;color:#334155;white-space:nowrap;">${escapeHtml(price)}</div>`,
+        '</div>',
+      ].join("");
+    }).join("");
+    wrap.innerHTML = [
+      hiddenChecks,
+      '<div style="max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:14px;">',
+      '<div style="border:1px solid #fed7aa;background:#fff7ed;border-radius:4px;padding:14px 16px;">',
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">',
+      '<div style="font-size:16px;font-weight:900;color:#9a3412;">准备提交一键上架</div>',
+      `<div style="border:1px solid #fdba74;background:#fff;color:#9a3412;border-radius:3px;padding:6px 9px;font-size:12px;font-weight:900;">待提交 ${visibleRows.length}</div>`,
+      '</div>',
+      '</div>',
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;">',
+      sampleHtml,
+      '</div>',
+      visibleRows.length > sampleRows.length
+        ? `<div style="font-size:12px;color:#64748b;text-align:center;">另有 ${visibleRows.length - sampleRows.length} 个商品已纳入提交队列，确认目标店铺后点击底部“一键上架选中商品”。</div>`
+        : '',
+      '</div>',
+    ].join("");
+  }
+
   async function publishSelectedOzonWorkbenchRows(modal) {
-    const selected = Array.from(modal.querySelectorAll("[data-role='workbench-row-check']:checked"))
+    const selected = Array.from(new Set(Array.from(modal.querySelectorAll("[data-role='workbench-row-check']:checked"))
       .map((box) => String(box.value || "").trim())
-      .filter(Boolean);
+      .filter(Boolean)));
     const shopId = String((modal.querySelector("[data-role='shop-select']") || {}).value || "").trim();
     const publishMode = String((modal.querySelector("[data-role='publish-mode']") || {}).value || "clone");
     const followBrand = Boolean((modal.querySelector("[data-role='follow-brand']") || {}).checked);

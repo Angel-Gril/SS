@@ -25,6 +25,7 @@ import {
   shouldUseProductImportForPublishItem,
   resolvePublishName,
   findVariantAttributeConflicts,
+  buildVariantAttributeConflictMessage,
   resolveVariantPublishImages,
   setVariantWatermarkedImages,
   shouldApplyCollectedVariantAttrOverride,
@@ -1115,15 +1116,30 @@ describe('collect publish helpers', () => {
     }], 10097)).toBe(false);
   });
 
-  it('detects duplicate collected variant signatures before Ozon rejects merged variants', () => {
+  it('adds neutral color names when same-color variants would otherwise collapse', () => {
+    expect(sanitizeVariantAttrSetsForOzonPublish([
+      { sku: '1945889349', attrs: { 'Цвет': 'коричневый' } },
+      { sku: '1945889350', attrs: { 'Цвет': 'коричневый' } },
+      { sku: '1945889351', attrs: { 'Цвет': 'хаки' } },
+    ].map((variant) => variant.attrs))).toEqual([
+      { 'Цвет': 'коричневый', 'Название цвета': 'Тип 1' },
+      { 'Цвет': 'коричневый', 'Название цвета': 'Тип 2' },
+      { 'Цвет': 'хаки' },
+    ]);
+
     expect(findVariantAttributeConflicts([
       { sku: '1945889349', attrs: { 'Цвет': 'коричневый' } },
       { sku: '1945889350', attrs: { 'Цвет': 'коричневый' } },
       { sku: '1945889351', attrs: { 'Цвет': 'хаки' } },
-    ])).toEqual([{
-      skus: ['1945889349', '1945889350'],
-      attrs: { 'Цвет': 'коричневый' },
-    }]);
+    ])).toEqual([]);
+  });
+
+  it('uses a concise public message for unmergeable variant conflicts', () => {
+    const message = buildVariantAttributeConflictMessage(3);
+    expect(message).toContain('变体属性重复');
+    expect(message).toContain('3 组');
+    expect(message).not.toContain('->');
+    expect(message).not.toContain('/');
   });
 
   it('ignores long descriptive color sentences when checking variant conflicts', () => {
