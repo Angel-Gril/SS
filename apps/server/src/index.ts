@@ -262,6 +262,7 @@ if (RUN_WORKERS) {
       { startScheduledDispatchWorker },
       { startExchangeRateSyncWorker },
       { startFinanceSyncWorker },
+      { startBrowserOneClickListingWorker },
     ] = await Promise.all([
       import('./workers/product-sync.js'),
       import('./workers/order-sync.js'),
@@ -269,6 +270,7 @@ if (RUN_WORKERS) {
       import('./workers/scheduled-dispatch.js'),
       import('./workers/exchange-rate-sync.js'),
       import('./workers/finance-sync.js'),
+      import('./workers/browser-one-click-listing.js'),
     ]);
 
     startProductSyncWorker();
@@ -277,6 +279,7 @@ if (RUN_WORKERS) {
     startScheduledDispatchWorker();
     startExchangeRateSyncWorker();
     startFinanceSyncWorker();
+    startBrowserOneClickListingWorker();
   } else {
     console.log('[bootstrap] REDIS_DISABLED=1, skipping BullMQ workers');
   }

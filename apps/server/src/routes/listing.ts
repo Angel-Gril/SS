@@ -10,6 +10,7 @@ import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
 import { randomOfferIdFrom } from '../lib/randomize.js';
+import { addBrowserOneClickListingJob } from '../workers/browser-one-click-listing.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
@@ -76,8 +77,21 @@ const browserOneClickJobSchema = z.object({
   entry: z.string().trim().optional(),
   mode: z.string().trim().optional(),
   sourceSkus: z.array(z.union([z.string(), z.number()])).optional(),
+  productUrls: z.array(z.string().trim()).optional(),
+  rows: z.array(z.record(z.any())).optional(),
   itemCount: z.coerce.number().int().positive().optional(),
   watermark: z.record(z.any()).optional().nullable(),
+  publish: z.record(z.any()).optional(),
+  markupPct: z.coerce.number().optional(),
+  followBrand: z.boolean().optional(),
+  randomOfferId: z.boolean().optional(),
+  categoryId: z.coerce.number().optional(),
+  typeId: z.coerce.number().optional(),
+  costs: z.record(z.any()).optional(),
+  prices: z.record(z.any()).optional(),
+  fxRate: z.coerce.number().optional(),
+  commissionRate: z.coerce.number().optional(),
+  logisticsFeeCny: z.coerce.number().optional(),
 });
 
 const browserOneClickJobPatchSchema = z.object({
@@ -105,16 +119,16 @@ function missingTaskIdMessage(payload: unknown): string {
   const data = objectRecord(payload);
   if (data.source === 'browser-one-click-listing') {
     const stage = String(data.stage || '').trim();
-    if (isBrowserOneClickStageStale(data)) return '浏览器后台执行可能已中断；请保持扩展和 ERP 连接正常，刷新后等待队列恢复，或确认未重复上架后重新提交';
-    if (stage === 'collecting') return '浏览器后台正在采集 Ozon 商品数据，请稍后刷新';
-    if (stage === 'collected') return '浏览器后台已采集商品，正在准备打水印/提交上架';
-    if (stage === 'watermarking') return '浏览器后台正在打水印，请稍后刷新';
-    if (stage === 'watermarked') return '浏览器后台已完成打水印，正在提交到 Ozon';
-    if (stage === 'publishing') return '浏览器后台正在提交到 Ozon，请稍后刷新';
-    if (stage === 'collect_failed') return '浏览器后台采集 Ozon 商品数据失败，请重新提交';
-    if (stage === 'watermark_failed') return '浏览器后台打水印失败，请检查水印模板后重新提交';
+    if (isBrowserOneClickStageStale(data)) return 'ERP 后台队列执行可能已中断；请稍后刷新队列状态，确认未重复上架后再重新提交';
+    if (stage === 'collecting') return 'ERP 后台队列正在写入临时采集商品，请稍后刷新';
+    if (stage === 'collected') return 'ERP 后台队列已写入临时采集商品，正在准备打水印/提交上架';
+    if (stage === 'watermarking') return 'ERP 后台队列正在打水印，请稍后刷新';
+    if (stage === 'watermarked') return 'ERP 后台队列已完成打水印，正在提交到 Ozon';
+    if (stage === 'publishing') return 'ERP 后台队列正在提交到 Ozon，请稍后刷新';
+    if (stage === 'collect_failed') return 'ERP 后台队列写入临时采集商品失败，请重新提交';
+    if (stage === 'watermark_failed') return 'ERP 后台队列打水印失败，请检查水印模板后重新提交';
     if (stage === 'publish_failed') return '提交到 Ozon 失败，请查看错误信息后重新提交';
-    return '任务还未进入 Ozon 提交阶段，请稍后刷新；如果长期停留，说明浏览器后台执行中断，请重新提交';
+    return '任务还未进入 Ozon 提交阶段，请稍后刷新；如果长期停留，说明 ERP 后台队列执行中断，请重新提交';
   }
   return '任务缺少 taskId';
 }
@@ -662,6 +676,23 @@ export async function listingRoutes(app: FastifyInstance) {
     const sourceSkus = (parsed.data.sourceSkus || [])
       .map((sku) => String(sku || '').trim())
       .filter(Boolean);
+    const productUrls = (parsed.data.productUrls || [])
+      .map((url) => String(url || '').trim())
+      .filter(Boolean);
+    const rows = Array.isArray(parsed.data.rows) ? parsed.data.rows : [];
+    const publish = {
+      ...objectRecord(parsed.data.publish),
+      ...(parsed.data.markupPct !== undefined ? { markupPct: parsed.data.markupPct } : {}),
+      ...(parsed.data.followBrand !== undefined ? { followBrand: parsed.data.followBrand } : {}),
+      ...(parsed.data.randomOfferId !== undefined ? { randomOfferId: parsed.data.randomOfferId } : {}),
+      ...(parsed.data.categoryId !== undefined ? { categoryId: parsed.data.categoryId } : {}),
+      ...(parsed.data.typeId !== undefined ? { typeId: parsed.data.typeId } : {}),
+      ...(parsed.data.costs !== undefined ? { costs: parsed.data.costs } : {}),
+      ...(parsed.data.prices !== undefined ? { prices: parsed.data.prices } : {}),
+      ...(parsed.data.fxRate !== undefined ? { fxRate: parsed.data.fxRate } : {}),
+      ...(parsed.data.commissionRate !== undefined ? { commissionRate: parsed.data.commissionRate } : {}),
+      ...(parsed.data.logisticsFeeCny !== undefined ? { logisticsFeeCny: parsed.data.logisticsFeeCny } : {}),
+    };
     const itemCount = parsed.data.itemCount || sourceSkus.length || 1;
     const payload: Record<string, any> = {
       source: 'browser-one-click-listing',
@@ -670,6 +701,9 @@ export async function listingRoutes(app: FastifyInstance) {
       mode: parsed.data.mode || 'clone',
       itemCount,
       sourceSkus,
+      productUrls,
+      rows,
+      publish,
       submittedAt: new Date().toISOString(),
     };
     if (parsed.data.watermark) payload.watermark = parsed.data.watermark;
@@ -684,11 +718,12 @@ export async function listingRoutes(app: FastifyInstance) {
       },
       select: { id: true },
     });
+    await addBrowserOneClickListingJob(job.id);
 
     return reply.send({
       code: 1,
-      msg: '上架任务已提交到 ERP 上架日志',
-      data: { jobId: job.id },
+      msg: '上架任务已提交到 ERP 上架日志，后台队列正在执行',
+      data: { jobId: job.id, queued: true },
     });
   });
 

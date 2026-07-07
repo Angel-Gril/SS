@@ -3326,7 +3326,7 @@ type WatermarkProcessor = (
   config: any,
 ) => Promise<{ watermarkedImages: string[]; failed: number }>;
 
-async function processWatermarkItemsWithConcurrency(
+export async function processWatermarkItemsWithConcurrency(
   items: any[],
   config: any,
   processItemWatermarks: WatermarkProcessor,
@@ -4793,6 +4793,9 @@ export async function collectRoutes(app: FastifyInstance) {
     if (body.jobId && (!existingPublishJob || existingPublishJob.shop.userId !== userId)) {
       return reply.status(404).send({ code: 0, msg: '上架任务不存在' });
     }
+    const existingPublishPayload = metadataRecord(existingPublishJob?.payload);
+    const isBrowserOneClickPublishJob = existingPublishPayload.source === 'browser-one-click-listing'
+      || existingPublishPayload.browserOneClickJob === true;
 
     const { OzonClient } = await import('../services/ozon-client.js');
     const { decrypt } = await import('../lib/crypto.js');
@@ -4849,6 +4852,7 @@ export async function collectRoutes(app: FastifyInstance) {
     if (noAttrs.length && body.forceRecreate !== true) {
       const recentFallbackJobs = await prisma.syncJob.findMany({
         where: {
+          ...(body.jobId ? { id: { not: body.jobId } } : {}),
           shopId: body.shopId,
           type: 'PRODUCT_PUSH',
           status: { in: ['RUNNING', 'SUCCESS'] },
@@ -4989,7 +4993,14 @@ export async function collectRoutes(app: FastifyInstance) {
         const fallbackBasePayload = {
           itemCount: fallbackItems.length,
           sourceItemCount: noAttrs.length,
-          source: 'collect-publish-fallback',
+          source: isBrowserOneClickPublishJob ? 'browser-one-click-listing' : 'collect-publish-fallback',
+          ...(isBrowserOneClickPublishJob ? {
+            browserOneClickJob: true,
+            publishSource: 'collect-publish-fallback',
+            stage: 'publishing',
+            submittedAt: existingPublishPayload.submittedAt || null,
+            publish: existingPublishPayload.publish || null,
+          } : {}),
           entry: body.source || 'collect-page',
           mode: 'follow-by-sku',
           followBrand,
@@ -5859,7 +5870,14 @@ export async function collectRoutes(app: FastifyInstance) {
         taskId,
         itemCount: cleanItems.length,
         sourceItemCount: items.length,
-        source: 'collect-publish',
+        source: isBrowserOneClickPublishJob ? 'browser-one-click-listing' : 'collect-publish',
+        ...(isBrowserOneClickPublishJob ? {
+          browserOneClickJob: true,
+          publishSource: 'collect-publish',
+          stage: 'publishing',
+          submittedAt: existingPublishPayload.submittedAt || null,
+          publish: existingPublishPayload.publish || null,
+        } : {}),
         entry: body.source || 'collect-page',
         mode,
         followBrand,

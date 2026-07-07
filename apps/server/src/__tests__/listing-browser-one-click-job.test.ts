@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   syncJobCreate: vi.fn(),
   syncJobFindFirst: vi.fn(),
   syncJobUpdate: vi.fn(),
+  addBrowserOneClickListingJob: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({
@@ -39,6 +40,10 @@ vi.mock('../services/ozon-client.js', () => ({
 
 vi.mock('../services/post-publish-sync.js', () => ({
   enqueueProductSyncAfterPublish: vi.fn(),
+}));
+
+vi.mock('../workers/browser-one-click-listing.js', () => ({
+  addBrowserOneClickListingJob: mocks.addBrowserOneClickListingJob,
 }));
 
 async function buildApp() {
@@ -72,8 +77,12 @@ describe('browser one-click listing jobs', () => {
           entry: 'ozon-list-page-full',
           mode: 'clone',
           sourceSkus: ['2143427743'],
+          productUrls: ['https://www.ozon.ru/product/2143427743/'],
+          rows: [{ sku: '2143427743', title: 'Ozon product', image: 'https://cdn.example/p.jpg', pagePrice: 1000 }],
           itemCount: 1,
           watermark: { type: 'image', imageUrl: 'https://cdn.example/watermark.png' },
+          markupPct: 15,
+          randomOfferId: true,
         },
       });
 
@@ -98,11 +107,18 @@ describe('browser one-click listing jobs', () => {
             mode: 'clone',
             itemCount: 1,
             sourceSkus: ['2143427743'],
+            productUrls: ['https://www.ozon.ru/product/2143427743/'],
+            rows: [{ sku: '2143427743', title: 'Ozon product', image: 'https://cdn.example/p.jpg', pagePrice: 1000 }],
             watermark: { type: 'image', imageUrl: 'https://cdn.example/watermark.png' },
+            publish: expect.objectContaining({
+              markupPct: 15,
+              randomOfferId: true,
+            }),
           }),
         }),
         select: { id: true },
       });
+      expect(mocks.addBrowserOneClickListingJob).toHaveBeenCalledWith('job-1');
     } finally {
       await app.close();
     }

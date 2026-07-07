@@ -229,19 +229,14 @@ test('Ozon product data panel opens a seller-list modal from follow seller data'
   assert.match(content, /showOzonSellerListModal\(data\)/);
 });
 
-test('product-detail one-click listing submits a listing-log job then keeps the normal collect-then-publish workflow', () => {
-  assert.match(background, /publishOzonWorkbenchRows\(/);
+test('product-detail one-click listing submits a backend queued listing-log job', () => {
+  assert.doesNotMatch(background, /async function publishOzonWorkbenchRows\(/);
   assert.match(background, /submitOzonWorkbenchPublishJob/);
   assert.match(background, /spb-self-hosted:publish-ozon-workbench-rows/);
-  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nasync function getWatermarkTemplates/);
-  assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
-  assert.match(publishFunction[0], /ozon-product-detail/);
-  assert.match(publishFunction[0], /collectOzonProductsToErp\(productIds/);
-  assert.match(publishFunction[0], /fetchCollectedOzonItemsBySkus/);
-  assert.match(background, /\/api\/collect\?/);
-  assert.match(publishFunction[0], /\/api\/collect\/publish-ozon/);
-  assert.match(publishFunction[0], /useItemCategory:\s*true/);
-  assert.match(publishFunction[0], /watermarkFailedCount[\s\S]*已中断上架/, 'selected watermark failures should stop publish before creating an Ozon listing');
+  assert.doesNotMatch(background, /collectOzonProductsToErp\(productIds[\s\S]*\/api\/collect\/publish-ozon/);
+  assert.match(background, /\/api\/listing\/browser-one-click-jobs/);
+  assert.match(background, /createOzonWorkbenchPublishJob\(productIds,\s*options\)[\s\S]*queued:\s*true/);
+  assert.doesNotMatch(background, /enqueueOzonWorkbenchPublishQueueJob/);
   assert.doesNotMatch(content, /选中后会先采集到 ERP，再走正常 Ozon 上架流程。/);
   assert.match(content, /正在提交上架任务到 ERP/);
   assert.match(content, /上架任务已提交到 ERP 上架日志/);
@@ -261,7 +256,7 @@ test('product-detail one-click listing submits a listing-log job then keeps the 
   assert.match(content, /没有可用水印/, 'product SKU workbench should explain when the current ERP account has no watermark templates');
   assert.match(content, /function\s+buildOzonWorkbenchWatermarkConfig[\s\S]*type[\s\S]*text[\s\S]*imageUrl[\s\S]*position[\s\S]*opacity[\s\S]*fontSize[\s\S]*fontColor[\s\S]*scale/, 'product SKU workbench watermark config should match the server watermark input fields');
   assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*const watermark = buildOzonWorkbenchWatermarkConfig\(modal\)/, 'product SKU workbench publish should read the selected watermark template');
-  assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*watermark:\s*watermark/, 'product SKU workbench publish should pass watermark config through the normal collect-then-publish path');
+  assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*watermark:\s*watermark/, 'product SKU workbench publish should pass watermark config to the backend listing job');
   assert.doesNotMatch(panel, /function\s+buildPublishCardBody|上架到 OZON/, 'detail calculator/profit drawer should not render a separate publish card');
   assert.doesNotMatch(panel, /data-publish-shop|data-publish-mode|data-publish-brand|data-publish-watermark|data-action="publish-product"/, 'publish controls belong in the SKU workbench, not the calculator drawer');
   assert.doesNotMatch(panel, /sendRuntimeMessage\(\{\s*type:\s*'spb-self-hosted:publish-ozon-workbench-rows'[\s\S]*entry:\s*'ozon-product-detail'/, 'calculator drawer should not submit one-click listing jobs');
@@ -269,7 +264,7 @@ test('product-detail one-click listing submits a listing-log job then keeps the 
   assert.equal((background.match(/case "spb-self-hosted:get-watermark-templates"/g) || []).length, 1, 'watermark template message case should be registered once');
 });
 
-test('list-page one-click listing uses collect-then-publish by default, not SKU-only direct import', () => {
+test('list-page one-click listing submits only the backend listing job from the extension', () => {
   const overlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
   assert.doesNotMatch(
     background,
@@ -281,16 +276,23 @@ test('list-page one-click listing uses collect-then-publish by default, not SKU-
     /\/api\/listing\/ozon\/import-by-sku/,
     'browser extension publishing should not call the SKU-only import-by-sku route directly',
   );
-
-  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nasync function getWatermarkTemplates/);
-  assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
   assert.doesNotMatch(
-    publishFunction[0],
+    background,
+    /async function publishOzonWorkbenchRows/,
+    'extension background should not run the collect/watermark/publish flow',
+  );
+  assert.doesNotMatch(
+    background,
+    /\/api\/collect\/publish-ozon/,
+    'extension background should not call publish-ozon directly',
+  );
+  assert.doesNotMatch(
+    background,
     /directPublish/,
     'extension workbench publishing should not expose a directPublish escape hatch',
   );
   assert.doesNotMatch(
-    publishFunction[0],
+    background,
     /String\(options\.entry\s*\|\|\s*""\)\s*===\s*"ozon-list-page"/,
     'ozon-list-page entries should no longer be silently downgraded to SKU-only import',
   );

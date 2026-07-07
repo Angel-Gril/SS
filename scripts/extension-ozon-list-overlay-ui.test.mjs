@@ -339,17 +339,12 @@ assert.match(
 assert.match(
   overlay,
   /publishListWorkbenchSelectedRows[\s\S]*watermark:\s*watermark/,
-  'Ozon list publish should send watermark config through the normal collect-then-publish path',
+  'Ozon list publish should send watermark config to the backend listing job',
 );
 assert.match(
   background,
   /\/api\/listing\/browser-one-click-jobs/,
   'Ozon one-click publish should create a listing-log job before long collect/watermark work starts',
-);
-assert.match(
-  background,
-  /submitOzonWorkbenchPublishJob[\s\S]*enqueueOzonWorkbenchPublishQueueJob/,
-  'Ozon one-click publish should enqueue the long collect/watermark/publish flow after creating the ERP listing log',
 );
 assert.doesNotMatch(
   background,
@@ -361,55 +356,50 @@ assert.doesNotMatch(
   /const\s+run\s*=\s*publishOzonWorkbenchRows/,
   'Ozon one-click publish should not rely on a detached Promise after returning from the MV3 message handler',
 );
-assert.match(
+assert.doesNotMatch(
   background,
-  /OZON_WORKBENCH_PUBLISH_QUEUE_KEY[\s\S]*flushOzonWorkbenchPublishQueue[\s\S]*runQueuedOzonWorkbenchPublishJob/,
-  'Ozon one-click publish should use a persisted background queue that can resume after the service worker wakes up',
+  /submitOzonWorkbenchPublishJob[\s\S]*enqueueOzonWorkbenchPublishQueueJob/,
+  'Ozon one-click publish should not enqueue the long flow in the extension background; ERP worker owns it',
 );
 assert.match(
   background,
-  /function\s+fetchOzonWorkbenchPublishJob[\s\S]*\/api\/listing\/tasks\//,
-  'Ozon one-click publish queue should read the ERP listing-log job before replaying a persisted item',
+  /createOzonWorkbenchPublishJob\(productIds,\s*options\)[\s\S]*return\s*\{[\s\S]*queued:\s*true/,
+  'Ozon one-click publish should return after ERP accepts the backend queued job',
 );
-assert.match(
+assert.doesNotMatch(
   background,
-  /runQueuedOzonWorkbenchPublishJob[\s\S]*fetchOzonWorkbenchPublishJob[\s\S]*SUCCESS[\s\S]*FAILED[\s\S]*publishOzonWorkbenchRows/,
-  'Ozon one-click publish queue should skip completed listing-log jobs before re-running collect/watermark/publish',
+  /OZON_WORKBENCH_PUBLISH_QUEUE_KEY[\s\S]*runQueuedOzonWorkbenchPublishJob/,
+  'Ozon one-click publish should not keep a browser-side persisted publish queue for long-running work',
 );
-assert.match(
-  background,
-  /runQueuedOzonWorkbenchPublishJob[\s\S]*payload[\s\S]*taskId[\s\S]*publishOzonWorkbenchRows/,
-  'Ozon one-click publish queue should not replay a RUNNING listing-log job that already has an Ozon taskId',
-);
-assert.match(
+assert.doesNotMatch(
   background,
   /onStartup[\s\S]*flushOzonWorkbenchPublishQueue/,
-  'Ozon one-click publish queue should be flushed again when the MV3 service worker/browser starts after an interrupted long watermark job',
+  'MV3 startup should not be responsible for resuming Ozon publish jobs after the backend owns the queue',
 );
-assert.match(
+assert.doesNotMatch(
+  background,
+  /fetchOzonWorkbenchPublishJob[\s\S]*publishOzonWorkbenchRows/,
+  'extension background should not replay ERP listing jobs locally',
+);
+assert.doesNotMatch(
   background,
   /function\s+hasOzonWorkbenchWatermarkOutput[\s\S]*watermarkedImages/,
-  'Ozon one-click publish should be able to detect collected rows that already have watermarked image output',
+  'watermark resume detection belongs in ERP worker, not in the extension background',
 );
-assert.match(
+assert.doesNotMatch(
   background,
   /function\s+shouldResumeOzonWorkbenchPublishFromCollectedRows[\s\S]*watermarking[\s\S]*watermarked[\s\S]*publishing/,
-  'Ozon one-click publish should resume from existing ERP collect rows instead of re-collecting after an interrupted watermark/publish stage',
+  'ERP worker should own interrupted collect/watermark/publish stage recovery',
 );
-assert.match(
-  background,
-  /const\s+skipWatermark\s*=[\s\S]*rows\.every\(\(row\)\s*=>\s*hasOzonWorkbenchWatermarkOutput\(row\)\)/,
-  'Ozon one-click publish should skip repeating watermark work when a resumed job already has watermarked images in ERP',
-);
-assert.match(
+assert.doesNotMatch(
   background,
   /withOzonWorkbenchPublishStage[\s\S]*"collecting"[\s\S]*setOzonWorkbenchPublishStage[\s\S]*"watermarking"[\s\S]*setOzonWorkbenchPublishStage[\s\S]*"publishing"/,
-  'Ozon one-click publish should update ERP listing logs with collection, watermark, and publish stages',
+  'extension background should not update collect/watermark/publish stages for backend-owned jobs',
 );
-assert.match(
+assert.doesNotMatch(
   background,
   /OZON_ONE_CLICK_COLLECT_PRODUCT_TIMEOUT_MS[\s\S]*withTimeout\([\s\S]*fetchOzonProductViaTab/,
-  'Ozon one-click collection should timeout individual Ozon page fetches instead of leaving jobs in submitted forever',
+  'Ozon one-click listing should not run browser-tab product collection after the backend owns the job',
 );
 assert.match(
   overlay,

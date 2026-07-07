@@ -73,7 +73,7 @@ test('Ozon collection keeps analytics snapshots in ERP metadata for table displa
 });
 
 test('background fetches SKU workbench rows in parallel without duplicate offers requests', () => {
-  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nasync function fetchCollectedOzonItemsBySkus/);
+  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nfunction buildOzonWorkbenchPublishPayload/);
   assert.ok(fetchRows, 'fetchOzonWorkbenchRows should be present');
   assert.match(fetchRows[0], /workerCount/);
   assert.match(fetchRows[0], /Promise\.all/);
@@ -102,7 +102,7 @@ test('Ozon workbench can skip slow offer enrichment for profit-only reads', () =
 });
 
 test('background passes synced commission rules into Ozon SKU workbench row building', () => {
-  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nasync function fetchCollectedOzonItemsBySkus/);
+  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nfunction buildOzonWorkbenchPublishPayload/);
   assert.ok(fetchRows, 'fetchOzonWorkbenchRows should be present');
   assert.match(fetchRows[0], /getOzonCommissionSnapshotForWorkbench\(\)/);
   assert.match(fetchRows[0], /commissionSnapshot:\s*commissionSnapshot/);
@@ -137,15 +137,15 @@ test('aggregate Ozon product insights applies category IDs and computed commissi
   );
 });
 
-test('extension workbench publish does not expose SKU-only import-by-sku', () => {
+test('extension workbench publish only creates a backend one-click listing job', () => {
   assert.doesNotMatch(background, /publishOzonWorkbenchRowsDirect/);
   assert.doesNotMatch(background, /buildOzonWorkbenchDirectImportItems/);
   assert.doesNotMatch(background, /\/api\/listing\/ozon\/import-by-sku/);
-  const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nasync function getWatermarkTemplates/);
-  assert.ok(publishFunction, 'publishOzonWorkbenchRows should remain the browser workbench publish path');
-  assert.match(publishFunction[0], /collectOzonProductsToErp\(productIds/);
-  assert.match(publishFunction[0], /\/api\/collect\/publish-ozon/);
-  assert.doesNotMatch(publishFunction[0], /directPublish/);
+  assert.doesNotMatch(background, /async function publishOzonWorkbenchRows/);
+  assert.doesNotMatch(background, /\/api\/collect\/publish-ozon/);
+  assert.match(background, /\/api\/listing\/browser-one-click-jobs/);
+  assert.match(background, /createOzonWorkbenchPublishJob\(productIds,\s*options\)[\s\S]*queued:\s*true/);
+  assert.doesNotMatch(background, /directPublish/);
 });
 
 test('background downloads Ozon workbench Excel exports through Chrome downloads API', () => {

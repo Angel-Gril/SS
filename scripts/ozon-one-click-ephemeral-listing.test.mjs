@@ -5,23 +5,28 @@ import test from 'node:test';
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 const collectRoute = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
 const listingRoute = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
+const backendWorker = fs.existsSync('apps/server/src/workers/browser-one-click-listing.ts')
+  ? fs.readFileSync('apps/server/src/workers/browser-one-click-listing.ts', 'utf8')
+  : '';
+const workerEntry = fs.readFileSync('apps/server/src/worker.ts', 'utf8');
+const serverEntry = fs.readFileSync('apps/server/src/index.ts', 'utf8');
 const listOverlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
 
 test('browser one-click listing uses temporary collect records instead of polluting SKU collect page', () => {
   assert.match(
-    background,
-    /collectOzonProductsToErp\(productIds,[\s\S]*ephemeralListing:\s*true/,
-    'one-click publish should collect into temporary ERP records',
+    backendWorker,
+    /ephemeralListing:\s*true/,
+    'ERP backend worker should create temporary collect records for one-click listing',
   );
   assert.match(
-    background,
-    /includeEphemeral=1/,
-    'publish follow-up lookup should explicitly include temporary collect records',
+    backendWorker,
+    /ephemeralListingExpiresAt:\s*expiresAt\.toISOString\(\)/,
+    'temporary one-click listing records should carry an expiry timestamp',
   );
   assert.match(
-    background,
-    /ephemeralHit[\s\S]*metadata[\s\S]*ephemeralListing\s*===\s*true/,
-    'publish follow-up lookup should prefer the newly created temporary record over older normal collect rows',
+    backendWorker,
+    /supplyGoodsIds/,
+    'backend worker should store the generated temporary collect record ids on the listing job for retry safety',
   );
   assert.match(
     collectRoute,
@@ -136,6 +141,21 @@ test('browser one-click listing reuses the pre-created listing-log job through p
   );
   assert.match(
     publishOzonRoute,
+    /id:\s*\{\s*not:\s*body\.jobId\s*\}/,
+    'publish-ozon retry checks should not block the current pre-created job as a duplicate fallback publish',
+  );
+  assert.match(
+    publishOzonRoute,
+    /browserOneClickJob/,
+    'publish-ozon should preserve browser-one-click identity when fallback payload replaces the submitted payload',
+  );
+  assert.match(
+    publishOzonRoute,
+    /publish:\s*existingPublishPayload\.publish/,
+    'publish-ozon should preserve browser-one-click pricing and offer settings across backend worker retries',
+  );
+  assert.match(
+    publishOzonRoute,
     /data:\s*\{[\s\S]*jobId:/,
     'publish-ozon should return the listing job id so the extension can point users to the ERP log',
   );
@@ -154,8 +174,8 @@ test('browser one-click listing logs surface stale extension background interrup
   );
   assert.match(
     listingRoute,
-    /missingTaskIdMessage[\s\S]*isBrowserOneClickStageStale\(data\)[\s\S]*后台执行可能已中断/,
-    'listing logs should not keep saying "打水印中" forever when the browser background has stopped advancing',
+    /missingTaskIdMessage[\s\S]*isBrowserOneClickStageStale\(data\)[\s\S]*后台队列执行可能已中断/,
+    'listing logs should not keep saying "打水印中" forever when the backend queue has stopped advancing',
   );
 });
 
@@ -179,5 +199,38 @@ test('watermark route processes one-click listing items with bounded concurrency
     watermarkRoute,
     /for\s*\(\s*const\s+item\s+of\s+items\s*\)\s*\{[\s\S]*processItemWatermarks[\s\S]*await\s+prisma\.supplyGoods\.update/,
     'watermark route should not process all selected items in one fully sequential loop',
+  );
+});
+
+test('browser one-click listing is executed by the ERP backend worker queue', () => {
+  assert.match(
+    listingRoute,
+    /addBrowserOneClickListingJob\(job\.id\)/,
+    'browser one-click job creation should enqueue the ERP backend worker',
+  );
+  assert.match(
+    backendWorker,
+    /payload\.source\s*!==\s*'browser-one-click-listing'[\s\S]*payload\.browserOneClickJob\s*!==\s*true/,
+    'backend worker should resume browser one-click jobs even after publish-ozon rewrites the payload to fallback mode',
+  );
+  assert.match(
+    backendWorker,
+    /export async function\s+addBrowserOneClickListingJob[\s\S]*browserOneClickListingQueue!?\s*\.add/,
+    'backend worker should expose a BullMQ enqueue function for one-click listing jobs',
+  );
+  assert.match(
+    backendWorker,
+    /export function\s+startBrowserOneClickListingWorker[\s\S]*new Worker/,
+    'backend worker should consume one-click listing jobs outside the extension background',
+  );
+  assert.match(
+    workerEntry,
+    /startBrowserOneClickListingWorker/,
+    'standalone worker process should start the browser one-click listing worker',
+  );
+  assert.match(
+    serverEntry,
+    /startBrowserOneClickListingWorker/,
+    'single-process API mode should start the browser one-click listing worker when workers are enabled',
   );
 });
