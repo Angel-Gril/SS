@@ -53,7 +53,12 @@ const OZON_ENDPOINTS = {
 const SELLER_OZON_ORIGIN = "https://seller.ozon.ru/*";
 const SELLER_OZON_PERMISSION_ERROR = "扩展未获得 seller.ozon.ru 站点访问权限。请点击同步按钮时允许授权，或在 Chrome 扩展详情页把“网站访问权限”设为允许 seller.ozon.ru，然后刷新 seller 页面重试。";
 const OZON_COLLECT_ENRICHMENT_QUEUE_KEY = "ss_erp_ozon_collect_enrichment_queue";
+const OZON_WORKBENCH_PUBLISH_QUEUE_KEY = "ss_erp_ozon_workbench_publish_queue";
+const OZON_WORKBENCH_PUBLISH_ALARM_NAME = "ss-erp:ozon-workbench-publish";
+const OZON_ONE_CLICK_COLLECT_PRODUCT_TIMEOUT_MS = 45 * 1000;
+const OZON_ONE_CLICK_VARIANT_TIMEOUT_MS = 45 * 1000;
 let ozonCollectEnrichmentRunQueue = Promise.resolve();
+let ozonWorkbenchPublishRunQueue = Promise.resolve();
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
@@ -3158,6 +3163,72 @@ async function fetchCollectedOzonItemsBySkus(erpBase, erpToken, skus) {
   return rows;
 }
 
+async function readOzonWorkbenchPublishQueue() {
+  const queue = await storageGet(OZON_WORKBENCH_PUBLISH_QUEUE_KEY);
+  return Array.isArray(queue) ? queue : [];
+}
+
+async function writeOzonWorkbenchPublishQueue(queue) {
+  await storageSet({ [OZON_WORKBENCH_PUBLISH_QUEUE_KEY]: Array.isArray(queue) ? queue : [] });
+}
+
+function scheduleOzonWorkbenchPublishQueueFlush() {
+  try {
+    if (chrome && chrome.alarms && typeof chrome.alarms.create === "function") {
+      chrome.alarms.create(OZON_WORKBENCH_PUBLISH_ALARM_NAME, { delayInMinutes: 0.1 });
+    }
+  } catch (error) {}
+}
+
+async function enqueueOzonWorkbenchPublishQueueJob(job) {
+  const jobId = String(job && job.jobId || "").trim();
+  const productIds = Array.isArray(job && job.productIds)
+    ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  if (!jobId || !productIds.length) return { ok: false, error: "缺少上架任务或 SKU" };
+
+  const queue = await readOzonWorkbenchPublishQueue();
+  queue.push({
+    id: jobId + ":" + Date.now(),
+    jobId,
+    productIds,
+    options: job.options && typeof job.options === "object" ? job.options : {},
+    queuedAt: new Date().toISOString(),
+    attempts: 0,
+  });
+  await writeOzonWorkbenchPublishQueue(queue);
+  scheduleOzonWorkbenchPublishQueueFlush();
+  flushOzonWorkbenchPublishQueue().catch((error) => {
+    console.warn("[SS ERP] Ozon workbench publish queue failed:", normalizeErrorMessage(error));
+  });
+  return { ok: true, jobId };
+}
+
+async function setOzonWorkbenchPublishStage(jobId, stage, payload = {}) {
+  const id = String(jobId || "").trim();
+  if (!id) return;
+  const knownStage = {
+    collecting: { stage: "collecting" },
+    collected: { stage: "collected" },
+    watermarking: { stage: "watermarking" },
+    watermarked: { stage: "watermarked" },
+    publishing: { stage: "publishing" },
+  }[stage] || { stage };
+  await updateOzonWorkbenchPublishJob(id, {
+    status: "RUNNING",
+    payload: {
+      ...knownStage,
+      ...payload,
+      updatedAt: new Date().toISOString(),
+    },
+  }).catch(() => null);
+}
+
+async function withOzonWorkbenchPublishStage(jobId, stage, run, payload = {}) {
+  await setOzonWorkbenchPublishStage(jobId, stage, payload);
+  return await run();
+}
+
 async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   const shopId = String(options.shopId || "").trim();
   if (!shopId) return { ok: false, error: "请选择目标店铺" };
@@ -3212,6 +3283,22 @@ async function updateOzonWorkbenchPublishJob(jobId, patch = {}) {
   return { ok: true, data: parsed.data };
 }
 
+async function fetchOzonWorkbenchPublishJob(jobId) {
+  const id = String(jobId || "").trim();
+  if (!id) return null;
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return null;
+  const response = await fetch(conn.baseUrl + "/api/listing/tasks/" + encodeURIComponent(id), {
+    method: "GET",
+    headers: { "Authorization": "Bearer " + conn.token },
+  });
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+  if (!response.ok || !parsed || parsed.code === 0) return null;
+  return parsed.data || null;
+}
+
 async function publishOzonWorkbenchRows(productIds, options = {}) {
   if (!Array.isArray(productIds) || !productIds.length) {
     return { ok: false, error: "请选择要上架的 SKU" };
@@ -3222,20 +3309,26 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
   const conn = await getStoredErpConnection();
   if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
 
-  const collectResult = await collectOzonProductsToErp(productIds, {
+  const collectResult = await withOzonWorkbenchPublishStage(options.jobId, "collecting", () => collectOzonProductsToErp(productIds, {
     productUrls: options.productUrls,
     fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
     mode: options.mode || "complete",
+    productTimeoutMs: options.productTimeoutMs || OZON_ONE_CLICK_COLLECT_PRODUCT_TIMEOUT_MS,
+    variantTimeoutMs: options.variantTimeoutMs || OZON_ONE_CLICK_VARIANT_TIMEOUT_MS,
     ephemeralListing: true,
     ephemeralListingSource: options.entry || "browser-one-click-listing",
     broadcast: false,
-  });
+  }), { itemCount: productIds.length });
   if (!collectResult || !collectResult.ok) {
-    return { ok: false, error: collectResult && collectResult.error || "采集到 ERP 失败", data: collectResult };
+    return { ok: false, stage: "collect_failed", error: collectResult && collectResult.error || "采集到 ERP 失败", data: collectResult };
   }
+  await setOzonWorkbenchPublishStage(options.jobId, "collected", {
+    collected: collectResult.data && collectResult.data.collected,
+    collectErrors: collectResult.data && Array.isArray(collectResult.data.errors) ? collectResult.data.errors.length : 0,
+  });
 
   const rows = await fetchCollectedOzonItemsBySkus(conn.baseUrl, conn.token, productIds);
-  if (!rows.length) return { ok: false, error: "采集完成，但未在 ERP 中找到对应商品" };
+  if (!rows.length) return { ok: false, stage: "collect_failed", error: "采集完成，但未在 ERP 中找到对应商品" };
 
   // 选了水印模板才在上架前多打一次水印（写回 metadata.watermarkedImages，随后 publish-ozon 自动读取）。
   // 没选则完全跳过，行为与原链路一致，零副作用。
@@ -3244,6 +3337,7 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
     const watermarkIds = rows.map((row) => row.id).filter(Boolean);
     if (watermarkIds.length) {
       try {
+        await setOzonWorkbenchPublishStage(options.jobId, "watermarking", { itemCount: watermarkIds.length });
         const watermarkResponse = await fetch(conn.baseUrl + "/api/collect/watermark", {
           method: "POST",
           headers: {
@@ -3268,14 +3362,16 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
         if (!watermarkResponse.ok || !watermarkResult || watermarkResult.code !== 1 || watermarkFailedCount > 0) {
           return {
             ok: false,
+            stage: "watermark_failed",
             error: watermarkFailedCount > 0
               ? ((watermarkResult && watermarkResult.msg) || "水印处理失败") + `（${watermarkFailedCount} 张失败，已中断上架）`
               : (watermarkResult && watermarkResult.msg) || ("水印处理失败: HTTP " + watermarkResponse.status + " " + watermarkText.slice(0, 200)),
             data: { collectResult, watermark: watermarkResult },
           };
         }
+        await setOzonWorkbenchPublishStage(options.jobId, "watermarked", { itemCount: watermarkIds.length });
       } catch (e) {
-        return { ok: false, error: "水印处理失败: " + (e && e.message ? e.message : String(e)), data: { collectResult } };
+        return { ok: false, stage: "watermark_failed", error: "水印处理失败: " + (e && e.message ? e.message : String(e)), data: { collectResult } };
       }
     }
   }
@@ -3294,6 +3390,7 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
   if (options.categoryId) publishBody.categoryId = Number(options.categoryId);
   if (options.typeId) publishBody.typeId = Number(options.typeId);
 
+  await setOzonWorkbenchPublishStage(options.jobId, "publishing", { itemCount: rows.length });
   const publishResponse = await fetch(conn.baseUrl + "/api/collect/publish-ozon", {
     method: "POST",
     headers: {
@@ -3308,12 +3405,108 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
   if (!publishResponse.ok || publishParsed.code === 0) {
     return {
       ok: false,
+      stage: "publish_failed",
       error: publishParsed.msg || ("ERP 上架失败: HTTP " + publishResponse.status + " " + publishText.slice(0, 200)),
       data: { collectResult, publish: publishParsed },
     };
   }
 
   return { ok: true, data: { collectResult, watermark: watermarkResult, publish: publishParsed, items: rows } };
+}
+
+async function runQueuedOzonWorkbenchPublishJob(job) {
+  const jobId = String(job && job.jobId || "").trim();
+  try {
+    const currentJob = await fetchOzonWorkbenchPublishJob(jobId).catch(() => null);
+    const currentStatus = String(currentJob && currentJob.status || "").toUpperCase();
+    const currentPayload = currentJob && currentJob.payload && typeof currentJob.payload === "object" ? currentJob.payload : {};
+    if (currentStatus === "SUCCESS" || currentStatus === "FAILED" || currentPayload.taskId) {
+      return {
+        ok: true,
+        jobId,
+        skipped: true,
+        status: currentStatus,
+        taskId: currentPayload.taskId,
+      };
+    }
+
+    const result = await publishOzonWorkbenchRows(job.productIds, { ...(job.options || {}), jobId });
+    if (!result || !result.ok) {
+      await updateOzonWorkbenchPublishJob(jobId, {
+        status: "FAILED",
+        errorMessage: result && (result.error || result.msg) || "一键上架执行失败",
+        payload: { stage: result && result.stage || "failed" },
+      }).catch(() => null);
+      return {
+        ok: false,
+        jobId,
+        error: result && (result.error || result.msg) || "一键上架执行失败",
+        data: { jobId: job.jobId, publish: result && result.data },
+      };
+    }
+
+    const publishData = result.data && result.data.publish && result.data.publish.data ? result.data.publish.data : {};
+    return {
+      ok: true,
+      jobId: publishData.jobId || jobId,
+      msg: result.data && result.data.publish && result.data.publish.msg || "上架任务已提交到 ERP 上架日志",
+      data: {
+        jobId: publishData.jobId || jobId,
+        taskId: publishData.taskId,
+        count: publishData.count,
+        sourceCount: publishData.sourceCount,
+        mode: publishData.mode,
+      },
+    };
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    await updateOzonWorkbenchPublishJob(jobId, {
+      status: "FAILED",
+      errorMessage: message,
+      payload: { stage: "failed" },
+    }).catch(() => null);
+    return { ok: false, jobId, error: message, data: { jobId } };
+  }
+}
+
+async function flushOzonWorkbenchPublishQueue() {
+  const run = ozonWorkbenchPublishRunQueue.then(async () => {
+    const queue = await readOzonWorkbenchPublishQueue();
+    if (!queue.length) return { ok: true, processed: 0 };
+
+    const remaining = [];
+    let processed = 0;
+    for (let index = 0; index < queue.length; index += 1) {
+      const item = queue[index];
+      if (!item || !item.jobId) continue;
+      const nextItem = { ...item, attempts: (Number(item.attempts) || 0) + 1, startedAt: item.startedAt || new Date().toISOString() };
+      try {
+        await writeOzonWorkbenchPublishQueue(remaining.concat([{ ...nextItem, status: "running" }], queue.slice(index + 1)));
+        await runQueuedOzonWorkbenchPublishJob(nextItem);
+      } catch (error) {
+        await updateOzonWorkbenchPublishJob(nextItem.jobId, {
+          status: "FAILED",
+          errorMessage: normalizeErrorMessage(error),
+          payload: { stage: "failed" },
+        }).catch(() => null);
+      }
+      processed += 1;
+    }
+
+    await writeOzonWorkbenchPublishQueue(remaining);
+    return { ok: true, processed };
+  });
+  ozonWorkbenchPublishRunQueue = run.catch(() => {});
+  return run;
+}
+
+if (chrome && chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (!alarm || alarm.name !== OZON_WORKBENCH_PUBLISH_ALARM_NAME) return;
+    flushOzonWorkbenchPublishQueue().catch((error) => {
+      console.warn("[SS ERP] Ozon workbench publish alarm failed:", normalizeErrorMessage(error));
+    });
+  });
 }
 
 async function submitOzonWorkbenchPublishJob(productIds, options = {}) {
@@ -3326,44 +3519,23 @@ async function submitOzonWorkbenchPublishJob(productIds, options = {}) {
   const job = await createOzonWorkbenchPublishJob(productIds, options);
   if (!job.ok) return job;
 
-  try {
-    const result = await publishOzonWorkbenchRows(productIds, { ...options, jobId: job.jobId });
-    if (!result || !result.ok) {
-      await updateOzonWorkbenchPublishJob(job.jobId, {
-        status: "FAILED",
-        errorMessage: result && (result.error || result.msg) || "一键上架执行失败",
-        payload: { stage: "failed" },
-      }).catch(() => null);
-      return {
-        ok: false,
-        jobId: job.jobId,
-        error: result && (result.error || result.msg) || "一键上架执行失败",
-        data: { jobId: job.jobId, publish: result && result.data },
-      };
-    }
+  const queued = await enqueueOzonWorkbenchPublishQueueJob({
+    jobId: job.jobId,
+    productIds,
+    options,
+  });
+  if (!queued.ok) return queued;
 
-    const publishData = result.data && result.data.publish && result.data.publish.data ? result.data.publish.data : {};
-    return {
-      ok: true,
-      jobId: publishData.jobId || job.jobId,
-      msg: result.data && result.data.publish && result.data.publish.msg || "上架任务已提交到 ERP 上架日志",
-      data: {
-        jobId: publishData.jobId || job.jobId,
-        taskId: publishData.taskId,
-        count: publishData.count,
-        sourceCount: publishData.sourceCount,
-        mode: publishData.mode,
-      },
-    };
-  } catch (error) {
-    const message = error && error.message ? error.message : String(error);
-    await updateOzonWorkbenchPublishJob(job.jobId, {
-      status: "FAILED",
-      errorMessage: message,
-      payload: { stage: "failed" },
-    }).catch(() => null);
-    return { ok: false, jobId: job.jobId, error: message, data: { jobId: job.jobId } };
-  }
+  return {
+    ok: true,
+    jobId: job.jobId,
+    msg: "上架任务已提交到 ERP 上架日志，后台正在执行",
+    data: {
+      jobId: job.jobId,
+      queued: true,
+      count: productIds.length,
+    },
+  };
 }
 
 async function getWatermarkTemplates(shopId) {
@@ -4496,10 +4668,19 @@ async function collectOzonProductsToErp(productIds, options = {}) {
 
   const collected = [];
   const errors = [];
+  const productTimeoutMs = Number(options.productTimeoutMs) || 0;
+  const variantTimeoutMs = Number(options.variantTimeoutMs) || 0;
   for (let i = 0; i < inputs.length; i++) {
     const pid = inputs[i].productId;
     const sourceUrl = inputs[i].sourceUrl;
-    const r = await fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions);
+    let r = null;
+    try {
+      r = productTimeoutMs > 0
+        ? await withTimeout(fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions), productTimeoutMs)
+        : await fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions);
+    } catch (error) {
+      r = { ok: false, error: normalizeErrorMessage(error) || "OZON 公开数据获取超时" };
+    }
     if (!r.ok) {
       errors.push({ productId: pid, error: r.error || "OZON 公开数据获取失败" });
       if (i < inputs.length - 1) await new Promise((resolve) => setTimeout(resolve, 800));
@@ -4507,7 +4688,15 @@ async function collectOzonProductsToErp(productIds, options = {}) {
     }
 
     const productData = r.data;
-    await completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions);
+    try {
+      if (variantTimeoutMs > 0) {
+        await withTimeout(completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions), variantTimeoutMs);
+      } else {
+        await completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions);
+      }
+    } catch (error) {
+      productData._variantCompletionWarning = normalizeErrorMessage(error).slice(0, 200);
+    }
 
     if (sellerCompanyId && collectPolicy.fetchRootSellerInsights) {
       try {

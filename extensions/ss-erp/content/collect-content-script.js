@@ -1669,6 +1669,22 @@
     }
   }
 
+  async function loadOzonWorkbenchWatermarkTemplatesFallback(shopId) {
+    const normalizedShopId = String(shopId || "").trim();
+    const fetchTemplates = async (targetShopId) => {
+      const response = await sendRuntimeMessage({
+        type: "spb-self-hosted:get-watermark-templates",
+        shopId: String(targetShopId || "").trim() || undefined,
+      });
+      if (!response || !response.ok) throw new Error(response && response.error || response && response.msg || "获取水印模板失败");
+      return Array.isArray(response.data) ? response.data : [];
+    };
+
+    const templates = await fetchTemplates(normalizedShopId);
+    if (!normalizedShopId || templates.length) return { templates, fallback: false };
+    return { templates: await fetchTemplates(""), fallback: true };
+  }
+
   async function loadOzonWorkbenchWatermarkTemplates(modal, shopId) {
     const select = modal.querySelector("[data-role='watermark-template']");
     const status = modal.querySelector("[data-role='workbench-status']");
@@ -1676,12 +1692,8 @@
     select.innerHTML = '<option value="">不使用</option>';
     modal.__ssErpWatermarkTemplateMap = {};
     try {
-      const response = await sendRuntimeMessage({
-        type: "spb-self-hosted:get-watermark-templates",
-        shopId: String(shopId || "").trim() || undefined,
-      });
-      if (!response || !response.ok) throw new Error(response && response.error || response && response.msg || "获取水印模板失败");
-      const templates = Array.isArray(response.data) ? response.data : [];
+      const result = await loadOzonWorkbenchWatermarkTemplatesFallback(shopId);
+      const templates = result.templates;
       const map = {};
       templates.forEach((tpl) => {
         if (tpl && tpl.id) map[String(tpl.id)] = tpl;
@@ -1696,6 +1708,7 @@
         .join("");
       const defaultTemplate = templates.find((tpl) => tpl && tpl.isDefault && tpl.id);
       if (defaultTemplate) select.value = String(defaultTemplate.id);
+      if (result.fallback && status) status.textContent = "当前店铺无专属水印，已显示全部水印模板";
     } catch (error) {
       const message = error && error.message ? error.message : "水印加载失败";
       select.innerHTML = `<option value="">${escapeHtml(message)}</option>`;

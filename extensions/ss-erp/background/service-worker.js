@@ -1677,12 +1677,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calc:erp-endpoint-get') {
-    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, OZON_CALC_ERP_PUSH_HISTORY_KEY]).then((result) => {
+    chrome.storage.local.get([OZON_CALC_ERP_ENDPOINT_KEY, OZON_CALC_ERP_TOKEN_KEY, OZON_CALC_ERP_PUSH_HISTORY_KEY, 'ss_erp_connection']).then((result) => {
       const history = Array.isArray(result[OZON_CALC_ERP_PUSH_HISTORY_KEY]) ? result[OZON_CALC_ERP_PUSH_HISTORY_KEY] : [];
+      const legacyConn = result.ss_erp_connection || {};
+      const endpoint = toText(result[OZON_CALC_ERP_ENDPOINT_KEY] || legacyConn.baseUrl).trim();
+      const token = toText(result[OZON_CALC_ERP_TOKEN_KEY] || legacyConn.token).trim();
       sendResponse({
         ok: true,
-        endpoint: toText(result[OZON_CALC_ERP_ENDPOINT_KEY]).trim(),
-        hasToken: Boolean(toText(result[OZON_CALC_ERP_TOKEN_KEY]).trim()),
+        endpoint,
+        hasToken: Boolean(token),
         lastPush: history.length ? history[history.length - 1] : null,
       });
     }).catch((error) => {

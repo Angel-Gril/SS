@@ -94,6 +94,15 @@ function objectRecord(value: unknown): Record<string, any> {
 function missingTaskIdMessage(payload: unknown): string {
   const data = objectRecord(payload);
   if (data.source === 'browser-one-click-listing') {
+    const stage = String(data.stage || '').trim();
+    if (stage === 'collecting') return '浏览器后台正在采集 Ozon 商品数据，请稍后刷新';
+    if (stage === 'collected') return '浏览器后台已采集商品，正在准备打水印/提交上架';
+    if (stage === 'watermarking') return '浏览器后台正在打水印，请稍后刷新';
+    if (stage === 'watermarked') return '浏览器后台已完成打水印，正在提交到 Ozon';
+    if (stage === 'publishing') return '浏览器后台正在提交到 Ozon，请稍后刷新';
+    if (stage === 'collect_failed') return '浏览器后台采集 Ozon 商品数据失败，请重新提交';
+    if (stage === 'watermark_failed') return '浏览器后台打水印失败，请检查水印模板后重新提交';
+    if (stage === 'publish_failed') return '提交到 Ozon 失败，请查看错误信息后重新提交';
     return '任务还未进入 Ozon 提交阶段，请稍后刷新；如果长期停留，说明浏览器后台执行中断，请重新提交';
   }
   return '任务缺少 taskId';

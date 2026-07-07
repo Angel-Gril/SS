@@ -206,4 +206,40 @@ describe('browser one-click listing jobs', () => {
       await app.close();
     }
   });
+
+  it('shows the current browser one-click stage when a listing job has not received an Ozon taskId yet', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'watermarking',
+        sourceSkus: ['2143427743'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        msg: expect.stringContaining('正在打水印'),
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });

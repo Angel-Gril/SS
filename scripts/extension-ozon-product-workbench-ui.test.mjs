@@ -250,6 +250,11 @@ test('product-detail one-click listing submits a listing-log job then keeps the 
   assert.match(content, /data-role="watermark-template"/, 'product SKU workbench should expose ERP watermark templates in the publish toolbar');
   assert.match(content, /function\s+loadOzonWorkbenchWatermarkTemplates/, 'product SKU workbench should load ERP watermark templates');
   assert.match(content, /shop-select['"\]\)][\s\S]*change[\s\S]*loadOzonWorkbenchWatermarkTemplates/, 'product SKU workbench should reload watermark templates when the selected shop changes');
+  assert.match(
+    content,
+    /function\s+loadOzonWorkbenchWatermarkTemplatesFallback[\s\S]*spb-self-hosted:get-watermark-templates[\s\S]*loadOzonWorkbenchWatermarkTemplates[\s\S]*loadOzonWorkbenchWatermarkTemplatesFallback/,
+    'product SKU workbench should fall back to all watermark templates when a selected shop has no matching templates',
+  );
   assert.match(content, /loadOzonWorkbenchShops[\s\S]*if\s*\(\s*!response\s*\|\|\s*!response\.ok\s*\)\s*throw new Error/, 'product SKU workbench should surface ERP shop loading errors instead of rendering an empty shop dropdown');
   assert.match(content, /没有可用 OZON 店铺/, 'product SKU workbench should explain when the current ERP account has no Ozon shops');
   assert.match(content, /loadOzonWorkbenchWatermarkTemplates[\s\S]*if\s*\(\s*!response\s*\|\|\s*!response\.ok\s*\)\s*throw new Error/, 'product SKU workbench should surface watermark loading errors instead of rendering an empty watermark dropdown');

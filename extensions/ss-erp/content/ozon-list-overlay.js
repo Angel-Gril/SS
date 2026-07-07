@@ -47,7 +47,7 @@
   const LIST_FIELD_CONFIG_MODAL_ID = 'ss-erp-list-field-config-modal';
   const LIST_SELECTION_RULES_MODAL_ID = 'ss-erp-list-selection-rules-modal';
   const LIST_QUICK_ACTIONS_ID = 'ss-erp-list-quick-actions';
-  const LIST_WORKBENCH_PUBLISH_TIMEOUT_MS = 10 * 60 * 1000;
+  const LIST_WORKBENCH_PUBLISH_TIMEOUT_MS = 45 * 1000;
   const LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY = 'ss-erp:ozon-list-workbench-column-widths';
   const LIST_WORKBENCH_MIN_COLUMN_WIDTH = 56;
   const LIST_WORKBENCH_COLUMNS = [
@@ -2958,6 +2958,7 @@
       '    </div>',
       `    <label style="font-size:12px;font-weight:800;color:#334155;">范围</label>`,
       `    <select data-role="row-filter" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="all" ${initialRowFilter === 'all' ? 'selected' : ''}>全部商品</option><option value="matched" ${initialRowFilter === 'matched' ? 'selected' : ''}>仅规则命中</option></select>`,
+      `    <div data-role="connection-status" style="font-size:12px;color:${SS_ERP_LIST_THEME.muted};white-space:nowrap;">ERP连接检测中...</div>`,
       `    <button type="button" data-role="refresh-list-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新数据</button>`,
       '  </div>',
       `  <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
@@ -3028,9 +3029,37 @@
     initListWorkbenchColumnResize(modal);
 
     setListWorkbenchMode(modal, modal.__ssErpWorkbenchFocus);
+    loadListWorkbenchConnectionStatus(modal).catch(() => {});
     loadListWorkbenchShops(modal);
     loadListWorkbenchWatermarkTemplates(modal).catch(() => {});
     loadListWorkbenchRows(modal);
+  }
+
+  function formatListWorkbenchConnectionLabel(endpoint, hasToken) {
+    const raw = String(endpoint || '').trim();
+    if (!raw) return 'ERP未连接';
+    let host = raw;
+    try {
+      const url = new URL(raw);
+      host = url.host;
+    } catch (error) {}
+    const lower = host.toLowerCase();
+    const scope = /localhost|127\.0\.0\.1/.test(lower) ? '本地ERP' : (/ss-erp\.com/.test(lower) ? '云端ERP' : 'ERP');
+    return `${scope}: ${host}${hasToken ? '' : ' · Token缺失'}`;
+  }
+
+  async function loadListWorkbenchConnectionStatus(modal) {
+    const node = modal.querySelector('[data-role="connection-status"]');
+    if (!node) return;
+    try {
+      const response = await send({ type: 'ozon-calc:erp-endpoint-get' }, 8000);
+      if (!response || !response.ok) throw new Error(response && (response.error || response.msg) || 'ERP连接读取失败');
+      node.textContent = formatListWorkbenchConnectionLabel(response.endpoint, response.hasToken);
+      node.style.color = response.endpoint && response.hasToken ? SS_ERP_LIST_THEME.muted : '#dc2626';
+    } catch (error) {
+      node.textContent = error && error.message ? error.message : 'ERP连接读取失败';
+      node.style.color = '#dc2626';
+    }
   }
 
   async function loadListWorkbenchShops(modal) {
@@ -3056,6 +3085,22 @@
     }
   }
 
+  async function loadListWorkbenchWatermarkTemplatesFallback(shopId) {
+    const normalizedShopId = String(shopId || '').trim();
+    const fetchTemplates = async (targetShopId) => {
+      const response = await send({
+        type: 'spb-self-hosted:get-watermark-templates',
+        shopId: String(targetShopId || '').trim() || undefined,
+      }, 12000);
+      if (!response || !response.ok) throw new Error(response && response.error || response && response.msg || '获取水印模板失败');
+      return Array.isArray(response.data) ? response.data : [];
+    };
+
+    const templates = await fetchTemplates(normalizedShopId);
+    if (!normalizedShopId || templates.length) return { templates, fallback: false };
+    return { templates: await fetchTemplates(''), fallback: true };
+  }
+
   async function loadListWorkbenchWatermarkTemplates(modal, shopId) {
     const select = modal.querySelector('[data-role="watermark-template"]');
     const status = modal.querySelector('[data-role="workbench-status"]');
@@ -3063,12 +3108,8 @@
     select.innerHTML = '<option value="">不使用</option>';
     modal.__ssErpWatermarkTemplateMap = {};
     try {
-      const response = await send({
-        type: 'spb-self-hosted:get-watermark-templates',
-        shopId: String(shopId || '').trim() || undefined,
-      }, 12000);
-      if (!response || !response.ok) throw new Error(response && response.error || response && response.msg || '获取水印模板失败');
-      const templates = Array.isArray(response.data) ? response.data : [];
+      const result = await loadListWorkbenchWatermarkTemplatesFallback(shopId);
+      const templates = result.templates;
       const map = {};
       templates.forEach((tpl) => {
         if (tpl && tpl.id) map[String(tpl.id)] = tpl;
@@ -3083,6 +3124,7 @@
         .join('');
       const defaultTemplate = templates.find((tpl) => tpl && tpl.isDefault && tpl.id);
       if (defaultTemplate) select.value = String(defaultTemplate.id);
+      if (result.fallback && status) status.textContent = '当前店铺无专属水印，已显示全部水印模板';
     } catch (error) {
       const message = error && error.message ? error.message : '水印加载失败';
       select.innerHTML = `<option value="">${escapeHtml(message)}</option>`;
@@ -3147,7 +3189,7 @@
         type: 'spb-self-hosted:fetch-ozon-workbench-rows',
         productIds: skus,
         rows: seedRows,
-        includeOffers,
+        includeOffers: modal.__ssErpWorkbenchFocus === 'publish',
         costs: costCny > 0 ? Object.fromEntries(skus.map((sku) => [String(sku), costCny])) : undefined,
         logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
         commissionRate: commissionRate > 0 ? commissionRate : undefined,
