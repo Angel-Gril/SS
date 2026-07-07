@@ -46,8 +46,6 @@
   const LIST_FIELD_CONFIG_MODAL_ID = 'ss-erp-list-field-config-modal';
   const LIST_SELECTION_RULES_MODAL_ID = 'ss-erp-list-selection-rules-modal';
   const LIST_QUICK_ACTIONS_ID = 'ss-erp-list-quick-actions';
-  const LIST_WORKBENCH_PUBLISH_TIMEOUT_MS = 10 * 60 * 1000;
-  const LIST_WORKBENCH_PUBLISH_TIMEOUT_MESSAGE = '后台可能仍在执行，请勿重复提交；稍后刷新 ERP 上架日志查看结果';
   const LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY = 'ss-erp:ozon-list-workbench-column-widths';
   const LIST_WORKBENCH_MIN_COLUMN_WIDTH = 56;
   const LIST_WORKBENCH_COLUMNS = [
@@ -3634,8 +3632,7 @@
       };
     });
     if (button) button.disabled = true;
-    if (status) status.textContent = watermark ? '正在采集商品、打水印并提交上架...' : '正在采集商品并提交上架...';
-    let keepButtonDisabled = false;
+    if (status) status.textContent = '正在提交上架任务到 ERP...';
     try {
       const response = await send({
         type: 'spb-self-hosted:publish-ozon-workbench-rows',
@@ -3652,20 +3649,16 @@
         commissionRate: commissionRate > 0 ? commissionRate : undefined,
         watermark: watermark,
         randomOfferId: true,
-      }, LIST_WORKBENCH_PUBLISH_TIMEOUT_MS);
+      });
       if (!response || !response.ok) {
         const message = response && (response.error || response.msg) || '上架失败';
-        if (response && (response.timedOut || message === '通信超时')) {
-          keepButtonDisabled = true;
-          throw new Error(LIST_WORKBENCH_PUBLISH_TIMEOUT_MESSAGE);
-        }
         throw new Error(message);
       }
-      if (status) status.textContent = '上架任务已提交';
+      if (status) status.textContent = '上架任务已提交到 ERP 上架日志';
     } catch (error) {
       if (status) status.textContent = error && error.message ? error.message : String(error);
     } finally {
-      if (button && !keepButtonDisabled) button.disabled = false;
+      if (button) button.disabled = false;
     }
   }
 

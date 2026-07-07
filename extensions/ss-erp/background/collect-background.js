@@ -3158,6 +3158,62 @@ async function fetchCollectedOzonItemsBySkus(erpBase, erpToken, skus) {
   return rows;
 }
 
+const ozonWorkbenchPublishInFlight = new Map();
+
+async function createOzonWorkbenchPublishJob(productIds, options = {}) {
+  const shopId = String(options.shopId || "").trim();
+  if (!shopId) return { ok: false, error: "请选择目标店铺" };
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+
+  const response = await fetch(conn.baseUrl + "/api/listing/browser-one-click-jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token,
+    },
+    body: JSON.stringify({
+      shopId,
+      entry: options.entry || "extension-workbench",
+      mode: options.publishMode === "follow" ? "follow" : "clone",
+      sourceSkus: Array.isArray(productIds) ? productIds.map((sku) => String(sku || "").trim()).filter(Boolean) : [],
+      itemCount: Array.isArray(productIds) ? productIds.length : 0,
+      watermark: options.watermark || null,
+    }),
+  });
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+  if (!response.ok || !parsed || parsed.code === 0) {
+    return { ok: false, error: parsed && parsed.msg || ("创建上架日志失败: HTTP " + response.status + " " + text.slice(0, 200)) };
+  }
+  const jobId = parsed.data && parsed.data.jobId ? String(parsed.data.jobId) : "";
+  if (!jobId) return { ok: false, error: "创建上架日志失败：ERP 未返回任务ID" };
+  return { ok: true, jobId, data: parsed.data, msg: parsed.msg || "上架任务已提交到 ERP 上架日志" };
+}
+
+async function updateOzonWorkbenchPublishJob(jobId, patch = {}) {
+  const id = String(jobId || "").trim();
+  if (!id) return { ok: false, error: "缺少上架任务ID" };
+  const conn = await getStoredErpConnection();
+  if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+  const response = await fetch(conn.baseUrl + "/api/listing/browser-one-click-jobs/" + encodeURIComponent(id), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      "Authorization": "Bearer " + conn.token,
+    },
+    body: JSON.stringify(patch),
+  });
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+  if (!response.ok || !parsed || parsed.code === 0) {
+    return { ok: false, error: parsed && parsed.msg || ("更新上架日志失败: HTTP " + response.status + " " + text.slice(0, 200)) };
+  }
+  return { ok: true, data: parsed.data };
+}
+
 async function publishOzonWorkbenchRows(productIds, options = {}) {
   if (!Array.isArray(productIds) || !productIds.length) {
     return { ok: false, error: "请选择要上架的 SKU" };
@@ -3229,6 +3285,7 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
   const publishBody = {
     ids: rows.map((row) => row.id),
     shopId,
+    jobId: options.jobId,
     mode: options.publishMode === "follow" ? "follow" : "clone",
     followBrand: options.followBrand === true,
     markupPct: Number(options.markupPct) || 0,
@@ -3259,6 +3316,46 @@ async function publishOzonWorkbenchRows(productIds, options = {}) {
   }
 
   return { ok: true, data: { collectResult, watermark: watermarkResult, publish: publishParsed, items: rows } };
+}
+
+async function submitOzonWorkbenchPublishJob(productIds, options = {}) {
+  if (!Array.isArray(productIds) || !productIds.length) {
+    return { ok: false, error: "请选择要上架的 SKU" };
+  }
+  const shopId = String(options.shopId || "").trim();
+  if (!shopId) return { ok: false, error: "请选择目标店铺" };
+
+  const job = await createOzonWorkbenchPublishJob(productIds, options);
+  if (!job.ok) return job;
+
+  const run = publishOzonWorkbenchRows(productIds, { ...options, jobId: job.jobId }).then(async (result) => {
+    if (!result || !result.ok) {
+      await updateOzonWorkbenchPublishJob(job.jobId, {
+        status: "FAILED",
+        errorMessage: result && (result.error || result.msg) || "一键上架执行失败",
+        payload: { stage: "failed" },
+      }).catch(() => null);
+    }
+    return result;
+  }).catch(async (error) => {
+    const message = error && error.message ? error.message : String(error);
+    await updateOzonWorkbenchPublishJob(job.jobId, {
+      status: "FAILED",
+      errorMessage: message,
+      payload: { stage: "failed" },
+    }).catch(() => null);
+    return { ok: false, error: message };
+  }).finally(() => {
+    setTimeout(() => ozonWorkbenchPublishInFlight.delete(job.jobId), 30000);
+  });
+  ozonWorkbenchPublishInFlight.set(job.jobId, run);
+
+  return {
+    ok: true,
+    jobId: job.jobId,
+    msg: "上架任务已提交到 ERP 上架日志",
+    data: { jobId: job.jobId },
+  };
 }
 
 async function getWatermarkTemplates(shopId) {
@@ -4603,6 +4700,7 @@ globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_B
   fetchOzonSellerOffers,
   fetchOzonWorkbenchRows,
   publishOzonWorkbenchRows,
+  submitOzonWorkbenchPublishJob,
   syncShopAnalyticsToErp,
   syncShopGraphsToErp,
 });
@@ -4649,7 +4747,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       }
       case "spb-self-hosted:publish-ozon-workbench-rows": {
-        return await publishOzonWorkbenchRows(message.productIds, {
+        return await submitOzonWorkbenchPublishJob(message.productIds, {
           productUrls: message.productUrls,
           rows: message.rows,
           prices: message.prices,

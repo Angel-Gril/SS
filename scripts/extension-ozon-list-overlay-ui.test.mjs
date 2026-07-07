@@ -317,19 +317,24 @@ assert.match(
   'Ozon list publish should send watermark config through the normal collect-then-publish path',
 );
 assert.match(
-  overlay,
-  /const\s+LIST_WORKBENCH_PUBLISH_TIMEOUT_MS\s*=\s*10\s*\*\s*60\s*\*\s*1000/,
-  'Ozon list one-click publish should wait long enough for collect + watermark + publish jobs',
+  background,
+  /\/api\/listing\/browser-one-click-jobs/,
+  'Ozon one-click publish should create a listing-log job before long collect/watermark work starts',
+);
+assert.match(
+  background,
+  /submitOzonWorkbenchPublishJob[\s\S]*return\s+\{\s*ok:\s*true[\s\S]*jobId/,
+  'Ozon one-click publish should return after the listing job is accepted instead of waiting for the full publish flow',
 );
 assert.match(
   overlay,
-  /publishListWorkbenchSelectedRows[\s\S]*LIST_WORKBENCH_PUBLISH_TIMEOUT_MS/,
-  'Ozon list one-click publish should use the long publish timeout instead of the default short message timeout',
+  /上架任务已提交到 ERP 上架日志/,
+  'Ozon list publish panel should hand users off to ERP listing logs after submission',
 );
-assert.match(
+assert.doesNotMatch(
   overlay,
-  /后台可能仍在执行，请勿重复提交/,
-  'Ozon list one-click publish timeout should warn that the backend may still be running to prevent duplicate submissions',
+  /后台可能仍在执行，请勿重复提交|LIST_WORKBENCH_PUBLISH_TIMEOUT_MS/,
+  'Ozon list publish panel should not keep a long-running front-end wait after submitting a job',
 );
 assert.match(
   overlay,

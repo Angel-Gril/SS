@@ -111,3 +111,31 @@ test('Ozon list publish mode keeps the SKU/KPI table for pre-publish validation'
     'list publish mode should not bypass seller/KPI enrichment before rendering rows',
   );
 });
+
+test('browser one-click listing reuses the pre-created listing-log job through publish-ozon', () => {
+  const publishOzonStart = collectRoute.indexOf("app.post('/publish-ozon'");
+  const publishOzonEnd = collectRoute.indexOf('  // 诊断端点', publishOzonStart);
+  assert.ok(publishOzonStart >= 0 && publishOzonEnd > publishOzonStart, 'publish-ozon route should be present');
+  const publishOzonRoute = collectRoute.slice(publishOzonStart, publishOzonEnd);
+
+  assert.match(
+    publishOzonRoute,
+    /jobId\?:\s*string/,
+    'publish-ozon should accept a pre-created listing job id from the browser one-click flow',
+  );
+  assert.match(
+    publishOzonRoute,
+    /prisma\.syncJob\.findFirst\([\s\S]*body\.jobId[\s\S]*type:\s*'PRODUCT_PUSH'[\s\S]*shop:\s*\{\s*select:\s*\{\s*userId:\s*true/,
+    'publish-ozon should verify the pre-created job belongs to the same authenticated user',
+  );
+  assert.match(
+    publishOzonRoute,
+    /upsertPublishOzonSyncJob\([\s\S]*jobId:\s*body\.jobId[\s\S]*payload:/,
+    'publish-ozon should update the accepted job instead of creating a second listing-log row',
+  );
+  assert.match(
+    publishOzonRoute,
+    /data:\s*\{[\s\S]*jobId:/,
+    'publish-ozon should return the listing job id so the extension can point users to the ERP log',
+  );
+});

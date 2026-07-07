@@ -71,6 +71,26 @@ const directOzonImportBySkuSchema = z.object({
   })).min(1).max(1000),
 });
 
+const browserOneClickJobSchema = z.object({
+  shopId: z.string().min(1),
+  entry: z.string().trim().optional(),
+  mode: z.string().trim().optional(),
+  sourceSkus: z.array(z.union([z.string(), z.number()])).optional(),
+  itemCount: z.coerce.number().int().positive().optional(),
+  watermark: z.record(z.any()).optional().nullable(),
+});
+
+const browserOneClickJobPatchSchema = z.object({
+  status: z.enum(['PENDING', 'RUNNING', 'SUCCESS', 'FAILED']).optional(),
+  payload: z.record(z.any()).optional(),
+  result: z.any().optional(),
+  errorMessage: z.string().trim().optional().nullable(),
+});
+
+function objectRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
 function buildDirectImportBySkuTitle(input: { title?: string; sku: number }): string {
   const title = String(input.title || '').trim();
   return title ? title.slice(0, 500) : `Ozon SKU ${input.sku}`;
@@ -593,6 +613,102 @@ export async function listingRoutes(app: FastifyInstance) {
     } catch (e: any) {
       return reply.send({ code: 0, msg: `快速上架失败: ${e.message?.slice(0, 300) || '未知错误'}` });
     }
+  });
+
+  app.post('/browser-one-click-jobs', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const parsed = browserOneClickJobSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { shopId } = parsed.data;
+    const shop = await prisma.shop.findFirst({ where: { id: shopId, userId } });
+    if (!shop) {
+      return reply.status(404).send({ code: 0, msg: '店铺不存在' });
+    }
+    if (shop.platform !== 'OZON') {
+      return reply.send({ code: 0, msg: '暂只支持 OZON 一键上架任务' });
+    }
+
+    const sourceSkus = (parsed.data.sourceSkus || [])
+      .map((sku) => String(sku || '').trim())
+      .filter(Boolean);
+    const itemCount = parsed.data.itemCount || sourceSkus.length || 1;
+    const payload: Record<string, any> = {
+      source: 'browser-one-click-listing',
+      stage: 'submitted',
+      entry: parsed.data.entry || 'extension-workbench',
+      mode: parsed.data.mode || 'clone',
+      itemCount,
+      sourceSkus,
+      submittedAt: new Date().toISOString(),
+    };
+    if (parsed.data.watermark) payload.watermark = parsed.data.watermark;
+
+    const job = await prisma.syncJob.create({
+      data: {
+        shopId,
+        type: 'PRODUCT_PUSH',
+        status: 'RUNNING',
+        startedAt: new Date(),
+        payload,
+      },
+      select: { id: true },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: '上架任务已提交到 ERP 上架日志',
+      data: { jobId: job.id },
+    });
+  });
+
+  app.patch('/browser-one-click-jobs/:id', async (request, reply) => {
+    const { userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const parsed = browserOneClickJobPatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const job = await prisma.syncJob.findFirst({
+      where: { id, type: 'PRODUCT_PUSH' },
+      include: { shop: { select: { userId: true } } },
+    });
+    if (!job || job.shop.userId !== userId) {
+      return reply.status(404).send({ code: 0, msg: '任务不存在' });
+    }
+
+    const nextStatus = parsed.data.status || job.status;
+    const payload = {
+      ...objectRecord(job.payload),
+      ...objectRecord(parsed.data.payload),
+    };
+    const updateData: Record<string, any> = {
+      status: nextStatus,
+      payload,
+    };
+    if ('result' in parsed.data) updateData.result = parsed.data.result ?? null;
+    if ('errorMessage' in parsed.data) updateData.errorMessage = parsed.data.errorMessage || null;
+    if (nextStatus === 'SUCCESS' || nextStatus === 'FAILED') updateData.finishedAt = new Date();
+
+    const updated = await prisma.syncJob.update({
+      where: { id: job.id },
+      data: updateData,
+      select: {
+        id: true,
+        status: true,
+        finishedAt: true,
+        payload: true,
+      },
+    });
+
+    return reply.send({
+      code: 1,
+      msg: 'ok',
+      data: updated,
+    });
   });
 
   app.get('/tasks', async (request) => {

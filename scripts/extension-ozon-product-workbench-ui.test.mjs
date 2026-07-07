@@ -229,8 +229,9 @@ test('Ozon product data panel opens a seller-list modal from follow seller data'
   assert.match(content, /showOzonSellerListModal\(data\)/);
 });
 
-test('product-detail one-click listing keeps the normal collect-then-publish workflow', () => {
+test('product-detail one-click listing submits a listing-log job then keeps the normal collect-then-publish workflow', () => {
   assert.match(background, /publishOzonWorkbenchRows\(/);
+  assert.match(background, /submitOzonWorkbenchPublishJob/);
   assert.match(background, /spb-self-hosted:publish-ozon-workbench-rows/);
   const publishFunction = background.match(/async function publishOzonWorkbenchRows[\s\S]*?\n}\n\nasync function getWatermarkTemplates/);
   assert.ok(publishFunction, 'publishOzonWorkbenchRows function should be present');
@@ -242,7 +243,8 @@ test('product-detail one-click listing keeps the normal collect-then-publish wor
   assert.match(publishFunction[0], /useItemCategory:\s*true/);
   assert.match(publishFunction[0], /watermarkFailedCount[\s\S]*已中断上架/, 'selected watermark failures should stop publish before creating an Ozon listing');
   assert.doesNotMatch(content, /选中后会先采集到 ERP，再走正常 Ozon 上架流程。/);
-  assert.match(content, /正在采集并上架/);
+  assert.match(content, /正在提交上架任务到 ERP/);
+  assert.match(content, /上架任务已提交到 ERP 上架日志/);
   assert.match(content, /entry:\s*"ozon-product-detail"/);
   assert.match(content, /markupPct/);
   assert.match(content, /data-role="watermark-template"/, 'product SKU workbench should expose ERP watermark templates in the publish toolbar');

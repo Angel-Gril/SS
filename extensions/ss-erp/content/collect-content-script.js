@@ -1825,7 +1825,7 @@
     }
 
     if (button) button.disabled = true;
-    if (status) status.textContent = watermark ? "正在采集商品、打水印并上架..." : "正在采集并上架...";
+    if (status) status.textContent = "正在提交上架任务到 ERP...";
     try {
       const rows = Array.isArray(modal.__ssErpOzonWorkbenchRows)
         ? modal.__ssErpOzonWorkbenchRows.filter((row) => selected.includes(String(row && row.sku || "").trim()))
@@ -1851,7 +1851,7 @@
         randomOfferId: true,
       });
       if (!response || !response.ok) throw new Error(response && response.error || "上架失败");
-      if (status) status.textContent = "上架任务已提交";
+      if (status) status.textContent = "上架任务已提交到 ERP 上架日志";
     } catch (error) {
       if (status) status.textContent = error && error.message ? error.message : String(error);
     } finally {

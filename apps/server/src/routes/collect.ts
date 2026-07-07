@@ -2850,6 +2850,42 @@ function metadataRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
+async function upsertPublishOzonSyncJob(input: {
+  jobId?: string | null;
+  shopId: string;
+  payload: Record<string, any>;
+  status?: 'RUNNING' | 'SUCCESS' | 'FAILED';
+  errorMessage?: string | null;
+  finishedAt?: Date | null;
+}): Promise<{ id: string }> {
+  const status = input.status || 'RUNNING';
+  if (input.jobId) {
+    return await prisma.syncJob.update({
+      where: { id: input.jobId },
+      data: {
+        status,
+        payload: input.payload,
+        errorMessage: input.errorMessage ?? null,
+        ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+      },
+      select: { id: true },
+    });
+  }
+
+  return await prisma.syncJob.create({
+    data: {
+      shopId: input.shopId,
+      type: 'PRODUCT_PUSH',
+      status,
+      startedAt: new Date(),
+      payload: input.payload,
+      errorMessage: input.errorMessage ?? null,
+      ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+    },
+    select: { id: true },
+  });
+}
+
 function isEphemeralListingMetadata(value: unknown): boolean {
   return metadataRecord(value).ephemeralListing === true;
 }
@@ -4663,8 +4699,9 @@ export async function collectRoutes(app: FastifyInstance) {
       priceOverrides?: Record<string, Record<string | number, number>>;
       offerIds?: Record<string, string>;
       variantOfferIds?: Record<string, Record<string | number, string>>;
-      source?: 'collect-page' | 'listing-page' | 'batch-collect-page' | 'source-publish-page';
+      source?: 'collect-page' | 'listing-page' | 'batch-collect-page' | 'source-publish-page' | 'ozon-product-detail-workbench';
       forceRecreate?: boolean;
+      jobId?: string;
     };
 
     if (!body?.ids?.length || !body.shopId) {
@@ -4674,6 +4711,14 @@ export async function collectRoutes(app: FastifyInstance) {
     const shop = await prisma.shop.findFirst({ where: { id: body.shopId, userId } });
     if (!shop || !shop.clientId || !shop.apiKeyEncrypted) {
       return reply.status(400).send({ code: 0, msg: '店铺配置不完整' });
+    }
+
+    const existingPublishJob = body.jobId ? await prisma.syncJob.findFirst({
+      where: { id: body.jobId, type: 'PRODUCT_PUSH', shopId: body.shopId },
+      include: { shop: { select: { userId: true } } },
+    }) : null;
+    if (body.jobId && (!existingPublishJob || existingPublishJob.shop.userId !== userId)) {
+      return reply.status(404).send({ code: 0, msg: '上架任务不存在' });
     }
 
     const { OzonClient } = await import('../services/ozon-client.js');
@@ -4787,6 +4832,7 @@ export async function collectRoutes(app: FastifyInstance) {
     let fallbackTaskId: number | null = null;
     let fallbackCount = 0;
     let fallbackError: string | null = null;
+    let fallbackJobId: string | null = null;
     if (noAttrs.length > 0) {
       // 收集 fallback：每个 SupplyGoods 如果有 variants[]，展开为 N 个跟卖 item；否则保持单 SKU
       const fallbackTrace: { offerId: string; sourceItemId: string; sourceVariantSku: string; variantAttrs: any }[] = [];
@@ -4794,7 +4840,6 @@ export async function collectRoutes(app: FastifyInstance) {
       const fallbackOfferImageLists: Record<string, string[]> = {};
       const fallbackPictureUploads: any[] = [];
       let fallbackPictureUploadError: string | null = null;
-      let fallbackJobId: string | null = null;
       const fallbackSourceItemIds = noAttrs.map((item) => item.id);
       const fallbackSourceSkus = noAttrs.map((item) => item.sku).filter(Boolean);
       const previousFallbackStatuses = new Map(noAttrs.map((item) => [item.id, item.status || 'collected']));
@@ -4904,15 +4949,11 @@ export async function collectRoutes(app: FastifyInstance) {
             data: { code: 'FALLBACK_RECREATE_BLOCKED' },
           });
         }
-        const fallbackJob = await prisma.syncJob.create({
-          data: {
-            shopId: body.shopId,
-            type: 'PRODUCT_PUSH',
-            status: 'RUNNING',
-            startedAt: new Date(),
-            payload: fallbackBasePayload,
-          },
-          select: { id: true },
+        const fallbackJob = await upsertPublishOzonSyncJob({
+          jobId: body.jobId,
+          shopId: body.shopId,
+          status: 'RUNNING',
+          payload: fallbackBasePayload,
         });
         fallbackJobId = fallbackJob.id;
 
@@ -5008,23 +5049,22 @@ export async function collectRoutes(app: FastifyInstance) {
               : fallbackPictureUploads.length
                 ? (blockedCount > 0 ? 'partial_failed' : 'success')
                 : 'pending';
-          await prisma.syncJob.update({
-            where: { id: fallbackJobId },
-            data: {
-              status: fallbackError ? 'FAILED' : 'RUNNING',
-              finishedAt: fallbackError ? new Date() : null,
-              payload: {
-                ...fallbackBasePayload,
-                taskId: fallbackTaskId,
-                pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
-                pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
-                pictureUploadSkippedCount: fallbackPictureUploads.filter((it) => it.status === 'skipped').length,
-                pictureUploadPendingCount: fallbackPendingCount,
-                pictureUploadStatus,
-                pictureUploadError: fallbackPictureUploadError,
-              },
-              errorMessage: fallbackError,
+          await upsertPublishOzonSyncJob({
+            jobId: fallbackJobId,
+            shopId: body.shopId,
+            status: fallbackError ? 'FAILED' : 'RUNNING',
+            finishedAt: fallbackError ? new Date() : null,
+            payload: {
+              ...fallbackBasePayload,
+              taskId: fallbackTaskId,
+              pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
+              pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
+              pictureUploadSkippedCount: fallbackPictureUploads.filter((it) => it.status === 'skipped').length,
+              pictureUploadPendingCount: fallbackPendingCount,
+              pictureUploadStatus,
+              pictureUploadError: fallbackPictureUploadError,
             },
+            errorMessage: fallbackError,
           });
           if (!fallbackError) void enqueueProductSyncAfterPublish(body.shopId, 'collect-publish-fallback');
         } catch (e: any) {
@@ -5035,22 +5075,21 @@ export async function collectRoutes(app: FastifyInstance) {
             data: { status: previousFallbackStatuses.get(item.id) || 'collected' },
           }).catch(() => null)));
           if (fallbackJobId) {
-            await prisma.syncJob.update({
-              where: { id: fallbackJobId },
-              data: {
-                status: 'FAILED',
-                finishedAt: new Date(),
-                payload: {
-                  ...fallbackBasePayload,
-                  taskId: fallbackTaskId,
-                  pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
-                  pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
-                  pictureUploadSkippedCount: fallbackPictureUploads.filter((it) => it.status === 'skipped').length,
-                  pictureUploadStatus: fallbackPictureUploadError ? 'failed' : 'pending',
-                  pictureUploadError: fallbackPictureUploadError,
-                },
-                errorMessage: detailMsg,
+            await upsertPublishOzonSyncJob({
+              jobId: fallbackJobId,
+              shopId: body.shopId,
+              status: 'FAILED',
+              finishedAt: new Date(),
+              payload: {
+                ...fallbackBasePayload,
+                taskId: fallbackTaskId,
+                pictureUploads: fallbackPictureUploads.length ? fallbackPictureUploads : null,
+                pictureUploadFailedCount: fallbackPictureUploads.filter((it) => it.status === 'failed').length,
+                pictureUploadSkippedCount: fallbackPictureUploads.filter((it) => it.status === 'skipped').length,
+                pictureUploadStatus: fallbackPictureUploadError ? 'failed' : 'pending',
+                pictureUploadError: fallbackPictureUploadError,
               },
+              errorMessage: detailMsg,
             }).catch(() => null);
           }
           console.error(`[publish-ozon fallback] import-by-sku failed:`, getOzonPublishErrorLogContext(e));
@@ -5068,7 +5107,7 @@ export async function collectRoutes(app: FastifyInstance) {
           msg: fallbackError
             ? `import-by-sku 上架失败：${fallbackError}`
             : `已通过 import-by-sku 提交 ${fallbackCount} 件商品${expandedNote}（继承源卡片），任务ID: ${fallbackTaskId}`,
-          data: { taskId: fallbackTaskId, count: fallbackCount, sourceCount, mode: 'follow-by-sku' },
+          data: { taskId: fallbackTaskId, jobId: fallbackJobId, count: fallbackCount, sourceCount, mode: 'follow-by-sku' },
         });
       }
       return reply.send({ code: 0, msg: '所有商品均缺少属性且无有效 SKU' });
@@ -5743,37 +5782,35 @@ export async function collectRoutes(app: FastifyInstance) {
         recordOfferPublishImages(mainOfferImageLists, mainOfferImages, it.offer_id, it.images);
       }
 
-      await prisma.syncJob.create({
-        data: {
-          shopId: body.shopId,
-          type: 'PRODUCT_PUSH',
-          status: 'RUNNING',
-          startedAt: new Date(),
-          payload: {
-            taskId,
-            itemCount: cleanItems.length,
-            sourceItemCount: items.length,
-            source: 'collect-publish',
-            entry: body.source || 'collect-page',
-            mode,
-            followBrand,
-            warehouseId: body.warehouseId ?? null,
-            offerIds: cleanItems.map((i) => i.offer_id),
-            sourceSkus: items.map((i) => i.sku).filter(Boolean),
-            offerImages: Object.keys(mainOfferImages).length ? mainOfferImages : null,
-            offerImageLists: Object.keys(mainOfferImageLists).length ? mainOfferImageLists : null,
-            variantTrace: variantTrace.length ? variantTrace : null,
-            richContentTrace: richContentTrace.length ? richContentTrace : null,
-            sizeChartTrace: sizeChartTrace.length ? sizeChartTrace : null,
-            videoTrace: finalVideoTrace.length ? finalVideoTrace : null,
-            sourceStandardAttributeTrace: sourceStandardAttributeTrace.length ? sourceStandardAttributeTrace : null,
-            videoPublishStatus,
-            videoPublishedCount: finalVideoTrace.filter((entry) => entry.status === 'uploaded').length,
-            videoPublishFailedCount: finalVideoTrace.filter((entry) => entry.status === 'failed').length,
-            videoPublishSkippedCount: finalVideoTrace.filter((entry) => entry.status === 'skipped').length,
-            videoPublishPendingCount: finalVideoTrace.filter((entry) => entry.status === 'pending').length,
-          },
-        },
+      const mainJobPayload = {
+        taskId,
+        itemCount: cleanItems.length,
+        sourceItemCount: items.length,
+        source: 'collect-publish',
+        entry: body.source || 'collect-page',
+        mode,
+        followBrand,
+        warehouseId: body.warehouseId ?? null,
+        offerIds: cleanItems.map((i) => i.offer_id),
+        sourceSkus: items.map((i) => i.sku).filter(Boolean),
+        offerImages: Object.keys(mainOfferImages).length ? mainOfferImages : null,
+        offerImageLists: Object.keys(mainOfferImageLists).length ? mainOfferImageLists : null,
+        variantTrace: variantTrace.length ? variantTrace : null,
+        richContentTrace: richContentTrace.length ? richContentTrace : null,
+        sizeChartTrace: sizeChartTrace.length ? sizeChartTrace : null,
+        videoTrace: finalVideoTrace.length ? finalVideoTrace : null,
+        sourceStandardAttributeTrace: sourceStandardAttributeTrace.length ? sourceStandardAttributeTrace : null,
+        videoPublishStatus,
+        videoPublishedCount: finalVideoTrace.filter((entry) => entry.status === 'uploaded').length,
+        videoPublishFailedCount: finalVideoTrace.filter((entry) => entry.status === 'failed').length,
+        videoPublishSkippedCount: finalVideoTrace.filter((entry) => entry.status === 'skipped').length,
+        videoPublishPendingCount: finalVideoTrace.filter((entry) => entry.status === 'pending').length,
+      };
+      const mainJob = await upsertPublishOzonSyncJob({
+        jobId: body.jobId,
+        shopId: body.shopId,
+        status: 'RUNNING',
+        payload: mainJobPayload,
       });
       void enqueueProductSyncAfterPublish(body.shopId, 'collect-publish');
 
@@ -5786,11 +5823,28 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.send({
         code: 1,
         msg: `已提交 ${cleanItems.length} 件商品${variantNote}（${mode === 'clone' ? '复制' : '跟卖'}）到 OZON，任务ID: ${taskId}`,
-        data: { taskId, count: cleanItems.length, sourceCount: items.length, mode, followBrand, variantCount: variantTrace.length },
+        data: { taskId, jobId: mainJob.id, count: cleanItems.length, sourceCount: items.length, mode, followBrand, variantCount: variantTrace.length },
       });
     } catch (e: any) {
       const detailMsg = getOzonPublishErrorMessage(e);
       console.error(`[publish-ozon] /v3/product/import failed:`, getOzonPublishErrorLogContext(e));
+      if (body.jobId) {
+        await upsertPublishOzonSyncJob({
+          jobId: body.jobId,
+          shopId: body.shopId,
+          status: 'FAILED',
+          finishedAt: new Date(),
+          payload: {
+            ...metadataRecord(existingPublishJob?.payload),
+            source: 'browser-one-click-listing',
+            stage: 'publish_failed',
+            entry: body.source || 'collect-page',
+            mode,
+            sourceSkus: items.map((i) => i.sku).filter(Boolean),
+          },
+          errorMessage: detailMsg,
+        }).catch(() => null);
+      }
       return reply.send({ code: 0, msg: `上架失败: ${detailMsg}` });
     }
   });
