@@ -21,6 +21,11 @@ import {
   parsePositiveNumber,
   resolveVariantPublishPreviewPrice,
 } from '@/lib/collect-publish-pricing';
+import {
+  shouldDefaultUseItemCategoryForPublish,
+  shouldHideManualOzonCategoryControls,
+  shouldRequireManualOzonCategory,
+} from '@/lib/collect-publish-context';
 
 interface TitleSuggestion {
   suggestedTitle: string;
@@ -728,7 +733,7 @@ export default function CollectPage() {
       mode: publishMode,
       followBrand: publishFollowBrand,
       randomOfferId: randomOfferIdEnabled,
-      useItemCategory: publishUseItemCategory,
+      useItemCategory: hideManualOzonCategoryControls || publishUseItemCategory,
       source: 'collect-page',
       ...(Object.keys(priceOverrides).length ? { priceOverrides } : {}),
       ...(Object.keys(offerIds).length ? { offerIds } : {}),
@@ -755,8 +760,8 @@ export default function CollectPage() {
   async function handlePublish() {
     if (!selectedIds.size) { toast({ title: '请先选择商品', variant: 'destructive' }); return; }
     if (!publishShopId) { toast({ title: '请选择目标店铺', variant: 'destructive' }); return; }
-    if (!publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
-    if (!publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
+    if (manualOzonCategoryRequired && !publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
+    if (manualOzonCategoryRequired && !publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
     setPublishing(true);
     await submitPublishRequest();
   }
@@ -764,8 +769,8 @@ export default function CollectPage() {
   async function handleApplyTitleSuggestionsAndPublish() {
     if (!selectedIds.size) { toast({ title: '请先选择商品', variant: 'destructive' }); return; }
     if (!publishShopId) { toast({ title: '请选择目标店铺', variant: 'destructive' }); return; }
-    if (!publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
-    if (!publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
+    if (manualOzonCategoryRequired && !publishCategoryId) { toast({ title: '请输入 OZON 分类 ID', variant: 'destructive' }); return; }
+    if (manualOzonCategoryRequired && !publishTypeId) { toast({ title: '请输入 OZON 类型 ID (type_id)', variant: 'destructive' }); return; }
 
     const targets = items.filter((item) => selectedIds.has(item.id) && !item.metadata?.publishTitleRu && item.titleSuggestion?.suggestedTitle);
     if (!targets.length) {
@@ -1052,6 +1057,11 @@ export default function CollectPage() {
 
   const totalPages = Math.ceil(total / limit);
   const selectedPublishItems = items.filter((item) => selectedIds.has(item.id));
+  const hideManualOzonCategoryControls = shouldHideManualOzonCategoryControls(selectedPublishItems);
+  const manualOzonCategoryRequired = shouldRequireManualOzonCategory(selectedPublishItems);
+  const publishSubmitDisabled = publishing
+    || !publishShopId
+    || (manualOzonCategoryRequired && (!publishCategoryId || !publishTypeId));
 
   function resolvePreviewCategory(item: CollectedItem) {
     const meta = item.metadata || {};
@@ -1059,9 +1069,10 @@ export default function CollectPage() {
     const itemTypeId = parsePositiveNumber(meta.typeId);
     const fallbackCategoryId = parsePositiveNumber(publishCategoryId);
     const fallbackTypeId = parsePositiveNumber(publishTypeId);
+    const useSourceCategory = hideManualOzonCategoryControls || publishUseItemCategory;
     return {
-      categoryId: publishUseItemCategory ? itemCategoryId ?? fallbackCategoryId : fallbackCategoryId ?? itemCategoryId,
-      typeId: publishUseItemCategory ? itemTypeId ?? fallbackTypeId : fallbackTypeId ?? itemTypeId,
+      categoryId: useSourceCategory ? itemCategoryId ?? fallbackCategoryId : fallbackCategoryId ?? itemCategoryId,
+      typeId: useSourceCategory ? itemTypeId ?? fallbackTypeId : fallbackTypeId ?? itemTypeId,
     };
   }
 
@@ -1186,7 +1197,7 @@ export default function CollectPage() {
                   <Button size="sm" variant="outline" onClick={handleGoToListing}>
                     <ArrowRight className="h-4 w-4 mr-1" />SKU 采集改款
                   </Button>
-                  <Button size="sm" onClick={() => { setPublishUseItemCategory(false); setShowPublishDialog(true); }}>
+                  <Button size="sm" onClick={() => { setPublishUseItemCategory(shouldDefaultUseItemCategoryForPublish(selectedPublishItems)); setShowPublishDialog(true); }}>
                     <Upload className="h-4 w-4 mr-1" />一键上架OZON
                   </Button>
                 </div>
@@ -1571,94 +1582,98 @@ export default function CollectPage() {
               从源商品继承分类/重量/尺寸
             </Button>
 
-            <div className="rounded-md border bg-muted/20 p-3 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <Label className="text-xs">OZON 类目目录</Label>
-                  <p className="mt-1 text-[11px] text-muted-foreground">按中文/俄文关键词搜索，点选后自动填入分类和类型。</p>
-                </div>
-                {categoryCatalogTotal > 0 && (
-                  <Badge variant="secondary" className="h-5 text-[11px]">
-                    {categoryCatalogTotal} 条
-                  </Badge>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  value={categoryCatalogQuery}
-                  onChange={(e) => setCategoryCatalogQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleSearchOzonCategoryCatalog(false);
-                    }
-                  }}
-                  placeholder="如：牛仔裤 / футболка / 类目ID"
-                  className="h-8 text-sm"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2"
-                  onClick={() => handleSearchOzonCategoryCatalog(false)}
-                  disabled={categoryCatalogSearching || categoryCatalogRefreshing || !publishShopId}
-                >
-                  {categoryCatalogSearching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2"
-                  onClick={() => handleSearchOzonCategoryCatalog(true)}
-                  disabled={categoryCatalogSearching || categoryCatalogRefreshing || !publishShopId}
-                >
-                  {categoryCatalogRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                </Button>
-              </div>
-              {categoryCatalogError && (
-                <p className="text-xs text-destructive">{categoryCatalogError}</p>
-              )}
-              {selectedOzonCategoryPath && (
-                <p className="rounded border bg-background px-2 py-1.5 text-xs text-muted-foreground">
-                  已选择：{selectedOzonCategoryPath}
-                </p>
-              )}
-              {categoryCatalogResults.length > 0 && (
-                <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-                  {categoryCatalogResults.map((entry) => (
-                    <button
-                      key={`${entry.descriptionCategoryId}:${entry.typeId}`}
+            {!hideManualOzonCategoryControls && (
+              <>
+                <div className="rounded-md border bg-muted/20 p-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Label className="text-xs">OZON 类目目录</Label>
+                      <p className="mt-1 text-[11px] text-muted-foreground">按中文/俄文关键词搜索，点选后自动填入分类和类型。</p>
+                    </div>
+                    {categoryCatalogTotal > 0 && (
+                      <Badge variant="secondary" className="h-5 text-[11px]">
+                        {categoryCatalogTotal} 条
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      value={categoryCatalogQuery}
+                      onChange={(e) => setCategoryCatalogQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleSearchOzonCategoryCatalog(false);
+                        }
+                      }}
+                      placeholder="如：牛仔裤 / футболка / 类目ID"
+                      className="h-8 text-sm"
+                    />
+                    <Button
                       type="button"
-                      onClick={() => applyOzonCategoryCatalogEntry(entry)}
-                      className="w-full rounded-md border bg-background px-2 py-2 text-left transition hover:border-primary/60 hover:bg-primary/5"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => handleSearchOzonCategoryCatalog(false)}
+                      disabled={categoryCatalogSearching || categoryCatalogRefreshing || !publishShopId}
                     >
-                      <div className="line-clamp-1 text-xs font-medium">
-                        {entry.displayPathZh || entry.displayPathRu}
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                        <span>category {entry.descriptionCategoryId}</span>
-                        <span>type {entry.typeId}</span>
-                        {entry.typeNameRu && <span className="line-clamp-1">{entry.typeNameRu}</span>}
-                      </div>
-                    </button>
-                  ))}
+                      {categoryCatalogSearching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => handleSearchOzonCategoryCatalog(true)}
+                      disabled={categoryCatalogSearching || categoryCatalogRefreshing || !publishShopId}
+                    >
+                      {categoryCatalogRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                  {categoryCatalogError && (
+                    <p className="text-xs text-destructive">{categoryCatalogError}</p>
+                  )}
+                  {selectedOzonCategoryPath && (
+                    <p className="rounded border bg-background px-2 py-1.5 text-xs text-muted-foreground">
+                      已选择：{selectedOzonCategoryPath}
+                    </p>
+                  )}
+                  {categoryCatalogResults.length > 0 && (
+                    <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                      {categoryCatalogResults.map((entry) => (
+                        <button
+                          key={`${entry.descriptionCategoryId}:${entry.typeId}`}
+                          type="button"
+                          onClick={() => applyOzonCategoryCatalogEntry(entry)}
+                          className="w-full rounded-md border bg-background px-2 py-2 text-left transition hover:border-primary/60 hover:bg-primary/5"
+                        >
+                          <div className="line-clamp-1 text-xs font-medium">
+                            {entry.displayPathZh || entry.displayPathRu}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                            <span>category {entry.descriptionCategoryId}</span>
+                            <span>type {entry.typeId}</span>
+                            {entry.typeNameRu && <span className="line-clamp-1">{entry.typeNameRu}</span>}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            <div className="space-y-2">
-              <Label>OZON 分类 ID *</Label>
-              <Input value={publishCategoryId} onChange={(e) => { setPublishUseItemCategory(false); setPublishCategoryId(e.target.value); }} placeholder="description_category_id" type="number" />
-            </div>
-            <div className="space-y-2">
-              <Label>OZON 类型 ID (type_id) *</Label>
-              <Input value={publishTypeId} onChange={(e) => { setPublishUseItemCategory(false); setPublishTypeId(e.target.value); }} placeholder="从分类树获取的 type_id" type="number" />
-              <p className="text-xs text-muted-foreground">
-                {publishUseItemCategory ? '已按每个商品自己的源分类上架；缺少源分类的商品会被服务端拦截。' : '点击上方按钮自动从 OZON 源商品继承，或手动从分类树获取（最后一级）'}
-              </p>
-            </div>
+                <div className="space-y-2">
+                  <Label>OZON 分类 ID *</Label>
+                  <Input value={publishCategoryId} onChange={(e) => { setPublishUseItemCategory(false); setPublishCategoryId(e.target.value); }} placeholder="description_category_id" type="number" />
+                </div>
+                <div className="space-y-2">
+                  <Label>OZON 类型 ID (type_id) *</Label>
+                  <Input value={publishTypeId} onChange={(e) => { setPublishUseItemCategory(false); setPublishTypeId(e.target.value); }} placeholder="从分类树获取的 type_id" type="number" />
+                  <p className="text-xs text-muted-foreground">
+                    {publishUseItemCategory ? '已按每个商品自己的源分类上架；缺少源分类的商品会被服务端拦截。' : '点击上方按钮自动从 OZON 源商品继承，或手动从分类树获取（最后一级）'}
+                  </p>
+                </div>
+              </>
+            )}
             <div className="grid grid-cols-4 gap-2">
               <div className="space-y-1">
                 <Label className="text-xs">重量(g)</Label>
@@ -1736,7 +1751,7 @@ export default function CollectPage() {
             <p className="text-xs text-muted-foreground">将上架 {selectedIds.size} 件商品到 OZON（货币: CNY）</p>
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setShowPublishDialog(false)}>取消</Button>
-              <Button onClick={handlePublish} disabled={publishing || !publishShopId || !publishCategoryId || !publishTypeId}>
+              <Button onClick={handlePublish} disabled={publishSubmitDisabled}>
                 {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
                 确认上架
               </Button>
@@ -1744,7 +1759,7 @@ export default function CollectPage() {
                 <Button
                   variant="secondary"
                   onClick={handleApplyTitleSuggestionsAndPublish}
-                  disabled={publishing || !publishShopId || !publishCategoryId || !publishTypeId}
+                  disabled={publishSubmitDisabled}
                 >
                   <Sparkles className="h-4 w-4 mr-1" />
                   使用建议标题并继续上架
