@@ -383,6 +383,26 @@ assert.match(
 );
 assert.match(
   background,
+  /onStartup[\s\S]*flushOzonWorkbenchPublishQueue/,
+  'Ozon one-click publish queue should be flushed again when the MV3 service worker/browser starts after an interrupted long watermark job',
+);
+assert.match(
+  background,
+  /function\s+hasOzonWorkbenchWatermarkOutput[\s\S]*watermarkedImages/,
+  'Ozon one-click publish should be able to detect collected rows that already have watermarked image output',
+);
+assert.match(
+  background,
+  /function\s+shouldResumeOzonWorkbenchPublishFromCollectedRows[\s\S]*watermarking[\s\S]*watermarked[\s\S]*publishing/,
+  'Ozon one-click publish should resume from existing ERP collect rows instead of re-collecting after an interrupted watermark/publish stage',
+);
+assert.match(
+  background,
+  /const\s+skipWatermark\s*=[\s\S]*rows\.every\(\(row\)\s*=>\s*hasOzonWorkbenchWatermarkOutput\(row\)\)/,
+  'Ozon one-click publish should skip repeating watermark work when a resumed job already has watermarked images in ERP',
+);
+assert.match(
+  background,
   /withOzonWorkbenchPublishStage[\s\S]*"collecting"[\s\S]*setOzonWorkbenchPublishStage[\s\S]*"watermarking"[\s\S]*setOzonWorkbenchPublishStage[\s\S]*"publishing"/,
   'Ozon one-click publish should update ERP listing logs with collection, watermark, and publish stages',
 );

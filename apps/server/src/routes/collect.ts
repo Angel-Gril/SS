@@ -57,6 +57,7 @@ const DESCRIPTION_MAX_LENGTH = 5000;
 const OZON_MAX_PUBLISH_IMAGES = 30;
 const OZON_ORIGIN_COUNTRY_ATTR_ID = 4389;
 const EPHEMERAL_LISTING_TTL_MS = 5 * 60 * 1000;
+const WATERMARK_ITEM_CONCURRENCY = 3;
 const OZON_MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
 const OZON_COLOR_TOKEN_RE = /^(?:бел|черн|красн|син|голуб|зел[её]н|желт|розов|фиолет|сер|беж|корич|хаки|бирюз|салатов|графит|серебрист|серебр|золот|оранж|бордов|молочн|крем|оливк|сиренев|лилов|изумруд|лаванд|мятн|пудров|коралл|терракот|персиков|бронз|сапфир|верблюд)\p{L}*$/iu;
 const OZON_COLOR_PREFIX_RE = /^(?:светло|темно|тёмно|ярко|нежно|бледно|пастельно|дымчато)$/iu;
@@ -3319,6 +3320,78 @@ export function setVariantWatermarkedImages(
   });
 }
 
+type WatermarkProcessor = (
+  images: string[],
+  itemId: string,
+  config: any,
+) => Promise<{ watermarkedImages: string[]; failed: number }>;
+
+async function processWatermarkItemsWithConcurrency(
+  items: any[],
+  config: any,
+  processItemWatermarks: WatermarkProcessor,
+): Promise<{ processed: number; failed: number }> {
+  let processed = 0;
+  let failed = 0;
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(WATERMARK_ITEM_CONCURRENCY, items.length));
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const item = items[index]!;
+      const images = Array.isArray(item.images) ? (item.images as string[]) : [];
+      const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
+      const existingMeta = (item.metadata as any) || {};
+      const updateData: any = {};
+      let itemProcessed = false;
+
+      if (images.length) {
+        const result = await processItemWatermarks(images, item.id, config);
+        failed += result.failed;
+
+        // 存相对路径 /watermarked/xxx.jpg。发布时由 resolveImageUrls 上传到存储后端转为公网 URL。
+        // 不要存 http://localhost:3001/... — OZON 拉不到本地服务。
+        const relPaths = normalizeWatermarkOutputPaths(result.watermarkedImages);
+        updateData.metadata = { ...existingMeta, watermarkedImages: relPaths, watermarkApplied: true };
+        itemProcessed = true;
+      }
+
+      const variantWatermarkedBySku: Record<string, string[]> = {};
+      for (let idx = 0; idx < variants.length; idx += 1) {
+        const variant = variants[idx]!;
+        const sku = String(variant?.sku || '').trim();
+        const variantImages = Array.isArray(variant?.images) ? variant.images as string[] : [];
+        if (!sku || !variantImages.length) continue;
+
+        const result = await processItemWatermarks(variantImages, `${item.id}_v${idx}`, config);
+        failed += result.failed;
+        variantWatermarkedBySku[sku] = normalizeWatermarkOutputPaths(result.watermarkedImages);
+        itemProcessed = true;
+      }
+
+      if (!itemProcessed) {
+        failed++;
+        continue;
+      }
+
+      if (Object.keys(variantWatermarkedBySku).length) {
+        updateData.variants = setVariantWatermarkedImages(variants, variantWatermarkedBySku) as any;
+      }
+
+      await prisma.supplyGoods.update({
+        where: { id: item.id },
+        data: updateData,
+      });
+      processed++;
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return { processed, failed };
+}
+
 export function recordOfferPublishImages(
   offerImageLists: Record<string, string[]>,
   offerImages: Record<string, string>,
@@ -6514,55 +6587,7 @@ export async function collectRoutes(app: FastifyInstance) {
       where: { id: { in: body.ids }, userId },
     });
 
-    let processed = 0;
-    let failed = 0;
-
-    for (const item of items) {
-      const images = Array.isArray(item.images) ? (item.images as string[]) : [];
-      const variants = Array.isArray(item.variants) ? item.variants as any[] : [];
-      const existingMeta = (item.metadata as any) || {};
-      const updateData: any = {};
-      let itemProcessed = false;
-
-      if (images.length) {
-        const result = await processItemWatermarks(images, item.id, config);
-        failed += result.failed;
-
-        // 存相对路径 /watermarked/xxx.jpg。发布时由 resolveImageUrls 上传到存储后端转为公网 URL。
-        // 不要存 http://localhost:3001/... — OZON 拉不到本地服务。
-        const relPaths = normalizeWatermarkOutputPaths(result.watermarkedImages);
-        updateData.metadata = { ...existingMeta, watermarkedImages: relPaths, watermarkApplied: true };
-        itemProcessed = true;
-      }
-
-      const variantWatermarkedBySku: Record<string, string[]> = {};
-      for (let idx = 0; idx < variants.length; idx += 1) {
-        const variant = variants[idx]!;
-        const sku = String(variant?.sku || '').trim();
-        const variantImages = Array.isArray(variant?.images) ? variant.images as string[] : [];
-        if (!sku || !variantImages.length) continue;
-
-        const result = await processItemWatermarks(variantImages, `${item.id}_v${idx}`, config);
-        failed += result.failed;
-        variantWatermarkedBySku[sku] = normalizeWatermarkOutputPaths(result.watermarkedImages);
-        itemProcessed = true;
-      }
-
-      if (!itemProcessed) {
-        failed++;
-        continue;
-      }
-
-      if (Object.keys(variantWatermarkedBySku).length) {
-        updateData.variants = setVariantWatermarkedImages(variants, variantWatermarkedBySku) as any;
-      }
-
-      await prisma.supplyGoods.update({
-        where: { id: item.id },
-        data: updateData,
-      });
-      processed++;
-    }
+    const { processed, failed } = await processWatermarkItemsWithConcurrency(items, config, processItemWatermarks);
 
     return reply.send({
       code: 1,

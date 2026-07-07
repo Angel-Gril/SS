@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 const collectRoute = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
+const listingRoute = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
 const listOverlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
 
 test('browser one-click listing uses temporary collect records instead of polluting SKU collect page', () => {
@@ -137,5 +138,46 @@ test('browser one-click listing reuses the pre-created listing-log job through p
     publishOzonRoute,
     /data:\s*\{[\s\S]*jobId:/,
     'publish-ozon should return the listing job id so the extension can point users to the ERP log',
+  );
+});
+
+test('browser one-click listing logs surface stale extension background interruptions', () => {
+  assert.match(
+    listingRoute,
+    /BROWSER_ONE_CLICK_STAGE_STALE_MS\s*=\s*15\s*\*\s*60\s*\*\s*1000/,
+    'listing logs should have a stale threshold for browser-extension stages that stop updating',
+  );
+  assert.match(
+    listingRoute,
+    /function\s+isBrowserOneClickStageStale[\s\S]*watermarking[\s\S]*watermarked[\s\S]*publishing/,
+    'listing logs should detect stale collect/watermark/publish stages before an Ozon taskId exists',
+  );
+  assert.match(
+    listingRoute,
+    /missingTaskIdMessage[\s\S]*isBrowserOneClickStageStale\(data\)[\s\S]*后台执行可能已中断/,
+    'listing logs should not keep saying "打水印中" forever when the browser background has stopped advancing',
+  );
+});
+
+test('watermark route processes one-click listing items with bounded concurrency', () => {
+  const watermarkStart = collectRoute.indexOf("app.post('/watermark'");
+  const watermarkEnd = collectRoute.indexOf('/** 解析 OZON 输入', watermarkStart);
+  assert.ok(watermarkStart >= 0 && watermarkEnd > watermarkStart, 'watermark route should be present');
+  const watermarkRoute = collectRoute.slice(watermarkStart, watermarkEnd);
+
+  assert.match(
+    collectRoute,
+    /WATERMARK_ITEM_CONCURRENCY\s*=\s*3/,
+    'watermark route should use a small bounded item concurrency instead of processing every item sequentially',
+  );
+  assert.match(
+    collectRoute,
+    /async function\s+processWatermarkItemsWithConcurrency[\s\S]*Promise\.all\(\s*Array\.from\(\{\s*length:\s*workerCount\s*\}/,
+    'watermark route should run a bounded worker pool so large one-click listing batches finish before the extension background is reclaimed',
+  );
+  assert.doesNotMatch(
+    watermarkRoute,
+    /for\s*\(\s*const\s+item\s+of\s+items\s*\)\s*\{[\s\S]*processItemWatermarks[\s\S]*await\s+prisma\.supplyGoods\.update/,
+    'watermark route should not process all selected items in one fully sequential loop',
   );
 });

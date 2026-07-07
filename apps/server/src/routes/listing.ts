@@ -87,14 +87,25 @@ const browserOneClickJobPatchSchema = z.object({
   errorMessage: z.string().trim().optional().nullable(),
 });
 
+const BROWSER_ONE_CLICK_STAGE_STALE_MS = 15 * 60 * 1000;
+
 function objectRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function isBrowserOneClickStageStale(data: Record<string, any>): boolean {
+  const stage = String(data.stage || '').trim();
+  if (!['collecting', 'collected', 'watermarking', 'watermarked', 'publishing'].includes(stage)) return false;
+  const updatedAt = new Date(String(data.updatedAt || data.submittedAt || ''));
+  if (!Number.isFinite(updatedAt.getTime())) return false;
+  return Date.now() - updatedAt.getTime() > BROWSER_ONE_CLICK_STAGE_STALE_MS;
 }
 
 function missingTaskIdMessage(payload: unknown): string {
   const data = objectRecord(payload);
   if (data.source === 'browser-one-click-listing') {
     const stage = String(data.stage || '').trim();
+    if (isBrowserOneClickStageStale(data)) return '浏览器后台执行可能已中断；请保持扩展和 ERP 连接正常，刷新后等待队列恢复，或确认未重复上架后重新提交';
     if (stage === 'collecting') return '浏览器后台正在采集 Ozon 商品数据，请稍后刷新';
     if (stage === 'collected') return '浏览器后台已采集商品，正在准备打水印/提交上架';
     if (stage === 'watermarking') return '浏览器后台正在打水印，请稍后刷新';
