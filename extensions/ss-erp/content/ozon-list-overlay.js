@@ -46,6 +46,7 @@
   const LIST_FIELD_CONFIG_MODAL_ID = 'ss-erp-list-field-config-modal';
   const LIST_SELECTION_RULES_MODAL_ID = 'ss-erp-list-selection-rules-modal';
   const LIST_QUICK_ACTIONS_ID = 'ss-erp-list-quick-actions';
+  const LIST_WORKBENCH_PUBLISH_TIMEOUT_MS = 10 * 60 * 1000;
   const LIST_WORKBENCH_COLUMN_WIDTHS_STORAGE_KEY = 'ss-erp:ozon-list-workbench-column-widths';
   const LIST_WORKBENCH_MIN_COLUMN_WIDTH = 56;
   const LIST_WORKBENCH_COLUMNS = [
@@ -2800,6 +2801,7 @@
         modal.remove();
         const workbench = document.getElementById(LIST_WORKBENCH_MODAL_ID);
         if (workbench) {
+          syncListWorkbenchRuleFilterOptions(workbench);
           renderListWorkbenchRows(workbench, workbench.__ssErpListWorkbenchRows || [], workbench.__ssErpListWorkbenchSkus || []);
         }
       } catch (error) {
@@ -2867,6 +2869,32 @@
     bindSelectionRulesModalEvents(modal);
   }
 
+  function normalizeListWorkbenchRowFilter(value) {
+    const raw = String(value || '').trim();
+    if (raw === 'matched') return 'matched';
+    if (raw.startsWith('rule:') && raw.slice(5).trim()) return raw;
+    return 'all';
+  }
+
+  function syncListWorkbenchRuleFilterOptions(modal) {
+    const select = modal && modal.querySelector ? modal.querySelector('[data-role="row-filter"]') : null;
+    if (!select) return;
+    const rules = readProductSelectionRules().filter((rule) => rule && rule.enabled);
+    const current = normalizeListWorkbenchRowFilter(modal.__ssErpRowFilter || select.value);
+    const ruleOptions = rules.map((rule) => {
+      const label = String(rule.tag || rule.name || rule.id || '').trim();
+      return `<option value="rule:${escapeHtml(rule.id)}">${escapeHtml(label || rule.id)}</option>`;
+    }).join('');
+    select.innerHTML = [
+      '<option value="all">全部商品</option>',
+      '<option value="matched">仅规则命中</option>',
+      ruleOptions,
+    ].join('');
+    const hasCurrent = Array.from(select.options).some((option) => option.value === current);
+    select.value = hasCurrent ? current : 'all';
+    modal.__ssErpRowFilter = select.value;
+  }
+
   function openListSkuWorkbench(options) {
     const old = document.getElementById(LIST_WORKBENCH_MODAL_ID);
     if (old) old.remove();
@@ -2876,9 +2904,7 @@
       ? options.skus.map((sku) => String(sku || '').trim()).filter(Boolean)
       : null;
     const skus = explicitSkus && explicitSkus.length ? explicitSkus : getCurrentPageSkus();
-    const initialRowFilter = options && options.rowFilter === 'matched'
-      ? 'matched'
-      : 'all';
+    const initialRowFilter = normalizeListWorkbenchRowFilter(options && options.rowFilter);
 
     const modal = document.createElement('div');
     modal.id = LIST_WORKBENCH_MODAL_ID;
@@ -2888,6 +2914,7 @@
     modal.__ssErpDeletedWorkbenchSkus = new Set();
     modal.__ssErpRowFilter = initialRowFilter;
     modal.__ssErpWorkbenchFocus = normalizeListWorkbenchMode(options && options.focus);
+    modal.__ssErpListWorkbenchRowsHaveOffers = false;
     modal.__ssErpListWorkbenchColumnWidths = readListWorkbenchColumnWidths();
     const workbenchTableWidth = getListWorkbenchTableWidth(modal.__ssErpListWorkbenchColumnWidths);
     modal.style.cssText = [
@@ -2964,6 +2991,7 @@
     ].join('');
 
     document.body.appendChild(modal);
+    syncListWorkbenchRuleFilterOptions(modal);
     modal.querySelector('[data-role="close-list-workbench"]').addEventListener('click', () => modal.remove());
     modal.querySelector('[data-role="refresh-list-workbench"]').addEventListener('click', () => loadListWorkbenchRows(modal));
     modal.querySelector('[data-role="shop-select"]').addEventListener('change', (event) => {
@@ -2972,11 +3000,15 @@
     modal.querySelectorAll('[data-role="workbench-view"]').forEach((button) => {
       button.addEventListener('click', () => {
         setListWorkbenchMode(modal, button.getAttribute('data-mode'));
-        loadListWorkbenchRows(modal);
+        if (shouldReloadListWorkbenchRowsForMode(modal)) {
+          loadListWorkbenchRows(modal);
+        } else {
+          renderListWorkbenchRows(modal, modal.__ssErpListWorkbenchRows || [], modal.__ssErpListWorkbenchSkus || []);
+        }
       });
     });
     modal.querySelector('[data-role="row-filter"]').addEventListener('change', (event) => {
-      modal.__ssErpRowFilter = event.target.value === 'matched' ? 'matched' : 'all';
+      modal.__ssErpRowFilter = normalizeListWorkbenchRowFilter(event.target.value);
       renderListWorkbenchRows(modal, modal.__ssErpListWorkbenchRows || [], modal.__ssErpListWorkbenchSkus || []);
     });
     modal.querySelector('[data-role="select-all-workbench"]').addEventListener('change', (event) => {
@@ -3073,6 +3105,12 @@
     };
   }
 
+  function shouldReloadListWorkbenchRowsForMode(modal) {
+    const rows = Array.isArray(modal && modal.__ssErpListWorkbenchRows) ? modal.__ssErpListWorkbenchRows : [];
+    if (!rows.length) return true;
+    return modal.__ssErpWorkbenchFocus === 'publish' && modal.__ssErpListWorkbenchRowsHaveOffers !== true;
+  }
+
   async function loadListWorkbenchRows(modal) {
     const status = modal.querySelector('[data-role="workbench-status"]');
     const body = modal.querySelector('[data-role="workbench-body"]');
@@ -3091,17 +3129,19 @@
     }
     const seedRows = buildListWorkbenchSeedRows(skus);
     modal.__ssErpListWorkbenchRows = seedRows;
+    modal.__ssErpListWorkbenchRowsHaveOffers = false;
     renderListWorkbenchRows(modal, seedRows, skus);
     if (status) status.textContent = `已显示 ${seedRows.length} 条缓存数据`;
     try {
       const costCny = readListWorkbenchNumber(modal, 'cost-cny');
       const logisticsFeeCny = readListWorkbenchNumber(modal, 'logistics-fee-cny');
       const commissionRate = readListWorkbenchNumber(modal, 'commission-rate');
+      const includeOffers = modal.__ssErpWorkbenchFocus === 'publish';
       const response = await send({
         type: 'spb-self-hosted:fetch-ozon-workbench-rows',
         productIds: skus,
         rows: seedRows,
-        includeOffers: modal.__ssErpWorkbenchFocus === 'publish',
+        includeOffers,
         costs: costCny > 0 ? Object.fromEntries(skus.map((sku) => [String(sku), costCny])) : undefined,
         logisticsFeeCny: logisticsFeeCny > 0 ? logisticsFeeCny : undefined,
         commissionRate: commissionRate > 0 ? commissionRate : undefined,
@@ -3116,6 +3156,7 @@
       });
       const rows = skus.map((sku) => rowBySku.get(String(sku)) || { sku: String(sku) });
       modal.__ssErpListWorkbenchRows = rows;
+      modal.__ssErpListWorkbenchRowsHaveOffers = includeOffers;
       renderListWorkbenchRows(modal, rows, skus);
       if (status) status.textContent = rows.length ? `已读取 ${rows.length} 条 SKU 数据` : '没有可展示的 SKU 数据';
     } catch (error) {
@@ -3132,7 +3173,8 @@
     const rowBySku = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.sku || ''), row]));
     const allRenderSkus = (Array.isArray(skus) && skus.length ? skus : rows.map((row) => String(row.sku || ''))).filter(Boolean);
     scheduleProductSelectionPoolStatusFetch(allRenderSkus);
-    const rowFilter = modal.__ssErpRowFilter === 'matched' ? 'matched' : 'all';
+    const rowFilter = normalizeListWorkbenchRowFilter(modal.__ssErpRowFilter);
+    const selectedRuleId = rowFilter.startsWith('rule:') ? rowFilter.slice(5) : '';
     const decoratedRows = allRenderSkus.map((sku) => {
       const row = rowBySku.get(String(sku)) || { sku };
       const dom = getCardDomBySku(String(sku));
@@ -3143,9 +3185,11 @@
     });
     const visibleRows = rowFilter === 'matched'
       ? decoratedRows.filter((item) => item.matchedRules.length)
+      : rowFilter.startsWith('rule:')
+        ? decoratedRows.filter((item) => item.matchedRules.some((rule) => String(rule.id || '') === selectedRuleId))
       : decoratedRows;
     if (!visibleRows.length) {
-      body.innerHTML = `<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">${rowFilter === 'matched' ? '暂无规则命中 SKU' : '暂无数据'}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">${rowFilter === 'matched' || rowFilter.startsWith('rule:') ? '暂无规则命中 SKU' : '暂无数据'}</td></tr>`;
       return;
     }
     body.innerHTML = visibleRows.map(({ sku, row, dom, matchedRules }) => {
@@ -3633,6 +3677,7 @@
     });
     if (button) button.disabled = true;
     if (status) status.textContent = '正在提交上架任务到 ERP...';
+    let restoreButton = true;
     try {
       const response = await send({
         type: 'spb-self-hosted:publish-ozon-workbench-rows',
@@ -3649,16 +3694,21 @@
         commissionRate: commissionRate > 0 ? commissionRate : undefined,
         watermark: watermark,
         randomOfferId: true,
-      });
+      }, LIST_WORKBENCH_PUBLISH_TIMEOUT_MS);
+      if (response && response.timedOut) {
+        restoreButton = false;
+        throw new Error('后台可能仍在执行，请勿重复提交；稍后刷新 ERP 上架日志查看结果');
+      }
       if (!response || !response.ok) {
         const message = response && (response.error || response.msg) || '上架失败';
         throw new Error(message);
       }
-      if (status) status.textContent = '上架任务已提交到 ERP 上架日志';
+      const taskId = response.data && response.data.taskId ? `，任务ID: ${response.data.taskId}` : '';
+      if (status) status.textContent = `上架任务已提交到 ERP 上架日志${taskId}`;
     } catch (error) {
       if (status) status.textContent = error && error.message ? error.message : String(error);
     } finally {
-      if (button) button.disabled = false;
+      if (button && restoreButton) button.disabled = false;
     }
   }
 

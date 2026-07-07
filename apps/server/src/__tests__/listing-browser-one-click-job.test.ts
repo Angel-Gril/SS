@@ -170,4 +170,40 @@ describe('browser one-click listing jobs', () => {
       await app.close();
     }
   });
+
+  it('explains that a browser one-click job without taskId has not reached Ozon submission yet', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'submitted',
+        sourceSkus: ['2143427743'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        msg: expect.stringContaining('还未进入 Ozon 提交阶段'),
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });

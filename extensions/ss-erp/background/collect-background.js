@@ -3158,8 +3158,6 @@ async function fetchCollectedOzonItemsBySkus(erpBase, erpToken, skus) {
   return rows;
 }
 
-const ozonWorkbenchPublishInFlight = new Map();
-
 async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   const shopId = String(options.shopId || "").trim();
   if (!shopId) return { ok: false, error: "请选择目标店铺" };
@@ -3328,34 +3326,44 @@ async function submitOzonWorkbenchPublishJob(productIds, options = {}) {
   const job = await createOzonWorkbenchPublishJob(productIds, options);
   if (!job.ok) return job;
 
-  const run = publishOzonWorkbenchRows(productIds, { ...options, jobId: job.jobId }).then(async (result) => {
+  try {
+    const result = await publishOzonWorkbenchRows(productIds, { ...options, jobId: job.jobId });
     if (!result || !result.ok) {
       await updateOzonWorkbenchPublishJob(job.jobId, {
         status: "FAILED",
         errorMessage: result && (result.error || result.msg) || "一键上架执行失败",
         payload: { stage: "failed" },
       }).catch(() => null);
+      return {
+        ok: false,
+        jobId: job.jobId,
+        error: result && (result.error || result.msg) || "一键上架执行失败",
+        data: { jobId: job.jobId, publish: result && result.data },
+      };
     }
-    return result;
-  }).catch(async (error) => {
+
+    const publishData = result.data && result.data.publish && result.data.publish.data ? result.data.publish.data : {};
+    return {
+      ok: true,
+      jobId: publishData.jobId || job.jobId,
+      msg: result.data && result.data.publish && result.data.publish.msg || "上架任务已提交到 ERP 上架日志",
+      data: {
+        jobId: publishData.jobId || job.jobId,
+        taskId: publishData.taskId,
+        count: publishData.count,
+        sourceCount: publishData.sourceCount,
+        mode: publishData.mode,
+      },
+    };
+  } catch (error) {
     const message = error && error.message ? error.message : String(error);
     await updateOzonWorkbenchPublishJob(job.jobId, {
       status: "FAILED",
       errorMessage: message,
       payload: { stage: "failed" },
     }).catch(() => null);
-    return { ok: false, error: message };
-  }).finally(() => {
-    setTimeout(() => ozonWorkbenchPublishInFlight.delete(job.jobId), 30000);
-  });
-  ozonWorkbenchPublishInFlight.set(job.jobId, run);
-
-  return {
-    ok: true,
-    jobId: job.jobId,
-    msg: "上架任务已提交到 ERP 上架日志",
-    data: { jobId: job.jobId },
-  };
+    return { ok: false, jobId: job.jobId, error: message, data: { jobId: job.jobId } };
+  }
 }
 
 async function getWatermarkTemplates(shopId) {

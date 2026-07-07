@@ -323,23 +323,43 @@ assert.match(
 );
 assert.match(
   background,
-  /submitOzonWorkbenchPublishJob[\s\S]*return\s+\{\s*ok:\s*true[\s\S]*jobId/,
-  'Ozon one-click publish should return after the listing job is accepted instead of waiting for the full publish flow',
+  /submitOzonWorkbenchPublishJob[\s\S]*const\s+result\s*=\s*await\s+publishOzonWorkbenchRows/,
+  'Ozon one-click publish should keep the extension message alive until the real publish flow reaches Ozon and receives a taskId',
+);
+assert.doesNotMatch(
+  background,
+  /const\s+run\s*=\s*publishOzonWorkbenchRows/,
+  'Ozon one-click publish should not rely on a detached Promise after returning from the MV3 message handler',
 );
 assert.match(
   overlay,
   /上架任务已提交到 ERP 上架日志/,
   'Ozon list publish panel should hand users off to ERP listing logs after submission',
 );
-assert.doesNotMatch(
+assert.match(
   overlay,
-  /后台可能仍在执行，请勿重复提交|LIST_WORKBENCH_PUBLISH_TIMEOUT_MS/,
-  'Ozon list publish panel should not keep a long-running front-end wait after submitting a job',
+  /LIST_WORKBENCH_PUBLISH_TIMEOUT_MS\s*=\s*10\s*\*\s*60\s*\*\s*1000/,
+  'Ozon list publish panel should allow the collect/watermark/publish flow enough time to return a real Ozon taskId',
 );
 assert.match(
   overlay,
   /data-role="row-filter"/,
   'Ozon list workbench should switch between all rows and selection-rule matched rows',
+);
+assert.match(
+  overlay,
+  /function\s+syncListWorkbenchRuleFilterOptions/,
+  'Ozon list workbench should populate rule-specific publish filters from current selection rules',
+);
+assert.match(
+  overlay,
+  /value="rule:\$\{escapeHtml\(rule\.id\)\}"/,
+  'Ozon list workbench should offer a separate filter option for each selection rule',
+);
+assert.match(
+  overlay,
+  /rowFilter\.startsWith\('rule:'\)[\s\S]*matchedRules\.some/,
+  'Ozon list workbench should filter rows by the selected rule before publishing selected rows',
 );
 assert.match(
   overlay,
@@ -427,8 +447,18 @@ assert.match(
 );
 assert.match(
   overlay,
-  /includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
+  /const\s+includeOffers\s*=\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'[\s\S]*includeOffers,/,
   'Ozon list workbench should fetch slow seller-offer details only in publish mode',
+);
+assert.match(
+  overlay,
+  /function\s+shouldReloadListWorkbenchRowsForMode/,
+  'Ozon list workbench should avoid full seller-data reloads when switching between already-loaded data/profit views',
+);
+assert.match(
+  overlay,
+  /__ssErpListWorkbenchRowsHaveOffers/,
+  'Ozon list workbench should remember whether slow publish offer details have already been loaded',
 );
 assert.match(
   overlay,

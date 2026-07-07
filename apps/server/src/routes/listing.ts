@@ -91,6 +91,14 @@ function objectRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
+function missingTaskIdMessage(payload: unknown): string {
+  const data = objectRecord(payload);
+  if (data.source === 'browser-one-click-listing') {
+    return '任务还未进入 Ozon 提交阶段，请稍后刷新；如果长期停留，说明浏览器后台执行中断，请重新提交';
+  }
+  return '任务缺少 taskId';
+}
+
 function buildDirectImportBySkuTitle(input: { title?: string; sku: number }): string {
   const title = String(input.title || '').trim();
   return title ? title.slice(0, 500) : `Ozon SKU ${input.sku}`;
@@ -283,7 +291,7 @@ export async function refreshListingProductPushJob(id: string, userId?: string):
 
   const taskId = (job.payload as any)?.taskId;
   if (!taskId) {
-    return { code: 0, msg: '任务缺少 taskId' };
+    return { code: 0, msg: missingTaskIdMessage(job.payload) };
   }
 
   const client = new OzonClient({
@@ -789,7 +797,7 @@ export async function listingRoutes(app: FastifyInstance) {
 
     const taskId = (job.payload as any)?.taskId;
     if (!taskId) {
-      return reply.send({ code: 0, msg: '任务缺少 taskId' });
+      return reply.send({ code: 0, msg: missingTaskIdMessage(job.payload) });
     }
 
     const client = new OzonClient({
