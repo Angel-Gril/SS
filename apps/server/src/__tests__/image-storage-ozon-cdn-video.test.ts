@@ -95,3 +95,51 @@ describe('Ozon CDN video upload', () => {
     expect(retryInit.headers.cookie).not.toContain('__Secure-ETC=stale-etc');
   });
 });
+
+describe('Ozon CDN image upload', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('retries transient seller upload socket failures before failing the publish image stage', async () => {
+    for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
+      vi.stubEnv(name, '');
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      const textUrl = String(url);
+      if (!textUrl.includes('__rr=1')) {
+        return new Response('probe', {
+          status: 200,
+          headers: {
+            'set-cookie': '__Secure-ETC=fresh-etc; Path=/; Secure; HttpOnly',
+          },
+        });
+      }
+      if (fetchMock.mock.calls.filter(([calledUrl]) => String(calledUrl).includes('__rr=1')).length === 1) {
+        const error = new TypeError('terminated') as TypeError & { cause?: { code: string } };
+        error.cause = { code: 'UND_ERR_SOCKET' };
+        throw error;
+      }
+      return new Response(JSON.stringify({
+        url: 'https://ir.ozone.ru/s3/sc-temporary/demo.jpg',
+        name: 'demo.jpg',
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { OzonCdnBackend } = await import('../services/image-storage.js');
+    const backend = new OzonCdnBackend({ cookie: 'sid=demo', companyId: '4494016' });
+
+    await expect(backend.uploadBuffer(Buffer.from('jpg-bytes'), 'demo.jpg', 'image/jpeg')).resolves.toEqual({
+      url: 'https://ir.ozone.ru/s3/sc-temporary/demo.jpg',
+      filename: 'demo.jpg',
+      backend: 'ozon-cdn',
+    });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('__rr=1'))).toHaveLength(2);
+  });
+});

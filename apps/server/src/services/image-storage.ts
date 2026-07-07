@@ -14,6 +14,8 @@ const httpFetch: typeof globalThis.fetch = proxyDispatcher
   ? ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher: proxyDispatcher }) as any)
   : globalThis.fetch;
 
+const OZON_CDN_IMAGE_UPLOAD_ATTEMPTS = 3;
+
 export interface ImageUploadResult {
   url: string;
   filename: string;
@@ -154,35 +156,39 @@ export class OzonCdnBackend implements ImageStorageBackend {
     }
     const fullCookie = `${cleanCookie}; ${etc}`;
 
-    let res: Response;
-    try {
-      res = await httpFetch(`${this.getUploadBaseUrl()}/api/images/synchronous/validate_raw?__rr=1`, {
-        method: 'POST',
-        headers: {
-          'content-type': `multipart/form-data; boundary=${boundary}`,
-          'cookie': fullCookie,
-          'x-o3-app-name': 'seller-ui',
-          'x-o3-company-id': this.config.companyId,
-          'origin': 'https://seller.ozon.ru',
-          'referer': 'https://seller.ozon.ru/',
-          'user-agent': 'Mozilla/5.0',
-        },
-        body,
-        signal: AbortSignal.timeout(30000),
-      });
-    } catch (e: any) {
-      const cause = e?.cause?.code || e?.cause?.message || e?.code || '';
-      const target = this.config.relayUrl ? `中转地址 ${this.config.relayUrl}` : 'upload.seller.ozon.ru';
-      const hint = cause === 'ENOTFOUND' || cause === 'EAI_AGAIN'
-        ? `DNS 解析失败：${target} 在当前网络不可达${this.config.relayUrl ? '。请检查 CF Worker 中转地址是否正确' : (PROXY_URL ? '' : '。请在超管设置中配置 CF Worker 中转地址，或使用 OSS 后端')}`
-        : cause === 'ECONNREFUSED' || cause === 'ECONNRESET'
-        ? '连接被拒绝/中断，可能是网络代理或防火墙拦截'
-        : cause === 'CERT_HAS_EXPIRED' || /certificate/i.test(String(cause))
-        ? 'TLS 证书校验失败'
-        : cause === 'UND_ERR_HEADERS_TIMEOUT' || /timeout/i.test(String(cause))
-        ? '请求超时'
-        : `底层错误: ${cause || e?.message || 'unknown'}`;
-      throw new Error(`OZON CDN 上传连接失败 — ${hint}`);
+    let res: Response | null = null;
+    for (let attempt = 1; attempt <= OZON_CDN_IMAGE_UPLOAD_ATTEMPTS; attempt += 1) {
+      try {
+        res = await httpFetch(`${this.getUploadBaseUrl()}/api/images/synchronous/validate_raw?__rr=1`, {
+          method: 'POST',
+          headers: {
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            'cookie': fullCookie,
+            'x-o3-app-name': 'seller-ui',
+            'x-o3-company-id': this.config.companyId,
+            'origin': 'https://seller.ozon.ru',
+            'referer': 'https://seller.ozon.ru/',
+            'user-agent': 'Mozilla/5.0',
+          },
+          body,
+          signal: AbortSignal.timeout(30000),
+        });
+        break;
+      } catch (e: any) {
+        const cause = getFetchFailureCause(e);
+        if (attempt < OZON_CDN_IMAGE_UPLOAD_ATTEMPTS && isTransientOzonCdnUploadFailure(cause, e)) {
+          console.warn(`[image-storage] Ozon CDN image upload interrupted (${cause || e?.message || 'unknown'}), retry ${attempt + 1}/${OZON_CDN_IMAGE_UPLOAD_ATTEMPTS}`);
+          await waitForOzonCdnUploadRetry(attempt);
+          continue;
+        }
+        const hint = formatOzonCdnUploadConnectionHint(cause, e, this.config.relayUrl);
+        const retrySuffix = attempt > 1 ? `（已重试 ${attempt} 次）` : '';
+        throw new Error(`OZON CDN 上传连接失败${retrySuffix} — ${hint}`);
+      }
+    }
+
+    if (!res) {
+      throw new Error('OZON CDN 上传连接失败 — 底层错误: empty response');
     }
 
     if (!res.ok) {
@@ -603,6 +609,46 @@ export async function getStorageBackend(shopId?: string): Promise<ImageStorageBa
 
 function randomBoundary(): string {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+function getFetchFailureCause(error: any): string {
+  return String(error?.cause?.code || error?.cause?.message || error?.code || '');
+}
+
+function isTransientOzonCdnUploadFailure(cause: string, error: any): boolean {
+  const text = `${cause} ${error?.message || ''}`;
+  return [
+    'UND_ERR_SOCKET',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_BODY_TIMEOUT',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'EAI_AGAIN',
+  ].some((token) => text.includes(token));
+}
+
+function formatOzonCdnUploadConnectionHint(cause: string, error: any, relayUrl?: string): string {
+  const target = relayUrl ? `中转地址 ${relayUrl}` : 'upload.seller.ozon.ru';
+  if (cause === 'ENOTFOUND' || cause === 'EAI_AGAIN') {
+    return `DNS 解析失败：${target} 在当前网络不可达${relayUrl ? '。请检查 CF Worker 中转地址是否正确' : (PROXY_URL ? '' : '。请在超管设置中配置 CF Worker 中转地址，或使用 OSS 后端')}`;
+  }
+  if (cause === 'ECONNREFUSED' || cause === 'ECONNRESET') {
+    return '连接被拒绝/中断，可能是网络代理或防火墙拦截';
+  }
+  if (cause === 'CERT_HAS_EXPIRED' || /certificate/i.test(String(cause))) {
+    return 'TLS 证书校验失败';
+  }
+  if (cause === 'UND_ERR_HEADERS_TIMEOUT' || /timeout/i.test(String(cause))) {
+    return '请求超时';
+  }
+  return `底层错误: ${cause || error?.message || 'unknown'}`;
+}
+
+async function waitForOzonCdnUploadRetry(attempt: number): Promise<void> {
+  if (process.env.NODE_ENV === 'test') return;
+  const delayMs = Math.min(2000, 500 * (2 ** Math.max(0, attempt - 1)));
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function guessMime(filename: string): string {
