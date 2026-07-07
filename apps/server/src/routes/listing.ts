@@ -10,7 +10,7 @@ import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
 import { randomOfferIdFrom } from '../lib/randomize.js';
-import { addBrowserOneClickListingJob } from '../workers/browser-one-click-listing.js';
+import { addBrowserOneClickListingJob, appendBrowserOneClickListingRows } from '../workers/browser-one-click-listing.js';
 
 const batchListSchema = z.object({
   shopId: z.string().min(1),
@@ -106,6 +106,27 @@ const BROWSER_ONE_CLICK_STAGE_STALE_MS = 15 * 60 * 1000;
 
 function objectRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function rowSku(row: Record<string, any>): string {
+  return String(row.sku || row.productId || '').trim();
+}
+
+function mergeRowsBySku(existingRows: Record<string, any>[], nextRows: Record<string, any>[]): Record<string, any>[] {
+  const bySku = new Map<string, Record<string, any>>();
+  for (const row of existingRows) {
+    const sku = rowSku(row);
+    if (sku) bySku.set(sku, row);
+  }
+  for (const row of nextRows) {
+    const sku = rowSku(row);
+    if (sku) bySku.set(sku, row);
+  }
+  return Array.from(bySku.values());
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 }
 
 function isBrowserOneClickStageStale(data: Record<string, any>): boolean {
@@ -754,13 +775,43 @@ export async function listingRoutes(app: FastifyInstance) {
     const nextStatus = parsed.data.status || job.status;
     const previousPayload = objectRecord(job.payload);
     const patchPayload = objectRecord(parsed.data.payload);
+    let ingestResult: Awaited<ReturnType<typeof appendBrowserOneClickListingRows>> | null = null;
+    if (
+      previousPayload.source === 'browser-one-click-listing'
+      && patchPayload.browserPayloadBatch === true
+      && Array.isArray(patchPayload.rows)
+      && patchPayload.rows.length
+      && nextStatus !== 'FAILED'
+    ) {
+      ingestResult = await appendBrowserOneClickListingRows(job.id, patchPayload.rows.map(objectRecord));
+    }
     const shouldStartDeferredJob = previousPayload.source === 'browser-one-click-listing'
       && previousPayload.browserPayloadReady === false
       && patchPayload.browserPayloadReady === true
       && nextStatus !== 'FAILED';
+    const previousRows = Array.isArray(previousPayload.rows) ? previousPayload.rows.map(objectRecord) : [];
+    const patchRows = Array.isArray(patchPayload.rows) ? patchPayload.rows.map(objectRecord) : [];
+    const mergedRows = ingestResult ? ingestResult.rows : (patchRows.length ? mergeRowsBySku(previousRows, patchRows) : previousRows);
+    const mergedSupplyGoodsIds = ingestResult
+      ? ingestResult.supplyGoodsIds
+      : uniqueStrings([...(Array.isArray(previousPayload.supplyGoodsIds) ? previousPayload.supplyGoodsIds : []), ...(Array.isArray(patchPayload.supplyGoodsIds) ? patchPayload.supplyGoodsIds : [])]);
+    const mergedSkuGoodsIds = ingestResult
+      ? ingestResult.skuGoodsIds
+      : { ...objectRecord(previousPayload.browserOneClickSkuGoodsIds), ...objectRecord(patchPayload.browserOneClickSkuGoodsIds) };
     const payload = {
       ...previousPayload,
       ...patchPayload,
+      ...(mergedRows.length ? { rows: mergedRows } : {}),
+      ...(mergedSupplyGoodsIds.length ? { supplyGoodsIds: mergedSupplyGoodsIds, collected: mergedSupplyGoodsIds.length } : {}),
+      ...(Object.keys(mergedSkuGoodsIds).length ? { browserOneClickSkuGoodsIds: mergedSkuGoodsIds } : {}),
+      ...(ingestResult ? {
+        browserPayloadIngest: {
+          accepted: ingestResult.accepted,
+          failed: ingestResult.failed,
+          errors: ingestResult.errors,
+          updatedAt: new Date().toISOString(),
+        },
+      } : {}),
       ...(shouldStartDeferredJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
     };
     const updateData: Record<string, any> = {

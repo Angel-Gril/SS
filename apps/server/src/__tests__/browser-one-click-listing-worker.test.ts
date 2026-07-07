@@ -60,6 +60,82 @@ describe('browser one-click listing worker', () => {
     vi.clearAllMocks();
   });
 
+  it('appends browser-enriched rows into temporary supply goods one SKU at a time', async () => {
+    let currentPayload = {
+      source: 'browser-one-click-listing',
+      stage: 'preparing_browser_data',
+      entry: 'ozon-list-page-full',
+      sourceSkus: ['2143427743', '3186614714'],
+      productUrls: ['https://www.ozon.ru/product/2143427743/', 'https://www.ozon.ru/product/3186614714/'],
+      rows: [],
+      supplyGoodsIds: [],
+      browserOneClickSkuGoodsIds: {},
+      publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+    };
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: 'job-1',
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload: currentPayload,
+          shop: { userId: 'user-1', user: { id: 'user-1', role: 'USER' } },
+        };
+      }
+      return { payload: currentPayload };
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => {
+      currentPayload = data.payload;
+      return { id: 'job-1', payload: currentPayload };
+    });
+    mocks.supplyGoodsCreate.mockResolvedValue({ id: 'sg-1' });
+    mocks.resolveCollectedPrice.mockResolvedValue({
+      purchasePriceCny: 88,
+      originalPrice: 1000,
+      originalCurrency: 'RUB',
+      exchangeRateUsed: 0.088,
+      needsReview: false,
+    });
+
+    const row = {
+      sku: '2143427743',
+      title: 'Ozon product',
+      image: 'https://cdn.example/p.jpg',
+      pagePrice: 1000,
+      pagePriceCurrency: 'RUB',
+      ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }],
+    };
+    const { appendBrowserOneClickListingRows } = await import('../workers/browser-one-click-listing.js');
+    const result = await appendBrowserOneClickListingRows('job-1', [row]);
+
+    expect(result).toMatchObject({
+      accepted: 1,
+      failed: 0,
+      supplyGoodsIds: ['sg-1'],
+      skuGoodsIds: { '2143427743': 'sg-1' },
+    });
+    expect(mocks.supplyGoodsCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        user: { connect: { id: 'user-1' } },
+        sku: '2143427743',
+        sourcePlatform: 'ozon',
+        images: ['https://cdn.example/p.jpg'],
+        metadata: expect.objectContaining({
+          ephemeralListing: true,
+          browserOneClickJobId: 'job-1',
+          ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }],
+        }),
+      }),
+    });
+    expect(currentPayload).toMatchObject({
+      stage: 'collecting',
+      rows: [row],
+      supplyGoodsIds: ['sg-1'],
+      browserOneClickSkuGoodsIds: { '2143427743': 'sg-1' },
+      browserPayloadIngest: { accepted: 1, failed: 0 },
+    });
+  });
+
   it('creates temporary supply goods and delegates publish to the existing collect publish endpoint', async () => {
     const payload = {
       source: 'browser-one-click-listing',

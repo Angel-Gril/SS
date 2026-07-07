@@ -386,6 +386,16 @@ assert.match(
   /completeOzonWorkbenchPublishJobPayload[\s\S]*browserPayloadReady:\s*true/,
   'Ozon one-click publish should patch enriched rows back to the pre-created listing-log job and then let ERP start the backend queue',
 );
+assert.match(
+  background,
+  /streamOzonWorkbenchPublishRowsToJob[\s\S]*browserPayloadBatch:\s*true[\s\S]*rows:\s*\[row\]/,
+  'Ozon one-click publish should stream each enriched SKU row into ERP instead of waiting for the whole batch',
+);
+assert.doesNotMatch(
+  background,
+  /completeOzonWorkbenchPublishJobPayload[\s\S]*const\s+payload\s*=\s*await\s+buildOzonWorkbenchPublishPayload/,
+  'Ozon one-click publish should not build the full publish payload before ERP can ingest temporary goods',
+);
 assert.doesNotMatch(
   background,
   /OZON_WORKBENCH_PUBLISH_QUEUE_KEY[\s\S]*runQueuedOzonWorkbenchPublishJob/,

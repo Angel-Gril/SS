@@ -235,7 +235,7 @@ test('browser one-click listing is executed by the ERP backend worker queue', ()
   );
 });
 
-test('browser one-click listing preserves complete Ozon publish data before handing off to backend queue', () => {
+test('browser one-click listing streams complete Ozon publish data into ERP temporary goods', () => {
   const publishRowsFn = background.match(/async function\s+buildOzonWorkbenchPublishRows[\s\S]*?\n}\n\nasync function\s+buildOzonWorkbenchPublishPayload/);
   assert.ok(publishRowsFn, 'extension should have a dedicated publish-row enrichment function');
   assert.match(
@@ -260,8 +260,18 @@ test('browser one-click listing preserves complete Ozon publish data before hand
   );
   assert.match(
     background,
-    /const\s+rows\s*=\s*await\s+buildOzonWorkbenchPublishRows[\s\S]*\n\s*rows,/,
-    'backend queue payload should contain the enriched publish rows, not only the lightweight KPI table rows',
+    /streamOzonWorkbenchPublishRowsToJob[\s\S]*browserPayloadBatch:\s*true[\s\S]*rows:\s*\[row\]/,
+    'extension should stream enriched rows into the visible ERP job one SKU at a time',
+  );
+  assert.match(
+    listingRoute,
+    /appendBrowserOneClickListingRows\(job\.id,\s*patchPayload\.rows\.map\(objectRecord\)\)/,
+    'ERP should convert each streamed row into temporary collect records before the backend queue starts',
+  );
+  assert.match(
+    backendWorker,
+    /export async function\s+appendBrowserOneClickListingRows[\s\S]*prisma\.supplyGoods\.create/,
+    'backend worker helper should persist streamed browser rows as temporary SupplyGoods',
   );
   assert.match(
     backendWorker,

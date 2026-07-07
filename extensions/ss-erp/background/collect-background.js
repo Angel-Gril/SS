@@ -3409,6 +3409,74 @@ async function patchOzonWorkbenchPublishJob(conn, jobId, body) {
   return parsed;
 }
 
+async function streamOzonWorkbenchPublishRowsToJob(conn, jobId, productIds, options = {}) {
+  const inputs = normalizeOzonCollectionInputs(productIds, options.productUrls);
+  const fallbackRows = Array.isArray(options.rows) ? options.rows : [];
+  const rowBySku = new Map(fallbackRows.map((row) => [String(row && row.sku || "").trim(), row]));
+  const collectPolicy = resolveOzonCollectionPolicy({ mode: "complete" });
+  const collectionRunOptions = {
+    ...collectPolicy,
+    fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
+  };
+  const productTimeoutMs = Number(options.productTimeoutMs) || 45 * 1000;
+  const variantTimeoutMs = Number(options.variantTimeoutMs) || 45 * 1000;
+  let sellerCompanyId = null;
+  try { sellerCompanyId = await getSellerCompanyId(); } catch (e) {}
+
+  const rows = [];
+  const errors = [];
+  const streamRows = inputs.length
+    ? inputs
+    : fallbackRows.map((row) => ({
+      productId: String(row && (row.sku || row.productId) || "").trim(),
+      sourceUrl: row && row.sourceUrl ? String(row.sourceUrl) : null,
+      fallbackOnly: true,
+    })).filter((input) => input.productId);
+
+  for (let i = 0; i < streamRows.length; i++) {
+    const pid = streamRows[i].productId;
+    const sourceUrl = streamRows[i].sourceUrl;
+    const fallbackRow = rowBySku.get(String(pid)) || { sku: String(pid), sourceUrl };
+    let row = null;
+    if (streamRows[i].fallbackOnly) {
+      row = { ...fallbackRow, sku: String(pid), sourceUrl: sourceUrl || fallbackRow.sourceUrl };
+    } else {
+      try {
+        const r = await withTimeout(fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions), productTimeoutMs);
+        if (!r || !r.ok) throw new Error(r && r.error || "OZON 公开数据获取失败");
+        const productData = r.data || {};
+        await withTimeout(completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions), variantTimeoutMs);
+        await enrichOzonWorkbenchPublishProductData(productData, pid, sellerCompanyId, collectPolicy);
+        if (Array.isArray(productData.variants) && productData.variants.length > 0) {
+          productData.variants = sanitizeCollectedOzonVariantAttrs(productData.variants);
+        }
+        row = mapOzonProductToWorkbenchPublishRow(productData, fallbackRow, pid, sourceUrl);
+      } catch (error) {
+        const message = normalizeErrorMessage(error).slice(0, 200);
+        errors.push({ productId: pid, error: message });
+        row = { ...fallbackRow, sku: String(pid), sourceUrl: sourceUrl || fallbackRow.sourceUrl, publishDataWarning: message };
+      }
+    }
+
+    if (row && row.sku) {
+      await patchOzonWorkbenchPublishJob(conn, jobId, {
+        status: "RUNNING",
+        payload: {
+          stage: "collecting",
+          browserPayloadBatch: true,
+          browserPayloadReady: false,
+          rows: [row],
+          browserPayloadBatchAt: new Date().toISOString(),
+        },
+      });
+      rows.push(row);
+    }
+    if (i < streamRows.length - 1) await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  return { ok: true, count: rows.length, errors };
+}
+
 async function markOzonWorkbenchPublishJobFailed(conn, jobId, error) {
   try {
     await patchOzonWorkbenchPublishJob(conn, jobId, {
@@ -3426,14 +3494,18 @@ async function markOzonWorkbenchPublishJobFailed(conn, jobId, error) {
 
 async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, options = {}) {
   try {
-    const payload = await buildOzonWorkbenchPublishPayload(productIds, options);
+    const streamResult = await streamOzonWorkbenchPublishRowsToJob(conn, jobId, productIds, options);
     await patchOzonWorkbenchPublishJob(conn, jobId, {
       status: "RUNNING",
       payload: {
-        ...payload,
         stage: "submitted",
         browserPayloadReady: true,
+        browserPayloadComplete: true,
         browserPayloadReadyAt: new Date().toISOString(),
+        browserPayloadStream: {
+          count: streamResult.count,
+          errors: streamResult.errors,
+        },
       },
     });
   } catch (error) {

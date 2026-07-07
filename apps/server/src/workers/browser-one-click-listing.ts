@@ -62,6 +62,34 @@ function rowPriceInput(row: Record<string, any>, sku: string, publish: Record<st
   return { price: price ? String(price) : undefined, currency };
 }
 
+function rowSku(row: Record<string, any>): string {
+  return String(row.sku || row.productId || '').trim();
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function mergeRowsBySku(existingRows: Record<string, any>[], nextRows: Record<string, any>[]): Record<string, any>[] {
+  const bySku = new Map<string, Record<string, any>>();
+  for (const row of existingRows) {
+    const sku = rowSku(row);
+    if (sku) bySku.set(sku, row);
+  }
+  for (const row of nextRows) {
+    const sku = rowSku(row);
+    if (sku) bySku.set(sku, row);
+  }
+  return Array.from(bySku.values());
+}
+
+function productUrlForSku(payload: Record<string, any>, sku: string, row: Record<string, any>): string | undefined {
+  const productUrls = stringList(payload.productUrls);
+  const sourceSkus = stringList(payload.sourceSkus);
+  const index = sourceSkus.indexOf(sku);
+  return String(row.sourceUrl || (index >= 0 ? productUrls[index] : '') || '').trim() || undefined;
+}
+
 function assignIfPresent(target: Record<string, any>, key: string, value: unknown) {
   if (value === undefined || value === null || value === '') return;
   target[key] = value;
@@ -118,6 +146,104 @@ async function mergeBrowserOneClickJobPayload(jobId: string, patch: Record<strin
   return payload;
 }
 
+export async function appendBrowserOneClickListingRows(syncJobId: string, inputRows: Record<string, any>[]) {
+  const rows = Array.isArray(inputRows) ? inputRows.map(objectRecord).filter((row) => rowSku(row)) : [];
+  const job = await prisma.syncJob.findUnique({
+    where: { id: syncJobId },
+    include: { shop: { include: { user: { select: { id: true, role: true } } } } },
+  });
+  if (!job) throw new Error(`Browser one-click listing job ${syncJobId} not found`);
+  const payload = objectRecord(job.payload);
+  if (payload.source !== 'browser-one-click-listing' && payload.browserOneClickJob !== true) {
+    throw new Error('不是浏览器一键上架任务');
+  }
+
+  const existingRows = Array.isArray(payload.rows) ? payload.rows.map(objectRecord) : [];
+  const skuGoodsIds = objectRecord(payload.browserOneClickSkuGoodsIds);
+  const supplyGoodsIds = stringList(payload.supplyGoodsIds);
+  const errors: Array<{ sku: string; error: string }> = [];
+  let accepted = 0;
+
+  for (const row of rows) {
+    const sku = rowSku(row);
+    if (!sku) continue;
+    if (skuGoodsIds[sku]) continue;
+    try {
+      const item = await createBrowserOneClickSupplyGoodFromRow(job, payload, row);
+      skuGoodsIds[item.sku] = item.id;
+      supplyGoodsIds.push(item.id);
+      accepted += 1;
+    } catch (error: any) {
+      errors.push({ sku, error: error?.message ? String(error.message).slice(0, 240) : String(error).slice(0, 240) });
+    }
+  }
+
+  const mergedRows = mergeRowsBySku(existingRows, rows);
+  const mergedIds = uniqueStrings(supplyGoodsIds);
+  await mergeBrowserOneClickJobPayload(job.id, {
+    stage: 'collecting',
+    rows: mergedRows,
+    supplyGoodsIds: mergedIds,
+    browserOneClickSkuGoodsIds: skuGoodsIds,
+    collected: mergedIds.length,
+    browserPayloadIngest: {
+      accepted,
+      failed: errors.length,
+      errors,
+      updatedAt: new Date().toISOString(),
+    },
+  }, 'RUNNING', null);
+
+  return {
+    accepted,
+    failed: errors.length,
+    errors,
+    rows: mergedRows,
+    supplyGoodsIds: mergedIds,
+    skuGoodsIds,
+  };
+}
+
+async function createBrowserOneClickSupplyGoodFromRow(
+  job: any,
+  payload: Record<string, any>,
+  row: Record<string, any>,
+): Promise<{ id: string; sku: string }> {
+  const sku = rowSku(row);
+  if (!sku) throw new Error('缺少 SKU');
+  const publish = objectRecord(payload.publish);
+  const sourceUrl = productUrlForSku(payload, sku, row) || `https://www.ozon.ru/product/${sku}/`;
+  const { price, currency } = rowPriceInput(row, sku, publish);
+  const priceInfo = await resolveCollectedPrice(price, currency, sourceUrl);
+  const images = rowImageList(row);
+  const expiresAt = new Date(Date.now() + EPHEMERAL_LISTING_TTL_MS);
+  const metadata = buildBrowserOneClickOzonMetadata(row, job.id, payload, expiresAt);
+  const variants = Array.isArray(row.variants) && row.variants.length ? row.variants : undefined;
+  const item = await prisma.supplyGoods.create({
+    data: {
+      user: { connect: { id: job.shop.userId } },
+      title: rowTitle(row, sku),
+      sourceUrl,
+      sourcePlatform: 'ozon',
+      sourceProductId: sku,
+      sku,
+      images: images.length ? images : undefined,
+      purchasePrice: priceInfo.purchasePriceCny,
+      currency: 'CNY',
+      originalPrice: priceInfo.originalPrice,
+      originalCurrency: priceInfo.originalCurrency,
+      exchangeRateUsed: priceInfo.exchangeRateUsed,
+      priceNeedsReview: priceInfo.needsReview,
+      notes: String(row.description || row.categoryPath || row.salesSchema || '').slice(0, 500) || null,
+      metadata: metadata as any,
+      variants: variants as any,
+      modelId: row.modelId ? String(row.modelId) : null,
+      status: 'collected',
+    },
+  });
+  return { id: item.id, sku };
+}
+
 async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
   const payload = objectRecord(job.payload);
   const existingIds = stringList(payload.supplyGoodsIds).length
@@ -132,16 +258,13 @@ async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
   }
 
   const sourceSkus = stringList(payload.sourceSkus);
-  const productUrls = stringList(payload.productUrls);
   const rows: Record<string, any>[] = Array.isArray(payload.rows) ? payload.rows.map(objectRecord) : [];
-  const publish = objectRecord(payload.publish);
   const rowEntries: Array<[string, Record<string, any>]> = [];
   for (const row of rows) {
-    const sku = String(row.sku || row.productId || '').trim();
+    const sku = rowSku(row);
     if (sku) rowEntries.push([sku, row]);
   }
   const rowBySku = new Map<string, Record<string, any>>(rowEntries);
-  const expiresAt = new Date(Date.now() + EPHEMERAL_LISTING_TTL_MS);
   const ids: string[] = [];
 
   await mergeBrowserOneClickJobPayload(job.id, { stage: 'collecting', itemCount: sourceSkus.length }, 'RUNNING', null);
@@ -149,33 +272,7 @@ async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
   for (let index = 0; index < sourceSkus.length; index += 1) {
     const sku = sourceSkus[index]!;
     const row: Record<string, any> = rowBySku.get(sku) || {};
-    const { price, currency } = rowPriceInput(row, sku, publish);
-    const priceInfo = await resolveCollectedPrice(price, currency, productUrls[index] || row.sourceUrl);
-    const images = rowImageList(row);
-    const metadata = buildBrowserOneClickOzonMetadata(row, job.id, payload, expiresAt);
-    const variants = Array.isArray(row.variants) && row.variants.length ? row.variants : undefined;
-    const item = await prisma.supplyGoods.create({
-      data: {
-        user: { connect: { id: job.shop.userId } },
-        title: rowTitle(row, sku),
-        sourceUrl: String(row.sourceUrl || productUrls[index] || `https://www.ozon.ru/product/${sku}/`).trim(),
-        sourcePlatform: 'ozon',
-        sourceProductId: sku,
-        sku,
-        images: images.length ? images : undefined,
-        purchasePrice: priceInfo.purchasePriceCny,
-        currency: 'CNY',
-        originalPrice: priceInfo.originalPrice,
-        originalCurrency: priceInfo.originalCurrency,
-        exchangeRateUsed: priceInfo.exchangeRateUsed,
-        priceNeedsReview: priceInfo.needsReview,
-        notes: String(row.description || row.categoryPath || row.salesSchema || '').slice(0, 500) || null,
-        metadata: metadata as any,
-        variants: variants as any,
-        modelId: row.modelId ? String(row.modelId) : null,
-        status: 'collected',
-      },
-    });
+    const item = await createBrowserOneClickSupplyGoodFromRow(job, payload, { ...row, sku });
     ids.push(item.id);
   }
 

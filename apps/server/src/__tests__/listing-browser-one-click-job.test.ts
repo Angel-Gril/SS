@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   syncJobFindFirst: vi.fn(),
   syncJobUpdate: vi.fn(),
   addBrowserOneClickListingJob: vi.fn(),
+  appendBrowserOneClickListingRows: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({
@@ -44,6 +45,7 @@ vi.mock('../services/post-publish-sync.js', () => ({
 
 vi.mock('../workers/browser-one-click-listing.js', () => ({
   addBrowserOneClickListingJob: mocks.addBrowserOneClickListingJob,
+  appendBrowserOneClickListingRows: mocks.appendBrowserOneClickListingRows,
 }));
 
 async function buildApp() {
@@ -220,6 +222,86 @@ describe('browser one-click listing jobs', () => {
         data: { id: 'job-1', status: 'RUNNING' },
       });
       expect(mocks.addBrowserOneClickListingJob).toHaveBeenCalledWith('job-1');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('ingests browser-enriched rows as temporary goods before the deferred job starts', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'preparing_browser_data',
+        browserPayloadReady: false,
+        sourceSkus: ['2143427743', '3186614714'],
+        rows: [],
+        supplyGoodsIds: [],
+        browserOneClickSkuGoodsIds: {},
+      },
+      shop: { userId: 'user-1' },
+    });
+    mocks.appendBrowserOneClickListingRows.mockResolvedValue({
+      accepted: 1,
+      failed: 0,
+      rows: [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+      supplyGoodsIds: ['sg-1'],
+      skuGoodsIds: { '2143427743': 'sg-1' },
+      errors: [],
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'RUNNING',
+      finishedAt: null,
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'collecting',
+        browserPayloadReady: false,
+        sourceSkus: ['2143427743', '3186614714'],
+        rows: [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+        supplyGoodsIds: ['sg-1'],
+        browserOneClickSkuGoodsIds: { '2143427743': 'sg-1' },
+      },
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/api/listing/browser-one-click-jobs/job-1',
+        payload: {
+          status: 'RUNNING',
+          payload: {
+            stage: 'collecting',
+            browserPayloadBatch: true,
+            rows: [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(mocks.appendBrowserOneClickListingRows).toHaveBeenCalledWith(
+        'job-1',
+        [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+      );
+      expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          status: 'RUNNING',
+          payload: expect.objectContaining({
+            stage: 'collecting',
+            browserPayloadReady: false,
+            rows: [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+            supplyGoodsIds: ['sg-1'],
+            browserOneClickSkuGoodsIds: { '2143427743': 'sg-1' },
+            browserPayloadIngest: expect.objectContaining({ accepted: 1, failed: 0 }),
+          }),
+        }),
+        select: expect.any(Object),
+      });
+      expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }
