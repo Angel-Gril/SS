@@ -34,8 +34,9 @@
   const CARD_SCAN_FAST_MS = 500;
   const CARD_SCAN_SLOW_MS = 2000;
   const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
-  // T6 自动滚动：防风控节流——每步滚动间隔 + 到底判定的稳定轮次。
-  const AUTO_SCROLL_STEP_MS = 900;          // 每次滚动间隔（配合项目 1-2 req/s 约束，留足懒加载时间）
+  // T6 自动滚动：防风控节流——随机步进间隔 + 到底判定的稳定轮次。
+  const AUTO_SCROLL_STEP_DELAY_MIN_MS = 3000;
+  const AUTO_SCROLL_STEP_DELAY_MAX_MS = 5000;
   const AUTO_SCROLL_STEP_RATIO = 0.85;      // 每步滚动视口高度占比（略小于一屏，避免跳过懒加载触发点）
   const AUTO_SCROLL_MAX_STABLE = 4;         // 连续 N 轮高度与 SKU 数都不增长即判定到底
   const AUTO_SCROLL_MAX_STEPS = 400;        // 硬上限，防止异常页面无限滚动
@@ -2254,6 +2255,11 @@
       : quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1');
   }
 
+  function getAutoScrollStepDelayMs() {
+    const span = AUTO_SCROLL_STEP_DELAY_MAX_MS - AUTO_SCROLL_STEP_DELAY_MIN_MS;
+    return AUTO_SCROLL_STEP_DELAY_MIN_MS + Math.floor(Math.random() * (span + 1));
+  }
+
   function stopAutoScroll(reason) {
     if (autoScrollState.timer) {
       clearTimeout(autoScrollState.timer);
@@ -2284,7 +2290,7 @@
       if (!autoScrollState.running) return;
       // 页面切后台时暂停一拍，避免空滚 + 减少无谓请求。
       if (document.visibilityState !== 'visible') {
-        autoScrollState.timer = setTimeout(step, AUTO_SCROLL_STEP_MS);
+        autoScrollState.timer = setTimeout(step, getAutoScrollStepDelayMs());
         return;
       }
       // 硬上限保护：异常页面（无限流）避免无限滚动。
@@ -2318,12 +2324,12 @@
           return;
         }
         step();
-      }, AUTO_SCROLL_STEP_MS);
+      }, getAutoScrollStepDelayMs());
     };
 
     step();
     const panel = document.getElementById(LIST_QUICK_ACTIONS_ID);
-    if (panel) setListQuickStatus(panel, '自动滚动已开始');
+    if (panel) setListQuickStatus(panel, '自动滚动已开始 · 3-5秒随机间隔');
   }
 
   function toggleAutoScroll() {

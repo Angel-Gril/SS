@@ -477,8 +477,18 @@ assert.match(
 );
 assert.match(
   overlay,
-  /AUTO_SCROLL_STEP_MS\s*=\s*900[\s\S]*AUTO_SCROLL_MAX_STEPS\s*=\s*400/,
-  'Ozon list auto-scroll should keep the requested throttle and hard step cap',
+  /AUTO_SCROLL_STEP_DELAY_MIN_MS\s*=\s*3000[\s\S]*AUTO_SCROLL_STEP_DELAY_MAX_MS\s*=\s*5000[\s\S]*AUTO_SCROLL_MAX_STEPS\s*=\s*400/,
+  'Ozon list auto-scroll should use a slower 3-5s random interval while keeping the hard step cap',
+);
+assert.match(
+  overlay,
+  /function\s+getAutoScrollStepDelayMs\(\)[\s\S]*Math\.random\(\)/,
+  'Ozon list auto-scroll should randomize each wait instead of using a fixed one-second cadence',
+);
+assert.doesNotMatch(
+  overlay,
+  /setTimeout\([^,\n]+,\s*AUTO_SCROLL_STEP_MS\)/,
+  'Ozon list auto-scroll should not schedule steps with the old fixed one-second delay',
 );
 assert.match(
   overlay,
