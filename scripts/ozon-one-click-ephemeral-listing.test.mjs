@@ -169,8 +169,8 @@ test('browser one-click listing logs surface stale extension background interrup
   );
   assert.match(
     listingRoute,
-    /function\s+isBrowserOneClickStageStale[\s\S]*watermarking[\s\S]*watermarked[\s\S]*publishing/,
-    'listing logs should detect stale collect/watermark/publish stages before an Ozon taskId exists',
+    /function\s+isBrowserOneClickStageStale[\s\S]*preparing_browser_data[\s\S]*watermarking[\s\S]*watermarked[\s\S]*publishing/,
+    'listing logs should detect stale browser-data/collect/watermark/publish stages before an Ozon taskId exists',
   );
   assert.match(
     listingRoute,

@@ -366,6 +366,26 @@ assert.match(
   /createOzonWorkbenchPublishJob\(productIds,\s*options\)[\s\S]*return\s*\{[\s\S]*queued:\s*true/,
   'Ozon one-click publish should return after ERP accepts the backend queued job',
 );
+assert.match(
+  background,
+  /function\s+buildOzonWorkbenchInitialPublishPayload[\s\S]*deferStart:\s*true/,
+  'Ozon one-click publish should create a visible deferred listing-log job before browser-side enrichment starts',
+);
+assert.doesNotMatch(
+  background,
+  /async function createOzonWorkbenchPublishJob[\s\S]*await\s+buildOzonWorkbenchPublishPayload[\s\S]*\/api\/listing\/browser-one-click-jobs/,
+  'Ozon one-click publish should not wait for full browser-side enrichment before creating the ERP listing log',
+);
+assert.match(
+  background,
+  /patchOzonWorkbenchPublishJob[\s\S]*\/api\/listing\/browser-one-click-jobs\/"\s*\+\s*encodeURIComponent\(jobId\)/,
+  'Ozon one-click publish should patch the pre-created listing-log job by id',
+);
+assert.match(
+  background,
+  /completeOzonWorkbenchPublishJobPayload[\s\S]*browserPayloadReady:\s*true/,
+  'Ozon one-click publish should patch enriched rows back to the pre-created listing-log job and then let ERP start the backend queue',
+);
 assert.doesNotMatch(
   background,
   /OZON_WORKBENCH_PUBLISH_QUEUE_KEY[\s\S]*runQueuedOzonWorkbenchPublishJob/,

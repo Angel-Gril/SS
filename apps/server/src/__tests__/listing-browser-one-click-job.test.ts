@@ -124,6 +124,107 @@ describe('browser one-click listing jobs', () => {
     }
   });
 
+  it('can create a visible deferred job before browser-side publish data is ready', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      name: 'BINI',
+      platform: 'OZON',
+      status: 'ACTIVE',
+    });
+    mocks.syncJobCreate.mockResolvedValue({ id: 'job-1' });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/browser-one-click-jobs',
+        payload: {
+          shopId: 'shop-1',
+          entry: 'ozon-list-page-full',
+          mode: 'clone',
+          deferStart: true,
+          sourceSkus: ['2143427743'],
+          productUrls: ['https://www.ozon.ru/product/2143427743/'],
+          rows: [{ sku: '2143427743', title: 'Ozon product', image: 'https://cdn.example/p.jpg', pagePrice: 1000 }],
+          itemCount: 1,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { jobId: 'job-1', queued: false, deferred: true },
+      });
+      expect(mocks.syncJobCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          status: 'RUNNING',
+          payload: expect.objectContaining({
+            source: 'browser-one-click-listing',
+            stage: 'preparing_browser_data',
+            browserPayloadReady: false,
+            sourceSkus: ['2143427743'],
+          }),
+        }),
+        select: { id: true },
+      });
+      expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('starts a deferred browser one-click job when the extension patches enriched rows', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'preparing_browser_data',
+        browserPayloadReady: false,
+        sourceSkus: ['2143427743'],
+      },
+      shop: { userId: 'user-1' },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'RUNNING',
+      finishedAt: null,
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'submitted',
+        browserPayloadReady: true,
+        sourceSkus: ['2143427743'],
+        rows: [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+      },
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/api/listing/browser-one-click-jobs/job-1',
+        payload: {
+          status: 'RUNNING',
+          payload: {
+            stage: 'submitted',
+            browserPayloadReady: true,
+            rows: [{ sku: '2143427743', ozonAttributes: [{ id: 85, values: [{ value: 'Brand' }] }] }],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { id: 'job-1', status: 'RUNNING' },
+      });
+      expect(mocks.addBrowserOneClickListingJob).toHaveBeenCalledWith('job-1');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('lets the extension background mark the pre-created job failed when collection or watermarking stops early', async () => {
     mocks.syncJobFindFirst.mockResolvedValue({
       id: 'job-1',

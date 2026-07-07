@@ -92,6 +92,7 @@ const browserOneClickJobSchema = z.object({
   fxRate: z.coerce.number().optional(),
   commissionRate: z.coerce.number().optional(),
   logisticsFeeCny: z.coerce.number().optional(),
+  deferStart: z.boolean().optional(),
 });
 
 const browserOneClickJobPatchSchema = z.object({
@@ -109,7 +110,7 @@ function objectRecord(value: unknown): Record<string, any> {
 
 function isBrowserOneClickStageStale(data: Record<string, any>): boolean {
   const stage = String(data.stage || '').trim();
-  if (!['collecting', 'collected', 'watermarking', 'watermarked', 'publishing'].includes(stage)) return false;
+  if (!['preparing_browser_data', 'collecting', 'collected', 'watermarking', 'watermarked', 'publishing'].includes(stage)) return false;
   const updatedAt = new Date(String(data.updatedAt || data.submittedAt || ''));
   if (!Number.isFinite(updatedAt.getTime())) return false;
   return Date.now() - updatedAt.getTime() > BROWSER_ONE_CLICK_STAGE_STALE_MS;
@@ -121,6 +122,7 @@ function missingTaskIdMessage(payload: unknown): string {
     const stage = String(data.stage || '').trim();
     if (isBrowserOneClickStageStale(data)) return 'ERP 后台队列执行可能已中断；请稍后刷新队列状态，确认未重复上架后再重新提交';
     if (stage === 'collecting') return 'ERP 后台队列正在写入临时采集商品，请稍后刷新';
+    if (stage === 'preparing_browser_data') return '浏览器扩展正在补全商品数据，完成后会自动进入 ERP 后台队列';
     if (stage === 'collected') return 'ERP 后台队列已写入临时采集商品，正在准备打水印/提交上架';
     if (stage === 'watermarking') return 'ERP 后台队列正在打水印，请稍后刷新';
     if (stage === 'watermarked') return 'ERP 后台队列已完成打水印，正在提交到 Ozon';
@@ -694,9 +696,10 @@ export async function listingRoutes(app: FastifyInstance) {
       ...(parsed.data.logisticsFeeCny !== undefined ? { logisticsFeeCny: parsed.data.logisticsFeeCny } : {}),
     };
     const itemCount = parsed.data.itemCount || sourceSkus.length || 1;
+    const deferStart = parsed.data.deferStart === true;
     const payload: Record<string, any> = {
       source: 'browser-one-click-listing',
-      stage: 'submitted',
+      stage: deferStart ? 'preparing_browser_data' : 'submitted',
       entry: parsed.data.entry || 'extension-workbench',
       mode: parsed.data.mode || 'clone',
       itemCount,
@@ -704,6 +707,7 @@ export async function listingRoutes(app: FastifyInstance) {
       productUrls,
       rows,
       publish,
+      browserPayloadReady: !deferStart,
       submittedAt: new Date().toISOString(),
     };
     if (parsed.data.watermark) payload.watermark = parsed.data.watermark;
@@ -718,12 +722,16 @@ export async function listingRoutes(app: FastifyInstance) {
       },
       select: { id: true },
     });
-    await addBrowserOneClickListingJob(job.id);
+    if (!deferStart) {
+      await addBrowserOneClickListingJob(job.id);
+    }
 
     return reply.send({
       code: 1,
-      msg: '上架任务已提交到 ERP 上架日志，后台队列正在执行',
-      data: { jobId: job.id, queued: true },
+      msg: deferStart
+        ? '上架任务已提交到 ERP 上架日志，浏览器正在补全商品数据'
+        : '上架任务已提交到 ERP 上架日志，后台队列正在执行',
+      data: { jobId: job.id, queued: !deferStart, deferred: deferStart },
     });
   });
 
@@ -744,9 +752,16 @@ export async function listingRoutes(app: FastifyInstance) {
     }
 
     const nextStatus = parsed.data.status || job.status;
+    const previousPayload = objectRecord(job.payload);
+    const patchPayload = objectRecord(parsed.data.payload);
+    const shouldStartDeferredJob = previousPayload.source === 'browser-one-click-listing'
+      && previousPayload.browserPayloadReady === false
+      && patchPayload.browserPayloadReady === true
+      && nextStatus !== 'FAILED';
     const payload = {
-      ...objectRecord(job.payload),
-      ...objectRecord(parsed.data.payload),
+      ...previousPayload,
+      ...patchPayload,
+      ...(shouldStartDeferredJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
     };
     const updateData: Record<string, any> = {
       status: nextStatus,
@@ -766,6 +781,9 @@ export async function listingRoutes(app: FastifyInstance) {
         payload: true,
       },
     });
+    if (shouldStartDeferredJob) {
+      await addBrowserOneClickListingJob(job.id);
+    }
 
     return reply.send({
       code: 1,
