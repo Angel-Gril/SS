@@ -27,6 +27,19 @@ function positiveNumber(value: unknown): number | null {
   return Number.isFinite(num) && num > 0 ? num : null;
 }
 
+function finiteNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function firstFiniteNumber(row: Record<string, any>, keys: string[]): number | null {
+  for (const key of keys) {
+    const num = finiteNumber(row[key]);
+    if (num != null) return num;
+  }
+  return null;
+}
+
 function rowImageList(row: Record<string, any>): string[] {
   const images = Array.isArray(row.images) ? row.images : [row.image, row.img, row.picture];
   return images.map((image) => String(image || '').trim()).filter(Boolean).slice(0, 15);
@@ -47,6 +60,40 @@ function rowPriceInput(row: Record<string, any>, sku: string, publish: Record<st
   const price = positiveNumber(row.pagePrice) ?? positiveNumber(row.priceRub) ?? positiveNumber(row.price);
   const currency = String(row.pagePriceCurrency || row.priceCurrency || row.currency || 'RUB').trim() || 'RUB';
   return { price: price ? String(price) : undefined, currency };
+}
+
+function assignIfPresent(target: Record<string, any>, key: string, value: unknown) {
+  if (value === undefined || value === null || value === '') return;
+  target[key] = value;
+}
+
+function buildBrowserOneClickOzonMetadata(row: Record<string, any>, jobId: string, payload: Record<string, any>, expiresAt: Date): Record<string, any> {
+  const metadata: Record<string, any> = {
+    ephemeralListing: true,
+    ephemeralListingSource: String(payload.entry || 'browser-one-click-listing').slice(0, 120),
+    ephemeralListingExpiresAt: expiresAt.toISOString(),
+    browserOneClickJobId: jobId,
+    sourceRow: row,
+    pagePrice: row.pagePrice ?? row.priceRub ?? row.price ?? null,
+    pagePriceCurrency: row.pagePriceCurrency || row.priceCurrency || row.currency || null,
+    ozonMetrics: objectRecord(row.metrics),
+  };
+  assignIfPresent(metadata, 'ozonAttributes', Array.isArray(row.ozonAttributes) && row.ozonAttributes.length ? row.ozonAttributes : undefined);
+  assignIfPresent(metadata, 'descriptionCategoryId', firstFiniteNumber(row, ['descriptionCategoryId', 'description_category_id', 'categoryId', 'category3Id']));
+  assignIfPresent(metadata, 'typeId', firstFiniteNumber(row, ['typeId', 'descriptionTypeId', 'description_type_id']));
+  assignIfPresent(metadata, 'weightG', firstFiniteNumber(row, ['weightG', 'weightGrams', 'grossWeightGrams', 'weight']));
+  assignIfPresent(metadata, 'lengthMm', firstFiniteNumber(row, ['lengthMm', 'depth', 'length']));
+  assignIfPresent(metadata, 'widthMm', firstFiniteNumber(row, ['widthMm', 'width']));
+  assignIfPresent(metadata, 'heightMm', firstFiniteNumber(row, ['heightMm', 'height']));
+  assignIfPresent(metadata, 'manufacturerName', row.manufacturerName || row.manufacturer);
+  assignIfPresent(metadata, 'brandName', row.brandName || row.brand);
+  assignIfPresent(metadata, 'sourceRichDescriptionJson', row.sourceRichDescriptionJson || row.richDescriptionJson);
+  assignIfPresent(metadata, 'sourceDescriptionRu', row.sourceDescriptionRu || row.description);
+  assignIfPresent(metadata, 'publishDescriptionRu', row.publishDescriptionRu);
+  assignIfPresent(metadata, 'sourceVideos', Array.isArray(row.sourceVideos) && row.sourceVideos.length ? row.sourceVideos : undefined);
+  assignIfPresent(metadata, 'widgetStatesDump', row.widgetStatesDump);
+  assignIfPresent(metadata, 'selectedSku', row.selectedSku);
+  return metadata;
 }
 
 async function mergeBrowserOneClickJobPayload(jobId: string, patch: Record<string, any>, status?: 'RUNNING' | 'SUCCESS' | 'FAILED', errorMessage?: string | null) {
@@ -105,16 +152,8 @@ async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
     const { price, currency } = rowPriceInput(row, sku, publish);
     const priceInfo = await resolveCollectedPrice(price, currency, productUrls[index] || row.sourceUrl);
     const images = rowImageList(row);
-    const metadata: Record<string, any> = {
-      ephemeralListing: true,
-      ephemeralListingSource: String(payload.entry || 'browser-one-click-listing').slice(0, 120),
-      ephemeralListingExpiresAt: expiresAt.toISOString(),
-      browserOneClickJobId: job.id,
-      sourceRow: row,
-      pagePrice: row.pagePrice ?? row.priceRub ?? row.price ?? null,
-      pagePriceCurrency: row.pagePriceCurrency || row.priceCurrency || row.currency || null,
-      ozonMetrics: objectRecord(row.metrics),
-    };
+    const metadata = buildBrowserOneClickOzonMetadata(row, job.id, payload, expiresAt);
+    const variants = Array.isArray(row.variants) && row.variants.length ? row.variants : undefined;
     const item = await prisma.supplyGoods.create({
       data: {
         user: { connect: { id: job.shop.userId } },
@@ -130,8 +169,10 @@ async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
         originalCurrency: priceInfo.originalCurrency,
         exchangeRateUsed: priceInfo.exchangeRateUsed,
         priceNeedsReview: priceInfo.needsReview,
-        notes: String(row.categoryPath || row.salesSchema || '').slice(0, 500) || null,
+        notes: String(row.description || row.categoryPath || row.salesSchema || '').slice(0, 500) || null,
         metadata: metadata as any,
+        variants: variants as any,
+        modelId: row.modelId ? String(row.modelId) : null,
         status: 'collected',
       },
     });

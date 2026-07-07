@@ -234,3 +234,38 @@ test('browser one-click listing is executed by the ERP backend worker queue', ()
     'single-process API mode should start the browser one-click listing worker when workers are enabled',
   );
 });
+
+test('browser one-click listing preserves complete Ozon publish data before handing off to backend queue', () => {
+  const publishRowsFn = background.match(/async function\s+buildOzonWorkbenchPublishRows[\s\S]*?\n}\n\nasync function\s+buildOzonWorkbenchPublishPayload/);
+  assert.ok(publishRowsFn, 'extension should have a dedicated publish-row enrichment function');
+  assert.match(
+    publishRowsFn[0],
+    /fetchOzonProductViaTab/,
+    'extension should collect complete Ozon product data for selected SKUs before creating the backend queue job',
+  );
+  assert.match(
+    publishRowsFn[0],
+    /completeOzonProductVariantsForCollection/,
+    'one-click listing publish rows should include completed multi-variant data when available',
+  );
+  assert.match(
+    background,
+    /mapOzonProductToWorkbenchPublishRow[\s\S]*ozonAttributes[\s\S]*descriptionCategoryId[\s\S]*typeId[\s\S]*variants/,
+    'publish rows should carry Ozon attributes/category/type/variants so publish-ozon uses product import instead of import-by-sku fallback',
+  );
+  assert.doesNotMatch(
+    publishRowsFn[0],
+    /collectOzonProductsToErp/,
+    'publish data preparation must not write browser-collected goods directly into ERP; the backend queue owns temporary collect records',
+  );
+  assert.match(
+    background,
+    /const\s+rows\s*=\s*await\s+buildOzonWorkbenchPublishRows[\s\S]*\n\s*rows,/,
+    'backend queue payload should contain the enriched publish rows, not only the lightweight KPI table rows',
+  );
+  assert.match(
+    backendWorker,
+    /buildBrowserOneClickOzonMetadata[\s\S]*ozonAttributes[\s\S]*descriptionCategoryId[\s\S]*typeId[\s\S]*sourceRichDescriptionJson/,
+    'backend worker should store enriched Ozon fields in the same metadata shape as manual SKU collection',
+  );
+});

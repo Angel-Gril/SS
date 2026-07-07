@@ -3159,11 +3159,174 @@ async function fetchOzonWorkbenchRows(productIds, options = {}) {
   return { ok: true, data: { rows: rows.filter(Boolean), errors } };
 }
 
-function buildOzonWorkbenchPublishPayload(productIds, options = {}) {
+function setDefinedField(target, key, value) {
+  if (value === undefined || value === null || value === "") return;
+  target[key] = value;
+}
+
+function normalizeWorkbenchPublishImages(value) {
+  const list = Array.isArray(value) ? value : [value];
+  return list.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 15);
+}
+
+function mapOzonProductToWorkbenchPublishRow(productData, fallbackRow = {}, productId = "", sourceUrl = "") {
+  const p = productData && typeof productData === "object" ? productData : {};
+  const row = fallbackRow && typeof fallbackRow === "object" ? fallbackRow : {};
+  const sku = String(p.productId || p.sku || productId || row.sku || "").trim();
+  const images = normalizeWorkbenchPublishImages(p.images && p.images.length ? p.images : (row.images && row.images.length ? row.images : row.image));
+  const currency = String(p.pagePriceCurrency || p.currency || row.pagePriceCurrency || row.priceCurrency || row.currency || "RUB").trim() || "RUB";
+  const price = p.pagePriceValue || p.currentPriceValue || p.price || row.pagePrice || row.priceRub || row.price;
+  const next = {
+    ...row,
+    sku,
+    title: p.publishTitle || p.title || row.title || ("Ozon SKU " + sku),
+    image: images[0] || row.image || "",
+    images: images.length ? images : undefined,
+    sourceUrl: p.url || p.sourceUrl || sourceUrl || row.sourceUrl || (sku ? "https://www.ozon.ru/product/" + sku + "/" : ""),
+    pagePrice: price,
+    pagePriceCurrency: currency,
+    priceCurrency: currency,
+  };
+  if (currency === "CNY") next.priceCny = price;
+  else next.priceRub = price;
+  setDefinedField(next, "description", p.description || row.description);
+  setDefinedField(next, "richDescriptionJson", p.richDescriptionJson || row.richDescriptionJson);
+  setDefinedField(next, "sourceVideos", Array.isArray(p.sourceVideos) && p.sourceVideos.length ? p.sourceVideos : row.sourceVideos);
+  setDefinedField(next, "ozonAttributes", Array.isArray(p.ozonAttributes) && p.ozonAttributes.length ? p.ozonAttributes : row.ozonAttributes);
+  setDefinedField(next, "descriptionCategoryId", p.descriptionCategoryId || row.descriptionCategoryId || row.categoryId);
+  setDefinedField(next, "typeId", p.typeId || row.typeId);
+  setDefinedField(next, "weightG", p.weight || p.weightG || row.weightG || row.weightGrams);
+  setDefinedField(next, "lengthMm", p.length || p.lengthMm || row.lengthMm);
+  setDefinedField(next, "widthMm", p.width || p.widthMm || row.widthMm);
+  setDefinedField(next, "heightMm", p.height || p.heightMm || row.heightMm);
+  setDefinedField(next, "manufacturerName", p.manufacturerName || row.manufacturerName);
+  setDefinedField(next, "brandName", p.brandName || row.brandName || row.brand);
+  setDefinedField(next, "variants", Array.isArray(p.variants) && p.variants.length ? p.variants : row.variants);
+  setDefinedField(next, "modelId", p.modelId || row.modelId);
+  setDefinedField(next, "widgetStatesDump", p.widgetStatesDump || row.widgetStatesDump);
+  return next;
+}
+
+async function enrichOzonWorkbenchPublishProductData(productData, productId, sellerCompanyId, collectPolicy) {
+  if (!productData || !sellerCompanyId || !collectPolicy.fetchRootSellerInsights) return productData;
+  try {
+    const insights = await getOzonInsights(productId);
+    productData.ozonInsights = normalizeOzonCollectionInsights(insights);
+    repairOzonCollectedTitleFromInsights(productData, insights);
+    if (insights.detail && Array.isArray(insights.detail.attributes)) {
+      productData.ozonAttributes = insights.detail.attributes;
+    } else {
+      productData._attrWarning = "seller API 无法获取该商品属性（analytics 未索引），上架可能退回 SKU 继承路径";
+    }
+    if (insights.detail) {
+      productData.weight = insights.detail.weight || (insights.specs && insights.specs.weightGrams) || null;
+      productData.length = insights.detail.depth || (insights.specs && insights.specs.lengthMm) || null;
+      productData.width = insights.detail.width || (insights.specs && insights.specs.widthMm) || null;
+      productData.height = insights.detail.height || (insights.specs && insights.specs.heightMm) || null;
+      if (insights.detail.manufacturer) productData.manufacturerName = insights.detail.manufacturer;
+      if (insights.detail.brand) productData.brandName = insights.detail.brand;
+    } else if (insights.specs) {
+      productData.weight = insights.specs.weightGrams;
+      productData.length = insights.specs.lengthMm;
+      productData.width = insights.specs.widthMm;
+      productData.height = insights.specs.heightMm;
+    }
+
+    try {
+      const treeRes = await sellerTabFetchJson(
+        "https://seller.ozon.ru/api/v1/seller-tree/resolve/by-sku",
+        { skus: [String(productId)] },
+        sellerCompanyId
+      );
+      const resolved = treeRes && treeRes.resolved_categories_by_sku && treeRes.resolved_categories_by_sku[String(productId)];
+      if (resolved) {
+        productData.descriptionCategoryId = resolved.description_category_id_level_3 || null;
+        productData.typeId = resolved.description_type_id || null;
+      }
+    } catch (e) {}
+
+    if ((collectPolicy.fetchVariantSellerInsights || collectedOzonVariantsNeedSellerRepair(productData.variants)) && Array.isArray(productData.variants) && productData.variants.length > 0) {
+      const subPids = productData.variants
+        .map((v) => v && v.sku ? String(v.sku) : null)
+        .filter((s) => s && s !== String(productId));
+      if (subPids.length) {
+        const subMap = await fetchVariantInsightsConcurrent(subPids, 2, 200);
+        productData.variants.forEach((v) => {
+          if (!v || !v.sku) return;
+          const sku = String(v.sku);
+          if (sku === String(productId)) {
+            v.ozonAttributes = productData.ozonAttributes || null;
+            v.weight = productData.weight || null;
+            v.depth = productData.length || null;
+            v.width = productData.width || null;
+            v.height = productData.height || null;
+          } else if (subMap[sku] && subMap[sku].attributes) {
+            v.ozonAttributes = subMap[sku].attributes;
+            v.weight = subMap[sku].weight;
+            v.depth = subMap[sku].depth;
+            v.width = subMap[sku].width;
+            v.height = subMap[sku].height;
+            if (subMap[sku].manufacturer) v.manufacturerName = subMap[sku].manufacturer;
+            if (subMap[sku].brand) v.brandName = subMap[sku].brand;
+          } else {
+            v._attrMissing = (subMap[sku] && subMap[sku].error) || "no insights";
+          }
+        });
+      }
+    }
+  } catch (e) {
+    productData._attrWarning = normalizeErrorMessage(e).slice(0, 200);
+  }
+  return productData;
+}
+
+async function buildOzonWorkbenchPublishRows(productIds, options = {}) {
+  const inputs = normalizeOzonCollectionInputs(productIds, options.productUrls);
+  const fallbackRows = Array.isArray(options.rows) ? options.rows : [];
+  const rowBySku = new Map(fallbackRows.map((row) => [String(row && row.sku || "").trim(), row]));
+  if (!inputs.length) return fallbackRows;
+
+  const collectPolicy = resolveOzonCollectionPolicy({ mode: "complete" });
+  const collectionRunOptions = {
+    ...collectPolicy,
+    fetchVariantDescriptionDetails: options.fetchVariantDescriptionDetails === true,
+  };
+  const productTimeoutMs = Number(options.productTimeoutMs) || 45 * 1000;
+  const variantTimeoutMs = Number(options.variantTimeoutMs) || 45 * 1000;
+  let sellerCompanyId = null;
+  try { sellerCompanyId = await getSellerCompanyId(); } catch (e) {}
+
+  const out = [];
+  const errors = [];
+  for (let i = 0; i < inputs.length; i++) {
+    const pid = inputs[i].productId;
+    const sourceUrl = inputs[i].sourceUrl;
+    const fallbackRow = rowBySku.get(String(pid)) || { sku: String(pid), sourceUrl };
+    try {
+      const r = await withTimeout(fetchOzonProductViaTab(pid, sourceUrl, collectionRunOptions), productTimeoutMs);
+      if (!r || !r.ok) throw new Error(r && r.error || "OZON 公开数据获取失败");
+      const productData = r.data || {};
+      await withTimeout(completeOzonProductVariantsForCollection(productData, pid, collectionRunOptions), variantTimeoutMs);
+      await enrichOzonWorkbenchPublishProductData(productData, pid, sellerCompanyId, collectPolicy);
+      if (Array.isArray(productData.variants) && productData.variants.length > 0) {
+        productData.variants = sanitizeCollectedOzonVariantAttrs(productData.variants);
+      }
+      out.push(mapOzonProductToWorkbenchPublishRow(productData, fallbackRow, pid, sourceUrl));
+    } catch (error) {
+      const message = normalizeErrorMessage(error).slice(0, 200);
+      errors.push({ productId: pid, error: message });
+      out.push({ ...fallbackRow, sku: String(pid), sourceUrl: sourceUrl || fallbackRow.sourceUrl, publishDataWarning: message });
+    }
+    if (i < inputs.length - 1) await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return out.map((row) => row && row.sku ? row : null).filter(Boolean);
+}
+
+async function buildOzonWorkbenchPublishPayload(productIds, options = {}) {
   const sourceSkus = Array.isArray(productIds)
     ? productIds.map((sku) => String(sku || "").trim()).filter(Boolean)
     : [];
-  const rows = Array.isArray(options.rows) ? options.rows : [];
+  const rows = await buildOzonWorkbenchPublishRows(productIds, options);
   const productUrls = Array.isArray(options.productUrls)
     ? options.productUrls.map((url) => String(url || "").trim()).filter(Boolean)
     : [];
@@ -3198,7 +3361,7 @@ async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   if (!shopId) return { ok: false, error: "请选择目标店铺" };
   const conn = await getStoredErpConnection();
   if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
-  const payload = buildOzonWorkbenchPublishPayload(productIds, options);
+  const payload = await buildOzonWorkbenchPublishPayload(productIds, options);
 
   const response = await fetch(conn.baseUrl + "/api/listing/browser-one-click-jobs", {
     method: "POST",

@@ -160,6 +160,107 @@ describe('browser one-click listing worker', () => {
     });
   });
 
+  it('preserves collected Ozon attributes and variants so one-click listings use product import instead of import-by-sku fallback', async () => {
+    const ozonAttributes = [
+      { id: 85, values: [{ value: 'Brand X', dictionary_value_id: 123 }] },
+      { id: 10096, values: [{ value: 'Россия', dictionary_value_id: 643 }] },
+    ];
+    const variants = [{
+      sku: '3253911757',
+      attrs: { Цвет: 'черный' },
+      images: ['https://cdn.example/variant.jpg'],
+      ozonAttributes: [{ id: 10097, values: [{ value: 'черный', dictionary_value_id: 77 }] }],
+    }];
+    const payload = {
+      source: 'browser-one-click-listing',
+      stage: 'submitted',
+      entry: 'ozon-product-detail',
+      mode: 'clone',
+      sourceSkus: ['3186614714'],
+      productUrls: ['https://www.ozon.ru/product/3186614714/'],
+      rows: [{
+        sku: '3186614714',
+        title: 'Ozon product with attributes',
+        images: ['https://cdn.example/base-1.jpg', 'https://cdn.example/base-2.jpg'],
+        pagePrice: 1200,
+        pagePriceCurrency: 'RUB',
+        description: 'Collected Ozon description',
+        ozonAttributes,
+        descriptionCategoryId: 17028922,
+        typeId: 971589,
+        weightG: 420,
+        lengthMm: 210,
+        widthMm: 110,
+        heightMm: 45,
+        manufacturerName: 'Factory X',
+        brandName: 'Brand X',
+        variants,
+        modelId: 'model-1',
+        richDescriptionJson: '{"content":[]}',
+        sourceVideos: [{ url: 'https://cdn.example/video.mp4' }],
+      }],
+      watermark: null,
+      publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+    };
+    let currentPayload = payload;
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: 'job-attrs',
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload: currentPayload,
+          shop: { userId: 'user-1', user: { id: 'user-1', role: 'USER' } },
+        };
+      }
+      return { payload: currentPayload };
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => {
+      currentPayload = data.payload;
+      return { id: 'job-attrs', payload: currentPayload };
+    });
+    mocks.supplyGoodsCreate.mockResolvedValue({ id: 'sg-attrs' });
+    mocks.userFindUnique.mockResolvedValue({ id: 'user-1', role: 'USER' });
+    mocks.resolveCollectedPrice.mockResolvedValue({
+      purchasePriceCny: 105.6,
+      originalPrice: 1200,
+      originalCurrency: 'RUB',
+      exchangeRateUsed: 0.088,
+      needsReview: false,
+    });
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 1, data: { taskId: 789, jobId: 'job-attrs', count: 1 } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await runBrowserOneClickListingJob('job-attrs');
+
+    expect(mocks.supplyGoodsCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sku: '3186614714',
+        images: ['https://cdn.example/base-1.jpg', 'https://cdn.example/base-2.jpg'],
+        variants,
+        modelId: 'model-1',
+        metadata: expect.objectContaining({
+          ozonAttributes,
+          descriptionCategoryId: 17028922,
+          typeId: 971589,
+          weightG: 420,
+          lengthMm: 210,
+          widthMm: 110,
+          heightMm: 45,
+          manufacturerName: 'Factory X',
+          brandName: 'Brand X',
+          sourceRichDescriptionJson: '{"content":[]}',
+          sourceVideos: [{ url: 'https://cdn.example/video.mp4' }],
+        }),
+      }),
+    });
+  });
+
   it('resumes a publishing-stage fallback payload without recreating records or repeating watermark work', async () => {
     const payload = {
       source: 'browser-one-click-listing',

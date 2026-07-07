@@ -73,7 +73,7 @@ test('Ozon collection keeps analytics snapshots in ERP metadata for table displa
 });
 
 test('background fetches SKU workbench rows in parallel without duplicate offers requests', () => {
-  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nfunction buildOzonWorkbenchPublishPayload/);
+  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nfunction setDefinedField/);
   assert.ok(fetchRows, 'fetchOzonWorkbenchRows should be present');
   assert.match(fetchRows[0], /workerCount/);
   assert.match(fetchRows[0], /Promise\.all/);
@@ -102,7 +102,7 @@ test('Ozon workbench can skip slow offer enrichment for profit-only reads', () =
 });
 
 test('background passes synced commission rules into Ozon SKU workbench row building', () => {
-  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nfunction buildOzonWorkbenchPublishPayload/);
+  const fetchRows = background.match(/async function fetchOzonWorkbenchRows[\s\S]*?\r?\n}\r?\n\r?\nfunction setDefinedField/);
   assert.ok(fetchRows, 'fetchOzonWorkbenchRows should be present');
   assert.match(fetchRows[0], /getOzonCommissionSnapshotForWorkbench\(\)/);
   assert.match(fetchRows[0], /commissionSnapshot:\s*commissionSnapshot/);
