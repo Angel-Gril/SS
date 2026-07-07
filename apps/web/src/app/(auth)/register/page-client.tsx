@@ -7,6 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import { registerSchema, type RegisterInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
+import { formatAuthNetworkError } from '@/lib/auth-ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,6 +15,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { toast } from '@/components/ui/use-toast';
 
 const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
+const TURNSTILE_RESPONSE_TIMEOUT_MS = 8000;
+const TURNSTILE_UNAVAILABLE_MESSAGE = '人机验证没有成功加载或未通过；请点击重新加载验证，或刷新页面后再试';
 
 interface AuthChallengeConfig {
   runtimeMode: 'local' | 'cloud';
@@ -38,6 +41,7 @@ export default function RegisterPage() {
   const [countdown, setCountdown] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileError, setTurnstileError] = useState('');
+  const [turnstileRenderKey, setTurnstileRenderKey] = useState(0);
   const [challengeConfig, setChallengeConfig] = useState<AuthChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
   const turnstileRef = useRef<TurnstileInstance | null>(null);
   const needsSms = challengeConfig.runtimeMode === 'cloud' && challengeConfig.smsRegisterEnabled;
@@ -81,6 +85,8 @@ export default function RegisterPage() {
   function resetTurnstile() {
     turnstileRef.current?.reset();
     setTurnstileToken('');
+    setTurnstileError('');
+    setTurnstileRenderKey((value) => value + 1);
   }
 
   function handleTurnstileError(errorCode?: string) {
@@ -99,7 +105,7 @@ export default function RegisterPage() {
     }
 
     try {
-      const token = await turnstileRef.current?.getResponsePromise(30000);
+      const token = await turnstileRef.current?.getResponsePromise(TURNSTILE_RESPONSE_TIMEOUT_MS);
       if (token) {
         setTurnstileToken(token);
         setTurnstileError('');
@@ -109,7 +115,7 @@ export default function RegisterPage() {
       // handled below with a user-facing message
     }
 
-    const message = '请先完成人机验证；如果没有看到验证框，请检查 Turnstile Site Key 是否允许 app.ss-erp.com';
+    const message = TURNSTILE_UNAVAILABLE_MESSAGE;
     setTurnstileError(message);
     toast({ title: message, variant: 'destructive' });
     return null;
@@ -137,8 +143,8 @@ export default function RegisterPage() {
         toast({ title: res.msg || '发送失败', variant: 'destructive' });
         resetTurnstile();
       }
-    } catch {
-      toast({ title: '网络错误', variant: 'destructive' });
+    } catch (error) {
+      toast({ title: formatAuthNetworkError(error), variant: 'destructive' });
       resetTurnstile();
     } finally {
       setSending(false);
@@ -163,8 +169,9 @@ export default function RegisterPage() {
         toast({ title: res.msg || '注册失败', variant: 'destructive' });
         resetTurnstile();
       }
-    } catch {
-      toast({ title: '网络错误', variant: 'destructive' });
+    } catch (error) {
+      toast({ title: formatAuthNetworkError(error), variant: 'destructive' });
+      resetTurnstile();
     } finally {
       setLoading(false);
     }
@@ -232,6 +239,7 @@ export default function RegisterPage() {
               challengeConfig.turnstileSiteKey ? (
                 <div className="flex justify-center">
                   <Turnstile
+                    key={turnstileRenderKey}
                     ref={turnstileRef}
                     siteKey={challengeConfig.turnstileSiteKey}
                     onSuccess={(token) => {

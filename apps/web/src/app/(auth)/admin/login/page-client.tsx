@@ -6,6 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { api, tokenStore } from '@/lib/api';
+import { formatAuthNetworkError } from '@/lib/auth-ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -55,8 +56,8 @@ export default function AdminLoginPage() {
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
       }
-    } catch {
-      toast({ title: '网络错误', variant: 'destructive' });
+    } catch (error) {
+      toast({ title: formatAuthNetworkError(error), variant: 'destructive' });
     } finally {
       setLoading(false);
     }
