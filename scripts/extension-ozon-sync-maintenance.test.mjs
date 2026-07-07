@@ -60,6 +60,18 @@ assert.match(
 
 assert.match(
   serviceWorker,
+  /function\s+ensureCurrentOzonCookieSyncedForInsights/,
+  'seller KPI aggregation should have a throttled guard that syncs the currently logged-in Ozon seller cookie automatically',
+);
+
+assert.match(
+  collectBackground,
+  /ensureCurrentOzonCookieSyncedForInsights[\s\S]*recordInsightSourceError\(sourceErrors,\s*["']cookie-sync["']/,
+  'seller KPI aggregation should record cookie auto-sync failures as source diagnostics instead of silently showing empty Premium data',
+);
+
+assert.match(
+  serviceWorker,
   /ozon-calc:sync-current-ozon-cookie/,
   'content-script quick Cookie buttons should call a direct sync message instead of opening settings.html#cookie',
 );

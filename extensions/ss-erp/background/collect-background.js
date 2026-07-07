@@ -2553,6 +2553,26 @@ function recordInsightSourceError(sourceErrors, source, error) {
   sourceErrors.push({ source, error: message });
 }
 
+async function waitForOzonInsightCookieSync(sourceErrors, options = {}) {
+  const ensureCurrentOzonCookieSyncedForInsights = globalThis.ensureCurrentOzonCookieSyncedForInsights;
+  if (typeof ensureCurrentOzonCookieSyncedForInsights !== "function") return null;
+  const timeoutMs = 2500;
+  try {
+    const timeout = new Promise((resolve) => {
+      setTimeout(() => resolve({ ok: false, skipped: true, error: "Cookie 自动同步仍在后台执行" }), timeoutMs);
+    });
+    const result = await Promise.race([
+      ensureCurrentOzonCookieSyncedForInsights({ reason: "aggregate_product_insights", ...options }),
+      timeout,
+    ]);
+    if (result && result.error) recordInsightSourceError(sourceErrors, "cookie-sync", result.error);
+    return result;
+  } catch (error) {
+    recordInsightSourceError(sourceErrors, "cookie-sync", error);
+    return null;
+  }
+}
+
 function hasInsightValue(value) {
   return value != null && value !== "" && !(Array.isArray(value) && value.length === 0);
 }
@@ -2614,6 +2634,8 @@ async function aggregateOzonProductInsights(productId, options = {}) {
   const sources = [];
   const sourceErrors = [];
   let item = {};
+
+  await waitForOzonInsightCookieSync(sourceErrors);
 
   // 来源 1：seller-analytics（仅当登录 + 有 Premium 时成功）
   try {

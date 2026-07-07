@@ -29,8 +29,10 @@
 
   const PREMIUM_TTL_MS = 10 * 60 * 1000;
   const PREMIUM_FAILURE_TTL_MS = 90 * 1000;
+  const LIST_DATA_COOKIE_AUTO_SYNC_TTL_MS = 5 * 60 * 1000;
   const PRODUCT_SELECTION_POOL_STATUS_TTL_MS = 2 * 60 * 1000;
   const PREMIUM_CONCURRENCY = 3;
+  const LIST_PRELOAD_ROOT_MARGIN = '1200px 0px 1800px 0px';
   const CARD_SCAN_FAST_MS = 500;
   const CARD_SCAN_SLOW_MS = 2000;
   const CARD_SCAN_FAST_UNTIL_MS = 20 * 1000;
@@ -147,6 +149,8 @@
   const inFlightPremium = new Map(); // sku -> Promise
   const premiumQueue = [];
   let activePremiumRequests = 0;
+  let listDataCookieAutoSyncPromise = null;
+  let listDataCookieAutoSyncAt = 0;
   let overlayIdCounter = 0;
   let activeExpandedPanel = null;
   let expandedPanelListenersInstalled = false;
@@ -473,6 +477,31 @@
     } catch (e) {}
   }
 
+  function autoSyncCurrentOzonCookieForListData() {
+    const now = Date.now();
+    if (listDataCookieAutoSyncPromise) return listDataCookieAutoSyncPromise;
+    if (listDataCookieAutoSyncAt && now - listDataCookieAutoSyncAt < LIST_DATA_COOKIE_AUTO_SYNC_TTL_MS) {
+      return Promise.resolve(null);
+    }
+    listDataCookieAutoSyncAt = now;
+    listDataCookieAutoSyncPromise = send({
+      type: 'ozon-calc:sync-current-ozon-cookie',
+      payload: { reason: 'ozon_list_kpi_preload' },
+    }, 30000).then((response) => {
+      if (response && response.ok) {
+        failedPremiumCache.clear();
+        try { globalThis.__SS_ERP_LIST_OVERLAY_SOURCE_ERRORS__ = {}; } catch (e) {}
+      }
+      return response;
+    }).catch((error) => ({
+      ok: false,
+      error: error && error.message ? error.message : String(error),
+    })).finally(() => {
+      listDataCookieAutoSyncPromise = null;
+    });
+    return listDataCookieAutoSyncPromise;
+  }
+
   function hasDisplayablePremiumData(data) {
     if (!data || typeof data !== 'object') return false;
     return Object.keys(data).some((key) => {
@@ -489,6 +518,8 @@
   async function fetchPublicProduct(sku) {
     const cached = getCached(premiumCache, sku, PREMIUM_TTL_MS);
     if (cached) return cached;
+
+    autoSyncCurrentOzonCookieForListData();
 
     const failTs = failedPremiumCache.get(sku);
     if (failTs && Date.now() - failTs < PREMIUM_FAILURE_TTL_MS) return null;
@@ -3857,7 +3888,7 @@
           intersectionObserver.unobserve(entry.target);
         }
       });
-    }, { rootMargin: '200px' });
+    }, { rootMargin: LIST_PRELOAD_ROOT_MARGIN });
     return intersectionObserver;
   }
 
@@ -3900,6 +3931,7 @@
     const startedAt = Date.now();
     ensureListOverlayStyles();
     hydrateProductSelectionRulesFromStorage();
+    autoSyncCurrentOzonCookieForListData();
     scan();
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.body, { childList: true, subtree: true });

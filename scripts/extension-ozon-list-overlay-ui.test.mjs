@@ -60,6 +60,16 @@ assert.match(
   /ozon-calc:sync-current-ozon-cookie/,
   'Ozon list quick Cookie button should reuse the popup Cookie sync backend path',
 );
+assert.match(
+  overlay,
+  /function\s+autoSyncCurrentOzonCookieForListData[\s\S]*ozon-calc:sync-current-ozon-cookie/,
+  'Ozon list KPI loading should automatically sync the currently logged-in seller cookie before relying on ERP-side Ozon data',
+);
+assert.match(
+  overlay,
+  /autoSyncCurrentOzonCookieForListData\(\)[\s\S]*failedPremiumCache\.clear\(\)/,
+  'Ozon list KPI auto cookie sync should clear stale Premium failure cache after the seller shop is corrected',
+);
 assert.doesNotMatch(
   overlay,
   /quick-bind-cookie[\s\S]{0,500}openExtensionSettingsPage\('cookie'\)/,
@@ -270,6 +280,21 @@ assert.match(
   overlay,
   /rememberVisibleListSkus\(\)/,
   'Ozon list scans should remember newly visible SKUs before refreshing the quick action count',
+);
+assert.match(
+  overlay,
+  /LIST_PRELOAD_ROOT_MARGIN/,
+  'Ozon list overlay should preload a bounded look-ahead window instead of waiting until cards are directly visible',
+);
+assert.match(
+  overlay,
+  /rootMargin:\s*LIST_PRELOAD_ROOT_MARGIN/,
+  'Ozon list IntersectionObserver should use the bounded preload window',
+);
+assert.doesNotMatch(
+  overlay,
+  /rootMargin:\s*['"]200px['"]/,
+  'Ozon list KPI loading should not wait until the card is almost in view before starting data fetches',
 );
 assert.match(
   overlay,

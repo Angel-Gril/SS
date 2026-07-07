@@ -29,6 +29,7 @@ const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
 let imageSearchJobsQueue = Promise.resolve();
+let ozonInsightCookieSyncInFlight = null;
 const OZON_CALC_VISIBLE_SNAPSHOTS_KEY = 'ozon-calc:visible-snapshots';
 const OZON_CALC_ERP_ENDPOINT_KEY = 'ozon-calc:erp-endpoint';
 const OZON_CALC_ERP_TOKEN_KEY = 'ozon-calc:erp-token';
@@ -43,6 +44,7 @@ const SS_ERP_OZON_AUTO_SYNC_STATE_KEY = 'ss_erp_ozon_auto_sync_state';
 const SS_ERP_OZON_AUTO_SYNC_ALARM_NAME = 'ss-erp:ozon-auto-sync';
 const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MS = SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES * 60 * 1000;
+const SS_ERP_OZON_INSIGHT_COOKIE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
 const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
 const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
@@ -567,6 +569,34 @@ async function syncCurrentOzonCookieForSync(options) {
   });
   return result;
 }
+
+async function ensureCurrentOzonCookieSyncedForInsights(options) {
+  const liveCompanyId = normalizeOzonCompanyIdForSync(
+    (options && options.companyId)
+    || await getCapturedOzonCompanyIdForSync()
+    || await readOzonSellerCookieValueFromOpenTabForSync('sc_company_id')
+  );
+  const now = Date.now();
+  const stateRow = await chrome.storage.local.get([SS_ERP_OZON_AUTO_SYNC_STATE_KEY]);
+  const state = stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] && typeof stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY] === 'object'
+    ? stateRow[SS_ERP_OZON_AUTO_SYNC_STATE_KEY]
+    : {};
+  const lastCookieAt = Number(state.cookieAt) || 0;
+  const sameCompany = !liveCompanyId || !state.lastCompanyId || state.lastCompanyId === liveCompanyId;
+  if (sameCompany && lastCookieAt && now - lastCookieAt < SS_ERP_OZON_INSIGHT_COOKIE_SYNC_INTERVAL_MS) {
+    return { ok: true, skipped: true, reason: 'recent_cookie_sync', companyId: liveCompanyId || state.lastCompanyId || '' };
+  }
+  if (ozonInsightCookieSyncInFlight) return await ozonInsightCookieSyncInFlight;
+
+  ozonInsightCookieSyncInFlight = syncCurrentOzonCookieForSync({
+    ...(options && typeof options === 'object' ? options : {}),
+    companyId: liveCompanyId || (options && options.companyId) || '',
+  }).finally(() => {
+    ozonInsightCookieSyncInFlight = null;
+  });
+  return await ozonInsightCookieSyncInFlight;
+}
+globalThis.ensureCurrentOzonCookieSyncedForInsights = ensureCurrentOzonCookieSyncedForInsights;
 
 function shouldRunOzonAutoSyncSlot(state, key, now, force) {
   if (force) return true;
