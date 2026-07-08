@@ -56,6 +56,7 @@ const CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
 const DESCRIPTION_MAX_LENGTH = 5000;
 const OZON_MAX_PUBLISH_IMAGES = 30;
 const OZON_ORIGIN_COUNTRY_ATTR_ID = 4389;
+const OZON_MARKING_CODE_REQUIRED_ATTR_ID = 23536;
 const EPHEMERAL_LISTING_TTL_MS = 5 * 60 * 1000;
 const WATERMARK_ITEM_CONCURRENCY = 3;
 const OZON_MARKETING_WORD_RE = /(^|[^\p{L}\p{N}])(?:100%\s*оригинал\p{L}*|проверен\p{L}*|оригинал\p{L}*|original|verified|authentic)(?=$|[^\p{L}\p{N}])/giu;
@@ -2202,6 +2203,26 @@ export function normalizeOzonOriginCountryForChinaSeller<T extends { id: number;
     });
   }
   return normalized;
+}
+
+export function normalizeOzonMarkingCodeRequirementForChinaSeller<T extends { id: number; complex_id?: number; values: any[] }>(
+  attributes: T[] | null | undefined,
+  categoryAttrs: Array<{ id?: unknown; name?: unknown }> | null | undefined = [],
+): Array<T | { id: number; complex_id: number; values: { value: string; dictionary_value_id: number }[] }> {
+  const attrs = Array.isArray(attributes) ? attributes : [];
+  const hasExistingMarkingAttr = attrs.some((attr) => Number(attr.id) === OZON_MARKING_CODE_REQUIRED_ATTR_ID);
+  const categorySupportsMarkingAttr = Array.isArray(categoryAttrs)
+    && categoryAttrs.some((attr) => Number(attr?.id) === OZON_MARKING_CODE_REQUIRED_ATTR_ID);
+  if (!hasExistingMarkingAttr && !categorySupportsMarkingAttr) return attrs;
+
+  return [
+    ...attrs.filter((attr) => Number(attr.id) !== OZON_MARKING_CODE_REQUIRED_ATTR_ID),
+    {
+      id: OZON_MARKING_CODE_REQUIRED_ATTR_ID,
+      complex_id: 0,
+      values: [{ value: 'false', dictionary_value_id: 0 }],
+    },
+  ];
 }
 
 type SourceStandardOzonAttributeKey = 'brand' | 'colors' | 'sizes' | 'materials' | 'gender' | 'seasons';
@@ -5545,6 +5566,7 @@ export async function collectRoutes(app: FastifyInstance) {
         const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
         const mfrAttrDef = requiredAttrs.find((a) => MANUFACTURER_NAMES.test(a.name));
         const originCountryAttrDef = allAttrs.find((a) => a.id === OZON_ORIGIN_COUNTRY_ATTR_ID);
+        const markingCodeAttrDef = allAttrs.find((a) => a.id === OZON_MARKING_CODE_REQUIRED_ATTR_ID);
         const richContentAttrDef = resolveOzonRichContentAttributeDef(allAttrs);
         const sizeChartAttrDef = resolveOzonSizeChartAttributeDef(allAttrs);
 
@@ -5583,6 +5605,9 @@ export async function collectRoutes(app: FastifyInstance) {
             values: Array.isArray(a.values) ? a.values.map((v: any) => ({ ...v })) : a.values,
           }));
           importItem.attributes = normalizeOzonOriginCountryForChinaSeller(importItem.attributes, originCountryValues);
+          if (markingCodeAttrDef || importItem.attributes.some((attr: any) => Number(attr.id) === OZON_MARKING_CODE_REQUIRED_ATTR_ID)) {
+            importItem.attributes = normalizeOzonMarkingCodeRequirementForChinaSeller(importItem.attributes, allAttrs);
+          }
 
           importItem.attributes = syncOzonVariantGroupingAttributes(importItem.attributes, importItem);
 

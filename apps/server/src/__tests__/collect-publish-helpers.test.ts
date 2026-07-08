@@ -49,6 +49,7 @@ import {
   sanitizeVariantAttrsForOzonPublish,
   syncOzonVariantGroupingAttributes,
   normalizeOzonOriginCountryForChinaSeller,
+  normalizeOzonMarkingCodeRequirementForChinaSeller,
   normalizeCollectedSourceVideos,
   applyAiContentDraftsToPublishMetadata,
   getCollectedRichDescriptionJson,
@@ -1102,6 +1103,33 @@ describe('collect publish helpers', () => {
       complex_id: 0,
       values: [{ value: 'Китай', dictionary_value_id: 156 }],
     }]);
+  });
+
+  it('forces Ozon marking-code requirement to false for China seller publishing', () => {
+    const attrs = normalizeOzonMarkingCodeRequirementForChinaSeller([
+      { id: 23536, complex_id: 0, values: [{ value: 'true', dictionary_value_id: 0 }] },
+      { id: 85, complex_id: 0, values: [{ value: 'Demo brand', dictionary_value_id: 123 }] },
+    ], [
+      { id: 23536, name: 'Нужен код маркировки' },
+    ]);
+
+    expect(attrs).toEqual([
+      { id: 85, complex_id: 0, values: [{ value: 'Demo brand', dictionary_value_id: 123 }] },
+      { id: 23536, complex_id: 0, values: [{ value: 'false', dictionary_value_id: 0 }] },
+    ]);
+  });
+
+  it('adds Ozon marking-code false when the category supports the field but cloned attributes omit it', () => {
+    const attrs = normalizeOzonMarkingCodeRequirementForChinaSeller([
+      { id: 85, complex_id: 0, values: [{ value: 'Demo brand', dictionary_value_id: 123 }] },
+    ], [
+      { id: 23536, name: 'Нужен код маркировки' },
+    ]);
+
+    expect(attrs).toEqual([
+      { id: 85, complex_id: 0, values: [{ value: 'Demo brand', dictionary_value_id: 123 }] },
+      { id: 23536, complex_id: 0, values: [{ value: 'false', dictionary_value_id: 0 }] },
+    ]);
   });
 
   it('keeps official SKU variant attributes instead of overwriting them with collected web aspects', () => {
