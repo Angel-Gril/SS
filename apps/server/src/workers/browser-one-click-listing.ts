@@ -246,17 +246,6 @@ async function createBrowserOneClickSupplyGoodFromRow(
 
 async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
   const payload = objectRecord(job.payload);
-  const existingIds = stringList(payload.supplyGoodsIds).length
-    ? stringList(payload.supplyGoodsIds)
-    : stringList(payload.sourceItemIds);
-  if (existingIds.length) {
-    const existing = await prisma.supplyGoods.findMany({
-      where: { id: { in: existingIds }, userId: job.shop.userId },
-      select: { id: true },
-    });
-    if (existing.length === existingIds.length) return existingIds;
-  }
-
   const sourceSkus = stringList(payload.sourceSkus);
   const rows: Record<string, any>[] = Array.isArray(payload.rows) ? payload.rows.map(objectRecord) : [];
   const rowEntries: Array<[string, Record<string, any>]> = [];
@@ -265,18 +254,51 @@ async function ensureBrowserOneClickSupplyGoods(job: any): Promise<string[]> {
     if (sku) rowEntries.push([sku, row]);
   }
   const rowBySku = new Map<string, Record<string, any>>(rowEntries);
-  const ids: string[] = [];
+  const skuGoodsIds = { ...objectRecord(payload.browserOneClickSkuGoodsIds) };
+  const existingIds = stringList(payload.supplyGoodsIds).length
+    ? stringList(payload.supplyGoodsIds)
+    : stringList(payload.sourceItemIds);
+  const candidateIds = uniqueStrings([
+    ...existingIds,
+    ...Object.values(skuGoodsIds),
+  ]);
+  const existing = candidateIds.length
+    ? await prisma.supplyGoods.findMany({
+      where: { id: { in: candidateIds }, userId: job.shop.userId },
+      select: { id: true },
+    })
+    : [];
+  const validExistingIds = new Set(existing.map((item: { id: string }) => item.id));
 
+  if (!sourceSkus.length) {
+    const validIds = existingIds.filter((id) => validExistingIds.has(id));
+    if (validIds.length) return validIds;
+  }
+
+  const ids: string[] = [];
   await mergeBrowserOneClickJobPayload(job.id, { stage: 'collecting', itemCount: sourceSkus.length }, 'RUNNING', null);
 
   for (let index = 0; index < sourceSkus.length; index += 1) {
     const sku = sourceSkus[index]!;
+    const existingId = String(skuGoodsIds[sku] || existingIds[index] || '').trim();
+    if (existingId && validExistingIds.has(existingId)) {
+      ids.push(existingId);
+      skuGoodsIds[sku] = existingId;
+      continue;
+    }
+
     const row: Record<string, any> = rowBySku.get(sku) || {};
     const item = await createBrowserOneClickSupplyGoodFromRow(job, payload, { ...row, sku });
+    skuGoodsIds[item.sku] = item.id;
     ids.push(item.id);
   }
 
-  await mergeBrowserOneClickJobPayload(job.id, { stage: 'collected', supplyGoodsIds: ids, collected: ids.length }, 'RUNNING', null);
+  await mergeBrowserOneClickJobPayload(job.id, {
+    stage: 'collected',
+    supplyGoodsIds: ids,
+    browserOneClickSkuGoodsIds: skuGoodsIds,
+    collected: ids.length,
+  }, 'RUNNING', null);
   return ids;
 }
 

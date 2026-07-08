@@ -237,6 +237,88 @@ describe('browser one-click listing worker', () => {
     });
   });
 
+  it('fills missing temporary goods when a browser one-click job was only partially collected', async () => {
+    const payload = {
+      source: 'browser-one-click-listing',
+      stage: 'submitted',
+      entry: 'ozon-list-page-full',
+      mode: 'clone',
+      sourceSkus: ['2143427743', '3186614714'],
+      productUrls: ['https://www.ozon.ru/product/2143427743/', 'https://www.ozon.ru/product/3186614714/'],
+      rows: [
+        { sku: '2143427743', title: 'Existing product', image: 'https://cdn.example/a.jpg', pagePrice: 1000 },
+        { sku: '3186614714', title: 'Recovered product', image: 'https://cdn.example/b.jpg', pagePrice: 1200 },
+      ],
+      supplyGoodsIds: ['sg-existing'],
+      browserOneClickSkuGoodsIds: { '2143427743': 'sg-existing' },
+      watermark: { type: 'text', text: 'SS ERP' },
+      publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+    };
+    let currentPayload = payload;
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: 'job-1',
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload: currentPayload,
+          shop: { userId: 'user-1', user: { id: 'user-1', role: 'USER' } },
+        };
+      }
+      return { payload: currentPayload };
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => {
+      currentPayload = data.payload;
+      return { id: 'job-1', payload: currentPayload };
+    });
+    mocks.supplyGoodsFindMany.mockImplementation(async (args: any) => {
+      if (args?.select) return [{ id: 'sg-existing' }];
+      return [
+        { id: 'sg-existing', userId: 'user-1', images: ['https://cdn.example/a.jpg'], metadata: {} },
+        { id: 'sg-new', userId: 'user-1', images: ['https://cdn.example/b.jpg'], metadata: {} },
+      ];
+    });
+    mocks.supplyGoodsCreate.mockResolvedValue({ id: 'sg-new' });
+    mocks.userFindUnique.mockResolvedValue({ id: 'user-1', role: 'USER' });
+    mocks.resolveCollectedPrice.mockResolvedValue({
+      purchasePriceCny: 88,
+      originalPrice: 1000,
+      originalCurrency: 'RUB',
+      exchangeRateUsed: 0.088,
+      needsReview: false,
+    });
+    mocks.processWatermarkItemsWithConcurrency.mockResolvedValue({ processed: 2, failed: 0 });
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 1, data: { taskId: 123, jobId: 'job-1', count: 2 } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-1')).resolves.toMatchObject({
+      ok: true,
+      jobId: 'job-1',
+      data: { taskId: 123 },
+    });
+
+    expect(mocks.supplyGoodsCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sku: '3186614714',
+        sourceProductId: '3186614714',
+      }),
+    });
+    const publishBody = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(publishBody.ids).toEqual(['sg-existing', 'sg-new']);
+    expect(currentPayload).toMatchObject({
+      supplyGoodsIds: ['sg-existing', 'sg-new'],
+      browserOneClickSkuGoodsIds: {
+        '2143427743': 'sg-existing',
+        '3186614714': 'sg-new',
+      },
+      collected: 2,
+    });
+  });
   it('preserves collected Ozon attributes and variants so one-click listings use product import instead of import-by-sku fallback', async () => {
     const ozonAttributes = [
       { id: 85, values: [{ value: 'Brand X', dictionary_value_id: 123 }] },

@@ -130,6 +130,54 @@ function uniqueStrings(values: unknown[]): string[] {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 }
 
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+}
+
+function positiveNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
+}
+
+function hasImage(row: Record<string, any>): boolean {
+  const images = Array.isArray(row.images) ? row.images : [row.image, row.img, row.picture];
+  return images.some((image) => String(image || '').trim());
+}
+
+function rowHasPublishCategory(row: Record<string, any>, publish: Record<string, any>): boolean {
+  const categoryId = positiveNumber(publish.categoryId)
+    ?? positiveNumber(row.descriptionCategoryId)
+    ?? positiveNumber(row.description_category_id)
+    ?? positiveNumber(row.categoryId)
+    ?? positiveNumber(row.category3Id);
+  const typeId = positiveNumber(publish.typeId)
+    ?? positiveNumber(row.typeId)
+    ?? positiveNumber(row.descriptionTypeId)
+    ?? positiveNumber(row.description_type_id);
+  return !!(categoryId && typeId);
+}
+
+function hasRecoverableBrowserPayloadRows(payload: Record<string, any>): boolean {
+  const sourceSkus = stringList(payload.sourceSkus);
+  if (!sourceSkus.length) return false;
+  const rows = Array.isArray(payload.rows) ? payload.rows.map(objectRecord) : [];
+  const rowEntries: Array<[string, Record<string, any>]> = [];
+  for (const row of rows) {
+    const sku = rowSku(row);
+    if (sku) rowEntries.push([sku, row]);
+  }
+  const rowBySku = new Map<string, Record<string, any>>(rowEntries);
+  const publish = objectRecord(payload.publish);
+  return sourceSkus.every((sku) => {
+    const row = rowBySku.get(sku);
+    if (!row) return false;
+    const title = String(row.title || row.name || '').trim();
+    return !!title && hasImage(row) && rowHasPublishCategory(row, publish);
+  });
+}
+
 function importErrorMessage(error: unknown): string {
   const anyError = error as any;
   const code = String(anyError?.code || anyError?.cause?.code || '').trim();
@@ -920,7 +968,7 @@ export async function listingRoutes(app: FastifyInstance) {
     const mergedSkuGoodsIds = ingestResult
       ? ingestResult.skuGoodsIds
       : { ...objectRecord(previousPayload.browserOneClickSkuGoodsIds), ...objectRecord(patchPayload.browserOneClickSkuGoodsIds) };
-    const payload = {
+    const basePayload = {
       ...previousPayload,
       ...patchPayload,
       ...(mergedRows.length ? { rows: mergedRows } : {}),
@@ -934,15 +982,38 @@ export async function listingRoutes(app: FastifyInstance) {
           updatedAt: new Date().toISOString(),
         },
       } : {}),
-      ...(shouldStartDeferredJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
     };
+    const failureMessage = String(parsed.data.errorMessage || previousPayload.browserPayloadLastError || '浏览器补全商品数据失败').slice(0, 260);
+    const shouldRecoverBrowserPayloadFailure = previousPayload.source === 'browser-one-click-listing'
+      && nextStatus === 'FAILED'
+      && String(patchPayload.stage || '').trim() === 'collect_failed'
+      && !previousPayload.taskId
+      && hasRecoverableBrowserPayloadRows(basePayload);
+    const shouldQueueBackendJob = shouldStartDeferredJob || shouldRecoverBrowserPayloadFailure;
+    const payload = {
+      ...basePayload,
+      ...(shouldRecoverBrowserPayloadFailure ? {
+        stage: 'submitted',
+        browserPayloadReady: true,
+        browserPayloadComplete: false,
+        browserPayloadRetrying: false,
+        browserPayloadRecoveredFromFailure: true,
+        browserPayloadLastError: failureMessage,
+      } : {}),
+      ...(shouldQueueBackendJob ? { browserQueueStartedAt: new Date().toISOString() } : {}),
+    };
+    const effectiveStatus = shouldRecoverBrowserPayloadFailure ? 'RUNNING' : nextStatus;
     const updateData: Record<string, any> = {
-      status: nextStatus,
+      status: effectiveStatus,
       payload,
     };
     if ('result' in parsed.data) updateData.result = parsed.data.result ?? null;
-    if ('errorMessage' in parsed.data) updateData.errorMessage = parsed.data.errorMessage || null;
-    if (nextStatus === 'SUCCESS' || nextStatus === 'FAILED') updateData.finishedAt = new Date();
+    if (shouldRecoverBrowserPayloadFailure) {
+      updateData.errorMessage = '浏览器补全商品数据暂时中断，ERP 已接管继续执行: ' + failureMessage;
+    } else if ('errorMessage' in parsed.data) {
+      updateData.errorMessage = parsed.data.errorMessage || null;
+    }
+    if (effectiveStatus === 'SUCCESS' || effectiveStatus === 'FAILED') updateData.finishedAt = new Date();
 
     const updated = await prisma.syncJob.update({
       where: { id: job.id },
@@ -954,7 +1025,7 @@ export async function listingRoutes(app: FastifyInstance) {
         payload: true,
       },
     });
-    if (shouldStartDeferredJob) {
+    if (shouldQueueBackendJob) {
       await addBrowserOneClickListingJob(job.id);
     }
 

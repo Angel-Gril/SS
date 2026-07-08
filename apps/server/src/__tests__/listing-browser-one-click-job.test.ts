@@ -315,6 +315,84 @@ describe('browser one-click listing jobs', () => {
     }
   });
 
+  it('keeps a recoverable browser payload failure running and queues backend publish', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'collecting',
+        browserPayloadReady: false,
+        sourceSkus: ['2143427743'],
+        rows: [{
+          sku: '2143427743',
+          title: 'Ozon product',
+          image: 'https://cdn.example/p.jpg',
+          descriptionCategoryId: '17028627',
+          typeId: '95777',
+        }],
+        publish: { publishMode: 'clone' },
+      },
+      shop: { userId: 'user-1' },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'RUNNING',
+      finishedAt: null,
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'submitted',
+        browserPayloadReady: true,
+        browserPayloadRecoveredFromFailure: true,
+        sourceSkus: ['2143427743'],
+        rows: [{
+          sku: '2143427743',
+          title: 'Ozon product',
+          image: 'https://cdn.example/p.jpg',
+          descriptionCategoryId: '17028627',
+          typeId: '95777',
+        }],
+      },
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/api/listing/browser-one-click-jobs/job-1',
+        payload: {
+          status: 'FAILED',
+          errorMessage: '浏览器补全商品数据失败: Failed to fetch',
+          payload: { stage: 'collect_failed', browserPayloadReady: false },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { id: 'job-1', status: 'RUNNING' },
+      });
+      expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          status: 'RUNNING',
+          errorMessage: expect.stringContaining('浏览器补全商品数据暂时中断'),
+          payload: expect.objectContaining({
+            stage: 'submitted',
+            browserPayloadReady: true,
+            browserPayloadRecoveredFromFailure: true,
+            browserPayloadLastError: '浏览器补全商品数据失败: Failed to fetch',
+          }),
+        }),
+        select: expect.any(Object),
+      });
+      expect(mocks.syncJobUpdate.mock.calls[0]![0].data).not.toHaveProperty('finishedAt');
+      expect(mocks.addBrowserOneClickListingJob).toHaveBeenCalledWith('job-1');
+    } finally {
+      await app.close();
+    }
+  });
   it('lets the extension background mark the pre-created job failed when collection or watermarking stops early', async () => {
     mocks.syncJobFindFirst.mockResolvedValue({
       id: 'job-1',
