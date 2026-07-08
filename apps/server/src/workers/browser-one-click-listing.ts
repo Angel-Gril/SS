@@ -295,10 +295,16 @@ async function applyBrowserOneClickWatermark(jobId: string, userId: string, ids:
     fontColor: watermark.fontColor,
     scale: watermark.scale,
   }, processItemWatermarks);
-  if (result.failed > 0) {
-    throw new Error(`水印处理失败（${result.failed} 张失败，已中断上架）`);
-  }
-  await mergeBrowserOneClickJobPayload(jobId, { stage: 'watermarked', watermark: result }, 'RUNNING', null);
+  const watermarkWarning = result.failed > 0
+    ? (result.processed > 0
+      ? `水印处理部分失败（${result.failed} 张已回退原图，继续上架）`
+      : `水印处理失败（${result.failed} 张已回退原图，继续上架）`)
+    : null;
+  await mergeBrowserOneClickJobPayload(jobId, {
+    stage: 'watermarked',
+    watermark: result,
+    ...(watermarkWarning ? { watermarkWarning } : {}),
+  }, 'RUNNING', null);
   return result;
 }
 
@@ -313,12 +319,18 @@ async function createInternalAuthToken(userId: string): Promise<string> {
   return token;
 }
 
+function normalizeInternalApiBaseUrl(value: string | undefined): string {
+  return String(value || '').trim().replace(/\/api(?:\/.*)?$/, '').replace(/\/+$/, '');
+}
+
 function localApiBaseUrl(): string {
+  const configuredBaseUrl = normalizeInternalApiBaseUrl(process.env.INTERNAL_API_BASE_URL);
+  if (configuredBaseUrl) return configuredBaseUrl;
   const host = process.env.SERVER_HOST && process.env.SERVER_HOST !== '0.0.0.0'
     ? process.env.SERVER_HOST
     : '127.0.0.1';
   const port = Number(process.env.SERVER_PORT) || 3001;
-  return process.env.INTERNAL_API_BASE_URL || `http://${host}:${port}`;
+  return `http://${host}:${port}`;
 }
 
 async function callPublishOzon(job: any, ids: string[]) {

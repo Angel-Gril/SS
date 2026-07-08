@@ -57,6 +57,7 @@ vi.mock('../routes/collect.js', () => ({
 describe('browser one-click listing worker', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
@@ -337,6 +338,120 @@ describe('browser one-click listing worker', () => {
     });
   });
 
+  it('continues publishing with original images when watermark processing fails', async () => {
+    const payload = {
+      source: 'browser-one-click-listing',
+      stage: 'submitted',
+      entry: 'ozon-list-page-full',
+      mode: 'clone',
+      sourceSkus: ['2143427743'],
+      productUrls: ['https://www.ozon.ru/product/2143427743/'],
+      rows: [{
+        sku: '2143427743',
+        title: 'Ozon product',
+        image: 'https://cdn.example/p.jpg',
+        pagePrice: 1000,
+        pagePriceCurrency: 'RUB',
+      }],
+      watermark: { type: 'text', text: '@BINI' },
+      publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+    };
+    let currentPayload = payload;
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: 'job-watermark-partial',
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload: currentPayload,
+          shop: { userId: 'user-1', user: { id: 'user-1', role: 'USER' } },
+        };
+      }
+      return { payload: currentPayload };
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => {
+      currentPayload = data.payload;
+      return { id: 'job-watermark-partial', payload: currentPayload };
+    });
+    mocks.supplyGoodsCreate.mockResolvedValue({ id: 'sg-partial' });
+    mocks.supplyGoodsFindMany.mockResolvedValue([{ id: 'sg-partial', userId: 'user-1', images: ['https://cdn.example/p.jpg'], metadata: {} }]);
+    mocks.userFindUnique.mockResolvedValue({ id: 'user-1', role: 'USER' });
+    mocks.resolveCollectedPrice.mockResolvedValue({
+      purchasePriceCny: 88,
+      originalPrice: 1000,
+      originalCurrency: 'RUB',
+      exchangeRateUsed: 0.088,
+      needsReview: false,
+    });
+    mocks.processWatermarkItemsWithConcurrency.mockResolvedValue({ processed: 0, failed: 1 });
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 1, data: { taskId: 321, jobId: 'job-watermark-partial', count: 1 } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-watermark-partial')).resolves.toMatchObject({
+      ok: true,
+      jobId: 'job-watermark-partial',
+      data: { taskId: 321 },
+    });
+
+    expect(mocks.processWatermarkItemsWithConcurrency).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
+    expect(currentPayload).toMatchObject({
+      stage: 'published',
+      watermark: { processed: 0, failed: 1 },
+      watermarkWarning: '水印处理失败（1 张已回退原图，继续上架）',
+      taskId: 321,
+    });
+  });
+  it('normalizes configured internal API base URL when publishing from a VPS worker', async () => {
+    vi.stubEnv('INTERNAL_API_BASE_URL', 'https://erp.example.com/api');
+    const payload = {
+      source: 'browser-one-click-listing',
+      browserOneClickJob: true,
+      stage: 'publishing',
+      sourceSkus: ['2143427743'],
+      sourceItemIds: ['sg-vps'],
+      watermark: null,
+      publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+    };
+    let currentPayload = payload;
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: 'job-vps',
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload: currentPayload,
+          shop: { userId: 'user-1', user: { id: 'user-1', role: 'USER' } },
+        };
+      }
+      return { payload: currentPayload };
+    });
+    mocks.syncJobUpdate.mockImplementation(async ({ data }: any) => {
+      currentPayload = data.payload;
+      return { id: 'job-vps', payload: currentPayload };
+    });
+    mocks.supplyGoodsFindMany.mockResolvedValue([{ id: 'sg-vps' }]);
+    mocks.userFindUnique.mockResolvedValue({ id: 'user-1', role: 'USER' });
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 1, data: { taskId: 654, jobId: 'job-vps', count: 1 } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await runBrowserOneClickListingJob('job-vps');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://erp.example.com/api/collect/publish-ozon',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
   it('resumes a publishing-stage fallback payload without recreating records or repeating watermark work', async () => {
     const payload = {
       source: 'browser-one-click-listing',

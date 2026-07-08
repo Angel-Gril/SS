@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
-import { OzonClient } from '../services/ozon-client.js';
+import { OzonClient, type OzonImportInfo, type OzonProductInfo } from '../services/ozon-client.js';
+import { getListingTaskRefreshSettings } from '../services/listing-task-refresh.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
 import { summarizeOzonImportItems } from '../services/ozon-import-status.js';
 import { resolveImageUrls } from '../services/ozon-image-resolver.js';
@@ -127,6 +128,90 @@ function mergeRowsBySku(existingRows: Record<string, any>[], nextRows: Record<st
 
 function uniqueStrings(values: unknown[]): string[] {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function importErrorMessage(error: unknown): string {
+  const anyError = error as any;
+  const code = String(anyError?.code || anyError?.cause?.code || '').trim();
+  const message = String(anyError?.message || error || '未知错误').trim();
+  return code && !message.includes(code) ? `${message} (${code})` : message;
+}
+
+interface RefreshListingProductPushJobOptions {
+  ozonApiTimeoutMs?: number;
+}
+
+function positiveInt(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
+}
+
+async function resolveListingOzonApiTimeoutMs(options: RefreshListingProductPushJobOptions): Promise<number> {
+  const explicit = positiveInt(options.ozonApiTimeoutMs, 0);
+  if (explicit > 0) return explicit;
+  const settings = await getListingTaskRefreshSettings();
+  return positiveInt(settings.ozonApiTimeoutMs, 20000);
+}
+export function extractListingOfferIds(payload: unknown): string[] {
+  const data = objectRecord(payload);
+  const fromOfferIds = Array.isArray(data.offerIds) ? data.offerIds : [];
+  const fromItems = Array.isArray(data.items)
+    ? data.items.map((item: any) => item?.offer_id || item?.offerId)
+    : [];
+  const fromImages = data.offerImageLists && typeof data.offerImageLists === 'object' && !Array.isArray(data.offerImageLists)
+    ? Object.keys(data.offerImageLists)
+    : [];
+  return uniqueStrings([...fromOfferIds, ...fromItems, ...fromImages]);
+}
+
+export function buildImportInfoFromProductInfoFallback(payload: unknown, products: OzonProductInfo[]): OzonImportInfo | null {
+  const offerIds = extractListingOfferIds(payload);
+  if (!offerIds.length) return null;
+
+  const productByOfferId = new Map<string, OzonProductInfo>();
+  for (const product of products || []) {
+    const offerId = String((product as any)?.offer_id || '').trim();
+    if (offerId) productByOfferId.set(offerId, product);
+  }
+
+  const items = offerIds.map((offerId) => {
+    const product = productByOfferId.get(offerId);
+    const productId = Number((product as any)?.id || (product as any)?.product_id || 0);
+    return {
+      offer_id: offerId,
+      product_id: Number.isFinite(productId) ? productId : 0,
+      status: productId > 0 ? 'imported' : 'pending',
+      errors: [],
+    };
+  });
+
+  return { total: items.length, items };
+}
+
+async function getImportInfoWithProductFallback(client: OzonClient, taskId: number, payload: unknown): Promise<{
+  info: OzonImportInfo | null;
+  source: 'import-info' | 'product-info-fallback' | 'unavailable';
+  errorMessage: string | null;
+}> {
+  try {
+    return { info: await client.getImportInfo(taskId), source: 'import-info', errorMessage: null };
+  } catch (error) {
+    const errorMessage = importErrorMessage(error);
+    const offerIds = extractListingOfferIds(payload);
+    if (!offerIds.length) return { info: null, source: 'unavailable', errorMessage };
+
+    try {
+      const products = await client.getProductInfoByOfferId(offerIds);
+      const fallbackInfo = buildImportInfoFromProductInfoFallback(payload, products);
+      return { info: fallbackInfo, source: 'product-info-fallback', errorMessage };
+    } catch (fallbackError) {
+      return {
+        info: null,
+        source: 'unavailable',
+        errorMessage: `${errorMessage}; offer_id 兜底查询也失败: ${importErrorMessage(fallbackError)}`,
+      };
+    }
+  }
 }
 
 function isBrowserOneClickStageStale(data: Record<string, any>): boolean {
@@ -327,7 +412,11 @@ export async function findPictureActivationPendingItems(
     .filter(Boolean);
 }
 
-export async function refreshListingProductPushJob(id: string, userId?: string): Promise<{
+export async function refreshListingProductPushJob(
+  id: string,
+  userId?: string,
+  options: RefreshListingProductPushJobOptions = {},
+): Promise<{
   code: 1 | 0;
   msg: string;
   statusCode?: number;
@@ -351,22 +440,55 @@ export async function refreshListingProductPushJob(id: string, userId?: string):
     return { code: 0, msg: missingTaskIdMessage(job.payload) };
   }
 
+  const payload = (job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload))
+    ? job.payload as Record<string, any>
+    : {};
+  const ozonApiTimeoutMs = await resolveListingOzonApiTimeoutMs(options);
   const client = new OzonClient({
     clientId: job.shop.clientId!,
     apiKey: decrypt(job.shop.apiKeyEncrypted),
+    maxRetries: 0,
+    timeoutMs: ozonApiTimeoutMs,
   });
 
   try {
-    const info = await client.getImportInfo(Number(taskId));
+    const importLookup = await getImportInfoWithProductFallback(client, Number(taskId), payload);
+    const checkedAt = new Date().toISOString();
+    if (!importLookup.info) {
+      const updated = await prisma.syncJob.update({
+        where: { id: job.id },
+        data: {
+          status: job.status,
+          payload: {
+            ...payload,
+            ozonImportInfoSource: importLookup.source,
+            lastImportInfoError: importLookup.errorMessage,
+            lastImportInfoCheckedAt: checkedAt,
+          },
+        },
+      });
+      return {
+        code: 1,
+        msg: 'Ozon import 状态暂时无法读取，任务继续等待自动重试',
+        data: {
+          id: updated.id,
+          status: updated.status,
+          finishedAt: updated.finishedAt,
+          payload: updated.payload,
+        },
+      };
+    }
+
+    const info = importLookup.info;
     const { total, failed, allDone } = summarizeOzonImportItems(info.items);
-    const payload = (job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload))
-      ? job.payload as Record<string, any>
-      : {};
     let nextPayload: Record<string, any> = {
       ...payload,
       itemCount: total,
       failedCount: failed,
       items: info.items,
+      ozonImportInfoSource: importLookup.source,
+      lastImportInfoError: importLookup.errorMessage,
+      lastImportInfoCheckedAt: checkedAt,
     };
     let pictureErrorMessage: string | null = null;
 
@@ -910,157 +1032,10 @@ export async function listingRoutes(app: FastifyInstance) {
   app.post('/tasks/:id/refresh', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-
-    const job = await prisma.syncJob.findFirst({
-      where: { id, type: 'PRODUCT_PUSH' },
-      include: { shop: true },
-    });
-    if (!job || job.shop.userId !== userId) {
-      return reply.status(404).send({ code: 0, msg: '任务不存在' });
-    }
-
-    const taskId = (job.payload as any)?.taskId;
-    if (!taskId) {
-      return reply.send({ code: 0, msg: missingTaskIdMessage(job.payload) });
-    }
-
-    const client = new OzonClient({
-      clientId: job.shop.clientId!,
-      apiKey: decrypt(job.shop.apiKeyEncrypted),
-    });
-
-    try {
-      const info = await client.getImportInfo(Number(taskId));
-      const { total, failed, allDone } = summarizeOzonImportItems(info.items);
-      const payload = (job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload))
-        ? job.payload as Record<string, any>
-        : {};
-      let nextPayload: Record<string, any> = {
-        ...payload,
-        itemCount: total,
-        failedCount: failed,
-        items: info.items,
-      };
-      let pictureErrorMessage: string | null = null;
-
-      if (isPictureUploadRepairJob(payload)) {
-        const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];
-        const sourceItemIds = Array.from(new Set(
-          traces
-            .map((trace) => String(trace?.sourceItemId || '').trim())
-            .filter(Boolean),
-        ));
-        const sourceItems = sourceItemIds.length
-          ? await prisma.supplyGoods.findMany({
-            where: {
-              id: { in: sourceItemIds },
-              userId: job.shop.userId,
-            },
-          })
-          : [];
-        const plan = planFallbackPictureUploads(payload, info.items, sourceItems);
-        const pictureDiagnostics: any[] = [];
-
-        for (const skipped of plan.skipped) {
-          recordPictureUploadDiagnostic(pictureDiagnostics, {
-            offerId: skipped.offerId,
-            productId: skipped.productId,
-            status: 'skipped',
-            rawImages: skipped.rawImages,
-            message: skipped.message,
-          });
-        }
-
-        for (const operation of plan.operations) {
-          try {
-            const resolvedImages = await resolveImageUrls(operation.rawImages, job.shopId, job.shop.userId);
-            await client.importProductPictures({ product_id: operation.productId, images: resolvedImages });
-            recordPictureUploadDiagnostic(pictureDiagnostics, {
-              offerId: operation.offerId,
-              productId: operation.productId,
-              status: 'uploaded',
-              rawImages: operation.rawImages,
-              resolvedImages,
-            });
-          } catch (e: any) {
-            recordPictureUploadDiagnostic(pictureDiagnostics, {
-              offerId: operation.offerId,
-              productId: operation.productId,
-              status: 'failed',
-              rawImages: operation.rawImages,
-              error: e,
-            });
-          }
-        }
-
-        const mergedDiagnostics = mergePictureUploadDiagnostics(payload.pictureUploads, pictureDiagnostics);
-        const pictureSummary = summarizePictureUploadDiagnostics(mergedDiagnostics, plan.pendingCount);
-        pictureErrorMessage = pictureSummary.errorMessage;
-        nextPayload = {
-          ...nextPayload,
-          offerImageLists: Object.keys(plan.offerImageLists).length ? plan.offerImageLists : payload.offerImageLists ?? null,
-          pictureUploads: mergedDiagnostics.length ? mergedDiagnostics : null,
-          pictureUploadStatus: pictureSummary.status,
-          pictureUploadFailedCount: pictureSummary.failedCount,
-          pictureUploadSkippedCount: pictureSummary.skippedCount,
-          pictureUploadPendingCount: pictureSummary.pendingCount,
-          pictureUploadError: pictureSummary.errorMessage,
-        };
-      }
-
-      const pictureStatus = String(nextPayload.pictureUploadStatus || '').toLowerCase();
-      const canCheckPictureActivation = allDone
-        && failed < total
-        && pictureStatus !== 'failed'
-        && pictureStatus !== 'partial_failed'
-        && pictureStatus !== 'pending';
-      if (canCheckPictureActivation) {
-        const pendingActivation = await findPictureActivationPendingItems(client, job.shopId, info.items || []);
-        nextPayload = {
-          ...nextPayload,
-          pictureActivationPendingCount: pendingActivation.length,
-          pictureActivationPending: pendingActivation.length ? pendingActivation : null,
-        };
-      }
-
-      const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
-      const finalStatus = pictureErrorMessage
-        ? (
-          allDone
-          && nextPayload.pictureUploadStatus !== 'pending'
-          && nextPayload.pictureUploadStatus !== 'partial_pending'
-          && (nextPayload.pictureUploadStatus === 'failed' || nextPayload.pictureUploadStatus === 'partial_failed')
-            ? 'FAILED'
-            : 'RUNNING'
-        )
-        : newStatus;
-      const errorMessage = pictureErrorMessage || (failed > 0 ? `${failed} 个商品上架失败` : null);
-
-      const updated = await prisma.syncJob.update({
-        where: { id: job.id },
-        data: {
-          status: finalStatus,
-          finishedAt: allDone && finalStatus !== 'RUNNING' ? new Date() : null,
-          payload: nextPayload,
-          errorMessage,
-        },
-      });
-
-      return reply.send({
-        code: 1,
-        msg: 'ok',
-        data: {
-          id: updated.id,
-          status: updated.status,
-          finishedAt: updated.finishedAt,
-          payload: updated.payload,
-        },
-      });
-    } catch (e: any) {
-      return reply.send({ code: 0, msg: `刷新失败: ${e.message}` });
-    }
+    const result = await refreshListingProductPushJob(id, userId);
+    if (result.statusCode) return reply.status(result.statusCode).send(result);
+    return reply.send(result);
   });
-
   app.get('/categories', async (request, reply) => {
     const { userId } = (request as any).user;
     const query = request.query as { shopId: string };

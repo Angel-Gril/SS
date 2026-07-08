@@ -1,28 +1,48 @@
 import { prisma } from '../lib/prisma.js';
 import { registerTimer } from '../lib/worker-registry.js';
-import { shouldAutoRefreshProductPushJob } from '../services/listing-task-refresh.js';
+import {
+  getListingTaskRefreshEnvDefaults,
+  getListingTaskRefreshSettings,
+  shouldAutoRefreshProductPushJob,
+  type ListingTaskRefreshSettings,
+} from '../services/listing-task-refresh.js';
 import { refreshListingProductPushJob } from '../routes/listing.js';
 
-const DEFAULT_INTERVAL_MS = 30_000;
-const DEFAULT_LOOKBACK_HOURS = 48;
-const DEFAULT_BATCH_SIZE = 10;
-
-function positiveInt(value: unknown, fallback: number): number {
-  const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
+function settingsSummary(settings: ListingTaskRefreshSettings): string {
+  return `interval=${settings.intervalMs}ms lookback=${settings.lookbackHours}h batch=${settings.batchSize} concurrency=${settings.concurrency} ozonTimeout=${settings.ozonApiTimeoutMs}ms`;
 }
 
 export function startListingTaskRefreshWorker() {
-  const intervalMs = positiveInt(process.env.LISTING_TASK_REFRESH_INTERVAL_MS, DEFAULT_INTERVAL_MS);
-  const lookbackHours = positiveInt(process.env.LISTING_TASK_REFRESH_LOOKBACK_HOURS, DEFAULT_LOOKBACK_HOURS);
-  const batchSize = positiveInt(process.env.LISTING_TASK_REFRESH_BATCH_SIZE, DEFAULT_BATCH_SIZE);
+  const fallbackSettings = getListingTaskRefreshEnvDefaults();
+  let stopped = false;
   let running = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let lastLoggedSettings = '';
 
-  const tick = async () => {
+  const scheduleNext = (delayMs: number) => {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      void runOnce();
+    }, delayMs);
+    timer.unref();
+  };
+
+  const logSettingsIfChanged = (settings: ListingTaskRefreshSettings) => {
+    const summary = settingsSummary(settings);
+    if (summary === lastLoggedSettings) return;
+    lastLoggedSettings = summary;
+    console.log(`[listing-task-refresh] settings ${summary}`);
+  };
+
+  const runOnce = async () => {
     if (running) return;
     running = true;
+    let settings = fallbackSettings;
     try {
-      const cutoff = new Date(Date.now() - lookbackHours * 60 * 60 * 1000);
+      settings = await getListingTaskRefreshSettings();
+      logSettingsIfChanged(settings);
+
+      const cutoff = new Date(Date.now() - settings.lookbackHours * 60 * 60 * 1000);
       const candidates = await prisma.syncJob.findMany({
         where: {
           type: 'PRODUCT_PUSH',
@@ -30,7 +50,7 @@ export function startListingTaskRefreshWorker() {
           status: { in: ['PENDING', 'RUNNING', 'SUCCESS'] },
         },
         orderBy: { createdAt: 'desc' },
-        take: 100,
+        take: Math.max(100, settings.batchSize * 2),
         select: {
           id: true,
           type: true,
@@ -38,28 +58,38 @@ export function startListingTaskRefreshWorker() {
           payload: true,
         },
       });
-      const targets = candidates.filter(shouldAutoRefreshProductPushJob).slice(0, batchSize);
-      for (const job of targets) {
-        const result = await refreshListingProductPushJob(job.id);
-        if (result.code !== 1) {
-          console.warn(`[listing-task-refresh] ${job.id} refresh skipped/failed: ${result.msg}`);
-        } else {
-          console.log(`[listing-task-refresh] ${job.id} -> ${result.data?.status || 'unknown'}`);
-        }
+      const targets = candidates.filter(shouldAutoRefreshProductPushJob).slice(0, settings.batchSize);
+      const concurrency = Math.max(1, Math.min(settings.concurrency, Math.max(1, targets.length)));
+      for (let i = 0; i < targets.length; i += concurrency) {
+        const chunk = targets.slice(i, i + concurrency);
+        await Promise.allSettled(chunk.map(async (job) => {
+          try {
+            const result = await refreshListingProductPushJob(job.id, undefined, {
+              ozonApiTimeoutMs: settings.ozonApiTimeoutMs,
+            });
+            if (result.code !== 1) {
+              console.warn(`[listing-task-refresh] ${job.id} refresh skipped/failed: ${result.msg}`);
+            } else {
+              console.log(`[listing-task-refresh] ${job.id} -> ${result.data?.status || 'unknown'}`);
+            }
+          } catch (e: any) {
+            console.warn(`[listing-task-refresh] ${job.id} refresh crashed: ${e?.message || e}`);
+          }
+        }));
       }
     } catch (e: any) {
       console.error('[listing-task-refresh] tick failed:', e?.message || e);
     } finally {
       running = false;
+      scheduleNext(settings.intervalMs);
     }
   };
 
-  const timer = setInterval(() => {
-    void tick();
-  }, intervalMs);
-  timer.unref();
-  void tick();
+  void runOnce();
 
-  registerTimer(() => clearInterval(timer));
-  console.log(`[listing-task-refresh] worker started interval=${intervalMs}ms lookback=${lookbackHours}h batch=${batchSize}`);
+  registerTimer(() => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  });
+  console.log('[listing-task-refresh] worker started configSource=admin-settings envFallback=true');
 }

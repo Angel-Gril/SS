@@ -157,6 +157,9 @@ export function ListingJobDetailDialog({
 
   const mode = data ? modeLabel(data.payload) : null;
   const jobErrorHint = data?.error ? explainOzonError(data.error) : null;
+  const importInfoError = data?.payload?.lastImportInfoError || null;
+  const importInfoCheckedAt = data?.payload?.lastImportInfoCheckedAt || null;
+  const importInfoSource = data?.payload?.ozonImportInfoSource || null;
   const pictureUploads = data?.payload?.pictureUploads || [];
   const pictureUploadedCount = pictureUploads.filter((it) => it.status === 'uploaded').length;
   const pictureBlockedCount = pictureUploads.filter((it) => it.status !== 'uploaded').length;
@@ -273,6 +276,20 @@ export function ListingJobDetailDialog({
                   {jobErrorHint && <Badge variant="outline" className="text-[10px] border-destructive/30">{jobErrorHint.label}</Badge>}
                   <span>{formatOzonErrorMessage(data.error)}</span>
                 </div>
+              </div>
+            )}
+
+            {importInfoError && (
+              <div className="border border-amber-200 bg-amber-50 rounded-md px-3 py-2 text-amber-800 text-xs dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700 dark:text-amber-200 dark:border-amber-700">
+                    Ozon 状态查询
+                  </Badge>
+                  {importInfoSource && <span className="text-muted-foreground">来源：{importInfoSource}</span>}
+                  {importInfoCheckedAt && <span className="text-muted-foreground">最近检查：{new Date(importInfoCheckedAt).toLocaleString('zh-CN', { hour12: false })}</span>}
+                </div>
+                <div className="mt-1 break-words">{formatOzonErrorMessage(importInfoError)}</div>
+                <div className="mt-1 text-muted-foreground">任务未失败，系统会继续按 Task ID 和 offer_id 自动重试。</div>
               </div>
             )}
 

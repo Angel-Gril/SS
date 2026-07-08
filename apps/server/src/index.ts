@@ -241,12 +241,14 @@ if (RUN_WORKERS) {
     { startOssCleanupWorker },
     { startDatabaseBackupWorker },
     { startRechargeTimeoutWorker },
+    { startListingTaskRefreshWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
     import('./workers/oss-cleanup.js'),
     import('./workers/database-backup.js'),
     import('./workers/recharge-timeout.js'),
+    import('./workers/listing-task-refresh.js'),
   ]);
 
   startWarehouseCommandPollWorker();
@@ -254,6 +256,7 @@ if (RUN_WORKERS) {
   startOssCleanupWorker();
   startDatabaseBackupWorker();
   startRechargeTimeoutWorker();
+  startListingTaskRefreshWorker();
   if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
     const [
       { startProductSyncWorker },

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const collectRoute = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
 const listingRoute = fs.readFileSync('apps/server/src/routes/listing.ts', 'utf8');
 const backendWorker = fs.existsSync('apps/server/src/workers/browser-one-click-listing.ts')
@@ -235,6 +236,88 @@ test('browser one-click listing is executed by the ERP backend worker queue', ()
   );
 });
 
+test('Ozon one-click publish syncs target shop cookie before creating the backend job', () => {
+  const createJobFn = background.match(/async function\s+createOzonWorkbenchPublishJob[\s\S]*?\n}\n\nasync function\s+submitOzonWorkbenchPublishJob/);
+  assert.ok(createJobFn, 'extension should create one-click publish jobs through a dedicated helper');
+  assert.match(
+    createJobFn[0],
+    /await\s+ensureOzonWorkbenchPublishCookieSynced\(\s*shopId\s*,\s*options\s*\)/,
+    'one-click publish should refresh the selected shop Ozon cookie/company_id before the ERP backend tries Ozon CDN uploads',
+  );
+  assert.match(
+    background,
+    /async function\s+ensureOzonWorkbenchPublishCookieSynced[\s\S]*syncOzonCookieToShopForSync/,
+    'collect background should reuse the service-worker Ozon cookie sync helper instead of duplicating sync logic',
+  );
+});
+
+test('Ozon one-click cookie sync keeps the target shop company_id when available', () => {
+  const syncFn = serviceWorker.match(/async function\s+syncOzonCookieToShopForSync[\s\S]*?\n}\n\nglobalThis\.syncOzonCookieToShopForSync/);
+  assert.ok(syncFn, 'service worker should expose a dedicated target-shop cookie sync helper');
+  assert.match(
+    syncFn[0],
+    /preferStoredCompanyId[\s\S]*options[\s\S]*useStoredCompanyId[\s\S]*\[storedCompanyId,\s*payloadCompanyId,\s*tabCompanyId,\s*capturedCompanyId,\s*cookieCompanyId\]/,
+    'one-click sync should prefer the target shop stored company_id over the currently active seller tab company_id',
+  );
+});
+
+test('Ozon one-click cookie sync targets the configured ERP backend for VPS deployments', () => {
+  assert.match(
+    serviceWorker,
+    /async function\s+getOzonAutoSyncConnection[\s\S]*OZON_CALC_ERP_ENDPOINT_KEY[\s\S]*'ss_erp_connection'[\s\S]*apiBase:\s*endpoint\s*\?\s*endpoint\.replace\(\/\\\/api\\\/\.\*\$\/,\s*''\)\s*:\s*''/,
+    'cookie sync should derive apiBase from the configured ERP endpoint instead of assuming localhost',
+  );
+  assert.match(
+    serviceWorker,
+    /fetch\(connection\.apiBase\s*\+\s*'\/api\/shops\/'\s*\+\s*encodeURIComponent\(normalizedShopId\)\s*\+\s*'\/ozon-cdn-auth'/,
+    'cookie sync should write the selected shop login state to the configured ERP backend',
+  );
+  assert.match(
+    serviceWorker,
+    /ss_erp_connection:\s*\{\s*baseUrl,\s*token\s*\}/,
+    'saving a VPS/cloud ERP endpoint should keep the legacy one-click connection in sync',
+  );
+});
+
+test('Ozon one-click publish payload completion survives MV3 background restarts', () => {
+  const createJobFn = background.match(/async function\s+createOzonWorkbenchPublishJob[\s\S]*?\n}\n\nasync function\s+submitOzonWorkbenchPublishJob/);
+  assert.ok(createJobFn, 'extension should create one-click publish jobs through a dedicated helper');
+  assert.match(
+    background,
+    /OZON_WORKBENCH_PUBLISH_PAYLOAD_QUEUE_KEY/,
+    'extension should persist unfinished one-click publish payload jobs in chrome.storage.local',
+  );
+  assert.match(
+    createJobFn[0],
+    /await\s+upsertOzonWorkbenchPublishPayloadJob\(\s*\{[\s\S]*jobId[\s\S]*productIds[\s\S]*options/,
+    'one-click publish should persist the browser payload job before running async enrichment',
+  );
+  assert.match(
+    createJobFn[0],
+    /void\s+flushOzonWorkbenchPublishPayloadQueue\(\)/,
+    'one-click publish should run the persisted payload queue instead of relying on one detached promise',
+  );
+  assert.match(
+    background,
+    /async function\s+flushOzonWorkbenchPublishPayloadQueue[\s\S]*completeOzonWorkbenchPublishJobPayload[\s\S]*removeOzonWorkbenchPublishPayloadJob/,
+    'payload queue flush should complete and then remove recovered jobs',
+  );
+  assert.match(
+    background,
+    /chrome\.runtime\.onInstalled[\s\S]*flushOzonWorkbenchPublishPayloadQueue/,
+    'extension install/reload should resume unfinished browser payload jobs',
+  );
+  assert.match(
+    background,
+    /chrome\.runtime\.onStartup[\s\S]*flushOzonWorkbenchPublishPayloadQueue/,
+    'browser startup should resume unfinished browser payload jobs',
+  );
+  assert.match(
+    background,
+    /chrome\.alarms\.create\(OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME[\s\S]*chrome\.alarms\.onAlarm[\s\S]*OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME[\s\S]*flushOzonWorkbenchPublishPayloadQueue/,
+    'alarm wakeups should keep retrying unfinished browser payload jobs on VPS/local deployments',
+  );
+});
 test('browser one-click listing streams complete Ozon publish data into ERP temporary goods', () => {
   const publishRowsFn = background.match(/async function\s+buildOzonWorkbenchPublishRows[\s\S]*?\n}\n\nasync function\s+buildOzonWorkbenchPublishPayload/);
   assert.ok(publishRowsFn, 'extension should have a dedicated publish-row enrichment function');

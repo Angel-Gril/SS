@@ -521,7 +521,11 @@ async function syncOzonCookieToShopForSync(shopId, options) {
     getCapturedOzonCompanyIdForSync(),
     fetchStoredOzonCompanyIdForSync(connection.apiBase, connection.token, normalizedShopId),
   ]);
-  const companyId = tabCompanyId || payloadCompanyId || capturedCompanyId || cookieCompanyId || storedCompanyId;
+  const preferStoredCompanyId = options && options.useStoredCompanyId === true;
+  const companyIdCandidates = preferStoredCompanyId
+    ? [storedCompanyId, payloadCompanyId, tabCompanyId, capturedCompanyId, cookieCompanyId]
+    : [tabCompanyId, payloadCompanyId, capturedCompanyId, cookieCompanyId, storedCompanyId];
+  const companyId = companyIdCandidates.find((value) => normalizeOzonCompanyIdForSync(value)) || '';
   const body = { cookie: cookieStr };
   if (companyId) {
     body.companyId = companyId;
@@ -538,6 +542,8 @@ async function syncOzonCookieToShopForSync(shopId, options) {
   await updateOzonSyncTimes({ cookie: now });
   return { ok: true, shopId: normalizedShopId, companyId: companyId || '', data: data.data, syncedAt: now };
 }
+
+globalThis.syncOzonCookieToShopForSync = syncOzonCookieToShopForSync;
 
 async function syncCurrentOzonCookieForSync(options) {
   const connection = await getOzonAutoSyncConnection();

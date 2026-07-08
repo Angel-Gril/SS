@@ -54,6 +54,9 @@ export interface JobRow {
     videoPublishFailedCount?: number;
     videoPublishSkippedCount?: number;
     videoPublishPendingCount?: number;
+    ozonImportInfoSource?: 'import-info' | 'product-info-fallback' | 'unavailable' | string;
+    lastImportInfoError?: string | null;
+    lastImportInfoCheckedAt?: string | null;
     itemCount?: number;
     sourceItemCount?: number;
     failedCount?: number;
@@ -237,6 +240,7 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
   const succeeded = total - failed;
   const mode = modeLabel(row.payload);
   const errorHint = row.errorMessage ? explainOzonError(row.errorMessage) : null;
+  const importInfoError = row.status === 'RUNNING' ? row.payload?.lastImportInfoError : null;
   const pictureStage = resolveListingPictureStage({ status: row.status, payload: row.payload });
   const showPictureStage = isFallbackPictureJob(row.payload)
     || pictureStage.code === 'picture_failed'
@@ -322,6 +326,13 @@ function JobCard({ row, onOpenDetail }: { row: JobRow; onOpenDetail: () => void 
           </div>
         </div>
       </div>
+
+      {importInfoError && (
+        <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800">
+          <span className="font-medium">Ozon 状态查询暂时失败，自动重试中：</span>
+          <span className="break-words">{formatOzonErrorMessage(importInfoError)}</span>
+        </div>
+      )}
 
       {/* 错误信息 */}
       {row.errorMessage && (

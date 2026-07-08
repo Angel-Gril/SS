@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { listingRoutes } from '../routes/listing.js';
+import { OzonClient } from '../services/ozon-client.js';
 
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(async (request: any) => {
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   syncJobCreate: vi.fn(),
   syncJobFindFirst: vi.fn(),
   syncJobUpdate: vi.fn(),
+  getConfig: vi.fn(async (_key: string): Promise<number | undefined> => undefined),
   addBrowserOneClickListingJob: vi.fn(),
   appendBrowserOneClickListingRows: vi.fn(),
 }));
@@ -35,6 +37,10 @@ vi.mock('../lib/crypto.js', () => ({
   decrypt: vi.fn((value: string) => value),
 }));
 
+vi.mock('../config/system-config-schema.js', () => ({
+  getConfig: mocks.getConfig,
+}));
+
 vi.mock('../services/ozon-client.js', () => ({
   OzonClient: vi.fn(),
 }));
@@ -58,6 +64,8 @@ async function buildApp() {
 describe('browser one-click listing jobs', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.mocked(OzonClient).mockReset();
+    mocks.getConfig.mockResolvedValue(undefined);
   });
 
   it('creates a visible listing-log job before extension collection and watermark work starts', async () => {
@@ -436,6 +444,197 @@ describe('browser one-click listing jobs', () => {
       expect(response.json()).toMatchObject({
         code: 0,
         msg: expect.stringContaining('正在打水印'),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+  it('falls back to offer_id product lookup when Ozon import info is temporarily unavailable', async () => {
+    const getImportInfo = vi.fn().mockRejectedValue(Object.assign(new Error('fetch failed'), {
+      code: 'UND_ERR_CONNECT_TIMEOUT',
+    }));
+    const getProductInfoByOfferId = vi.fn().mockResolvedValue([
+      { id: 1001, offer_id: 'offer-1' },
+      { id: 1002, offer_id: 'offer-2' },
+    ]);
+    const getProductInfoList = vi.fn().mockResolvedValue([
+      { id: 1001, offer_id: 'offer-1', images: ['https://cdn.example/1.jpg'], primary_image: 'https://cdn.example/1.jpg' },
+      { id: 1002, offer_id: 'offer-2', images: ['https://cdn.example/2.jpg'], primary_image: 'https://cdn.example/2.jpg' },
+    ]);
+    const getProductInfoAttributes = vi.fn().mockResolvedValue([]);
+    vi.mocked(OzonClient).mockImplementation(function () {
+      return { getImportInfo, getProductInfoByOfferId, getProductInfoList, getProductInfoAttributes } as any;
+    });
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        taskId: 123,
+        source: 'browser-one-click-listing',
+        stage: 'publishing',
+        offerIds: ['offer-1', 'offer-2'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'SUCCESS',
+      finishedAt: new Date('2026-07-08T10:00:00.000Z'),
+      payload: {},
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { id: 'job-1', status: 'SUCCESS' } });
+      expect(getImportInfo).toHaveBeenCalledWith(123);
+      expect(getProductInfoByOfferId).toHaveBeenCalledWith(['offer-1', 'offer-2']);
+      expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          status: 'SUCCESS',
+          finishedAt: expect.any(Date),
+          errorMessage: null,
+          payload: expect.objectContaining({
+            ozonImportInfoSource: 'product-info-fallback',
+            lastImportInfoError: expect.stringContaining('fetch failed'),
+            items: [
+              { offer_id: 'offer-1', product_id: 1001, status: 'imported', errors: [] },
+              { offer_id: 'offer-2', product_id: 1002, status: 'imported', errors: [] },
+            ],
+          }),
+        }),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('uses admin-configured Ozon API timeout when refreshing import status', async () => {
+    mocks.getConfig.mockImplementation(async (key: string) => (
+      key === 'listing_ozon_api_timeout_ms' ? 27000 : undefined
+    ));
+    const getImportInfo = vi.fn().mockResolvedValue({
+      total: 1,
+      items: [
+        { offer_id: 'offer-1', product_id: 0, status: 'pending', errors: [] },
+      ],
+    });
+    vi.mocked(OzonClient).mockImplementation(function () {
+      return { getImportInfo } as any;
+    });
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        taskId: 123,
+        source: 'browser-one-click-listing',
+        stage: 'publishing',
+        offerIds: ['offer-1'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'RUNNING',
+      finishedAt: null,
+      payload: {},
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { id: 'job-1', status: 'RUNNING' } });
+      expect(OzonClient).toHaveBeenCalledWith(expect.objectContaining({
+        clientId: 'client-id',
+        apiKey: 'api-key',
+        maxRetries: 0,
+        timeoutMs: 27000,
+      }));
+    } finally {
+      await app.close();
+    }
+  });
+  it('keeps a listing task running when Ozon import info is down and offer_id lookup has not generated products yet', async () => {
+    const getImportInfo = vi.fn().mockRejectedValue(new Error('OZON API 连接超时: /v1/product/import/info'));
+    const getProductInfoByOfferId = vi.fn().mockResolvedValue([]);
+    vi.mocked(OzonClient).mockImplementation(function () {
+      return { getImportInfo, getProductInfoByOfferId } as any;
+    });
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        taskId: 123,
+        source: 'browser-one-click-listing',
+        stage: 'publishing',
+        offerIds: ['offer-1', 'offer-2'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'RUNNING',
+      finishedAt: null,
+      payload: {},
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { id: 'job-1', status: 'RUNNING' } });
+      expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          status: 'RUNNING',
+          finishedAt: null,
+          errorMessage: null,
+          payload: expect.objectContaining({
+            failedCount: 0,
+            ozonImportInfoSource: 'product-info-fallback',
+            lastImportInfoError: expect.stringContaining('OZON API 连接超时'),
+            items: [
+              { offer_id: 'offer-1', product_id: 0, status: 'pending', errors: [] },
+              { offer_id: 'offer-2', product_id: 0, status: 'pending', errors: [] },
+            ],
+          }),
+        }),
       });
     } finally {
       await app.close();

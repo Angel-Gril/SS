@@ -64,6 +64,12 @@ export const SystemConfigSchema = {
   security_admin_session_ttl_hours: z.number().int().min(1).max(168).default(24),
   security_audit_log_enabled: z.boolean().default(false),
 
+  // ─── listing / Ozon publish workers ───
+  listing_task_refresh_interval_ms: z.number().int().min(5000).max(300000).default(30000),
+  listing_task_refresh_batch_size: z.number().int().min(1).max(200).default(process.env.NODE_ENV === 'production' ? 30 : 10),
+  listing_task_refresh_concurrency: z.number().int().min(1).max(30).default(process.env.NODE_ENV === 'production' ? 6 : 3),
+  listing_task_refresh_lookback_hours: z.number().int().min(1).max(168).default(process.env.NODE_ENV === 'production' ? 72 : 48),
+  listing_ozon_api_timeout_ms: z.number().int().min(5000).max(60000).default(20000),
   // ─── upload ───
   upload_rate_limit_enabled: z.boolean().default(true),
   upload_rate_limit_per_minute: z.number().int().min(1).max(100).default(10),
@@ -202,6 +208,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   security_admin_session_ttl_hours: { label: '管理员会话有效期（小时）', group: 'security', description: '管理员独立登录入口的 token 有效期，默认 24 小时' },
   security_audit_log_enabled: { label: '审计日志', group: 'security', description: '记录管理员/超管的写操作（需先建表）' },
 
+  listing_task_refresh_interval_ms: { label: '上架状态刷新间隔（毫秒）', group: 'listing', description: '后台自动向 Ozon 查询上架任务状态的间隔。默认 30000，即 30 秒。' },
+  listing_task_refresh_batch_size: { label: '每轮最多刷新任务数', group: 'listing', description: '每轮自动刷新最多处理多少个上架任务。VPS 推荐 30，任务量大且稳定后可提高。' },
+  listing_task_refresh_concurrency: { label: '状态刷新并发数', group: 'listing', description: '同时刷新多少个上架任务。VPS 推荐从 6 起步，稳定后可调到 8-10。' },
+  listing_task_refresh_lookback_hours: { label: '刷新任务回看时间（小时）', group: 'listing', description: '只自动刷新最近多少小时内的上架任务，避免长期历史任务占用队列。' },
+  listing_ozon_api_timeout_ms: { label: 'Ozon 状态查询超时（毫秒）', group: 'listing', description: '单次 Ozon 状态查询/兜底查询的最长等待时间。网络稳定可保留 20000。' },
   upload_rate_limit_enabled: { label: '上传频率限制', group: 'upload', description: '是否启用单用户上传频率限制' },
   upload_rate_limit_per_minute: { label: '每分钟上传次数', group: 'upload', description: '单用户每分钟最多上传次数（默认 10 次）' },
   upload_daily_quota_enabled: { label: '每日上传配额', group: 'upload', description: '是否启用单用户每日上传流量配额' },

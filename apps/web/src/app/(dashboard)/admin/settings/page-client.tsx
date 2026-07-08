@@ -55,6 +55,7 @@ const GROUP_LABELS: Record<string, string> = {
   feature: '功能开关',
   auth: '短信与人机验证',
   upload: '上传与对象存储',
+  listing: '上架任务',
   retention: '数据保留',
   backup: '备份策略',
   maintenance: '维护模式',
@@ -64,9 +65,17 @@ const GROUP_LABELS: Record<string, string> = {
   general: '通用',
 };
 
-const GROUP_ORDER = ['maintenance', 'auth', 'feature', 'ai', 'upload', 'retention', 'backup', 'version', 'randomize', 'general'];
+const GROUP_ORDER = ['maintenance', 'auth', 'feature', 'ai', 'upload', 'listing', 'retention', 'backup', 'version', 'randomize', 'general'];
 
-const REQUIRED_CONFIG_KEYS = ['ai_provider', 'ai_image_provider'];
+const REQUIRED_CONFIG_KEYS = [
+  'ai_provider',
+  'ai_image_provider',
+  'listing_task_refresh_interval_ms',
+  'listing_task_refresh_batch_size',
+  'listing_task_refresh_concurrency',
+  'listing_task_refresh_lookback_hours',
+  'listing_ozon_api_timeout_ms',
+];
 
 export default function AdminSettingsPage() {
   const [configs, setConfigs] = useState<SystemConfig[]>([]);
@@ -234,6 +243,18 @@ export default function AdminSettingsPage() {
             />
           );
         }
+        if (group === 'listing') {
+          return (
+            <ListingSettingsPanel
+              key={group}
+              items={items}
+              editing={editing}
+              setEditing={setEditing}
+              savingKey={savingKey}
+              saveConfigs={saveConfigs}
+            />
+          );
+        }
 
         if (group === 'auth') {
           return (
@@ -360,6 +381,13 @@ interface UploadSettingsPanelProps {
   saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
 }
 
+interface ListingSettingsPanelProps {
+  items: SystemConfig[];
+  editing: Record<string, string>;
+  setEditing: (next: Record<string, string>) => void;
+  savingKey: string | null;
+  saveConfigs: (keys: string[], label: string, overrides?: Record<string, string>) => Promise<void>;
+}
 interface AuthSettingsPanelProps {
   items: SystemConfig[];
   editing: Record<string, string>;
@@ -379,6 +407,125 @@ interface BackupSettingsPanelProps {
   runBackupNow: () => Promise<void>;
 }
 
+const LISTING_REFRESH_KEYS = [
+  'listing_task_refresh_interval_ms',
+  'listing_task_refresh_batch_size',
+  'listing_task_refresh_concurrency',
+  'listing_task_refresh_lookback_hours',
+  'listing_ozon_api_timeout_ms',
+];
+
+const LISTING_PRESETS = [
+  {
+    label: '本地保守',
+    desc: '适合本地网络和测试环境',
+    values: {
+      listing_task_refresh_interval_ms: '30000',
+      listing_task_refresh_batch_size: '10',
+      listing_task_refresh_concurrency: '3',
+      listing_task_refresh_lookback_hours: '48',
+      listing_ozon_api_timeout_ms: '20000',
+    },
+  },
+  {
+    label: 'VPS 推荐',
+    desc: '适合 OSS 直链和稳定公网',
+    values: {
+      listing_task_refresh_interval_ms: '30000',
+      listing_task_refresh_batch_size: '30',
+      listing_task_refresh_concurrency: '6',
+      listing_task_refresh_lookback_hours: '72',
+      listing_ozon_api_timeout_ms: '20000',
+    },
+  },
+  {
+    label: 'VPS 高吞吐',
+    desc: '任务量大时使用，先观察 Ozon 限流',
+    values: {
+      listing_task_refresh_interval_ms: '30000',
+      listing_task_refresh_batch_size: '50',
+      listing_task_refresh_concurrency: '10',
+      listing_task_refresh_lookback_hours: '72',
+      listing_ozon_api_timeout_ms: '25000',
+    },
+  },
+];
+
+function ListingSettingsPanel({
+  items,
+  editing,
+  setEditing,
+  savingKey,
+  saveConfigs,
+}: ListingSettingsPanelProps) {
+  const configs = Object.fromEntries(items.map((item) => [item.key, item]));
+  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const isSavingRefresh = savingKey === 'group:上架任务刷新';
+  const applyPreset = (values: Record<string, string>) => setEditing({ ...editing, ...values });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <details open className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">上架任务</Badge>
+              <span className="text-sm text-muted-foreground">自动刷新、并发、Ozon 查询超时</span>
+            </div>
+            <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+            <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
+          </summary>
+          <CardContent className="space-y-6 border-t pt-5">
+            <section className="rounded-md border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">上架队列执行参数</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    后台 worker 每轮读取这里的配置；.env 只作为数据库配置不可用时的兜底。
+                  </p>
+                </div>
+                <Button size="sm" onClick={() => saveConfigs(LISTING_REFRESH_KEYS, '上架任务刷新')} disabled={isSavingRefresh}>
+                  {isSavingRefresh ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <span className="ml-1">保存上架参数</span>
+                </Button>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="grid gap-2 md:grid-cols-3">
+                {LISTING_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => applyPreset(preset.values)}
+                    className="rounded-md border px-3 py-2 text-left transition-colors hover:bg-muted/50"
+                  >
+                    <span className="block text-sm font-medium">{preset.label}</span>
+                    <span className="text-xs text-muted-foreground">{preset.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div>
+                <h3 className="text-sm font-medium">自动刷新策略</h3>
+                <p className="text-xs text-muted-foreground">并发不是越高越好。VPS 先从 6 开始，稳定后再调到 8-10。</p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput cfg={configs.listing_task_refresh_interval_ms} editing={editing} setValue={setValue} placeholder="30000" />
+                <ConfigInput cfg={configs.listing_task_refresh_batch_size} editing={editing} setValue={setValue} placeholder="30" />
+                <ConfigInput cfg={configs.listing_task_refresh_concurrency} editing={editing} setValue={setValue} placeholder="6" />
+                <ConfigInput cfg={configs.listing_task_refresh_lookback_hours} editing={editing} setValue={setValue} placeholder="72" />
+                <ConfigInput cfg={configs.listing_ozon_api_timeout_ms} editing={editing} setValue={setValue} placeholder="20000" />
+              </div>
+            </section>
+          </CardContent>
+        </details>
+      </Card>
+    </div>
+  );
+}
 const AUTH_GENERAL_KEYS = [
   'feature_sms_register',
   'feature_turnstile_login',

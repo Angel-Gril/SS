@@ -29,5 +29,5 @@ export function summarizeOzonImportItems(items: OzonImportStatusItem[]): {
   const total = items.length;
   const pending = items.filter((item) => item.status === 'pending').length;
   const failed = items.filter(isOzonImportItemFailed).length;
-  return { total, pending, failed, allDone: pending === 0 };
+  return { total, pending, failed, allDone: total > 0 && pending === 0 };
 }

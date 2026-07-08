@@ -53,7 +53,13 @@ const OZON_ENDPOINTS = {
 const SELLER_OZON_ORIGIN = "https://seller.ozon.ru/*";
 const SELLER_OZON_PERMISSION_ERROR = "扩展未获得 seller.ozon.ru 站点访问权限。请点击同步按钮时允许授权，或在 Chrome 扩展详情页把“网站访问权限”设为允许 seller.ozon.ru，然后刷新 seller 页面重试。";
 const OZON_COLLECT_ENRICHMENT_QUEUE_KEY = "ss_erp_ozon_collect_enrichment_queue";
+const OZON_WORKBENCH_PUBLISH_PAYLOAD_QUEUE_KEY = "ss_erp_ozon_workbench_publish_payload_queue";
+const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME = "ss-erp:ozon-workbench-publish-payload";
+const OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_MINUTES = 1;
+const OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_BASE_MS = 60 * 1000;
+const OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_MAX_MS = 15 * 60 * 1000;
 let ozonCollectEnrichmentRunQueue = Promise.resolve();
+let ozonWorkbenchPublishPayloadRunQueue = Promise.resolve();
 
 function normalizeErrorMessage(error) {
   return error && error.message ? error.message : String(error || "");
@@ -268,6 +274,176 @@ async function flushOzonCollectEnrichmentQueue() {
   });
 }
 
+function enqueueOzonWorkbenchPublishPayloadRun(task) {
+  const run = ozonWorkbenchPublishPayloadRunQueue.then(() => task());
+  ozonWorkbenchPublishPayloadRunQueue = run.catch(() => {});
+  return run;
+}
+
+function cloneOzonWorkbenchPublishPayloadOptions(options) {
+  try {
+    return JSON.parse(JSON.stringify(options || {}));
+  } catch (_error) {
+    const clone = {};
+    const allowedKeys = [
+      "productUrls",
+      "rows",
+      "prices",
+      "costs",
+      "fxRate",
+      "commissionRate",
+      "logisticsFeeCny",
+      "shopId",
+      "entry",
+      "publishMode",
+      "followBrand",
+      "markupPct",
+      "categoryId",
+      "typeId",
+      "randomOfferId",
+      "watermark",
+      "fetchVariantDescriptionDetails",
+      "productTimeoutMs",
+      "variantTimeoutMs",
+      "companyId",
+    ];
+    if (options && typeof options === "object") {
+      for (const key of allowedKeys) {
+        if (options[key] !== undefined) clone[key] = options[key];
+      }
+    }
+    return clone;
+  }
+}
+
+function normalizeOzonWorkbenchPublishPayloadJob(job) {
+  const jobId = String(job && job.jobId || "").trim();
+  const productIds = Array.isArray(job && job.productIds)
+    ? job.productIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  const attempts = Math.max(0, Number(job && job.attempts) || 0);
+  return {
+    jobId,
+    productIds,
+    options: cloneOzonWorkbenchPublishPayloadOptions(job && job.options),
+    queuedAt: String(job && job.queuedAt || "").trim() || new Date().toISOString(),
+    attempts,
+    lastAttemptAt: String(job && job.lastAttemptAt || "").trim(),
+    nextRunAt: String(job && job.nextRunAt || "").trim(),
+    lastError: String(job && job.lastError || "").slice(0, 260),
+  };
+}
+
+async function readOzonWorkbenchPublishPayloadQueue() {
+  const queue = await storageGet(OZON_WORKBENCH_PUBLISH_PAYLOAD_QUEUE_KEY);
+  return Array.isArray(queue)
+    ? queue.map(normalizeOzonWorkbenchPublishPayloadJob).filter((job) => job.jobId)
+    : [];
+}
+
+async function writeOzonWorkbenchPublishPayloadQueue(queue) {
+  const normalized = Array.isArray(queue)
+    ? queue.map(normalizeOzonWorkbenchPublishPayloadJob).filter((job) => job.jobId)
+    : [];
+  await storageSet({ [OZON_WORKBENCH_PUBLISH_PAYLOAD_QUEUE_KEY]: normalized });
+}
+
+async function upsertOzonWorkbenchPublishPayloadJob(job) {
+  const normalized = normalizeOzonWorkbenchPublishPayloadJob(job);
+  if (!normalized.jobId) return;
+  const queue = await readOzonWorkbenchPublishPayloadQueue();
+  const existing = queue.find((item) => item.jobId === normalized.jobId) || {};
+  const nextJob = {
+    ...existing,
+    ...normalized,
+    queuedAt: existing.queuedAt || normalized.queuedAt,
+    attempts: Number(existing.attempts) || 0,
+    nextRunAt: "",
+    lastError: "",
+  };
+  await writeOzonWorkbenchPublishPayloadQueue([
+    ...queue.filter((item) => item.jobId !== normalized.jobId),
+    nextJob,
+  ]);
+  ensureOzonWorkbenchPublishPayloadAlarm();
+}
+
+async function removeOzonWorkbenchPublishPayloadJob(jobId) {
+  const normalizedJobId = String(jobId || "").trim();
+  if (!normalizedJobId) return;
+  const queue = await readOzonWorkbenchPublishPayloadQueue();
+  await writeOzonWorkbenchPublishPayloadQueue(queue.filter((job) => job.jobId !== normalizedJobId));
+}
+
+function nextOzonWorkbenchPublishPayloadRetryAt(attempts) {
+  const step = Math.max(1, Math.min(8, Number(attempts) || 1));
+  const delayMs = Math.min(
+    OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_MAX_MS,
+    OZON_WORKBENCH_PUBLISH_PAYLOAD_RETRY_BASE_MS * Math.pow(2, step - 1)
+  );
+  return new Date(Date.now() + delayMs).toISOString();
+}
+
+async function recordOzonWorkbenchPublishPayloadRetry(job, error) {
+  const normalized = normalizeOzonWorkbenchPublishPayloadJob(job);
+  if (!normalized.jobId) return;
+  const queue = await readOzonWorkbenchPublishPayloadQueue();
+  const current = queue.find((item) => item.jobId === normalized.jobId) || normalized;
+  const attempts = (Number(current.attempts) || 0) + 1;
+  const nextJob = {
+    ...current,
+    attempts,
+    lastAttemptAt: new Date().toISOString(),
+    nextRunAt: nextOzonWorkbenchPublishPayloadRetryAt(attempts),
+    lastError: normalizeErrorMessage(error).slice(0, 260),
+  };
+  await writeOzonWorkbenchPublishPayloadQueue([
+    ...queue.filter((item) => item.jobId !== normalized.jobId),
+    nextJob,
+  ]);
+}
+
+function isOzonWorkbenchPublishPayloadDue(job, nowMs) {
+  const nextRunAt = Date.parse(job && job.nextRunAt || "");
+  return !Number.isFinite(nextRunAt) || nextRunAt <= nowMs;
+}
+
+function ensureOzonWorkbenchPublishPayloadAlarm() {
+  try {
+    if (!chrome.alarms || typeof chrome.alarms.create !== "function") return;
+    chrome.alarms.create(OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME, {
+      periodInMinutes: OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_MINUTES,
+      delayInMinutes: OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_MINUTES,
+    });
+  } catch (error) {
+    console.warn("[SS ERP] create Ozon one-click publish payload alarm failed:", normalizeErrorMessage(error));
+  }
+}
+
+async function flushOzonWorkbenchPublishPayloadQueue() {
+  return enqueueOzonWorkbenchPublishPayloadRun(async () => {
+    const conn = await getStoredErpConnection();
+    if (!conn.baseUrl || !conn.token) return;
+
+    const queue = await readOzonWorkbenchPublishPayloadQueue();
+    if (!queue.length) return;
+
+    const nowMs = Date.now();
+    for (const job of queue) {
+      if (!job.jobId || !isOzonWorkbenchPublishPayloadDue(job, nowMs)) continue;
+      try {
+        const result = await completeOzonWorkbenchPublishJobPayload(conn, job.jobId, job.productIds, job.options, { keepQueued: true });
+        if (result && result.ok === true) {
+          await removeOzonWorkbenchPublishPayloadJob(job.jobId);
+        } else {
+          await recordOzonWorkbenchPublishPayloadRetry(job, result && result.error ? result.error : "浏览器补全商品数据失败");
+        }
+      } catch (error) {
+        await recordOzonWorkbenchPublishPayloadRetry(job, error);
+      }
+    }
+  });
+}
 function normalizeRichDescriptionText(value) {
   return String(value || "")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
@@ -2437,14 +2613,27 @@ chrome.runtime.onInstalled.addListener(async () => {
     await saveConfig(DEFAULT_CONFIG);
   }
   flushOzonCollectEnrichmentQueue().catch(() => {});
+  ensureOzonWorkbenchPublishPayloadAlarm();
+  flushOzonWorkbenchPublishPayloadQueue().catch(() => {});
 });
 
 if (chrome.runtime && typeof chrome.runtime.onStartup?.addListener === "function") {
   chrome.runtime.onStartup.addListener(() => {
     flushOzonCollectEnrichmentQueue().catch(() => {});
+    ensureOzonWorkbenchPublishPayloadAlarm();
+    flushOzonWorkbenchPublishPayloadQueue().catch(() => {});
   });
 }
 
+ensureOzonWorkbenchPublishPayloadAlarm();
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (!alarm || alarm.name !== OZON_WORKBENCH_PUBLISH_PAYLOAD_ALARM_NAME) return;
+    flushOzonWorkbenchPublishPayloadQueue().catch((error) => {
+      console.warn("[SS ERP] Ozon one-click publish payload queue failed:", normalizeErrorMessage(error));
+    });
+  });
+}
 // ---- Cookie 监控：检测 1688/淘宝/天猫登录态变化 ----
 // 移植自 V3.1.74，_m_h5_tk 是 1688/淘宝系的防 CSRF token
 chrome.cookies.onChanged.addListener((change) => {
@@ -3492,7 +3681,7 @@ async function markOzonWorkbenchPublishJobFailed(conn, jobId, error) {
   }
 }
 
-async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, options = {}) {
+async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, options = {}, lifecycle = {}) {
   try {
     const streamResult = await streamOzonWorkbenchPublishRowsToJob(conn, jobId, productIds, options);
     await patchOzonWorkbenchPublishJob(conn, jobId, {
@@ -3508,8 +3697,45 @@ async function completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, o
         },
       },
     });
+    return { ok: true, count: streamResult.count, errors: streamResult.errors };
   } catch (error) {
+    if (lifecycle && lifecycle.keepQueued === true) {
+      try {
+        await patchOzonWorkbenchPublishJob(conn, jobId, {
+          status: "RUNNING",
+          errorMessage: "浏览器补全商品数据暂时中断，扩展会自动重试: " + normalizeErrorMessage(error).slice(0, 220),
+          payload: {
+            stage: "collecting",
+            browserPayloadReady: false,
+            browserPayloadRetrying: true,
+            browserPayloadRetryAt: new Date().toISOString(),
+            browserPayloadLastError: normalizeErrorMessage(error).slice(0, 260),
+          },
+        });
+      } catch (patchError) {
+        console.warn("[SS ERP] record Ozon one-click listing payload retry:", normalizeErrorMessage(patchError));
+      }
+      return { ok: false, error: normalizeErrorMessage(error) };
+    }
     await markOzonWorkbenchPublishJobFailed(conn, jobId, error);
+    return { ok: false, error: normalizeErrorMessage(error) };
+  }
+}
+
+async function ensureOzonWorkbenchPublishCookieSynced(shopId, options = {}) {
+  const syncFn = typeof globalThis.syncOzonCookieToShopForSync === "function"
+    ? globalThis.syncOzonCookieToShopForSync
+    : (typeof syncOzonCookieToShopForSync === "function" ? syncOzonCookieToShopForSync : null);
+  if (typeof syncFn !== "function") {
+    throw new Error("Ozon Cookie 自动同步组件未加载，请刷新扩展后重试");
+  }
+  try {
+    return await syncFn(shopId, {
+      companyId: options.companyId,
+      useStoredCompanyId: true,
+    });
+  } catch (error) {
+    throw new Error("上架前同步 Ozon Cookie/company_id 失败：" + normalizeErrorMessage(error));
   }
 }
 
@@ -3518,6 +3744,7 @@ async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   if (!shopId) return { ok: false, error: "请选择目标店铺" };
   const conn = await getStoredErpConnection();
   if (!conn.baseUrl || !conn.token) return { ok: false, error: "请先配置 ERP 连接" };
+  await ensureOzonWorkbenchPublishCookieSynced(shopId, options);
   const payload = buildOzonWorkbenchInitialPublishPayload(productIds, options);
 
   const response = await fetch(conn.baseUrl + "/api/listing/browser-one-click-jobs", {
@@ -3536,7 +3763,8 @@ async function createOzonWorkbenchPublishJob(productIds, options = {}) {
   }
   const jobId = parsed.data && parsed.data.jobId ? String(parsed.data.jobId) : "";
   if (!jobId) return { ok: false, error: "创建上架日志失败：ERP 未返回任务ID" };
-  void completeOzonWorkbenchPublishJobPayload(conn, jobId, productIds, options);
+  await upsertOzonWorkbenchPublishPayloadJob({ jobId, productIds, options });
+  void flushOzonWorkbenchPublishPayloadQueue();
   return {
     ok: true,
     jobId,

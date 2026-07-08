@@ -3303,6 +3303,56 @@ export function resolveVariantPublishImages(
   return limitOzonPublishImages(variantImages.length ? mergePublishImageLists(variantImages, baseImages) : baseImages);
 }
 
+function isLocalPublishUploadImage(raw: unknown): boolean {
+  const image = String(raw || '').trim();
+  if (image.startsWith('/watermarked/') || image.startsWith('/uploads/')) return true;
+  return /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(?:watermarked|uploads)\//i.test(image);
+}
+
+export function resolveOriginalBasePublishImages(
+  item: { images?: unknown; metadata?: unknown },
+  clonedImages?: unknown,
+): string[] {
+  const cloned = normalizePublishImageList(clonedImages);
+  if (cloned.length) return limitOzonPublishImages(cloned);
+  return limitOzonPublishImages(normalizePublishImageList(item.images));
+}
+
+function resolveOriginalVariantPublishImages(
+  item: { images?: unknown; metadata?: unknown },
+  variant: { images?: unknown; watermarkedImages?: unknown },
+  baseOriginalImages: string[],
+): string[] {
+  const variantImages = normalizePublishImageList(variant.images);
+  return limitOzonPublishImages(variantImages.length ? mergePublishImageLists(variantImages, baseOriginalImages) : baseOriginalImages);
+}
+
+export function shouldFallbackToOriginalPublishImages(rawImagesInput: unknown, fallbackImagesInput: unknown, error: unknown): boolean {
+  const rawImages = normalizePublishImageList(rawImagesInput);
+  const fallbackImages = normalizePublishImageList(fallbackImagesInput).filter((image) => !isLocalPublishUploadImage(image));
+  if (!rawImages.some(isLocalPublishUploadImage) || !fallbackImages.length) return false;
+  const message = error && typeof error === 'object' && 'message' in error
+    ? String((error as { message?: unknown }).message || '')
+    : String(error || '');
+  return /OZON CDN|水印图|cookie|company_id|鉴权|未同步|上传连接失败|握手阶段失败|公网暂不可读|OZON 可能下载失败|error=timeout|readiness/i.test(message);
+}
+
+async function resolvePublishImageUrls(
+  rawImages: string[],
+  fallbackImages: string[],
+  shopId: string,
+  userId: string,
+): Promise<string[]> {
+  try {
+    return await resolveImageUrls(rawImages, shopId, userId);
+  } catch (error) {
+    if (!shouldFallbackToOriginalPublishImages(rawImages, fallbackImages, error)) throw error;
+    const safeFallbackImages = normalizePublishImageList(fallbackImages).filter((image) => !isLocalPublishUploadImage(image));
+    console.warn(`[publish-ozon] watermarked image upload failed, falling back to original images: ${(error as any)?.message || error}`);
+    return await resolveImageUrls(safeFallbackImages, shopId, userId);
+  }
+}
+
 export function setVariantWatermarkedImages(
   variantsInput: unknown,
   watermarkedBySku: Record<string, unknown>,
@@ -5294,7 +5344,8 @@ export async function collectRoutes(app: FastifyInstance) {
       const { categoryId, typeId } = resolveItemPublishCategory(item, body.categoryId, body.typeId, preferItemCategory);
       const dims = getItemDimensions(item);
       const baseRawImages = resolveBasePublishImages(item, cloned?.images);
-      const baseImages = await resolveImageUrls(baseRawImages, body.shopId, userId);
+      const baseOriginalRawImages = resolveOriginalBasePublishImages(item, cloned?.images);
+      const baseImages = await resolvePublishImageUrls(baseRawImages, baseOriginalRawImages, body.shopId, userId);
       const itemDescription = resolvePublishDescription(item, cloned?.description);
       const sourceRichDescriptionJson = getCollectedRichDescriptionJson(item);
       let sourceVideos = getCollectedSourceVideos(item);
@@ -5379,9 +5430,10 @@ export async function collectRoutes(app: FastifyInstance) {
         });
         const subSku = v.sku ? String(v.sku) : `${item.sku || item.id}-v${idx}`;
         const subImagesRaw = resolveVariantPublishImages(item, v, baseRawImages);
+        const subFallbackRawImages = resolveOriginalVariantPublishImages(item, v, baseOriginalRawImages);
         const subImages = sameStringList(subImagesRaw, baseRawImages)
           ? baseImages
-          : await resolveImageUrls(subImagesRaw, body.shopId, userId);
+          : await resolvePublishImageUrls(subImagesRaw, subFallbackRawImages, body.shopId, userId);
         const subAttrs = publishVariantAttrsList[idx] || {};
         const subName = resolvePublishName(item, subAttrs);
 

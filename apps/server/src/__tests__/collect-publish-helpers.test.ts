@@ -20,6 +20,8 @@ import {
   resolvePublishDescription,
   resolveOzonDictionaryAttributeValues,
   resolveBasePublishImages,
+  resolveOriginalBasePublishImages,
+  shouldFallbackToOriginalPublishImages,
   resolveItemPublishCategory,
   resolvePublishOfferId,
   shouldUseProductImportForPublishItem,
@@ -2737,6 +2739,36 @@ describe('collect publish helpers', () => {
     ]);
   });
 
+  it('allows one-click publish to fall back to original images when local watermarked uploads lose Ozon CDN auth', () => {
+    const item = {
+      images: ['https://cdn.example.com/parent.jpg'],
+      metadata: {
+        watermarkApplied: true,
+        watermarkedImages: ['/watermarked/item-1.jpg'],
+      },
+    };
+
+    const watermarkedImages = resolveBasePublishImages(item);
+    const originalImages = resolveOriginalBasePublishImages(item);
+
+    expect(watermarkedImages).toEqual(['/watermarked/item-1.jpg']);
+    expect(originalImages).toEqual(['https://cdn.example.com/parent.jpg']);
+    expect(shouldFallbackToOriginalPublishImages(
+      watermarkedImages,
+      originalImages,
+      new Error('OZON CDN 鉴权失败 (HTTP 401) — cookie 已过期或 company_id 不匹配'),
+    )).toBe(true);
+  });
+  it('falls back to original images when uploaded Ozon CDN images time out during readiness checks', () => {
+    const watermarkedImages = ['/watermarked/item-1.jpg'];
+    const originalImages = ['https://ir.ozone.ru/s3/multimedia-1/source.jpg'];
+
+    expect(shouldFallbackToOriginalPublishImages(
+      watermarkedImages,
+      originalImages,
+      new Error('图片已上传但公网暂不可读，OZON 可能下载失败: https://cdn1.ozone.ru/s3/multimedia-tmp-1/item-pic.jpg (status=ERR, type=-, error=timeout)'),
+    )).toBe(true);
+  });
   it('keeps variant cover images first even after item-level watermarks are applied', () => {
     const item = {
       images: ['https://cdn.example.com/parent.jpg'],

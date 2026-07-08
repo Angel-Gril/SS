@@ -33,4 +33,12 @@ describe('ozon import status', () => {
       { status: 'imported', errors: [{ level: 'error', state: 'declined' }] },
     ])).toEqual({ total: 3, pending: 1, failed: 1, allDone: false });
   });
+  it('keeps an empty import-info response running instead of treating it as complete', () => {
+    expect(summarizeOzonImportItems([])).toEqual({
+      total: 0,
+      pending: 0,
+      failed: 0,
+      allDone: false,
+    });
+  });
 });

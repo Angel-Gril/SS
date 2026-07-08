@@ -3,15 +3,22 @@ interface OzonConfig {
   apiKey: string;
   maxRetries?: number;
   baseDelayMs?: number;
+  timeoutMs?: number;
 }
 
 interface OzonRequestOptions {
   method?: string;
   body?: unknown;
   skipRetry?: boolean;
+  timeoutMs?: number;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function positiveInt(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
+}
 
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
 const PROXY_URL =
@@ -29,20 +36,29 @@ export class OzonClient {
   private apiKey: string;
   private maxRetries: number;
   private baseDelayMs: number;
+  private timeoutMs: number;
 
   constructor(config: OzonConfig) {
     this.clientId = config.clientId;
     this.apiKey = config.apiKey;
     this.maxRetries = config.maxRetries ?? 3;
     this.baseDelayMs = config.baseDelayMs ?? 2000;
+    this.timeoutMs = config.timeoutMs ?? positiveInt(process.env.OZON_API_TIMEOUT_MS, 20_000);
   }
 
   async request<T = unknown>(path: string, options: OzonRequestOptions = {}): Promise<T> {
     const { method = 'POST', body, skipRetry } = options;
     const maxAttempts = skipRetry ? 1 : this.maxRetries + 1;
+    const timeoutMs = options.timeoutMs ?? this.timeoutMs;
 
     let lastError: unknown;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const controller = timeoutMs > 0 ? new AbortController() : null;
+      const timeout = controller
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : null;
+      timeout?.unref?.();
+
       try {
         const res = await httpFetch(`${this.baseUrl}${path}`, {
           method,
@@ -52,7 +68,9 @@ export class OzonClient {
             'Api-Key': this.apiKey,
           },
           body: body ? JSON.stringify(body) : undefined,
+          signal: controller?.signal,
         });
+        if (timeout) clearTimeout(timeout);
 
         if (res.status === 429 && attempt < maxAttempts - 1) {
           const retryAfter = Number(res.headers.get('retry-after')) || 0;
@@ -75,13 +93,15 @@ export class OzonClient {
 
         return res.json() as Promise<T>;
       } catch (e) {
-        lastError = e;
+        if (timeout) clearTimeout(timeout);
         if (e instanceof OzonApiError) throw e;
+        const normalizedError = new OzonNetworkError(path, e, timeoutMs);
+        lastError = normalizedError;
         if (attempt < maxAttempts - 1) {
           await sleep(this.baseDelayMs * 2 ** attempt);
           continue;
         }
-        throw e;
+        throw normalizedError;
       }
     }
     throw lastError ?? new Error(`OZON request failed after ${maxAttempts} attempts: ${path}`);
@@ -651,6 +671,34 @@ export class OzonApiError extends Error {
       message: this.publicMessage,
       details: this.details,
     };
+  }
+}
+
+export class OzonNetworkError extends Error {
+  public code: string | null;
+  public causeMessage: string | null;
+
+  constructor(public path: string, cause: unknown, public timeoutMs: number) {
+    const anyCause = cause as any;
+    const nested = anyCause?.cause;
+    const code = String(nested?.code || anyCause?.code || '').trim();
+    const name = String(anyCause?.name || nested?.name || '').trim();
+    const causeMessage = String(nested?.message || anyCause?.message || cause || '').trim();
+    const timeoutText = timeoutMs > 0 ? `（${timeoutMs}ms）` : '';
+    let message = `OZON API 网络请求失败: ${path}`;
+    if (name === 'AbortError') {
+      message = `OZON API 请求超时${timeoutText}: ${path}`;
+    } else if (code === 'UND_ERR_CONNECT_TIMEOUT') {
+      message = `OZON API 连接超时${timeoutText}: ${path}`;
+    } else if (code === 'ECONNRESET') {
+      message = `OZON API 连接被中断: ${path}`;
+    } else if (causeMessage) {
+      message = `OZON API 网络请求失败: ${path} — ${causeMessage}`;
+    }
+    super(message);
+    this.name = 'OzonNetworkError';
+    this.code = code || null;
+    this.causeMessage = causeMessage || null;
   }
 }
 
