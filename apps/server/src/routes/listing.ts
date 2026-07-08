@@ -104,6 +104,7 @@ const browserOneClickJobPatchSchema = z.object({
 });
 
 const BROWSER_ONE_CLICK_STAGE_STALE_MS = 15 * 60 * 1000;
+const OZON_MARKING_CODE_REQUIRED_ATTR_ID = 23536;
 
 function objectRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
@@ -210,6 +211,38 @@ export function extractListingOfferIds(payload: unknown): string[] {
     ? Object.keys(data.offerImageLists)
     : [];
   return uniqueStrings([...fromOfferIds, ...fromItems, ...fromImages]);
+}
+
+function isOzonMarkingCodeAutoCorrectedError(error: unknown): boolean {
+  const row = objectRecord(error);
+  const code = String(row.code || '').trim().toLowerCase();
+  if (code !== 'marking_auto_corrected') return false;
+  const attributeId = Number(row.attribute_id || row.attributeId || 0);
+  return attributeId === OZON_MARKING_CODE_REQUIRED_ATTR_ID;
+}
+
+export function buildOzonMarkingCodeRepairItems(
+  importItems: Array<{ offer_id?: unknown; errors?: unknown[] }> | null | undefined,
+  alreadySubmittedOfferIds: unknown[] = [],
+): Array<{ offer_id: string; attributes: { id: number; values: { value: string }[] }[] }> {
+  const skipped = new Set(uniqueStrings(alreadySubmittedOfferIds));
+  const seen = new Set<string>();
+  const out: Array<{ offer_id: string; attributes: { id: number; values: { value: string }[] }[] }> = [];
+  for (const item of Array.isArray(importItems) ? importItems : []) {
+    const offerId = String(item?.offer_id || '').trim();
+    if (!offerId || skipped.has(offerId) || seen.has(offerId)) continue;
+    const errors = Array.isArray(item?.errors) ? item.errors : [];
+    if (!errors.some(isOzonMarkingCodeAutoCorrectedError)) continue;
+    seen.add(offerId);
+    out.push({
+      offer_id: offerId,
+      attributes: [{
+        id: OZON_MARKING_CODE_REQUIRED_ATTR_ID,
+        values: [{ value: 'false' }],
+      }],
+    });
+  }
+  return out;
 }
 
 export function buildImportInfoFromProductInfoFallback(payload: unknown, products: OzonProductInfo[]): OzonImportInfo | null {
@@ -539,6 +572,38 @@ export async function refreshListingProductPushJob(
       lastImportInfoCheckedAt: checkedAt,
     };
     let pictureErrorMessage: string | null = null;
+
+    if (importLookup.source === 'import-info') {
+      const previousRepair = objectRecord(payload.ozonMarkingCodeRepair);
+      const alreadySubmittedOfferIds = String(previousRepair.status || '') === 'submitted'
+        ? (Array.isArray(previousRepair.offerIds) ? previousRepair.offerIds : [])
+        : [];
+      const markingRepairItems = buildOzonMarkingCodeRepairItems(info.items, alreadySubmittedOfferIds);
+      if (markingRepairItems.length) {
+        try {
+          const repairResult = await client.updateProductAttributes(markingRepairItems);
+          nextPayload = {
+            ...nextPayload,
+            ozonMarkingCodeRepair: {
+              status: 'submitted',
+              offerIds: markingRepairItems.map((item) => item.offer_id),
+              taskId: Number((repairResult as any)?.result?.task_id) || null,
+              updatedAt: checkedAt,
+            },
+          };
+        } catch (error: any) {
+          nextPayload = {
+            ...nextPayload,
+            ozonMarkingCodeRepair: {
+              status: 'failed',
+              offerIds: markingRepairItems.map((item) => item.offer_id),
+              error: String(error?.message || error || 'unknown').slice(0, 300),
+              updatedAt: checkedAt,
+            },
+          };
+        }
+      }
+    }
 
     if (isPictureUploadRepairJob(payload)) {
       const traces = Array.isArray(payload.variantTrace) ? payload.variantTrace as any[] : [];

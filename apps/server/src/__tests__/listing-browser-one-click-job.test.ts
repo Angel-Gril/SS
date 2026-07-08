@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { listingRoutes } from '../routes/listing.js';
+import { buildOzonMarkingCodeRepairItems, listingRoutes } from '../routes/listing.js';
 import { OzonClient } from '../services/ozon-client.js';
 
 const mocks = vi.hoisted(() => ({
@@ -66,6 +66,31 @@ describe('browser one-click listing jobs', () => {
     vi.clearAllMocks();
     vi.mocked(OzonClient).mockReset();
     mocks.getConfig.mockResolvedValue(undefined);
+  });
+
+  it('builds Ozon marking-code repair updates only for auto-corrected marking warnings', () => {
+    expect(buildOzonMarkingCodeRepairItems([
+      {
+        offer_id: 'offer-1',
+        status: 'imported',
+        errors: [{ code: 'marking_auto_corrected', level: 'warning', attribute_id: 23536 }],
+      },
+      {
+        offer_id: 'offer-2',
+        status: 'imported',
+        errors: [{ code: 'VALUE_MIN_LIMIT', level: 'warning', attribute_id: 4383 }],
+      },
+      {
+        offer_id: 'offer-3',
+        status: 'imported',
+        errors: [{ code: 'marking_auto_corrected', level: 'warning', attribute_id: 12345 }],
+      },
+    ] as any)).toEqual([
+      {
+        offer_id: 'offer-1',
+        attributes: [{ id: 23536, values: [{ value: 'false' }] }],
+      },
+    ]);
   });
 
   it('creates a visible listing-log job before extension collection and watermark work starts', async () => {
@@ -592,6 +617,81 @@ describe('browser one-click listing jobs', () => {
               { offer_id: 'offer-1', product_id: 1001, status: 'imported', errors: [] },
               { offer_id: 'offer-2', product_id: 1002, status: 'imported', errors: [] },
             ],
+          }),
+        }),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('auto-confirms Ozon marking-code corrections while refreshing a completed import task', async () => {
+    const getImportInfo = vi.fn().mockResolvedValue({
+      total: 1,
+      items: [
+        {
+          offer_id: 'offer-1',
+          product_id: 1001,
+          status: 'imported',
+          errors: [{
+            code: 'marking_auto_corrected',
+            level: 'warning',
+            state: 'offer_validated',
+            attribute_id: 23536,
+            attribute_name: 'Нужен код маркировки',
+          }],
+        },
+      ],
+    });
+    const updateProductAttributes = vi.fn().mockResolvedValue({ result: { task_id: 456 } });
+    const getProductInfoList = vi.fn().mockResolvedValue([
+      { id: 1001, offer_id: 'offer-1', images: ['https://cdn.example/1.jpg'], primary_image: 'https://cdn.example/1.jpg' },
+    ]);
+    const getProductInfoAttributes = vi.fn().mockResolvedValue([]);
+    vi.mocked(OzonClient).mockImplementation(function () {
+      return { getImportInfo, updateProductAttributes, getProductInfoList, getProductInfoAttributes } as any;
+    });
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        taskId: 123,
+        source: 'browser-one-click-listing',
+        stage: 'publishing',
+        offerIds: ['offer-1'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'SUCCESS',
+      finishedAt: new Date('2026-07-08T10:00:00.000Z'),
+      payload: {},
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(updateProductAttributes).toHaveBeenCalledWith([
+        { offer_id: 'offer-1', attributes: [{ id: 23536, values: [{ value: 'false' }] }] },
+      ]);
+      expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          payload: expect.objectContaining({
+            ozonMarkingCodeRepair: expect.objectContaining({ status: 'submitted', offerIds: ['offer-1'], taskId: 456 }),
           }),
         }),
       });
