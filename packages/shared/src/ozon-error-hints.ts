@@ -122,6 +122,18 @@ const OZON_ERROR_RULES: ErrorRule[] = [
     ],
   },
   {
+    code: 'OZON_BRAND_DOCUMENT_MISSING',
+    label: '品牌资质文件缺失',
+    message: 'Ozon 要求该品牌的授权或认证文件。没有品牌资质时，请改用无品牌上架，并避免标题里保留会触发品牌识别的品牌词。',
+    severity: 'error',
+    patterns: [
+      /(отсутств|нет)[а-я\s]*(документ|сертификат)[а-я\s]*(бренд|товарн[а-я\s]*знак)/i,
+      /(бренд|товарн[а-я\s]*знак)[а-я\s]*(треб|обязательн)[а-я\s]*(документ|сертификат)/i,
+      /(brand|trademark).*(document|certificate|certification|authorization).*(missing|required)/i,
+      /(missing|required).*(brand|trademark).*(document|certificate|certification|authorization)/i,
+    ],
+  },
+  {
     code: 'OZON_PRICE_INVALID',
     label: '价格不符合要求',
     message: 'Ozon 拒绝了当前价格。请检查价格是否为正数、是否低于平台最小价或不符合促销/币种规则。',

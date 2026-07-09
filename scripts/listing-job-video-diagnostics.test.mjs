@@ -39,5 +39,15 @@ assert.match(
   /待手动处理/,
   'listing job detail dialog should not present manual-required videos as upload failures',
 );
+assert.match(
+  detailDialog,
+  /待更正/,
+  'listing job detail dialog should label imported rows with blocking Ozon review errors as needing correction',
+);
+assert.match(
+  detailDialog,
+  /blockingError\s*\?\s*'待更正'/,
+  'listing job detail dialog should compute the visible import status from blocking Ozon errors',
+);
 
 console.log('PASS listing job video diagnostics UI');

@@ -700,6 +700,97 @@ describe('browser one-click listing jobs', () => {
     }
   });
 
+  it('marks partially imported jobs as failed when Ozon returns blocking review errors', async () => {
+    const getImportInfo = vi.fn().mockResolvedValue({
+      total: 2,
+      items: [
+        {
+          offer_id: 'offer-ok',
+          product_id: 1001,
+          status: 'imported',
+          errors: [],
+        },
+        {
+          offer_id: 'offer-brand',
+          product_id: 1002,
+          status: 'imported',
+          errors: [{
+            code: 'brand_document_missing',
+            level: 'error',
+            state: 'declined',
+            description: 'Отсутствует документ на бренд TOUCHMI. Некоторые бренды требуют обязательной сертификации',
+          }],
+        },
+      ],
+    });
+    const getProductInfoList = vi.fn().mockResolvedValue([
+      { id: 1001, offer_id: 'offer-ok', images: ['https://cdn.example/1.jpg'], primary_image: 'https://cdn.example/1.jpg' },
+      { id: 1002, offer_id: 'offer-brand', images: ['https://cdn.example/2.jpg'], primary_image: 'https://cdn.example/2.jpg' },
+    ]);
+    const getProductInfoAttributes = vi.fn().mockResolvedValue([]);
+    vi.mocked(OzonClient).mockImplementation(function () {
+      return { getImportInfo, getProductInfoList, getProductInfoAttributes } as any;
+    });
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      type: 'PRODUCT_PUSH',
+      status: 'RUNNING',
+      payload: {
+        taskId: 123,
+        source: 'browser-one-click-listing',
+        stage: 'publishing',
+        offerIds: ['offer-ok', 'offer-brand'],
+      },
+      shop: {
+        id: 'shop-1',
+        userId: 'user-1',
+        clientId: 'client-id',
+        apiKeyEncrypted: 'api-key',
+      },
+    });
+    mocks.syncJobUpdate.mockResolvedValue({
+      id: 'job-1',
+      status: 'FAILED',
+      finishedAt: new Date('2026-07-08T10:00:00.000Z'),
+      payload: {},
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/tasks/job-1/refresh',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { id: 'job-1', status: 'FAILED' } });
+      expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
+        where: { id: 'job-1' },
+        data: expect.objectContaining({
+          status: 'FAILED',
+          finishedAt: expect.any(Date),
+          errorMessage: expect.stringContaining('品牌资质文件缺失'),
+          payload: expect.objectContaining({
+            failedCount: 1,
+            ozonReviewStatus: 'needs_correction',
+            ozonReviewIssueCount: 1,
+            ozonReviewIssues: [
+              expect.objectContaining({
+                offerId: 'offer-brand',
+                productId: 1002,
+                status: 'imported',
+                messages: [expect.stringContaining('品牌资质文件缺失')],
+              }),
+            ],
+          }),
+        }),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('uses admin-configured Ozon API timeout when refreshing import status', async () => {
     mocks.getConfig.mockImplementation(async (key: string) => (
       key === 'listing_ozon_api_timeout_ms' ? 27000 : undefined

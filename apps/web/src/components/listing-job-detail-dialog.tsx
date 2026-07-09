@@ -434,10 +434,10 @@ export function ListingJobDetailDialog({
                   </thead>
                   <tbody>
                     {data.payload.items.map((it, i) => {
-                      const cls = it.status === 'imported' ? 'bg-emerald-600' : it.status === 'failed' ? 'bg-destructive' : 'bg-amber-500';
-                      const txt = it.status === 'imported' ? '成功' : it.status === 'failed' ? '失败' : '处理中';
                       const img = data.payload?.offerImages?.[it.offer_id];
                       const blockingError = isBlockingImportError(it);
+                      const cls = blockingError ? 'bg-destructive' : it.status === 'imported' ? 'bg-emerald-600' : it.status === 'failed' ? 'bg-destructive' : 'bg-amber-500';
+                      const txt = blockingError ? '待更正' : it.status === 'imported' ? '成功' : it.status === 'failed' ? '失败' : '处理中';
                       const hints = Array.from(new Map((it.errors || [])
                         .map((error) => explainOzonError(error))
                         .filter((hint): hint is OzonErrorHint => !!hint)

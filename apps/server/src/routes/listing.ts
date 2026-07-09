@@ -6,7 +6,7 @@ import { decrypt } from '../lib/crypto.js';
 import { OzonClient, type OzonImportInfo, type OzonProductInfo } from '../services/ozon-client.js';
 import { getListingTaskRefreshSettings } from '../services/listing-task-refresh.js';
 import { enqueueProductSyncAfterPublish } from '../services/post-publish-sync.js';
-import { summarizeOzonImportItems } from '../services/ozon-import-status.js';
+import { collectOzonImportReviewIssues, summarizeOzonImportItems } from '../services/ozon-import-status.js';
 import { resolveImageUrls } from '../services/ozon-image-resolver.js';
 import { resolveOzonProductImages } from '../services/product-sync-metadata.js';
 import { planFallbackPictureUploads, recordPictureUploadDiagnostic } from './collect.js';
@@ -562,11 +562,16 @@ export async function refreshListingProductPushJob(
 
     const info = importLookup.info;
     const { total, failed, allDone } = summarizeOzonImportItems(info.items);
+    const reviewIssues = collectOzonImportReviewIssues(info.items || []);
+    const reviewIssueMessage = reviewIssues[0]?.messages?.[0] || null;
     let nextPayload: Record<string, any> = {
       ...payload,
       itemCount: total,
       failedCount: failed,
       items: info.items,
+      ozonReviewStatus: reviewIssues.length ? 'needs_correction' : 'ok',
+      ozonReviewIssueCount: reviewIssues.length,
+      ozonReviewIssues: reviewIssues.length ? reviewIssues : null,
       ozonImportInfoSource: importLookup.source,
       lastImportInfoError: importLookup.errorMessage,
       lastImportInfoCheckedAt: checkedAt,
@@ -685,7 +690,7 @@ export async function refreshListingProductPushJob(
       };
     }
 
-    const newStatus = allDone ? (failed === total ? 'FAILED' : 'SUCCESS') : 'RUNNING';
+    const newStatus = allDone ? (failed > 0 ? 'FAILED' : 'SUCCESS') : 'RUNNING';
     const finalStatus = pictureErrorMessage
       ? (
         allDone
@@ -696,7 +701,9 @@ export async function refreshListingProductPushJob(
           : 'RUNNING'
       )
       : newStatus;
-    const errorMessage = pictureErrorMessage || (failed > 0 ? `${failed} 个商品上架失败` : null);
+    const errorMessage = pictureErrorMessage
+      || (reviewIssueMessage ? `Ozon 返回 ${failed} 个商品需更正：${reviewIssueMessage}` : null)
+      || (failed > 0 ? `${failed} 个商品上架失败` : null);
 
     const updated = await prisma.syncJob.update({
       where: { id: job.id },

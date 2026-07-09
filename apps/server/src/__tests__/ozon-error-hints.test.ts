@@ -61,6 +61,10 @@ describe('ozon error hints', () => {
       code: 'OZON_TITLE_QUALITY_INVALID',
       label: '标题疑似无意义或语法错误',
     });
+    expect(explainOzonError('Отсутствует документ на бренд TOUCHMI. Некоторые бренды требуют обязательной сертификации')).toMatchObject({
+      code: 'OZON_BRAND_DOCUMENT_MISSING',
+      label: '品牌资质文件缺失',
+    });
   });
 
   it('formats multiple raw errors with chinese hints and original messages', () => {
