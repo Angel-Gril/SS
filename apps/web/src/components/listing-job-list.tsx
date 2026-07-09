@@ -98,10 +98,12 @@ function needsRemoteRefresh(row: JobRow): boolean {
   const pictureUploadStatus = row.payload?.pictureUploadStatus;
   const pictureUploads = row.payload?.pictureUploads || [];
   const pictureActivationPendingCount = Number(row.payload?.pictureActivationPendingCount || 0);
+  const importFailedCount = Number(row.payload?.failedCount || 0);
   return row.status === 'RUNNING'
     || pictureUploadStatus === 'pending'
     || pictureUploadStatus === 'partial_pending'
     || pictureActivationPendingCount > 0
+    || (row.status === 'SUCCESS' && importFailedCount > 0)
     || (
       row.status === 'SUCCESS'
       && isFallbackPictureJob(row.payload)

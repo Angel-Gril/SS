@@ -203,6 +203,7 @@ export function ListingJobDetailDialog({
   );
   const canManualRefresh = !!data && (
     data.status !== 'SUCCESS'
+    || (data.status === 'SUCCESS' && Number(data.payload?.failedCount || 0) > 0)
     || fallbackPictureJob
     || pictureUploadStatus === 'pending'
     || pictureUploadStatus === 'partial_pending'

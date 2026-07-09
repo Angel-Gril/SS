@@ -4,6 +4,12 @@ import fs from 'node:fs';
 const detailDialog = fs.readFileSync('apps/web/src/components/listing-job-detail-dialog.tsx', 'utf8');
 const jobList = fs.readFileSync('apps/web/src/components/listing-job-list.tsx', 'utf8');
 
+function extractBlock(source, pattern, name) {
+  const match = source.match(pattern);
+  assert.ok(match, `${name} should exist`);
+  return match[0];
+}
+
 assert.match(
   jobList,
   /videoTrace\?:\s*Array/,
@@ -48,6 +54,18 @@ assert.match(
   detailDialog,
   /blockingError\s*\?\s*'待更正'/,
   'listing job detail dialog should compute the visible import status from blocking Ozon errors',
+);
+const needsRemoteRefresh = extractBlock(jobList, /function needsRemoteRefresh[\s\S]*?\n}/, 'needsRemoteRefresh');
+assert.match(
+  needsRemoteRefresh,
+  /row\.payload\?\.failedCount/,
+  'listing job list should auto-refresh legacy SUCCESS rows that already carry failedCount',
+);
+const canManualRefresh = extractBlock(detailDialog, /const canManualRefresh[\s\S]*?\n  \);/, 'canManualRefresh');
+assert.match(
+  canManualRefresh,
+  /data\.payload\?\.failedCount/,
+  'listing job detail dialog should allow manual refresh for legacy SUCCESS rows with failedCount',
 );
 
 console.log('PASS listing job video diagnostics UI');
