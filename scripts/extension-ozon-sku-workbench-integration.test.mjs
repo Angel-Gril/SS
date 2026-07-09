@@ -83,7 +83,7 @@ test('background fetches SKU workbench rows in parallel without duplicate offers
   assert.doesNotMatch(fetchRows[0], /fetchOzonSellerOffers\(sku\)/);
 });
 
-test('Ozon workbench can skip slow offer enrichment for profit-only reads', () => {
+test('Ozon workbench keeps optional offer enrichment while list workbench stays publish-only', () => {
   const aggregate = background.match(/async function aggregateOzonProductInsights[\s\S]*?\r?\n}\r?\n\r?\nasync function getStoredErpConnection/);
   assert.ok(aggregate, 'aggregateOzonProductInsights should be present');
   assert.match(background, /function\s+getOzonWorkbenchInsightCacheKey/, 'workbench insight cache should distinguish light and full enrichment');
@@ -96,9 +96,15 @@ test('Ozon workbench can skip slow offer enrichment for profit-only reads', () =
   assert.match(background, /if\s*\(includeOffers\)\s*\{[\s\S]*fetchOzonSellerOffers\(productId\)/);
   assert.match(
     overlay,
-    /focus:\s*'data'[\s\S]*includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
-    'list data actions should skip slow offer enrichment while publish mode keeps it',
+    /function\s+normalizeListWorkbenchMode\(mode\)\s*\{\s*return 'publish';\s*\}/,
+    'list workbench should normalize every entry point to publish mode',
   );
+  assert.match(
+    overlay,
+    /includeOffers:\s*modal\.__ssErpWorkbenchFocus\s*===\s*'publish'/,
+    'list publish mode should keep full seller-offer enrichment before one-click listing',
+  );
+  assert.doesNotMatch(overlay, /focus:\s*'data'|data-mode=["']data["']|data-mode=["']profit["']/);
 });
 
 test('background passes synced commission rules into Ozon SKU workbench row building', () => {

@@ -783,7 +783,6 @@
       <button type="button" data-role="quick-open-workbench" title="打开商品上架工作台" style="${quickActionButtonStyle("#ea580c", "#ffffff")}">一键上架</button>
       <button type="button" data-role="quick-profit" title="查看售价、成本和利润率" style="${quickActionButtonStyle("#1d4ed8", "#ffffff")}">利润测算</button>
       <button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">绑定Cookie</button>
-      <button type="button" data-role="quick-open-insights" title="打开数据一览和选品指标" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">选品数据</button>
       <button type="button" data-role="quick-selection-settings" title="打开选品规则设置入口" style="${quickActionButtonStyle("#ffffff", "#1f2937", "#cbd5e1")}">设置选品</button>
       <div data-role="quick-status" style="min-height:15px;margin-top:5px;text-align:center;font-size:10px;line-height:1.25;color:#64748b;">SKU ${escapeHtml(productId)}</div>
       <button type="button" data-role="quick-open-erp" title="进入 ERP 批量采集页" style="margin-top:5px;border:1px solid #cbd5e1;background:#f8fafc;color:#1d4ed8;font-size:10px;font-weight:800;cursor:pointer;width:100%;height:22px;padding:0;border-radius:3px;">ERP</button>
@@ -800,15 +799,6 @@
     });
     panel.querySelector("[data-role='quick-bind-cookie']").addEventListener("click", async () => {
       await syncOzonCookieFromQuickAction(panel);
-    });
-    panel.querySelector("[data-role='quick-open-insights']").addEventListener("click", () => {
-      const existing = document.getElementById(OZON_PANEL_ID);
-      if (existing) {
-        existing.remove();
-        lastOzonUrl = "";
-      }
-      renderOzonPanel({ expand: true });
-      setOzonQuickStatus(panel, "选品已打开");
     });
     panel.querySelector("[data-role='quick-selection-settings']").addEventListener("click", () => {
       openExtensionSettingsPage("selection");
@@ -901,25 +891,19 @@
   }
 
   function getWorkbenchModeStatus(mode) {
-    if (mode === "data") return "查看已采集的数据和 Ozon 指标";
-    if (mode === "profit") return "查看售价、成本和利润率";
     return "选择店铺和 SKU 后提交上架";
   }
 
   function normalizeProductWorkbenchMode(mode) {
-    return ["data", "profit", "publish"].includes(mode) ? mode : "publish";
+    return "publish";
   }
 
   function getProductWorkbenchModeTitle(mode) {
-    if (mode === "data") return "SS ERP 选品数据工作台";
-    if (mode === "profit") return "SS ERP 利润测算工作台";
     return "SS ERP 一键上架工作台";
   }
 
   function getProductWorkbenchModeSubtitle(mode, productId) {
     const base = `Ozon SKU ${productId}`;
-    if (mode === "data") return `${base} · 数据查看 / 指标分析`;
-    if (mode === "profit") return `${base} · 成本 / 物流费 / 佣金测算`;
     return `${base} · 选择店铺后提交上架`;
   }
 
@@ -943,7 +927,7 @@
       node.style.display = normalized === "publish" ? (role === "publish-target-controls" ? "flex" : "") : "none";
     });
     modal.querySelectorAll("[data-mode-scope='pricing']").forEach((node) => {
-      node.style.display = normalized === "data" ? "none" : "flex";
+      node.style.display = "flex";
     });
   }
 
@@ -1462,11 +1446,6 @@
             <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getProductWorkbenchModeTitle(activeMode))}</div>
             <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getProductWorkbenchModeSubtitle(activeMode, productId))}</div>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
-            <button type="button" data-role="workbench-view" data-mode="data" style="${workbenchModeButtonStyle(activeMode === "data")}">数据</button>
-            <button type="button" data-role="workbench-view" data-mode="profit" style="${workbenchModeButtonStyle(activeMode === "profit")}">利润</button>
-            <button type="button" data-role="workbench-view" data-mode="publish" style="${workbenchModeButtonStyle(activeMode === "publish")}">上架</button>
-          </div>
           <button type="button" data-role="close-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>
         </div>
         <div data-role="workbench-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
@@ -1489,18 +1468,12 @@
               <option value="">加载水印...</option>
             </select>
           </div>
-          <button type="button" data-role="refresh-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新数据</button>
+          <button type="button" data-role="refresh-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新 SKU</button>
         </div>
         <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_PRODUCT_THEME.surface};">
           <div data-role="pricing-controls" data-mode-scope="pricing" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <label style="font-size:12px;font-weight:800;color:#334155;">加价%</label>
             <input type="number" data-role="markup-pct" value="0" min="-90" max="500" step="1" style="height:32px;width:74px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
-            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">成本¥</label>
-            <input type="number" data-role="cost-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
-            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">物流费¥</label>
-            <input type="number" data-role="logistics-fee-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
-            <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">佣金%</label>
-            <input type="number" data-role="commission-rate" value="" min="0" max="100" step="0.1" placeholder="自动" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">
           </div>
           <div style="margin-left:auto;font-size:12px;color:${SS_ERP_PRODUCT_THEME.muted};" data-role="workbench-status">准备读取 SKU 数据...</div>
         </div>
@@ -1549,15 +1522,6 @@
       loadOzonWorkbenchWatermarkTemplates(modal, event.target && event.target.value).catch(() => {});
     });
     modal.querySelector("[data-role='refresh-workbench']").addEventListener("click", () => loadOzonWorkbenchRows(modal, productId));
-    modal.querySelectorAll("[data-role='workbench-view']").forEach((button) => {
-      button.addEventListener("click", () => {
-        const nextMode = button.getAttribute("data-mode");
-        setProductWorkbenchMode(modal, nextMode);
-        if (nextMode !== "publish" && !(modal.__ssErpOzonWorkbenchRows || []).length) {
-          loadOzonWorkbenchRows(modal, productId);
-        }
-      });
-    });
     modal.querySelector("[data-role='select-all-workbench']").addEventListener("change", (event) => {
       modal.querySelectorAll("[data-role='workbench-row-check']").forEach((box) => { box.checked = event.target.checked; });
     });

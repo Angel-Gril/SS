@@ -3,6 +3,15 @@ import fs from 'node:fs';
 
 const overlay = fs.readFileSync('extensions/ss-erp/content/ozon-list-overlay.js', 'utf8');
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+function functionSlice(source, name) {
+  const start = source.indexOf(`function ${name}`);
+  assert.notEqual(start, -1, `${name} should exist`);
+  const next = source.indexOf('\n  function ', start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
+}
+
+const listQuickDock = functionSlice(overlay, 'ensureListQuickActions');
+const listWorkbench = functionSlice(overlay, 'openListSkuWorkbench');
 
 assert.doesNotMatch(
   overlay,
@@ -32,14 +41,23 @@ assert.match(
 for (const role of [
   'quick-open-workbench',
   'quick-profit',
-  'quick-open-insights',
   'quick-bind-cookie',
   'quick-selection-settings',
   'quick-auto-scroll',
   'quick-open-erp',
 ]) {
-  assert.match(overlay, new RegExp(`data-role="${role}"`), `Ozon list quick toolbar should expose ${role}`);
+  assert.match(listQuickDock, new RegExp(`data-role="${role}"`), `Ozon list quick toolbar should expose ${role}`);
 }
+assert.doesNotMatch(
+  listQuickDock,
+  /data-role="quick-open-insights"/,
+  'Ozon list quick toolbar should not expose the old selection-data entry point',
+);
+assert.match(
+  listQuickDock,
+  /quick-selection-settings[\s\S]*showProductSelectionRulesModal\(\)/,
+  'Ozon list quick toolbar should keep the selection rule settings entry',
+);
 assert.doesNotMatch(
   overlay,
   /data-role="quick-pricing"|定价策略|openErpPage\('\/products'\)/,
@@ -76,13 +94,13 @@ assert.doesNotMatch(
   'Ozon list quick Cookie button should not navigate to settings.html#cookie from the Ozon page',
 );
 assert.match(
-  overlay,
+  listQuickDock,
   /quick-open-workbench[\s\S]*quickActionButtonStyle\(SS_ERP_LIST_THEME\.primary,\s*'#ffffff'/,
   'Ozon list quick toolbar should use the shared ERP theme token for the primary one-click listing action',
 );
 assert.match(
   overlay,
-  /quick-open-workbench[\s\S]*openListSkuWorkbench\(\{\s*rowFilter:\s*'all',\s*focus:\s*'publish'\s*\}\)/,
+  /quick-open-workbench[\s\S]*openListSkuWorkbench\(\{\s*focus:\s*'publish'\s*\}\)/,
   'Ozon list primary action should open the SKU publishing workbench',
 );
 assert.doesNotMatch(
@@ -91,9 +109,9 @@ assert.doesNotMatch(
   'Ozon list quick toolbar should not have a separate rule-match button that opens the same seller workbench',
 );
 assert.match(
-  overlay,
+  listQuickDock,
   /data-role="quick-match-summary"/,
-  'Ozon list quick toolbar should show rule-match count as status instead of a duplicate action button',
+  'Ozon list quick toolbar should show selection-rule match counters for listing candidate filtering',
 );
 assert.match(
   overlay,
@@ -206,10 +224,10 @@ assert.doesNotMatch(
   /<th[^>]+border:1px solid #4b5563/,
   'Ozon list workbench header cells should use light grid lines instead of dark borders that look like table bleed-through',
 );
-assert.match(
-  overlay,
+assert.doesNotMatch(
+  listWorkbench,
   /data-role="export-workbench-skus"/,
-  'Ozon list workbench should support Penguin-style one-click export of selected SKUs',
+  'Ozon list workbench should not expose export from the listing-only panel',
 );
 assert.match(
   overlay,
@@ -452,24 +470,19 @@ assert.match(
   'Ozon list publish panel should wait only for job acceptance, not for the full long-running publish flow',
 );
 assert.match(
-  overlay,
-  /data-role="row-filter"/,
-  'Ozon list workbench should switch between all rows and selection-rule matched rows',
+  listWorkbench,
+  /data-role="row-filter"[\s\S]*仅规则命中/,
+  'Ozon list workbench should keep selection-rule filters for choosing listing candidates',
 );
 assert.match(
   overlay,
-  /function\s+syncListWorkbenchRuleFilterOptions/,
-  'Ozon list workbench should populate rule-specific publish filters from current selection rules',
+  /LIST_WORKBENCH_COLUMNS[\s\S]*key:\s*'select'[\s\S]*key:\s*'sku'[\s\S]*key:\s*'title'[\s\S]*key:\s*'selection'[\s\S]*key:\s*'price'/,
+  'Ozon list workbench headers should align with rendered row cells when showing selection-rule tags',
 );
 assert.match(
   overlay,
-  /value="rule:\$\{escapeHtml\(rule\.id\)\}"/,
-  'Ozon list workbench should offer a separate filter option for each selection rule',
-);
-assert.match(
-  overlay,
-  /rowFilter\.startsWith\('rule:'\)[\s\S]*matchedRules\.some/,
-  'Ozon list workbench should filter rows by the selected rule before publishing selected rows',
+  /value="rule:\$\{escapeHtml\(rule\.id\)\}"[\s\S]*rowFilter\.startsWith\('rule:'\)[\s\S]*matchedRules\.some/,
+  'Ozon list workbench should offer rule-specific filters and apply them before listing',
 );
 assert.match(
   overlay,
@@ -496,22 +509,20 @@ assert.match(
   /data-role="workbench-subtitle"/,
   'Ozon list workbench should expose a subtitle element that explains the current mode',
 );
-for (const mode of ['data', 'profit', 'publish']) {
-  assert.match(
-    overlay,
-    new RegExp(`data-role="workbench-view"[^>]+data-mode="${mode}"`),
-    `Ozon list workbench should expose ${mode} mode`,
-  );
-}
+assert.doesNotMatch(
+  listWorkbench,
+  /data-role="workbench-view"|data-mode="data"|data-mode="profit"/,
+  'Ozon list workbench should not expose data/profit mode tabs',
+);
 assert.match(
-  overlay,
+  listQuickDock,
   /quick-profit[\s\S]*openProfitCalculatorFromQuickAction\(\)/,
   'Ozon list profit action should open the dedicated calculator entry instead of the same SKU workbench',
 );
-assert.match(
-  overlay,
+assert.doesNotMatch(
+  listQuickDock,
   /quick-open-insights[\s\S]*openListSkuWorkbench\(\{\s*rowFilter:\s*'all',\s*focus:\s*'data'\s*\}\)/,
-  'Ozon list data action should open the list workbench in data mode',
+  'Ozon list quick toolbar should not expose a selection-data workbench action',
 );
 assert.match(
   overlay,
@@ -524,12 +535,14 @@ for (const role of [
   'publish-target-controls',
   'pricing-controls',
   'workbench-footer-actions',
-  'save-workbench-data',
-  'add-selected-workbench-skus-to-pool',
-  'delete-selected-workbench-skus',
 ]) {
-  assert.match(overlay, new RegExp(`data-role="${role}"`), `Ozon list workbench should expose ${role}`);
+  assert.match(listWorkbench, new RegExp(`data-role="${role}"`), `Ozon list workbench should expose ${role}`);
 }
+assert.doesNotMatch(
+  listWorkbench,
+  /data-role="save-workbench-data"|data-role="add-selected-workbench-skus-to-pool"|data-role="delete-selected-workbench-skus"|data-role="export-workbench-skus"/,
+  'Ozon list workbench should not expose save/pool/delete/export actions in the listing-only panel',
+);
 assert.match(
   overlay,
   /function\s+listWorkbenchFooterStyle/,
@@ -605,18 +618,11 @@ assert.match(
   /stableRounds\s*>=\s*AUTO_SCROLL_MAX_STABLE\s*&&\s*atBottom/,
   'Ozon list auto-scroll should only stop as loaded when stable and actually at the bottom',
 );
-for (const actionLabel of ['保存', '加入选品池', '删除选中 SKU', '导出选中 SKU', '一键上架选中商品']) {
-  assert.match(overlay, new RegExp(actionLabel), `Ozon list workbench footer should expose ${actionLabel}`);
-}
-assert.match(
-  overlay,
-  /function\s+addSelectedListWorkbenchSkusToPool/,
-  'Ozon list workbench should let users manually add selected SKUs to the ERP selection pool',
-);
-assert.match(
-  overlay,
-  /仅规则命中/,
-  'Ozon list workbench should provide a Maozi-style selection-rule matched filter',
+assert.match(listWorkbench, /一键上架选中商品/, 'Ozon list workbench footer should expose the one-click listing action');
+assert.doesNotMatch(
+  listWorkbench,
+  /保存|加入选品池|删除选中 SKU|导出选中 SKU/,
+  'Ozon list workbench footer should not expose selection-data management actions',
 );
 assert.doesNotMatch(
   overlay,
@@ -790,23 +796,15 @@ assert.match(
   /data-ss-erp-selection-matched/,
   'Ozon list rows/cards should expose whether they matched selection rules',
 );
-for (const label of ['成本¥', '物流费¥', '佣金%']) {
-  assert.match(overlay, new RegExp(label), `Ozon list workbench should expose ${label}`);
-}
-assert.match(
-  overlay,
-  /exportListWorkbenchSelectedSkus\(modal\)/,
-  'Ozon list workbench export button should use the selected workbench rows',
+assert.doesNotMatch(
+  listWorkbench,
+  /成本¥|物流费¥|佣金%|data-role="cost-cny"|data-role="logistics-fee-cny"|data-role="commission-rate"/,
+  'Ozon list workbench should not expose profit-only cost/logistics/commission controls',
 );
 assert.match(
   overlay,
-  /publishListWorkbenchSelectedRows[\s\S]*const costCny = readListWorkbenchNumber\(modal,\s*['"]cost-cny['"]\)/,
-  'Ozon list workbench publish should read the current cost input at submit time',
-);
-assert.match(
-  overlay,
-  /publishListWorkbenchSelectedRows[\s\S]*costs:\s*costCny > 0 \? Object\.fromEntries\(selected\.map\(\(sku\) => \[String\(sku\), costCny\]\)\) : undefined/,
-  'Ozon list workbench publish should pass selected SKU cost context through the full publish request',
+  /publishListWorkbenchSelectedRows[\s\S]*markupPct/,
+  'Ozon list workbench publish should pass markup context through the full publish request',
 );
 for (const label of [
   '广告费占比',

@@ -6,17 +6,17 @@ const content = fs.readFileSync('extensions/ss-erp/content/collect-content-scrip
 const panel = fs.readFileSync('extensions/ss-erp/content/ozon-panel.js', 'utf8');
 const background = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
 
-test('Ozon product data panel keeps data actions separate from listing actions', () => {
+test('Ozon product data panel keeps listing actions separate from removed selection data actions', () => {
   assert.doesNotMatch(content, /data-role="open-workbench"/);
   assert.match(content, /showOzonSkuWorkbench\(/);
   assert.match(content, /ss-erp-ozon-workbench-modal/);
   assert.match(content, /SS ERP 一键上架工作台/);
-  assert.match(content, /SS ERP 利润测算工作台/);
-  assert.match(content, /SS ERP 选品数据工作台/);
+  assert.doesNotMatch(content, /SS ERP 利润测算工作台/);
+  assert.doesNotMatch(content, /SS ERP 选品数据工作台/);
   assert.match(content, /一键上架选中商品/);
   assert.match(content, /data-role="quick-open-workbench"/);
   assert.match(content, /renderOzonPanel\(\{\s*expand:\s*false\s*\}\)/, 'product detail should keep the data panel collapsed on page load');
-  assert.match(content, /quick-open-insights[\s\S]*renderOzonPanel\(\{\s*expand:\s*true\s*\}\)/, 'product detail should expand data metrics from the quick action dock');
+  assert.doesNotMatch(content, /quick-open-insights[\s\S]*renderOzonPanel\(\{\s*expand:\s*true\s*\}\)/, 'product detail should not expose selection data from the quick action dock');
   assert.doesNotMatch(content, /默认展开数据一览窗|📊/, 'product detail should not auto-open a second large floating panel or use emoji chrome');
 });
 
@@ -39,11 +39,11 @@ test('Ozon product page exposes an SS ERP right quick action toolbar', () => {
     '一键上架',
     '利润测算',
     '绑定Cookie',
-    '选品数据',
     '设置选品',
   ]) {
     assert.match(content, new RegExp(label), `right toolbar should show ${label}`);
   }
+  assert.doesNotMatch(content, /选品数据/, 'right toolbar should not expose the old selection data entry point');
   assert.doesNotMatch(content, /localhost:3002/, 'right toolbar ERP entry should not default to the old temporary 3002 test port');
   assert.doesNotMatch(content, /background:rgba\(124,45,18/, 'product dialogs should not tint the whole Ozon page yellow/brown when a modal opens');
   assert.match(content, /http:\/\/localhost:3000/, 'right toolbar ERP entry should default to the local web app on port 3000');
@@ -90,7 +90,7 @@ test('Ozon product workbench fetches table rows and seller offer metrics through
   );
   assert.match(content, /data-role="workbench-table-wrap"/, 'product workbench should isolate table scrolling for sticky headers');
   assert.match(content, /position:sticky;\s*top:0;\s*z-index:3/, 'product workbench header cells should stay above rows without piercing the toolbar');
-  assert.doesNotMatch(content, /data-mode="pricing"/, 'product detail workbench should use the same data/profit/publish modes as the list workbench');
+  assert.doesNotMatch(content, /data-mode="data"|data-mode="profit"|data-mode="pricing"/, 'product detail workbench should not expose alternate data/profit/pricing tabs');
   assert.match(content, /function\s+getProductWorkbenchModeTitle/, 'product workbench should show a mode-specific title so profit does not look like listing');
   assert.doesNotMatch(
     content,
@@ -141,13 +141,14 @@ test('Ozon product workbench matches list publish controls for pricing and water
   for (const role of [
     'publish-target-controls',
     'pricing-controls',
-    'cost-cny',
-    'logistics-fee-cny',
-    'commission-rate',
+    'markup-pct',
     'watermark-template',
   ]) {
     assert.match(content, new RegExp(`data-role="${role}"`), `product SKU workbench should expose ${role}`);
   }
+  assert.doesNotMatch(content, /<input[^>]+data-role="cost-cny"/, 'product SKU workbench should not show profit-only cost input');
+  assert.doesNotMatch(content, /<input[^>]+data-role="logistics-fee-cny"/, 'product SKU workbench should not show profit-only logistics input');
+  assert.doesNotMatch(content, /<input[^>]+data-role="commission-rate"/, 'product SKU workbench should not show profit-only commission input');
   assert.match(
     content,
     /data-mode-scope="publish"/,
@@ -163,26 +164,7 @@ test('Ozon product workbench matches list publish controls for pricing and water
     /function\s+readOzonWorkbenchNumber/,
     'product SKU workbench should use a shared numeric reader for pricing inputs',
   );
-  assert.match(
-    content,
-    /loadOzonWorkbenchRows[\s\S]*const costCny = readOzonWorkbenchNumber\(modal,\s*"cost-cny"\)[\s\S]*const logisticsFeeCny = readOzonWorkbenchNumber\(modal,\s*"logistics-fee-cny"\)[\s\S]*const commissionRate = readOzonWorkbenchNumber\(modal,\s*"commission-rate"\)/,
-    'product SKU workbench data refresh should read cost, logistics fee, and commission rate',
-  );
-  assert.match(
-    content,
-    /loadOzonWorkbenchRows[\s\S]*costs:\s*costCny > 0 \? Object\.fromEntries\(productIds\.map\(\(sku\) => \[String\(sku\), costCny\]\)\) : undefined[\s\S]*logisticsFeeCny:\s*logisticsFeeCny > 0 \? logisticsFeeCny : undefined[\s\S]*commissionRate:\s*commissionRate > 0 \? commissionRate : undefined/,
-    'product SKU workbench data refresh should send pricing params to background enrichment',
-  );
-  assert.match(
-    content,
-    /publishSelectedOzonWorkbenchRows[\s\S]*const costCny = readOzonWorkbenchNumber\(modal,\s*"cost-cny"\)[\s\S]*const logisticsFeeCny = readOzonWorkbenchNumber\(modal,\s*"logistics-fee-cny"\)[\s\S]*const commissionRate = readOzonWorkbenchNumber\(modal,\s*"commission-rate"\)/,
-    'product SKU workbench publish should read cost, logistics fee, and commission rate',
-  );
-  assert.match(
-    content,
-    /publishSelectedOzonWorkbenchRows[\s\S]*costs:\s*costCny > 0 \? Object\.fromEntries\(selected\.map\(\(sku\) => \[String\(sku\), costCny\]\)\) : undefined[\s\S]*logisticsFeeCny:\s*logisticsFeeCny > 0 \? logisticsFeeCny : undefined[\s\S]*commissionRate:\s*commissionRate > 0 \? commissionRate : undefined/,
-    'product SKU workbench publish should pass pricing params through the normal collect-then-publish path',
-  );
+  assert.match(content, /publishSelectedOzonWorkbenchRows[\s\S]*markupPct/, 'product SKU workbench publish should pass markup through the normal collect-then-publish path');
 });
 
 test('Ozon workbench enrichment avoids duplicate slow seller fetches', () => {

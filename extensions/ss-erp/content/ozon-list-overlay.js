@@ -1997,7 +1997,7 @@
   }
 
   function normalizeListWorkbenchMode(mode) {
-    return ['data', 'profit', 'publish'].includes(mode) ? mode : 'publish';
+    return 'publish';
   }
 
   function listWorkbenchModeButtonStyle(active) {
@@ -2015,21 +2015,15 @@
   }
 
   function getListWorkbenchModeStatus(mode) {
-    if (mode === 'data') return '数据模式';
-    if (mode === 'profit') return '利润测算';
     return '一键上架';
   }
 
   function getListWorkbenchModeTitle(mode) {
-    if (mode === 'data') return 'SS ERP 选品数据工作台';
-    if (mode === 'profit') return 'SS ERP 利润测算工作台';
     return 'SS ERP 一键上架工作台';
   }
 
   function getListWorkbenchModeSubtitle(mode, count) {
     const base = `Ozon 列表页 ${count} 个 SKU`;
-    if (mode === 'data') return `${base} · 数据查看 / 规则筛选 / Excel 导出`;
-    if (mode === 'profit') return `${base} · 成本 / 物流费 / 佣金测算`;
     return `${base} · 选择店铺后提交上架`;
   }
 
@@ -2146,16 +2140,12 @@
   function setListWorkbenchMode(modal, mode) {
     const nextMode = normalizeListWorkbenchMode(mode);
     modal.__ssErpWorkbenchFocus = nextMode;
-    modal.querySelectorAll('[data-role="workbench-view"]').forEach((button) => {
-      const active = String(button.getAttribute('data-mode') || '') === nextMode;
-      button.setAttribute('style', listWorkbenchModeButtonStyle(active));
-    });
     modal.querySelectorAll('[data-mode-scope="publish"]').forEach((element) => {
       const role = String(element.getAttribute('data-role') || '');
-      element.style.display = nextMode === 'publish' ? (role === 'publish-target-controls' ? 'flex' : '') : 'none';
+      element.style.display = role === 'publish-target-controls' ? 'flex' : '';
     });
     modal.querySelectorAll('[data-mode-scope="pricing"]').forEach((element) => {
-      element.style.display = nextMode === 'data' ? 'none' : 'flex';
+      element.style.display = 'flex';
     });
     const tableWrap = modal.querySelector('[data-role="workbench-table-wrap"]');
     if (tableWrap) tableWrap.style.display = 'block';
@@ -2401,9 +2391,8 @@
         '</div>',
         `<button type="button" data-role="quick-open-workbench" title="打开本页上架工作台" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primary, '#ffffff')}">一键上架</button>`,
         `<button type="button" data-role="quick-profit" title="打开本页 SKU 利润测算" style="${quickActionButtonStyle(SS_ERP_LIST_THEME.primaryDark, '#ffffff')}">利润测算</button>`,
-        `<button type="button" data-role="quick-open-insights" title="打开本页 SKU 选品数据" style="${quickActionButtonStyle('#ffffff', SS_ERP_LIST_THEME.text, SS_ERP_LIST_THEME.borderStrong)}">选品数据</button>`,
-        `<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>`,
         `<button type="button" data-role="quick-bind-cookie" title="同步当前 Ozon / Seller Cookie 到 ERP 店铺" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">绑定Cookie</button>`,
+        `<div data-role="quick-match-summary" style="height:24px;margin:4px 0;border:1px solid ${SS_ERP_LIST_THEME.border};background:${SS_ERP_LIST_THEME.primarySoft};color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;white-space:nowrap;"></div>`,
         `<button type="button" data-role="quick-selection-settings" title="设置选品规则" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">设置选品</button>`,
         `<button type="button" data-role="quick-field-config" title="选择列表卡片展示字段" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">展示字段</button>`,
         `<button type="button" data-role="quick-auto-scroll" title="自动滚动列表触发懒加载，抓全所有 SKU" style="${quickActionButtonStyle('#ffffff', '#1f2937', '#cbd5e1')}">自动滚动</button>`,
@@ -2412,16 +2401,12 @@
       ].join('');
       document.body.appendChild(panel);
       panel.querySelector('[data-role="quick-open-workbench"]').addEventListener('click', () => {
-        openListSkuWorkbench({ rowFilter: 'all', focus: 'publish' });
+        openListSkuWorkbench({ focus: 'publish' });
         setListQuickStatus(panel, '已打开工作台');
       });
       panel.querySelector('[data-role="quick-profit"]').addEventListener('click', () => {
         openProfitCalculatorFromQuickAction();
         setListQuickStatus(panel, '利润测算已打开');
-      });
-      panel.querySelector('[data-role="quick-open-insights"]').addEventListener('click', () => {
-        openListSkuWorkbench({ rowFilter: 'all', focus: 'data' });
-        setListQuickStatus(panel, '数据已打开');
       });
       panel.querySelector('[data-role="quick-bind-cookie"]').addEventListener('click', async () => {
         await syncOzonCookieFromQuickAction(panel);
@@ -2915,7 +2900,10 @@
 
   function syncListWorkbenchRuleFilterOptions(modal) {
     const select = modal && modal.querySelector ? modal.querySelector('[data-role="row-filter"]') : null;
-    if (!select) return;
+    if (!select) {
+      if (modal) modal.__ssErpRowFilter = 'all';
+      return;
+    }
     const rules = readProductSelectionRules().filter((rule) => rule && rule.enabled);
     const current = normalizeListWorkbenchRowFilter(modal.__ssErpRowFilter || select.value);
     const ruleOptions = rules.map((rule) => {
@@ -2970,11 +2958,6 @@
       `      <div data-role="workbench-title" style="font-size:16px;font-weight:800;line-height:1.2;">${escapeHtml(getListWorkbenchModeTitle(modal.__ssErpWorkbenchFocus))}</div>`,
       `      <div data-role="workbench-subtitle" style="font-size:11px;color:rgba(255,255,255,0.78);margin-top:2px;">${escapeHtml(getListWorkbenchModeSubtitle(modal.__ssErpWorkbenchFocus, skus.length))}</div>`,
       '    </div>',
-      '    <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">',
-      `      <button type="button" data-role="workbench-view" data-mode="data" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'data')}">数据</button>`,
-      `      <button type="button" data-role="workbench-view" data-mode="profit" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'profit')}">利润</button>`,
-      `      <button type="button" data-role="workbench-view" data-mode="publish" style="${listWorkbenchModeButtonStyle(modal.__ssErpWorkbenchFocus === 'publish')}">上架</button>`,
-      '    </div>',
       '    <button type="button" data-role="close-list-workbench" style="width:30px;height:30px;border:1px solid rgba(255,255,255,0.42);background:rgba(255,255,255,0.14);color:#fff;cursor:pointer;font-size:18px;line-height:28px;border-radius:4px;">×</button>',
       '  </div>',
       `  <div data-role="workbench-filter-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
@@ -2990,18 +2973,12 @@
       `    <label style="font-size:12px;font-weight:800;color:#334155;">范围</label>`,
       `    <select data-role="row-filter" style="height:32px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;"><option value="all" ${initialRowFilter === 'all' ? 'selected' : ''}>全部商品</option><option value="matched" ${initialRowFilter === 'matched' ? 'selected' : ''}>仅规则命中</option></select>`,
       `    <div data-role="connection-status" style="font-size:12px;color:${SS_ERP_LIST_THEME.muted};white-space:nowrap;">ERP连接检测中...</div>`,
-      `    <button type="button" data-role="refresh-list-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新数据</button>`,
+      `    <button type="button" data-role="refresh-list-workbench" style="height:32px;margin-left:auto;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:0 12px;font-size:13px;font-weight:800;cursor:pointer;">刷新 SKU</button>`,
       '  </div>',
       `  <div data-role="workbench-batch-toolbar" style="padding:10px 18px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${SS_ERP_LIST_THEME.surface};">`,
       '    <div data-role="pricing-controls" data-mode-scope="pricing" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">',
       `      <label style="font-size:12px;font-weight:800;color:#334155;">加价%</label>`,
       '      <input type="number" data-role="markup-pct" value="0" min="-90" max="500" step="1" style="height:32px;width:74px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
-      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">成本¥</label>`,
-      '      <input type="number" data-role="cost-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
-      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">物流费¥</label>`,
-      '      <input type="number" data-role="logistics-fee-cny" value="0" min="0" step="0.1" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
-      `      <label style="font-size:12px;font-weight:800;color:#334155;margin-left:6px;">佣金%</label>`,
-      '      <input type="number" data-role="commission-rate" value="" min="0" max="100" step="0.1" placeholder="自动" style="height:32px;width:78px;border:1px solid #d1d5db;border-radius:3px;background:#fff;padding:0 8px;font-size:13px;text-align:right;">',
       '    </div>',
       `    <div style="margin-left:auto;font-size:12px;color:${SS_ERP_LIST_THEME.muted};" data-role="workbench-status">准备读取本页 SKU...</div>`,
       '  </div>',
@@ -3013,15 +2990,11 @@
       `          ${listWorkbenchHeaderHtml(modal.__ssErpListWorkbenchColumnWidths)}`,
       '        </tr>',
       '      </thead>',
-      '      <tbody data-role="workbench-body"><tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">读取中...</td></tr></tbody>',
+      `      <tbody data-role="workbench-body"><tr><td colspan="${LIST_WORKBENCH_COLUMNS.length}" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">读取中...</td></tr></tbody>`,
       '    </table>',
       '  </div>',
       `  <div style="${listWorkbenchFooterStyle()}">`,
       '    <div data-role="workbench-footer-actions" style="display:flex;align-items:center;gap:8px;">',
-      `      <button type="button" data-role="save-workbench-data" style="height:36px;border:1px solid #bfdbfe;background:#fff;color:#1d4ed8;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">保存</button>`,
-      `      <button type="button" data-role="add-selected-workbench-skus-to-pool" style="height:36px;border:1px solid #bbf7d0;background:#f0fdf4;color:#047857;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">加入选品池</button>`,
-      `      <button type="button" data-role="delete-selected-workbench-skus" style="height:36px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">删除选中 SKU</button>`,
-      `      <button type="button" data-role="export-workbench-skus" style="height:36px;border:1px solid ${SS_ERP_LIST_THEME.borderStrong};background:#fff;color:${SS_ERP_LIST_THEME.primaryDarker};border-radius:3px;padding:0 14px;font-size:13px;font-weight:800;cursor:pointer;">导出选中 SKU</button>`,
       `      <button type="button" data-role="publish-workbench" data-mode-scope="publish" style="height:36px;border:0;background:${SS_ERP_LIST_THEME.primary};color:#fff;border-radius:3px;padding:0 18px;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 1px 2px rgba(15,23,42,0.12);">一键上架选中商品</button>`,
       '    </div>',
       '  </div>',
@@ -3035,16 +3008,6 @@
     modal.querySelector('[data-role="shop-select"]').addEventListener('change', (event) => {
       loadListWorkbenchWatermarkTemplates(modal, event.target && event.target.value).catch(() => {});
     });
-    modal.querySelectorAll('[data-role="workbench-view"]').forEach((button) => {
-      button.addEventListener('click', () => {
-        setListWorkbenchMode(modal, button.getAttribute('data-mode'));
-        if (shouldReloadListWorkbenchRowsForMode(modal)) {
-          loadListWorkbenchRows(modal);
-        } else {
-          renderListWorkbenchRows(modal, modal.__ssErpListWorkbenchRows || [], modal.__ssErpListWorkbenchSkus || []);
-        }
-      });
-    });
     modal.querySelector('[data-role="row-filter"]').addEventListener('change', (event) => {
       modal.__ssErpRowFilter = normalizeListWorkbenchRowFilter(event.target.value);
       renderListWorkbenchRows(modal, modal.__ssErpListWorkbenchRows || [], modal.__ssErpListWorkbenchSkus || []);
@@ -3052,10 +3015,6 @@
     modal.querySelector('[data-role="select-all-workbench"]').addEventListener('change', (event) => {
       modal.querySelectorAll('[data-role="workbench-row-check"]').forEach((box) => { box.checked = event.target.checked; });
     });
-    modal.querySelector('[data-role="save-workbench-data"]').addEventListener('click', () => saveListWorkbenchData(modal));
-    modal.querySelector('[data-role="add-selected-workbench-skus-to-pool"]').addEventListener('click', () => addSelectedListWorkbenchSkusToPool(modal));
-    modal.querySelector('[data-role="delete-selected-workbench-skus"]').addEventListener('click', () => deleteSelectedListWorkbenchSkus(modal));
-    modal.querySelector('[data-role="export-workbench-skus"]').addEventListener('click', () => exportListWorkbenchSelectedSkus(modal));
     modal.querySelector('[data-role="publish-workbench"]').addEventListener('click', () => publishListWorkbenchSelectedRows(modal));
     initListWorkbenchColumnResize(modal);
 
@@ -3202,7 +3161,7 @@
       .slice(0, 1000);
     modal.__ssErpListWorkbenchSkus = skus;
     if (!skus.length) {
-      if (body) body.innerHTML = '<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">本页没有识别到 SKU</td></tr>';
+      if (body) body.innerHTML = `<tr><td colspan="${LIST_WORKBENCH_COLUMNS.length}" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">本页没有识别到 SKU</td></tr>`;
       if (status) status.textContent = '没有识别到 SKU';
       return;
     }
@@ -3240,7 +3199,7 @@
       if (status) status.textContent = rows.length ? `已读取 ${rows.length} 条 SKU 数据` : '没有可展示的 SKU 数据';
     } catch (error) {
       if (!seedRows.length && body) {
-        body.innerHTML = `<tr><td colspan="18" style="padding:26px;text-align:center;color:#dc2626;border:1px solid #e5e7eb;">${escapeHtml(error && error.message ? error.message : String(error))}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="${LIST_WORKBENCH_COLUMNS.length}" style="padding:26px;text-align:center;color:#dc2626;border:1px solid #e5e7eb;">${escapeHtml(error && error.message ? error.message : String(error))}</td></tr>`;
       }
       if (status) status.textContent = seedRows.length ? `seller 数据补全失败，已保留本页缓存：${error && error.message ? error.message : String(error)}` : '读取失败';
     }
@@ -3266,9 +3225,9 @@
       ? decoratedRows.filter((item) => item.matchedRules.length)
       : rowFilter.startsWith('rule:')
         ? decoratedRows.filter((item) => item.matchedRules.some((rule) => String(rule.id || '') === selectedRuleId))
-      : decoratedRows;
+        : decoratedRows;
     if (!visibleRows.length) {
-      body.innerHTML = `<tr><td colspan="18" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">${rowFilter === 'matched' || rowFilter.startsWith('rule:') ? '暂无规则命中 SKU' : '暂无数据'}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="${LIST_WORKBENCH_COLUMNS.length}" style="padding:26px;text-align:center;color:#6b7280;border:1px solid #e5e7eb;">${rowFilter === 'matched' || rowFilter.startsWith('rule:') ? '暂无规则命中 SKU' : '暂无数据'}</td></tr>`;
       return;
     }
     body.innerHTML = visibleRows.map(({ sku, row, dom, matchedRules }) => {
@@ -3276,14 +3235,12 @@
       const image = row.image || dom.image || '';
       const selectionTags = matchedRules.length
         ? matchedRules.slice(0, 2).map((rule) => {
-          // T2：与卡片标签共用同一派生函数，规则色浅渐变底 + 规则色描边/文字。
           const tint = deriveSelectionRuleTint(rule.color);
           return `<span title="${escapeHtml(rule.name)}" style="display:inline-block;max-width:86px;border:1px solid ${tint.border};background:${tint.bg};color:${tint.text};border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rule.tag || rule.name)}</span>`;
         }).join('')
         : '<span style="color:#94a3b8;">--</span>';
       const poolStatus = getProductSelectionPoolStatus(sku);
       const poolBadge = `<span data-role="selection-pool-status" data-ss-erp-pool-sku="${escapeHtml(sku)}" style="display:${poolStatus && poolStatus.inPool ? 'inline-flex' : 'none'};align-items:center;border:1px solid #93c5fd;background:#eff6ff;color:#1d4ed8;border-radius:3px;padding:2px 5px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap;">已入池</span>`;
-      // T3：命中行底色/左边强调条取命中规则（priority 最高）的 color 派生，与卡片同源，算一次复用。
       const rowTint = matchedRules.length ? deriveSelectionRuleTint(pickSelectionRuleForCard(matchedRules).color) : null;
       return [
         `<tr data-sku="${escapeHtml(sku)}" data-ss-erp-selection-matched="${matchedRules.length ? '1' : '0'}" style="background:${rowTint ? rowTint.cardBg : '#fff'};box-shadow:${rowTint ? `inset 3px 0 0 ${rowTint.border}` : 'none'};">`,

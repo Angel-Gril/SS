@@ -54,15 +54,18 @@ test('browser one-click listing uses temporary collect records instead of pollut
     /function\s+purgeExpiredEphemeralListingRecords/,
     'server should have a best-effort cleanup for temporary records after restart',
   );
-  const purgeFn = collectRoute.match(/function\s+purgeExpiredEphemeralListingRecords[\s\S]*?\n}\n/);
-  assert.ok(purgeFn, 'restart-safe cleanup function should be present');
+  const purgeStart = collectRoute.indexOf('function purgeExpiredEphemeralListingRecords');
+  const purgeEnd = collectRoute.indexOf('\nfunction ', purgeStart + 1);
+  assert.ok(purgeStart >= 0, 'restart-safe cleanup function should be present');
+  assert.ok(purgeEnd > purgeStart, 'restart-safe cleanup function should have a stable end marker');
+  const purgeFn = collectRoute.slice(purgeStart, purgeEnd);
   assert.match(
-    purgeFn[0],
+    purgeFn,
     /updatedAt:\s*\{\s*lt:\s*new Date\(Date\.now\(\)\s*-\s*EPHEMERAL_LISTING_TTL_MS\)/,
     'restart-safe cleanup should purge expired temporary records after the TTL',
   );
   assert.doesNotMatch(
-    purgeFn[0],
+    purgeFn,
     /status:\s*'listed'/,
     'restart-safe cleanup should also purge temporary records that never reached listed status',
   );
