@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { cpSync, existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const sourceDir = path.resolve(process.env.EXTENSION_SOURCE_DIR || 'extensions/ss-erp');
@@ -17,12 +17,67 @@ if (!existsSync(path.join(sourceDir, 'manifest.json'))) {
 }
 
 const outDir = path.join(outRoot, `ss-erp-${target}`);
+
+function parseVersion(value) {
+  const match = String(value || '').match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    raw: match[0],
+  };
+}
+
+function compareVersions(a, b) {
+  for (const key of ['major', 'minor', 'patch']) {
+    if (a[key] > b[key]) return 1;
+    if (a[key] < b[key]) return -1;
+  }
+  return 0;
+}
+
+function readManifestVersion(root) {
+  if (!root) return null;
+  const manifestFile = path.join(root, `ss-erp-${target}`, 'manifest.json');
+  if (!existsSync(manifestFile)) return null;
+  try {
+    return parseVersion(JSON.parse(readFileSync(manifestFile, 'utf8')).version);
+  } catch {
+    return null;
+  }
+}
+
+function readZipVersions(root) {
+  if (!root || !existsSync(root)) return [];
+  const prefix = `ss-erp-${target}-`;
+  return readdirSync(root)
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.zip'))
+    .map((name) => parseVersion(name.slice(prefix.length, -4)))
+    .filter(Boolean);
+}
+
+function resolveBuildVersion(sourceManifestPath) {
+  const sourceManifest = JSON.parse(readFileSync(sourceManifestPath, 'utf8'));
+  const source = parseVersion(sourceManifest.version) || parseVersion('0.0.0');
+  const candidates = [
+    source,
+    readManifestVersion(outRoot),
+    readManifestVersion(process.env.EXTENSION_PREVIOUS_BUILD_ROOT),
+    ...readZipVersions(outRoot),
+    ...readZipVersions(process.env.EXTENSION_PREVIOUS_BUILD_ROOT),
+  ].filter(Boolean);
+  return candidates.reduce((max, current) => (compareVersions(current, max) > 0 ? current : max), source).raw;
+}
+
+const buildVersion = resolveBuildVersion(path.join(sourceDir, 'manifest.json'));
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(path.dirname(outDir), { recursive: true });
 cpSync(sourceDir, outDir, { recursive: true });
 
 const manifestPath = path.join(outDir, 'manifest.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+manifest.version = buildVersion;
 
 const CLOUD_HOST_PERMISSIONS = [
   'https://ss-erp.com/*',
