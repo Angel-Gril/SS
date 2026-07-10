@@ -155,6 +155,21 @@ export async function removeSession(userId: string, token: string) {
   await redis.del(sessionKey);
 }
 
+export async function removeAllSessions(userId: string) {
+  let cursor = '0';
+  do {
+    const [nextCursor, keys] = await redis.scan(
+      cursor,
+      'MATCH',
+      `session:${userId}:*`,
+      'COUNT',
+      100,
+    ) as [string, string[]];
+    if (keys.length > 0) await redis.del(...keys);
+    cursor = nextCursor;
+  } while (cursor !== '0');
+}
+
 const AUTH_COOKIE_NAME = 'sserp_token';
 const AUTH_COOKIE_SECURE =
   process.env.AUTH_COOKIE_SECURE !== undefined
@@ -170,10 +185,9 @@ const AUTH_COOKIE_OPTIONS = {
 };
 
 export function setAuthCookie(reply: FastifyReply, token: string, maxAgeSeconds?: number) {
-  const seconds = maxAgeSeconds || Number(process.env.SESSION_TTL_SECONDS) || 604800;
   reply.setCookie(AUTH_COOKIE_NAME, token, {
     ...AUTH_COOKIE_OPTIONS,
-    maxAge: seconds,
+    ...(typeof maxAgeSeconds === 'number' ? { maxAge: maxAgeSeconds } : {}),
   });
 }
 

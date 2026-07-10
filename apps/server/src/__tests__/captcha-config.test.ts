@@ -42,14 +42,14 @@ describe('captcha runtime config', () => {
     configStore.set('auth_sms_code_ttl_seconds', '600');
     configStore.set('auth_sms_rate_limit_seconds', '120');
     const { redis } = await import('../lib/redis.js');
-    vi.mocked(redis.get).mockResolvedValue(null);
+    vi.mocked(redis.set).mockResolvedValue('OK');
 
     const { sendSmsCode } = await import('../lib/captcha.js');
     const result = await sendSmsCode('13800138000');
 
     expect(result.ok).toBe(true);
     expect(redis.set).toHaveBeenCalledWith('sms:code:13800138000', expect.stringMatching(/^\d{6}$/), 'EX', 600);
-    expect(redis.set).toHaveBeenCalledWith('sms:rate:13800138000', '1', 'EX', 120);
+    expect(redis.set).toHaveBeenCalledWith('sms:rate:13800138000', '1', 'EX', 120, 'NX');
   });
 
   it('uses configured Turnstile secret instead of env secret', async () => {

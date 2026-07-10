@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const cryptoMocks = vi.hoisted(() => ({
+  randomInt: vi.fn(() => 654321),
+}));
+
+vi.mock('node:crypto', () => ({ randomInt: cryptoMocks.randomInt }));
+
 import { sendSmsCode, verifySmsCode, verifyTurnstile } from '../lib/captcha.js';
 
 vi.mock('../lib/redis.js', () => ({
@@ -8,6 +15,7 @@ vi.mock('../lib/redis.js', () => ({
     del: vi.fn(),
     incr: vi.fn(),
     expire: vi.fn(),
+    eval: vi.fn(),
   },
 }));
 
@@ -36,20 +44,65 @@ describe('SMS verification', () => {
     );
   });
 
+  it('uses cryptographically secure randomness for SMS codes', async () => {
+    const { redis } = await import('../lib/redis.js');
+    vi.mocked(redis.set).mockResolvedValue('OK');
+
+    await sendSmsCode('13800138000', 'password-reset');
+
+    expect(cryptoMocks.randomInt).toHaveBeenCalledWith(100000, 1000000);
+    expect(redis.set).toHaveBeenCalledWith(
+      'sms:code:password-reset:13800138000',
+      '654321',
+      'EX',
+      300,
+    );
+  });
+
+  it('claims the purpose-specific send window atomically', async () => {
+    const { redis } = await import('../lib/redis.js');
+    vi.mocked(redis.set).mockResolvedValue('OK');
+
+    await sendSmsCode('13800138000', 'password-reset');
+
+    expect(redis.set).toHaveBeenCalledWith(
+      'sms:rate:password-reset:13800138000',
+      '1',
+      'EX',
+      60,
+      'NX',
+    );
+  });
+
+  it('consumes a valid password reset code atomically', async () => {
+    const { redis } = await import('../lib/redis.js');
+    vi.mocked(redis.eval).mockResolvedValue(1);
+
+    const valid = await verifySmsCode('13800138000', '123456', 'password-reset');
+
+    expect(valid).toBe(true);
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("redis.call('DEL', KEYS[1])"),
+      1,
+      'sms:code:password-reset:13800138000',
+      '123456',
+    );
+  });
+
   it('should verify correct code', async () => {
     const { redis } = await import('../lib/redis.js');
-    vi.mocked(redis.get).mockResolvedValue('123456');
+    vi.mocked(redis.eval).mockResolvedValue(1);
     vi.mocked(redis.del).mockResolvedValue(1);
 
     const valid = await verifySmsCode('13800138000', '123456');
 
     expect(valid).toBe(true);
-    expect(redis.del).toHaveBeenCalledWith('sms:code:13800138000');
+    expect(redis.del).toHaveBeenCalledWith('sms:fail:13800138000');
   });
 
   it('should reject incorrect code', async () => {
     const { redis } = await import('../lib/redis.js');
-    vi.mocked(redis.get).mockResolvedValue('123456');
+    vi.mocked(redis.eval).mockResolvedValue(0);
     vi.mocked(redis.incr).mockResolvedValue(1);
     vi.mocked(redis.expire).mockResolvedValue(1);
 
@@ -62,7 +115,7 @@ describe('SMS verification', () => {
 
   it('should reject expired code', async () => {
     const { redis } = await import('../lib/redis.js');
-    vi.mocked(redis.get).mockResolvedValue(null);
+    vi.mocked(redis.eval).mockResolvedValue(-1);
 
     const valid = await verifySmsCode('13800138000', '123456');
 
@@ -76,7 +129,7 @@ describe('SMS verification', () => {
     const valid = await verifySmsCode('13800138000', '');
 
     expect(valid).toBe(true);
-    expect(redis.get).not.toHaveBeenCalled();
+    expect(redis.eval).not.toHaveBeenCalled();
   });
 
   it('should bypass Turnstile in local runtime even when NODE_ENV=production', async () => {

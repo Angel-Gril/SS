@@ -103,6 +103,7 @@ model User {
   ozonAnalyticsCaches OzonAnalyticsCache[]
   productSelectionRules ProductSelectionRule[]
   productSelectionPoolItems ProductSelectionPoolItem[]
+  legalAcceptances LegalAcceptance[]
 
   @@index([parentId])
   @@map("users")
@@ -121,6 +122,24 @@ model Session {
   @@index([userId])
   @@index([expiresAt])
   @@map("sessions")
+}
+
+model LegalAcceptance {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile        String
+  termsVersion   String   @map("terms_version")
+  privacyVersion String   @map("privacy_version")
+  source         String
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  acceptedAt     DateTime @default(now()) @map("accepted_at")
+
+  @@index([userId])
+  @@index([profile])
+  @@index([acceptedAt])
+  @@map("legal_acceptances")
 }
 
 model Shop {

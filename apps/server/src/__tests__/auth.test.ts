@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { registerSchema } from 'shared';
 import { signToken, verifyToken } from '../lib/auth.js';
 
 describe('auth token', () => {
@@ -37,5 +38,17 @@ describe('auth token', () => {
     const decoded = verifyToken(token);
     expect(decoded.userId).toBe('user-123');
     expect(decoded.role).toBe('ADMIN');
+  });
+});
+
+describe('auth registration consent', () => {
+  const registration = {
+    phone: '19200000000',
+    password: 'secure123',
+  };
+
+  it('requires explicit acceptance of the current user agreement and privacy policy', () => {
+    expect(registerSchema.safeParse(registration).success).toBe(false);
+    expect(registerSchema.safeParse({ ...registration, legalAccepted: true }).success).toBe(true);
   });
 });

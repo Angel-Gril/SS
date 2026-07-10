@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
-import { registerSchema, loginSchema, sendSmsCodeSchema } from 'shared';
+import { getLegalProfile, registerSchema, loginSchema, resetPasswordWithSmsSchema, sendSmsCodeSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
-import { signToken, storeSession, removeSession, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
+import { signToken, storeSession, removeSession, removeAllSessions, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { verifyTurnstile, sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 import {
@@ -22,6 +22,7 @@ const authRateLimitConfig = {
     }),
   },
 };
+const REMEMBER_ME_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function authRoutes(app: FastifyInstance) {
   // auth 专用频控只挂到敏感 POST 路由，避免 challenge-config 消耗登录尝试桶。
@@ -64,6 +65,47 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.send({ code: result.ok ? 1 : 0, msg: result.msg });
   });
 
+  app.post('/password-reset/sms-code', { config: authRateLimitConfig }, async (request, reply) => {
+    const parsed = sendSmsCodeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { phone, turnstileToken } = parsed.data;
+    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+      return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { phone } });
+    if (user && user.status !== 'SUSPENDED') {
+      await sendSmsCode(phone, 'password-reset');
+    }
+    return reply.send({ code: 1, msg: '如果该手机号已注册，验证码将发送至该手机' });
+  });
+
+  app.post('/password-reset', { config: authRateLimitConfig }, async (request, reply) => {
+    const parsed = resetPasswordWithSmsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
+    }
+
+    const { phone, smsCode, newPassword } = parsed.data;
+    if (!await verifySmsCode(phone, smsCode, 'password-reset')) {
+      return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { phone } });
+    if (!user) {
+      return reply.status(400).send({ code: 0, msg: '验证码错误或已过期' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    await removeAllSessions(user.id);
+    clearAuthCookie(reply);
+    return reply.send({ code: 1, msg: '密码已重置，请重新登录' });
+  });
+
   app.post('/register', { config: authRateLimitConfig }, async (request, reply) => {
     const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
     if (adminCount === 0) {
@@ -88,8 +130,27 @@ export async function authRoutes(app: FastifyInstance) {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const accountCode = await generateAccountCode(null);
+    const legalProfile = getLegalProfile(process.env.LEGAL_PROFILE);
+    const userAgent = typeof request.headers['user-agent'] === 'string'
+      ? request.headers['user-agent'].slice(0, 500)
+      : null;
     const user = await prisma.user.create({
-      data: { phone, passwordHash, nickname: nickname || `用户${phone.slice(-4)}`, accountCode },
+      data: {
+        phone,
+        passwordHash,
+        nickname: nickname || ('用户' + phone.slice(-4)),
+        accountCode,
+        legalAcceptances: {
+          create: {
+            profile: legalProfile.id,
+            termsVersion: legalProfile.termsVersion,
+            privacyVersion: legalProfile.privacyVersion,
+            source: 'register',
+            ipAddress: request.ip,
+            userAgent,
+          },
+        },
+      },
     });
 
     const token = signToken({ userId: user.id, role: user.role });
@@ -119,7 +180,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { phone, password, turnstileToken } = parsed.data;
+    const { phone, password, rememberMe = false, turnstileToken } = parsed.data;
 
     const { redis } = await import('../lib/redis.js');
     const failKey = `login:fail:${request.ip}`;
@@ -156,9 +217,10 @@ export async function authRoutes(app: FastifyInstance) {
     // 登录成功，清除失败计数
     await redis.del(failKey);
 
-    const token = signToken({ userId: user.id, role: user.role });
-    await storeSession(user.id, token);
-    setAuthCookie(reply, token);
+    const sessionTtlSeconds = rememberMe ? REMEMBER_ME_TTL_SECONDS : undefined;
+    const token = signToken({ userId: user.id, role: user.role }, rememberMe ? '7d' : undefined);
+    await storeSession(user.id, token, sessionTtlSeconds);
+    setAuthCookie(reply, token, sessionTtlSeconds);
 
     return reply.send({
       code: 1,

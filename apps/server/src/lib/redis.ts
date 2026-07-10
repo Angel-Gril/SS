@@ -22,6 +22,8 @@ class NoopRedis {
   async zadd() { return 0; }
   async zrange() { return []; }
   async keys() { return []; }
+  async scan() { return ['0', []]; }
+  async eval() { return -1; }
   async publish() { return 0; }
   on() { return this; }
   off() { return this; }

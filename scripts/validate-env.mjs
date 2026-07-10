@@ -110,6 +110,7 @@ function validateBootstrapBase(env) {
   requireValue(env, 'JWT_SECRET', { minLength: 16 });
   requireValue(env, 'ENCRYPTION_KEY', { minLength: 32 });
   expectOneOf(env, 'RUNTIME_MODE', ['local', 'cloud']);
+  expectOneOf(env, 'LEGAL_PROFILE', ['local', 'cloud-cn', 'cloud-global', 'self-hosted']);
   if (isSet(env.AUTH_COOKIE_SECURE) && !['true', 'false'].includes(env.AUTH_COOKIE_SECURE)) {
     fail(`AUTH_COOKIE_SECURE expected true/false, got ${env.AUTH_COOKIE_SECURE}`);
   }

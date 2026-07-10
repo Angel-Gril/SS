@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
+import { getLegalProfile } from 'shared';
 import { prisma } from '../lib/prisma.js';
 import { nextSuperAdminCode } from '../lib/account-code.js';
 
@@ -23,7 +24,13 @@ export async function setupRoutes(app: FastifyInstance) {
   // 引导初始化：仅当系统没有 ADMIN 时允许，创建首个超级管理员。
   // 即使误开放注册导致已有普通用户，也不能把系统锁死在“无管理员”状态。
   app.post('/init', async (request, reply) => {
-    const body = request.body as { phone?: string; password?: string; nickname?: string; setupToken?: string };
+    const body = request.body as {
+      phone?: string;
+      password?: string;
+      nickname?: string;
+      setupToken?: string;
+      legalAccepted?: boolean;
+    };
 
     const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
     if (adminCount > 0) {
@@ -36,6 +43,9 @@ export async function setupRoutes(app: FastifyInstance) {
     }
     if (process.env.SETUP_TOKEN && providedSetupToken !== process.env.SETUP_TOKEN) {
       return reply.code(403).send({ code: 0, msg: '初始化令牌不正确' });
+    }
+    if (body.legalAccepted !== true) {
+      return reply.code(400).send({ code: 0, msg: '请阅读并同意用户协议和隐私政策' });
     }
 
     const phone = (body.phone || '').trim();
@@ -60,6 +70,10 @@ export async function setupRoutes(app: FastifyInstance) {
     } catch (e: any) {
       return reply.status(400).send({ code: 0, msg: e.message || '超管账号编号分配失败' });
     }
+    const legalProfile = getLegalProfile(process.env.LEGAL_PROFILE);
+    const userAgent = typeof request.headers['user-agent'] === 'string'
+      ? request.headers['user-agent'].slice(0, 500)
+      : null;
     const admin = await prisma.user.create({
       data: {
         phone,
@@ -70,6 +84,16 @@ export async function setupRoutes(app: FastifyInstance) {
         accountCode,
         balance: 10000,
         canInvite: true,
+        legalAcceptances: {
+          create: {
+            profile: legalProfile.id,
+            termsVersion: legalProfile.termsVersion,
+            privacyVersion: legalProfile.privacyVersion,
+            source: 'setup',
+            ipAddress: request.ip,
+            userAgent,
+          },
+        },
       },
       select: { id: true, phone: true, nickname: true, role: true, isSuperAdmin: true, accountCode: true },
     });

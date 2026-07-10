@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
+import { Eye, EyeOff } from 'lucide-react';
 import { registerSchema, type RegisterInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
 import { formatAuthNetworkError } from '@/lib/auth-ui';
@@ -37,6 +38,7 @@ const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
 export default function RegisterPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [sending, setSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [turnstileToken, setTurnstileToken] = useState('');
@@ -67,6 +69,7 @@ export default function RegisterPage() {
     formState: { errors },
   } = useForm<RegisterInput>({
     resolver: zodResolver(registerSchema),
+    defaultValues: { legalAccepted: false },
   });
 
   function startCountdown() {
@@ -178,14 +181,14 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-[#fff7f0] p-4 dark:bg-gray-950">
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center space-y-2">
           <div className="mx-auto w-12 h-12 bg-primary rounded-xl flex items-center justify-center mb-2">
             <span className="text-2xl font-bold text-primary-foreground">SS</span>
           </div>
           <CardTitle className="text-2xl">注册账号</CardTitle>
-          <CardDescription>开启您的跨境电商之旅</CardDescription>
+          <CardDescription>松鼠跨境 ERP · 厦门常青藤上云</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -224,16 +227,45 @@ export default function RegisterPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">密码</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="至少 8 位，包含字母和数字"
-                {...register('password')}
-                autoComplete="new-password"
-              />
+              <div className="relative">
+                <Input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="至少 8 位，包含字母和数字"
+                  className="pr-10"
+                  {...register('password')}
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                  title={showPassword ? '隐藏密码' : '显示密码'}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
               {errors.password && (
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="legalAccepted" className="flex cursor-pointer items-start gap-2.5 text-sm leading-5 text-muted-foreground">
+                <input
+                  id="legalAccepted"
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  {...register('legalAccepted')}
+                />
+                <span>
+                  我已阅读并同意
+                  <a href="/terms" target="_blank" rel="noreferrer" className="mx-1 font-medium text-primary hover:underline">《用户协议》</a>
+                  和
+                  <a href="/privacy" target="_blank" rel="noreferrer" className="ml-1 font-medium text-primary hover:underline">《隐私政策》</a>
+                </span>
+              </label>
+              {errors.legalAccepted && <p className="text-xs text-destructive">{errors.legalAccepted.message}</p>}
             </div>
             {needsTurnstile && (
               challengeConfig.turnstileSiteKey ? (
