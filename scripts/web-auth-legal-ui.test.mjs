@@ -15,6 +15,7 @@ const privacy = read('apps/web/src/app/privacy/page.tsx');
 const register = read('apps/web/src/app/(auth)/register/page-client.tsx');
 const setup = read('apps/web/src/app/(auth)/setup/page.tsx');
 const login = read('apps/web/src/app/(auth)/login/page-client.tsx');
+const legalLayout = read('apps/web/src/components/legal-document-layout.tsx');
 
 test('user agreement and privacy pages use deployment-aware legal identity', () => {
   assert.match(terms, /用户协议/);
@@ -26,6 +27,11 @@ test('user agreement and privacy pages use deployment-aware legal identity', () 
   assert.match(privacy, /dataHostingDescription/);
   assert.match(privacy, /crossBorderDescription/);
   assert.match(privacy, /privacyVersion/);
+});
+
+test('legal pages use a full navigation for cross-domain login redirects', () => {
+  assert.match(legalLayout, /<a href="\/login"/);
+  assert.doesNotMatch(legalLayout, /<Link href="\/login"/);
 });
 
 test('registration and first-admin setup require explicit legal consent', () => {

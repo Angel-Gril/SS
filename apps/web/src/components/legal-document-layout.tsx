@@ -17,13 +17,13 @@ export function LegalDocumentLayout({
     <div className="min-h-screen bg-[#fffaf6] text-slate-900">
       <header className="border-b border-orange-100 bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4 sm:px-8">
-          <Link href="/login" className="flex items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
+          <a href="/login" className="flex items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary font-bold text-primary-foreground shadow-sm">SS</span>
             <span>
               <span className="block font-semibold leading-tight">{profile.platformName}</span>
               <span className="block text-xs text-slate-500">{profile.operatorDisplayName}</span>
             </span>
-          </Link>
+          </a>
           <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-medium text-orange-700">
             {profile.deploymentLabel}
           </span>
@@ -50,7 +50,7 @@ export function LegalDocumentLayout({
         <nav aria-label="法律文件" className="mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-slate-600">
           <Link href="/terms" className="hover:text-primary hover:underline">用户协议</Link>
           <Link href="/privacy" className="hover:text-primary hover:underline">隐私政策</Link>
-          <Link href="/login" className="hover:text-primary hover:underline">返回登录</Link>
+          <a href="/login" className="hover:text-primary hover:underline">返回登录</a>
         </nav>
       </main>
     </div>
