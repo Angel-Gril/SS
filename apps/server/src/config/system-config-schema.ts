@@ -149,7 +149,9 @@ export const SystemConfigSchema = {
   backup_local_keep_days: z.number().int().min(1).max(365).default(7),
   backup_remote_enabled: z.boolean().default(false),
   backup_remote_keep_days: z.number().int().min(1).max(3650).default(30),
-  backup_remote_provider: z.enum(['s3']).default('s3'),
+  backup_remote_provider: z
+    .enum(['s3', 'aliyun-oss', 'cloudflare-r2', 's3-compatible'])
+    .default('s3-compatible'),
   backup_remote_bucket: z.string().default(''),
   backup_remote_endpoint: z.string().default(''),
   backup_remote_region: z.string().default('auto'),
@@ -666,19 +668,17 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   backup_remote_provider: {
     label: '远程存储类型',
     group: 'backup',
-    description: '远程备份存储类型（目前仅支持 s3 兼容）',
+    description: '选择阿里云 OSS、Cloudflare R2 或其他 S3 兼容存储；旧值 s3 继续兼容',
   },
   backup_remote_bucket: {
     label: '远程存储 Bucket',
     group: 'backup',
     description: '远程备份目标 bucket 名称',
-    sensitive: true,
   },
   backup_remote_endpoint: {
     label: '远程存储 Endpoint',
     group: 'backup',
     description: '远程备份 S3 兼容 endpoint URL',
-    sensitive: true,
   },
   backup_remote_region: {
     label: '远程存储 Region',

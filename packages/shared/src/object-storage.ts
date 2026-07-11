@@ -29,6 +29,26 @@ export const ALIYUN_OSS_REGIONS = [
   { value: 'ap-southeast-1', label: '新加坡' },
 ] as const;
 
+export function getAliyunOssEndpoint(
+  region: string,
+  options: { internal?: boolean } = {},
+): string {
+  const normalizedRegion = String(region || 'cn-guangzhou').trim() || 'cn-guangzhou';
+  const suffix = options.internal ? '-internal' : '';
+  return `https://oss-${normalizedRegion}${suffix}.aliyuncs.com`;
+}
+
+export function inferAliyunOssRegion(endpoint: string): string | null {
+  const value = String(endpoint || '').trim().toLowerCase();
+  if (!value) return null;
+  try {
+    const hostname = new URL(value.includes('://') ? value : `https://${value}`).hostname;
+    return hostname.match(/(?:^|\.)oss-([a-z0-9-]+?)(?:-internal)?\.aliyuncs\.com$/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getObjectStorageProviderPreset(
   provider: ObjectStorageProvider,
   input: ObjectStoragePresetInput = {},
@@ -36,11 +56,12 @@ export function getObjectStorageProviderPreset(
   const bucket = (input.bucket || '').trim();
   if (provider === 'aliyun-oss') {
     const region = (input.region || 'cn-guangzhou').trim();
-    const host = `oss-${region}.aliyuncs.com`;
+    const endpoint = getAliyunOssEndpoint(region);
+    const host = new URL(endpoint).hostname;
     return {
       provider,
       region,
-      endpoint: `https://${host}`,
+      endpoint,
       publicDomain: bucket ? `https://${bucket}.${host}` : '',
     };
   }

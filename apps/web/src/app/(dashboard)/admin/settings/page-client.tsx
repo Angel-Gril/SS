@@ -19,8 +19,10 @@ import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import {
   ALIYUN_OSS_REGIONS,
+  getAliyunOssEndpoint,
   getAliyunOssRamPolicy,
   getObjectStorageProviderPreset,
+  inferAliyunOssRegion,
   inferObjectStorageProvider,
   type ObjectStorageProvider,
 } from 'shared/object-storage';
@@ -908,8 +910,48 @@ function BackupSettingsPanel({
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const isSavingGeneral = savingKey === 'group:备份基础策略';
-  const isSavingRemote = savingKey === 'group:备份 R2';
+  const isSavingRemote = savingKey === 'group:数据库备份对象存储';
   const remoteEnabled = editing.backup_remote_enabled === 'true';
+  const savedRemoteProvider = editing.backup_remote_provider;
+  const remoteProvider: ObjectStorageProvider =
+    savedRemoteProvider === 'aliyun-oss' ||
+    savedRemoteProvider === 'cloudflare-r2' ||
+    savedRemoteProvider === 's3-compatible'
+      ? savedRemoteProvider
+      : inferObjectStorageProvider(editing.backup_remote_endpoint || '');
+  const aliyunRegion =
+    inferAliyunOssRegion(editing.backup_remote_endpoint || '') ||
+    editing.backup_remote_region ||
+    'cn-guangzhou';
+  const backupRamPolicy = getAliyunOssRamPolicy(editing.backup_remote_bucket || 'your-private-bucket');
+  const applyRemoteProviderPreset = (nextProvider: ObjectStorageProvider) => {
+    const next: Record<string, string> = { ...editing, backup_remote_provider: nextProvider };
+    if (nextProvider !== remoteProvider) {
+      next.backup_remote_access_key_id = '';
+      next.backup_remote_secret_access_key = '';
+    }
+    if (nextProvider === 'aliyun-oss') {
+      const region = inferAliyunOssRegion(editing.backup_remote_endpoint || '') || 'cn-guangzhou';
+      next.backup_remote_region = region;
+      next.backup_remote_endpoint = getAliyunOssEndpoint(region, { internal: true });
+    } else if (nextProvider === 'cloudflare-r2') {
+      next.backup_remote_region = 'auto';
+      if (inferObjectStorageProvider(editing.backup_remote_endpoint || '') === 'aliyun-oss') {
+        next.backup_remote_endpoint = '';
+      }
+    } else if (inferObjectStorageProvider(editing.backup_remote_endpoint || '') === 'aliyun-oss') {
+      next.backup_remote_region = 'auto';
+      next.backup_remote_endpoint = '';
+    }
+    setEditing(next);
+  };
+  const setRemoteValue = (key: string, value: string) => {
+    const next = { ...editing, [key]: value };
+    if (remoteProvider === 'aliyun-oss' && key === 'backup_remote_region') {
+      next.backup_remote_endpoint = getAliyunOssEndpoint(value, { internal: true });
+    }
+    setEditing(next);
+  };
   const remoteRequiredKeys = [
     'backup_remote_bucket',
     'backup_remote_endpoint',
@@ -925,7 +967,7 @@ function BackupSettingsPanel({
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
             <div className="flex items-center gap-2">
               <Badge variant="secondary">备份策略</Badge>
-              <span className="text-sm text-muted-foreground">数据库备份、本地保留、备份 R2</span>
+              <span className="text-sm text-muted-foreground">数据库备份、本地保留、私有对象存储</span>
             </div>
             <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
@@ -1031,16 +1073,17 @@ function BackupSettingsPanel({
             <section className="space-y-3 rounded-md border p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-medium">备份 R2 远程存储</h3>
+                  <h3 className="text-sm font-medium">数据库备份对象存储</h3>
                   <p className="text-xs text-muted-foreground">
-                    这里是数据库备份专用 bucket，不影响图片/附件上传。建议使用单独 R2 token 和单独
-                    bucket。
+                    使用独立私有 Bucket 和专用访问凭证，不影响图片/附件对象存储。
                   </p>
                 </div>
                 <Button
                   size="sm"
                   onClick={() =>
-                    saveConfigs(BACKUP_REMOTE_KEYS, '备份 R2', { backup_remote_provider: 's3' })
+                    saveConfigs(BACKUP_REMOTE_KEYS, '数据库备份对象存储', {
+                      backup_remote_provider: remoteProvider,
+                    })
                   }
                   disabled={isSavingRemote || (remoteEnabled && missingRemote.length > 0)}
                   title={
@@ -1054,8 +1097,48 @@ function BackupSettingsPanel({
                   ) : (
                     <Save className="h-3.5 w-3.5" />
                   )}
-                  <span className="ml-1">保存备份 R2</span>
+                  <span className="ml-1">保存远程备份</span>
                 </Button>
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-3">
+                {(
+                  [
+                    { value: 'aliyun-oss', label: '阿里云 OSS', desc: '国内 ECS 走同地域内网' },
+                    { value: 'cloudflare-r2', label: 'Cloudflare R2', desc: '国外 VPS 备份' },
+                    { value: 's3-compatible', label: 'S3 兼容', desc: '其他私有对象存储' },
+                  ] as Array<{ value: ObjectStorageProvider; label: string; desc: string }>
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => applyRemoteProviderPreset(option.value)}
+                    className={`rounded-md border px-3 py-3 text-left transition-colors ${remoteProvider === option.value ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'hover:bg-muted/50'}`}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-950">
+                <p className="font-medium">备份桶安全边界</p>
+                <p className="mt-1">
+                  必须使用私有 Bucket；不要绑定 CDN，不要开启公共读，也不需要配置 CORS。数据库备份不得写入
+                  ozon-cdn 图片桶。
+                </p>
+                {remoteProvider === 'aliyun-oss' && (
+                  <p className="mt-1 font-mono">
+                    ECS 推荐内网 Endpoint：https://oss-{aliyunRegion}-internal.aliyuncs.com
+                  </p>
+                )}
+              </div>
+
+              <div className="rounded-md border bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">应急恢复凭证</p>
+                <p className="mt-1">
+                  另建只读恢复凭证并保存在服务器 root-only 文件中，不要只存于 ERP 数据库；数据库故障时仍应能独立下载备份。
+                </p>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -1073,25 +1156,48 @@ function BackupSettingsPanel({
                 <ConfigInput
                   cfg={configs.backup_remote_bucket}
                   editing={editing}
-                  setValue={setValue}
+                  setValue={setRemoteValue}
                   placeholder="ss-erp-backups"
                 />
                 <ConfigInput
                   cfg={configs.backup_remote_endpoint}
                   editing={editing}
-                  setValue={setValue}
-                  placeholder="https://<account-id>.r2.cloudflarestorage.com"
+                  setValue={setRemoteValue}
+                  placeholder={
+                    remoteProvider === 'aliyun-oss'
+                      ? 'https://oss-cn-guangzhou-internal.aliyuncs.com'
+                      : 'S3 API Endpoint'
+                  }
                 />
-                <ConfigInput
-                  cfg={configs.backup_remote_region}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="auto"
-                />
+                {remoteProvider === 'aliyun-oss' ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="backup-aliyun-region">阿里云地域</Label>
+                    <select
+                      id="backup-aliyun-region"
+                      value={aliyunRegion}
+                      onChange={(event) => setRemoteValue('backup_remote_region', event.target.value)}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      {ALIYUN_OSS_REGIONS.map((region) => (
+                        <option key={region.value} value={region.value}>
+                          {region.label} · {region.value}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">自动使用同地域 ECS 可访问的 OSS 内网 Endpoint。</p>
+                  </div>
+                ) : (
+                  <ConfigInput
+                    cfg={configs.backup_remote_region}
+                    editing={editing}
+                    setValue={setRemoteValue}
+                    placeholder="auto"
+                  />
+                )}
                 <ConfigInput
                   cfg={configs.backup_remote_prefix}
                   editing={editing}
-                  setValue={setValue}
+                  setValue={setRemoteValue}
                   placeholder="db/daily/"
                 />
                 <ConfigInput
@@ -1109,6 +1215,20 @@ function BackupSettingsPanel({
                   placeholder="Secret Access Key"
                 />
               </div>
+
+              {remoteProvider === 'aliyun-oss' && (
+                <details className="rounded-md border p-3">
+                  <summary className="cursor-pointer text-xs font-medium">
+                    数据库备份 RAM 最小权限
+                  </summary>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    为备份专用 RAM 用户创建 Bucket 级策略；不要复用图片上传用户或主账号 AccessKey。
+                  </p>
+                  <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-3 text-[11px]">
+                    {JSON.stringify(backupRamPolicy, null, 2)}
+                  </pre>
+                </details>
+              )}
             </section>
           </CardContent>
         </details>

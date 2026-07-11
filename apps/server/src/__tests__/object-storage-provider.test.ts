@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyObjectStorageProbeFailure,
   getAliyunOssRamPolicy,
+  getAliyunOssEndpoint,
+  inferAliyunOssRegion,
   getObjectStorageProviderPreset,
   inferObjectStorageProvider,
   resolveObjectStoragePublicUrl,
@@ -20,6 +22,16 @@ describe('object storage provider helpers', () => {
       endpoint: 'https://oss-cn-guangzhou.aliyuncs.com',
       publicDomain: 'https://ozon-cdn.oss-cn-guangzhou.aliyuncs.com',
     });
+  });
+
+  it('builds private Aliyun OSS internal endpoints and infers their region', () => {
+    expect(getAliyunOssEndpoint('cn-guangzhou', { internal: true })).toBe(
+      'https://oss-cn-guangzhou-internal.aliyuncs.com',
+    );
+    expect(
+      inferAliyunOssRegion('https://ss-erp-backups.oss-cn-shenzhen-internal.aliyuncs.com'),
+    ).toBe('cn-shenzhen');
+    expect(inferAliyunOssRegion('https://account.r2.cloudflarestorage.com')).toBeNull();
   });
 
   it('uses auto as the Cloudflare R2 region without inventing an endpoint', () => {

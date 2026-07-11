@@ -6,14 +6,22 @@ import { pipeline } from 'stream/promises';
 import { createGzip } from 'zlib';
 import {
   DeleteObjectsCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import {
+  getAliyunOssEndpoint,
+  inferAliyunOssRegion,
+  inferObjectStorageProvider,
+  type ObjectStorageProvider,
+} from 'shared/object-storage';
 import { getConfig } from '../config/system-config-schema.js';
 
 export interface BackupRemoteConfig {
+  provider: ObjectStorageProvider;
   endpoint: string;
   bucket: string;
   accessKeyId: string;
@@ -85,37 +93,57 @@ function backupStatusPath(localDir = resolveDefaultBackupDir()): string {
   return trimValue(process.env.BACKUP_STATUS_PATH) || path.join(localDir, 'backup-status.json');
 }
 
-function completeRemoteConfig(values: {
+interface BackupRemoteValues {
+  provider?: string;
   endpoint: string;
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
   region?: string;
   prefix?: string;
-}): BackupRemoteConfig | null {
-  if (!values.endpoint || !values.bucket || !values.accessKeyId || !values.secretAccessKey) return null;
-  return {
-    endpoint: values.endpoint.startsWith('http') ? values.endpoint : `https://${values.endpoint}`,
-    bucket: values.bucket,
-    accessKeyId: values.accessKeyId,
-    secretAccessKey: values.secretAccessKey,
-    region: values.region || 'auto',
-    prefix: normalizeRemotePrefix(values.prefix || 'db/'),
-  };
 }
 
-function missingRemoteFields(values: {
-  endpoint: string;
-  bucket: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-}): string[] {
+function normalizeBackupProvider(value: string | undefined, endpoint: string): ObjectStorageProvider {
+  if (value === 'aliyun-oss' || value === 'cloudflare-r2' || value === 's3-compatible') return value;
+  return inferObjectStorageProvider(endpoint);
+}
+
+export function resolveBackupRemoteConfig(values: BackupRemoteValues): {
+  remote: BackupRemoteConfig | null;
+  missing: string[];
+} {
+  const provider = normalizeBackupProvider(trimValue(values.provider), trimValue(values.endpoint));
+  const configuredEndpoint = trimValue(values.endpoint);
+  const configuredRegion = trimValue(values.region);
+  const inferredAliyunRegion = provider === 'aliyun-oss' ? inferAliyunOssRegion(configuredEndpoint) : null;
+  const region = provider === 'aliyun-oss'
+    ? configuredRegion && configuredRegion !== 'auto'
+      ? configuredRegion
+      : inferredAliyunRegion || 'cn-guangzhou'
+    : configuredRegion || 'auto';
+  const endpoint = configuredEndpoint || (provider === 'aliyun-oss'
+    ? getAliyunOssEndpoint(region, { internal: true })
+    : '');
+  const normalizedEndpoint = endpoint && !endpoint.startsWith('http') ? `https://${endpoint}` : endpoint;
   const missing: string[] = [];
-  if (!values.endpoint) missing.push('Endpoint');
+  if (!normalizedEndpoint) missing.push('Endpoint');
   if (!values.bucket) missing.push('Bucket');
   if (!values.accessKeyId) missing.push('Access Key ID');
   if (!values.secretAccessKey) missing.push('Secret Access Key');
-  return missing;
+  if (missing.length > 0) return { remote: null, missing };
+
+  return {
+    remote: {
+      provider,
+      endpoint: normalizedEndpoint,
+      bucket: values.bucket,
+      accessKeyId: values.accessKeyId,
+      secretAccessKey: values.secretAccessKey,
+      region,
+      prefix: normalizeRemotePrefix(values.prefix || 'db/'),
+    },
+    missing: [],
+  };
 }
 
 export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
@@ -125,6 +153,7 @@ export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
     localKeepDays,
     remoteEnabled,
     remoteKeepDays,
+    remoteProvider,
     remoteBucket,
     remoteEndpoint,
     remoteRegion,
@@ -137,6 +166,7 @@ export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
     getConfig('backup_local_keep_days'),
     getConfig('backup_remote_enabled'),
     getConfig('backup_remote_keep_days'),
+    getConfig('backup_remote_provider'),
     getConfig('backup_remote_bucket'),
     getConfig('backup_remote_endpoint'),
     getConfig('backup_remote_region'),
@@ -146,6 +176,7 @@ export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
   ]);
 
   const dbValues = {
+    provider: trimValue(remoteProvider),
     endpoint: trimValue(remoteEndpoint),
     bucket: trimValue(remoteBucket),
     accessKeyId: trimValue(remoteAccessKeyId),
@@ -153,9 +184,11 @@ export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
     region: trimValue(remoteRegion) || 'auto',
     prefix: trimValue(remotePrefix) || 'db/',
   };
-  const dbRemote = remoteEnabled ? completeRemoteConfig(dbValues) : null;
+  const dbResolution = resolveBackupRemoteConfig(dbValues);
+  const dbRemote = remoteEnabled ? dbResolution.remote : null;
 
   const envValues = {
+    provider: trimValue(process.env.BACKUP_S3_PROVIDER),
     endpoint: trimValue(process.env.BACKUP_S3_ENDPOINT),
     bucket: trimValue(process.env.BACKUP_S3_BUCKET),
     accessKeyId: trimValue(process.env.BACKUP_S3_ACCESS_KEY_ID),
@@ -163,10 +196,11 @@ export async function getBackupRuntimeConfig(): Promise<BackupRuntimeConfig> {
     region: trimValue(process.env.BACKUP_S3_REGION) || 'auto',
     prefix: trimValue(process.env.BACKUP_S3_PREFIX) || 'db/',
   };
-  const envRemote = completeRemoteConfig(envValues);
+  const envResolution = resolveBackupRemoteConfig(envValues);
+  const envRemote = envResolution.remote;
   const remote = dbRemote || (!remoteEnabled ? envRemote : null);
   const remoteSource = dbRemote ? 'system-config' : envRemote && !remoteEnabled ? 'env' : 'none';
-  const remoteMissing = remoteEnabled ? missingRemoteFields(dbValues) : missingRemoteFields(envValues);
+  const remoteMissing = remoteEnabled ? dbResolution.missing : envResolution.missing;
 
   return {
     enabled: Boolean(enabled),
@@ -560,6 +594,17 @@ export async function testBackupRemoteStorage(): Promise<{ ok: boolean; msg: str
   });
 
   if (putOk) {
+    await step('getObject', '读回并校验备份测试对象', true, async () => {
+      const result = await client.send(new GetObjectCommand({
+        Bucket: remote.bucket,
+        Key: testKey,
+      }));
+      if (!result.Body) throw new Error('读取成功但响应内容为空');
+      const readBack = await result.Body.transformToString('utf-8');
+      if (readBack !== body) throw new Error('读回内容与写入内容不一致');
+      return `已读回并校验 ${Buffer.byteLength(readBack, 'utf8')} bytes`;
+    });
+
     await step('deleteObject', '删除备份测试对象', true, async () => {
       await client.send(new DeleteObjectsCommand({
         Bucket: remote.bucket,
@@ -569,6 +614,13 @@ export async function testBackupRemoteStorage(): Promise<{ ok: boolean; msg: str
       return '测试对象已删除';
     });
   } else {
+    steps.push({
+      key: 'getObject',
+      label: '读回并校验备份测试对象',
+      status: 'skip',
+      detail: '写入失败，跳过读回校验',
+      critical: true,
+    });
     steps.push({
       key: 'deleteObject',
       label: '删除备份测试对象',

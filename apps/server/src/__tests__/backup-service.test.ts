@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configStore = new Map<string, any>();
+const s3Mocks = vi.hoisted(() => ({ send: vi.fn() }));
 
 vi.mock('../config/system-config-schema.js', () => ({
   getConfig: vi.fn(async (key: string) => configStore.get(key) ?? ''),
 }));
 
+vi.mock('@aws-sdk/client-s3', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@aws-sdk/client-s3')>();
+  return { ...actual, S3Client: class { send = s3Mocks.send; } };
+});
+
 describe('backup service config', () => {
   beforeEach(() => {
     configStore.clear();
+    s3Mocks.send.mockReset();
     vi.resetModules();
     vi.unstubAllEnvs();
   });
@@ -87,6 +94,135 @@ describe('backup service config', () => {
     const config = await getBackupRuntimeConfig();
     expect(config.localDir.replaceAll('\\', '/')).toMatch(/\/shared\/backups$/);
     expect(config.localDir).not.toBe('/var/backups/ss-erp');
+  });
+
+  it('derives the Aliyun OSS internal endpoint for a private backup bucket', async () => {
+    configStore.set('backup_enabled', true);
+    configStore.set('backup_schedule', '0 3 * * *');
+    configStore.set('backup_local_keep_days', 7);
+    configStore.set('backup_remote_enabled', true);
+    configStore.set('backup_remote_keep_days', 90);
+    configStore.set('backup_remote_provider', 'aliyun-oss');
+    configStore.set('backup_remote_bucket', 'ss-erp-cn-db-backups');
+    configStore.set('backup_remote_endpoint', '');
+    configStore.set('backup_remote_region', 'cn-guangzhou');
+    configStore.set('backup_remote_prefix', 'production/postgresql/daily');
+    configStore.set('backup_remote_access_key_id', 'backup-ak');
+    configStore.set('backup_remote_secret_access_key', 'backup-sk');
+
+    const { getBackupRuntimeConfig } = await import('../services/backup.service.js');
+
+    await expect(getBackupRuntimeConfig()).resolves.toMatchObject({
+      remoteSource: 'system-config',
+      remoteMissing: [],
+      remote: {
+        provider: 'aliyun-oss',
+        endpoint: 'https://oss-cn-guangzhou-internal.aliyuncs.com',
+        region: 'cn-guangzhou',
+        bucket: 'ss-erp-cn-db-backups',
+        prefix: 'production/postgresql/daily/',
+      },
+    });
+  });
+
+  it('infers the Aliyun region from an explicitly configured internal endpoint', async () => {
+    configStore.set('backup_enabled', true);
+    configStore.set('backup_schedule', '0 3 * * *');
+    configStore.set('backup_local_keep_days', 7);
+    configStore.set('backup_remote_enabled', true);
+    configStore.set('backup_remote_keep_days', 90);
+    configStore.set('backup_remote_provider', 'aliyun-oss');
+    configStore.set('backup_remote_bucket', 'ss-erp-cn-db-backups');
+    configStore.set('backup_remote_endpoint', 'https://oss-cn-shenzhen-internal.aliyuncs.com');
+    configStore.set('backup_remote_region', 'auto');
+    configStore.set('backup_remote_prefix', 'db/');
+    configStore.set('backup_remote_access_key_id', 'backup-ak');
+    configStore.set('backup_remote_secret_access_key', 'backup-sk');
+
+    const { getBackupRuntimeConfig } = await import('../services/backup.service.js');
+
+    await expect(getBackupRuntimeConfig()).resolves.toMatchObject({
+      remote: {
+        provider: 'aliyun-oss',
+        endpoint: 'https://oss-cn-shenzhen-internal.aliyuncs.com',
+        region: 'cn-shenzhen',
+      },
+    });
+  });
+});
+
+describe('backup remote storage diagnostics', () => {
+  beforeEach(() => {
+    configStore.clear();
+    s3Mocks.send.mockReset();
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    configStore.set('backup_enabled', true);
+    configStore.set('backup_schedule', '0 3 * * *');
+    configStore.set('backup_local_keep_days', 7);
+    configStore.set('backup_remote_enabled', true);
+    configStore.set('backup_remote_keep_days', 90);
+    configStore.set('backup_remote_provider', 'aliyun-oss');
+    configStore.set('backup_remote_bucket', 'ss-erp-cn-db-backups');
+    configStore.set('backup_remote_endpoint', 'https://oss-cn-guangzhou-internal.aliyuncs.com');
+    configStore.set('backup_remote_region', 'cn-guangzhou');
+    configStore.set('backup_remote_prefix', 'db/');
+    configStore.set('backup_remote_access_key_id', 'backup-ak');
+    configStore.set('backup_remote_secret_access_key', 'backup-sk');
+  });
+
+  it('writes, reads back, verifies, and deletes a private bucket test object', async () => {
+    let writtenBody = '';
+    s3Mocks.send.mockImplementation(async (command: any) => {
+      const commandName = command.constructor.name;
+      if (commandName === 'HeadBucketCommand') throw new Error('AccessDenied');
+      if (commandName === 'PutObjectCommand') {
+        writtenBody = Buffer.from(command.input.Body).toString('utf8');
+        return {};
+      }
+      if (commandName === 'GetObjectCommand') {
+        return { Body: { transformToString: async () => writtenBody } };
+      }
+      if (commandName === 'DeleteObjectsCommand') return {};
+      throw new Error(`Unexpected command: ${commandName}`);
+    });
+
+    const { testBackupRemoteStorage } = await import('../services/backup.service.js');
+    const result = await testBackupRemoteStorage();
+
+    expect(result.ok).toBe(true);
+    expect(result.data.steps.map((step) => [step.key, step.status])).toEqual([
+      ['headBucket', 'warn'],
+      ['putObject', 'pass'],
+      ['getObject', 'pass'],
+      ['deleteObject', 'pass'],
+    ]);
+    expect(s3Mocks.send.mock.calls.map(([command]) => command.constructor.name)).toEqual([
+      'HeadBucketCommand',
+      'PutObjectCommand',
+      'GetObjectCommand',
+      'DeleteObjectsCommand',
+    ]);
+  });
+
+  it('fails integrity validation but still deletes the test object when read-back content differs', async () => {
+    s3Mocks.send.mockImplementation(async (command: any) => {
+      const commandName = command.constructor.name;
+      if (commandName === 'GetObjectCommand') {
+        return { Body: { transformToString: async () => 'corrupted' } };
+      }
+      return {};
+    });
+
+    const { testBackupRemoteStorage } = await import('../services/backup.service.js');
+    const result = await testBackupRemoteStorage();
+
+    expect(result.ok).toBe(false);
+    expect(result.data.steps.find((step) => step.key === 'getObject')).toMatchObject({
+      status: 'fail',
+      critical: true,
+    });
+    expect(result.data.steps.find((step) => step.key === 'deleteObject')?.status).toBe('pass');
   });
 });
 
