@@ -11,13 +11,13 @@ const baseJob: AiImageJobRecord = {
   providerJobId: 'provider-1', errorCode: null, errorMessage: null,
 };
 
-async function buildApp(ownerUserId = 'owner-1') {
+async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
   const repository: AiImageJobRepository = {
     getById: vi.fn(async () => baseJob),
     createWithQuota: vi.fn(async () => ({ kind: 'created' as const, job: { ...baseJob, status: 'QUEUED' as const } })),
     requestCancellation: vi.fn(async (_id, owner) => owner === 'owner-1' ? { ...baseJob, status: 'CANCEL_REQUESTED' as const } : null),
     recordApplication: vi.fn(async (_id, data) => ({ ...baseJob, appliedMode: data.mode })),
-    markRunning: vi.fn(), markRetrying: vi.fn(), markFailed: vi.fn(), markCancelled: vi.fn(), complete: vi.fn(),
+    markRunning: vi.fn(async () => true), markRetrying: vi.fn(), markFailed: vi.fn(), markCancelled: vi.fn(), complete: vi.fn(),
   };
   const enqueue = vi.fn(async () => undefined);
   const app = Fastify();
@@ -27,7 +27,7 @@ async function buildApp(ownerUserId = 'owner-1') {
     authenticate: async (request: FastifyRequest) => {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1', role: 'USER' };
     },
-    getSettings: async () => ({ enabled: true, provider: 'fake', model: 'fake-image-v1', dailyLimit: 5, estimatedCostCents: 4 }),
+    getSettings: async () => ({ enabled: true, provider, model: provider === 'fake' ? 'fake-image-v1' : 'wanx-v1', dailyLimit: 5, estimatedCostCents: 4 }),
   });
   return { app, repository, enqueue };
 }
@@ -62,5 +62,19 @@ describe('AI image job routes', () => {
     const valid = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: { mode: 'replace', targetType: 'collect', targetId: 'item-1' } });
     expect(valid.statusCode).toBe(200);
     expect(repository.recordApplication).toHaveBeenCalledWith('job-1', expect.objectContaining({ mode: 'replace' }));
+    expect(valid.json().data).toEqual(expect.objectContaining({ jobId: 'job-1', mode: 'replace', targetType: 'collect', targetId: 'item-1' }));
+  });
+  it('accepts supported real providers and rejects unsupported custom adapters', async () => {
+    const { app: dashscope, enqueue } = await buildApp('owner-1', 'dashscope-wanx');
+    const accepted = await dashscope.inject({
+      method: 'POST', url: '/jobs',
+      payload: { prompt: 'photo', count: 1, width: 1024, height: 1024, idempotencyKey: 'idem-real-1' },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(enqueue).toHaveBeenCalledWith('job-1');
+
+    const { app: custom } = await buildApp('owner-1', 'custom');
+    const rejected = await custom.inject({ method: 'POST', url: '/jobs', payload: { prompt: 'photo' } });
+    expect(rejected.statusCode).toBe(503);
   });
 });

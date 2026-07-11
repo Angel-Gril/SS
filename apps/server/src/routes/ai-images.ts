@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { AiImageJobError, applyAiImageJob, createAiImageJob, type AiImageJobRepository } from '../services/ai-image-jobs.js';
+import { AiImageApplicationError, applyAiImageAssets } from '../services/ai-image-application.js';
 
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(8000),
@@ -16,7 +17,7 @@ const createSchema = z.object({
 });
 const applySchema = z.object({
   mode: z.enum(['append', 'replace']),
-  targetType: z.string().trim().min(1).max(64),
+  targetType: z.enum(['collect', 'product']),
   targetId: z.string().trim().min(1).max(128),
 });
 
@@ -44,6 +45,10 @@ function actor(request: FastifyRequest) {
 }
 
 function sendError(reply: any, error: unknown) {
+  if (error instanceof AiImageApplicationError) {
+    const status = error.code === 'NOT_FOUND' ? 404 : error.code === 'ALREADY_APPLIED' ? 409 : 400;
+    return reply.status(status).send({ code: error.code, msg: error.message });
+  }
   if (error instanceof AiImageJobError) {
     const status = error.code === 'NOT_FOUND' ? 404 : error.code === 'QUOTA_EXCEEDED' ? 429 : error.code === 'PROVIDER_DISABLED' ? 503 : 400;
     return reply.status(status).send({ code: error.code, msg: error.message });
@@ -73,7 +78,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
     const settings = await getSettings();
     if (!settings.enabled || settings.provider === 'disabled') return reply.status(503).send({ code: 'PROVIDER_DISABLED', msg: 'AI image generation is disabled' });
-    if (settings.provider !== 'fake') return reply.status(503).send({ code: 'PROVIDER_NOT_READY', msg: 'AI image provider adapter is not enabled yet' });
+    if (!['fake', 'dashscope-wanx', 'openai-images'].includes(settings.provider)) {
+      return reply.status(503).send({ code: 'PROVIDER_NOT_READY', msg: 'AI image provider adapter is not enabled yet' });
+    }
     const ids = actor(request);
     try {
       const result = await createAiImageJob({
@@ -119,8 +126,14 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
     const { id } = request.params as { id: string };
     try {
-      const job = await applyAiImageJob(id, actor(request).ownerUserId, parsed.data, repository);
-      return { code: 1, data: job };
+      let application;
+      if (options.repository) {
+        await applyAiImageJob(id, actor(request).ownerUserId, parsed.data, repository);
+        application = { jobId: id, ...parsed.data };
+      } else {
+        application = await applyAiImageAssets(prisma as any, { jobId: id, ownerUserId: actor(request).ownerUserId, ...parsed.data });
+      }
+      return { code: 1, data: application };
     } catch (error) { return sendError(reply, error); }
   });
 }

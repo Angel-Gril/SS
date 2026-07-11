@@ -68,10 +68,11 @@ export interface AiImageAssetInput {
 
 export interface AiImageJobRepository {
   getById(id: string): Promise<AiImageJobRecord | null>;
-  markRunning(id: string, attemptCount: number): Promise<void>;
+  markRunning(id: string, attemptCount: number): Promise<boolean>;
   markRetrying(id: string, data: FailureUpdate): Promise<void>;
   markFailed(id: string, data: FailureUpdate): Promise<void>;
   markCancelled(id: string): Promise<void>;
+  recordProviderJobId?(id: string, providerJobId: string): Promise<void>;
   complete(id: string, data: {
     providerJobId: string | null;
     actualCostCents: number;
@@ -163,6 +164,7 @@ export async function runAiImageJob(
       mimeType?: string,
       options?: { category?: 'ai-generated'; ownerId?: string },
     ) => Promise<{ url: string; backend: string; filename?: string; key?: string }>;
+    maxAttempts?: number;
   },
 ) {
   const job = await deps.repository.getById(jobId);
@@ -173,7 +175,8 @@ export async function runAiImageJob(
   }
   if (job.status === 'SUCCEEDED') return;
 
-  await deps.repository.markRunning(job.id, attemptNumber);
+  const claimed = await deps.repository.markRunning(job.id, attemptNumber);
+  if (!claimed) return;
   try {
     const generated = await deps.provider.generate({
       prompt: job.prompt,
@@ -215,7 +218,7 @@ export async function runAiImageJob(
     });
   } catch (error) {
     const details = { attemptCount: attemptNumber, ...errorDetails(error) };
-    if (attemptNumber < job.maxAttempts) await deps.repository.markRetrying(job.id, details);
+    if (attemptNumber < (deps.maxAttempts ?? job.maxAttempts)) await deps.repository.markRetrying(job.id, details);
     else await deps.repository.markFailed(job.id, details);
     throw error;
   }

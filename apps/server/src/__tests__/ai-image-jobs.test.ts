@@ -43,7 +43,7 @@ function repository(initial = job()) {
   const repo: AiImageJobRepository = {
     getById: vi.fn(async () => current),
     markRunning: vi.fn(async (_id, attemptCount) => {
-      current = { ...current, status: 'RUNNING', attemptCount };
+      current = { ...current, status: 'RUNNING', attemptCount }; return true;
     }),
     markRetrying: vi.fn(async (_id, data) => {
       current = { ...current, status: 'RETRYING', attemptCount: data.attemptCount, errorCode: data.errorCode, errorMessage: data.errorMessage };
@@ -189,4 +189,15 @@ describe('AI image job foundation', () => {
     expect(schema).toContain('actualCostCents');
     expect(schema).toContain('billedUnits');
   });
+  it('does not invoke a paid provider when another worker already claimed the job', async () => {
+    const state = repository();
+    state.repo.markRunning = vi.fn(async () => false) as any;
+    const provider = { name: 'openai-images', generate: vi.fn() };
+
+    await runAiImageJob('job-1', 1, { repository: state.repo, provider, uploadBuffer: vi.fn() });
+
+    expect(provider.generate).not.toHaveBeenCalled();
+    expect(state.repo.complete).not.toHaveBeenCalled();
+  });
+
 });

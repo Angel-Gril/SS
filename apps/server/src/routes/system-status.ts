@@ -8,6 +8,7 @@ import { getConfig } from '../config/system-config-schema.js';
 import { getSmsRuntimeConfig, getTurnstileRuntimeConfig } from '../lib/auth-challenge-config.js';
 import { getSmsProvider } from '../lib/sms/index.js';
 import { getBackupRuntimeConfig, testBackupRemoteStorage } from '../services/backup.service.js';
+import { testAiImageProviderConnection } from '../services/ai-image-providers.js';
 import {
   classifyObjectStorageProbeFailure,
   inferObjectStorageProvider,
@@ -593,7 +594,12 @@ export async function systemStatusRoutes(app: FastifyInstance) {
       provider === 'custom' && !baseUrl && 'Base URL',
     ].filter(Boolean);
     if (missing.length) return reply.send({ code: 0, msg: `AI 生图配置不完整：缺少 ${missing.join('、')}` });
-    return reply.send({ code: 1, msg: `${provider} 配置已加载；真实供应商连通性将在适配器启用后验证` });
+    try {
+      const result = await testAiImageProviderConnection({ provider, baseUrl, apiKey, model });
+      return reply.send({ code: 1, msg: result.detail, data: result });
+    } catch (error: any) {
+      return reply.send({ code: 0, msg: error?.message || 'AI 生图连接测试失败' });
+    }
   });
   app.post('/test/sentry', async (_request, reply) => {
     if (!process.env.SENTRY_DSN) return reply.send({ code: 0, msg: 'SENTRY_DSN 未配置' });

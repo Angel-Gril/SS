@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, Pencil, Trash2, Eye, Image as ImageIcon, Palette, Maximize2 } from 'lucide-react';
+import { Loader2, Plus, Pencil, Trash2, Eye, Image as ImageIcon, Palette, Maximize2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
+import { AiImageWorkbench } from '@/components/ai-image-workbench';
 
 interface WatermarkTemplate {
   id: string;
@@ -37,7 +38,7 @@ const POSITION_OPTIONS = [
   { value: 'tile', label: '平铺' },
 ];
 
-type Tab = 'watermark' | 'resize';
+type Tab = 'watermark' | 'resize' | 'ai';
 
 export default function ImageProcessingPage() {
   const [activeTab, setActiveTab] = useState<Tab>('watermark');
@@ -48,7 +49,7 @@ export default function ImageProcessingPage() {
         <h1 className="text-2xl font-semibold flex items-center gap-2">
           <ImageIcon className="h-6 w-6" /> 图片处理
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">水印添加、批量改分辨率等图片处理功能</p>
+        <p className="text-sm text-muted-foreground mt-1">水印、批量改分辨率与 AI 生图等图片处理功能</p>
       </div>
 
       <div className="border-b flex gap-1">
@@ -68,9 +69,17 @@ export default function ImageProcessingPage() {
         >
           <Maximize2 className="h-4 w-4 inline mr-1" /> 批量改分辨率
         </button>
+        <button
+          onClick={() => setActiveTab('ai')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+            activeTab === 'ai' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Sparkles className="h-4 w-4 inline mr-1" /> AI 生图/改图
+        </button>
       </div>
 
-      {activeTab === 'watermark' ? <WatermarkPanel /> : <ResizePanel />}
+      {activeTab === 'watermark' ? <WatermarkPanel /> : activeTab === 'resize' ? <ResizePanel /> : <AiImageWorkbench />}
     </div>
   );
 }

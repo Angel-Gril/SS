@@ -32,8 +32,12 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
       throw error;
     }
   }
-  async markRunning(id: string, attemptCount: number) { await (this.prisma as any).aiImageJob.update({ where: { id }, data: { status: 'RUNNING', attemptCount, progress: 10, startedAt: new Date(), errorCode: null, errorMessage: null } }); }
+  async markRunning(id: string, attemptCount: number) {
+    const result = await (this.prisma as any).aiImageJob.updateMany({ where: { id, status: { in: ['PENDING', 'QUEUED', 'RETRYING'] } }, data: { status: 'RUNNING', attemptCount, progress: 10, startedAt: new Date(), errorCode: null, errorMessage: null } });
+    return result.count === 1;
+  }
   async markRetrying(id: string, data: any) { await (this.prisma as any).aiImageJob.update({ where: { id }, data: { status: 'RETRYING', progress: 0, ...data } }); }
+  async recordProviderJobId(id: string, providerJobId: string) { await (this.prisma as any).aiImageJob.update({ where: { id }, data: { providerJobId } }); }
   async markFailed(id: string, data: any) { await (this.prisma as any).aiImageJob.update({ where: { id }, data: { status: 'FAILED', progress: 0, billedUnits: 0, completedAt: new Date(), ...data } }); }
   async markCancelled(id: string) { await (this.prisma as any).aiImageJob.update({ where: { id }, data: { status: 'CANCELLED', progress: 0, billedUnits: 0, completedAt: new Date() } }); }
   async complete(id: string, data: { providerJobId: string | null; actualCostCents: number; billedUnits: number; assets: AiImageAssetInput[] }) {
