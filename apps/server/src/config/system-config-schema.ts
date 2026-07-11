@@ -48,7 +48,7 @@ export const SystemConfigSchema = {
     .default(
       'Generate Russian Ozon-localized product copy from the source product profile. Use only verified facts and return JSON with description, bulletPoints, searchTags, warnings, confidence.',
     ),
-  ai_image_provider: z.enum(['disabled', 'custom']).default('disabled'),
+  ai_image_provider: z.enum(['disabled', 'dashscope-wanx', 'openai-images', 'custom']).default('disabled'),
   ai_image_base_url: z.string().default(''),
   ai_image_api_key: z.string().default(''),
   ai_image_model: z.string().default(''),

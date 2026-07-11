@@ -13,6 +13,7 @@ import { startDatabaseBackupWorker } from './workers/database-backup.js';
 import { startRechargeTimeoutWorker } from './workers/recharge-timeout.js';
 import { startListingTaskRefreshWorker } from './workers/listing-task-refresh.js';
 import { startBrowserOneClickListingWorker } from './workers/browser-one-click-listing.js';
+import { startAiImageGenerationWorker } from './workers/ai-image-generation.js';
 import { shutdownAllWorkers } from './lib/worker-registry.js';
 
 console.log('[worker] starting all workers as standalone process...');
@@ -24,6 +25,7 @@ startDatabaseBackupWorker();
 startRechargeTimeoutWorker();
 startListingTaskRefreshWorker();
 startBrowserOneClickListingWorker();
+startAiImageGenerationWorker();
 startProductSyncWorker();
 startOrderSyncWorker();
 startSoloBillingWorker();

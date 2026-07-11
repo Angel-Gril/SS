@@ -1294,6 +1294,9 @@ const AI_IMAGE_PROVIDER_KEYS = [
   'ai_image_base_url',
   'ai_image_api_key',
   'ai_image_model',
+  'ai_image_prompt',
+  'ai_user_daily_image_generation_limit',
+  'ai_daily_budget_cents',
 ];
 
 const AI_LIMIT_KEYS = [
@@ -1302,6 +1305,24 @@ const AI_LIMIT_KEYS = [
   'ai_user_daily_product_generation_limit',
   'ai_user_daily_image_generation_limit',
 ];
+
+const AI_IMAGE_PROVIDER_PRESETS = [
+  { value: 'disabled', label: '关闭', desc: '不允许创建新的生图任务', baseUrl: '', model: '' },
+  {
+    value: 'dashscope-wanx',
+    label: '阿里云百炼 · 通义万相',
+    desc: '适合国内部署，使用 DashScope 图像生成接口',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+    model: 'wanx2.1-t2i-turbo',
+  },
+  {
+    value: 'openai-images',
+    label: 'OpenAI Images',
+    desc: '适合国外部署，使用 OpenAI Images API',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-image-1',
+  },
+] as const;
 
 const AI_FEATURE_KEYS = [
   'ai_category_translation_enabled',
@@ -1326,6 +1347,12 @@ function AiSettingsPanel({
 }: AiSettingsPanelProps) {
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const provider = editing.ai_provider || 'disabled';
+  const imageProvider = editing.ai_image_provider || 'disabled';
+  const [testingImageProvider, setTestingImageProvider] = useState(false);
+  const [imageTestResult, setImageTestResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const isSavingProvider = savingKey === 'group:AI 服务';
   const isSavingLimits = savingKey === 'group:AI 额度';
@@ -1336,6 +1363,47 @@ function AiSettingsPanel({
     (editing.ai_base_url || '').trim() &&
     (editing.ai_api_key || '').trim() &&
     (editing.ai_model || '').trim();
+  const imageProviderReady =
+    imageProvider !== 'disabled' &&
+    Boolean((editing.ai_image_base_url || '').trim()) &&
+    Boolean((editing.ai_image_api_key || '').trim()) &&
+    Boolean((editing.ai_image_model || '').trim());
+
+  function selectImageProvider(nextProvider: (typeof AI_IMAGE_PROVIDER_PRESETS)[number]) {
+    setImageTestResult(null);
+    setEditing({
+      ...editing,
+      ai_image_provider: nextProvider.value,
+      ai_image_base_url: nextProvider.baseUrl,
+      ai_image_model: nextProvider.model,
+    });
+  }
+
+  async function testAiImageProvider() {
+    setTestingImageProvider(true);
+    setImageTestResult(null);
+    const res = await api.post<{ detail?: string; provider?: string }>(
+      '/api/admin/system-status/test/ai-image',
+      {
+        provider: imageProvider,
+        baseUrl: editing.ai_image_base_url || '',
+        apiKey: editing.ai_image_api_key || '',
+        model: editing.ai_image_model || '',
+      },
+    );
+    setTestingImageProvider(false);
+    const message =
+      res.data?.detail ||
+      res.msg ||
+      (res.code === 1 ? '供应商连接正常' : '连接测试失败，请检查配置');
+    setImageTestResult({ ok: res.code === 1, message });
+    toast({
+      title: res.code === 1 ? '生图连接正常' : '生图连接失败',
+      description: message,
+      ...(res.code === 1 ? {} : { variant: 'destructive' as const }),
+    });
+  }
+
 
   return (
     <div className="space-y-4">
@@ -1457,55 +1525,131 @@ function AiSettingsPanel({
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <h3 className="text-sm font-medium">生图/改图接口</h3>
-                  <p className="text-xs text-muted-foreground">
-                    预留 MiniMax
-                    或其他图片生成/重绘网关配置；当前只保存参数，后续图片处理流程会读取这里。
+                  <h3 className="text-sm font-medium">AI 生图基础平台</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    任务与存储基础已就绪；真实供应商调用尚未启用。这里先完成统一配置契约，
+                    后续 Provider 适配器将直接读取同一组参数。
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Badge variant="outline">任务队列：基础就绪</Badge>
+                    <Badge variant="outline">对象存储：基础就绪</Badge>
+                    <Badge variant={imageProviderReady ? 'default' : 'secondary'}>
+                      {imageProviderReady ? '供应商配置完整' : '等待供应商配置'}
+                    </Badge>
+                  </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
-                  disabled={savingKey === 'group:AI 生图服务'}
-                >
-                  {savingKey === 'group:AI 生图服务' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Save className="h-3.5 w-3.5" />
-                  )}
-                  <span className="ml-1">保存生图接口</span>
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={testAiImageProvider}
+                    disabled={!imageProviderReady || testingImageProvider}
+                  >
+                    {testingImageProvider ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                    )}
+                    <span className="ml-1">测试生图连接</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
+                    disabled={savingKey === 'group:AI 生图服务'}
+                  >
+                    {savingKey === 'group:AI 生图服务' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
+                    <span className="ml-1">保存生图配置</span>
+                  </Button>
+                </div>
               </div>
+
+              <div className="grid gap-2 lg:grid-cols-3">
+                {AI_IMAGE_PROVIDER_PRESETS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => selectImageProvider(option)}
+                    className={[
+                      'rounded-md border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      imageProvider === option.value
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/50',
+                    ].join(' ')}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+
               <div className="grid gap-3 md:grid-cols-2">
-                <ConfigInput
-                  cfg={configs.ai_image_provider}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="disabled / custom"
-                />
                 <ConfigInput
                   cfg={configs.ai_image_base_url}
                   editing={editing}
                   setValue={setValue}
-                  placeholder="https://api.minimax.chat/v1"
-                />
-                <ConfigInput
-                  cfg={configs.ai_image_api_key}
-                  editing={editing}
-                  setValue={setValue}
-                  type="password"
-                  placeholder="Image API Key"
+                  placeholder="选择 Provider 后自动填充"
                 />
                 <ConfigInput
                   cfg={configs.ai_image_model}
                   editing={editing}
                   setValue={setValue}
-                  placeholder="image model id"
+                  placeholder="选择 Provider 后自动填充"
                 />
+                <SecretConfigInput
+                  cfg={configs.ai_image_api_key}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="填写供应商 API Key"
+                />
+                <ConfigInput
+                  cfg={configs.ai_user_daily_image_generation_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="5"
+                />
+                <ConfigInput
+                  cfg={configs.ai_daily_budget_cents}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="0 表示不设置预算上限"
+                />
+                <div className="md:col-span-2">
+                  <ConfigInput
+                    cfg={configs.ai_image_prompt}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="默认提示词：主体保持一致、背景干净、适合跨境电商商品图"
+                  />
+                </div>
               </div>
+
+              <p className="text-xs text-muted-foreground">
+                测试只验证配置与供应商连通性，不生成图片，也不消耗用户每日图片额度。
+              </p>
+
+              {imageTestResult && (
+                <div
+                  className={[
+                    'flex items-start gap-2 rounded-md border px-3 py-2 text-xs',
+                    imageTestResult.ok
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                      : 'border-destructive/30 bg-destructive/5 text-destructive',
+                  ].join(' ')}
+                >
+                  {imageTestResult.ok ? (
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span>{imageTestResult.message}</span>
+                </div>
+              )}
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
@@ -2191,6 +2335,43 @@ function UploadSettingsPanel({
           </CardContent>
         </details>
       </Card>
+    </div>
+  );
+}
+
+function SecretConfigInput({
+  cfg,
+  editing,
+  setValue,
+  placeholder,
+}: {
+  cfg?: SystemConfig;
+  editing: Record<string, string>;
+  setValue: (key: string, value: string) => void;
+  placeholder?: string;
+}) {
+  if (!cfg) return null;
+  const value = editing[cfg.key] || '';
+  const hasSavedSecret = value === '***MASKED***';
+  return (
+    <div className="space-y-1.5">
+      <div>
+        <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
+        <code className="ml-2 text-[11px] text-muted-foreground">{cfg.key}</code>
+      </div>
+      {cfg.description && <p className="text-xs text-muted-foreground">{cfg.description}</p>}
+      <Input
+        type="password"
+        autoComplete="new-password"
+        value={value === '***MASKED***' ? '' : value}
+        onChange={(event) => setValue(cfg.key, event.target.value)}
+        placeholder={hasSavedSecret ? '留空保留已保存密钥' : placeholder}
+      />
+      <p className="text-xs text-muted-foreground">
+        {hasSavedSecret
+          ? '密钥已保存；留空表示保留原密钥'
+          : '密钥保存后不会回显；再次输入将覆盖原密钥'}
+      </p>
     </div>
   );
 }

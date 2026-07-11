@@ -576,6 +576,25 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post('/test/ai-image', async (_request, reply) => {
+    const [enabled, provider, baseUrl, apiKey, model] = await Promise.all([
+      getConfig('ai_image_generation_enabled'),
+      getConfig('ai_image_provider'),
+      getConfig('ai_image_base_url'),
+      getConfig('ai_image_api_key'),
+      getConfig('ai_image_model'),
+    ]);
+    if (!enabled || provider === 'disabled') {
+      return reply.send({ code: 1, msg: 'AI 生图当前已关闭，基础任务与存储平台可用' });
+    }
+    const missing = [
+      !apiKey && 'API Key',
+      !model && '模型',
+      provider === 'custom' && !baseUrl && 'Base URL',
+    ].filter(Boolean);
+    if (missing.length) return reply.send({ code: 0, msg: `AI 生图配置不完整：缺少 ${missing.join('、')}` });
+    return reply.send({ code: 1, msg: `${provider} 配置已加载；真实供应商连通性将在适配器启用后验证` });
+  });
   app.post('/test/sentry', async (_request, reply) => {
     if (!process.env.SENTRY_DSN) return reply.send({ code: 0, msg: 'SENTRY_DSN 未配置' });
     try {

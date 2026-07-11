@@ -40,7 +40,7 @@ export interface PresignedUploadInput {
   ownerId?: string;
 }
 
-export type ImageUploadCategory = 'raw' | 'watermarked' | 'thumbnail' | 'tmp' | 'video' | 'announcement' | 'system';
+export type ImageUploadCategory = 'raw' | 'watermarked' | 'thumbnail' | 'tmp' | 'video' | 'announcement' | 'system' | 'ai-generated';
 
 export interface ImageUploadOptions {
   category?: ImageUploadCategory;
