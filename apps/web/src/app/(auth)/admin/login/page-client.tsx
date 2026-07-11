@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -12,6 +12,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/use-toast';
+import {
+  HumanChallenge,
+  resolveHumanChallengeProvider,
+  type HumanChallengeConfig,
+  type HumanChallengeHandle,
+} from '@/components/auth/human-challenge';
 
 const adminLoginSchema = z.object({
   phone: z.string().min(11, '手机号格式不正确').max(11),
@@ -19,6 +25,14 @@ const adminLoginSchema = z.object({
 });
 
 type AdminLoginInput = z.infer<typeof adminLoginSchema>;
+
+const DEFAULT_CHALLENGE_CONFIG: HumanChallengeConfig = {
+  runtimeMode: process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'cloud' : 'local',
+  smsRegisterEnabled: false,
+  turnstileEnabled: false,
+  turnstileSiteKey: '',
+  smsRateLimitSeconds: 60,
+};
 
 function resolveUserLoginHref(hostname: string): string {
   return hostname === 'admin.ss-erp.com' ? 'https://app.ss-erp.com/login' : '/login';
@@ -28,11 +42,20 @@ export default function AdminLoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [userLoginHref, setUserLoginHref] = useState('/login');
+  const [challengeConfig, setChallengeConfig] = useState<HumanChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
+  const [challengeReady, setChallengeReady] = useState(true);
+  const challengeRef = useRef<HumanChallengeHandle | null>(null);
+  const challengeProvider = resolveHumanChallengeProvider(challengeConfig);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       setUserLoginHref(resolveUserLoginHref(window.location.hostname));
     }
+    api.get<HumanChallengeConfig>('/api/auth/challenge-config')
+      .then((response) => {
+        if (response.code === 1 && response.data) setChallengeConfig(response.data);
+      })
+      .catch(() => undefined);
   }, []);
 
   const {
@@ -46,18 +69,25 @@ export default function AdminLoginPage() {
   async function onSubmit(data: AdminLoginInput) {
     setLoading(true);
     try {
+      const humanChallengeToken = await challengeRef.current?.getToken();
+      if (challengeProvider !== 'disabled' && !humanChallengeToken) {
+        toast({ title: '请先完成人机验证', variant: 'destructive' });
+        return;
+      }
       const res = await api.post<{ token?: string; user: { role: string } }>(
         '/api/admin/auth/login',
-        data,
+        { ...data, humanChallengeToken: humanChallengeToken || undefined },
       );
       if (res.code === 1) {
         tokenStore.clear();
         router.push('/admin/users');
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
+        challengeRef.current?.reset();
       }
     } catch (error) {
       toast({ title: formatAuthNetworkError(error), variant: 'destructive' });
+      challengeRef.current?.reset();
     } finally {
       setLoading(false);
     }
@@ -100,7 +130,14 @@ export default function AdminLoginPage() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
+            <HumanChallenge
+              ref={challengeRef}
+              action="admin_login"
+              provider={challengeProvider}
+              turnstileSiteKey={challengeConfig.turnstileSiteKey}
+              onStatusChange={setChallengeReady}
+            />
+            <Button type="submit" className="w-full" disabled={loading || (challengeProvider !== 'disabled' && !challengeReady)}>
               {loading ? '登录中...' : '登录'}
             </Button>
             <p className="text-center text-xs text-muted-foreground">

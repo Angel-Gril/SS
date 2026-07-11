@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   userFindUnique: vi.fn(),
   userUpdate: vi.fn(),
   verifyTurnstile: vi.fn(async () => true),
+  verifyHumanChallenge: vi.fn(async () => true),
   sendSmsCode: vi.fn(async () => ({ ok: true, msg: '验证码已发送' })),
   verifySmsCode: vi.fn(async () => true),
   signToken: vi.fn(() => 'signed-token'),
@@ -54,6 +55,12 @@ vi.mock('../lib/captcha.js', () => ({
   verifySmsCode: mocks.verifySmsCode,
 }));
 
+vi.mock('../lib/human-challenge.js', () => ({
+  verifyHumanChallenge: mocks.verifyHumanChallenge,
+  getPublicHumanChallengeConfig: vi.fn(async () => ({ provider: 'cloudflare-turnstile', turnstileSiteKey: 'site-key' })),
+  issueHumanChallenge: vi.fn(),
+}));
+
 vi.mock('../lib/auth-challenge-config.js', () => ({
   getPublicAuthChallengeConfig: vi.fn(async () => ({
     runtimeMode: 'cloud',
@@ -100,6 +107,7 @@ describe('authentication session choices', () => {
     mocks.userFindUnique.mockResolvedValue(activeUser);
     mocks.userUpdate.mockResolvedValue(activeUser);
     mocks.verifyTurnstile.mockResolvedValue(true);
+    mocks.verifyHumanChallenge.mockResolvedValue(true);
     mocks.verifySmsCode.mockResolvedValue(true);
     mocks.comparePassword.mockResolvedValue(true);
   });
@@ -145,6 +153,7 @@ describe('SMS password reset', () => {
     mocks.userFindUnique.mockResolvedValue(activeUser);
     mocks.userUpdate.mockResolvedValue(activeUser);
     mocks.verifyTurnstile.mockResolvedValue(true);
+    mocks.verifyHumanChallenge.mockResolvedValue(true);
     mocks.verifySmsCode.mockResolvedValue(true);
   });
 
@@ -158,7 +167,7 @@ describe('SMS password reset', () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(mocks.verifyTurnstile).toHaveBeenCalledWith('turnstile-token', expect.any(String));
+      expect(mocks.verifyHumanChallenge).toHaveBeenCalledWith({ action: 'password_reset_sms', token: 'turnstile-token', ip: expect.any(String) });
       expect(mocks.sendSmsCode).toHaveBeenCalledWith(activeUser.phone, 'password-reset');
     } finally {
       await app.close();

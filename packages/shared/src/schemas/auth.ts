@@ -17,6 +17,7 @@ export const registerSchema = z.object({
   legalAccepted: z.boolean().refine((accepted) => accepted, '请阅读并同意用户协议和隐私政策'),
   inviteCode: z.string().optional(),
   turnstileToken: z.string().optional(),
+  humanChallengeToken: z.string().optional(),
 });
 
 export const loginSchema = z.object({
@@ -24,11 +25,13 @@ export const loginSchema = z.object({
   password: z.string().min(1, '请输入密码'),
   rememberMe: z.boolean().optional(),
   turnstileToken: z.string().optional(),
+  humanChallengeToken: z.string().optional(),
 });
 
 export const sendSmsCodeSchema = z.object({
   phone: z.string().regex(phoneRegex, '请输入有效的手机号'),
   turnstileToken: z.string().optional(),
+  humanChallengeToken: z.string().optional(),
 });
 
 export const changePasswordSchema = z.object({

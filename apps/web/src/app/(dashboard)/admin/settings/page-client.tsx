@@ -630,6 +630,10 @@ function ListingSettingsPanel({
 const AUTH_GENERAL_KEYS = [
   'feature_sms_register',
   'feature_turnstile_login',
+  'auth_human_challenge_provider',
+  'auth_pow_signing_secret',
+  'auth_pow_difficulty',
+  'auth_pow_ttl_seconds',
   'auth_sms_provider',
   'auth_sms_code_ttl_seconds',
   'auth_sms_rate_limit_seconds',
@@ -648,6 +652,9 @@ const AUTH_TENCENT_KEYS = [
 ];
 
 const AUTH_TURNSTILE_KEYS = [
+  'auth_human_challenge_provider',
+  'auth_pow_difficulty',
+  'auth_pow_ttl_seconds',
   'feature_turnstile_login',
   'auth_turnstile_site_key',
   'auth_turnstile_secret_key',
@@ -662,6 +669,7 @@ function AuthSettingsPanel({
 }: AuthSettingsPanelProps) {
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const provider = editing.auth_sms_provider || 'env';
+  const challengeProvider = editing.auth_human_challenge_provider || (editing.feature_turnstile_login === 'true' ? 'cloudflare-turnstile' : 'disabled');
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
   const isSavingAuth = savingKey === 'group:短信与人机验证';
   const isSavingTencent = savingKey === 'group:腾讯云短信';
@@ -840,6 +848,39 @@ function AuthSettingsPanel({
             </section>
 
             <section className="space-y-3 rounded-md border p-4">
+              <div>
+                <h3 className="text-sm font-medium">人机验证服务商</h3>
+                <p className="text-xs text-muted-foreground">
+                  国内可使用免费的浏览器工作量证明；国外可继续使用 Cloudflare Turnstile。
+                </p>
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
+                {[
+                  { value: 'builtin-pow', label: '浏览器工作量证明', desc: '无第三方费用，自动完成' },
+                  { value: 'cloudflare-turnstile', label: 'Cloudflare Turnstile', desc: '适合海外网络' },
+                  { value: 'disabled', label: '关闭验证', desc: '仅建议本地开发' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setEditing({ ...editing, auth_human_challenge_provider: option.value, feature_turnstile_login: option.value === 'cloudflare-turnstile' ? 'true' : 'false' })}
+                    className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                      challengeProvider === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+              {challengeProvider === 'builtin-pow' && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <ConfigInput cfg={configs.auth_pow_signing_secret} editing={editing} setValue={setValue} type="password" placeholder="至少 32 位随机密钥" />
+                  <ConfigInput cfg={configs.auth_pow_difficulty} editing={editing} setValue={setValue} placeholder="4" />
+                  <ConfigInput cfg={configs.auth_pow_ttl_seconds} editing={editing} setValue={setValue} placeholder="120" />
+                  <p className="md:col-span-2 text-xs text-muted-foreground">建议难度 4–5 个十六进制前导零、有效期 120 秒；难度越高，低性能设备需要更久。</p>
+                </div>
+              )}
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>

@@ -3,12 +3,14 @@ import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession, setAuthCookie, authenticate, requireRole } from '../lib/auth.js';
+import { verifyHumanChallenge } from '../lib/human-challenge.js';
 
 const ADMIN_SESSION_TTL_SECONDS = 24 * 60 * 60;
 
 const adminLoginSchema = z.object({
   phone: z.string().min(11).max(11),
   password: z.string().min(6),
+  humanChallengeToken: z.string().optional(),
 });
 
 export async function adminAuthRoutes(app: FastifyInstance) {
@@ -34,6 +36,15 @@ export async function adminAuthRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
+    const humanChallengeToken = parsed.data.humanChallengeToken;
+    if (!await verifyHumanChallenge({
+      action: 'admin_login',
+      token: humanChallengeToken || '',
+      ip: request.ip,
+    })) {
+      return reply.status(403).send({ code: 0, msg: '请完成人机验证' });
+    }
+
 
     const { phone, password } = parsed.data;
 

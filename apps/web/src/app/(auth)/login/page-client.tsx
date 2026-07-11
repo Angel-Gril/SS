@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import { Eye, EyeOff } from 'lucide-react';
 import { loginSchema, type LoginInput } from 'shared';
 import { api, tokenStore } from '@/lib/api';
@@ -14,20 +13,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/use-toast';
+import {
+  HumanChallenge,
+  resolveHumanChallengeProvider,
+  type HumanChallengeConfig,
+  type HumanChallengeHandle,
+} from '@/components/auth/human-challenge';
 
 const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
-const TURNSTILE_RESPONSE_TIMEOUT_MS = 8000;
-const TURNSTILE_UNAVAILABLE_MESSAGE = '人机验证没有成功加载或未通过；请点击重新加载验证，或刷新页面后再试';
-
-interface AuthChallengeConfig {
-  runtimeMode: 'local' | 'cloud';
-  smsRegisterEnabled: boolean;
-  turnstileEnabled: boolean;
-  turnstileSiteKey: string;
-  smsRateLimitSeconds: number;
-}
-
-const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
+const DEFAULT_CHALLENGE_CONFIG: HumanChallengeConfig = {
   runtimeMode: IS_LOCAL_RUNTIME ? 'local' : 'cloud',
   smsRegisterEnabled: !IS_LOCAL_RUNTIME,
   turnstileEnabled: false,
@@ -43,13 +37,11 @@ export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [turnstileToken, setTurnstileToken] = useState('');
-  const [turnstileError, setTurnstileError] = useState('');
-  const [turnstileRenderKey, setTurnstileRenderKey] = useState(0);
-  const [challengeConfig, setChallengeConfig] = useState<AuthChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
+  const [challengeConfig, setChallengeConfig] = useState<HumanChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
+  const [challengeReady, setChallengeReady] = useState(true);
   const [adminLoginHref, setAdminLoginHref] = useState('/admin/login');
-  const turnstileRef = useRef<TurnstileInstance | null>(null);
-  const needsTurnstile = challengeConfig.runtimeMode === 'cloud' && challengeConfig.turnstileEnabled;
+  const challengeRef = useRef<HumanChallengeHandle | null>(null);
+  const challengeProvider = resolveHumanChallengeProvider(challengeConfig);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -58,7 +50,7 @@ export default function LoginPage() {
 
     (async () => {
       try {
-        const challengeRes = await api.get<AuthChallengeConfig>('/api/auth/challenge-config');
+        const challengeRes = await api.get<HumanChallengeConfig>('/api/auth/challenge-config');
         if (challengeRes.code === 1 && challengeRes.data) {
           setChallengeConfig(challengeRes.data);
         }
@@ -86,60 +78,21 @@ export default function LoginPage() {
     defaultValues: { rememberMe: false },
   });
 
-  function resetTurnstile() {
-    turnstileRef.current?.reset();
-    setTurnstileToken('');
-    setTurnstileError('');
-    setTurnstileRenderKey((value) => value + 1);
-  }
-
-  function handleTurnstileError(errorCode?: string) {
-    setTurnstileToken('');
-    setTurnstileError(
-      errorCode
-        ? `人机验证加载失败（错误代码：${errorCode}），请重试或关闭代理/浏览器插件后再试`
-        : '人机验证加载失败，请重试或关闭代理/浏览器插件后再试',
-    );
-  }
-
-  async function getTurnstileTokenForSubmit(): Promise<string | null> {
-    const existingToken = turnstileToken || turnstileRef.current?.getResponse();
-    if (existingToken) {
-      return existingToken;
-    }
-
-    try {
-      const token = await turnstileRef.current?.getResponsePromise(TURNSTILE_RESPONSE_TIMEOUT_MS);
-      if (token) {
-        setTurnstileToken(token);
-        setTurnstileError('');
-        return token;
-      }
-    } catch {
-      // handled below with a user-facing message
-    }
-
-    const message = TURNSTILE_UNAVAILABLE_MESSAGE;
-    setTurnstileError(message);
-    toast({ title: message, variant: 'destructive' });
-    return null;
-  }
-
   async function onSubmit(data: LoginInput) {
     setLoading(true);
     try {
-      const captchaToken = needsTurnstile ? await getTurnstileTokenForSubmit() : '';
-      if (needsTurnstile && !captchaToken) {
+      const humanChallengeToken = await challengeRef.current?.getToken();
+      if (challengeProvider !== 'disabled' && !humanChallengeToken) {
+        toast({ title: '请先完成人机验证', variant: 'destructive' });
         return;
       }
 
       const res = await api.post<{ token?: string; user: { role: string } }>('/api/auth/login', {
         ...data,
-        turnstileToken: captchaToken || undefined,
+        humanChallengeToken: humanChallengeToken || undefined,
       });
       if (res.code === 1) {
         tokenStore.clear();
-        setTurnstileError('');
         const role = res.data?.user?.role;
         if (role === 'STAFF') {
           router.push('/warehouse');
@@ -148,11 +101,11 @@ export default function LoginPage() {
         }
       } else {
         toast({ title: res.msg || '登录失败', variant: 'destructive' });
-        resetTurnstile();
+        challengeRef.current?.reset();
       }
     } catch (error) {
       toast({ title: formatAuthNetworkError(error), variant: 'destructive' });
-      resetTurnstile();
+      challengeRef.current?.reset();
     } finally {
       setLoading(false);
     }
@@ -220,53 +173,17 @@ export default function LoginPage() {
               <a href="/forgot-password" className="font-medium text-primary hover:underline">忘记密码？</a>
             </div>
             <p className="-mt-2 text-xs text-muted-foreground">仅延长此设备的登录状态，不保存您的密码。</p>
-            {needsTurnstile && (
-              challengeConfig.turnstileSiteKey ? (
-                <div className="flex justify-center">
-                  <Turnstile
-                    key={turnstileRenderKey}
-                    ref={turnstileRef}
-                    siteKey={challengeConfig.turnstileSiteKey}
-                    onSuccess={(token) => {
-                      setTurnstileToken(token);
-                      setTurnstileError('');
-                    }}
-                    onError={handleTurnstileError}
-                    onExpire={() => {
-                      setTurnstileToken('');
-                      setTurnstileError('人机验证已过期，请重新验证');
-                    }}
-                    onTimeout={() => {
-                      setTurnstileToken('');
-                      setTurnstileError('人机验证超时，请重新验证');
-                    }}
-                    options={{
-                      size: 'normal',
-                      theme: 'auto',
-                      retry: 'auto',
-                      refreshExpired: 'auto',
-                      refreshTimeout: 'auto',
-                    }}
-                  />
-                </div>
-              ) : (
-                <p className="text-xs text-destructive text-center">
-                  Turnstile 站点密钥未配置，无法完成人机验证
-                </p>
-              )
-            )}
-            {needsTurnstile && turnstileError && (
-              <div className="space-y-2 text-center">
-                <p className="text-xs text-destructive">{turnstileError}</p>
-                <Button type="button" variant="outline" size="sm" onClick={resetTurnstile}>
-                  重新加载验证
-                </Button>
-              </div>
-            )}
+            <HumanChallenge
+              ref={challengeRef}
+              action="login"
+              provider={challengeProvider}
+              turnstileSiteKey={challengeConfig.turnstileSiteKey}
+              onStatusChange={setChallengeReady}
+            />
             <Button
               type="submit"
               className="w-full"
-              disabled={loading}
+              disabled={loading || (challengeProvider !== 'disabled' && !challengeReady)}
             >
               {loading ? '登录中...' : '登录'}
             </Button>

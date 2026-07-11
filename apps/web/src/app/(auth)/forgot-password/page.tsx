@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatAuthNetworkError } from '@/lib/auth-ui';
@@ -11,19 +10,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/use-toast';
+import {
+  HumanChallenge,
+  resolveHumanChallengeProvider,
+  type HumanChallengeConfig,
+  type HumanChallengeHandle,
+} from '@/components/auth/human-challenge';
 
 const IS_LOCAL_RUNTIME = process.env.NEXT_PUBLIC_RUNTIME_MODE !== 'cloud';
-const TURNSTILE_RESPONSE_TIMEOUT_MS = 8000;
-
-interface AuthChallengeConfig {
-  runtimeMode: 'local' | 'cloud';
-  smsRegisterEnabled: boolean;
-  turnstileEnabled: boolean;
-  turnstileSiteKey: string;
-  smsRateLimitSeconds: number;
-}
-
-const DEFAULT_CHALLENGE_CONFIG: AuthChallengeConfig = {
+const DEFAULT_CHALLENGE_CONFIG: HumanChallengeConfig = {
   runtimeMode: IS_LOCAL_RUNTIME ? 'local' : 'cloud',
   smsRegisterEnabled: false,
   turnstileEnabled: false,
@@ -42,15 +37,13 @@ export default function ForgotPasswordPage() {
   const [sending, setSending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [countdown, setCountdown] = useState(0);
-  const [turnstileToken, setTurnstileToken] = useState('');
-  const [turnstileError, setTurnstileError] = useState('');
-  const [turnstileRenderKey, setTurnstileRenderKey] = useState(0);
-  const [challengeConfig, setChallengeConfig] = useState<AuthChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
-  const turnstileRef = useRef<TurnstileInstance | null>(null);
-  const needsTurnstile = challengeConfig.runtimeMode === 'cloud' && challengeConfig.turnstileEnabled;
+  const [challengeConfig, setChallengeConfig] = useState<HumanChallengeConfig>(DEFAULT_CHALLENGE_CONFIG);
+  const [challengeReady, setChallengeReady] = useState(true);
+  const challengeRef = useRef<HumanChallengeHandle | null>(null);
+  const challengeProvider = resolveHumanChallengeProvider(challengeConfig);
 
   useEffect(() => {
-    api.get<AuthChallengeConfig>('/api/auth/challenge-config')
+    api.get<HumanChallengeConfig>('/api/auth/challenge-config')
       .then((response) => {
         if (response.code === 1 && response.data) setChallengeConfig(response.data);
       })
@@ -63,28 +56,6 @@ export default function ForgotPasswordPage() {
     return () => window.clearTimeout(timer);
   }, [countdown]);
 
-  function resetTurnstile() {
-    turnstileRef.current?.reset();
-    setTurnstileToken('');
-    setTurnstileError('');
-    setTurnstileRenderKey((value) => value + 1);
-  }
-
-  async function getTurnstileToken(): Promise<string | null> {
-    const existingToken = turnstileToken || turnstileRef.current?.getResponse();
-    if (existingToken) return existingToken;
-    try {
-      const token = await turnstileRef.current?.getResponsePromise(TURNSTILE_RESPONSE_TIMEOUT_MS);
-      if (token) return token;
-    } catch {
-      // The user-facing error below covers timeout and failed widget responses.
-    }
-    const message = '人机验证没有成功加载或未通过，请重新验证后再试';
-    setTurnstileError(message);
-    toast({ title: message, variant: 'destructive' });
-    return null;
-  }
-
   async function onSendCode() {
     if (!/^1[3-9]\d{9}$/.test(phone)) {
       toast({ title: '请输入有效的手机号', variant: 'destructive' });
@@ -92,11 +63,14 @@ export default function ForgotPasswordPage() {
     }
     setSending(true);
     try {
-      const captchaToken = needsTurnstile ? await getTurnstileToken() : '';
-      if (needsTurnstile && !captchaToken) return;
+      const humanChallengeToken = await challengeRef.current?.getToken();
+      if (challengeProvider !== 'disabled' && !humanChallengeToken) {
+        toast({ title: '请先完成人机验证', variant: 'destructive' });
+        return;
+      }
       const response = await api.post('/api/auth/password-reset/sms-code', {
         phone,
-        turnstileToken: captchaToken || undefined,
+        humanChallengeToken: humanChallengeToken || undefined,
       });
       if (response.code === 1) {
         toast({ title: response.msg || '验证码已发送' });
@@ -104,10 +78,10 @@ export default function ForgotPasswordPage() {
       } else {
         toast({ title: response.msg || '验证码发送失败', variant: 'destructive' });
       }
-      if (needsTurnstile) resetTurnstile();
+      challengeRef.current?.reset();
     } catch (error) {
       toast({ title: formatAuthNetworkError(error), variant: 'destructive' });
-      if (needsTurnstile) resetTurnstile();
+      challengeRef.current?.reset();
     } finally {
       setSending(false);
     }
@@ -164,39 +138,19 @@ export default function ForgotPasswordPage() {
               <Input id="phone" value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" inputMode="tel" placeholder="请输入注册手机号" />
             </div>
 
-            {needsTurnstile && (
-              challengeConfig.turnstileSiteKey ? (
-                <div className="flex justify-center">
-                  <Turnstile
-                    key={turnstileRenderKey}
-                    ref={turnstileRef}
-                    siteKey={challengeConfig.turnstileSiteKey}
-                    onSuccess={(token) => {
-                      setTurnstileToken(token);
-                      setTurnstileError('');
-                    }}
-                    onError={() => {
-                      setTurnstileToken('');
-                      setTurnstileError('人机验证加载失败，请重新加载');
-                    }}
-                    onExpire={() => {
-                      setTurnstileToken('');
-                      setTurnstileError('人机验证已过期，请重新验证');
-                    }}
-                    options={{ theme: 'auto', retry: 'auto', refreshExpired: 'auto' }}
-                  />
-                </div>
-              ) : (
-                <p className="text-center text-xs text-destructive">Turnstile 站点密钥未配置，暂时无法发送验证码</p>
-              )
-            )}
-            {turnstileError && <p className="text-center text-xs text-destructive">{turnstileError}</p>}
+            <HumanChallenge
+              ref={challengeRef}
+              action="password_reset_sms"
+              provider={challengeProvider}
+              turnstileSiteKey={challengeConfig.turnstileSiteKey}
+              onStatusChange={setChallengeReady}
+            />
 
             <div className="space-y-2">
               <Label htmlFor="smsCode">短信验证码</Label>
               <div className="flex gap-2">
                 <Input id="smsCode" value={smsCode} onChange={(event) => setSmsCode(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="6 位验证码" />
-                <Button type="button" variant="outline" className="w-32 shrink-0" onClick={onSendCode} disabled={sending || countdown > 0 || (needsTurnstile && !challengeConfig.turnstileSiteKey)}>
+                <Button type="button" variant="outline" className="w-32 shrink-0" onClick={onSendCode} disabled={sending || countdown > 0 || (challengeProvider !== 'disabled' && !challengeReady)}>
                   {countdown > 0 ? countdown + 's 后重试' : sending ? '发送中...' : '发送验证码'}
                 </Button>
               </div>

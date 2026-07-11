@@ -4,11 +4,12 @@ import { getLegalProfile, registerSchema, loginSchema, resetPasswordWithSmsSchem
 import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession, removeSession, removeAllSessions, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
-import { verifyTurnstile, sendSmsCode, verifySmsCode } from '../lib/captcha.js';
+import { sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 import {
   getPublicAuthChallengeConfig,
   isSmsRegistrationChallengeEnabled,
 } from '../lib/auth-challenge-config.js';
+import { getPublicHumanChallengeConfig, issueHumanChallenge, verifyHumanChallenge, type HumanChallengeAction } from '../lib/human-challenge.js';
 
 const authRateLimitConfig = {
   rateLimit: {
@@ -32,7 +33,16 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/challenge-config', async (_request, reply) => {
     const config = await getPublicAuthChallengeConfig();
-    return reply.send({ code: 1, msg: 'ok', data: config });
+    return reply.send({ code: 1, msg: 'ok', data: { ...config, ...await getPublicHumanChallengeConfig() } });
+  });
+
+  app.get('/human-challenge', async (request, reply) => {
+    const action = (request.query as { action?: string }).action as HumanChallengeAction;
+    try {
+      return reply.send({ code: 1, msg: 'ok', data: await issueHumanChallenge(action) });
+    } catch {
+      return reply.status(400).send({ code: 0, msg: '不支持的人机验证场景' });
+    }
   });
 
   // 发送短信验证码（注册前调用）
@@ -47,12 +57,12 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { phone, turnstileToken } = parsed.data;
+    const { phone, turnstileToken, humanChallengeToken } = parsed.data;
     if (!await isSmsRegistrationChallengeEnabled()) {
       return reply.send({ code: 1, msg: '当前无需短信验证码' });
     }
 
-    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+    if (!await verifyHumanChallenge({ action: 'register_sms', token: humanChallengeToken || turnstileToken || '', ip: request.ip })) {
       return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
     }
 
@@ -71,8 +81,8 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { phone, turnstileToken } = parsed.data;
-    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+    const { phone, turnstileToken, humanChallengeToken } = parsed.data;
+    if (!await verifyHumanChallenge({ action: 'password_reset_sms', token: humanChallengeToken || turnstileToken || '', ip: request.ip })) {
       return reply.status(403).send({ code: 0, msg: '人机验证失败，请重试' });
     }
 
@@ -180,13 +190,13 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const { phone, password, rememberMe = false, turnstileToken } = parsed.data;
+    const { phone, password, rememberMe = false, turnstileToken, humanChallengeToken } = parsed.data;
 
     const { redis } = await import('../lib/redis.js');
     const failKey = `login:fail:${request.ip}`;
     const failCount = Number(await redis.get(failKey) || '0');
 
-    if (!await verifyTurnstile(turnstileToken || '', request.ip)) {
+    if (!await verifyHumanChallenge({ action: 'login', token: humanChallengeToken || turnstileToken || '', ip: request.ip })) {
       const hint = failCount >= 5 ? '登录失败次数过多，' : '';
       return reply.status(403).send({ code: 0, msg: `${hint}请完成人机验证` });
     }

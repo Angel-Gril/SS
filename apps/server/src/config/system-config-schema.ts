@@ -60,6 +60,11 @@ export const SystemConfigSchema = {
   ai_user_daily_image_generation_limit: z.number().int().min(0).max(100000).default(5),
 
   // ─── auth / challenge ───
+  auth_human_challenge_provider: z.enum(['disabled', 'cloudflare-turnstile', 'builtin-pow']).default('disabled'),
+  auth_pow_signing_secret: z.string().default(''),
+  auth_pow_difficulty: z.number().int().min(1).max(5).default(4),
+  auth_pow_ttl_seconds: z.number().int().min(30).max(600).default(120),
+  auth_turnstile_allowed_hostnames: z.string().default(''),
   auth_sms_provider: z.enum(['env', 'console', 'tencent']).default('env'),
   auth_sms_tencent_secret_id: z.string().default(''),
   auth_sms_tencent_secret_key: z.string().default(''),
@@ -361,6 +366,33 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     description: '普通用户每日可触发的新生图/改图调用次数；缓存命中不扣额度',
   },
 
+  auth_human_challenge_provider: {
+    label: '人机验证服务商',
+    group: 'auth',
+    description: 'disabled 关闭；cloudflare-turnstile 使用 Cloudflare；builtin-pow 使用内置浏览器工作量证明',
+  },
+  auth_pow_signing_secret: {
+    label: '工作量证明签名密钥',
+    group: 'auth',
+    description: '内置工作量证明挑战的服务端签名密钥，至少 32 个字符',
+    sensitive: true,
+    encrypted: true,
+  },
+  auth_pow_difficulty: {
+    label: '工作量证明难度',
+    group: 'auth',
+    description: 'SHA-256 十六进制摘要要求的前导零字符数，范围 1-6',
+  },
+  auth_pow_ttl_seconds: {
+    label: '工作量证明有效期（秒）',
+    group: 'auth',
+    description: '单次人机验证挑战的有效期，范围 30-600 秒',
+  },
+  auth_turnstile_allowed_hostnames: {
+    label: 'Turnstile 允许域名',
+    group: 'auth',
+    description: '逗号分隔的合法 hostname；留空表示不额外限制',
+  },
   auth_sms_provider: {
     label: '短信服务来源',
     group: 'auth',
