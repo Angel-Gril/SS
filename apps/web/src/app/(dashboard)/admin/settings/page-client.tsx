@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Save, Settings as SettingsIcon, AlertCircle, HardDrive, CheckCircle2, XCircle } from 'lucide-react';
+import {
+  Loader2,
+  Save,
+  Settings as SettingsIcon,
+  AlertCircle,
+  HardDrive,
+  CheckCircle2,
+  XCircle,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,6 +17,13 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
+import {
+  ALIYUN_OSS_REGIONS,
+  getAliyunOssRamPolicy,
+  getObjectStorageProviderPreset,
+  inferObjectStorageProvider,
+  type ObjectStorageProvider,
+} from 'shared/object-storage';
 
 interface SystemConfig {
   id: string;
@@ -65,9 +80,22 @@ const GROUP_LABELS: Record<string, string> = {
   general: '通用',
 };
 
-const GROUP_ORDER = ['maintenance', 'auth', 'feature', 'ai', 'upload', 'listing', 'retention', 'backup', 'version', 'randomize', 'general'];
+const GROUP_ORDER = [
+  'maintenance',
+  'auth',
+  'feature',
+  'ai',
+  'upload',
+  'listing',
+  'retention',
+  'backup',
+  'version',
+  'randomize',
+  'general',
+];
 
 const REQUIRED_CONFIG_KEYS = [
+  'upload_oss_provider',
   'ai_provider',
   'ai_image_provider',
   'listing_task_refresh_interval_ms',
@@ -86,13 +114,17 @@ export default function AdminSettingsPage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [runningBackup, setRunningBackup] = useState(false);
 
-  useEffect(() => { fetchConfigs(); }, []);
+  useEffect(() => {
+    fetchConfigs();
+  }, []);
 
   function applyConfigRows(rows: SystemConfig[]) {
     const filtered = rows.filter((c) => !['storage', 'security', 'integration'].includes(c.group));
     setConfigs(filtered);
     const map: Record<string, string> = {};
-    filtered.forEach((c) => { map[c.key] = c.value; });
+    filtered.forEach((c) => {
+      map[c.key] = c.value;
+    });
     setEditing(map);
     return filtered;
   }
@@ -106,7 +138,9 @@ export default function AdminSettingsPage() {
     ]);
     if (configRes.code === 1 && configRes.data) {
       const filtered = applyConfigRows(configRes.data);
-      const hasRequiredKeys = REQUIRED_CONFIG_KEYS.every((key) => filtered.some((cfg) => cfg.key === key));
+      const hasRequiredKeys = REQUIRED_CONFIG_KEYS.every((key) =>
+        filtered.some((cfg) => cfg.key === key),
+      );
       if (!hasRequiredKeys) {
         await api.post('/api/admin/system-config/seed', {});
         const res2 = await api.get<SystemConfig[]>('/api/admin/system-config');
@@ -134,18 +168,25 @@ export default function AdminSettingsPage() {
     }
   }
 
-  async function saveConfigs(keys: string[], label: string, overrides: Record<string, string> = {}) {
-    const available = keys.filter((key) => Object.prototype.hasOwnProperty.call(editing, key));
+  async function saveConfigs(
+    keys: string[],
+    label: string,
+    overrides: Record<string, string> = {},
+  ) {
+    const items = keys
+      .filter((key) => Object.prototype.hasOwnProperty.call(editing, key))
+      .map((key) => ({ key, value: overrides[key] ?? editing[key] ?? '' }));
     setSavingKey(`group:${label}`);
-    for (const key of available) {
-      const res = await api.put(`/api/admin/system-config/${key}`, { value: overrides[key] ?? editing[key] ?? '' });
-      if (res.code !== 1) {
-        setSavingKey(null);
-        toast({ title: '保存失败', description: `${key}: ${res.msg || '未知错误'}`, variant: 'destructive' });
-        return;
-      }
-    }
+    const res = await api.put('/api/admin/system-config/batch', { items });
     setSavingKey(null);
+    if (res.code !== 1) {
+      toast({
+        title: '保存失败',
+        description: res.msg || '对象存储配置未写入，原配置保持不变',
+        variant: 'destructive',
+      });
+      return;
+    }
     toast({ title: '已保存', description: `${label} 更新成功` });
     fetchConfigs();
   }
@@ -166,7 +207,11 @@ export default function AdminSettingsPage() {
       toast({ title: '备份完成', description: res.msg || '数据库备份已完成' });
       fetchConfigs();
     } else {
-      toast({ title: '备份失败', description: res.msg || '请查看运维状态', variant: 'destructive' });
+      toast({
+        title: '备份失败',
+        description: res.msg || '请查看运维状态',
+        variant: 'destructive',
+      });
       fetchConfigs();
     }
   }
@@ -199,10 +244,13 @@ export default function AdminSettingsPage() {
             <SettingsIcon className="h-6 w-6" /> 系统设置
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            常用配置默认展开，高级运维参数默认收起。当前 R2 上传测试只需要填写"上传与对象存储"里的 R2 必填项。
+            常用配置默认展开，高级运维参数默认收起。对象存储配置同时适用于本地版、国内服务器和国外
+            VPS。
           </p>
         </div>
-        <Button variant="outline" onClick={initDefaults}>初始化默认配置</Button>
+        <Button variant="outline" onClick={initDefaults}>
+          初始化默认配置
+        </Button>
       </div>
 
       {Object.keys(grouped).length === 0 && (
@@ -287,19 +335,21 @@ export default function AdminSettingsPage() {
 
         return (
           <div key={group} className="space-y-4">
-              <Card>
-                <details open={group === 'maintenance'} className="group">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
-                      <span className="text-sm text-muted-foreground">{items.length} 项</span>
-                      {group !== 'maintenance' && (
-                        <span className="text-xs text-muted-foreground">低频配置，点开后修改</span>
-                      )}
-                    </div>
-                    <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
-                    <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
-                  </summary>
+            <Card>
+              <details open={group === 'maintenance'} className="group">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{GROUP_LABELS[group] || group}</Badge>
+                    <span className="text-sm text-muted-foreground">{items.length} 项</span>
+                    {group !== 'maintenance' && (
+                      <span className="text-xs text-muted-foreground">低频配置，点开后修改</span>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
+                  <span className="hidden text-xs text-muted-foreground group-open:inline">
+                    收起
+                  </span>
+                </summary>
                 <CardContent className="space-y-5 border-t pt-5">
                   {group === 'backup' && (
                     <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
@@ -308,53 +358,67 @@ export default function AdminSettingsPage() {
                     </p>
                   )}
                   {items.map((cfg) => (
-                    <div key={cfg.key} className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0">
+                    <div
+                      key={cfg.key}
+                      className="space-y-2 pb-4 border-b last:border-b-0 last:pb-0"
+                    >
                       <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1">
-                        <Label className="font-medium">{cfg.label || cfg.key}</Label>
-                        <code className="ml-2 text-xs text-muted-foreground">{cfg.key}</code>
-                        {cfg.description && (
-                          <p className="text-xs text-muted-foreground mt-1">{cfg.description}</p>
-                        )}
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => saveConfig(cfg.key)}
-                        disabled={savingKey === cfg.key || editing[cfg.key] === cfg.value}
-                      >
-                        {savingKey === cfg.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                        <span className="ml-1">保存</span>
-                      </Button>
-                    </div>
-
-                    {editing[cfg.key] === 'true' || editing[cfg.key] === 'false' ? (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setEditing({ ...editing, [cfg.key]: editing[cfg.key] === 'true' ? 'false' : 'true' })}
-                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                            editing[cfg.key] === 'true' ? 'bg-primary' : 'bg-muted'
-                          }`}
+                        <div className="flex-1">
+                          <Label className="font-medium">{cfg.label || cfg.key}</Label>
+                          <code className="ml-2 text-xs text-muted-foreground">{cfg.key}</code>
+                          {cfg.description && (
+                            <p className="text-xs text-muted-foreground mt-1">{cfg.description}</p>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => saveConfig(cfg.key)}
+                          disabled={savingKey === cfg.key || editing[cfg.key] === cfg.value}
                         >
-                          <span
-                            className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
-                              editing[cfg.key] === 'true' ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                          />
-                        </button>
-                        <span className="text-sm">{editing[cfg.key] === 'true' ? '已启用' : '已禁用'}</span>
+                          {savingKey === cfg.key ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Save className="h-3.5 w-3.5" />
+                          )}
+                          <span className="ml-1">保存</span>
+                        </Button>
                       </div>
-                    ) : (
-                      <Input
-                        value={editing[cfg.key] || ''}
-                        onChange={(e) => setEditing({ ...editing, [cfg.key]: e.target.value })}
-                        placeholder={cfg.description || ''}
-                      />
-                    )}
-                  </div>
-                ))}
-              </CardContent>
-                </details>
+
+                      {editing[cfg.key] === 'true' || editing[cfg.key] === 'false' ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditing({
+                                ...editing,
+                                [cfg.key]: editing[cfg.key] === 'true' ? 'false' : 'true',
+                              })
+                            }
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                              editing[cfg.key] === 'true' ? 'bg-primary' : 'bg-muted'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                                editing[cfg.key] === 'true' ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                          <span className="text-sm">
+                            {editing[cfg.key] === 'true' ? '已启用' : '已禁用'}
+                          </span>
+                        </div>
+                      ) : (
+                        <Input
+                          value={editing[cfg.key] || ''}
+                          onChange={(e) => setEditing({ ...editing, [cfg.key]: e.target.value })}
+                          placeholder={cfg.description || ''}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </details>
             </Card>
           </div>
         );
@@ -484,8 +548,16 @@ function ListingSettingsPanel({
                     后台 worker 每轮读取这里的配置；.env 只作为数据库配置不可用时的兜底。
                   </p>
                 </div>
-                <Button size="sm" onClick={() => saveConfigs(LISTING_REFRESH_KEYS, '上架任务刷新')} disabled={isSavingRefresh}>
-                  {isSavingRefresh ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(LISTING_REFRESH_KEYS, '上架任务刷新')}
+                  disabled={isSavingRefresh}
+                >
+                  {isSavingRefresh ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
                   <span className="ml-1">保存上架参数</span>
                 </Button>
               </div>
@@ -510,14 +582,41 @@ function ListingSettingsPanel({
             <section className="space-y-3 rounded-md border p-4">
               <div>
                 <h3 className="text-sm font-medium">自动刷新策略</h3>
-                <p className="text-xs text-muted-foreground">并发不是越高越好。VPS 先从 6 开始，稳定后再调到 8-10。</p>
+                <p className="text-xs text-muted-foreground">
+                  并发不是越高越好。VPS 先从 6 开始，稳定后再调到 8-10。
+                </p>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
-                <ConfigInput cfg={configs.listing_task_refresh_interval_ms} editing={editing} setValue={setValue} placeholder="30000" />
-                <ConfigInput cfg={configs.listing_task_refresh_batch_size} editing={editing} setValue={setValue} placeholder="30" />
-                <ConfigInput cfg={configs.listing_task_refresh_concurrency} editing={editing} setValue={setValue} placeholder="6" />
-                <ConfigInput cfg={configs.listing_task_refresh_lookback_hours} editing={editing} setValue={setValue} placeholder="72" />
-                <ConfigInput cfg={configs.listing_ozon_api_timeout_ms} editing={editing} setValue={setValue} placeholder="20000" />
+                <ConfigInput
+                  cfg={configs.listing_task_refresh_interval_ms}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="30000"
+                />
+                <ConfigInput
+                  cfg={configs.listing_task_refresh_batch_size}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="30"
+                />
+                <ConfigInput
+                  cfg={configs.listing_task_refresh_concurrency}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="6"
+                />
+                <ConfigInput
+                  cfg={configs.listing_task_refresh_lookback_hours}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="72"
+                />
+                <ConfigInput
+                  cfg={configs.listing_ozon_api_timeout_ms}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="20000"
+                />
               </div>
             </section>
           </CardContent>
@@ -573,116 +672,208 @@ function AuthSettingsPanel({
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
             <div className="flex items-center gap-2">
               <Badge variant="secondary">短信与人机验证</Badge>
-              <span className="text-sm text-muted-foreground">注册短信、登录人机验证、测试短信白名单</span>
+              <span className="text-sm text-muted-foreground">
+                注册短信、登录人机验证、测试短信白名单
+              </span>
             </div>
             <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
           </summary>
           <CardContent className="space-y-6 border-t pt-5">
-          <section className="rounded-md border bg-muted/20 p-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <section className="rounded-md border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">云端注册与登录保护</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    后台配置优先于 VPS .env。密钥保存后会加密入库，页面只返回掩码。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(AUTH_GENERAL_KEYS, '短信与人机验证')}
+                  disabled={isSavingAuth}
+                >
+                  {isSavingAuth ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存验证配置</span>
+                </Button>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <div className="grid gap-4 md:grid-cols-2">
+                <ConfigToggle
+                  cfg={configs.feature_sms_register}
+                  editing={editing}
+                  setValue={setValue}
+                />
+                <ConfigToggle
+                  cfg={configs.feature_turnstile_login}
+                  editing={editing}
+                  setValue={setValue}
+                />
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
               <div>
-                <h3 className="text-sm font-medium">云端注册与登录保护</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  后台配置优先于 VPS .env。密钥保存后会加密入库，页面只返回掩码。
+                <h3 className="text-sm font-medium">短信服务来源</h3>
+                <p className="text-xs text-muted-foreground">
+                  正式云端建议选择腾讯云短信；env 表示继续读取服务器环境变量。
                 </p>
               </div>
-              <Button
-                size="sm"
-                onClick={() => saveConfigs(AUTH_GENERAL_KEYS, '短信与人机验证')}
-                disabled={isSavingAuth}
-              >
-                {isSavingAuth ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">保存验证配置</span>
-              </Button>
-            </div>
-          </section>
+              <div className="grid gap-2 md:grid-cols-3">
+                {[
+                  { value: 'tencent', label: '腾讯云短信', desc: '正式注册验证码' },
+                  { value: 'env', label: '服务器环境', desc: '读取 VPS .env' },
+                  { value: 'console', label: 'Console 测试', desc: '只写日志不发短信' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setValue('auth_sms_provider', option.value)}
+                    className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                      provider === option.value
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
 
-          <section className="space-y-3">
-            <div className="grid gap-4 md:grid-cols-2">
-              <ConfigToggle cfg={configs.feature_sms_register} editing={editing} setValue={setValue} />
-              <ConfigToggle cfg={configs.feature_turnstile_login} editing={editing} setValue={setValue} />
-            </div>
-          </section>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput
+                  cfg={configs.auth_sms_code_ttl_seconds}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="300"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_rate_limit_seconds}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="60"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_test_phone_whitelist}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="13800138000,13900139000"
+                />
+              </div>
+            </section>
 
-          <section className="space-y-3 rounded-md border p-4">
-            <div>
-              <h3 className="text-sm font-medium">短信服务来源</h3>
-              <p className="text-xs text-muted-foreground">正式云端建议选择腾讯云短信；env 表示继续读取服务器环境变量。</p>
-            </div>
-            <div className="grid gap-2 md:grid-cols-3">
-              {[
-                { value: 'tencent', label: '腾讯云短信', desc: '正式注册验证码' },
-                { value: 'env', label: '服务器环境', desc: '读取 VPS .env' },
-                { value: 'console', label: 'Console 测试', desc: '只写日志不发短信' },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setValue('auth_sms_provider', option.value)}
-                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
-                    provider === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
-                  }`}
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">腾讯云短信</h3>
+                  <p className="text-xs text-muted-foreground">
+                    模板变量当前按 {`{1}=验证码`} 发送，腾讯云模板需保持一致。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    saveConfigs(['auth_sms_provider', ...AUTH_TENCENT_KEYS], '腾讯云短信', {
+                      auth_sms_provider: 'tencent',
+                    })
+                  }
+                  disabled={isSavingTencent}
                 >
-                  <span className="block text-sm font-medium">{option.label}</span>
-                  <span className="text-xs text-muted-foreground">{option.desc}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <ConfigInput cfg={configs.auth_sms_code_ttl_seconds} editing={editing} setValue={setValue} placeholder="300" />
-              <ConfigInput cfg={configs.auth_sms_rate_limit_seconds} editing={editing} setValue={setValue} placeholder="60" />
-              <ConfigInput cfg={configs.auth_sms_test_phone_whitelist} editing={editing} setValue={setValue} placeholder="13800138000,13900139000" />
-            </div>
-          </section>
-
-          <section className="space-y-3 rounded-md border p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium">腾讯云短信</h3>
-                <p className="text-xs text-muted-foreground">模板变量当前按 {`{1}=验证码`} 发送，腾讯云模板需保持一致。</p>
+                  {isSavingTencent ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存腾讯云短信</span>
+                </Button>
               </div>
-              <Button
-                size="sm"
-                onClick={() => saveConfigs(['auth_sms_provider', ...AUTH_TENCENT_KEYS], '腾讯云短信', { auth_sms_provider: 'tencent' })}
-                disabled={isSavingTencent}
-              >
-                {isSavingTencent ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">保存腾讯云短信</span>
-              </Button>
-            </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <ConfigInput cfg={configs.auth_sms_tencent_secret_id} editing={editing} setValue={setValue} type="password" placeholder="SecretId" />
-              <ConfigInput cfg={configs.auth_sms_tencent_secret_key} editing={editing} setValue={setValue} type="password" placeholder="SecretKey" />
-              <ConfigInput cfg={configs.auth_sms_tencent_region} editing={editing} setValue={setValue} placeholder="ap-guangzhou" />
-              <ConfigInput cfg={configs.auth_sms_tencent_sdk_app_id} editing={editing} setValue={setValue} placeholder="SDK AppId" />
-              <ConfigInput cfg={configs.auth_sms_tencent_sign_name} editing={editing} setValue={setValue} placeholder="已审核签名" />
-              <ConfigInput cfg={configs.auth_sms_tencent_template_id} editing={editing} setValue={setValue} placeholder="模板 ID" />
-            </div>
-          </section>
-
-          <section className="space-y-3 rounded-md border p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>
-                <p className="text-xs text-muted-foreground">Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput
+                  cfg={configs.auth_sms_tencent_secret_id}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="SecretId"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_tencent_secret_key}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="SecretKey"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_tencent_region}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="ap-guangzhou"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_tencent_sdk_app_id}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="SDK AppId"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_tencent_sign_name}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="已审核签名"
+                />
+                <ConfigInput
+                  cfg={configs.auth_sms_tencent_template_id}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="模板 ID"
+                />
               </div>
-              <Button
-                size="sm"
-                onClick={() => saveConfigs(AUTH_TURNSTILE_KEYS, 'Cloudflare Turnstile')}
-                disabled={isSavingTurnstile}
-              >
-                {isSavingTurnstile ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">保存 Turnstile</span>
-              </Button>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <ConfigInput cfg={configs.auth_turnstile_site_key} editing={editing} setValue={setValue} placeholder="0x4AAAA..." />
-              <ConfigInput cfg={configs.auth_turnstile_secret_key} editing={editing} setValue={setValue} type="password" placeholder="0x4AAAA... secret" />
-            </div>
-          </section>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">Cloudflare Turnstile</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Site Key 给前端展示，Secret Key 给后端校验；不要把 Secret 填到 Site Key。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(AUTH_TURNSTILE_KEYS, 'Cloudflare Turnstile')}
+                  disabled={isSavingTurnstile}
+                >
+                  {isSavingTurnstile ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存 Turnstile</span>
+                </Button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput
+                  cfg={configs.auth_turnstile_site_key}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="0x4AAAA..."
+                />
+                <ConfigInput
+                  cfg={configs.auth_turnstile_secret_key}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="0x4AAAA... secret"
+                />
+              </div>
+            </section>
           </CardContent>
         </details>
       </Card>
@@ -690,11 +881,7 @@ function AuthSettingsPanel({
   );
 }
 
-const BACKUP_GENERAL_KEYS = [
-  'backup_enabled',
-  'backup_schedule',
-  'backup_local_keep_days',
-];
+const BACKUP_GENERAL_KEYS = ['backup_enabled', 'backup_schedule', 'backup_local_keep_days'];
 
 const BACKUP_REMOTE_KEYS = [
   'backup_remote_enabled',
@@ -756,21 +943,42 @@ function BackupSettingsPanel({
                   </p>
                 </div>
                 <Button size="sm" variant="outline" onClick={runBackupNow} disabled={runningBackup}>
-                  {runningBackup ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  {runningBackup ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
                   <span className="ml-1">{runningBackup ? '备份中' : '立即备份'}</span>
                 </Button>
               </div>
 
               {!backupStatus?.available ? (
-                <p className="mt-4 text-sm text-muted-foreground">{backupStatus?.message || '还没有备份状态。保存配置后可先点“立即备份”。'}</p>
+                <p className="mt-4 text-sm text-muted-foreground">
+                  {backupStatus?.message || '还没有备份状态。保存配置后可先点“立即备份”。'}
+                </p>
               ) : (
                 <div className="mt-4 grid gap-2 text-sm">
-                  <BackupStatusRow label="最近备份时间" value={backupStatus.lastBackupAt ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN') : '-'} />
-                  <BackupStatusRow label="本地文件" value={backupStatus.lastLocalFile || '-'} monospace />
+                  <BackupStatusRow
+                    label="最近备份时间"
+                    value={
+                      backupStatus.lastBackupAt
+                        ? new Date(backupStatus.lastBackupAt).toLocaleString('zh-CN')
+                        : '-'
+                    }
+                  />
+                  <BackupStatusRow
+                    label="本地文件"
+                    value={backupStatus.lastLocalFile || '-'}
+                    monospace
+                  />
                   <BackupStatusRow label="文件大小" value={backupStatus.lastLocalSize || '-'} />
                   <BackupStatusRow
                     label="远程上传"
-                    value={backupStatus.remoteUploaded ? `已上传 ${backupStatus.lastRemoteKey || ''}` : '未上传'}
+                    value={
+                      backupStatus.remoteUploaded
+                        ? `已上传 ${backupStatus.lastRemoteKey || ''}`
+                        : '未上传'
+                    }
                     ok={backupStatus.remoteUploaded}
                   />
                   {backupStatus.warnings && backupStatus.warnings.length > 0 && (
@@ -786,17 +994,37 @@ function BackupSettingsPanel({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">基础备份策略</h3>
-                  <p className="text-xs text-muted-foreground">备份时间使用服务器本地时间；默认每天 03:00 执行。</p>
+                  <p className="text-xs text-muted-foreground">
+                    备份时间使用服务器本地时间；默认每天 03:00 执行。
+                  </p>
                 </div>
-                <Button size="sm" onClick={() => saveConfigs(BACKUP_GENERAL_KEYS, '备份基础策略')} disabled={isSavingGeneral}>
-                  {isSavingGeneral ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(BACKUP_GENERAL_KEYS, '备份基础策略')}
+                  disabled={isSavingGeneral}
+                >
+                  {isSavingGeneral ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
                   <span className="ml-1">保存基础策略</span>
                 </Button>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <ConfigToggle cfg={configs.backup_enabled} editing={editing} setValue={setValue} />
-                <ConfigInput cfg={configs.backup_schedule} editing={editing} setValue={setValue} placeholder="0 3 * * *" />
-                <ConfigInput cfg={configs.backup_local_keep_days} editing={editing} setValue={setValue} placeholder="7" />
+                <ConfigInput
+                  cfg={configs.backup_schedule}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="0 3 * * *"
+                />
+                <ConfigInput
+                  cfg={configs.backup_local_keep_days}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="7"
+                />
               </div>
             </section>
 
@@ -805,29 +1033,81 @@ function BackupSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">备份 R2 远程存储</h3>
                   <p className="text-xs text-muted-foreground">
-                    这里是数据库备份专用 bucket，不影响图片/附件上传。建议使用单独 R2 token 和单独 bucket。
+                    这里是数据库备份专用 bucket，不影响图片/附件上传。建议使用单独 R2 token 和单独
+                    bucket。
                   </p>
                 </div>
                 <Button
                   size="sm"
-                  onClick={() => saveConfigs(BACKUP_REMOTE_KEYS, '备份 R2', { backup_remote_provider: 's3' })}
+                  onClick={() =>
+                    saveConfigs(BACKUP_REMOTE_KEYS, '备份 R2', { backup_remote_provider: 's3' })
+                  }
                   disabled={isSavingRemote || (remoteEnabled && missingRemote.length > 0)}
-                  title={remoteEnabled && missingRemote.length > 0 ? `缺少 ${missingRemote.length} 个必填项` : undefined}
+                  title={
+                    remoteEnabled && missingRemote.length > 0
+                      ? `缺少 ${missingRemote.length} 个必填项`
+                      : undefined
+                  }
                 >
-                  {isSavingRemote ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  {isSavingRemote ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
                   <span className="ml-1">保存备份 R2</span>
                 </Button>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <ConfigToggle cfg={configs.backup_remote_enabled} editing={editing} setValue={setValue} />
-                <ConfigInput cfg={configs.backup_remote_keep_days} editing={editing} setValue={setValue} placeholder="180" />
-                <ConfigInput cfg={configs.backup_remote_bucket} editing={editing} setValue={setValue} placeholder="ss-erp-backups" />
-                <ConfigInput cfg={configs.backup_remote_endpoint} editing={editing} setValue={setValue} placeholder="https://<account-id>.r2.cloudflarestorage.com" />
-                <ConfigInput cfg={configs.backup_remote_region} editing={editing} setValue={setValue} placeholder="auto" />
-                <ConfigInput cfg={configs.backup_remote_prefix} editing={editing} setValue={setValue} placeholder="db/daily/" />
-                <ConfigInput cfg={configs.backup_remote_access_key_id} editing={editing} setValue={setValue} type="password" placeholder="Access Key ID" />
-                <ConfigInput cfg={configs.backup_remote_secret_access_key} editing={editing} setValue={setValue} type="password" placeholder="Secret Access Key" />
+                <ConfigToggle
+                  cfg={configs.backup_remote_enabled}
+                  editing={editing}
+                  setValue={setValue}
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_keep_days}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="180"
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_bucket}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="ss-erp-backups"
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_endpoint}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="https://<account-id>.r2.cloudflarestorage.com"
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_region}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="auto"
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_prefix}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="db/daily/"
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_access_key_id}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="Access Key ID"
+                />
+                <ConfigInput
+                  cfg={configs.backup_remote_secret_access_key}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="Secret Access Key"
+                />
               </div>
             </section>
           </CardContent>
@@ -890,10 +1170,11 @@ function AiSettingsPanel({
   const isSavingLimits = savingKey === 'group:AI 额度';
   const isSavingPrompts = savingKey === 'group:AI 提示词';
   const isSavingFeatures = savingKey === 'group:AI 功能开关';
-  const providerReady = provider === 'custom'
-    && (editing.ai_base_url || '').trim()
-    && (editing.ai_api_key || '').trim()
-    && (editing.ai_model || '').trim();
+  const providerReady =
+    provider === 'custom' &&
+    (editing.ai_base_url || '').trim() &&
+    (editing.ai_api_key || '').trim() &&
+    (editing.ai_model || '').trim();
 
   return (
     <div className="space-y-4">
@@ -902,7 +1183,9 @@ function AiSettingsPanel({
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
             <div className="flex items-center gap-2">
               <Badge variant="secondary">AI 翻译与生成</Badge>
-              <span className="text-sm text-muted-foreground">自定义 OpenAI-compatible 接口、缓存、用户每日额度</span>
+              <span className="text-sm text-muted-foreground">
+                自定义 OpenAI-compatible 接口、缓存、用户每日额度
+              </span>
             </div>
             <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
@@ -916,7 +1199,9 @@ function AiSettingsPanel({
                     DeepSeek、MiniMax、OpenRouter、沉浸式翻译网关等统一按自定义兼容接口配置。
                   </p>
                 </div>
-                <Badge variant={providerReady ? 'default' : 'secondary'}>{providerReady ? '接口已配置' : '默认关闭'}</Badge>
+                <Badge variant={providerReady ? 'default' : 'secondary'}>
+                  {providerReady ? '接口已配置' : '默认关闭'}
+                </Badge>
               </div>
             </section>
 
@@ -924,14 +1209,20 @@ function AiSettingsPanel({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">接口配置</h3>
-                  <p className="text-xs text-muted-foreground">Base URL 填到 /v1；系统会请求 /chat/completions。</p>
+                  <p className="text-xs text-muted-foreground">
+                    Base URL 填到 /v1；系统会请求 /chat/completions。
+                  </p>
                 </div>
                 <Button
                   size="sm"
                   onClick={() => saveConfigs(AI_PROVIDER_KEYS, 'AI 服务')}
                   disabled={isSavingProvider}
                 >
-                  {isSavingProvider ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  {isSavingProvider ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
                   <span className="ml-1">保存接口</span>
                 </Button>
               </div>
@@ -946,7 +1237,9 @@ function AiSettingsPanel({
                     type="button"
                     onClick={() => setValue('ai_provider', option.value)}
                     className={`rounded-md border px-3 py-2 text-left transition-colors ${
-                      provider === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                      provider === option.value
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/50'
                     }`}
                   >
                     <span className="block text-sm font-medium">{option.label}</span>
@@ -956,13 +1249,49 @@ function AiSettingsPanel({
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <ConfigInput cfg={configs.ai_provider_label} editing={editing} setValue={setValue} placeholder="DeepSeek / MiniMax / 自定义网关" />
-                <ConfigInput cfg={configs.ai_base_url} editing={editing} setValue={setValue} placeholder="https://api.deepseek.com/v1" />
-                <ConfigInput cfg={configs.ai_api_key} editing={editing} setValue={setValue} type="password" placeholder="API Key" />
-                <ConfigInput cfg={configs.ai_model} editing={editing} setValue={setValue} placeholder="deepseek-chat" />
-                <ConfigInput cfg={configs.ai_product_title_model} editing={editing} setValue={setValue} placeholder="可选：fast title model" />
-                <ConfigInput cfg={configs.ai_product_description_model} editing={editing} setValue={setValue} placeholder="可选：strong copy model" />
-                <ConfigInput cfg={configs.ai_timeout_ms} editing={editing} setValue={setValue} placeholder="30000" />
+                <ConfigInput
+                  cfg={configs.ai_provider_label}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="DeepSeek / MiniMax / 自定义网关"
+                />
+                <ConfigInput
+                  cfg={configs.ai_base_url}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="https://api.deepseek.com/v1"
+                />
+                <ConfigInput
+                  cfg={configs.ai_api_key}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="API Key"
+                />
+                <ConfigInput
+                  cfg={configs.ai_model}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="deepseek-chat"
+                />
+                <ConfigInput
+                  cfg={configs.ai_product_title_model}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="可选：fast title model"
+                />
+                <ConfigInput
+                  cfg={configs.ai_product_description_model}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="可选：strong copy model"
+                />
+                <ConfigInput
+                  cfg={configs.ai_timeout_ms}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="30000"
+                />
               </div>
             </section>
 
@@ -970,7 +1299,10 @@ function AiSettingsPanel({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">生图/改图接口</h3>
-                  <p className="text-xs text-muted-foreground">预留 MiniMax 或其他图片生成/重绘网关配置；当前只保存参数，后续图片处理流程会读取这里。</p>
+                  <p className="text-xs text-muted-foreground">
+                    预留 MiniMax
+                    或其他图片生成/重绘网关配置；当前只保存参数，后续图片处理流程会读取这里。
+                  </p>
                 </div>
                 <Button
                   size="sm"
@@ -978,15 +1310,40 @@ function AiSettingsPanel({
                   onClick={() => saveConfigs(AI_IMAGE_PROVIDER_KEYS, 'AI 生图服务')}
                   disabled={savingKey === 'group:AI 生图服务'}
                 >
-                  {savingKey === 'group:AI 生图服务' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  {savingKey === 'group:AI 生图服务' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
                   <span className="ml-1">保存生图接口</span>
                 </Button>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
-                <ConfigInput cfg={configs.ai_image_provider} editing={editing} setValue={setValue} placeholder="disabled / custom" />
-                <ConfigInput cfg={configs.ai_image_base_url} editing={editing} setValue={setValue} placeholder="https://api.minimax.chat/v1" />
-                <ConfigInput cfg={configs.ai_image_api_key} editing={editing} setValue={setValue} type="password" placeholder="Image API Key" />
-                <ConfigInput cfg={configs.ai_image_model} editing={editing} setValue={setValue} placeholder="image model id" />
+                <ConfigInput
+                  cfg={configs.ai_image_provider}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="disabled / custom"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_base_url}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="https://api.minimax.chat/v1"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_api_key}
+                  editing={editing}
+                  setValue={setValue}
+                  type="password"
+                  placeholder="Image API Key"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_model}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="image model id"
+                />
               </div>
             </section>
 
@@ -994,36 +1351,88 @@ function AiSettingsPanel({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">功能与额度</h3>
-                  <p className="text-xs text-muted-foreground">缓存命中不扣用户额度；额度只限制新的外部 API 调用。生图/改图当前为预留配置。</p>
+                  <p className="text-xs text-muted-foreground">
+                    缓存命中不扣用户额度；额度只限制新的外部 API 调用。生图/改图当前为预留配置。
+                  </p>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => saveConfigs(AI_FEATURE_KEYS, 'AI 功能开关')} disabled={isSavingFeatures}>
-                    {isSavingFeatures ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => saveConfigs(AI_FEATURE_KEYS, 'AI 功能开关')}
+                    disabled={isSavingFeatures}
+                  >
+                    {isSavingFeatures ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
                     <span className="ml-1">保存开关</span>
                   </Button>
-                  <Button size="sm" onClick={() => saveConfigs(AI_LIMIT_KEYS, 'AI 额度')} disabled={isSavingLimits}>
-                    {isSavingLimits ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <Button
+                    size="sm"
+                    onClick={() => saveConfigs(AI_LIMIT_KEYS, 'AI 额度')}
+                    disabled={isSavingLimits}
+                  >
+                    {isSavingLimits ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
                     <span className="ml-1">保存额度</span>
                   </Button>
                 </div>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
-                <ConfigToggle cfg={configs.ai_category_translation_enabled} editing={editing} setValue={setValue} />
-                <ConfigToggle cfg={configs.ai_product_generation_enabled} editing={editing} setValue={setValue} />
-                <ConfigToggle cfg={configs.ai_image_generation_enabled} editing={editing} setValue={setValue} />
-                <ConfigInput cfg={configs.ai_user_daily_category_translation_limit} editing={editing} setValue={setValue} placeholder="1000" />
-                <ConfigInput cfg={configs.ai_user_daily_product_generation_limit} editing={editing} setValue={setValue} placeholder="20" />
-                <ConfigInput cfg={configs.ai_user_daily_image_generation_limit} editing={editing} setValue={setValue} placeholder="5" />
-                <ConfigInput cfg={configs.ai_daily_budget_cents} editing={editing} setValue={setValue} placeholder="0" />
+                <ConfigToggle
+                  cfg={configs.ai_category_translation_enabled}
+                  editing={editing}
+                  setValue={setValue}
+                />
+                <ConfigToggle
+                  cfg={configs.ai_product_generation_enabled}
+                  editing={editing}
+                  setValue={setValue}
+                />
+                <ConfigToggle
+                  cfg={configs.ai_image_generation_enabled}
+                  editing={editing}
+                  setValue={setValue}
+                />
+                <ConfigInput
+                  cfg={configs.ai_user_daily_category_translation_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="1000"
+                />
+                <ConfigInput
+                  cfg={configs.ai_user_daily_product_generation_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="20"
+                />
+                <ConfigInput
+                  cfg={configs.ai_user_daily_image_generation_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="5"
+                />
+                <ConfigInput
+                  cfg={configs.ai_daily_budget_cents}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="0"
+                />
               </div>
             </section>
-
 
             <section className="space-y-3 rounded-md border p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">AI 用量诊断</h3>
-                  <p className="text-xs text-muted-foreground">按今天汇总外部请求、缓存命中、失败和 token 用量。</p>
+                  <p className="text-xs text-muted-foreground">
+                    按今天汇总外部请求、缓存命中、失败和 token 用量。
+                  </p>
                 </div>
                 <Badge variant="outline">{aiUsage?.date || '-'}</Badge>
               </div>
@@ -1034,17 +1443,23 @@ function AiSettingsPanel({
                 <MetricChip label="Tokens" value={String(aiUsage?.total?.totalTokens ?? 0)} />
               </div>
               <div className="grid gap-2 md:grid-cols-2">
-                {['category_term', 'product_title', 'product_description', 'image_text'].map((namespace) => {
-                  const row = aiUsage?.byNamespace?.[namespace];
-                  return (
-                    <div key={namespace} className="rounded-md border bg-muted/20 px-3 py-2 text-xs">
-                      <div className="font-medium">{namespace}</div>
-                      <div className="mt-1 text-muted-foreground">
-                        请求 {row?.requestCount ?? 0} / 缓存 {row?.cacheHitCount ?? 0} / 失败 {row?.failureCount ?? 0} / tokens {row?.totalTokens ?? 0}
+                {['category_term', 'product_title', 'product_description', 'image_text'].map(
+                  (namespace) => {
+                    const row = aiUsage?.byNamespace?.[namespace];
+                    return (
+                      <div
+                        key={namespace}
+                        className="rounded-md border bg-muted/20 px-3 py-2 text-xs"
+                      >
+                        <div className="font-medium">{namespace}</div>
+                        <div className="mt-1 text-muted-foreground">
+                          请求 {row?.requestCount ?? 0} / 缓存 {row?.cacheHitCount ?? 0} / 失败{' '}
+                          {row?.failureCount ?? 0} / tokens {row?.totalTokens ?? 0}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  },
+                )}
               </div>
             </section>
 
@@ -1052,16 +1467,38 @@ function AiSettingsPanel({
               <summary className="cursor-pointer text-sm font-medium">提示词</summary>
               <div className="mt-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs text-muted-foreground">类目翻译和商品生成提示词分开保存，避免互相污染缓存。</p>
-                  <Button size="sm" onClick={() => saveConfigs(AI_PROMPT_KEYS, 'AI 提示词')} disabled={isSavingPrompts}>
-                    {isSavingPrompts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  <p className="text-xs text-muted-foreground">
+                    类目翻译和商品生成提示词分开保存，避免互相污染缓存。
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() => saveConfigs(AI_PROMPT_KEYS, 'AI 提示词')}
+                    disabled={isSavingPrompts}
+                  >
+                    {isSavingPrompts ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
                     <span className="ml-1">保存提示词</span>
                   </Button>
                 </div>
                 <div className="grid gap-3">
-                  <ConfigInput cfg={configs.ai_category_translation_prompt} editing={editing} setValue={setValue} />
-                  <ConfigInput cfg={configs.ai_product_title_prompt} editing={editing} setValue={setValue} />
-                  <ConfigInput cfg={configs.ai_product_description_prompt} editing={editing} setValue={setValue} />
+                  <ConfigInput
+                    cfg={configs.ai_category_translation_prompt}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                  <ConfigInput
+                    cfg={configs.ai_product_title_prompt}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                  <ConfigInput
+                    cfg={configs.ai_product_description_prompt}
+                    editing={editing}
+                    setValue={setValue}
+                  />
                 </div>
               </div>
             </details>
@@ -1080,16 +1517,32 @@ function MetricChip({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-function BackupStatusRow({ label, value, monospace = false, ok }: { label: string; value: string; monospace?: boolean; ok?: boolean }) {
+function BackupStatusRow({
+  label,
+  value,
+  monospace = false,
+  ok,
+}: {
+  label: string;
+  value: string;
+  monospace?: boolean;
+  ok?: boolean;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 border-b py-1.5 last:border-b-0">
       <span className="text-muted-foreground">{label}</span>
-      <span className={`flex min-w-0 items-center gap-1 text-right ${monospace ? 'font-mono text-xs' : ''}`}>
-        {typeof ok === 'boolean' && (ok
-          ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-600" />
-          : <XCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="truncate" title={value}>{value}</span>
+      <span
+        className={`flex min-w-0 items-center gap-1 text-right ${monospace ? 'font-mono text-xs' : ''}`}
+      >
+        {typeof ok === 'boolean' &&
+          (ok ? (
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-600" />
+          ) : (
+            <XCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          ))}
+        <span className="truncate" title={value}>
+          {value}
+        </span>
       </span>
     </div>
   );
@@ -1140,12 +1593,71 @@ function UploadSettingsPanel({
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const mode = editing.upload_storage_backend || 'env';
   const isSavingMode = savingKey === 'upload_storage_backend';
-  const isSavingR2 = savingKey === 'group:R2 对象存储';
+  const isSavingR2 = savingKey === 'group:S3 兼容对象存储';
   const isSavingSecurity = savingKey === 'group:上传保护';
   const isSavingAdvanced = savingKey === 'group:上传高级选项';
 
   const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
-  const filledR2Count = R2_REQUIRED_KEYS.filter((key) => (editing[key] || '').trim().length > 0).length;
+  const inferredProvider = inferObjectStorageProvider(editing.upload_oss_endpoint || '');
+  const savedProvider = editing.upload_oss_provider as ObjectStorageProvider | undefined;
+  const provider =
+    savedProvider && !(savedProvider === 's3-compatible' && inferredProvider !== 's3-compatible')
+      ? savedProvider
+      : inferredProvider;
+  const providerLabel =
+    provider === 'aliyun-oss'
+      ? '阿里云 OSS'
+      : provider === 'cloudflare-r2'
+        ? 'Cloudflare R2'
+        : 'S3 兼容';
+  const aliyunRamPolicy =
+    provider === 'aliyun-oss' && editing.upload_oss_bucket
+      ? JSON.stringify(getAliyunOssRamPolicy(editing.upload_oss_bucket), null, 2)
+      : '';
+
+  const applyProviderPreset = (nextProvider: ObjectStorageProvider) => {
+    const preset = getObjectStorageProviderPreset(nextProvider, {
+      region: editing.upload_oss_region,
+      bucket: editing.upload_oss_bucket,
+    });
+    const next: Record<string, string> = {
+      ...editing,
+      upload_oss_provider: nextProvider,
+      upload_storage_backend: 'oss',
+    };
+    if (nextProvider === 'aliyun-oss') {
+      next.upload_oss_region = preset.region;
+      next.upload_oss_endpoint = preset.endpoint;
+      next.upload_oss_cdn_domain = preset.publicDomain;
+    } else if (nextProvider === 'cloudflare-r2') {
+      next.upload_oss_region = 'auto';
+      if (inferObjectStorageProvider(editing.upload_oss_endpoint || '') !== 'cloudflare-r2') {
+        next.upload_oss_endpoint = '';
+        next.upload_oss_cdn_domain = '';
+      }
+    } else if (inferObjectStorageProvider(editing.upload_oss_endpoint || '') !== 's3-compatible') {
+      next.upload_oss_region = 'auto';
+      next.upload_oss_endpoint = '';
+      next.upload_oss_cdn_domain = '';
+    }
+    setEditing(next);
+  };
+
+  const setStorageValue = (key: string, value: string) => {
+    const next = { ...editing, [key]: value };
+    if (provider === 'aliyun-oss' && (key === 'upload_oss_region' || key === 'upload_oss_bucket')) {
+      const preset = getObjectStorageProviderPreset('aliyun-oss', {
+        region: next.upload_oss_region,
+        bucket: next.upload_oss_bucket,
+      });
+      next.upload_oss_endpoint = preset.endpoint;
+      next.upload_oss_cdn_domain = preset.publicDomain;
+    }
+    setEditing(next);
+  };
+  const filledR2Count = R2_REQUIRED_KEYS.filter(
+    (key) => (editing[key] || '').trim().length > 0,
+  ).length;
   const missingR2Keys = R2_REQUIRED_KEYS.filter((key) => (editing[key] || '').trim().length === 0);
   const hasAllR2Required = missingR2Keys.length === 0;
   const isR2Ready = filledR2Count === R2_REQUIRED_KEYS.length && mode === 'oss';
@@ -1157,174 +1669,364 @@ function UploadSettingsPanel({
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
             <div className="flex items-center gap-2">
               <Badge variant="secondary">上传与对象存储</Badge>
-              <span className="text-sm text-muted-foreground">当前重点：R2 图片/附件上传测试</span>
+              <span className="text-sm text-muted-foreground">S3 兼容对象存储配置中心</span>
             </div>
             <span className="text-xs text-muted-foreground group-open:hidden">展开</span>
             <span className="hidden text-xs text-muted-foreground group-open:inline">收起</span>
           </summary>
           <CardContent className="space-y-6 border-t pt-5">
-          <section className="rounded-md border bg-muted/20 p-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h3 className="text-sm font-medium">R2 测试状态</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  这里是图片和公告附件上传用的对象存储，不是数据库备份。填完必填项后，到"接口与集成"页面点 OSS 测试。
-                </p>
-              </div>
-              <Badge variant={isR2Ready ? 'default' : 'secondary'}>
-                {isR2Ready ? 'R2 已启用' : `R2 必填项 ${filledR2Count}/${R2_REQUIRED_KEYS.length}`}
-              </Badge>
-            </div>
-            {!isR2Ready && (
-              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                {!hasAllR2Required ? (
-                  <>
-                    <span className="font-medium">还不能测试 R2 上传：</span>
-                    <span>缺少 {missingR2Keys.map((key) => R2_REQUIRED_LABELS[key] || key).join('、')}。</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="font-medium">R2 参数已填完，但尚未启用：</span>
-                    <span>请点击“保存 R2”，系统会自动切换为 R2 / OSS 模式。</span>
-                  </>
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium">存储模式</h3>
-                <p className="text-xs text-muted-foreground">
-                  当前：{mode === 'oss' ? 'R2/OSS' : mode === 'ozon-cdn' ? 'OZON CDN' : mode === 'local' ? '本地存储' : '跟随服务器环境'}
-                  {mode === 'env' && filledR2Count > 0 ? '，已检测到部分 R2 配置但还没切换到 R2' : ''}
-                </p>
-              </div>
-              <Button
-                size="sm"
-                onClick={() => saveConfig('upload_storage_backend')}
-                disabled={isSavingMode || editing.upload_storage_backend === configs.upload_storage_backend?.value}
-              >
-                {isSavingMode ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">保存模式</span>
-              </Button>
-            </div>
-
-            <div className="grid gap-2 md:grid-cols-4">
-              {[
-                { value: 'oss', label: 'R2 / OSS', desc: '云端推荐' },
-                { value: 'env', label: '服务器环境', desc: '高级：读取 .env' },
-                { value: 'ozon-cdn', label: 'OZON CDN', desc: '备用旧链路' },
-                { value: 'local', label: '本地存储', desc: '离线版' },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => setValue('upload_storage_backend', option.value)}
-                  className={`rounded-md border px-3 py-2 text-left transition-colors ${
-                    mode === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
-                  }`}
-                >
-                  <span className="block text-sm font-medium">{option.label}</span>
-                  <span className="text-xs text-muted-foreground">{option.desc}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="space-y-3 rounded-md border p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium">R2 必填项</h3>
-                <p className="text-xs text-muted-foreground">只填下面 5 项即可开始测试上传；保存会自动切换为 R2/OSS 模式。</p>
-              </div>
-              <Button
-                size="sm"
-                onClick={() => saveConfigs(['upload_storage_backend', ...R2_REQUIRED_KEYS], 'R2 对象存储', { upload_storage_backend: 'oss' })}
-                disabled={isSavingR2 || !hasAllR2Required}
-                title={!hasAllR2Required ? '请先补齐 R2 必填项' : undefined}
-              >
-                {isSavingR2 ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                <span className="ml-1">{hasAllR2Required ? '保存 R2' : `缺少 ${missingR2Keys.length} 项`}</span>
-              </Button>
-            </div>
-
-            <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              Cloudflare R2 的 Endpoint 只是连接地址；Bucket 名称和 R2 API Token 生成的 Access Key ID / Secret Access Key 也必须填写。
-            </p>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <ConfigInput cfg={configs.upload_oss_endpoint} editing={editing} setValue={setValue} placeholder="https://<account-id>.r2.cloudflarestorage.com" />
-              <ConfigInput cfg={configs.upload_oss_bucket} editing={editing} setValue={setValue} placeholder="Bucket 名称" />
-              <ConfigInput cfg={configs.upload_oss_access_key_id} editing={editing} setValue={setValue} placeholder="Access Key ID" />
-              <ConfigInput cfg={configs.upload_oss_access_key_secret} editing={editing} setValue={setValue} placeholder="Secret Access Key" type="password" />
-              <ConfigInput cfg={configs.upload_oss_region} editing={editing} setValue={setValue} placeholder="auto" />
-            </div>
-
-            <details className="rounded-md border border-dashed px-3 py-2">
-              <summary className="cursor-pointer text-sm font-medium">高级可选：自定义访问域名 / 旧 CDN / 本地 Base URL</summary>
-              <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div className="space-y-1 text-xs text-muted-foreground">
-                  <p>
-                    当前走 /api/cdn 代理时，建议把 <code className="font-mono">upload_local_base_url</code> 设为 {RECOMMENDED_UPLOAD_BASE_URL}。
-                  </p>
-                  <p>
-                    <code className="font-mono">upload_oss_cdn_domain</code> 保持为空，除非你配置了 R2 自定义公开域名或 r2.dev。
+            <section className="rounded-md border bg-muted/20 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">对象存储状态</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    这里是图片和公告附件上传用的对象存储，不是数据库备份。填完必填项后，到"接口与集成"页面点
+                    OSS 测试。
                   </p>
                 </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setValue('upload_local_base_url', RECOMMENDED_UPLOAD_BASE_URL)}
-                  >
-                    填入推荐 Base URL
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => saveConfigs(UPLOAD_ADVANCED_KEYS, '上传高级选项')}
-                    disabled={isSavingAdvanced}
-                  >
-                    {isSavingAdvanced ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                    <span className="ml-1">保存高级选项</span>
-                  </Button>
+                <Badge variant={isR2Ready ? 'default' : 'secondary'}>
+                  {isR2Ready
+                    ? `${providerLabel} 已启用`
+                    : `对象存储必填项 ${filledR2Count}/${R2_REQUIRED_KEYS.length}`}
+                </Badge>
+              </div>
+              {!isR2Ready && (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  {!hasAllR2Required ? (
+                    <>
+                      <span className="font-medium">还不能测试对象存储：</span>
+                      <span>
+                        缺少 {missingR2Keys.map((key) => R2_REQUIRED_LABELS[key] || key).join('、')}
+                        。
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium">连接参数已填完，但尚未启用：</span>
+                      <span>请保存对象存储配置，系统会自动切换为 S3 兼容模式。</span>
+                    </>
+                  )}
                 </div>
-              </div>
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <ConfigInput cfg={configs.upload_oss_cdn_domain} editing={editing} setValue={setValue} placeholder="自定义 CDN 域名，可留空" />
-                <ConfigInput cfg={configs.upload_ozon_cdn_relay_url} editing={editing} setValue={setValue} placeholder="OZON CDN 中转，可留空" />
-                <ConfigInput cfg={configs.upload_local_base_url} editing={editing} setValue={setValue} placeholder={RECOMMENDED_UPLOAD_BASE_URL} />
-              </div>
-            </details>
-          </section>
+              )}
+            </section>
 
-          <details className="rounded-md border p-4">
-            <summary className="cursor-pointer text-sm font-medium">上传保护（默认值够用，测试 R2 可先不改）</summary>
-            <div className="mt-4 space-y-3">
+            <section className="space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">频率限制、每日配额和 /cdn 防盗链。用户量上来或被刷上传时再重点调整。</p>
+                <div>
+                  <h3 className="text-sm font-medium">存储模式</h3>
+                  <p className="text-xs text-muted-foreground">
+                    当前：
+                    {mode === 'oss'
+                      ? providerLabel
+                      : mode === 'ozon-cdn'
+                        ? 'OZON CDN'
+                        : mode === 'local'
+                          ? '本地存储'
+                          : '跟随服务器环境'}
+                    {mode === 'env' && filledR2Count > 0
+                      ? '，已检测到部分对象存储配置但还没启用'
+                      : ''}
+                  </p>
+                </div>
                 <Button
                   size="sm"
-                  onClick={() => saveConfigs(UPLOAD_SECURITY_KEYS, '上传保护')}
-                  disabled={isSavingSecurity}
+                  onClick={() => saveConfig('upload_storage_backend')}
+                  disabled={
+                    isSavingMode ||
+                    editing.upload_storage_backend === configs.upload_storage_backend?.value
+                  }
                 >
-                  {isSavingSecurity ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                  <span className="ml-1">保存保护</span>
+                  {isSavingMode ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存模式</span>
                 </Button>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <ConfigToggle cfg={configs.upload_rate_limit_enabled} editing={editing} setValue={setValue} />
-                <ConfigInput cfg={configs.upload_rate_limit_per_minute} editing={editing} setValue={setValue} />
-                <ConfigToggle cfg={configs.upload_daily_quota_enabled} editing={editing} setValue={setValue} />
-                <ConfigInput cfg={configs.upload_daily_quota_mb} editing={editing} setValue={setValue} />
-                <ConfigToggle cfg={configs.upload_referer_check_enabled} editing={editing} setValue={setValue} />
+              <div className="grid gap-2 md:grid-cols-4">
+                {[
+                  { value: 'oss', label: 'S3 对象存储', desc: '阿里云 OSS / R2 / S3' },
+                  { value: 'env', label: '服务器环境', desc: '高级：读取 .env' },
+                  { value: 'ozon-cdn', label: 'OZON CDN', desc: '备用旧链路' },
+                  { value: 'local', label: '本地存储', desc: '离线版' },
+                ].map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setValue('upload_storage_backend', option.value)}
+                    className={`rounded-md border px-3 py-2 text-left transition-colors ${
+                      mode === option.value ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
               </div>
-            </div>
-          </details>
+            </section>
+
+            <section className="space-y-4 rounded-md border p-4">
+              <div>
+                <h3 className="text-sm font-medium">服务商预设</h3>
+                <p className="text-xs text-muted-foreground">
+                  选择服务商后自动填充 Endpoint、Region 和推荐公网域名；AccessKey 不会被自动修改。
+                </p>
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
+                {(
+                  [
+                    { value: 'aliyun-oss', label: '阿里云 OSS', desc: '国内 ECS 与 Ozon 图床' },
+                    { value: 'cloudflare-r2', label: 'Cloudflare R2', desc: '国外 VPS 与全球访问' },
+                    { value: 's3-compatible', label: 'S3 兼容', desc: 'AWS S3、MinIO 或其他服务' },
+                  ] as Array<{ value: ObjectStorageProvider; label: string; desc: string }>
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => applyProviderPreset(option.value)}
+                    className={`rounded-md border px-3 py-3 text-left transition-colors ${provider === option.value ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'hover:bg-muted/50'}`}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+              {provider === 'aliyun-oss' && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="aliyun-oss-region">阿里云地域</Label>
+                    <select
+                      id="aliyun-oss-region"
+                      value={editing.upload_oss_region || 'cn-guangzhou'}
+                      onChange={(event) => setStorageValue('upload_oss_region', event.target.value)}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {ALIYUN_OSS_REGIONS.map((region) => (
+                        <option key={region.value} value={region.value}>
+                          {region.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">阿里云检查项</p>
+                    <p className="mt-1">
+                      保存前确认 Bucket 公共读、RAM 最小权限和 CORS。HeadBucket
+                      兼容告警不影响上传、读取和删除测试。
+                    </p>
+                    {aliyunRamPolicy && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer font-medium text-foreground">
+                          RAM 最小权限策略
+                        </summary>
+                        <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-[11px]">
+                          {aliyunRamPolicy}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <Badge variant="outline">自动填充 Endpoint</Badge>
+                <Badge variant="outline">测试公网匿名读取</Badge>
+                <Badge variant="outline">RAM 最小权限</Badge>
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-medium">对象存储必填项</h3>
+                  <p className="text-xs text-muted-foreground">
+                    填写连接与凭据后即可测试上传；阿里云 OSS 会根据地域和 Bucket 自动生成推荐地址。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    saveConfigs(
+                      [
+                        'upload_storage_backend',
+                        'upload_oss_provider',
+                        ...R2_REQUIRED_KEYS,
+                        'upload_oss_cdn_domain',
+                      ],
+                      'S3 兼容对象存储',
+                      { upload_storage_backend: 'oss', upload_oss_provider: provider },
+                    )
+                  }
+                  disabled={isSavingR2 || !hasAllR2Required}
+                  title={!hasAllR2Required ? '请先补齐对象存储必填项' : undefined}
+                >
+                  {isSavingR2 ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">
+                    {hasAllR2Required ? '保存对象存储' : `缺少 ${missingR2Keys.length} 项`}
+                  </span>
+                </Button>
+              </div>
+
+              <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                服务端统一使用 S3 兼容接口；选择服务商后可自动填充 Endpoint、Region 和推荐公网域名。
+              </p>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput
+                  cfg={configs.upload_oss_endpoint}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="https://<account-id>.r2.cloudflarestorage.com"
+                />
+                <ConfigInput
+                  cfg={configs.upload_oss_bucket}
+                  editing={editing}
+                  setValue={setStorageValue}
+                  placeholder="Bucket 名称"
+                />
+                <ConfigInput
+                  cfg={configs.upload_oss_access_key_id}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="Access Key ID"
+                />
+                <ConfigInput
+                  cfg={configs.upload_oss_access_key_secret}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="Secret Access Key"
+                  type="password"
+                />
+                {provider !== 'aliyun-oss' && (
+                  <ConfigInput
+                    cfg={configs.upload_oss_region}
+                    editing={editing}
+                    setValue={setStorageValue}
+                    placeholder="auto"
+                  />
+                )}
+              </div>
+
+              <details className="rounded-md border border-dashed px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium">
+                  高级可选：自定义访问域名 / 旧 CDN / 本地 Base URL
+                </summary>
+                <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <p>
+                      公网域名留空并走 /api/cdn 代理时，建议把{' '}
+                      <code className="font-mono">upload_local_base_url</code> 设为{' '}
+                      {RECOMMENDED_UPLOAD_BASE_URL}。
+                    </p>
+                    <p>
+                      <code className="font-mono">upload_oss_cdn_domain</code> 可填写阿里云 Bucket
+                      公网域名、CDN 域名、R2 自定义域名或 r2.dev。
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setValue('upload_local_base_url', RECOMMENDED_UPLOAD_BASE_URL)}
+                    >
+                      填入推荐 Base URL
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => saveConfigs(UPLOAD_ADVANCED_KEYS, '上传高级选项')}
+                      disabled={isSavingAdvanced}
+                    >
+                      {isSavingAdvanced ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )}
+                      <span className="ml-1">保存高级选项</span>
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <ConfigInput
+                    cfg={configs.upload_oss_cdn_domain}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="自定义 CDN 域名，可留空"
+                  />
+                  <ConfigInput
+                    cfg={configs.upload_ozon_cdn_relay_url}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder="OZON CDN 中转，可留空"
+                  />
+                  <ConfigInput
+                    cfg={configs.upload_local_base_url}
+                    editing={editing}
+                    setValue={setValue}
+                    placeholder={RECOMMENDED_UPLOAD_BASE_URL}
+                  />
+                </div>
+              </details>
+            </section>
+
+            <details className="rounded-md border p-4">
+              <summary className="cursor-pointer text-sm font-medium">
+                上传保护（默认值够用，测试 R2 可先不改）
+              </summary>
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    频率限制、每日配额和 /cdn 防盗链。用户量上来或被刷上传时再重点调整。
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={() => saveConfigs(UPLOAD_SECURITY_KEYS, '上传保护')}
+                    disabled={isSavingSecurity}
+                  >
+                    {isSavingSecurity ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
+                    <span className="ml-1">保存保护</span>
+                  </Button>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <ConfigToggle
+                    cfg={configs.upload_rate_limit_enabled}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                  <ConfigInput
+                    cfg={configs.upload_rate_limit_per_minute}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                  <ConfigToggle
+                    cfg={configs.upload_daily_quota_enabled}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                  <ConfigInput
+                    cfg={configs.upload_daily_quota_mb}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                  <ConfigToggle
+                    cfg={configs.upload_referer_check_enabled}
+                    editing={editing}
+                    setValue={setValue}
+                  />
+                </div>
+              </div>
+            </details>
           </CardContent>
         </details>
       </Card>
@@ -1378,7 +2080,9 @@ function ConfigToggle({
     <div className="flex items-start justify-between gap-3 rounded-md border px-3 py-2">
       <div>
         <Label className="text-sm font-medium">{cfg.label || cfg.key}</Label>
-        {cfg.description && <p className="text-xs text-muted-foreground mt-0.5">{cfg.description}</p>}
+        {cfg.description && (
+          <p className="text-xs text-muted-foreground mt-0.5">{cfg.description}</p>
+        )}
       </div>
       <button
         type="button"

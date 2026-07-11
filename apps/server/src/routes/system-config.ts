@@ -26,6 +26,10 @@ const upsertSchema = z.object({
   description: z.string().optional(),
 });
 
+const batchUpdateSchema = z.object({
+  items: z.array(z.object({ key: z.string().min(1), value: z.string() })).min(1).max(50),
+});
+
 const SECRET_FIELDS: string[] = [];
 
 function isSecretKey(key: string): boolean {
@@ -159,6 +163,73 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       byNamespace[namespace] = await store.getDailySummary({ date, namespace });
     }
     return reply.send({ code: 1, msg: 'ok', data: { date, total, byNamespace } });
+  });
+
+  app.put('/batch', async (request, reply) => {
+    const parsed = batchUpdateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.errors[0]?.message ?? '参数错误' });
+    }
+
+    const duplicateKeys = parsed.data.items.filter((item, index, items) => items.findIndex((other) => other.key === item.key) !== index);
+    if (duplicateKeys.length > 0) {
+      return reply.status(400).send({ code: 0, msg: `配置项重复: ${duplicateKeys[0]?.key}` });
+    }
+
+    const prepared = [] as Array<{
+      key: SystemConfigKey;
+      oldValue: string;
+      displayValue: string;
+      storedValue: string;
+      existing: { key: string; value: string } | null;
+    }>;
+
+    for (const item of parsed.data.items) {
+      if (!validateKey(item.key)) {
+        return reply.status(400).send({ code: 0, msg: `未知配置项: ${item.key}` });
+      }
+      const key = item.key as SystemConfigKey;
+      const existing = await prisma.systemConfig.findUnique({ where: { key } });
+      const oldValue = existing ? decryptConfigValue(key, existing.value) : '';
+      const finalValue = mergeMaskedValue(key, item.value, oldValue);
+      const validated = SystemConfigSchema[key].safeParse(coerceConfigValue(key, finalValue));
+      if (!validated.success) {
+        const errMsg = validated.error.errors[0]?.message || '值不符合要求';
+        return reply.status(400).send({ code: 0, msg: `${key}: ${errMsg}` });
+      }
+      const displayValue = String(validated.data);
+      prepared.push({ key, oldValue, displayValue, storedValue: encryptConfigValue(key, displayValue), existing });
+    }
+
+    const configs = await prisma.$transaction(prepared.map(({ key, storedValue }) => {
+      const meta = SystemConfigMeta[key];
+      return prisma.systemConfig.upsert({
+        where: { key },
+        create: { key, value: storedValue, label: meta.label, group: meta.group, description: meta.description },
+        update: { value: storedValue },
+      });
+    }));
+
+    const actor = (request as any).user;
+    for (const item of prepared) {
+      await logAudit({
+        actorId: actor.actorUserId || actor.userId,
+        actorRole: actor.role,
+        action: 'system_config_update',
+        target: item.key,
+        before: item.existing ? { value: maskSecretValue(item.key, item.oldValue) } : null,
+        after: { value: maskSecretValue(item.key, item.displayValue) },
+        force: item.key === 'security_audit_log_enabled',
+        ...extractRequestMeta(request),
+      });
+      invalidateConfigCaches(item.key);
+    }
+
+    return reply.send({
+      code: 1,
+      msg: '已批量保存',
+      data: configs.map((config) => ({ ...config, value: toPublicConfigValue(config.key, config.value) })),
+    });
   });
 
   app.get('/:key', async (request, reply) => {

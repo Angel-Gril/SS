@@ -33,14 +33,30 @@ export const SystemConfigSchema = {
   ai_category_translation_enabled: z.boolean().default(false),
   ai_product_generation_enabled: z.boolean().default(false),
   ai_image_generation_enabled: z.boolean().default(false),
-  ai_category_translation_prompt: z.string().default('Translate this Ozon category term from Russian to concise Simplified Chinese. Return only the translated term.'),
-  ai_product_title_prompt: z.string().default('Generate a Russian Ozon-localized product title from the source product profile. Start with the concrete product type, remove China-platform/live-stream/wholesale noise, and return JSON with title, searchTags, warnings, confidence.'),
-  ai_product_description_prompt: z.string().default('Generate Russian Ozon-localized product copy from the source product profile. Use only verified facts and return JSON with description, bulletPoints, searchTags, warnings, confidence.'),
+  ai_category_translation_prompt: z
+    .string()
+    .default(
+      'Translate this Ozon category term from Russian to concise Simplified Chinese. Return only the translated term.',
+    ),
+  ai_product_title_prompt: z
+    .string()
+    .default(
+      'Generate a Russian Ozon-localized product title from the source product profile. Start with the concrete product type, remove China-platform/live-stream/wholesale noise, and return JSON with title, searchTags, warnings, confidence.',
+    ),
+  ai_product_description_prompt: z
+    .string()
+    .default(
+      'Generate Russian Ozon-localized product copy from the source product profile. Use only verified facts and return JSON with description, bulletPoints, searchTags, warnings, confidence.',
+    ),
   ai_image_provider: z.enum(['disabled', 'custom']).default('disabled'),
   ai_image_base_url: z.string().default(''),
   ai_image_api_key: z.string().default(''),
   ai_image_model: z.string().default(''),
-  ai_image_prompt: z.string().default('Generate or edit product images suitable for Ozon marketplace listing. Return image assets only.'),
+  ai_image_prompt: z
+    .string()
+    .default(
+      'Generate or edit product images suitable for Ozon marketplace listing. Return image assets only.',
+    ),
   ai_user_daily_image_generation_limit: z.number().int().min(0).max(100000).default(5),
 
   // ─── auth / challenge ───
@@ -66,9 +82,24 @@ export const SystemConfigSchema = {
 
   // ─── listing / Ozon publish workers ───
   listing_task_refresh_interval_ms: z.number().int().min(5000).max(300000).default(30000),
-  listing_task_refresh_batch_size: z.number().int().min(1).max(200).default(process.env.NODE_ENV === 'production' ? 30 : 10),
-  listing_task_refresh_concurrency: z.number().int().min(1).max(30).default(process.env.NODE_ENV === 'production' ? 6 : 3),
-  listing_task_refresh_lookback_hours: z.number().int().min(1).max(168).default(process.env.NODE_ENV === 'production' ? 72 : 48),
+  listing_task_refresh_batch_size: z
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .default(process.env.NODE_ENV === 'production' ? 30 : 10),
+  listing_task_refresh_concurrency: z
+    .number()
+    .int()
+    .min(1)
+    .max(30)
+    .default(process.env.NODE_ENV === 'production' ? 6 : 3),
+  listing_task_refresh_lookback_hours: z
+    .number()
+    .int()
+    .min(1)
+    .max(168)
+    .default(process.env.NODE_ENV === 'production' ? 72 : 48),
   listing_ozon_api_timeout_ms: z.number().int().min(5000).max(60000).default(20000),
   // ─── upload ───
   upload_rate_limit_enabled: z.boolean().default(true),
@@ -77,6 +108,9 @@ export const SystemConfigSchema = {
   upload_daily_quota_mb: z.number().int().min(100).max(10000).default(1024),
   upload_referer_check_enabled: z.boolean().default(true),
   upload_storage_backend: z.enum(['env', 'local', 'oss', 'ozon-cdn']).default('env'),
+  upload_oss_provider: z
+    .enum(['aliyun-oss', 'cloudflare-r2', 's3-compatible'])
+    .default('s3-compatible'),
   upload_oss_endpoint: z.string().default(''),
   upload_oss_bucket: z.string().default(''),
   upload_oss_access_key_id: z.string().default(''),
@@ -108,7 +142,10 @@ export const SystemConfigSchema = {
 
   // ─── backup ───
   backup_enabled: z.boolean().default(true),
-  backup_schedule: z.string().regex(/^[\d\s\*\/\-,]+$/).default('0 3 * * *'),
+  backup_schedule: z
+    .string()
+    .regex(/^[\d\s\*\/\-,]+$/)
+    .default('0 3 * * *'),
   backup_local_keep_days: z.number().int().min(1).max(365).default(7),
   backup_remote_enabled: z.boolean().default(false),
   backup_remote_keep_days: z.number().int().min(1).max(3650).default(30),
@@ -140,7 +177,7 @@ export const SystemConfigSchema = {
 } as const;
 
 export type SystemConfigKey = keyof typeof SystemConfigSchema;
-export type SystemConfigValue<K extends SystemConfigKey> = z.infer<typeof SystemConfigSchema[K]>;
+export type SystemConfigValue<K extends SystemConfigKey> = z.infer<(typeof SystemConfigSchema)[K]>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 元数据：label、group、description、是否敏感
@@ -155,124 +192,584 @@ export interface ConfigMeta {
 }
 
 export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
-  feature_customer_chat: { label: '客服聊天功能', group: 'feature', description: '是否启用 OZON 店铺客服聊天集成' },
-  feature_image_translate: { label: '图片翻译功能', group: 'feature', description: '是否启用图片 OCR + 翻译' },
-  feature_oss_upload: { label: 'OSS 上传', group: 'feature', description: '是否启用 OSS 对象存储上传（关闭后走本地或 OZON CDN）' },
-  feature_ozon_cdn_fallback: { label: 'OZON CDN 降级', group: 'feature', description: 'OSS 上传失败时自动降级到 OZON CDN' },
-  feature_extension_list_overlay: { label: '扩展列表覆盖层', group: 'feature', description: '浏览器扩展在 OZON 商品列表页显示覆盖层' },
-  feature_new_listing_flow: { label: '新版上架流程', group: 'feature', description: '启用新版上架流程（实验性）' },
-  feature_announcement_popup: { label: '公告弹窗', group: 'feature', description: '是否在用户登录后弹出未读公告' },
-  feature_sms_register: { label: '短信注册验证', group: 'auth', description: '云端模式注册时是否要求短信验证码' },
-  feature_turnstile_login: { label: 'Turnstile 登录验证', group: 'auth', description: '云端模式登录/发送短信时是否要求 Cloudflare Turnstile 人机验证' },
+  feature_customer_chat: {
+    label: '客服聊天功能',
+    group: 'feature',
+    description: '是否启用 OZON 店铺客服聊天集成',
+  },
+  feature_image_translate: {
+    label: '图片翻译功能',
+    group: 'feature',
+    description: '是否启用图片 OCR + 翻译',
+  },
+  feature_oss_upload: {
+    label: 'OSS 上传',
+    group: 'feature',
+    description: '是否启用 OSS 对象存储上传（关闭后走本地或 OZON CDN）',
+  },
+  feature_ozon_cdn_fallback: {
+    label: 'OZON CDN 降级',
+    group: 'feature',
+    description: 'OSS 上传失败时自动降级到 OZON CDN',
+  },
+  feature_extension_list_overlay: {
+    label: '扩展列表覆盖层',
+    group: 'feature',
+    description: '浏览器扩展在 OZON 商品列表页显示覆盖层',
+  },
+  feature_new_listing_flow: {
+    label: '新版上架流程',
+    group: 'feature',
+    description: '启用新版上架流程（实验性）',
+  },
+  feature_announcement_popup: {
+    label: '公告弹窗',
+    group: 'feature',
+    description: '是否在用户登录后弹出未读公告',
+  },
+  feature_sms_register: {
+    label: '短信注册验证',
+    group: 'auth',
+    description: '云端模式注册时是否要求短信验证码',
+  },
+  feature_turnstile_login: {
+    label: 'Turnstile 登录验证',
+    group: 'auth',
+    description: '云端模式登录/发送短信时是否要求 Cloudflare Turnstile 人机验证',
+  },
 
-  ai_provider: { label: 'AI 服务来源', group: 'ai', description: 'disabled 表示关闭；custom 表示 OpenAI-compatible 自定义接口' },
-  ai_base_url: { label: 'AI Base URL', group: 'ai', description: 'OpenAI-compatible 接口地址，例如 https://api.deepseek.com/v1' },
-  ai_api_key: { label: 'AI API Key', group: 'ai', description: 'AI 服务访问密钥', sensitive: true, encrypted: true },
-  ai_model: { label: 'AI 模型', group: 'ai', description: '例如 deepseek-chat、abab6.5s-chat、gpt-compatible model id' },
-  ai_product_title_model: { label: '商品标题模型', group: 'ai', description: '可选。为空则使用 AI 模型；适合配置便宜快速模型生成标题/标签' },
-  ai_product_description_model: { label: '商品描述/富内容模型', group: 'ai', description: '可选。为空则使用 AI 模型；适合配置更强模型生成描述、卖点和富内容' },
-  ai_provider_label: { label: 'AI 服务名称', group: 'ai', description: '后台展示名称，例如 DeepSeek、MiniMax、沉浸式翻译网关' },
-  ai_timeout_ms: { label: 'AI 超时（毫秒）', group: 'ai', description: '单次 AI 请求超时时间，默认 30000' },
-  ai_daily_budget_cents: { label: 'AI 全局每日预算（分）', group: 'ai', description: '0 表示不按金额限制；后续用量统计接入后生效' },
-  ai_user_daily_category_translation_limit: { label: '用户每日类目翻译额度', group: 'ai', description: '普通用户每日可触发的新类目翻译调用数；缓存命中不扣额度' },
-  ai_user_daily_product_generation_limit: { label: '用户每日商品生成额度', group: 'ai', description: '普通用户每日可触发的新商品标题/描述生成次数；缓存命中不扣额度' },
-  ai_category_translation_enabled: { label: '类目缺失自动翻译', group: 'ai', description: 'Ozon 类目刷新时自动翻译缺失词，优先读取系统词库/缓存' },
-  ai_product_generation_enabled: { label: '商品内容生成', group: 'ai', description: '允许普通用户生成商品标题/描述草稿，受每日额度限制' },
-  ai_image_generation_enabled: { label: 'AI 生图/改图预留', group: 'ai', description: '预留开关：当前只保存配置，不触发真实生图/改图；后续接入 API 或 skill 后受每日额度限制' },
-  ai_category_translation_prompt: { label: '类目翻译提示词', group: 'ai', description: '用于短类目词翻译。必须只返回译文，不要解释' },
-  ai_product_title_prompt: { label: '商品标题提示词', group: 'ai', description: '用于生成 Ozon 俄文商品标题草稿' },
-  ai_product_description_prompt: { label: '商品描述提示词', group: 'ai', description: '用于生成 Ozon 俄文商品描述草稿' },
-  ai_image_provider: { label: '生图服务来源', group: 'ai', description: 'disabled 表示关闭；custom 表示自定义生图/改图接口' },
-  ai_image_base_url: { label: '生图 Base URL', group: 'ai', description: '生图或改图服务接口地址；不同供应商可填自定义网关' },
-  ai_image_api_key: { label: '生图 API Key', group: 'ai', description: '生图/改图服务访问密钥', sensitive: true, encrypted: true },
-  ai_image_model: { label: '生图模型', group: 'ai', description: '例如 minimax image 模型、自定义网关模型 ID' },
-  ai_image_prompt: { label: '生图/改图提示词预留', group: 'ai', description: '预留提示词：后续图片生成/重绘 API 或 skill 编排会读取这里' },
-  ai_user_daily_image_generation_limit: { label: '用户每日生图额度', group: 'ai', description: '普通用户每日可触发的新生图/改图调用次数；缓存命中不扣额度' },
+  ai_provider: {
+    label: 'AI 服务来源',
+    group: 'ai',
+    description: 'disabled 表示关闭；custom 表示 OpenAI-compatible 自定义接口',
+  },
+  ai_base_url: {
+    label: 'AI Base URL',
+    group: 'ai',
+    description: 'OpenAI-compatible 接口地址，例如 https://api.deepseek.com/v1',
+  },
+  ai_api_key: {
+    label: 'AI API Key',
+    group: 'ai',
+    description: 'AI 服务访问密钥',
+    sensitive: true,
+    encrypted: true,
+  },
+  ai_model: {
+    label: 'AI 模型',
+    group: 'ai',
+    description: '例如 deepseek-chat、abab6.5s-chat、gpt-compatible model id',
+  },
+  ai_product_title_model: {
+    label: '商品标题模型',
+    group: 'ai',
+    description: '可选。为空则使用 AI 模型；适合配置便宜快速模型生成标题/标签',
+  },
+  ai_product_description_model: {
+    label: '商品描述/富内容模型',
+    group: 'ai',
+    description: '可选。为空则使用 AI 模型；适合配置更强模型生成描述、卖点和富内容',
+  },
+  ai_provider_label: {
+    label: 'AI 服务名称',
+    group: 'ai',
+    description: '后台展示名称，例如 DeepSeek、MiniMax、沉浸式翻译网关',
+  },
+  ai_timeout_ms: {
+    label: 'AI 超时（毫秒）',
+    group: 'ai',
+    description: '单次 AI 请求超时时间，默认 30000',
+  },
+  ai_daily_budget_cents: {
+    label: 'AI 全局每日预算（分）',
+    group: 'ai',
+    description: '0 表示不按金额限制；后续用量统计接入后生效',
+  },
+  ai_user_daily_category_translation_limit: {
+    label: '用户每日类目翻译额度',
+    group: 'ai',
+    description: '普通用户每日可触发的新类目翻译调用数；缓存命中不扣额度',
+  },
+  ai_user_daily_product_generation_limit: {
+    label: '用户每日商品生成额度',
+    group: 'ai',
+    description: '普通用户每日可触发的新商品标题/描述生成次数；缓存命中不扣额度',
+  },
+  ai_category_translation_enabled: {
+    label: '类目缺失自动翻译',
+    group: 'ai',
+    description: 'Ozon 类目刷新时自动翻译缺失词，优先读取系统词库/缓存',
+  },
+  ai_product_generation_enabled: {
+    label: '商品内容生成',
+    group: 'ai',
+    description: '允许普通用户生成商品标题/描述草稿，受每日额度限制',
+  },
+  ai_image_generation_enabled: {
+    label: 'AI 生图/改图预留',
+    group: 'ai',
+    description:
+      '预留开关：当前只保存配置，不触发真实生图/改图；后续接入 API 或 skill 后受每日额度限制',
+  },
+  ai_category_translation_prompt: {
+    label: '类目翻译提示词',
+    group: 'ai',
+    description: '用于短类目词翻译。必须只返回译文，不要解释',
+  },
+  ai_product_title_prompt: {
+    label: '商品标题提示词',
+    group: 'ai',
+    description: '用于生成 Ozon 俄文商品标题草稿',
+  },
+  ai_product_description_prompt: {
+    label: '商品描述提示词',
+    group: 'ai',
+    description: '用于生成 Ozon 俄文商品描述草稿',
+  },
+  ai_image_provider: {
+    label: '生图服务来源',
+    group: 'ai',
+    description: 'disabled 表示关闭；custom 表示自定义生图/改图接口',
+  },
+  ai_image_base_url: {
+    label: '生图 Base URL',
+    group: 'ai',
+    description: '生图或改图服务接口地址；不同供应商可填自定义网关',
+  },
+  ai_image_api_key: {
+    label: '生图 API Key',
+    group: 'ai',
+    description: '生图/改图服务访问密钥',
+    sensitive: true,
+    encrypted: true,
+  },
+  ai_image_model: {
+    label: '生图模型',
+    group: 'ai',
+    description: '例如 minimax image 模型、自定义网关模型 ID',
+  },
+  ai_image_prompt: {
+    label: '生图/改图提示词预留',
+    group: 'ai',
+    description: '预留提示词：后续图片生成/重绘 API 或 skill 编排会读取这里',
+  },
+  ai_user_daily_image_generation_limit: {
+    label: '用户每日生图额度',
+    group: 'ai',
+    description: '普通用户每日可触发的新生图/改图调用次数；缓存命中不扣额度',
+  },
 
-  auth_sms_provider: { label: '短信服务来源', group: 'auth', description: 'env 表示跟随服务器环境变量；正式短信请选择 tencent；console 仅用于开发/测试' },
-  auth_sms_tencent_secret_id: { label: '腾讯云 SecretId', group: 'auth', description: '腾讯云账号 API SecretId', sensitive: true, encrypted: true },
-  auth_sms_tencent_secret_key: { label: '腾讯云 SecretKey', group: 'auth', description: '腾讯云账号 API SecretKey', sensitive: true, encrypted: true },
-  auth_sms_tencent_region: { label: '腾讯云短信 Region', group: 'auth', description: '默认 ap-guangzhou' },
-  auth_sms_tencent_sdk_app_id: { label: '短信 SDK AppId', group: 'auth', description: '腾讯云短信应用的 SDK AppId' },
-  auth_sms_tencent_sign_name: { label: '短信签名', group: 'auth', description: '腾讯云短信已审核通过的签名名称' },
-  auth_sms_tencent_template_id: { label: '短信模板 ID', group: 'auth', description: '验证码模板 ID；当前模板变量顺序为 {1}=验证码' },
-  auth_sms_code_ttl_seconds: { label: '验证码有效期（秒）', group: 'auth', description: '注册短信验证码有效期，默认 300 秒' },
-  auth_sms_rate_limit_seconds: { label: '短信发送间隔（秒）', group: 'auth', description: '同一手机号两次发送验证码之间的最小间隔，默认 60 秒' },
-  auth_sms_test_phone_whitelist: { label: '测试手机号白名单', group: 'auth', description: '逗号分隔。填写后，接口与集成页面只能向白名单手机号发送测试短信' },
-  auth_turnstile_site_key: { label: 'Turnstile Site Key', group: 'auth', description: '前端渲染 Cloudflare Turnstile 使用的公开 Site Key' },
-  auth_turnstile_secret_key: { label: 'Turnstile Secret Key', group: 'auth', description: '后端校验 Cloudflare Turnstile 使用的 Secret Key', sensitive: true, encrypted: true },
+  auth_sms_provider: {
+    label: '短信服务来源',
+    group: 'auth',
+    description: 'env 表示跟随服务器环境变量；正式短信请选择 tencent；console 仅用于开发/测试',
+  },
+  auth_sms_tencent_secret_id: {
+    label: '腾讯云 SecretId',
+    group: 'auth',
+    description: '腾讯云账号 API SecretId',
+    sensitive: true,
+    encrypted: true,
+  },
+  auth_sms_tencent_secret_key: {
+    label: '腾讯云 SecretKey',
+    group: 'auth',
+    description: '腾讯云账号 API SecretKey',
+    sensitive: true,
+    encrypted: true,
+  },
+  auth_sms_tencent_region: {
+    label: '腾讯云短信 Region',
+    group: 'auth',
+    description: '默认 ap-guangzhou',
+  },
+  auth_sms_tencent_sdk_app_id: {
+    label: '短信 SDK AppId',
+    group: 'auth',
+    description: '腾讯云短信应用的 SDK AppId',
+  },
+  auth_sms_tencent_sign_name: {
+    label: '短信签名',
+    group: 'auth',
+    description: '腾讯云短信已审核通过的签名名称',
+  },
+  auth_sms_tencent_template_id: {
+    label: '短信模板 ID',
+    group: 'auth',
+    description: '验证码模板 ID；当前模板变量顺序为 {1}=验证码',
+  },
+  auth_sms_code_ttl_seconds: {
+    label: '验证码有效期（秒）',
+    group: 'auth',
+    description: '注册短信验证码有效期，默认 300 秒',
+  },
+  auth_sms_rate_limit_seconds: {
+    label: '短信发送间隔（秒）',
+    group: 'auth',
+    description: '同一手机号两次发送验证码之间的最小间隔，默认 60 秒',
+  },
+  auth_sms_test_phone_whitelist: {
+    label: '测试手机号白名单',
+    group: 'auth',
+    description: '逗号分隔。填写后，接口与集成页面只能向白名单手机号发送测试短信',
+  },
+  auth_turnstile_site_key: {
+    label: 'Turnstile Site Key',
+    group: 'auth',
+    description: '前端渲染 Cloudflare Turnstile 使用的公开 Site Key',
+  },
+  auth_turnstile_secret_key: {
+    label: 'Turnstile Secret Key',
+    group: 'auth',
+    description: '后端校验 Cloudflare Turnstile 使用的 Secret Key',
+    sensitive: true,
+    encrypted: true,
+  },
 
-  security_login_max_attempts: { label: '登录失败锁定阈值', group: 'security', description: '同一 IP 登录失败次数达到该值后强制要求 Turnstile 人机验证（云端模式）' },
-  security_admin_ip_whitelist: { label: '管理员 IP 白名单', group: 'security', description: '逗号分隔的 CIDR 列表（如 1.2.3.4/32,10.0.0.0/8）。留空表示不限制。生效需重启服务', sensitive: true },
-  security_session_ttl_hours: { label: '会话有效期（小时）', group: 'security', description: '默认 168（7天）。修改后只对新发放的 token 生效' },
-  security_admin_session_ttl_hours: { label: '管理员会话有效期（小时）', group: 'security', description: '管理员独立登录入口的 token 有效期，默认 24 小时' },
-  security_audit_log_enabled: { label: '审计日志', group: 'security', description: '记录管理员/超管的写操作（需先建表）' },
+  security_login_max_attempts: {
+    label: '登录失败锁定阈值',
+    group: 'security',
+    description: '同一 IP 登录失败次数达到该值后强制要求 Turnstile 人机验证（云端模式）',
+  },
+  security_admin_ip_whitelist: {
+    label: '管理员 IP 白名单',
+    group: 'security',
+    description: '逗号分隔的 CIDR 列表（如 1.2.3.4/32,10.0.0.0/8）。留空表示不限制。生效需重启服务',
+    sensitive: true,
+  },
+  security_session_ttl_hours: {
+    label: '会话有效期（小时）',
+    group: 'security',
+    description: '默认 168（7天）。修改后只对新发放的 token 生效',
+  },
+  security_admin_session_ttl_hours: {
+    label: '管理员会话有效期（小时）',
+    group: 'security',
+    description: '管理员独立登录入口的 token 有效期，默认 24 小时',
+  },
+  security_audit_log_enabled: {
+    label: '审计日志',
+    group: 'security',
+    description: '记录管理员/超管的写操作（需先建表）',
+  },
 
-  listing_task_refresh_interval_ms: { label: '上架状态刷新间隔（毫秒）', group: 'listing', description: '后台自动向 Ozon 查询上架任务状态的间隔。默认 30000，即 30 秒。' },
-  listing_task_refresh_batch_size: { label: '每轮最多刷新任务数', group: 'listing', description: '每轮自动刷新最多处理多少个上架任务。VPS 推荐 30，任务量大且稳定后可提高。' },
-  listing_task_refresh_concurrency: { label: '状态刷新并发数', group: 'listing', description: '同时刷新多少个上架任务。VPS 推荐从 6 起步，稳定后可调到 8-10。' },
-  listing_task_refresh_lookback_hours: { label: '刷新任务回看时间（小时）', group: 'listing', description: '只自动刷新最近多少小时内的上架任务，避免长期历史任务占用队列。' },
-  listing_ozon_api_timeout_ms: { label: 'Ozon 状态查询超时（毫秒）', group: 'listing', description: '单次 Ozon 状态查询/兜底查询的最长等待时间。网络稳定可保留 20000。' },
-  upload_rate_limit_enabled: { label: '上传频率限制', group: 'upload', description: '是否启用单用户上传频率限制' },
-  upload_rate_limit_per_minute: { label: '每分钟上传次数', group: 'upload', description: '单用户每分钟最多上传次数（默认 10 次）' },
-  upload_daily_quota_enabled: { label: '每日上传配额', group: 'upload', description: '是否启用单用户每日上传流量配额' },
-  upload_daily_quota_mb: { label: '每日上传配额（MB）', group: 'upload', description: '单用户每日最多上传流量（默认 1024MB = 1GB）' },
-  upload_referer_check_enabled: { label: 'Referer 检查', group: 'upload', description: '是否检查 Referer 防止盗链（仅对 /cdn/* 路径生效）' },
-  upload_storage_backend: { label: '图片/附件存储后端', group: 'upload', description: 'env 表示跟随服务器环境变量；云端 R2 测试请选择 oss' },
-  upload_oss_endpoint: { label: 'R2/OSS Endpoint', group: 'upload', description: 'S3 兼容 endpoint，例如 https://<account-id>.r2.cloudflarestorage.com', sensitive: true },
-  upload_oss_bucket: { label: 'R2/OSS Bucket', group: 'upload', description: '图片/附件上传使用的 bucket 名称', sensitive: true },
-  upload_oss_access_key_id: { label: 'R2/OSS Access Key ID', group: 'upload', description: 'S3 兼容访问密钥 ID', sensitive: true },
-  upload_oss_access_key_secret: { label: 'R2/OSS Secret Access Key', group: 'upload', description: 'S3 兼容访问密钥 Secret', sensitive: true },
-  upload_oss_region: { label: 'R2/OSS Region', group: 'upload', description: 'Cloudflare R2 通常填写 auto' },
-  upload_oss_cdn_domain: { label: 'R2/OSS 公网访问域名', group: 'upload', description: '可选。只填 Cloudflare R2 自定义域名或 r2.dev 公网域名；不要填 r2.cloudflarestorage.com S3 API endpoint。为空时走 /api/cdn 安全代理' },
-  upload_ozon_cdn_relay_url: { label: 'OZON CDN 中转地址', group: 'upload', description: '可选。存储后端为 ozon-cdn 或 OSS 降级时使用' },
-  upload_local_base_url: { label: '上传访问 Base URL', group: 'upload', description: 'local 存储及 OSS /api/cdn 代理访问使用。云端通常填写 https://app.ss-erp.com；为空时云端默认使用 app.ss-erp.com' },
+  listing_task_refresh_interval_ms: {
+    label: '上架状态刷新间隔（毫秒）',
+    group: 'listing',
+    description: '后台自动向 Ozon 查询上架任务状态的间隔。默认 30000，即 30 秒。',
+  },
+  listing_task_refresh_batch_size: {
+    label: '每轮最多刷新任务数',
+    group: 'listing',
+    description: '每轮自动刷新最多处理多少个上架任务。VPS 推荐 30，任务量大且稳定后可提高。',
+  },
+  listing_task_refresh_concurrency: {
+    label: '状态刷新并发数',
+    group: 'listing',
+    description: '同时刷新多少个上架任务。VPS 推荐从 6 起步，稳定后可调到 8-10。',
+  },
+  listing_task_refresh_lookback_hours: {
+    label: '刷新任务回看时间（小时）',
+    group: 'listing',
+    description: '只自动刷新最近多少小时内的上架任务，避免长期历史任务占用队列。',
+  },
+  listing_ozon_api_timeout_ms: {
+    label: 'Ozon 状态查询超时（毫秒）',
+    group: 'listing',
+    description: '单次 Ozon 状态查询/兜底查询的最长等待时间。网络稳定可保留 20000。',
+  },
+  upload_rate_limit_enabled: {
+    label: '上传频率限制',
+    group: 'upload',
+    description: '是否启用单用户上传频率限制',
+  },
+  upload_rate_limit_per_minute: {
+    label: '每分钟上传次数',
+    group: 'upload',
+    description: '单用户每分钟最多上传次数（默认 10 次）',
+  },
+  upload_daily_quota_enabled: {
+    label: '每日上传配额',
+    group: 'upload',
+    description: '是否启用单用户每日上传流量配额',
+  },
+  upload_daily_quota_mb: {
+    label: '每日上传配额（MB）',
+    group: 'upload',
+    description: '单用户每日最多上传流量（默认 1024MB = 1GB）',
+  },
+  upload_referer_check_enabled: {
+    label: 'Referer 检查',
+    group: 'upload',
+    description: '是否检查 Referer 防止盗链（仅对 /cdn/* 路径生效）',
+  },
+  upload_storage_backend: {
+    label: '图片/附件存储后端',
+    group: 'upload',
+    description: 'env 表示跟随服务器环境变量；对象存储请选择 oss',
+  },
+  upload_oss_provider: {
+    label: '对象存储服务商',
+    group: 'upload',
+    description: '选择阿里云 OSS、Cloudflare R2 或其他 S3 兼容服务',
+  },
+  upload_oss_endpoint: {
+    label: 'S3 API Endpoint',
+    group: 'upload',
+    description: '对象存储的 S3 兼容 API 地址',
+    sensitive: true,
+  },
+  upload_oss_bucket: {
+    label: 'Bucket',
+    group: 'upload',
+    description: '图片和附件使用的存储桶名称',
+    sensitive: true,
+  },
+  upload_oss_access_key_id: {
+    label: 'Access Key ID',
+    group: 'upload',
+    description: 'S3 兼容访问密钥 ID',
+    sensitive: true,
+  },
+  upload_oss_access_key_secret: {
+    label: 'Secret Access Key',
+    group: 'upload',
+    description: 'S3 兼容访问密钥 Secret',
+    sensitive: true,
+  },
+  upload_oss_region: {
+    label: 'Region',
+    group: 'upload',
+    description: '阿里云填写实际地域，Cloudflare R2 填写 auto',
+  },
+  upload_oss_cdn_domain: {
+    label: '公网访问域名',
+    group: 'upload',
+    description:
+      '可选。只填 Cloudflare R2 自定义域名或 r2.dev 公网域名；不要填 r2.cloudflarestorage.com S3 API endpoint。为空时走 /api/cdn 安全代理',
+  },
+  upload_ozon_cdn_relay_url: {
+    label: 'OZON CDN 中转地址',
+    group: 'upload',
+    description: '可选。存储后端为 ozon-cdn 或 OSS 降级时使用',
+  },
+  upload_local_base_url: {
+    label: '上传访问 Base URL',
+    group: 'upload',
+    description:
+      'local 存储及 OSS /api/cdn 代理访问使用。云端通常填写 https://app.ss-erp.com；为空时云端默认使用 app.ss-erp.com',
+  },
 
-  retention_collect_archive_days: { label: '采集数据归档天数', group: 'retention', description: '超过此天数的采集记录标记为归档（第一阶段仅统计，不删除）' },
-  retention_collect_min_keep: { label: '采集数据最少保留条数', group: 'retention', description: '即使超过归档天数，每个用户至少保留此数量的采集记录' },
-  retention_cainiao_unbound_days: { label: '菜鸟未绑定缓存保留天数', group: 'retention', description: '未绑定到订单的菜鸟包裹缓存保留天数' },
-  retention_cainiao_bound_days: { label: '菜鸟已绑定缓存保留天数', group: 'retention', description: '已绑定到订单的菜鸟包裹缓存保留天数' },
-  retention_sync_success_days: { label: '成功同步任务保留天数', group: 'retention', description: '状态为 SUCCESS 的 SyncJob 记录保留天数' },
-  retention_sync_failed_days: { label: '失败同步任务保留天数', group: 'retention', description: '状态为 FAILED 的 SyncJob 记录保留天数（便于排查问题）' },
-  retention_notification_read_days: { label: '已读通知保留天数', group: 'retention', description: '已读通知超过此天数后自动清理' },
-  retention_notification_unread_days: { label: '未读通知保留天数', group: 'retention', description: '未读通知超过此天数后自动清理' },
-  retention_temp_images_days: { label: '临时图片保留天数', group: 'retention', description: '临时上传目录中超过此天数的图片自动清理' },
-  retention_cleanup_dry_run: { label: '清理 dry-run 模式', group: 'retention', description: '开启时只统计不删除，关闭后才真正执行清理' },
+  retention_collect_archive_days: {
+    label: '采集数据归档天数',
+    group: 'retention',
+    description: '超过此天数的采集记录标记为归档（第一阶段仅统计，不删除）',
+  },
+  retention_collect_min_keep: {
+    label: '采集数据最少保留条数',
+    group: 'retention',
+    description: '即使超过归档天数，每个用户至少保留此数量的采集记录',
+  },
+  retention_cainiao_unbound_days: {
+    label: '菜鸟未绑定缓存保留天数',
+    group: 'retention',
+    description: '未绑定到订单的菜鸟包裹缓存保留天数',
+  },
+  retention_cainiao_bound_days: {
+    label: '菜鸟已绑定缓存保留天数',
+    group: 'retention',
+    description: '已绑定到订单的菜鸟包裹缓存保留天数',
+  },
+  retention_sync_success_days: {
+    label: '成功同步任务保留天数',
+    group: 'retention',
+    description: '状态为 SUCCESS 的 SyncJob 记录保留天数',
+  },
+  retention_sync_failed_days: {
+    label: '失败同步任务保留天数',
+    group: 'retention',
+    description: '状态为 FAILED 的 SyncJob 记录保留天数（便于排查问题）',
+  },
+  retention_notification_read_days: {
+    label: '已读通知保留天数',
+    group: 'retention',
+    description: '已读通知超过此天数后自动清理',
+  },
+  retention_notification_unread_days: {
+    label: '未读通知保留天数',
+    group: 'retention',
+    description: '未读通知超过此天数后自动清理',
+  },
+  retention_temp_images_days: {
+    label: '临时图片保留天数',
+    group: 'retention',
+    description: '临时上传目录中超过此天数的图片自动清理',
+  },
+  retention_cleanup_dry_run: {
+    label: '清理 dry-run 模式',
+    group: 'retention',
+    description: '开启时只统计不删除，关闭后才真正执行清理',
+  },
 
-  retention_oss_raw_days: { label: 'OSS 原始图保留天数', group: 'retention', description: '用户采集的原始图片在 OSS/R2 中保留天数（默认 15 天）' },
-  retention_oss_watermarked_days: { label: 'OSS 水印图保留天数', group: 'retention', description: '生成的水印图在 OSS/R2 中保留天数（默认 60 天）' },
-  retention_oss_tmp_days: { label: 'OSS 临时图保留天数', group: 'retention', description: '失败任务的临时图在 OSS/R2 中保留天数（默认 7 天）' },
-  retention_oss_attachments_days: { label: 'OSS 附件保留天数', group: 'retention', description: '公告/系统附件保留天数（0 表示永久保留）' },
-  retention_oss_cleanup_enabled: { label: 'OSS 清理总开关', group: 'retention', description: '是否启用 OSS/R2 对象自动清理' },
-  retention_oss_cleanup_dry_run: { label: 'OSS 清理 dry-run', group: 'retention', description: '开启时只统计不删除，关闭后才真正删除 OSS 对象' },
+  retention_oss_raw_days: {
+    label: 'OSS 原始图保留天数',
+    group: 'retention',
+    description: '用户采集的原始图片在 OSS/R2 中保留天数（默认 15 天）',
+  },
+  retention_oss_watermarked_days: {
+    label: 'OSS 水印图保留天数',
+    group: 'retention',
+    description: '生成的水印图在 OSS/R2 中保留天数（默认 60 天）',
+  },
+  retention_oss_tmp_days: {
+    label: 'OSS 临时图保留天数',
+    group: 'retention',
+    description: '失败任务的临时图在 OSS/R2 中保留天数（默认 7 天）',
+  },
+  retention_oss_attachments_days: {
+    label: 'OSS 附件保留天数',
+    group: 'retention',
+    description: '公告/系统附件保留天数（0 表示永久保留）',
+  },
+  retention_oss_cleanup_enabled: {
+    label: 'OSS 清理总开关',
+    group: 'retention',
+    description: '是否启用 OSS/R2 对象自动清理',
+  },
+  retention_oss_cleanup_dry_run: {
+    label: 'OSS 清理 dry-run',
+    group: 'retention',
+    description: '开启时只统计不删除，关闭后才真正删除 OSS 对象',
+  },
 
   backup_enabled: { label: '自动备份', group: 'backup', description: '是否启用定时数据库备份' },
-  backup_schedule: { label: '备份 cron 表达式', group: 'backup', description: '备份执行时间（cron 格式），默认每天凌晨 3 点' },
-  backup_local_keep_days: { label: '本地备份保留天数', group: 'backup', description: '本地备份文件超过此天数后自动清理' },
-  backup_remote_enabled: { label: '远程备份', group: 'backup', description: '是否将备份上传到远程存储（S3 兼容）' },
-  backup_remote_keep_days: { label: '远程备份保留天数', group: 'backup', description: '远程存储中超过此天数的备份自动清理' },
-  backup_remote_provider: { label: '远程存储类型', group: 'backup', description: '远程备份存储类型（目前仅支持 s3 兼容）' },
-  backup_remote_bucket: { label: '远程存储 Bucket', group: 'backup', description: '远程备份目标 bucket 名称', sensitive: true },
-  backup_remote_endpoint: { label: '远程存储 Endpoint', group: 'backup', description: '远程备份 S3 兼容 endpoint URL', sensitive: true },
-  backup_remote_region: { label: '远程存储 Region', group: 'backup', description: '远程备份存储区域' },
-  backup_remote_prefix: { label: '远程存储路径前缀', group: 'backup', description: '远程备份文件在 bucket 中的路径前缀' },
-  backup_remote_access_key_id: { label: '远程备份 Access Key ID', group: 'backup', description: '远程备份 bucket 专用访问密钥 ID', sensitive: true, encrypted: true },
-  backup_remote_secret_access_key: { label: '远程备份 Secret Access Key', group: 'backup', description: '远程备份 bucket 专用访问密钥 Secret', sensitive: true, encrypted: true },
+  backup_schedule: {
+    label: '备份 cron 表达式',
+    group: 'backup',
+    description: '备份执行时间（cron 格式），默认每天凌晨 3 点',
+  },
+  backup_local_keep_days: {
+    label: '本地备份保留天数',
+    group: 'backup',
+    description: '本地备份文件超过此天数后自动清理',
+  },
+  backup_remote_enabled: {
+    label: '远程备份',
+    group: 'backup',
+    description: '是否将备份上传到远程存储（S3 兼容）',
+  },
+  backup_remote_keep_days: {
+    label: '远程备份保留天数',
+    group: 'backup',
+    description: '远程存储中超过此天数的备份自动清理',
+  },
+  backup_remote_provider: {
+    label: '远程存储类型',
+    group: 'backup',
+    description: '远程备份存储类型（目前仅支持 s3 兼容）',
+  },
+  backup_remote_bucket: {
+    label: '远程存储 Bucket',
+    group: 'backup',
+    description: '远程备份目标 bucket 名称',
+    sensitive: true,
+  },
+  backup_remote_endpoint: {
+    label: '远程存储 Endpoint',
+    group: 'backup',
+    description: '远程备份 S3 兼容 endpoint URL',
+    sensitive: true,
+  },
+  backup_remote_region: {
+    label: '远程存储 Region',
+    group: 'backup',
+    description: '远程备份存储区域',
+  },
+  backup_remote_prefix: {
+    label: '远程存储路径前缀',
+    group: 'backup',
+    description: '远程备份文件在 bucket 中的路径前缀',
+  },
+  backup_remote_access_key_id: {
+    label: '远程备份 Access Key ID',
+    group: 'backup',
+    description: '远程备份 bucket 专用访问密钥 ID',
+    sensitive: true,
+    encrypted: true,
+  },
+  backup_remote_secret_access_key: {
+    label: '远程备份 Secret Access Key',
+    group: 'backup',
+    description: '远程备份 bucket 专用访问密钥 Secret',
+    sensitive: true,
+    encrypted: true,
+  },
 
-  maintenance_enabled: { label: '维护模式', group: 'maintenance', description: '开启后普通用户写接口返回 503，管理员仍可访问' },
-  maintenance_message: { label: '维护提示信息', group: 'maintenance', description: '维护模式下返回给用户的提示文案' },
-  maintenance_allow_admin: { label: '管理员免维护', group: 'maintenance', description: '维护模式下管理员是否可以继续访问' },
-  maintenance_readonly: { label: '只读模式', group: 'maintenance', description: '维护模式下是否允许读接口通过（仅拦截写操作）' },
+  maintenance_enabled: {
+    label: '维护模式',
+    group: 'maintenance',
+    description: '开启后普通用户写接口返回 503，管理员仍可访问',
+  },
+  maintenance_message: {
+    label: '维护提示信息',
+    group: 'maintenance',
+    description: '维护模式下返回给用户的提示文案',
+  },
+  maintenance_allow_admin: {
+    label: '管理员免维护',
+    group: 'maintenance',
+    description: '维护模式下管理员是否可以继续访问',
+  },
+  maintenance_readonly: {
+    label: '只读模式',
+    group: 'maintenance',
+    description: '维护模式下是否允许读接口通过（仅拦截写操作）',
+  },
 
-  version_web_check_interval_hours: { label: 'Web 版本检查间隔（小时）', group: 'version', description: '前端检查新版本的间隔时间' },
-  version_extension_check_interval_hours: { label: '扩展版本检查间隔（小时）', group: 'version', description: '浏览器扩展检查新版本的间隔时间' },
-  version_force_refresh_enabled: { label: '强制刷新', group: 'version', description: '检测到新版本时是否强制用户刷新页面' },
+  version_web_check_interval_hours: {
+    label: 'Web 版本检查间隔（小时）',
+    group: 'version',
+    description: '前端检查新版本的间隔时间',
+  },
+  version_extension_check_interval_hours: {
+    label: '扩展版本检查间隔（小时）',
+    group: 'version',
+    description: '浏览器扩展检查新版本的间隔时间',
+  },
+  version_force_refresh_enabled: {
+    label: '强制刷新',
+    group: 'version',
+    description: '检测到新版本时是否强制用户刷新页面',
+  },
 
-  randomize_enabled: { label: '货号/尺寸/重量随机化总开关', group: 'randomize', description: '总开关：关闭则所有随机化均不生效。打开后用户上品页可单独切换"随机货号"' },
-  randomize_offer_id: { label: '允许随机货号', group: 'randomize', description: '允许在跟卖/复制时生成随机 offer_id（基于源 SKU + 随机后缀）。默认值是开启，用户端仍可单独关闭' },
-  randomize_dimension_jitter_mm: { label: '尺寸浮动范围（mm）', group: 'randomize', description: '长/宽/高在原值 ±N mm 范围内随机浮动，避免被官方判定为重复商品。设为 0 关闭尺寸浮动' },
-  randomize_weight_buckets: { label: '重量分档区间（g）', group: 'randomize', description: '逗号分隔的区间，每段写为"下限-上限"。原重量落在哪段就在该段内随机一个值。例：0-250 表示 0g 到 250g' },
-  randomize_dimension_min_mm: { label: '尺寸最小值兜底（mm）', group: 'randomize', description: '随机浮动后小于此值则取此值，避免出现 0 或负数尺寸' },
+  randomize_enabled: {
+    label: '货号/尺寸/重量随机化总开关',
+    group: 'randomize',
+    description: '总开关：关闭则所有随机化均不生效。打开后用户上品页可单独切换"随机货号"',
+  },
+  randomize_offer_id: {
+    label: '允许随机货号',
+    group: 'randomize',
+    description:
+      '允许在跟卖/复制时生成随机 offer_id（基于源 SKU + 随机后缀）。默认值是开启，用户端仍可单独关闭',
+  },
+  randomize_dimension_jitter_mm: {
+    label: '尺寸浮动范围（mm）',
+    group: 'randomize',
+    description:
+      '长/宽/高在原值 ±N mm 范围内随机浮动，避免被官方判定为重复商品。设为 0 关闭尺寸浮动',
+  },
+  randomize_weight_buckets: {
+    label: '重量分档区间（g）',
+    group: 'randomize',
+    description:
+      '逗号分隔的区间，每段写为"下限-上限"。原重量落在哪段就在该段内随机一个值。例：0-250 表示 0g 到 250g',
+  },
+  randomize_dimension_min_mm: {
+    label: '尺寸最小值兜底（mm）',
+    group: 'randomize',
+    description: '随机浮动后小于此值则取此值，避免出现 0 或负数尺寸',
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,7 +866,13 @@ export async function setConfig<K extends SystemConfigKey>(
 
   await prisma.systemConfig.upsert({
     where: { key },
-    create: { key, value: serialized, label: meta.label, group: meta.group, description: meta.description },
+    create: {
+      key,
+      value: serialized,
+      label: meta.label,
+      group: meta.group,
+      description: meta.description,
+    },
     update: { value: serialized },
   });
 }

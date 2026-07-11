@@ -30,8 +30,9 @@ interface IntegrationCheck {
 type IntegrationTestKey = 'turnstile' | 'sms' | 'oss' | 'backup' | 'sentry';
 type DiagnosticStepStatus = 'pass' | 'warn' | 'fail' | 'skip';
 
-const appHostname = process.env.NEXT_PUBLIC_USER_HOSTNAME
-  || (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
+const appHostname =
+  process.env.NEXT_PUBLIC_USER_HOSTNAME ||
+  (process.env.NEXT_PUBLIC_RUNTIME_MODE === 'cloud' ? 'app.ss-erp.com' : '');
 const appOrigin = appHostname ? `https://${appHostname}` : '';
 
 function toAppHref(pathname: string): string {
@@ -83,7 +84,9 @@ export default function AdminIntegrationsPage() {
   const [smsTestPhone, setSmsTestPhone] = useState('');
   const [lastTest, setLastTest] = useState<LastTestResult | null>(null);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -112,7 +115,11 @@ export default function AdminIntegrationsPage() {
   }
 
   if (loading) {
-    return <div className="flex items-center justify-center h-96"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
   }
 
   return (
@@ -122,10 +129,12 @@ export default function AdminIntegrationsPage() {
           <Plug className="h-6 w-6" /> 接口与集成
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          第三方服务接入状态。上传对象存储优先读取超管设置里的 upload_* 配置，其它服务主要读取环境变量。
+          第三方服务接入状态。上传对象存储优先读取超管设置里的 upload_*
+          配置，其它服务主要读取环境变量。
         </p>
         <p className="text-xs text-muted-foreground mt-2">
-          数据库备份的远程存储使用 backup_remote_*；图片和附件上传使用 upload_*，未填写时才回退到 VPS 环境变量。
+          数据库备份的远程存储使用 backup_remote_*；图片和附件上传使用 upload_*，未填写时才回退到
+          VPS 环境变量。
         </p>
       </div>
 
@@ -135,7 +144,9 @@ export default function AdminIntegrationsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <h2 className="font-medium">服务接入状态</h2>
-            <Button variant="outline" size="sm" onClick={load}>刷新</Button>
+            <Button variant="outline" size="sm" onClick={load}>
+              刷新
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -145,7 +156,11 @@ export default function AdminIntegrationsPage() {
               check={c}
               testing={testingKey === c.key}
               onTest={
-                c.key === 'turnstile' || c.key === 'sms' || c.key === 'oss' || c.key === 'backup' || c.key === 'sentry'
+                c.key === 'turnstile' ||
+                c.key === 'sms' ||
+                c.key === 'oss' ||
+                c.key === 'backup' ||
+                c.key === 'sentry'
                   ? () => testIntegration(c.key as any)
                   : undefined
               }
@@ -162,7 +177,9 @@ export default function AdminIntegrationsPage() {
 }
 
 function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null }) {
-  const cloudHref = toAppHref(release?.targets.cloud.downloadUrl || '/api/extensions/download/cloud');
+  const cloudHref = toAppHref(
+    release?.targets.cloud.downloadUrl || '/api/extensions/download/cloud',
+  );
   const localHref = release?.targets.local ? toAppHref(release.targets.local.downloadUrl) : '';
   const publicDownloadHref = toAppHref('/download');
   return (
@@ -176,7 +193,8 @@ function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null })
             <div>
               <h2 className="font-medium">浏览器扩展发布</h2>
               <p className="mt-1 text-xs text-muted-foreground">
-                当前扩展包由已部署代码自动打包生成；更新扩展逻辑需要提交代码并重新部署，不通过公告热更新 JS。
+                当前扩展包由已部署代码自动打包生成；更新扩展逻辑需要提交代码并重新部署，不通过公告热更新
+                JS。
               </p>
             </div>
           </div>
@@ -185,7 +203,10 @@ function ExtensionReleaseCard({ release }: { release: ExtensionRelease | null })
       </CardHeader>
       <CardContent className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
         <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
-          <InfoLine label="云端扩展包" value={release?.targets.cloud.filename || 'ss-erp-cloud.zip'} />
+          <InfoLine
+            label="云端扩展包"
+            value={release?.targets.cloud.filename || 'ss-erp-cloud.zip'}
+          />
           <InfoLine label="本地扩展包" value={release?.targets.local?.filename || '暂未发布'} />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -230,15 +251,22 @@ function IntegrationRow({
 }) {
   const Icon = check.configured ? CheckCircle2 : XCircle;
   const color = check.configured ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground';
-  const sourceLabel = check.source === 'db' ? '后台配置' : check.source === 'mixed' ? '后台+环境' : '环境变量';
+  const sourceLabel =
+    check.source === 'db' ? '后台配置' : check.source === 'mixed' ? '后台+环境' : '环境变量';
   return (
     <div className="flex items-center gap-3 py-2 border-b last:border-b-0">
       <Icon className={`h-5 w-5 shrink-0 ${color}`} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm">{check.label}</span>
-          <Badge variant="outline" className="text-[10px]">{sourceLabel}</Badge>
-          {!check.configured && <Badge variant="secondary" className="text-[10px]">未配置</Badge>}
+          <Badge variant="outline" className="text-[10px]">
+            {sourceLabel}
+          </Badge>
+          {!check.configured && (
+            <Badge variant="secondary" className="text-[10px]">
+              未配置
+            </Badge>
+          )}
         </div>
         {check.detail && <p className="text-xs text-muted-foreground mt-0.5">{check.detail}</p>}
       </div>
@@ -251,8 +279,18 @@ function IntegrationRow({
         />
       )}
       {onTest && check.configured && (
-        <Button variant="outline" size="sm" disabled={testing} onClick={onTest} className="gap-1.5 shrink-0">
-          {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TestTube2 className="h-3.5 w-3.5" />}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={testing}
+          onClick={onTest}
+          className="gap-1.5 shrink-0"
+        >
+          {testing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <TestTube2 className="h-3.5 w-3.5" />
+          )}
           {check.key === 'sms' && testPhone?.trim() ? '发送测试短信' : '测试'}
         </Button>
       )}
@@ -261,15 +299,16 @@ function IntegrationRow({
 }
 
 function IntegrationTestDetails({ result }: { result: LastTestResult }) {
-  const title = result.key === 'oss'
-    ? 'R2/OSS 最近一次测试'
-    : result.key === 'backup'
-      ? '备份 R2 最近一次测试'
-      : result.key === 'sms'
-        ? '短信最近一次测试'
-        : result.key === 'turnstile'
-          ? 'Turnstile 最近一次测试'
-          : 'Sentry 最近一次测试';
+  const title =
+    result.key === 'oss'
+      ? 'S3 对象存储最近一次测试'
+      : result.key === 'backup'
+        ? '备份 R2 最近一次测试'
+        : result.key === 'sms'
+          ? '短信最近一次测试'
+          : result.key === 'turnstile'
+            ? 'Turnstile 最近一次测试'
+            : 'Sentry 最近一次测试';
   const statusVariant = result.ok ? 'success' : 'destructive';
   const steps = result.data?.steps || [];
 
@@ -292,7 +331,10 @@ function IntegrationTestDetails({ result }: { result: LastTestResult }) {
             <InfoLine label="Bucket" value={result.data.bucket || '-'} />
             <InfoLine label="Endpoint" value={result.data.endpoint || '-'} />
             <InfoLine label="代理路径" value={result.data.proxyPath || '-'} />
-            <InfoLine label="测试对象" value={result.data.testObjectDeleted ? '已删除' : '未确认删除'} />
+            <InfoLine
+              label="测试对象"
+              value={result.data.testObjectDeleted ? '已删除' : '未确认删除'}
+            />
           </div>
         )}
 
@@ -337,39 +379,51 @@ function InfoLine({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-md bg-muted/40 px-3 py-2">
       <div className="mb-1 text-muted-foreground">{label}</div>
-      <code className="block truncate font-mono text-foreground" title={value}>{value}</code>
+      <code className="block truncate font-mono text-foreground" title={value}>
+        {value}
+      </code>
     </div>
   );
 }
 
 function DiagnosticStepRow({ step }: { step: DiagnosticStep }) {
-  const variant = step.status === 'pass'
-    ? 'success'
-    : step.status === 'warn'
-      ? 'warning'
-      : step.status === 'fail'
-        ? 'destructive'
-        : 'secondary';
-  const label = step.status === 'pass'
-    ? '通过'
-    : step.status === 'warn'
-      ? '警告'
-      : step.status === 'fail'
-        ? '失败'
-        : '跳过';
+  const variant =
+    step.status === 'pass'
+      ? 'success'
+      : step.status === 'warn'
+        ? 'warning'
+        : step.status === 'fail'
+          ? 'destructive'
+          : 'secondary';
+  const label =
+    step.status === 'pass'
+      ? '通过'
+      : step.status === 'warn'
+        ? '警告'
+        : step.status === 'fail'
+          ? '失败'
+          : '跳过';
 
   return (
     <div className="flex items-start gap-3 rounded-md border p-3">
-      <Badge variant={variant} className="mt-0.5 shrink-0">{label}</Badge>
+      <Badge variant={variant} className="mt-0.5 shrink-0">
+        {label}
+      </Badge>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">{step.label}</span>
-          {step.critical && <Badge variant="outline" className="text-[10px]">关键</Badge>}
+          {step.critical && (
+            <Badge variant="outline" className="text-[10px]">
+              关键
+            </Badge>
+          )}
           {typeof step.elapsedMs === 'number' && (
             <span className="text-xs text-muted-foreground">{step.elapsedMs}ms</span>
           )}
         </div>
-        {step.detail && <p className="mt-1 break-words text-xs text-muted-foreground">{step.detail}</p>}
+        {step.detail && (
+          <p className="mt-1 break-words text-xs text-muted-foreground">{step.detail}</p>
+        )}
       </div>
     </div>
   );
