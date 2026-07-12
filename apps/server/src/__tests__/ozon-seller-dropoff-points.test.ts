@@ -48,6 +48,9 @@ describe('Ozon seller drop-off points', () => {
           ],
         });
       }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({ provider_templates: [] });
+      }
       if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
         const body = JSON.parse(String(init?.body || '{}'));
         expect(body.company_id).toBe('4494016');
@@ -68,10 +71,10 @@ describe('Ozon seller drop-off points', () => {
       fetchImpl: fetchImpl as any,
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
     expect(result.providers).toEqual([
-      { providerId: 1079, providerName: 'RETS' },
-      { providerId: 1268, providerName: 'RETS Budget' },
+      expect.objectContaining({ providerId: 1079, providerName: 'RETS', source: 'warehouse' }),
+      expect.objectContaining({ providerId: 1268, providerName: 'RETS Budget', source: 'warehouse' }),
     ]);
     expect(result.points).toEqual([
       expect.objectContaining({
@@ -88,6 +91,105 @@ describe('Ozon seller drop-off points', () => {
         providerName: 'RETS Budget',
         boundMethodIds: [2],
       }),
+    ]);
+  });
+
+  it('unions warehouse and template providers with provenance and complete result counts', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        return jsonResponse({
+          deliveryMethods: [
+            { id: 1, providerId: 101, providerName: 'Warehouse only', tplDropoffPointId: 11 },
+            { id: 2, providerId: 202, providerName: 'Warehouse shared', tplDropoffPointId: 22 },
+          ],
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({
+          provider_templates: [
+            { provider_id: 202, provider_name: 'Template shared' },
+            { provider_id: 303, provider_name: 'Template only' },
+          ],
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({
+          result: [{ id: `point-${body.provider_id}`, name: `Point ${body.provider_id}`, address: '厦门测试地址' }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.providers).toEqual([
+      expect.objectContaining({ providerId: 101, providerName: 'Warehouse only', source: 'warehouse', status: 'succeeded' }),
+      expect.objectContaining({ providerId: 202, providerName: 'Warehouse shared', source: 'both', status: 'succeeded' }),
+      expect.objectContaining({ providerId: 303, providerName: 'Template only', source: 'template', status: 'succeeded' }),
+    ]);
+    expect(result.providerStats).toEqual({
+      discovered: 3,
+      attempted: 3,
+      succeeded: 3,
+      failed: 0,
+      empty: 0,
+      complete: true,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not count failures or empty responses as successful provider collection', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+        return jsonResponse({
+          deliveryMethods: [
+            { id: 1, providerId: 101, providerName: 'First' },
+            { id: 2, providerId: 202, providerName: 'Second' },
+            { id: 3, providerId: 303, providerName: 'Empty' },
+            { id: 4, providerId: 404, providerName: 'Failed' },
+          ],
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({ provider_templates: [] });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        if (body.provider_id === 404) return errorResponse(503, { error: 'temporary' });
+        if (body.provider_id === 303) return jsonResponse({ result: [] });
+        return jsonResponse({
+          result: [{ id: 'same-external-id', name: 'Same warehouse', address: '同一物理地址' }],
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.providerStats).toEqual({
+      discovered: 4,
+      attempted: 4,
+      succeeded: 2,
+      failed: 1,
+      empty: 1,
+      complete: false,
+    });
+    expect(result.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerId: 303, status: 'empty' }),
+      expect.objectContaining({ providerId: 404, status: 'failed' }),
+    ]));
+    expect(result.points.map((point) => `${point.providerId}:${point.externalId}`)).toEqual([
+      '101:same-external-id',
+      '202:same-external-id',
     ]);
   });
 
@@ -164,8 +266,12 @@ describe('Ozon seller drop-off points', () => {
 
     expect(result.methods).toEqual([]);
     expect(result.providers).toEqual([
-      { providerId: 1079, providerName: 'RETS Standard Extra Small' },
-      { providerId: 1164, providerName: 'CEL' },
+      expect.objectContaining({ providerId: 1079, providerName: 'RETS Standard Extra Small', source: 'template' }),
+      expect.objectContaining({ providerId: 1164, providerName: 'CEL', source: 'template' }),
+    ]);
+    expect(result.providerStats?.complete).toBe(false);
+    expect(result.providerDiscoveryErrors).toEqual([
+      expect.objectContaining({ source: 'warehouse' }),
     ]);
     expect(result.points).toHaveLength(2);
     expect(fetchImpl).toHaveBeenCalledTimes(4);
@@ -206,6 +312,7 @@ describe('Ozon seller drop-off points', () => {
       '1079:same-dropoff',
       '1268:same-dropoff',
     ]);
+    expect(new Set(result.points.map((point) => point.physicalAddressKey))).toEqual(new Set(['中国仓地址']));
   });
 
   it('builds searchable pickup point data from seller drop-off points', () => {

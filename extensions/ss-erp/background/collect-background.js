@@ -1372,6 +1372,44 @@ async function fetchOzonSellerProviderTemplates(companyId) {
   return extractOzonSellerProvidersFromTemplates(payload);
 }
 
+
+function mergeOzonSellerProviderSources(warehouseProviders, templateProviders) {
+  var merged = new Map();
+  (Array.isArray(warehouseProviders) ? warehouseProviders : []).forEach(function (provider) {
+    merged.set(provider.providerId, {
+      providerId: provider.providerId,
+      providerName: provider.providerName,
+      warehouse: true,
+      template: false
+    });
+  });
+  (Array.isArray(templateProviders) ? templateProviders : []).forEach(function (provider) {
+    var existing = merged.get(provider.providerId);
+    if (existing) {
+      existing.template = true;
+      return;
+    }
+    merged.set(provider.providerId, {
+      providerId: provider.providerId,
+      providerName: provider.providerName,
+      warehouse: false,
+      template: true
+    });
+  });
+  return Array.from(merged.values()).map(function (provider) {
+    return {
+      providerId: provider.providerId,
+      providerName: provider.providerName,
+      source: provider.warehouse && provider.template ? "both" : (provider.warehouse ? "warehouse" : "template"),
+      status: "pending",
+      pointCount: 0
+    };
+  }).sort(function (a, b) { return a.providerId - b.providerId; });
+}
+
+function normalizeOzonPhysicalAddressKey(value) {
+  return toCleanString(value).replace(/\s+/g, " ").replace(/[,，;；\s]+$/g, "").trim();
+}
 function sendExtensionProgress(sender, requestId, progress) {
   if (!requestId || !sender || !sender.tab || !sender.tab.id) return;
   try {
@@ -1399,17 +1437,27 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
     label: "确认 Ozon Seller 店铺",
     providerDone: 0,
     providerTotal: 0,
+    providerAttempted: 0,
+    providerSucceeded: 0,
+    providerFailed: 0,
+    providerEmpty: 0,
     pointCount: 0,
     errorCount: 0
   });
   var companyId = await getSellerCompanyId(companyIdInput);
   var methods = [];
-  var providerMap = new Map();
+  var warehouseProviders = [];
+  var templateProviders = [];
+  var providerDiscoveryErrors = [];
   reportProgress({
     phase: "providers",
     label: "读取承运商列表",
     providerDone: 0,
     providerTotal: 0,
+    providerAttempted: 0,
+    providerSucceeded: 0,
+    providerFailed: 0,
+    providerEmpty: 0,
     pointCount: 0,
     errorCount: 0
   });
@@ -1420,37 +1468,58 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
       companyId
     );
     methods = extractOzonSellerDeliveryMethods(warehousePayload);
+    var warehouseProviderMap = new Map();
+    methods.forEach(function (method) {
+      if (!warehouseProviderMap.has(method.providerId)) {
+        warehouseProviderMap.set(method.providerId, method.providerName);
+      }
+    });
+    warehouseProviders = Array.from(warehouseProviderMap.entries()).map(function (entry) {
+      return { providerId: entry[0], providerName: entry[1] };
+    });
   } catch (error) {
+    providerDiscoveryErrors.push({ source: "warehouse", message: error && error.message ? error.message : String(error) });
     console.warn("[SS ERP] Ozon warehouse/list provider discovery failed, falling back to provider templates:", error);
   }
-  methods.forEach(function (method) {
-    if (!providerMap.has(method.providerId)) providerMap.set(method.providerId, method.providerName);
-  });
-  if (providerMap.size === 0) {
-    var templateProviders = await fetchOzonSellerProviderTemplates(companyId);
-    templateProviders.forEach(function (provider) {
-      if (!providerMap.has(provider.providerId)) providerMap.set(provider.providerId, provider.providerName);
-    });
+  try {
+    templateProviders = await fetchOzonSellerProviderTemplates(companyId);
+  } catch (error) {
+    providerDiscoveryErrors.push({ source: "template", message: error && error.message ? error.message : String(error) });
+    console.warn("[SS ERP] Ozon provider/template discovery failed:", error);
+  }
+
+  var providers = mergeOzonSellerProviderSources(warehouseProviders, templateProviders);
+  if (!providers.length && providerDiscoveryErrors.length === 2) {
+    throw new Error("Ozon Seller 承运商来源读取失败: " + providerDiscoveryErrors.map(function (item) {
+      return item.source + " " + item.message;
+    }).join("; "));
   }
 
   var points = new Map();
   var providerErrors = [];
-  var providerEntries = Array.from(providerMap.entries());
+  var providerEntries = providers;
   var providerIndex = 0;
-  var providerDone = 0;
+  var providerAttempted = 0;
+  var providerSucceeded = 0;
+  var providerFailed = 0;
+  var providerEmpty = 0;
   reportProgress({
     phase: "dropoffs",
     label: "读取承运商发运点",
     providerDone: 0,
     providerTotal: providerEntries.length,
+    providerAttempted: 0,
+    providerSucceeded: 0,
+    providerFailed: 0,
+    providerEmpty: 0,
     pointCount: 0,
-    errorCount: 0
+    errorCount: providerDiscoveryErrors.length
   });
   async function fetchNextProviderDropoffs() {
     while (providerIndex < providerEntries.length) {
       var providerEntry = providerEntries[providerIndex++];
-      var providerId = providerEntry[0];
-      var providerName = providerEntry[1];
+      var providerId = providerEntry.providerId;
+      var providerName = providerEntry.providerName;
       try {
         var payload = await sellerTabFetchJson(
           OZON_ENDPOINTS.sellerDropoffByProvider,
@@ -1458,6 +1527,7 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
           companyId
         );
         var rows = payload && Array.isArray(payload.result) ? payload.result : [];
+        var providerPointKeys = new Set();
         rows.forEach(function (row) {
           if (!row || typeof row !== "object") return;
           var externalId = toCleanString(row.id);
@@ -1468,6 +1538,7 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
             })
             .map(function (method) { return method.id; });
           var pointKey = providerId + ":" + externalId;
+          providerPointKeys.add(pointKey);
           var existing = points.get(pointKey);
           if (existing) {
             existing.boundMethodIds = uniqueSortedNumbers(existing.boundMethodIds.concat(boundMethodIds));
@@ -1475,31 +1546,47 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
           }
           var contact = toCleanString(row.contact || row.contactName || row.contact_name || row.manager || row.receiver);
           var phone = toCleanString(row.phone || row.mobile || row.telephone || row.contactPhone || row.contact_phone);
+          var address = toCleanString(row.address);
           points.set(pointKey, {
             externalId: externalId,
             name: toCleanString(row.name) || "发运点 " + externalId,
-            address: toCleanString(row.address),
+            address: address,
             ...(contact ? { contact: contact } : {}),
             ...(phone ? { phone: phone } : {}),
             providerId: providerId,
             providerName: providerName,
-            boundMethodIds: uniqueSortedNumbers(boundMethodIds)
+            boundMethodIds: uniqueSortedNumbers(boundMethodIds),
+            physicalAddressKey: normalizeOzonPhysicalAddressKey(address || row.name)
           });
         });
+        providerEntry.pointCount = providerPointKeys.size;
+        if (providerEntry.pointCount > 0) {
+          providerEntry.status = "succeeded";
+          providerSucceeded += 1;
+        } else {
+          providerEntry.status = "empty";
+          providerEmpty += 1;
+        }
       } catch (error) {
+        providerEntry.status = "failed";
+        providerFailed += 1;
         providerErrors.push({
           providerId: providerId,
           message: error && error.message ? error.message : String(error)
         });
       } finally {
-        providerDone += 1;
+        providerAttempted += 1;
         reportProgress({
           phase: "dropoffs",
           label: "读取承运商发运点",
-          providerDone: providerDone,
+          providerDone: providerAttempted,
           providerTotal: providerEntries.length,
+          providerAttempted: providerAttempted,
+          providerSucceeded: providerSucceeded,
+          providerFailed: providerFailed,
+          providerEmpty: providerEmpty,
           pointCount: points.size,
-          errorCount: providerErrors.length,
+          errorCount: providerDiscoveryErrors.length + providerErrors.length,
           providerId: providerId,
           providerName: providerName
         });
@@ -1508,29 +1595,41 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
   }
   var workerCount = Math.min(SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY, providerEntries.length);
   await Promise.all(Array.from({ length: workerCount }, fetchNextProviderDropoffs));
+  var providerStats = {
+    discovered: providerEntries.length,
+    attempted: providerAttempted,
+    succeeded: providerSucceeded,
+    failed: providerFailed,
+    empty: providerEmpty,
+    complete: providerAttempted === providerEntries.length && providerFailed === 0 && providerDiscoveryErrors.length === 0
+  };
   reportProgress({
     phase: "complete",
-    label: "采集完成，准备导入 ERP",
-    providerDone: providerEntries.length,
+    label: providerStats.complete ? "采集完成，准备导入 ERP" : "采集完成，但存在失败或来源缺失",
+    providerDone: providerAttempted,
     providerTotal: providerEntries.length,
+    providerAttempted: providerAttempted,
+    providerSucceeded: providerSucceeded,
+    providerFailed: providerFailed,
+    providerEmpty: providerEmpty,
     pointCount: points.size,
-    errorCount: providerErrors.length
+    errorCount: providerDiscoveryErrors.length + providerErrors.length,
+    complete: providerStats.complete
   });
 
   return {
     companyId: String(companyId),
     methods: methods,
-    providers: Array.from(providerMap.entries()).map(function (entry) {
-      return { providerId: entry[0], providerName: entry[1] };
-    }),
+    providers: providers,
     points: Array.from(points.values()).sort(function (a, b) {
       if (a.providerId !== b.providerId) return a.providerId - b.providerId;
       return String(a.externalId).localeCompare(String(b.externalId), "zh-Hans-CN", { numeric: true });
     }),
-    providerErrors: providerErrors
+    providerErrors: providerErrors,
+    providerDiscoveryErrors: providerDiscoveryErrors,
+    providerStats: providerStats
   };
 }
-
 function buildOzonAnalyticsRequestBody(productId) {
   return {
     limit: "50",

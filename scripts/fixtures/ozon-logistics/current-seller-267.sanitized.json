@@ -1,0 +1,25 @@
+{
+  "fixtureVersion": 1,
+  "scope": "legacy-unverified-xiamen-sample",
+  "capturedAt": "2026-06-14T06:37:30.140Z",
+  "limitations": [
+    "Historical characterization only; not a complete or current Ozon production catalog.",
+    "The legacy export did not retain companyId or the Seller request point.",
+    "Counts must not be used as universal publication expectations."
+  ],
+  "characterization": {
+    "templateCount": 267,
+    "providerCount": 159,
+    "chargeModes": {
+      "actual": 209,
+      "maxActualVolume": 55,
+      "hybrid": 3
+    },
+    "selectedServiceCount": 37,
+    "selectedRouteMix": {
+      "belarus": 12,
+      "kazakhstan": 12,
+      "unclassifiedRussiaCandidates": 13
+    }
+  }
+}

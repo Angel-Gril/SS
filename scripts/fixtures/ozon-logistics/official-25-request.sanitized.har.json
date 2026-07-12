@@ -1,0 +1,26 @@
+{
+  "fixtureVersion": 1,
+  "scope": "historical-validation-sample-not-production-catalog",
+  "capturedAt": "2026-07-12",
+  "limitations": [
+    "Sanitized aggregate derived from 25 exact calculator requests; no request headers or credentials retained.",
+    "Official quotes are point samples and do not replace Seller formulas.",
+    "The report characterizes the supplied capture and does not claim complete Ozon coverage."
+  ],
+  "characterization": {
+    "calculateRequestCount": 25,
+    "originCityCount": 15,
+    "destinationCount": 1,
+    "productFingerprintCount": 2,
+    "latestTariffCount": 63,
+    "latestProviderCount": 30,
+    "matchReport": {
+      "exactMatches": 57,
+      "driftingTariffs": 6,
+      "driftingProviders": 3,
+      "providerFamilies": [
+        "ATC"
+      ]
+    }
+  }
+}

@@ -33,13 +33,34 @@ export interface SellerDropoffPoint {
   providerId: number;
   providerName: string;
   boundMethodIds: number[];
+  physicalAddressKey?: string;
+}
+
+export type SellerProviderSource = 'warehouse' | 'template' | 'both';
+export type SellerProviderStatus = 'pending' | 'succeeded' | 'empty' | 'failed';
+
+export interface SellerProviderInventoryEntry {
+  providerId: number;
+  providerName: string;
+  source?: SellerProviderSource;
+  status?: SellerProviderStatus;
+  pointCount?: number;
 }
 
 export interface SellerDropoffFetchResult {
   methods: SellerDeliveryMethodRef[];
-  providers: { providerId: number; providerName: string }[];
+  providers: SellerProviderInventoryEntry[];
   points: SellerDropoffPoint[];
   providerErrors: { providerId: number; message: string }[];
+  providerDiscoveryErrors?: { source: 'warehouse' | 'template'; message: string }[];
+  providerStats?: {
+    discovered: number;
+    attempted: number;
+    succeeded: number;
+    failed: number;
+    empty: number;
+    complete: boolean;
+  };
 }
 
 export interface OzonPickupPointData {
@@ -100,18 +121,19 @@ export async function fetchOzonSellerDropoffPoints(params: {
 
   const fetchImpl = params.fetchImpl || defaultFetch;
   const headers = sellerHeaders(cookie, companyId);
-  const { methods, providers } = await fetchSellerDeliveryMethodRefs(fetchImpl, headers, companyId);
-  const providerMap = new Map<number, string>();
-  for (const method of methods) {
-    if (!providerMap.has(method.providerId)) providerMap.set(method.providerId, method.providerName);
-  }
-  for (const provider of providers) {
-    if (!providerMap.has(provider.providerId)) providerMap.set(provider.providerId, provider.providerName);
-  }
-
+  const discovery = await fetchSellerDeliveryMethodRefs(fetchImpl, headers, companyId);
+  const methods = discovery.methods;
+  const providers = mergeSellerProviderSources(discovery.warehouseProviders, discovery.templateProviders);
   const points = new Map<string, SellerDropoffPoint>();
   const providerErrors: { providerId: number; message: string }[] = [];
-  for (const [providerId, providerName] of providerMap) {
+  let attempted = 0;
+  let succeeded = 0;
+  let failed = 0;
+  let empty = 0;
+
+  for (const provider of providers) {
+    attempted += 1;
+    const { providerId, providerName } = provider;
     try {
       const payload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${DROPOFF_BY_PROVIDER_PATH}`, {
         method: 'POST',
@@ -119,11 +141,13 @@ export async function fetchOzonSellerDropoffPoints(params: {
         body: JSON.stringify({ company_id: companyId, provider_id: providerId }),
       });
       const rows = Array.isArray((payload as any)?.result) ? (payload as any).result : [];
+      const providerPointKeys = new Set<string>();
       for (const row of rows) {
         if (!isRecord(row)) continue;
         const externalId = stringValue(row.id);
         if (!externalId) continue;
         const pointKey = `${providerId}:${externalId}`;
+        providerPointKeys.add(pointKey);
         const existing = points.get(pointKey);
         const boundMethodIds = methods
           .filter((method) => method.providerId === providerId && String(method.tplDropoffPointId || '') === externalId)
@@ -134,27 +158,48 @@ export async function fetchOzonSellerDropoffPoints(params: {
         }
         const contact = stringValue(row.contact ?? row.contactName ?? row.contact_name ?? row.manager ?? row.receiver);
         const phone = normalizeContactPhone(stringValue(row.phone ?? row.mobile ?? row.telephone ?? row.contactPhone ?? row.contact_phone));
+        const address = stringValue(row.address);
         points.set(pointKey, {
           externalId,
           name: stringValue(row.name) || `发运点 ${externalId}`,
-          address: stringValue(row.address),
+          address,
           ...(contact ? { contact } : {}),
           ...(phone ? { phone } : {}),
           providerId,
           providerName,
           boundMethodIds: uniqueNumbers(boundMethodIds),
+          physicalAddressKey: normalizePhysicalAddressKey(address || row.name),
         });
       }
+      provider.pointCount = providerPointKeys.size;
+      if (providerPointKeys.size > 0) {
+        provider.status = 'succeeded';
+        succeeded += 1;
+      } else {
+        provider.status = 'empty';
+        empty += 1;
+      }
     } catch (error) {
+      failed += 1;
+      provider.status = 'failed';
       providerErrors.push({ providerId, message: error instanceof Error ? error.message : String(error) });
     }
   }
 
   return {
     methods,
-    providers: [...providerMap.entries()].map(([providerId, providerName]) => ({ providerId, providerName })),
+    providers,
     points: [...points.values()].sort(compareSellerDropoffPoints),
     providerErrors,
+    providerDiscoveryErrors: discovery.errors,
+    providerStats: {
+      discovered: providers.length,
+      attempted,
+      succeeded,
+      failed,
+      empty,
+      complete: discovery.complete && attempted === providers.length && failed === 0,
+    },
   };
 }
 
@@ -162,17 +207,27 @@ async function fetchSellerDeliveryMethodRefs(
   fetchImpl: typeof globalThis.fetch,
   headers: Record<string, string>,
   companyId: string,
-): Promise<{ methods: SellerDeliveryMethodRef[]; providers: { providerId: number; providerName: string }[] }> {
+): Promise<{
+  methods: SellerDeliveryMethodRef[];
+  warehouseProviders: { providerId: number; providerName: string }[];
+  templateProviders: { providerId: number; providerName: string }[];
+  complete: boolean;
+  errors: { source: 'warehouse' | 'template'; message: string }[];
+}> {
+  let methods: SellerDeliveryMethodRef[] = [];
+  let warehouseProviders: { providerId: number; providerName: string }[] = [];
+  let templateProviders: { providerId: number; providerName: string }[] = [];
   let warehouseError = '';
+  let templateError = '';
+
   try {
     const warehousePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${WAREHOUSE_LIST_PATH}`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ company_id: companyId }),
     });
-    const methods = extractSellerDeliveryMethods(warehousePayload);
-    const providers = uniqueProvidersFromMethods(methods);
-    if (providers.length) return { methods, providers };
+    methods = extractSellerDeliveryMethods(warehousePayload);
+    warehouseProviders = uniqueProvidersFromMethods(methods);
   } catch (error) {
     warehouseError = error instanceof Error ? error.message : String(error || '');
   }
@@ -188,14 +243,25 @@ async function fetchSellerDeliveryMethodRefs(
         point: DEFAULT_PROVIDER_TEMPLATE_POINT,
       }),
     });
-    return { methods: [], providers: extractSellerProvidersFromTemplates(templatePayload) };
+    templateProviders = extractSellerProvidersFromTemplates(templatePayload);
   } catch (error) {
-    const templateError = error instanceof Error ? error.message : String(error || '');
-    if (warehouseError) {
-      throw new Error(`Ozon Seller provider discovery failed: warehouse/list ${warehouseError}; provider/template ${templateError}`);
-    }
-    throw error;
+    templateError = error instanceof Error ? error.message : String(error || '');
   }
+
+  if (warehouseError && templateError) {
+    throw new Error(`Ozon Seller provider discovery failed: warehouse/list ${warehouseError}; provider/template ${templateError}`);
+  }
+
+  return {
+    methods,
+    warehouseProviders,
+    templateProviders,
+    errors: [
+      ...(warehouseError ? [{ source: 'warehouse' as const, message: warehouseError }] : []),
+      ...(templateError ? [{ source: 'template' as const, message: templateError }] : []),
+    ],
+    complete: !warehouseError && !templateError,
+  };
 }
 
 function extractSellerProvidersFromTemplates(payload: unknown): { providerId: number; providerName: string }[] {
@@ -224,6 +290,48 @@ function uniqueProvidersFromMethods(methods: SellerDeliveryMethodRef[]): { provi
   return [...providerMap.entries()]
     .map(([providerId, providerName]) => ({ providerId, providerName }))
     .sort((a, b) => a.providerId - b.providerId);
+}
+
+function mergeSellerProviderSources(
+  warehouseProviders: { providerId: number; providerName: string }[],
+  templateProviders: { providerId: number; providerName: string }[],
+): SellerProviderInventoryEntry[] {
+  const merged = new Map<number, { providerName: string; warehouse: boolean; template: boolean }>();
+  for (const provider of warehouseProviders) {
+    merged.set(provider.providerId, {
+      providerName: provider.providerName,
+      warehouse: true,
+      template: false,
+    });
+  }
+  for (const provider of templateProviders) {
+    const existing = merged.get(provider.providerId);
+    if (existing) {
+      existing.template = true;
+    } else {
+      merged.set(provider.providerId, {
+        providerName: provider.providerName,
+        warehouse: false,
+        template: true,
+      });
+    }
+  }
+  return [...merged.entries()]
+    .map(([providerId, provider]) => ({
+      providerId,
+      providerName: provider.providerName,
+      source: provider.warehouse && provider.template ? 'both' as const : provider.warehouse ? 'warehouse' as const : 'template' as const,
+      status: 'pending' as const,
+      pointCount: 0,
+    }))
+    .sort((a, b) => a.providerId - b.providerId);
+}
+
+function normalizePhysicalAddressKey(value: unknown): string {
+  return stringValue(value)
+    .replace(/\s+/g, ' ')
+    .replace(/[,，;；\s]+$/g, '')
+    .trim();
 }
 
 export function toOzonPickupPointData(point: SellerDropoffPoint, shopId: string): OzonPickupPointData {
