@@ -2,6 +2,7 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { redis } from './redis.js';
 import { prisma } from './prisma.js';
+import { isLegacyExtensionTokenIssuanceEnabled } from './extension-device-auth.js';
 
 const DEV_JWT_FALLBACK = 'dev-secret-change-me';
 
@@ -32,6 +33,9 @@ resolveJwtSecret.warned = false as boolean;
 
 const JWT_SECRET = resolveJwtSecret();
 const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
+const ACCOUNT_DEPLOYMENT_ID = process.env.SS_ERP_DEPLOYMENT_ID?.trim() || 'local-dev';
+const ACCOUNT_JWT_ISSUER = process.env.AUTH_JWT_ISSUER?.trim() || 'ss-erp-local';
+const ACCOUNT_JWT_AUDIENCE = `ss-erp-account:${ACCOUNT_DEPLOYMENT_ID}`;
 
 export interface JwtPayload {
   userId: string;
@@ -51,11 +55,44 @@ export interface AuthContext extends JwtPayload {
 }
 
 export function signToken(payload: JwtPayload, expiresIn?: SignOptions['expiresIn']): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: expiresIn || JWT_EXPIRES_IN });
+  return jwt.sign({
+    ...payload,
+    typ: 'account',
+    tokenUse: 'account_session',
+    deploymentId: ACCOUNT_DEPLOYMENT_ID,
+  }, JWT_SECRET, {
+    algorithm: 'HS256',
+    issuer: ACCOUNT_JWT_ISSUER,
+    audience: ACCOUNT_JWT_AUDIENCE,
+    expiresIn: expiresIn || JWT_EXPIRES_IN,
+  });
 }
 
 export function verifyToken(token: string): JwtPayload {
-  return jwt.verify(token, JWT_SECRET) as JwtPayload;
+  const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+  if (typeof decoded === 'string') throw new Error('Invalid account token');
+
+  const claims = decoded as typeof decoded & Record<string, unknown>;
+  if (typeof claims.userId !== 'string' || typeof claims.role !== 'string') {
+    throw new Error('Invalid account token');
+  }
+
+  if (claims.typ === 'account') {
+    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    if (claims.tokenUse !== 'account_session'
+      || claims.deploymentId !== ACCOUNT_DEPLOYMENT_ID
+      || claims.iss !== ACCOUNT_JWT_ISSUER
+      || !audiences.includes(ACCOUNT_JWT_AUDIENCE)) {
+      throw new Error('Invalid account token');
+    }
+    return claims as unknown as JwtPayload;
+  }
+
+  const isUntypedLegacyToken = claims.typ == null && claims.tokenUse == null;
+  if (!isLegacyExtensionTokenIssuanceEnabled() || !isUntypedLegacyToken) {
+    throw new Error('Invalid account token');
+  }
+  return claims as unknown as JwtPayload;
 }
 
 // 短期缓存 user → effective context，减少认证中间件每次都打 DB

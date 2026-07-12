@@ -10,6 +10,7 @@ import {
   isSmsRegistrationChallengeEnabled,
 } from '../lib/auth-challenge-config.js';
 import { getPublicHumanChallengeConfig, issueHumanChallenge, verifyHumanChallenge, type HumanChallengeAction } from '../lib/human-challenge.js';
+import { isLegacyExtensionTokenIssuanceEnabled } from '../lib/extension-device-auth.js';
 
 const authRateLimitConfig = {
   rateLimit: {
@@ -258,6 +259,13 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/extension-token', { preHandler: [authenticate] }, async (request, reply) => {
+    if (!isLegacyExtensionTokenIssuanceEnabled()) {
+      return reply.status(410).send({
+        code: 0,
+        errorCode: 'legacy_extension_token_disabled',
+        msg: '旧版扩展 Token 已停用，请使用设备配对',
+      });
+    }
     // 扩展 token 是给当前实际登录账号的（子账号要走自己），不能用 effectiveUserId
     const { actorUserId, role } = (request as any).user;
     const extensionToken = signToken({ userId: actorUserId, role }, '30d');

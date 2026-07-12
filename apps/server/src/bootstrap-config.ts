@@ -24,6 +24,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateExtensionDeviceAuthEnvironment } from './lib/extension-device-auth.js';
 
 function loadExternalConfig(): void {
   const candidates: string[] = [];
@@ -46,6 +47,15 @@ function loadExternalConfig(): void {
       if (cfg.serverHost) process.env.SERVER_HOST = String(cfg.serverHost);
       if (cfg.databaseUrl) process.env.DATABASE_URL = String(cfg.databaseUrl);
       if (cfg.jwtSecret) process.env.JWT_SECRET = String(cfg.jwtSecret);
+      if (cfg.deploymentId) process.env.SS_ERP_DEPLOYMENT_ID = String(cfg.deploymentId);
+      if (cfg.authJwtIssuer) process.env.AUTH_JWT_ISSUER = String(cfg.authJwtIssuer);
+      if (cfg.extensionDeviceJwtSecret) process.env.EXTENSION_DEVICE_JWT_SECRET = String(cfg.extensionDeviceJwtSecret);
+      if (cfg.logisticsDistributionEnabled !== undefined) {
+        process.env.LOGISTICS_DISTRIBUTION_ENABLED = String(cfg.logisticsDistributionEnabled);
+      }
+      if (cfg.acceptLegacyAccountTokens !== undefined) {
+        process.env.AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS = String(cfg.acceptLegacyAccountTokens);
+      }
       if (cfg.encryptionKey || cfg.encryption_key) process.env.ENCRYPTION_KEY = String(cfg.encryptionKey || cfg.encryption_key);
       if (cfg.corsOrigin) process.env.CORS_ORIGIN = String(cfg.corsOrigin);
       if (cfg.redisUrl) process.env.REDIS_URL = String(cfg.redisUrl);
@@ -61,6 +71,13 @@ function loadExternalConfig(): void {
 }
 
 loadExternalConfig();
+
+try {
+  validateExtensionDeviceAuthEnvironment(process.env);
+} catch (error) {
+  console.error(`[FATAL] ${(error as Error).message}`);
+  process.exit(1);
+}
 
 // 生产环境关键密钥硬校验 — 缺失或使用默认值时直接拒绝启动
 if (process.env.NODE_ENV === 'production') {

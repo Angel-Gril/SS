@@ -109,6 +109,30 @@ function validateBootstrapBase(env) {
   }
   requireValue(env, 'JWT_SECRET', { minLength: 16 });
   requireValue(env, 'ENCRYPTION_KEY', { minLength: 32 });
+  for (const key of ['LOGISTICS_DISTRIBUTION_ENABLED', 'AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS']) {
+    if (isSet(env[key]) && !['true', 'false'].includes(env[key])) {
+      fail(`${key} expected true/false, got ${env[key]}`);
+    }
+  }
+  if (env.LOGISTICS_DISTRIBUTION_ENABLED === 'true') {
+    requireValue(env, 'SS_ERP_DEPLOYMENT_ID');
+    requireValue(env, 'AUTH_JWT_ISSUER');
+    requireValue(env, 'EXTENSION_DEVICE_JWT_SECRET', { minLength: 32 });
+    if (isSet(env.SS_ERP_DEPLOYMENT_ID)
+      && (env.SS_ERP_DEPLOYMENT_ID === 'local-dev'
+        || !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$/.test(env.SS_ERP_DEPLOYMENT_ID))) {
+      fail('SS_ERP_DEPLOYMENT_ID is not valid for production');
+    }
+    if (isSet(env.AUTH_JWT_ISSUER)
+      && (env.AUTH_JWT_ISSUER === 'ss-erp-local'
+        || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$/.test(env.AUTH_JWT_ISSUER))) {
+      fail('AUTH_JWT_ISSUER is not valid for production');
+    }
+    if (isSet(env.EXTENSION_DEVICE_JWT_SECRET)
+      && env.EXTENSION_DEVICE_JWT_SECRET === env.JWT_SECRET) {
+      fail('EXTENSION_DEVICE_JWT_SECRET must differ from JWT_SECRET');
+    }
+  }
   expectOneOf(env, 'RUNTIME_MODE', ['local', 'cloud']);
   expectOneOf(env, 'LEGAL_PROFILE', ['local', 'cloud-cn', 'cloud-global', 'self-hosted']);
   if (isSet(env.AUTH_COOKIE_SECURE) && !['true', 'false'].includes(env.AUTH_COOKIE_SECURE)) {
