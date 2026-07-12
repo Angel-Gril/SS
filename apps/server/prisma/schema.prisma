@@ -56,6 +56,53 @@ enum BalanceLogType {
   ADJUST
 }
 
+enum LogisticsChannelType {
+  TENANT
+  PUBLIC
+}
+
+enum LogisticsSourceOwnerType {
+  TENANT
+  PUBLIC
+}
+
+enum LogisticsConfidentiality {
+  TENANT_PRIVATE
+  PUBLIC
+}
+
+enum LogisticsValidationStatus {
+  DRAFT
+  PASSED
+  FAILED
+}
+
+enum LogisticsBindingStatus {
+  CANDIDATE
+  VERIFIED
+  INVALIDATED
+}
+
+enum LogisticsReviewStatus {
+  SUGGESTED
+  CONFIRMED
+  REJECTED
+  INVALIDATED
+}
+
+enum LogisticsReleaseKind {
+  PUBLISH
+  ROLLBACK
+}
+
+enum LogisticsRuleEventType {
+  REVISION_CREATED
+  BINDING_CHANGED
+  PUBLISHED
+  ROLLED_BACK
+  INVALIDATED
+}
+
 model User {
   id                 String     @id @default(cuid())
   phone              String     @unique
@@ -107,6 +154,13 @@ model User {
   ownedAiImageJobs              AiImageJob[]               @relation("AiImageJobOwner")
   createdAiImageJobs            AiImageJob[]               @relation("AiImageJobActor")
   mediaAssets                   MediaAsset[]
+  logisticsRuleChannels         LogisticsRuleChannel[]     @relation("LogisticsChannelTenant")
+  logisticsRuleRevisions        LogisticsRuleRevision[]    @relation("LogisticsRevisionTenant")
+  logisticsRuleAssignments      LogisticsRuleAssignment[]  @relation("LogisticsAssignmentTenant")
+  shopOzonCompanyBindings       ShopOzonCompanyBinding[]   @relation("ShopCompanyBindingTenant")
+  warehouseOzonOriginBindings   WarehouseOzonOriginBinding[] @relation("WarehouseOriginBindingTenant")
+  deliveryMethodRuleBindings    ShopDeliveryMethodRuleBinding[] @relation("MethodRuleBindingTenant")
+  officialFormulaResolutions    OfficialSellerFormulaResolution[] @relation("OfficialResolutionTenant")
 
   @@index([parentId])
   @@map("users")
@@ -170,6 +224,14 @@ model Shop {
   issues               ExpressIssue[]
   financeTransactions  OzonFinanceTransaction[]
   ozonCategoryCatalogs OzonCategoryCatalog[]
+  logisticsRuleChannels LogisticsRuleChannel[] @relation("LogisticsChannelShop")
+  logisticsRuleAssignments LogisticsRuleAssignment[] @relation("LogisticsAssignmentShop")
+  shopOzonCompanyBindings ShopOzonCompanyBinding[] @relation("ShopCompanyBindingShop")
+  warehouseOzonOriginBindings WarehouseOzonOriginBinding[] @relation("WarehouseOriginBindingShop")
+  deliveryMethodRuleBindings ShopDeliveryMethodRuleBinding[] @relation("MethodRuleBindingShop")
+  officialFormulaResolutions OfficialSellerFormulaResolution[] @relation("OfficialResolutionShop")
+
+  @@unique([id, userId])
 
   @@index([userId])
   @@index([platform])
@@ -212,6 +274,13 @@ model Warehouse {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   deliveryMethods ShopDeliveryMethod[]
+  logisticsRuleChannels LogisticsRuleChannel[] @relation("LogisticsChannelWarehouse")
+  logisticsRuleAssignments LogisticsRuleAssignment[] @relation("LogisticsAssignmentWarehouse")
+  warehouseOzonOriginBindings WarehouseOzonOriginBinding[] @relation("WarehouseOriginBindingWarehouse")
+  deliveryMethodRuleBindings ShopDeliveryMethodRuleBinding[] @relation("MethodRuleBindingWarehouse")
+  officialFormulaResolutions OfficialSellerFormulaResolution[] @relation("OfficialResolutionWarehouse")
+
+  @@unique([id, shopId])
 
   @@unique([shopId, platformWarehouseId])
   @@index([shopId])
@@ -236,7 +305,9 @@ model ShopDeliveryMethod {
   rawData             Json?     @map("raw_data")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
+  ruleBindings        ShopDeliveryMethodRuleBinding[]
 
+  @@unique([id, warehouseId])
   @@unique([warehouseId, platformMethodId])
   @@index([warehouseId])
   @@map("shop_delivery_methods")
@@ -1593,4 +1664,250 @@ model MediaAsset {
   @@index([ownerUserId, createdAt])
   @@index([aiImageJobId])
   @@map("media_assets")
+}
+model ShopOzonCompanyBinding {
+  id                            String                 @id @default(cuid())
+  tenantId                      String                 @map("tenant_id")
+  tenant                        User                   @relation("ShopCompanyBindingTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                        String                 @map("shop_id")
+  shop                          Shop                   @relation("ShopCompanyBindingShop", fields: [shopId], references: [id], onDelete: Restrict)
+  ozonCompanyId                 String                 @map("ozon_company_id")
+  status                        LogisticsBindingStatus @default(CANDIDATE)
+  openApiEvidence               Json?                  @map("open_api_evidence")
+  sellerProbeEvidence           Json?                  @map("seller_probe_evidence")
+  openApiVerifiedAt             DateTime?              @map("open_api_verified_at")
+  sellerProbeVerifiedAt         DateTime?              @map("seller_probe_verified_at")
+  openApiIntersectionVerifiedAt DateTime?              @map("open_api_intersection_verified_at")
+  verifiedById                  String?                @map("verified_by_id")
+  verifiedAt                    DateTime?              @map("verified_at")
+  invalidatedAt                 DateTime?              @map("invalidated_at")
+  retiredAt                     DateTime?              @map("retired_at")
+  createdAt                     DateTime               @default(now()) @map("created_at")
+  updatedAt                     DateTime               @updatedAt @map("updated_at")
+  channels                      LogisticsRuleChannel[]
+
+  @@unique([id, tenantId, shopId, ozonCompanyId])
+  @@index([tenantId, shopId, status])
+  @@map("shop_ozon_company_bindings")
+}
+
+model WarehouseOzonOriginBinding {
+  id                         String                 @id @default(cuid())
+  tenantId                   String                 @map("tenant_id")
+  tenant                     User                   @relation("WarehouseOriginBindingTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                     String                 @map("shop_id")
+  shop                       Shop                   @relation("WarehouseOriginBindingShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId                String                 @map("warehouse_id")
+  warehouse                  Warehouse              @relation("WarehouseOriginBindingWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  originCountryUid           String                 @map("origin_country_uid")
+  originCityUid              String                 @map("origin_city_uid")
+  originCountryCode          String?                @map("origin_country_code")
+  originLabel                String                 @map("origin_label")
+  status                     LogisticsBindingStatus @default(CANDIDATE)
+  openApiAddressEvidence     Json?                  @map("open_api_address_evidence")
+  officialLocationEvidence   Json?                  @map("official_location_evidence")
+  openApiAddressVerifiedAt   DateTime?              @map("open_api_address_verified_at")
+  officialLocationVerifiedAt DateTime?              @map("official_location_verified_at")
+  verifiedById               String?                @map("verified_by_id")
+  verifiedAt                 DateTime?              @map("verified_at")
+  invalidatedAt              DateTime?              @map("invalidated_at")
+  retiredAt                  DateTime?              @map("retired_at")
+  createdAt                  DateTime               @default(now()) @map("created_at")
+  updatedAt                  DateTime               @updatedAt @map("updated_at")
+  channels                   LogisticsRuleChannel[]
+
+  @@unique([id, tenantId, shopId, warehouseId, originCountryUid, originCityUid])
+  @@index([tenantId, shopId, warehouseId, status])
+  @@map("warehouse_ozon_origin_bindings")
+}
+
+model LogisticsRuleChannel {
+  id                 String                  @id @default(cuid())
+  channelType        LogisticsChannelType    @map("channel_type")
+  tenantId           String?                 @map("tenant_id")
+  tenant             User?                   @relation("LogisticsChannelTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId             String?                 @map("shop_id")
+  shop               Shop?                   @relation("LogisticsChannelShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId        String?                 @map("warehouse_id")
+  warehouse          Warehouse?              @relation("LogisticsChannelWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  ozonCompanyId      String?                 @map("ozon_company_id")
+  originCountryUid   String?                 @map("origin_country_uid")
+  originCityUid      String?                 @map("origin_city_uid")
+  originCountryCode  String?                 @map("origin_country_code")
+  originLabel        String?                 @map("origin_label")
+  companyBindingId   String?                 @map("company_binding_id")
+  companyBinding     ShopOzonCompanyBinding? @relation(fields: [companyBindingId], references: [id], onDelete: Restrict)
+  originBindingId    String?                 @map("origin_binding_id")
+  originBinding      WarehouseOzonOriginBinding? @relation(fields: [originBindingId], references: [id], onDelete: Restrict)
+  scopeKey           String                  @unique @map("scope_key")
+  currentSequence    Int                     @default(0) @map("current_sequence")
+  currentReleaseId   String?                 @unique @map("current_release_id")
+  currentRelease     LogisticsRuleRelease?   @relation("CurrentLogisticsRuleRelease", fields: [currentReleaseId], references: [id], onDelete: Restrict)
+  retiredAt          DateTime?               @map("retired_at")
+  createdAt          DateTime                @default(now()) @map("created_at")
+  updatedAt          DateTime                @updatedAt @map("updated_at")
+  releases           LogisticsRuleRelease[]  @relation("ChannelLogisticsRuleReleases")
+  assignments        LogisticsRuleAssignment[]
+  events             LogisticsRuleEvent[]
+
+  @@unique([id, tenantId, shopId, warehouseId])
+  @@index([tenantId, shopId, warehouseId])
+  @@map("logistics_rule_channels")
+}
+
+model LogisticsRuleRevision {
+  id                   String                    @id @default(cuid())
+  revisionKey          String                    @unique @map("revision_key")
+  sourceOwnerType      LogisticsSourceOwnerType  @map("source_owner_type")
+  sourceTenantId       String?                   @map("source_tenant_id")
+  sourceTenant         User?                     @relation("LogisticsRevisionTenant", fields: [sourceTenantId], references: [id], onDelete: Restrict)
+  confidentiality      LogisticsConfidentiality
+  contentChecksum      String                    @map("content_checksum")
+  payload              Json
+  schemaVersion        String                    @map("schema_version")
+  parserVersion        String?                   @map("parser_version")
+  sourceMetadata       Json?                     @map("source_metadata")
+  capturedAt           DateTime?                 @map("captured_at")
+  validationStatus     LogisticsValidationStatus @default(DRAFT) @map("validation_status")
+  validationReport     Json?                     @map("validation_report")
+  validatedAt          DateTime?                 @map("validated_at")
+  validationValidUntil DateTime?                 @map("validation_valid_until")
+  createdById          String?                   @map("created_by_id")
+  createdAt            DateTime                  @default(now()) @map("created_at")
+  releases             LogisticsRuleRelease[]
+  methodBindings       ShopDeliveryMethodRuleBinding[]
+  officialResolutions  OfficialSellerFormulaResolution[]
+
+  @@unique([sourceOwnerType, sourceTenantId, contentChecksum])
+  @@index([sourceTenantId, createdAt])
+  @@map("logistics_rule_revisions")
+}
+
+model LogisticsRuleRelease {
+  id                      String                 @id @default(cuid())
+  channelId               String                 @map("channel_id")
+  channel                 LogisticsRuleChannel   @relation("ChannelLogisticsRuleReleases", fields: [channelId], references: [id], onDelete: Restrict)
+  sequence                Int
+  revisionId              String                 @map("revision_id")
+  revision                LogisticsRuleRevision  @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  releaseKind             LogisticsReleaseKind   @map("release_kind")
+  rollbackTargetReleaseId String?                @map("rollback_target_release_id")
+  rollbackTargetRelease   LogisticsRuleRelease?  @relation("LogisticsReleaseRollback", fields: [rollbackTargetReleaseId], references: [id], onDelete: Restrict)
+  rollbackReleases        LogisticsRuleRelease[] @relation("LogisticsReleaseRollback")
+  contentChecksum         String                 @map("content_checksum")
+  effectiveChecksum       String                 @map("effective_checksum")
+  frozenPayload           Json                   @map("frozen_payload")
+  validatedAt             DateTime               @map("validated_at")
+  validationValidUntil    DateTime               @map("validation_valid_until")
+  publishedById           String?                @map("published_by_id")
+  publishedAt             DateTime               @default(now()) @map("published_at")
+  currentForChannel       LogisticsRuleChannel?  @relation("CurrentLogisticsRuleRelease")
+  pinnedAssignments       LogisticsRuleAssignment[]
+  events                  LogisticsRuleEvent[]
+
+  @@unique([channelId, sequence])
+  @@unique([id, channelId])
+  @@index([revisionId])
+  @@map("logistics_rule_releases")
+}
+
+model LogisticsRuleAssignment {
+  id                     String                @id @default(cuid())
+  tenantId               String                @map("tenant_id")
+  tenant                 User                  @relation("LogisticsAssignmentTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                 String                @map("shop_id")
+  shop                   Shop                  @relation("LogisticsAssignmentShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId            String                @map("warehouse_id")
+  warehouse              Warehouse             @relation("LogisticsAssignmentWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  channelId              String                @map("channel_id")
+  channel                LogisticsRuleChannel  @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  destinationCountryUid  String                @map("destination_country_uid")
+  destinationLocationUid String                @map("destination_location_uid")
+  destinationCountryCode String?               @map("destination_country_code")
+  destinationLabel       String                @map("destination_label")
+  pinnedReleaseId        String?               @map("pinned_release_id")
+  pinnedRelease          LogisticsRuleRelease? @relation(fields: [pinnedReleaseId], references: [id], onDelete: SetNull)
+  retiredAt              DateTime?             @map("retired_at")
+  createdAt              DateTime              @default(now()) @map("created_at")
+  updatedAt              DateTime              @updatedAt @map("updated_at")
+
+  @@index([tenantId, shopId, warehouseId, destinationCountryUid, destinationLocationUid])
+  @@index([channelId])
+  @@map("logistics_rule_assignments")
+}
+
+model ShopDeliveryMethodRuleBinding {
+  id                   String                @id @default(cuid())
+  tenantId             String                @map("tenant_id")
+  tenant               User                  @relation("MethodRuleBindingTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId               String                @map("shop_id")
+  shop                 Shop                  @relation("MethodRuleBindingShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId          String                @map("warehouse_id")
+  warehouse            Warehouse             @relation("MethodRuleBindingWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  deliveryMethodId     String                @map("delivery_method_id")
+  deliveryMethod       ShopDeliveryMethod    @relation(fields: [deliveryMethodId], references: [id], onDelete: Restrict)
+  stableServiceKey     String                @map("stable_service_key")
+  candidateServiceKeys Json?                 @map("candidate_service_keys")
+  sourceRevisionId     String                @map("source_revision_id")
+  sourceRevision       LogisticsRuleRevision @relation(fields: [sourceRevisionId], references: [id], onDelete: Restrict)
+  status               LogisticsReviewStatus @default(SUGGESTED)
+  evidence             Json?
+  confirmedById        String?               @map("confirmed_by_id")
+  confirmedAt          DateTime?             @map("confirmed_at")
+  retiredAt            DateTime?             @map("retired_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+
+  @@index([tenantId, shopId, warehouseId, deliveryMethodId])
+  @@index([sourceRevisionId])
+  @@map("shop_delivery_method_rule_bindings")
+}
+
+model OfficialSellerFormulaResolution {
+  id                     String                @id @default(cuid())
+  resolutionKey          String                @unique @map("resolution_key")
+  tenantId               String                @map("tenant_id")
+  tenant                 User                  @relation("OfficialResolutionTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                 String                @map("shop_id")
+  shop                   Shop                  @relation("OfficialResolutionShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId            String                @map("warehouse_id")
+  warehouse              Warehouse             @relation("OfficialResolutionWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  officialFingerprint    String                @map("official_fingerprint")
+  sellerSourceRevisionId String                @map("seller_source_revision_id")
+  sellerSourceRevision   LogisticsRuleRevision @relation(fields: [sellerSourceRevisionId], references: [id], onDelete: Restrict)
+  candidateSetChecksum   String                @map("candidate_set_checksum")
+  candidateServiceKeys   Json                  @map("candidate_service_keys")
+  selectedServiceKey     String?               @map("selected_service_key")
+  status                 LogisticsReviewStatus @default(SUGGESTED)
+  evidence               Json?
+  reviewedById           String?               @map("reviewed_by_id")
+  reviewedAt             DateTime?             @map("reviewed_at")
+  invalidatedAt          DateTime?             @map("invalidated_at")
+  createdAt              DateTime              @default(now()) @map("created_at")
+  updatedAt              DateTime              @updatedAt @map("updated_at")
+
+  @@index([tenantId, shopId, warehouseId, officialFingerprint])
+  @@index([sellerSourceRevisionId])
+  @@map("official_seller_formula_resolutions")
+}
+
+model LogisticsRuleEvent {
+  id            String                 @id @default(cuid())
+  tenantId      String?                @map("tenant_id")
+  channelId     String                 @map("channel_id")
+  channel       LogisticsRuleChannel   @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  releaseId     String?                @map("release_id")
+  release       LogisticsRuleRelease?  @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+  subjectType   String                 @map("subject_type")
+  subjectId     String                 @map("subject_id")
+  actorUserId   String?                @map("actor_user_id")
+  type          LogisticsRuleEventType
+  scopeSnapshot Json                   @map("scope_snapshot")
+  facts         Json
+  createdAt     DateTime               @default(now()) @map("created_at")
+
+  @@index([releaseId])
+  @@index([tenantId, createdAt])
+  @@index([channelId, createdAt])
+  @@map("logistics_rule_events")
 }
