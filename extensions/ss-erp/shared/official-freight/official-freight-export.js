@@ -53,13 +53,25 @@
     var payload = parseJson(requestText);
     var dims = getFirst(payload, ['dimensions', 'dimension', 'package']);
     dims = dims && typeof dims === 'object' ? dims : {};
+    var hasBatteryField = Object.prototype.hasOwnProperty.call(payload, 'hasBattery')
+      || Object.prototype.hasOwnProperty.call(payload, 'has_battery')
+      || Object.prototype.hasOwnProperty.call(payload, 'battery');
     return {
       weightG: toNumber(getFirst(payload, ['weight', 'weightG', 'weight_g', 'weightInGrams'])),
-      lengthCm: toNumber(getFirst(payload, ['length', 'lengthCm', 'length_cm']) || getFirst(dims, ['length', 'lengthCm', 'length_cm'])),
-      widthCm: toNumber(getFirst(payload, ['width', 'widthCm', 'width_cm']) || getFirst(dims, ['width', 'widthCm', 'width_cm'])),
-      heightCm: toNumber(getFirst(payload, ['height', 'heightCm', 'height_cm']) || getFirst(dims, ['height', 'heightCm', 'height_cm'])),
+      lengthMm: toNumber(getFirst(payload, ['length', 'lengthMm', 'length_mm']) || getFirst(dims, ['length', 'lengthMm', 'length_mm'])),
+      widthMm: toNumber(getFirst(payload, ['width', 'widthMm', 'width_mm']) || getFirst(dims, ['width', 'widthMm', 'width_mm'])),
+      heightMm: toNumber(getFirst(payload, ['height', 'heightMm', 'height_mm']) || getFirst(dims, ['height', 'heightMm', 'height_mm'])),
       declaredPrice: toNumber(getFirst(payload, ['price', 'declaredPrice', 'declared_price', 'productPrice'])),
-      hasBattery: Boolean(getFirst(payload, ['hasBattery', 'has_battery', 'battery'])),
+      currency: normalizeCurrency(payload.currency),
+      batteryInput: hasBatteryField ? Boolean(getFirst(payload, ['hasBattery', 'has_battery', 'battery'])) : null,
+      origin: {
+        countryUid: toText(payload.countryUid).trim(),
+        cityUid: toText(payload.cityUid).trim(),
+      },
+      destination: {
+        countryUid: toText(payload.destinationCountryUid).trim(),
+        locationUid: toText(payload.destinationLocationUid).trim(),
+      },
     };
   }
 
@@ -82,22 +94,25 @@
         var price = extractPrice(tariff);
         if (!providerId && !providerName && !description && !price) return;
         var capturedAt = toText(entry && (entry.startedDateTime || entry.capturedAt));
-        var dimsKey = [context.lengthCm, context.widthCm, context.heightCm].join('x');
+        var dimsKey = [context.lengthMm, context.widthMm, context.heightMm].join('x');
         samples.push({
           key: [capturedAt, providerId, description, context.weightG, dimsKey].join('|'),
           providerId: providerId,
           providerName: providerName,
           description: description,
           price: price,
-          currency: normalizeCurrency(getFirst(tariff, ['currency', 'currency_code', 'currencyCode']) || getFirst(tariff.delivery_price, ['currency', 'currency_code', 'currencyCode'])),
+          currency: normalizeCurrency(getFirst(tariff, ['currency', 'currency_code', 'currencyCode']) || getFirst(tariff.delivery_price, ['currency', 'currency_code', 'currencyCode']) || context.currency),
           weightType: toText(getFirst(tariff, ['weightType', 'weight_type', 'chargeMode', 'charge_mode'])).trim(),
-          hasBattery: tariff.hasBattery == null && tariff.has_battery == null ? Boolean(context.hasBattery) : Boolean(getFirst(tariff, ['hasBattery', 'has_battery'])),
+          hasBattery: tariff.hasBattery == null && tariff.has_battery == null ? Boolean(context.batteryInput) : Boolean(getFirst(tariff, ['hasBattery', 'has_battery'])),
+          batteryInput: context.batteryInput,
           isDropOff: Boolean(getFirst(tariff, ['isDropOff', 'is_drop_off', 'dropOff', 'drop_off'])),
           weightG: context.weightG,
-          lengthCm: context.lengthCm,
-          widthCm: context.widthCm,
-          heightCm: context.heightCm,
+          lengthMm: context.lengthMm,
+          widthMm: context.widthMm,
+          heightMm: context.heightMm,
           declaredPrice: context.declaredPrice,
+          origin: context.origin,
+          destination: context.destination,
           capturedAt: capturedAt,
         });
       });
@@ -128,12 +143,17 @@
       'currency',
       'weightType',
       'hasBattery',
+      'batteryInput',
       'isDropOff',
       'weightG',
-      'lengthCm',
-      'widthCm',
-      'heightCm',
+      'lengthMm',
+      'widthMm',
+      'heightMm',
       'declaredPrice',
+      'originCountryUid',
+      'originCityUid',
+      'destinationCountryUid',
+      'destinationLocationUid',
       'capturedAt',
     ];
     var rows = [columns.join(',')];
@@ -147,12 +167,17 @@
         sample && sample.currency,
         sample && sample.weightType,
         Boolean(sample && sample.hasBattery),
+        sample && sample.batteryInput == null ? '' : Boolean(sample.batteryInput),
         Boolean(sample && sample.isDropOff),
         Number(sample && sample.weightG) || 0,
-        Number(sample && sample.lengthCm) || 0,
-        Number(sample && sample.widthCm) || 0,
-        Number(sample && sample.heightCm) || 0,
+        Number(sample && sample.lengthMm) || 0,
+        Number(sample && sample.widthMm) || 0,
+        Number(sample && sample.heightMm) || 0,
         Number(sample && sample.declaredPrice) || 0,
+        sample && sample.origin && sample.origin.countryUid,
+        sample && sample.origin && sample.origin.cityUid,
+        sample && sample.destination && sample.destination.countryUid,
+        sample && sample.destination && sample.destination.locationUid,
         sample && sample.capturedAt,
       ].map(csvEscape).join(','));
     });

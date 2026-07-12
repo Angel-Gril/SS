@@ -32,10 +32,37 @@
     return [];
   }
 
-  function parseRequestCompanyId(entry) {
+  function parseRequestPayload(entry) {
     var text = entry && entry.request && entry.request.postData ? entry.request.postData.text : '';
-    var payload = parseJson(text);
-    return toText(payload.company_id || payload.companyId).trim();
+    return parseJson(text);
+  }
+
+  function observedContextFromEntry(entry) {
+    var payload = parseRequestPayload(entry);
+    var point = payload.point && typeof payload.point === 'object' ? payload.point : {};
+    var latitude = Number(point.latitude);
+    var longitude = Number(point.longitude);
+    var hasQueryPoint = Number.isFinite(latitude) && Number.isFinite(longitude);
+    return {
+      companyId: toText(payload.company_id || payload.companyId).trim(),
+      availableIntegrationType: Number(payload.available_integration_type || payload.availableIntegrationType) || 0,
+      ...(hasQueryPoint ? { queryPoint: { latitude: latitude, longitude: longitude } } : {}),
+      locationStatus: hasQueryPoint ? 'coordinates_only' : 'legacy_unscoped',
+    };
+  }
+
+  function observedContextKey(context) {
+    return [
+      context.companyId,
+      context.availableIntegrationType,
+      context.queryPoint ? context.queryPoint.latitude : '',
+      context.queryPoint ? context.queryPoint.longitude : '',
+      context.locationStatus,
+    ].join('|');
+  }
+
+  function parseRequestCompanyId(entry) {
+    return observedContextFromEntry(entry).companyId;
   }
 
   function chargeModeFromWeightType(weightType) {
@@ -93,6 +120,31 @@
     }).sort(function (left, right) {
       return left.templateName.localeCompare(right.templateName) || left.templateId.localeCompare(right.templateId);
     });
+  }
+
+
+  function extractSellerLogisticsCaptureFromEntries(entries) {
+    var templateEntries = (Array.isArray(entries) ? entries : []).filter(function (entry) {
+      var url = toText(entry && entry.request && entry.request.url);
+      return url.indexOf('/provider/template/by-location/list') >= 0;
+    });
+    var contextMap = {};
+    templateEntries.forEach(function (entry) {
+      var context = observedContextFromEntry(entry);
+      contextMap[observedContextKey(context)] = context;
+    });
+    var contexts = Object.keys(contextMap).map(function (key) { return contextMap[key]; });
+    var quarantined = contexts.length > 1;
+    return {
+      observedContext: contexts[0] || {
+        companyId: '',
+        availableIntegrationType: 0,
+        locationStatus: 'legacy_unscoped',
+      },
+      templates: quarantined ? [] : extractSellerLogisticsTemplatesFromEntries(templateEntries),
+      quarantined: quarantined,
+      errors: quarantined ? ['Seller 捕获批次上下文冲突，不能合并 company 或查询点。'] : [],
+    };
   }
 
   function csvEscape(value) {
@@ -165,6 +217,7 @@
 
   var api = {
     extractSellerLogisticsTemplatesFromEntries: extractSellerLogisticsTemplatesFromEntries,
+    extractSellerLogisticsCaptureFromEntries: extractSellerLogisticsCaptureFromEntries,
     exportSellerLogisticsAsJson: exportSellerLogisticsAsJson,
     exportSellerLogisticsAsCsv: exportSellerLogisticsAsCsv,
   };

@@ -26,6 +26,19 @@
     return null;
   }
 
+  function isExactOfficialCalculateEntry(entry) {
+    var rawUrl = entry && entry.request && String(entry.request.url || '').trim();
+    if (!rawUrl) return false;
+    try {
+      var pageUrl = entry && entry._ozonCalc && entry._ozonCalc.pageUrl;
+      var parsed = new URL(rawUrl, pageUrl || 'https://globalcalculator.ozon.ru');
+      return parsed.hostname === 'globalcalculator.ozon.ru'
+        && parsed.pathname === '/p-api/tpl-api-global-calc-gw/v1/calculator/calculate';
+    } catch (error) {
+      return false;
+    }
+  }
+
   function parseEntryJson(entry, sourceLabel) {
     if (!entry || !entry.response || !entry.response.content) {
       throw new Error(sourceLabel + ' 没有找到可解析的响应内容。');
@@ -255,6 +268,17 @@
     var categoryPayload = categoryEntry ? parseEntryJson(categoryEntry, 'seller 类目') : { result: [] };
     var speedPayload = speedEntry ? parseEntryJson(speedEntry, 'seller 时效') : { result: [] };
     var requestPayload = parseRequestJson(templateEntry);
+
+    var point = requestPayload.point && typeof requestPayload.point === 'object' ? requestPayload.point : {};
+    var latitude = Number(point.latitude);
+    var longitude = Number(point.longitude);
+    var hasQueryPoint = Number.isFinite(latitude) && Number.isFinite(longitude);
+    var observedContext = {
+      companyId: String(requestPayload.company_id || requestPayload.companyId || ''),
+      availableIntegrationType: Number(requestPayload.available_integration_type || requestPayload.availableIntegrationType) || 0,
+      ...(hasQueryPoint ? { queryPoint: { latitude: latitude, longitude: longitude } } : {}),
+      locationStatus: hasQueryPoint ? 'coordinates_only' : 'legacy_unscoped',
+    };
     var templates = Array.isArray(templatePayload.provider_templates) ? templatePayload.provider_templates : [];
     var categoryMap = buildCategoryMap(categoryPayload);
     var speedMap = buildSpeedMap(speedPayload);
@@ -265,6 +289,7 @@
     if (typeStats['3']) warnings.push('检测到 weight_type=3 模板，当前按 max(实重, 体积重) 计费，体积重除数 12000。');
 
     return {
+      observedContext: observedContext,
       catalogSnapshot: {
         metadata: {
           source: 'seller-har',
@@ -301,15 +326,115 @@
     };
   }
 
+  function finiteNumber(value) {
+    var number = Number(value);
+    return Number.isFinite(number) ? number : 0;
+  }
+
+  function normalizeOfficialRequest(requestPayload) {
+    requestPayload = requestPayload && typeof requestPayload === 'object' ? requestPayload : {};
+    var batteryInput = null;
+    if (Object.prototype.hasOwnProperty.call(requestPayload, 'hasBattery')) {
+      batteryInput = Boolean(requestPayload.hasBattery);
+    } else if (Object.prototype.hasOwnProperty.call(requestPayload, 'has_battery')) {
+      batteryInput = Boolean(requestPayload.has_battery);
+    }
+    return {
+      origin: {
+        countryUid: String(requestPayload.countryUid || ''),
+        cityUid: String(requestPayload.cityUid || ''),
+      },
+      destination: {
+        countryUid: String(requestPayload.destinationCountryUid || ''),
+        locationUid: String(requestPayload.destinationLocationUid || ''),
+      },
+      currency: String(requestPayload.currency || '').toUpperCase(),
+      declaredPrice: finiteNumber(requestPayload.price),
+      package: {
+        weight: { value: finiteNumber(requestPayload.weight), unit: 'g' },
+        dimensions: {
+          length: finiteNumber(requestPayload.length),
+          width: finiteNumber(requestPayload.width),
+          height: finiteNumber(requestPayload.height),
+          unit: 'mm',
+        },
+      },
+      batteryInput: batteryInput,
+    };
+  }
+
+  function buildOfficialFingerprintKey(request) {
+    return [
+      request.origin.countryUid,
+      request.origin.cityUid,
+      request.destination.countryUid,
+      request.destination.locationUid,
+      request.currency,
+      request.declaredPrice,
+      request.package.weight.value,
+      request.package.dimensions.length,
+      request.package.dimensions.width,
+      request.package.dimensions.height,
+      request.batteryInput == null ? 'battery-unknown' : (request.batteryInput ? 'battery' : 'no-battery'),
+    ].join('|');
+  }
+
+  function normalizeServiceIdentityText(value) {
+    return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function normalizeOfficialTariffs(calculatePayload, currency) {
+    return Array.isArray(calculatePayload.tariffs) ? calculatePayload.tariffs.map(function (item) {
+      var providerId = String(item.providerId || '');
+      var description = String(item.description || '');
+      var templateType = String(item.templateType || '');
+      var weightType = String(item.weightType || '');
+      var batteryKey = item.hasBattery ? 'battery' : 'no-battery';
+      return {
+        stableServiceKey: [
+          providerId,
+          normalizeServiceIdentityText(description),
+          normalizeServiceIdentityText(templateType),
+          normalizeServiceIdentityText(weightType),
+          batteryKey,
+        ].join('|'),
+        providerId: providerId,
+        providerName: String(item.providerName || ''),
+        description: description,
+        price: finiteNumber(item.price),
+        currency: String(currency || '').toUpperCase(),
+        weightType: weightType,
+        hasBattery: Boolean(item.hasBattery),
+        isDropOff: Boolean(item.isDropOff),
+        templateType: templateType,
+        clusterDeliverySpeeds: Array.isArray(item.clusterDeliverySpeeds) ? item.clusterDeliverySpeeds : [],
+        deliverySpeed: item.deliverySpeed == null ? null : item.deliverySpeed,
+        rating: item.rating == null ? null : item.rating,
+      };
+    }) : [];
+  }
+
   function importOfficialHar(payload) {
     var entries = parseHarPayload(payload);
     var providerEntry = findLatestEntry(entries, '/v1/provider/');
-    var calculateEntry = findLatestEntry(entries, '/v1/calculator/calculate');
+    var calculateEntries = entries.filter(isExactOfficialCalculateEntry);
+    var calculateEntry = calculateEntries.length ? calculateEntries[calculateEntries.length - 1] : null;
     if (!calculateEntry) throw new Error('official HAR 中缺少 calculator/calculate 响应。');
 
     var providerPayload = providerEntry ? parseEntryJson(providerEntry, 'official provider') : { providers: [] };
     var calculatePayload = parseEntryJson(calculateEntry, 'official calculate');
     var requestPayload = parseRequestJson(calculateEntry);
+
+    var samples = calculateEntries.map(function (entry) {
+      var request = normalizeOfficialRequest(parseRequestJson(entry));
+      var samplePayload = parseEntryJson(entry, 'official calculate');
+      return {
+        fingerprintKey: buildOfficialFingerprintKey(request),
+        capturedAt: String(entry.startedDateTime || ''),
+        request: request,
+        tariffs: normalizeOfficialTariffs(samplePayload, request.currency),
+      };
+    });
 
     return {
       metadata: {
@@ -320,23 +445,14 @@
         note: '仅用于样本校验，不会实时请求官方计算器。',
       },
       sampleRequest: requestPayload,
+      samples: samples,
       providers: Array.isArray(providerPayload.providers) ? providerPayload.providers.map(function (item) {
         return {
           id: String(item.id || ''),
           name: String(item.name || ''),
         };
       }) : [],
-      tariffs: Array.isArray(calculatePayload.tariffs) ? calculatePayload.tariffs.map(function (item) {
-        return {
-          providerId: String(item.providerId || ''),
-          providerName: String(item.providerName || ''),
-          description: String(item.description || ''),
-          price: Number(item.price) || 0,
-          weightType: String(item.weightType || ''),
-          hasBattery: Boolean(item.hasBattery),
-          isDropOff: Boolean(item.isDropOff),
-        };
-      }) : [],
+      tariffs: normalizeOfficialTariffs(calculatePayload, requestPayload.currency),
     };
   }
 

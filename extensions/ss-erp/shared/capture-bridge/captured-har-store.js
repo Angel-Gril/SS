@@ -13,8 +13,6 @@
     { mode: 'seller-products', source: 'seller-products-capture', keyword: '/api/inventory' },
     { mode: 'seller-products', source: 'seller-products-capture', keyword: '/api/warehouse/stock' },
     { mode: 'official', source: 'official-page-capture', keyword: '/v1/provider/' },
-    { mode: 'official', source: 'official-page-capture', keyword: '/v1/calculator/calculate' },
-    { mode: 'official', source: 'official-page-capture', keyword: '/calculator/calculate' },
     { mode: 'ozon-video-upload', source: 'seller-video-upload-capture', keyword: '/api/media/video' },
     { mode: 'ozon-video-upload', source: 'seller-video-upload-capture', keyword: '/api/video' },
     { mode: 'ozon-video-upload', source: 'seller-video-upload-capture', keyword: '/media/upload' },
@@ -36,6 +34,12 @@
     '/token',
     '/settings/account',
   ];
+
+  var OFFICIAL_FREIGHT_ENDPOINT = {
+    mode: 'official',
+    source: 'official-page-capture',
+    keyword: '/p-api/tpl-api-global-calc-gw/v1/calculator/calculate',
+  };
 
   var BINARY_UPLOAD_ENDPOINT = {
     mode: 'ozon-video-upload',
@@ -122,10 +126,23 @@
     return lower.indexOf('seller.ozon.ru') >= 0 || lower.indexOf('.seller.ozon.ru') >= 0 || lower.indexOf('/api/') === 0;
   }
 
+
+  function matchOfficialFreightEndpoint(url, pageUrl) {
+    try {
+      var parsed = new URL(toText(url), toText(pageUrl) || 'https://globalcalculator.ozon.ru');
+      if (parsed.hostname !== 'globalcalculator.ozon.ru') return null;
+      if (parsed.pathname !== OFFICIAL_FREIGHT_ENDPOINT.keyword) return null;
+      return OFFICIAL_FREIGHT_ENDPOINT;
+    } catch (error) {
+      return null;
+    }
+  }
+
   function detectSupportedEndpoint(url, rawRequest, pageUrl) {
     var text = toText(url);
     var lower = text.toLowerCase();
     if (isSensitiveUrl(lower)) return null;
+    if (lower.indexOf('/calculator/calculate') >= 0) return matchOfficialFreightEndpoint(text, pageUrl);
     for (var index = 0; index < SUPPORTED_ENDPOINTS.length; index += 1) {
       if (text.indexOf(SUPPORTED_ENDPOINTS[index].keyword) >= 0) return SUPPORTED_ENDPOINTS[index];
     }
