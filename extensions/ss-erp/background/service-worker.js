@@ -18,6 +18,14 @@ try {
 } catch (e) { console.warn('[SS ERP] adapter layer load error:', e); }
 
 const OZON_CALC_SYNC_CHANNEL = 'ozon-calc:sync-config';
+const OZON_CALC_SETTINGS_WRITE_CHANNELS = new Set([
+  'ozon-calculator:build-config-from-captured-seller',
+  'ozon-calculator:sync-captured-seller-official',
+  'ozon-calculator:sync-captured-official',
+  'ozon-calculator:update-fee-settings',
+  'ozon-calculator:clear-captured-har',
+]);
+const OZON_CALC_IMPORT_PAGE_WRITE_CHANNELS = new Set(['ozon-calc:erp-endpoint-save']);
 const OZON_CALC_ERP_QUEUE_KEY = 'ozon-calc:erp-queue';
 const OZON_CALC_CAPTURE_ENTRIES_KEY = 'ozon-calc:capture-har-entries';
 const OZON_CALC_PRODUCT_POOL_KEY = 'ozon-calc:product-pool';
@@ -1447,6 +1455,26 @@ async function openImageSearchTabsFromOzon(payload) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
+  if (OZON_CALC_SETTINGS_WRITE_CHANNELS.has(message.type)) {
+    const securitySchema = globalThis.OZON_CALC_SYNC_SCHEMA;
+    if (!securitySchema
+      || typeof securitySchema.isTrustedSettingsSender !== 'function'
+      || !securitySchema.isTrustedSettingsSender(sender, chrome.runtime.id)) {
+      sendResponse({ ok: false, error: '该计算器操作仅允许从插件设置页发起' });
+      return false;
+    }
+  }
+
+  if (OZON_CALC_IMPORT_PAGE_WRITE_CHANNELS.has(message.type)) {
+    const securitySchema = globalThis.OZON_CALC_SYNC_SCHEMA;
+    if (!securitySchema
+      || typeof securitySchema.isTrustedManualImportSender !== 'function'
+      || !securitySchema.isTrustedManualImportSender(sender, chrome.runtime.id)) {
+      sendResponse({ ok: false, error: '该配置操作仅允许从插件设置页发起' });
+      return false;
+    }
+  }
+
   if (message.type === 'ss-erp:ozon-company-id-captured') {
     rememberRuntimeOzonCompanyIdForSync(message.companyId, message.capturedAt);
     sendResponse({ ok: true });
@@ -1479,9 +1507,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === OZON_CALC_SYNC_CHANNEL) {
     const schema = globalThis.OZON_CALC_SYNC_SCHEMA;
-    const snapshot = schema && typeof schema.normalizeSnapshot === 'function'
-      ? schema.normalizeSnapshot(message.payload || {})
-      : (message.payload || null);
+    if (!schema
+      || typeof schema.isTrustedManualImportSender !== 'function'
+      || typeof schema.prepareManualImport !== 'function') {
+      sendResponse({ ok: false, error: '同步配置安全校验不可用' });
+      return false;
+    }
+    if (!schema.isTrustedManualImportSender(sender, chrome.runtime.id)) {
+      sendResponse({ ok: false, error: '不允许的配置写入来源' });
+      return false;
+    }
+
+    const prepared = schema.prepareManualImport(message.payload);
+    if (!prepared.valid || !prepared.snapshot) {
+      sendResponse({
+        ok: false,
+        error: prepared.errors.length ? prepared.errors.join('；').slice(0, 500) : '配置无效',
+      });
+      return false;
+    }
+
+    const snapshot = prepared.snapshot;
     chrome.storage.local.set({
       [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
       [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),

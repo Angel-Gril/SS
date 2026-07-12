@@ -499,8 +499,7 @@
   }
 
   function importSnapshot(payload) {
-    var normalized = window.OZON_CALC_SYNC_SCHEMA.normalizeSnapshot(payload);
-    var validation = window.OZON_CALC_SYNC_SCHEMA.validateSnapshot(normalized);
+    var validation = window.OZON_CALC_SYNC_SCHEMA.validateRawSnapshot(payload);
     if (!validation.valid) {
       setStatus(configStatusNode, '导入失败：' + validation.errors.join('；'), 'error');
       return;
@@ -508,13 +507,13 @@
 
     sendMessage({
       type: 'ozon-calc:sync-config',
-      payload: normalized,
+      payload: payload,
     }).then(function (response) {
       if (!response || !response.ok) {
         setStatus(configStatusNode, '导入失败：' + (response && response.error ? response.error : '未知错误'), 'error');
         return;
       }
-      currentSnapshot = normalized;
+      currentSnapshot = window.OZON_CALC_SYNC_SCHEMA.normalizeSnapshot(Object.assign({}, payload, { source: 'local-fallback' }));
       renderServiceList(currentSnapshot);
       renderSelectedServices();
       renderFeeForm(currentSnapshot);

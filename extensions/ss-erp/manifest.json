@@ -211,20 +211,6 @@
     },
     {
       "matches": [
-        "file:///*",
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
-      ],
-      "js": [
-        "shared/config-bridge/sync-schema.js",
-        "content/calculator-sync-bridge.js"
-      ],
-      "run_at": "document_start"
-    },
-    {
-      "matches": [
         "<all_urls>"
       ],
       "js": [
@@ -236,10 +222,6 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "pages/sync-receiver.html",
-        "pages/sync-receiver.js",
-        "pages/config-import.html",
-        "pages/config-import.js",
         "content/capture-page-hook.js",
         "content/page-bridge.js",
         "content/source-search-1688-page.js",

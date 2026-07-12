@@ -4,6 +4,9 @@
     'ozon-calculator/config-v1': true,
     'ozon-calc/config-v1': true,
   };
+  var MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
+  var MAX_SNAPSHOT_DEPTH = 20;
+  var MAX_SERVICE_COUNT = 2000;
 
   function toText(value) {
     return value == null ? '' : String(value).trim();
@@ -58,6 +61,170 @@
       resolutionMode: value.resolutionMode === 'priority' ? 'priority' : 'lowest_cost',
       updatedAt: toText(value.updatedAt) || new Date().toISOString(),
     };
+  }
+
+  function utf8ByteLength(value) {
+    var text = String(value || '');
+    var bytes = 0;
+    for (var index = 0; index < text.length; index += 1) {
+      var code = text.charCodeAt(index);
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x800) {
+        bytes += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+        var next = text.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          bytes += 4;
+          index += 1;
+        } else {
+          bytes += 3;
+        }
+      } else {
+        bytes += 3;
+      }
+    }
+    return bytes;
+  }
+
+  function isNonNegativeNumericPath(path) {
+    return /(fee|cost|amount|price|rate|commission|weight|dimension|length|width|height|handling|packing|step)/i.test(path);
+  }
+
+  function inspectRawValue(value, path, depth, seen, errors) {
+    if (errors.length >= 20) return;
+    if (depth > MAX_SNAPSHOT_DEPTH) {
+      errors.push('payload 嵌套层级过深');
+      return;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        errors.push(path + ' 不是有限数字');
+      } else if (Math.abs(value) > 1000000000000) {
+        errors.push(path + ' 超出允许范围');
+      } else if (value < 0 && isNonNegativeNumericPath(path)) {
+        errors.push(path + ' 不能为负数');
+      }
+      return;
+    }
+    if (value == null || typeof value === 'string' || typeof value === 'boolean') return;
+    if (typeof value !== 'object') {
+      errors.push(path + ' 包含不支持的值类型');
+      return;
+    }
+    if (seen.has(value)) {
+      errors.push(path + ' 包含循环引用');
+      return;
+    }
+    seen.add(value);
+    Object.keys(value).forEach(function (key) {
+      if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+        errors.push(path + ' 包含不安全字段');
+        return;
+      }
+      inspectRawValue(value[key], path + '.' + key, depth + 1, seen, errors);
+    });
+    seen.delete(value);
+  }
+
+  function validateRawSnapshot(payload) {
+    var basic = validateSnapshot(payload);
+    var errors = basic.errors.slice();
+    var serialized = '';
+    try {
+      serialized = JSON.stringify(payload);
+    } catch (error) {
+      errors.push('payload 无法序列化');
+    }
+    if (!serialized) {
+      errors.push('payload 为空');
+    } else if (utf8ByteLength(serialized) > MAX_SNAPSHOT_BYTES) {
+      errors.push('payload 超过 5 MiB 限制');
+    }
+
+    if (payload && typeof payload === 'object') {
+      inspectRawValue(payload, 'payload', 0, new Set(), errors);
+      var catalogServices = payload.catalogSnapshot && payload.catalogSnapshot.services;
+      var ruleServices = payload.ruleSnapshot && payload.ruleSnapshot.services;
+      if (Array.isArray(catalogServices) && catalogServices.length > MAX_SERVICE_COUNT) {
+        errors.push('catalogSnapshot.services 数量过多');
+      }
+      if (Array.isArray(ruleServices) && ruleServices.length > MAX_SERVICE_COUNT) {
+        errors.push('ruleSnapshot.services 数量过多');
+      }
+      if (Array.isArray(catalogServices) && catalogServices.some(function (service) {
+        return !service || typeof service !== 'object' || !toText(service.id);
+      })) {
+        errors.push('catalogSnapshot.services 包含无效服务');
+      }
+      if (Array.isArray(ruleServices) && ruleServices.some(function (rule) {
+        return !rule || typeof rule !== 'object' || !toText(rule.serviceId);
+      })) {
+        errors.push('ruleSnapshot.services 包含无效规则');
+      }
+
+      var formState = payload.formState && typeof payload.formState === 'object' ? payload.formState : {};
+      if (formState.fxRate != null && (!(Number(formState.fxRate) > 0) || Number(formState.fxRate) > 1000)) {
+        errors.push('formState.fxRate 超出允许范围');
+      }
+      if (formState.commissionPct != null && (Number(formState.commissionPct) < 0 || Number(formState.commissionPct) > 100)) {
+        errors.push('formState.commissionPct 超出允许范围');
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors: Array.from(new Set(errors)),
+    };
+  }
+
+  function prepareManualImport(payload) {
+    var validation = validateRawSnapshot(payload);
+    if (!validation.valid) {
+      return {
+        valid: false,
+        errors: validation.errors,
+        snapshot: null,
+      };
+    }
+    var snapshot = normalizeSnapshot(payload);
+    snapshot.source = 'local-fallback';
+    return {
+      valid: true,
+      errors: [],
+      snapshot: snapshot,
+    };
+  }
+
+  function isTrustedExtensionPageUrl(value, runtimeId) {
+    try {
+      var parsed = new URL(toText(value));
+      if (parsed.protocol !== 'chrome-extension:' || parsed.hostname !== runtimeId) return false;
+      return parsed.pathname === '/pages/settings.html' || parsed.pathname === '/pages/config-import.html';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function isTrustedManualImportSender(sender, runtimeId) {
+    var extensionId = toText(runtimeId);
+    if (!extensionId || !sender || toText(sender.id) !== extensionId) return false;
+    var senderUrl = toText(sender.url || sender.documentUrl);
+    if (!isTrustedExtensionPageUrl(senderUrl, extensionId)) return false;
+    if (sender.origin && toText(sender.origin) !== 'chrome-extension://' + extensionId) return false;
+    if (sender.tab && sender.tab.url && !isTrustedExtensionPageUrl(sender.tab.url, extensionId)) return false;
+    return true;
+  }
+
+  function isTrustedSettingsSender(sender, runtimeId) {
+    var extensionId = toText(runtimeId);
+    if (!extensionId || !sender || toText(sender.id) !== extensionId) return false;
+    var senderUrl = toText(sender.url || sender.documentUrl);
+    var settingsUrl = 'chrome-extension://' + extensionId + '/pages/settings.html';
+    if (senderUrl !== settingsUrl) return false;
+    if (sender.origin && toText(sender.origin) !== 'chrome-extension://' + extensionId) return false;
+    if (sender.tab && sender.tab.url && toText(sender.tab.url) !== settingsUrl) return false;
+    return true;
   }
 
   function normalizeSnapshot(payload) {
@@ -115,5 +282,9 @@
     normalizeSnapshot: normalizeSnapshot,
     mergeSnapshotFormState: mergeSnapshotFormState,
     validateSnapshot: validateSnapshot,
+    validateRawSnapshot: validateRawSnapshot,
+    prepareManualImport: prepareManualImport,
+    isTrustedManualImportSender: isTrustedManualImportSender,
+    isTrustedSettingsSender: isTrustedSettingsSender,
   };
 }(typeof window !== 'undefined' ? window : globalThis));

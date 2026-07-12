@@ -49,8 +49,7 @@
   }
 
   function importSnapshot(payload) {
-    var normalized = window.OZON_CALC_SYNC_SCHEMA.normalizeSnapshot(payload);
-    var validation = window.OZON_CALC_SYNC_SCHEMA.validateSnapshot(normalized);
+    var validation = window.OZON_CALC_SYNC_SCHEMA.validateRawSnapshot(payload);
     if (!validation.valid) {
       setStatus('导入失败：' + validation.errors.join('；'));
       return;
@@ -58,7 +57,7 @@
 
     chrome.runtime.sendMessage({
       type: 'ozon-calc:sync-config',
-      payload: normalized,
+      payload: payload,
     }, function (response) {
       if (chrome.runtime.lastError) {
         setStatus('导入失败：' + chrome.runtime.lastError.message);
