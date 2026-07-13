@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { OzonApiError, OzonClient } from '../services/ozon-client.js';
+import {
+  getOzonWarehouseCoordinates,
+  normalizeOzonWarehouseAddressEvidence,
+  OzonApiError,
+  OzonClient,
+} from '../services/ozon-client.js';
 
 describe('Ozon client errors', () => {
   it('localizes blocked company errors for shop-dependent Ozon APIs', () => {
@@ -16,6 +21,91 @@ describe('Ozon client errors', () => {
 });
 
 describe('Ozon client warehouse APIs', () => {
+  it('reads warehouse coordinates from the current address_info response field', () => {
+    expect(getOzonWarehouseCoordinates({
+      address_info: {
+        address: 'China, Fujian Sheng, Xiamen',
+        latitude: 24.480107,
+        longitude: 118.085348,
+      },
+    })).toEqual({
+      latitude: 24.480107,
+      longitude: 118.085348,
+    });
+  });
+
+  it('normalizes the real RETS OpenAPI Xiamen address evidence', () => {
+    expect(normalizeOzonWarehouseAddressEvidence({
+      warehouse_id: 1020005015663520,
+      address_info: {
+        address: 'China, 361000, Fujian Sheng, Xiamen, Hai cang qu,hai hong lu 86 hao,huiqi, 1430',
+        latitude: 24.480107,
+        longitude: 118.085348,
+      },
+    }, '1020005015663520')).toEqual({
+      countryCode: 'CN',
+      city: 'Xiamen',
+      zipCode: '361000',
+    });
+  });
+
+  it('normalizes a coherent non-Xiamen China warehouse without clearing it', () => {
+    expect(normalizeOzonWarehouseAddressEvidence({
+      warehouse_id: 1002,
+      address_info: {
+        address: 'China, 518000, Guangdong Sheng, Shenzhen, Nanshan qu',
+        latitude: 22.5431,
+        longitude: 114.0579,
+      },
+    }, '1002')).toEqual({
+      countryCode: 'CN',
+      city: 'Shenzhen',
+      zipCode: '518000',
+    });
+  });
+
+  it('rejects address evidence associated with a different warehouse id', () => {
+    expect(normalizeOzonWarehouseAddressEvidence({
+      warehouse_id: 1020005015663520,
+      address_info: {
+        address: 'China, Fujian Sheng, Xiamen',
+        latitude: 24.480107,
+        longitude: 118.085348,
+      },
+    }, '1020005015663521')).toBeNull();
+  });
+
+  it.each([
+    {
+      label: 'Xiamen address with Shenzhen coordinates',
+      address: 'China, Fujian Sheng, Xiamen',
+      latitude: 22.5431,
+      longitude: 114.0579,
+    },
+    {
+      label: 'Shenzhen address with Xiamen coordinates',
+      address: 'China, Guangdong Sheng, Shenzhen',
+      latitude: 24.480107,
+      longitude: 118.085348,
+    },
+  ])('rejects conflicting OpenAPI city and coordinate evidence: $label', (input) => {
+    expect(normalizeOzonWarehouseAddressEvidence({
+      warehouse_id: 1020005015663520,
+      address_info: input,
+    }, '1020005015663520')).toBeNull();
+  });
+
+  it.each([
+    { address: undefined, latitude: 24.480107, longitude: 118.085348 },
+    { address: 'China, Fujian Sheng, Xiamen', latitude: undefined, longitude: undefined },
+    { address: 'China, Fujian Sheng, Xiamen', latitude: 24.480107, longitude: undefined },
+  ])('does not normalize incomplete OpenAPI address evidence: %j', (addressInfo) => {
+    expect(normalizeOzonWarehouseAddressEvidence({
+      warehouse_id: 1020005015663520,
+      address_info: addressInfo,
+    }, '1020005015663520')).toBeUndefined();
+  });
+
   it('reads delivery methods from the current delivery_methods response field', async () => {
     class StubClient extends OzonClient {
       override async request<T = unknown>(_path: string, _options = {}): Promise<T> {

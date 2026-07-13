@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     status: 'ACTIVE',
     isSuperAdmin: false,
     role: 'USER',
+    authVersion: 0,
   })),
 }));
 
@@ -63,7 +64,7 @@ function rawDeviceClaims(overrides: Record<string, unknown> = {}) {
     deviceId: 'device-1',
     ownerUserId: 'owner-1',
     actorUserId: 'actor-1',
-    scopes: ['logistics:discover', 'logistics:read', 'logistics:ack'],
+    scopes: ['logistics:discover', 'logistics:read', 'logistics:receipt'],
     ...overrides,
   };
 }
@@ -147,6 +148,72 @@ describe('account and extension-device token boundary', () => {
     expect(reply.statusCode).toBe(401);
     expect((request as any).user).toBeUndefined();
     expect(mocks.redisExists).not.toHaveBeenCalled();
+  });
+
+  it('rejects admin authorization when the database role was downgraded after token issuance', async () => {
+    stubAccountEnvironment(true);
+    mocks.userFindUnique.mockResolvedValueOnce({
+      id: 'user-1',
+      parentId: null,
+      accountCode: 'ACCOUNT-1',
+      status: 'ACTIVE',
+      isSuperAdmin: false,
+      role: 'USER',
+      authVersion: 0,
+    });
+    const auth = await import('../lib/auth.js');
+    const token = auth.signToken({ userId: 'user-1', role: 'ADMIN' }, '5m');
+    const request = {
+      cookies: {},
+      headers: { authorization: `Bearer ${token}` },
+    } as any;
+    const authReply = replyRecorder();
+
+    await auth.authenticate(request, authReply as any);
+
+    expect(authReply.statusCode).toBe(200);
+    expect(request.user.role).toBe('USER');
+
+    const roleReply = replyRecorder();
+    await auth.requireRole('ADMIN')(request, roleReply as any);
+    expect(roleReply.statusCode).toBe(403);
+
+    const superAdminReply = replyRecorder();
+    await auth.requireSuperAdmin(request, superAdminReply as any);
+    expect(superAdminReply.statusCode).toBe(403);
+  });
+
+  it('allows unchanged current administrators through role and super-admin checks', async () => {
+    stubAccountEnvironment(true);
+    mocks.userFindUnique.mockResolvedValueOnce({
+      id: 'user-1',
+      parentId: null,
+      accountCode: 'ACCOUNT-1',
+      status: 'ACTIVE',
+      isSuperAdmin: true,
+      role: 'ADMIN',
+      authVersion: 0,
+    });
+    const auth = await import('../lib/auth.js');
+    const token = auth.signToken({ userId: 'user-1', role: 'ADMIN' }, '5m');
+    const request = {
+      cookies: {},
+      headers: { authorization: `Bearer ${token}` },
+    } as any;
+    const authReply = replyRecorder();
+
+    await auth.authenticate(request, authReply as any);
+
+    expect(authReply.statusCode).toBe(200);
+    expect(request.user).toMatchObject({ role: 'ADMIN', isSuperAdmin: true });
+
+    const roleReply = replyRecorder();
+    await auth.requireRole('ADMIN')(request, roleReply as any);
+    expect(roleReply.statusCode).toBe(200);
+
+    const superAdminReply = replyRecorder();
+    await auth.requireSuperAdmin(request, superAdminReply as any);
+    expect(superAdminReply.statusCode).toBe(200);
   });
 
   it('accepts an untyped legacy account JWT only while the migration flag is enabled', async () => {
@@ -278,7 +345,7 @@ describe('extension-device access JWT validation', () => {
     const config = auth.resolveExtensionDeviceAuthConfig(deviceEnvironment());
     const token = signRawDeviceToken(rawDeviceClaims({ scopes: ['logistics:read'] }));
 
-    expect(() => auth.verifyExtensionDeviceAccessTokenCryptographically(token, config, ['logistics:ack']))
+    expect(() => auth.verifyExtensionDeviceAccessTokenCryptographically(token, config, ['logistics:receipt']))
       .toThrowError(expect.objectContaining({ statusCode: 403, code: 'insufficient_scope' }));
   });
 

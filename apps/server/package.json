@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "start:worker": "node dist/worker.js",
     "test": "vitest run",
-    "test:logistics:postgres": "vitest run src/__tests__/logistics-rule-release.postgres.integration.test.ts",
+    "test:logistics:postgres": "vitest run --no-file-parallelism src/__tests__/logistics-rule-release.postgres.integration.test.ts src/__tests__/extension-device-session.postgres.integration.test.ts src/__tests__/logistics-rule-device-prisma.postgres.integration.test.ts src/__tests__/logistics-capture-task.postgres.integration.test.ts src/__tests__/logistics-scope-bootstrap.postgres.integration.test.ts src/__tests__/logistics-official-input-unit-contract.postgres.integration.test.ts",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "typecheck": "tsc --noEmit",

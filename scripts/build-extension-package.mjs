@@ -75,6 +75,23 @@ rmSync(outDir, { recursive: true, force: true });
 mkdirSync(path.dirname(outDir), { recursive: true });
 cpSync(sourceDir, outDir, { recursive: true });
 
+const logisticsDistributionEnabled =
+  process.env.LOGISTICS_DISTRIBUTION_ENABLED === 'true'
+  && process.env.NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED === 'true';
+const logisticsFeaturePath = path.join(
+  outDir,
+  'shared/logistics-rules/distribution-feature.js',
+);
+writeFileSync(logisticsFeaturePath, [
+  '(function (root) {',
+  '  root.SS_ERP_LOGISTICS_DISTRIBUTION_FEATURE = Object.freeze({',
+  `    enabled: ${logisticsDistributionEnabled},`,
+  `    source: 'package-${target}',`,
+  '  });',
+  '})(typeof globalThis !== \'undefined\' ? globalThis : self);',
+  '',
+].join('\n'));
+
 const manifestPath = path.join(outDir, 'manifest.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 manifest.version = buildVersion;
@@ -82,6 +99,8 @@ manifest.version = buildVersion;
 const CLOUD_HOST_PERMISSIONS = [
   'https://ss-erp.com/*',
   'https://*.ss-erp.com/*',
+  'https://ss-erp.cn/*',
+  'https://*.ss-erp.cn/*',
   'https://seller.ozon.ru/*',
   'https://globalcalculator.ozon.ru/*',
   'https://docs.ozon.ru/*',
@@ -114,6 +133,8 @@ const CLOUD_HOST_PERMISSIONS = [
 const CLOUD_ERP_MATCHES = [
   'https://ss-erp.com/*',
   'https://*.ss-erp.com/*',
+  'https://ss-erp.cn/*',
+  'https://*.ss-erp.cn/*',
 ];
 
 const CLOUD_WEB_RESOURCE_MATCHES = [

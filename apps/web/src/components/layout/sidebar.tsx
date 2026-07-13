@@ -27,10 +27,18 @@ interface NavItem {
   label: string;
   icon: React.ElementType;
   href?: string;
-  children?: { label: string; href: string; superAdminOnly?: boolean }[];
+  children?: {
+    label: string;
+    href: string;
+    superAdminOnly?: boolean;
+    logisticsDistributionOnly?: boolean;
+  }[];
   /** 允许访问的角色列表，不设置则所有角色可见 */
   roles?: UserRole[];
 }
+
+const logisticsDistributionEnabled =
+  process.env.NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED === 'true';
 
 const navigation: NavItem[] = [
   { label: '首页', icon: LayoutDashboard, href: '/', roles: ['ADMIN', 'USER'] },
@@ -120,9 +128,7 @@ const navigation: NavItem[] = [
     label: '库存管理',
     icon: Package,
     roles: ['ADMIN', 'USER'],
-    children: [
-      { label: '库存列表', href: '/inventory' },
-    ],
+    children: [{ label: '库存列表', href: '/inventory' }],
   },
   {
     label: '供货平台',
@@ -144,6 +150,12 @@ const navigation: NavItem[] = [
       { label: '接口与集成', href: '/admin/integrations', superAdminOnly: true },
       { label: '安全设置', href: '/admin/security', superAdminOnly: true },
       { label: '运维状态', href: '/admin/ops', superAdminOnly: true },
+      {
+        label: '物流规则发布',
+        href: '/admin/logistics-rules',
+        superAdminOnly: true,
+        logisticsDistributionOnly: true,
+      },
       { label: '公告管理', href: '/admin/announcements' },
       { label: '首页内容管理', href: '/admin/dashboard-content' },
       { label: '服务标签设置', href: '/admin/service-tags' },
@@ -185,9 +197,18 @@ interface SidebarProps {
   pathname: string;
   role: UserRole;
   isSuperAdmin?: boolean;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
-export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: SidebarProps) {
+export function Sidebar({
+  collapsed,
+  pathname,
+  role,
+  isSuperAdmin = false,
+  mobileOpen,
+  onMobileClose,
+}: SidebarProps) {
   const [isHovered, setIsHovered] = useState(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const visibleNav = navigation
@@ -196,13 +217,18 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
       if (!item.children) return item;
       return {
         ...item,
-        children: item.children.filter((child) => !child.superAdminOnly || isSuperAdmin),
+        children: item.children.filter(
+          (child) =>
+            (!child.superAdminOnly || isSuperAdmin) &&
+            (!child.logisticsDistributionOnly || logisticsDistributionEnabled),
+        ),
       };
     })
     .filter((item) => item.href || item.children?.length);
 
   // 当侧边栏折叠时，鼠标悬停自动展开
   const shouldExpand = collapsed && isHovered;
+  const renderCollapsed = collapsed && !shouldExpand && !mobileOpen;
   function clearCloseTimer() {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
@@ -215,8 +241,9 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
   return (
     <aside
       className={cn(
-        'h-screen sticky top-0 flex flex-col transition-all duration-300 border-r glass-effect',
-        shouldExpand ? 'w-64' : collapsed ? 'w-16' : 'w-64',
+        'fixed inset-y-0 left-0 z-50 flex h-screen w-64 -translate-x-full flex-col border-r glass-effect transition-[transform,width] duration-300 md:sticky md:top-0 md:translate-x-0',
+        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+        shouldExpand ? 'md:w-64' : collapsed ? 'md:w-16' : 'md:w-64',
       )}
       onMouseEnter={() => {
         if (collapsed) {
@@ -232,7 +259,7 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
       }}
     >
       <div className="h-16 flex items-center justify-center border-b border-border/50 shrink-0">
-        {collapsed && !shouldExpand ? (
+        {renderCollapsed ? (
           <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground font-bold text-lg shadow-sm">
             SS
           </div>
@@ -241,15 +268,19 @@ export function Sidebar({ collapsed, pathname, role, isSuperAdmin = false }: Sid
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground font-bold shadow-sm">
               SS
             </div>
-            <span className="text-lg font-semibold tracking-tight text-primary">
-              松鼠跨境 ERP
-            </span>
+            <span className="text-lg font-semibold tracking-tight text-primary">松鼠跨境 ERP</span>
           </div>
         )}
       </div>
       <nav className="flex-1 overflow-y-auto scrollbar-thin py-4 px-2">
         {visibleNav.map((item) => (
-          <NavGroup key={item.label} item={item} collapsed={collapsed && !shouldExpand} pathname={pathname} />
+          <NavGroup
+            key={item.label}
+            item={item}
+            collapsed={renderCollapsed}
+            pathname={pathname}
+            onMobileClose={onMobileClose}
+          />
         ))}
       </nav>
     </aside>
@@ -260,13 +291,16 @@ function NavGroup({
   item,
   collapsed,
   pathname,
+  onMobileClose,
 }: {
   item: NavItem;
   collapsed: boolean;
   pathname: string;
+  onMobileClose: () => void;
 }) {
   const hasChildren = !!item.children?.length;
-  const isActive = item.href === pathname || item.children?.some((c) => pathname.startsWith(c.href));
+  const isActive =
+    item.href === pathname || item.children?.some((c) => pathname.startsWith(c.href));
   const [open, setOpen] = useState(isActive);
 
   useEffect(() => {
@@ -277,6 +311,7 @@ function NavGroup({
     return (
       <Link
         href={item.href!}
+        onClick={onMobileClose}
         className={cn(
           'dock-item flex items-center gap-3 px-4 py-3 mb-1 rounded-xl text-sm font-medium transition-all',
           pathname === item.href
@@ -285,7 +320,12 @@ function NavGroup({
           collapsed && 'justify-center px-0 w-12 h-12 mx-auto',
         )}
       >
-        {pathname === item.href && <span aria-hidden className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60" />}
+        {pathname === item.href && (
+          <span
+            aria-hidden
+            className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60"
+          />
+        )}
         <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-4.5 w-4.5')} />
         {!collapsed && <span>{item.label}</span>}
       </Link>
@@ -304,14 +344,17 @@ function NavGroup({
           collapsed && 'justify-center px-0 w-12 h-12 mx-auto',
         )}
       >
-        {isActive && <span aria-hidden className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60" />}
+        {isActive && (
+          <span
+            aria-hidden
+            className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60"
+          />
+        )}
         <item.icon className={cn('shrink-0', collapsed ? 'h-5 w-5' : 'h-4.5 w-4.5')} />
         {!collapsed && (
           <>
             <span className="flex-1 text-left">{item.label}</span>
-            <ChevronDown
-              className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')}
-            />
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
           </>
         )}
       </button>
@@ -321,6 +364,7 @@ function NavGroup({
             <Link
               key={child.href}
               href={child.href}
+              onClick={onMobileClose}
               className={cn(
                 'dock-item block px-3 py-2.5 rounded-lg text-sm font-medium transition-all',
                 pathname === child.href
@@ -328,7 +372,12 @@ function NavGroup({
                   : 'text-foreground/60 hover:bg-muted hover:text-foreground',
               )}
             >
-              {pathname === child.href && <span aria-hidden className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60" />}
+              {pathname === child.href && (
+                <span
+                  aria-hidden
+                  className="absolute left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary/60"
+                />
+              )}
               {child.label}
             </Link>
           ))}

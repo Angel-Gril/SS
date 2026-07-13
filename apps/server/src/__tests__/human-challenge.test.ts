@@ -31,6 +31,7 @@ describe('human challenge', () => {
     configStore.clear();
     vi.resetModules();
     vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'builtin-pow');
+    vi.stubEnv('RUNTIME_MODE', 'cloud');
     vi.stubEnv('HUMAN_CHALLENGE_SIGNING_SECRET', 'test-secret-at-least-32-characters-long');
     vi.stubEnv('HUMAN_CHALLENGE_POW_DIFFICULTY', '2');
     vi.stubEnv('HUMAN_CHALLENGE_TTL_SECONDS', '60');
@@ -94,5 +95,24 @@ describe('human challenge', () => {
       provider: 'builtin-pow',
       source: 'env',
     });
+  });
+
+  it('disables configured human challenges in local runtime', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'local');
+    vi.stubEnv('HUMAN_CHALLENGE_PROVIDER', 'cloudflare-turnstile');
+    vi.stubEnv('TURNSTILE_SITE_KEY', 'local-site-key');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'local-secret-key');
+
+    const {
+      getHumanChallengeRuntimeConfig,
+      getPublicHumanChallengeConfig,
+      verifyHumanChallenge,
+    } = await import('../lib/human-challenge.js');
+
+    await expect(getHumanChallengeRuntimeConfig()).resolves.toMatchObject({ provider: 'disabled' });
+    await expect(getPublicHumanChallengeConfig()).resolves.toMatchObject({
+      humanChallengeProvider: 'disabled', turnstileSiteKey: '',
+    });
+    await expect(verifyHumanChallenge({ action: 'login', token: '' })).resolves.toBe(true);
   });
 });

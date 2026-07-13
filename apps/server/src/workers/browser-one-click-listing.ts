@@ -333,10 +333,10 @@ async function applyBrowserOneClickWatermark(jobId: string, userId: string, ids:
 async function createInternalAuthToken(userId: string): Promise<string> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, role: true },
+    select: { id: true, role: true, authVersion: true },
   });
   if (!user) throw new Error('任务所属用户不存在');
-  const token = signToken({ userId: user.id, role: user.role }, '2h');
+  const token = signToken({ userId: user.id, role: user.role, authVersion: user.authVersion }, '2h');
   await storeSession(user.id, token, 2 * 3600);
   return token;
 }

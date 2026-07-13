@@ -1,3 +1,5 @@
+try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
+try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
 try { importScripts('../shared/currency/price-currency.js'); } catch (e) { console.warn('[SS ERP] price-currency load error:', e); }
 try { importScripts('../shared/ozon/variant-spec.js'); } catch (e) { console.warn('[SS ERP] ozon variant spec load error:', e); }
 try { importScripts('../shared/ozon/collection-policy.js'); } catch (e) { console.warn('[SS ERP] ozon collection policy load error:', e); }
@@ -24,6 +26,16 @@ const OZON_CALC_SETTINGS_WRITE_CHANNELS = new Set([
   'ozon-calculator:sync-captured-official',
   'ozon-calculator:update-fee-settings',
   'ozon-calculator:clear-captured-har',
+  'ss-erp:logistics-device-claim',
+  'ss-erp:logistics-device-clear',
+  'ss-erp:logistics-device-status',
+  'ss-erp:logistics-rules-sync',
+  'ss-erp:logistics-capture-refresh',
+  'ss-erp:logistics-capture-retry',
+  'ss-erp:logistics-capture-status',
+  'ss-erp:logistics-capture-cancel',
+  'ss-erp:logistics-binding-probe-run',
+  'ss-erp:logistics-binding-probe-status',
 ]);
 const OZON_CALC_IMPORT_PAGE_WRITE_CHANNELS = new Set(['ozon-calc:erp-endpoint-save']);
 const OZON_CALC_ERP_QUEUE_KEY = 'ozon-calc:erp-queue';
@@ -55,6 +67,7 @@ const SS_ERP_OZON_AUTO_SYNC_INTERVAL_MS = SS_ERP_OZON_AUTO_SYNC_INTERVAL_MINUTES
 const SS_ERP_OZON_INSIGHT_COOKIE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const OZON_CALC_CONFIG_SNAPSHOT_KEY = 'ozon-calc:config-snapshot';
 const OZON_CALC_CONFIG_UPDATED_AT_KEY = 'ozon-calc:config-updated-at';
+const OZON_LOGISTICS_CALCULATOR_STATE_KEY = 'ozon-logistics:calculator-state:v1';
 const OZON_OFFICIAL_SNAPSHOT_KEY = 'ozon-calculator:official-snapshot';
 const OZON_COMMISSION_SNAPSHOT_KEY = 'ozon-calculator:commission-snapshot';
 const OZON_FX_SNAPSHOT_KEY = 'ozon-calculator:fx-snapshot';
@@ -131,6 +144,12 @@ try {
 }
 
 try {
+  importScripts('../shared/capture-bridge/provider-inventory-capture.js');
+} catch (error) {
+  console.warn('[SS ERP] provider inventory capture module failed to load', error);
+}
+
+try {
   importScripts('../shared/product-pool/product-pool-store.js');
 } catch (error) {
   console.warn('[ozon-calc] product pool store import failed', error);
@@ -184,6 +203,391 @@ try {
 }
 
 try {
+  importScripts('../shared/logistics-rules/distribution-schema.js');
+  importScripts('../shared/logistics-rules/device-credential-manager.js');
+  importScripts('../shared/logistics-rules/distribution-store.js');
+  importScripts('../shared/logistics-rules/distribution-client.js');
+  importScripts('../shared/logistics-rules/distribution-runtime.js');
+} catch (error) {
+  console.warn('[SS ERP] logistics distribution modules failed to load', error);
+}
+
+try {
+  importScripts('../shared/logistics-rules/capture-task-adapter.js');
+  importScripts('../shared/logistics-rules/capture-task-runtime.js');
+} catch (error) {
+  console.warn('[SS ERP] logistics capture modules failed to load', error);
+}
+
+try {
+  importScripts('../shared/logistics-rules/binding-probe-adapter.js');
+  importScripts('../shared/logistics-rules/binding-probe-collector.js');
+  importScripts('../shared/logistics-rules/binding-probe-runtime.js');
+} catch (error) {
+  console.warn('[SS ERP] logistics binding probe modules failed to load', error);
+}
+
+let logisticsDistributionRuntime = null;
+let logisticsDistributionMessageHandler = null;
+let logisticsDeviceCredentials = null;
+let logisticsCaptureRuntime = null;
+let logisticsCaptureMessageHandler = null;
+let logisticsBindingProbeRuntime = null;
+let logisticsBindingProbeMessageHandler = null;
+const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
+const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
+const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
+const SS_ERP_LOGISTICS_CAPTURE_INTERVAL_MINUTES = 1;
+
+function isLogisticsDistributionFeatureEnabled() {
+  const feature = globalThis.SS_ERP_LOGISTICS_DISTRIBUTION_FEATURE;
+  return Boolean(feature && feature.enabled === true);
+}
+
+function disableLogisticsDistributionAlarms() {
+  if (!chrome.alarms || typeof chrome.alarms.clear !== 'function') return;
+  chrome.alarms.clear(SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME);
+  chrome.alarms.clear(SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME);
+}
+
+function logisticsDistributionDisabledResult() {
+  return { state: 'disabled', errorCode: 'feature_disabled' };
+}
+
+function getLogisticsDeviceCredentials() {
+  if (logisticsDeviceCredentials) return logisticsDeviceCredentials;
+  const api = globalThis.SS_ERP_EXTENSION_DEVICE_CREDENTIALS;
+  if (!api || typeof api.createManager !== 'function') {
+    throw new Error('扩展设备凭据管理器不可用');
+  }
+  logisticsDeviceCredentials = api.createManager({
+    localStorage: chrome.storage.local,
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    now: () => new Date(),
+  });
+  return logisticsDeviceCredentials;
+}
+
+function validateDeliveryEnvelope(value) {
+  const schema = globalThis.SS_ERP_LOGISTICS_DISTRIBUTION_SCHEMA;
+  if (!schema || typeof schema.validateDeliveryEnvelope !== 'function') {
+    return { valid: false, errors: ['物流规则分发结构校验器不可用'] };
+  }
+  return schema.validateDeliveryEnvelope(value);
+}
+
+function getLogisticsDistributionRuntime() {
+  if (logisticsDistributionRuntime) return logisticsDistributionRuntime;
+  const api = globalThis.SS_ERP_LOGISTICS_DISTRIBUTION_RUNTIME;
+  if (!api || typeof api.createRuntime !== 'function') {
+    throw new Error('物流规则分发运行时不可用');
+  }
+  logisticsDistributionRuntime = api.createRuntime({
+    localStorage: chrome.storage.local,
+    credentials: getLogisticsDeviceCredentials(),
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    validateBundle: validateDeliveryEnvelope,
+    randomId: () => globalThis.crypto.randomUUID(),
+    now: () => new Date(),
+  });
+  return logisticsDistributionRuntime;
+}
+
+function getLogisticsDistributionMessageHandler() {
+  if (logisticsDistributionMessageHandler) return logisticsDistributionMessageHandler;
+  const api = globalThis.SS_ERP_LOGISTICS_DISTRIBUTION_RUNTIME;
+  const securitySchema = globalThis.OZON_CALC_SYNC_SCHEMA;
+  if (!api || typeof api.createMessageHandler !== 'function'
+    || !securitySchema || typeof securitySchema.isTrustedSettingsSender !== 'function') {
+    throw new Error('物流规则分发消息边界不可用');
+  }
+  logisticsDistributionMessageHandler = api.createMessageHandler({
+    runtime: getLogisticsDistributionRuntime(),
+    extensionId: chrome.runtime.id,
+    isTrustedSettingsSender: securitySchema.isTrustedSettingsSender,
+  });
+  return logisticsDistributionMessageHandler;
+}
+
+function logisticsCaptureStatusKey() {
+  const api = globalThis.SS_ERP_LOGISTICS_CAPTURE_RUNTIME;
+  return api && api.STATUS_KEY || 'ss-erp:logistics-capture-task:status:v1';
+}
+
+async function readLogisticsCaptureEntries() {
+  const result = await chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY]);
+  return Array.isArray(result[OZON_CALC_CAPTURE_ENTRIES_KEY])
+    ? result[OZON_CALC_CAPTURE_ENTRIES_KEY] : [];
+}
+
+async function readLogisticsSelectedServiceIds() {
+  const result = await chrome.storage.local.get([
+    OZON_CALC_CONFIG_SNAPSHOT_KEY,
+    OZON_LOGISTICS_CALCULATOR_STATE_KEY,
+  ]);
+  const calculatorState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY];
+  const snapshot = calculatorState && calculatorState.snapshot
+    || result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || {};
+  const selected = snapshot && snapshot.userConfig && snapshot.userConfig.selectedServiceIds;
+  return Array.isArray(selected) ? selected.map(String) : [];
+}
+
+async function writeLogisticsCaptureStatus(status) {
+  await chrome.storage.local.set({ [logisticsCaptureStatusKey()]: status });
+}
+
+async function readLogisticsCaptureStatus() {
+  const key = logisticsCaptureStatusKey();
+  const result = await chrome.storage.local.get([key]);
+  return result[key] || { state: 'idle' };
+}
+
+async function captureOzonSellerProviderInventory(input) {
+  const collectApi = globalThis.SS_ERP_COLLECT_BACKGROUND;
+  const inventoryCapture = globalThis.SS_ERP_PROVIDER_INVENTORY_CAPTURE;
+  if (!collectApi || typeof collectApi.fetchOzonSellerDropoffPointsViaTab !== 'function') {
+    throw new Error('Ozon Seller provider 采集器不可用');
+  }
+  if (!inventoryCapture || typeof inventoryCapture.appendSellerProviderInventory !== 'function') {
+    throw new Error('provider inventory 净化存储不可用');
+  }
+  const inventory = await collectApi.fetchOzonSellerDropoffPointsViaTab(input.companyId, {
+    point: input.point,
+  });
+  const entries = await readLogisticsCaptureEntries();
+  const next = inventoryCapture.appendSellerProviderInventory(entries, {
+    ...inventory,
+    point: input.point,
+    capturedAt: new Date().toISOString(),
+  }, OZON_CALC_CAPTURE_LIMIT);
+  await chrome.storage.local.set({ [OZON_CALC_CAPTURE_ENTRIES_KEY]: next });
+  return {
+    companyId: inventory.companyId,
+    providerStats: inventory.providerStats,
+  };
+}
+
+function getLogisticsCaptureRuntime() {
+  if (logisticsCaptureRuntime) return logisticsCaptureRuntime;
+  const api = globalThis.SS_ERP_LOGISTICS_CAPTURE_RUNTIME;
+  if (!api || typeof api.createRuntime !== 'function') {
+    throw new Error('物流规则采集运行时不可用');
+  }
+  logisticsCaptureRuntime = api.createRuntime({
+    credentials: getLogisticsDeviceCredentials(),
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    readCapturedEntries: readLogisticsCaptureEntries,
+    collectProviderInventory: captureOzonSellerProviderInventory,
+    readSelectedServiceIds: readLogisticsSelectedServiceIds,
+    writeStatus: writeLogisticsCaptureStatus,
+    readStatus: readLogisticsCaptureStatus,
+    now: () => new Date(),
+  });
+  return logisticsCaptureRuntime;
+}
+
+function getLogisticsCaptureMessageHandler() {
+  if (logisticsCaptureMessageHandler) return logisticsCaptureMessageHandler;
+  const api = globalThis.SS_ERP_LOGISTICS_CAPTURE_RUNTIME;
+  const securitySchema = globalThis.OZON_CALC_SYNC_SCHEMA;
+  if (!api || typeof api.createMessageHandler !== 'function'
+    || !securitySchema || typeof securitySchema.isTrustedSettingsSender !== 'function') {
+    throw new Error('物流规则采集消息边界不可用');
+  }
+  logisticsCaptureMessageHandler = api.createMessageHandler({
+    runtime: getLogisticsCaptureRuntime(),
+    extensionId: chrome.runtime.id,
+    isTrustedSettingsSender: securitySchema.isTrustedSettingsSender,
+  });
+  return logisticsCaptureMessageHandler;
+}
+
+function logisticsBindingProbeStatusKey() {
+  const api = globalThis.SS_ERP_LOGISTICS_BINDING_PROBE_RUNTIME;
+  return api && api.STATUS_KEY || 'ss-erp:logistics-binding-probe:status:v1';
+}
+
+async function writeLogisticsBindingProbeStatus(status, operation) {
+  const envelope = {
+    status,
+    ownerSessionId: toText(operation && operation.sessionId).trim(),
+    ownerDeploymentId: toText(operation && operation.deploymentId).trim(),
+    ownerUserId: toText(operation && operation.ownerUserId).trim(),
+    ownerEpoch: Number(operation && operation.epoch),
+  };
+  await chrome.storage.local.set({ [logisticsBindingProbeStatusKey()]: envelope });
+}
+
+async function readLogisticsBindingProbeStatus() {
+  const key = logisticsBindingProbeStatusKey();
+  const result = await chrome.storage.local.get([key]);
+  const stored = result[key];
+  if (!stored) return { state: 'idle' };
+  if (!stored.status || typeof stored.status !== 'object') return stored;
+  const deviceStatus = await getLogisticsDeviceCredentials().getStatus();
+  if (deviceStatus && deviceStatus.state === 'paired') {
+    const sameOwner = stored.ownerSessionId
+      && stored.ownerSessionId === deviceStatus.sessionId
+      && stored.ownerDeploymentId === deviceStatus.deploymentId
+      && stored.ownerUserId === deviceStatus.ownerUserId;
+    return sameOwner ? stored.status : { state: 'idle' };
+  }
+  return stored.status.state === 'revoked' || stored.status.state === 'unpaired'
+    ? stored.status : { state: 'idle' };
+}
+
+async function readCurrentOzonCompanyIdForBindingProbe() {
+  if (!chrome.cookies || typeof chrome.cookies.get !== 'function') return '';
+  try {
+    const cookie = await chrome.cookies.get({
+      url: 'https://seller.ozon.ru/',
+      name: 'sc_company_id',
+    });
+    return normalizeOzonCompanyIdForSync(cookie && cookie.value);
+  } catch (_error) {
+    return '';
+  }
+}
+
+async function collectLogisticsBindingProbeEvidence(probes) {
+  const collector = globalThis.SS_ERP_LOGISTICS_BINDING_PROBE_COLLECTOR;
+  if (!collector || typeof collector.collectWarehouseEvidence !== 'function'
+    || !chrome.tabs || !chrome.scripting) {
+    return { state: 'collector_unavailable', matches: [] };
+  }
+  const companyId = await readCurrentOzonCompanyIdForBindingProbe();
+  if (!companyId) return { state: 'current_company_missing', matches: [] };
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: 'https://seller.ozon.ru/*' });
+  } catch (_error) {
+    return { state: 'seller_tab_unavailable', matches: [] };
+  }
+  const candidates = [
+    ...tabs.filter((tab) => tab && tab.active),
+    ...tabs.filter((tab) => tab && (tab.url || '').includes('/app/')),
+    ...tabs,
+  ];
+  const seen = new Set();
+  for (const tab of candidates) {
+    if (!tab || tab.id == null || seen.has(tab.id)) continue;
+    seen.add(tab.id);
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'ISOLATED',
+        func: collector.collectWarehouseEvidence,
+        args: [{ companyId, probes }],
+      });
+      const projection = results && results[0] && results[0].result;
+      if (projection && Array.isArray(projection.matches)
+        && projection.state !== 'request_failed') return projection;
+    } catch (_error) {}
+  }
+  return { state: 'request_failed', matches: [] };
+}
+
+function getLogisticsBindingProbeRuntime() {
+  if (logisticsBindingProbeRuntime) return logisticsBindingProbeRuntime;
+  const api = globalThis.SS_ERP_LOGISTICS_BINDING_PROBE_RUNTIME;
+  const adapter = globalThis.SS_ERP_LOGISTICS_BINDING_PROBE_ADAPTER;
+  const collector = globalThis.SS_ERP_LOGISTICS_BINDING_PROBE_COLLECTOR;
+  if (!api || typeof api.createRuntime !== 'function'
+    || !adapter || typeof adapter.buildEvidence !== 'function'
+    || !collector || typeof collector.collectWarehouseEvidence !== 'function') {
+    throw new Error('物流店铺仓库验证运行时不可用');
+  }
+  logisticsBindingProbeRuntime = api.createRuntime({
+    credentials: getLogisticsDeviceCredentials(),
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    adapter,
+    collectEvidence: collectLogisticsBindingProbeEvidence,
+    writeStatus: writeLogisticsBindingProbeStatus,
+    readStatus: readLogisticsBindingProbeStatus,
+    now: () => new Date(),
+  });
+  return logisticsBindingProbeRuntime;
+}
+
+function getLogisticsBindingProbeMessageHandler() {
+  if (logisticsBindingProbeMessageHandler) return logisticsBindingProbeMessageHandler;
+  const api = globalThis.SS_ERP_LOGISTICS_BINDING_PROBE_RUNTIME;
+  const securitySchema = globalThis.OZON_CALC_SYNC_SCHEMA;
+  if (!api || typeof api.createMessageHandler !== 'function'
+    || !securitySchema || typeof securitySchema.isTrustedSettingsSender !== 'function') {
+    throw new Error('物流店铺仓库验证消息边界不可用');
+  }
+  logisticsBindingProbeMessageHandler = api.createMessageHandler({
+    runtime: getLogisticsBindingProbeRuntime(),
+    extensionId: chrome.runtime.id,
+    isTrustedSettingsSender: securitySchema.isTrustedSettingsSender,
+  });
+  return logisticsBindingProbeMessageHandler;
+}
+
+function ensureLogisticsCaptureAlarm() {
+  if (!isLogisticsDistributionFeatureEnabled()) return;
+  if (!chrome.alarms || typeof chrome.alarms.create !== 'function') return;
+  chrome.alarms.create(SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME, {
+    delayInMinutes: 1,
+    periodInMinutes: SS_ERP_LOGISTICS_CAPTURE_INTERVAL_MINUTES,
+  });
+}
+
+async function runScheduledLogisticsCapture({ reason }) {
+  if (!isLogisticsDistributionFeatureEnabled()) return logisticsDistributionDisabledResult();
+  return getLogisticsCaptureRuntime().refresh({
+    reason,
+    extensionVersion: chrome.runtime.getManifest().version,
+    allowProviderCollection: false,
+  });
+}
+function ensureLogisticsRuleSyncAlarm(options = {}) {
+  if (!isLogisticsDistributionFeatureEnabled()) return;
+  if (!chrome.alarms || typeof chrome.alarms.create !== 'function') return;
+  const requestedWhen = Number(options.when);
+  const alarmOptions = Number.isFinite(requestedWhen) && requestedWhen > Date.now()
+    ? { when: requestedWhen, periodInMinutes: SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES }
+    : { delayInMinutes: 1, periodInMinutes: SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES };
+  chrome.alarms.create(SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME, alarmOptions);
+}
+
+async function runScheduledLogisticsRuleSync({ reason }) {
+  if (!isLogisticsDistributionFeatureEnabled()) return logisticsDistributionDisabledResult();
+  const runtime = getLogisticsDistributionRuntime();
+  if (!runtime || typeof runtime.syncStored !== 'function') {
+    throw new Error('物流规则自动同步运行时不可用');
+  }
+  const extensionVersion = chrome.runtime.getManifest().version;
+  const result = await runtime.syncStored({
+    reason,
+    extensionVersion,
+  });
+  const nextAttemptAt = Date.parse(String(result && result.nextAttemptAt || ''));
+  if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) {
+    ensureLogisticsRuleSyncAlarm({ when: nextAttemptAt });
+  }
+  return result;
+}
+
+if (chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(() => {
+    if (!isLogisticsDistributionFeatureEnabled()) {
+      disableLogisticsDistributionAlarms();
+      return;
+    }
+    ensureLogisticsRuleSyncAlarm();
+    ensureLogisticsCaptureAlarm();
+    runScheduledLogisticsRuleSync({ reason: 'startup' }).catch((error) => {
+      console.warn('[SS ERP] logistics rule startup sync failed:', error);
+    });
+    runScheduledLogisticsCapture({ reason: 'startup' }).catch((error) => {
+      console.warn('[SS ERP] logistics capture startup poll failed:', error);
+    });
+  });
+}
+
+try {
   importScripts('../shared/erp-package/erp-package-export.js');
 } catch (error) {
   console.warn('[ozon-calc] erp package exporter import failed', error);
@@ -193,9 +597,20 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log('[ozon-calc] installed');
   if (self.SS_ERP_RUNTIME) self.SS_ERP_RUNTIME.syncRuntimeMode();
   ensureOzonAutoSyncAlarm();
+  if (!isLogisticsDistributionFeatureEnabled()) {
+    disableLogisticsDistributionAlarms();
+    return;
+  }
+  ensureLogisticsRuleSyncAlarm();
+  ensureLogisticsCaptureAlarm();
 });
 
 ensureOzonAutoSyncAlarm();
+if (!isLogisticsDistributionFeatureEnabled()) {
+  disableLogisticsDistributionAlarms();
+}
+ensureLogisticsRuleSyncAlarm();
+ensureLogisticsCaptureAlarm();
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local' || !self.SS_ERP_RUNTIME) return;
@@ -721,7 +1136,26 @@ async function readOzonAutoSyncStatus() {
 
 if (chrome.alarms && chrome.alarms.onAlarm) {
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (!alarm || alarm.name !== SS_ERP_OZON_AUTO_SYNC_ALARM_NAME) return;
+    if (!alarm) return;
+    if ((alarm.name === SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME
+      || alarm.name === SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME)
+      && !isLogisticsDistributionFeatureEnabled()) {
+      disableLogisticsDistributionAlarms();
+      return;
+    }
+    if (alarm.name === SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME) {
+      runScheduledLogisticsCapture({ reason: 'alarm' }).catch((error) => {
+        console.warn('[SS ERP] logistics capture alarm poll failed:', error);
+      });
+      return;
+    }
+    if (alarm.name === SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME) {
+      runScheduledLogisticsRuleSync({ reason: 'alarm' }).catch((error) => {
+        console.warn('[SS ERP] logistics rule alarm sync failed:', error);
+      });
+      return;
+    }
+    if (alarm.name !== SS_ERP_OZON_AUTO_SYNC_ALARM_NAME) return;
     runOzonAutoSyncMaintenance({ reason: 'alarm' }).catch((error) => {
       console.warn('[SS ERP] Ozon auto sync alarm failed:', error);
     });
@@ -1455,6 +1889,19 @@ async function openImageSearchTabsFromOzon(payload) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
 
+  const runtimeMessagePolicy = globalThis.SS_ERP_RUNTIME_MESSAGE_POLICY;
+  if (!runtimeMessagePolicy
+    || typeof runtimeMessagePolicy.isKnownRuntimeMessageType !== 'function'
+    || typeof runtimeMessagePolicy.isAllowedRuntimeMessageSender !== 'function') {
+    sendResponse({ ok: false, error: '扩展消息安全策略不可用' });
+    return false;
+  }
+  if (!runtimeMessagePolicy.isKnownRuntimeMessageType(message.type)) return false;
+  if (!runtimeMessagePolicy.isAllowedRuntimeMessageSender(message.type, sender, chrome.runtime.id)) {
+    sendResponse({ ok: false, error: '不允许的扩展消息来源' });
+    return false;
+  }
+
   if (OZON_CALC_SETTINGS_WRITE_CHANNELS.has(message.type)) {
     const securitySchema = globalThis.OZON_CALC_SYNC_SCHEMA;
     if (!securitySchema
@@ -1473,6 +1920,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: '该配置操作仅允许从插件设置页发起' });
       return false;
     }
+  }
+
+  if (OZON_CALC_SETTINGS_WRITE_CHANNELS.has(message.type)
+    && message.type.startsWith('ss-erp:logistics-')) {
+    if (!isLogisticsDistributionFeatureEnabled()) {
+      sendResponse({ handled: true, ok: false, errorCode: 'feature_disabled' });
+      return false;
+    }
+    try {
+      const handler = message.type.startsWith('ss-erp:logistics-capture-')
+        ? getLogisticsCaptureMessageHandler()
+        : message.type.startsWith('ss-erp:logistics-binding-probe-')
+          ? getLogisticsBindingProbeMessageHandler()
+          : getLogisticsDistributionMessageHandler();
+      Promise.resolve(handler(message, sender)).then(sendResponse).catch(() => {
+        sendResponse({ handled: true, ok: false, errorCode: 'operation_failed' });
+      });
+    } catch (_error) {
+      sendResponse({ handled: true, ok: false, errorCode: 'runtime_unavailable' });
+      return false;
+    }
+    return true;
   }
 
   if (message.type === 'ss-erp:ozon-company-id-captured') {
@@ -1528,12 +1997,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const snapshot = prepared.snapshot;
-    chrome.storage.local.set({
-      [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
-      [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),
-    }).then(() => {
-      sendResponse({ ok: true });
-    }).catch((error) => {
+    (async () => {
+      const result = await chrome.storage.local.get([OZON_LOGISTICS_CALCULATOR_STATE_KEY]);
+      const calculatorState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY];
+      const source = toText(
+        snapshot.catalogSnapshot && snapshot.catalogSnapshot.metadata
+          && snapshot.catalogSnapshot.metadata.source
+      );
+      if (isLogisticsDistributionFeatureEnabled() && calculatorState && calculatorState.scope && source === 'erp_release') {
+        const runtime = getLogisticsDistributionRuntime();
+        const updated = await runtime.updatePreferences({ snapshot });
+        sendResponse({ ok: true, snapshot: updated.snapshot, mode: 'scoped_preferences' });
+        return;
+      }
+      await chrome.storage.local.set({
+        [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
+        [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),
+      });
+      if (calculatorState && calculatorState.scope) {
+        if (isLogisticsDistributionFeatureEnabled()) {
+          const updated = await getLogisticsDistributionRuntime().saveLocalFallback({
+            scopeBinding: calculatorState.scope,
+            snapshot: snapshot,
+          });
+          sendResponse({ ok: true, snapshot: updated && updated.snapshot || snapshot, mode: 'scoped_fallback' });
+          return;
+        }
+        sendResponse({ ok: true, snapshot, mode: 'legacy_unscoped' });
+        return;
+      }
+      sendResponse({ ok: true, snapshot, mode: 'local_unscoped' });
+    })().catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
     return true;
@@ -2410,28 +2904,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:status') {
-    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_CALC_CONFIG_UPDATED_AT_KEY, OZON_OFFICIAL_SNAPSHOT_KEY, OZON_COMMISSION_SNAPSHOT_KEY, OZON_FX_SNAPSHOT_KEY]).then((result) => {
+    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_CALC_CONFIG_UPDATED_AT_KEY, OZON_OFFICIAL_SNAPSHOT_KEY, OZON_COMMISSION_SNAPSHOT_KEY, OZON_FX_SNAPSHOT_KEY, OZON_LOGISTICS_CALCULATOR_STATE_KEY]).then((result) => {
       const entries = Array.isArray(result[OZON_CALC_CAPTURE_ENTRIES_KEY]) ? result[OZON_CALC_CAPTURE_ENTRIES_KEY] : [];
-      const snapshot = result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null;
-      const officialSnapshot = result[OZON_OFFICIAL_SNAPSHOT_KEY] || null;
+      const logisticsState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY] || null;
+      const snapshot = logisticsState ? logisticsState.snapshot || null : result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null;
+      const officialSnapshot = logisticsState ? logisticsState.officialSnapshot || null : result[OZON_OFFICIAL_SNAPSHOT_KEY] || null;
       const commissionSnapshot = result[OZON_COMMISSION_SNAPSHOT_KEY] || null;
       const fxSnapshot = result[OZON_FX_SNAPSHOT_KEY] || null;
       sendResponse({
         ok: true,
         counts: buildCaptureCounts(entries),
         latestCapturedAt: latestCapturedAt(entries),
-        configUpdatedAt: toText(result[OZON_CALC_CONFIG_UPDATED_AT_KEY]),
+        configUpdatedAt: toText(logisticsState && logisticsState.updatedAt || result[OZON_CALC_CONFIG_UPDATED_AT_KEY]),
         selectedServiceCount: snapshot && snapshot.userConfig && Array.isArray(snapshot.userConfig.selectedServiceIds)
           ? snapshot.userConfig.selectedServiceIds.length
           : 0,
-        officialSampleCount: officialSnapshot && Array.isArray(officialSnapshot.tariffs) ? officialSnapshot.tariffs.length : 0,
-        officialUpdatedAt: officialSnapshot && officialSnapshot.metadata ? toText(officialSnapshot.metadata.syncedAt) : '',
+        officialSampleCount: officialSnapshot && Array.isArray(officialSnapshot.samples)
+          ? officialSnapshot.samples.length
+          : officialSnapshot && Array.isArray(officialSnapshot.tariffs) ? officialSnapshot.tariffs.length : 0,
+        officialUpdatedAt: toText(logisticsState && logisticsState.updatedAt || officialSnapshot && officialSnapshot.metadata && officialSnapshot.metadata.syncedAt),
         commissionRuleCount: commissionSnapshot && Array.isArray(commissionSnapshot.rules) ? commissionSnapshot.rules.length : 0,
         commissionUpdatedAt: commissionSnapshot ? toText(commissionSnapshot.fetchedAt) : '',
         fxCurrencyCount: fxSnapshot && fxSnapshot.cnyPerCurrency ? Object.keys(fxSnapshot.cnyPerCurrency).length : 0,
         fxUpdatedAt: fxSnapshot ? toText(fxSnapshot.fetchedAt) : '',
         commissionSnapshot,
         fxSnapshot,
+        logisticsState,
         snapshot,
       });
     }).catch((error) => {
@@ -2571,25 +3069,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:update-fee-settings') {
-    chrome.storage.local.get([OZON_CALC_CONFIG_SNAPSHOT_KEY]).then((result) => {
+    (async () => {
+      const result = await chrome.storage.local.get([
+        OZON_CALC_CONFIG_SNAPSHOT_KEY,
+        OZON_LOGISTICS_CALCULATOR_STATE_KEY,
+      ]);
       const schema = globalThis.OZON_CALC_SYNC_SCHEMA;
       if (!schema || typeof schema.mergeSnapshotFormState !== 'function') {
         throw new Error('同步配置结构未加载');
       }
+      const calculatorState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY];
       const snapshot = schema.mergeSnapshotFormState(
-        result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || {},
+        calculatorState && calculatorState.snapshot || result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || {},
         message.formState || {}
       );
-      return chrome.storage.local.set({
+      if (calculatorState && calculatorState.scope) {
+        const updated = await getLogisticsDistributionRuntime().updatePreferences({ snapshot });
+        sendResponse({ ok: true, snapshot: updated.snapshot, mode: 'scoped_preferences' });
+        return;
+      }
+      await chrome.storage.local.set({
         [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
         [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),
-      }).then(() => {
-        sendResponse({
-          ok: true,
-          snapshot,
-        });
       });
-    }).catch((error) => {
+      sendResponse({ ok: true, snapshot, mode: 'local_unscoped' });
+    })().catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
     });
     return true;

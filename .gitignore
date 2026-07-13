@@ -67,3 +67,10 @@ public/resized/
 # Local SQLite/dev database leftovers
 prisma/migrations/dev.db*
 .gstack/
+
+# Local agent and browser-debug scratch files
+*.orig
+/.tmp-*
+/.codex-write-test.tmp
+/scripts/.tmp-cdp-*
+**/.unit-contract-patch-probe.tmp

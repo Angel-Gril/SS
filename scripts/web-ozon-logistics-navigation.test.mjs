@@ -32,7 +32,8 @@ assert.match(
   'template page should clarify it does not directly create Ozon logistics settings',
 );
 
-assert.match(adminPickupPage, /OZON 发运点同步/, 'admin pickup point page should be positioned as Ozon sync');
-assert.match(userPickupPage, /OZON 发运点查询/, 'user pickup point page should be positioned as Ozon point lookup');
+assert.match(adminPickupPage, /OZON 可选发运点池/, 'admin pickup point page should expose the selectable Ozon point pool');
+assert.match(adminPickupPage, /Ozon Seller 可选点采集/, 'admin pickup point page should expose Seller point capture');
+assert.match(userPickupPage, /OZON 发运点池查询/, 'user pickup point page should be positioned as Ozon point-pool lookup');
 
 console.log('PASS web ozon logistics navigation');

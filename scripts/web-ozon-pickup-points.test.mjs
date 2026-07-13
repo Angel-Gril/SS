@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const adminPage = fs.readFileSync('apps/web/src/app/(dashboard)/admin/ozon-pickup-points/page.tsx', 'utf8');
-const userPage = fs.readFileSync('apps/web/src/app/(dashboard)/ozon-pickup-points/page.tsx', 'utf8');
-const extensionBackground = fs.readFileSync('extensions/ss-erp/background/collect-background.js', 'utf8');
+const adminPage = fs.readFileSync(
+  'apps/web/src/app/(dashboard)/admin/ozon-pickup-points/page.tsx',
+  'utf8',
+);
+const userPage = fs.readFileSync(
+  'apps/web/src/app/(dashboard)/ozon-pickup-points/page.tsx',
+  'utf8',
+);
+const extensionBackground = fs.readFileSync(
+  'extensions/ss-erp/background/collect-background.js',
+  'utf8',
+);
 const extensionBridge = fs.readFileSync('extensions/ss-erp/content/erp-collect-bridge.js', 'utf8');
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 
@@ -17,7 +26,11 @@ for (const token of [
   'providerName',
   'externalId',
 ]) {
-  assert.match(adminPage, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `admin pickup point page should expose ${token}`);
+  assert.match(
+    adminPage,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `admin pickup point page should expose ${token}`,
+  );
 }
 
 assert.match(
@@ -35,6 +48,26 @@ assert.match(
   adminPage,
   /sendToExtension<OzonDropoffSyncPayload>[\s\S]{0,420}\.\.\.\(companyId \? \{ companyId \} : \{\}\)/,
   'admin pickup sync should pass the ERP-stored Ozon companyId to the browser extension',
+);
+assert.match(
+  adminPage,
+  /api\s*\.get<WarehouseOption\[]>\s*\(`\/api\/shops\/\$\{encodeURIComponent\(syncShopId\)\}\/warehouses`\)/,
+  'admin pickup sync should load warehouses for the selected ERP shop',
+);
+assert.match(
+  adminPage,
+  /syncWarehouseId[\s\S]*发运仓库/,
+  'admin pickup sync should require an explicit warehouse selection',
+);
+assert.match(
+  adminPage,
+  /point:\s*\{\s*latitude:\s*selectedSyncWarehouse\.latitude,\s*longitude:\s*selectedSyncWarehouse\.longitude,?\s*\}/,
+  'admin pickup sync should pass the selected warehouse coordinates to the extension',
+);
+assert.match(
+  adminPage,
+  /仓库缺少坐标|先同步[^\n]*仓库坐标/,
+  'admin pickup sync should explain why a warehouse without coordinates cannot collect',
 );
 assert.match(
   adminPage,
@@ -103,15 +136,26 @@ assert.match(
   /delivery-method-service\/v2\/provider\/template\/by-location\/list/,
   'extension should discover Ozon providers through the seller provider template endpoint when warehouse/list is unavailable',
 );
-assert.match(
-  extensionBackground,
-  /Ozon warehouse\/list provider discovery failed[\s\S]{0,900}fetchOzonSellerProviderTemplates\(companyId\)/,
-  'extension should fall back to provider templates after warehouse/list rejects the request',
+const methodDiscoveryIndex = extensionBackground.indexOf(
+  'fetchOzonSellerConfiguredMethods(companyId)',
+);
+const templateDiscoveryIndex = extensionBackground.indexOf(
+  'fetchOzonSellerProviderTemplates(companyId, point)',
+  methodDiscoveryIndex,
+);
+assert.ok(
+  methodDiscoveryIndex >= 0 && templateDiscoveryIndex > methodDiscoveryIndex,
+  'extension should read configured methods before supplementing them with provider templates',
 );
 assert.match(
   extensionBackground,
-  /sellerWarehouseList[\s\S]{0,220}\{\s*company_id:\s*String\(companyId\)\s*\}/,
-  'extension should include string company_id in the Ozon seller warehouse list request body',
+  /mergeOzonSellerProviderSources\(methodProviders, templateProviders\)/,
+  'extension should merge configured-method and provider-template sources',
+);
+assert.match(
+  extensionBackground,
+  /sellerWarehouseList[\s\S]{0,220}\{\s*company_id:\s*toOzonSellerTemplateCompanyId\(companyId\)\s*\}/,
+  'extension should normalize company_id in the Ozon seller warehouse list request body',
 );
 assert.match(
   serviceWorker,

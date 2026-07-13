@@ -1,5 +1,13 @@
 # SS ERP 运维手册 (RUNBOOK)
 
+## 专项手册
+
+- [Ozon 物流规则运维与验收](./ozon-logistics-rule-operations.md)
+
+Ozon 物流上线顺序：确认环境和 feature flags，完成 tenant/shop/warehouse/method scope
+onboarding 与同 bootstrap probe，审核规范化候选并发布，最后执行两台设备 20 次真实循环。真实验收完成前不得扩大范围或宣称试点通过。
+
+
 ## 服务器要求
 
 - Ubuntu 22.04+ / Debian 12+

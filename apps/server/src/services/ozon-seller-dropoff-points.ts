@@ -2,7 +2,8 @@ import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import type { Prisma } from '@prisma/client';
 
 const SELLER_BASE_URL = 'https://seller.ozon.ru';
-const WAREHOUSE_LIST_PATH = '/api/site/logistic-service/v5/facade/warehouse/list';
+const WAREHOUSE_LIST_PATH = '/api/site/logistic-service/v2/warehouse/list';
+const DELIVERY_METHOD_LIST_PATH = '/api/posting-service/seller-ui/delivery-method/list';
 const PROVIDER_TEMPLATE_BY_LOCATION_PATH = '/api/delivery-method-service/v2/provider/template/by-location/list';
 const DROPOFF_BY_PROVIDER_PATH = '/api/delivery-method-service/v1/drop-off/list/by-provider';
 const DEFAULT_PROVIDER_TEMPLATE_POINT = { latitude: 24.480107, longitude: 118.085348 };
@@ -20,6 +21,7 @@ export interface SellerDeliveryMethodRef {
   id: number;
   name: string;
   providerId: number;
+  warehouseId?: string;
   providerName: string;
   tplDropoffPointId: number | string | null;
 }
@@ -36,7 +38,7 @@ export interface SellerDropoffPoint {
   physicalAddressKey?: string;
 }
 
-export type SellerProviderSource = 'warehouse' | 'template' | 'both';
+export type SellerProviderSource = 'method' | 'template' | 'both';
 export type SellerProviderStatus = 'pending' | 'succeeded' | 'empty' | 'failed';
 
 export interface SellerProviderInventoryEntry {
@@ -49,10 +51,12 @@ export interface SellerProviderInventoryEntry {
 
 export interface SellerDropoffFetchResult {
   methods: SellerDeliveryMethodRef[];
+  warehouseIds?: string[];
+  methodBindingsComplete?: boolean;
   providers: SellerProviderInventoryEntry[];
   points: SellerDropoffPoint[];
   providerErrors: { providerId: number; message: string }[];
-  providerDiscoveryErrors?: { source: 'warehouse' | 'template'; message: string }[];
+  providerDiscoveryErrors?: { source: 'warehouse' | 'method' | 'template'; message: string }[];
   providerStats?: {
     discovered: number;
     attempted: number;
@@ -60,6 +64,9 @@ export interface SellerDropoffFetchResult {
     failed: number;
     empty: number;
     complete: boolean;
+    catalogComplete: boolean;
+    methodBindingsComplete: boolean;
+    methodBindingsRequired: boolean;
   };
 }
 
@@ -92,13 +99,15 @@ export function extractSellerDeliveryMethods(payload: unknown): SellerDeliveryMe
   for (const array of arrays) {
     for (const item of array) {
       if (!isRecord(item)) continue;
-      const id = numberValue(item.id ?? item.methodId ?? item.method_id);
+      const id = numberValue(item.id ?? item.methodId ?? item.method_id ?? item.delivery_method_id);
       const providerId = numberValue(item.providerId ?? item.provider_id ?? item.tplProviderId ?? item.tpl_provider_id);
       if (!id || !providerId) continue;
       const tplDropoffPointId = numberValue(item.tplDropoffPointId ?? item.tpl_dropoff_point_id ?? item.dropoffPointId ?? item.dropoff_point_id);
+      const warehouseId = stringValue(item.warehouseId ?? item.warehouse_id);
       byId.set(id, {
         id,
-        name: stringValue(item.name) || `物流方式 ${id}`,
+        name: stringValue(item.name ?? item.delivery_method ?? item.delivery_method_name) || `物流方式 ${id}`,
+        ...(warehouseId ? { warehouseId } : {}),
         providerId,
         providerName: stringValue(item.providerName ?? item.provider_name ?? item.tplProvider ?? item.tpl_provider) || `Provider ${providerId}`,
         tplDropoffPointId: tplDropoffPointId || null,
@@ -113,6 +122,7 @@ export async function fetchOzonSellerDropoffPoints(params: {
   cookie: string;
   companyId: string | number;
   fetchImpl?: typeof globalThis.fetch;
+  requireMethodBindings?: boolean;
 }): Promise<SellerDropoffFetchResult> {
   const cookie = params.cookie.replace(/[\r\n]/g, '').trim();
   const companyId = String(params.companyId || '').trim();
@@ -123,7 +133,7 @@ export async function fetchOzonSellerDropoffPoints(params: {
   const headers = sellerHeaders(cookie, companyId);
   const discovery = await fetchSellerDeliveryMethodRefs(fetchImpl, headers, companyId);
   const methods = discovery.methods;
-  const providers = mergeSellerProviderSources(discovery.warehouseProviders, discovery.templateProviders);
+  const providers = mergeSellerProviderSources(discovery.methodProviders, discovery.templateProviders);
   const points = new Map<string, SellerDropoffPoint>();
   const providerErrors: { providerId: number; message: string }[] = [];
   let attempted = 0;
@@ -186,8 +196,15 @@ export async function fetchOzonSellerDropoffPoints(params: {
     }
   }
 
+  const catalogComplete = discovery.templateComplete
+    && attempted === providers.length
+    && failed === 0
+    && empty === 0;
+  const methodBindingsRequired = params.requireMethodBindings === true;
   return {
     methods,
+    warehouseIds: discovery.warehouseIds,
+    methodBindingsComplete: discovery.methodBindingsComplete,
     providers,
     points: [...points.values()].sort(compareSellerDropoffPoints),
     providerErrors,
@@ -198,7 +215,10 @@ export async function fetchOzonSellerDropoffPoints(params: {
       succeeded,
       failed,
       empty,
-      complete: discovery.complete && attempted === providers.length && failed === 0,
+      catalogComplete,
+      methodBindingsComplete: discovery.methodBindingsComplete,
+      methodBindingsRequired,
+      complete: catalogComplete && (!methodBindingsRequired || discovery.methodBindingsComplete),
     },
   };
 }
@@ -209,27 +229,65 @@ async function fetchSellerDeliveryMethodRefs(
   companyId: string,
 ): Promise<{
   methods: SellerDeliveryMethodRef[];
-  warehouseProviders: { providerId: number; providerName: string }[];
+  methodProviders: { providerId: number; providerName: string }[];
   templateProviders: { providerId: number; providerName: string }[];
-  complete: boolean;
-  errors: { source: 'warehouse' | 'template'; message: string }[];
+  warehouseIds: string[];
+  methodBindingsComplete: boolean;
+  templateComplete: boolean;
+  errors: { source: 'warehouse' | 'method' | 'template'; message: string }[];
 }> {
-  let methods: SellerDeliveryMethodRef[] = [];
-  let warehouseProviders: { providerId: number; providerName: string }[] = [];
+  let warehouseIds: string[] = [];
+  let methodRows: unknown[] = [];
   let templateProviders: { providerId: number; providerName: string }[] = [];
   let warehouseError = '';
+  let methodError = '';
   let templateError = '';
 
   try {
     const warehousePayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${WAREHOUSE_LIST_PATH}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ company_id: companyId }),
+      body: JSON.stringify({ company_id: toTemplateCompanyId(companyId) }),
     });
-    methods = extractSellerDeliveryMethods(warehousePayload);
-    warehouseProviders = uniqueProvidersFromMethods(methods);
+    const rows = (warehousePayload as any)?.result;
+    if (!Array.isArray(rows)) throw new Error('warehouse/list response is missing result');
+    warehouseIds = [...new Set(rows
+      .map((row) => stringValue(row?.warehouse_id ?? row?.warehouseId ?? row?.id))
+      .filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   } catch (error) {
     warehouseError = error instanceof Error ? error.message : String(error || '');
+  }
+
+  try {
+    const statusGroups = [['active'], ['disabled', 'new']];
+    let pageCount = 0;
+    for (const statuses of statusGroups) {
+      let cursor = '';
+      const seenCursors = new Set<string>();
+      while (true) {
+        pageCount += 1;
+        if (pageCount > 100) throw new Error('delivery-method/list exceeded page limit');
+        const methodPayload = await fetchJson(fetchImpl, `${SELLER_BASE_URL}${DELIVERY_METHOD_LIST_PATH}`, {
+          method: 'POST',
+          headers: { ...headers, 'x-o3-page-type': 'CbPostingsFbs' },
+          body: JSON.stringify(buildDeliveryMethodListBody(companyId, statuses, cursor)),
+        });
+        const rows = (methodPayload as any)?.delivery_methods;
+        if (!Array.isArray(rows)) throw new Error('delivery-method/list response is missing delivery_methods');
+        methodRows = methodRows.concat(rows);
+        if (methodRows.length > 2_000) throw new Error('delivery-method/list exceeded row limit');
+        const nextCursor = stringValue((methodPayload as any)?.cursor);
+        if (!nextCursor) break;
+        if (nextCursor.length > 2_000 || seenCursors.has(nextCursor)) {
+          throw new Error('delivery-method/list returned an invalid cursor');
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+    }
+  } catch (error) {
+    methodError = error instanceof Error ? error.message : String(error || '');
   }
 
   try {
@@ -243,24 +301,55 @@ async function fetchSellerDeliveryMethodRefs(
         point: DEFAULT_PROVIDER_TEMPLATE_POINT,
       }),
     });
+    if (!Array.isArray((templatePayload as any)?.provider_templates)
+      && !Array.isArray((templatePayload as any)?.result?.provider_templates)) {
+      throw new Error('provider/template response is missing provider_templates');
+    }
     templateProviders = extractSellerProvidersFromTemplates(templatePayload);
   } catch (error) {
     templateError = error instanceof Error ? error.message : String(error || '');
   }
 
-  if (warehouseError && templateError) {
-    throw new Error(`Ozon Seller provider discovery failed: warehouse/list ${warehouseError}; provider/template ${templateError}`);
+  const methods = extractSellerDeliveryMethods({ delivery_methods: methodRows });
+  const methodProviders = uniqueProvidersFromMethods(methods);
+  if (templateError && !methodProviders.length) {
+    throw new Error(`Ozon Seller provider discovery failed: delivery-method/list ${methodError || 'returned no providers'}; provider/template ${templateError}`);
   }
 
   return {
     methods,
-    warehouseProviders,
+    methodProviders,
     templateProviders,
+    warehouseIds,
     errors: [
       ...(warehouseError ? [{ source: 'warehouse' as const, message: warehouseError }] : []),
+      ...(methodError ? [{ source: 'method' as const, message: methodError }] : []),
       ...(templateError ? [{ source: 'template' as const, message: templateError }] : []),
     ],
-    complete: !warehouseError && !templateError,
+    methodBindingsComplete: !warehouseError && !methodError,
+    templateComplete: !templateError,
+  };
+}
+
+function buildDeliveryMethodListBody(
+  companyId: string,
+  statuses: string[],
+  cursor: string,
+  now = new Date(),
+): Record<string, unknown> {
+  if (!Number.isFinite(now.getTime())) throw new Error('invalid delivery method query time');
+  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 90));
+  const to = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999,
+  ));
+  return {
+    company_id: toTemplateCompanyId(companyId),
+    processed_at_from: from.toISOString(),
+    processed_at_to: to.toISOString(),
+    limit: 20,
+    status_alias: ['awaiting_packaging'],
+    delivery_method_statuses: statuses,
+    ...(cursor ? { cursor } : {}),
   };
 }
 
@@ -293,14 +382,14 @@ function uniqueProvidersFromMethods(methods: SellerDeliveryMethodRef[]): { provi
 }
 
 function mergeSellerProviderSources(
-  warehouseProviders: { providerId: number; providerName: string }[],
+  methodProviders: { providerId: number; providerName: string }[],
   templateProviders: { providerId: number; providerName: string }[],
 ): SellerProviderInventoryEntry[] {
-  const merged = new Map<number, { providerName: string; warehouse: boolean; template: boolean }>();
-  for (const provider of warehouseProviders) {
+  const merged = new Map<number, { providerName: string; method: boolean; template: boolean }>();
+  for (const provider of methodProviders) {
     merged.set(provider.providerId, {
       providerName: provider.providerName,
-      warehouse: true,
+      method: true,
       template: false,
     });
   }
@@ -311,7 +400,7 @@ function mergeSellerProviderSources(
     } else {
       merged.set(provider.providerId, {
         providerName: provider.providerName,
-        warehouse: false,
+        method: false,
         template: true,
       });
     }
@@ -320,7 +409,7 @@ function mergeSellerProviderSources(
     .map(([providerId, provider]) => ({
       providerId,
       providerName: provider.providerName,
-      source: provider.warehouse && provider.template ? 'both' as const : provider.warehouse ? 'warehouse' as const : 'template' as const,
+      source: provider.method && provider.template ? 'both' as const : provider.method ? 'method' as const : 'template' as const,
       status: 'pending' as const,
       pointCount: 0,
     }))

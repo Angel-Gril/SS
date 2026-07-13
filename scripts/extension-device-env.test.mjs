@@ -20,6 +20,7 @@ function baseEnv(extra = []) {
     'NEXT_PUBLIC_API_BASE_URL=https://ss-erp.example',
     'CORS_ORIGIN=https://ss-erp.example',
     'AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS=true',
+    'EXTENSION_AUTH_MODE=compat',
     ...extra,
     '',
   ].join('\n');
@@ -30,13 +31,11 @@ function validate(contents) {
   const envPath = join(dir, '.env.test');
   writeFileSync(envPath, contents);
   try {
-    return spawnSync(process.execPath, [
-      'scripts/validate-env.mjs',
-      '--profile',
-      'cloud-bootstrap',
-      '--env',
-      envPath,
-    ], { cwd: process.cwd(), encoding: 'utf8' });
+    return spawnSync(
+      process.execPath,
+      ['scripts/validate-env.mjs', '--profile', 'cloud-bootstrap', '--env', envPath],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -54,12 +53,14 @@ test('enabled logistics distribution requires isolated device auth settings', ()
   assert.match(missing.stderr, /AUTH_JWT_ISSUER is required/);
   assert.match(missing.stderr, /EXTENSION_DEVICE_JWT_SECRET is required/);
 
-  const valid = validate(baseEnv([
-    'LOGISTICS_DISTRIBUTION_ENABLED=true',
-    'SS_ERP_DEPLOYMENT_ID=cloud-global-prod',
-    'AUTH_JWT_ISSUER=ss-erp-cloud-global',
-    `EXTENSION_DEVICE_JWT_SECRET=${DEVICE_SECRET}`,
-  ]));
+  const valid = validate(
+    baseEnv([
+      'LOGISTICS_DISTRIBUTION_ENABLED=true',
+      'SS_ERP_DEPLOYMENT_ID=cloud-global-prod',
+      'AUTH_JWT_ISSUER=ss-erp-cloud-global',
+      `EXTENSION_DEVICE_JWT_SECRET=${DEVICE_SECRET}`,
+    ]),
+  );
   assert.equal(valid.status, 0, `${valid.stdout}\n${valid.stderr}`);
 });
 
@@ -68,12 +69,18 @@ test('device auth env parsing fails closed for malformed flags and shared secret
   assert.equal(malformed.status, 1);
   assert.match(malformed.stderr, /LOGISTICS_DISTRIBUTION_ENABLED expected true\/false/);
 
-  const sharedSecret = validate(baseEnv([
-    'LOGISTICS_DISTRIBUTION_ENABLED=true',
-    'SS_ERP_DEPLOYMENT_ID=cloud-global-prod',
-    'AUTH_JWT_ISSUER=ss-erp-cloud-global',
-    `EXTENSION_DEVICE_JWT_SECRET=${ACCOUNT_SECRET}`,
-  ]));
+  const malformedMode = validate(baseEnv(['EXTENSION_AUTH_MODE=legacy']));
+  assert.equal(malformedMode.status, 1);
+  assert.match(malformedMode.stderr, /EXTENSION_AUTH_MODE expected compat or device-only/);
+
+  const sharedSecret = validate(
+    baseEnv([
+      'LOGISTICS_DISTRIBUTION_ENABLED=true',
+      'SS_ERP_DEPLOYMENT_ID=cloud-global-prod',
+      'AUTH_JWT_ISSUER=ss-erp-cloud-global',
+      `EXTENSION_DEVICE_JWT_SECRET=${ACCOUNT_SECRET}`,
+    ]),
+  );
   assert.equal(sharedSecret.status, 1);
   assert.match(sharedSecret.stderr, /EXTENSION_DEVICE_JWT_SECRET must differ from JWT_SECRET/);
 });
@@ -81,7 +88,9 @@ test('device auth env parsing fails closed for malformed flags and shared secret
 test('production env example documents the disabled-by-default device auth rollout', () => {
   const source = readFileSync('.env.production.example', 'utf8');
   for (const key of [
+    'EXTENSION_AUTH_MODE',
     'LOGISTICS_DISTRIBUTION_ENABLED',
+    'NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED',
     'SS_ERP_DEPLOYMENT_ID',
     'AUTH_JWT_ISSUER',
     'EXTENSION_DEVICE_JWT_SECRET',
@@ -89,5 +98,7 @@ test('production env example documents the disabled-by-default device auth rollo
   ]) {
     assert.match(source, new RegExp(`^${key}=`, 'm'));
   }
+  assert.match(source, /^EXTENSION_AUTH_MODE=compat\r?$/m);
   assert.match(source, /^LOGISTICS_DISTRIBUTION_ENABLED=false\r?$/m);
+  assert.match(source, /^NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED=false\r?$/m);
 });

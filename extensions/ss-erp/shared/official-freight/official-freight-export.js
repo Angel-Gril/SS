@@ -95,6 +95,11 @@
         if (!providerId && !providerName && !description && !price) return;
         var capturedAt = toText(entry && (entry.startedDateTime || entry.capturedAt));
         var dimsKey = [context.lengthMm, context.widthMm, context.heightMm].join('x');
+        var hasBatteryCapability = Object.prototype.hasOwnProperty.call(tariff, 'hasBattery')
+          || Object.prototype.hasOwnProperty.call(tariff, 'has_battery');
+        var hasBattery = Object.prototype.hasOwnProperty.call(tariff, 'hasBattery')
+          ? Boolean(tariff.hasBattery)
+          : Boolean(tariff.has_battery);
         samples.push({
           key: [capturedAt, providerId, description, context.weightG, dimsKey].join('|'),
           providerId: providerId,
@@ -103,7 +108,8 @@
           price: price,
           currency: normalizeCurrency(getFirst(tariff, ['currency', 'currency_code', 'currencyCode']) || getFirst(tariff.delivery_price, ['currency', 'currency_code', 'currencyCode']) || context.currency),
           weightType: toText(getFirst(tariff, ['weightType', 'weight_type', 'chargeMode', 'charge_mode'])).trim(),
-          hasBattery: tariff.hasBattery == null && tariff.has_battery == null ? Boolean(context.batteryInput) : Boolean(getFirst(tariff, ['hasBattery', 'has_battery'])),
+          hasBattery: hasBatteryCapability ? hasBattery : null,
+          batteryMode: hasBatteryCapability ? (hasBattery ? 'battery' : 'no-battery') : 'unspecified',
           batteryInput: context.batteryInput,
           isDropOff: Boolean(getFirst(tariff, ['isDropOff', 'is_drop_off', 'dropOff', 'drop_off'])),
           weightG: context.weightG,
@@ -143,6 +149,7 @@
       'currency',
       'weightType',
       'hasBattery',
+      'batteryMode',
       'batteryInput',
       'isDropOff',
       'weightG',
@@ -166,7 +173,8 @@
         Number(sample && sample.price) || 0,
         sample && sample.currency,
         sample && sample.weightType,
-        Boolean(sample && sample.hasBattery),
+        sample && sample.hasBattery == null ? '' : Boolean(sample.hasBattery),
+        sample && sample.batteryMode,
         sample && sample.batteryInput == null ? '' : Boolean(sample.batteryInput),
         Boolean(sample && sample.isDropOff),
         Number(sample && sample.weightG) || 0,

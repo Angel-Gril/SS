@@ -4,29 +4,23 @@
 
   var DIRECTION_TO_EXT = 'ss-erp:to-extension';
   var DIRECTION_FROM_EXT = 'ss-erp:from-extension';
-  var ACTIVATION_TIMEOUT_MS = 15000;
 
   function isKnownLegacyErpOrigin() {
     var hostname = window.location.hostname;
     return (
-      window.location.protocol === 'file:' ||
       hostname === 'localhost' ||
       hostname === '127.0.0.1' ||
       hostname === 'staging.ss-erp.com' ||
       hostname === 'ss-erp.com' ||
-      hostname.endsWith('.ss-erp.com')
+      hostname.endsWith('.ss-erp.com') ||
+      hostname === 'ss-erp.cn' ||
+      hostname.endsWith('.ss-erp.cn')
     );
   }
 
-  function hasErpMarker() {
-    var root = document.documentElement;
-    if (root && root.getAttribute('data-ss-erp-app') === 'true') return true;
-    var meta = document.querySelector('meta[name="ss-erp-app"]');
-    return !!(meta && meta.getAttribute('content') === 'true');
-  }
 
   function shouldActivate() {
-    return hasErpMarker() || isKnownLegacyErpOrigin();
+    return isKnownLegacyErpOrigin();
   }
 
   function activateBridge() {
@@ -83,23 +77,5 @@
 
   if (shouldActivate()) {
     activateBridge();
-    return;
   }
-
-  var observer = new MutationObserver(function () {
-    if (!shouldActivate()) return;
-    observer.disconnect();
-    activateBridge();
-  });
-
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-ss-erp-app'],
-    childList: true,
-    subtree: true,
-  });
-
-  setTimeout(function () {
-    observer.disconnect();
-  }, ACTIVATION_TIMEOUT_MS);
 }());

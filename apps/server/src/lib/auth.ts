@@ -40,6 +40,7 @@ const ACCOUNT_JWT_AUDIENCE = `ss-erp-account:${ACCOUNT_DEPLOYMENT_ID}`;
 export interface JwtPayload {
   userId: string;
   role: string;
+  authVersion?: number;
 }
 
 export interface AuthContext extends JwtPayload {
@@ -54,18 +55,41 @@ export interface AuthContext extends JwtPayload {
   isSuperAdmin: boolean;
 }
 
-export function signToken(payload: JwtPayload, expiresIn?: SignOptions['expiresIn']): string {
+const MAX_WEB_ACCOUNT_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+type AccountTokenUse = 'account_session' | 'legacy_extension';
+
+function signAccountToken(
+  payload: JwtPayload,
+  tokenUse: AccountTokenUse,
+  expiresIn: SignOptions['expiresIn'],
+): string {
   return jwt.sign({
     ...payload,
+    authVersion: payload.authVersion ?? 0,
     typ: 'account',
-    tokenUse: 'account_session',
+    tokenUse,
     deploymentId: ACCOUNT_DEPLOYMENT_ID,
   }, JWT_SECRET, {
     algorithm: 'HS256',
     issuer: ACCOUNT_JWT_ISSUER,
     audience: ACCOUNT_JWT_AUDIENCE,
-    expiresIn: expiresIn || JWT_EXPIRES_IN,
+    expiresIn,
   });
+}
+
+export function signToken(payload: JwtPayload, expiresIn?: SignOptions['expiresIn']): string {
+  return signAccountToken(payload, 'account_session', expiresIn || JWT_EXPIRES_IN);
+}
+
+export function signLegacyExtensionToken(
+  payload: JwtPayload,
+  expiresIn: SignOptions['expiresIn'] = '30d',
+): string {
+  if (!isLegacyExtensionTokenIssuanceEnabled()) {
+    throw new Error('Legacy extension token issuance is disabled');
+  }
+  return signAccountToken(payload, 'legacy_extension', expiresIn);
 }
 
 export function verifyToken(token: string): JwtPayload {
@@ -79,57 +103,38 @@ export function verifyToken(token: string): JwtPayload {
 
   if (claims.typ === 'account') {
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (claims.tokenUse !== 'account_session'
+    const issuedAt = claims.iat;
+    const expiresAt = claims.exp;
+    const authVersion = claims.authVersion === undefined ? 0 : claims.authVersion;
+    if ((claims.tokenUse !== 'account_session' && claims.tokenUse !== 'legacy_extension')
       || claims.deploymentId !== ACCOUNT_DEPLOYMENT_ID
       || claims.iss !== ACCOUNT_JWT_ISSUER
-      || !audiences.includes(ACCOUNT_JWT_AUDIENCE)) {
+      || !audiences.includes(ACCOUNT_JWT_AUDIENCE)
+      || !Number.isSafeInteger(issuedAt)
+      || !Number.isSafeInteger(expiresAt)
+      || Number(expiresAt) <= Number(issuedAt)
+      || !Number.isSafeInteger(authVersion)
+      || Number(authVersion) < 0) {
       throw new Error('Invalid account token');
     }
-    return claims as unknown as JwtPayload;
+    const legacyEnabled = isLegacyExtensionTokenIssuanceEnabled();
+    const lifetimeSeconds = Number(expiresAt) - Number(issuedAt);
+    if (claims.tokenUse === 'legacy_extension'
+      || lifetimeSeconds > MAX_WEB_ACCOUNT_TOKEN_TTL_SECONDS) {
+      if (!legacyEnabled) throw new Error('Invalid account token');
+    }
+    return { ...claims, authVersion: Number(authVersion) } as unknown as JwtPayload;
   }
 
   const isUntypedLegacyToken = claims.typ == null && claims.tokenUse == null;
   if (!isLegacyExtensionTokenIssuanceEnabled() || !isUntypedLegacyToken) {
     throw new Error('Invalid account token');
   }
-  return claims as unknown as JwtPayload;
+  return { ...claims, authVersion: 0 } as unknown as JwtPayload;
 }
 
-// 短期缓存 user → effective context，减少认证中间件每次都打 DB
-type ContextFields = {
-  effectiveUserId: string;
-  parentId: string | null;
-  isSubAccount: boolean;
-  accountCode: string | null;
-  isSuperAdmin: boolean;
-};
-const ctxCache = new Map<string, { ctx: ContextFields; expiresAt: number }>();
-const CTX_TTL_MS = 60 * 1000;
-
-async function loadAuthContext(userId: string): Promise<ContextFields | null> {
-  const cached = ctxCache.get(userId);
-  if (cached && cached.expiresAt > Date.now()) return cached.ctx;
-
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true, parentId: true, accountCode: true, status: true, isSuperAdmin: true, role: true },
-  });
-  if (!user || user.status === 'SUSPENDED') return null;
-
-  const ctx = {
-    effectiveUserId: user.parentId || user.id,
-    parentId: user.parentId,
-    isSubAccount: !!user.parentId,
-    accountCode: user.accountCode,
-    isSuperAdmin: user.role === 'ADMIN' && user.isSuperAdmin,
-  };
-  ctxCache.set(userId, { ctx, expiresAt: Date.now() + CTX_TTL_MS });
-  return ctx;
-}
-
-/** 父账号属性变更时（如禁用/解绑）需要清除子账号缓存 */
-export function clearAuthContextCache(userId: string) {
-  ctxCache.delete(userId);
+/** Compatibility hook: security-critical account context is read live for every request. */
+export function clearAuthContextCache(_userId: string) {
 }
 
 export async function authenticate(request: FastifyRequest, reply: FastifyReply) {
@@ -146,23 +151,32 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
       return reply.status(401).send({ code: 0, msg: '会话已过期' });
     }
 
-    const ctx = await loadAuthContext(payload.userId);
-    if (!ctx) {
+
+    const live = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, parentId: true, parent: { select: { status: true } }, accountCode: true, status: true, isSuperAdmin: true, role: true, authVersion: true },
+    });
+    if (!live || live.status === 'SUSPENDED' || (live.parentId && live.parent?.status !== 'ACTIVE')) {
       return reply.status(403).send({ code: 0, msg: '账号不可用' });
     }
+    if ((payload.authVersion === undefined ? 0 : payload.authVersion) !== live.authVersion) {
+      return reply.status(401).send({ code: 0, msg: '会话已失效' });
+    }
+
 
     // 关键：把 user.userId 替换成 effectiveUserId，让所有现有路由的 where: { userId } 自动穿透到父账号
     // actorUserId 保留登录账号 ID，给需要审计/操作日志/parentId 等场景用
     (request as any).user = {
       ...payload,
-      userId: ctx.effectiveUserId,
+      userId: live.parentId || live.id,
       actorUserId: payload.userId,
-      role: payload.role,
-      effectiveUserId: ctx.effectiveUserId,
-      parentId: ctx.parentId,
-      isSubAccount: ctx.isSubAccount,
-      accountCode: ctx.accountCode,
-      isSuperAdmin: ctx.isSuperAdmin,
+      role: live.role,
+      effectiveUserId: live.parentId || live.id,
+      parentId: live.parentId,
+      authVersion: live.authVersion,
+      isSubAccount: !!live.parentId,
+      accountCode: live.accountCode,
+      isSuperAdmin: live.role === 'ADMIN' && live.isSuperAdmin,
     } as AuthContext & { actorUserId: string };
   } catch {
     return reply.status(401).send({ code: 0, msg: '无效的令牌' });

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SS ERP - 松鼠跨境卖家助手",
   "short_name": "SS ERP",
-  "version": "1.0.126",
+  "version": "1.0.196",
   "description": "OZON跨境电商利润计算、物流同步、商品采集、ERP对接一站式工具",
   "icons": {
     "16": "icons/icon16.png",
@@ -42,7 +42,10 @@
       "https://localhost/*",
       "http://127.0.0.1/*",
       "https://127.0.0.1/*",
+      "https://ss-erp.com/*",
       "https://*.ss-erp.com/*",
+      "https://ss-erp.cn/*",
+      "https://*.ss-erp.cn/*",
       "https://staging.ss-erp.com/*"
     ]
   },
@@ -85,6 +88,7 @@
         "shared/erp-package/erp-package-export.js",
         "shared/erp-package/erp-package-summary.js",
         "shared/config-bridge/sync-schema.js",
+        "shared/logistics-rules/distribution-feature.js",
         "shared/config-bridge/config-store.js",
         "shared/erp-adapter/index.js",
         "shared/erp-adapter/collect-product.js",
@@ -211,7 +215,14 @@
     },
     {
       "matches": [
-        "<all_urls>"
+        "http://localhost/*",
+        "https://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*",
+        "https://ss-erp.com/*",
+        "https://*.ss-erp.com/*",
+        "https://ss-erp.cn/*",
+        "https://*.ss-erp.cn/*"
       ],
       "js": [
         "content/erp-collect-bridge.js"

@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { authenticate, clearAuthContextCache, requireRole } from '../lib/auth.js';
+import { authenticate, clearAuthContextCache, removeAllSessions, requireRole } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { generateAccountCode, nextAdminCode, nextSuperAdminCode } from '../lib/account-code.js';
 import { logAudit, extractRequestMeta } from '../lib/audit-log.js';
+import { revokeExtensionDeviceSessionsForUserInTransaction } from '../services/extension-device-session-prisma.js';
 
 const createTagSchema = z.object({
   name: z.string().min(1, '标签名称不能为空'),
@@ -535,7 +536,41 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: e.message });
     }
 
-    const user = await prisma.user.update({ where: { id }, data });
+    const suspending = data.status === 'SUSPENDED';
+    let childUserIds: string[] = [];
+    const user = suspending
+      ? await prisma.$transaction(async (tx) => {
+        const updated = await tx.user.update({
+          where: { id },
+          data: { ...data, authVersion: { increment: 1 } },
+        });
+        await revokeExtensionDeviceSessionsForUserInTransaction(tx, id, 'ACCOUNT_SUSPENDED');
+        const childUsers = await tx.user.findMany({
+          where: { parentId: id },
+          select: { id: true },
+        });
+        if (childUsers.length > 0) {
+          await tx.user.updateMany({
+            where: { parentId: id },
+            data: { authVersion: { increment: 1 } },
+          });
+        }
+        childUserIds = childUsers.map((child) => child.id);
+        for (const childId of childUserIds) {
+          await revokeExtensionDeviceSessionsForUserInTransaction(tx, childId, 'ACCOUNT_SUSPENDED');
+        }
+        return updated;
+      }, { isolationLevel: 'Serializable' })
+      : await prisma.user.update({ where: { id }, data });
+
+    if (suspending) {
+      for (const affectedUserId of [id, ...childUserIds]) {
+        clearAuthContextCache(affectedUserId);
+        await removeAllSessions(affectedUserId).catch(() => {
+          request.log.warn({ userId: affectedUserId }, 'Account suspension could not purge cached web sessions');
+        });
+      }
+    }
 
     // 审计日志：记录敏感字段变更
     const sensitiveChanges: Record<string, any> = {};
@@ -591,7 +626,16 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-    await prisma.user.update({ where: { id }, data: { passwordHash } });
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { passwordHash, authVersion: { increment: 1 } },
+      });
+      await revokeExtensionDeviceSessionsForUserInTransaction(tx, id, 'PASSWORD_RESET');
+    }, { isolationLevel: 'Serializable' });
+    await removeAllSessions(id).catch(() => {
+      request.log.warn({ userId: id }, 'Password reset could not purge cached web sessions');
+    });
     clearAuthContextCache(id);
     return reply.send({ code: 1, msg: '密码已重置' });
   });
@@ -610,8 +654,34 @@ export async function adminRoutes(app: FastifyInstance) {
     } catch (e: any) {
       return reply.status(existing.isSuperAdmin && !actor?.isSuperAdmin ? 403 : 400).send({ code: 0, msg: e.message });
     }
-    await prisma.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
-    clearAuthContextCache(id);
+    let childUserIds: string[] = [];
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { status: 'SUSPENDED', authVersion: { increment: 1 } },
+      });
+      await revokeExtensionDeviceSessionsForUserInTransaction(tx, id, 'ACCOUNT_SUSPENDED');
+      const childUsers = await tx.user.findMany({
+        where: { parentId: id },
+        select: { id: true },
+      });
+      if (childUsers.length > 0) {
+        await tx.user.updateMany({
+          where: { parentId: id },
+          data: { authVersion: { increment: 1 } },
+        });
+      }
+      childUserIds = childUsers.map((child) => child.id);
+      for (const childId of childUserIds) {
+        await revokeExtensionDeviceSessionsForUserInTransaction(tx, childId, 'ACCOUNT_SUSPENDED');
+      }
+    }, { isolationLevel: 'Serializable' });
+    for (const affectedUserId of [id, ...childUserIds]) {
+      clearAuthContextCache(affectedUserId);
+      await removeAllSessions(affectedUserId).catch(() => {
+        request.log.warn({ userId: affectedUserId }, 'Account suspension could not purge cached web sessions');
+      });
+    }
     return reply.send({ code: 1, msg: '用户已禁用' });
   });
 

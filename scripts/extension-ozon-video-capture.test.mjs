@@ -126,4 +126,97 @@ assert.match(captureHookSource, /\[binary\]/, 'page hook should not serialize up
 assert.match(settingsHtml, /videoUploadDiagnosticHarBtn/, 'settings page should expose a video upload diagnostic HAR button');
 assert.match(settingsJs, /exportCapturedHar\('ozon-video-upload'/, 'settings page should export video upload diagnostic mode');
 
+const sensitivePayload = store.normalizeCapturedEntry({
+  pageUrl: 'https://seller.ozon.ru/app/products/5249973343/edit/media?draftToken=page-secret#access_token=fragment-secret',
+  request: {
+    method: 'POST',
+    url: 'https://seller.ozon.ru/api/media/video/upload',
+    headers: [{
+      name: 'referer',
+      value: 'https://seller.ozon.ru/app/products/5249973343/edit/media?draftToken=referer-secret#session=referer-fragment',
+    }],
+    postData: {
+      text: JSON.stringify({
+        upload: {
+          url: 'https://video-bucket.example/video.mp4?X-Amz-Credential=request-credential&X-Amz-Signature=request-signature',
+          token: 'request-token',
+          parts: [{ partNumber: 1, signature: 'part-signature' }],
+        },
+        fileName: 'demo.mp4',
+      }),
+    },
+  },
+  response: {
+    status: 201,
+    headers: [
+      {
+        name: 'location',
+        value: 'https://video-bucket.example/video.mp4?uploadId=secret-upload-id&signature=location-signature#complete',
+      },
+      { name: 'x-request-id', value: 'request-id-1' },
+    ],
+    content: {
+      mimeType: 'application/json',
+      text: JSON.stringify({
+        result: {
+          uploadUrl: 'https://video-bucket.example/video.mp4?credential=response-credential&token=response-url-token',
+          accessToken: 'response-token',
+          credential: { keyId: 'credential-key', secret: 'credential-secret' },
+          videoId: 'video-123',
+        },
+      }),
+    },
+  },
+});
+
+assert.deepEqual(
+  JSON.parse(sensitivePayload.request.postData.text),
+  {
+    upload: {
+      url: 'https://video-bucket.example/video.mp4?X-Amz-Credential=[redacted]&X-Amz-Signature=[redacted]',
+      token: '[redacted]',
+      parts: [{ partNumber: 1, signature: '[redacted]' }],
+    },
+    fileName: 'demo.mp4',
+  },
+  'capture store should recursively redact signed URLs and credential fields in request JSON',
+);
+assert.deepEqual(
+  JSON.parse(sensitivePayload.response.content.text),
+  {
+    result: {
+      uploadUrl: 'https://video-bucket.example/video.mp4?credential=[redacted]&token=[redacted]',
+      accessToken: '[redacted]',
+      credential: '[redacted]',
+      videoId: 'video-123',
+    },
+  },
+  'capture store should recursively redact signed URLs and credential fields in response JSON while preserving diagnostics',
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(sensitivePayload.response.headers)),
+  [
+    {
+      name: 'location',
+      value: 'https://video-bucket.example/video.mp4?uploadId=[redacted]&signature=[redacted]#[redacted]',
+    },
+    { name: 'x-request-id', value: 'request-id-1' },
+  ],
+  'capture store should redact all Location URL query and fragment values while preserving the destination',
+);
+
+assert.equal(
+  sensitivePayload._ozonCalc.pageUrl,
+  'https://seller.ozon.ru/app/products/5249973343/edit/media?draftToken=[redacted]#[redacted]',
+  'capture store should redact page URL query and fragment values',
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(sensitivePayload.request.headers)),
+  [{
+    name: 'referer',
+    value: 'https://seller.ozon.ru/app/products/5249973343/edit/media?draftToken=[redacted]#[redacted]',
+  }],
+  'capture store should redact Referer query and fragment values',
+);
+
 console.log('PASS extension ozon video capture');

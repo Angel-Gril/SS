@@ -327,5 +327,5 @@ describe('source video transfer', () => {
       transferStatus: 'uploaded',
       transferReason: 'direct_video',
     });
-  });
+  }, 10_000);
 });

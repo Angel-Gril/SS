@@ -1,4 +1,13 @@
 (function () {
+  var SS_ERP_MESSAGE_TIMEOUT_MS = 60000;
+  var logisticsDistributionFeature = globalThis.SS_ERP_LOGISTICS_DISTRIBUTION_FEATURE;
+  var logisticsDistributionEnabled = Boolean(
+    logisticsDistributionFeature && logisticsDistributionFeature.enabled === true
+  );
+  var logisticsDistributionFeatureSection = document.getElementById('logisticsDistributionFeatureSection');
+  if (logisticsDistributionFeatureSection) {
+    logisticsDistributionFeatureSection.hidden = !logisticsDistributionEnabled;
+  }
   var sellerCountNode = document.getElementById('sellerCount');
   var officialCountNode = document.getElementById('officialCount');
   var officialSampleCountNode = document.getElementById('officialSampleCount');
@@ -120,16 +129,32 @@
 
   function sendMessage(message) {
     return new Promise(function (resolve) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        settle({
+          ok: false,
+          errorCode: 'runtime_timeout',
+          error: '扩展后台响应超时，操作可能仍在后台执行，请刷新状态后重试。',
+        });
+      }, SS_ERP_MESSAGE_TIMEOUT_MS);
+
+      function settle(value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      }
+
       try {
         chrome.runtime.sendMessage(message, function (response) {
           if (chrome.runtime.lastError) {
-            resolve({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
+            settle({ ok: false, error: formatRuntimeError(chrome.runtime.lastError.message) });
             return;
           }
-          resolve(response || { ok: false, error: '无响应' });
+          settle(response || { ok: false, error: '无响应' });
         });
       } catch (error) {
-        resolve({ ok: false, error: formatRuntimeError(error && error.message ? error.message : String(error)) });
+        settle({ ok: false, error: formatRuntimeError(error && error.message ? error.message : String(error)) });
       }
     });
   }
@@ -785,7 +810,7 @@
   });
 
   on(openSellerBtn, 'click', function () {
-    chrome.tabs.create({ url: 'https://seller.ozon.ru/app/settings/logistics' });
+    chrome.tabs.create({ url: 'https://seller.ozon.ru/app/postings/fbs' });
   });
 
   on(openOfficialBtn, 'click', function () {
@@ -909,6 +934,23 @@
   var erpTokenInput = document.getElementById('erpTokenInput');
   var testErpBtn = document.getElementById('testErpBtn');
   var erpStatusNode = document.getElementById('erpStatus');
+  var logisticsDeploymentInput = document.getElementById('logisticsDeploymentInput');
+  var logisticsPairingCodeInput = document.getElementById('logisticsPairingCodeInput');
+  var logisticsDeviceLabelInput = document.getElementById('logisticsDeviceLabelInput');
+  var pairLogisticsDeviceBtn = document.getElementById('pairLogisticsDeviceBtn');
+  var logisticsAssignmentSelect = document.getElementById('logisticsAssignmentSelect');
+  var syncPublishedLogisticsBtn = document.getElementById('syncPublishedLogisticsBtn');
+  var revokeLogisticsDeviceBtn = document.getElementById('revokeLogisticsDeviceBtn');
+  var logisticsDistributionStatus = document.getElementById('logisticsDistributionStatus');
+  var logisticsCaptureStatus = document.getElementById('logisticsCaptureStatus');
+  var refreshLogisticsCaptureBtn = document.getElementById('refreshLogisticsCaptureBtn');
+  var retryLogisticsCaptureBtn = document.getElementById('retryLogisticsCaptureBtn');
+  var cancelLogisticsCaptureBtn = document.getElementById('cancelLogisticsCaptureBtn');
+  var logisticsBindingProbeStatus = document.getElementById('logisticsBindingProbeStatus');
+  var runLogisticsBindingProbeBtn = document.getElementById('runLogisticsBindingProbeBtn');
+  var currentLogisticsCaptureTaskId = '';
+  var logisticsDeviceIdKey = 'ss-erp:logistics-device-id';
+  var logisticsDeploymentKey = 'ss-erp:logistics-deployment-id';
 
   function loadErpConfig() {
     chrome.storage.local.get(['ss_erp_connection', 'ozon-calc:erp-endpoint', 'ozon-calc:erp-token'], function (data) {
@@ -924,6 +966,314 @@
       }
       if (erpUrlInput && conn.baseUrl) erpUrlInput.value = conn.baseUrl;
       if (erpTokenInput && conn.token) erpTokenInput.value = conn.token;
+    });
+  }
+
+  function renderLogisticsAssignments(assignments, selectedId) {
+    if (!logisticsAssignmentSelect) return;
+    var values = Array.isArray(assignments) ? assignments : [];
+    logisticsAssignmentSelect.textContent = '';
+    var automatic = document.createElement('option');
+    automatic.value = '';
+    automatic.textContent = values.length === 1 ? '自动：' + values[0].warehouseName : '请选择物流作用域';
+    logisticsAssignmentSelect.appendChild(automatic);
+    values.forEach(function (assignment) {
+      var option = document.createElement('option');
+      option.value = String(assignment.assignmentId || '');
+      option.textContent = [
+        assignment.shopName || assignment.shopId,
+        assignment.warehouseName || assignment.warehouseId,
+        assignment.originLabel,
+        '→',
+        assignment.destinationLabel,
+      ].filter(Boolean).join(' · ');
+      logisticsAssignmentSelect.appendChild(option);
+    });
+    if (selectedId && values.some(function (item) { return item.assignmentId === selectedId; })) {
+      logisticsAssignmentSelect.value = selectedId;
+    }
+  }
+
+  function ensureLogisticsDeviceId() {
+    return new Promise(function (resolve, reject) {
+      chrome.storage.local.get([logisticsDeviceIdKey], function (data) {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        var deviceId = String(data[logisticsDeviceIdKey] || '').trim();
+        if (!deviceId) deviceId = crypto.randomUUID();
+        chrome.storage.local.set({ [logisticsDeviceIdKey]: deviceId }, function () {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(deviceId);
+        });
+      });
+    });
+  }
+
+  function loadLogisticsDistributionStatus() {
+    chrome.storage.local.get([logisticsDeploymentKey], function (stored) {
+      if (logisticsDeploymentInput && stored[logisticsDeploymentKey]) {
+        logisticsDeploymentInput.value = stored[logisticsDeploymentKey];
+      }
+      sendMessage({ type: 'ss-erp:logistics-device-status' }).then(function (response) {
+        var state = response && response.ok && response.data;
+        if (!state || state.state !== 'paired') {
+          setStatus(logisticsDistributionStatus, '设备未配对', 'warn');
+          return;
+        }
+        if (logisticsDeploymentInput) logisticsDeploymentInput.value = state.deploymentId || '';
+        setStatus(
+          logisticsDistributionStatus,
+          '已配对 · ' + (state.deploymentId || '') + ' · ' + (state.deviceId || ''),
+          'success'
+        );
+      });
+    });
+  }
+
+  function pairLogisticsDevice() {
+    var baseUrl = String(erpUrlInput && erpUrlInput.value || '').trim().replace(/\/+$/, '');
+    var deploymentId = String(logisticsDeploymentInput && logisticsDeploymentInput.value || '').trim();
+    var code = String(logisticsPairingCodeInput && logisticsPairingCodeInput.value || '').trim();
+    var deviceLabel = String(logisticsDeviceLabelInput && logisticsDeviceLabelInput.value || '').trim()
+      || 'Chrome ' + navigator.platform;
+    if (!baseUrl || !deploymentId || !code) {
+      setStatus(logisticsDistributionStatus, '请填写 ERP 地址、部署标识和配对码', 'error');
+      return Promise.resolve(false);
+    }
+    if (pairLogisticsDeviceBtn) pairLogisticsDeviceBtn.disabled = true;
+    setStatus(logisticsDistributionStatus, '正在配对设备...', 'warn');
+    return ensureLogisticsDeviceId().then(function (deviceId) {
+      return sendMessage({
+        type: 'ss-erp:logistics-device-claim',
+        baseUrl: baseUrl,
+        code: code,
+        deploymentId: deploymentId,
+        deviceId: deviceId,
+        deviceLabel: deviceLabel,
+      });
+    }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsDistributionStatus, '设备配对失败', 'error');
+        return false;
+      }
+      chrome.storage.local.set({ [logisticsDeploymentKey]: deploymentId });
+      if (logisticsPairingCodeInput) logisticsPairingCodeInput.value = '';
+      setStatus(logisticsDistributionStatus, '设备配对成功', 'success');
+      return true;
+    }).catch(function () {
+      setStatus(logisticsDistributionStatus, '设备配对失败', 'error');
+      return false;
+    }).finally(function () {
+      if (pairLogisticsDeviceBtn) pairLogisticsDeviceBtn.disabled = false;
+    });
+  }
+
+  function syncPublishedLogistics() {
+    var baseUrl = String(erpUrlInput && erpUrlInput.value || '').trim().replace(/\/+$/, '');
+    if (!baseUrl) {
+      setStatus(logisticsDistributionStatus, '请先填写 ERP 地址', 'error');
+      return Promise.resolve(false);
+    }
+    if (syncPublishedLogisticsBtn) syncPublishedLogisticsBtn.disabled = true;
+    setStatus(logisticsDistributionStatus, '正在同步已发布物流规则...', 'warn');
+    return sendMessage({
+      type: 'ss-erp:logistics-rules-sync',
+      baseUrl: baseUrl,
+      extensionVersion: chrome.runtime.getManifest().version,
+      assignmentId: logisticsAssignmentSelect ? logisticsAssignmentSelect.value : '',
+    }).then(function (response) {
+      var result = response && response.ok && response.data;
+      if (!result) {
+        setStatus(logisticsDistributionStatus, '物流规则同步失败', 'error');
+        return false;
+      }
+      if (Array.isArray(result.assignments)) {
+        renderLogisticsAssignments(result.assignments, '');
+      } else if (result.assignment) {
+        renderLogisticsAssignments([result.assignment], result.assignment.assignmentId);
+      }
+      if (result.state === 'needs_selection') {
+        setStatus(logisticsDistributionStatus, '请选择物流作用域后重新同步', 'warn');
+        return false;
+      }
+      if (result.state === 'upgrade_required') {
+        setStatus(logisticsDistributionStatus, '扩展版本过低，请先更新', 'error');
+        return false;
+      }
+      if (result.state !== 'active' && result.state !== 'not_modified') {
+        setStatus(logisticsDistributionStatus, '当前作用域暂无可用发布规则', 'warn');
+        return false;
+      }
+      var assignment = result.assignment || {};
+      setStatus(
+        logisticsDistributionStatus,
+        '同步完成 · ' + (assignment.originLabel || '') + ' → ' + (assignment.destinationLabel || ''),
+        'success'
+      );
+      return true;
+    }).catch(function () {
+      setStatus(logisticsDistributionStatus, '物流规则同步失败', 'error');
+      return false;
+    }).finally(function () {
+      if (syncPublishedLogisticsBtn) syncPublishedLogisticsBtn.disabled = false;
+    });
+  }
+
+  function revokeLogisticsDevice() {
+    return sendMessage({ type: 'ss-erp:logistics-device-clear' }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsDistributionStatus, '解除配对失败', 'error');
+        return false;
+      }
+      renderLogisticsAssignments([], '');
+      setStatus(logisticsDistributionStatus, '设备已解除配对', 'warn');
+      return true;
+    });
+  }
+
+  function renderLogisticsBindingProbeState(value) {
+    var state = value && typeof value === 'object' ? value : { state: 'idle' };
+    var stateName = String(state.state || 'idle');
+    var labels = {
+      idle: '没有待验证的店铺或仓库',
+      unpaired: '设备未配对',
+      scope_missing: '设备缺少物流采集权限',
+      pending: '等待当前 Seller 仓库信息',
+      submitted: '验证证据已提交，等待管理员确认',
+      scope_mismatch: '当前设备、店铺或仓库与验证任务不一致',
+      expired: '验证任务已过期，请管理员重新签发',
+      replayed: '验证任务已使用，请管理员检查结果',
+      unavailable: '验证任务不可用',
+      revoked: '设备授权已撤销，请重新配对',
+      retryable: '验证请求暂时失败，可以重试',
+      rejected: '验证证据被服务器拒绝',
+    };
+    var message = labels[stateName] || ('验证状态：' + stateName);
+    if (state.probeId) message += ' · probe ' + String(state.probeId);
+    var tone = stateName === 'submitted' ? 'success'
+      : ['scope_mismatch', 'expired', 'replayed', 'unavailable', 'revoked', 'rejected'].indexOf(stateName) >= 0
+        ? 'error'
+        : stateName === 'idle' ? '' : 'warn';
+    setStatus(logisticsBindingProbeStatus, message, tone);
+  }
+
+  function loadLogisticsBindingProbeStatus() {
+    return sendMessage({ type: 'ss-erp:logistics-binding-probe-status' }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsBindingProbeStatus, '无法读取店铺仓库验证状态', 'error');
+        return null;
+      }
+      renderLogisticsBindingProbeState(response.data);
+      return response.data;
+    });
+  }
+
+  function runLogisticsBindingProbe() {
+    if (runLogisticsBindingProbeBtn) runLogisticsBindingProbeBtn.disabled = true;
+    setStatus(logisticsBindingProbeStatus, '正在验证当前 Seller 店铺与仓库...', 'warn');
+    return sendMessage({
+      type: 'ss-erp:logistics-binding-probe-run',
+      extensionVersion: chrome.runtime.getManifest().version,
+    }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsBindingProbeStatus, '店铺仓库验证失败', 'error');
+        return false;
+      }
+      renderLogisticsBindingProbeState(response.data);
+      return true;
+    }).finally(function () {
+      if (runLogisticsBindingProbeBtn) runLogisticsBindingProbeBtn.disabled = false;
+    });
+  }
+
+  function renderLogisticsCaptureState(value) {
+    var state = value && typeof value === 'object' ? value : { state: 'idle' };
+    var stateName = String(state.state || 'idle');
+    currentLogisticsCaptureTaskId = String(state.taskId || '');
+    var terminal = ['idle', 'uploaded', 'cancelled', 'task_unavailable', 'revoked'].indexOf(stateName) >= 0;
+    if (cancelLogisticsCaptureBtn) {
+      cancelLogisticsCaptureBtn.disabled = !currentLogisticsCaptureTaskId || terminal;
+    }
+    var labels = {
+      idle: '没有待处理采集任务',
+      unpaired: '设备未配对',
+      scope_missing: '设备缺少物流采集权限',
+      waiting_for_provider_inventory: '等待完整 Provider 数据',
+      waiting_for_capture: '等待 Seller / Official 页面数据',
+      collecting: '正在读取 Provider 与发运点',
+      ready_to_upload: '采集完成，正在提交候选',
+      uploaded: '候选已提交，等待 ERP 审核',
+      cancelled: '采集任务已取消',
+      retryable: '采集暂时失败，可以重试',
+      task_unavailable: '采集任务已失效',
+      revoked: '设备授权已撤销',
+      rejected: '采集候选被服务器拒绝',
+      http_error: '采集接口请求失败',
+    };
+    var detail = [];
+    if (currentLogisticsCaptureTaskId) detail.push('task ' + currentLogisticsCaptureTaskId);
+    if (state.candidateId) detail.push('candidate ' + state.candidateId);
+    var message = labels[stateName] || ('采集状态：' + stateName);
+    if (detail.length) message += ' · ' + detail.join(' · ');
+    var tone = stateName === 'uploaded' ? 'success'
+      : ['revoked', 'rejected', 'http_error'].indexOf(stateName) >= 0 ? 'error'
+        : stateName === 'idle' ? '' : 'warn';
+    setStatus(logisticsCaptureStatus, message, tone);
+  }
+
+  function loadLogisticsCaptureStatus() {
+    return sendMessage({ type: 'ss-erp:logistics-capture-status' }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsCaptureStatus, '无法读取物流采集状态', 'error');
+        return null;
+      }
+      renderLogisticsCaptureState(response.data);
+      return response.data;
+    });
+  }
+
+  function runLogisticsCapture(type) {
+    if (refreshLogisticsCaptureBtn) refreshLogisticsCaptureBtn.disabled = true;
+    if (retryLogisticsCaptureBtn) retryLogisticsCaptureBtn.disabled = true;
+    setStatus(logisticsCaptureStatus, type === 'ss-erp:logistics-capture-retry'
+      ? '正在重试物流采集...' : '正在刷新并采集物流数据...', 'warn');
+    return sendMessage({
+      type: type,
+      extensionVersion: chrome.runtime.getManifest().version,
+    }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsCaptureStatus, '物流采集操作失败', 'error');
+        return false;
+      }
+      renderLogisticsCaptureState(response.data);
+      return true;
+    }).finally(function () {
+      if (refreshLogisticsCaptureBtn) refreshLogisticsCaptureBtn.disabled = false;
+      if (retryLogisticsCaptureBtn) retryLogisticsCaptureBtn.disabled = false;
+    });
+  }
+
+  function cancelLogisticsCapture() {
+    if (!currentLogisticsCaptureTaskId) return Promise.resolve(false);
+    if (cancelLogisticsCaptureBtn) cancelLogisticsCaptureBtn.disabled = true;
+    return sendMessage({
+      type: 'ss-erp:logistics-capture-cancel',
+      taskId: currentLogisticsCaptureTaskId,
+      extensionVersion: chrome.runtime.getManifest().version,
+    }).then(function (response) {
+      if (!response || !response.ok) {
+        setStatus(logisticsCaptureStatus, '取消采集任务失败', 'error');
+        return false;
+      }
+      renderLogisticsCaptureState(response.data);
+      return true;
+    }).finally(function () {
+      if (cancelLogisticsCaptureBtn) cancelLogisticsCaptureBtn.disabled = !currentLogisticsCaptureTaskId;
     });
   }
 
@@ -969,7 +1319,20 @@
 
   if (erpUrlInput) erpUrlInput.addEventListener('blur', saveErpConfig);
   if (erpTokenInput) erpTokenInput.addEventListener('blur', saveErpConfig);
+  on(pairLogisticsDeviceBtn, 'click', pairLogisticsDevice);
+  on(syncPublishedLogisticsBtn, 'click', syncPublishedLogistics);
+  on(revokeLogisticsDeviceBtn, 'click', revokeLogisticsDevice);
+  on(runLogisticsBindingProbeBtn, 'click', runLogisticsBindingProbe);
+  on(refreshLogisticsCaptureBtn, 'click', function () { runLogisticsCapture('ss-erp:logistics-capture-refresh'); });
+  on(retryLogisticsCaptureBtn, 'click', function () { runLogisticsCapture('ss-erp:logistics-capture-retry'); });
+  on(cancelLogisticsCaptureBtn, 'click', cancelLogisticsCapture);
   loadErpConfig();
+  if (logisticsDistributionEnabled) {
+  loadLogisticsDistributionStatus();
+  loadLogisticsBindingProbeStatus();
+  loadLogisticsCaptureStatus();
+  window.setInterval(loadLogisticsCaptureStatus, 5000);
+  }
 
   // === Extra Fee Rules ===
   var extraFeeRules = [];

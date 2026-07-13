@@ -3,12 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authRoutes } from '../routes/auth.js';
 
 const mocks = vi.hoisted(() => ({
-  signToken: vi.fn(() => 'legacy-extension-token'),
+  signLegacyExtensionToken: vi.fn(() => 'legacy-extension-token'),
   storeSession: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({
-  signToken: mocks.signToken,
+  signLegacyExtensionToken: mocks.signLegacyExtensionToken,
   storeSession: mocks.storeSession,
   removeSession: vi.fn(),
   removeAllSessions: vi.fn(),
@@ -54,6 +54,7 @@ describe('legacy extension-token cutoff', () => {
   });
 
   it('returns 410 without signing or storing a token after cutoff', async () => {
+    vi.stubEnv('EXTENSION_AUTH_MODE', 'compat');
     vi.stubEnv('AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS', 'false');
     const app = await buildApp();
     try {
@@ -64,14 +65,15 @@ describe('legacy extension-token cutoff', () => {
         code: 0,
         errorCode: 'legacy_extension_token_disabled',
       });
-      expect(mocks.signToken).not.toHaveBeenCalled();
+      expect(mocks.signLegacyExtensionToken).not.toHaveBeenCalled();
       expect(mocks.storeSession).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }
   });
 
-  it('keeps issuance available while the migration flag is explicitly true', async () => {
+  it('keeps issuance available only in explicit compat migration mode', async () => {
+    vi.stubEnv('EXTENSION_AUTH_MODE', 'compat');
     vi.stubEnv('AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS', 'true');
     const app = await buildApp();
     try {
@@ -79,8 +81,25 @@ describe('legacy extension-token cutoff', () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ code: 1, data: { token: 'legacy-extension-token' } });
-      expect(mocks.signToken).toHaveBeenCalledOnce();
+      expect(mocks.signLegacyExtensionToken).toHaveBeenCalledWith({
+        userId: 'user-1', role: 'USER',
+      }, '30d');
       expect(mocks.storeSession).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 410 in device-only mode even if the legacy flag is true', async () => {
+    vi.stubEnv('EXTENSION_AUTH_MODE', 'device-only');
+    vi.stubEnv('AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS', 'true');
+    const app = await buildApp();
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/auth/extension-token' });
+
+      expect(response.statusCode).toBe(410);
+      expect(mocks.signLegacyExtensionToken).not.toHaveBeenCalled();
+      expect(mocks.storeSession).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

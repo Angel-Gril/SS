@@ -1,5 +1,9 @@
 # SS ERP 扩展开发与整合计划
 
+Ozon 物流规则的管理员 onboarding、设备配对、ETag 分发、回滚和两设备 20 次真实验收，统一按
+[Ozon 物流规则运维与验收手册](./ozon-logistics-rule-operations.md)执行。自动化测试通过不代表真实试点已经通过。
+
+
 本文是当前版 Chrome 扩展的开发主文档。历史分析仍保存在 `docs/archive/`，但后续扩展整合、核价、采集和货源比价的判断以本文为准。
 
 ## 当前结论

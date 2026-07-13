@@ -24,7 +24,7 @@ function getDefaultPath(role: string): string {
 /** 检查当前路径是否对该角色禁止访问 */
 function isPathForbidden(pathname: string, role: string, isSuperAdmin?: boolean): boolean {
   if (role === 'ADMIN') {
-    const superAdminOnly = ['/admin/settings', '/admin/integrations', '/admin/security', '/admin/ops'];
+    const superAdminOnly = ['/admin/settings', '/admin/integrations', '/admin/security', '/admin/ops', '/admin/logistics-rules'];
     return superAdminOnly.some((path) => pathname === path || pathname.startsWith(`${path}/`)) && !isSuperAdmin;
   }
 
@@ -57,6 +57,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -95,6 +96,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [user, pathname, router]);
 
+  useEffect(() => {
+    setMobileNavigationOpen(false);
+  }, [pathname]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -116,16 +121,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     );
   }
 
+  function toggleNavigation() {
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setMobileNavigationOpen((open) => !open);
+      return;
+    }
+    setCollapsed((value) => !value);
+  }
+
   return (
-    <div className="min-h-screen flex bg-background">
-      <Sidebar collapsed={collapsed} pathname={pathname} role={effRole} isSuperAdmin={user.isSuperAdmin} />
+    <div className="relative min-h-screen flex overflow-x-hidden bg-background">
+      <Sidebar
+        collapsed={collapsed}
+        pathname={pathname}
+        role={effRole}
+        isSuperAdmin={user.isSuperAdmin}
+        mobileOpen={mobileNavigationOpen}
+        onMobileClose={() => setMobileNavigationOpen(false)}
+      />
+      {mobileNavigationOpen && (
+        <button
+          type="button"
+          aria-label="关闭导航菜单"
+          className="fixed inset-0 z-40 bg-black/35 md:hidden"
+          onClick={() => setMobileNavigationOpen(false)}
+        />
+      )}
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar
           user={user}
           collapsed={collapsed}
-          onToggle={() => setCollapsed(!collapsed)}
+          onToggle={toggleNavigation}
         />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-3 sm:p-4 lg:p-6">{children}</main>
       </div>
       <AnnouncementPopup />
     </div>

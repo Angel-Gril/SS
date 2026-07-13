@@ -1,3 +1,5 @@
+BEGIN;
+
 -- CreateEnum
 CREATE TYPE "LogisticsChannelType" AS ENUM ('TENANT', 'PUBLIC');
 
@@ -709,3 +711,5 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER "logistics_rule_revision_content_immutable"
   BEFORE UPDATE ON "logistics_rule_revisions"
   FOR EACH ROW EXECUTE FUNCTION "protect_logistics_revision_content"();
+
+COMMIT;

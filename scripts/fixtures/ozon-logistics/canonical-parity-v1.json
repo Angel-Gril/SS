@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "z": 2,
+    "a": 1
+  },
+  "providers": [
+    {
+      "providerId": "ä",
+      "name": "accent"
+    },
+    {
+      "providerId": "z",
+      "name": "ascii"
+    }
+  ],
+  "services": [
+    {
+      "stableServiceKey": "provider-b|b|global|weight|no-battery",
+      "priceMinor": 200
+    },
+    {
+      "stableServiceKey": "provider-a|a|global|weight|no-battery",
+      "priceMinor": 100
+    }
+  ],
+  "money": {
+    "baseFee": "1.5",
+    "declaredPriceMinor": 300000
+  }
+}

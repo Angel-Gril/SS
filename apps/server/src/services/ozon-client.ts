@@ -806,6 +806,72 @@ export interface OzonWarehouse {
   phone?: string;
   address?: string;
   address_coordinates?: { latitude: number; longitude: number };
+  address_info?: {
+    address?: string;
+    latitude?: number;
+    longitude?: number;
+    utc?: string;
+  };
+}
+
+export function getOzonWarehouseCoordinates(
+  warehouse: Pick<OzonWarehouse, 'address_coordinates' | 'address_info'>,
+): { latitude: number | null; longitude: number | null } {
+  const latitude = warehouse.address_coordinates?.latitude ?? warehouse.address_info?.latitude;
+  const longitude = warehouse.address_coordinates?.longitude ?? warehouse.address_info?.longitude;
+  return {
+    latitude: Number.isFinite(latitude) ? Number(latitude) : null,
+    longitude: Number.isFinite(longitude) ? Number(longitude) : null,
+  };
+}
+
+export function normalizeOzonWarehouseAddressEvidence(
+  warehouse: Pick<OzonWarehouse, 'warehouse_id' | 'address_coordinates' | 'address_info'>,
+  expectedPlatformWarehouseId: string | number,
+): { countryCode: 'CN'; city: string; zipCode?: string } | null | undefined {
+  if (String(warehouse.warehouse_id) !== String(expectedPlatformWarehouseId)) return null;
+
+  const address = String(warehouse.address_info?.address || '').trim();
+  if (!address) return undefined;
+  const parts = address.split(',').map((part) => part.trim()).filter(Boolean);
+  const normalizedCountry = String(parts[0] || '').toLowerCase().replace(/[\s_-]+/g, '');
+  const countryMatches =
+    ['china', 'cn', '中国', '中华人民共和国'].includes(normalizedCountry);
+  if (!countryMatches) return undefined;
+
+  const zipCode = /^\d{6}$/.test(parts[1] || '') ? parts[1] : undefined;
+  const city = parts[zipCode ? 3 : 2];
+  if (!city) return undefined;
+  const normalizedCity = city.toLowerCase().replace(/[\s_-]+/g, '');
+  const cityIsXiamen =
+    ['xiamen', 'xiamencity', '厦门', '厦门市'].includes(normalizedCity);
+
+  const coordinateSources = [warehouse.address_info, warehouse.address_coordinates];
+  let coordinatesProvided = false;
+  for (const source of coordinateSources) {
+    if (!source) continue;
+    const hasLatitude = source.latitude !== null && source.latitude !== undefined;
+    const hasLongitude = source.longitude !== null && source.longitude !== undefined;
+    if (hasLatitude !== hasLongitude) return undefined;
+    if (!hasLatitude) continue;
+    coordinatesProvided = true;
+    const latitude = Number(source.latitude);
+    const longitude = Number(source.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return undefined;
+    const sourceMatchesXiamen =
+      latitude >= 24.35 &&
+      latitude <= 24.95 &&
+      longitude >= 117.8 &&
+      longitude <= 118.5;
+    if (sourceMatchesXiamen !== cityIsXiamen) return null;
+  }
+  if (!coordinatesProvided) return undefined;
+
+  return {
+    countryCode: 'CN',
+    city,
+    ...(zipCode ? { zipCode } : {}),
+  };
 }
 
 export interface OzonFboWarehouse {

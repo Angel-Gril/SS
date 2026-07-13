@@ -288,3 +288,382 @@
     resolveBestQuote: resolveBestQuote,
   };
 }(typeof window !== 'undefined' ? window : globalThis));
+
+(function (root) {
+  'use strict';
+
+  var SCOPE_FIELDS = [
+    ['deploymentId', ['deploymentId']],
+    ['tenantSubject', ['tenantSubject', 'tenantId']],
+    ['shopId', ['shopId']],
+    ['ozonCompanyId', ['ozonCompanyId', 'companyId']],
+    ['warehouseId', ['warehouseId', 'erpWarehouseId']],
+    ['originCountryUid', ['originCountryUid']],
+    ['originCityUid', ['originCityUid']],
+    ['destinationCountryUid', ['destinationCountryUid']],
+    ['destinationLocationUid', ['destinationLocationUid']],
+    ['assignmentId', ['assignmentId']],
+    ['schemaMajor', ['schemaMajor']],
+  ];
+  var TERMINAL_REMOTE_STATES = new Set([
+    'authorization_expired',
+    'expired',
+    'revoked',
+    'upgrade_required',
+  ]);
+
+  function clone(value) {
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function text(value) {
+    return String(value == null ? '' : value).trim();
+  }
+
+  function fieldValue(value, candidates) {
+    if (!value || typeof value !== 'object') return '';
+    for (var index = 0; index < candidates.length; index += 1) {
+      var candidate = candidates[index];
+      if (value[candidate] != null && text(value[candidate])) return text(value[candidate]);
+    }
+    return '';
+  }
+
+  function scopeMatches(candidate, expected, fields) {
+    if (!candidate || !expected) return false;
+    var selected = fields || SCOPE_FIELDS;
+    return selected.every(function (definition) {
+      var expectedValue = fieldValue(expected, [definition[0]]);
+      var actualValue = fieldValue(candidate, definition[1]);
+      return Boolean(expectedValue) && actualValue === expectedValue;
+    });
+  }
+
+  function assertScopedRelease(envelope, expectedScope) {
+    if (!envelope || typeof envelope !== 'object') throw new Error('Remote release is unavailable');
+    if (text(envelope.deploymentId) !== text(expectedScope.deploymentId)) {
+      throw new Error('Remote release deployment scope mismatch');
+    }
+    if (text(envelope.assignmentId) !== text(expectedScope.assignmentId)) {
+      throw new Error('Remote release assignment scope mismatch');
+    }
+    var frozen = envelope.payload;
+    var revision = frozen && frozen.revisionPayload;
+    var frozenScopeFields = SCOPE_FIELDS.filter(function (definition) {
+      return definition[0] !== 'deploymentId'
+        && definition[0] !== 'assignmentId'
+        && definition[0] !== 'schemaMajor';
+    });
+    if (!frozen || !scopeMatches(frozen.scope, expectedScope, frozenScopeFields)) {
+      throw new Error('Remote release frozen scope mismatch');
+    }
+    if (!revision || !scopeMatches(revision.scope, expectedScope)) {
+      throw new Error('Remote release revision scope mismatch');
+    }
+    var destination = frozen.manifest && frozen.manifest.destination;
+    if (
+      !destination
+      || text(destination.destinationCountryUid) !== text(expectedScope.destinationCountryUid)
+      || text(destination.destinationLocationUid) !== text(expectedScope.destinationLocationUid)
+    ) {
+      throw new Error('Remote release destination scope mismatch');
+    }
+    return { frozen: frozen, revision: revision };
+  }
+
+  function scopedPreferenceSnapshot(input, expectedScope) {
+    if (!input || typeof input !== 'object' || !scopeMatches(input.scope, expectedScope)) {
+      return null;
+    }
+    return input;
+  }
+
+  function eligibleServiceKeys(revision, frozen, expectedScope, requireLocalDropoff) {
+    var services = new Map((revision.services || []).map(function (item) {
+      return [text(item.stableServiceKey), item];
+    }));
+    var formulas = new Map((revision.formulas || []).map(function (item) {
+      return [text(item.stableServiceKey), item];
+    }));
+    var bindings = new Set((frozen.deliveryMethodBindings || []).map(function (item) {
+      return text(item.stableServiceKey);
+    }).filter(Boolean));
+    var destinationEvidence = new Set((revision.destinationEvidence || [])
+      .filter(function (item) {
+        return text(item.destinationCountryUid) === text(expectedScope.destinationCountryUid)
+          && text(item.destinationLocationUid) === text(expectedScope.destinationLocationUid);
+      })
+      .map(function (item) { return text(item.stableServiceKey); }));
+    var available = new Set();
+    (revision.cityAvailabilityOverlays || []).forEach(function (overlay) {
+      if (
+        !overlay
+        || text(overlay.origin && overlay.origin.countryUid) !== text(expectedScope.originCountryUid)
+        || text(overlay.origin && overlay.origin.cityUid) !== text(expectedScope.originCityUid)
+        || text(overlay.destination && overlay.destination.countryUid)
+          !== text(expectedScope.destinationCountryUid)
+        || text(overlay.destination && overlay.destination.locationUid)
+          !== text(expectedScope.destinationLocationUid)
+      ) return;
+      (overlay.services || []).forEach(function (item) {
+        var hasRoute = Array.isArray(item.clusterDeliverySpeeds)
+          && item.clusterDeliverySpeeds.length > 0;
+        if (hasRoute && (!requireLocalDropoff || item.isDropOff === true)) {
+          available.add(text(item.stableServiceKey));
+        }
+      });
+    });
+    var releaseSelection = frozen.manifest && Array.isArray(frozen.manifest.selectedServiceKeys)
+      ? frozen.manifest.selectedServiceKeys
+      : revision.selectedServiceKeys || [];
+    return releaseSelection.map(text).filter(function (stableServiceKey, index, values) {
+      return stableServiceKey
+        && values.indexOf(stableServiceKey) === index
+        && services.has(stableServiceKey)
+        && formulas.has(stableServiceKey)
+        && bindings.has(stableServiceKey)
+        && destinationEvidence.has(stableServiceKey)
+        && available.has(stableServiceKey);
+    });
+  }
+
+  function buildRemoteSnapshot(envelope, expectedScope, preferences, requireLocalDropoff) {
+    var parsed = assertScopedRelease(envelope, expectedScope);
+    var frozen = parsed.frozen;
+    var revision = parsed.revision;
+    var eligibleKeys = eligibleServiceKeys(
+      revision,
+      frozen,
+      expectedScope,
+      Boolean(requireLocalDropoff),
+    );
+    var eligible = new Set(eligibleKeys);
+    var serviceMap = new Map((revision.services || []).map(function (item) {
+      return [text(item.stableServiceKey), item];
+    }));
+    var formulaMap = new Map((revision.formulas || []).map(function (item) {
+      return [text(item.stableServiceKey), item];
+    }));
+    var defaultKeys = frozen.manifest && Array.isArray(frozen.manifest.defaultServiceKeys)
+      ? frozen.manifest.defaultServiceKeys.map(text)
+      : (revision.defaultServiceKeys || []).map(text);
+    var preferredKeys = preferences
+      && preferences.userConfig
+      && Array.isArray(preferences.userConfig.selectedServiceIds)
+      ? preferences.userConfig.selectedServiceIds.map(text)
+      : defaultKeys;
+    var selectedServiceIds = preferredKeys.filter(function (key, index, values) {
+      return eligible.has(key) && values.indexOf(key) === index;
+    });
+    var catalogServices = eligibleKeys.map(function (key) {
+      var identity = serviceMap.get(key);
+      var formula = formulaMap.get(key).calculationRule;
+      return {
+        id: key,
+        carrierId: text(identity.providerId),
+        providerId: text(identity.providerId),
+        templateId: key,
+        carrierName: text(formula.carrierName) || text(identity.providerId),
+        serviceName: text(formula.displayName) || text(identity.normalizedDescription),
+        displayName: text(formula.displayName) || text(identity.normalizedDescription),
+        deliveryMode: text(identity.deliveryVariant),
+        batteryMode: text(identity.batteryMode),
+        tags: [],
+        priority: Number(formula.priority) || 9999,
+        note: text(formula.conditionNote),
+      };
+    });
+    var rawRules = eligibleKeys.map(function (key) {
+      return formulaMap.get(key).calculationRule;
+    });
+    var engine = root.OZON_CALC_RULE_ENGINE;
+    var normalizedRules = engine && typeof engine.normalizeRulePayload === 'function'
+      ? engine.normalizeRulePayload({ services: rawRules }).services
+      : rawRules;
+    var resolutionMode = preferences
+      && preferences.userConfig
+      && preferences.userConfig.resolutionMode === 'priority'
+      ? 'priority'
+      : 'lowest_cost';
+    var snapshot = {
+      schemaVersion: 'ozon-calculator/config-v1',
+      userConfig: {
+        selectedServiceIds: selectedServiceIds,
+        resolutionMode: resolutionMode,
+      },
+      formState: clone(preferences && preferences.formState || {}),
+      catalogSnapshot: {
+        metadata: {
+          source: 'erp_release',
+          sourceLabel: 'ERP published logistics release',
+          syncedAt: new Date().toISOString(),
+          status: 'published',
+          releaseId: text(envelope.releaseId),
+          releaseSequence: Number(envelope.releaseSequence),
+        },
+        services: catalogServices,
+      },
+      ruleSnapshot: {
+        metadata: {
+          source: 'erp_release',
+          releaseId: text(envelope.releaseId),
+          releaseSequence: Number(envelope.releaseSequence),
+        },
+        services: normalizedRules,
+      },
+    };
+    return {
+      snapshot: snapshot,
+      officialSnapshot: {
+        source: 'erp_release',
+        scope: clone(expectedScope),
+        samples: clone(revision.officialSamples || []),
+        releaseId: text(envelope.releaseId),
+        releaseSequence: Number(envelope.releaseSequence),
+      },
+      eligibleKeys: eligibleKeys,
+      selectedServiceIds: selectedServiceIds,
+    };
+  }
+
+  function scopedLocalFallback(localFallback, expectedScope) {
+    if (!localFallback || typeof localFallback !== 'object') return null;
+    var fallbackScope = localFallback.scope || localFallback.logisticsScope;
+    if (!scopeMatches(fallbackScope, expectedScope)) return null;
+    var snapshot = localFallback.snapshot || localFallback;
+    if (!snapshot.userConfig || !snapshot.catalogSnapshot || !snapshot.ruleSnapshot) return null;
+    return snapshot;
+  }
+
+  function buildCalculatorState(input) {
+    input = input && typeof input === 'object' ? input : {};
+    var expectedScope = input.expectedScope;
+    if (!scopeMatches(expectedScope, expectedScope)) {
+      throw new Error('Complete calculator scope is required');
+    }
+    var usable = input.usable && typeof input.usable === 'object'
+      ? input.usable
+      : { state: 'no_config', quoteAllowed: false, bundle: null };
+    var state = text(usable.state) || 'no_config';
+    if (usable.quoteAllowed === true && usable.bundle) {
+      var preferences = scopedPreferenceSnapshot(input.localPreferences, expectedScope);
+      var remote = buildRemoteSnapshot(
+        usable.bundle,
+        expectedScope,
+        preferences,
+        input.requireLocalDropoff,
+      );
+      var quoteAllowed = remote.selectedServiceIds.length > 0;
+      return {
+        schemaVersion: 'ozon-logistics/calculator-state-v1',
+        state: quoteAllowed ? state : 'no_selected_services',
+        source: 'remote',
+        quoteAllowed: quoteAllowed,
+        scope: clone(expectedScope),
+        releaseId: text(usable.bundle.releaseId),
+        releaseSequence: Number(usable.bundle.releaseSequence),
+        authorizationValidUntil: text(usable.authorizationValidUntil) || null,
+        validUntil: text(usable.validUntil || usable.bundle.validUntil) || null,
+        staleUntil: text(usable.staleUntil || usable.bundle.staleUntil) || null,
+        snapshot: remote.snapshot,
+        officialSnapshot: remote.officialSnapshot,
+      };
+    }
+    if (!TERMINAL_REMOTE_STATES.has(state)) {
+      var fallback = scopedLocalFallback(input.localFallback, expectedScope);
+      if (fallback) {
+        return {
+          schemaVersion: 'ozon-logistics/calculator-state-v1',
+          state: 'local_fallback',
+          source: 'local_fallback',
+          quoteAllowed: true,
+          scope: clone(expectedScope),
+          releaseId: null,
+          releaseSequence: null,
+          authorizationValidUntil: text(usable.authorizationValidUntil) || null,
+          validUntil: null,
+          staleUntil: null,
+          snapshot: clone(fallback),
+          officialSnapshot: null,
+        };
+      }
+    }
+    return {
+      schemaVersion: 'ozon-logistics/calculator-state-v1',
+      state: state,
+      source: 'none',
+      quoteAllowed: false,
+      scope: clone(expectedScope),
+      releaseId: null,
+      releaseSequence: null,
+      authorizationValidUntil: text(usable.authorizationValidUntil) || null,
+      validUntil: text(usable.validUntil) || null,
+      staleUntil: text(usable.staleUntil) || null,
+      snapshot: null,
+      officialSnapshot: null,
+    };
+  }
+
+  function numberEqual(left, right) {
+    return Number.isFinite(Number(left)) && Number(left) === Number(right);
+  }
+
+  function fingerprintMatches(sample, input, scope) {
+    var fingerprint = sample && sample.fingerprint;
+    if (!fingerprint) return false;
+    var weight = fingerprint.package && fingerprint.package.weight;
+    var dimensions = fingerprint.package && fingerprint.package.dimensions;
+    var weightG = weight && weight.unit === 'kg' ? Number(weight.value) * 1000 : Number(weight && weight.value);
+    var dimensionFactor = dimensions && dimensions.unit === 'cm' ? 10 : 1;
+    var declaredPriceMinor = input.declaredPriceMinor != null
+      ? Number(input.declaredPriceMinor)
+      : Math.round(Number(input.priceRMB != null ? input.priceRMB : input.priceCNY) * 100);
+    var batteryInput = typeof input.hasBattery === 'boolean' ? input.hasBattery : null;
+    var currency = text(input.currency || input.priceCurrency || 'CNY').toUpperCase();
+    return text(fingerprint.origin && fingerprint.origin.countryUid) === text(scope.originCountryUid)
+      && text(fingerprint.origin && fingerprint.origin.cityUid) === text(scope.originCityUid)
+      && text(fingerprint.destination && fingerprint.destination.countryUid)
+        === text(scope.destinationCountryUid)
+      && text(fingerprint.destination && fingerprint.destination.locationUid)
+        === text(scope.destinationLocationUid)
+      && text(fingerprint.currency).toUpperCase() === currency
+      && Number(fingerprint.declaredPriceMinor) === declaredPriceMinor
+      && numberEqual(weightG, input.weightG)
+      && numberEqual(Number(dimensions && dimensions.length) * dimensionFactor, Number(input.lenCm) * 10)
+      && numberEqual(Number(dimensions && dimensions.width) * dimensionFactor, Number(input.widCm) * 10)
+      && numberEqual(Number(dimensions && dimensions.height) * dimensionFactor, Number(input.hgtCm) * 10)
+      && fingerprint.batteryInput === batteryInput;
+  }
+
+  function attachExactOfficialSample(quote, officialSnapshot, input) {
+    var result = Object.assign({}, quote, { officialSampleStatus: 'unavailable' });
+    var scope = officialSnapshot && officialSnapshot.scope;
+    if (!scope || !input || typeof input !== 'object') return result;
+    if (input.logisticsScope && !scopeMatches(input.logisticsScope, scope)) return result;
+    var samples = Array.isArray(officialSnapshot.samples) ? officialSnapshot.samples : [];
+    var matchingSamples = samples.filter(function (sample) {
+      return fingerprintMatches(sample, input, scope);
+    });
+    if (matchingSamples.length !== 1) return result;
+    var tariffs = Array.isArray(matchingSamples[0].tariffs) ? matchingSamples[0].tariffs : [];
+    var matches = tariffs.filter(function (tariff) {
+      return text(tariff.stableServiceKey) === text(quote.serviceId)
+        && (!quote.providerId || text(tariff.providerId) === text(quote.providerId));
+    });
+    if (matches.length !== 1 || !Number.isSafeInteger(Number(matches[0].priceMinor))) return result;
+    var officialPrice = Number(matches[0].priceMinor) / 100;
+    return Object.assign({}, quote, {
+      officialSampleStatus: 'exact',
+      officialSamplePrice: officialPrice,
+      officialSampleDiff: Number(quote.shippingCost) - officialPrice,
+      officialWeightType: matches[0].weightType,
+      officialFingerprintKey: matchingSamples[0].fingerprintKey || null,
+    });
+  }
+
+  root.OZON_CALC_LOGISTICS_RELEASE_ADAPTER = {
+    attachExactOfficialSample: attachExactOfficialSample,
+    buildCalculatorState: buildCalculatorState,
+    scopeMatches: scopeMatches,
+  };
+})(typeof window !== 'undefined' ? window : globalThis);

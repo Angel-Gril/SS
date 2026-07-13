@@ -99,18 +99,67 @@
 
   function redactUrlQueryValues(url) {
     var text = toText(url).trim();
-    if (!text || text.indexOf('?') < 0) return text;
+    if (!text || (text.indexOf('?') < 0 && text.indexOf('#') < 0)) return text;
     try {
       var isRelative = text.charAt(0) === '/';
       var parsed = new URL(text, isRelative ? 'https://seller.ozon.ru' : undefined);
       parsed.searchParams.forEach(function (_value, key) {
         parsed.searchParams.set(key, '[redacted]');
       });
+      if (parsed.hash) parsed.hash = '[redacted]';
       return isRelative
         ? parsed.pathname + parsed.search + parsed.hash
         : parsed.toString();
     } catch (error) {
-      return text.replace(/([?&][^=&#]+)=([^&#]*)/g, '$1=[redacted]');
+      return text
+        .replace(/([?&][^=&#]+)=([^&#]*)/g, '$1=[redacted]')
+        .replace(/#.*$/, '#[redacted]');
+    }
+  }
+
+  var SENSITIVE_JSON_KEY_MARKERS = [
+    'token',
+    'signature',
+    'credential',
+    'secret',
+    'authorization',
+    'password',
+    'accesskey',
+    'apikey',
+    'policy',
+  ];
+
+  function isSensitiveJsonKey(key) {
+    var normalized = toText(key).toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (var index = 0; index < SENSITIVE_JSON_KEY_MARKERS.length; index += 1) {
+      if (normalized.indexOf(SENSITIVE_JSON_KEY_MARKERS[index]) >= 0) return true;
+    }
+    return false;
+  }
+
+  function redactStructuredJson(value) {
+    if (Array.isArray(value)) {
+      return value.map(redactStructuredJson);
+    }
+    if (value && typeof value === 'object') {
+      var out = {};
+      Object.keys(value).forEach(function (key) {
+        out[key] = isSensitiveJsonKey(key) ? '[redacted]' : redactStructuredJson(value[key]);
+      });
+      return out;
+    }
+    if (typeof value === 'string' && value.indexOf('?') >= 0 && (/^https?:\/\//i.test(value) || /^\/[^/]/.test(value))) {
+      return redactUrlQueryValues(value);
+    }
+    return value;
+  }
+
+  function redactJsonText(rawText) {
+    var text = toText(rawText);
+    try {
+      return JSON.stringify(redactStructuredJson(JSON.parse(text)));
+    } catch (error) {
+      return text;
     }
   }
 
@@ -194,7 +243,12 @@
     function add(name, value) {
       var headerName = toText(name).trim().toLowerCase();
       if (!headerName || !allowedMap[headerName]) return;
-      out.push({ name: headerName, value: toText(value).slice(0, 500) });
+      var headerValue = toText(value);
+      if ((kind === 'response' && headerName === 'location')
+        || (kind === 'request' && headerName === 'referer')) {
+        headerValue = redactUrlQueryValues(headerValue);
+      }
+      out.push({ name: headerName, value: headerValue.slice(0, 500) });
     }
 
     if (!rawHeaders) return out;
@@ -224,6 +278,7 @@
     var url = toText(rawRequest.url).trim();
     var endpoint = detectSupportedEndpoint(url, rawRequest, raw.pageUrl);
     if (!endpoint) return null;
+    var redactSensitiveJson = endpoint.mode === 'ozon-video-upload';
 
     var request = {
       method: toText(rawRequest.method).trim().toUpperCase() || 'GET',
@@ -232,9 +287,12 @@
     var requestHeaders = normalizeHeaders(rawRequest.headers, 'request');
     if (requestHeaders.length) request.headers = requestHeaders;
     var postData = normalizePostData(rawRequest.postData);
+    if (postData && redactSensitiveJson) postData.text = redactJsonText(postData.text);
     if (postData) request.postData = postData;
 
     var responseHeaders = normalizeHeaders(rawResponse.headers, 'response');
+    var responseContent = normalizeResponseContent(rawResponse.content);
+    if (redactSensitiveJson) responseContent.text = redactJsonText(responseContent.text);
 
     return {
       startedDateTime: safeIsoDate(raw.startedDateTime || raw.capturedAt),
@@ -242,12 +300,12 @@
       response: {
         status: Number(rawResponse.status) || 0,
         ...(responseHeaders.length ? { headers: responseHeaders } : {}),
-        content: normalizeResponseContent(rawResponse.content),
+        content: responseContent,
       },
       _ozonCalc: {
         mode: endpoint.mode,
         source: endpoint.source,
-        pageUrl: toText(raw.pageUrl),
+        pageUrl: redactUrlQueryValues(raw.pageUrl),
         capturedAt: safeIsoDate(raw.capturedAt || raw.startedDateTime),
       },
     };
@@ -283,8 +341,18 @@
   }
 
   function buildHarPayload(entries, mode) {
+    var safeEntries = (Array.isArray(entries) ? entries : []).map(function (entry) {
+      var meta = captureMeta(entry);
+      return normalizeCapturedEntry({
+        startedDateTime: entry && entry.startedDateTime,
+        capturedAt: meta.capturedAt,
+        pageUrl: meta.pageUrl,
+        request: entry && entry.request,
+        response: entry && entry.response,
+      });
+    }).filter(Boolean);
     var normalizedMode = toText(mode).trim().toLowerCase();
-    var filtered = (Array.isArray(entries) ? entries : []).filter(function (entry) {
+    var filtered = safeEntries.filter(function (entry) {
       if (!normalizedMode || normalizedMode === 'all') return true;
       if (normalizedMode === 'seller') {
         var sellerMeta = captureMeta(entry);

@@ -129,9 +129,8 @@ test('ERP topbar shows a stable account identifier when nicknames are duplicated
   );
 });
 
-test('one-click extension binding validates the token and shows the bound ERP account', () => {
+test('extension-owned legacy import validates the token and returns the bound ERP account', () => {
   const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
-  const dialog = fs.readFileSync('apps/web/src/components/extension-token-dialog.tsx', 'utf8');
 
   assert.match(
     serviceWorker,
@@ -141,17 +140,27 @@ test('one-click extension binding validates the token and shows the bound ERP ac
   assert.match(
     serviceWorker,
     /sendResponse\(\{[\s\S]*user:/,
-    'endpoint-save should return the bound user identity to the ERP page',
+    'endpoint-save should return the bound user identity to the extension-owned import page',
+  );
+});
+
+test('ERP extension dialog provisions a scoped device pairing code', () => {
+  const dialog = fs.readFileSync('apps/web/src/components/extension-token-dialog.tsx', 'utf8');
+
+  assert.match(
+    dialog,
+    /\/api\/extension-device\/pairing-codes/,
+    'extension dialog should create a server-scoped device pairing code',
   );
   assert.match(
     dialog,
-    /formatExtensionBoundUserLabel/,
-    'extension token dialog should format the bound account returned by the extension',
+    /shopIds:\s*selectedShopIds/,
+    'pairing code should be scoped to the selected Ozon shops',
   );
   assert.match(
     dialog,
-    /response\.user/,
-    'extension token dialog should display the account actually bound in the extension',
+    /pairing\.deploymentId[\s\S]*pairing\.code/,
+    'pairing instructions should display the deployment id and one-time code',
   );
 });
 

@@ -12,7 +12,11 @@ const mocks = vi.hoisted(() => ({
   signToken: vi.fn(() => 'signed-token'),
   storeSession: vi.fn(),
   setAuthCookie: vi.fn(),
-  removeAllSessions: vi.fn(),
+  removeAllSessions: vi.fn(async () => undefined),
+  clearAuthContextCache: vi.fn(),
+  revokeExtensionDeviceSessionsForUser: vi.fn(),
+  revokeExtensionDeviceSessionsForUserInTransaction: vi.fn(),
+  transaction: vi.fn(),
   comparePassword: vi.fn(async () => true),
   hashPassword: vi.fn(async () => 'new-password-hash'),
 }));
@@ -33,6 +37,7 @@ vi.mock('../lib/prisma.js', () => ({
       create: vi.fn(),
       update: mocks.userUpdate,
     },
+    $transaction: mocks.transaction,
   },
 }));
 
@@ -81,6 +86,12 @@ vi.mock('../lib/auth.js', () => ({
   extractToken: vi.fn(),
   setAuthCookie: mocks.setAuthCookie,
   clearAuthCookie: vi.fn(),
+  clearAuthContextCache: mocks.clearAuthContextCache,
+}));
+vi.mock('../services/extension-device-session-prisma.js', () => ({
+  revokeExtensionDeviceSessionsForUser: mocks.revokeExtensionDeviceSessionsForUser,
+  revokeExtensionDeviceSessionsForUserInTransaction:
+    mocks.revokeExtensionDeviceSessionsForUserInTransaction,
 }));
 
 const activeUser = {
@@ -90,6 +101,7 @@ const activeUser = {
   nickname: '测试用户',
   avatar: null,
   role: 'USER',
+  authVersion: 0,
   status: 'ACTIVE',
   balance: { toString: () => '0' },
 };
@@ -110,6 +122,9 @@ describe('authentication session choices', () => {
     mocks.verifyHumanChallenge.mockResolvedValue(true);
     mocks.verifySmsCode.mockResolvedValue(true);
     mocks.comparePassword.mockResolvedValue(true);
+    mocks.transaction.mockImplementation(async (operation: (tx: unknown) => Promise<unknown>) =>
+      operation({ user: { update: mocks.userUpdate } }),
+    );
   });
 
   it('uses a persistent seven-day cookie only when rememberMe is selected', async () => {
@@ -122,7 +137,7 @@ describe('authentication session choices', () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(mocks.signToken).toHaveBeenCalledWith({ userId: activeUser.id, role: activeUser.role }, '7d');
+      expect(mocks.signToken).toHaveBeenCalledWith({ userId: activeUser.id, role: activeUser.role, authVersion: 0 }, '7d');
       expect(mocks.storeSession).toHaveBeenCalledWith(activeUser.id, 'signed-token', 604800);
       expect(mocks.setAuthCookie.mock.calls[0]?.[2]).toBe(604800);
     } finally {
@@ -214,11 +229,19 @@ describe('SMS password reset', () => {
 
       expect(response.statusCode).toBe(200);
       expect(mocks.verifySmsCode).toHaveBeenCalledWith(activeUser.phone, '123456', 'password-reset');
+      expect(mocks.transaction).toHaveBeenCalledTimes(1);
       expect(mocks.userUpdate).toHaveBeenCalledWith({
         where: { id: activeUser.id },
-        data: { passwordHash: 'new-password-hash' },
+        data: {
+          passwordHash: 'new-password-hash',
+          authVersion: { increment: 1 },
+        },
       });
       expect(mocks.removeAllSessions).toHaveBeenCalledWith(activeUser.id);
+      expect(mocks.revokeExtensionDeviceSessionsForUserInTransaction).toHaveBeenCalledWith(
+        expect.anything(), activeUser.id, 'PASSWORD_RESET',
+      );
+      expect(mocks.revokeExtensionDeviceSessionsForUser).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }
@@ -241,6 +264,7 @@ describe('SMS password reset', () => {
       expect(response.statusCode).toBe(400);
       expect(mocks.userUpdate).not.toHaveBeenCalled();
       expect(mocks.removeAllSessions).not.toHaveBeenCalled();
+      expect(mocks.revokeExtensionDeviceSessionsForUser).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

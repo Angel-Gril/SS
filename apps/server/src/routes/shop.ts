@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
-import { OzonClient } from '../services/ozon-client.js';
+import {
+  getOzonWarehouseCoordinates,
+  normalizeOzonWarehouseAddressEvidence,
+  OzonClient,
+} from '../services/ozon-client.js';
 import {
   buildProductStatusCounts,
   getProductSyncCategory,
@@ -28,6 +32,13 @@ import {
   parseOzonVideoProbeDataUrl,
   probeOzonVideoUpload,
 } from '../services/ozon-video-upload-probe.js';
+import {
+  invalidateShopLogisticsForCredentialChange,
+  deliveryMethodLogisticsScopeChanged,
+  invalidateWarehouseLogisticsScope,
+  warehouseLogisticsScopeChanged,
+  retireShopLogisticsScope,
+} from '../services/logistics-scope-invalidation.js';
 
 const createShopSchema = z.object({
   platform: z.enum(['OZON', 'YANDEX', 'KASPI', 'WILDBERRIES']),
@@ -222,7 +233,7 @@ export async function shopRoutes(app: FastifyInstance) {
   app.get('/', extensionConfigReadRouteOptions, async (request) => {
     const { userId } = (request as any).user;
     const shops = await prisma.shop.findMany({
-      where: { userId },
+      where: { userId, status: { not: 'DISABLED' } },
       select: {
         id: true,
         platform: true,
@@ -281,7 +292,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
@@ -319,18 +330,35 @@ export async function shopRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message ?? '参数错误' });
     }
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
 
+    const credentialChanged =
+      (parsed.data.clientId !== undefined && parsed.data.clientId !== shop.clientId) ||
+      (parsed.data.apiKey !== undefined && parsed.data.apiKey !== decrypt(shop.apiKeyEncrypted)) ||
+      (parsed.data.apiSecret !== undefined &&
+        parsed.data.apiSecret !==
+          (shop.apiSecretEncrypted ? decrypt(shop.apiSecretEncrypted) : undefined));
     const data: Record<string, unknown> = {};
     if (parsed.data.name) data.name = parsed.data.name;
     if (parsed.data.clientId) data.clientId = parsed.data.clientId;
     if (parsed.data.apiKey) data.apiKeyEncrypted = encrypt(parsed.data.apiKey);
-    if (parsed.data.apiSecret) data.apiSecretEncrypted = encrypt(parsed.data.apiSecret);
+    if (parsed.data.apiSecret !== undefined)
+      data.apiSecretEncrypted = parsed.data.apiSecret ? encrypt(parsed.data.apiSecret) : null;
 
-    await prisma.shop.update({ where: { id }, data });
+    if (credentialChanged) {
+      data.status = 'ERROR';
+      data.errorMessage = '店铺凭证已更新，请重新测试连接';
+      const now = new Date();
+      await prisma.$transaction(async (tx) => {
+        await tx.shop.update({ where: { id }, data });
+        await invalidateShopLogisticsForCredentialChange(tx, { tenantId: userId, shopId: id, now });
+      }, { isolationLevel: 'Serializable' });
+    } else {
+      await prisma.shop.update({ where: { id }, data });
+    }
     return reply.send({ code: 1, msg: '更新成功' });
   });
 
@@ -338,7 +366,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
@@ -362,20 +390,21 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.send({ code: 0, msg: '店铺不存在' });
     }
 
     try {
-      await prisma.expressIssue.deleteMany({ where: { shopId: id } });
-      await prisma.return.deleteMany({ where: { shopId: id } });
-      await prisma.syncJob.deleteMany({ where: { shopId: id } });
-      await prisma.order.deleteMany({ where: { shopId: id } });
-      await prisma.product.deleteMany({ where: { shopId: id } });
-      await prisma.warehouse.deleteMany({ where: { shopId: id } });
-      await prisma.shop.delete({ where: { id } });
-      return reply.send({ code: 1, msg: '店铺及关联数据已删除' });
+      const now = new Date();
+      await prisma.$transaction(async (tx) => {
+        await tx.shop.update({
+          where: { id },
+          data: { status: 'DISABLED', errorMessage: '店铺已停用' },
+        });
+        await retireShopLogisticsScope(tx, { tenantId: userId, shopId: id, now });
+      }, { isolationLevel: 'Serializable' });
+      return reply.send({ code: 1, msg: '店铺已停用，设备授权与物流规则分发已撤销' });
     } catch (e: any) {
       console.error('[Shop Delete Error]', e);
       return reply.send({ code: 0, msg: `删除失败: ${e.message?.slice(0, 300) || '数据库错误'}` });
@@ -387,7 +416,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
@@ -425,92 +454,154 @@ export async function shopRoutes(app: FastifyInstance) {
       const upserted = [];
       for (const wh of warehouses) {
         const fm = wh.first_mile_type;
-        const record = await prisma.warehouse.upsert({
-          where: {
-            shopId_platformWarehouseId: {
-              shopId: id,
-              platformWarehouseId: String(wh.warehouse_id),
-            },
-          },
-          update: {
-            name: wh.name,
-            type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'),
-            status: wh.status,
-            isRfbs: wh.is_rfbs ?? false,
-            isKgt: wh.is_kgt ?? false,
-            firstMileType: fm?.first_mile_type || null,
-            dropOffPointId: fm?.dropoff_point_id || null,
-            dropOffTimeslotId: fm?.dropoff_timeslot_id || null,
-            workingDays: wh.working_days as any,
-            latitude: wh.address_coordinates?.latitude || null,
-            longitude: wh.address_coordinates?.longitude || null,
-            phone: wh.phone || null,
-            rawData: wh as any,
-          },
-          create: {
+        const coordinates = getOzonWarehouseCoordinates(wh);
+        const normalizedAddress = normalizeOzonWarehouseAddressEvidence(
+          wh,
+          String(wh.warehouse_id),
+        );
+        const normalizedAddressData = normalizedAddress === undefined
+          ? {}
+          : normalizedAddress === null
+            ? { countryCode: null, city: null, zipCode: null }
+            : normalizedAddress;
+        const warehouseWhere = {
+          shopId_platformWarehouseId: {
             shopId: id,
             platformWarehouseId: String(wh.warehouse_id),
-            name: wh.name,
-            type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'),
-            status: wh.status,
-            isRfbs: wh.is_rfbs ?? false,
-            isKgt: wh.is_kgt ?? false,
-            firstMileType: fm?.first_mile_type || null,
-            dropOffPointId: fm?.dropoff_point_id || null,
-            dropOffTimeslotId: fm?.dropoff_timeslot_id || null,
-            workingDays: wh.working_days as any,
-            latitude: wh.address_coordinates?.latitude || null,
-            longitude: wh.address_coordinates?.longitude || null,
-            phone: wh.phone || null,
-            rawData: wh as any,
           },
-        });
-        upserted.push(record);
-
-        // 同步该仓库的 delivery methods
-        const whMethods = deliveryMethods.filter((dm) => dm.warehouse_id === wh.warehouse_id);
-        for (const dm of whMethods) {
-          await prisma.shopDeliveryMethod.upsert({
-            where: {
-              warehouseId_platformMethodId: {
-                warehouseId: record.id,
-                platformMethodId: dm.id,
-              },
-            },
-            update: {
-              name: dm.name,
-              status: dm.status,
-              providerId: dm.provider_id,
-              providerName: dm.provider_name || null,
-              tplDropoffPointId: dm.tpl_dropoff_point_id != null
-                ? String(dm.tpl_dropoff_point_id)
-                : (dm.tpl_dropoff_point?.code ? String(dm.tpl_dropoff_point.code) : null),
-              cutoff: dm.cutoff || null,
-              slaCutIn: dm.sla_cut_in || null,
-              tplIntegrationType: dm.tpl_integration_type || null,
-              dropOffPointAddress: dm.tpl_dropoff_point?.address || null,
-              dropOffPointName: dm.tpl_dropoff_point?.name || null,
-              rawData: dm as any,
-            },
-            create: {
-              warehouseId: record.id,
-              platformMethodId: dm.id,
-              name: dm.name,
-              status: dm.status,
-              providerId: dm.provider_id,
-              providerName: dm.provider_name || null,
-              tplDropoffPointId: dm.tpl_dropoff_point_id != null
-                ? String(dm.tpl_dropoff_point_id)
-                : (dm.tpl_dropoff_point?.code ? String(dm.tpl_dropoff_point.code) : null),
-              cutoff: dm.cutoff || null,
-              slaCutIn: dm.sla_cut_in || null,
-              tplIntegrationType: dm.tpl_integration_type || null,
-              dropOffPointAddress: dm.tpl_dropoff_point?.address || null,
-              dropOffPointName: dm.tpl_dropoff_point?.name || null,
-              rawData: dm as any,
+        };
+        const warehouseData = {
+          name: wh.name,
+          type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'),
+          status: wh.status,
+          isRfbs: wh.is_rfbs ?? false,
+          isKgt: wh.is_kgt ?? false,
+          firstMileType: fm?.first_mile_type || null,
+          dropOffPointId: fm?.dropoff_point_id || null,
+          dropOffTimeslotId: fm?.dropoff_timeslot_id || null,
+          workingDays: wh.working_days as any,
+          latitude: coordinates.latitude,
+          longitude: coordinates.longitude,
+          ...normalizedAddressData,
+          phone: wh.phone || null,
+          rawData: wh as any,
+        };
+        const whMethods = deliveryMethods.filter(
+          (dm) => String(dm.warehouse_id) === String(wh.warehouse_id),
+        );
+        const record = await prisma.$transaction(async (tx) => {
+          const previousWarehouse = await tx.warehouse.findUnique({
+            where: warehouseWhere,
+            select: {
+              id: true, platformWarehouseId: true, name: true, status: true, type: true,
+              countryCode: true, city: true, street: true, zipCode: true,
+              latitude: true, longitude: true, firstMileType: true, dropOffPointId: true,
+              isRfbs: true, isKgt: true,
             },
           });
-        }
+          const current = await tx.warehouse.upsert({
+            where: warehouseWhere,
+            update: warehouseData,
+            create: {
+              shopId: id,
+              platformWarehouseId: String(wh.warehouse_id),
+              ...warehouseData,
+            },
+          });
+          const existingMethods = await tx.shopDeliveryMethod.findMany({
+            where: { warehouseId: current.id },
+            select: { platformMethodId: true, status: true },
+          });
+          let methodScopeChanged = false;
+
+          for (const dm of whMethods) {
+            const deliveryMethodWhere = {
+              warehouseId_platformMethodId: {
+                warehouseId: current.id,
+                platformMethodId: dm.id,
+              },
+            };
+            const deliveryMethodData = {
+              name: dm.name,
+              status: dm.status,
+              providerId: dm.provider_id,
+              providerName: dm.provider_name || null,
+              tplDropoffPointId: dm.tpl_dropoff_point_id != null
+                ? String(dm.tpl_dropoff_point_id)
+                : (dm.tpl_dropoff_point?.code ? String(dm.tpl_dropoff_point.code) : null),
+              cutoff: dm.cutoff || null,
+              slaCutIn: dm.sla_cut_in || null,
+              tplIntegrationType: dm.tpl_integration_type || null,
+              dropOffPointAddress: dm.tpl_dropoff_point?.address || null,
+              dropOffPointName: dm.tpl_dropoff_point?.name || null,
+              rawData: dm as any,
+            };
+            const previousMethod = await tx.shopDeliveryMethod.findUnique({
+              where: deliveryMethodWhere,
+              select: {
+                name: true,
+                status: true,
+                providerId: true,
+                providerName: true,
+                tplDropoffPointId: true,
+                cutoff: true,
+                slaCutIn: true,
+                tplIntegrationType: true,
+                dropOffPointAddress: true,
+                dropOffPointName: true,
+              },
+            });
+            await tx.shopDeliveryMethod.upsert({
+              where: deliveryMethodWhere,
+              update: deliveryMethodData,
+              create: {
+                warehouseId: current.id,
+                platformMethodId: dm.id,
+                ...deliveryMethodData,
+              },
+            });
+            methodScopeChanged ||= Boolean(
+              previousMethod &&
+              deliveryMethodLogisticsScopeChanged(previousMethod, deliveryMethodData),
+            );
+          }
+
+          const returnedMethodIds = new Set(whMethods.map((dm) => Number(dm.id)));
+          const missingMethodIds = existingMethods
+            .filter((method) =>
+              !returnedMethodIds.has(method.platformMethodId) &&
+              String(method.status || '').trim().toLowerCase() !== 'missing')
+            .map((method) => method.platformMethodId);
+          if (missingMethodIds.length > 0) {
+            await tx.shopDeliveryMethod.updateMany({
+              where: {
+                warehouseId: current.id,
+                platformMethodId: { in: missingMethodIds },
+              },
+              data: { status: 'missing' },
+            });
+            methodScopeChanged = true;
+          }
+
+          const originScopeChanged = Boolean(
+            previousWarehouse &&
+            warehouseLogisticsScopeChanged(
+              { ...warehouseData, ...previousWarehouse },
+              { ...previousWarehouse, ...warehouseData },
+            ),
+          );
+          if (originScopeChanged || methodScopeChanged) {
+            await invalidateWarehouseLogisticsScope(tx, {
+              tenantId: userId,
+              shopId: id,
+              warehouseId: current.id,
+              invalidateOriginBinding: originScopeChanged,
+              now: new Date(),
+            });
+          }
+          return current;
+        }, { isolationLevel: 'Serializable' });
+        upserted.push(record);
       }
 
       return reply.send({
@@ -528,7 +619,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
@@ -547,7 +638,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id, warehouseId } = request.params as { id: string; warehouseId: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     const wh = await prisma.warehouse.findFirst({ where: { id: warehouseId, shopId: id } });
@@ -567,18 +658,30 @@ export async function shopRoutes(app: FastifyInstance) {
         payload.address_coordinates = { latitude: body.latitude, longitude: body.longitude };
       }
 
-      const result = await client.updateWarehouseErfbs(payload);
+      const warehouseData = {
+        name: body.name ?? wh.name,
+        phone: body.phone ?? wh.phone,
+        latitude: body.latitude ?? wh.latitude,
+        longitude: body.longitude ?? wh.longitude,
+      };
+      const scopeChanged = warehouseLogisticsScopeChanged(
+        wh,
+        { ...wh, ...warehouseData },
+      );
+      if (scopeChanged) {
+        await prisma.$transaction(async (tx) => {
+          await invalidateWarehouseLogisticsScope(tx, {
+            tenantId: userId,
+            shopId: id,
+            warehouseId,
+            invalidateOriginBinding: true,
+            now: new Date(),
+          });
+        }, { isolationLevel: 'Serializable' });
+      }
 
-      // 更新本地记录
-      await prisma.warehouse.update({
-        where: { id: warehouseId },
-        data: {
-          name: body.name ?? wh.name,
-          phone: body.phone ?? wh.phone,
-          latitude: body.latitude ?? wh.latitude,
-          longitude: body.longitude ?? wh.longitude,
-        },
-      });
+      const result = await client.updateWarehouseErfbs(payload);
+      await prisma.warehouse.update({ where: { id: warehouseId }, data: warehouseData });
 
       return reply.send({ code: 1, msg: '已推送到 OZON', data: { operationId: result.operation_id } });
     } catch (e: any) {
@@ -591,7 +694,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id, warehouseId } = request.params as { id: string; warehouseId: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     const wh = await prisma.warehouse.findFirst({ where: { id: warehouseId, shopId: id } });
@@ -606,6 +709,16 @@ export async function shopRoutes(app: FastifyInstance) {
     try {
       const isRfbs = wh.isRfbs || wh.type === 'RFBS';
       const payload = { warehouse_id: Number(wh.platformWarehouseId), delivery_method: body.delivery_method };
+      await prisma.$transaction(async (tx) => {
+        await invalidateWarehouseLogisticsScope(tx, {
+          tenantId: userId,
+          shopId: id,
+          warehouseId,
+          invalidateOriginBinding: false,
+          now: new Date(),
+        });
+      }, { isolationLevel: 'Serializable' });
+
       const result = isRfbs
         ? await client.updateAggregatorDeliveryMethod(payload)
         : await client.updateNonIntegratedDeliveryMethod(payload);
@@ -621,7 +734,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (!shop.clientId) return reply.status(400).send({ code: 0, msg: '店铺未配置凭证' });
 
@@ -645,7 +758,7 @@ export async function shopRoutes(app: FastifyInstance) {
       warehouseId?: number;
     };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (!shop.clientId) return reply.status(400).send({ code: 0, msg: '店铺未配置凭证' });
 
@@ -677,7 +790,7 @@ export async function shopRoutes(app: FastifyInstance) {
       selectedDropoffPointId?: number;
     };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (!shop.clientId) return reply.status(400).send({ code: 0, msg: '店铺未配置凭证' });
 
@@ -713,7 +826,7 @@ export async function shopRoutes(app: FastifyInstance) {
       warehouseId?: string;
     };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON' });
     if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接' });
@@ -769,24 +882,37 @@ export async function shopRoutes(app: FastifyInstance) {
       if (body.warehouseId) {
         const existing = await prisma.warehouse.findFirst({ where: { id: body.warehouseId, shopId: id } });
         if (!existing?.platformWarehouseId) return reply.status(400).send({ code: 0, msg: '仓库平台 ID 缺失' });
+        const warehouseData = {
+          name: body.name,
+          phone: body.phone,
+          countryCode: body.countryCode,
+          city: body.city,
+          street: body.street,
+          zipCode: body.zipCode,
+          building: body.building,
+          block: body.block,
+          latitude: body.latitude,
+          longitude: body.longitude,
+          templateId: tpl.id,
+          returnRecipient: body.returnRecipient,
+          returnPhone: body.returnPhone,
+        };
+        const scopeChanged = warehouseLogisticsScopeChanged(existing, { ...existing, ...warehouseData });
+        if (scopeChanged) {
+          await prisma.$transaction(async (tx) => {
+            await invalidateWarehouseLogisticsScope(tx, {
+              tenantId: userId,
+              shopId: id,
+              warehouseId: body.warehouseId!,
+              invalidateOriginBinding: true,
+              now: new Date(),
+            });
+          }, { isolationLevel: 'Serializable' });
+        }
         opResult = await client.updateFbsWarehouse({ ...payload, warehouse_id: Number(existing.platformWarehouseId) });
         warehouseRecord = await prisma.warehouse.update({
           where: { id: body.warehouseId },
-          data: {
-            name: body.name,
-            phone: body.phone,
-            countryCode: body.countryCode,
-            city: body.city,
-            street: body.street,
-            zipCode: body.zipCode,
-            building: body.building,
-            block: body.block,
-            latitude: body.latitude,
-            longitude: body.longitude,
-            templateId: tpl.id,
-            returnRecipient: body.returnRecipient,
-            returnPhone: body.returnPhone,
-          },
+          data: warehouseData,
         });
       } else {
         opResult = await client.createFbsWarehouse(payload);
@@ -826,7 +952,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
@@ -853,7 +979,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 促销活动' });
     if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接确保店铺状态正常' });
@@ -880,7 +1006,7 @@ export async function shopRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '活动 ID 无效' });
     }
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 促销活动' });
     if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接确保店铺状态正常' });
@@ -925,7 +1051,7 @@ export async function shopRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '活动 ID 无效' });
     }
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (shop.platform !== 'OZON') return reply.send({ code: 0, msg: '暂只支持 OZON 促销活动' });
     if (shop.status !== 'ACTIVE') return reply.send({ code: 0, msg: '请先测试连接确保店铺状态正常' });
@@ -961,7 +1087,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = request.body as { items: any[]; period?: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     if (!body?.items?.length) {
@@ -994,7 +1120,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     // 获取最新的非 graphs 类型快照（what_to_sell 数据）
@@ -1059,7 +1185,7 @@ export async function shopRoutes(app: FastifyInstance) {
       salesFunnel?: any;
     };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     if (!body?.graphData && !body?.tableData) {
@@ -1125,7 +1251,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     const latest = await prisma.shopAnalyticsSnapshot.findFirst({
@@ -1171,7 +1297,7 @@ export async function shopRoutes(app: FastifyInstance) {
       ozonPriceIndexFilter?: string;
     };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) {
       return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     }
@@ -1405,7 +1531,7 @@ export async function shopRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '缺少 cookie 或 companyId' });
     }
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
 
     const existingConfig = (shop.config as any) || {};
@@ -1429,7 +1555,7 @@ export async function shopRoutes(app: FastifyInstance) {
   app.get('/:id/ozon-cdn-auth', async (request, reply) => {
     const { userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     const config = (shop.config as any) || {};
     return reply.send({
@@ -1448,7 +1574,7 @@ export async function shopRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = (request.body || {}) as { dataUrl?: string; filename?: string };
 
-    const shop = await prisma.shop.findFirst({ where: { id, userId } });
+    const shop = await prisma.shop.findFirst({ where: { id, userId, status: { not: 'DISABLED' } } });
     if (!shop) return reply.status(404).send({ code: 0, msg: '店铺不存在' });
     if (shop.platform !== 'OZON') {
       return reply.status(400).send({ code: 0, msg: '视频探针仅支持 OZON 店铺' });

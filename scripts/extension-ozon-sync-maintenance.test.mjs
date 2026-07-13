@@ -34,22 +34,31 @@ assert.match(
   'cookie sync should query api.seller.ozon.ru host-only cookies, not only shared ozon.ru cookies',
 );
 
+const companyIdCandidateMatch = serviceWorker.match(
+  /const companyIdCandidates\s*=\s*preferStoredCompanyId\s*\?\s*\[([^\]]+)\]\s*:\s*\[([^\]]+)\]/,
+);
+assert.ok(companyIdCandidateMatch, 'cookie sync should define explicit companyId candidate orders');
+const candidateNames = (value) => value.split(',').map((name) => name.trim());
+assert.deepEqual(
+  candidateNames(companyIdCandidateMatch[1]),
+  ['storedCompanyId', 'payloadCompanyId', 'tabCompanyId', 'capturedCompanyId', 'cookieCompanyId'],
+  'an explicit stored-shop sync should prefer the selected shop companyId',
+);
+assert.deepEqual(
+  candidateNames(companyIdCandidateMatch[2]),
+  ['tabCompanyId', 'payloadCompanyId', 'capturedCompanyId', 'cookieCompanyId', 'storedCompanyId'],
+  'normal sync should prefer live browser evidence and keep stored companyId as the final fallback',
+);
 assert.match(
   serviceWorker,
-  /payloadCompanyId\s*\|\|\s*capturedCompanyId\s*\|\|\s*cookieCompanyId\s*\|\|\s*storedCompanyId/,
-  'companyId fallback order should include saved shop companyId after current browser evidence',
+  /companyIdCandidates\.find\(\(value\)\s*=>\s*normalizeOzonCompanyIdForSync\(value\)\)/,
+  'cookie sync should select the first valid companyId from the ordered candidates',
 );
 
 assert.match(
   serviceWorker,
   /readOzonSellerCookieValueFromOpenTabForSync/,
   'cookie sync should fall back to reading sc_company_id from an already-open seller tab',
-);
-
-assert.match(
-  serviceWorker,
-  /tabCompanyId\s*\|\|\s*payloadCompanyId\s*\|\|\s*capturedCompanyId\s*\|\|\s*cookieCompanyId\s*\|\|\s*storedCompanyId/,
-  'companyId fallback order should prefer live seller tab evidence before stale saved values',
 );
 
 assert.match(

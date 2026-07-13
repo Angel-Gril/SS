@@ -14,6 +14,10 @@ import {
   resolveOzonProductImages,
   resolveOzonSalesCommissionPercent,
 } from '../services/product-sync-metadata.js';
+import {
+  invalidateWarehouseLogisticsScope,
+  warehouseLogisticsScopeChanged,
+} from '../services/logistics-scope-invalidation.js';
 
 const updatePriceSchema = z.object({
   price: z.string().min(1),
@@ -54,6 +58,64 @@ const archiveSchema = z.object({
   archive: z.boolean(),
 });
 
+type OzonWarehouseStatusSnapshot = {
+  warehouse_id: string | number;
+  name: string;
+  warehouse_type?: string | null;
+  is_rfbs?: boolean | null;
+  status?: string | null;
+};
+
+async function upsertWarehouseStatusWithLogisticsInvalidation(input: {
+  tenantId: string;
+  shopId: string;
+  warehouse: OzonWarehouseStatusSnapshot;
+}) {
+  const where = {
+    shopId_platformWarehouseId: {
+      shopId: input.shopId,
+      platformWarehouseId: String(input.warehouse.warehouse_id),
+    },
+  };
+  const data = {
+    name: input.warehouse.name,
+    type: input.warehouse.warehouse_type || (input.warehouse.is_rfbs ? 'RFBS' : 'FBS'),
+    status: input.warehouse.status,
+  };
+  return prisma.$transaction(async (tx) => {
+    const previous = await tx.warehouse.findUnique({
+      where,
+      select: {
+        id: true, platformWarehouseId: true, name: true, status: true, type: true,
+        countryCode: true, city: true, street: true, zipCode: true,
+        latitude: true, longitude: true, firstMileType: true, dropOffPointId: true,
+        isRfbs: true, isKgt: true,
+      },
+    });
+    const current = await tx.warehouse.upsert({
+      where,
+      update: data,
+      create: {
+        shopId: input.shopId,
+        platformWarehouseId: String(input.warehouse.warehouse_id),
+        ...data,
+      },
+    });
+    if (previous && warehouseLogisticsScopeChanged(
+      { ...data, ...previous },
+      { ...previous, ...data },
+    )) {
+      await invalidateWarehouseLogisticsScope(tx, {
+        tenantId: input.tenantId,
+        shopId: input.shopId,
+        warehouseId: current.id,
+        invalidateOriginBinding: true,
+        now: new Date(),
+      });
+    }
+    return current;
+  }, { isolationLevel: 'Serializable' });
+}
 export async function productRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
 
@@ -160,25 +222,10 @@ export async function productRoutes(app: FastifyInstance) {
         try {
           const ozonWarehouses = await client.getWarehouseList();
           for (const wh of ozonWarehouses) {
-            await prisma.warehouse.upsert({
-              where: {
-                shopId_platformWarehouseId: {
-                  shopId: product.shop.id,
-                  platformWarehouseId: String(wh.warehouse_id),
-                },
-              },
-              update: {
-                name: wh.name,
-                type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'),
-                status: wh.status,
-              },
-              create: {
-                shopId: product.shop.id,
-                platformWarehouseId: String(wh.warehouse_id),
-                name: wh.name,
-                type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'),
-                status: wh.status,
-              },
+            await upsertWarehouseStatusWithLogisticsInvalidation({
+              tenantId: userId,
+              shopId: product.shop.id,
+              warehouse: wh,
             });
           }
           warehouse = await prisma.warehouse.findFirst({
@@ -218,15 +265,10 @@ export async function productRoutes(app: FastifyInstance) {
           try {
             const ozonWarehouses = await client.getWarehouseList();
             for (const wh of ozonWarehouses) {
-              await prisma.warehouse.upsert({
-                where: {
-                  shopId_platformWarehouseId: {
-                    shopId: product.shop.id,
-                    platformWarehouseId: String(wh.warehouse_id),
-                  },
-                },
-                update: { name: wh.name, type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'), status: wh.status },
-                create: { shopId: product.shop.id, platformWarehouseId: String(wh.warehouse_id), name: wh.name, type: wh.warehouse_type || (wh.is_rfbs ? 'RFBS' : 'FBS'), status: wh.status },
+              await upsertWarehouseStatusWithLogisticsInvalidation({
+                tenantId: userId,
+                shopId: product.shop.id,
+                warehouse: wh,
               });
             }
             const freshWarehouse = await prisma.warehouse.findFirst({

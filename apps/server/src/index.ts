@@ -62,6 +62,43 @@ import { systemStatusRoutes } from './routes/system-status.js';
 import { opsRoutes } from './routes/ops.js';
 import { sourceCandidateRoutes } from './routes/source-candidates.js';
 import { aiImageRoutes } from './routes/ai-images.js';
+import { extensionDeviceRoutes } from './routes/extension-device.js';
+import { createExtensionDeviceSessionService } from './services/extension-device-session.js';
+import { createPrismaExtensionDeviceSessionRepository } from './services/extension-device-session-prisma.js';
+import {
+  authenticateExtensionDevice,
+  isLogisticsDistributionEnabled,
+  resolveExtensionDeviceAuthConfig,
+} from './lib/extension-device-auth.js';
+import { adminLogisticsRuleRoutes } from './routes/admin-logistics-rules.js';
+import { createLogisticsRuleAdminService } from './services/logistics-rule-admin.js';
+import { createPrismaLogisticsRuleAdminRepository } from './services/logistics-rule-admin-prisma.js';
+import {
+  adminLogisticsInputUnitContractRoutes,
+} from './routes/admin-logistics-input-unit-contracts.js';
+import { createOfficialInputUnitContractService } from './services/logistics-official-input-unit-contract.js';
+import {
+  createPrismaOfficialInputUnitContractRepository,
+} from './services/logistics-official-input-unit-contract-prisma.js';
+import {
+  adminLogisticsCaptureTaskRoutes,
+  logisticsCaptureTaskRoutes,
+} from './routes/logistics-capture-tasks.js';
+import { createLogisticsCaptureTaskService } from './services/logistics-capture-task.js';
+import { createPrismaLogisticsCaptureTaskRepository } from './services/logistics-capture-task-prisma.js';
+import { createReviewedCaptureDraftService } from './services/logistics-capture-draft.js';
+import { logisticsRuleRoutes } from './routes/logistics-rules.js';
+import { createPrismaLogisticsRuleDeviceRepository } from './services/logistics-rule-device-prisma.js';
+import {
+  adminLogisticsScopeBootstrapRoutes,
+  logisticsScopeBootstrapDeviceRoutes,
+} from './routes/logistics-scope-bootstrap.js';
+import { createLogisticsScopeBootstrapService } from './services/logistics-scope-bootstrap.js';
+import {
+  createPrismaLogisticsScopeBootstrapRepository,
+} from './services/logistics-scope-bootstrap-prisma.js';
+import { getRuntimeConfig } from './adapters/runtime-config.js';
+
 import { isAllowedCorsOrigin } from './lib/cors.js';
 import { registerMaintenanceHook } from './lib/maintenance.js';
 
@@ -136,6 +173,106 @@ app.get('/ready', async (_request, reply) => {
 });
 
 await app.register(authRoutes, { prefix: '/api/auth' });
+if (isLogisticsDistributionEnabled()) {
+  const extensionDeviceRepository = createPrismaExtensionDeviceSessionRepository();
+  await app.register(extensionDeviceRoutes, {
+    prefix: '/api/extension-device',
+    sessionService: createExtensionDeviceSessionService({
+      repository: extensionDeviceRepository, authConfig: resolveExtensionDeviceAuthConfig(),
+    }),
+    managementRepository: extensionDeviceRepository,
+  });
+  const logisticsAuthConfig = resolveExtensionDeviceAuthConfig();
+  const logisticsRuntimeConfig = getRuntimeConfig();
+  const logisticsAdminRepository = createPrismaLogisticsRuleAdminRepository({
+    prisma,
+    deploymentId: logisticsAuthConfig.deploymentId,
+    apiOrigin: new URL(logisticsRuntimeConfig.localBaseUrl).origin,
+  });
+  const logisticsAdminService = createLogisticsRuleAdminService({
+    repository: logisticsAdminRepository,
+    releaseDatabase: prisma,
+    deploymentId: logisticsAuthConfig.deploymentId,
+    schemaMajor: 1,
+  });
+  await app.register(adminLogisticsRuleRoutes, {
+    prefix: '/api/admin/logistics-rules',
+    service: logisticsAdminService,
+  });
+  const officialInputUnitContractRepository =
+    createPrismaOfficialInputUnitContractRepository({ client: prisma });
+  const officialInputUnitContractService = createOfficialInputUnitContractService({
+    repository: officialInputUnitContractRepository,
+  });
+  await app.register(adminLogisticsInputUnitContractRoutes, {
+    prefix: '/api/admin/logistics-rules',
+    service: officialInputUnitContractService,
+  });
+  const logisticsDeviceRepository = createPrismaLogisticsRuleDeviceRepository({ client: prisma });
+  await app.register(logisticsRuleRoutes, {
+    prefix: '/api/logistics-rules',
+    repository: logisticsDeviceRepository,
+    authenticateDiscover: authenticateExtensionDevice({
+      config: logisticsAuthConfig,
+      requiredScopes: ['logistics:discover'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    authenticateRead: authenticateExtensionDevice({
+      config: logisticsAuthConfig,
+      requiredScopes: ['logistics:read'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    authenticateReceipt: authenticateExtensionDevice({
+      config: logisticsAuthConfig,
+      requiredScopes: ['logistics:receipt'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    deploymentId: logisticsAuthConfig.deploymentId,
+  });
+  const logisticsCaptureRepository = createPrismaLogisticsCaptureTaskRepository({ client: prisma });
+  const logisticsCaptureService = createLogisticsCaptureTaskService({
+    repository: logisticsCaptureRepository,
+  });
+  const logisticsCaptureDraftService = createReviewedCaptureDraftService({
+    captureRepository: logisticsCaptureRepository,
+    candidateSetRepository: logisticsCaptureRepository,
+    adminService: logisticsAdminService,
+  });
+  await app.register(adminLogisticsCaptureTaskRoutes, {
+    prefix: '/api/admin/logistics-rules',
+    service: logisticsCaptureService,
+    draftService: logisticsCaptureDraftService,
+  });
+  await app.register(logisticsCaptureTaskRoutes, {
+    prefix: '/api/logistics-rules',
+    service: logisticsCaptureService,
+    authenticateCapture: authenticateExtensionDevice({
+      config: logisticsAuthConfig,
+      requiredScopes: ['logistics:capture'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+  const logisticsScopeBootstrapRepository =
+    createPrismaLogisticsScopeBootstrapRepository({ client: prisma });
+  const logisticsScopeBootstrapService = createLogisticsScopeBootstrapService({
+    repository: logisticsScopeBootstrapRepository,
+    deploymentId: logisticsAuthConfig.deploymentId,
+    tokenSecret: logisticsAuthConfig.secret,
+  });
+  await app.register(adminLogisticsScopeBootstrapRoutes, {
+    prefix: '/api/admin/logistics-rules',
+    service: logisticsScopeBootstrapService,
+  });
+  await app.register(logisticsScopeBootstrapDeviceRoutes, {
+    prefix: '/api/logistics-rules',
+    service: logisticsScopeBootstrapService,
+    authenticateDevice: authenticateExtensionDevice({
+      config: logisticsAuthConfig,
+      requiredScopes: ['logistics:capture'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+}
 await app.register(setupRoutes, { prefix: '/api/setup' });
 await app.register(userRoutes, { prefix: '/api/user' });
 await app.register(shopRoutes, { prefix: '/api/shops' });

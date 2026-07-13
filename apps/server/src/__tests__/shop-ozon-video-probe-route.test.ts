@@ -59,7 +59,9 @@ describe('shop Ozon video probe route', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(mocks.shopFindFirst).toHaveBeenCalledWith({ where: { id: 'shop-1', userId: 'user-1' } });
+    expect(mocks.shopFindFirst).toHaveBeenCalledWith({
+      where: { id: 'shop-1', userId: 'user-1', status: { not: 'DISABLED' } },
+    });
     expect(mocks.getOzonCdnStorageBackend).toHaveBeenCalledWith('shop-1');
     expect(response.json()).toMatchObject({
       code: 1,

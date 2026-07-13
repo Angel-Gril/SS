@@ -225,13 +225,23 @@ const requiredAdapters = [
   'shared/erp-adapter/runtime-mode.js',
 ];
 
+const requiredSecurityModules = [
+  'shared/message-security/runtime-message-policy.js',
+];
+
 for (const adapter of requiredAdapters) fileExists(adapter, `adapter ${adapter}`);
+for (const modulePath of requiredSecurityModules) fileExists(modulePath, `security module ${modulePath}`);
 
 const swText = readFileSync(relToAbs(manifest.background?.service_worker || ''), 'utf8');
 for (const adapter of requiredAdapters) {
   const relFromBackground = `../${adapter}`;
   if (swText.includes(relFromBackground)) pass(`service worker imports ${adapter}`);
   else fail(`service worker does not import ${adapter}`);
+}
+for (const modulePath of requiredSecurityModules) {
+  const relFromBackground = `../${modulePath}`;
+  if (swText.includes(relFromBackground)) pass(`service worker imports ${modulePath}`);
+  else fail(`service worker does not import ${modulePath}`);
 }
 
 const cloudText = readFileSync(relToAbs('shared/adapters/cloud-adapter.js'), 'utf8');
@@ -250,6 +260,8 @@ if (localText.includes("credentials: 'include'") || localText.includes('credenti
 const externalMatches = manifest.externally_connectable?.matches || [];
 if (externalMatches.some((item) => item.includes('ss-erp.com'))) pass('externally_connectable includes ss-erp.com');
 else fail('externally_connectable missing ss-erp.com');
+if (externalMatches.some((item) => item.includes('ss-erp.cn'))) pass('externally_connectable includes ss-erp.cn');
+else fail('externally_connectable missing ss-erp.cn');
 const externalHasLocalOrigins = externalMatches.some((item) => item.includes('localhost') || item.includes('127.0.0.1'));
 if (packageTarget === 'cloud') {
   if (externalHasLocalOrigins) fail('cloud package externally_connectable contains local origins');

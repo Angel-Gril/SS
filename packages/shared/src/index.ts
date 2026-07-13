@@ -8,4 +8,6 @@ export * from './source-standard-attributes';
 export * from './source-size-chart-template-catalog';
 export * from './source-rich-content-plan';
 export * from './ozon-extension-sync-status';
+export * from './ozon-logistics-rules';
+export * from './ozon-logistics-validation';
 

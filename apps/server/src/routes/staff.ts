@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { authenticate } from '../lib/auth.js';
+import { authenticate, clearAuthContextCache, removeAllSessions } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import bcrypt from 'bcryptjs';
+import { revokeExtensionDeviceSessionsForUserInTransaction } from '../services/extension-device-session-prisma.js';
 
 const createStaffSchema = z.object({
   phone: z.string().min(5).max(20),
@@ -90,7 +91,24 @@ export async function staffRoutes(app: FastifyInstance) {
       data.passwordHash = await bcrypt.hash(body.password, 10);
     }
 
-    await prisma.user.update({ where: { id }, data });
+    const securityReason = body.status === 'SUSPENDED'
+      ? 'ACCOUNT_SUSPENDED'
+      : body.password && body.password.length >= 6
+        ? 'PASSWORD_RESET'
+        : null;
+    if (securityReason) data.authVersion = { increment: 1 };
+    if (securityReason) {
+      await prisma.$transaction(async (tx) => {
+        await tx.user.update({ where: { id }, data });
+        await revokeExtensionDeviceSessionsForUserInTransaction(tx, id, securityReason);
+      }, { isolationLevel: 'Serializable' });
+      clearAuthContextCache(id);
+      await removeAllSessions(id).catch(() => {
+        request.log.warn({ userId: id }, 'Staff security update could not purge cached web sessions');
+      });
+    } else {
+      await prisma.user.update({ where: { id }, data });
+    }
     return reply.send({ code: 1, msg: '已更新' });
   });
 

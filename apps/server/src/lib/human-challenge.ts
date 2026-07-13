@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getConfig, getDefaultValue, type SystemConfigKey, type SystemConfigValue } from '../config/system-config-schema.js';
+import { getRuntimeMode } from '../adapters/runtime-config.js';
 import { redis } from './redis.js';
 
 export type HumanChallengeProvider = 'disabled' | 'cloudflare-turnstile' | 'builtin-pow';
@@ -43,9 +44,10 @@ export async function getHumanChallengeRuntimeConfig(): Promise<HumanChallengeRu
     readConfig('auth_turnstile_allowed_hostnames'), readConfig('auth_turnstile_site_key'),
     readConfig('auth_turnstile_secret_key'),
   ]);
-  const provider = isProvider(envProvider)
+  const configuredProvider = isProvider(envProvider)
     ? envProvider
     : process.env.FEATURE_TURNSTILE_LOGIN === 'true' ? 'cloudflare-turnstile' : legacyTurnstileEnabled && dbProvider === 'disabled' ? 'cloudflare-turnstile' : dbProvider;
+  const provider = getRuntimeMode() === 'cloud' ? configuredProvider : 'disabled';
   return {
     provider,
     difficulty: Math.min(5, Math.max(1, Number(process.env.HUMAN_CHALLENGE_POW_DIFFICULTY || dbDifficulty))),

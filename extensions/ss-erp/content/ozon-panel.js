@@ -20,6 +20,68 @@
     });
   }
 
+  var LOGISTICS_ROUTE_STATUS_LABELS = {
+    healthy: 'ERP 已发布规则',
+    stale: 'ERP 规则处于宽限期',
+    recovered_previous: 'ERP 已回退上一版本',
+  };
+  var LOGISTICS_REMOTE_ROUTE_STATES = new Set([
+    'healthy',
+    'stale',
+    'recovered_previous',
+  ]);
+
+  function routeMatchesScope(route, scope) {
+    if (!route || !scope || route.source !== 'erp_assignment') return false;
+    return [
+      'assignmentId',
+      'originCountryUid',
+      'originCityUid',
+      'destinationCountryUid',
+      'destinationLocationUid',
+    ].every(function (field) {
+      var expected = String(scope[field] || '').trim();
+      return Boolean(expected) && String(route[field] || '').trim() === expected;
+    });
+  }
+
+  function buildLogisticsRouteHtml(logisticsStatus) {
+    logisticsStatus = logisticsStatus && typeof logisticsStatus === 'object'
+      ? logisticsStatus
+      : null;
+    if (!logisticsStatus || logisticsStatus.quoteAllowed !== true) return '';
+    if (logisticsStatus.state === 'local_fallback'
+      && logisticsStatus.source === 'local_fallback') {
+      return [
+        '<div class="ozon-calc-route-local" data-logistics-route="local-unverified">',
+        '  <span>本地 HAR 兜底</span>',
+        '  <span>路线未验证</span>',
+        '</div>',
+      ].join('');
+    }
+    var releaseSequence = Number(logisticsStatus.releaseSequence);
+    var route = logisticsStatus.route;
+    if (logisticsStatus.source !== 'remote'
+      || !LOGISTICS_REMOTE_ROUTE_STATES.has(String(logisticsStatus.state || ''))
+      || !String(logisticsStatus.releaseId || '').trim()
+      || !Number.isSafeInteger(releaseSequence)
+      || releaseSequence < 1
+      || !routeMatchesScope(route, logisticsStatus.scope)) return '';
+    var originLabel = String(route.originLabel || '').trim();
+    var destinationLabel = String(route.destinationLabel || '').trim();
+    if (!originLabel || !destinationLabel) return '';
+    var routeTitle = originLabel + ' → ' + destinationLabel;
+    var statusLabel = LOGISTICS_ROUTE_STATUS_LABELS[logisticsStatus.state];
+    return [
+      '<div class="ozon-calc-route" data-logistics-route="verified" title="' + escapeHtml(routeTitle) + '">',
+      '  <span class="ozon-calc-route-endpoint origin">' + escapeHtml(originLabel) + '</span>',
+      '  <span class="ozon-calc-route-arrow" aria-hidden="true">→</span>',
+      '  <span class="ozon-calc-route-endpoint destination">' + escapeHtml(destinationLabel) + '</span>',
+      '</div>',
+      '<div class="ozon-calc-route-meta">' + escapeHtml(statusLabel) + ' · 版本 ' + releaseSequence + '</div>',
+    ].join('');
+  }
+
   function toNumber(value, fallbackValue) {
     var number = Number(value);
     return Number.isFinite(number) ? number : (fallbackValue == null ? 0 : fallbackValue);
@@ -109,6 +171,7 @@
       hydrationPending: false,
       configSnapshot: null,
       officialSnapshot: null,
+      logisticsStatus: null,
       commissionSnapshot: null,
       fxSnapshot: null,
       commissionMatch: null,
@@ -412,25 +475,15 @@
   }
 
   function attachOfficialSample(quote, officialSnapshot, input) {
-    var snapshot = officialSnapshot && typeof officialSnapshot === 'object' ? officialSnapshot : {};
-    var sample = snapshot.sampleRequest || {};
-    var tariffs = Array.isArray(snapshot.tariffs) ? snapshot.tariffs : [];
-    if (!tariffs.length) return quote;
-    if (Number(sample.weight) !== (Number(input.weightG) || 0)) return quote;
-    if (Number(sample.length) !== (Number(input.lenCm) || 0) * 10) return quote;
-    if (Number(sample.width) !== (Number(input.widCm) || 0) * 10) return quote;
-    if (Number(sample.height) !== (Number(input.hgtCm) || 0) * 10) return quote;
-
-    var official = tariffs.find(function (item) {
-      return item.providerId === quote.providerId && item.description === quote.displayName;
-    });
-    if (!official) return quote;
-
-    return Object.assign({}, quote, {
-      officialSamplePrice: official.price,
-      officialSampleDiff: quote.shippingCost - official.price,
-      officialWeightType: official.weightType,
-    });
+    if (!window.OZON_CALC_LOGISTICS_RELEASE_ADAPTER
+      || typeof window.OZON_CALC_LOGISTICS_RELEASE_ADAPTER.attachExactOfficialSample !== 'function') {
+      return Object.assign({}, quote, { officialSampleStatus: 'unavailable' });
+    }
+    return window.OZON_CALC_LOGISTICS_RELEASE_ADAPTER.attachExactOfficialSample(
+      quote,
+      officialSnapshot,
+      input,
+    );
   }
 
   function normalizeFxSnapshot(snapshot, manualRate) {
@@ -1099,8 +1152,22 @@
     }
 
     function renderConfigStatus(snapshot, updatedAt) {
+      var logisticsStatus = state.logisticsStatus;
+      var statusLabels = {
+        healthy: 'ERP 已发布规则',
+        stale: 'ERP 规则处于宽限期',
+        local_fallback: '本地 HAR 兜底',
+        expired: 'ERP 规则已过期',
+        authorization_expired: 'ERP 授权已过期',
+        revoked: 'ERP 授权已撤销',
+        no_config: '当前范围暂无发布规则',
+        no_selected_services: '当前范围没有可用物流',
+      };
       if (!snapshot || !snapshot.userConfig || !snapshot.userConfig.selectedServiceIds || !snapshot.userConfig.selectedServiceIds.length) {
-        configCard.innerHTML = '<h3>配置状态</h3><div class="ozon-calc-muted">还没有同步物流配置。请先在原计算器网页点击“同步物流配置到插件”。</div>';
+        var unavailableLabel = logisticsStatus && statusLabels[logisticsStatus.state]
+          ? statusLabels[logisticsStatus.state]
+          : '还没有同步物流配置';
+        configCard.innerHTML = '<h3>配置状态</h3><div class="ozon-calc-muted">' + escapeHtml(unavailableLabel) + '，无法进行权威核价。</div>';
         return;
       }
       var serviceMap = new Map((snapshot.catalogSnapshot && snapshot.catalogSnapshot.services || []).map(function (service) {
@@ -1110,12 +1177,15 @@
         var service = serviceMap.get(serviceId);
         return '<span class="ozon-calc-badge">' + escapeHtml(service ? service.displayName : serviceId) + '</span>';
       }).join('');
+      var routeHtml = buildLogisticsRouteHtml(logisticsStatus);
       configCard.className = 'ozon-calc-card tight';
       configCard.innerHTML = [
         '<button type="button" class="ozon-calc-collapsible-trigger" data-config-toggle>',
         '  <span style="font-size:13px;font-weight:700;color:#334155;">配置状态</span>',
         '  <span class="ozon-calc-collapsible-arrow">' + (state.configExpanded ? '▲' : '▼') + '</span>',
         '</button>',
+        routeHtml,
+        !routeHtml && logisticsStatus ? '<div class="ozon-calc-muted" style="margin-top:8px;">来源：' + escapeHtml(statusLabels[logisticsStatus.state] || logisticsStatus.source || logisticsStatus.state) + '</div>' : '',
         '<div class="ozon-calc-muted" style="margin-top:8px;">已同步物流模板：' + snapshot.userConfig.selectedServiceIds.length + ' 个</div>',
         state.configExpanded ? [
           '<div class="ozon-calc-muted" style="margin-top:8px;">命中策略：' + escapeHtml(snapshot.userConfig.resolutionMode) + '</div>',
@@ -1137,6 +1207,11 @@
       // Re-attempt weight extraction if still 0 (data panel may have loaded since initial render)
       if (!(state.inputs.weightG > 0)) {
         refreshProductSnapshotFromPage();
+      }
+      if (state.logisticsStatus && state.logisticsStatus.quoteAllowed !== true) {
+        state.lastResult = null;
+        resultCard.innerHTML = '<h3>核价结果</h3><div class="ozon-calc-muted">当前物流规则不可用，无法进行权威核价。请重新连接 ERP 或切换有效范围。</div>';
+        return;
       }
       if (!state.configSnapshot || !state.configSnapshot.userConfig || !state.configSnapshot.userConfig.selectedServiceIds.length) {
         resultCard.innerHTML = '<h3>核价结果</h3><div class="ozon-calc-muted">未同步物流配置，无法正式核价。</div>';
@@ -1168,6 +1243,7 @@
       var commissionInput = Object.assign({}, state.inputs, {
         commissionPct: state.commissionMatch.ratePct,
         commissionMatch: state.commissionMatch,
+        logisticsScope: state.logisticsStatus && state.logisticsStatus.scope,
       });
       var commissionHintNode = inputCard.querySelector('[data-commission-hint]');
       if (commissionHintNode) commissionHintNode.textContent = commissionMatchText(state.commissionMatch);
@@ -1389,6 +1465,7 @@
 
     if (window.OZON_CALC_CONFIG_STORE && typeof window.OZON_CALC_CONFIG_STORE.readSnapshot === 'function') {
       window.OZON_CALC_CONFIG_STORE.readSnapshot().then(function (result) {
+        state.logisticsStatus = result.logisticsStatus || null;
         applyConfigSnapshot(state, result.snapshot, result.updatedAt);
         renderConfigStatus(result.snapshot, result.updatedAt);
         refreshAutoPriceFromProduct(state, inputCard);
@@ -1451,6 +1528,7 @@
   }
 
   window.OZON_CALC_OZON_PANEL = {
+    buildLogisticsRouteHtml,
     ensurePanelState,
     collectPageProduct,
     attachOfficialSample,

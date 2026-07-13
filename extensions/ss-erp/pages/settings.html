@@ -219,6 +219,55 @@
           </label>
         </div>
         <div id="erpStatus" class="status compact" style="margin-top:12px;"></div>
+        <div id="logisticsDistributionFeatureSection">
+        <div style="margin-top:18px;padding-top:18px;border-top:1px solid rgba(100,116,139,0.2);display:flex;flex-direction:column;gap:12px;">
+          <h3 style="margin:0;color:#0f172a;font-size:14px;">物流规则设备配对</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">
+            <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+              <span>部署标识</span>
+              <input id="logisticsDeploymentInput" type="text" autocomplete="off" placeholder="例如 cn-production" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+              <span>一次性配对码</span>
+              <input id="logisticsPairingCodeInput" type="password" autocomplete="one-time-code" placeholder="输入 ERP 生成的配对码" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+              <span>设备名称</span>
+              <input id="logisticsDeviceLabelInput" type="text" autocomplete="off" placeholder="例如 Chrome - 厦门" style="width:100%;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:10px 11px;font-weight:650;outline:none;" />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="pairLogisticsDeviceBtn" class="btn btn-primary" type="button">配对设备</button>
+            <button id="revokeLogisticsDeviceBtn" class="btn btn-muted" type="button">解除配对</button>
+          </div>
+          <label style="display:flex;flex-direction:column;gap:6px;color:#64748b;font-size:12px;font-weight:800;">
+            <span>物流作用域</span>
+            <select id="logisticsAssignmentSelect" style="height:38px;border:1px solid rgba(100,116,139,0.28);border-radius:8px;background:#fff;color:#0f172a;padding:0 10px;font-size:13px;font-weight:600;">
+              <option value="">自动选择唯一仓库</option>
+            </select>
+          </label>
+          <div class="actions">
+            <button id="syncPublishedLogisticsBtn" class="btn btn-secondary" type="button">同步已发布规则</button>
+          </div>
+        </div>
+        <div id="logisticsDistributionStatus" class="status compact"></div>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(100,116,139,0.2);">
+          <h3 style="margin:0 0 10px;color:#0f172a;font-size:14px;">店铺与仓库验证</h3>
+          <div id="logisticsBindingProbeStatus" class="status compact"></div>
+          <div class="actions" style="margin-top:10px;">
+            <button id="runLogisticsBindingProbeBtn" class="btn btn-secondary" type="button">验证当前 Seller</button>
+          </div>
+        </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(100,116,139,0.2);">
+          <h3 style="margin:0 0 10px;color:#0f172a;font-size:14px;">物流数据采集任务</h3>
+          <div id="logisticsCaptureStatus" class="status compact"></div>
+          <div class="actions" style="margin-top:10px;">
+            <button id="refreshLogisticsCaptureBtn" class="btn btn-primary" type="button">刷新并采集</button>
+            <button id="retryLogisticsCaptureBtn" class="btn btn-muted" type="button">重试</button>
+            <button id="cancelLogisticsCaptureBtn" class="btn btn-muted" type="button" disabled>取消任务</button>
+          </div>
+        </div>
+        </div>
       </article>
 
       <article class="surface-panel" style="border-left:3px solid #8b5cf6;">
@@ -344,6 +393,7 @@
     </section>
   </div>
 
+  <script src="../shared/logistics-rules/distribution-feature.js"></script>
   <script src="../shared/config-bridge/sync-schema.js"></script>
   <script src="settings.js"></script>
 </body>

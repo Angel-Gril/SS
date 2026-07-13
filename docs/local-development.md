@@ -136,8 +136,8 @@ pnpm --filter server test -- src/__tests__/collect-batch-upsert.test.ts
 | 公网登录后只读接口 | 本地 | `pnpm preflight --remote-core` | 临时用户可登录，核心只读 API 正常返回 |
 | R2/OSS 上传 | 本地 | `pnpm preflight --remote-oss` | 返回 `runtimeImageUpload:"oss"` 且上传结果 `backend:"oss"` |
 | VPS 部署层 | VPS | `DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh` | systemd、Nginx、端口、防火墙、备份状态、Prisma migration、`/ready` 均通过 |
-| 数据库备份 | VPS | `. /etc/ss-erp-backup.env && bash scripts/backup-db.sh` | 生成 `ss_erp_*.sql.gz` 和 `backup-status.json` |
-| 恢复演练 | VPS | `. /etc/ss-erp-backup.env && bash scripts/verify-backup-restore.sh` | 临时库恢复成功并自动清理 |
+| 数据库备份 | VPS | `set -a; . /etc/ss-erp-backup.env; set +a; bash scripts/backup-db.sh` | 生成 `ss_erp_*.sql.gz` 和 `backup-status.json` |
+| 恢复演练 | VPS | `set -a; . /etc/ss-erp-backup.env; set +a; bash scripts/verify-backup-restore.sh` | 临时库恢复成功并自动清理 |
 
 ## 当前服务器验收流程
 
@@ -506,8 +506,7 @@ DEPLOY_DIR=/opt/ss-erp/app ./scripts/verify-vps-deploy.sh
 数据库备份脚本和恢复演练都只建议在 Linux / VPS / WSL 上跑。
 
 ```bash
-source /etc/ss-erp-backup.env
-bash scripts/backup-db.sh
+set -a; . /etc/ss-erp-backup.env; set +a; bash scripts/backup-db.sh
 bash scripts/verify-backup-restore.sh
 ```
 
@@ -523,13 +522,12 @@ R2 / S3 兼容备份建议单独使用一个 bucket，不要和图片桶混用�
 发布前的最低备份测试：
 
 ```bash
-source /etc/ss-erp-backup.env
-bash scripts/backup-db.sh
+set -a; . /etc/ss-erp-backup.env; set +a; bash scripts/backup-db.sh
 bash scripts/verify-backup-restore.sh
 DEPLOY_DIR=/opt/ss-erp ./scripts/verify-vps-deploy.sh
 ```
 
-`verify-vps-deploy.sh` 会检查 cron 是否包含 `backup-db.sh`、`backup-status.json` 是否可读、是否有恢复演练残留的临时库。它不是备份本身的替代品，只是确认备份链路处于可观测状态。
+`verify-vps-deploy.sh` 会检查 cron 是否包含 `backup-db.sh`、最近备份是否在 36 小时内、本地备份包是否真实存在且可读非空、已配置远程备份时最近一次上传是否成功，以及是否有恢复演练残留的临时库。它不会修改或上传备份，也不是备份本身的替代品。
 
 ## VPS 系统层优化验证
 

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { getLegalProfile, registerSchema, loginSchema, resetPasswordWithSmsSchema, sendSmsCodeSchema } from 'shared';
 import { prisma } from '../lib/prisma.js';
-import { signToken, storeSession, removeSession, removeAllSessions, authenticate, extractToken, setAuthCookie, clearAuthCookie } from '../lib/auth.js';
+import { signToken, signLegacyExtensionToken, storeSession, removeSession, removeAllSessions, authenticate, extractToken, setAuthCookie, clearAuthCookie, clearAuthContextCache } from '../lib/auth.js';
 import { generateAccountCode } from '../lib/account-code.js';
 import { sendSmsCode, verifySmsCode } from '../lib/captcha.js';
 import {
@@ -11,6 +11,7 @@ import {
 } from '../lib/auth-challenge-config.js';
 import { getPublicHumanChallengeConfig, issueHumanChallenge, verifyHumanChallenge, type HumanChallengeAction } from '../lib/human-challenge.js';
 import { isLegacyExtensionTokenIssuanceEnabled } from '../lib/extension-device-auth.js';
+import { revokeExtensionDeviceSessionsForUserInTransaction } from '../services/extension-device-session-prisma.js';
 
 const authRateLimitConfig = {
   rateLimit: {
@@ -111,8 +112,17 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 12);
-    await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
-    await removeAllSessions(user.id);
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { passwordHash, authVersion: { increment: 1 } },
+      });
+      await revokeExtensionDeviceSessionsForUserInTransaction(tx, user.id, 'PASSWORD_RESET');
+    }, { isolationLevel: 'Serializable' });
+    clearAuthContextCache(user.id);
+    await removeAllSessions(user.id).catch(() => {
+      request.log.warn({ userId: user.id }, 'Password reset could not purge cached web sessions');
+    });
     clearAuthCookie(reply);
     return reply.send({ code: 1, msg: '密码已重置，请重新登录' });
   });
@@ -164,7 +174,7 @@ export async function authRoutes(app: FastifyInstance) {
       },
     });
 
-    const token = signToken({ userId: user.id, role: user.role });
+    const token = signToken({ userId: user.id, role: user.role, authVersion: user.authVersion });
     await storeSession(user.id, token);
     setAuthCookie(reply, token);
 
@@ -229,7 +239,7 @@ export async function authRoutes(app: FastifyInstance) {
     await redis.del(failKey);
 
     const sessionTtlSeconds = rememberMe ? REMEMBER_ME_TTL_SECONDS : undefined;
-    const token = signToken({ userId: user.id, role: user.role }, rememberMe ? '7d' : undefined);
+    const token = signToken({ userId: user.id, role: user.role, authVersion: user.authVersion }, rememberMe ? '7d' : undefined);
     await storeSession(user.id, token, sessionTtlSeconds);
     setAuthCookie(reply, token, sessionTtlSeconds);
 
@@ -267,8 +277,8 @@ export async function authRoutes(app: FastifyInstance) {
       });
     }
     // 扩展 token 是给当前实际登录账号的（子账号要走自己），不能用 effectiveUserId
-    const { actorUserId, role } = (request as any).user;
-    const extensionToken = signToken({ userId: actorUserId, role }, '30d');
+    const { actorUserId, role, authVersion } = (request as any).user;
+    const extensionToken = signLegacyExtensionToken({ userId: actorUserId, role, authVersion }, '30d');
     await storeSession(actorUserId, extensionToken, 30 * 24 * 3600);
     return reply.send({
       code: 1,

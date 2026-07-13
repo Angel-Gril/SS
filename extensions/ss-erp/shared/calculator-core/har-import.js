@@ -32,8 +32,10 @@
     try {
       var pageUrl = entry && entry._ozonCalc && entry._ozonCalc.pageUrl;
       var parsed = new URL(rawUrl, pageUrl || 'https://globalcalculator.ozon.ru');
-      return parsed.hostname === 'globalcalculator.ozon.ru'
-        && parsed.pathname === '/p-api/tpl-api-global-calc-gw/v1/calculator/calculate';
+      return (
+        parsed.hostname === 'globalcalculator.ozon.ru' &&
+        parsed.pathname === '/p-api/tpl-api-global-calc-gw/v1/calculator/calculate'
+      );
     } catch (error) {
       return false;
     }
@@ -47,7 +49,8 @@
   }
 
   function parseRequestJson(entry) {
-    if (!entry || !entry.request || !entry.request.postData || !entry.request.postData.text) return {};
+    if (!entry || !entry.request || !entry.request.postData || !entry.request.postData.text)
+      return {};
     return JSON.parse(entry.request.postData.text);
   }
 
@@ -99,7 +102,10 @@
     if (contractMin || contractMax) return formatDayRange(contractMin, contractMax);
 
     var speedKey = speedNameFromTemplate(template.template_name, template.provider_name, speedMap);
-    var categoryId = template.categories && template.categories[0] ? Number(template.categories[0].category_id) : 0;
+    var categoryId =
+      template.categories && template.categories[0]
+        ? Number(template.categories[0].category_id)
+        : 0;
     if (speedKey && categoryId && speedMap.has(speedKey)) {
       var range = speedMap.get(speedKey).categoryDays.get(categoryId);
       if (range) return formatDayRange(range.min, range.max);
@@ -136,10 +142,12 @@
   }
 
   function categoryNames(template, categoryMap) {
-    return (template.categories || []).map(function (item) {
-      var category = categoryMap.get(Number(item.category_id));
-      return category ? String(category.category_name || '') : '';
-    }).filter(Boolean);
+    return (template.categories || [])
+      .map(function (item) {
+        var category = categoryMap.get(Number(item.category_id));
+        return category ? String(category.category_name || '') : '';
+      })
+      .filter(Boolean);
   }
 
   function priorityOfTemplate(template, categoryMap) {
@@ -155,9 +163,12 @@
   }
 
   function findPriceRestriction(template, currencyCode) {
-    var restrictions = Array.isArray(template.price_restrictions) ? template.price_restrictions : [];
+    var restrictions = Array.isArray(template.price_restrictions)
+      ? template.price_restrictions
+      : [];
     for (var index = 0; index < restrictions.length; index += 1) {
-      if (String(restrictions[index].currency || '').toUpperCase() === currencyCode) return restrictions[index];
+      if (String(restrictions[index].currency || '').toUpperCase() === currencyCode)
+        return restrictions[index];
     }
     return null;
   }
@@ -170,10 +181,7 @@
         restriction.max_price ? moneyToNumber(restriction.max_price) : 0,
       ];
     }
-    return [
-      Math.max(0, valueOf(fallbackMinField, 0)),
-      Math.max(0, valueOf(fallbackMaxField, 0)),
-    ];
+    return [Math.max(0, valueOf(fallbackMinField, 0)), Math.max(0, valueOf(fallbackMaxField, 0))];
   }
 
   function templateToCatalogService(template, categoryMap, speedMap) {
@@ -204,10 +212,19 @@
     var maxWidthCm = valueOf(template.max_width, 0) / 10;
     var maxHeightCm = valueOf(template.max_height, 0) / 10;
     var longestSideCm = valueOf(template.longest_side_limit, 0) / 10;
-    var pricePerShipment = moneyToNumber(template.delivery_tariff && template.delivery_tariff.price_per_shipment);
-    var stepFee = moneyToNumber(template.delivery_tariff && template.delivery_tariff.weight_rounding_step_price);
-    var stepSize = Number(template.delivery_tariff && template.delivery_tariff.weight_rounding_step_grammes) || 1;
-    var minPostingWeight = valueOf(template.delivery_tariff && template.delivery_tariff.min_posting_weight_in_grams, 0);
+    var pricePerShipment = moneyToNumber(
+      template.delivery_tariff && template.delivery_tariff.price_per_shipment,
+    );
+    var stepFee = moneyToNumber(
+      template.delivery_tariff && template.delivery_tariff.weight_rounding_step_price,
+    );
+    var stepSize =
+      Number(template.delivery_tariff && template.delivery_tariff.weight_rounding_step_grammes) ||
+      1;
+    var minPostingWeight = valueOf(
+      template.delivery_tariff && template.delivery_tariff.min_posting_weight_in_grams,
+      0,
+    );
     var chargeMode = chargeModeFromWeightType(weightType);
 
     return {
@@ -218,20 +235,20 @@
       carrierName: String(template.provider_name || '').trim(),
       priority: priorityOfTemplate(template, categoryMap),
       deliveryPromise: inferDeliveryPromise(template, categoryMap, speedMap),
-      conditionNote: weightType === 1
-        ? 'weight_type=1 当前按 hybrid-实重保守模式处理'
-        : weightType === 3
-          ? 'weight_type=3 按 max(实重, 体积重) 计费，体积重除数 12000'
-          : '',
+      conditionNote:
+        weightType === 1
+          ? 'weight_type=1 当前按 hybrid-实重保守模式处理'
+          : weightType === 3
+            ? 'weight_type=3 按 max(实重, 体积重) 计费，体积重除数 12000'
+            : '',
       conditions: {
-        weightRangeG: [Math.max(0, valueOf(template.min_weight, 0)), Math.max(0, valueOf(template.max_weight, 999999))],
+        weightRangeG: [
+          Math.max(0, valueOf(template.min_weight, 0)),
+          Math.max(0, valueOf(template.max_weight, 999999)),
+        ],
         priceRangeCNY: buildPriceRange(template, 'CNY', null, null),
         priceRangeRUB: buildPriceRange(template, 'RUB', template.min_price, template.max_price),
-        maxDimsCm: [
-          maxLengthCm || 9999,
-          maxWidthCm || 9999,
-          maxHeightCm || 9999,
-        ],
+        maxDimsCm: [maxLengthCm || 9999, maxWidthCm || 9999, maxHeightCm || 9999],
         longestSideCm: longestSideCm || 0,
         battery: template.has_battery ? 'any' : 'disallowed',
         chargeMode: chargeMode,
@@ -260,33 +277,48 @@
   function importSellerHar(payload) {
     var entries = parseHarPayload(payload);
     var templateEntry = findLatestEntry(entries, '/provider/template/by-location/list');
-    if (!templateEntry) throw new Error('seller HAR 中缺少 provider/template/by-location/list 响应。');
+    if (!templateEntry)
+      throw new Error('seller HAR 中缺少 provider/template/by-location/list 响应。');
 
     var categoryEntry = findLatestEntry(entries, '/provider/template/category/list');
     var speedEntry = findLatestEntry(entries, '/provider/template/speed/list');
     var templatePayload = parseEntryJson(templateEntry, 'seller 模板');
-    var categoryPayload = categoryEntry ? parseEntryJson(categoryEntry, 'seller 类目') : { result: [] };
+    var categoryPayload = categoryEntry
+      ? parseEntryJson(categoryEntry, 'seller 类目')
+      : { result: [] };
     var speedPayload = speedEntry ? parseEntryJson(speedEntry, 'seller 时效') : { result: [] };
     var requestPayload = parseRequestJson(templateEntry);
 
-    var point = requestPayload.point && typeof requestPayload.point === 'object' ? requestPayload.point : {};
+    var point =
+      requestPayload.point && typeof requestPayload.point === 'object' ? requestPayload.point : {};
     var latitude = Number(point.latitude);
     var longitude = Number(point.longitude);
     var hasQueryPoint = Number.isFinite(latitude) && Number.isFinite(longitude);
     var observedContext = {
       companyId: String(requestPayload.company_id || requestPayload.companyId || ''),
-      availableIntegrationType: Number(requestPayload.available_integration_type || requestPayload.availableIntegrationType) || 0,
+      availableIntegrationType:
+        Number(
+          requestPayload.available_integration_type || requestPayload.availableIntegrationType,
+        ) || 0,
       ...(hasQueryPoint ? { queryPoint: { latitude: latitude, longitude: longitude } } : {}),
       locationStatus: hasQueryPoint ? 'coordinates_only' : 'legacy_unscoped',
     };
-    var templates = Array.isArray(templatePayload.provider_templates) ? templatePayload.provider_templates : [];
+    var templates = Array.isArray(templatePayload.provider_templates)
+      ? templatePayload.provider_templates
+      : templatePayload.result &&
+          typeof templatePayload.result === 'object' &&
+          Array.isArray(templatePayload.result.provider_templates)
+        ? templatePayload.result.provider_templates
+        : [];
     var categoryMap = buildCategoryMap(categoryPayload);
     var speedMap = buildSpeedMap(speedPayload);
     var typeStats = statsByWeightType(templates);
     var warnings = [];
 
-    if (typeStats['1']) warnings.push('检测到 weight_type=1 模板，当前按 hybrid-实重保守模式计算。');
-    if (typeStats['3']) warnings.push('检测到 weight_type=3 模板，当前按 max(实重, 体积重) 计费，体积重除数 12000。');
+    if (typeStats['1'])
+      warnings.push('检测到 weight_type=1 模板，当前按 hybrid-实重保守模式计算。');
+    if (typeStats['3'])
+      warnings.push('检测到 weight_type=3 模板，当前按 max(实重, 体积重) 计费，体积重除数 12000。');
 
     return {
       observedContext: observedContext,
@@ -299,11 +331,16 @@
           note: warnings.join(' '),
           companyId: requestPayload.company_id || '',
         },
-        services: templates.map(function (item) {
-          return templateToCatalogService(item, categoryMap, speedMap);
-        }).sort(function (left, right) {
-          return left.priority - right.priority || left.displayName.localeCompare(right.displayName, 'zh-CN');
-        }),
+        services: templates
+          .map(function (item) {
+            return templateToCatalogService(item, categoryMap, speedMap);
+          })
+          .sort(function (left, right) {
+            return (
+              left.priority - right.priority ||
+              left.displayName.localeCompare(right.displayName, 'zh-CN')
+            );
+          }),
       },
       ruleSnapshot: {
         metadata: {
@@ -349,7 +386,7 @@
         locationUid: String(requestPayload.destinationLocationUid || ''),
       },
       currency: String(requestPayload.currency || '').toUpperCase(),
-      declaredPrice: finiteNumber(requestPayload.price),
+      declaredPriceMinor: Math.round(finiteNumber(requestPayload.price) * 100),
       package: {
         weight: { value: finiteNumber(requestPayload.weight), unit: 'g' },
         dimensions: {
@@ -363,65 +400,101 @@
     };
   }
 
+  function buildVersionedTupleKey(prefix, values) {
+    return prefix + JSON.stringify(values);
+  }
+
   function buildOfficialFingerprintKey(request) {
-    return [
+    return buildVersionedTupleKey('fp:v2:', [
       request.origin.countryUid,
       request.origin.cityUid,
       request.destination.countryUid,
       request.destination.locationUid,
       request.currency,
-      request.declaredPrice,
+      request.declaredPriceMinor,
       request.package.weight.value,
+      request.package.weight.unit,
       request.package.dimensions.length,
       request.package.dimensions.width,
       request.package.dimensions.height,
-      request.batteryInput == null ? 'battery-unknown' : (request.batteryInput ? 'battery' : 'no-battery'),
-    ].join('|');
+      request.package.dimensions.unit,
+      request.batteryInput == null
+        ? 'battery-unknown'
+        : request.batteryInput
+          ? 'battery'
+          : 'no-battery',
+    ]);
   }
 
   function normalizeServiceIdentityText(value) {
-    return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
   }
 
   function normalizeOfficialTariffs(calculatePayload, currency) {
-    return Array.isArray(calculatePayload.tariffs) ? calculatePayload.tariffs.map(function (item) {
-      var providerId = String(item.providerId || '');
-      var description = String(item.description || '');
-      var templateType = String(item.templateType || '');
-      var weightType = String(item.weightType || '');
-      var batteryKey = item.hasBattery ? 'battery' : 'no-battery';
-      return {
-        stableServiceKey: [
-          providerId,
-          normalizeServiceIdentityText(description),
-          normalizeServiceIdentityText(templateType),
-          normalizeServiceIdentityText(weightType),
-          batteryKey,
-        ].join('|'),
-        providerId: providerId,
-        providerName: String(item.providerName || ''),
-        description: description,
-        price: finiteNumber(item.price),
-        currency: String(currency || '').toUpperCase(),
-        weightType: weightType,
-        hasBattery: Boolean(item.hasBattery),
-        isDropOff: Boolean(item.isDropOff),
-        templateType: templateType,
-        clusterDeliverySpeeds: Array.isArray(item.clusterDeliverySpeeds) ? item.clusterDeliverySpeeds : [],
-        deliverySpeed: item.deliverySpeed == null ? null : item.deliverySpeed,
-        rating: item.rating == null ? null : item.rating,
-      };
-    }) : [];
+    return Array.isArray(calculatePayload.tariffs)
+      ? calculatePayload.tariffs.map(function (item) {
+          var providerId = String(item.providerId || '');
+          var description = String(item.description || '');
+          var normalizedDescription = normalizeServiceIdentityText(description);
+          var templateType = String(item.templateType || '');
+          var normalizedTemplateType = normalizeServiceIdentityText(templateType);
+          var weightType = String(item.weightType || '');
+          var normalizedWeightType = normalizeServiceIdentityText(weightType);
+          var batteryPresent = Object.prototype.hasOwnProperty.call(item, 'hasBattery')
+            || Object.prototype.hasOwnProperty.call(item, 'has_battery');
+          var hasBattery = Object.prototype.hasOwnProperty.call(item, 'hasBattery')
+            ? Boolean(item.hasBattery)
+            : Boolean(item.has_battery);
+          var batteryKey = batteryPresent
+            ? (hasBattery ? 'battery' : 'no-battery')
+            : 'unspecified';
+          var price = finiteNumber(item.price);
+          return {
+            stableServiceKey: buildVersionedTupleKey('svc:v2:', [
+              providerId,
+              normalizedDescription,
+              normalizedTemplateType,
+              normalizedWeightType,
+              batteryKey,
+            ]),
+            providerId: providerId,
+            providerName: String(item.providerName || ''),
+            description: description,
+            normalizedDescription: normalizedDescription,
+            price: price,
+            priceMinor: Math.round(price * 100),
+            currency: String(currency || '').toUpperCase(),
+            weightType: weightType,
+            hasBattery: batteryPresent ? hasBattery : null,
+            batteryMode: batteryKey,
+            deliveryVariant: normalizedDescription.indexOf('courier') >= 0 ? 'courier' : 'pickup',
+            isDropOff: Boolean(item.isDropOff),
+            templateType: templateType,
+            clusterDeliverySpeeds: Array.isArray(item.clusterDeliverySpeeds)
+              ? item.clusterDeliverySpeeds
+              : [],
+            deliverySpeed: item.deliverySpeed == null ? null : item.deliverySpeed,
+            rating: item.rating == null ? null : item.rating,
+          };
+        })
+      : [];
   }
 
   function importOfficialHar(payload) {
     var entries = parseHarPayload(payload);
     var providerEntry = findLatestEntry(entries, '/v1/provider/');
     var calculateEntries = entries.filter(isExactOfficialCalculateEntry);
-    var calculateEntry = calculateEntries.length ? calculateEntries[calculateEntries.length - 1] : null;
+    var calculateEntry = calculateEntries.length
+      ? calculateEntries[calculateEntries.length - 1]
+      : null;
     if (!calculateEntry) throw new Error('official HAR 中缺少 calculator/calculate 响应。');
 
-    var providerPayload = providerEntry ? parseEntryJson(providerEntry, 'official provider') : { providers: [] };
+    var providerPayload = providerEntry
+      ? parseEntryJson(providerEntry, 'official provider')
+      : { providers: [] };
     var calculatePayload = parseEntryJson(calculateEntry, 'official calculate');
     var requestPayload = parseRequestJson(calculateEntry);
 
@@ -446,12 +519,14 @@
       },
       sampleRequest: requestPayload,
       samples: samples,
-      providers: Array.isArray(providerPayload.providers) ? providerPayload.providers.map(function (item) {
-        return {
-          id: String(item.id || ''),
-          name: String(item.name || ''),
-        };
-      }) : [],
+      providers: Array.isArray(providerPayload.providers)
+        ? providerPayload.providers.map(function (item) {
+            return {
+              id: String(item.id || ''),
+              name: String(item.name || ''),
+            };
+          })
+        : [],
       tariffs: normalizeOfficialTariffs(calculatePayload, requestPayload.currency),
     };
   }
@@ -460,4 +535,4 @@
     importSellerHar: importSellerHar,
     importOfficialHar: importOfficialHar,
   };
-}(typeof window !== 'undefined' ? window : globalThis));
+})(typeof window !== 'undefined' ? window : globalThis);

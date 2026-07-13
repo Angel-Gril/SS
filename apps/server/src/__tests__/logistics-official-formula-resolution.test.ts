@@ -14,7 +14,7 @@ const resolution = {
   status: 'CONFIRMED',
   reviewedById: 'admin-1',
   reviewedAt: new Date('2026-07-12T00:00:00.000Z'),
-  evidence: { reason: 'matched exact pickup method' },
+  evidence: { requirementKey: 'requirement-1', reason: 'matched exact pickup method' },
   invalidatedAt: null,
 };
 
@@ -22,6 +22,7 @@ const expected = {
   tenantId: 'tenant-1',
   shopId: 'shop-1',
   warehouseId: 'warehouse-1',
+  requirementKey: 'requirement-1',
   officialFingerprint: 'official-fingerprint-1',
   sellerSourceRevisionId: 'revision-1',
   candidateSetChecksum: 'candidate-checksum-1',
@@ -49,6 +50,7 @@ describe('Official-to-Seller formula resolutions', () => {
       { officialFingerprint: 'official-fingerprint-2' },
       { sellerSourceRevisionId: 'revision-2' },
       { candidateSetChecksum: 'candidate-checksum-2' },
+      { requirementKey: 'requirement-2' },
     ]) {
       expect(() => assertEffectiveOfficialFormulaResolution(resolution, {
         ...expected,

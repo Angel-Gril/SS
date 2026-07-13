@@ -7,7 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
@@ -83,6 +89,16 @@ interface ShopOption {
   platform: string;
 }
 
+interface WarehouseOption {
+  id: string;
+  name: string;
+  platformWarehouseId?: string | null;
+  city?: string | null;
+  street?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
 interface OzonCdnAuthStatus {
   companyId?: string | null;
 }
@@ -133,7 +149,8 @@ const TYPE_OPTIONS = [
 ];
 
 const typeLabel = (t: string) => TYPE_OPTIONS.find((o) => o.value === t)?.label || t;
-const sourceLabel = (source: string | null | undefined) => (source === 'ozon_seller' ? 'Ozon可选池' : 'ERP自建');
+const sourceLabel = (source: string | null | undefined) =>
+  source === 'ozon_seller' ? 'Ozon可选池' : 'ERP自建';
 const PAGE_SIZE = 100;
 const EXTENSION_PING_TIMEOUT_MS = 5000;
 const OZON_DROPOFF_EXTENSION_TIMEOUT_MS = 300000;
@@ -175,20 +192,26 @@ function sendToExtension<T>(
     onMessage = (event: MessageEvent) => {
       if (event.source !== window) return;
       const data = event.data as any;
-      if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
+      if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId)
+        return;
       if (data.progress) {
         onProgress?.(data.progress as OzonDropoffSyncProgress);
         return;
       }
       cleanup();
-      resolve((data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse<T>);
+      resolve(
+        (data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse<T>,
+      );
     };
     timer = window.setTimeout(() => {
       cleanup();
       resolve({ ok: false, error: timeoutError });
     }, timeoutMs);
     window.addEventListener('message', onMessage);
-    window.postMessage({ direction: 'ss-erp:to-extension', requestId, message }, window.location.origin);
+    window.postMessage(
+      { direction: 'ss-erp:to-extension', requestId, message },
+      window.location.origin,
+    );
   });
 }
 
@@ -226,7 +249,6 @@ function mergeSyncProgress(
   };
 }
 
-
 export default function AdminOzonPickupPointsPage() {
   const systemDialog = useSystemDialog();
   const [items, setItems] = useState<PickupPointGroup[]>([]);
@@ -239,20 +261,62 @@ export default function AdminOzonPickupPointsPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<OzonDropoffSyncProgress | null>(null);
   const [syncShopId, setSyncShopId] = useState('');
+  const [syncWarehouses, setSyncWarehouses] = useState<WarehouseOption[]>([]);
+  const [syncWarehouseId, setSyncWarehouseId] = useState('');
   const [filterKeyword, setFilterKeyword] = useState('');
   const [page, setPage] = useState(1);
-  const [meta, setMeta] = useState<PageMeta>({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1, hasNext: false });
+  const [meta, setMeta] = useState<PageMeta>({
+    page: 1,
+    pageSize: PAGE_SIZE,
+    total: 0,
+    totalPages: 1,
+    hasNext: false,
+  });
 
   useEffect(() => {
     fetchShops();
   }, []);
 
   useEffect(() => {
+    if (!syncShopId) return;
+    let cancelled = false;
+    setSyncWarehouses([]);
+    setSyncWarehouseId('');
+    void api
+      .get<WarehouseOption[]>(`/api/shops/${encodeURIComponent(syncShopId)}/warehouses`)
+      .then((response) => {
+        if (cancelled) return;
+        const rows = response.code === 1 && Array.isArray(response.data) ? response.data : [];
+        setSyncWarehouses(rows);
+        setSyncWarehouseId(rows[0]?.id || '');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSyncWarehouses([]);
+        setSyncWarehouseId('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [syncShopId]);
+
+  const selectedSyncWarehouse =
+    syncWarehouses.find((warehouse) => warehouse.id === syncWarehouseId) || null;
+  const selectedWarehouseHasPoint =
+    Number.isFinite(selectedSyncWarehouse?.latitude) &&
+    Number.isFinite(selectedSyncWarehouse?.longitude);
+
+  useEffect(() => {
     setPage(1);
   }, [filterKeyword]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { fetchList(); }, filterKeyword ? 250 : 0);
+    const timer = window.setTimeout(
+      () => {
+        fetchList();
+      },
+      filterKeyword ? 250 : 0,
+    );
     return () => window.clearTimeout(timer);
   }, [filterKeyword, page]);
 
@@ -268,7 +332,15 @@ export default function AdminOzonPickupPointsPage() {
     const res = await api.get<PickupPointGroup[]>(`/api/ozon-pickup-points?${params.toString()}`);
     if (res.code === 1 && res.data) {
       setItems(res.data);
-      setMeta((res.meta as PageMeta | undefined) || { page, pageSize: PAGE_SIZE, total: res.data.length, totalPages: 1, hasNext: false });
+      setMeta(
+        (res.meta as PageMeta | undefined) || {
+          page,
+          pageSize: PAGE_SIZE,
+          total: res.data.length,
+          totalPages: 1,
+          hasNext: false,
+        },
+      );
     }
     setLoading(false);
   }
@@ -276,7 +348,7 @@ export default function AdminOzonPickupPointsPage() {
   async function fetchShops() {
     const res = await api.get<ShopOption[] | { rows?: ShopOption[] }>('/api/shops?limit=200');
     if (res.code !== 1 || !res.data) return;
-    const rows = Array.isArray(res.data) ? res.data : (res.data.rows || []);
+    const rows = Array.isArray(res.data) ? res.data : res.data.rows || [];
     const ozonShops = rows.filter((shop) => shop.platform === 'OZON');
     setShops(ozonShops);
     setSyncShopId((current) => current || ozonShops[0]?.id || '');
@@ -383,6 +455,18 @@ export default function AdminOzonPickupPointsPage() {
       toast({ title: '请选择 Ozon 店铺', variant: 'destructive' });
       return;
     }
+    if (!selectedSyncWarehouse) {
+      toast({ title: '请选择发运仓库', variant: 'destructive' });
+      return;
+    }
+    if (!selectedWarehouseHasPoint) {
+      toast({
+        title: '仓库缺少坐标',
+        description: '请先同步 Ozon 仓库，或补充仓库经纬度后再采集物流数据。',
+        variant: 'destructive',
+      });
+      return;
+    }
     setSyncing(true);
     setSyncProgress({
       phase: 'company',
@@ -393,19 +477,20 @@ export default function AdminOzonPickupPointsPage() {
       errorCount: 0,
     });
     const authRes = await api.get<OzonCdnAuthStatus>(`/api/shops/${syncShopId}/ozon-cdn-auth`);
-    const companyId = authRes.code === 1 && authRes.data?.companyId
-      ? String(authRes.data.companyId).trim()
-      : '';
+    const companyId =
+      authRes.code === 1 && authRes.data?.companyId ? String(authRes.data.companyId).trim() : '';
     const extensionPing = await sendToExtension<{ version?: string }>(
       { type: 'ss-erp:ping' },
       EXTENSION_PING_TIMEOUT_MS,
       '未检测到 SS ERP 扩展桥，请刷新当前 ERP 页面；如果仍失败，请在 Chrome 扩展管理页重新加载 SS ERP 扩展',
     );
     if (!extensionPing.ok) {
-      setSyncProgress((current) => mergeSyncProgress(current, {
-        phase: 'error',
-        label: '浏览器扩展未连接',
-      }));
+      setSyncProgress((current) =>
+        mergeSyncProgress(current, {
+          phase: 'error',
+          label: '浏览器扩展未连接',
+        }),
+      );
       setSyncing(false);
       toast({
         title: '浏览器扩展未连接',
@@ -414,28 +499,41 @@ export default function AdminOzonPickupPointsPage() {
       });
       return;
     }
-    setSyncProgress((current) => mergeSyncProgress(current, {
-      phase: 'dropoffs',
-      label: '扩展已连接，开始读取 Ozon 可选发运点',
-    }));
-    const extensionResult = await sendToExtension<OzonDropoffSyncPayload>({
-      type: 'spb-self-hosted:fetch-ozon-dropoff-points',
-      shopId: syncShopId,
-      ...(companyId ? { companyId } : {}),
-    }, OZON_DROPOFF_EXTENSION_TIMEOUT_MS, 'Ozon 可选发运点采集超过 5 分钟仍未完成，请确认 seller.ozon.ru 已登录并保持页面打开，然后重试', (progress) => {
-      setSyncProgress((current) => mergeSyncProgress(current, progress));
-    });
+    setSyncProgress((current) =>
+      mergeSyncProgress(current, {
+        phase: 'dropoffs',
+        label: '扩展已连接，开始读取 Ozon 可选发运点',
+      }),
+    );
+    const extensionResult = await sendToExtension<OzonDropoffSyncPayload>(
+      {
+        type: 'spb-self-hosted:fetch-ozon-dropoff-points',
+        shopId: syncShopId,
+        ...(companyId ? { companyId } : {}),
+        point: {
+          latitude: selectedSyncWarehouse.latitude,
+          longitude: selectedSyncWarehouse.longitude,
+        },
+      },
+      OZON_DROPOFF_EXTENSION_TIMEOUT_MS,
+      'Ozon 可选发运点采集超过 5 分钟仍未完成，请确认 seller.ozon.ru 已登录并保持页面打开，然后重试',
+      (progress) => {
+        setSyncProgress((current) => mergeSyncProgress(current, progress));
+      },
+    );
     let res;
     if (extensionResult.ok && extensionResult.data) {
       const dropoffData = extensionResult.data;
-      setSyncProgress((current) => mergeSyncProgress(current, {
-        phase: 'importing',
-        label: '写入 ERP 数据库',
-        providerDone: dropoffData.providers.length,
-        providerTotal: dropoffData.providers.length,
-        pointCount: dropoffData.points.length,
-        errorCount: dropoffData.providerErrors?.length || 0,
-      }));
+      setSyncProgress((current) =>
+        mergeSyncProgress(current, {
+          phase: 'importing',
+          label: '写入 ERP 数据库',
+          providerDone: dropoffData.providers.length,
+          providerTotal: dropoffData.providers.length,
+          pointCount: dropoffData.points.length,
+          errorCount: dropoffData.providerErrors?.length || 0,
+        }),
+      );
       res = await api.post<{
         created: number;
         updated: number;
@@ -449,10 +547,12 @@ export default function AdminOzonPickupPointsPage() {
         ...dropoffData,
       });
     } else {
-      setSyncProgress((current) => mergeSyncProgress(current, {
-        phase: 'error',
-        label: '扩展采集失败',
-      }));
+      setSyncProgress((current) =>
+        mergeSyncProgress(current, {
+          phase: 'error',
+          label: '扩展采集失败',
+        }),
+      );
       setSyncing(false);
       toast({
         title: '需要通过浏览器扩展读取 Ozon 可选发运点池',
@@ -478,10 +578,12 @@ export default function AdminOzonPickupPointsPage() {
       setPage(1);
       fetchList();
     } else {
-      setSyncProgress((current) => mergeSyncProgress(current, {
-        phase: 'error',
-        label: '写入 ERP 失败',
-      }));
+      setSyncProgress((current) =>
+        mergeSyncProgress(current, {
+          phase: 'error',
+          label: '写入 ERP 失败',
+        }),
+      );
       toast({ title: res.msg || '导入 Ozon 可选发运点失败', variant: 'destructive' });
     }
   }
@@ -497,9 +599,15 @@ export default function AdminOzonPickupPointsPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">OZON 可选发运点池</h1>
-          <p className="text-muted-foreground mt-1">管理员从 Ozon Seller 读取当前账号可选择的中国境内发运点/集运仓，保存后用户可按地址、城市和承运商查询选择。</p>
+          <p className="text-muted-foreground mt-1">
+            管理员从 Ozon Seller
+            读取当前账号可选择的中国境内发运点/集运仓，保存后用户可按地址、城市和承运商查询选择。
+          </p>
         </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" />新增手工点</Button>
+        <Button onClick={openCreate}>
+          <Plus className="h-4 w-4 mr-1" />
+          新增手工点
+        </Button>
       </div>
 
       <Card>
@@ -509,7 +617,8 @@ export default function AdminOzonPickupPointsPage() {
             Ozon Seller 可选点采集
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            选择 ERP 店铺后，通过浏览器扩展复用已登录的 seller.ozon.ru 页面，读取该账号在 Ozon 后台可选的发运点池。
+            选择 ERP 店铺后，通过浏览器扩展复用已登录的 seller.ozon.ru 页面，读取该账号在 Ozon
+            后台可选的发运点池。
           </p>
         </CardHeader>
         <CardContent>
@@ -521,23 +630,72 @@ export default function AdminOzonPickupPointsPage() {
                 onChange={(event) => setSyncShopId(event.target.value)}
                 className="h-9 min-w-[240px] rounded-md border border-input bg-background px-3 text-sm"
               >
-                {shops.length ? shops.map((shop) => (
-                  <option key={shop.id} value={shop.id}>{shop.name}</option>
-                )) : <option value="">无可同步店铺</option>}
+                {shops.length ? (
+                  shops.map((shop) => (
+                    <option key={shop.id} value={shop.id}>
+                      {shop.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">无可同步店铺</option>
+                )}
               </select>
             </div>
-            <Button onClick={syncOzonDropoffPoints} disabled={syncing || !syncShopId}>
-              {syncing ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+            <div className="space-y-1">
+              <Label>发运仓库</Label>
+              <select
+                value={syncWarehouseId}
+                onChange={(event) => setSyncWarehouseId(event.target.value)}
+                className="h-9 min-w-[280px] rounded-md border border-input bg-background px-3 text-sm"
+              >
+                {syncWarehouses.length ? (
+                  syncWarehouses.map((warehouse) => (
+                    <option key={warehouse.id} value={warehouse.id}>
+                      {warehouse.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">无已同步仓库</option>
+                )}
+              </select>
+            </div>
+            <Button
+              onClick={syncOzonDropoffPoints}
+              disabled={
+                syncing || !syncShopId || !selectedSyncWarehouse || !selectedWarehouseHasPoint
+              }
+            >
+              {syncing ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-1" />
+              )}
               读取可选发运点池
             </Button>
           </div>
+          {selectedSyncWarehouse && (
+            <div className="mt-3 text-xs text-muted-foreground">
+              {selectedWarehouseHasPoint ? (
+                `查询点：${selectedSyncWarehouse.city || selectedSyncWarehouse.name} · ${selectedSyncWarehouse.latitude}, ${selectedSyncWarehouse.longitude}`
+              ) : (
+                <span className="text-destructive">
+                  仓库缺少坐标，请先同步 Ozon 仓库或补充仓库坐标。
+                </span>
+              )}
+              {selectedSyncWarehouse.street ? ` · ${selectedSyncWarehouse.street}` : ''}
+            </div>
+          )}
+
           <div className="mt-3 text-xs text-muted-foreground">
-            这一步必须通过浏览器扩展在真实 Seller 页面执行；服务端官方 API 只能读已绑定物流方式，不能代替可选发运点池采集。
+            这一步必须通过浏览器扩展在真实 Seller 页面执行；服务端官方 API
+            只能读已绑定物流方式，不能代替可选发运点池采集。
           </div>
           {syncProgress && (
             <div className="mt-4 rounded-md border bg-muted/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                <div className="font-medium">{syncProgress.label || '正在同步 Ozon 可选发运点'}</div>
+                <div className="font-medium">
+                  {syncProgress.label || '正在同步 Ozon 可选发运点'}
+                </div>
                 <div className="text-muted-foreground">{progressPercent}%</div>
               </div>
               <div
@@ -547,10 +705,15 @@ export default function AdminOzonPickupPointsPage() {
                 aria-valuemax={100}
                 aria-valuenow={progressPercent}
               >
-                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progressPercent}%` }} />
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${progressPercent}%` }}
+                />
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>承运商：{providerDone}/{providerTotal || '-'}</span>
+                <span>
+                  承运商：{providerDone}/{providerTotal || '-'}
+                </span>
                 <span>已读取发运点：{pointCount}</span>
                 <span>失败承运商：{errorCount}</span>
                 {syncProgress.providerName && <span>当前：{syncProgress.providerName}</span>}
@@ -574,7 +737,9 @@ export default function AdminOzonPickupPointsPage() {
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
+            <div className="flex justify-center py-10">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
           ) : items.length === 0 ? (
             <p className="text-center py-10 text-muted-foreground">暂无数据</p>
           ) : (
@@ -582,41 +747,87 @@ export default function AdminOzonPickupPointsPage() {
               {items.map((it) => (
                 <div key={it.id} className="rounded-lg border p-3 hover:bg-muted/30">
                   <div className="flex items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium">{it.name}</span>
-                      <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>{typeLabel(it.type)}</Badge>
-                      <Badge variant="outline">{it.province ? `${it.province} · ` : ''}{it.city}</Badge>
-                      <Badge variant="outline">{sourceLabel(it.source)}</Badge>
-                      {it.carriers.slice(0, 4).map((carrier) => <Badge key={carrier} variant="outline">{carrier}</Badge>)}
-                      <Badge variant="outline">{it.activeServiceCount || 0}/{it.serviceCount} 启用</Badge>
-                      {!it.isActive && <Badge variant="outline" className="text-muted-foreground">已停用</Badge>}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium">{it.name}</span>
+                        <Badge variant={it.type === 'collect' ? 'default' : 'secondary'}>
+                          {typeLabel(it.type)}
+                        </Badge>
+                        <Badge variant="outline">
+                          {it.province ? `${it.province} · ` : ''}
+                          {it.city}
+                        </Badge>
+                        <Badge variant="outline">{sourceLabel(it.source)}</Badge>
+                        {it.carriers.slice(0, 4).map((carrier) => (
+                          <Badge key={carrier} variant="outline">
+                            {carrier}
+                          </Badge>
+                        ))}
+                        <Badge variant="outline">
+                          {it.activeServiceCount || 0}/{it.serviceCount} 启用
+                        </Badge>
+                        {!it.isActive && (
+                          <Badge variant="outline" className="text-muted-foreground">
+                            已停用
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-sm text-muted-foreground mt-1">{it.address}</div>
+                      <div className="text-xs text-muted-foreground mt-1 flex gap-3 flex-wrap">
+                        {it.contact && <span>联系人：{it.contact}</span>}
+                        {it.phone && <span>电话：{it.phone}</span>}
+                        {it.workingHours && <span>{it.workingHours}</span>}
+                      </div>
                     </div>
-                    <div className="text-sm text-muted-foreground mt-1">{it.address}</div>
-                    <div className="text-xs text-muted-foreground mt-1 flex gap-3 flex-wrap">
-                      {it.contact && <span>联系人：{it.contact}</span>}
-                      {it.phone && <span>电话：{it.phone}</span>}
-                      {it.workingHours && <span>{it.workingHours}</span>}
+                    <div className="text-xs text-muted-foreground shrink-0">
+                      服务 {it.serviceCount}
                     </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground shrink-0">服务 {it.serviceCount}</div>
                   </div>
                   <div className="mt-2 space-y-1">
                     {it.services.map((service) => (
-                      <div key={service.id} className="flex items-center gap-2 rounded-md bg-muted/30 px-2 py-1.5 text-xs">
+                      <div
+                        key={service.id}
+                        className="flex items-center gap-2 rounded-md bg-muted/30 px-2 py-1.5 text-xs"
+                      >
                         <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5">
-                          <span className="font-medium">{service.providerName || service.carrierName || '未命名服务'}</span>
-                          {service.serviceLevel && <Badge variant="outline" className="h-5 px-1.5 text-[11px]">{service.serviceLevel}</Badge>}
-                          {service.weightTier && <Badge variant="outline" className="h-5 px-1.5 text-[11px]">{service.weightTier}</Badge>}
-                          {service.externalId && <span className="text-muted-foreground">ID {service.externalId}</span>}
-                          {!service.isActive && <span className="text-muted-foreground">已停用</span>}
-                          {service.note && <span className="truncate text-muted-foreground">{service.note}</span>}
+                          <span className="font-medium">
+                            {service.providerName || service.carrierName || '未命名服务'}
+                          </span>
+                          {service.serviceLevel && (
+                            <Badge variant="outline" className="h-5 px-1.5 text-[11px]">
+                              {service.serviceLevel}
+                            </Badge>
+                          )}
+                          {service.weightTier && (
+                            <Badge variant="outline" className="h-5 px-1.5 text-[11px]">
+                              {service.weightTier}
+                            </Badge>
+                          )}
+                          {service.externalId && (
+                            <span className="text-muted-foreground">ID {service.externalId}</span>
+                          )}
+                          {!service.isActive && (
+                            <span className="text-muted-foreground">已停用</span>
+                          )}
+                          {service.note && (
+                            <span className="truncate text-muted-foreground">{service.note}</span>
+                          )}
                         </div>
                         <div className="flex gap-1 shrink-0">
-                          <Button size="sm" variant="ghost" onClick={() => openEdit(pointFromService(it, service))} title="编辑服务变体">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(pointFromService(it, service))}
+                            title="编辑服务变体"
+                          >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => remove(pointFromService(it, service))} title="删除服务变体">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => remove(pointFromService(it, service))}
+                            title="删除服务变体"
+                          >
                             <Trash2 className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         </div>
@@ -628,7 +839,9 @@ export default function AdminOzonPickupPointsPage() {
             </div>
           )}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-            <span>第 {meta.page} / {meta.totalPages} 页，每页 {meta.pageSize} 条</span>
+            <span>
+              第 {meta.page} / {meta.totalPages} 页，每页 {meta.pageSize} 条
+            </span>
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
@@ -636,7 +849,8 @@ export default function AdminOzonPickupPointsPage() {
                 onClick={() => setPage((value) => Math.max(1, value - 1))}
                 disabled={loading || meta.page <= 1}
               >
-                <ChevronLeft className="h-4 w-4 mr-1" />上一页
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                上一页
               </Button>
               <Button
                 variant="outline"
@@ -644,7 +858,8 @@ export default function AdminOzonPickupPointsPage() {
                 onClick={() => setPage((value) => value + 1)}
                 disabled={loading || !meta.hasNext}
               >
-                下一页<ChevronRight className="h-4 w-4 ml-1" />
+                下一页
+                <ChevronRight className="h-4 w-4 ml-1" />
               </Button>
             </div>
           </div>
@@ -653,16 +868,26 @@ export default function AdminOzonPickupPointsPage() {
 
       <Dialog open={showDialog} onOpenChange={(v) => !v && setShowDialog(false)}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>{editing ? '编辑发运点' : '新增发运点'}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{editing ? '编辑发运点' : '新增发运点'}</DialogTitle>
+          </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label>城市 *</Label>
-                <Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="如：义乌" />
+                <Input
+                  value={form.city}
+                  onChange={(e) => setForm({ ...form, city: e.target.value })}
+                  placeholder="如：义乌"
+                />
               </div>
               <div className="space-y-1">
                 <Label>省份</Label>
-                <Input value={form.province} onChange={(e) => setForm({ ...form, province: e.target.value })} placeholder="如：浙江" />
+                <Input
+                  value={form.province}
+                  onChange={(e) => setForm({ ...form, province: e.target.value })}
+                  placeholder="如：浙江"
+                />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -670,45 +895,90 @@ export default function AdminOzonPickupPointsPage() {
                 <Label>类型 *</Label>
                 <select
                   value={form.type}
-                  onChange={(e) => setForm({ ...form, type: e.target.value as 'collect' | 'dispatch' })}
+                  onChange={(e) =>
+                    setForm({ ...form, type: e.target.value as 'collect' | 'dispatch' })
+                  }
                   className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                 >
-                  {TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  {TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1">
                 <Label>排序（小在前）</Label>
-                <Input type="number" value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) || 0 })} />
+                <Input
+                  type="number"
+                  value={form.sortOrder}
+                  onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) || 0 })}
+                />
               </div>
             </div>
             <div className="space-y-1">
               <Label>站点名称 *</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="如：义乌国际物流中心 OZON 集运点" />
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="如：义乌国际物流中心 OZON 集运点"
+              />
             </div>
             <div className="space-y-1">
               <Label>详细地址 *</Label>
-              <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="详细到门牌号" />
+              <Input
+                value={form.address}
+                onChange={(e) => setForm({ ...form, address: e.target.value })}
+                placeholder="详细到门牌号"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1"><Label>联系人</Label><Input value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} /></div>
-              <div className="space-y-1"><Label>电话</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
+              <div className="space-y-1">
+                <Label>联系人</Label>
+                <Input
+                  value={form.contact}
+                  onChange={(e) => setForm({ ...form, contact: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>电话</Label>
+                <Input
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                />
+              </div>
             </div>
             <div className="space-y-1">
               <Label>工作时间</Label>
-              <Input value={form.workingHours} onChange={(e) => setForm({ ...form, workingHours: e.target.value })} placeholder="周一至周六 09:00-18:00" />
+              <Input
+                value={form.workingHours}
+                onChange={(e) => setForm({ ...form, workingHours: e.target.value })}
+                placeholder="周一至周六 09:00-18:00"
+              />
             </div>
             <div className="space-y-1">
               <Label>备注（资费/限重等）</Label>
-              <Input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+              <Input
+                value={form.note}
+                onChange={(e) => setForm({ ...form, note: e.target.value })}
+              />
             </div>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+              <input
+                type="checkbox"
+                checked={form.isActive}
+                onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+              />
               <span>启用（用户可见）</span>
             </label>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDialog(false)}>取消</Button>
-            <Button onClick={save} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : '保存'}</Button>
+            <Button variant="outline" onClick={() => setShowDialog(false)}>
+              取消
+            </Button>
+            <Button onClick={save} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : '保存'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

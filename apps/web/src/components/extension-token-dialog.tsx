@@ -1,142 +1,253 @@
 'use client';
 
-import { useState } from 'react';
-import { Key, Copy, Check, Loader2, RefreshCw, Cable } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Copy, Key, Loader2, MonitorUp, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/use-toast';
-import { api, getApiBase } from '@/lib/api';
+import { api, getApiBase, type ApiResponse } from '@/lib/api';
 
 interface ExtensionTokenDialogProps {
   trigger?: React.ReactNode;
 }
 
-interface ExtensionBridgeResponse {
-  ok?: boolean;
-  endpoint?: string;
-  hasToken?: boolean;
-  user?: {
-    id?: string;
-    phone?: string;
-    nickname?: string;
-    accountCode?: string;
-    role?: string;
-  } | null;
-  error?: string;
+interface ShopOption {
+  id: string;
+  name: string;
+  platform: string;
+  status?: string;
+}
+
+interface PairingCode {
+  id: string;
+  code: string;
+  deploymentId: string;
+  expiresAt: string;
+  shopIds: string[];
+}
+
+interface DeviceSession {
+  id: string;
+  deviceId: string;
+  deviceLabel: string | null;
+  status: string;
+  shopIds: string[];
+  scopes: string[];
+  expiresAt: string;
+  lastSeenAt: string | null;
+  createdAt: string;
+}
+
+type View = 'pairing' | 'legacy';
+type CopyTarget = 'url' | 'deployment' | 'code' | 'token' | null;
+
+const logisticsDistributionEnabled =
+  process.env.NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED === 'true';
+
+function responseErrorCode(response: ApiResponse<unknown>): string {
+  const value = response as unknown as Record<string, unknown>;
+  const error =
+    value.error && typeof value.error === 'object' ? (value.error as Record<string, unknown>) : {};
+  return String(value.errorCode || error.code || 'REQUEST_FAILED');
+}
+
+function shortDeviceId(value: string): string {
+  return value.length > 18 ? value.slice(0, 8) + '...' + value.slice(-6) : value;
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
 }
 
 export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<View>(logisticsDistributionEnabled ? 'pairing' : 'legacy');
+  const [shops, setShops] = useState<ShopOption[]>([]);
+  const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
+  const [deviceLabel, setDeviceLabel] = useState('');
+  const [pairing, setPairing] = useState<PairingCode | null>(null);
+  const [sessions, setSessions] = useState<DeviceSession[]>([]);
+  const [loadingContext, setLoadingContext] = useState(false);
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [revokingId, setRevokingId] = useState('');
   const [token, setToken] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [binding, setBinding] = useState(false);
-  const [bindStatus, setBindStatus] = useState('');
-  const [copied, setCopied] = useState(false);
-
-  async function generateToken(): Promise<string | null> {
-    setLoading(true);
-    try {
-      const res = await api.post<{ token: string; expiresAt: string }>('/api/auth/extension-token', {});
-      if (res.code === 1 && res.data) {
-        setToken(res.data.token);
-        setExpiresAt(res.data.expiresAt);
-        return res.data.token;
-      }
-      toast({ title: res.msg || '生成失败', variant: 'destructive' });
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function formatExtensionBoundUserLabel(user: ExtensionBridgeResponse['user']) {
-    if (!user) return '';
-    return user.accountCode || user.phone || user.nickname || (user.id ? `ID ${user.id.slice(0, 8)}` : '');
-  }
-
-  function sendToExtension(message: Record<string, unknown>): Promise<ExtensionBridgeResponse> {
-    if (typeof window === 'undefined') {
-      return Promise.resolve({ ok: false, error: '当前环境无法连接扩展' });
-    }
-
-    const requestId = `extension-bind-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-    return new Promise((resolve) => {
-      let done = false;
-      let onMessage: (event: MessageEvent) => void;
-      const cleanup = () => {
-        done = true;
-        window.removeEventListener('message', onMessage);
-        clearTimeout(timer);
-      };
-      onMessage = (event: MessageEvent) => {
-        if (event.source !== window) return;
-        const data = event.data as any;
-        if (!data || data.direction !== 'ss-erp:from-extension' || data.requestId !== requestId) return;
-        cleanup();
-        resolve((data.response || { ok: false, error: '扩展未返回结果' }) as ExtensionBridgeResponse);
-      };
-      const timer = window.setTimeout(() => {
-        if (done) return;
-        cleanup();
-        resolve({ ok: false, error: '未检测到 SS ERP 扩展，请确认已安装并刷新当前页面' });
-      }, 5000);
-
-      window.addEventListener('message', onMessage);
-      window.postMessage({
-        direction: 'ss-erp:to-extension',
-        requestId,
-        message,
-      }, window.location.origin);
-    });
-  }
-
-  async function bindExtension() {
-    setBinding(true);
-    setBindStatus('正在生成 Token...');
-    const nextToken = token || await generateToken();
-    if (!nextToken) {
-      setBinding(false);
-      setBindStatus('Token 生成失败');
-      return;
-    }
-
-    const endpoint = `${getApiBase()}/api/collect`;
-    setBindStatus('正在写入扩展配置...');
-    const response = await sendToExtension({
-      type: 'ozon-calc:erp-endpoint-save',
-      payload: { endpoint, token: nextToken },
-    });
-    setBinding(false);
-
-    if (response.ok) {
-      const boundUser = formatExtensionBoundUserLabel(response.user);
-      setBindStatus(`扩展已连接：${boundUser ? `${boundUser} · ` : ''}${response.endpoint || endpoint}`);
-      toast({
-        title: '扩展连接成功',
-        description: boundUser ? `已绑定账号：${boundUser}` : 'ERP 地址和 Token 已写入当前浏览器扩展',
-      });
-    } else {
-      const msg = response.error || '扩展连接失败';
-      setBindStatus(msg);
-      toast({ title: '扩展连接失败', description: msg, variant: 'destructive' });
-    }
-  }
-
-  async function copyValue(value: string) {
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
+  const [tokenExpiresAt, setTokenExpiresAt] = useState('');
+  const [legacyBusy, setLegacyBusy] = useState(false);
+  const [legacyDisabled, setLegacyDisabled] = useState(false);
+  const [copied, setCopied] = useState<CopyTarget>(null);
 
   const erpUrl = typeof window !== 'undefined' ? getApiBase() : '';
-  const collectEndpoint = erpUrl ? `${erpUrl}/api/collect` : '';
+  const shopNameById = useMemo(() => new Map(shops.map((shop) => [shop.id, shop.name])), [shops]);
+  const pairingFields: Array<[label: string, value: string, target: Exclude<CopyTarget, null>]> =
+    pairing
+      ? [
+          ['ERP 地址', erpUrl, 'url'],
+          ['部署标识', pairing.deploymentId, 'deployment'],
+          ['配对码', pairing.code, 'code'],
+        ]
+      : [];
+
+  async function loadPairingContext() {
+    setLoadingContext(true);
+    try {
+      const [shopResponse, sessionResponse] = await Promise.all([
+        api.get<ShopOption[]>('/api/shops'),
+        api.get<DeviceSession[]>('/api/extension-device/sessions'),
+      ]);
+      const ozonShops =
+        shopResponse.code === 1 && Array.isArray(shopResponse.data)
+          ? shopResponse.data.filter(
+              (shop) => shop.platform === 'OZON' && shop.status !== 'DISABLED',
+            )
+          : [];
+      setShops(ozonShops);
+      setSelectedShopIds((current) => {
+        const allowed = current.filter((id) => ozonShops.some((shop) => shop.id === id));
+        if (allowed.length) return allowed;
+        return ozonShops.length === 1 ? [ozonShops[0]!.id] : [];
+      });
+      setSessions(
+        sessionResponse.code === 1 && Array.isArray(sessionResponse.data)
+          ? sessionResponse.data
+          : [],
+      );
+    } catch (error) {
+      toast({
+        title: '设备连接信息读取失败',
+        description: error instanceof Error ? error.message : '网络请求失败',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoadingContext(false);
+    }
+  }
+
+  useEffect(() => {
+    if (open && logisticsDistributionEnabled) void loadPairingContext();
+  }, [open]);
+
+  function toggleShop(shopId: string) {
+    setSelectedShopIds((current) =>
+      current.includes(shopId) ? current.filter((id) => id !== shopId) : [...current, shopId],
+    );
+  }
+
+  async function createPairingCode() {
+    if (!selectedShopIds.length) {
+      toast({
+        title: '请选择 Ozon 店铺',
+        description: '设备权限必须限定到至少一个店铺。',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setPairingBusy(true);
+    try {
+      const response = await api.post<PairingCode>('/api/extension-device/pairing-codes', {
+        shopIds: selectedShopIds,
+        ...(deviceLabel.trim() ? { deviceLabel: deviceLabel.trim() } : {}),
+      });
+      if (response.code !== 1 || !response.data) {
+        throw new Error(response.msg || responseErrorCode(response));
+      }
+      setPairing(response.data);
+      toast({ title: '一次性配对码已创建', description: '请在过期前到扩展“完整设置”中领取。' });
+      await loadPairingContext();
+    } catch (error) {
+      toast({
+        title: '创建配对码失败',
+        description: error instanceof Error ? error.message : '请求失败',
+        variant: 'destructive',
+      });
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
+  async function cancelPairingCode() {
+    if (!pairing) return;
+    setPairingBusy(true);
+    try {
+      const response = await api.delete(
+        '/api/extension-device/pairing-codes/' + encodeURIComponent(pairing.id),
+      );
+      if (response.code !== 1) throw new Error(response.msg || responseErrorCode(response));
+      setPairing(null);
+      toast({ title: '配对码已取消' });
+    } catch (error) {
+      toast({
+        title: '取消配对码失败',
+        description: error instanceof Error ? error.message : '请求失败',
+        variant: 'destructive',
+      });
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
+  async function revokeSession(sessionId: string) {
+    setRevokingId(sessionId);
+    try {
+      const response = await api.delete(
+        '/api/extension-device/sessions/' + encodeURIComponent(sessionId),
+      );
+      if (response.code !== 1) throw new Error(response.msg || responseErrorCode(response));
+      setSessions((current) => current.filter((session) => session.id !== sessionId));
+      toast({ title: '撤销设备完成', description: '该设备下次联网时将立即停止物流规则访问。' });
+    } catch (error) {
+      toast({
+        title: '撤销设备失败',
+        description: error instanceof Error ? error.message : '请求失败',
+        variant: 'destructive',
+      });
+    } finally {
+      setRevokingId('');
+    }
+  }
+
+  async function generateLegacyToken() {
+    setLegacyBusy(true);
+    try {
+      const response = await api.post<{ token: string; expiresAt: string }>(
+        '/api/auth/extension-token',
+        {},
+      );
+      if (response.code !== 1 || !response.data) {
+        const code = responseErrorCode(response);
+        if (code === 'legacy_extension_token_disabled') setLegacyDisabled(true);
+        throw new Error(response.msg || code);
+      }
+      setToken(response.data.token);
+      setTokenExpiresAt(response.data.expiresAt);
+    } catch (error) {
+      toast({
+        title: '兼容 Token 生成失败',
+        description: error instanceof Error ? error.message : '请求失败',
+        variant: 'destructive',
+      });
+    } finally {
+      setLegacyBusy(false);
+    }
+  }
+
+  async function copyValue(target: Exclude<CopyTarget, null>, value: string) {
+    await navigator.clipboard.writeText(value);
+    setCopied(target);
+    window.setTimeout(() => setCopied(null), 1800);
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (o && !token) generateToken(); }}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger || (
           <Button variant="ghost" size="icon" title="扩展连接">
@@ -144,87 +255,284 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            扩展连接 Token
+            <MonitorUp className="h-4 w-4" />
+            扩展设备连接
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            优先点击一键连接。失败时再把下面的 ERP 地址和 Token 手动填入 Chrome 扩展设置面板。
-          </p>
 
-          <div className="rounded-md border bg-muted/40 p-3">
-            <div className="mb-2 flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium">一键连接当前浏览器扩展</div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  会把 ERP 采集接口和 30 天 Token 写入扩展本地存储，不经过公告或远程脚本。
+        <div role="tablist" aria-label="扩展连接方式" className="flex border-b">
+          <button
+            type="button"
+            role="tab"
+            hidden={!logisticsDistributionEnabled}
+            aria-selected={view === 'pairing'}
+            className={
+              'border-b-2 px-3 py-2 text-sm font-medium ' +
+              (view === 'pairing'
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground')
+            }
+            onClick={() => setView('pairing')}
+          >
+            设备配对
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'legacy'}
+            className={
+              'border-b-2 px-3 py-2 text-sm font-medium ' +
+              (view === 'legacy'
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground')
+            }
+            onClick={() => setView('legacy')}
+          >
+            兼容 Token
+          </button>
+        </div>
+
+        {logisticsDistributionEnabled && view === 'pairing' ? (
+          <div className="space-y-5">
+            <section aria-labelledby="pairing-scope-title" className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 id="pairing-scope-title" className="text-sm font-semibold">
+                    选择 Ozon 店铺
+                  </h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    设备只能读取所选店铺已发布的物流规则。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={loadPairingContext}
+                  disabled={loadingContext}
+                >
+                  {loadingContext ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1.5">刷新</span>
+                </Button>
+              </div>
+
+              <div className="divide-y border-y">
+                {shops.length ? (
+                  shops.map((shop) => (
+                    <label
+                      key={shop.id}
+                      className="flex cursor-pointer items-center gap-3 px-2 py-2.5 text-sm hover:bg-muted/40"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={selectedShopIds.includes(shop.id)}
+                        onChange={() => toggleShop(shop.id)}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{shop.name}</span>
+                      <code className="text-[11px] text-muted-foreground">
+                        {shop.id.slice(0, 8)}
+                      </code>
+                    </label>
+                  ))
+                ) : (
+                  <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                    {loadingContext ? '正在读取店铺...' : '没有可配对的 Ozon 店铺'}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  value={deviceLabel}
+                  onChange={(event) => setDeviceLabel(event.target.value)}
+                  maxLength={120}
+                  placeholder="设备名称，例如：开发机 Chrome"
+                  aria-label="设备名称"
+                />
+                <Button
+                  onClick={createPairingCode}
+                  disabled={pairingBusy || !selectedShopIds.length}
+                  className="shrink-0"
+                >
+                  {pairingBusy ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  生成配对码
+                </Button>
+              </div>
+            </section>
+
+            {pairing ? (
+              <section
+                aria-labelledby="pairing-code-title"
+                className="space-y-3 border-y border-emerald-300 bg-emerald-50/50 px-3 py-3 dark:bg-emerald-950/20"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 id="pairing-code-title" className="text-sm font-semibold">
+                      一次性配对码
+                    </h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      有效期至 {formatDate(pairing.expiresAt)}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={cancelPairingCode}
+                    disabled={pairingBusy}
+                  >
+                    取消
+                  </Button>
+                </div>
+                {pairingFields.map(([label, value, target]) => (
+                  <div
+                    key={label}
+                    className="grid gap-1.5 sm:grid-cols-[76px_1fr_auto] sm:items-center"
+                  >
+                    <span className="text-xs font-medium">{label}</span>
+                    <code className="break-all bg-background px-2 py-1.5 text-xs">{value}</code>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8"
+                      onClick={() => copyValue(target, value)}
+                    >
+                      {copied === target ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                      <span className="sr-only">复制{label}</span>
+                    </Button>
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground">
+                  打开扩展“完整设置”，在“物流规则设备配对”中依次填写以上三项。配对码领取成功后不可再次使用。
                 </p>
-              </div>
-              <Button size="sm" onClick={bindExtension} disabled={binding || loading} className="shrink-0 gap-1.5">
-                {binding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cable className="h-3.5 w-3.5" />}
-                一键连接
-              </Button>
-            </div>
-            {bindStatus && <p className="break-words text-xs text-muted-foreground">{bindStatus}</p>}
-          </div>
+              </section>
+            ) : null}
 
-          <div className="space-y-2">
-            <div className="text-xs font-medium text-muted-foreground">ERP 地址</div>
-            <div className="flex items-center gap-2">
-              <code className="bg-muted px-2 py-1.5 rounded flex-1 text-xs break-all">{erpUrl}</code>
-              <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => copyValue(erpUrl)}>
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            {collectEndpoint && (
-              <p className="text-xs text-muted-foreground">
-                扩展内部会保存采集接口：<code className="font-mono">{collectEndpoint}</code>
+            <section aria-labelledby="paired-devices-title" className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 id="paired-devices-title" className="text-sm font-semibold">
+                    已配对设备
+                  </h2>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    撤销后不会删除发布历史，只停止该设备继续拉取。
+                  </p>
+                </div>
+                <Badge variant="outline">{sessions.length}</Badge>
+              </div>
+              <div className="divide-y border-y">
+                {sessions.length ? (
+                  sessions.map((session) => (
+                    <div key={session.id} className="flex items-start gap-3 px-2 py-3">
+                      <MonitorUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium">
+                            {session.deviceLabel || '未命名设备'}
+                          </span>
+                          <Badge variant={session.status === 'ACTIVE' ? 'success' : 'secondary'}>
+                            {session.status}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                          {shortDeviceId(session.deviceId)}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          店铺：
+                          {session.shopIds.map((id) => shopNameById.get(id) || id).join('、') ||
+                            '-'}{' '}
+                          · 最近在线 {formatDate(session.lastSeenAt)}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="shrink-0 text-destructive"
+                        onClick={() => revokeSession(session.id)}
+                        disabled={revokingId === session.id}
+                      >
+                        {revokingId === session.id ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        撤销设备
+                      </Button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                    尚无已配对设备
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <section aria-labelledby="legacy-token-title" className="space-y-4">
+            <div>
+              <h2 id="legacy-token-title" className="text-sm font-semibold">
+                旧版扩展兼容 Token
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                仅供尚未迁移的采集功能使用。物流规则同步不会接受此 Token；新设备请使用“设备配对”。
               </p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-medium text-muted-foreground">Token</div>
-              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={generateToken} disabled={loading}>
-                {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
-                重新生成
-              </Button>
             </div>
-            {loading && !token ? (
-              <div className="bg-muted px-2 py-3 rounded flex items-center justify-center">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-              </div>
-            ) : token ? (
-              <div className="flex items-center gap-2">
-                <code className="bg-muted px-2 py-1.5 rounded flex-1 text-[10px] break-all select-all font-mono">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={generateLegacyToken}
+                disabled={legacyBusy || legacyDisabled}
+              >
+                {legacyBusy ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {legacyDisabled ? '兼容 Token 已停用' : '生成兼容 Token'}
+              </Button>
+              {tokenExpiresAt ? (
+                <span className="text-xs text-muted-foreground">
+                  有效期至 {formatDate(tokenExpiresAt)}
+                </span>
+              ) : null}
+            </div>
+            {token ? (
+              <div className="flex items-start gap-2">
+                <code className="min-w-0 flex-1 break-all bg-muted px-2 py-2 text-[10px]">
                   {token}
                 </code>
-                <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => copyValue(token)}>
-                  {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                <Button size="icon" variant="ghost" onClick={() => copyValue('token', token)}>
+                  {copied === 'token' ? (
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                  <span className="sr-only">复制兼容 Token</span>
                 </Button>
               </div>
             ) : null}
-            {expiresAt && (
-              <p className="text-xs text-muted-foreground">
-                有效期至 {new Date(expiresAt).toLocaleString('zh-CN')}（30 天）
-              </p>
-            )}
-          </div>
-
-          <div className="text-xs text-muted-foreground bg-muted/50 rounded-md p-3 space-y-1">
-            <p className="font-medium text-foreground">使用说明</p>
-            <ol className="list-decimal list-inside space-y-0.5">
-              <li>先点击“一键连接”，看到连接成功后刷新 OZON 页面</li>
-              <li>如果提示未检测到扩展，确认已安装 SS ERP 扩展并刷新当前 ERP 页面</li>
-              <li>仍失败时，打开扩展设置面板手动填入 ERP 地址和 Token</li>
-            </ol>
-          </div>
-        </div>
+            <p className="text-xs text-muted-foreground">
+              如服务器返回
+              legacy_extension_token_disabled，说明当前部署已完成设备凭证迁移，不应重新启用旧
+              Token。
+            </p>
+          </section>
+        )}
       </DialogContent>
     </Dialog>
   );

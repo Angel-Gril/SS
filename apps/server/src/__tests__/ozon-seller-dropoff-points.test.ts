@@ -6,46 +6,123 @@ import {
 } from '../services/ozon-seller-dropoff-points.js';
 
 describe('Ozon seller drop-off points', () => {
-  it('extracts provider and tpl drop-off ids from seller warehouse facade payloads', () => {
+  it('extracts configured methods from the current Seller delivery-method payload', () => {
     const methods = extractSellerDeliveryMethods({
-      result: {
-        warehouses: [
-          {
-            deliveryMethods: [
-              {
-                id: 32672640,
-                name: 'RETS Standard Extra Small Courier',
-                providerId: 1079,
-                providerName: 'RETS Standard Extra Small',
-                tplDropoffPointId: 5802718,
-              },
-            ],
-          },
-        ],
-      },
+      delivery_methods: [
+        {
+          delivery_method_id: 32672640,
+          warehouse_id: 'wh-101',
+          delivery_method: 'RETS Xiamen configured method',
+          tpl_provider_id: 1079,
+          tpl_provider: 'RETS Standard Extra Small',
+        },
+      ],
     });
 
     expect(methods).toEqual([
       {
         id: 32672640,
-        name: 'RETS Standard Extra Small Courier',
+        name: 'RETS Xiamen configured method',
+        warehouseId: 'wh-101',
         providerId: 1079,
         providerName: 'RETS Standard Extra Small',
-        tplDropoffPointId: 5802718,
+        tplDropoffPointId: null,
       },
     ]);
   });
 
+  it('paginates current configured methods before traversing the full template provider catalog', async () => {
+    const methodRequests: Array<{ body: any; headers: Record<string, string> }> = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
+        expect(JSON.parse(String(init?.body))).toEqual({ company_id: 4494016 });
+        return jsonResponse({ result: [{ warehouse_id: 'wh-101' }, { warehouse_id: 'wh-202' }] });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        methodRequests.push({ body, headers: init?.headers as Record<string, string> });
+        if (body.delivery_method_statuses[0] === 'active' && !body.cursor) {
+          return jsonResponse({
+            delivery_methods: [{ delivery_method_id: 11, warehouse_id: 'wh-101', tpl_provider_id: 101, tpl_provider: 'Method only' }],
+            cursor: 'active-next',
+          });
+        }
+        if (body.delivery_method_statuses[0] === 'active') {
+          return jsonResponse({
+            delivery_methods: [{ delivery_method_id: 12, warehouse_id: 'wh-202', tpl_provider_id: 202, tpl_provider: 'Shared active' }],
+            cursor: '',
+          });
+        }
+        return jsonResponse({
+          delivery_methods: [{ delivery_method_id: 13, warehouse_id: 'wh-101', tpl_provider_id: 303, tpl_provider: 'Shared disabled' }],
+          cursor: '',
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({ provider_templates: [
+          { provider_id: 202, provider_name: 'Template shared active' },
+          { provider_id: 303, provider_name: 'Template shared disabled' },
+          { provider_id: 404, provider_name: 'Template only' },
+        ] });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({ result: [{ id: `point-${body.provider_id}`, name: 'Point', address: '厦门' }] });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.methods.map((method) => method.id)).toEqual([11, 12, 13]);
+    expect(result.providers).toEqual([
+      expect.objectContaining({ providerId: 101, source: 'method' }),
+      expect.objectContaining({ providerId: 202, source: 'both' }),
+      expect.objectContaining({ providerId: 303, source: 'both' }),
+      expect.objectContaining({ providerId: 404, source: 'template' }),
+    ]);
+    expect(methodRequests.map((request) => request.body.delivery_method_statuses)).toEqual([
+      ['active'], ['active'], ['disabled', 'new'],
+    ]);
+    expect(methodRequests[0]!.body.limit).toBe(20);
+    expect(methodRequests[1]!.body.cursor).toBe('active-next');
+    expect(methodRequests.every((request) => request.headers['x-o3-page-type'] === 'CbPostingsFbs')).toBe(true);
+    expect(
+      new Date(methodRequests[0]!.body.processed_at_to).getTime()
+        - new Date(methodRequests[0]!.body.processed_at_from).getTime(),
+    ).toBe((91 * 24 * 60 * 60 * 1000) - 1);
+    expect(result.providerStats).toEqual({
+      discovered: 4,
+      attempted: 4,
+      succeeded: 4,
+      failed: 0,
+      empty: 0,
+      catalogComplete: true,
+      methodBindingsComplete: true,
+      methodBindingsRequired: false,
+      complete: true,
+    });
+  });
+
   it('uses provider_id with company auth to fetch and merge visible drop-off points', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
         const body = JSON.parse(String(init?.body || '{}'));
-        expect(body.company_id).toBe('4494016');
+        expect(body.company_id).toBe(4494016);
+        return jsonResponse({ result: [{ warehouse_id: 'wh-1' }, { warehouse_id: 'wh-2' }] });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
         return jsonResponse({
-          deliveryMethods: [
-            { id: 1, name: 'RETS Standard', providerId: 1079, providerName: 'RETS', tplDropoffPointId: 5802718 },
-            { id: 2, name: 'RETS Budget', providerId: 1268, providerName: 'RETS Budget', tplDropoffPointId: 26433091 },
-          ],
+          delivery_methods: body.delivery_method_statuses[0] === 'active' ? [
+            { delivery_method_id: 1, warehouse_id: 'wh-1', tpl_provider_id: 1079, tpl_provider: 'RETS' },
+            { delivery_method_id: 2, warehouse_id: 'wh-2', tpl_provider_id: 1268, tpl_provider: 'RETS Budget' },
+          ] : [],
+          cursor: '',
         });
       }
       if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
@@ -71,10 +148,10 @@ describe('Ozon seller drop-off points', () => {
       fetchImpl: fetchImpl as any,
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
     expect(result.providers).toEqual([
-      expect.objectContaining({ providerId: 1079, providerName: 'RETS', source: 'warehouse' }),
-      expect.objectContaining({ providerId: 1268, providerName: 'RETS Budget', source: 'warehouse' }),
+      expect.objectContaining({ providerId: 1079, providerName: 'RETS', source: 'method' }),
+      expect.objectContaining({ providerId: 1268, providerName: 'RETS Budget', source: 'method' }),
     ]);
     expect(result.points).toEqual([
       expect.objectContaining({
@@ -83,25 +160,29 @@ describe('Ozon seller drop-off points', () => {
         providerName: 'RETS',
         name: 'RETS广州中心仓',
         address: '广东省广州市白云区龙归街南村3号',
-        boundMethodIds: [1],
+        boundMethodIds: [],
       }),
       expect.objectContaining({
         externalId: '26433091',
         providerId: 1268,
         providerName: 'RETS Budget',
-        boundMethodIds: [2],
+        boundMethodIds: [],
       }),
     ]);
   });
 
-  it('unions warehouse and template providers with provenance and complete result counts', async () => {
+  it('unions method and template providers with provenance and complete result counts', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
+        return jsonResponse({ result: [{ warehouse_id: 'wh-1' }, { warehouse_id: 'wh-2' }] });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
         return jsonResponse({
-          deliveryMethods: [
-            { id: 1, providerId: 101, providerName: 'Warehouse only', tplDropoffPointId: 11 },
-            { id: 2, providerId: 202, providerName: 'Warehouse shared', tplDropoffPointId: 22 },
-          ],
+          delivery_methods: body.delivery_method_statuses[0] === 'active' ? [
+            { delivery_method_id: 1, warehouse_id: 'wh-1', tpl_provider_id: 101, tpl_provider: 'Method only' },
+            { delivery_method_id: 2, warehouse_id: 'wh-2', tpl_provider_id: 202, tpl_provider: 'Method shared' },
+          ] : [], cursor: '',
         });
       }
       if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
@@ -128,8 +209,8 @@ describe('Ozon seller drop-off points', () => {
     });
 
     expect(result.providers).toEqual([
-      expect.objectContaining({ providerId: 101, providerName: 'Warehouse only', source: 'warehouse', status: 'succeeded' }),
-      expect.objectContaining({ providerId: 202, providerName: 'Warehouse shared', source: 'both', status: 'succeeded' }),
+      expect.objectContaining({ providerId: 101, providerName: 'Method only', source: 'method', status: 'succeeded' }),
+      expect.objectContaining({ providerId: 202, providerName: 'Method shared', source: 'both', status: 'succeeded' }),
       expect.objectContaining({ providerId: 303, providerName: 'Template only', source: 'template', status: 'succeeded' }),
     ]);
     expect(result.providerStats).toEqual({
@@ -139,20 +220,27 @@ describe('Ozon seller drop-off points', () => {
       failed: 0,
       empty: 0,
       complete: true,
+      catalogComplete: true,
+      methodBindingsComplete: true,
+      methodBindingsRequired: false,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(fetchImpl).toHaveBeenCalledTimes(7);
   });
 
   it('does not count failures or empty responses as successful provider collection', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
+        return jsonResponse({ result: [{ warehouse_id: 'wh-1' }] });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
         return jsonResponse({
-          deliveryMethods: [
-            { id: 1, providerId: 101, providerName: 'First' },
-            { id: 2, providerId: 202, providerName: 'Second' },
-            { id: 3, providerId: 303, providerName: 'Empty' },
-            { id: 4, providerId: 404, providerName: 'Failed' },
-          ],
+          delivery_methods: body.delivery_method_statuses[0] === 'active' ? [
+            { delivery_method_id: 1, warehouse_id: 'wh-1', tpl_provider_id: 101, tpl_provider: 'First' },
+            { delivery_method_id: 2, warehouse_id: 'wh-1', tpl_provider_id: 202, tpl_provider: 'Second' },
+            { delivery_method_id: 3, warehouse_id: 'wh-1', tpl_provider_id: 303, tpl_provider: 'Empty' },
+            { delivery_method_id: 4, warehouse_id: 'wh-1', tpl_provider_id: 404, tpl_provider: 'Failed' },
+          ] : [], cursor: '',
         });
       }
       if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
@@ -182,6 +270,9 @@ describe('Ozon seller drop-off points', () => {
       failed: 1,
       empty: 1,
       complete: false,
+      catalogComplete: false,
+      methodBindingsComplete: true,
+      methodBindingsRequired: false,
     });
     expect(result.providers).toEqual(expect.arrayContaining([
       expect.objectContaining({ providerId: 303, status: 'empty' }),
@@ -193,13 +284,61 @@ describe('Ozon seller drop-off points', () => {
     ]);
   });
 
+  it('treats an empty provider response as an incomplete catalog when every request succeeds', async () => {
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
+        return jsonResponse({ result: [{ warehouse_id: 'wh-1' }] });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        return jsonResponse({
+          delivery_methods: body.delivery_method_statuses[0] === 'active' ? [
+            { delivery_method_id: 3, warehouse_id: 'wh-1', tpl_provider_id: 303, tpl_provider: 'Empty' },
+          ] : [],
+          cursor: '',
+        });
+      }
+      if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
+        return jsonResponse({ provider_templates: [] });
+      }
+      if (url.endsWith('/api/delivery-method-service/v1/drop-off/list/by-provider')) {
+        return jsonResponse({ result: [] });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+
+    const result = await fetchOzonSellerDropoffPoints({
+      cookie: 'sid=demo',
+      companyId: '4494016',
+      fetchImpl: fetchImpl as any,
+    });
+
+    expect(result.providerStats).toEqual({
+      discovered: 1,
+      attempted: 1,
+      succeeded: 0,
+      failed: 0,
+      empty: 1,
+      complete: false,
+      catalogComplete: false,
+      methodBindingsComplete: true,
+      methodBindingsRequired: false,
+    });
+    expect(result.providers).toEqual([
+      expect.objectContaining({ providerId: 303, status: 'empty', pointCount: 0 }),
+    ]);
+  });
+
   it('retries seller API requests with refreshed __Secure-ETC cookie after Ozon redirects', async () => {
     const seenCookies: string[] = [];
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
         return jsonResponse({ provider_templates: [] });
       }
-      if (!url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        return jsonResponse({ delivery_methods: [], cursor: '' });
+      }
+      if (!url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
         throw new Error(`unexpected url ${url}`);
       }
       expect(init?.redirect).toBe('manual');
@@ -208,7 +347,7 @@ describe('Ozon seller drop-off points', () => {
       if (!cookie.includes('__Secure-ETC=fresh-etc')) {
         return redirectResponse('__Secure-ETC=fresh-etc; Path=/; Secure; HttpOnly');
       }
-      return jsonResponse({ deliveryMethods: [] });
+      return jsonResponse({ result: [] });
     });
 
     const result = await fetchOzonSellerDropoffPoints({
@@ -222,18 +361,21 @@ describe('Ozon seller drop-off points', () => {
     expect(seenCookies[1]).toContain('sid=demo');
     expect(seenCookies[1]).toContain('__Secure-ETC=fresh-etc');
     expect(seenCookies[1]).not.toContain('__Secure-ETC=stale-etc');
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
-  it('falls back to provider templates when warehouse facade refuses company id', async () => {
+  it('keeps the provider catalog complete when optional warehouse binding discovery fails', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
         return errorResponse(403, {
           error: {
             code: 'PermissionDenied',
             detail: 'rpc error: code = PermissionDenied desc = Failed to get body company ID',
           },
         });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        return jsonResponse({ delivery_methods: [], cursor: '' });
       }
       if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
         const body = JSON.parse(String(init?.body || '{}'));
@@ -269,18 +411,23 @@ describe('Ozon seller drop-off points', () => {
       expect.objectContaining({ providerId: 1079, providerName: 'RETS Standard Extra Small', source: 'template' }),
       expect.objectContaining({ providerId: 1164, providerName: 'CEL', source: 'template' }),
     ]);
-    expect(result.providerStats?.complete).toBe(false);
+    expect(result.providerStats).toEqual(expect.objectContaining({
+      catalogComplete: true, methodBindingsComplete: false, methodBindingsRequired: false, complete: true,
+    }));
     expect(result.providerDiscoveryErrors).toEqual([
       expect.objectContaining({ source: 'warehouse' }),
     ]);
     expect(result.points).toHaveLength(2);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 
   it('keeps same drop-off ids from different providers as separate points', async () => {
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith('/api/site/logistic-service/v5/facade/warehouse/list')) {
+      if (url.endsWith('/api/site/logistic-service/v2/warehouse/list')) {
         return errorResponse(403, { error: { code: 'PermissionDenied' } });
+      }
+      if (url.endsWith('/api/posting-service/seller-ui/delivery-method/list')) {
+        return jsonResponse({ delivery_methods: [], cursor: '' });
       }
       if (url.endsWith('/api/delivery-method-service/v2/provider/template/by-location/list')) {
         return jsonResponse({

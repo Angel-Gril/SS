@@ -62,7 +62,7 @@ export async function adminAuthRoutes(app: FastifyInstance) {
       return reply.status(401).send({ code: 0, msg: '账号或密码错误' });
     }
 
-    const token = signToken({ userId: user.id, role: user.role }, '24h');
+    const token = signToken({ userId: user.id, role: user.role, authVersion: user.authVersion }, '24h');
     await storeSession(user.id, token, ADMIN_SESSION_TTL_SECONDS);
     setAuthCookie(reply, token, ADMIN_SESSION_TTL_SECONDS);
 

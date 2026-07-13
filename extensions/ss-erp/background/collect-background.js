@@ -39,7 +39,8 @@ const OZON_ENDPOINTS = {
   chartsV3Recommendation: "https://seller.ozon.ru/api/site/seller-analytics/charts/v3/recommendation",
   salesFunnelRevenue: "https://seller.ozon.ru/api/site/seller-analytics/sales-funnel/v2/get_chart_revenue",
   sellerCategoryTree: "https://seller.ozon.ru/api/site/seller-analytics/charts/seller-category-tree",
-  sellerWarehouseList: "https://seller.ozon.ru/api/site/logistic-service/v5/facade/warehouse/list",
+  sellerWarehouseList: "https://seller.ozon.ru/api/site/logistic-service/v2/warehouse/list",
+  sellerDeliveryMethodList: "https://seller.ozon.ru/api/posting-service/seller-ui/delivery-method/list",
   sellerProviderTemplateByLocation: "https://seller.ozon.ru/api/delivery-method-service/v2/provider/template/by-location/list",
   sellerDropoffByProvider: "https://seller.ozon.ru/api/delivery-method-service/v1/drop-off/list/by-provider",
   // Market data (may require Premium)
@@ -1218,14 +1219,14 @@ async function getSellerTab() {
   return tabs.find((tab) => tab.active) || tabs.find((tab) => (tab.url || "").includes("/app/")) || tabs[0];
 }
 
-async function sellerTabFetchJson(url, body, companyId) {
+async function sellerTabFetchJson(url, body, companyId, requestOptions) {
   const targetTab = await getSellerTab();
 
   const results = await executeScriptWithHostAccess({
     target: { tabId: targetTab.id },
     world: "MAIN",
-    args: [url, body, companyId],
-    func: async (targetUrl, requestBody, xCompanyId) => {
+    args: [url, body, companyId, requestOptions || {}],
+    func: async (targetUrl, requestBody, xCompanyId, options) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 25000);
 
@@ -1241,7 +1242,7 @@ async function sellerTabFetchJson(url, body, companyId) {
             "x-o3-app-name": "seller-ui",
             "x-o3-company-id": xCompanyId,
             "x-o3-language": "ru",
-            "x-o3-page-type": "products-other"
+            "x-o3-page-type": options && options.pageType ? options.pageType : "products-other"
           },
           body: JSON.stringify(requestBody)
         });
@@ -1327,13 +1328,14 @@ function extractOzonSellerDeliveryMethods(payload) {
   arrays.forEach(function (array) {
     array.forEach(function (item) {
       if (!item || typeof item !== "object") return;
-      var id = toPositiveNumber(item.id || item.methodId || item.method_id);
+      var id = toPositiveNumber(item.id || item.methodId || item.method_id || item.delivery_method_id);
       var providerId = toPositiveNumber(item.providerId || item.provider_id || item.tplProviderId || item.tpl_provider_id);
       if (!id || !providerId) return;
       var tplDropoffPointId = toPositiveNumber(item.tplDropoffPointId || item.tpl_dropoff_point_id || item.dropoffPointId || item.dropoff_point_id);
       byId.set(id, {
         id: id,
-        name: toCleanString(item.name) || "物流方式 " + id,
+        name: toCleanString(item.name || item.delivery_method || item.delivery_method_name) || "物流方式 " + id,
+        ...(toCleanString(item.warehouseId || item.warehouse_id) ? { warehouseId: toCleanString(item.warehouseId || item.warehouse_id) } : {}),
         providerId: providerId,
         providerName: toCleanString(item.providerName || item.provider_name || item.tplProvider || item.tpl_provider) || "Provider " + providerId,
         tplDropoffPointId: tplDropoffPointId || null
@@ -1343,9 +1345,129 @@ function extractOzonSellerDeliveryMethods(payload) {
   return Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
 }
 
+function extractOzonSellerWarehouseIds(payload) {
+  if (!payload || !Array.isArray(payload.result)) throw new Error("warehouse/list 响应缺少 result");
+  var rows = payload.result;
+  return Array.from(new Set(rows.map(function (row) {
+    return toCleanString(row && (row.warehouse_id || row.warehouseId || row.id));
+  }).filter(Boolean))).sort(function (a, b) {
+    return a.localeCompare(b, "en", { numeric: true });
+  });
+}
+
+function buildOzonSellerDeliveryMethodListBody(companyId, statuses, cursor, nowInput) {
+  var current = nowInput ? new Date(nowInput) : new Date();
+  if (!Number.isFinite(current.getTime())) throw new Error("无效的物流方式查询时间");
+  var from = new Date(Date.UTC(
+    current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate() - 90,
+    0, 0, 0, 0
+  ));
+  var to = new Date(Date.UTC(
+    current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate(),
+    23, 59, 59, 999
+  ));
+  var body = {
+    company_id: toOzonSellerTemplateCompanyId(companyId),
+    processed_at_from: from.toISOString(),
+    processed_at_to: to.toISOString(),
+    limit: 20,
+    status_alias: ["awaiting_packaging"],
+    delivery_method_statuses: statuses
+  };
+  if (cursor) body.cursor = cursor;
+  return body;
+}
+
+async function fetchOzonSellerConfiguredMethods(companyId) {
+  var warehouseIds = [];
+  var methodRows = [];
+  var errors = [];
+  try {
+    var warehousePayload = await sellerTabFetchJson(
+      OZON_ENDPOINTS.sellerWarehouseList,
+      { company_id: toOzonSellerTemplateCompanyId(companyId) },
+      companyId
+    );
+    warehouseIds = extractOzonSellerWarehouseIds(warehousePayload);
+  } catch (error) {
+    errors.push({ source: "warehouse", message: error && error.message ? error.message : String(error) });
+  }
+
+  try {
+    var statusGroups = [["active"], ["disabled", "new"]];
+    var pageCount = 0;
+    for (var statusIndex = 0; statusIndex < statusGroups.length; statusIndex += 1) {
+      var cursor = "";
+      var seenCursors = new Set();
+      while (true) {
+        pageCount += 1;
+        if (pageCount > 100) throw new Error("物流方式分页超过安全上限");
+        var payload = await sellerTabFetchJson(
+          OZON_ENDPOINTS.sellerDeliveryMethodList,
+          buildOzonSellerDeliveryMethodListBody(companyId, statusGroups[statusIndex], cursor),
+          companyId,
+          { pageType: "CbPostingsFbs" }
+        );
+        if (!payload || !Array.isArray(payload.delivery_methods)) {
+          throw new Error("物流方式响应缺少 delivery_methods");
+        }
+        methodRows = methodRows.concat(payload.delivery_methods);
+        var nextCursor = toCleanString(payload.cursor);
+        if (!nextCursor) break;
+        if (nextCursor.length > 2000 || seenCursors.has(nextCursor)) {
+          throw new Error("物流方式分页 cursor 无效");
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+    }
+  } catch (error) {
+    errors.push({ source: "method", message: error && error.message ? error.message : String(error) });
+  }
+
+  var methods = extractOzonSellerDeliveryMethods({ delivery_methods: methodRows });
+  var providersById = new Map();
+  methods.forEach(function (method) {
+    if (!providersById.has(method.providerId)) providersById.set(method.providerId, method.providerName);
+  });
+  return {
+    methods: methods,
+    providers: Array.from(providersById.entries()).map(function (entry) {
+      return { providerId: entry[0], providerName: entry[1] };
+    }).sort(function (a, b) { return a.providerId - b.providerId; }),
+    warehouseIds: warehouseIds,
+    errors: errors,
+    complete: errors.length === 0
+  };
+}
+
+function buildOzonSellerProviderStats(input) {
+  var catalogComplete = input.templateComplete === true
+    && input.attempted === input.discovered
+    && input.failed === 0
+    && input.empty === 0;
+  var methodBindingsComplete = input.methodBindingsComplete === true;
+  var methodBindingsRequired = input.methodBindingsRequired === true;
+  return {
+    discovered: input.discovered,
+    attempted: input.attempted,
+    succeeded: input.succeeded,
+    failed: input.failed,
+    empty: input.empty,
+    catalogComplete: catalogComplete,
+    methodBindingsComplete: methodBindingsComplete,
+    methodBindingsRequired: methodBindingsRequired,
+    complete: catalogComplete && (!methodBindingsRequired || methodBindingsComplete)
+  };
+}
+
 function extractOzonSellerProvidersFromTemplates(payload) {
-  var templates = payload && Array.isArray(payload.provider_templates) ? payload.provider_templates
-    : (payload && payload.result && Array.isArray(payload.result.provider_templates) ? payload.result.provider_templates : []);
+  var templates = payload && Array.isArray(payload.provider_templates)
+    ? payload.provider_templates
+    : (payload && payload.result && Array.isArray(payload.result.provider_templates)
+      ? payload.result.provider_templates
+      : null);
+  if (!templates) throw new Error("provider/template 响应缺少 provider_templates");
   var byId = new Map();
   templates.forEach(function (item) {
     if (!item || typeof item !== "object") return;
@@ -1358,14 +1480,24 @@ function extractOzonSellerProvidersFromTemplates(payload) {
   }).sort(function (a, b) { return a.providerId - b.providerId; });
 }
 
-async function fetchOzonSellerProviderTemplates(companyId) {
+function normalizeOzonSellerQueryPoint(value) {
+  var latitude = Number(value && value.latitude);
+  var longitude = Number(value && value.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+    || latitude < -90 || latitude > 90
+    || longitude < -180 || longitude > 180) {
+    throw new Error("缺少有效的发运仓库坐标，请先在 ERP 选择仓库");
+  }
+  return { latitude: latitude, longitude: longitude };
+}
+async function fetchOzonSellerProviderTemplates(companyId, point) {
   var payload = await sellerTabFetchJson(
     OZON_ENDPOINTS.sellerProviderTemplateByLocation,
     {
       available_integration_type: 1,
       company_id: toOzonSellerTemplateCompanyId(companyId),
       item_info: {},
-      point: { latitude: 24.480107, longitude: 118.085348 }
+      point: normalizeOzonSellerQueryPoint(point)
     },
     companyId
   );
@@ -1373,13 +1505,13 @@ async function fetchOzonSellerProviderTemplates(companyId) {
 }
 
 
-function mergeOzonSellerProviderSources(warehouseProviders, templateProviders) {
+function mergeOzonSellerProviderSources(methodProviders, templateProviders) {
   var merged = new Map();
-  (Array.isArray(warehouseProviders) ? warehouseProviders : []).forEach(function (provider) {
+  (Array.isArray(methodProviders) ? methodProviders : []).forEach(function (provider) {
     merged.set(provider.providerId, {
       providerId: provider.providerId,
       providerName: provider.providerName,
-      warehouse: true,
+      method: true,
       template: false
     });
   });
@@ -1392,7 +1524,7 @@ function mergeOzonSellerProviderSources(warehouseProviders, templateProviders) {
     merged.set(provider.providerId, {
       providerId: provider.providerId,
       providerName: provider.providerName,
-      warehouse: false,
+      method: false,
       template: true
     });
   });
@@ -1400,7 +1532,7 @@ function mergeOzonSellerProviderSources(warehouseProviders, templateProviders) {
     return {
       providerId: provider.providerId,
       providerName: provider.providerName,
-      source: provider.warehouse && provider.template ? "both" : (provider.warehouse ? "warehouse" : "template"),
+      source: provider.method && provider.template ? "both" : (provider.method ? "method" : "template"),
       status: "pending",
       pointCount: 0
     };
@@ -1424,6 +1556,7 @@ function sendExtensionProgress(sender, requestId, progress) {
 }
 
 async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
+  var point = normalizeOzonSellerQueryPoint(options && options.point);
   var onProgress = options && typeof options.onProgress === "function" ? options.onProgress : null;
   function reportProgress(progress) {
     if (!onProgress) return;
@@ -1445,10 +1578,13 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
     errorCount: 0
   });
   var companyId = await getSellerCompanyId(companyIdInput);
-  var methods = [];
-  var warehouseProviders = [];
+  var methodBindingsRequired = options && options.requireMethodBindings === true;
+  var methodDiscovery = await fetchOzonSellerConfiguredMethods(companyId);
+  var methods = methodDiscovery.methods;
+  var methodProviders = methodDiscovery.providers;
   var templateProviders = [];
-  var providerDiscoveryErrors = [];
+  var templateComplete = false;
+  var providerDiscoveryErrors = methodDiscovery.errors.slice();
   reportProgress({
     phase: "providers",
     label: "读取承运商列表",
@@ -1462,34 +1598,15 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
     errorCount: 0
   });
   try {
-    var warehousePayload = await sellerTabFetchJson(
-      OZON_ENDPOINTS.sellerWarehouseList,
-      { company_id: String(companyId) },
-      companyId
-    );
-    methods = extractOzonSellerDeliveryMethods(warehousePayload);
-    var warehouseProviderMap = new Map();
-    methods.forEach(function (method) {
-      if (!warehouseProviderMap.has(method.providerId)) {
-        warehouseProviderMap.set(method.providerId, method.providerName);
-      }
-    });
-    warehouseProviders = Array.from(warehouseProviderMap.entries()).map(function (entry) {
-      return { providerId: entry[0], providerName: entry[1] };
-    });
-  } catch (error) {
-    providerDiscoveryErrors.push({ source: "warehouse", message: error && error.message ? error.message : String(error) });
-    console.warn("[SS ERP] Ozon warehouse/list provider discovery failed, falling back to provider templates:", error);
-  }
-  try {
-    templateProviders = await fetchOzonSellerProviderTemplates(companyId);
+    templateProviders = await fetchOzonSellerProviderTemplates(companyId, point);
+    templateComplete = true;
   } catch (error) {
     providerDiscoveryErrors.push({ source: "template", message: error && error.message ? error.message : String(error) });
     console.warn("[SS ERP] Ozon provider/template discovery failed:", error);
   }
 
-  var providers = mergeOzonSellerProviderSources(warehouseProviders, templateProviders);
-  if (!providers.length && providerDiscoveryErrors.length === 2) {
+  var providers = mergeOzonSellerProviderSources(methodProviders, templateProviders);
+  if (!providers.length && !templateComplete && !methodProviders.length) {
     throw new Error("Ozon Seller 承运商来源读取失败: " + providerDiscoveryErrors.map(function (item) {
       return item.source + " " + item.message;
     }).join("; "));
@@ -1595,17 +1712,22 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
   }
   var workerCount = Math.min(SS_ERP_COLLECT_OZON_DROPOFF_PROVIDER_CONCURRENCY, providerEntries.length);
   await Promise.all(Array.from({ length: workerCount }, fetchNextProviderDropoffs));
-  var providerStats = {
+  var providerStats = buildOzonSellerProviderStats({
     discovered: providerEntries.length,
     attempted: providerAttempted,
     succeeded: providerSucceeded,
     failed: providerFailed,
     empty: providerEmpty,
-    complete: providerAttempted === providerEntries.length && providerFailed === 0 && providerDiscoveryErrors.length === 0
-  };
+    templateComplete: templateComplete,
+    methodBindingsComplete: methodDiscovery.complete,
+    methodBindingsRequired: methodBindingsRequired
+  });
+  var completeLabel = providerStats.complete
+    ? (providerStats.methodBindingsComplete ? "采集完成，准备导入 ERP" : "承运商目录完成，物流方式绑定读取不完整")
+    : "采集完成，但存在失败或来源缺失";
   reportProgress({
     phase: "complete",
-    label: providerStats.complete ? "采集完成，准备导入 ERP" : "采集完成，但存在失败或来源缺失",
+    label: completeLabel,
     providerDone: providerAttempted,
     providerTotal: providerEntries.length,
     providerAttempted: providerAttempted,
@@ -1619,7 +1741,9 @@ async function fetchOzonSellerDropoffPointsViaTab(companyIdInput, options) {
 
   return {
     companyId: String(companyId),
+    warehouseIds: methodDiscovery.warehouseIds,
     methods: methods,
+    methodBindingsComplete: methodDiscovery.complete,
     providers: providers,
     points: Array.from(points.values()).sort(function (a, b) {
       if (a.providerId !== b.providerId) return a.providerId - b.providerId;
@@ -5254,6 +5378,7 @@ async function syncShopGraphsToErp(shopId, companyIdInput, period) {
 globalThis.SS_ERP_COLLECT_BACKGROUND = Object.assign(globalThis.SS_ERP_COLLECT_BACKGROUND || {}, {
   aggregateOzonProductInsights,
   collectOzonProductsToErp,
+  fetchOzonSellerDropoffPointsViaTab,
   fetchOzonSellerOffers,
   fetchOzonWorkbenchRows,
   submitOzonWorkbenchPublishJob,
@@ -5266,6 +5391,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (!message.type.startsWith('spb-self-hosted:')) {
+    return false;
+  }
+  const runtimeMessagePolicy = globalThis.SS_ERP_RUNTIME_MESSAGE_POLICY;
+  if (!runtimeMessagePolicy
+    || typeof runtimeMessagePolicy.isAllowedRuntimeMessageSender !== 'function'
+    || !runtimeMessagePolicy.isAllowedRuntimeMessageSender(message.type, sender, chrome.runtime.id)) {
+    sendResponse({ ok: false, error: '不允许的扩展消息来源' });
     return false;
   }
 
@@ -5367,6 +5499,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return {
           ok: true,
           data: await fetchOzonSellerDropoffPointsViaTab(message.companyId, {
+            point: message.point,
             onProgress: function (progress) {
               sendExtensionProgress(sender, message.requestId, progress);
             }

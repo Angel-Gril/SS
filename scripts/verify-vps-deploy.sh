@@ -10,6 +10,8 @@ DOMAIN="${VERIFY_DOMAIN:-ss-erp.com}"
 READY_URL="${VERIFY_READY_URL:-https://${DOMAIN}/ready}"
 LOCAL_READY_URL="${VERIFY_LOCAL_READY_URL:-http://127.0.0.1:3001/ready}"
 LOG_SINCE="${VERIFY_LOG_SINCE:-10 minutes ago}"
+BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-/etc/ss-erp-backup.env}"
+BACKUP_MAX_AGE_HOURS="${BACKUP_MAX_AGE_HOURS:-36}"
 
 FAILURES=0
 WARNINGS=0
@@ -26,6 +28,23 @@ warn() {
 fail() {
   FAILURES=$((FAILURES + 1))
   echo "FAIL $1"
+}
+
+load_backup_config() {
+  if [ ! -e "$BACKUP_ENV_FILE" ]; then
+    warn "backup env file missing; using current environment: $BACKUP_ENV_FILE"
+    return
+  fi
+  if [ ! -r "$BACKUP_ENV_FILE" ]; then
+    fail "backup env file is not readable: $BACKUP_ENV_FILE"
+    return
+  fi
+  # shellcheck disable=SC1090
+  if . "$BACKUP_ENV_FILE"; then
+    pass "backup configuration loaded: $BACKUP_ENV_FILE"
+  else
+    fail "backup env file could not be loaded: $BACKUP_ENV_FILE"
+  fi
 }
 
 require_command() {
@@ -145,10 +164,10 @@ check_cloudflare_origin_guard() {
 check_cron() {
   local cron
   cron=$(crontab -l 2>/dev/null || true)
-  if echo "$cron" | grep -q 'backup-db.sh'; then
-    pass "cron includes database backup"
+  if echo "$cron" | grep -Ev '^[[:space:]]*#' | grep -Fq 'set -a; . /etc/ss-erp-backup.env; set +a; bash /opt/ss-erp/app/scripts/backup-db.sh'; then
+    pass "cron exports backup env and targets the app-dir backup script"
   else
-    fail "cron missing database backup"
+    fail "cron database backup command does not export env or target the app-dir script"
   fi
   if echo "$cron" | grep -q 'update-cloudflare-ips.sh'; then
     pass "cron includes Cloudflare IP update"
@@ -158,20 +177,105 @@ check_cron() {
 }
 
 check_backup_status() {
-  local status_file="${BACKUP_LOCAL_DIR:-/var/backups/ss-erp}/backup-status.json"
-  if [ ! -f "$status_file" ]; then
-    fail "backup status file missing: $status_file"
+  local backup_dir="${BACKUP_LOCAL_DIR:-/var/backups/ss-erp}"
+  local status_file="${backup_dir}/backup-status.json"
+  if [ ! -r "$status_file" ]; then
+    fail "backup status file missing or unreadable: $status_file"
     return
   fi
-  if node -e '
+
+  local validation
+  if validation=$(node -e '
 const fs = require("fs");
-const file = process.argv[1];
-const data = JSON.parse(fs.readFileSync(file, "utf8"));
-if (!data.lastBackupAt || !data.lastLocalFile || !data.lastLocalSize) process.exit(1);
-' "$status_file"; then
-    pass "backup status JSON is readable"
+const path = require("path");
+const statusFile = process.argv[1];
+const backupDir = path.resolve(process.argv[2]);
+const maxAgeHours = Number(process.argv[3]);
+const reject = (message) => {
+  console.error(message);
+  process.exit(1);
+};
+
+if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) {
+  reject("BACKUP_MAX_AGE_HOURS must be a positive number");
+}
+
+let data;
+try {
+  data = JSON.parse(fs.readFileSync(statusFile, "utf8"));
+} catch (error) {
+  reject("backup status JSON is invalid: " + error.message);
+}
+
+const backupAt = Date.parse(data.lastBackupAt);
+if (!Number.isFinite(backupAt)) {
+  reject("lastBackupAt is missing or invalid");
+}
+const ageMs = Date.now() - backupAt;
+if (ageMs < -5 * 60 * 1000) {
+  reject("lastBackupAt is unexpectedly in the future");
+}
+const ageHours = Math.max(0, ageMs / (60 * 60 * 1000));
+if (ageHours > maxAgeHours) {
+  reject("lastBackupAt is stale: " + ageHours.toFixed(2) + " hours old");
+}
+
+if (typeof data.lastLocalFile !== "string" || data.lastLocalFile.trim() === "") {
+  reject("lastLocalFile is missing or invalid");
+}
+const localFile = path.resolve(backupDir, data.lastLocalFile);
+const relativeFile = path.relative(backupDir, localFile);
+if (relativeFile === ".." || relativeFile.startsWith(".." + path.sep) || path.isAbsolute(relativeFile)) {
+  reject("lastLocalFile resolves outside the backup directory");
+}
+if (!fs.existsSync(localFile)) {
+  reject("lastLocalFile does not exist");
+}
+try {
+  fs.accessSync(localFile, fs.constants.R_OK);
+} catch {
+  reject("lastLocalFile is not readable");
+}
+const stats = fs.statSync(localFile);
+if (!stats.isFile() || stats.size <= 0) {
+  reject("lastLocalFile is empty or not a regular file");
+}
+if (typeof data.remoteUploaded !== "boolean") {
+  reject("remoteUploaded is missing or invalid");
+}
+
+process.stdout.write(String(data.remoteUploaded) + "\t" + ageHours.toFixed(2) + "\t" + stats.size);
+' "$status_file" "$backup_dir" "$BACKUP_MAX_AGE_HOURS" 2>&1); then
+    local remote_uploaded
+    local age_hours
+    local local_size
+    IFS=$'\t' read -r remote_uploaded age_hours local_size <<< "$validation"
+    pass "latest backup is ${age_hours} hours old and local artifact is readable (${local_size} bytes)"
   else
-    fail "backup status JSON invalid"
+    fail "backup status validation failed: $validation"
+    return
+  fi
+
+  local remote_configured=0
+  if [ -n "${BACKUP_S3_BUCKET:-}${BACKUP_S3_ENDPOINT:-}${BACKUP_S3_ACCESS_KEY_ID:-}${BACKUP_S3_SECRET_ACCESS_KEY:-}" ]; then
+    if [ -z "${BACKUP_S3_BUCKET:-}" ] || [ -z "${BACKUP_S3_ENDPOINT:-}" ] || \
+       [ -z "${BACKUP_S3_ACCESS_KEY_ID:-}" ] || [ -z "${BACKUP_S3_SECRET_ACCESS_KEY:-}" ]; then
+      fail "remote backup configuration is incomplete"
+      return
+    fi
+    remote_configured=1
+  fi
+
+  if [ "$remote_configured" -eq 1 ]; then
+    if [ "$remote_uploaded" = "true" ]; then
+      pass "latest backup reports successful remote upload"
+    else
+      fail "remote backup is configured but latest upload was not successful"
+    fi
+  elif [ "$remote_uploaded" = "true" ]; then
+    warn "remote backup is not configured; latest status reports a remote upload"
+  else
+    warn "remote backup is not configured; latest backup is local only"
   fi
 }
 
@@ -262,6 +366,7 @@ check_port_loopback 6379 redis
 
 check_ufw
 check_cloudflare_origin_guard
+load_backup_config
 check_cron
 check_backup_status
 check_prisma_migrations

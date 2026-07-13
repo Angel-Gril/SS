@@ -17,7 +17,7 @@
 
 # ─── crontab 行 ───
 # 每天凌晨 3:00 执行备份（按服务器本地时区）
-0 3 * * * . /etc/ss-erp-backup.env && bash /opt/ss-erp/scripts/backup-db.sh >> /var/log/ss-erp/backup.log 2>&1
+0 3 * * * set -a; . /etc/ss-erp-backup.env; set +a; bash /opt/ss-erp/app/scripts/backup-db.sh >> /var/log/ss-erp/backup.log 2>&1
 
 # 每周日 4:00 额外做一次全量备份（可选，用于异地冗余）
-# 0 4 * * 0 . /etc/ss-erp-backup.env && bash /opt/ss-erp/scripts/backup-db.sh >> /var/log/ss-erp/backup-weekly.log 2>&1
+# 0 4 * * 0 set -a; . /etc/ss-erp-backup.env; set +a; bash /opt/ss-erp/app/scripts/backup-db.sh >> /var/log/ss-erp/backup-weekly.log 2>&1
