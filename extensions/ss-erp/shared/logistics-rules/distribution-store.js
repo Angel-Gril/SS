@@ -82,6 +82,43 @@
       return Object.prototype.hasOwnProperty.call(result, 'bundle') ? result.bundle : value;
     }
 
+    function currentVersionContext(input) {
+      if (input && typeof input === 'object'
+        && Object.prototype.hasOwnProperty.call(input, 'currentExtensionVersion')) {
+        return { enabled: true, value: input.currentExtensionVersion };
+      }
+      if (options && Object.prototype.hasOwnProperty.call(options, 'currentExtensionVersion')) {
+        return { enabled: true, value: options.currentExtensionVersion };
+      }
+      return { enabled: false, value: null };
+    }
+
+    function incompatibleVersionResult(bundle, input, metadata) {
+      var current = currentVersionContext(input);
+      if (!current.enabled) return null;
+      var policy = global.SS_ERP_LOGISTICS_VERSION_POLICY;
+      var minimum = String(bundle && bundle.minExtensionVersion != null
+        ? bundle.minExtensionVersion : '').trim();
+      var currentText = String(current.value == null ? '' : current.value).trim();
+      var evaluation = policy && typeof policy.evaluateCompatibility === 'function'
+        ? policy.evaluateCompatibility(current.value, minimum)
+        : {
+          compatible: false,
+          reason: 'version_policy_unavailable',
+          currentExtensionVersion: currentText,
+          minExtensionVersion: minimum,
+        };
+      if (evaluation && evaluation.compatible === true) return null;
+      return Object.assign({
+        state: 'upgrade_required',
+        quoteAllowed: false,
+        bundle: bundle,
+        minExtensionVersion: minimum || null,
+        currentExtensionVersion: currentText || null,
+        versionReason: evaluation && evaluation.reason || 'version_policy_unavailable',
+      }, metadata);
+    }
+
     async function readPointer(namespace) {
       var key = pointerKey(namespace);
       var result = await storage.get([key]);
@@ -489,6 +526,13 @@
 
       var active = await readBundleByChecksum(namespace, pointer.activeChecksum);
       if (active) {
+        var activeVersion = incompatibleVersionResult(active, input, {
+          effectiveChecksum: pointer.activeChecksum,
+          authorizationValidUntil: pointer.authorizationValidUntil || null,
+          validUntil: active.validUntil || pointer.validUntil || null,
+          staleUntil: active.staleUntil || pointer.staleUntil || null,
+        });
+        if (activeVersion) return activeVersion;
         var activePolicy = bundlePolicy(active, pointer, at, true);
         if (activePolicy === 'healthy' || activePolicy === 'stale') {
           return {
@@ -513,6 +557,13 @@
 
       var previous = await readBundleByChecksum(namespace, pointer.previousChecksum);
       if (previous) {
+        var previousVersion = incompatibleVersionResult(previous, input, {
+          effectiveChecksum: pointer.previousChecksum,
+          authorizationValidUntil: pointer.authorizationValidUntil || null,
+          validUntil: previous.validUntil || null,
+          staleUntil: previous.staleUntil || null,
+        });
+        if (previousVersion) return previousVersion;
         var previousPolicy = bundlePolicy(previous, pointer, at, false);
         if (previousPolicy === 'healthy' || previousPolicy === 'stale') {
           return {

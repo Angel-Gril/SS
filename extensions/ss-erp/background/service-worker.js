@@ -205,11 +205,16 @@ try {
 try {
   importScripts('../shared/logistics-rules/distribution-schema.js');
   importScripts('../shared/logistics-rules/device-credential-manager.js');
+  importScripts('../shared/logistics-rules/version-policy.js');
   importScripts('../shared/logistics-rules/distribution-store.js');
   importScripts('../shared/logistics-rules/distribution-client.js');
   importScripts('../shared/logistics-rules/distribution-runtime.js');
 } catch (error) {
   console.warn('[SS ERP] logistics distribution modules failed to load', error);
+}
+
+try { importScripts('../shared/logistics-rules/manual-fallback-persistence.js'); } catch (error) {
+  console.warn('[SS ERP] logistics manual fallback module failed to load', error);
 }
 
 try {
@@ -230,6 +235,7 @@ try {
 let logisticsDistributionRuntime = null;
 let logisticsDistributionMessageHandler = null;
 let logisticsDeviceCredentials = null;
+let logisticsManualFallbackPersistence = null;
 let logisticsCaptureRuntime = null;
 let logisticsCaptureMessageHandler = null;
 let logisticsBindingProbeRuntime = null;
@@ -287,10 +293,30 @@ function getLogisticsDistributionRuntime() {
     credentials: getLogisticsDeviceCredentials(),
     fetchImpl: globalThis.fetch.bind(globalThis),
     validateBundle: validateDeliveryEnvelope,
+    currentExtensionVersion: chrome.runtime.getManifest().version,
     randomId: () => globalThis.crypto.randomUUID(),
     now: () => new Date(),
   });
   return logisticsDistributionRuntime;
+}
+
+function getLogisticsManualFallbackPersistence() {
+  if (logisticsManualFallbackPersistence) return logisticsManualFallbackPersistence;
+  const api = globalThis.SS_ERP_LOGISTICS_MANUAL_FALLBACK;
+  if (!api || typeof api.createPersistence !== 'function') {
+    throw new Error('物流手工备用规则持久化模块不可用');
+  }
+  logisticsManualFallbackPersistence = api.createPersistence({
+    storage: chrome.storage.local,
+    getRuntime: getLogisticsDistributionRuntime,
+    isFeatureEnabled: isLogisticsDistributionFeatureEnabled,
+    now: () => new Date(),
+  });
+  return logisticsManualFallbackPersistence;
+}
+
+function persistManualCalculatorData(input) {
+  return getLogisticsManualFallbackPersistence().persist(input);
 }
 
 function getLogisticsDistributionMessageHandler() {
@@ -1998,37 +2024,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const snapshot = prepared.snapshot;
     (async () => {
-      const result = await chrome.storage.local.get([OZON_LOGISTICS_CALCULATOR_STATE_KEY]);
-      const calculatorState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY];
       const source = toText(
         snapshot.catalogSnapshot && snapshot.catalogSnapshot.metadata
           && snapshot.catalogSnapshot.metadata.source
       );
-      if (isLogisticsDistributionFeatureEnabled() && calculatorState && calculatorState.scope && source === 'erp_release') {
-        const runtime = getLogisticsDistributionRuntime();
-        const updated = await runtime.updatePreferences({ snapshot });
-        sendResponse({ ok: true, snapshot: updated.snapshot, mode: 'scoped_preferences' });
-        return;
-      }
-      await chrome.storage.local.set({
-        [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
-        [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),
+      const persisted = await persistManualCalculatorData({
+        snapshot,
+        source,
       });
-      if (calculatorState && calculatorState.scope) {
-        if (isLogisticsDistributionFeatureEnabled()) {
-          const updated = await getLogisticsDistributionRuntime().saveLocalFallback({
-            scopeBinding: calculatorState.scope,
-            snapshot: snapshot,
-          });
-          sendResponse({ ok: true, snapshot: updated && updated.snapshot || snapshot, mode: 'scoped_fallback' });
-          return;
-        }
-        sendResponse({ ok: true, snapshot, mode: 'legacy_unscoped' });
+      if (persisted.state === 'scope_required') {
+        sendResponse({ ok: false, errorCode: 'scope_required', error: '请先绑定物流规则范围后再导入' });
         return;
       }
-      sendResponse({ ok: true, snapshot, mode: 'local_unscoped' });
+      sendResponse({
+        ok: true,
+        snapshot: persisted.snapshot || snapshot,
+        officialSnapshot: persisted.officialSnapshot || null,
+        mode: persisted.mode,
+        state: persisted.state,
+      });
     })().catch((error) => {
-      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+      sendResponse({
+        ok: false,
+        errorCode: error && error.code || undefined,
+        error: error && error.message ? error.message : String(error),
+      });
     });
     return true;
   }
@@ -2906,7 +2926,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'ozon-calculator:status') {
     chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_CALC_CONFIG_UPDATED_AT_KEY, OZON_OFFICIAL_SNAPSHOT_KEY, OZON_COMMISSION_SNAPSHOT_KEY, OZON_FX_SNAPSHOT_KEY, OZON_LOGISTICS_CALCULATOR_STATE_KEY]).then((result) => {
       const entries = Array.isArray(result[OZON_CALC_CAPTURE_ENTRIES_KEY]) ? result[OZON_CALC_CAPTURE_ENTRIES_KEY] : [];
-      const logisticsState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY] || null;
+      const logisticsState = isLogisticsDistributionFeatureEnabled()
+        ? result[OZON_LOGISTICS_CALCULATOR_STATE_KEY] || null
+        : null;
       const snapshot = logisticsState ? logisticsState.snapshot || null : result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null;
       const officialSnapshot = logisticsState ? logisticsState.officialSnapshot || null : result[OZON_OFFICIAL_SNAPSHOT_KEY] || null;
       const commissionSnapshot = result[OZON_COMMISSION_SNAPSHOT_KEY] || null;
@@ -2939,7 +2961,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:build-config-from-captured-seller') {
-    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY]).then((result) => {
+    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_LOGISTICS_CALCULATOR_STATE_KEY]).then(async (result) => {
       const store = globalThis.OZON_CALC_CAPTURE_STORE;
       if (!store || typeof store.buildHarPayload !== 'function') {
         throw new Error('后台物流数据存储未加载');
@@ -2949,18 +2971,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const snapshot = buildConfigSnapshotFromSellerHar(
         sellerHar,
         message.selectedServiceIds,
-        result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null
+        isLogisticsDistributionFeatureEnabled() && result[OZON_LOGISTICS_CALCULATOR_STATE_KEY] && result[OZON_LOGISTICS_CALCULATOR_STATE_KEY].snapshot
+          || result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null
       );
-      return chrome.storage.local.set({
-        [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
-        [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),
-      }).then(() => {
+      const persisted = await persistManualCalculatorData({ snapshot, source: 'extension-settings' });
+      if (persisted.state === 'scope_required') {
         sendResponse({
-          ok: true,
-          snapshot,
-          serviceCount: snapshot.catalogSnapshot.services.length,
-          selectedServiceCount: snapshot.userConfig.selectedServiceIds.length,
+          ok: false,
+          errorCode: 'scope_required',
+          error: '请先绑定物流规则范围后再同步 Seller 数据',
         });
+        return;
+      }
+      sendResponse({
+        ok: true,
+        snapshot: persisted.snapshot || snapshot,
+        mode: persisted.mode,
+        state: persisted.state,
+        serviceCount: snapshot.catalogSnapshot.services.length,
+        selectedServiceCount: snapshot.userConfig.selectedServiceIds.length,
       });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
@@ -2969,7 +2998,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:sync-captured-seller-official') {
-    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY]).then((result) => {
+    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY, OZON_CALC_CONFIG_SNAPSHOT_KEY, OZON_LOGISTICS_CALCULATOR_STATE_KEY]).then(async (result) => {
       const store = globalThis.OZON_CALC_CAPTURE_STORE;
       if (!store || typeof store.buildHarPayload !== 'function') {
         throw new Error('后台物流数据存储未加载');
@@ -2980,7 +3009,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const snapshot = buildConfigSnapshotFromSellerHar(
         sellerHar,
         message.selectedServiceIds,
-        result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null
+        isLogisticsDistributionFeatureEnabled() && result[OZON_LOGISTICS_CALCULATOR_STATE_KEY] && result[OZON_LOGISTICS_CALCULATOR_STATE_KEY].snapshot
+          || result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || null
       );
       let officialSnapshot = null;
       let officialError = '';
@@ -2989,23 +3019,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (error) {
         officialError = error && error.message ? error.message : String(error);
       }
-      const values = {
-        [OZON_CALC_CONFIG_SNAPSHOT_KEY]: snapshot,
-        [OZON_CALC_CONFIG_UPDATED_AT_KEY]: new Date().toISOString(),
-      };
-      if (officialSnapshot) values[OZON_OFFICIAL_SNAPSHOT_KEY] = officialSnapshot;
-      return chrome.storage.local.set(values).then(() => {
+      const persisted = await persistManualCalculatorData({
+        snapshot,
+        officialSnapshot,
+        source: 'extension-settings',
+      });
+      if (persisted.state === 'scope_required') {
         sendResponse({
-          ok: true,
-          snapshot,
-          officialSnapshot,
-          officialError,
-          sellerEntryCount: sellerHar.log.entries.length,
-          officialEntryCount: officialHar.log.entries.length,
-          serviceCount: snapshot.catalogSnapshot.services.length,
-          selectedServiceCount: snapshot.userConfig.selectedServiceIds.length,
-          officialSampleCount: officialSnapshot && Array.isArray(officialSnapshot.tariffs) ? officialSnapshot.tariffs.length : 0,
+          ok: false,
+          errorCode: 'scope_required',
+          error: '请先绑定物流规则范围后再同步 Seller 与 Official 数据',
         });
+        return;
+      }
+      sendResponse({
+        ok: true,
+        snapshot: persisted.snapshot || snapshot,
+        officialSnapshot: persisted.officialSnapshot || officialSnapshot,
+        officialError,
+        mode: persisted.mode,
+        state: persisted.state,
+        sellerEntryCount: sellerHar.log.entries.length,
+        officialEntryCount: officialHar.log.entries.length,
+        serviceCount: snapshot.catalogSnapshot.services.length,
+        selectedServiceCount: snapshot.userConfig.selectedServiceIds.length,
+        officialSampleCount: officialSnapshot && Array.isArray(officialSnapshot.tariffs) ? officialSnapshot.tariffs.length : 0,
       });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
@@ -3014,7 +3052,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ozon-calculator:sync-captured-official') {
-    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY]).then((result) => {
+    chrome.storage.local.get([OZON_CALC_CAPTURE_ENTRIES_KEY]).then(async (result) => {
       const store = globalThis.OZON_CALC_CAPTURE_STORE;
       if (!store || typeof store.buildHarPayload !== 'function') {
         throw new Error('后台物流数据存储未加载');
@@ -3022,15 +3060,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const entries = Array.isArray(result[OZON_CALC_CAPTURE_ENTRIES_KEY]) ? result[OZON_CALC_CAPTURE_ENTRIES_KEY] : [];
       const officialHar = store.buildHarPayload(entries, 'official');
       const officialSnapshot = buildOfficialSnapshotFromHar(officialHar);
-      return chrome.storage.local.set({
-        [OZON_OFFICIAL_SNAPSHOT_KEY]: officialSnapshot,
-      }).then(() => {
+      const persisted = await persistManualCalculatorData({ officialSnapshot });
+      if (persisted.state === 'scope_required') {
         sendResponse({
-          ok: true,
-          officialSnapshot,
-          officialEntryCount: officialHar.log.entries.length,
-          officialSampleCount: officialSnapshot.tariffs.length,
+          ok: false,
+          errorCode: 'scope_required',
+          error: '请先绑定物流规则范围后再同步 Official 数据',
         });
+        return;
+      }
+      sendResponse({
+        ok: true,
+        officialSnapshot: persisted.officialSnapshot || officialSnapshot,
+        mode: persisted.mode,
+        state: persisted.state,
+        officialEntryCount: officialHar.log.entries.length,
+        officialSampleCount: officialSnapshot.tariffs.length,
       });
     }).catch((error) => {
       sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
@@ -3078,7 +3123,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!schema || typeof schema.mergeSnapshotFormState !== 'function') {
         throw new Error('同步配置结构未加载');
       }
-      const calculatorState = result[OZON_LOGISTICS_CALCULATOR_STATE_KEY];
+      const calculatorState = isLogisticsDistributionFeatureEnabled()
+        ? result[OZON_LOGISTICS_CALCULATOR_STATE_KEY]
+        : null;
       const snapshot = schema.mergeSnapshotFormState(
         calculatorState && calculatorState.snapshot || result[OZON_CALC_CONFIG_SNAPSHOT_KEY] || {},
         message.formState || {}

@@ -41,7 +41,11 @@ const uniquePrefix = (label: string) =>
   `device_dist_${label}_${randomUUID().replaceAll('-', '').slice(0, 12)}`;
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
-async function seedDeviceScope(client: PrismaClient, label: string): Promise<Seed> {
+async function seedDeviceScope(
+  client: PrismaClient,
+  label: string,
+  options: { publishRelease?: boolean } = {},
+): Promise<Seed> {
   const prefix = uniquePrefix(label);
   const ownerUserId = `${prefix}_owner`;
   const shopId = `${prefix}_shop`;
@@ -179,6 +183,7 @@ async function seedDeviceScope(client: PrismaClient, label: string): Promise<See
     warehouseId,
     channelId,
   );
+  if (options.publishRelease !== false) {
   await client.$executeRawUnsafe(
     `INSERT INTO "logistics_rule_releases"
       ("id", "channel_id", "sequence", "revision_id", "release_kind", "content_checksum",
@@ -210,6 +215,7 @@ async function seedDeviceScope(client: PrismaClient, label: string): Promise<See
     releaseId,
     channelId,
   );
+  }
   await client.$executeRawUnsafe(
     `INSERT INTO "extension_device_pairing_codes"
       ("id", "deployment_id", "actor_user_id", "owner_user_id", "code_digest", "shop_ids", "scopes",
@@ -337,6 +343,25 @@ describePostgres('logistics device repository PostgreSQL integration', () => {
         now: new Date(),
       }),
     ).resolves.toEqual({ state: 'not_found' });
+  });
+
+  it('discovers a verified assignment before its first release is published', async () => {
+    const seed = await seedDeviceScope(first, 'before_first_release', {
+      publishRelease: false,
+    });
+    const repository = createPrismaLogisticsRuleDeviceRepository({ client: first });
+
+    await expect(repository.listAssignmentsForDevice({
+      sessionId: seed.sessionId,
+      ownerUserId: seed.ownerUserId,
+      allowedShopIds: [seed.shopId],
+    })).resolves.toEqual([
+      expect.objectContaining({
+        assignmentId: seed.assignmentId,
+        releaseSequence: 0,
+        effectiveReleaseAvailable: false,
+      }),
+    ]);
   });
 
   it.each([

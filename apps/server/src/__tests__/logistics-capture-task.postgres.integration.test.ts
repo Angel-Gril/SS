@@ -259,12 +259,18 @@ async function seedCandidateSetGraph(client: PrismaClient) {
          CASE WHEN $3 = 'OFFICIAL' THEN 'russia' ELSE NULL END,
          CASE WHEN $3 = 'OFFICIAL' THEN 'moscow' ELSE NULL END,
          $8, $9, CURRENT_TIMESTAMP, 'CAPTURED', 'postgres-candidate-set-test',
-         '{}'::jsonb, '{}'::jsonb, 'VERIFIED', $4, CURRENT_TIMESTAMP,
-         'verified candidate evidence'
+         '{}'::jsonb, '{}'::jsonb, 'PENDING_REVIEW', NULL, NULL, NULL
        )`,
       candidateId, taskId, kind, seed.ownerUserId, seed.shopId, seed.companyId,
       seed.warehouseId, fingerprintChecksum, responseChecksum,
     );
+    await createPrismaLogisticsCaptureTaskRepository({ client }).reviewCaptureCandidate!({
+      candidateId,
+      actorUserId: seed.ownerUserId,
+      decision: 'VERIFIED',
+      reason: 'verified candidate evidence',
+      reviewedAt: new Date(),
+    });
     return { candidateId, responseChecksum };
   }
 
@@ -500,6 +506,7 @@ describePostgres('logistics capture task PostgreSQL integration', () => {
   it('allows exactly one terminal review decision for each candidate', async () => {
     const seed = await seedScope(first);
     const otherReviewer = await seedScope(first);
+    const repository = createPrismaLogisticsCaptureTaskRepository({ client: first });
 
     const insertPendingCandidate = async (label: string) => {
       const taskId = prefix() + '_task_' + label;
@@ -544,13 +551,22 @@ describePostgres('logistics capture task PostgreSQL integration', () => {
     };
 
     const verifiedCandidateId = await insertPendingCandidate('verified');
-    await first.$executeRawUnsafe(
-      `UPDATE "logistics_capture_candidates"
-          SET "review_status" = 'VERIFIED', "reviewed_by_id" = $2,
-              "reviewed_at" = CURRENT_TIMESTAMP, "review_reason" = 'verified evidence'
-        WHERE "id" = $1`,
-      verifiedCandidateId, seed.ownerUserId,
-    );
+    const verifiedAt = new Date();
+    const verified = await repository.reviewCaptureCandidate!({
+      candidateId: verifiedCandidateId,
+      actorUserId: seed.ownerUserId,
+      decision: 'VERIFIED',
+      reason: 'verified evidence',
+      reviewedAt: verifiedAt,
+    });
+    expect(verified).toMatchObject({ state: 'reviewed', duplicate: false });
+    await expect(repository.reviewCaptureCandidate!({
+      candidateId: verifiedCandidateId,
+      actorUserId: seed.ownerUserId,
+      decision: 'VERIFIED',
+      reason: 'verified evidence',
+      reviewedAt: new Date(verifiedAt.getTime() + 1_000),
+    })).resolves.toMatchObject({ state: 'reviewed', duplicate: true });
     await expect(first.$executeRawUnsafe(
       `UPDATE "logistics_capture_candidates"
           SET "review_status" = 'REJECTED', "review_reason" = 'changed decision'
@@ -565,19 +581,47 @@ describePostgres('logistics capture task PostgreSQL integration', () => {
     )).rejects.toThrow(/review.*final/i);
 
     const rejectedCandidateId = await insertPendingCandidate('rejected');
-    await first.$executeRawUnsafe(
-      `UPDATE "logistics_capture_candidates"
-          SET "review_status" = 'REJECTED', "reviewed_by_id" = $2,
-              "reviewed_at" = CURRENT_TIMESTAMP, "review_reason" = 'rejected evidence'
-        WHERE "id" = $1`,
-      rejectedCandidateId, seed.ownerUserId,
-    );
+    const rejectedAt = new Date();
+    await expect(repository.reviewCaptureCandidate!({
+      candidateId: rejectedCandidateId,
+      actorUserId: seed.ownerUserId,
+      decision: 'REJECTED',
+      reason: 'rejected evidence',
+      reviewedAt: rejectedAt,
+    })).resolves.toMatchObject({ state: 'reviewed', duplicate: false });
     await expect(first.$executeRawUnsafe(
       `UPDATE "logistics_capture_candidates"
           SET "review_status" = 'VERIFIED', "review_reason" = 'changed decision'
         WHERE "id" = $1`,
       rejectedCandidateId,
     )).rejects.toThrow(/review.*final/i);
+
+    const events = await first.$queryRawUnsafe<Array<{
+      id: string;
+      eventType: string;
+      payload: Record<string, unknown>;
+    }>>(
+      `SELECT "id", "event_type" AS "eventType", "payload"
+         FROM "logistics_scope_events"
+        WHERE "capture_candidate_id" IN ($1, $2)
+        ORDER BY "event_type"`,
+      verifiedCandidateId, rejectedCandidateId,
+    );
+    expect(events.map((event) => event.eventType).sort()).toEqual([
+      'CAPTURE_CANDIDATE_REJECTED',
+      'CAPTURE_CANDIDATE_VERIFIED',
+    ]);
+    expect(events).toHaveLength(2);
+    expect(JSON.stringify(events)).not.toContain('verified evidence');
+    await expect(first.$executeRawUnsafe(
+      `UPDATE "logistics_scope_events" SET "payload" = "payload" WHERE "id" = $1`,
+      events[0]!.id,
+    )).rejects.toThrow(/scope events are immutable/i);
+    await expect(first.$executeRawUnsafe(
+      `DELETE FROM "logistics_scope_events" WHERE "id" = $1`,
+      events[0]!.id,
+    )).rejects.toThrow(/scope events are immutable/i);
+
 
     const rows = await first.$queryRawUnsafe<Array<{
       id: string;
@@ -601,6 +645,102 @@ describePostgres('logistics capture task PostgreSQL integration', () => {
       }),
     ]));
   });
+  it('rolls back missing or forged terminal review events at the database boundary', async () => {
+    const capturePending = async (rateMinor: string) => {
+      const seed = await seedScope(first);
+      const service = createLogisticsCaptureTaskService({
+        repository: createPrismaLogisticsCaptureTaskRepository({ client: first }),
+      });
+      const task = await issueClaimedSellerTask(service, seed, seed.sessionIds[0]!);
+      const captured = await service.submitCapture(sellerUpload(
+        task,
+        seed,
+        seed.sessionIds[0]!,
+        sellerPayload(rateMinor),
+      ));
+      return { seed, candidateId: captured.candidateId };
+    };
+
+    const missing = await capturePending('1401');
+    await expect(first.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "logistics_capture_candidates"
+            SET "review_status" = 'VERIFIED', "reviewed_by_id" = $2,
+                "reviewed_at" = $3, "review_reason" = 'missing review event'
+          WHERE "id" = $1`,
+        missing.candidateId, missing.seed.ownerUserId, new Date(),
+      );
+    })).rejects.toThrow(/requires one matching scope event/i);
+    const afterMissing = await first.$queryRawUnsafe<Array<{ reviewStatus: string }>>(
+      `SELECT "review_status"::text AS "reviewStatus"
+         FROM "logistics_capture_candidates" WHERE "id" = $1`,
+      missing.candidateId,
+    );
+    expect(afterMissing[0]?.reviewStatus).toBe('PENDING_REVIEW');
+
+    const forged = await capturePending('1402');
+    const forgedClient: any = {
+      $queryRawUnsafe: first.$queryRawUnsafe.bind(first),
+      $executeRawUnsafe: first.$executeRawUnsafe.bind(first),
+      $transaction: (operation: any, options: any) => first.$transaction(
+        async (tx) => operation({
+          $queryRawUnsafe: tx.$queryRawUnsafe.bind(tx),
+          $executeRawUnsafe: async (sql: string, ...values: any[]) => {
+            if (sql.includes('INSERT INTO "logistics_scope_events"')) {
+              const payload = JSON.parse(String(values[7])) as Record<string, unknown>;
+              values[7] = JSON.stringify({ ...payload, companyId: 'forged-company' });
+            }
+            return tx.$executeRawUnsafe(sql, ...values);
+          },
+        }),
+        options,
+      ),
+    };
+    const forgedRepository = createPrismaLogisticsCaptureTaskRepository({
+      client: forgedClient,
+    });
+    await expect(forgedRepository.reviewCaptureCandidate!({
+      candidateId: forged.candidateId,
+      actorUserId: forged.seed.ownerUserId,
+      decision: 'REJECTED',
+      reason: 'forged review event must roll back',
+      reviewedAt: new Date(),
+    })).rejects.toThrow(/provenance does not match candidate review/i);
+
+    const afterForged = await first.$queryRawUnsafe<Array<{
+      reviewStatus: string;
+      eventCount: bigint;
+    }>>(
+      `SELECT c."review_status"::text AS "reviewStatus",
+              (SELECT COUNT(*) FROM "logistics_scope_events" e
+                WHERE e."capture_candidate_id" = c."id") AS "eventCount"
+         FROM "logistics_capture_candidates" c WHERE c."id" = $1`,
+      forged.candidateId,
+    );
+    expect(afterForged[0]?.reviewStatus).toBe('PENDING_REVIEW');
+    expect(Number(afterForged[0]?.eventCount || 0)).toBe(0);
+
+    const missingBackfill = await first.$queryRawUnsafe<Array<{ count: bigint }>>(
+      `SELECT COUNT(*) AS "count"
+         FROM "logistics_capture_candidates" c
+        WHERE c."review_status" IN ('VERIFIED', 'REJECTED')
+          AND NOT EXISTS (
+            SELECT 1 FROM "logistics_scope_events" e
+             WHERE e."capture_candidate_id" = c."id"
+               AND e."tenant_id" = c."tenant_id"
+               AND e."shop_id" = c."shop_id"
+               AND e."actor_user_id" = c."reviewed_by_id"
+               AND e."created_at" = c."reviewed_at"
+               AND e."event_type" = CASE c."review_status"::text
+                 WHEN 'VERIFIED' THEN 'CAPTURE_CANDIDATE_VERIFIED'
+                 ELSE 'CAPTURE_CANDIDATE_REJECTED'
+               END
+          )`,
+    );
+    expect(Number(missingBackfill[0]?.count || 0)).toBe(0);
+  }, 30_000);
+
+
   it('rejects candidates whose provenance differs from the source task', async () => {
     const seed = await seedScope(first);
     const taskId = prefix() + '_provenance_task';

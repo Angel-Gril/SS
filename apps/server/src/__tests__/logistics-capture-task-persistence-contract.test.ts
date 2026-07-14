@@ -20,6 +20,10 @@ const taskVersionMigration = readFileSync(
   resolve(root, 'prisma/migrations/20260713090000_freeze_logistics_capture_task_version/migration.sql'),
   'utf8',
 );
+const captureReviewEventMigration = readFileSync(
+  resolve(root, 'prisma/migrations/20260714060000_add_logistics_capture_review_events/migration.sql'),
+  'utf8',
+);
 const migrationsRoot = resolve(root, 'prisma/migrations');
 const allMigrations = readdirSync(migrationsRoot, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
@@ -89,6 +93,39 @@ describe('logistics capture task persistence contract', () => {
     expect(reviewMigration).toContain(`OLD."review_status" <> 'PENDING_REVIEW'`);
     expect(reviewMigration).toContain(`NEW."review_status" = 'PENDING_REVIEW'`);
     expect(reviewMigration).toContain('logistics capture candidate review is final');
+  });
+
+  it('requires one immutable sanitized scope event for every terminal capture review', () => {
+    expect(captureReviewEventMigration.trim()).toMatch(/^BEGIN;[\s\S]*COMMIT;$/);
+    expect(schema).toMatch(
+      /model LogisticsScopeEvent[\s\S]*captureCandidateId\s+String\?[\s\S]*captureCandidate\s+LogisticsCaptureCandidate\?/,
+    );
+    expect(captureReviewEventMigration).toContain('capture_candidate_id');
+    expect(captureReviewEventMigration).toContain('capture_review_event_candidate_scope_fkey');
+    expect(captureReviewEventMigration).toContain('logistics_scope_event_capture_candidate_idx');
+    expect(captureReviewEventMigration).toContain('logistics_scope_event_capture_review_once');
+    expect(captureReviewEventMigration).toContain('logistics_scope_event_capture_review_check');
+    expect(captureReviewEventMigration).toContain('CAPTURE_CANDIDATE_VERIFIED');
+    expect(captureReviewEventMigration).toContain('CAPTURE_CANDIDATE_REJECTED');
+    expect(captureReviewEventMigration).toContain('reasonDigest');
+    expect(captureReviewEventMigration).toContain('reasonLength');
+    expect(captureReviewEventMigration).toContain('prevent_logistics_scope_event_mutation');
+    expect(captureReviewEventMigration).toContain('BEFORE UPDATE OR DELETE');
+    expect(captureReviewEventMigration).toContain("SET LOCAL lock_timeout = '5s'");
+    expect(captureReviewEventMigration).toContain('validate_logistics_capture_review_event');
+    expect(captureReviewEventMigration).toContain('reviewed_by_id');
+    expect(captureReviewEventMigration).toContain('reviewed_at');
+    expect(captureReviewEventMigration).toContain('fingerprint_checksum');
+    expect(captureReviewEventMigration).toContain('source_response_checksum');
+    expect(captureReviewEventMigration).toContain('ensure_logistics_capture_review_event');
+    expect(captureReviewEventMigration).toContain('CREATE CONSTRAINT TRIGGER');
+    expect(captureReviewEventMigration).toContain('DEFERRABLE INITIALLY DEFERRED');
+    expect(captureReviewEventMigration).toMatch(
+      /INSERT INTO "logistics_scope_events"[\s\S]*FROM "logistics_capture_candidates" c[\s\S]*WHERE c\."review_status" IN/,
+    );
+    expect(captureReviewEventMigration).not.toMatch(
+      /rawPayload|normalizedPayload|diagnostics|reviewReason|authorization|cookie|accessToken/i,
+    );
   });
 
   it('freezes reviewed candidate sets with scoped point and Official evidence', () => {

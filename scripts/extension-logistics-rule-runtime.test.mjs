@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const sources = [
   'extensions/ss-erp/shared/logistics-rules/device-credential-manager.js',
+  'extensions/ss-erp/shared/logistics-rules/version-policy.js',
   'extensions/ss-erp/shared/logistics-rules/distribution-store.js',
   'extensions/ss-erp/shared/logistics-rules/distribution-client.js',
   'extensions/ss-erp/shared/logistics-rules/distribution-runtime.js',
@@ -15,19 +16,39 @@ function clone(value) {
 }
 
 function createStorage() {
+  let heldGet = null;
   const values = new Map();
   return {
     async get(keys) {
       const requested = Array.isArray(keys) ? keys : [keys];
-      return Object.fromEntries(
+      const result = Object.fromEntries(
         requested.filter((key) => values.has(key)).map((key) => [key, clone(values.get(key))]),
       );
+      if (heldGet && requested.includes(heldGet.key)) {
+        if (heldGet.remaining > 0) {
+          heldGet.remaining -= 1;
+        } else {
+          const current = heldGet;
+          heldGet = null;
+          current.markStarted();
+          await current.waitForRelease;
+        }
+      }
+      return result;
     },
     async set(input) {
       for (const [key, value] of Object.entries(input)) values.set(key, clone(value));
     },
     async remove(keys) {
       for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key);
+    },
+    holdNextGet(key, skip = 0) {
+      let markStarted;
+      let release;
+      const started = new Promise((resolve) => { markStarted = resolve; });
+      const waitForRelease = new Promise((resolve) => { release = resolve; });
+      heldGet = { key, remaining: skip, markStarted, waitForRelease };
+      return { started, release };
     },
     all() { return Object.fromEntries([...values.entries()].map(([key, value]) => [key, clone(value)])); },
   };
@@ -100,6 +121,9 @@ function createUpgradeRequiredRuntimeFixture() {
   const localStorage = createStorage();
   let currentTime = new Date('2026-07-12T12:00:00.000Z');
   let upgradeRequired = false;
+  let malformedUpgrade = false;
+  let assignmentAvailable = true;
+  const requests = [];
   const operation = {
     state: 'paired',
     epoch: 1,
@@ -126,6 +150,7 @@ function createUpgradeRequiredRuntimeFixture() {
     destinationLocationUid: 'moscow',
     destinationLabel: 'Russia / Moscow',
     releaseSequence: 1,
+    effectiveReleaseAvailable: true,
   };
   const credentials = {
     async claim() { return operation; },
@@ -140,12 +165,21 @@ function createUpgradeRequiredRuntimeFixture() {
   const runtime = loadRuntime({
     localStorage,
     credentials,
+    currentExtensionVersion: '1.2.0',
     fetchImpl: async (url) => {
+      requests.push(url);
       if (url.endsWith('/api/logistics-rules/assignments')) {
-        return response(200, { code: 1, data: { assignments: [assignment] } });
+        return response(200, {
+          code: 1, data: { assignments: assignmentAvailable ? [assignment] : [] },
+        });
       }
       if (url.endsWith('/assignments/assignment-a/effective')) {
         if (upgradeRequired) {
+          if (malformedUpgrade) {
+            const malformed = response(426, null);
+            malformed.json = async () => { throw new SyntaxError('invalid JSON'); };
+            return malformed;
+          }
           return response(426, {
             code: 0,
             errorCode: 'upgrade_required',
@@ -197,8 +231,19 @@ function createUpgradeRequiredRuntimeFixture() {
   return {
     localStorage,
     runtime,
+    requireMalformedUpgrade() { upgradeRequired = true; malformedUpgrade = true; },
     requireUpgrade() { upgradeRequired = true; },
+    removeRelease() {
+      assignment.effectiveReleaseAvailable = false;
+      assignment.releaseSequence = 0;
+    },
+    restoreRelease() {
+      assignment.effectiveReleaseAvailable = true;
+      assignment.releaseSequence = 1;
+    },
+    removeAssignment() { assignmentAvailable = false; },
     setTime(value) { currentTime = new Date(value); },
+    requests,
   };
 }
 
@@ -224,6 +269,7 @@ test('one paired device discovers, applies, and acknowledges the single Xiamen a
     destinationLocationUid: 'moscow',
     destinationLabel: 'Russia / Moscow',
     releaseSequence: 1,
+    effectiveReleaseAvailable: true,
   };
   const calculatorInputs = [];
   const runtime = loadRuntime({
@@ -397,13 +443,14 @@ test('one paired device discovers, applies, and acknowledges the single Xiamen a
   assert.equal(cleared, undefined);
 });
 
-test('upgrade_required preserves a policy-valid last-known-good and assignment selection', async () => {
+test('upgrade_required clears quotes while preserving cached bundles and assignment selection', async () => {
   const fixture = createUpgradeRequiredRuntimeFixture();
   const first = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
   const before = fixture.localStorage.all();
   const pointerKey = Object.keys(before).find((key) => key.endsWith(':pointer'));
   const calculatorKey = 'ozon-logistics:calculator-state:v1';
   const selectionKey = 'ss-erp:logistics:selection:v1';
+  const blobKeys = Object.keys(before).filter((key) => key.includes(':blob:'));
 
   fixture.requireUpgrade();
   const result = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
@@ -412,13 +459,163 @@ test('upgrade_required preserves a policy-valid last-known-good and assignment s
   assert.equal(first.state, 'active');
   assert.equal(result.state, 'upgrade_required');
   assert.equal(result.assignment.assignmentId, 'assignment-a');
-  assert.equal(result.calculatorState.quoteAllowed, true);
-  assert.equal(result.calculatorState.snapshot.marker, 'policy-valid-lkg');
+  assert.equal(result.calculatorState.state, 'upgrade_required');
+  assert.equal(result.calculatorState.quoteAllowed, false);
+  assert.equal(result.calculatorState.snapshot, null);
+  assert.equal(result.calculatorState.officialSnapshot, null);
+  assert.equal(result.calculatorState.minExtensionVersion, '2.0.0');
   assert.deepEqual(after[pointerKey], before[pointerKey]);
-  assert.deepEqual(after[calculatorKey], before[calculatorKey]);
+  assert.deepEqual(Object.keys(after).filter((key) => key.includes(':blob:')), blobKeys);
+  assert.equal(after[calculatorKey].state, 'upgrade_required');
   assert.deepEqual(after[selectionKey], before[selectionKey]);
+  const requestCount = fixture.requests.length;
+  const startup = await fixture.runtime.syncStored({ reason: 'startup', extensionVersion: '1.2.0' });
+  assert.equal(startup.state, 'upgrade_required');
+  assert.equal(startup.calculatorState.quoteAllowed, false);
+  assert.equal(fixture.requests.length, requestCount);
+  assert.deepEqual(fixture.localStorage.all()[selectionKey], before[selectionKey]);
 });
 
+test('local preference updates cannot revive a cached release after upgrade_required', async () => {
+  const fixture = createUpgradeRequiredRuntimeFixture();
+  await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  fixture.requireUpgrade();
+  await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+
+  const updated = await fixture.runtime.updatePreferences({
+    snapshot: {
+      userConfig: { selectedServiceIds: ['service-1'], resolutionMode: 'priority' },
+      formState: { platformFeeRate: 0.12 },
+    },
+  });
+
+  assert.equal(updated.state, 'upgrade_required');
+  assert.equal(updated.quoteAllowed, false);
+  assert.equal(updated.snapshot, null);
+  assert.equal(updated.minExtensionVersion, '2.0.0');
+  assert.equal(
+    fixture.localStorage.all()['ozon-logistics:calculator-state:v1'].state,
+    'upgrade_required',
+  );
+});
+
+test('a malformed upgrade gate stays closed while retrying the server for diagnostics', async () => {
+  const fixture = createUpgradeRequiredRuntimeFixture();
+  await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  fixture.requireMalformedUpgrade();
+  const first = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  assert.equal(first.state, 'upgrade_required');
+  assert.equal(first.minExtensionVersion, null);
+  const requestCount = fixture.requests.length;
+  const second = await fixture.runtime.syncStored({ reason: 'startup', extensionVersion: '1.2.0' });
+  assert.equal(second.state, 'upgrade_required');
+  assert.equal(second.calculatorState.quoteAllowed, false);
+  assert.equal(second.minExtensionVersion, null);
+  assert.ok(fixture.requests.length > requestCount);
+});
+
+
+test('local preference updates cannot revive a cached release after it is withdrawn', async () => {
+  const fixture = createUpgradeRequiredRuntimeFixture();
+  const first = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  assert.equal(first.state, 'active');
+  fixture.removeRelease();
+  const withdrawn = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  assert.equal(withdrawn.state, 'no_remote_release');
+  assert.equal(withdrawn.calculatorState.quoteAllowed, false);
+
+  const updated = await fixture.runtime.updatePreferences({
+    snapshot: {
+      userConfig: { selectedServiceIds: ['service-1'], resolutionMode: 'lowest_cost' },
+      formState: { handlingFee: 3 },
+    },
+  });
+
+  assert.equal(updated.state, 'no_remote_release');
+  assert.equal(updated.quoteAllowed, false);
+  assert.equal(updated.snapshot, null);
+  assert.equal(fixture.localStorage.all()['ozon-logistics:calculator-state:v1'].state, 'no_remote_release');
+
+  fixture.restoreRelease();
+  const restored = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  const restoredState = fixture.localStorage.all()['ozon-logistics:calculator-state:v1'];
+  assert.ok(restored.state === 'active' || restored.state === 'not_modified');
+  assert.equal(restoredState.quoteAllowed, true);
+  assert.equal(restoredState.authoritativeGate, null);
+});
+
+
+
+test('local preference updates cannot revive a cached release after assignment removal', async () => {
+  const fixture = createUpgradeRequiredRuntimeFixture();
+  await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  fixture.removeAssignment();
+  const removed = await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  const calculatorKey = 'ozon-logistics:calculator-state:v1';
+
+  assert.equal(removed.state, 'no_assignment');
+  assert.equal(fixture.localStorage.all()[calculatorKey].quoteAllowed, false);
+
+  const updated = await fixture.runtime.updatePreferences({
+    snapshot: {
+      userConfig: { selectedServiceIds: ['service-1'], resolutionMode: 'priority' },
+      formState: { handlingFee: 5 },
+    },
+  });
+
+  assert.equal(updated.state, 'no_assignment');
+  assert.equal(updated.quoteAllowed, false);
+  assert.equal(fixture.localStorage.all()[calculatorKey].state, 'no_assignment');
+});
+
+test('an assignment authority gate wins a concurrent local preference publish', async () => {
+  const fixture = createUpgradeRequiredRuntimeFixture();
+  await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  const calculatorKey = 'ozon-logistics:calculator-state:v1';
+  fixture.removeAssignment();
+  const held = fixture.localStorage.holdNextGet(calculatorKey, 1);
+  const localWrite = fixture.runtime.updatePreferences({
+    snapshot: {
+      userConfig: { selectedServiceIds: ['service-1'], resolutionMode: 'priority' },
+      formState: { handlingFee: 9 },
+    },
+  });
+  await held.started;
+  const authorityWrite = fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  await new Promise((resolve) => setImmediate(resolve));
+  held.release();
+  const [, removed] = await Promise.all([localWrite, authorityWrite]);
+  const finalState = fixture.localStorage.all()[calculatorKey];
+
+  assert.equal(removed.state, 'no_assignment');
+  assert.equal(finalState.state, 'no_assignment');
+  assert.equal(finalState.quoteAllowed, false);
+  assert.equal(finalState.authoritativeGate.state, 'no_assignment');
+});
+
+
+
+
+test('startup preflights an incompatible cached bundle before any network request', async () => {
+  const fixture = createUpgradeRequiredRuntimeFixture();
+  await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
+  const before = fixture.localStorage.all();
+  const blobKey = Object.keys(before).find((key) => key.includes(':blob:'));
+  assert.ok(blobKey);
+  await fixture.localStorage.set({
+    [blobKey]: { ...before[blobKey], minExtensionVersion: '2.0.0' },
+  });
+  const requestCount = fixture.requests.length;
+
+  const result = await fixture.runtime.syncStored({ reason: 'startup', extensionVersion: '1.2.0' });
+  const after = fixture.localStorage.all();
+
+  assert.equal(result.state, 'upgrade_required');
+  assert.equal(result.calculatorState.state, 'upgrade_required');
+  assert.equal(result.calculatorState.quoteAllowed, false);
+  assert.equal(fixture.requests.length, requestCount);
+  assert.ok(after[blobKey]);
+});
 test('upgrade_required does not keep an expired last-known-good quotable', async () => {
   const fixture = createUpgradeRequiredRuntimeFixture();
   await fixture.runtime.syncStored({ reason: 'manual', extensionVersion: '1.2.0' });
@@ -433,9 +630,10 @@ test('upgrade_required does not keep an expired last-known-good quotable', async
   const after = fixture.localStorage.all();
 
   assert.equal(result.state, 'upgrade_required');
-  assert.equal(result.calculatorState.state, 'expired');
+  assert.equal(result.calculatorState.state, 'upgrade_required');
   assert.equal(result.calculatorState.quoteAllowed, false);
   assert.equal(result.calculatorState.snapshot, null);
+  assert.equal(result.calculatorState.minExtensionVersion, '2.0.0');
   assert.deepEqual(after[pointerKey], before[pointerKey]);
   assert.equal(after[calculatorKey].quoteAllowed, false);
   assert.equal(after[calculatorKey].snapshot, null);
@@ -453,9 +651,10 @@ test('upgrade_required without a prior active release remains non-quotable', asy
   const pointerKey = Object.keys(stored).find((key) => key.endsWith(':pointer'));
 
   assert.equal(result.state, 'upgrade_required');
-  assert.equal(result.calculatorState.state, 'no_config');
+  assert.equal(result.calculatorState.state, 'upgrade_required');
   assert.equal(result.calculatorState.quoteAllowed, false);
   assert.equal(result.calculatorState.snapshot, null);
+  assert.equal(result.calculatorState.minExtensionVersion, '2.0.0');
   assert.equal(pointerKey, undefined);
   assert.equal(stored[calculatorKey].quoteAllowed, false);
   assert.equal(stored[calculatorKey].snapshot, null);
@@ -668,6 +867,7 @@ test('two independent devices survive 20 worker restarts, updates, and rollback 
         destinationLocationUid: 'moscow',
         destinationLabel: 'Russia / Moscow',
         releaseSequence: 1,
+        effectiveReleaseAvailable: true,
       },
       storage: createStorage(),
     };
@@ -921,6 +1121,7 @@ test('an initial revoked receipt stops refresh and disables the calculator immed
     originCountryUid: 'china', originCityUid: 'xiamen', originLabel: 'Xiamen',
     destinationCountryUid: 'russia', destinationLocationUid: 'moscow',
     destinationLabel: 'Moscow', releaseSequence: 1,
+    effectiveReleaseAvailable: true,
   };
   let refreshCalls = 0;
   const client = {
@@ -977,6 +1178,7 @@ test('a sync superseded by re-pairing cannot overwrite the new tenant global sta
     originCountryUid: 'china', originCityUid: 'xiamen', originLabel: 'Xiamen',
     destinationCountryUid: 'russia', destinationLocationUid: 'moscow',
     destinationLabel: 'Moscow', releaseSequence: 1,
+    effectiveReleaseAvailable: true,
   };
   let current = true;
   let flushCalls = 0;
@@ -1035,6 +1237,7 @@ test('authority terminal states disable stale quotes and clear global selection 
     assignmentId: 'assignment-a', shopId: 'shop-a', shopName: 'Shop A', companyId: 'company-a', warehouseId: 'warehouse-a', warehouseName: 'Warehouse A',
     originCountryUid: 'china', originCityUid: 'xiamen', originLabel: 'Xiamen',
     destinationCountryUid: 'russia', destinationLocationUid: 'moscow', destinationLabel: 'Moscow', releaseSequence: 1,
+    effectiveReleaseAvailable: true,
   };
   for (const terminal of ['unpaired', 'no_assignment', 'needs_selection']) {
     const localStorage = createStorage();
@@ -1146,4 +1349,318 @@ test('local fallback requires an explicit binding to the complete active scope',
   const fallbackKey = Object.keys(stored).find((key) => key.startsWith('ozon-logistics:fallback:v1:'));
   assert.ok(fallbackKey);
   assert.equal(stored[fallbackKey].scope.shopId, 'shop-a');
+
+  await assert.rejects(
+    runtime.saveLocalFallback({
+      scopeBinding: scope,
+      officialSnapshot: { scope: { ...scope, shopId: 'shop-b' }, samples: [] },
+    }),
+    /official snapshot scope does not match/i,
+  );
+  const officialOnly = await runtime.saveLocalFallback({
+    scopeBinding: scope,
+    officialSnapshot: { scope, samples: [{ fingerprintKey: 'official-a' }] },
+  });
+  assert.equal(officialOnly.state, 'local_fallback');
+  const merged = localStorage.all()[fallbackKey];
+  assert.equal(merged.snapshot.userConfig.selectedServiceIds[0], 'manual-1');
+  assert.equal(merged.officialSnapshot.samples[0].fingerprintKey, 'official-a');
+
+  const nextSnapshot = {
+    userConfig: { selectedServiceIds: ['manual-2'], resolutionMode: 'priority' },
+    formState: { packingFee: 8 },
+    catalogSnapshot: { services: [{ id: 'manual-2' }] },
+    ruleSnapshot: { services: [{ serviceId: 'manual-2' }] },
+  };
+  const held = localStorage.holdNextGet(fallbackKey);
+  const sellerWrite = runtime.saveLocalFallback({
+    scopeBinding: scope,
+    snapshot: nextSnapshot,
+  });
+  await held.started;
+  const officialWrite = runtime.saveLocalFallback({
+    scopeBinding: scope,
+    officialSnapshot: { scope, samples: [{ fingerprintKey: 'official-b' }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  held.release();
+  await Promise.all([sellerWrite, officialWrite]);
+
+  const concurrent = localStorage.all()[fallbackKey];
+  assert.equal(concurrent.snapshot.userConfig.selectedServiceIds[0], 'manual-2');
+  assert.equal(concurrent.officialSnapshot.samples[0].fingerprintKey, 'official-b');
+
+  const configured = await runtime.saveLocalFallbackWithPreferences({
+    scopeBinding: scope,
+    snapshot: nextSnapshot,
+    officialSnapshot: { scope, samples: [{ fingerprintKey: 'official-c' }] },
+  });
+  const configuredValues = localStorage.all();
+  const preferenceKey = Object.keys(configuredValues)
+    .find((key) => key.startsWith('ozon-logistics:preferences:v1:'));
+  assert.equal(configured.state, 'local_fallback');
+  assert.equal(configuredValues[fallbackKey].officialSnapshot.samples[0].fingerprintKey, 'official-c');
+  assert.equal(configuredValues[preferenceKey].userConfig.selectedServiceIds[0], 'manual-2');
+});
+function createStaleManualMutationFixture({ switchScope, switchAuthority }) {
+  const localStorage = createStorage();
+  const calculatorKey = 'ozon-logistics:calculator-state:v1';
+  const scope = {
+    deploymentId: 'deployment-a', tenantSubject: 'tenant-a',
+    shopId: 'shop-a', ozonCompanyId: 'company-a', warehouseId: 'warehouse-a',
+    originCountryUid: 'china', originCityUid: 'xiamen',
+    destinationCountryUid: 'russia', destinationLocationUid: 'moscow',
+    assignmentId: 'assignment-a', schemaMajor: 1,
+  };
+  const initialAuthority = {
+    sessionId: 'session-a', deploymentId: 'deployment-a', ownerUserId: 'tenant-a',
+  };
+  const operation = {
+    state: 'paired', epoch: 2, baseUrl: 'https://erp.example',
+    deploymentId: 'deployment-a',
+    sessionId: switchAuthority ? 'session-b' : initialAuthority.sessionId,
+    deviceId: 'device-a', ownerUserId: 'tenant-a',
+    scopes: ['logistics:discover', 'logistics:read'], accessToken: 'token-a',
+    expiresAt: '2026-08-12T12:00:00.000Z',
+  };
+  const assignment = {
+    assignmentId: switchScope ? 'assignment-b' : scope.assignmentId,
+    shopId: scope.shopId,
+    shopName: 'Shop A',
+    companyId: scope.ozonCompanyId,
+    warehouseId: switchScope ? 'warehouse-b' : scope.warehouseId,
+    warehouseName: switchScope ? 'Warehouse B' : 'Warehouse A',
+    originCountryUid: scope.originCountryUid,
+    originCityUid: switchScope ? 'quanzhou' : scope.originCityUid,
+    originLabel: switchScope ? 'China / Quanzhou' : 'China / Xiamen',
+    destinationCountryUid: scope.destinationCountryUid,
+    destinationLocationUid: scope.destinationLocationUid,
+    destinationLabel: 'Russia / Moscow',
+    releaseSequence: 0,
+    effectiveReleaseAvailable: false,
+  };
+  const credentials = {
+    async claim() { return operation; },
+    async clear() { return { state: 'unpaired' }; },
+    async getStatus() { return operation; },
+    async getConnection() { return operation; },
+    async getAccessToken() { return operation.accessToken; },
+    async beginOperation() { return operation; },
+    async isOperationCurrent(candidate) { return candidate === operation; },
+    async clearIfCurrent() { return true; },
+  };
+  const client = {
+    async discover() { return { state: 'ready', assignments: [assignment] }; },
+    async flushPendingReceipt() { throw new Error('receipt must not run without a release'); },
+    async refresh() { throw new Error('refresh must not run without a release'); },
+  };
+  const runtime = loadRuntime({
+    localStorage, credentials,
+    fetchImpl: async () => { throw new Error('fake client owns network'); },
+    validateBundle: () => ({ valid: false, errors: ['unused'] }),
+    buildCalculatorState({ usable, expectedScope, localFallback }) {
+      const snapshot = localFallback && localFallback.snapshot || null;
+      return {
+        state: snapshot ? 'local_fallback' : usable.state,
+        source: snapshot ? 'local_fallback' : 'none',
+        quoteAllowed: Boolean(snapshot),
+        scope: expectedScope,
+        snapshot,
+        officialSnapshot: localFallback && localFallback.officialSnapshot || null,
+      };
+    },
+    randomId: () => 'unused-id-000000',
+  }, {
+    SS_ERP_LOGISTICS_DISTRIBUTION_CLIENT: { createClient: () => client },
+  });
+  const initialSnapshot = {
+    userConfig: { selectedServiceIds: ['manual-initial'], resolutionMode: 'lowest_cost' },
+    formState: { packingFee: 2 },
+    catalogSnapshot: { services: [{ id: 'manual-initial' }] },
+    ruleSnapshot: { services: [{ serviceId: 'manual-initial' }] },
+  };
+  const nextSnapshot = {
+    userConfig: { selectedServiceIds: ['manual-stale'], resolutionMode: 'priority' },
+    formState: { packingFee: 9 },
+    catalogSnapshot: { services: [{ id: 'manual-stale' }] },
+    ruleSnapshot: { services: [{ serviceId: 'manual-stale' }] },
+  };
+  return {
+    assignment, calculatorKey, initialAuthority, initialSnapshot,
+    localStorage, nextSnapshot, operation, runtime, scope,
+  };
+}
+
+for (const scenario of [
+  { method: 'saveLocalFallback', switchScope: true, switchAuthority: false },
+  { method: 'saveLocalFallbackWithPreferences', switchScope: false, switchAuthority: true },
+  { method: 'updatePreferences', switchScope: true, switchAuthority: false },
+]) {
+  test(`${scenario.method} cannot republish stale calculator scope or authority after sync`, async () => {
+    const fixture = createStaleManualMutationFixture(scenario);
+    await fixture.localStorage.set({
+      [fixture.calculatorKey]: {
+        state: 'local_fallback', source: 'local_fallback', quoteAllowed: true,
+        scope: fixture.scope, authority: fixture.initialAuthority,
+        snapshot: fixture.initialSnapshot, officialSnapshot: null,
+      },
+    });
+    await fixture.runtime.saveLocalFallback({
+      scopeBinding: fixture.scope,
+      snapshot: fixture.initialSnapshot,
+    });
+    const fallbackKey = Object.keys(fixture.localStorage.all())
+      .find((key) => key.startsWith('ozon-logistics:fallback:v1:'));
+    assert.ok(fallbackKey);
+
+    const heldKey = scenario.method === 'updatePreferences'
+      ? fixture.calculatorKey
+      : fallbackKey;
+    const held = fixture.localStorage.holdNextGet(heldKey);
+    const staleWrite = fixture.runtime[scenario.method]({
+      scopeBinding: fixture.scope,
+      snapshot: fixture.nextSnapshot,
+    });
+    await held.started;
+    let syncResult;
+    try {
+      syncResult = await fixture.runtime.syncStored({
+        reason: 'manual', extensionVersion: '1.2.0',
+      });
+    } finally {
+      held.release();
+    }
+    assert.equal(syncResult.state, 'no_remote_release');
+    const afterSync = fixture.localStorage.all()[fixture.calculatorKey];
+    if (scenario.switchScope) {
+      assert.equal(afterSync.scope.assignmentId, fixture.assignment.assignmentId);
+    } else {
+      assert.equal(afterSync.authority.sessionId, fixture.operation.sessionId);
+    }
+
+    const staleResult = await staleWrite;
+    assert.equal(staleResult.state, 'scope_changed');
+    const finalValues = fixture.localStorage.all();
+    assert.deepEqual(finalValues[fixture.calculatorKey], afterSync);
+    assert.equal(
+      finalValues[fallbackKey].snapshot.userConfig.selectedServiceIds[0],
+      'manual-initial',
+    );
+    assert.equal(
+      Object.keys(finalValues)
+        .filter((key) => key.startsWith('ozon-logistics:preferences:v1:')).length,
+      0,
+    );
+  });
+}
+
+
+
+test('a discoverable scope without a live release activates only its exact local fallback', async () => {
+  const localStorage = createStorage();
+  const requests = [];
+  const assignment = {
+    assignmentId: 'assignment-a',
+    shopId: 'shop-a',
+    shopName: 'Xiamen pilot',
+    companyId: 'company-a',
+    warehouseId: 'warehouse-a',
+    warehouseName: 'Xiamen warehouse',
+    originCountryUid: 'china',
+    originCityUid: 'xiamen',
+    originLabel: 'China / Xiamen',
+    destinationCountryUid: 'russia',
+    destinationLocationUid: 'moscow',
+    destinationLabel: 'Russia / Moscow',
+    releaseSequence: 0,
+    effectiveReleaseAvailable: false,
+  };
+  const operation = {
+    state: 'paired',
+    epoch: 1,
+    baseUrl: 'https://erp.example',
+    deploymentId: 'local-dev',
+    sessionId: 'session-a',
+    deviceId: 'device-a',
+    ownerUserId: 'owner-1',
+    scopes: ['logistics:discover', 'logistics:read', 'logistics:receipt'],
+    accessToken: 'device-token-a',
+    expiresAt: '2026-08-12T12:00:00.000Z',
+  };
+  const credentials = {
+    async claim() { return operation; },
+    async clear() { return { state: 'unpaired' }; },
+    async getStatus() { return operation; },
+    async getConnection() { return operation; },
+    async getAccessToken() { return operation.accessToken; },
+    async beginOperation() { return operation; },
+    async isOperationCurrent(candidate) { return candidate === operation; },
+    async clearIfCurrent() { return true; },
+  };
+  const runtime = loadRuntime({
+    localStorage,
+    credentials,
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.endsWith('/api/logistics-rules/assignments')) {
+        return response(200, { code: 1, data: { assignments: [assignment] } });
+      }
+      throw new Error('a no-release assignment must not request ' + url);
+    },
+    validateBundle: () => ({ valid: false, errors: ['unused'] }),
+    buildCalculatorState({ usable, expectedScope, localFallback }) {
+      if (localFallback && localFallback.scope
+        && localFallback.scope.assignmentId === expectedScope.assignmentId) {
+        return {
+          state: 'local_fallback',
+          source: 'local_fallback',
+          quoteAllowed: true,
+          scope: expectedScope,
+          snapshot: localFallback.snapshot,
+          officialSnapshot: localFallback.officialSnapshot || null,
+        };
+      }
+      return {
+        state: usable.state,
+        source: 'none',
+        quoteAllowed: false,
+        scope: expectedScope,
+        snapshot: null,
+        officialSnapshot: null,
+      };
+    },
+    randomId: () => 'unused-receipt-id',
+  });
+
+  const initial = await runtime.syncStored({
+    reason: 'manual',
+    extensionVersion: '1.2.0',
+  });
+  assert.equal(initial.state, 'no_remote_release');
+  assert.equal(initial.calculatorState.scope.assignmentId, 'assignment-a');
+  assert.equal(initial.calculatorState.quoteAllowed, false);
+
+  await runtime.saveLocalFallback({
+    scopeBinding: initial.calculatorState.scope,
+    snapshot: {
+      userConfig: { selectedServiceIds: ['manual-a'] },
+      catalogSnapshot: { services: [{ id: 'manual-a' }] },
+      ruleSnapshot: { services: [{ serviceId: 'manual-a' }] },
+    },
+    officialSnapshot: {
+      scope: initial.calculatorState.scope,
+      samples: [{ fingerprintKey: 'manual-official-a' }],
+    },
+  });
+
+  const restarted = await runtime.syncStored({
+    reason: 'startup',
+    extensionVersion: '1.2.0',
+  });
+  assert.equal(restarted.state, 'no_remote_release');
+  assert.equal(restarted.calculatorState.state, 'local_fallback');
+  assert.equal(restarted.calculatorState.snapshot.userConfig.selectedServiceIds[0], 'manual-a');
+  assert.equal(restarted.calculatorState.officialSnapshot.samples[0].fingerprintKey, 'manual-official-a');
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((url) => url.endsWith('/api/logistics-rules/assignments')));
 });

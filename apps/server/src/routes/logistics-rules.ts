@@ -31,6 +31,7 @@ const assignmentDiscoverySchema = z.object({
   destinationLocationUid: nonEmpty,
   destinationLabel: nonEmpty,
   releaseSequence: z.number().int().nonnegative(),
+  effectiveReleaseAvailable: z.boolean(),
 }).strict();
 
 const applyFailureCodeSchema = z.enum([

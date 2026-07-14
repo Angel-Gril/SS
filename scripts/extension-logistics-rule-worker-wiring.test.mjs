@@ -3,10 +3,15 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const source = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
+const persistenceSource = fs.readFileSync(
+  'extensions/ss-erp/shared/logistics-rules/manual-fallback-persistence.js',
+  'utf8',
+);
 
 test('service worker loads logistics distribution modules before runtime initialization', () => {
   const schema = source.indexOf("importScripts('../shared/logistics-rules/distribution-schema.js')");
   const credentials = source.indexOf("importScripts('../shared/logistics-rules/device-credential-manager.js')");
+  const versionPolicy = source.indexOf("importScripts('../shared/logistics-rules/version-policy.js')");
   const store = source.indexOf("importScripts('../shared/logistics-rules/distribution-store.js')");
   const client = source.indexOf("importScripts('../shared/logistics-rules/distribution-client.js')");
   const runtime = source.indexOf("importScripts('../shared/logistics-rules/distribution-runtime.js')");
@@ -14,10 +19,15 @@ test('service worker loads logistics distribution modules before runtime initial
 
   assert.ok(schema >= 0);
   assert.ok(credentials > schema);
+  assert.ok(versionPolicy >= 0 && versionPolicy < store);
   assert.ok(store > credentials);
   assert.ok(client > store);
   assert.ok(runtime > client);
   assert.ok(initializer > runtime);
+  assert.match(
+    source,
+    /currentExtensionVersion:\s*chrome\.runtime\.getManifest\(\)\.version/,
+  );
 });
 
 test('pairing and sync messages use the extension-owned sender guard before runtime dispatch', () => {
@@ -45,11 +55,13 @@ test('service worker schedules scoped logistics refresh on install, startup, and
   assert.ok(source.includes('syncStored'));
 });
 
-test('settings writes keep manual imports unscoped unless an ERP release owns the active scope', () => {
+test('settings writes use scoped persistence and reserve global storage for the disabled gate', () => {
   assert.ok(source.includes('OZON_LOGISTICS_CALCULATOR_STATE_KEY'));
-  assert.match(source, /OZON_CALC_SYNC_CHANNEL[\s\S]*updatePreferences/);
-  assert.doesNotMatch(source, /await runtime\.saveLocalFallback\(\{ snapshot \}\)/);
-  assert.match(source, /mode: 'legacy_unscoped'/);
+  assert.match(source, /manual-fallback-persistence\.js/);
+  assert.equal((source.match(/persistManualCalculatorData\(\{/g) || []).length, 4);
+  assert.match(persistenceSource, /if \(!isFeatureEnabled\(\)\)/);
+  assert.match(persistenceSource, /mode: 'legacy_unscoped'/);
+  assert.match(persistenceSource, /state: 'scope_required'/);
   assert.match(
     source,
     /ozon-calculator:update-fee-settings[\s\S]*updatePreferences/,
@@ -57,5 +69,25 @@ test('settings writes keep manual imports unscoped unless an ERP release owns th
   assert.match(
     source,
     /ozon-calculator:status[\s\S]*OZON_LOGISTICS_CALCULATOR_STATE_KEY/,
+  );
+});
+
+test('disabled distribution ignores residual scoped state for status and fee settings', () => {
+  const statusStart = source.indexOf("if (message.type === 'ozon-calculator:status')");
+  const statusEnd = source.indexOf('\n  if (message.type === ', statusStart + 1);
+  const statusHandler = source.slice(statusStart, statusEnd);
+  assert.ok(statusStart >= 0 && statusEnd > statusStart);
+  assert.match(
+    statusHandler,
+    /logisticsState\s*=\s*isLogisticsDistributionFeatureEnabled\(\)/,
+  );
+
+  const feeStart = source.indexOf("if (message.type === 'ozon-calculator:update-fee-settings')");
+  const feeEnd = source.indexOf('\n  if (message.type === ', feeStart + 1);
+  const feeHandler = source.slice(feeStart, feeEnd);
+  assert.ok(feeStart >= 0 && feeEnd > feeStart);
+  assert.match(
+    feeHandler,
+    /calculatorState\s*=\s*isLogisticsDistributionFeatureEnabled\(\)/,
   );
 });

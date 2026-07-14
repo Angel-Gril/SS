@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPrismaOfficialInputUnitContractRepository } from '../services/logistics-official-input-unit-contract-prisma.js';
+import { createPrismaLogisticsCaptureTaskRepository } from '../services/logistics-capture-task-prisma.js';
 
 const testDatabaseUrl = process.env.LOGISTICS_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_LOGISTICS_POSTGRES_TESTS === '1' && Boolean(testDatabaseUrl);
@@ -151,12 +152,18 @@ async function seedScope(client: PrismaClient, label: string): Promise<Seed> {
           "reviewed_by_id", "reviewed_at", "review_reason", "source_trust",
           "normalized_payload", "diagnostics")
        VALUES ($1, $2, 'logistics-capture-task/v1', 'OFFICIAL', $3, $4, $5, $6, 'china', 'xiamen',
-         'russia', 'moscow', $7, $8, $9, $9, 'CAPTURED', 'VERIFIED', $3, $9,
-         'Official input-unit evidence verified', 'postgres-unit-contract-test',
+         'russia', 'moscow', $7, $8, $9, $9, 'CAPTURED', 'PENDING_REVIEW', NULL, NULL, NULL, 'postgres-unit-contract-test',
          $10::jsonb, '{}'::jsonb)`,
       candidateId, taskId, ownerUserId, shopId, companyId, warehouseId,
       fingerprintChecksum, responseChecksum, capturedAt, JSON.stringify(normalizedPayload),
     );
+    await createPrismaLogisticsCaptureTaskRepository({ client }).reviewCaptureCandidate!({
+      candidateId,
+      actorUserId: ownerUserId,
+      decision: 'VERIFIED',
+      reason: 'Official input-unit evidence verified',
+      reviewedAt: capturedAt,
+    });
     candidates.push({ id: candidateId, responseChecksum });
   }
 

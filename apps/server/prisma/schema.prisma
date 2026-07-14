@@ -2288,6 +2288,9 @@ model LogisticsCaptureCandidate {
   diagnostics              Json
   createdAt                DateTime                        @default(now()) @map("created_at")
   officialInputUnitContracts LogisticsOfficialInputUnitContract[] @relation("OfficialInputUnitContractCandidate")
+  scopeEvents              LogisticsScopeEvent[]           @relation("CaptureCandidateScopeEvents")
+
+  @@unique([id, tenantId, shopId], map: "logistics_capture_candidate_event_scope_key")
 
   @@unique([id, tenantId, shopId, companyId, warehouseId, originCountryUid, originCityUid])
   @@index([tenantId, shopId, reviewStatus, receivedAt])
@@ -2442,6 +2445,8 @@ model LogisticsScopeEvent {
   id              String   @id @default(cuid())
   tenantId        String   @map("tenant_id")
   shopId          String   @map("shop_id")
+  captureCandidateId String? @map("capture_candidate_id")
+  captureCandidate LogisticsCaptureCandidate? @relation("CaptureCandidateScopeEvents", fields: [captureCandidateId, tenantId, shopId], references: [id, tenantId, shopId], onDelete: Restrict, map: "capture_review_event_candidate_scope_fkey")
   bootstrapId     String?  @map("bootstrap_id")
   probeId         String?  @map("probe_id")
   channelId       String?  @map("channel_id")
@@ -2457,5 +2462,6 @@ model LogisticsScopeEvent {
   @@index([tenantId, shopId, createdAt])
   @@index([bootstrapId, createdAt])
   @@index([probeId, createdAt])
+  @@index([captureCandidateId, createdAt], map: "logistics_scope_event_capture_candidate_idx")
   @@map("logistics_scope_events")
 }

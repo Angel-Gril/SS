@@ -186,6 +186,10 @@
           if (text.length > 300) throw new Error('logistics assignment field is too long');
           value[field] = text;
         });
+        if (typeof assignment.effectiveReleaseAvailable !== 'boolean') {
+          throw new Error('assignment effective release availability is required');
+        }
+        value.effectiveReleaseAvailable = assignment.effectiveReleaseAvailable;
         var sequence = Number(assignment.releaseSequence);
         if (!Number.isSafeInteger(sequence) || sequence < 0) {
           throw new Error('invalid logistics assignment sequence');
@@ -274,15 +278,22 @@
         };
       }
       if (response.status === 426) {
-        var upgradeBody = await response.json();
+        var upgradeBody = null;
+        try {
+          upgradeBody = await response.json();
+        } catch (_error) {
+          upgradeBody = null;
+        }
         if (!await operationIsCurrent(operation)) return superseded();
-        return {
+        var minimumVersion = String(
+          upgradeBody && upgradeBody.data && upgradeBody.data.minExtensionVersion || '',
+        ).trim();
+        var upgradeResult = {
           state: 'upgrade_required',
-          minExtensionVersion: requiredText(
-            upgradeBody && upgradeBody.data && upgradeBody.data.minExtensionVersion,
-            'minimum extension version',
-          ),
+          minExtensionVersion: minimumVersion || null,
         };
+        if (!minimumVersion) upgradeResult.versionReason = 'minimum_version_unavailable';
+        return upgradeResult;
       }
       if (response.status !== 200) {
         return { state: 'http_error', status: response.status };

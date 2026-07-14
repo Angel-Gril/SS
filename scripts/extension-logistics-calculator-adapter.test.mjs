@@ -256,6 +256,68 @@ test('only an exact scoped fallback is usable and revocation never falls back', 
   assert.equal(revoked.quoteAllowed, false);
 });
 
+test('assignment authority gates never activate an exact local fallback', () => {
+  const adapter = loadAdapter();
+  const fallbackSnapshot = {
+    userConfig: { selectedServiceIds: ['manual-route'] },
+    catalogSnapshot: { services: [{ id: 'manual-route' }] },
+    ruleSnapshot: { services: [{ serviceId: 'manual-route' }] },
+  };
+
+  for (const state of ['no_assignment', 'needs_selection', 'scope_missing']) {
+    const result = adapter.buildCalculatorState({
+      usable: { state, quoteAllowed: false, bundle: null },
+      expectedScope: scope,
+      localFallback: { scope, snapshot: fallbackSnapshot },
+    });
+    assert.equal(result.state, state);
+    assert.equal(result.source, 'none');
+    assert.equal(result.quoteAllowed, false);
+    assert.equal(result.snapshot, null);
+  }
+});
+
+
+test('scoped fallback exposes Official samples only when their scope is exact', () => {
+  const adapter = loadAdapter();
+  const fallbackSnapshot = {
+    userConfig: { selectedServiceIds: ['manual-route'] },
+    catalogSnapshot: { services: [{ id: 'manual-route' }] },
+    ruleSnapshot: { services: [{ serviceId: 'manual-route' }] },
+  };
+  const officialSnapshot = {
+    scope,
+    samples: [{ fingerprintKey: 'official-a' }],
+  };
+
+  const exact = adapter.buildCalculatorState({
+    usable: { state: 'no_remote_release', quoteAllowed: false },
+    expectedScope: scope,
+    localFallback: {
+      scope,
+      snapshot: fallbackSnapshot,
+      officialSnapshot,
+    },
+  });
+  assert.equal(exact.state, 'local_fallback');
+  assert.equal(exact.officialSnapshot.samples[0].fingerprintKey, 'official-a');
+
+  const mismatch = adapter.buildCalculatorState({
+    usable: { state: 'no_remote_release', quoteAllowed: false },
+    expectedScope: scope,
+    localFallback: {
+      scope,
+      snapshot: fallbackSnapshot,
+      officialSnapshot: {
+        ...officialSnapshot,
+        scope: { ...scope, warehouseId: 'warehouse-b' },
+      },
+    },
+  });
+  assert.equal(mismatch.state, 'local_fallback');
+  assert.equal(mismatch.officialSnapshot, null);
+});
+
 test('Official comparison requires the complete location, currency, price, package and battery fingerprint', () => {
   const adapter = loadAdapter();
   const state = adapter.buildCalculatorState({
@@ -302,7 +364,49 @@ test('Official comparison requires the complete location, currency, price, packa
   }
 });
 
-async function loadConfigStore(values, clock = { now: '2026-07-13T00:00:00.000Z' }, featureEnabled = true) {
+test('captured Official HAR request samples participate in exact comparison', () => {
+  const adapter = loadAdapter();
+  const request = {
+    origin: { countryUid: 'china', cityUid: 'xiamen' },
+    destination: { countryUid: 'russia', locationUid: 'moscow' },
+    currency: 'CNY',
+    declaredPriceMinor: 30000,
+    package: {
+      weight: { value: 500, unit: 'g' },
+      dimensions: { length: 200, width: 100, height: 50, unit: 'mm' },
+    },
+    batteryInput: false,
+  };
+  const result = adapter.attachExactOfficialSample(
+    { serviceId: 'route-a', providerId: '1', shippingCost: 30 },
+    {
+      scope,
+      samples: [{
+        fingerprintKey: 'captured-request-a',
+        request,
+        tariffs: [{
+          stableServiceKey: 'route-a', providerId: '1', priceMinor: 2500,
+          weightType: 'actual', currency: 'CNY',
+        }],
+      }],
+    },
+    {
+      logisticsScope: scope,
+      currency: 'CNY',
+      priceRMB: 300,
+      weightG: 500,
+      lenCm: 20,
+      widCm: 10,
+      hgtCm: 5,
+      hasBattery: false,
+    },
+  );
+  assert.equal(result.officialSampleStatus, 'exact');
+  assert.equal(result.officialSamplePrice, 25);
+});
+
+
+async function loadConfigStore(values, clock = { now: '2026-07-13T00:00:00.000Z' }, featureEnabled = true, manifestVersion = '1.2.0') {
   const source = fs.readFileSync(
     'extensions/ss-erp/shared/config-bridge/config-store.js',
     'utf8',
@@ -325,6 +429,9 @@ async function loadConfigStore(values, clock = { now: '2026-07-13T00:00:00.000Z'
       }),
     },
     chrome: {
+      runtime: {
+        getManifest() { return { version: manifestVersion }; },
+      },
       storage: {
         local: {
           async get(keys) {
@@ -337,10 +444,51 @@ async function loadConfigStore(values, clock = { now: '2026-07-13T00:00:00.000Z'
       },
     },
   };
+  const versionPolicySource = fs.readFileSync(
+    'extensions/ss-erp/shared/logistics-rules/version-policy.js',
+    'utf8',
+  );
+  vm.runInNewContext(versionPolicySource, context, { filename: 'version-policy.js' });
+  context.window.SS_ERP_LOGISTICS_VERSION_POLICY = context.SS_ERP_LOGISTICS_VERSION_POLICY;
   vm.runInNewContext(source, context, { filename: 'config-store.js' });
   return context.window.OZON_CALC_CONFIG_STORE;
 }
 
+
+test('config store rechecks the manifest version before exposing cached remote rules', async () => {
+  const remoteSnapshot = { userConfig: { selectedServiceIds: ['route-a'] } };
+  const officialSnapshot = { samples: [{ fingerprintKey: 'official-a' }] };
+  const values = {
+    'ss-erp:extension-device:credential:v1': {
+      sessionId: 'session-a', deploymentId: scope.deploymentId,
+      ownerUserId: scope.tenantSubject,
+    },
+    'ozon-logistics:calculator-state:v1': {
+      state: 'healthy', source: 'remote', quoteAllowed: true, scope,
+      minExtensionVersion: '2.0.0',
+      authority: {
+        sessionId: 'session-a', deploymentId: scope.deploymentId,
+        ownerUserId: scope.tenantSubject,
+      },
+      authorizationValidUntil: '2026-07-14T00:00:00.000Z',
+      validUntil: '2026-07-19T00:00:00.000Z',
+      staleUntil: '2026-07-20T00:00:00.000Z',
+      snapshot: remoteSnapshot,
+      officialSnapshot,
+    },
+  };
+
+  const outdated = await loadConfigStore(values, undefined, true, '1.2.0');
+  const blocked = await outdated.readSnapshot();
+  assert.equal(blocked.snapshot, null);
+  assert.equal(blocked.logisticsStatus.state, 'upgrade_required');
+  assert.equal(blocked.logisticsStatus.quoteAllowed, false);
+  assert.equal(await outdated.readOfficialSnapshot(), null);
+
+  const compatible = await loadConfigStore(values, undefined, true, '2.0.0');
+  assert.deepEqual(plain((await compatible.readSnapshot()).snapshot), remoteSnapshot);
+  assert.deepEqual(plain(await compatible.readOfficialSnapshot()), officialSnapshot);
+});
 test('config store prioritizes the calculator adapter state without overwriting legacy preferences', async () => {
   const legacySnapshot = { userConfig: { selectedServiceIds: ['legacy'] } };
   const remoteSnapshot = { userConfig: { selectedServiceIds: ['route-a'] } };
@@ -355,6 +503,7 @@ test('config store prioritizes the calculator adapter state without overwriting 
       state: 'stale',
       source: 'remote',
       quoteAllowed: true,
+      minExtensionVersion: '1.0.0',
       scope,
       authority: {
         sessionId: 'session-a', deploymentId: scope.deploymentId,
@@ -402,6 +551,22 @@ test('config store prioritizes the calculator adapter state without overwriting 
   assert.equal(revoked.logisticsStatus.state, 'revoked');
 });
 
+
+test('config store fails closed when distribution is enabled before scoped state exists', async () => {
+  const legacySnapshot = { userConfig: { selectedServiceIds: ['legacy'] } };
+  const values = {
+    'ozon-calc:config-snapshot': legacySnapshot,
+    'ozon-calc:config-updated-at': '2026-07-12T00:00:00.000Z',
+    'ozon-calculator:official-snapshot': { tariffs: [{ id: 'legacy-official' }] },
+  };
+  const store = await loadConfigStore(values);
+  const result = await store.readSnapshot();
+
+  assert.equal(result.snapshot, null);
+  assert.equal(result.logisticsStatus.state, 'no_config');
+  assert.equal(result.logisticsStatus.quoteAllowed, false);
+  assert.equal(await store.readOfficialSnapshot(), null);
+});
 test('config store ignores cached remote rules when rollout feature is disabled', async () => {
   const legacySnapshot = { userConfig: { selectedServiceIds: ['manual-route'] } };
   const legacyOfficial = { tariffs: [{ id: 'manual-sample' }] };
@@ -434,6 +599,7 @@ test('config store revalidates freshness, authorization, and device session on e
     },
     'ozon-logistics:calculator-state:v1': {
       state: 'healthy', source: 'remote', quoteAllowed: true, scope,
+      minExtensionVersion: '1.0.0',
       authority: {
         sessionId: 'session-a', deploymentId: scope.deploymentId,
         ownerUserId: scope.tenantSubject,

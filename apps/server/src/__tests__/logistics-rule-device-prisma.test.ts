@@ -63,6 +63,7 @@ const deliveryInput = {
   ownerUserId: 'tenant-a',
   allowedShopIds: ['shop-a'],
   assignmentId: 'assignment-a',
+
   releaseId: 'release-a',
   effectiveChecksum: 'b'.repeat(64),
   scopeKey: AUTHORIZED_ROW.scopeKey,
@@ -70,6 +71,45 @@ const deliveryInput = {
 };
 
 describe('Prisma logistics device repository', () => {
+  it('discovers an authorized verified scope before its first effective release exists', async () => {
+    const client = new ScriptedSqlClient((query) => {
+      if (!query.includes('/* discover assignment scopes */')) return [];
+      return [{
+        ...AUTHORIZED_ROW,
+        releaseId: null,
+        releaseSequence: 0,
+        effectiveReleaseAvailable: false,
+      }];
+    });
+    const repository = createPrismaLogisticsRuleDeviceRepository({ client: client as never });
+
+    await expect(repository.listAssignmentsForDevice({
+      sessionId: 'session-a',
+      ownerUserId: 'tenant-a',
+      allowedShopIds: ['shop-a'],
+    })).resolves.toEqual([{
+      assignmentId: 'assignment-a',
+      shopId: 'shop-a',
+      shopName: 'Xiamen shop',
+      companyId: 'company-a',
+      warehouseId: 'warehouse-a',
+      warehouseName: 'Xiamen warehouse',
+      originCountryUid: 'china',
+      originCityUid: 'xiamen',
+      originLabel: 'China / Xiamen',
+      destinationCountryUid: 'russia',
+      destinationLocationUid: 'moscow',
+      destinationLabel: 'Russia / Moscow',
+      releaseSequence: 0,
+      effectiveReleaseAvailable: false,
+    }]);
+    expect(client.calls[0]?.query).toContain('LEFT JOIN "logistics_rule_releases" r');
+    expect(client.calls[0]?.query).not.toContain('WHERE r."validation_valid_until"');
+    expect(client.calls[0]?.query).toContain(
+      'OR (c."current_release_id" IS NULL AND c."current_sequence" = 0)',
+    );
+    expect(client.calls[0]?.query).toContain('AND ((r."id" IS NOT NULL');
+  });
   it('scopes assignment discovery to the authenticated session deployment and schema major', async () => {
     const client = new ScriptedSqlClient(() => []);
     const repository = createPrismaLogisticsRuleDeviceRepository({ client: client as never });

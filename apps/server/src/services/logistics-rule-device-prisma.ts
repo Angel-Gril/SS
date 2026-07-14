@@ -18,7 +18,7 @@ interface SqlClient extends SqlTransaction {
   ): Promise<T>;
 }
 
-interface EffectiveRow extends LogisticsRuleAssignmentDiscovery {
+interface EffectiveRow extends Omit<LogisticsRuleAssignmentDiscovery, 'effectiveReleaseAvailable'> {
   scopeKey: string;
   releaseId: string;
   contentChecksum: string;
@@ -83,7 +83,12 @@ const LIVE_RELEASE_DELIVERY_METHODS_SQL = `
     )
   )`;
 
-const ACTIVE_ASSIGNMENT_JOINS = `
+const EFFECTIVE_RELEASE_AVAILABLE_SQL = `(r."id" IS NOT NULL
+  AND r."validation_valid_until" + INTERVAL '24 hours' > CURRENT_TIMESTAMP
+  AND (${LIVE_RELEASE_DELIVERY_METHODS_SQL}))`;
+const FIRST_RELEASE_PENDING_SQL = `(c."current_release_id" IS NULL AND c."current_sequence" = 0)`;
+
+const ACTIVE_ASSIGNMENT_SCOPE_JOINS = `
   FROM "extension_device_sessions" s
   JOIN "users" owner ON owner."id" = s."owner_user_id" AND owner."status" = 'ACTIVE'
   JOIN "extension_device_shop_grants" sg
@@ -120,7 +125,10 @@ const ACTIVE_ASSIGNMENT_JOINS = `
    AND ob."origin_city_uid" = c."origin_city_uid"
    AND ob."status" = 'VERIFIED'
    AND ob."invalidated_at" IS NULL
-   AND ob."retired_at" IS NULL
+   AND ob."retired_at" IS NULL`;
+
+const ACTIVE_ASSIGNMENT_JOINS = `
+  ${ACTIVE_ASSIGNMENT_SCOPE_JOINS}
   JOIN "logistics_rule_releases" r
     ON r."id" = c."current_release_id"
    AND r."channel_id" = c."id"
@@ -408,24 +416,26 @@ export function createPrismaLogisticsRuleDeviceRepository(
   return {
     async listAssignmentsForDevice(input) {
       if (input.allowedShopIds.length === 0) return [];
-      const rows = await client.$queryRawUnsafe<EffectiveRow[]>(
-        `SELECT a."id" AS "assignmentId", a."shop_id" AS "shopId", sh."name" AS "shopName",
+      const rows = await client.$queryRawUnsafe<LogisticsRuleAssignmentDiscovery[]>(
+        `/* discover assignment scopes */
+         SELECT a."id" AS "assignmentId", a."shop_id" AS "shopId", sh."name" AS "shopName",
                 c."ozon_company_id" AS "companyId", a."warehouse_id" AS "warehouseId",
                 w."name" AS "warehouseName", c."origin_country_uid" AS "originCountryUid",
                 c."origin_city_uid" AS "originCityUid", c."origin_label" AS "originLabel",
                 a."destination_country_uid" AS "destinationCountryUid",
                 a."destination_location_uid" AS "destinationLocationUid",
-                a."destination_label" AS "destinationLabel", r."sequence" AS "releaseSequence",
-                c."scope_key" AS "scopeKey", r."id" AS "releaseId",
-                r."content_checksum" AS "contentChecksum", r."effective_checksum" AS "effectiveChecksum",
-                r."frozen_payload" AS "frozenPayload",
-                r."validation_valid_until" AS "validationValidUntil",
-                s."expires_at" AS "sessionExpiresAt"
-         ${ACTIVE_ASSIGNMENT_JOINS}
+                a."destination_label" AS "destinationLabel",
+                COALESCE(r."sequence", c."current_sequence", 0) AS "releaseSequence",
+                ${EFFECTIVE_RELEASE_AVAILABLE_SQL} AS "effectiveReleaseAvailable"
+         ${ACTIVE_ASSIGNMENT_SCOPE_JOINS}
+         LEFT JOIN "logistics_rule_releases" r
+           ON r."id" = c."current_release_id"
+          AND r."channel_id" = c."id"
+          AND r."sequence" = c."current_sequence"
          WHERE s."id" = $1 AND s."owner_user_id" = $2 AND s."status" = 'ACTIVE'
            AND s."expires_at" > CURRENT_TIMESTAMP
            AND a."tenant_id" = s."owner_user_id"
-           AND r."validation_valid_until" + INTERVAL '24 hours' > CURRENT_TIMESTAMP
+           AND (${EFFECTIVE_RELEASE_AVAILABLE_SQL} OR ${FIRST_RELEASE_PENDING_SQL})
          ORDER BY a."shop_id" ASC, a."id" ASC`,
         input.sessionId,
         input.ownerUserId,
@@ -447,6 +457,7 @@ export function createPrismaLogisticsRuleDeviceRepository(
           destinationLocationUid: row.destinationLocationUid,
           destinationLabel: row.destinationLabel,
           releaseSequence: Number(row.releaseSequence),
+          effectiveReleaseAvailable: row.effectiveReleaseAvailable === true,
         }));
     },
 

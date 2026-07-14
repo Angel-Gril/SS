@@ -27,7 +27,8 @@ describe('logistics rule device routes', () => {
         destinationCountryUid: 'russia',
         destinationLocationUid: 'moscow',
         destinationLabel: 'Russia / Moscow',
-        releaseSequence: 3,
+        releaseSequence: 0,
+        effectiveReleaseAvailable: false,
       }]),
     };
     const authenticateDiscover = vi.fn(async (request: FastifyRequest) => {
@@ -62,7 +63,8 @@ describe('logistics rule device routes', () => {
           destinationCountryUid: 'russia',
           destinationLocationUid: 'moscow',
           destinationLabel: 'Russia / Moscow',
-          releaseSequence: 3,
+          releaseSequence: 0,
+          effectiveReleaseAvailable: false,
         }],
       },
     });

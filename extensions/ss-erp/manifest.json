@@ -79,6 +79,7 @@
       "js": [
         "shared/calculator-core/profit-engine.js",
         "shared/calculator-core/rule-engine.js",
+        "shared/logistics-rules/version-policy.js",
         "shared/commission/commission-rates.js",
         "shared/currency/fx-rates.js",
         "shared/ozon/page-product.js",

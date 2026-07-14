@@ -24,6 +24,31 @@
     return Boolean(feature && feature.enabled === true);
   }
 
+  function currentExtensionVersion() {
+    try {
+      return text(chrome.runtime && chrome.runtime.getManifest
+        && chrome.runtime.getManifest().version);
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function evaluateRemoteVersion(remote) {
+    if (text(remote && remote.source) !== 'remote') return null;
+    var current = currentExtensionVersion();
+    var minimum = text(remote && remote.minExtensionVersion);
+    var policy = window.SS_ERP_LOGISTICS_VERSION_POLICY;
+    if (!policy || typeof policy.evaluateCompatibility !== 'function') {
+      return {
+        compatible: false,
+        reason: 'version_policy_unavailable',
+        currentExtensionVersion: current,
+        minExtensionVersion: minimum,
+      };
+    }
+    return policy.evaluateCompatibility(current, minimum);
+  }
+
   function terminalState(remote) {
     var state = text(remote && remote.state);
     return ['authorization_expired', 'expired', 'revoked', 'upgrade_required']
@@ -56,6 +81,16 @@
         return { state: 'authorization_expired', quoteAllowed: false };
       }
       if (text(remote.source) === 'remote') {
+        var versionEvaluation = evaluateRemoteVersion(remote);
+        if (versionEvaluation && versionEvaluation.compatible !== true) {
+          return {
+            state: 'upgrade_required',
+            quoteAllowed: false,
+            currentExtensionVersion: versionEvaluation.currentExtensionVersion || null,
+            minExtensionVersion: versionEvaluation.minExtensionVersion || null,
+            versionReason: versionEvaluation.reason || 'version_policy_unavailable',
+          };
+        }
         var validUntil = Date.parse(text(remote.validUntil));
         var staleUntil = Date.parse(text(remote.staleUntil));
         if (!Number.isFinite(validUntil) || !Number.isFinite(staleUntil)
@@ -82,6 +117,10 @@
       authorizationValidUntil: remote.authorizationValidUntil || null,
       validUntil: remote.validUntil || null,
       staleUntil: remote.staleUntil || null,
+      minExtensionVersion: evaluated.minExtensionVersion || remote.minExtensionVersion || null,
+      currentExtensionVersion: evaluated.currentExtensionVersion
+        || remote.currentExtensionVersion || currentExtensionVersion() || null,
+      versionReason: evaluated.versionReason || remote.versionReason || null,
     };
   }
 
@@ -95,12 +134,20 @@
       LEGACY_UPDATED_AT_KEY,
     ]).then(function (result) {
       var remote = result[LOGISTICS_CALCULATOR_STATE_KEY];
-      if (isLogisticsDistributionFeatureEnabled() && remote && typeof remote === 'object') {
-        var evaluated = evaluatedRemote(remote, result[DEVICE_CREDENTIAL_KEY]);
+      if (isLogisticsDistributionFeatureEnabled()) {
+        if (remote && typeof remote === 'object') {
+          var evaluated = evaluatedRemote(remote, result[DEVICE_CREDENTIAL_KEY]);
+          return {
+            snapshot: evaluated.quoteAllowed ? remote.snapshot || null : null,
+            updatedAt: remote.updatedAt || result[UPDATED_AT_KEY] || '',
+            logisticsStatus: logisticsStatus(remote, evaluated),
+          };
+        }
+        var unavailable = { state: 'no_config', source: 'none', quoteAllowed: false };
         return {
-          snapshot: evaluated.quoteAllowed ? remote.snapshot || null : null,
-          updatedAt: remote.updatedAt || result[UPDATED_AT_KEY] || '',
-          logisticsStatus: logisticsStatus(remote, evaluated),
+          snapshot: null,
+          updatedAt: '',
+          logisticsStatus: logisticsStatus(unavailable, unavailable),
         };
       }
       return {
@@ -131,9 +178,12 @@
       OFFICIAL_SNAPSHOT_KEY,
     ]).then(function (result) {
       var remote = result[LOGISTICS_CALCULATOR_STATE_KEY];
-      if (isLogisticsDistributionFeatureEnabled() && remote && typeof remote === 'object') {
-        var evaluated = evaluatedRemote(remote, result[DEVICE_CREDENTIAL_KEY]);
-        return evaluated.quoteAllowed ? remote.officialSnapshot || null : null;
+      if (isLogisticsDistributionFeatureEnabled()) {
+        if (remote && typeof remote === 'object') {
+          var evaluated = evaluatedRemote(remote, result[DEVICE_CREDENTIAL_KEY]);
+          return evaluated.quoteAllowed ? remote.officialSnapshot || null : null;
+        }
+        return null;
       }
       return result[OFFICIAL_SNAPSHOT_KEY] || null;
     });

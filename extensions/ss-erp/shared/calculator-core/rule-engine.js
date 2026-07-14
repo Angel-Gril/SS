@@ -310,6 +310,9 @@
     'expired',
     'revoked',
     'upgrade_required',
+    'no_assignment',
+    'needs_selection',
+    'scope_missing',
   ]);
 
   function clone(value) {
@@ -532,7 +535,12 @@
     if (!scopeMatches(fallbackScope, expectedScope)) return null;
     var snapshot = localFallback.snapshot || localFallback;
     if (!snapshot.userConfig || !snapshot.catalogSnapshot || !snapshot.ruleSnapshot) return null;
-    return snapshot;
+    var officialSnapshot = localFallback.officialSnapshot;
+    return {
+      snapshot: snapshot,
+      officialSnapshot: officialSnapshot && scopeMatches(officialSnapshot.scope, expectedScope)
+        ? officialSnapshot : null,
+    };
   }
 
   function buildCalculatorState(input) {
@@ -583,8 +591,8 @@
           authorizationValidUntil: text(usable.authorizationValidUntil) || null,
           validUntil: null,
           staleUntil: null,
-          snapshot: clone(fallback),
-          officialSnapshot: null,
+          snapshot: clone(fallback.snapshot),
+          officialSnapshot: clone(fallback.officialSnapshot),
         };
       }
     }
@@ -609,7 +617,7 @@
   }
 
   function fingerprintMatches(sample, input, scope) {
-    var fingerprint = sample && sample.fingerprint;
+    var fingerprint = sample && (sample.fingerprint || sample.request);
     if (!fingerprint) return false;
     var weight = fingerprint.package && fingerprint.package.weight;
     var dimensions = fingerprint.package && fingerprint.package.dimensions;

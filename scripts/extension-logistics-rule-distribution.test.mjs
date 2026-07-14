@@ -7,6 +7,10 @@ const storeSource = fs.readFileSync(
   'extensions/ss-erp/shared/logistics-rules/distribution-store.js',
   'utf8',
 );
+const versionPolicyPath = 'extensions/ss-erp/shared/logistics-rules/version-policy.js';
+const versionPolicySource = fs.existsSync(versionPolicyPath)
+  ? fs.readFileSync(versionPolicyPath, 'utf8')
+  : '';
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -76,16 +80,18 @@ function createStorage() {
   };
 }
 
-function loadStore(storage, validateBundle) {
+function loadStore(storage, validateBundle, storeOptions = {}) {
   const context = {
     Date, JSON, Number, Object, Array, String, Boolean, Set, Map, Promise, encodeURIComponent,
   };
   context.globalThis = context;
+  vm.runInNewContext(versionPolicySource, context, { filename: 'version-policy.js' });
   vm.runInNewContext(storeSource, context, { filename: 'distribution-store.js' });
   return context.SS_ERP_LOGISTICS_DISTRIBUTION_STORE.createStore({
     storage,
     now: () => new Date('2026-07-12T12:00:00.000Z'),
     validateBundle,
+    ...storeOptions,
   });
 }
 
@@ -926,4 +932,171 @@ test('quota recovery removes only unreferenced blobs and retries without losing 
   assert.equal(blobKeys.some((key) => key.endsWith('b'.repeat(64))), false);
   assert.equal(blobKeys.some((key) => key.endsWith('d'.repeat(64))), true);
   assert.equal(blobKeys.some((key) => key.endsWith('e'.repeat(64))), true);
+});
+test('active bundles require a numerically compatible current extension version', async () => {
+  const storage = createStorage();
+  const store = loadStore(storage, (value) => ({ valid: true, bundle: value }));
+  const versioned = {
+    ...bundle,
+    minExtensionVersion: '1.9.9',
+    validUntil: '2026-07-19T12:00:00.000Z',
+    staleUntil: '2026-07-20T12:00:00.000Z',
+  };
+  await store.stageAndActivate({
+    namespace,
+    bundle: versioned,
+    etag: '"release-1"',
+    serverTime: '2026-07-12T12:00:00.000Z',
+    authorizationValidUntil: '2026-07-13T12:00:00.000Z',
+    receiptIdempotencyKey: 'versioned-active-01',
+  });
+
+  const newer = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+    currentExtensionVersion: '1.10.0',
+  });
+  const equal = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+    currentExtensionVersion: '1.9.9',
+  });
+  const older = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+    currentExtensionVersion: '1.9.8',
+  });
+
+  assert.equal(newer.state, 'healthy');
+  assert.equal(newer.quoteAllowed, true);
+  assert.equal(equal.state, 'healthy');
+  assert.equal(equal.quoteAllowed, true);
+  assert.equal(older.state, 'upgrade_required');
+  assert.equal(older.quoteAllowed, false);
+  assert.equal(older.bundle.releaseId, versioned.releaseId);
+  assert.equal(older.minExtensionVersion, '1.9.9');
+  assert.equal(older.effectiveChecksum, versioned.effectiveChecksum);
+});
+
+test('resolveUsable uses the store extension version unless the input explicitly overrides it', async () => {
+  const storage = createStorage();
+  const store = loadStore(
+    storage,
+    (value) => ({ valid: true, bundle: value }),
+    { currentExtensionVersion: '1.4.9' },
+  );
+  const versioned = {
+    ...bundle,
+    minExtensionVersion: '1.5.0',
+    validUntil: '2026-07-19T12:00:00.000Z',
+    staleUntil: '2026-07-20T12:00:00.000Z',
+  };
+  await store.stageAndActivate({
+    namespace,
+    bundle: versioned,
+    etag: '"release-1"',
+    serverTime: '2026-07-12T12:00:00.000Z',
+    authorizationValidUntil: '2026-07-13T12:00:00.000Z',
+    receiptIdempotencyKey: 'versioned-option-01',
+  });
+
+  const configured = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+  });
+  const overridden = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+    currentExtensionVersion: '1.5.0',
+  });
+
+  assert.equal(configured.state, 'upgrade_required');
+  assert.equal(configured.quoteAllowed, false);
+  assert.equal(overridden.state, 'healthy');
+  assert.equal(overridden.quoteAllowed, true);
+});
+
+test('invalid current or minimum extension versions fail closed', async () => {
+  for (const [currentExtensionVersion, minExtensionVersion] of [
+    ['1.0', '1.0.0'],
+    ['999.0.0', 'latest'],
+  ]) {
+    const storage = createStorage();
+    const store = loadStore(storage, (value) => ({ valid: true, bundle: value }));
+    const versioned = {
+      ...bundle,
+      minExtensionVersion,
+      validUntil: '2026-07-19T12:00:00.000Z',
+      staleUntil: '2026-07-20T12:00:00.000Z',
+    };
+    await store.stageAndActivate({
+      namespace,
+      bundle: versioned,
+      etag: '"release-1"',
+      serverTime: '2026-07-12T12:00:00.000Z',
+      authorizationValidUntil: '2026-07-13T12:00:00.000Z',
+      receiptIdempotencyKey: 'invalid-version-01',
+    });
+
+    const result = await store.resolveUsable(namespace, {
+      at: '2026-07-12T13:00:00.000Z',
+      currentExtensionVersion,
+    });
+    assert.equal(result.state, 'upgrade_required');
+    assert.equal(result.quoteAllowed, false);
+    assert.equal(result.bundle.releaseId, versioned.releaseId);
+    assert.equal(result.minExtensionVersion, minExtensionVersion);
+  }
+});
+
+test('previous-bundle recovery enforces its own minimum extension version', async () => {
+  const storage = createStorage();
+  const store = loadStore(storage, (value) => value && value.releaseId
+    ? { valid: true, bundle: value }
+    : { valid: false, errors: ['releaseId is required'] });
+  const previous = {
+    ...bundle,
+    minExtensionVersion: '2.0.0',
+    validUntil: '2026-07-19T12:00:00.000Z',
+    staleUntil: '2026-07-20T12:00:00.000Z',
+  };
+  const active = {
+    ...previous,
+    releaseId: 'release-2',
+    releaseSequence: 2,
+    contentChecksum: 'c'.repeat(64),
+    effectiveChecksum: 'd'.repeat(64),
+    minExtensionVersion: '1.0.0',
+  };
+  await store.stageAndActivate({
+    namespace,
+    bundle: previous,
+    etag: '"release-1"',
+    serverTime: '2026-07-12T12:00:00.000Z',
+    authorizationValidUntil: '2026-07-13T12:00:00.000Z',
+    receiptIdempotencyKey: 'previous-version-01',
+  });
+  await store.stageAndActivate({
+    namespace,
+    bundle: active,
+    etag: '"release-2"',
+    serverTime: '2026-07-12T12:05:00.000Z',
+    authorizationValidUntil: '2026-07-13T12:05:00.000Z',
+    receiptIdempotencyKey: 'active-version-0002',
+  });
+  const activeBlobKey = storage.keys().find((key) => key.endsWith(active.effectiveChecksum));
+  await storage.set({ [activeBlobKey]: { effectiveChecksum: active.effectiveChecksum } });
+
+  const incompatible = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+    currentExtensionVersion: '1.9.9',
+  });
+  const compatible = await store.resolveUsable(namespace, {
+    at: '2026-07-12T13:00:00.000Z',
+    currentExtensionVersion: '2.0.0',
+  });
+
+  assert.equal(incompatible.state, 'upgrade_required');
+  assert.equal(incompatible.quoteAllowed, false);
+  assert.equal(incompatible.bundle.releaseId, previous.releaseId);
+  assert.equal(incompatible.minExtensionVersion, '2.0.0');
+  assert.equal(incompatible.effectiveChecksum, previous.effectiveChecksum);
+  assert.equal(compatible.state, 'recovered_previous');
+  assert.equal(compatible.quoteAllowed, true);
+  assert.equal(compatible.bundle.releaseId, previous.releaseId);
 });

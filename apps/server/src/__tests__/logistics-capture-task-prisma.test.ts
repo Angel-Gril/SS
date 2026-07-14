@@ -329,6 +329,176 @@ describe('Prisma logistics capture task repository', () => {
     expect(String(calls[0]?.[0])).not.toContain("review_status\" = 'PENDING_REVIEW'");
   });
 
+  it('writes a sanitized immutable review event in the candidate review transaction', async () => {
+    const pending = {
+      candidateId: 'candidate-review-1',
+      taskId: 'task-review-1',
+      taskKind: 'SELLER',
+      taskVersion: CAPTURE_TASK_VERSION,
+      tenantId: 'tenant-a',
+      shopId: 'shop-a',
+      companyId: 'company-a',
+      warehouseId: 'warehouse-a',
+      originCountryUid: 'china',
+      originCityUid: 'xiamen',
+      destinationCountryUid: null,
+      destinationLocationUid: null,
+      state: 'CAPTURED',
+      reviewStatus: 'PENDING_REVIEW',
+      fingerprintChecksum: 'a'.repeat(64),
+      responseChecksum: 'b'.repeat(64),
+      sourceResponseChecksum: null,
+      previousResponseChecksum: null,
+      capturedAt: NOW,
+      receivedAt: NOW,
+      quarantineReasons: [],
+      normalizedPayload: { schema: 'ozon-seller-logistics-capture/v1' },
+      diagnostics: { historicalCountsOnly: true },
+      reviewedById: null,
+      reviewedAt: null,
+      reviewReason: null,
+    };
+    const reviewedAt = new Date('2026-07-12T10:05:00.000Z');
+    const reason = 'verified \u{1F600} scoped evidence';
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('FOR UPDATE OF c')) return [pending];
+      if (sql.includes('UPDATE "logistics_capture_candidates"')) {
+        return [{
+          ...pending,
+          reviewStatus: 'VERIFIED',
+          reviewedById: 'admin-a',
+          reviewedAt,
+          reviewReason: reason,
+        }];
+      }
+      return [];
+    });
+    const execute = vi.fn(async () => 1);
+    const client: any = {
+      $queryRawUnsafe: query,
+      $executeRawUnsafe: execute,
+      $transaction: async (operation: any) => operation(client),
+    };
+    const repository = createPrismaLogisticsCaptureTaskRepository({ client });
+
+    await expect(repository.reviewCaptureCandidate!({
+      candidateId: pending.candidateId,
+      actorUserId: 'admin-a',
+      decision: 'VERIFIED',
+      reason,
+      reviewedAt,
+    })).resolves.toMatchObject({ state: 'reviewed', duplicate: false });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const [sql, , tenantId, shopId, candidateId, subjectId, eventType, actorId, payload] =
+      execute.mock.calls[0] as unknown as [string, ...unknown[]];
+    expect(sql).toContain('INSERT INTO "logistics_scope_events"');
+    expect(sql).toContain('"capture_candidate_id"');
+    expect({ tenantId, shopId, candidateId, subjectId, actorId, eventType }).toEqual({
+      tenantId: 'tenant-a',
+      shopId: 'shop-a',
+      candidateId: pending.candidateId,
+      subjectId: pending.candidateId,
+      actorId: 'admin-a',
+      eventType: 'CAPTURE_CANDIDATE_VERIFIED',
+    });
+    const eventPayload = JSON.parse(String(payload)) as Record<string, unknown>;
+    expect(eventPayload).toMatchObject({
+      schema: 'logistics-capture-review-event/v1',
+      decision: 'VERIFIED',
+      candidateId: pending.candidateId,
+      taskId: pending.taskId,
+      tenantId: pending.tenantId,
+      shopId: pending.shopId,
+      fingerprintChecksum: pending.fingerprintChecksum,
+      responseChecksum: pending.responseChecksum,
+      reasonDigest: createHash('sha256').update(reason).digest('hex'),
+      reasonLength: Array.from(reason).length,
+    });
+    expect(JSON.stringify(eventPayload)).not.toContain(reason);
+    expect(eventPayload).not.toHaveProperty('normalizedPayload');
+    expect(eventPayload).not.toHaveProperty('diagnostics');
+  });
+
+  it('does not append another review event for an idempotent review retry', async () => {
+    const reason = 'verified scoped evidence';
+    const reviewedAt = new Date('2026-07-12T10:05:00.000Z');
+    const query = vi.fn(async () => [{
+      candidateId: 'candidate-review-1', taskId: 'task-review-1', taskKind: 'SELLER',
+      taskVersion: CAPTURE_TASK_VERSION, tenantId: 'tenant-a', shopId: 'shop-a',
+      companyId: 'company-a', warehouseId: 'warehouse-a', originCountryUid: 'china',
+      originCityUid: 'xiamen', destinationCountryUid: null, destinationLocationUid: null,
+      state: 'CAPTURED', reviewStatus: 'VERIFIED', fingerprintChecksum: 'a'.repeat(64),
+      responseChecksum: 'b'.repeat(64), sourceResponseChecksum: null,
+      previousResponseChecksum: null, capturedAt: NOW, receivedAt: NOW,
+      quarantineReasons: [], normalizedPayload: {}, diagnostics: {},
+      reviewedById: 'admin-a', reviewedAt, reviewReason: reason,
+    }]);
+    const execute = vi.fn();
+    const client: any = {
+      $queryRawUnsafe: query,
+      $executeRawUnsafe: execute,
+      $transaction: async (operation: any) => operation(client),
+    };
+    const repository = createPrismaLogisticsCaptureTaskRepository({ client });
+
+    await expect(repository.reviewCaptureCandidate!({
+      candidateId: 'candidate-review-1', actorUserId: 'admin-a', decision: 'VERIFIED',
+      reason, reviewedAt,
+    })).resolves.toMatchObject({ state: 'reviewed', duplicate: true });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('fails the candidate review when the mandatory review event cannot be written', async () => {
+    const pending = {
+      candidateId: 'candidate-review-event-failure', taskId: 'task-review-event-failure',
+      taskKind: 'SELLER', taskVersion: CAPTURE_TASK_VERSION,
+      tenantId: 'tenant-a', shopId: 'shop-a', companyId: 'company-a',
+      warehouseId: 'warehouse-a', originCountryUid: 'china', originCityUid: 'xiamen',
+      destinationCountryUid: null, destinationLocationUid: null,
+      state: 'CAPTURED', reviewStatus: 'PENDING_REVIEW',
+      fingerprintChecksum: 'a'.repeat(64), responseChecksum: 'b'.repeat(64),
+      sourceResponseChecksum: null, previousResponseChecksum: null,
+      capturedAt: NOW, receivedAt: NOW, quarantineReasons: [],
+      normalizedPayload: {}, diagnostics: {}, reviewedById: null,
+      reviewedAt: null, reviewReason: null,
+    };
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('FOR UPDATE OF c')) return [pending];
+      if (sql.includes('UPDATE "logistics_capture_candidates"')) {
+        return [{
+          ...pending,
+          reviewStatus: 'VERIFIED',
+          reviewedById: 'admin-a',
+          reviewedAt: NOW,
+          reviewReason: 'verified scoped evidence',
+        }];
+      }
+      return [];
+    });
+    const execute = vi.fn(async () => {
+      throw new Error('scope event insert failed');
+    });
+    const client: any = {
+      $queryRawUnsafe: query,
+      $executeRawUnsafe: execute,
+      $transaction: async (operation: any) => operation(client),
+    };
+    const repository = createPrismaLogisticsCaptureTaskRepository({ client });
+
+    await expect(repository.reviewCaptureCandidate!({
+      candidateId: pending.candidateId,
+      actorUserId: 'admin-a',
+      decision: 'VERIFIED',
+      reason: 'verified scoped evidence',
+      reviewedAt: NOW,
+    })).rejects.toThrow('scope event insert failed');
+    expect(query.mock.calls.some(([sql]) => String(sql).includes(
+      'UPDATE "logistics_capture_candidates"',
+    ))).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it('exposes the immutable capture CandidateSet repository contract', () => {
     const client = {
       $queryRawUnsafe: vi.fn(),

@@ -13,6 +13,10 @@
   ];
   var MIN_BACKOFF_MS = 60 * 1000;
   var MAX_BACKOFF_MS = 30 * 60 * 1000;
+  var AUTHORITATIVE_GATE_STATES = new Set([
+    'upgrade_required', 'no_remote_release', 'no_assignment', 'needs_selection',
+    'scope_missing',
+  ]);
 
   function requiredApi(value, name, methods) {
     if (!value) throw new Error(name + ' is unavailable');
@@ -74,6 +78,15 @@
     }
     var now = options && options.now ? options.now : function () { return new Date(); };
     var random = options && typeof options.random === 'function' ? options.random : Math.random;
+    var configuredExtensionVersion = String(
+      options && options.currentExtensionVersion != null ? options.currentExtensionVersion : '',
+    ).trim();
+
+    function extensionVersionFor(input) {
+      var value = configuredExtensionVersion || String(input && input.extensionVersion || '').trim();
+      if (!value) throw new TypeError('current extension version is required');
+      return value;
+    }
 
     var credentials = requiredApi(
       options && options.credentials || credentialsApi.createManager({
@@ -88,11 +101,15 @@
     if (typeof credentials.getConnection !== 'function') {
       throw new Error('device connection lookup is unavailable');
     }
-    var store = storeApi.createStore({
+    var storeOptions = {
       storage: localStorage,
       validateBundle: options.validateBundle,
       now: now,
-    });
+    };
+    if (configuredExtensionVersion) {
+      storeOptions.currentExtensionVersion = configuredExtensionVersion;
+    }
+    var store = storeApi.createStore(storeOptions);
     var client = clientApi.createClient({
       fetchImpl: options.fetchImpl,
       store: store,
@@ -101,9 +118,15 @@
       now: now,
     });
     var syncInFlight = null;
+    var scopeMutationTails = new Map();
+    var calculatorStateMutationTail = Promise.resolve();
 
     function superseded() {
       return { state: 'superseded' };
+    }
+
+    function scopeChanged() {
+      return { state: 'scope_changed' };
     }
 
     async function operationIsCurrent(operation) {
@@ -113,6 +136,30 @@
         return false;
       }
     }
+
+    async function runScopeMutation(scope, mutate) {
+      var key = scopeStorageSuffix(scope);
+      var previous = scopeMutationTails.get(key) || Promise.resolve();
+      var mutation = previous.catch(function () {}).then(mutate);
+      scopeMutationTails.set(key, mutation);
+      try {
+        return await mutation;
+      } finally {
+        if (scopeMutationTails.get(key) === mutation) scopeMutationTails.delete(key);
+      }
+    }
+
+    async function runCalculatorStateMutation(mutate) {
+      var mutation = calculatorStateMutationTail.catch(function () {}).then(mutate);
+      calculatorStateMutationTail = mutation;
+      try {
+        return await mutation;
+      } finally {
+        if (calculatorStateMutationTail === mutation) calculatorStateMutationTail = Promise.resolve();
+      }
+    }
+
+
 
     var adapter = global.OZON_CALC_LOGISTICS_RELEASE_ADAPTER;
     var buildCalculatorState = options && typeof options.buildCalculatorState === 'function'
@@ -209,7 +256,63 @@
       };
     }
 
-    async function publishCalculatorState(namespace, operation, assignment) {
+    function scopesMatch(left, right) {
+      try {
+        return scopeStorageSuffix(left) === scopeStorageSuffix(right);
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function authoritiesMatch(left, right) {
+      if (!left || !right) return !left && !right;
+      return ['sessionId', 'deploymentId', 'ownerUserId'].every(function (field) {
+        return String(left[field] || '') === String(right[field] || '');
+      });
+    }
+
+    function calculatorContextMatches(calculatorState, expectedContext) {
+      return Boolean(
+        calculatorState
+        && expectedContext
+        && scopesMatch(calculatorState.scope, expectedContext.scope)
+        && authoritiesMatch(calculatorState.authority, expectedContext.authority),
+      );
+    }
+
+    function authoritativeGate(value) {
+      var source = value && value.authoritativeGate && typeof value.authoritativeGate === 'object'
+        ? value.authoritativeGate
+        : value;
+      var state = String(source && source.state || '').trim();
+      if (!AUTHORITATIVE_GATE_STATES.has(state)) return null;
+      return {
+        state: state,
+        minExtensionVersion: source.minExtensionVersion || null,
+        currentExtensionVersion: source.currentExtensionVersion || null,
+        versionReason: source.versionReason || null,
+        authorizationValidUntil: source.authorizationValidUntil || null,
+        validUntil: source.validUntil || null,
+        staleUntil: source.staleUntil || null,
+      };
+    }
+
+    function usableForGate(gate) {
+      return {
+        state: gate.state,
+        quoteAllowed: false,
+        bundle: null,
+        minExtensionVersion: gate.minExtensionVersion,
+        currentExtensionVersion: gate.currentExtensionVersion,
+        versionReason: gate.versionReason,
+        authorizationValidUntil: gate.authorizationValidUntil,
+        validUntil: gate.validUntil,
+        staleUntil: gate.staleUntil,
+      };
+    }
+
+
+    async function publishCalculatorStateUnlocked(namespace, operation, assignment, usableOverride, extensionVersion, clearAuthoritativeGate, expectedContext) {
       if (typeof buildCalculatorState !== 'function') return null;
       if (operation && !await operationIsCurrent(operation)) return superseded();
       var preferenceKey = preferenceKeyForScope(namespace);
@@ -219,7 +322,28 @@
         fallbackKey,
         CALCULATOR_STATE_KEY,
       ]);
-      var usable = await store.resolveUsable(namespace, { at: now().toISOString() });
+      var existingState = stored && stored[CALCULATOR_STATE_KEY];
+      if (expectedContext && !calculatorContextMatches(existingState, expectedContext)) {
+        return scopeChanged();
+      }
+      var incomingGate = authoritativeGate(usableOverride);
+      var existingGate = scopesMatch(existingState && existingState.scope, namespace)
+        ? authoritativeGate(existingState) : null;
+      var nextGate = clearAuthoritativeGate ? null : existingGate;
+      var usable;
+      if (incomingGate) {
+        usable = usableForGate(incomingGate);
+        nextGate = incomingGate;
+      } else if (!clearAuthoritativeGate && existingGate) {
+        usable = usableForGate(existingGate);
+      } else if (usableOverride && typeof usableOverride === 'object') {
+        usable = usableOverride;
+      } else {
+        var resolveInput = { at: now().toISOString() };
+        var resolvedVersion = String(extensionVersion || configuredExtensionVersion || '').trim();
+        if (resolvedVersion) resolveInput.currentExtensionVersion = resolvedVersion;
+        usable = await store.resolveUsable(namespace, resolveInput);
+      }
       if (operation && !await operationIsCurrent(operation)) return superseded();
       var state = buildCalculatorState({
         usable: usable,
@@ -230,7 +354,6 @@
       if (!state || typeof state !== 'object') {
         throw new Error('calculator adapter returned an invalid state');
       }
-      var existingState = stored && stored[CALCULATOR_STATE_KEY];
       var authority = operation ? {
         sessionId: String(operation.sessionId || ''),
         deploymentId: String(operation.deploymentId || ''),
@@ -246,13 +369,26 @@
         || null;
       var persisted = Object.assign({}, state, {
         authority: authority,
+        authoritativeGate: nextGate,
         authorizationValidUntil: authorizationValidUntil,
         validUntil: state.validUntil || usable.validUntil || null,
         staleUntil: state.staleUntil || usable.staleUntil || null,
+        minExtensionVersion: state.minExtensionVersion
+          || usable.minExtensionVersion
+          || usable.bundle && usable.bundle.minExtensionVersion || null,
+        currentExtensionVersion: state.currentExtensionVersion
+          || usable.currentExtensionVersion || String(extensionVersion || configuredExtensionVersion || '').trim() || null,
+        versionReason: state.versionReason || usable.versionReason || null,
         route: route,
         updatedAt: now().toISOString(),
       });
       if (operation && !await operationIsCurrent(operation)) return superseded();
+      if (expectedContext) {
+        var latest = await localStorage.get([CALCULATOR_STATE_KEY]);
+        if (!calculatorContextMatches(latest && latest[CALCULATOR_STATE_KEY], expectedContext)) {
+          return scopeChanged();
+        }
+      }
       await localStorage.set((function () {
         var values = {};
         values[CALCULATOR_STATE_KEY] = persisted;
@@ -262,18 +398,42 @@
       return persisted;
     }
 
+    function publishCalculatorState(namespace, operation, assignment, usableOverride, extensionVersion, clearAuthoritativeGate, expectedContext) {
+      return runCalculatorStateMutation(function () {
+        return publishCalculatorStateUnlocked(
+          namespace, operation, assignment, usableOverride, extensionVersion,
+          clearAuthoritativeGate, expectedContext);
+      });
+    }
+
+
     function cloneJson(value) {
       return JSON.parse(JSON.stringify(value));
     }
 
-    async function currentCalculatorScope() {
+    async function currentCalculatorContext() {
       var stored = await localStorage.get([CALCULATOR_STATE_KEY]);
       var current = stored && stored[CALCULATOR_STATE_KEY];
       if (!current || !current.scope || typeof current.scope !== 'object') {
         throw new Error('an active scoped calculator state is required');
       }
       scopeStorageSuffix(current.scope);
-      return cloneJson(current.scope);
+      return {
+        scope: cloneJson(current.scope),
+        authority: current.authority ? cloneJson(current.authority) : null,
+      };
+    }
+
+    function commitManualCalculatorMutation(context, values) {
+      return runCalculatorStateMutation(async function () {
+        var stored = await localStorage.get([CALCULATOR_STATE_KEY]);
+        if (!calculatorContextMatches(stored && stored[CALCULATOR_STATE_KEY], context)) {
+          return scopeChanged();
+        }
+        await localStorage.set(values);
+        return publishCalculatorStateUnlocked(
+          context.scope, null, null, null, null, undefined, context);
+      });
     }
 
     function normalizedPreference(snapshot, scope) {
@@ -307,17 +467,16 @@
     }
 
     async function updatePreferences(input) {
-      var scope = await currentCalculatorScope();
+      var context = await currentCalculatorContext();
+      var scope = context.scope;
       var preference = normalizedPreference(input && input.snapshot, scope);
       var key = preferenceKeyForScope(scope);
       var values = {};
       values[key] = preference;
-      await localStorage.set(values);
-      return publishCalculatorState(scope);
+      return commitManualCalculatorMutation(context, values);
     }
 
-    async function saveLocalFallback(input) {
-      var scope = await currentCalculatorScope();
+    async function mergedLocalFallback(scope, input) {
       var binding = input && input.scopeBinding;
       if (!binding || typeof binding !== 'object') {
         throw new TypeError('an explicit scope binding is required for local fallback');
@@ -329,16 +488,135 @@
         throw new TypeError('an explicit complete scope binding is required for local fallback');
       }
       if (bindingSuffix !== scopeStorageSuffix(scope)) throw new Error('scope binding does not match the active scope');
-      var snapshot = input && input.snapshot;
+      var key = fallbackKeyForScope(scope);
+      var stored = await localStorage.get([key]);
+      var existing = stored && stored[key];
+      var snapshot = input && input.snapshot || existing && existing.snapshot;
       if (!snapshot || !snapshot.userConfig || !snapshot.catalogSnapshot || !snapshot.ruleSnapshot) {
         throw new TypeError('a complete local calculator fallback is required');
       }
-      var fallback = { scope: scope, snapshot: cloneJson(snapshot) };
-      var key = fallbackKeyForScope(scope);
-      var values = {};
-      values[key] = fallback;
-      await localStorage.set(values);
-      return publishCalculatorState(scope);
+      var officialProvided = input && Object.prototype.hasOwnProperty.call(input, 'officialSnapshot');
+      var officialSnapshot = officialProvided
+        ? input.officialSnapshot
+        : existing && existing.officialSnapshot || null;
+      if (officialSnapshot) {
+        var officialSuffix;
+        try {
+          officialSuffix = scopeStorageSuffix(officialSnapshot.scope);
+        } catch (_error) {
+          throw new TypeError('official snapshot scope does not match the active scope');
+        }
+        if (officialSuffix !== scopeStorageSuffix(scope)) {
+          throw new Error('official snapshot scope does not match the active scope');
+        }
+      }
+      var fallback = {
+        scope: scope,
+        snapshot: cloneJson(snapshot),
+        officialSnapshot: cloneJson(officialSnapshot),
+      };
+      return { key: key, fallback: fallback };
+    }
+
+    async function saveLocalFallback(input) {
+      var context = await currentCalculatorContext();
+      var scope = context.scope;
+      return runScopeMutation(scope, async function () {
+        var merged = await mergedLocalFallback(scope, input);
+        var values = {};
+        values[merged.key] = merged.fallback;
+        return commitManualCalculatorMutation(context, values);
+      });
+    }
+
+    async function saveLocalFallbackWithPreferences(input) {
+      var context = await currentCalculatorContext();
+      var scope = context.scope;
+      return runScopeMutation(scope, async function () {
+        var merged = await mergedLocalFallback(scope, input);
+        var preference = normalizedPreference(input && input.snapshot, scope);
+        var values = {};
+        values[merged.key] = merged.fallback;
+        values[preferenceKeyForScope(scope)] = preference;
+        return commitManualCalculatorMutation(context, values);
+      });
+    }
+
+
+    function evaluateVersionCompatibility(currentVersion, minimumVersion) {
+      var policy = global.SS_ERP_LOGISTICS_VERSION_POLICY;
+      if (!policy || typeof policy.evaluateCompatibility !== 'function') {
+        return {
+          compatible: false,
+          reason: 'version_policy_unavailable',
+          currentExtensionVersion: String(currentVersion || '').trim(),
+          minExtensionVersion: String(minimumVersion || '').trim(),
+        };
+      }
+      return policy.evaluateCompatibility(currentVersion, minimumVersion);
+    }
+
+    function calculatorAuthorityMatchesStatus(calculatorState, status) {
+      var authority = calculatorState && calculatorState.authority;
+      return authority && status
+        && String(authority.sessionId || '') === String(status.sessionId || '')
+        && String(authority.deploymentId || '') === String(status.deploymentId || '')
+        && String(authority.ownerUserId || '') === String(status.ownerUserId || '');
+    }
+
+    async function preflightCachedVersion(status, operation, extensionVersion) {
+      var stored = await localStorage.get([CALCULATOR_STATE_KEY]);
+      var calculatorState = stored && stored[CALCULATOR_STATE_KEY];
+      if (!calculatorState || !calculatorAuthorityMatchesStatus(calculatorState, status)) return null;
+      if (operation && !await operationIsCurrent(operation)) return superseded();
+
+      if (
+        calculatorState.state === 'upgrade_required'
+        && String(calculatorState.minExtensionVersion || '').trim()
+      ) {
+        var persistedEvaluation = evaluateVersionCompatibility(
+          extensionVersion,
+          calculatorState.minExtensionVersion,
+        );
+        if (!persistedEvaluation || persistedEvaluation.compatible !== true) {
+          var persisted = await markCalculatorUnavailable('upgrade_required', {
+            minExtensionVersion: calculatorState.minExtensionVersion || null,
+            currentExtensionVersion: String(extensionVersion || '').trim() || null,
+            versionReason: persistedEvaluation && persistedEvaluation.reason || 'version_policy_unavailable',
+          });
+          return {
+            state: 'upgrade_required',
+            calculatorState: persisted,
+            minExtensionVersion: calculatorState.minExtensionVersion || null,
+          };
+        }
+      }
+
+      if (!calculatorState.scope || typeof store.resolveUsable !== 'function') return null;
+      var usable;
+      try {
+        usable = await store.resolveUsable(calculatorState.scope, {
+          at: now().toISOString(),
+          currentExtensionVersion: extensionVersion,
+        });
+      } catch (_error) {
+        return null;
+      }
+      if (!usable || usable.state !== 'upgrade_required') return null;
+      if (operation && !await operationIsCurrent(operation)) return superseded();
+      var published = await publishCalculatorState(
+        calculatorState.scope,
+        operation,
+        calculatorState.route || null,
+        usable,
+        extensionVersion,
+      );
+      if (published && published.state === 'superseded') return published;
+      return {
+        state: 'upgrade_required',
+        calculatorState: published,
+        minExtensionVersion: usable.minExtensionVersion || null,
+      };
     }
 
     async function performSync(input) {
@@ -357,9 +635,13 @@
       if (input.baseUrl && normalizedBaseUrl(input.baseUrl) !== baseUrl) {
         throw new Error('requested ERP endpoint does not match the paired deployment');
       }
+      var extensionVersion = extensionVersionFor(input);
+      var versionPreflight = await preflightCachedVersion(status, operation, extensionVersion);
+      if (versionPreflight) return versionPreflight;
+
       var discovery = await client.discover({
         baseUrl: baseUrl,
-        extensionVersion: input.extensionVersion,
+        extensionVersion: extensionVersion,
       });
       if (discovery.state === 'revoked' || discovery.state === 'superseded') {
         return discovery;
@@ -376,11 +658,32 @@
       if (assignment.state === 'superseded') return assignment;
       if (!await operationIsCurrent(operation)) return superseded();
       var namespace = namespaceFor(status, assignment);
+      if (assignment.effectiveReleaseAvailable === false) {
+        var unavailableState = await publishCalculatorState(
+          namespace,
+          operation,
+          assignment,
+          { state: 'no_remote_release', quoteAllowed: false, bundle: null },
+          extensionVersion,
+        );
+        if (unavailableState && unavailableState.state === 'superseded') {
+          return unavailableState;
+        }
+        return {
+          state: 'no_remote_release',
+          assignment: assignment,
+          receipt: { state: 'no_pending' },
+          cleanup: null,
+          calculatorState: unavailableState,
+          releaseId: null,
+          releaseSequence: null,
+        };
+      }
       var initialReceipt = await client.flushPendingReceipt({
         baseUrl: baseUrl,
         assignmentId: assignment.assignmentId,
         namespace: namespace,
-        extensionVersion: input.extensionVersion,
+        extensionVersion: extensionVersion,
       });
       if (initialReceipt.state === 'revoked' || initialReceipt.state === 'superseded') {
         return initialReceipt;
@@ -390,12 +693,39 @@
         baseUrl: baseUrl,
         assignmentId: assignment.assignmentId,
         namespace: namespace,
-        extensionVersion: input.extensionVersion,
+        extensionVersion: extensionVersion,
       });
       if (refreshed.state === 'revoked' || refreshed.state === 'superseded') {
         return refreshed;
       }
       if (!await operationIsCurrent(operation)) return superseded();
+      if (refreshed.state === 'upgrade_required') {
+        var upgradeState = await publishCalculatorState(
+          namespace,
+          operation,
+          assignment,
+          {
+            state: 'upgrade_required',
+            quoteAllowed: false,
+            bundle: null,
+            minExtensionVersion: refreshed.minExtensionVersion || null,
+            currentExtensionVersion: extensionVersion,
+            versionReason: refreshed.versionReason || 'server_upgrade_required',
+          },
+          extensionVersion,
+        );
+        if (upgradeState && upgradeState.state === 'superseded') return upgradeState;
+        return {
+          state: 'upgrade_required',
+          assignment: assignment,
+          receipt: { state: 'no_pending' },
+          cleanup: null,
+          calculatorState: upgradeState,
+          minExtensionVersion: refreshed.minExtensionVersion || null,
+          releaseId: null,
+          releaseSequence: null,
+        };
+      }
       var receipt = { state: 'no_pending' };
       var cleanup = null;
       if (refreshed.state === 'active' || refreshed.state === 'not_modified') {
@@ -403,7 +733,7 @@
           baseUrl: baseUrl,
           assignmentId: assignment.assignmentId,
           namespace: namespace,
-          extensionVersion: input.extensionVersion,
+          extensionVersion: extensionVersion,
         });
         if (receipt.state === 'revoked' || receipt.state === 'superseded') {
           return receipt;
@@ -418,7 +748,9 @@
         }
         if (!await operationIsCurrent(operation)) return superseded();
       }
-      var calculatorState = await publishCalculatorState(namespace, operation, assignment);
+      var clearGate = refreshed.state === 'active' || refreshed.state === 'not_modified';
+      var calculatorState = await publishCalculatorState(
+        namespace, operation, assignment, null, extensionVersion, clearGate);
       if (calculatorState && calculatorState.state === 'superseded') return calculatorState;
       return {
         state: refreshed.state,
@@ -462,22 +794,35 @@
       if (typeof localStorage.remove === 'function') await localStorage.remove([SCHEDULE_KEY]);
     }
 
-    async function markCalculatorUnavailable(state) {
+    async function markCalculatorUnavailableUnlocked(state, metadata) {
       var stored = await localStorage.get([CALCULATOR_STATE_KEY]);
       var current = stored && stored[CALCULATOR_STATE_KEY];
       if (!current || typeof current !== 'object') return null;
-      var next = Object.assign({}, current, {
+      var unavailableGate = authoritativeGate(Object.assign(
+        { state: state },
+        metadata && typeof metadata === 'object' ? metadata : {},
+      ));
+      var next = Object.assign({}, current,
+        metadata && typeof metadata === 'object' ? metadata : {},
+        {
         state: state,
+        authoritativeGate: unavailableGate,
         source: 'none',
         quoteAllowed: false,
         snapshot: null,
         officialSnapshot: null,
         updatedAt: now().toISOString(),
-      });
+        });
       var values = {};
       values[CALCULATOR_STATE_KEY] = next;
       await localStorage.set(values);
       return next;
+    }
+
+    function markCalculatorUnavailable(state, metadata) {
+      return runCalculatorStateMutation(function () {
+        return markCalculatorUnavailableUnlocked(state, metadata);
+      });
     }
 
     async function disableAuthorityState(state) {
@@ -550,6 +895,7 @@
       sync: sync,
       syncStored: syncStored,
       saveLocalFallback: saveLocalFallback,
+      saveLocalFallbackWithPreferences: saveLocalFallbackWithPreferences,
       updatePreferences: updatePreferences,
     };
   }

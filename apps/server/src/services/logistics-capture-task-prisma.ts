@@ -94,6 +94,7 @@ interface ReviewRow {
   destinationLocationUid: string | null;
   state: 'CAPTURED' | 'QUARANTINED';
   reviewStatus: 'PENDING_REVIEW' | 'VERIFIED' | 'REJECTED';
+  fingerprintChecksum: string;
   responseChecksum: string;
   previousResponseChecksum: string | null;
   receivedAt: Date | string;
@@ -233,6 +234,7 @@ const REVIEW_COLUMNS = `
   c."origin_city_uid" AS "originCityUid",
   c."destination_country_uid" AS "destinationCountryUid",
   c."destination_location_uid" AS "destinationLocationUid",
+  c."fingerprint_checksum" AS "fingerprintChecksum",
   c."state"::text AS "state", c."review_status"::text AS "reviewStatus",
   c."response_checksum" AS "responseChecksum",
   c."source_response_checksum" AS "sourceResponseChecksum",
@@ -534,6 +536,35 @@ function reviewDetailFromRow(
     reviewedById: row.reviewedById || null,
     reviewedAt: asDate(row.reviewedAt || null)?.toISOString() || null,
     reviewReason: row.reviewReason || null,
+  };
+}
+
+function captureReviewEventPayload(
+  row: ReviewDetailRow,
+  decision: 'VERIFIED' | 'REJECTED',
+  reason: string,
+) {
+  return {
+    schema: 'logistics-capture-review-event/v1',
+    decision,
+    candidateId: row.candidateId,
+    taskId: row.taskId,
+    taskKind: row.taskKind,
+    taskVersion: row.taskVersion,
+    tenantId: row.tenantId,
+    shopId: row.shopId,
+    companyId: row.companyId,
+    warehouseId: row.warehouseId,
+    originCountryUid: row.originCountryUid,
+    originCityUid: row.originCityUid,
+    destinationCountryUid: row.destinationCountryUid,
+    destinationLocationUid: row.destinationLocationUid,
+    fingerprintChecksum: row.fingerprintChecksum,
+    responseChecksum: row.responseChecksum,
+    sourceResponseChecksum: row.sourceResponseChecksum,
+    previousResponseChecksum: row.previousResponseChecksum,
+    reasonDigest: createHash('sha256').update(reason).digest('hex'),
+    reasonLength: Array.from(reason).length,
   };
 }
 
@@ -1459,6 +1490,23 @@ export function createPrismaLogisticsCaptureTaskRepository(options: {
           input.candidateId,
         );
         if (!updated[0]) throw new RetryableCaptureRace('capture candidate review raced');
+        const eventType = input.decision === 'VERIFIED'
+          ? 'CAPTURE_CANDIDATE_VERIFIED'
+          : 'CAPTURE_CANDIDATE_REJECTED';
+        await tx.$executeRawUnsafe(
+          `INSERT INTO "logistics_scope_events" (
+             "id", "tenant_id", "shop_id", "capture_candidate_id",
+             "subject_type", "subject_id", "event_type", "actor_user_id",
+             "payload", "created_at"
+           ) VALUES (
+             $1, $2, $3, $4, 'CAPTURE_CANDIDATE', $5, $6, $7, $8::jsonb, $9
+           )`,
+          randomUUID(), updated[0].tenantId, updated[0].shopId,
+          updated[0].candidateId, updated[0].candidateId,
+          eventType, input.actorUserId,
+          JSON.stringify(captureReviewEventPayload(updated[0], input.decision, input.reason)),
+          input.reviewedAt,
+        );
         return {
           state: 'reviewed',
           duplicate: false,

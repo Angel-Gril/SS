@@ -546,6 +546,33 @@ test('426 reports upgrade_required without staging or revoking the prior bundle'
   assert.equal(staged, 0);
   assert.equal(revoked, 0);
 });
+
+test('a malformed 426 response still fails closed without a minimum version', async () => {
+  const malformed = response(426, null);
+  malformed.json = async () => { throw new SyntaxError('invalid JSON'); };
+  const client = loadClient({
+    fetchImpl: async () => malformed,
+    store: {
+      async readPointer() { return { etag: '"release-1"', effectiveChecksum: 'b'.repeat(64) }; },
+      async stageAndActivate() { throw new Error('must not stage'); },
+    },
+    credentials: epochCredentials(),
+    randomId: () => 'unused-id-000000',
+  });
+
+  const result = await client.refresh({
+    baseUrl: 'https://erp.example',
+    assignmentId: 'assignment-a',
+    namespace,
+    extensionVersion: '1.2.0',
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result)),
+    { state: 'upgrade_required', minExtensionVersion: null, versionReason: 'minimum_version_unavailable' },
+  );
+});
+
 test('a refresh network failure preserves the active pointer and reports a retryable state', async () => {
   let staged = 0;
   let revoked = 0;
@@ -599,6 +626,7 @@ test('device discovery returns only the scoped logistics assignments', async () 
             destinationLocationUid: 'moscow',
             destinationLabel: 'Russia / Moscow',
             releaseSequence: 1,
+            effectiveReleaseAvailable: true,
           }],
         },
       });
@@ -621,6 +649,7 @@ test('device discovery returns only the scoped logistics assignments', async () 
   assert.equal(result.assignments[0].assignmentId, 'assignment-a');
   assert.equal(result.assignments[0].originCityUid, 'xiamen');
   assert.equal(result.assignments[0].destinationLocationUid, 'moscow');
+  assert.equal(result.assignments[0].effectiveReleaseAvailable, true);
 });
 
 test('a 200 response must match every discovered namespace field before staging', async () => {
