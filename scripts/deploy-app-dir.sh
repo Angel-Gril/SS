@@ -16,6 +16,7 @@ set -euo pipefail
 #   DEPLOY_BASE=/opt/ss-erp
 #   APP_DIR=$DEPLOY_BASE/app
 #   BACKUP_DIR=$DEPLOY_BASE/backups
+#   BACKUP_LOG_DIR=/var/log/ss-erp
 #   ENV_FILE_NAME=.env.staging
 #   DEPLOY_RUN_USER=deploy
 #   DEPLOY_ENV_PROFILE=cloud-r2
@@ -35,6 +36,7 @@ SSH_KEY="${SSH_KEY:-}"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/ss-erp}"
 APP_DIR="${APP_DIR:-$DEPLOY_BASE/app}"
 BACKUP_DIR="${BACKUP_DIR:-$DEPLOY_BASE/backups}"
+BACKUP_LOG_DIR="${BACKUP_LOG_DIR:-/var/log/ss-erp}"
 ENV_FILE_NAME="${ENV_FILE_NAME:-.env.staging}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:-deploy}"
 DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
@@ -76,7 +78,7 @@ log "Uploading package to $DEPLOY_USER@$DEPLOY_HOST"
 scp "${SSH_ARGS[@]}" "$TARBALL" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/$(basename "$TARBALL")"
 
 log "Deploying app-dir release"
-REMOTE_COMMAND="COMMIT_HASH=$(shell_escape "$COMMIT_HASH") DEPLOY_BASE=$(shell_escape "$DEPLOY_BASE") APP_DIR=$(shell_escape "$APP_DIR") BACKUP_DIR=$(shell_escape "$BACKUP_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") RUN_DB_BACKUP=$(shell_escape "$RUN_DB_BACKUP") KEEP_APP_BACKUPS=$(shell_escape "$KEEP_APP_BACKUPS") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") TARBALL_NAME=$(shell_escape "$(basename "$TARBALL")") bash -s"
+REMOTE_COMMAND="COMMIT_HASH=$(shell_escape "$COMMIT_HASH") DEPLOY_BASE=$(shell_escape "$DEPLOY_BASE") APP_DIR=$(shell_escape "$APP_DIR") BACKUP_DIR=$(shell_escape "$BACKUP_DIR") BACKUP_LOG_DIR=$(shell_escape "$BACKUP_LOG_DIR") ENV_FILE_NAME=$(shell_escape "$ENV_FILE_NAME") DEPLOY_RUN_USER=$(shell_escape "$DEPLOY_RUN_USER") DEPLOY_ENV_PROFILE=$(shell_escape "$DEPLOY_ENV_PROFILE") RUN_DB_BACKUP=$(shell_escape "$RUN_DB_BACKUP") KEEP_APP_BACKUPS=$(shell_escape "$KEEP_APP_BACKUPS") API_SERVICE=$(shell_escape "$API_SERVICE") WEB_SERVICE=$(shell_escape "$WEB_SERVICE") WORKER_SERVICE=$(shell_escape "$WORKER_SERVICE") HEALTH_URL=$(shell_escape "$HEALTH_URL") TARBALL_NAME=$(shell_escape "$(basename "$TARBALL")") bash -s"
 ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$REMOTE_COMMAND" <<'REMOTE'
 set -euo pipefail
 
@@ -84,6 +86,7 @@ COMMIT_HASH="${COMMIT_HASH:?}"
 DEPLOY_BASE="${DEPLOY_BASE:?}"
 APP_DIR="${APP_DIR:?}"
 BACKUP_DIR="${BACKUP_DIR:?}"
+BACKUP_LOG_DIR="${BACKUP_LOG_DIR:?}"
 ENV_FILE_NAME="${ENV_FILE_NAME:?}"
 DEPLOY_RUN_USER="${DEPLOY_RUN_USER:?}"
 DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
@@ -115,7 +118,9 @@ if [ ! -f "$APP_DIR/$ENV_FILE_NAME" ]; then
   fail "env file missing: $APP_DIR/$ENV_FILE_NAME"
 fi
 
-mkdir -p "$DEPLOY_BASE" "$BACKUP_DIR"
+mkdir -p "$DEPLOY_BASE" "$BACKUP_DIR" "$BACKUP_LOG_DIR"
+chown root:root "$BACKUP_LOG_DIR"
+chmod 0750 "$BACKUP_LOG_DIR"
 
 if [ "$RUN_DB_BACKUP" = "true" ] || [ "$RUN_DB_BACKUP" = "1" ]; then
   if [ -f /etc/ss-erp-backup.env ] && [ -f "$APP_DIR/scripts/backup-db.sh" ]; then

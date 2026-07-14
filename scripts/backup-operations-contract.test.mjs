@@ -11,6 +11,7 @@ const localDevelopment = readFileSync(
   'utf8',
 );
 const verifier = readFileSync(new URL('./verify-vps-deploy.sh', import.meta.url), 'utf8');
+const appDirDeployer = readFileSync(new URL('./deploy-app-dir.sh', import.meta.url), 'utf8');
 
 test('backup cron exports its env and targets the app-dir deployment script', () => {
   const expected =
@@ -30,6 +31,56 @@ test('backup cron exports its env and targets the app-dir deployment script', ()
     ),
   );
   assert.doesNotMatch(cronExample, /\/opt\/ss-erp\/scripts\/backup-db\.sh/u);
+});
+
+
+test('deployment creates and verification checks the backup cron log directory', () => {
+  assert.match(
+    appDirDeployer,
+    /BACKUP_LOG_DIR="\$\{BACKUP_LOG_DIR:-\/var\/log\/ss-erp\}"/u,
+  );
+  assert.match(
+    appDirDeployer,
+    /mkdir -p "\$DEPLOY_BASE" "\$BACKUP_DIR" "\$BACKUP_LOG_DIR"/u,
+  );
+  assert.match(appDirDeployer, /chmod 0750 "\$BACKUP_LOG_DIR"/u);
+  assert.match(appDirDeployer, /chown root:root "\$BACKUP_LOG_DIR"/u);
+  assert.match(
+    verifier,
+    /fail "backup log directory is missing or not writable: \$BACKUP_LOG_DIR"/u,
+  );
+  assert.match(
+    verifier,
+    /fail "backup log directory mode must be 750: \$BACKUP_LOG_DIR/u,
+  );
+  assert.match(
+    verifier,
+    /fail "backup log directory owner must be root:root: \$BACKUP_LOG_DIR/u,
+  );
+});
+test('VPS verification keeps logistics distribution dark unless rollout expectations are explicit', () => {
+  assert.ok(verifier.includes(
+    'VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED:-false}"',
+  ));
+  assert.ok(verifier.includes(
+    'VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED:-false}"',
+  ));
+  assert.ok(verifier.includes(
+    'VERIFY_EXPECT_EXTENSION_AUTH_MODE="${VERIFY_EXPECT_EXTENSION_AUTH_MODE:-compat}"',
+  ));
+  assert.ok(verifier.includes(
+    'VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:-false}"',
+  ));
+  assert.match(verifier, /\r?\ncheck_logistics_rollout_expectations\r?\n/u);
+  assert.ok(verifier.includes('LOGISTICS_DISTRIBUTION_ENABLED'));
+  assert.ok(verifier.includes('NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED'));
+  assert.ok(verifier.includes('EXTENSION_AUTH_MODE'));
+  assert.ok(verifier.includes(
+    'build/extensions/ss-erp-cloud/shared/logistics-rules/distribution-feature.js',
+  ));
+  assert.ok(verifier.includes(
+    'enabled:[[:space:]]*${expected_cloud_extension}',
+  ));
 });
 
 test('VPS verification rejects stale or missing backup artifacts', () => {

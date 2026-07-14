@@ -11,7 +11,12 @@ READY_URL="${VERIFY_READY_URL:-https://${DOMAIN}/ready}"
 LOCAL_READY_URL="${VERIFY_LOCAL_READY_URL:-http://127.0.0.1:3001/ready}"
 LOG_SINCE="${VERIFY_LOG_SINCE:-10 minutes ago}"
 BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-/etc/ss-erp-backup.env}"
+BACKUP_LOG_DIR="${BACKUP_LOG_DIR:-/var/log/ss-erp}"
 BACKUP_MAX_AGE_HOURS="${BACKUP_MAX_AGE_HOURS:-36}"
+VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED:-false}"
+VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED:-false}"
+VERIFY_EXPECT_EXTENSION_AUTH_MODE="${VERIFY_EXPECT_EXTENSION_AUTH_MODE:-compat}"
+VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED="${VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:-false}"
 
 FAILURES=0
 WARNINGS=0
@@ -169,6 +174,26 @@ check_cron() {
   else
     fail "cron database backup command does not export env or target the app-dir script"
   fi
+  if [ -d "$BACKUP_LOG_DIR" ] && [ -w "$BACKUP_LOG_DIR" ]; then
+    pass "backup log directory is present and writable: $BACKUP_LOG_DIR"
+    local backup_log_mode
+    local backup_log_owner
+    backup_log_mode=$(stat -c '%a' "$BACKUP_LOG_DIR")
+    backup_log_owner=$(stat -c '%U:%G' "$BACKUP_LOG_DIR")
+    if [ "$backup_log_mode" = "750" ]; then
+      pass "backup log directory mode is 750: $BACKUP_LOG_DIR"
+    else
+      fail "backup log directory mode must be 750: $BACKUP_LOG_DIR (found $backup_log_mode)"
+    fi
+    if [ "$backup_log_owner" = "root:root" ]; then
+      pass "backup log directory owner is root:root: $BACKUP_LOG_DIR"
+    else
+      fail "backup log directory owner must be root:root: $BACKUP_LOG_DIR (found $backup_log_owner)"
+    fi
+  else
+    fail "backup log directory is missing or not writable: $BACKUP_LOG_DIR"
+  fi
+
   if echo "$cron" | grep -q 'update-cloudflare-ips.sh'; then
     pass "cron includes Cloudflare IP update"
   else
@@ -279,6 +304,84 @@ process.stdout.write(String(data.remoteUploaded) + "\t" + ageHours.toFixed(2) + 
   fi
 }
 
+check_logistics_rollout_expectations() {
+  local expected_logistics="$VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED"
+  local expected_public="$VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED"
+  local expected_auth_mode="$VERIFY_EXPECT_EXTENSION_AUTH_MODE"
+  local expected_cloud_extension="$VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED"
+
+  local rollout_expectations=(
+    "VERIFY_EXPECT_LOGISTICS_DISTRIBUTION_ENABLED:$expected_logistics"
+    "VERIFY_EXPECT_NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED:$expected_public"
+    "VERIFY_EXPECT_CLOUD_EXTENSION_DISTRIBUTION_ENABLED:$expected_cloud_extension"
+  )
+  local expectation
+  for expectation in "${rollout_expectations[@]}"; do
+    case "${expectation#*:}" in
+      true|false) ;;
+      *)
+        fail "${expectation%%:*} must be true or false"
+        return
+        ;;
+    esac
+  done
+  case "$expected_auth_mode" in
+    compat|device-only) ;;
+    *)
+      fail "VERIFY_EXPECT_EXTENSION_AUTH_MODE must be compat or device-only"
+      return
+      ;;
+  esac
+
+  local env_path="${DEPLOY_DIR}/${ENV_FILE}"
+  if [ ! -r "$env_path" ]; then
+    fail "deployment env file is missing or unreadable: $env_path"
+    return
+  fi
+
+  local actual_values
+  if ! actual_values=$(
+    set +u
+    # shellcheck disable=SC1090
+    . "$env_path"
+    printf '%s|%s|%s' "${LOGISTICS_DISTRIBUTION_ENABLED-}" "${NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED-}" "${EXTENSION_AUTH_MODE-}"
+  ); then
+    fail "deployment env file could not be loaded: $env_path"
+    return
+  fi
+
+  local actual_logistics
+  local actual_public
+  local actual_auth_mode
+  IFS='|' read -r actual_logistics actual_public actual_auth_mode <<< "$actual_values"
+  if [ "$actual_logistics" = "$expected_logistics" ]; then
+    pass "LOGISTICS_DISTRIBUTION_ENABLED matches rollout expectation: $expected_logistics"
+  else
+    fail "LOGISTICS_DISTRIBUTION_ENABLED expected $expected_logistics, found ${actual_logistics:-<unset>}"
+  fi
+  if [ "$actual_public" = "$expected_public" ]; then
+    pass "NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED matches rollout expectation: $expected_public"
+  else
+    fail "NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED expected $expected_public, found ${actual_public:-<unset>}"
+  fi
+  if [ "$actual_auth_mode" = "$expected_auth_mode" ]; then
+    pass "EXTENSION_AUTH_MODE matches rollout expectation: $expected_auth_mode"
+  else
+    fail "EXTENSION_AUTH_MODE expected $expected_auth_mode, found ${actual_auth_mode:-<unset>}"
+  fi
+
+  local cloud_feature_file="${DEPLOY_DIR}/build/extensions/ss-erp-cloud/shared/logistics-rules/distribution-feature.js"
+  if [ ! -r "$cloud_feature_file" ]; then
+    fail "cloud extension logistics feature file is missing or unreadable: $cloud_feature_file"
+    return
+  fi
+  if grep -Eq "^[[:space:]]*enabled:[[:space:]]*${expected_cloud_extension},?[[:space:]]*$" "$cloud_feature_file"; then
+    pass "cloud extension logistics distribution matches rollout expectation: $expected_cloud_extension"
+  else
+    fail "cloud extension logistics distribution expected $expected_cloud_extension: $cloud_feature_file"
+  fi
+}
+
 check_prisma_migrations() {
   if [ ! -d "${DEPLOY_DIR}/apps/server" ]; then
     fail "server directory missing: ${DEPLOY_DIR}/apps/server"
@@ -370,6 +473,7 @@ load_backup_config
 check_cron
 check_backup_status
 check_prisma_migrations
+check_logistics_rollout_expectations
 check_no_restore_temp_db
 
 check_http_json_ready "local /ready" "$LOCAL_READY_URL"
