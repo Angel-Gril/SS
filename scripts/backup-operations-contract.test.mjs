@@ -97,14 +97,14 @@ test('cloud verification derives the public ready target from the deployed env',
   assert.match(cloudVerifier, /VERIFY_READY_URL/u);
   assert.doesNotMatch(cloudVerifier, /VERIFY_DOMAIN:-ss-erp\.com/u);
   for (const source of [verifier, cloudVerifier]) {
-    assert.match(source, /\['http:', 'https:'\]\.includes\(url\.protocol\)/u);
-    assert.match(source, /url\.pathname !== '\/ready'/u);
+    assert.match(source, /\["http:", "https:"\]\.includes\(url\.protocol\)/u);
+    assert.match(source, /url\.pathname !== "\/ready"/u);
     assert.match(source, /url\.username/u);
     assert.match(source, /url\.password/u);
     assert.match(source, /url\.search/u);
     assert.match(source, /url\.hash/u);
     assert.match(source, /configured && configured !== host/u);
-    assert.match(source, /host === 'localhost'/u);
+    assert.match(source, /host === "localhost"/u);
     assert.match(source, /privateIpv4/u);
   }
   assert.doesNotMatch(verifier, /curl -k /u);

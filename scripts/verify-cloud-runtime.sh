@@ -63,18 +63,18 @@ fi
 PARSED_READY_DOMAIN=$(node -e '
 try {
   const url = new URL(process.argv[1]);
-  if (!['http:', 'https:'].includes(url.protocol)
+  if (!["http:", "https:"].includes(url.protocol)
     || !url.hostname
     || url.username
     || url.password
-    || url.pathname !== '/ready'
+    || url.pathname !== "/ready"
     || url.search
     || url.hash) process.exit(1);
   const host = url.hostname.toLowerCase();
-  const configured = String(process.argv[2] || '').toLowerCase();
+  const configured = String(process.argv[2] || "").toLowerCase();
   const privateIpv4 = /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/u.test(host);
   if (configured && configured !== host) process.exit(1);
-  if (host === 'localhost' || host === '::1' || privateIpv4) process.exit(1);
+  if (host === "localhost" || host === "::1" || host === "[::1]" || privateIpv4) process.exit(1);
   process.stdout.write(url.hostname);
 } catch {
   process.exit(1);
