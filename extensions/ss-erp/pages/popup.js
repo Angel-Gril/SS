@@ -30,6 +30,8 @@
   var secondaryActionBtn = document.getElementById('secondaryActionBtn');
   var sourceSearchPlatformPrefs = document.getElementById('sourceSearchPlatformPrefs');
   var primaryActionStatus = document.getElementById('primaryActionStatus');
+  var sourceWorkflowHandoffBtn = createSourceWorkflowHandoffButton();
+  var sourceWorkflowHandoff = null;
   var primaryActionState = { type: 'loading', tab: null, productId: '' };
   var secondaryActionState = { type: 'hidden' };
   var sourceSearchPlatformSelection = DEFAULT_SOURCE_SEARCH_PLATFORMS.slice();
@@ -47,6 +49,43 @@
     primaryActionStatus.className = 'action-status' + (kind ? ' ' + kind : '');
   }
 
+  function createSourceWorkflowHandoffButton() {
+    if (!primaryActionStatus || !primaryActionStatus.parentNode) return null;
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary-action';
+    button.textContent = '打开 ERP 继续';
+    button.title = '打开刚保存的 ERP 来源商品';
+    button.hidden = true;
+    primaryActionStatus.parentNode.insertBefore(button, primaryActionStatus);
+    return button;
+  }
+
+  function setSourceWorkflowHandoff(handoff) {
+    sourceWorkflowHandoff = handoff && typeof handoff === 'object' ? handoff : null;
+    if (!sourceWorkflowHandoffBtn) return;
+    sourceWorkflowHandoffBtn.hidden = !handoff;
+    sourceWorkflowHandoffBtn.disabled = !sourceWorkflowHandoff;
+  }
+
+  function openSourceWorkflowHandoff() {
+    if (!sourceWorkflowHandoff || !sourceWorkflowHandoffBtn) return;
+    sourceWorkflowHandoffBtn.disabled = true;
+    sourceWorkflowHandoffBtn.textContent = '打开中...';
+    sendRuntimeMessage({
+      type: 'ss-erp:open-source-workflow-handoff',
+      snapshotId: sourceWorkflowHandoff.snapshotId
+    }, function (response) {
+      sourceWorkflowHandoffBtn.textContent = '打开 ERP 继续';
+      sourceWorkflowHandoffBtn.disabled = !sourceWorkflowHandoff;
+      if (response && response.ok) {
+        setActionStatus('已打开 ERP，可继续处理上架信息', 'ok');
+        return;
+      }
+      setActionStatus((response && response.error) || '打开 ERP 失败', 'fail');
+    });
+  }
+
   function setPrimaryAction(state) {
     primaryActionState = state || { type: 'unsupported', tab: null, productId: '' };
     setText(activePageLabel, primaryActionState.label || '当前页面');
@@ -57,6 +96,7 @@
       primaryActionBtn.textContent = primaryActionState.buttonText || '打开设置';
     }
     setSecondaryAction(primaryActionState.secondaryAction || null);
+    setSourceWorkflowHandoff(null);
     setActionStatus('', '');
   }
 
@@ -464,6 +504,7 @@
     } else {
       setPrimaryButtonBusy('采集中...');
     }
+    setSourceWorkflowHandoff(null);
     setActionStatus('', '');
     sendRuntimeMessage({ type: 'spb-self-hosted:collect-current-tab' }, function (response) {
       if (useSecondary) {
@@ -476,6 +517,7 @@
         var baseStatus = data.title ? ('已采集：' + String(data.title).slice(0, 18)) : '已采集当前货源页';
         submitSourceToErp(data, function (erpResponse) {
           if (erpResponse && erpResponse.ok) {
+            setSourceWorkflowHandoff(erpResponse.handoff || null);
             setActionStatus(baseStatus + '，已进入 ERP 上品列表', 'ok');
             return;
           }
@@ -1158,6 +1200,9 @@
   }
   if (secondaryActionBtn) {
     secondaryActionBtn.addEventListener('click', runSecondaryAction);
+  }
+  if (sourceWorkflowHandoffBtn) {
+    sourceWorkflowHandoffBtn.addEventListener('click', openSourceWorkflowHandoff);
   }
   SOURCE_SEARCH_PLATFORM_OPTIONS.forEach(function (option) {
     var input = getSourceSearchPlatformInput(option.platform);

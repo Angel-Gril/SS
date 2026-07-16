@@ -1,8 +1,23 @@
 import { createHash } from 'crypto';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
+import {
+  assertLegacySourceOzonPublishAllowed,
+  sourceWorkflowFeatureFlags,
+  SourceWorkflowLegacyPublishError,
+  type SourceCaptureRolloutStage,
+  type SourceWorkflowFeatureDecision,
+  type SourceWorkflowFeatureFlagEvaluator,
+} from '../services/source-workflow-feature-flags.js';
+import {
+  getDefaultLegacySourceListingWorkflowAdapter,
+  resolveLegacySourceListingCompatibility,
+  sourceListingCompatibilityMetadata,
+  type LegacySourceListingDraftPointer,
+  type LegacySourceListingWorkflowAdapter,
+} from './source-listing-workflow-compat.js';
 import { prisma } from '../lib/prisma.js';
 import { getRandomizeConfig, randomOfferIdFrom, jitterDimensionMm, bucketWeightG } from '../lib/randomize.js';
 import { randomSuffix, chunkArray } from '../lib/util.js';
@@ -15,9 +30,17 @@ import {
   getCachedOzonAttributeValues,
 } from '../services/ozon-attribute-dictionary-cache.js';
 import {
+  createPrismaOzonAttributeDefinitionCacheStore,
+  getCachedOzonAttributeDefinitions,
+  OzonAttributeDefinitionsRequiredError,
+  type OzonAttributeDefinition,
+} from '../services/ozon-attribute-definition-cache.js';
+import {
   applyOzonCategoryCatalogLocalTranslations,
   buildOzonCategoryCatalog,
+  buildMergedOzonCategoryCatalog,
   createPrismaOzonCategoryCatalogStore,
+  deriveOzonCategoryCatalogRevision,
   enrichMissingOzonCategoryCatalogTranslations,
   searchOrRefreshOzonCategoryCatalogForShop,
   translateOzonCategoryText as translateOzonCategoryCatalogText,
@@ -25,6 +48,18 @@ import {
   type OzonCategoryCatalogStore,
   type OzonCategoryTranslationStatus,
 } from '../services/ozon-category-catalog.js';
+import {
+  deriveSourceOzonCategoryIdentity,
+  SourceOzonCategoryMappingError,
+  type CanonicalSourceOzonCategoryInput,
+  type OfficialOzonCategoryTarget,
+  type SourceOzonCategoryMappingRecord,
+} from '../services/source-ozon-category-mapping.js';
+import { SourceOzonCategoryContextError } from '../services/source-ozon-category-context.js';
+import {
+  createSourceWorkflowOzonClient,
+  findSourceWorkflowOzonCredentialsUnavailableError,
+} from '../services/source-workflow-ozon-client.js';
 import { getOzonCategoryLocalKeywordExpansions } from '../services/ozon-category-local-rules.js';
 import {
   appendOzonRichContentAttribute,
@@ -44,7 +79,7 @@ import { generateAiText } from '../services/ai-text.js';
 import { createPrismaAiTranslationCacheStore, getCachedAiTranslation } from '../services/ai-translation-cache.js';
 import { createPrismaAiUsageStore } from '../services/ai-usage.js';
 import { generateProductContentDraft, type ProductContentField } from '../services/product-content-ai.js';
-import { buildSourceProductProfile } from '../services/source-product-profile.js';
+import { buildSourceProductProfile, type SourceProductProfile } from '../services/source-product-profile.js';
 import { transferSourceProductImages } from '../services/source-image-transfer.js';
 import { transferSourceProductVideos } from '../services/source-video-transfer.js';
 import { formatOzonErrorMessage } from 'shared/ozon-error-hints';
@@ -2428,6 +2463,16 @@ export function sourceCategorySignature(item: { sourcePlatform?: unknown; metada
   return platform + '|' + parts.join('>');
 }
 
+export function sourceOzonLegacyConfirmedMappingWhere(userId: string, signature: string) {
+  return {
+    userId: String(userId || '').trim(),
+    metadata: {
+      path: ['sourceOzonCategoryConfirmed', 'signature'],
+      equals: String(signature || '').trim(),
+    },
+  };
+}
+
 type SourceOzonConfirmedMapping = {
   signature: string;
   categoryId: number;
@@ -2435,6 +2480,8 @@ type SourceOzonConfirmedMapping = {
   categoryName?: string | null;
   typeName?: string | null;
   confirmations?: number;
+  mappingId?: string | null;
+  transitionVersion?: number;
 };
 
 type SourceOzonCategoryTreeNode = {
@@ -2461,6 +2508,8 @@ type SourceOzonCategoryCandidate = {
   selected: boolean;
   source: 'shared_history' | 'tree_match';
   confirmationCount: number;
+  mappingId: string | null;
+  transitionVersion: number;
   reasons: string[];
   attributePlan: ReturnType<typeof buildSourceStandardOzonAttributePlan>;
 };
@@ -2632,15 +2681,17 @@ function categoryTextScore(sourceTerms: string[], candidate: { categoryName: str
 
 export function buildSourceOzonCategoryCandidates(input: {
   item: { sourcePlatform?: unknown; metadata?: unknown; title?: unknown; variants?: unknown };
+  sourceSignature?: string;
+  sourceProfile?: SourceProductProfile;
   categoryTree?: SourceOzonCategoryTreeNode[] | null;
   categoryCatalog?: OzonCategoryCatalogEntry[] | null;
   attributesByCategory?: Record<string, SourceStandardOzonAttributeDef[]>;
   confirmedMappings?: SourceOzonConfirmedMapping[];
 }): SourceOzonCategoryCandidate[] {
-  const signature = sourceCategorySignature(input.item);
+  const signature = String(input.sourceSignature || '').trim() || sourceCategorySignature(input.item);
   const meta = metadataRecord(input.item.metadata);
   const standard = getCollectedSourceStandardAttributes(input.item) || metadataRecord(meta.sourceStandardAttributes);
-  const sourceProfile = buildSourceProductProfile({
+  const sourceProfile = input.sourceProfile || buildSourceProductProfile({
     title: input.item.title == null ? null : String(input.item.title),
     sourcePlatform: input.item.sourcePlatform == null ? null : String(input.item.sourcePlatform),
     metadata: input.item.metadata,
@@ -2658,11 +2709,18 @@ export function buildSourceOzonCategoryCandidates(input: {
     ...sourceProfile.genderSeasonHints,
   ].flatMap(sourceCategorySearchTerms).filter(Boolean);
   const byKey = new Map<string, SourceOzonCategoryCandidate>();
-  const catalogRows = Array.isArray(input.categoryCatalog) ? input.categoryCatalog : [];
+  const allCatalogRows = Array.isArray(input.categoryCatalog) ? input.categoryCatalog : [];
+  const disabledCatalogKeys = new Set(allCatalogRows
+    .filter((entry) => entry.disabled === true || entry.selectable === false)
+    .map((entry) => sourceOzonCategoryKey(entry.descriptionCategoryId, entry.typeId)));
+  const catalogRows = allCatalogRows.filter((entry) => (
+    entry.disabled !== true && entry.selectable !== false
+  ));
   const catalogByKey = new Map(catalogRows.map((entry) => [sourceOzonCategoryKey(entry.descriptionCategoryId, entry.typeId), entry]));
   const treeRowsByKey = new Map<string, { categoryId: number; typeId: number; categoryName: string; typeName: string }>();
   for (const row of flattenOzonCategoryTree(input.categoryTree)) {
-    treeRowsByKey.set(sourceOzonCategoryKey(row.categoryId, row.typeId), row);
+    const key = sourceOzonCategoryKey(row.categoryId, row.typeId);
+    if (!disabledCatalogKeys.has(key)) treeRowsByKey.set(key, row);
   }
   for (const entry of catalogRows) {
     const key = sourceOzonCategoryKey(entry.descriptionCategoryId, entry.typeId);
@@ -2679,6 +2737,7 @@ export function buildSourceOzonCategoryCandidates(input: {
   const treeByKey = new Map(treeRows.map((row) => [String(row.categoryId) + ':' + String(row.typeId), row]));
   const addCandidate = (row: { categoryId: number; typeId: number; categoryName?: string | null; typeName?: string | null }, baseScore: number, source: 'shared_history' | 'tree_match', reasons: string[], confirmationCount = 0) => {
     const key = sourceOzonCategoryKey(row.categoryId, row.typeId);
+    if (disabledCatalogKeys.has(key)) return;
     const tree = treeByKey.get(key);
     const catalog = catalogByKey.get(key);
     const attrs = input.attributesByCategory?.[key] || [];
@@ -2710,6 +2769,8 @@ export function buildSourceOzonCategoryCandidates(input: {
       selected: false,
       source: existing?.source === 'shared_history' ? 'shared_history' : source,
       confirmationCount: Math.max(existing?.confirmationCount || 0, confirmationCount),
+      mappingId: existing?.mappingId || null,
+      transitionVersion: existing?.transitionVersion || 0,
       reasons: Array.from(new Set([...(existing?.reasons || []), ...reasons])),
       attributePlan,
     };
@@ -2731,6 +2792,11 @@ export function buildSourceOzonCategoryCandidates(input: {
       ? 45 + historyTextScore + confirmations * 4
       : 80 + confirmations * 8;
     addCandidate(mapping, baseScore, 'shared_history', ['全局历史确认', '确认 ' + confirmations + ' 次'], confirmations);
+    const candidate = byKey.get(sourceOzonCategoryKey(mapping.categoryId, mapping.typeId));
+    if (candidate) {
+      candidate.mappingId = mapping.mappingId || null;
+      candidate.transitionVersion = Math.max(0, Number(mapping.transitionVersion) || 0);
+    }
   }
 
   const sourceIsAdult = isAdultSourceCategoryTerms(sourceTerms);
@@ -4004,7 +4070,440 @@ async function findExistingCollectedOzonGoods(userId: string, item: {
   });
 }
 
-export async function collectRoutes(app: FastifyInstance) {
+export interface SourceOzonCategoryCanonicalContext {
+  source: CanonicalSourceOzonCategoryInput;
+  profile: SourceProductProfile;
+}
+
+export interface AuthoritativeOzonCategoryCatalogSnapshot {
+  entries: OzonCategoryCatalogEntry[];
+  categoryTree: SourceOzonCategoryTreeNode[];
+  catalogRevision: string;
+}
+
+export interface SourceOzonCategoryMappingRouteService {
+  listVisibleMappings(input: {
+    ownerUserId: string;
+    source: CanonicalSourceOzonCategoryInput;
+  }): Promise<SourceOzonCategoryMappingRecord[]>;
+  confirmTenantMapping(input: {
+    ownerUserId: string;
+    actorUserId: string;
+    expectedTransitionVersion: number;
+    source: CanonicalSourceOzonCategoryInput;
+    target: OfficialOzonCategoryTarget;
+  }): Promise<{ mapping: SourceOzonCategoryMappingRecord; idempotent: boolean }>;
+}
+
+type LoadAuthoritativeOzonCategoryCatalog = (input: {
+  shopId: string;
+  fetchTree(language: 'DEFAULT' | 'ZH_HANS'): Promise<SourceOzonCategoryTreeNode[]>;
+}) => Promise<AuthoritativeOzonCategoryCatalogSnapshot>;
+
+export interface CollectRoutesOptions {
+  featureFlags?: SourceWorkflowFeatureFlagEvaluator;
+  sourceListingWorkflowAdapter?: LegacySourceListingWorkflowAdapter;
+  publisherParityObserver?: {
+    observe(input: {
+      ownerUserId: string;
+      shopId: string;
+      rolloutRevision: string;
+      entrypoint: 'COLLECT_PUBLISH_OZON' | 'BROWSER_ONE_CLICK';
+      legacy: {
+        endpoint: '/v3/product/import' | '/v1/product/import-by-sku';
+        payload: { items: unknown[] };
+        itemTrace?: Array<{
+          ordinal: number;
+          supplyGoodsId: string;
+          sourceSkuAlias?: string | null;
+        }>;
+      };
+      drafts: LegacySourceListingDraftPointer[];
+    }): Promise<Record<string, unknown>>;
+  };
+  publisherParityTimeoutMs?: number;
+  sourceCaptureService?: {
+    ensureLegacyProjection(input: {
+      trusted: {
+        ownerUserId: string;
+        actorUserId: string;
+        rolloutRevision: string;
+        rolloutStage: Exclude<SourceCaptureRolloutStage, 'off'>;
+        ingestChannel: 'LEGACY_ADAPTER';
+      };
+      item: Record<string, unknown>;
+    }): Promise<{ supplyGoodsId: string }>;
+    ingestLegacy(input: {
+      trusted: {
+        ownerUserId: string;
+        actorUserId: string;
+        rolloutRevision: string;
+        rolloutStage: Exclude<SourceCaptureRolloutStage, 'off'>;
+        ingestChannel: 'LEGACY_ADAPTER';
+      };
+      item: Record<string, unknown>;
+      supplyGoodsId: string;
+    }): Promise<unknown>;
+  };
+  sourceOzonCategoryMappingService?: SourceOzonCategoryMappingRouteService;
+  loadCanonicalSourceOzonCategoryContext?(input: {
+    ownerUserId: string;
+    supplyGoodsId: string;
+  }): Promise<SourceOzonCategoryCanonicalContext | null>;
+  loadAuthoritativeOzonCategoryCatalog?: LoadAuthoritativeOzonCategoryCatalog;
+}
+
+class SourceOzonCategoryRouteError extends Error {
+  constructor(
+    readonly errorCode: string,
+    readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SourceOzonCategoryRouteError';
+  }
+}
+
+const sourceOzonCategoryConfirmationSchema = z.object({
+  shopId: z.string().trim().min(1).max(200),
+  categoryId: z.number().int().positive(),
+  typeId: z.number().int().positive(),
+  expectedCatalogRevision: z.string().trim().min(1).max(200),
+  expectedTransitionVersion: z.number().int().nonnegative(),
+});
+
+async function loadLiveAuthoritativeOzonCategoryCatalog(input: {
+  shopId: string;
+  fetchTree(language: 'DEFAULT' | 'ZH_HANS'): Promise<SourceOzonCategoryTreeNode[]>;
+}): Promise<AuthoritativeOzonCategoryCatalogSnapshot> {
+  const [defaultTree, zhHansTree] = await Promise.all([
+    input.fetchTree('DEFAULT'),
+    input.fetchTree('ZH_HANS'),
+  ]);
+  const entries = buildMergedOzonCategoryCatalog(defaultTree, zhHansTree);
+  return {
+    entries,
+    categoryTree: defaultTree,
+    catalogRevision: deriveOzonCategoryCatalogRevision(entries),
+  };
+}
+
+function selectableOfficialOzonCategoryTarget(
+  snapshot: AuthoritativeOzonCategoryCatalogSnapshot,
+  categoryId: number,
+  typeId: number,
+): OfficialOzonCategoryTarget | null {
+  const entry = snapshot.entries.find((candidate) => (
+    candidate.descriptionCategoryId === categoryId
+    && candidate.typeId === typeId
+    && candidate.disabled !== true
+    && candidate.selectable !== false
+  ));
+  if (!entry) return null;
+  const categoryName = String(entry.categoryNameRu || '').trim();
+  const typeName = String(entry.typeNameRu || '').trim();
+  if (!categoryName || !typeName) return null;
+  return {
+    categoryId,
+    typeId,
+    categoryName,
+    typeName,
+    catalogRevision: snapshot.catalogRevision,
+  };
+}
+
+const SOURCE_OZON_CATEGORY_CONFIRMATION_V2 = 'source-ozon-category-confirmed/v2';
+const SOURCE_OZON_CATEGORY_CONFIRMATION_LEGACY_V1 = 'source-ozon-category-confirmed/legacy-v1';
+
+function sourcePublishCategoryItemLabel(item: { id: string; sku?: unknown; title?: unknown }): string {
+  return String(item.sku || item.title || item.id).trim() || item.id;
+}
+
+function sourcePublishCategoryGateError(
+  errorCode: 'source_ozon_category_confirmation_required'
+    | 'source_ozon_category_confirmation_mismatch'
+    | 'source_ozon_category_confirmation_stale',
+  statusCode: 409 | 422,
+  item: { id: string; sku?: unknown; title?: unknown },
+  message: string,
+): SourceOzonCategoryRouteError {
+  return new SourceOzonCategoryRouteError(
+    errorCode,
+    statusCode,
+    `${sourcePublishCategoryItemLabel(item)}: ${message}`,
+  );
+}
+
+async function assertSourcePublishCategoryConfirmations(input: {
+  ownerUserId: string;
+  items: Array<{
+    id: string;
+    sku?: unknown;
+    title?: unknown;
+    sourcePlatform?: unknown;
+    metadata?: unknown;
+  }>;
+  fallbackCategoryId?: unknown;
+  fallbackTypeId?: unknown;
+  preferItemCategory: boolean;
+  catalogSnapshot: AuthoritativeOzonCategoryCatalogSnapshot;
+  mappingService?: SourceOzonCategoryMappingRouteService;
+  loadCanonicalContext?(input: {
+    ownerUserId: string;
+    supplyGoodsId: string;
+  }): Promise<SourceOzonCategoryCanonicalContext | null>;
+}): Promise<void> {
+  for (const item of input.items) {
+    const effective = resolveItemPublishCategory(
+      item,
+      input.fallbackCategoryId,
+      input.fallbackTypeId,
+      input.preferItemCategory,
+    );
+    if (!selectableOfficialOzonCategoryTarget(
+      input.catalogSnapshot,
+      effective.categoryId,
+      effective.typeId,
+    )) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_mismatch',
+        422,
+        item,
+        `Ozon 类目/type ${effective.categoryId}/${effective.typeId} 不在当前可用官方目录中`,
+      );
+    }
+
+    const confirmed = metadataRecord(metadataRecord(item.metadata).sourceOzonCategoryConfirmed);
+    const version = String(confirmed.version || '').trim();
+    if (!version) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_required',
+        409,
+        item,
+        '发布前必须先确认 Ozon 类目',
+      );
+    }
+    if (positiveInt(confirmed.categoryId) !== effective.categoryId
+      || positiveInt(confirmed.typeId) !== effective.typeId) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_mismatch',
+        422,
+        item,
+        '已确认类目与当前发布类目不一致，请重新确认',
+      );
+    }
+    if (String(confirmed.catalogRevision || '').trim() !== input.catalogSnapshot.catalogRevision) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_stale',
+        409,
+        item,
+        'Ozon 类目目录已更新，请刷新候选并重新确认',
+      );
+    }
+
+    if (version === SOURCE_OZON_CATEGORY_CONFIRMATION_LEGACY_V1) {
+      if (String(confirmed.signature || '').trim() !== sourceCategorySignature(item)) {
+        throw sourcePublishCategoryGateError(
+          'source_ozon_category_confirmation_stale',
+          409,
+          item,
+          '来源商品分类已变化，请重新确认 Ozon 类目',
+        );
+      }
+      continue;
+    }
+    if (version !== SOURCE_OZON_CATEGORY_CONFIRMATION_V2) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_required',
+        409,
+        item,
+        '类目确认版本无效，请重新确认 Ozon 类目',
+      );
+    }
+    if (!input.mappingService || !input.loadCanonicalContext) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_stale',
+        409,
+        item,
+        '无法验证当前类目确认，请刷新后重试',
+      );
+    }
+
+    let canonicalContext: SourceOzonCategoryCanonicalContext | null;
+    try {
+      canonicalContext = await input.loadCanonicalContext({
+        ownerUserId: input.ownerUserId,
+        supplyGoodsId: item.id,
+      });
+    } catch {
+      canonicalContext = null;
+    }
+    if (!canonicalContext) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_stale',
+        409,
+        item,
+        '来源采集快照已失效，请重新采集并确认类目',
+      );
+    }
+
+    const identity = deriveSourceOzonCategoryIdentity(canonicalContext.source);
+    const confirmedTransitionVersion = Number(confirmed.transitionVersion);
+    const canonicalProjectionMatches = String(confirmed.signature || '').trim() === identity.sourceSignature
+      && String(confirmed.sourceSnapshotId || '').trim() === identity.snapshotId
+      && String(confirmed.sourceProfileHash || '').trim() === identity.profileHash
+      && Number.isSafeInteger(confirmedTransitionVersion)
+      && confirmedTransitionVersion > 0;
+    if (!canonicalProjectionMatches) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_stale',
+        409,
+        item,
+        '来源商品证据已变化，请重新确认 Ozon 类目',
+      );
+    }
+
+    let visibleMappings: SourceOzonCategoryMappingRecord[];
+    try {
+      visibleMappings = await input.mappingService.listVisibleMappings({
+        ownerUserId: input.ownerUserId,
+        source: canonicalContext.source,
+      });
+    } catch {
+      visibleMappings = [];
+    }
+    const mappingId = String(confirmed.mappingId || '').trim();
+    const currentMapping = visibleMappings.find((mapping) => mapping.id === mappingId);
+    const mappingMatches = !!currentMapping
+      && currentMapping.status === 'ACTIVE'
+      && currentMapping.sourceSignature === identity.sourceSignature
+      && currentMapping.sourceSnapshotId === identity.snapshotId
+      && currentMapping.sourceProfileHash === identity.profileHash
+      && currentMapping.targetCategoryId === effective.categoryId
+      && currentMapping.targetTypeId === effective.typeId
+      && currentMapping.catalogRevision === input.catalogSnapshot.catalogRevision
+      && currentMapping.transitionVersion === confirmedTransitionVersion
+      && (
+        (currentMapping.scope === 'TENANT'
+          && currentMapping.scopeKey === `tenant:${input.ownerUserId}`
+          && currentMapping.ownerUserId === input.ownerUserId)
+        || (currentMapping.scope === 'GLOBAL'
+          && currentMapping.scopeKey === 'global'
+          && currentMapping.ownerUserId === null
+          && !!currentMapping.reviewedByUserId
+          && !!currentMapping.reviewedAt)
+      );
+    if (!mappingMatches) {
+      throw sourcePublishCategoryGateError(
+        'source_ozon_category_confirmation_stale',
+        409,
+        item,
+        '类目映射已变化，请刷新候选并重新确认',
+      );
+    }
+  }
+}
+
+function mappingRouteError(reply: FastifyReply, caught: unknown) {
+  const credentialError = findSourceWorkflowOzonCredentialsUnavailableError(caught);
+  if (credentialError) {
+    return reply.status(credentialError.statusCode).send({
+      code: 0,
+      errorCode: credentialError.code,
+      msg: credentialError.message,
+    });
+  }
+  if (caught instanceof SourceOzonCategoryRouteError) {
+    return reply.status(caught.statusCode).send({
+      code: 0,
+      errorCode: caught.errorCode,
+      msg: caught.message,
+    });
+  }
+  if (caught instanceof SourceOzonCategoryContextError) {
+    return reply.status(caught.statusCode).send({
+      code: 0,
+      errorCode: 'source_capture_v2_required',
+      msg: caught.message,
+    });
+  }
+  if (caught instanceof SourceOzonCategoryMappingError) {
+    return reply.status(caught.statusCode).send({
+      code: 0,
+      errorCode: caught.code,
+      msg: caught.message,
+    });
+  }
+  if (caught instanceof OzonAttributeDefinitionsRequiredError) {
+    return reply.status(caught.statusCode).send({
+      code: 0,
+      errorCode: caught.code,
+      msg: caught.message,
+    });
+  }
+  throw caught;
+}
+
+function toOzonCategoryAttributeDefinition(definition: OzonAttributeDefinition) {
+  return {
+    id: definition.id,
+    name: definition.name,
+    description: definition.description,
+    type: definition.type,
+    is_collection: definition.isCollection,
+    is_required: definition.isRequired,
+    ...(definition.dictionaryId ? { dictionary_id: definition.dictionaryId } : {}),
+  };
+}
+
+async function mergeSourceOzonCategoryMetadata(input: {
+  ownerUserId: string;
+  supplyGoodsId: string;
+  metadataPatch: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const rows = await prisma.$queryRaw<Array<{ metadata: unknown }>>(Prisma.sql`
+    UPDATE "supply_goods"
+    SET "metadata" = COALESCE("metadata", '{}'::jsonb)
+          || CAST(${JSON.stringify(input.metadataPatch)} AS jsonb),
+        "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${input.supplyGoodsId}
+      AND "user_id" = ${input.ownerUserId}
+    RETURNING "metadata"
+  `);
+  const metadata = rows[0]?.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new SourceOzonCategoryRouteError(
+      'source_ozon_category_projection_failed',
+      500,
+      'Ozon 类目确认已记录，但兼容投影失败，请重试',
+    );
+  }
+  return metadata as Record<string, unknown>;
+}
+
+function sendSourceWorkflowLegacyPublishError(reply: FastifyReply, caught: unknown) {
+  if (!(caught instanceof SourceWorkflowLegacyPublishError)) throw caught;
+  return reply.status(caught.statusCode).send({
+    code: 0,
+    errorCode: caught.code,
+    msg: caught.message,
+    rolloutRevision: caught.decision.revision,
+  });
+}
+
+export async function collectRoutes(app: FastifyInstance, options: CollectRoutesOptions = {}) {
+  const featureFlags = options.featureFlags || sourceWorkflowFeatureFlags;
+  const sourceListingWorkflowAdapter = options.sourceListingWorkflowAdapter
+    || getDefaultLegacySourceListingWorkflowAdapter();
+  const publisherParityObserver = options.publisherParityObserver;
+  const publisherParityTimeoutMs = Number.isFinite(options.publisherParityTimeoutMs)
+    ? Math.max(10, Math.min(5_000, Number(options.publisherParityTimeoutMs)))
+    : 2_000;
+  const sourceCaptureService = options.sourceCaptureService;
+  const sourceOzonCategoryMappingService = options.sourceOzonCategoryMappingService;
+  const loadCanonicalSourceOzonCategoryContext = options.loadCanonicalSourceOzonCategoryContext;
+  const loadAuthoritativeOzonCategoryCatalog = options.loadAuthoritativeOzonCategoryCatalog
+    || loadLiveAuthoritativeOzonCategoryCatalog;
   app.addHook('preHandler', authenticate);
 
   // 扩展查询：某 SKU 是否已被当前用户采集（用于 ozon.ru 列表页 overlay）
@@ -4228,19 +4727,80 @@ export async function collectRoutes(app: FastifyInstance) {
       ephemeralListingSource?: string;
     };
 
-    if (!body?.items?.length) {
+    if (!Array.isArray(body?.items) || !body.items.length) {
       return reply.status(400).send({ code: 0, msg: '请提供商品数据' });
+    }
+    if (body.items.length > 50) {
+      return reply.status(413).send({
+        code: 0,
+        errorCode: 'source_collect_batch_limit_exceeded',
+        msg: '单次最多提交 50 件商品，请分批重试',
+        data: {
+          observedCount: body.items.length,
+          limit: 50,
+          recoverable: true,
+        },
+      });
+    }
+
+    const captureRollouts = new Map<string, SourceWorkflowFeatureDecision>();
+    if (sourceCaptureService) {
+      const platforms = [...new Set(body.items.map((item) => (
+        String(item?.sourcePlatform || '').trim().toLowerCase()
+      )).filter((platform) => platform === '1688'))];
+      for (const platform of platforms) {
+        let decision: SourceWorkflowFeatureDecision;
+        try {
+          decision = await featureFlags.evaluate('SOURCE_CAPTURE_V2', {
+            ownerUserId: userId,
+            platform,
+          });
+        } catch {
+          return reply.status(503).send({
+            code: 0,
+            errorCode: 'source_workflow_rollout_unavailable',
+            msg: '来源商品采集策略暂不可用',
+          });
+        }
+        captureRollouts.set(platform, decision);
+        if (!decision.legacyAllowed) {
+          return reply.status(decision.enabled ? 409 : 503).send({
+            code: 0,
+            errorCode: decision.enabled
+              ? 'source_capture_v2_required'
+              : 'source_workflow_rollout_unavailable',
+            msg: decision.enabled
+              ? '该来源商品已启用采集 V2，请升级扩展后重试'
+              : '来源商品采集策略暂不可用',
+            rolloutRevision: decision.revision,
+          });
+        }
+      }
     }
 
     const collectPhase = String(body.collectPhase || 'collect').trim().toLowerCase();
     const shouldUpdateExisting = collectPhase === 'enrichment';
     let saved = 0;
     const errors: { sku?: string; sourceProductId?: string; title?: string; error: string }[] = [];
-    for (const item of body.items.slice(0, 50)) {
+    for (const item of body.items) {
       try {
         const validationError = validateDomesticCollectPayload(item as Record<string, unknown>);
         if (validationError) throw new Error(validationError);
         const sourceProductId = normalizeProductId(item.sourceProductId || item.sku);
+        const sourcePlatform = String(item.sourcePlatform || '').trim().toLowerCase();
+        const captureRollout = captureRollouts.get(sourcePlatform);
+        const legacyCaptureTrusted = sourceCaptureService
+          && captureRollout?.enabled
+          && (captureRollout.captureStage === 'shadow_write'
+            || captureRollout.captureStage === 'dual_read')
+          ? {
+            ownerUserId: userId,
+            actorUserId: userId,
+            rolloutRevision: captureRollout.revision,
+            rolloutStage: captureRollout.captureStage,
+            ingestChannel: 'LEGACY_ADAPTER' as const,
+          }
+          : null;
         const imageState = await prepareCollectedSourceImageMetadata(item, userId);
         const metadata: Record<string, unknown> = {
           ...buildCollectedGoodsMetadata({ ...item, ...imageState.metadataPatch }),
@@ -4287,13 +4847,26 @@ export async function collectRoutes(app: FastifyInstance) {
           sourcePlatform: item.sourcePlatform,
         });
 
-        const existing = shouldUpdateExisting
-          ? await findExistingCollectedOzonGoods(userId, {
+        const ensuredProjection = sourceCaptureService && legacyCaptureTrusted
+          ? await sourceCaptureService.ensureLegacyProjection({
+            trusted: legacyCaptureTrusted,
+            item,
+          })
+          : null;
+        const existing = ensuredProjection
+          ? await prisma.supplyGoods.findFirst({
+            where: { id: ensuredProjection.supplyGoodsId, userId },
+          })
+          : shouldUpdateExisting
+            ? await findExistingCollectedOzonGoods(userId, {
             sourcePlatform: item.sourcePlatform,
             sourceProductId,
             sku: item.sku,
           })
-          : null;
+            : null;
+        if (ensuredProjection && !existing) {
+          throw new Error('稳定采集投影不存在，请重试');
+        }
 
         const data = {
           title: displayTitle,
@@ -4315,21 +4888,35 @@ export async function collectRoutes(app: FastifyInstance) {
           status: 'collected',
         };
 
-        if (existing) {
-          await prisma.supplyGoods.update({
+        const persisted = existing
+          ? await prisma.supplyGoods.update({
             where: { id: existing.id },
             data: {
               ...data,
               metadata: mergeCollectedMetadata(existing.metadata, metadata) as any,
             },
-          });
-        } else {
-          await prisma.supplyGoods.create({
+          })
+          : await prisma.supplyGoods.create({
             data: {
               user: { connect: { id: userId } },
               ...data,
             },
           });
+
+        if (sourceCaptureService && legacyCaptureTrusted) {
+          try {
+            await sourceCaptureService.ingestLegacy({
+              trusted: legacyCaptureTrusted,
+              item,
+              supplyGoodsId: persisted.id,
+            });
+          } catch (caught) {
+            request.log.warn({
+              err: caught,
+              sourcePlatform,
+              sourceProductId,
+            }, 'source capture V2 shadow write failed');
+          }
         }
         saved++;
       } catch (e: any) {
@@ -4846,6 +5433,7 @@ export async function collectRoutes(app: FastifyInstance) {
       source?: 'collect-page' | 'listing-page' | 'batch-collect-page' | 'source-publish-page' | 'ozon-product-detail-workbench';
       forceRecreate?: boolean;
       jobId?: string;
+      legacyWorkflowFallback?: boolean;
     };
 
     if (!body?.ids?.length || !body.shopId) {
@@ -4855,6 +5443,28 @@ export async function collectRoutes(app: FastifyInstance) {
     const shop = await prisma.shop.findFirst({ where: { id: body.shopId, userId } });
     if (!shop || !shop.clientId || !shop.apiKeyEncrypted) {
       return reply.status(400).send({ code: 0, msg: '店铺配置不完整' });
+    }
+    const publishActor = (request as any).user || {};
+    const actorUserId = String(publishActor.actorUserId || publishActor.userId || '');
+    if (!publishActor.userId
+      || actorUserId !== String(publishActor.userId)
+      || publishActor.isSubAccount === true
+      || publishActor.role === 'STAFF') {
+      return reply.status(403).send({
+        code: 0,
+        errorCode: 'source_publish_owner_required',
+        msg: '仅店铺所有者可提交 Ozon 发布任务',
+      });
+    }
+    const assertCurrentLegacyPublish = () => assertLegacySourceOzonPublishAllowed(featureFlags, {
+      ownerUserId: userId,
+      shopId: shop.id,
+      platform: String(shop.platform || ''),
+    });
+    try {
+      await assertCurrentLegacyPublish();
+    } catch (caught) {
+      return sendSourceWorkflowLegacyPublishError(reply, caught);
     }
 
     const existingPublishJob = body.jobId ? await prisma.syncJob.findFirst({
@@ -4879,6 +5489,99 @@ export async function collectRoutes(app: FastifyInstance) {
     if (!items.length) {
       return reply.send({ code: 0, msg: '未找到有效商品' });
     }
+
+    const sourceListingCompatibility = await resolveLegacySourceListingCompatibility({
+      featureFlags,
+      adapter: sourceListingWorkflowAdapter,
+      ownerUserId: userId,
+      actorUserId,
+      shopId: shop.id,
+      platform: String(shop.platform || ''),
+      supplyGoodsIds: items.map((item) => item.id),
+      legacyFallback: body.legacyWorkflowFallback,
+    });
+    if (existingPublishJob) {
+      await prisma.syncJob.update({
+        where: { id: existingPublishJob.id },
+        data: {
+          payload: {
+            ...existingPublishPayload,
+            sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
+
+    const observePublisherParity = async (input: {
+      endpoint: '/v3/product/import' | '/v1/product/import-by-sku';
+      items: unknown[];
+      supplyGoodsIds: string[];
+      itemTrace: Array<{
+        ordinal: number;
+        supplyGoodsId: string;
+        sourceSkuAlias?: string | null;
+      }>;
+    }): Promise<Record<string, unknown> | null> => {
+      if (!publisherParityObserver || sourceListingCompatibility.stage === 'off') return null;
+      try {
+        const branchSupplyGoodsIds = new Set(input.supplyGoodsIds);
+        const branchDrafts = sourceListingCompatibility.drafts.filter((draft) => (
+          branchSupplyGoodsIds.has(draft.supplyGoodsId)
+        ));
+        const preparedSupplyGoodsIds = new Set(branchDrafts.map((draft) => draft.supplyGoodsId));
+        const branchPreparationFailed = sourceListingCompatibility.failures.some((failure) => (
+          branchSupplyGoodsIds.has(failure.supplyGoodsId)
+        ));
+        const branchCoverageComplete = branchSupplyGoodsIds.size > 0
+          && preparedSupplyGoodsIds.size === branchSupplyGoodsIds.size
+          && branchDrafts.length === branchSupplyGoodsIds.size
+          && !branchPreparationFailed;
+        const observation = publisherParityObserver.observe({
+          ownerUserId: userId,
+          shopId: shop.id,
+          rolloutRevision: sourceListingCompatibility.rolloutRevision,
+          entrypoint: isBrowserOneClickPublishJob
+            ? 'BROWSER_ONE_CLICK'
+            : 'COLLECT_PUBLISH_OZON',
+          legacy: {
+            endpoint: input.endpoint,
+            payload: { items: input.items },
+            itemTrace: input.itemTrace,
+          },
+          drafts: branchCoverageComplete ? branchDrafts : [],
+        });
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        const report = await Promise.race([
+          observation,
+          new Promise<null>((resolve) => {
+            timeout = setTimeout(() => resolve(null), publisherParityTimeoutMs);
+            timeout.unref?.();
+          }),
+        ]).finally(() => {
+          if (timeout) clearTimeout(timeout);
+        });
+        if (!report) {
+          app.log.warn('Ozon publisher parity shadow observation timed out; legacy publish remains authoritative');
+          return null;
+        }
+        return report && typeof report === 'object' && !Array.isArray(report) ? report : null;
+      } catch {
+        app.log.warn('Ozon publisher parity shadow observation failed; legacy publish remains authoritative');
+        return null;
+      }
+    };
+    const assertObservedLegacyPublish = async () => {
+      const decision = await assertCurrentLegacyPublish();
+      if (decision.revision !== sourceListingCompatibility.rolloutRevision) {
+        throw new SourceWorkflowLegacyPublishError({
+          ...decision,
+          enabled: false,
+          legacyAllowed: false,
+          reason: 'policy_revision_changed',
+        });
+      }
+      return decision;
+    };
 
     // 货币校验：上架价格统一按 CNY 处理（店铺合同货币 CNY；后端不做汇率换算）
     // 防御历史 bug：曾出现 RUB 价被当 CNY 直接 markup，OZON 后台再按汇率显示成 ¥2612 的错位
@@ -4918,6 +5621,42 @@ export async function collectRoutes(app: FastifyInstance) {
           code: 0,
           msg: `${missingCategoryItems.length} 件商品缺少独立 OZON 分类/类型 ID（${sample}）。请先点击“从源商品继承分类/重量/尺寸”，或手动补齐后再上架。`,
         });
+      }
+    }
+    let publishCatalogSnapshot: AuthoritativeOzonCategoryCatalogSnapshot | null = null;
+    if (body.source === 'source-publish-page') {
+      try {
+        publishCatalogSnapshot = await loadAuthoritativeOzonCategoryCatalog({
+          shopId: body.shopId,
+          fetchTree: async (language) => client.getDescriptionCategoryTree({ language }),
+        });
+      } catch {
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'ozon_category_catalog_unavailable',
+          msg: '当前 Ozon 官方类目目录不可用，请稍后重试',
+        });
+      }
+      if (!publishCatalogSnapshot.catalogRevision || !Array.isArray(publishCatalogSnapshot.entries)) {
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'ozon_category_catalog_invalid',
+          msg: '当前 Ozon 官方类目目录无效，请稍后重试',
+        });
+      }
+      try {
+        await assertSourcePublishCategoryConfirmations({
+          ownerUserId: userId,
+          items,
+          fallbackCategoryId: body.categoryId,
+          fallbackTypeId: body.typeId,
+          preferItemCategory,
+          catalogSnapshot: publishCatalogSnapshot,
+          mappingService: sourceOzonCategoryMappingService,
+          loadCanonicalContext: loadCanonicalSourceOzonCategoryContext,
+        });
+      } catch (caught) {
+        return mappingRouteError(reply, caught);
       }
     }
     if (noAttrs.length && body.forceRecreate !== true) {
@@ -4981,12 +5720,19 @@ export async function collectRoutes(app: FastifyInstance) {
     let fallbackCount = 0;
     let fallbackError: string | null = null;
     let fallbackJobId: string | null = null;
+    let fallbackPublisherParityForSharedJob: Record<string, unknown> | null = null;
+    let mainPublisherParityReport: Record<string, unknown> | null = null;
     if (noAttrs.length > 0) {
       // 收集 fallback：每个 SupplyGoods 如果有 variants[]，展开为 N 个跟卖 item；否则保持单 SKU
       const fallbackTrace: { offerId: string; sourceItemId: string; sourceVariantSku: string; variantAttrs: any }[] = [];
       const fallbackOfferImages: Record<string, string> = {};
       const fallbackOfferImageLists: Record<string, string[]> = {};
       const fallbackPictureUploads: any[] = [];
+      const fallbackEmittedSourceItemIds = new Set<string>();
+      const fallbackParityIdentityByOfferId = new Map<string, {
+        supplyGoodsId: string;
+        sourceSkuAlias: string;
+      }>();
       let fallbackPictureUploadError: string | null = null;
       const fallbackSourceItemIds = noAttrs.map((item) => item.id);
       const fallbackSourceSkus = noAttrs.map((item) => item.sku).filter(Boolean);
@@ -5006,7 +5752,12 @@ export async function collectRoutes(app: FastifyInstance) {
           if (!variants.length) {
             const sourceSku = item.sku && /^\d+$/.test(item.sku) ? Number(item.sku) : null;
             if (!sourceSku) return [];
+            fallbackEmittedSourceItemIds.add(item.id);
             const offerId = buildOfferId(item.sku, `f${Date.now().toString(36)}${randomSuffix(4)}`, getItemCustomOfferId(item));
+            fallbackParityIdentityByOfferId.set(offerId, {
+              supplyGoodsId: item.id,
+              sourceSkuAlias: String(item.sku),
+            });
             const rawImages = resolveBasePublishImages(item);
             recordOfferPublishImages(fallbackOfferImageLists, fallbackOfferImages, offerId, rawImages);
             return [{
@@ -5026,6 +5777,7 @@ export async function collectRoutes(app: FastifyInstance) {
             .map((v, idx) => {
               const subSourceSku = v.sku && /^\d+$/.test(String(v.sku)) ? Number(v.sku) : null;
               if (!subSourceSku) return null;
+              fallbackEmittedSourceItemIds.add(item.id);
               const subPrice = resolveVariantPublishPriceCny({
                 itemOverrides,
                 variant: v,
@@ -5036,6 +5788,10 @@ export async function collectRoutes(app: FastifyInstance) {
                 fxRate,
               });
               const offerId = buildOfferId(String(v.sku), `f${Date.now().toString(36)}${randomSuffix(4)}`, getVariantCustomOfferId(item, v, idx));
+              fallbackParityIdentityByOfferId.set(offerId, {
+                supplyGoodsId: item.id,
+                sourceSkuAlias: String(v.sku),
+              });
               fallbackTrace.push({
                 offerId,
                 sourceItemId: item.id,
@@ -5061,6 +5817,16 @@ export async function collectRoutes(app: FastifyInstance) {
 
       console.log(`[publish-ozon fallback] expanded ${noAttrs.length} SupplyGoods to ${fallbackItems.length} fallback items (variants展开)`);
       if (fallbackItems.length) {
+        const fallbackPublisherParity = await observePublisherParity({
+          endpoint: '/v1/product/import-by-sku',
+          items: fallbackItems,
+          supplyGoodsIds: [...fallbackEmittedSourceItemIds],
+          itemTrace: fallbackItems.flatMap((item, ordinal) => {
+            const identity = fallbackParityIdentityByOfferId.get(item.offer_id);
+            return identity ? [{ ordinal, ...identity }] : [];
+          }),
+        });
+        fallbackPublisherParityForSharedJob = fallbackPublisherParity;
         const fallbackBasePayload = {
           itemCount: fallbackItems.length,
           sourceItemCount: noAttrs.length,
@@ -5073,6 +5839,8 @@ export async function collectRoutes(app: FastifyInstance) {
             publish: existingPublishPayload.publish || null,
           } : {}),
           entry: body.source || 'collect-page',
+          sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+          ...(fallbackPublisherParity ? { publisherEntrypointParity: fallbackPublisherParity } : {}),
           mode: 'follow-by-sku',
           followBrand,
           warehouseId: body.warehouseId ?? null,
@@ -5089,6 +5857,11 @@ export async function collectRoutes(app: FastifyInstance) {
           pictureUploadError: null,
           variantTrace: fallbackTrace.length ? fallbackTrace : null,
         };
+        try {
+          await assertObservedLegacyPublish();
+        } catch (caught) {
+          return sendSourceWorkflowLegacyPublishError(reply, caught);
+        }
         const locked = await prisma.supplyGoods.updateMany({
           where: {
             id: { in: fallbackSourceItemIds },
@@ -5113,6 +5886,27 @@ export async function collectRoutes(app: FastifyInstance) {
         fallbackJobId = fallbackJob.id;
 
         try {
+          try {
+            await assertObservedLegacyPublish();
+          } catch (caught) {
+            if (!(caught instanceof SourceWorkflowLegacyPublishError)) throw caught;
+            await Promise.all(noAttrs.map((item) => prisma.supplyGoods.update({
+              where: { id: item.id },
+              data: { status: previousFallbackStatuses.get(item.id) || 'collected' },
+            }).catch(() => null)));
+            await upsertPublishOzonSyncJob({
+              jobId: fallbackJobId,
+              shopId: body.shopId,
+              status: 'FAILED',
+              finishedAt: new Date(),
+              payload: {
+                ...fallbackBasePayload,
+                stage: 'rollout_blocked',
+              },
+              errorMessage: caught.message,
+            }).catch(() => null);
+            return sendSourceWorkflowLegacyPublishError(reply, caught);
+          }
           const fbResult = await client.importBySku(fallbackItems);
           fallbackTaskId = fbResult.result.task_id;
           fallbackCount = fallbackItems.length;
@@ -5514,25 +6308,59 @@ export async function collectRoutes(app: FastifyInstance) {
       return reply.send({ code: 0, msg: `图片处理失败: ${e.message?.slice(0, 400) || '未知错误'}` });
     }
 
+    if (!publishCatalogSnapshot) {
+      try {
+        publishCatalogSnapshot = await loadAuthoritativeOzonCategoryCatalog({
+          shopId: body.shopId,
+          fetchTree: async (language) => client.getDescriptionCategoryTree({ language }),
+        });
+      } catch {
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'ozon_category_catalog_unavailable',
+          msg: '当前 Ozon 官方类目目录不可用，请稍后重试',
+        });
+      }
+    }
+    if (!publishCatalogSnapshot.catalogRevision || !Array.isArray(publishCatalogSnapshot.entries)) {
+      return reply.status(503).send({
+        code: 0,
+        errorCode: 'ozon_category_catalog_invalid',
+        msg: '当前 Ozon 官方类目目录无效，请稍后重试',
+      });
+    }
+    for (const group of groupPublishItemsByCategory(importItems)) {
+      if (!selectableOfficialOzonCategoryTarget(publishCatalogSnapshot, group.categoryId, group.typeId)) {
+        return reply.status(422).send({
+          code: 0,
+          errorCode: 'ozon_category_target_invalid',
+          msg: `Ozon 类目/type ${group.categoryId}/${group.typeId} 不在当前可用官方目录中`,
+        });
+      }
+    }
+
     // 按每个 payload item 自己的类目补属性，避免批量多类目上架时第一类目污染整批。
     const attrDictCache = new Map<string, { id: number; value?: string | null }[]>();
     const persistentAttrDictStore = createPrismaOzonAttributeDictionaryCacheStore(prisma as any);
+    const persistentAttrDefinitionStore = createPrismaOzonAttributeDefinitionCacheStore(prisma as any);
     const getAttributeDictValues = async (categoryId: number, typeId: number, attributeId: number, language = 'DEFAULT') => {
-      const dictKey = `${categoryId}:${typeId}:${attributeId}:${language}`;
+      const dictKey = `${categoryId}:${typeId}:${attributeId}:${language}:${publishCatalogSnapshot.catalogRevision}`;
       if (attrDictCache.has(dictKey)) return attrDictCache.get(dictKey)!;
       const result = await getCachedOzonAttributeValues({
         description_category_id: categoryId,
         type_id: typeId,
         attribute_id: attributeId,
         language,
+        catalogRevision: publishCatalogSnapshot.catalogRevision,
       }, {
         store: persistentAttrDictStore,
-        fetchValues: (params) => client.getAttributeValues({
+        fetchPage: (params) => client.getAttributeValuesPage({
           description_category_id: params.description_category_id,
           type_id: params.type_id,
           attribute_id: params.attribute_id,
           language: params.language,
-          limit: 5000,
+          last_value_id: params.last_value_id,
+          limit: params.limit,
         }),
       });
       attrDictCache.set(dictKey, result.values);
@@ -5555,12 +6383,21 @@ export async function collectRoutes(app: FastifyInstance) {
     const BRAND_NAMES = /бренд|brand/i;
     for (const group of groupPublishItemsByCategory(importItems)) {
       try {
-        const categoryAttrs = await client.getDescriptionCategoryAttributes({
-          description_category_id: group.categoryId,
-          type_id: group.typeId,
+        const categoryDefinitionResult = await getCachedOzonAttributeDefinitions({
+          shopId: body.shopId,
+          descriptionCategoryId: group.categoryId,
+          typeId: group.typeId,
           language: 'DEFAULT',
+          catalogRevision: publishCatalogSnapshot.catalogRevision,
+        }, {
+          store: persistentAttrDefinitionStore,
+          fetchDefinitions: () => client.getDescriptionCategoryAttributes({
+            description_category_id: group.categoryId,
+            type_id: group.typeId,
+            language: 'DEFAULT',
+          }),
         });
-        const allAttrs = categoryAttrs;
+        const allAttrs = categoryDefinitionResult.definitions.map(toOzonCategoryAttributeDefinition);
         const requiredAttrs = allAttrs.filter((a) => a.is_required);
 
         const brandAttrDef = allAttrs.find((a) => BRAND_NAMES.test(a.name)) || allAttrs.find((a) => a.id === 85);
@@ -5839,7 +6676,18 @@ export async function collectRoutes(app: FastifyInstance) {
           }
         }
       } catch (e: any) {
-        console.warn(`[publish-ozon] failed to query category attributes ${group.categoryId}/${group.typeId}:`, e.message?.slice(0, 200));
+        if (e instanceof OzonAttributeDefinitionsRequiredError) {
+          return reply.status(e.statusCode).send({
+            code: 0,
+            errorCode: e.code,
+            msg: e.message,
+          });
+        }
+        return reply.status(503).send({
+          code: 0,
+          errorCode: 'ozon_attribute_definitions_unavailable',
+          msg: `无法取得 Ozon 类目属性定义 ${group.categoryId}/${group.typeId}，请稍后重试`,
+        });
       }
     }
 
@@ -5859,6 +6707,12 @@ export async function collectRoutes(app: FastifyInstance) {
     console.log('=================================');
 
     try {
+      await assertObservedLegacyPublish();
+    } catch (caught) {
+      return sendSourceWorkflowLegacyPublishError(reply, caught);
+    }
+
+    try {
       // 把诊断字段（_variantAttrs/_sourceItemId/_sourceModelId）抽出来留给 SyncJob，发给 OZON 的 payload 必须干净
       const variantTrace = importItems
         .filter((i) => i._isVariantItem || i._variantAttrs)
@@ -5869,6 +6723,16 @@ export async function collectRoutes(app: FastifyInstance) {
           sourceModelId: i._sourceModelId || null,
           variantAttrs: i._variantAttrs || null,
         }));
+      const mainPublisherParityItemTrace = importItems.flatMap((item, ordinal) => {
+        const supplyGoodsId = String(item._sourceItemId || '').trim();
+        if (!supplyGoodsId) return [];
+        const sourceSkuAlias = String(item._sourceVariantSku || '').trim();
+        return [{
+          ordinal,
+          supplyGoodsId,
+          ...(sourceSkuAlias ? { sourceSkuAlias } : {}),
+        }];
+      });
       const cleanItems = importItems.map((i) => {
         const {
           _variantAttrs,
@@ -5886,6 +6750,50 @@ export async function collectRoutes(app: FastifyInstance) {
         return rest;
       });
 
+      mainPublisherParityReport = await observePublisherParity({
+        endpoint: '/v3/product/import',
+        items: cleanItems,
+        supplyGoodsIds: items.map((item) => item.id),
+        itemTrace: mainPublisherParityItemTrace,
+      });
+      try {
+        await assertObservedLegacyPublish();
+      } catch (caught) {
+        if (body.jobId && caught instanceof SourceWorkflowLegacyPublishError) {
+          await upsertPublishOzonSyncJob({
+            jobId: body.jobId,
+            shopId: body.shopId,
+            status: 'FAILED',
+            finishedAt: new Date(),
+            payload: {
+              ...metadataRecord(existingPublishJob?.payload),
+              source: 'browser-one-click-listing',
+              stage: 'rollout_blocked',
+              sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+              ...(mainPublisherParityReport
+                ? { publisherEntrypointParity: mainPublisherParityReport }
+                : {}),
+              ...(fallbackPublisherParityForSharedJob
+                ? { fallbackPublisherEntrypointParity: fallbackPublisherParityForSharedJob }
+                : {}),
+              ...(fallbackTaskId !== null
+                ? {
+                    fallbackPublish: {
+                      taskId: fallbackTaskId,
+                      itemCount: fallbackCount,
+                      error: fallbackError,
+                    },
+                  }
+                : {}),
+              entry: body.source || 'collect-page',
+              mode,
+              sourceSkus: items.map((item) => item.sku).filter(Boolean),
+            },
+            errorMessage: caught.message,
+          }).catch(() => null);
+        }
+        return sendSourceWorkflowLegacyPublishError(reply, caught);
+      }
       const result = await client.importProducts(cleanItems);
       const taskId = result.result.task_id;
 
@@ -5956,6 +6864,22 @@ export async function collectRoutes(app: FastifyInstance) {
           publish: existingPublishPayload.publish || null,
         } : {}),
         entry: body.source || 'collect-page',
+        sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+        ...(mainPublisherParityReport
+          ? { publisherEntrypointParity: mainPublisherParityReport }
+          : {}),
+        ...(body.jobId && fallbackPublisherParityForSharedJob
+          ? { fallbackPublisherEntrypointParity: fallbackPublisherParityForSharedJob }
+          : {}),
+        ...(body.jobId && fallbackTaskId !== null
+          ? {
+              fallbackPublish: {
+                taskId: fallbackTaskId,
+                itemCount: fallbackCount,
+                error: fallbackError,
+              },
+            }
+          : {}),
         mode,
         followBrand,
         warehouseId: body.warehouseId ?? null,
@@ -6006,6 +6930,22 @@ export async function collectRoutes(app: FastifyInstance) {
             ...metadataRecord(existingPublishJob?.payload),
             source: 'browser-one-click-listing',
             stage: 'publish_failed',
+            sourceListingWorkflow: sourceListingCompatibilityMetadata(sourceListingCompatibility),
+            ...(mainPublisherParityReport
+              ? { publisherEntrypointParity: mainPublisherParityReport }
+              : {}),
+            ...(fallbackPublisherParityForSharedJob
+              ? { fallbackPublisherEntrypointParity: fallbackPublisherParityForSharedJob }
+              : {}),
+            ...(fallbackTaskId !== null
+              ? {
+                  fallbackPublish: {
+                    taskId: fallbackTaskId,
+                    itemCount: fallbackCount,
+                    error: fallbackError,
+                  },
+                }
+              : {}),
             entry: body.source || 'collect-page',
             mode,
             sourceSkus: items.map((i) => i.sku).filter(Boolean),
@@ -6482,104 +7422,394 @@ export async function collectRoutes(app: FastifyInstance) {
     const shopId = String(query.shopId || '').trim();
     if (!shopId) return reply.status(400).send({ code: 0, msg: '请选择 OZON 店铺' });
 
-    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
-    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
     const shop = await prisma.shop.findFirst({ where: { id: shopId, userId, platform: 'OZON' } });
     if (!shop || !shop.clientId || !shop.apiKeyEncrypted) return reply.status(400).send({ code: 0, msg: '店铺配置不完整' });
+    const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
+    if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
+    const shopCredentials = {
+      clientId: shop.clientId,
+      apiKeyEncrypted: shop.apiKeyEncrypted,
+    };
 
-    const signature = sourceCategorySignature(item);
-    const confirmedRows = await prisma.supplyGoods.findMany({
-      where: {
-        metadata: { path: ['sourceOzonCategoryConfirmed', 'signature'], equals: signature } as any,
-      },
-      select: { metadata: true },
-      take: 200,
-      orderBy: { updatedAt: 'desc' },
-    });
-    const confirmedMap = new Map<string, SourceOzonConfirmedMapping>();
-    for (const row of confirmedRows) {
-      const confirmed = metadataRecord(row.metadata).sourceOzonCategoryConfirmed;
-      if (!confirmed || typeof confirmed !== 'object' || Array.isArray(confirmed)) continue;
-      const categoryId = Number(confirmed.categoryId);
-      const typeId = Number(confirmed.typeId);
-      if (!Number.isFinite(categoryId) || !Number.isFinite(typeId) || categoryId <= 0 || typeId <= 0) continue;
-      const key = String(categoryId) + ':' + String(typeId);
-      const existing = confirmedMap.get(key);
-      confirmedMap.set(key, {
-        signature,
-        categoryId,
-        typeId,
-        categoryName: String(confirmed.categoryName || existing?.categoryName || ''),
-        typeName: String(confirmed.typeName || existing?.typeName || ''),
-        confirmations: (existing?.confirmations || 0) + 1,
-      });
-    }
-
-    const { OzonClient } = await import('../services/ozon-client.js');
-    const { decrypt } = await import('../lib/crypto.js');
-    const client = new OzonClient({ clientId: shop.clientId, apiKey: decrypt(shop.apiKeyEncrypted) });
+    let client: ReturnType<typeof createSourceWorkflowOzonClient> | null = null;
+    const loadClient = () => {
+      client ||= createSourceWorkflowOzonClient(shopCredentials);
+      return client;
+    };
     try {
-      const store = createPrismaOzonCategoryCatalogStore(prisma);
-      const enrichMissingTranslations = await createAiOzonCategoryTranslationEnricher();
-      const { categoryTree, categoryCatalog } = await loadSourceOzonCategoryCatalogForCandidates({
+      const readDecision = await featureFlags.evaluate('SOURCE_OZON_MAPPING_V2_READ', {
+        ownerUserId: userId,
         shopId,
-        store,
-        fetchTree: async () => client.getDescriptionCategoryTree({ language: 'DEFAULT' }),
-        ...(enrichMissingTranslations ? { enrichMissingTranslations } : {}),
+        platform: 'OZON',
       });
+      if (!readDecision.enabled && !readDecision.legacyAllowed) {
+        throw new SourceOzonCategoryRouteError(
+          'source_workflow_rollout_unavailable',
+          503,
+          'Ozon 类目映射读取策略暂不可用',
+        );
+      }
+
+      let catalogSnapshot: AuthoritativeOzonCategoryCatalogSnapshot;
+      try {
+        catalogSnapshot = await loadAuthoritativeOzonCategoryCatalog({
+          shopId,
+          fetchTree: async (language) => loadClient().getDescriptionCategoryTree({ language }),
+        });
+      } catch (error) {
+        const credentialError = findSourceWorkflowOzonCredentialsUnavailableError(error);
+        if (credentialError) throw credentialError;
+        throw new SourceOzonCategoryRouteError(
+          'ozon_category_catalog_unavailable',
+          503,
+          '当前 Ozon 官方类目目录不可用，请稍后重试',
+        );
+      }
+      if (!catalogSnapshot.catalogRevision || !Array.isArray(catalogSnapshot.entries)) {
+        throw new SourceOzonCategoryRouteError(
+          'ozon_category_catalog_invalid',
+          503,
+          '当前 Ozon 官方类目目录无效，请稍后重试',
+        );
+      }
+
+      let signature: string;
+      let canonicalContext: SourceOzonCategoryCanonicalContext | null = null;
+      let historyMode: 'v2' | 'legacy_tenant';
+      let confirmedMappings: SourceOzonConfirmedMapping[];
+      if (readDecision.enabled) {
+        if (!sourceOzonCategoryMappingService || !loadCanonicalSourceOzonCategoryContext) {
+          throw new SourceOzonCategoryRouteError(
+            'source_ozon_mapping_v2_unavailable',
+            503,
+            'Ozon 类目映射 V2 服务不可用',
+          );
+        }
+        canonicalContext = await loadCanonicalSourceOzonCategoryContext({
+          ownerUserId: userId,
+          supplyGoodsId: id,
+        });
+        if (!canonicalContext) {
+          throw new SourceOzonCategoryRouteError(
+            'source_capture_v2_required',
+            409,
+            '该商品缺少可验证的采集快照，请重新采集',
+          );
+        }
+        signature = deriveSourceOzonCategoryIdentity(canonicalContext.source).sourceSignature;
+        const visibleMappings = await sourceOzonCategoryMappingService.listVisibleMappings({
+          ownerUserId: userId,
+          source: canonicalContext.source,
+        });
+        const catalogByKey = new Map(catalogSnapshot.entries
+          .filter((entry) => entry.disabled !== true && entry.selectable !== false)
+          .map((entry) => [sourceOzonCategoryKey(entry.descriptionCategoryId, entry.typeId), entry]));
+        confirmedMappings = visibleMappings
+          .filter((mapping) => (
+            mapping.status === 'ACTIVE'
+            && mapping.sourceSignature === signature
+            && (
+              (mapping.scope === 'TENANT'
+                && mapping.scopeKey === `tenant:${userId}`
+                && mapping.ownerUserId === userId)
+              || (mapping.scope === 'GLOBAL'
+                && mapping.scopeKey === 'global'
+                && mapping.ownerUserId === null
+                && !!mapping.reviewedByUserId
+                && !!mapping.reviewedAt)
+            )
+          ))
+          .flatMap((mapping) => {
+            const catalog = catalogByKey.get(sourceOzonCategoryKey(mapping.targetCategoryId, mapping.targetTypeId));
+            return catalog ? [{
+              signature,
+              categoryId: mapping.targetCategoryId,
+              typeId: mapping.targetTypeId,
+              categoryName: catalog.categoryNameRu,
+              typeName: catalog.typeNameRu,
+              confirmations: mapping.confirmCount,
+              mappingId: mapping.id,
+              transitionVersion: mapping.transitionVersion,
+            }] : [];
+          });
+        historyMode = 'v2';
+      } else {
+        signature = sourceCategorySignature(item);
+        const confirmedRows = await prisma.supplyGoods.findMany({
+          where: sourceOzonLegacyConfirmedMappingWhere(userId, signature) as any,
+          select: { metadata: true },
+          take: 200,
+          orderBy: { updatedAt: 'desc' },
+        });
+        const confirmedMap = new Map<string, SourceOzonConfirmedMapping>();
+        for (const row of confirmedRows) {
+          const confirmed = metadataRecord(row.metadata).sourceOzonCategoryConfirmed;
+          if (!confirmed || typeof confirmed !== 'object' || Array.isArray(confirmed)) continue;
+          const categoryId = Number(confirmed.categoryId);
+          const typeId = Number(confirmed.typeId);
+          const target = selectableOfficialOzonCategoryTarget(catalogSnapshot, categoryId, typeId);
+          if (!target) continue;
+          const key = sourceOzonCategoryKey(categoryId, typeId);
+          const existing = confirmedMap.get(key);
+          confirmedMap.set(key, {
+            signature,
+            categoryId,
+            typeId,
+            categoryName: target.categoryName,
+            typeName: target.typeName,
+            confirmations: (existing?.confirmations || 0) + 1,
+            mappingId: null,
+            transitionVersion: 0,
+          });
+        }
+        confirmedMappings = Array.from(confirmedMap.values());
+        historyMode = 'legacy_tenant';
+      }
+
       const preliminary = buildSourceOzonCategoryCandidates({
         item,
-        categoryTree,
-        categoryCatalog,
-        confirmedMappings: Array.from(confirmedMap.values()),
+        sourceSignature: signature,
+        ...(canonicalContext ? { sourceProfile: canonicalContext.profile } : {}),
+        categoryTree: catalogSnapshot.categoryTree,
+        categoryCatalog: catalogSnapshot.entries,
+        confirmedMappings,
       });
       const attributesByCategory: Record<string, SourceStandardOzonAttributeDef[]> = {};
+      const attributeDefinitionStore = createPrismaOzonAttributeDefinitionCacheStore(prisma as any);
       for (const candidate of preliminary) {
         const key = String(candidate.categoryId) + ':' + String(candidate.typeId);
-        attributesByCategory[key] = await client.getDescriptionCategoryAttributes({
-          description_category_id: candidate.categoryId,
-          type_id: candidate.typeId,
-          language: 'DEFAULT',
-        });
+        try {
+          const result = await getCachedOzonAttributeDefinitions({
+            shopId,
+            descriptionCategoryId: candidate.categoryId,
+            typeId: candidate.typeId,
+            language: 'DEFAULT',
+            catalogRevision: catalogSnapshot.catalogRevision,
+          }, {
+            store: attributeDefinitionStore,
+            fetchDefinitions: () => loadClient().getDescriptionCategoryAttributes({
+              description_category_id: candidate.categoryId,
+              type_id: candidate.typeId,
+              language: 'DEFAULT',
+            }),
+          });
+          attributesByCategory[key] = result.definitions.map(toOzonCategoryAttributeDefinition);
+        } catch (error) {
+          if (error instanceof OzonAttributeDefinitionsRequiredError) throw error;
+          const credentialError = findSourceWorkflowOzonCredentialsUnavailableError(error);
+          if (credentialError) throw credentialError;
+          throw new SourceOzonCategoryRouteError(
+            'ozon_attribute_definitions_unavailable',
+            503,
+            `无法取得 Ozon 类目属性定义 ${candidate.categoryId}/${candidate.typeId}，请稍后重试`,
+          );
+        }
       }
       const candidates = buildSourceOzonCategoryCandidates({
         item,
-        categoryTree,
-        categoryCatalog,
-        confirmedMappings: Array.from(confirmedMap.values()),
+        sourceSignature: signature,
+        ...(canonicalContext ? { sourceProfile: canonicalContext.profile } : {}),
+        categoryTree: catalogSnapshot.categoryTree,
+        categoryCatalog: catalogSnapshot.entries,
+        confirmedMappings,
         attributesByCategory,
       });
-      return reply.send({ code: 1, msg: 'ok', data: { signature, candidates } });
-    } catch (e: any) {
-      return reply.send({ code: 0, msg: '生成类目候选失败: ' + (e.message?.slice(0, 200) || '未知') });
+      const mappingByKey = new Map(confirmedMappings.map((mapping) => [
+        sourceOzonCategoryKey(mapping.categoryId, mapping.typeId),
+        mapping,
+      ]));
+      for (const candidate of candidates) {
+        const mapping = mappingByKey.get(sourceOzonCategoryKey(candidate.categoryId, candidate.typeId));
+        candidate.mappingId = mapping?.mappingId || null;
+        candidate.transitionVersion = Math.max(0, Number(mapping?.transitionVersion) || 0);
+      }
+      return reply.send({
+        code: 1,
+        msg: 'ok',
+        data: {
+          signature,
+          sourceSnapshotId: canonicalContext?.source.snapshotId || null,
+          sourceProfileHash: canonicalContext?.source.profileHash || null,
+          catalogRevision: catalogSnapshot.catalogRevision,
+          historyMode,
+          candidates,
+        },
+      });
+    } catch (caught) {
+      return mappingRouteError(reply, caught);
     }
   });
 
   app.post('/:id/ozon-category-confirm', async (request, reply) => {
-    const { userId } = (request as any).user;
+    const auth = (request as any).user;
+    const userId = String(auth.userId || '').trim();
+    const actorUserId = String(auth.actorUserId || auth.userId || '').trim();
     const { id } = request.params as { id: string };
-    const body = request.body as { categoryId?: number; typeId?: number; categoryName?: string; typeName?: string; signature?: string };
-    const categoryId = Number(body.categoryId);
-    const typeId = Number(body.typeId);
-    if (!Number.isFinite(categoryId) || !Number.isFinite(typeId) || categoryId <= 0 || typeId <= 0) {
-      return reply.status(400).send({ code: 0, msg: '请选择有效的 Ozon 类目/type' });
+    const parsed = sourceOzonCategoryConfirmationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 0, msg: parsed.error.issues[0]?.message || '确认参数无效' });
+    }
+    const body = parsed.data;
+    const shop = await prisma.shop.findFirst({
+      where: { id: body.shopId, userId, platform: 'OZON' },
+    });
+    if (!shop || !shop.clientId || !shop.apiKeyEncrypted) {
+      return reply.status(400).send({ code: 0, msg: '店铺配置不完整' });
     }
     const item = await prisma.supplyGoods.findFirst({ where: { id, userId } });
     if (!item) return reply.status(404).send({ code: 0, msg: '商品不存在' });
-    const signature = String(body.signature || sourceCategorySignature(item));
-    const meta = metadataRecord(item.metadata);
-    meta.descriptionCategoryId = categoryId;
-    meta.typeId = typeId;
-    meta.sourceOzonCategoryConfirmed = {
-      signature,
-      categoryId,
-      typeId,
-      categoryName: String(body.categoryName || ''),
-      typeName: String(body.typeName || ''),
-      confirmedAt: new Date().toISOString(),
+    const shopCredentials = {
+      clientId: shop.clientId,
+      apiKeyEncrypted: shop.apiKeyEncrypted,
     };
-    await prisma.supplyGoods.update({ where: { id }, data: { metadata: meta as any } });
-    return reply.send({ code: 1, msg: '已确认 Ozon 类目', data: { id, signature, categoryId, typeId } });
+
+    let client: ReturnType<typeof createSourceWorkflowOzonClient> | null = null;
+    const loadClient = () => {
+      client ||= createSourceWorkflowOzonClient(shopCredentials);
+      return client;
+    };
+    try {
+      const writeDecision = await featureFlags.evaluate('SOURCE_OZON_MAPPING_V2_WRITE', {
+        ownerUserId: userId,
+        shopId: body.shopId,
+        platform: 'OZON',
+      });
+      if (!writeDecision.enabled && !writeDecision.legacyAllowed) {
+        throw new SourceOzonCategoryRouteError(
+          'source_workflow_rollout_unavailable',
+          503,
+          'Ozon 类目映射写入策略暂不可用',
+        );
+      }
+
+      let catalogSnapshot: AuthoritativeOzonCategoryCatalogSnapshot;
+      try {
+        catalogSnapshot = await loadAuthoritativeOzonCategoryCatalog({
+          shopId: body.shopId,
+          fetchTree: async (language) => loadClient().getDescriptionCategoryTree({ language }),
+        });
+      } catch (error) {
+        const credentialError = findSourceWorkflowOzonCredentialsUnavailableError(error);
+        if (credentialError) throw credentialError;
+        throw new SourceOzonCategoryRouteError(
+          'ozon_category_catalog_unavailable',
+          503,
+          '当前 Ozon 官方类目目录不可用，请稍后重试',
+        );
+      }
+      if (catalogSnapshot.catalogRevision !== body.expectedCatalogRevision) {
+        throw new SourceOzonCategoryRouteError(
+          'ozon_category_catalog_stale',
+          409,
+          'Ozon 类目目录已更新，请刷新候选后重试',
+        );
+      }
+      const target = selectableOfficialOzonCategoryTarget(
+        catalogSnapshot,
+        body.categoryId,
+        body.typeId,
+      );
+      if (!target) {
+        throw new SourceOzonCategoryRouteError(
+          'ozon_category_target_invalid',
+          422,
+          '所选 Ozon 类目/type 不在当前可用官方目录中',
+        );
+      }
+
+      let signature: string;
+      let sourceSnapshotId: string | null = null;
+      let sourceProfileHash: string | null = null;
+      let mappingId: string | null = null;
+      let transitionVersion = 0;
+      let confirmedAt = new Date().toISOString();
+      let idempotent = false;
+      if (writeDecision.enabled) {
+        if (!sourceOzonCategoryMappingService || !loadCanonicalSourceOzonCategoryContext) {
+          throw new SourceOzonCategoryRouteError(
+            'source_ozon_mapping_v2_unavailable',
+            503,
+            'Ozon 类目映射 V2 服务不可用',
+          );
+        }
+        const canonicalContext = await loadCanonicalSourceOzonCategoryContext({
+          ownerUserId: userId,
+          supplyGoodsId: id,
+        });
+        if (!canonicalContext) {
+          throw new SourceOzonCategoryRouteError(
+            'source_capture_v2_required',
+            409,
+            '该商品缺少可验证的采集快照，请重新采集',
+          );
+        }
+        const result = await sourceOzonCategoryMappingService.confirmTenantMapping({
+          ownerUserId: userId,
+          actorUserId,
+          expectedTransitionVersion: body.expectedTransitionVersion,
+          source: canonicalContext.source,
+          target,
+        });
+        signature = result.mapping.sourceSignature;
+        sourceSnapshotId = result.mapping.sourceSnapshotId;
+        sourceProfileHash = result.mapping.sourceProfileHash;
+        mappingId = result.mapping.id;
+        transitionVersion = result.mapping.transitionVersion;
+        confirmedAt = result.mapping.lastConfirmedAt || result.mapping.updatedAt;
+        idempotent = result.idempotent;
+      } else {
+        signature = sourceCategorySignature(item);
+      }
+
+      const metadataPatch = {
+        descriptionCategoryId: target.categoryId,
+        typeId: target.typeId,
+        sourceOzonCategoryConfirmed: {
+          version: writeDecision.enabled
+            ? 'source-ozon-category-confirmed/v2'
+            : 'source-ozon-category-confirmed/legacy-v1',
+          mappingId,
+          signature,
+          sourceSnapshotId,
+          sourceProfileHash,
+          categoryId: target.categoryId,
+          typeId: target.typeId,
+          categoryName: target.categoryName,
+          typeName: target.typeName,
+          catalogRevision: target.catalogRevision,
+          transitionVersion,
+          actorUserId,
+          confirmedAt,
+        },
+      };
+      await mergeSourceOzonCategoryMetadata({
+        ownerUserId: userId,
+        supplyGoodsId: id,
+        metadataPatch,
+      });
+      return reply.send({
+        code: 1,
+        msg: '已确认 Ozon 类目',
+        data: {
+          id,
+          signature,
+          sourceSnapshotId,
+          sourceProfileHash,
+          categoryId: target.categoryId,
+          typeId: target.typeId,
+          categoryName: target.categoryName,
+          typeName: target.typeName,
+          catalogRevision: target.catalogRevision,
+          mappingId,
+          transitionVersion,
+          confirmedAt,
+          idempotent,
+          metadataPatch,
+        },
+      });
+    } catch (caught) {
+      return mappingRouteError(reply, caught);
+    }
   });
 
   app.post('/resolve-type-id', async (request, reply) => {

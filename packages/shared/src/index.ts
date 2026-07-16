@@ -7,7 +7,8 @@ export * from './order-fulfillment-stage';
 export * from './source-standard-attributes';
 export * from './source-size-chart-template-catalog';
 export * from './source-rich-content-plan';
+export * from './source-product-capture';
 export * from './ozon-extension-sync-status';
 export * from './ozon-logistics-rules';
 export * from './ozon-logistics-validation';
-
+export * from './ozon-listing-draft';

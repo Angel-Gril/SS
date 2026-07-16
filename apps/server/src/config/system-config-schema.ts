@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { decrypt, encrypt } from '../lib/crypto.js';
 
+const sourceOzonPublisherEntrypointStage = z.enum(['off', 'shadow', 'v2']);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema 定义：所有 SystemConfig key 的类型、默认值、校验规则
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,6 +19,21 @@ export const SystemConfigSchema = {
   feature_announcement_popup: z.boolean().default(true),
   feature_sms_register: z.boolean().default(true),
   feature_turnstile_login: z.boolean().default(true),
+  feature_source_capture_v2: z.boolean().default(false),
+  feature_source_listing_workflow: z.boolean().default(false),
+  feature_source_ozon_mapping_v2_read: z.boolean().default(false),
+  feature_source_ozon_mapping_v2_write: z.boolean().default(false),
+  feature_source_ozon_publisher_v2: z.boolean().default(false),
+  source_ozon_publisher_collect_publish_stage: sourceOzonPublisherEntrypointStage.default('off'),
+  source_ozon_publisher_listing_batch_stage: sourceOzonPublisherEntrypointStage.default('off'),
+  source_ozon_publisher_listing_import_by_sku_stage: sourceOzonPublisherEntrypointStage.default('off'),
+  source_ozon_publisher_browser_one_click_stage: sourceOzonPublisherEntrypointStage.default('off'),
+  source_ozon_publisher_extension_adapter_stage: sourceOzonPublisherEntrypointStage.default('off'),
+  feature_source_network_capture: z.boolean().default(false),
+  feature_ai_media_workflow_v2: z.boolean().default(false),
+  feature_source_listing_web_media: z.boolean().default(false),
+  feature_source_listing_extension_workbench: z.boolean().default(false),
+  source_workflow_rollout_policy: z.string().max(100000).default('{}'),
 
   // ─── ai / translation ───
   ai_provider: z.enum(['disabled', 'custom']).default('disabled'),
@@ -132,6 +149,7 @@ export const SystemConfigSchema = {
   retention_cainiao_bound_days: z.number().int().min(1).max(3650).default(180),
   retention_sync_success_days: z.number().int().min(1).max(365).default(30),
   retention_sync_failed_days: z.number().int().min(1).max(3650).default(180),
+  retention_ozon_publisher_parity_days: z.number().int().min(30).max(3650).default(180),
   retention_notification_read_days: z.number().int().min(1).max(3650).default(90),
   retention_notification_unread_days: z.number().int().min(1).max(3650).default(365),
   retention_temp_images_days: z.number().int().min(1).max(365).default(30),
@@ -244,6 +262,81 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     group: 'auth',
     description: '云端模式登录/发送短信时是否要求 Cloudflare Turnstile 人机验证',
   },
+  feature_source_capture_v2: {
+    label: '来源采集 V2',
+    group: 'feature',
+    description: '启用证据化来源商品采集契约；rollout policy 可分阶段影子写、双读或切换为 V2-only',
+  },
+  feature_source_listing_workflow: {
+    label: '来源商品草稿工作流',
+    group: 'feature',
+    description: '启用版本化来源商品草稿；具体租户由 rollout policy 控制',
+  },
+  feature_source_ozon_mapping_v2_read: {
+    label: '来源类目映射 V2 读取',
+    group: 'feature',
+    description: '从租户隔离、已审核的来源类目映射表读取推荐历史；关闭时保留兼容读取路径',
+  },
+  feature_source_ozon_mapping_v2_write: {
+    label: '来源类目映射 V2 写入',
+    group: 'feature',
+    description: '将服务端校验后的类目确认写入可审计映射表；可独立于读取开关进行影子写入',
+  },
+  feature_source_ozon_publisher_v2: {
+    label: '来源商品发布 V2',
+    group: 'feature',
+    description: '启用统一 Ozon 发布边界并阻止命中试点的旧发布路径',
+  },
+  source_ozon_publisher_collect_publish_stage: {
+    label: '采集页 Ozon 发布入口阶段',
+    group: 'feature',
+    description: 'off 使用旧入口；shadow 使用旧入口并记录差异；v2 仅在精确版本证据门禁通过后允许切换',
+  },
+  source_ozon_publisher_listing_batch_stage: {
+    label: '批量上架入口阶段',
+    group: 'feature',
+    description: 'off 使用旧入口；shadow 使用旧入口并记录差异；v2 仅在精确版本证据门禁通过后允许切换',
+  },
+  source_ozon_publisher_listing_import_by_sku_stage: {
+    label: 'SKU 跟卖入口阶段',
+    group: 'feature',
+    description: 'off 使用旧入口；shadow 使用旧入口并记录差异；v2 仅在精确版本证据门禁通过后允许切换',
+  },
+  source_ozon_publisher_browser_one_click_stage: {
+    label: '浏览器一键上架入口阶段',
+    group: 'feature',
+    description: 'off 使用旧入口；shadow 使用旧入口并记录差异；v2 仅在精确版本证据门禁通过后允许切换',
+  },
+  source_ozon_publisher_extension_adapter_stage: {
+    label: '扩展发布适配器阶段',
+    group: 'feature',
+    description: 'off 使用旧入口；shadow 使用旧入口并记录差异；v2 仅在精确版本证据门禁通过后允许切换',
+  },
+  feature_source_network_capture: {
+    label: '国内平台网络证据采集',
+    group: 'feature',
+    description: '启用 PDD、淘宝和天猫的被动网络证据采集',
+  },
+  feature_ai_media_workflow_v2: {
+    label: '来源商品 AI 媒体工作流',
+    group: 'feature',
+    description: '启用来源商品的持久化 AI 媒体工作流',
+  },
+  feature_source_listing_web_media: {
+    label: '来源商品 Web 工作台',
+    group: 'feature',
+    description: '启用来源商品到 Ozon 的 Web 工作台',
+  },
+  feature_source_listing_extension_workbench: {
+    label: '来源商品扩展工作台',
+    group: 'feature',
+    description: '启用来源页面内的扩展工作台',
+  },
+  source_workflow_rollout_policy: {
+    label: '来源工作流发布策略',
+    group: 'feature',
+    description: '按 owner、shop、device 和 platform 控制 off、pilot 或 global；采集使用 stage，草稿工作流使用 listingStage',
+  },
 
   ai_provider: {
     label: 'AI 服务来源',
@@ -313,10 +406,10 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     description: '允许普通用户生成商品标题/描述草稿，受每日额度限制',
   },
   ai_image_generation_enabled: {
-    label: 'AI 生图/改图预留',
+    label: 'AI 文生图',
     group: 'ai',
     description:
-      '预留开关：当前只保存配置，不触发真实生图/改图；后续接入 API 或 skill 后受每日额度限制',
+      '允许普通用户创建真实文生图任务，受 Provider 配置、每日额度和全局预算限制',
   },
   ai_category_translation_prompt: {
     label: '类目翻译提示词',
@@ -336,17 +429,17 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   ai_image_provider: {
     label: '生图服务来源',
     group: 'ai',
-    description: 'disabled 表示关闭；custom 表示自定义生图/改图接口',
+    description: 'disabled 表示关闭；当前已接入 DashScope Wanx 与 OpenAI Images 文生图接口',
   },
   ai_image_base_url: {
     label: '生图 Base URL',
     group: 'ai',
-    description: '生图或改图服务接口地址；不同供应商可填自定义网关',
+    description: '生图服务接口地址；不同供应商可填自定义网关',
   },
   ai_image_api_key: {
     label: '生图 API Key',
     group: 'ai',
-    description: '生图/改图服务访问密钥',
+    description: '生图服务访问密钥',
     sensitive: true,
     encrypted: true,
   },
@@ -356,14 +449,14 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     description: '例如 minimax image 模型、自定义网关模型 ID',
   },
   ai_image_prompt: {
-    label: '生图/改图提示词预留',
+    label: '旧版生图提示词（兼容）',
     group: 'ai',
-    description: '预留提示词：后续图片生成/重绘 API 或 skill 编排会读取这里',
+    description: '仅用于首次初始化版本化模板；管理员界面不再直接编辑此项',
   },
   ai_user_daily_image_generation_limit: {
     label: '用户每日生图额度',
     group: 'ai',
-    description: '普通用户每日可触发的新生图/改图调用次数；缓存命中不扣额度',
+    description: '普通用户每日可触发的新文生图调用次数；缓存命中不扣额度',
   },
 
   auth_human_challenge_provider: {
@@ -623,6 +716,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '失败同步任务保留天数',
     group: 'retention',
     description: '状态为 FAILED 的 SyncJob 记录保留天数（便于排查问题）',
+  },
+  retention_ozon_publisher_parity_days: {
+    label: 'Ozon 发布影子观测保留天数',
+    group: 'retention',
+    description: '脱敏的旧版/V2 发布载荷对比观测保留天数；差异审批与决策事件不会随观测清理',
   },
   retention_notification_read_days: {
     label: '已读通知保留天数',

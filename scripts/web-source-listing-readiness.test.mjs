@@ -93,12 +93,32 @@ function item(overrides = {}) {
       ['description', 'auto'],
       ['category', 'auto'],
       ['gender', 'auto'],
-      ['originCountry', 'auto'],
+      ['originCountry', 'manual'],
       ['package', 'auto'],
     ],
   );
-  assert.ok(diagnostics.find((row) => row.key === 'originCountry')?.value.includes('Китай'));
+  const originCountry = diagnostics.find((row) => row.key === 'originCountry');
+  assert.equal(originCountry?.value, '未确认');
+  assert.match(originCountry?.evidence || '', /不能根据货源平台或卖家所在地推断/);
+  assert.match(originCountry?.action || '', /人工确认原产国并选择官方字典值/);
   assert.ok(diagnostics.find((row) => row.key === 'package')?.evidence.includes('120g'));
+}
+
+{
+  const diagnostics = readiness.evaluateSourceListingFieldDiagnostics(item({
+    metadata: {
+      ...item().metadata,
+      sourceAttributes: [
+        ...item().metadata.sourceAttributes,
+        { name: '原产国', value: '中国' },
+      ],
+    },
+  }));
+  const originCountry = diagnostics.find((row) => row.key === 'originCountry');
+  assert.equal(originCountry?.status, 'auto');
+  assert.equal(originCountry?.confidence, 'strong');
+  assert.equal(originCountry?.value, '中国');
+  assert.match(originCountry?.action || '', /核对并匹配官方字典/);
 }
 
 {

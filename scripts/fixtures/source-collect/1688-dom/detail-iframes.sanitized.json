@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000007.html",
+  "observedAt": "2026-07-15T00:10:00.000Z",
+  "document": {
+    "queries": {
+      "#detail iframe, .content-detail iframe, .detail-description-content iframe, .offer-detail-description iframe, iframe[src*='detail'], iframe[src*='desc']": [
+        {
+          "fixtureId": "same-origin-detail",
+          "attrs": { "src": "https://detail.1688.com/offer/frame/detail/index.html" },
+          "contentDocument": {
+            "locationHref": "https://detail.1688.com/offer/frame/detail/index.html",
+            "queries": {
+              "img": [
+                { "attrs": { "data-src": "../images/frame-a.jpg" } },
+                { "attrs": { "data-lazyload-src": "./frame-b.webp" } }
+              ]
+            }
+          }
+        },
+        {
+          "fixtureId": "cross-origin-detail",
+          "attrs": { "src": "https://foreign.example.net/detail/frame.html" },
+          "throwOnContentDocumentAccess": true
+        }
+      ]
+    }
+  },
+  "expected": {
+    "sameOriginImages": [
+      "https://detail.1688.com/offer/frame/images/frame-a.jpg",
+      "https://detail.1688.com/offer/frame/detail/frame-b.webp"
+    ],
+    "sameOriginReads": 1,
+    "crossOriginReads": 0
+  }
+}

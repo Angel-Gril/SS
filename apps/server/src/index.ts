@@ -16,6 +16,9 @@ import { orderAnalyticsRoutes } from './routes/order/analytics.js';
 import { financeRoutes } from './routes/finance.js';
 import { inventoryRoutes } from './routes/inventory.js';
 import { listingRoutes } from './routes/listing.js';
+import { sourceCaptureViewRoutes } from './routes/source-capture-views.js';
+import { sourceListingPublisherRoutes } from './routes/source-listing-publisher.js';
+import { sourceListingWorkflowRoutes } from './routes/source-listing-workflows.js';
 import { noticeRoutes } from './routes/notice.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { dashboardContentRoutes } from './routes/dashboard-content.js';
@@ -25,7 +28,10 @@ import { issueRoutes } from './routes/issue.js';
 import { supplyRoutes } from './routes/supply.js';
 import { staffRoutes } from './routes/staff.js';
 import { notificationRoutes } from './routes/notification.js';
-import { collectRoutes } from './routes/collect.js';
+import {
+  collectRoutes,
+  type CollectRoutesOptions,
+} from './routes/collect.js';
 import { ozonAnalyticsRoutes } from './routes/ozon-analytics.js';
 import { ozonSyncRoutes } from './routes/ozon-sync.js';
 import { warehouseRoutes } from './routes/warehouse.js';
@@ -62,11 +68,88 @@ import { systemStatusRoutes } from './routes/system-status.js';
 import { opsRoutes } from './routes/ops.js';
 import { sourceCandidateRoutes } from './routes/source-candidates.js';
 import { aiImageRoutes } from './routes/ai-images.js';
+import { adminAiPromptTemplateRoutes } from './routes/admin-ai-prompt-templates.js';
+import { adminOzonPublisherParityRoutes } from './routes/admin-ozon-publisher-parity.js';
+import { adminOzonPublisherRolloutRoutes } from './routes/admin-ozon-publisher-rollout.js';
+import {
+  aiPromptTemplateRegistry,
+  resolveActiveAiPrompt,
+} from './services/ai-prompt-template-registry.js';
+import { createOzonPublisherRolloutAdminService } from './services/ozon-publisher-rollout-admin.js';
+import { createPrismaOzonPublisherRolloutAdminRepository } from './services/ozon-publisher-rollout-admin-prisma.js';
+import { loadPrismaOzonPublisherRolloutControlSnapshot } from './services/ozon-publisher-rollout-control.js';
 import { extensionDeviceRoutes } from './routes/extension-device.js';
+import {
+  createSourceWorkflowCommandResolver,
+  extensionCommandGrantRoutes,
+} from './routes/extension-command-grants.js';
+import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
+import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
+import { createSourceListingWorkflowService } from './services/source-listing-workflow.js';
+import { createPrismaSourceListingWorkflowRepository } from './services/source-listing-workflow-prisma.js';
+import { createPrismaSourceListingWorkflowContextResolver } from './services/source-listing-workflow-context.js';
+import { createSourceListingWorkflowCategoryValidator } from './services/source-listing-workflow-category.js';
+import { createSourceListingWorkflowAttributeService } from './services/source-listing-workflow-attributes.js';
+import {
+  createSourceWorkflowOzonClient,
+  findSourceWorkflowOzonCredentialsUnavailableError,
+} from './services/source-workflow-ozon-client.js';
+import { createSourceListingMediaImportService } from './services/source-listing-media-import.js';
+import { createPrismaSourceListingMediaImportStore } from './services/source-listing-media-import-prisma.js';
+import { getStorageBackend } from './services/image-storage.js';
+import {
+  createPrismaOzonAttributeDefinitionCacheStore,
+  getCachedOzonAttributeDefinitions,
+} from './services/ozon-attribute-definition-cache.js';
+import {
+  createPrismaOzonAttributeDictionaryCacheStore,
+  getCachedOzonAttributeValues,
+} from './services/ozon-attribute-dictionary-cache.js';
+import { buildOzonAttributeSchema } from './services/ozon-attribute-schema.js';
+import { sourceStandardDictionaryAliases } from './services/source-standard-dictionary-aliases.js';
+import type { SourceProductProfile } from './services/source-product-profile.js';
+import { buildSourceListingAttributeSourceContext } from './services/source-listing-workflow-source-context.js';
+import { createSourceCaptureService } from './services/source-capture.js';
+import { createPrismaSourceCaptureRepository } from './services/source-capture-prisma.js';
+import { createSourceCaptureViewService } from './services/source-capture-view.js';
+import {
+  createSourceOzonCategoryMappingService,
+  PrismaSourceOzonCategoryMappingRepository,
+} from './services/source-ozon-category-mapping.js';
+import {
+  createSourceOzonCategoryContextLoader,
+  PrismaSourceOzonCategoryContextRepository,
+} from './services/source-ozon-category-context.js';
+import {
+  createPrismaOzonCategoryCatalogSnapshotStore,
+  getOrRefreshOzonCategoryCatalogSnapshotForShop,
+} from './services/ozon-category-catalog.js';
+import type { OzonClient, OzonImportItem } from './services/ozon-client.js';
+import { createOzonListingPublisher } from './services/ozon-listing-publisher.js';
+import { createPrismaOzonPublishAttemptRepository } from './services/ozon-publish-attempt-prisma.js';
+import {
+  createOzonListingProductionCompileAdapter,
+  type OzonListingProductionCompileAdapterOptions,
+} from './services/ozon-listing-production-compile-adapter.js';
+import { createOzonPublisherEntrypointParityObserver } from './services/ozon-publisher-entrypoint-parity-shadow.js';
+import { createPrismaOzonPublisherRolloutRecorder } from './services/ozon-publisher-rollout-recorder.js';
+import { createOzonPublisherParityObservationService } from './services/ozon-publisher-parity-observations.js';
+import { createPrismaOzonPublisherParityObservationRepository } from './services/ozon-publisher-parity-prisma.js';
+import { getConfig } from './config/system-config-schema.js';
+import { runOzonPublishReconciliationTick } from './services/ozon-publish-reconciliation.js';
+import type { OzonListingDraft, SourceProductCaptureV2 } from 'shared';
 import { createExtensionDeviceSessionService } from './services/extension-device-session.js';
 import { createPrismaExtensionDeviceSessionRepository } from './services/extension-device-session-prisma.js';
 import {
+  createExtensionCommandGrantService,
+  resolveExtensionCommandGrantSecret,
+} from './services/extension-command-grants.js';
+import {
+  createPrismaExtensionCommandGrantStore,
+} from './services/extension-command-grants-prisma.js';
+import {
   authenticateExtensionDevice,
+  isExtensionDeviceAuthEnabled,
   isLogisticsDistributionEnabled,
   resolveExtensionDeviceAuthConfig,
 } from './lib/extension-device-auth.js';
@@ -107,6 +190,15 @@ const app = Fastify({
   trustProxy: process.env.NODE_ENV === 'production',
   logger: {
     level: process.env.LOG_LEVEL || 'info',
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.x-ss-erp-command-grant',
+        'headers.authorization',
+        'headers.x-ss-erp-command-grant',
+      ],
+      censor: '[REDACTED]',
+    },
     transport:
       process.env.NODE_ENV !== 'production'
         ? { target: 'pino-pretty', options: { colorize: true } }
@@ -173,15 +265,456 @@ app.get('/ready', async (_request, reply) => {
 });
 
 await app.register(authRoutes, { prefix: '/api/auth' });
-if (isLogisticsDistributionEnabled()) {
-  const extensionDeviceRepository = createPrismaExtensionDeviceSessionRepository();
+const sourceOzonCategoryMappingService = createSourceOzonCategoryMappingService({
+  repository: new PrismaSourceOzonCategoryMappingRepository(prisma),
+});
+const sourceOzonCategoryContextLoader = createSourceOzonCategoryContextLoader({
+  repository: new PrismaSourceOzonCategoryContextRepository(prisma),
+});
+const sourceOzonCategoryCatalogSnapshotStore = createPrismaOzonCategoryCatalogSnapshotStore(prisma);
+const loadCanonicalSourceOzonCategoryContext: NonNullable<CollectRoutesOptions['loadCanonicalSourceOzonCategoryContext']> =
+  (input) => sourceOzonCategoryContextLoader.load(input);
+const loadAuthoritativeOzonCategoryCatalog: NonNullable<CollectRoutesOptions['loadAuthoritativeOzonCategoryCatalog']> =
+  async ({ shopId, fetchTree }) => {
+    let result: Awaited<ReturnType<typeof getOrRefreshOzonCategoryCatalogSnapshotForShop>>;
+    try {
+      result = await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId }, {
+        store: sourceOzonCategoryCatalogSnapshotStore,
+        fetchTree,
+      });
+    } catch (error) {
+      const credentialError = findSourceWorkflowOzonCredentialsUnavailableError(error);
+      if (credentialError) throw credentialError;
+      throw error;
+    }
+    const { snapshot } = result;
+    if (!snapshot.authoritative || snapshot.stale) {
+      const credentialError = findSourceWorkflowOzonCredentialsUnavailableError(result.refreshCause);
+      if (credentialError) throw credentialError;
+      throw new Error('Current Ozon category catalog snapshot is not authoritative');
+    }
+    return {
+      entries: snapshot.entries,
+      categoryTree: [],
+      catalogRevision: snapshot.revision,
+    };
+  };
+const sourceListingWorkflowService = createSourceListingWorkflowService({
+  repository: createPrismaSourceListingWorkflowRepository({ client: prisma as never }),
+});
+const sourceListingWorkflowContext = createPrismaSourceListingWorkflowContextResolver({
+  client: prisma,
+});
+const sourceListingMediaImportStore = createPrismaSourceListingMediaImportStore(prisma);
+const sourceListingMediaImportService = createSourceListingMediaImportService({
+  ...sourceListingMediaImportStore,
+  getStorageBackend,
+});
+const sourceListingAttributeDefinitionStore = createPrismaOzonAttributeDefinitionCacheStore(prisma);
+const sourceListingAttributeDictionaryStore = createPrismaOzonAttributeDictionaryCacheStore(prisma);
+const sourceListingOzonClientCache = new Map<string, { client: OzonClient; expiresAt: number }>();
+
+async function loadOwnedSourceListingOzonClient(ownerUserId: string, shopId: string): Promise<OzonClient> {
+  const cacheKey = `${ownerUserId}:${shopId}`;
+  const cached = sourceListingOzonClientCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.client;
+  const shop = await prisma.shop.findFirst({
+    where: {
+      id: shopId,
+      userId: ownerUserId,
+      platform: 'OZON',
+      status: 'ACTIVE',
+    },
+    select: { clientId: true, apiKeyEncrypted: true },
+  });
+  if (!shop?.clientId || !shop.apiKeyEncrypted) {
+    throw Object.assign(new Error('Owned active Ozon shop was not found'), {
+      code: 'SOURCE_LISTING_SHOP_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+  const client = createSourceWorkflowOzonClient({
+    clientId: shop.clientId,
+    apiKeyEncrypted: shop.apiKeyEncrypted,
+  });
+  sourceListingOzonClientCache.set(cacheKey, { client, expiresAt: Date.now() + 60_000 });
+  return client;
+}
+
+const sourceListingWorkflowCategoryValidator = createSourceListingWorkflowCategoryValidator({
+  loadCatalog: async ({ ownerUserId, shopId }) => {
+    const catalog = await loadAuthoritativeOzonCategoryCatalog({
+      shopId,
+      fetchTree: async (language) => (
+        await loadOwnedSourceListingOzonClient(ownerUserId, shopId)
+      ).getDescriptionCategoryTree({ language }),
+    });
+    return { revision: catalog.catalogRevision, entries: catalog.entries };
+  },
+});
+
+async function loadSourceListingAttributeSourceContext(input: {
+  ownerUserId: string;
+  draft: OzonListingDraft;
+}) {
+  const snapshot = await prisma.sourceCaptureSnapshot.findFirst({
+    where: {
+      id: input.draft.sourceCaptureSnapshotId,
+      subject: { ownerUserId: input.ownerUserId },
+    },
+    select: { profile: true, payload: true },
+  });
+  if (!snapshot) {
+    throw Object.assign(new Error('Owned source capture snapshot was not found'), {
+      code: 'SOURCE_LISTING_SNAPSHOT_NOT_FOUND',
+      statusCode: 404,
+    });
+  }
+  return buildSourceListingAttributeSourceContext({
+    capture: snapshot.payload as unknown as SourceProductCaptureV2,
+    sourceProfile: snapshot.profile as unknown as SourceProductProfile,
+    selectedSkuKeys: input.draft.selectedSkuKeys,
+  });
+}
+
+function throwShadowAuthorityUnavailable(): never {
+  throw Object.assign(new Error('Cached Ozon publish authority is unavailable'), {
+    code: 'OZON_LISTING_SHADOW_AUTHORITY_UNAVAILABLE',
+  });
+}
+
+const sourceListingWorkflowAttributeService = createSourceListingWorkflowAttributeService({
+  loadSchema: async ({ ownerUserId, draft, category, freshness }) => {
+    await sourceListingWorkflowCategoryValidator.validate({
+      ownerUserId,
+      shopId: draft.shopId,
+      category,
+    });
+    const cacheKey = {
+      shopId: draft.shopId,
+      descriptionCategoryId: category.categoryId,
+      typeId: category.typeId,
+      language: 'DEFAULT',
+      catalogRevision: category.catalogRevision,
+    };
+    const definitions = await getCachedOzonAttributeDefinitions(cacheKey, {
+      store: sourceListingAttributeDefinitionStore,
+      forceRefresh: freshness === 'OFFICIAL_REFRESH_REQUIRED',
+      fetchDefinitions: async () => (
+        await loadOwnedSourceListingOzonClient(ownerUserId, draft.shopId)
+      ).getDescriptionCategoryAttributes({
+          description_category_id: category.categoryId,
+          type_id: category.typeId,
+          language: 'DEFAULT',
+        }),
+    });
+    return buildOzonAttributeSchema({ cacheKey, definitionCache: definitions });
+  },
+  loadDictionary: async ({ ownerUserId, draft, schema, field, freshness }) => {
+    const dictionary = await getCachedOzonAttributeValues({
+      description_category_id: schema.descriptionCategoryId,
+      type_id: schema.typeId,
+      attribute_id: field.attributeId,
+      language: schema.language,
+      catalogRevision: schema.catalogRevision,
+    }, {
+      store: sourceListingAttributeDictionaryStore,
+      forceRefresh: freshness === 'OFFICIAL_REFRESH_REQUIRED',
+      fetchPage: async (params) => (
+        await loadOwnedSourceListingOzonClient(ownerUserId, draft.shopId)
+      ).getAttributeValuesPage({
+          description_category_id: params.description_category_id,
+          type_id: params.type_id,
+          attribute_id: params.attribute_id,
+          language: params.language,
+          last_value_id: params.last_value_id,
+          limit: params.limit,
+        }),
+    });
+    return {
+      complete: dictionary.complete === true,
+      values: dictionary.values,
+      source: dictionary.source,
+      ...(dictionary.warning ? { warning: dictionary.warning } : {}),
+    };
+  },
+  loadSourceContext: loadSourceListingAttributeSourceContext,
+  dictionaryAliases: sourceStandardDictionaryAliases,
+});
+const sourceListingShadowAttributeService = createSourceListingWorkflowAttributeService({
+  loadSchema: async ({ draft, category }) => {
+    const cacheKey = {
+      shopId: draft.shopId,
+      descriptionCategoryId: category.categoryId,
+      typeId: category.typeId,
+      language: 'DEFAULT',
+      catalogRevision: category.catalogRevision,
+    };
+    const definitions = await getCachedOzonAttributeDefinitions(cacheKey, {
+      store: sourceListingAttributeDefinitionStore,
+      fetchDefinitions: async () => throwShadowAuthorityUnavailable(),
+    });
+    if (definitions.source !== 'cache'
+      || definitions.complete !== true
+      || definitions.warning) {
+      throwShadowAuthorityUnavailable();
+    }
+    return buildOzonAttributeSchema({ cacheKey, definitionCache: definitions });
+  },
+  loadDictionary: async ({ schema, field }) => {
+    const dictionary = await getCachedOzonAttributeValues({
+      description_category_id: schema.descriptionCategoryId,
+      type_id: schema.typeId,
+      attribute_id: field.attributeId,
+      language: schema.language,
+      catalogRevision: schema.catalogRevision,
+    }, {
+      store: sourceListingAttributeDictionaryStore,
+      fetchPage: async () => throwShadowAuthorityUnavailable(),
+    });
+    if (dictionary.source !== 'cache'
+      || dictionary.complete !== true
+      || dictionary.warning) {
+      throwShadowAuthorityUnavailable();
+    }
+    return {
+      complete: true,
+      values: dictionary.values,
+      source: dictionary.source,
+    };
+  },
+  loadSourceContext: loadSourceListingAttributeSourceContext,
+  dictionaryAliases: sourceStandardDictionaryAliases,
+});
+const sourceOzonPublishAttemptRepository = createPrismaOzonPublishAttemptRepository({
+  client: prisma as never,
+});
+const sourceOzonPublisherParityObservationRepository =
+  createPrismaOzonPublisherParityObservationRepository({ client: prisma as never });
+const sourceOzonPublisherParityObservationService =
+  createOzonPublisherParityObservationService({
+    repository: sourceOzonPublisherParityObservationRepository,
+  });
+const sourceOzonPublisherRolloutRecorder = createPrismaOzonPublisherRolloutRecorder({
+  client: prisma as never,
+});
+const ozonPublisherRolloutAdminService = createOzonPublisherRolloutAdminService({
+  repository: createPrismaOzonPublisherRolloutAdminRepository({
+    client: prisma as never,
+    loadControlSnapshot: (tx, input) => loadPrismaOzonPublisherRolloutControlSnapshot(
+      tx as never,
+      input,
+    ),
+  }),
+});
+const sourceOzonListingCompileAuthorityLoaders: Pick<
+  OzonListingProductionCompileAdapterOptions,
+  'loadOwnedCapture' | 'loadCurrentCatalogAuthority' | 'loadOwnedMediaAssets'
+> = {
+  loadOwnedCapture: async ({ ownerUserId, snapshotId }) => {
+    const snapshot = await prisma.sourceCaptureSnapshot.findFirst({
+      where: { id: snapshotId, subject: { ownerUserId } },
+      select: {
+        id: true,
+        captureHash: true,
+        payload: true,
+        subject: { select: { ownerUserId: true } },
+      },
+    });
+    if (!snapshot) return null;
+    return {
+      snapshotId: snapshot.id,
+      ownerUserId: snapshot.subject.ownerUserId,
+      captureHash: snapshot.captureHash,
+      capture: snapshot.payload as unknown as SourceProductCaptureV2,
+    };
+  },
+  loadCurrentCatalogAuthority: async ({ ownerUserId, shopId }) => {
+    const ownedShop = await prisma.shop.findFirst({
+      where: { id: shopId, userId: ownerUserId, platform: 'OZON', status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (!ownedShop) return null;
+    const snapshot = await sourceOzonCategoryCatalogSnapshotStore.find(shopId);
+    if (!snapshot) return null;
+    const current = await prisma.ozonCategoryCatalogSnapshot.findFirst({
+      where: { shopId, revision: snapshot.revision, isCurrent: true },
+      select: { id: true },
+    });
+    if (!current) return null;
+    return { snapshotId: current.id, shopId, snapshot };
+  },
+  loadOwnedMediaAssets: ({ ownerUserId, assetIds }) => prisma.mediaAsset.findMany({
+    where: { ownerUserId, id: { in: assetIds } },
+    select: {
+      id: true,
+      ownerUserId: true,
+      url: true,
+      storageBackend: true,
+      storageKey: true,
+      mimeType: true,
+    },
+  }),
+};
+const sourceOzonListingProductionCompile = createOzonListingProductionCompileAdapter({
+  ...sourceOzonListingCompileAuthorityLoaders,
+  loadAuthoritativeValidation: ({ ownerUserId, draft }) => (
+    sourceListingWorkflowAttributeService.validateAuthoritative({ ownerUserId, draft })
+  ),
+});
+const sourceOzonListingShadowCompile = createOzonListingProductionCompileAdapter({
+  ...sourceOzonListingCompileAuthorityLoaders,
+  loadAuthoritativeValidation: ({ ownerUserId, draft }) => (
+    sourceListingShadowAttributeService.validateAuthoritative({ ownerUserId, draft })
+  ),
+});
+const sourceOzonPublisherEntrypointParityObserver = createOzonPublisherEntrypointParityObserver({
+  beginAttempt: (input) => sourceOzonPublisherRolloutRecorder.begin(input),
+  failAttempt: (input) => sourceOzonPublisherRolloutRecorder.fail(input),
+  loadDraft: ({ draftId, ownerUserId }) => sourceListingWorkflowService.getDraft({
+    draftId,
+    ownerUserId,
+  }),
+  loadSkuAliases: async ({ ownerUserId, draft }) => {
+    const snapshot = await prisma.sourceCaptureSnapshot.findFirst({
+      where: {
+        id: draft.sourceCaptureSnapshotId,
+        subject: { ownerUserId },
+      },
+      select: { payload: true },
+    });
+    const capture = snapshot?.payload as unknown as SourceProductCaptureV2 | undefined;
+    if (!capture || capture.captureVersion !== 'source-product-capture-v2' || !Array.isArray(capture.skus)) {
+      return [];
+    }
+    if (capture.skus.length === 0) {
+      return [{
+        skuKey: draft.selectedSkuKeys[0] || '',
+        aliases: [draft.selectedSkuKeys[0] || ''],
+      }];
+    }
+    return capture.skus.map((sku) => ({
+      skuKey: sku.key,
+      aliases: [sku.key, sku.sourceSkuId || ''].filter(Boolean),
+    }));
+  },
+  compile: sourceOzonListingShadowCompile,
+  record: async (diagnostic) => {
+    const retentionDays = await getConfig('retention_ozon_publisher_parity_days');
+    const stored = await sourceOzonPublisherParityObservationService.recordObservation({
+      scopeHash: diagnostic.scopeHash,
+      rolloutRevision: diagnostic.rolloutRevision,
+      report: diagnostic.report,
+      eligibleAttemptKey: diagnostic.eligibleAttemptKey,
+      retentionDays,
+    });
+    if (diagnostic.eligibleAttemptKey) {
+      await sourceOzonPublisherRolloutRecorder.complete({
+        eligibleAttemptKey: diagnostic.eligibleAttemptKey,
+        observation: stored.observation,
+      });
+    }
+    app.log.info({
+      ozonPublisherEntrypointParity: {
+        observationId: stored.observation.id,
+        created: stored.created,
+        entrypoint: stored.observation.entrypoint,
+        status: stored.observation.report.status,
+        classification: stored.observation.report.classification,
+        differenceSubjectKey: stored.observation.differenceSubjectKey,
+      },
+    }, 'Ozon publisher parity observed');
+  },
+  warn: (message) => app.log.warn(message),
+});
+const sourceOzonPublisherInstanceId = String(
+  process.env.INSTANCE_ID || process.env.HOSTNAME || process.env.COMPUTERNAME || 'server',
+).normalize('NFKC').trim().slice(0, 80) || 'server';
+const sourceOzonListingPublisher = createOzonListingPublisher({
+  workflow: sourceListingWorkflowService,
+  attempts: sourceOzonPublishAttemptRepository,
+  compile: sourceOzonListingProductionCompile,
+  submitImportOnce: async ({ ownerUserId, shopId, requestPayload }) => {
+    if (!Array.isArray(requestPayload.items)) {
+      throw new Error('Persisted Ozon publish request has no item array');
+    }
+    const client = await loadOwnedSourceListingOzonClient(ownerUserId, shopId);
+    return client.importProductsOnce(requestPayload.items as unknown as OzonImportItem[]);
+  },
+  workerId: `ozon-publish-submit:${sourceOzonPublisherInstanceId}:${process.pid}`,
+  warn: (message, error) => app.log.warn({ err: error }, message),
+});
+const extensionDeviceRepository = isExtensionDeviceAuthEnabled()
+  ? createPrismaExtensionDeviceSessionRepository()
+  : null;
+let sourceCaptureService: ReturnType<typeof createSourceCaptureService> | null = null;
+if (isExtensionDeviceAuthEnabled()) {
+  if (!extensionDeviceRepository) throw new Error('Extension device repository is unavailable');
+  const extensionDeviceAuthConfig = resolveExtensionDeviceAuthConfig();
+  const extensionCommandGrantSecret = resolveExtensionCommandGrantSecret();
+  sourceCaptureService = createSourceCaptureService({
+    repository: createPrismaSourceCaptureRepository({
+      client: prisma,
+      commandGrantSecret: extensionCommandGrantSecret,
+    }),
+  });
   await app.register(extensionDeviceRoutes, {
     prefix: '/api/extension-device',
     sessionService: createExtensionDeviceSessionService({
-      repository: extensionDeviceRepository, authConfig: resolveExtensionDeviceAuthConfig(),
+      repository: extensionDeviceRepository, authConfig: extensionDeviceAuthConfig,
     }),
     managementRepository: extensionDeviceRepository,
   });
+  await app.register(extensionCommandGrantRoutes, {
+    prefix: '/api/extension-device',
+    service: createExtensionCommandGrantService({
+      store: createPrismaExtensionCommandGrantStore({ client: prisma }),
+      secret: extensionCommandGrantSecret,
+    }),
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+    resolveCommand: createSourceWorkflowCommandResolver({
+      featureFlags: sourceWorkflowFeatureFlags,
+      loadShop: ({ shopId, ownerUserId }) => prisma.shop.findFirst({
+        where: { id: shopId, userId: ownerUserId },
+        select: { id: true, userId: true, platform: true, status: true },
+      }),
+      loadDraft: ({ workflowId, ownerUserId }) => sourceListingWorkflowService.getDraft({
+        draftId: workflowId,
+        ownerUserId,
+      }),
+    }),
+    executeOzonPublish: async ({ ownerUserId, actorUserId, workflowId, command }) => {
+      const commandRow = command as { draftRevision?: unknown; publishIntentId?: unknown };
+      const expectedRevision = Number(commandRow.draftRevision);
+      const idempotencyKey = String(commandRow.publishIntentId || '').trim();
+      if (!Number.isSafeInteger(expectedRevision) || !idempotencyKey) {
+        throw new Error('Ozon publish command identity is invalid');
+      }
+      return sourceOzonListingPublisher.publish({
+        draftId: workflowId,
+        ownerUserId,
+        actorUserId,
+        expectedRevision,
+        idempotencyKey,
+      });
+    },
+  });
+  await app.register(extensionSourceCaptureRoutes, {
+    prefix: '/api/extension-device',
+    service: sourceCaptureService,
+    featureFlags: sourceWorkflowFeatureFlags,
+    authenticateDevice: authenticateExtensionDevice({
+      config: extensionDeviceAuthConfig,
+      requiredScopes: ['capture:write'],
+      loadAuthorization: (sessionId) => extensionDeviceRepository.loadAuthorization(sessionId),
+    }),
+  });
+}
+if (isLogisticsDistributionEnabled()) {
+  if (!extensionDeviceRepository) throw new Error('Extension device repository is unavailable');
   const logisticsAuthConfig = resolveExtensionDeviceAuthConfig();
   const logisticsRuntimeConfig = getRuntimeConfig();
   const logisticsAdminRepository = createPrismaLogisticsRuleAdminRepository({
@@ -280,7 +813,39 @@ await app.register(orderRoutes, { prefix: '/api/orders' });
 await app.register(orderAnalyticsRoutes, { prefix: '/api/orders' });
 await app.register(financeRoutes, { prefix: '/api/finance' });
 await app.register(inventoryRoutes, { prefix: '/api/inventory' });
-await app.register(listingRoutes, { prefix: '/api/listing' });
+await app.register(listingRoutes, {
+  prefix: '/api/listing',
+  featureFlags: sourceWorkflowFeatureFlags,
+});
+await app.register(sourceCaptureViewRoutes, {
+  prefix: '/api/source-capture-views',
+  service: createSourceCaptureViewService(),
+});
+await app.register(sourceListingPublisherRoutes, {
+  prefix: '/api/source-listing-workflows',
+  featureFlags: sourceWorkflowFeatureFlags,
+  loadShop: ({ shopId, ownerUserId }) => prisma.shop.findFirst({
+    where: {
+      id: shopId,
+      userId: ownerUserId,
+      platform: 'OZON',
+      status: 'ACTIVE',
+    },
+    select: { id: true, userId: true, platform: true, status: true },
+  }),
+  workflow: sourceListingWorkflowService,
+  publisher: sourceOzonListingPublisher,
+});
+await app.register(sourceListingWorkflowRoutes, {
+  prefix: '/api/source-listing-workflows',
+  service: sourceListingWorkflowService,
+  featureFlags: sourceWorkflowFeatureFlags,
+  ownership: sourceListingWorkflowContext,
+  categoryValidator: sourceListingWorkflowCategoryValidator,
+  attributeWorkflow: sourceListingWorkflowAttributeService,
+  mediaWorkflow: sourceListingMediaImportService,
+  publisher: sourceOzonListingPublisher,
+});
 await app.register(noticeRoutes, { prefix: '/api/notices' });
 await app.register(dashboardRoutes, { prefix: '/api/dashboard' });
 await app.register(dashboardContentRoutes, { prefix: '/api/dashboard-content' });
@@ -290,7 +855,15 @@ await app.register(issueRoutes, { prefix: '/api/issues' });
 await app.register(supplyRoutes, { prefix: '/api/supply' });
 await app.register(staffRoutes, { prefix: '/api/staff' });
 await app.register(notificationRoutes, { prefix: '/api/notifications' });
-await app.register(collectRoutes, { prefix: '/api/collect' });
+await app.register(collectRoutes, {
+  prefix: '/api/collect',
+  featureFlags: sourceWorkflowFeatureFlags,
+  publisherParityObserver: sourceOzonPublisherEntrypointParityObserver,
+  sourceOzonCategoryMappingService,
+  loadCanonicalSourceOzonCategoryContext,
+  loadAuthoritativeOzonCategoryCatalog,
+  ...(sourceCaptureService ? { sourceCaptureService } : {}),
+});
 await app.register(ozonAnalyticsRoutes, { prefix: '/api/ozon-analytics' });
 await app.register(ozonSyncRoutes, { prefix: '/api/ozon-sync' });
 await app.register(warehouseRoutes, { prefix: '/api/warehouse' });
@@ -324,9 +897,24 @@ await app.register(extensionConfigRoutes, { prefix: '/api/extension-config' });
 await app.register(extensionDownloadRoutes, { prefix: '/api/extensions' });
 await app.register(announcementRoutes, { prefix: '/api/announcements' });
 await app.register(systemStatusRoutes, { prefix: '/api/admin/system-status' });
+await app.register(adminAiPromptTemplateRoutes, {
+  prefix: '/api/admin/ai-prompt-templates',
+  service: aiPromptTemplateRegistry,
+});
+await app.register(adminOzonPublisherParityRoutes, {
+  prefix: '/api/admin/ozon-publisher-parity',
+  service: sourceOzonPublisherParityObservationService,
+});
+await app.register(adminOzonPublisherRolloutRoutes, {
+  prefix: '/api/admin/ozon-publisher-rollout',
+  service: ozonPublisherRolloutAdminService,
+});
 await app.register(opsRoutes, { prefix: '/api/admin/ops' });
 await app.register(sourceCandidateRoutes, { prefix: '/api/source-candidates' });
-await app.register(aiImageRoutes, { prefix: '/api/ai-images' });
+await app.register(aiImageRoutes, {
+  prefix: '/api/ai-images',
+  resolvePrompt: resolveActiveAiPrompt,
+});
 
 // 静态文件：水印图片 + 上传图片
 import { join } from 'path';
@@ -381,6 +969,7 @@ if (RUN_WORKERS) {
     { startDatabaseBackupWorker },
     { startRechargeTimeoutWorker },
     { startListingTaskRefreshWorker },
+    { startOzonPublishReconciliationWorker },
   ] = await Promise.all([
     import('./workers/warehouse-command-poll.js'),
     import('./workers/notification-cleanup.js'),
@@ -388,6 +977,7 @@ if (RUN_WORKERS) {
     import('./workers/database-backup.js'),
     import('./workers/recharge-timeout.js'),
     import('./workers/listing-task-refresh.js'),
+    import('./workers/ozon-publish-reconciliation.js'),
   ]);
 
   startWarehouseCommandPollWorker();
@@ -396,6 +986,36 @@ if (RUN_WORKERS) {
   startDatabaseBackupWorker();
   startRechargeTimeoutWorker();
   startListingTaskRefreshWorker();
+  startOzonPublishReconciliationWorker({
+    runTick: () => runOzonPublishReconciliationTick({
+      repository: sourceOzonPublishAttemptRepository,
+      resolveOwnedClient: async (ownerUserId, shopId) => {
+        const client = await loadOwnedSourceListingOzonClient(ownerUserId, shopId);
+        return {
+          getImportInfo: (taskId) => {
+            const numericTaskId = typeof taskId === 'number' ? taskId : Number(taskId);
+            if (!Number.isSafeInteger(numericTaskId) || numericTaskId <= 0) {
+              throw new Error('Ozon import task ID exceeds the supported read contract');
+            }
+            return client.getImportInfo(numericTaskId);
+          },
+          getProductInfoByOfferId: (offerIds) => client.getProductInfoByOfferId(offerIds),
+        };
+      },
+      settings: {
+        workerId: `ozon-publish-reconciliation:${sourceOzonPublisherInstanceId}:${process.pid}`,
+      },
+      logger: {
+        info: (message, details) => app.log.info({ details }, message),
+        warn: (message, details) => app.log.warn({ details }, message),
+        error: (message, details) => app.log.error({ err: details }, message),
+      },
+    }),
+    logger: {
+      info: (message, details) => app.log.info({ details }, message),
+      error: (message, details) => app.log.error({ err: details }, message),
+    },
+  });
   if (process.env.REDIS_DISABLED !== '1' && process.env.REDIS_DISABLED !== 'true') {
     const [
       { startProductSyncWorker },

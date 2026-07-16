@@ -58,6 +58,8 @@ function authorization(overrides: Record<string, unknown> = {}) {
     scopes: ['logistics:discover', 'logistics:read'],
     ownerStatus: 'ACTIVE',
     actorStatus: 'ACTIVE',
+    ownerRole: 'USER',
+    actorRole: 'USER',
     actorParentId: null,
     shopGrants: [{ shopId: 'shop-1', status: 'ACTIVE' }],
     ...overrides,
@@ -118,6 +120,8 @@ describe('live extension-device authorization', () => {
     ['session expiry', { expiresAt: new Date(NOW.getTime() - 1) }],
     ['owner status', { ownerStatus: 'SUSPENDED' }],
     ['actor status', { actorStatus: 'SUSPENDED' }],
+    ['owner role', { ownerRole: 'STAFF' }],
+    ['actor role', { actorRole: 'STAFF' }],
     ['actor parent', { actorParentId: 'another-owner' }],
   ])('rejects a stale device when live %s no longer matches', async (_label, changed) => {
     const middleware = authenticateExtensionDevice({

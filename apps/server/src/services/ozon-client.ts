@@ -4,6 +4,7 @@ interface OzonConfig {
   maxRetries?: number;
   baseDelayMs?: number;
   timeoutMs?: number;
+  requestFetch?: typeof globalThis.fetch;
 }
 
 interface OzonRequestOptions {
@@ -11,6 +12,100 @@ interface OzonRequestOptions {
   body?: unknown;
   skipRetry?: boolean;
   timeoutMs?: number;
+}
+
+export interface OzonAttributeValue {
+  id: number;
+  value: string;
+  info: string;
+  picture: string;
+}
+
+export interface OzonAttributeValuePage<T extends { id: number } = OzonAttributeValue> {
+  values: T[];
+  hasNext: boolean;
+  nextCursor: number | null;
+}
+
+export type OzonAttributeValuesPage = OzonAttributeValuePage<OzonAttributeValue>;
+
+export interface OzonAttributeValuesParams {
+  description_category_id: number;
+  type_id: number;
+  attribute_id: number;
+  language?: string;
+  last_value_id?: number;
+  limit?: number;
+}
+
+export interface OzonAttributePaginationLimits {
+  maxPages?: number;
+  maxRows?: number;
+}
+
+export interface CompleteOzonAttributeValues<T extends { id: number }> {
+  values: T[];
+  complete: true;
+  pageCount: number;
+  finalCursor: number;
+}
+
+export async function collectOzonAttributeValuePages<T extends { id: number }>(
+  fetchPage: (cursor: number, limit: number) => Promise<OzonAttributeValuePage<T>>,
+  options: OzonAttributePaginationLimits & { initialCursor?: number; pageSize?: number } = {},
+): Promise<CompleteOzonAttributeValues<T>> {
+  const maxPages = positiveInt(options.maxPages, 100);
+  const maxRows = positiveInt(options.maxRows, 100_000);
+  const pageSize = positiveInt(options.pageSize, 5000);
+  const initialCursor = Number(options.initialCursor);
+  let cursor = Number.isSafeInteger(initialCursor) && initialCursor >= 0 ? initialCursor : 0;
+  let pageCount = 0;
+  let observedRows = 0;
+  const values: T[] = [];
+  const seenIds = new Set<number>();
+
+  while (true) {
+    const remainingRows = maxRows - observedRows;
+    if (remainingRows <= 0) {
+      throw new Error(`Ozon attribute dictionary exceeded row limit ${maxRows}`);
+    }
+    const page = await fetchPage(cursor, Math.min(pageSize, remainingRows));
+    pageCount += 1;
+    const pageValues = Array.isArray(page.values) ? page.values : [];
+    observedRows += pageValues.length;
+    if (observedRows > maxRows) {
+      throw new Error(`Ozon attribute dictionary exceeded row limit ${maxRows}`);
+    }
+
+    let newValueCount = 0;
+    for (const value of pageValues) {
+      const id = Number(value?.id);
+      if (!Number.isSafeInteger(id) || id <= 0 || seenIds.has(id)) continue;
+      seenIds.add(id);
+      values.push(value);
+      newValueCount += 1;
+    }
+
+    const nextCursor = Number(page.nextCursor);
+    if (!page.hasNext) {
+      return {
+        values,
+        complete: true,
+        pageCount,
+        finalCursor: Number.isSafeInteger(nextCursor) && nextCursor > cursor ? nextCursor : cursor,
+      };
+    }
+    if (observedRows >= maxRows) {
+      throw new Error(`Ozon attribute dictionary exceeded row limit ${maxRows}`);
+    }
+    if (pageCount >= maxPages) {
+      throw new Error(`Ozon attribute dictionary exceeded page limit ${maxPages}`);
+    }
+    if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor || newValueCount === 0) {
+      throw new Error('Ozon attribute dictionary pagination cursor did not advance');
+    }
+    cursor = nextCursor;
+  }
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -37,6 +132,7 @@ export class OzonClient {
   private maxRetries: number;
   private baseDelayMs: number;
   private timeoutMs: number;
+  private requestFetch: typeof globalThis.fetch;
 
   constructor(config: OzonConfig) {
     this.clientId = config.clientId;
@@ -44,6 +140,7 @@ export class OzonClient {
     this.maxRetries = config.maxRetries ?? 3;
     this.baseDelayMs = config.baseDelayMs ?? 2000;
     this.timeoutMs = config.timeoutMs ?? positiveInt(process.env.OZON_API_TIMEOUT_MS, 20_000);
+    this.requestFetch = config.requestFetch || httpFetch;
   }
 
   async request<T = unknown>(path: string, options: OzonRequestOptions = {}): Promise<T> {
@@ -60,7 +157,7 @@ export class OzonClient {
       timeout?.unref?.();
 
       try {
-        const res = await httpFetch(`${this.baseUrl}${path}`, {
+        const res = await this.requestFetch(`${this.baseUrl}${path}`, {
           method,
           headers: {
             'Content-Type': 'application/json',
@@ -70,30 +167,29 @@ export class OzonClient {
           body: body ? JSON.stringify(body) : undefined,
           signal: controller?.signal,
         });
-        if (timeout) clearTimeout(timeout);
-
         if (res.status === 429 && attempt < maxAttempts - 1) {
           const retryAfter = Number(res.headers.get('retry-after')) || 0;
           const wait = retryAfter > 0 ? retryAfter * 1000 : this.baseDelayMs * 2 ** attempt;
-          await res.text().catch(() => '');
+          await res.text();
+          if (timeout) clearTimeout(timeout);
           await sleep(wait);
           continue;
         }
 
         if (res.status >= 500 && res.status < 600 && attempt < maxAttempts - 1) {
-          await res.text().catch(() => '');
+          await res.text();
+          if (timeout) clearTimeout(timeout);
           await sleep(this.baseDelayMs * 2 ** attempt);
           continue;
         }
 
         if (!res.ok) {
-          const text = await res.text().catch(() => '');
+          const text = await res.text();
           throw new OzonApiError(res.status, text, path);
         }
 
-        return res.json() as Promise<T>;
+        return await res.json() as T;
       } catch (e) {
-        if (timeout) clearTimeout(timeout);
         if (e instanceof OzonApiError) throw e;
         const normalizedError = new OzonNetworkError(path, e, timeoutMs);
         lastError = normalizedError;
@@ -102,6 +198,8 @@ export class OzonClient {
           continue;
         }
         throw normalizedError;
+      } finally {
+        if (timeout) clearTimeout(timeout);
       }
     }
     throw lastError ?? new Error(`OZON request failed after ${maxAttempts} attempts: ${path}`);
@@ -402,19 +500,49 @@ export class OzonClient {
     return res.result;
   }
 
-  async getAttributeValues(params: {
-    description_category_id: number;
-    type_id: number;
-    attribute_id: number;
-    language?: string;
-    last_value_id?: number;
-    limit?: number;
-  }): Promise<{ id: number; value: string; info: string; picture: string }[]> {
-    const res = await this.request<{ result: { id: number; value: string; info: string; picture: string }[]; has_next: boolean }>(
+  async getAttributeValuesPage(params: OzonAttributeValuesParams): Promise<OzonAttributeValuesPage> {
+    const res = await this.request<{ result: OzonAttributeValue[]; has_next: boolean }>(
       '/v1/description-category/attribute/values',
-      { body: { description_category_id: params.description_category_id, type_id: params.type_id, attribute_id: params.attribute_id, language: params.language || 'DEFAULT', last_value_id: params.last_value_id || 0, limit: params.limit || 5000 } },
+      {
+        body: {
+          description_category_id: params.description_category_id,
+          type_id: params.type_id,
+          attribute_id: params.attribute_id,
+          language: params.language || 'DEFAULT',
+          last_value_id: params.last_value_id ?? 0,
+          limit: params.limit ?? 5000,
+        },
+      },
     );
-    return res.result;
+    const values = Array.isArray(res.result) ? res.result : [];
+    let nextCursor: number | null = null;
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      const id = Number(values[index]?.id);
+      if (Number.isSafeInteger(id) && id > 0) {
+        nextCursor = id;
+        break;
+      }
+    }
+    return { values, hasNext: res.has_next === true, nextCursor };
+  }
+
+  async getAttributeValues(
+    params: OzonAttributeValuesParams,
+    limits: OzonAttributePaginationLimits = {},
+  ): Promise<OzonAttributeValue[]> {
+    const result = await collectOzonAttributeValuePages(
+      (cursor, limit) => this.getAttributeValuesPage({
+        ...params,
+        last_value_id: cursor,
+        limit,
+      }),
+      {
+        ...limits,
+        initialCursor: params.last_value_id,
+        pageSize: params.limit,
+      },
+    );
+    return result.values;
   }
 
   async updatePrices(
@@ -472,6 +600,10 @@ export class OzonClient {
 
   async importProducts(items: OzonImportItem[]): Promise<{ result: { task_id: number } }> {
     return this.request('/v3/product/import', { body: { items } });
+  }
+
+  async importProductsOnce(items: OzonImportItem[]): Promise<{ result: { task_id: number } }> {
+    return this.request('/v3/product/import', { body: { items }, skipRetry: true });
   }
 
   async importBySku(items: { sku: number; name: string; offer_id: string; price: string; old_price: string; currency_code: string; vat: string }[]): Promise<{ result: { task_id: number; unmatched_sku_list?: number[] } }> {

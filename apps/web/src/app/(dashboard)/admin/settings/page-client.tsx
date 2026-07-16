@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Loader2,
   Save,
@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/use-toast';
+import { AiPromptTemplateEditor } from '@/components/admin/ai-prompt-template-editor';
 import { api } from '@/lib/api';
 import {
   ALIYUN_OSS_REGIONS,
@@ -35,6 +36,14 @@ interface SystemConfig {
   group: string;
   description: string | null;
   updatedAt: string;
+}
+
+function isMaskedSecretDisplay(value: string): boolean {
+  return value === '***MASKED***' || /^.{4}\*{3}.{4}$/.test(value);
+}
+
+function isSavedMaskedSecret(value: string, savedValue?: string): boolean {
+  return Boolean(savedValue && value === savedValue && isMaskedSecretDisplay(savedValue));
 }
 
 interface AiUsageSummary {
@@ -117,7 +126,7 @@ export default function AdminSettingsPage() {
   const [runningBackup, setRunningBackup] = useState(false);
 
   useEffect(() => {
-    fetchConfigs();
+    fetchConfigs(true);
   }, []);
 
   function applyConfigRows(rows: SystemConfig[]) {
@@ -131,8 +140,8 @@ export default function AdminSettingsPage() {
     return filtered;
   }
 
-  async function fetchConfigs() {
-    setLoading(true);
+  async function fetchConfigs(showInitialLoader = false) {
+    if (showInitialLoader) setLoading(true);
     const [configRes, backupRes, aiUsageRes] = await Promise.all([
       api.get<SystemConfig[]>('/api/admin/system-config'),
       api.get<BackupStatus>('/api/admin/ops/backup-status'),
@@ -1294,9 +1303,6 @@ const AI_IMAGE_PROVIDER_KEYS = [
   'ai_image_base_url',
   'ai_image_api_key',
   'ai_image_model',
-  'ai_image_prompt',
-  'ai_user_daily_image_generation_limit',
-  'ai_daily_budget_cents',
 ];
 
 const AI_LIMIT_KEYS = [
@@ -1334,7 +1340,6 @@ const AI_PROMPT_KEYS = [
   'ai_category_translation_prompt',
   'ai_product_title_prompt',
   'ai_product_description_prompt',
-  'ai_image_prompt',
 ];
 
 function AiSettingsPanel({
@@ -1352,8 +1357,12 @@ function AiSettingsPanel({
   const [imageTestResult, setImageTestResult] = useState<{
     ok: boolean;
     message: string;
+    fingerprint: string;
   } | null>(null);
-  const setValue = (key: string, value: string) => setEditing({ ...editing, [key]: value });
+  const setValue = (key: string, value: string) => {
+    if (AI_IMAGE_PROVIDER_KEYS.includes(key)) setImageTestResult(null);
+    setEditing({ ...editing, [key]: value });
+  };
   const isSavingProvider = savingKey === 'group:AI 服务';
   const isSavingLimits = savingKey === 'group:AI 额度';
   const isSavingPrompts = savingKey === 'group:AI 提示词';
@@ -1368,6 +1377,20 @@ function AiSettingsPanel({
     Boolean((editing.ai_image_base_url || '').trim()) &&
     Boolean((editing.ai_image_api_key || '').trim()) &&
     Boolean((editing.ai_image_model || '').trim());
+  const imageApiKeyForTest = isSavedMaskedSecret(
+    editing.ai_image_api_key || '',
+    configs.ai_image_api_key?.value,
+  )
+    ? ''
+    : editing.ai_image_api_key || '';
+  const imageTestFingerprint = JSON.stringify({
+    provider: imageProvider,
+    baseUrl: editing.ai_image_base_url || '',
+    apiKey: editing.ai_image_api_key || '',
+    model: editing.ai_image_model || '',
+  });
+  const imageTestFingerprintRef = useRef(imageTestFingerprint);
+  imageTestFingerprintRef.current = imageTestFingerprint;
 
   function selectImageProvider(nextProvider: (typeof AI_IMAGE_PROVIDER_PRESETS)[number]) {
     setImageTestResult(null);
@@ -1380,28 +1403,38 @@ function AiSettingsPanel({
   }
 
   async function testAiImageProvider() {
+    const testedFingerprint = imageTestFingerprint;
     setTestingImageProvider(true);
     setImageTestResult(null);
-    const res = await api.post<{ detail?: string; provider?: string }>(
-      '/api/admin/system-status/test/ai-image',
-      {
-        provider: imageProvider,
-        baseUrl: editing.ai_image_base_url || '',
-        apiKey: editing.ai_image_api_key || '',
-        model: editing.ai_image_model || '',
-      },
-    );
-    setTestingImageProvider(false);
-    const message =
-      res.data?.detail ||
-      res.msg ||
-      (res.code === 1 ? '供应商连接正常' : '连接测试失败，请检查配置');
-    setImageTestResult({ ok: res.code === 1, message });
-    toast({
-      title: res.code === 1 ? '生图连接正常' : '生图连接失败',
-      description: message,
-      ...(res.code === 1 ? {} : { variant: 'destructive' as const }),
-    });
+    try {
+      const res = await api.post<{ detail?: string; provider?: string }>(
+        '/api/admin/system-status/test/ai-image',
+        {
+          provider: imageProvider,
+          baseUrl: editing.ai_image_base_url || '',
+          apiKey: imageApiKeyForTest,
+          model: editing.ai_image_model || '',
+        },
+      );
+      const message =
+        res.data?.detail ||
+        res.msg ||
+        (res.code === 1 ? '供应商连接正常' : '连接测试失败，请检查配置');
+      if (imageTestFingerprintRef.current !== testedFingerprint) return;
+      setImageTestResult({ ok: res.code === 1, message, fingerprint: testedFingerprint });
+      toast({
+        title: res.code === 1 ? '生图连接正常' : '生图连接失败',
+        description: message,
+        ...(res.code === 1 ? {} : { variant: 'destructive' as const }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '网络请求失败';
+      if (imageTestFingerprintRef.current !== testedFingerprint) return;
+      setImageTestResult({ ok: false, message, fingerprint: testedFingerprint });
+      toast({ title: '生图连接失败', description: message, variant: 'destructive' });
+    } finally {
+      setTestingImageProvider(false);
+    }
   }
 
 
@@ -1529,8 +1562,8 @@ function AiSettingsPanel({
                 <div>
                   <h3 className="text-sm font-medium">AI 生图基础平台</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    任务与存储基础已就绪；真实供应商调用尚未启用。这里先完成统一配置契约，
-                    后续 Provider 适配器将直接读取同一组参数。
+                    任务与存储基础已就绪；真实生图任务已启用。当前仅支持 text-to-image，
+                    用户入口仍受生图功能开关、额度和 Provider 配置控制。
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge variant="outline">任务队列：基础就绪</Badge>
@@ -1607,33 +1640,13 @@ function AiSettingsPanel({
                   setValue={setValue}
                   placeholder="填写供应商 API Key"
                 />
-                <ConfigInput
-                  cfg={configs.ai_user_daily_image_generation_limit}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="5"
-                />
-                <ConfigInput
-                  cfg={configs.ai_daily_budget_cents}
-                  editing={editing}
-                  setValue={setValue}
-                  placeholder="0 表示不设置预算上限"
-                />
-                <div className="md:col-span-2">
-                  <ConfigInput
-                    cfg={configs.ai_image_prompt}
-                    editing={editing}
-                    setValue={setValue}
-                    placeholder="默认提示词：主体保持一致、背景干净、适合跨境电商商品图"
-                  />
-                </div>
               </div>
 
               <p className="text-xs text-muted-foreground">
-                测试只验证配置与供应商连通性，不生成图片，也不消耗用户每日图片额度。
+                测试当前表单配置；只验证配置与供应商连通性，不消耗用户每日图片额度。
               </p>
 
-              {imageTestResult && (
+              {imageTestResult?.fingerprint === imageTestFingerprint && (
                 <div
                   className={[
                     'flex items-start gap-2 rounded-md border px-3 py-2 text-xs',
@@ -1652,12 +1665,14 @@ function AiSettingsPanel({
               )}
             </section>
 
+            <AiPromptTemplateEditor />
+
             <section className="space-y-3 rounded-md border p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-medium">功能与额度</h3>
                   <p className="text-xs text-muted-foreground">
-                    缓存命中不扣用户额度；额度只限制新的外部 API 调用。生图/改图当前为预留配置。
+                    缓存命中不扣用户额度；额度只限制新的外部 API 调用。当前图片链路仅开放文生图。
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -2352,7 +2367,7 @@ function SecretConfigInput({
 }) {
   if (!cfg) return null;
   const value = editing[cfg.key] || '';
-  const hasSavedSecret = value === '***MASKED***';
+  const hasSavedSecret = isSavedMaskedSecret(value, cfg.value);
   return (
     <div className="space-y-1.5">
       <div>
@@ -2363,7 +2378,7 @@ function SecretConfigInput({
       <Input
         type="password"
         autoComplete="new-password"
-        value={value === '***MASKED***' ? '' : value}
+        value={hasSavedSecret ? '' : value}
         onChange={(event) => setValue(cfg.key, event.target.value)}
         placeholder={hasSavedSecret ? '留空保留已保存密钥' : placeholder}
       />

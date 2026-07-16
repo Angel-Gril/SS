@@ -124,6 +124,8 @@
       ],
       "js": [
         "shared/currency/price-currency.js",
+        "shared/contracts/source-product-capture-v2.js",
+        "shared/collectors/1688-dom-fallback.js",
         "shared/collectors/source-product-core.js",
         "shared/collectors/pdd-product.js",
         "shared/collectors/marketplace-product.js",

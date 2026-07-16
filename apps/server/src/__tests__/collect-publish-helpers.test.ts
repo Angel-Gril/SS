@@ -36,6 +36,7 @@ import {
   buildSourceStandardOzonPublishAttributes,
   getCollectedSourceStandardAttributes,
   sourceCategorySignature,
+  sourceOzonLegacyConfirmedMappingWhere,
   buildSourceOzonCategoryCandidates,
   loadSourceOzonCategoryCatalogForCandidates,
   resolveCollectedDisplayTitle,
@@ -56,8 +57,22 @@ import {
   sourceVideoTransferFailureTraceKey,
   sourceVideoTransferFailureMessage,
 } from '../routes/collect.js';
+import { buildOzonCategoryCatalog } from '../services/ozon-category-catalog.js';
 
 describe('collect publish helpers', () => {
+  it('scopes legacy Ozon category confirmation history to the current tenant', () => {
+    expect(sourceOzonLegacyConfirmedMappingWhere(
+      'tenant-a',
+      '1688|服饰内衣>女装>t恤',
+    )).toEqual({
+      userId: 'tenant-a',
+      metadata: {
+        path: ['sourceOzonCategoryConfirmed', 'signature'],
+        equals: '1688|服饰内衣>女装>t恤',
+      },
+    });
+  });
+
   it('calculates publish price with percentage markup and fixed amount', () => {
     expect(calcPublishPrice(50.16, 200, 10)).toBe(161);
     expect(calcPublishPrice(100, 0, 9.5)).toBe(110);
@@ -1657,6 +1672,74 @@ describe('collect publish helpers', () => {
       { attributeId: 9003, attributeName: 'Сезон', standardKey: 'seasons', reason: 'no_source_standard_value' },
     ]);
     expect(candidates[1]).toMatchObject({ categoryId: 170002, typeId: 91002, selected: false });
+  });
+
+  it('matches V2 mapping history with the server-owned source signature', () => {
+    const sourceSignature = 'a'.repeat(64);
+    const categoryTree = [{
+      description_category_id: 170001,
+      category_name: 'Одежда',
+      type_id: 91001,
+      type_name: 'Футболки',
+      children: [],
+    }];
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '女式棉质T恤',
+        sourcePlatform: '1688',
+        metadata: { categoryPath: ['旧路径'], categoryName: '旧类目' },
+      },
+      sourceSignature,
+      categoryTree,
+      categoryCatalog: buildOzonCategoryCatalog(categoryTree),
+      confirmedMappings: [{
+        signature: sourceSignature,
+        categoryId: 170001,
+        typeId: 91001,
+        confirmations: 2,
+      }],
+    });
+
+    expect(candidates[0]).toMatchObject({
+      categoryId: 170001,
+      typeId: 91001,
+      source: 'shared_history',
+      confirmationCount: 2,
+    });
+  });
+
+  it('never restores a non-selectable official category through tree or history signals', () => {
+    const sourceSignature = 'b'.repeat(64);
+    const categoryTree = [{
+      description_category_id: 170001,
+      category_name: 'Одежда',
+      type_id: 91001,
+      type_name: 'Футболки',
+      children: [],
+    }];
+    const disabledCatalog = buildOzonCategoryCatalog(categoryTree).map((entry) => ({
+      ...entry,
+      disabled: true,
+      selectable: false,
+    }));
+    const candidates = buildSourceOzonCategoryCandidates({
+      item: {
+        title: '女式棉质T恤',
+        sourcePlatform: '1688',
+        metadata: { categoryPath: ['服饰内衣', '女装', 'T恤'], categoryName: 'T恤' },
+      },
+      sourceSignature,
+      categoryTree,
+      categoryCatalog: disabledCatalog,
+      confirmedMappings: [{
+        signature: sourceSignature,
+        categoryId: 170001,
+        typeId: 91001,
+        confirmations: 8,
+      }],
+    });
+
+    expect(candidates).toEqual([]);
   });
 
   it('repairs legacy source gender before reporting Ozon category required attribute gaps', () => {

@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const ACCOUNT_SECRET = '0123456789abcdef0123456789abcdef';
 const DEVICE_SECRET = 'fedcba9876543210fedcba9876543210';
+const COMMAND_GRANT_SECRET = 'abcdef0123456789abcdef0123456789';
 
 function baseEnv(extra = []) {
   return [
@@ -52,6 +53,7 @@ test('enabled logistics distribution requires isolated device auth settings', ()
   assert.match(missing.stderr, /SS_ERP_DEPLOYMENT_ID is required/);
   assert.match(missing.stderr, /AUTH_JWT_ISSUER is required/);
   assert.match(missing.stderr, /EXTENSION_DEVICE_JWT_SECRET is required/);
+  assert.match(missing.stderr, /EXTENSION_COMMAND_GRANT_SECRET is required/);
 
   const valid = validate(
     baseEnv([
@@ -59,6 +61,7 @@ test('enabled logistics distribution requires isolated device auth settings', ()
       'SS_ERP_DEPLOYMENT_ID=cloud-global-prod',
       'AUTH_JWT_ISSUER=ss-erp-cloud-global',
       `EXTENSION_DEVICE_JWT_SECRET=${DEVICE_SECRET}`,
+      `EXTENSION_COMMAND_GRANT_SECRET=${COMMAND_GRANT_SECRET}`,
     ]),
   );
   assert.equal(valid.status, 0, `${valid.stdout}\n${valid.stderr}`);

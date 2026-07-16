@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000006.html",
+  "observedAt": "2026-07-15T00:05:00.000Z",
+  "document": {
+    "queries": {
+      ".content-detail img": [
+        { "attrs": { "data-lazy-src": "/assets/detail-a.jpg" } },
+        { "src": "https://cbu01.alicdn.com/img/ibank/detail-b.jpg" },
+        { "src": "https://cbu01.alicdn.com/img/ibank/icon.svg" }
+      ],
+      "video, source": [
+        { "currentSrc": "https://video.example.com/demo.mp4" },
+        { "src": "https://video.example.com/demo.mp4" },
+        { "attrs": { "src": "javascript:alert(1)" } }
+      ],
+      "[data-video-src], [data-video-url]": [
+        { "attrs": { "data-video-url": "//video.example.com/secondary.m3u8" } }
+      ]
+    }
+  },
+  "expected": {
+    "detailImages": [
+      "https://detail.1688.com/assets/detail-a.jpg",
+      "https://cbu01.alicdn.com/img/ibank/detail-b.jpg"
+    ],
+    "videos": [
+      "https://video.example.com/demo.mp4",
+      "https://video.example.com/secondary.m3u8"
+    ]
+  }
+}

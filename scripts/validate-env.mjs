@@ -111,8 +111,10 @@ function validateBootstrapBase(env) {
   requireValue(env, 'ENCRYPTION_KEY', { minLength: 32 });
   for (const key of [
     'LOGISTICS_DISTRIBUTION_ENABLED',
+    'EXTENSION_DEVICE_AUTH_ENABLED',
     'AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS',
     'NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED',
+    'NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED',
   ]) {
     if (isSet(env[key]) && !['true', 'false'].includes(env[key])) {
       fail(`${key} expected true/false, got ${env[key]}`);
@@ -130,10 +132,21 @@ function validateBootstrapBase(env) {
   ) {
     fail('NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED requires LOGISTICS_DISTRIBUTION_ENABLED=true');
   }
-  if (env.LOGISTICS_DISTRIBUTION_ENABLED === 'true') {
+  if (
+    env.NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED === 'true' &&
+    env.EXTENSION_DEVICE_AUTH_ENABLED !== 'true' &&
+    env.LOGISTICS_DISTRIBUTION_ENABLED !== 'true'
+  ) {
+    fail('NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED requires extension device auth on the server');
+  }
+  if (
+    env.LOGISTICS_DISTRIBUTION_ENABLED === 'true' ||
+    env.EXTENSION_DEVICE_AUTH_ENABLED === 'true'
+  ) {
     requireValue(env, 'SS_ERP_DEPLOYMENT_ID');
     requireValue(env, 'AUTH_JWT_ISSUER');
     requireValue(env, 'EXTENSION_DEVICE_JWT_SECRET', { minLength: 32 });
+    requireValue(env, 'EXTENSION_COMMAND_GRANT_SECRET', { minLength: 32 });
     if (
       isSet(env.SS_ERP_DEPLOYMENT_ID) &&
       (env.SS_ERP_DEPLOYMENT_ID === 'local-dev' ||
@@ -153,6 +166,12 @@ function validateBootstrapBase(env) {
       env.EXTENSION_DEVICE_JWT_SECRET === env.JWT_SECRET
     ) {
       fail('EXTENSION_DEVICE_JWT_SECRET must differ from JWT_SECRET');
+    }
+    if (
+      isSet(env.EXTENSION_COMMAND_GRANT_SECRET) &&
+      [env.JWT_SECRET, env.EXTENSION_DEVICE_JWT_SECRET].includes(env.EXTENSION_COMMAND_GRANT_SECRET)
+    ) {
+      fail('EXTENSION_COMMAND_GRANT_SECRET must differ from JWT secrets');
     }
   }
   expectOneOf(env, 'RUNTIME_MODE', ['local', 'cloud']);

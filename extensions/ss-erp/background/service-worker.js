@@ -1,6 +1,8 @@
 try { importScripts('../shared/logistics-rules/distribution-feature.js'); } catch (e) { console.warn('[SS ERP] logistics feature gate load error:', e); }
 try { importScripts('../shared/message-security/runtime-message-policy.js'); } catch (e) { console.warn('[SS ERP] runtime message policy load error:', e); }
 try { importScripts('../shared/currency/price-currency.js'); } catch (e) { console.warn('[SS ERP] price-currency load error:', e); }
+try { importScripts('../shared/contracts/source-product-capture-v2.js'); } catch (e) { console.warn('[SS ERP] source capture V2 contract load error:', e); }
+try { importScripts('../shared/source-capture/source-capture-submit.js'); } catch (e) { console.warn('[SS ERP] source capture V2 submit helper load error:', e); }
 try { importScripts('../shared/ozon/variant-spec.js'); } catch (e) { console.warn('[SS ERP] ozon variant spec load error:', e); }
 try { importScripts('../shared/ozon/collection-policy.js'); } catch (e) { console.warn('[SS ERP] ozon collection policy load error:', e); }
 try { importScripts('../shared/ozon/sku-workbench.js'); } catch (e) { console.warn('[SS ERP] ozon sku workbench load error:', e); }
@@ -45,6 +47,8 @@ const SS_ERP_SOURCE_CANDIDATES_KEY = 'ss-erp:source-candidates';
 const SS_ERP_SOURCE_CANDIDATE_CONTEXT_KEY = 'ss-erp:source-candidate-context';
 const SS_ERP_SOURCE_QUOTES_KEY = 'ss-erp:source-quotes';
 const SS_ERP_SOURCE_QUOTE_PENDING_KEY = 'ss-erp:source-quote-pending';
+const SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY = 'ss-erp:source-workflow:last-handoff:v1';
+const SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE = 'ss-erp:open-source-workflow-handoff';
 const SS_ERP_IMAGE_SEARCH_JOBS_KEY = 'ss-erp:image-search-jobs';
 const SS_ERP_SOURCE_SEARCH_PLATFORM_PREFS_KEY = 'ss-erp:source-search-platforms';
 const SS_ERP_DEFAULT_SOURCE_SEARCH_PLATFORMS = ['1688', 'pdd', 'taobao'];
@@ -240,6 +244,7 @@ let logisticsCaptureRuntime = null;
 let logisticsCaptureMessageHandler = null;
 let logisticsBindingProbeRuntime = null;
 let logisticsBindingProbeMessageHandler = null;
+let sourceCaptureSubmitter = null;
 const SS_ERP_LOGISTICS_RULE_SYNC_ALARM_NAME = 'ss-erp-logistics-rule-sync-v1';
 const SS_ERP_LOGISTICS_RULE_SYNC_INTERVAL_MINUTES = 30;
 const SS_ERP_LOGISTICS_CAPTURE_ALARM_NAME = 'ss-erp-logistics-capture-v1';
@@ -272,6 +277,108 @@ function getLogisticsDeviceCredentials() {
     now: () => new Date(),
   });
   return logisticsDeviceCredentials;
+}
+
+function getSourceCaptureSubmitter() {
+  if (sourceCaptureSubmitter) return sourceCaptureSubmitter;
+  const api = globalThis.SS_ERP_SOURCE_CAPTURE_SUBMIT;
+  const contract = globalThis.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2;
+  if (!api || typeof api.createSubmitter !== 'function') {
+    throw new Error('来源采集 V2 提交模块不可用');
+  }
+  if (!contract || typeof contract.createSourceProductCaptureV2Submission !== 'function') {
+    throw new Error('来源采集 V2 契约不可用');
+  }
+  if (!self.SS_ERP_CLIENT) throw new Error('ERP 适配器未加载，请重新加载扩展后重试');
+  sourceCaptureSubmitter = api.createSubmitter({
+    credentials: getLogisticsDeviceCredentials(),
+    client: self.SS_ERP_CLIENT,
+    contract,
+  });
+  return sourceCaptureSubmitter;
+}
+
+function sourceWorkflowHandoffText(value, maxLength) {
+  const text = String(value == null ? '' : value).normalize('NFKC').trim();
+  return text && text.length <= maxLength ? text : '';
+}
+
+function buildSourceWorkflowHandoffPath(value) {
+  const params = new URLSearchParams();
+  params.set('supplyGoodsId', value.supplyGoodsId);
+  params.set('snapshotId', value.snapshotId);
+  params.set('snapshotVersion', String(value.snapshotVersion));
+  if (value.sourceProductId) params.set('sourceProductId', value.sourceProductId);
+  params.set('section', 'listing');
+  return '/collect/source?' + params.toString();
+}
+
+function createSourceWorkflowHandoff(result, sourceProductIdValue) {
+  const source = result && typeof result === 'object' && !Array.isArray(result) ? result : {};
+  const supplyGoodsId = sourceWorkflowHandoffText(source.supplyGoodsId, 200);
+  const snapshotId = sourceWorkflowHandoffText(source.snapshotId, 200);
+  const snapshotVersion = Number(source.snapshotVersion);
+  const sourceProductId = sourceWorkflowHandoffText(sourceProductIdValue, 200);
+  if (!supplyGoodsId || !snapshotId || !Number.isSafeInteger(snapshotVersion) || snapshotVersion < 1) {
+    return null;
+  }
+  const identity = {
+    supplyGoodsId,
+    snapshotId,
+    snapshotVersion,
+    ...(sourceProductId ? { sourceProductId } : {}),
+  };
+  return { ...identity, path: buildSourceWorkflowHandoffPath(identity) };
+}
+
+function validateSourceWorkflowHandoff(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const allowedKeys = new Set(['supplyGoodsId', 'snapshotId', 'snapshotVersion', 'sourceProductId', 'path']);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  const normalized = createSourceWorkflowHandoff(value, value.sourceProductId);
+  if (!normalized || sourceWorkflowHandoffText(value.path, 2048) !== normalized.path) return null;
+  return normalized;
+}
+
+async function persistSourceWorkflowHandoff(value) {
+  const handoff = validateSourceWorkflowHandoff(value);
+  if (!handoff) return null;
+  await chrome.storage.local.set({ [SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]: handoff });
+  return handoff;
+}
+
+async function readPersistedSourceWorkflowHandoff() {
+  const result = await chrome.storage.local.get([SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]);
+  return validateSourceWorkflowHandoff(result[SS_ERP_SOURCE_WORKFLOW_HANDOFF_KEY]);
+}
+
+function inferErpWebBaseUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) throw new Error('ERP 地址无效，请重新配置');
+  try {
+    const url = new URL(raw.replace(/\/+$/, ''));
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+      throw new Error('invalid ERP protocol or credentials');
+    }
+    url.pathname = url.pathname.replace(/\/api\/.*$/, '').replace(/\/+$/, '');
+    url.search = '';
+    url.hash = '';
+    if (/^(localhost|127\.0\.0\.1)$/i.test(url.hostname) && url.port === '3001') {
+      url.port = '3000';
+    }
+    return url.href.replace(/\/+$/, '');
+  } catch {
+    throw new Error('ERP 地址无效，请重新配置');
+  }
+}
+
+function buildConfiguredSourceWorkflowUrl(baseUrlValue, handoff) {
+  const webBaseUrl = new URL(inferErpWebBaseUrl(baseUrlValue));
+  const target = new URL(handoff.path, webBaseUrl);
+  if (target.origin !== webBaseUrl.origin || target.pathname !== '/collect/source') {
+    throw new Error('ERP 工作流地址无效');
+  }
+  return target.toString();
 }
 
 function validateDeliveryEnvelope(value) {
@@ -1768,6 +1875,7 @@ function normalizeSourceProductForErpCollect(product) {
   const selectedSkuText = selectedSku ? firstText([selectedSku.skuId, selectedSku.sku, selectedSku.id, selectedSku.name, selectedSku.specText]) : '';
   const item = {
     ...source,
+    captureV2: undefined,
     title,
     publishTitle: '',
     sourceTitleRaw: pickSourceCollectTitle(source, sourceProductId, [source.sourceTitleRaw, source.title, source.titleZh, source.name]),
@@ -1926,6 +2034,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!runtimeMessagePolicy.isAllowedRuntimeMessageSender(message.type, sender, chrome.runtime.id)) {
     sendResponse({ ok: false, error: '不允许的扩展消息来源' });
     return false;
+  }
+  if (message.type === SS_ERP_OPEN_SOURCE_WORKFLOW_HANDOFF_MESSAGE) {
+    Promise.resolve().then(async () => {
+      if (!self.SS_ERP_CONFIG || typeof self.SS_ERP_CONFIG.getConfig !== 'function') {
+        throw new Error('ERP 运行配置不可用');
+      }
+      const [config, handoff] = await Promise.all([
+        self.SS_ERP_CONFIG.getConfig(),
+        readPersistedSourceWorkflowHandoff(),
+      ]);
+      if (!handoff) throw new Error('没有可继续的 ERP 来源商品记录');
+      const expectedSnapshotId = sourceWorkflowHandoffText(message.snapshotId, 200);
+      if (!expectedSnapshotId || expectedSnapshotId !== handoff.snapshotId) {
+        throw new Error('ERP 来源商品记录已变化，请使用最新采集结果继续');
+      }
+      const url = buildConfiguredSourceWorkflowUrl(config && config.baseUrl, handoff);
+      await chrome.tabs.create({ url, active: true });
+      return { url, handoff };
+    }).then((result) => {
+      sendResponse({ ok: true, ...result });
+    }).catch((error) => {
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) });
+    });
+    return true;
   }
 
   if (OZON_CALC_SETTINGS_WRITE_CHANNELS.has(message.type)) {
@@ -2450,6 +2582,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ? payload.items
         : [payload.product || payload.sourceProduct || payload.item || payload].filter((item) => item && typeof item === 'object');
       if (!rawItems.length) throw new Error('缺少货源商品数据');
+      const nativeCaptureItems = rawItems.filter((item) => item && item.captureV2 && item.captureV2.provenanceMode === 'native_v2');
+      if (nativeCaptureItems.length && nativeCaptureItems.length !== rawItems.length) {
+        throw new Error('不能在同一次请求中混合来源采集 V2 与旧版数据');
+      }
+      if (nativeCaptureItems.length) {
+        const submitter = getSourceCaptureSubmitter();
+        const submitted = [];
+        const handoffs = [];
+        for (const sourceItem of nativeCaptureItems) {
+          const outcome = await submitter.submit(sourceItem.captureV2);
+          if (outcome.state === 'legacy_compatible') {
+            if (submitted.length) {
+              throw new Error('来源采集策略在批次执行期间发生变化，请检查已写入记录后重试');
+            }
+            break;
+          }
+          if (outcome.state !== 'submitted') throw new Error('来源采集 V2 返回未知状态');
+          submitted.push(true);
+          const sourceProductId = sourceItem.captureV2 && sourceItem.captureV2.sourceIdentity
+            ? sourceItem.captureV2.sourceIdentity.productId
+            : null;
+          const handoff = createSourceWorkflowHandoff(outcome.data, sourceProductId);
+          if (handoff) handoffs.push(handoff);
+        }
+        if (submitted.length === nativeCaptureItems.length) {
+          const handoff = handoffs.length ? await persistSourceWorkflowHandoff(handoffs[handoffs.length - 1]) : null;
+          notifyErpCollectCompleted(submitted.length, 0);
+          sendResponse({
+            ok: true,
+            data: { code: 1, data: { saved: submitted.length } },
+            saved: submitted.length,
+            errorCount: 0,
+            handoff,
+            captureVersion: 'source-product-capture-v2',
+          });
+          return;
+        }
+      }
       const items = rawItems.map(normalizeSourceProductForErpCollect);
       const data = await self.SS_ERP_CLIENT.submitCollect({ items: items });
       if (!data || data.code !== 1) {

@@ -5,7 +5,7 @@ import { ExtensionDeviceSessionError } from '../services/extension-device-sessio
 
 const NOW = new Date('2026-07-12T08:00:00.000Z');
 
-function dependencies(options: { staff?: boolean } = {}) {
+function dependencies(options: { staff?: boolean; rootStaff?: boolean } = {}) {
   const session = {
     id: 'session-1',
     deploymentId: 'test-deployment',
@@ -55,13 +55,13 @@ function dependencies(options: { staff?: boolean } = {}) {
       userId: 'owner-1',
       actorUserId: options.staff ? 'staff-1' : 'owner-1',
       parentId: options.staff ? 'owner-1' : null,
-      role: 'USER',
+      role: options.staff || options.rootStaff ? 'STAFF' : 'USER',
     };
   });
   return { sessionService, managementRepository, authenticateAccount };
 }
 
-async function buildApp(options: { staff?: boolean } = {}) {
+async function buildApp(options: { staff?: boolean; rootStaff?: boolean } = {}) {
   const deps = dependencies(options);
   const app = Fastify();
   await app.register(extensionDeviceRoutes, deps as any);
@@ -81,7 +81,11 @@ describe('extension device routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/pairing-codes',
-      payload: { shopIds: ['shop-1', 'shop-1'], deviceLabel: 'Chrome Xiamen' },
+      payload: {
+        shopIds: ['shop-1', 'shop-1'],
+        scopes: ['listing:review', 'listing:publish'],
+        deviceLabel: 'Chrome Xiamen',
+      },
     });
 
     expect(response.statusCode).toBe(201);
@@ -94,9 +98,30 @@ describe('extension device routes', () => {
       actorUserId: 'owner-1',
       ownerUserId: 'owner-1',
       actorParentId: null,
+      actorRole: 'USER',
       shopIds: ['shop-1', 'shop-1'],
+      scopes: ['listing:review', 'listing:publish'],
       deviceLabel: 'Chrome Xiamen',
     });
+  });
+
+  it('requires the owner to select at least one allowlisted device scope', async () => {
+    const { app, sessionService } = await buildApp();
+
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/pairing-codes',
+      payload: { shopIds: ['shop-1'] },
+    });
+    const unknown = await app.inject({
+      method: 'POST',
+      url: '/pairing-codes',
+      payload: { shopIds: ['shop-1'], scopes: ['root:shell'] },
+    });
+
+    expect(missing.statusCode).toBe(400);
+    expect(unknown.statusCode).toBe(400);
+    expect(sessionService.createPairingCode).not.toHaveBeenCalled();
   });
 
   it('fails closed when staff attempt to create their own pairing authority', async () => {
@@ -108,11 +133,25 @@ describe('extension device routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/pairing-codes',
-      payload: { shopIds: ['shop-1'] },
+      payload: { shopIds: ['shop-1'], scopes: ['listing:review'] },
     });
 
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ errorCode: 'pairing_owner_required' });
+  });
+
+  it('rejects a root STAFF account even when actor and owner ids match', async () => {
+    const { app, sessionService } = await buildApp({ rootStaff: true });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/pairing-codes',
+      payload: { shopIds: ['shop-1'], scopes: ['listing:review'] },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ errorCode: 'pairing_owner_required' });
+    expect(sessionService.createPairingCode).not.toHaveBeenCalled();
   });
 
   it('claims once and rotates refresh credentials without account middleware', async () => {

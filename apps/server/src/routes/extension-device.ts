@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticate } from '../lib/auth.js';
 import {
   createExtensionDeviceSessionService,
+  EXTENSION_DEVICE_SCOPES,
   ExtensionDeviceSessionError,
   type ExtensionDeviceRevocationReason,
 } from '../services/extension-device-session.js';
@@ -44,6 +45,7 @@ export interface ExtensionDeviceRoutesOptions {
 
 const pairingSchema = z.object({
   shopIds: z.array(z.string().trim().min(1).max(200)).min(1).max(50),
+  scopes: z.array(z.enum(EXTENSION_DEVICE_SCOPES)).min(1).max(EXTENSION_DEVICE_SCOPES.length),
   deviceLabel: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
@@ -90,18 +92,22 @@ function accountContext(request: FastifyRequest) {
     userId: string;
     actorUserId: string;
     parentId: string | null;
+    role: string;
   };
   return {
     ownerUserId: user.userId,
     actorUserId: user.actorUserId,
     actorParentId: user.parentId ?? null,
+    actorRole: user.role,
   };
 }
 
 
 function ownerAccountContext(request: FastifyRequest, reply: FastifyReply) {
   const account = accountContext(request);
-  if (account.actorParentId !== null || account.actorUserId !== account.ownerUserId) {
+  if (account.actorParentId !== null
+    || account.actorUserId !== account.ownerUserId
+    || !['USER', 'ADMIN'].includes(account.actorRole)) {
     reply.status(403).send({
       code: 0, errorCode: 'pairing_owner_required', msg: '需要租户所有者权限',
     });
@@ -124,6 +130,7 @@ export async function extensionDeviceRoutes(
       const result = await options.sessionService.createPairingCode({
         ...account,
         shopIds: parsed.data.shopIds,
+        scopes: parsed.data.scopes,
         deviceLabel: parsed.data.deviceLabel,
       });
       return reply.status(201).send({ code: 1, msg: '配对码已创建', data: result });

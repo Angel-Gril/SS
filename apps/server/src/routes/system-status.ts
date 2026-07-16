@@ -47,6 +47,10 @@ function maskPhone(phone: string): string {
   return phone.replace(/^(\+?\d{2,3})?\d{3}(\d{4})$/, '$1***$2');
 }
 
+function maskedSecretValue(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 4)}***${value.slice(-4)}` : '***MASKED***';
+}
+
 function shortError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || 'unknown');
   return message.replace(/\s+/g, ' ').slice(0, 300);
@@ -577,16 +581,33 @@ export async function systemStatusRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/test/ai-image', async (_request, reply) => {
-    const [enabled, provider, baseUrl, apiKey, model] = await Promise.all([
-      getConfig('ai_image_generation_enabled'),
+  app.post('/test/ai-image', async (request, reply) => {
+    const body = request.body && typeof request.body === 'object'
+      ? request.body as Record<string, unknown>
+      : {};
+    const [savedProvider, savedBaseUrl, savedApiKey, savedModel] = await Promise.all([
       getConfig('ai_image_provider'),
       getConfig('ai_image_base_url'),
       getConfig('ai_image_api_key'),
       getConfig('ai_image_model'),
     ]);
-    if (!enabled || provider === 'disabled') {
-      return reply.send({ code: 1, msg: 'AI 生图当前已关闭，基础任务与存储平台可用' });
+
+    const submittedProvider = typeof body.provider === 'string' ? body.provider.trim() : '';
+    const provider = submittedProvider || savedProvider;
+    const baseUrl = Object.hasOwn(body, 'baseUrl') ? String(body.baseUrl || '').trim() : savedBaseUrl;
+    const model = Object.hasOwn(body, 'model') ? String(body.model || '').trim() : savedModel;
+    const submittedApiKey = Object.hasOwn(body, 'apiKey') ? String(body.apiKey || '').trim() : '';
+    const maskedApiKey = (
+      submittedApiKey.length >= 4
+      && (
+        /^[*•xX]+$/.test(submittedApiKey)
+        || (Boolean(savedApiKey) && submittedApiKey === maskedSecretValue(savedApiKey))
+      )
+    );
+    const apiKey = submittedApiKey && !maskedApiKey ? submittedApiKey : savedApiKey;
+
+    if (provider === 'disabled') {
+      return reply.send({ code: 0, msg: 'AI 生图供应商已禁用，未执行连接测试' });
     }
     const missing = [
       !apiKey && 'API Key',

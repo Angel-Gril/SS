@@ -1,19 +1,392 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildOzonCategoryCatalog,
+  buildMergedOzonCategoryCatalog,
   backfillOzonCategoryCatalogTranslations,
+  deriveOzonCategoryCatalogRevision,
   enrichMissingOzonCategoryCatalogTranslations,
   createPrismaOzonCategoryCatalogStore,
   getOzonCategoryLocalRuleStats,
   getOzonCategoryLocalSearchTermsForTarget,
   searchOzonCategoryCatalog,
   searchOrRefreshOzonCategoryCatalogForShop,
+  getOrRefreshOzonCategoryCatalogSnapshotForShop,
+  OzonCategoryCatalogRefreshError,
   translateOzonCategoryText,
   type OzonCategoryCatalogEntry,
+  type OzonCategoryCatalogSnapshot,
+  type OzonCategoryCatalogSnapshotStore,
   type PrismaOzonCategoryCatalogClient,
 } from '../services/ozon-category-catalog.js';
 
 describe('ozon category catalog', () => {
+  function catalogSnapshot(
+    entries: OzonCategoryCatalogEntry[],
+    overrides: Partial<OzonCategoryCatalogSnapshot> = {},
+  ): OzonCategoryCatalogSnapshot {
+    return {
+      schemaVersion: 'ozon-category-catalog-snapshot/v1',
+      entries,
+      revision: deriveOzonCategoryCatalogRevision(entries),
+      fetchedAt: new Date('2026-07-14T00:00:00.000Z'),
+      expiresAt: new Date('2026-07-15T00:00:00.000Z'),
+      complete: true,
+      defaultTreeComplete: true,
+      zhHansTreeComplete: true,
+      stale: false,
+      authoritative: true,
+      ...overrides,
+    };
+  }
+
+  function memorySnapshotStore(initial: OzonCategoryCatalogSnapshot | null) {
+    let current = initial;
+    const store: OzonCategoryCatalogSnapshotStore = {
+      find: vi.fn(async () => current),
+      replace: vi.fn(async (_shopId, snapshot) => {
+        current = snapshot;
+      }),
+    };
+    return { store, current: () => current };
+  }
+
+  const snapshotDefaultTree = (typeName = 'Джинсы', disabled = false) => [{
+    description_category_id: 20,
+    category_name: 'Женская одежда',
+    disabled: false,
+    children: [{ type_id: 100, type_name: typeName, disabled, children: [] }],
+  }];
+
+  const snapshotZhTree = (typeName = '牛仔裤', disabled = false) => [{
+    description_category_id: 20,
+    category_name: '女士服饰',
+    disabled: false,
+    children: [{ type_id: 100, type_name: typeName, disabled, children: [] }],
+  }];
+
+  it('refreshes a complete catalog snapshot at the exact TTL boundary but reuses it before expiry', async () => {
+    const cached = catalogSnapshot(buildMergedOzonCategoryCatalog(snapshotDefaultTree(), snapshotZhTree()));
+    const state = memorySnapshotStore(cached);
+    const fetchTree = vi.fn(async (language: 'DEFAULT' | 'ZH_HANS') => (
+      language === 'DEFAULT' ? snapshotDefaultTree('Джинсы обновленные') : snapshotZhTree('新版牛仔裤')
+    ));
+
+    const fresh = await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      fetchTree,
+      now: () => new Date(cached.expiresAt.getTime() - 1),
+    });
+    expect(fresh).toMatchObject({ refreshed: false, snapshot: { stale: false, authoritative: true } });
+    expect(fetchTree).not.toHaveBeenCalled();
+
+    const expired = await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      fetchTree,
+      now: () => new Date(cached.expiresAt),
+      ttlMs: 60_000,
+    });
+
+    expect(fetchTree.mock.calls.map(([language]) => language)).toEqual(['DEFAULT', 'ZH_HANS']);
+    expect(expired).toMatchObject({
+      refreshed: true,
+      snapshot: {
+        complete: true,
+        stale: false,
+        authoritative: true,
+        fetchedAt: cached.expiresAt,
+        expiresAt: new Date(cached.expiresAt.getTime() + 60_000),
+      },
+    });
+    expect(expired.snapshot.revision).not.toBe(cached.revision);
+    expect(state.store.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a newly disabled pair from the selectable catalog after refresh', async () => {
+    const cached = catalogSnapshot(buildMergedOzonCategoryCatalog(snapshotDefaultTree(), snapshotZhTree()));
+    const state = memorySnapshotStore(cached);
+
+    const result = await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1', refresh: true }, {
+      store: state.store,
+      fetchTree: async (language) => (
+        language === 'DEFAULT' ? snapshotDefaultTree('Джинсы', true) : snapshotZhTree('牛仔裤', true)
+      ),
+      now: () => new Date('2026-07-14T12:00:00.000Z'),
+    });
+
+    expect(result.snapshot.entries.find((entry) => entry.typeId === 100)).toMatchObject({
+      disabled: true,
+      selectable: false,
+    });
+    expect(searchOzonCategoryCatalog(result.snapshot.entries, '100').some((entry) => entry.typeId === 100)).toBe(false);
+    expect(result.snapshot.revision).not.toBe(cached.revision);
+  });
+
+  it('labels a complete stale snapshot non-authoritative and non-selectable when refresh fails', async () => {
+    const cached = catalogSnapshot(buildMergedOzonCategoryCatalog(snapshotDefaultTree(), snapshotZhTree()), {
+      expiresAt: new Date('2026-07-14T01:00:00.000Z'),
+    });
+    const state = memorySnapshotStore(cached);
+
+    const refreshFailure = new Error('ZH tree unavailable');
+    const result = await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      fetchTree: async (language) => {
+        if (language === 'ZH_HANS') throw refreshFailure;
+        return snapshotDefaultTree();
+      },
+      now: () => new Date('2026-07-14T02:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      refreshed: false,
+      refreshError: 'ZH tree unavailable',
+      snapshot: { complete: true, stale: true, authoritative: false },
+    });
+    expect(result.refreshCause).toBe(refreshFailure);
+    expect(result.snapshot.entries.every((entry) => entry.selectable === false)).toBe(true);
+    expect(deriveOzonCategoryCatalogRevision(result.snapshot.entries)).toBe(result.snapshot.revision);
+    expect(searchOzonCategoryCatalog(result.snapshot.entries, '牛仔裤')).toEqual([]);
+    expect(cached.entries.every((entry) => entry.selectable === true)).toBe(true);
+    expect(state.store.replace).not.toHaveBeenCalled();
+  });
+
+  it('retains the original refresh cause when no complete snapshot can be used', async () => {
+    const state = memorySnapshotStore(null);
+    const refreshFailure = new Error('credential sentinel');
+
+    let caught: unknown;
+    try {
+      await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+        store: state.store,
+        fetchTree: async () => { throw refreshFailure; },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(OzonCategoryCatalogRefreshError);
+    expect((caught as Error).cause).toBe(refreshFailure);
+  });
+
+  it('does not commit a partial bilingual refresh when one official tree is empty', async () => {
+    const state = memorySnapshotStore(null);
+
+    await expect(getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      fetchTree: async (language) => language === 'DEFAULT' ? snapshotDefaultTree() : [],
+      now: () => new Date('2026-07-14T02:00:00.000Z'),
+    })).rejects.toThrow('Ozon bilingual category refresh is incomplete');
+
+    expect(state.store.replace).not.toHaveBeenCalled();
+    expect(state.current()).toBeNull();
+  });
+
+  it('fetches the two official trees with a stable maximum concurrency of two', async () => {
+    const state = memorySnapshotStore(null);
+    const calls: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+
+    const result = await getOrRefreshOzonCategoryCatalogSnapshotForShop({ shopId: 'shop-1' }, {
+      store: state.store,
+      fetchTree: async (language) => {
+        calls.push(language);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await Promise.resolve();
+        active -= 1;
+        return language === 'DEFAULT' ? snapshotDefaultTree() : snapshotZhTree();
+      },
+    });
+
+    expect(calls).toEqual(['DEFAULT', 'ZH_HANS']);
+    expect(maxActive).toBe(2);
+    expect(result).toMatchObject({ refreshed: true, snapshot: { complete: true, authoritative: true } });
+  });
+
+  it('merges official DEFAULT and ZH_HANS labels by category/type ids across different tree topology and order', () => {
+    const defaultTree = [
+      {
+        description_category_id: 10,
+        category_name: 'Одежда',
+        disabled: false,
+        children: [{
+          description_category_id: 20,
+          category_name: 'Женская одежда',
+          disabled: false,
+          children: [{ type_id: 100, type_name: 'Джинсы', disabled: false, children: [] }],
+        }],
+      },
+      {
+        description_category_id: 30,
+        category_name: 'Дом и сад',
+        disabled: false,
+        children: [{ type_id: 200, type_name: 'Коробка для хранения', disabled: false, children: [] }],
+      },
+    ];
+    const zhHansTree = [
+      {
+        description_category_id: 30,
+        category_name: '家居园艺',
+        disabled: false,
+        children: [{ type_id: 200, type_name: '官方收纳箱', disabled: false, children: [] }],
+      },
+      {
+        description_category_id: 999,
+        category_name: '全部商品',
+        disabled: false,
+        children: [{
+          description_category_id: 20,
+          category_name: '官方女士服饰',
+          type_id: 100,
+          type_name: '官方牛仔裤',
+          disabled: false,
+          children: [],
+        }],
+      },
+      { description_category_id: 10, category_name: '官方服装', disabled: false, children: [] },
+    ];
+
+    const catalog = buildMergedOzonCategoryCatalog(defaultTree, zhHansTree);
+
+    expect(catalog).toHaveLength(2);
+    expect(catalog.find((entry) => entry.typeId === 100)).toMatchObject({
+      descriptionCategoryId: 20,
+      categoryPathRu: ['Одежда', 'Женская одежда'],
+      categoryPathZh: ['官方服装', '官方女士服饰'],
+      typeNameRu: 'Джинсы',
+      typeNameZh: '官方牛仔裤',
+      displayPathZh: '官方服装 / 官方女士服饰 / 官方牛仔裤',
+      disabled: false,
+      selectable: true,
+      labelProvenance: {
+        categoryPathRu: ['official_default', 'official_default'],
+        categoryPathZh: ['official_zh_hans', 'official_zh_hans'],
+        typeNameRu: 'official_default',
+        typeNameZh: 'official_zh_hans',
+      },
+    });
+    expect(catalog.find((entry) => entry.typeId === 200)).toMatchObject({
+      descriptionCategoryId: 30,
+      categoryPathZh: ['家居园艺'],
+      typeNameZh: '官方收纳箱',
+    });
+  });
+
+  it('keeps official Chinese labels authoritative over local and AI enrichment', async () => {
+    const catalog = buildMergedOzonCategoryCatalog([
+      {
+        description_category_id: 10,
+        category_name: 'Неизвестный раздел',
+        disabled: false,
+        children: [{
+          description_category_id: 20,
+          category_name: 'Женская одежда',
+          disabled: false,
+          children: [{ type_id: 100, type_name: 'Джинсы', disabled: false, children: [] }],
+        }],
+      },
+    ], [
+      {
+        description_category_id: 20,
+        category_name: '官方女士服饰',
+        disabled: false,
+        children: [{ type_id: 100, type_name: '官方牛仔裤', disabled: false, children: [] }],
+      },
+    ]);
+    const translate = vi.fn(async () => ({ outputText: 'AI 根类目', source: 'provider' }));
+
+    const enriched = await enrichMissingOzonCategoryCatalogTranslations(catalog, { translateTerm: translate });
+
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(translate).toHaveBeenCalledWith('Неизвестный раздел');
+    expect(enriched[0]).toMatchObject({
+      categoryPathZh: ['AI 根类目', '官方女士服饰'],
+      typeNameZh: '官方牛仔裤',
+      labelProvenance: {
+        categoryPathZh: ['ai', 'official_zh_hans'],
+        typeNameZh: 'official_zh_hans',
+      },
+    });
+  });
+
+  it('keeps a disabled target non-selectable while still traversing active descendants', () => {
+    const catalog = buildMergedOzonCategoryCatalog([
+      {
+        description_category_id: 10,
+        category_name: 'Одежда',
+        disabled: false,
+        children: [{
+          description_category_id: 20,
+          category_name: 'Старая категория',
+          type_id: 100,
+          type_name: 'Старый тип',
+          disabled: true,
+          children: [{
+            description_category_id: 30,
+            category_name: 'Активная категория',
+            type_id: 200,
+            type_name: 'Активный тип',
+            disabled: false,
+            children: [],
+          }],
+        }],
+      },
+    ], [
+      {
+        description_category_id: 10,
+        category_name: '服装',
+        disabled: false,
+        children: [{
+          description_category_id: 20,
+          category_name: '旧类目',
+          type_id: 100,
+          type_name: '旧类型',
+          disabled: true,
+          children: [{
+            description_category_id: 30,
+            category_name: '有效类目',
+            type_id: 200,
+            type_name: '有效类型',
+            disabled: false,
+            children: [],
+          }],
+        }],
+      },
+    ]);
+
+    expect(catalog.find((entry) => entry.typeId === 100)).toMatchObject({ disabled: true, selectable: false });
+    expect(catalog.find((entry) => entry.typeId === 200)).toMatchObject({
+      disabled: false,
+      selectable: true,
+      categoryPathRu: ['Одежда', 'Старая категория', 'Активная категория'],
+      categoryPathZh: ['服装', '旧类目', '有效类目'],
+    });
+    expect(searchOzonCategoryCatalog(catalog, 'Старый тип').some((entry) => entry.typeId === 100)).toBe(false);
+    expect(searchOzonCategoryCatalog(catalog, 'Активный тип')[0]).toMatchObject({ typeId: 200 });
+  });
+
+  it('derives the same catalog revision regardless of official tree order', () => {
+    const defaultRows = [
+      { description_category_id: 20, category_name: 'Женская одежда', type_id: 100, type_name: 'Джинсы', disabled: false, children: [] },
+      { description_category_id: 30, category_name: 'Дом и сад', type_id: 200, type_name: 'Коробка для хранения', disabled: false, children: [] },
+    ];
+    const zhRows = [
+      { description_category_id: 20, category_name: '女士服饰', type_id: 100, type_name: '牛仔裤', disabled: false, children: [] },
+      { description_category_id: 30, category_name: '家居园艺', type_id: 200, type_name: '收纳箱', disabled: false, children: [] },
+    ];
+    const first = buildMergedOzonCategoryCatalog(defaultRows, zhRows);
+    const reordered = buildMergedOzonCategoryCatalog([...defaultRows].reverse(), [...zhRows].reverse());
+    const changed = buildMergedOzonCategoryCatalog(defaultRows, [
+      { ...zhRows[0]!, type_name: '官方牛仔裤' },
+      zhRows[1]!,
+    ]);
+
+    expect(deriveOzonCategoryCatalogRevision(first)).toMatch(/^[a-f0-9]{64}$/);
+    expect(deriveOzonCategoryCatalogRevision(reordered)).toBe(deriveOzonCategoryCatalogRevision(first));
+    expect(deriveOzonCategoryCatalogRevision(changed)).not.toBe(deriveOzonCategoryCatalogRevision(first));
+  });
+
   it('flattens Ozon description category tree into searchable Chinese catalog entries', () => {
     const catalog = buildOzonCategoryCatalog([
       {
@@ -579,7 +952,11 @@ describe('ozon category catalog', () => {
       maxWait: expect.any(Number),
       timeout: expect.any(Number),
     }));
-    expect(executeRaw).toHaveBeenCalledTimes(2);
+    expect(executeRaw).toHaveBeenCalledTimes(3);
+    const executedSql = (executeRaw.mock.calls as unknown as Array<[TemplateStringsArray]>)
+      .map(([strings]) => strings.join(''))
+      .join('\n');
+    expect(executedSql).not.toContain('DELETE FROM');
   });
   it('enriches missing Ozon category labels through cache-backed translation and rebuilds display/search text', async () => {
     const catalog = buildOzonCategoryCatalog([

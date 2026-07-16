@@ -50,6 +50,7 @@
   var SOURCE_PAGE_TYPES = setOf([
     'ss-erp:source-candidate-context-get',
     'ss-erp:collect-source-to-erp',
+    'ss-erp:open-source-workflow-handoff',
     'ss-erp:source-quote-save',
     'ss-erp:image-search-create',
     'ozon-calculator:status',
@@ -157,6 +158,7 @@
     'ss-erp:source-candidate-context-save',
     'ss-erp:source-candidate-context-get',
     'ss-erp:collect-source-to-erp',
+    'ss-erp:open-source-workflow-handoff',
     'ss-erp:source-quote-save',
     'ss-erp:source-quote-pending-get',
     'ss-erp:source-quote-pending-clear',

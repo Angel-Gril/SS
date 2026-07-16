@@ -15,9 +15,13 @@ test('dashboard navigation becomes a dismissible overlay without shrinking mobil
   assert.match(sidebar, /onMobileClose: \(\) => void/);
   assert.match(
     sidebar,
-    /fixed inset-y-0 left-0 z-50[^"']*md:sticky[^"']*md:translate-x-0/,
+    /fixed inset-y-0 z-50[^"']*md:sticky[^"']*md:left-0/,
   );
-  assert.match(sidebar, /mobileOpen \? 'translate-x-0' : '-translate-x-full'/);
+  assert.match(sidebar, /mobileOpen \? 'left-0 visible' : '-left-64 invisible md:visible'/);
+  assert.match(
+    fs.readFileSync('apps/web/src/components/layout/topbar.tsx', 'utf8'),
+    /aria-label="切换导航菜单"/,
+  );
 });
 
 test('an opened mobile drawer renders full labels and closes after navigation', () => {

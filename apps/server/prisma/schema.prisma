@@ -129,6 +129,177 @@ enum ExtensionDeviceAssignmentGrantStatus {
   REVOKED
 }
 
+enum ExtensionCommandOperation {
+  SOURCE_CAPTURE
+  LISTING_WRITE
+  LISTING_REVIEW
+  MEDIA_EXECUTE
+  OZON_PUBLISH
+}
+
+enum ExtensionCommandReceiptStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum SourceCaptureIngestChannel {
+  EXTENSION_DEVICE
+  WEB_ACCOUNT
+  LEGACY_ADAPTER
+}
+
+enum SourceOzonCategoryMappingScope {
+  TENANT
+  GLOBAL
+}
+
+enum SourceOzonCategoryMappingStatus {
+  ACTIVE
+  REJECTED
+  RETIRED
+}
+
+enum SourceOzonCategoryMappingDecisionAction {
+  CONFIRM
+  REJECT
+  PROMOTE
+}
+
+enum SourceListingWorkflowStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+  RETRYABLE_FAILURE
+  PERMANENT_FAILURE
+  MANUAL_REVIEW
+  COMPLETED
+}
+
+enum SourceListingDraftStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+  RETRYABLE_FAILURE
+  PERMANENT_FAILURE
+  MANUAL_REVIEW
+  READY
+  PUBLISHED
+}
+
+enum OzonPublishAttemptState {
+  PREPARED
+  SUBMITTING
+  SUBMITTED
+  UNKNOWN
+  REJECTED
+}
+
+enum OzonPublishReconciliationState {
+  NOT_REQUIRED
+  PENDING
+  RUNNING
+  RETRY_WAIT
+  SUCCEEDED
+  PARTIAL_FAILURE
+  FAILED
+  MANUAL_REVIEW
+}
+
+enum OzonPublishLeasePurpose {
+  SUBMIT
+  RECONCILE
+}
+
+enum OzonPublisherParityEntrypoint {
+  COLLECT_PUBLISH_OZON
+  LISTING_BATCH
+  LISTING_IMPORT_BY_SKU
+  BROWSER_ONE_CLICK
+  EXTENSION_ADAPTER
+}
+
+enum OzonPublisherParityReportStatus {
+  MATCH
+  DIFFERENT
+  V2_BLOCKED
+  NOT_COMPARABLE
+}
+
+enum OzonPublisherParityClassification {
+  MATCH
+  INTENTIONAL_STRICTER
+  COMPATIBILITY_TRANSFORM
+  DEFECT
+  NOT_COMPARABLE
+}
+
+enum OzonPublisherParityV2Kind {
+  COMPILED
+  BLOCKED
+  UNAVAILABLE
+}
+
+enum OzonPublisherParityApprovalState {
+  PENDING
+  APPROVED
+  REJECTED
+  REVOKED
+}
+
+enum OzonPublisherParityDecisionAction {
+  APPROVE
+  REJECT
+  REVOKE
+}
+
+enum OzonPublisherWriterEntrypoint {
+  COLLECT_PUBLISH_OZON
+  LISTING_BATCH
+  LISTING_IMPORT_BY_SKU
+}
+
+enum OzonPublisherOriginChannel {
+  DIRECT
+  BROWSER_ONE_CLICK
+  EXTENSION_ADAPTER
+}
+
+enum OzonPublisherRolloutGateState {
+  NOT_READY
+  READY
+  REVOKED
+}
+
+enum OzonPublisherRolloutRecorderResult {
+  RECORDED
+  FAILED
+}
+
+enum OzonPublisherRolloutEvaluationResult {
+  NOT_READY
+  READY
+}
+
+enum OzonPublisherRolloutTransitionAction {
+  APPROVE
+  REVOKE
+}
+
+enum OzonPublisherRolloutBoundary {
+  COLLECT_PUBLISH_OZON
+  LISTING_BATCH
+  LISTING_IMPORT_BY_SKU
+  BROWSER_ONE_CLICK
+  EXTENSION_ADAPTER
+}
+
+enum OzonPublisherRolloutStage {
+  off
+  shadow
+  v2
+}
+
 enum ExtensionDeviceSecurityEventType {
   PAIRING_CLAIMED
   SESSION_REVOKED
@@ -150,6 +321,7 @@ enum ExtensionDeviceRevocationReason {
   SHOP_UNLINKED
   WAREHOUSE_RETIRED
   SCOPE_REVOKED
+  WORKFLOW_VERSION_CHANGED
 }
 
 enum LogisticsRuleReleaseAckStatus {
@@ -225,45 +397,69 @@ model User {
   updatedAt          DateTime   @updatedAt @map("updated_at")
   lastLoginAt        DateTime?  @map("last_login_at")
 
-  shops                         Shop[]
-  balanceLogs                   BalanceLog[]
-  sessions                      Session[]
-  supplyGoods                   SupplyGoods[]
-  sourceCandidates              SourceCandidate[]
-  sourceQuotes                  SourceQuote[]
-  account                       UserAccount?
-  rechargeOrders                RechargeOrder[]            @relation("RechargeOrderUser")
-  reviewedRechargeOrders        RechargeOrder[]            @relation("RechargeOrderReviewer")
-  userServiceTags               UserServiceTag[]
-  createdAnnouncements          Announcement[]             @relation("AnnouncementCreator")
-  announcementReads             AnnouncementRead[]
-  createdDashboardContentBlocks DashboardContentBlock[]    @relation("DashboardContentBlockCreator")
-  auditLogs                     AuditLog[]
-  ozonAnalyticsCaches           OzonAnalyticsCache[]
-  productSelectionRules         ProductSelectionRule[]
-  productSelectionPoolItems     ProductSelectionPoolItem[]
-  legalAcceptances              LegalAcceptance[]
-  ownedAiImageJobs              AiImageJob[]               @relation("AiImageJobOwner")
-  createdAiImageJobs            AiImageJob[]               @relation("AiImageJobActor")
-  mediaAssets                   MediaAsset[]
-  logisticsRuleChannels         LogisticsRuleChannel[]     @relation("LogisticsChannelTenant")
-  logisticsRuleRevisions        LogisticsRuleRevision[]    @relation("LogisticsRevisionTenant")
-  logisticsRuleAssignments      LogisticsRuleAssignment[]  @relation("LogisticsAssignmentTenant")
-  shopOzonCompanyBindings       ShopOzonCompanyBinding[]   @relation("ShopCompanyBindingTenant")
-  warehouseOzonOriginBindings   WarehouseOzonOriginBinding[] @relation("WarehouseOriginBindingTenant")
-  deliveryMethodRuleBindings    ShopDeliveryMethodRuleBinding[] @relation("MethodRuleBindingTenant")
-  officialFormulaResolutions    OfficialSellerFormulaResolution[] @relation("OfficialResolutionTenant")
-  createdExtensionPairingCodes ExtensionDevicePairingCode[] @relation("ExtensionPairingActor")
-  ownedExtensionPairingCodes   ExtensionDevicePairingCode[] @relation("ExtensionPairingOwner")
-  extensionSessionsAsActor     ExtensionDeviceSession[]     @relation("ExtensionSessionActor")
-  extensionSessionsAsOwner     ExtensionDeviceSession[]     @relation("ExtensionSessionOwner")
-  extensionSecurityEventsAsActor ExtensionDeviceSecurityEvent[] @relation("ExtensionSecurityEventActor")
-  requestedLogisticsCaptureTasks LogisticsCaptureTask[] @relation("CaptureTaskRequester")
-  tenantLogisticsCaptureTasks LogisticsCaptureTask[] @relation("CaptureTaskTenant")
-  tenantLogisticsCaptureCandidates LogisticsCaptureCandidate[] @relation("CaptureCandidateTenant")
-  reviewedLogisticsCaptureCandidates LogisticsCaptureCandidate[] @relation("CaptureCandidateReviewer")
-  reviewedOfficialInputUnitContracts LogisticsOfficialInputUnitContract[] @relation("OfficialInputUnitContractReviewer")
-  revokedOfficialInputUnitContracts LogisticsOfficialInputUnitContract[] @relation("OfficialInputUnitContractRevoker")
+  shops                               Shop[]
+  balanceLogs                         BalanceLog[]
+  sessions                            Session[]
+  supplyGoods                         SupplyGoods[]
+  sourceCandidates                    SourceCandidate[]
+  sourceQuotes                        SourceQuote[]
+  account                             UserAccount?
+  rechargeOrders                      RechargeOrder[]                        @relation("RechargeOrderUser")
+  reviewedRechargeOrders              RechargeOrder[]                        @relation("RechargeOrderReviewer")
+  userServiceTags                     UserServiceTag[]
+  createdAnnouncements                Announcement[]                         @relation("AnnouncementCreator")
+  announcementReads                   AnnouncementRead[]
+  createdDashboardContentBlocks       DashboardContentBlock[]                @relation("DashboardContentBlockCreator")
+  auditLogs                           AuditLog[]
+  ozonAnalyticsCaches                 OzonAnalyticsCache[]
+  productSelectionRules               ProductSelectionRule[]
+  productSelectionPoolItems           ProductSelectionPoolItem[]
+  legalAcceptances                    LegalAcceptance[]
+  ownedAiImageJobs                    AiImageJob[]                           @relation("AiImageJobOwner")
+  createdAiImageJobs                  AiImageJob[]                           @relation("AiImageJobActor")
+  mediaAssets                         MediaAsset[]
+  logisticsRuleChannels               LogisticsRuleChannel[]                 @relation("LogisticsChannelTenant")
+  logisticsRuleRevisions              LogisticsRuleRevision[]                @relation("LogisticsRevisionTenant")
+  logisticsRuleAssignments            LogisticsRuleAssignment[]              @relation("LogisticsAssignmentTenant")
+  shopOzonCompanyBindings             ShopOzonCompanyBinding[]               @relation("ShopCompanyBindingTenant")
+  warehouseOzonOriginBindings         WarehouseOzonOriginBinding[]           @relation("WarehouseOriginBindingTenant")
+  deliveryMethodRuleBindings          ShopDeliveryMethodRuleBinding[]        @relation("MethodRuleBindingTenant")
+  officialFormulaResolutions          OfficialSellerFormulaResolution[]      @relation("OfficialResolutionTenant")
+  createdExtensionPairingCodes        ExtensionDevicePairingCode[]           @relation("ExtensionPairingActor")
+  ownedExtensionPairingCodes          ExtensionDevicePairingCode[]           @relation("ExtensionPairingOwner")
+  extensionSessionsAsActor            ExtensionDeviceSession[]               @relation("ExtensionSessionActor")
+  extensionSessionsAsOwner            ExtensionDeviceSession[]               @relation("ExtensionSessionOwner")
+  extensionSecurityEventsAsActor      ExtensionDeviceSecurityEvent[]         @relation("ExtensionSecurityEventActor")
+  ownedExtensionCommandGrants         ExtensionCommandGrant[]                @relation("ExtensionCommandGrantOwner")
+  ownedSourceCaptureSubjects          SourceCaptureSubject[]                 @relation("SourceCaptureSubjectOwner")
+  sourceCaptureSnapshotsAsActor       SourceCaptureSnapshot[]                @relation("SourceCaptureSnapshotActor")
+  ownedSourceOzonCategoryMappings     SourceOzonCategoryMapping[]            @relation("SourceOzonCategoryMappingOwner")
+  createdSourceOzonCategoryMappings   SourceOzonCategoryMapping[]            @relation("SourceOzonCategoryMappingCreator")
+  updatedSourceOzonCategoryMappings   SourceOzonCategoryMapping[]            @relation("SourceOzonCategoryMappingUpdater")
+  reviewedSourceOzonCategoryMappings  SourceOzonCategoryMapping[]            @relation("SourceOzonCategoryMappingReviewer")
+  sourceOzonCategoryMappingDecisions  SourceOzonCategoryMappingDecision[]    @relation("SourceOzonCategoryMappingDecisionActor")
+  ownedSourceListingWorkflows         SourceListingWorkflow[]                @relation("SourceListingWorkflowOwner")
+  sourceListingDraftVersionsAsActor   SourceListingDraftVersion[]            @relation("SourceListingDraftVersionActor")
+  sourceListingWorkflowEventsAsActor  SourceListingWorkflowEvent[]           @relation("SourceListingWorkflowEventActor")
+  ownedSourceListingPublishIntents    SourceListingPublishIntent[]           @relation("SourceListingPublishIntentOwner")
+  sourceListingPublishIntentsAsActor  SourceListingPublishIntent[]           @relation("SourceListingPublishIntentActor")
+  ownedOzonPublishAttempts            OzonPublishAttempt[]                   @relation("OzonPublishAttemptOwner")
+  ozonPublishAttemptsAsActor          OzonPublishAttempt[]                   @relation("OzonPublishAttemptActor")
+  resolvedOzonPublishAttempts         OzonPublishAttempt[]                   @relation("OzonPublishAttemptResolver")
+  ozonPublishAttemptEventsAsActor     OzonPublishAttemptEvent[]              @relation("OzonPublishAttemptEventActor")
+  reviewedOzonPublisherParitySubjects OzonPublisherParityDifferenceSubject[] @relation("OzonPublisherParitySubjectReviewer")
+  ozonPublisherParityDecisionsAsActor OzonPublisherParityDecision[]          @relation("OzonPublisherParityDecisionActor")
+  approvedOzonPublisherRolloutGates   OzonPublisherRolloutGate[]             @relation("OzonPublisherRolloutGateApprover")
+  revokedOzonPublisherRolloutGates    OzonPublisherRolloutGate[]             @relation("OzonPublisherRolloutGateRevoker")
+  ozonPublisherRolloutEvaluations     OzonPublisherRolloutEvaluation[]       @relation("OzonPublisherRolloutEvaluationActor")
+  ozonPublisherRolloutTransitions     OzonPublisherRolloutTransition[]       @relation("OzonPublisherRolloutTransitionActor")
+  ozonPublisherRolloutStageTransitions OzonPublisherRolloutStageTransition[] @relation("OzonPublisherRolloutStageTransitionActor")
+  requestedLogisticsCaptureTasks      LogisticsCaptureTask[]                 @relation("CaptureTaskRequester")
+  tenantLogisticsCaptureTasks         LogisticsCaptureTask[]                 @relation("CaptureTaskTenant")
+  tenantLogisticsCaptureCandidates    LogisticsCaptureCandidate[]            @relation("CaptureCandidateTenant")
+  reviewedLogisticsCaptureCandidates  LogisticsCaptureCandidate[]            @relation("CaptureCandidateReviewer")
+  reviewedOfficialInputUnitContracts  LogisticsOfficialInputUnitContract[]   @relation("OfficialInputUnitContractReviewer")
+  revokedOfficialInputUnitContracts   LogisticsOfficialInputUnitContract[]   @relation("OfficialInputUnitContractRevoker")
 
   @@index([parentId])
   @@map("users")
@@ -319,27 +515,32 @@ model Shop {
   createdAt          DateTime   @default(now()) @map("created_at")
   updatedAt          DateTime   @updatedAt @map("updated_at")
 
-  products             Product[]
-  orders               Order[]
-  warehouses           Warehouse[]
-  syncJobs             SyncJob[]
-  returns              Return[]
-  issues               ExpressIssue[]
-  financeTransactions  OzonFinanceTransaction[]
-  ozonCategoryCatalogs OzonCategoryCatalog[]
-  logisticsRuleChannels LogisticsRuleChannel[] @relation("LogisticsChannelShop")
-  logisticsRuleAssignments LogisticsRuleAssignment[] @relation("LogisticsAssignmentShop")
-  shopOzonCompanyBindings ShopOzonCompanyBinding[] @relation("ShopCompanyBindingShop")
-  warehouseOzonOriginBindings WarehouseOzonOriginBinding[] @relation("WarehouseOriginBindingShop")
-  deliveryMethodRuleBindings ShopDeliveryMethodRuleBinding[] @relation("MethodRuleBindingShop")
-  officialFormulaResolutions OfficialSellerFormulaResolution[] @relation("OfficialResolutionShop")
-  extensionDeviceGrants ExtensionDeviceShopGrant[]
-  extensionAssignmentGrants ExtensionDeviceAssignmentGrant[]
-  logisticsCaptureTasks LogisticsCaptureTask[] @relation("CaptureTaskShop")
-  logisticsCaptureCandidates LogisticsCaptureCandidate[] @relation("CaptureCandidateShop")
+  products                      Product[]
+  orders                        Order[]
+  warehouses                    Warehouse[]
+  syncJobs                      SyncJob[]
+  returns                       Return[]
+  issues                        ExpressIssue[]
+  financeTransactions           OzonFinanceTransaction[]
+  ozonCategoryCatalogs          OzonCategoryCatalog[]
+  ozonCategoryCatalogSnapshots  OzonCategoryCatalogSnapshot[]
+  ozonAttributeDefinitionCaches OzonAttributeDefinitionCache[]
+  logisticsRuleChannels         LogisticsRuleChannel[]            @relation("LogisticsChannelShop")
+  logisticsRuleAssignments      LogisticsRuleAssignment[]         @relation("LogisticsAssignmentShop")
+  shopOzonCompanyBindings       ShopOzonCompanyBinding[]          @relation("ShopCompanyBindingShop")
+  warehouseOzonOriginBindings   WarehouseOzonOriginBinding[]      @relation("WarehouseOriginBindingShop")
+  deliveryMethodRuleBindings    ShopDeliveryMethodRuleBinding[]   @relation("MethodRuleBindingShop")
+  officialFormulaResolutions    OfficialSellerFormulaResolution[] @relation("OfficialResolutionShop")
+  extensionDeviceGrants         ExtensionDeviceShopGrant[]
+  extensionAssignmentGrants     ExtensionDeviceAssignmentGrant[]
+  extensionCommandGrants        ExtensionCommandGrant[]
+  logisticsCaptureTasks         LogisticsCaptureTask[]            @relation("CaptureTaskShop")
+  logisticsCaptureCandidates    LogisticsCaptureCandidate[]       @relation("CaptureCandidateShop")
+  sourceListingWorkflows        SourceListingWorkflow[]
+  sourceListingPublishIntents   SourceListingPublishIntent[]
+  ozonPublishAttempts           OzonPublishAttempt[]
 
   @@unique([id, userId])
-
   @@index([userId])
   @@index([platform])
   @@map("shops")
@@ -380,40 +581,39 @@ model Warehouse {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  deliveryMethods ShopDeliveryMethod[]
-  logisticsRuleChannels LogisticsRuleChannel[] @relation("LogisticsChannelWarehouse")
-  logisticsRuleAssignments LogisticsRuleAssignment[] @relation("LogisticsAssignmentWarehouse")
-  warehouseOzonOriginBindings WarehouseOzonOriginBinding[] @relation("WarehouseOriginBindingWarehouse")
-  deliveryMethodRuleBindings ShopDeliveryMethodRuleBinding[] @relation("MethodRuleBindingWarehouse")
-  officialFormulaResolutions OfficialSellerFormulaResolution[] @relation("OfficialResolutionWarehouse")
-  logisticsCaptureTasks LogisticsCaptureTask[] @relation("CaptureTaskWarehouse")
-  logisticsCaptureCandidates LogisticsCaptureCandidate[] @relation("CaptureCandidateWarehouse")
+  deliveryMethods             ShopDeliveryMethod[]
+  logisticsRuleChannels       LogisticsRuleChannel[]            @relation("LogisticsChannelWarehouse")
+  logisticsRuleAssignments    LogisticsRuleAssignment[]         @relation("LogisticsAssignmentWarehouse")
+  warehouseOzonOriginBindings WarehouseOzonOriginBinding[]      @relation("WarehouseOriginBindingWarehouse")
+  deliveryMethodRuleBindings  ShopDeliveryMethodRuleBinding[]   @relation("MethodRuleBindingWarehouse")
+  officialFormulaResolutions  OfficialSellerFormulaResolution[] @relation("OfficialResolutionWarehouse")
+  logisticsCaptureTasks       LogisticsCaptureTask[]            @relation("CaptureTaskWarehouse")
+  logisticsCaptureCandidates  LogisticsCaptureCandidate[]       @relation("CaptureCandidateWarehouse")
 
   @@unique([id, shopId])
-
   @@unique([shopId, platformWarehouseId])
   @@index([shopId])
   @@map("warehouses")
 }
 
 model ShopDeliveryMethod {
-  id                  String    @id @default(cuid())
-  warehouseId         String    @map("warehouse_id")
-  warehouse           Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  platformMethodId    Int       @map("platform_method_id")
+  id                  String                          @id @default(cuid())
+  warehouseId         String                          @map("warehouse_id")
+  warehouse           Warehouse                       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  platformMethodId    Int                             @map("platform_method_id")
   name                String
   status              String?
-  providerId          Int?      @map("provider_id")
-  providerName        String?   @map("provider_name")
-  tplDropoffPointId   String?   @map("tpl_dropoff_point_id")
+  providerId          Int?                            @map("provider_id")
+  providerName        String?                         @map("provider_name")
+  tplDropoffPointId   String?                         @map("tpl_dropoff_point_id")
   cutoff              String?
-  slaCutIn            Int?      @map("sla_cut_in")
-  tplIntegrationType  String?   @map("tpl_integration_type")
-  dropOffPointAddress String?   @map("drop_off_point_address")
-  dropOffPointName    String?   @map("drop_off_point_name")
-  rawData             Json?     @map("raw_data")
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @updatedAt @map("updated_at")
+  slaCutIn            Int?                            @map("sla_cut_in")
+  tplIntegrationType  String?                         @map("tpl_integration_type")
+  dropOffPointAddress String?                         @map("drop_off_point_address")
+  dropOffPointName    String?                         @map("drop_off_point_name")
+  rawData             Json?                           @map("raw_data")
+  createdAt           DateTime                        @default(now()) @map("created_at")
+  updatedAt           DateTime                        @updatedAt @map("updated_at")
   ruleBindings        ShopDeliveryMethodRuleBinding[]
 
   @@unique([id, warehouseId])
@@ -596,39 +796,686 @@ model ExpressIssue {
 }
 
 model SupplyGoods {
-  id               String            @id @default(cuid())
-  userId           String            @map("user_id")
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title            String
-  sourceUrl        String?           @map("source_url")
-  sourcePlatform   String?           @map("source_platform")
-  sourceProductId  String?           @map("source_product_id") // OZON SKU / product_id
-  supplier         String?
-  purchasePrice    Decimal?          @map("purchase_price") @db.Decimal(12, 2)
-  currency         String            @default("CNY")
+  id                           String                  @id @default(cuid())
+  userId                       String                  @map("user_id")
+  user                         User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title                        String
+  sourceUrl                    String?                 @map("source_url")
+  sourcePlatform               String?                 @map("source_platform")
+  sourceProductId              String?                 @map("source_product_id") // OZON SKU / product_id
+  supplier                     String?
+  purchasePrice                Decimal?                @map("purchase_price") @db.Decimal(12, 2)
+  currency                     String                  @default("CNY")
   // 原始采集币种（如 RUB），purchasePrice 是按采集时汇率换算的 CNY 值
-  originalPrice    Decimal?          @map("original_price") @db.Decimal(12, 2)
-  originalCurrency String?           @map("original_currency")
-  exchangeRateUsed Decimal?          @map("exchange_rate_used") @db.Decimal(12, 6)
-  priceNeedsReview Boolean           @default(false) @map("price_needs_review")
-  sku              String?
-  images           Json?
-  variants         Json? // 多变体 SKU 数组：[{ sku, attrs:{颜色:'红',尺码:'M'}, price, images?, stock? }]
-  modelId          String?           @map("model_id") // OZON model_id（多变体共享）
-  mappedProductId  String?           @map("mapped_product_id")
-  notes            String?
-  metadata         Json?
-  status           String            @default("active")
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
-  sourceCandidates SourceCandidate[]
-  sourceQuotes     SourceQuote[]
+  originalPrice                Decimal?                @map("original_price") @db.Decimal(12, 2)
+  originalCurrency             String?                 @map("original_currency")
+  exchangeRateUsed             Decimal?                @map("exchange_rate_used") @db.Decimal(12, 6)
+  priceNeedsReview             Boolean                 @default(false) @map("price_needs_review")
+  sku                          String?
+  images                       Json?
+  variants                     Json? // 多变体 SKU 数组：[{ sku, attrs:{颜色:'红',尺码:'M'}, price, images?, stock? }]
+  modelId                      String?                 @map("model_id") // OZON model_id（多变体共享）
+  mappedProductId              String?                 @map("mapped_product_id")
+  notes                        String?
+  metadata                     Json?
+  status                       String                  @default("active")
+  createdAt                    DateTime                @default(now()) @map("created_at")
+  updatedAt                    DateTime                @updatedAt @map("updated_at")
+  sourceCandidates             SourceCandidate[]
+  sourceQuotes                 SourceQuote[]
+  sourceCaptureSubject         SourceCaptureSubject?
+  legacySourceListingWorkflows SourceListingWorkflow[] @relation("SourceListingWorkflowLegacySupplyGoods")
+  sourceListingWorkflows       SourceListingWorkflow[] @relation("SourceListingWorkflowSupplyGoods")
 
   @@index([userId])
   @@index([status])
   @@index([userId, status, createdAt])
   @@index([userId, sourceProductId])
   @@map("supply_goods")
+}
+
+model SourceCaptureSubject {
+  id                     String                  @id
+  ownerUserId            String                  @map("owner_user_id")
+  owner                  User                    @relation("SourceCaptureSubjectOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  sourcePlatform         String                  @map("source_platform")
+  sourceProductId        String                  @map("source_product_id")
+  legacySupplyGoodsId    String?                 @unique(map: "source_capture_subject_legacy_projection_key") @map("legacy_supply_goods_id")
+  legacySupplyGoods      SupplyGoods?            @relation(fields: [legacySupplyGoodsId], references: [id], onDelete: SetNull)
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+  snapshots              SourceCaptureSnapshot[]
+  sourceListingWorkflows SourceListingWorkflow[]
+
+  @@unique([ownerUserId, sourcePlatform, sourceProductId], map: "source_capture_subject_identity_key")
+  @@index([ownerUserId, updatedAt])
+  @@map("source_capture_subjects")
+}
+
+model SourceCaptureSnapshot {
+  id                                 String                              @id
+  subjectId                          String                              @map("subject_id")
+  subject                            SourceCaptureSubject                @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  version                            Int
+  schemaVersion                      String                              @map("schema_version")
+  captureHash                        String                              @map("capture_hash")
+  payloadBytes                       Int                                 @map("payload_bytes")
+  payload                            Json
+  stageCounts                        Json                                @map("stage_counts")
+  provenance                         Json
+  provenanceComplete                 Boolean                             @map("provenance_complete")
+  parserVersion                      String                              @map("parser_version")
+  extensionVersion                   String?                             @map("extension_version")
+  completeness                       Json
+  truncations                        Json
+  hasEstimatedValues                 Boolean                             @map("has_estimated_values")
+  profile                            Json                                @map("profile_json")
+  profileHash                        String                              @map("profile_hash")
+  actorUserId                        String                              @map("actor_user_id")
+  actor                              User                                @relation("SourceCaptureSnapshotActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  deviceSessionId                    String?                             @map("device_session_id")
+  deviceSession                      ExtensionDeviceSession?             @relation(fields: [deviceSessionId], references: [id], onDelete: Restrict)
+  sourceOzonCategoryMappings         SourceOzonCategoryMapping[]         @relation("SourceOzonCategoryMappingSnapshot")
+  sourceOzonCategoryMappingDecisions SourceOzonCategoryMappingDecision[] @relation("SourceOzonCategoryMappingDecisionSnapshot")
+  currentSourceListingWorkflows      SourceListingWorkflow[]             @relation("SourceListingWorkflowCurrentSnapshot")
+  sourceListingDraftVersions         SourceListingDraftVersion[]
+  ozonPublishAttempts                OzonPublishAttempt[]
+  mediaAssets                        MediaAsset[]
+  ingestChannel                      SourceCaptureIngestChannel          @map("ingest_channel")
+  rolloutRevision                    String                              @map("rollout_revision")
+  rolloutStage                       String                              @map("rollout_stage")
+  capturedAt                         DateTime                            @map("captured_at")
+  createdAt                          DateTime                            @default(now()) @map("created_at")
+
+  @@unique([subjectId, version], map: "source_capture_snapshot_subject_version_key")
+  @@unique([subjectId, captureHash], map: "source_capture_snapshot_subject_hash_key")
+  @@index([subjectId, capturedAt])
+  @@index([actorUserId, createdAt])
+  @@index([deviceSessionId, createdAt])
+  @@map("source_capture_snapshots")
+}
+
+model SourceListingWorkflow {
+  id                             String                       @id
+  ownerUserId                    String                       @map("owner_user_id")
+  owner                          User                         @relation("SourceListingWorkflowOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  shopId                         String                       @map("shop_id")
+  shop                           Shop                         @relation(fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict)
+  sourceSubjectId                String                       @map("source_subject_id")
+  sourceSubject                  SourceCaptureSubject         @relation(fields: [sourceSubjectId], references: [id], onDelete: Restrict)
+  currentSourceCaptureSnapshotId String                       @map("current_source_capture_snapshot_id")
+  currentSourceCaptureSnapshot   SourceCaptureSnapshot        @relation("SourceListingWorkflowCurrentSnapshot", fields: [currentSourceCaptureSnapshotId], references: [id], onDelete: Restrict)
+  legacySupplyGoodsId            String?                      @map("legacy_supply_goods_id")
+  legacySupplyGoods              SupplyGoods?                 @relation("SourceListingWorkflowLegacySupplyGoods", fields: [legacySupplyGoodsId], references: [id], onDelete: Restrict)
+  supplyGoodsId                  String?                      @map("supply_goods_id")
+  supplyGoods                    SupplyGoods?                 @relation("SourceListingWorkflowSupplyGoods", fields: [supplyGoodsId], references: [id], onDelete: Restrict)
+  selectedSkuKeys                Json                         @map("selected_sku_keys")
+  selectedSkuHash                String                       @map("selected_sku_hash")
+  currentRevision                Int                          @map("current_revision")
+  currentDraftVersion            Int                          @map("current_draft_version")
+  currentDraft                   SourceListingDraftVersion    @relation("SourceListingWorkflowCurrentDraft", fields: [id, currentRevision], references: [workflowId, revision], onDelete: Restrict, onUpdate: NoAction)
+  stage                          String
+  status                         SourceListingWorkflowStatus  @default(ACTIVE)
+  createdAt                      DateTime                     @default(now()) @map("created_at")
+  updatedAt                      DateTime                     @updatedAt @map("updated_at")
+  draftVersions                  SourceListingDraftVersion[]  @relation("SourceListingWorkflowDraftVersions")
+  events                         SourceListingWorkflowEvent[]
+  publishIntents                 SourceListingPublishIntent[]
+  ozonPublishAttempts            OzonPublishAttempt[]
+
+  @@unique([id, ownerUserId], map: "source_listing_workflow_owner_key")
+  @@unique([id, currentRevision], map: "source_listing_workflow_current_pointer_key")
+  @@index([ownerUserId, status, updatedAt], map: "source_listing_workflow_owner_status_idx")
+  @@index([shopId, status, updatedAt], map: "source_listing_workflow_shop_status_idx")
+  @@index([sourceSubjectId, updatedAt], map: "source_listing_workflow_subject_idx")
+  @@index([ownerUserId, shopId, supplyGoodsId, currentSourceCaptureSnapshotId, selectedSkuHash, status, updatedAt], map: "source_listing_workflow_identity_lookup_idx")
+  @@map("source_listing_workflows")
+}
+
+model SourceListingDraftVersion {
+  id                      String                       @id
+  workflowId              String                       @map("workflow_id")
+  ownerUserId             String                       @map("owner_user_id")
+  workflow                SourceListingWorkflow        @relation("SourceListingWorkflowDraftVersions", fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  currentForWorkflow      SourceListingWorkflow?       @relation("SourceListingWorkflowCurrentDraft")
+  revision                Int
+  draftVersion            Int                          @map("draft_version")
+  shopId                  String                       @map("shop_id")
+  sourceCaptureSnapshotId String                       @map("source_capture_snapshot_id")
+  sourceCaptureSnapshot   SourceCaptureSnapshot        @relation(fields: [sourceCaptureSnapshotId], references: [id], onDelete: Restrict)
+  legacySupplyGoodsId     String?                      @map("legacy_supply_goods_id")
+  supplyGoodsId           String?                      @map("supply_goods_id")
+  selectedSkuKeys         Json                         @map("selected_sku_keys")
+  selectedSkuHash         String                       @map("selected_sku_hash")
+  stage                   String
+  status                  SourceListingDraftStatus     @default(ACTIVE)
+  payload                 Json
+  payloadHash             String                       @map("payload_hash")
+  parentRevision          Int?                         @map("parent_revision")
+  parent                  SourceListingDraftVersion?   @relation("SourceListingDraftLineage", fields: [workflowId, parentRevision], references: [workflowId, revision], onDelete: Restrict, onUpdate: NoAction)
+  children                SourceListingDraftVersion[]  @relation("SourceListingDraftLineage")
+  invalidationReasons     Json                         @map("invalidation_reasons")
+  actorUserId             String                       @map("actor_user_id")
+  actor                   User                         @relation("SourceListingDraftVersionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  createdAt               DateTime                     @default(now()) @map("created_at")
+  events                  SourceListingWorkflowEvent[]
+  publishIntents          SourceListingPublishIntent[]
+  ozonPublishAttempts     OzonPublishAttempt[]
+
+  @@unique([workflowId, revision], map: "source_listing_draft_workflow_revision_key")
+  @@index([workflowId, draftVersion, revision], map: "source_listing_draft_major_revision_idx")
+  @@index([ownerUserId, createdAt], map: "source_listing_draft_owner_created_idx")
+  @@index([sourceCaptureSnapshotId], map: "source_listing_draft_snapshot_idx")
+  @@map("source_listing_draft_versions")
+}
+
+model SourceListingWorkflowEvent {
+  id           String                    @id
+  workflowId   String                    @map("workflow_id")
+  ownerUserId  String                    @map("owner_user_id")
+  workflow     SourceListingWorkflow     @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  draftVersion Int                       @map("draft_version")
+  revision     Int
+  draft        SourceListingDraftVersion @relation(fields: [workflowId, revision], references: [workflowId, revision], onDelete: Restrict)
+  actorUserId  String                    @map("actor_user_id")
+  actor        User                      @relation("SourceListingWorkflowEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  eventKey     String                    @unique(map: "source_listing_workflow_event_key") @map("event_key")
+  eventType    String                    @map("event_type")
+  payload      Json
+  payloadHash  String                    @map("payload_hash")
+  createdAt    DateTime                  @default(now()) @map("created_at")
+
+  @@index([workflowId, draftVersion, revision, createdAt], map: "source_listing_workflow_event_version_idx")
+  @@index([actorUserId, createdAt], map: "source_listing_workflow_event_actor_idx")
+  @@map("source_listing_workflow_events")
+}
+
+model SourceListingPublishIntent {
+  id             String                    @id
+  workflowId     String                    @map("workflow_id")
+  ownerUserId    String                    @map("owner_user_id")
+  workflow       SourceListingWorkflow     @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  shopId         String                    @map("shop_id")
+  shop           Shop                      @relation(fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict)
+  draftVersion   Int                       @map("draft_version")
+  revision       Int
+  draft          SourceListingDraftVersion @relation(fields: [workflowId, revision], references: [workflowId, revision], onDelete: Restrict)
+  idempotencyKey String                    @map("idempotency_key")
+  payloadHash    String                    @map("payload_hash")
+  actorUserId    String                    @map("actor_user_id")
+  actor          User                      @relation("SourceListingPublishIntentActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  owner          User                      @relation("SourceListingPublishIntentOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  publishAttempt OzonPublishAttempt?
+  createdAt      DateTime                  @default(now()) @map("created_at")
+
+  @@unique([ownerUserId, idempotencyKey], map: "source_listing_publish_intent_idempotency_key")
+  @@index([workflowId, draftVersion, revision], map: "source_listing_publish_intent_draft_idx")
+  @@index([ownerUserId, createdAt], map: "source_listing_publish_intent_owner_idx")
+  @@map("source_listing_publish_intents")
+}
+
+model OzonPublishAttempt {
+  id                       String                         @id
+  publishIntentId          String                         @unique(map: "ozon_publish_attempt_intent_key") @map("publish_intent_id")
+  publishIntent            SourceListingPublishIntent     @relation(fields: [publishIntentId], references: [id], onDelete: Restrict)
+  workflowId               String                         @map("workflow_id")
+  ownerUserId              String                         @map("owner_user_id")
+  workflow                 SourceListingWorkflow          @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  owner                    User                           @relation("OzonPublishAttemptOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  shopId                   String                         @map("shop_id")
+  shop                     Shop                           @relation(fields: [shopId, ownerUserId], references: [id, userId], onDelete: Restrict)
+  draftVersion             Int                            @map("draft_version")
+  revision                 Int
+  draft                    SourceListingDraftVersion      @relation(fields: [workflowId, revision], references: [workflowId, revision], onDelete: Restrict)
+  sourceCaptureSnapshotId  String                         @map("source_capture_snapshot_id")
+  sourceCaptureSnapshot    SourceCaptureSnapshot          @relation(fields: [sourceCaptureSnapshotId], references: [id], onDelete: Restrict)
+  actorUserId              String                         @map("actor_user_id")
+  actor                    User                           @relation("OzonPublishAttemptActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  idempotencyKey           String                         @map("idempotency_key")
+  catalogSnapshotId        String                         @map("catalog_snapshot_id")
+  catalogRevision          String                         @map("catalog_revision")
+  catalog                  OzonCategoryCatalogSnapshot    @relation(fields: [catalogSnapshotId, shopId, catalogRevision], references: [id, shopId, revision], onDelete: Restrict)
+  catalogSnapshot          Json                           @map("catalog_snapshot_json")
+  catalogSnapshotHash      String                         @map("catalog_snapshot_hash")
+  attributeSchemaSnapshot  Json                           @map("attribute_schema_snapshot_json")
+  attributeSchemaHash      String                         @map("attribute_schema_hash")
+  publisherContractVersion String                         @map("publisher_contract_version")
+  endpoint                 String                         @default("/v3/product/import")
+  draftPayloadHash         String                         @map("draft_payload_hash")
+  draftStateHash           String                         @map("draft_state_hash")
+  requestPayload           Json                           @map("request_payload_json")
+  requestPayloadHash       String                         @map("request_payload_hash")
+  offerTrace               Json                           @map("offer_trace_json")
+  itemCount                Int                            @map("item_count")
+  state                    OzonPublishAttemptState        @default(PREPARED)
+  reconciliationState      OzonPublishReconciliationState @default(NOT_REQUIRED) @map("reconciliation_state")
+  stateVersion             Int                            @default(1) @map("state_version")
+  ozonTaskId               String?                        @map("ozon_task_id") @db.VarChar(40)
+  acceptanceSource         String?                        @map("acceptance_source") @db.VarChar(80)
+  response                 Json?                          @map("response_json")
+  responseHash             String?                        @map("response_hash")
+  itemResults              Json?                          @map("item_results_json")
+  itemErrors               Json                           @default("[]") @map("item_errors_json")
+  lastErrorCode            String?                        @map("last_error_code") @db.VarChar(100)
+  lastErrorMessage         String?                        @map("last_error_message") @db.VarChar(2000)
+  leasePurpose             OzonPublishLeasePurpose?       @map("lease_purpose")
+  leaseToken               String?                        @map("lease_token") @db.VarChar(100)
+  leaseOwner               String?                        @map("lease_owner") @db.VarChar(200)
+  leaseEpoch               Int                            @default(0) @map("lease_epoch")
+  heartbeatAt              DateTime?                      @map("heartbeat_at")
+  leaseExpiresAt           DateTime?                      @map("lease_expires_at")
+  submitStartedAt          DateTime?                      @map("submit_started_at")
+  submittedAt              DateTime?                      @map("submitted_at")
+  unknownAt                DateTime?                      @map("unknown_at")
+  rejectedAt               DateTime?                      @map("rejected_at")
+  nextReconcileAt          DateTime?                      @map("next_reconcile_at")
+  reconcileAttemptCount    Int                            @default(0) @map("reconcile_attempt_count")
+  lastReconciledAt         DateTime?                      @map("last_reconciled_at")
+  completedAt              DateTime?                      @map("completed_at")
+  resolvedByUserId         String?                        @map("resolved_by_user_id")
+  resolvedBy               User?                          @relation("OzonPublishAttemptResolver", fields: [resolvedByUserId], references: [id], onDelete: Restrict)
+  resolutionNote           String?                        @map("resolution_note") @db.VarChar(2000)
+  resolutionEvidence       Json?                          @map("resolution_evidence_json")
+  resolutionEvidenceHash   String?                        @map("resolution_evidence_hash")
+  createdAt                DateTime                       @default(now()) @map("created_at")
+  updatedAt                DateTime                       @updatedAt @map("updated_at")
+  events                   OzonPublishAttemptEvent[]
+
+  @@unique([ownerUserId, idempotencyKey], map: "ozon_publish_attempt_owner_idempotency_key")
+  @@index([workflowId, draftVersion, revision], map: "ozon_publish_attempt_draft_idx")
+  @@index([ownerUserId, createdAt], map: "ozon_publish_attempt_owner_idx")
+  @@index([shopId, createdAt], map: "ozon_publish_attempt_shop_idx")
+  @@map("ozon_publish_attempts")
+}
+
+model OzonPublishAttemptEvent {
+  id                  String                         @id
+  attemptId           String                         @map("attempt_id")
+  attempt             OzonPublishAttempt             @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  sequence            Int
+  eventType           String                         @map("event_type") @db.VarChar(100)
+  state               OzonPublishAttemptState
+  reconciliationState OzonPublishReconciliationState @map("reconciliation_state")
+  actorUserId         String?                        @map("actor_user_id")
+  actor               User?                          @relation("OzonPublishAttemptEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  workerId            String?                        @map("worker_id") @db.VarChar(200)
+  payload             Json
+  payloadHash         String                         @map("payload_hash")
+  createdAt           DateTime                       @default(now()) @map("created_at")
+
+  @@unique([attemptId, sequence], map: "ozon_publish_attempt_event_sequence_key")
+  @@index([attemptId, createdAt], map: "ozon_publish_attempt_event_attempt_idx")
+  @@index([actorUserId, createdAt], map: "ozon_publish_attempt_event_actor_idx")
+  @@map("ozon_publish_attempt_events")
+}
+
+model OzonPublisherParityObservation {
+  id                       String                                @id
+  recordKey                String                                @unique(map: "ozon_publisher_parity_observation_record_key") @map("record_key")
+  eligibleAttemptKey       String?                               @unique(map: "ozon_publisher_parity_observation_eligible_attempt_key") @map("eligible_attempt_key")
+  eligibleAttempt          OzonPublisherRolloutRecorderAttempt?  @relation("OzonPublisherRolloutEligibleAttemptObservation", fields: [eligibleAttemptKey], references: [eligibleAttemptKey], onDelete: Restrict)
+  scopeHash                String                                @map("scope_hash")
+  entrypoint               OzonPublisherParityEntrypoint
+  rolloutRevision          String                                @map("rollout_revision")
+  recordContractVersion    String                                @map("record_contract_version")
+  reportContractVersion    String                                @map("report_contract_version")
+  reportHash               String                                @map("report_hash")
+  status                   OzonPublisherParityReportStatus
+  classification           OzonPublisherParityClassification
+  switchEligible           Boolean                               @map("switch_eligible")
+  legacyEndpoint           String                                @map("legacy_endpoint")
+  legacyPayloadHash        String                                @map("legacy_payload_hash")
+  legacyItemCount          Int                                   @map("legacy_item_count")
+  v2Kind                   OzonPublisherParityV2Kind             @map("v2_kind")
+  v2Endpoint               String?                               @map("v2_endpoint")
+  v2PayloadHash            String?                               @map("v2_payload_hash")
+  v2ItemCount              Int?                                  @map("v2_item_count")
+  publisherContractVersion String?                               @map("publisher_contract_version")
+  payloadCompilerVersion   String?                               @map("payload_compiler_version")
+  blockerCode              String?                               @map("blocker_code") @db.VarChar(100)
+  reasonCode               String?                               @map("reason_code") @db.VarChar(100)
+  differenceTotal          Int                                   @map("difference_total")
+  differenceReturned       Int                                   @map("difference_returned")
+  differenceTruncated      Boolean                               @map("difference_truncated")
+  differenceRows           Json                                  @map("difference_rows_json")
+  fullDifferenceSignature  String?                               @map("full_difference_signature")
+  differenceSubjectKey     String?                               @map("difference_subject_key")
+  differenceSubject        OzonPublisherParityDifferenceSubject? @relation(fields: [differenceSubjectKey], references: [subjectKey], onDelete: Restrict)
+  observedAt               DateTime                              @map("observed_at")
+  expiresAt                DateTime                              @map("expires_at")
+  createdAt                DateTime                              @default(now()) @map("created_at")
+  rolloutRecorderOutcome   OzonPublisherRolloutRecorderOutcome?
+
+  @@index([expiresAt], map: "ozon_publisher_parity_observation_expiry_idx")
+  @@index([reportHash], map: "ozon_publisher_parity_observation_report_hash_idx")
+  @@index([entrypoint, observedAt], map: "ozon_publisher_parity_observation_entrypoint_idx")
+  @@index([differenceSubjectKey, observedAt], map: "ozon_publisher_parity_observation_subject_idx")
+  @@map("ozon_publisher_parity_observations")
+}
+
+model OzonPublisherParityDifferenceSubject {
+  subjectKey               String                            @id @map("subject_key")
+  entrypoint               OzonPublisherParityEntrypoint
+  rolloutRevision          String                            @map("rollout_revision")
+  recordContractVersion    String                            @map("record_contract_version")
+  reportContractVersion    String                            @map("report_contract_version")
+  legacyEndpoint           String                            @map("legacy_endpoint")
+  legacyItemCount          Int                               @map("legacy_item_count")
+  v2Kind                   OzonPublisherParityV2Kind         @map("v2_kind")
+  v2Endpoint               String?                           @map("v2_endpoint")
+  v2ItemCount              Int                               @map("v2_item_count")
+  publisherContractVersion String                            @map("publisher_contract_version")
+  payloadCompilerVersion   String                            @map("payload_compiler_version")
+  classification           OzonPublisherParityClassification
+  fullDifferenceSignature  String                            @map("full_difference_signature")
+  differenceTotal          Int                               @map("difference_total")
+  differenceRows           Json                              @map("difference_rows_json")
+  approvalState            OzonPublisherParityApprovalState  @default(PENDING) @map("approval_state")
+  stateVersion             Int                               @default(0) @map("state_version")
+  observationCount         Int                               @map("observation_count")
+  firstObservedAt          DateTime                          @map("first_observed_at")
+  lastObservedAt           DateTime                          @map("last_observed_at")
+  reviewedByUserId         String?                           @map("reviewed_by_user_id")
+  reviewedBy               User?                             @relation("OzonPublisherParitySubjectReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  reviewNote               String?                           @map("review_note") @db.VarChar(1000)
+  reviewedAt               DateTime?                         @map("reviewed_at")
+  approvedAt               DateTime?                         @map("approved_at")
+  rejectedAt               DateTime?                         @map("rejected_at")
+  revokedAt                DateTime?                         @map("revoked_at")
+  createdAt                DateTime                          @default(now()) @map("created_at")
+  updatedAt                DateTime                          @updatedAt @map("updated_at")
+  observations             OzonPublisherParityObservation[]
+  decisions                OzonPublisherParityDecision[]
+
+  @@index([entrypoint, approvalState, lastObservedAt], map: "ozon_publisher_parity_subject_state_idx")
+  @@index([reviewedByUserId, reviewedAt], map: "ozon_publisher_parity_subject_reviewer_idx")
+  @@map("ozon_publisher_parity_difference_subjects")
+}
+
+model OzonPublisherParityDecision {
+  id                              String                               @id
+  subjectKey                      String                               @map("subject_key")
+  subject                         OzonPublisherParityDifferenceSubject @relation(fields: [subjectKey], references: [subjectKey], onDelete: Restrict)
+  transitionVersion               Int                                  @map("transition_version")
+  decisionKey                     String                               @unique(map: "ozon_publisher_parity_decision_key") @map("decision_key")
+  operationKey                    String                               @map("operation_key")
+  requestHash                     String                               @map("request_hash")
+  action                          OzonPublisherParityDecisionAction
+  resultState                     OzonPublisherParityApprovalState     @map("result_state")
+  actorUserId                     String                               @map("actor_user_id")
+  actor                           User                                 @relation("OzonPublisherParityDecisionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  reviewNote                      String                               @map("review_note") @db.VarChar(1000)
+  observationCountSnapshot        Int                                  @map("observation_count_snapshot")
+  firstObservedAtSnapshot         DateTime                             @map("first_observed_at_snapshot")
+  lastObservedAtSnapshot          DateTime                             @map("last_observed_at_snapshot")
+  fullDifferenceSignatureSnapshot String                               @map("full_difference_signature_snapshot")
+  createdAt                       DateTime                             @default(now()) @map("created_at")
+
+  @@unique([subjectKey, transitionVersion], map: "ozon_publisher_parity_decision_transition_key")
+  @@unique([subjectKey, operationKey], map: "ozon_publisher_parity_decision_operation_key")
+  @@index([subjectKey, createdAt], map: "ozon_publisher_parity_decision_subject_idx")
+  @@index([actorUserId, createdAt], map: "ozon_publisher_parity_decision_actor_idx")
+  @@map("ozon_publisher_parity_decisions")
+}
+
+model OzonPublisherRolloutGate {
+  id                   String                           @id
+  writerEntrypoint     OzonPublisherWriterEntrypoint   @map("writer_entrypoint")
+  originChannel        OzonPublisherOriginChannel      @map("origin_channel")
+  rolloutRevision      String                           @map("rollout_revision")
+  recordContractVersion String                          @map("record_contract_version")
+  evidencePolicyHash   String                           @map("evidence_policy_hash")
+  authorizedControlConfigHash String                    @map("authorized_control_config_hash")
+  guardContractVersion String                           @map("guard_contract_version")
+  denominatorEnforcedFrom DateTime                      @map("denominator_enforced_from")
+  state                OzonPublisherRolloutGateState    @default(NOT_READY)
+  stateVersion         Int                              @default(0) @map("state_version")
+  readyEvaluationId    String?                          @unique(map: "ozon_publisher_rollout_gate_ready_evaluation_key") @map("ready_evaluation_id")
+  readyEvaluation      OzonPublisherRolloutEvaluation?  @relation("OzonPublisherRolloutGateReadyEvaluation", fields: [readyEvaluationId], references: [id], onDelete: Restrict)
+  evidenceHash         String?                          @map("evidence_hash")
+  evaluationHash       String?                          @map("evaluation_hash")
+  approvedByUserId     String?                          @map("approved_by_user_id")
+  approvedBy           User?                            @relation("OzonPublisherRolloutGateApprover", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  approvedAt           DateTime?                        @map("approved_at")
+  approvalReason       String?                          @map("approval_reason") @db.VarChar(1000)
+  revokedByUserId      String?                          @map("revoked_by_user_id")
+  revokedBy            User?                            @relation("OzonPublisherRolloutGateRevoker", fields: [revokedByUserId], references: [id], onDelete: Restrict)
+  revokedAt            DateTime?                        @map("revoked_at")
+  revocationReason     String?                          @map("revocation_reason") @db.VarChar(1000)
+  createdAt            DateTime                         @default(now()) @map("created_at")
+  updatedAt            DateTime                         @updatedAt @map("updated_at")
+  recorderAttempts     OzonPublisherRolloutRecorderAttempt[]
+  evaluations          OzonPublisherRolloutEvaluation[] @relation("OzonPublisherRolloutGateEvaluations")
+  transitions          OzonPublisherRolloutTransition[]
+  stageTransitions     OzonPublisherRolloutStageTransition[]
+
+  @@unique([writerEntrypoint, originChannel, rolloutRevision], map: "ozon_publisher_rollout_gate_identity_key")
+  @@index([state, writerEntrypoint, originChannel], map: "ozon_publisher_rollout_gate_state_idx")
+  @@map("ozon_publisher_rollout_gates")
+}
+
+model OzonPublisherRolloutRecorderAttempt {
+  id                    String                              @id
+  attemptKey            String                              @unique(map: "ozon_publisher_rollout_recorder_attempt_key") @map("attempt_key")
+  eligibleAttemptKey    String                              @unique(map: "ozon_publisher_rollout_recorder_eligible_attempt_key") @map("eligible_attempt_key")
+  operationKey          String                              @map("operation_key")
+  requestHash           String                              @map("request_hash")
+  payloadHash           String                              @map("payload_hash")
+  itemCount             Int                                 @map("item_count")
+  attemptContractVersion String                             @map("attempt_contract_version")
+  guardContractVersion  String                              @map("guard_contract_version")
+  evidencePolicyHash    String                              @map("evidence_policy_hash")
+  gateId                String                              @map("gate_id")
+  gate                  OzonPublisherRolloutGate            @relation(fields: [gateId], references: [id], onDelete: Restrict)
+  writerEntrypoint      OzonPublisherWriterEntrypoint       @map("writer_entrypoint")
+  originChannel         OzonPublisherOriginChannel          @map("origin_channel")
+  parityEntrypoint      OzonPublisherParityEntrypoint       @map("parity_entrypoint")
+  rolloutRevision       String                              @map("rollout_revision")
+  scopeHash             String                              @map("scope_hash")
+  eligibleAt            DateTime                            @map("eligible_at")
+  expiresAt             DateTime                            @map("expires_at")
+  createdAt             DateTime                            @default(now()) @map("created_at")
+  outcome               OzonPublisherRolloutRecorderOutcome?
+  observation           OzonPublisherParityObservation?      @relation("OzonPublisherRolloutEligibleAttemptObservation")
+
+  @@index([gateId, eligibleAt], map: "ozon_publisher_rollout_recorder_attempt_gate_idx")
+  @@unique([gateId, operationKey], map: "ozon_publisher_rollout_recorder_operation_key")
+  @@index([rolloutRevision, scopeHash, eligibleAt], map: "ozon_publisher_rollout_recorder_attempt_scope_idx")
+  @@map("ozon_publisher_rollout_recorder_attempts")
+}
+
+model OzonPublisherRolloutRecorderOutcome {
+  id             String                               @id
+  attemptId      String                               @unique(map: "ozon_publisher_rollout_recorder_outcome_attempt_key") @map("attempt_id")
+  attempt        OzonPublisherRolloutRecorderAttempt  @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  result         OzonPublisherRolloutRecorderResult
+  observationId  String?                              @unique(map: "ozon_publisher_rollout_recorder_outcome_observation_key") @map("observation_id")
+  observation    OzonPublisherParityObservation?      @relation(fields: [observationId], references: [id], onDelete: Restrict)
+  observationRecordKey String?                        @map("observation_record_key")
+  observationReportHash String?                       @map("observation_report_hash")
+  subjectStateVersionSnapshot Int?                    @map("subject_state_version_snapshot")
+  fullDifferenceSignatureSnapshot String?             @map("full_difference_signature_snapshot")
+  failureCode    String?                              @map("failure_code") @db.VarChar(100)
+  completedAt    DateTime                             @map("completed_at")
+  createdAt      DateTime                             @default(now()) @map("created_at")
+
+  @@index([result, completedAt], map: "ozon_publisher_rollout_recorder_outcome_result_idx")
+  @@map("ozon_publisher_rollout_recorder_outcomes")
+}
+
+model OzonPublisherRolloutEvaluation {
+  id                    String                                @id
+  evaluationKey         String                                @unique(map: "ozon_publisher_rollout_evaluation_key") @map("evaluation_key")
+  operationKey          String                                @map("operation_key")
+  requestHash           String                                @map("request_hash")
+  actorUserId           String                                @map("actor_user_id")
+  actor                 User                                  @relation("OzonPublisherRolloutEvaluationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  gateId                String                                @map("gate_id")
+  gate                  OzonPublisherRolloutGate              @relation("OzonPublisherRolloutGateEvaluations", fields: [gateId], references: [id], onDelete: Restrict)
+  writerEntrypoint      OzonPublisherWriterEntrypoint         @map("writer_entrypoint")
+  originChannel         OzonPublisherOriginChannel            @map("origin_channel")
+  rolloutRevision       String                                @map("rollout_revision")
+  recordContractVersion String                                @map("record_contract_version")
+  evaluatorVersion      String                                @map("evaluator_version")
+  evidencePolicyHash    String                                @map("evidence_policy_hash")
+  authorizedEvidencePolicyHash String                         @map("authorized_evidence_policy_hash")
+  controlConfigHash     String                                @map("control_config_hash")
+  authorizedControlConfigHash String                          @map("authorized_control_config_hash")
+  guardContractVersion  String                                @map("guard_contract_version")
+  result                OzonPublisherRolloutEvaluationResult
+  evidenceHash          String                                @map("evidence_hash")
+  evaluationHash        String                                @map("evaluation_hash")
+  windowStart           DateTime                              @map("window_start")
+  windowEnd             DateTime                              @map("window_end")
+  evaluatedAt           DateTime                              @default(now()) @map("evaluated_at")
+  evidenceRetainedUntil DateTime                              @map("evidence_retained_until")
+  validUntil            DateTime?                             @map("valid_until")
+  latestEligibleAt      DateTime?                             @map("latest_eligible_at")
+  thresholds            Json                                  @map("thresholds_json")
+  metrics               Json                                  @map("metrics_json")
+  blockers              Json                                  @map("blockers_json")
+  createdAt             DateTime                              @default(now()) @map("created_at")
+  readyForGate          OzonPublisherRolloutGate?             @relation("OzonPublisherRolloutGateReadyEvaluation")
+  transitions           OzonPublisherRolloutTransition[]
+
+  @@index([gateId, evaluatedAt], map: "ozon_publisher_rollout_evaluation_gate_idx")
+  @@unique([gateId, operationKey], map: "ozon_publisher_rollout_evaluation_operation_key")
+  @@index([actorUserId, evaluatedAt], map: "ozon_publisher_rollout_evaluation_actor_idx")
+  @@index([result, evaluatedAt], map: "ozon_publisher_rollout_evaluation_result_idx")
+  @@map("ozon_publisher_rollout_evaluations")
+}
+
+model OzonPublisherRolloutTransition {
+  id                   String                                @id
+  gateId               String                                @map("gate_id")
+  gate                 OzonPublisherRolloutGate              @relation(fields: [gateId], references: [id], onDelete: Restrict)
+  transitionVersion    Int                                   @map("transition_version")
+  expectedStateVersion Int                                   @map("expected_state_version")
+  transitionKey        String                                @unique(map: "ozon_publisher_rollout_transition_key") @map("transition_key")
+  operationKey         String                                @map("operation_key")
+  requestHash          String                                @map("request_hash")
+  action               OzonPublisherRolloutTransitionAction
+  fromState            OzonPublisherRolloutGateState         @map("from_state")
+  resultState          OzonPublisherRolloutGateState         @map("result_state")
+  evaluationId         String                                @map("evaluation_id")
+  evaluation           OzonPublisherRolloutEvaluation        @relation(fields: [evaluationId], references: [id], onDelete: Restrict)
+  evidenceHashSnapshot String                                @map("evidence_hash_snapshot")
+  evaluationHashSnapshot String                              @map("evaluation_hash_snapshot")
+  actorUserId          String                                @map("actor_user_id")
+  actor                User                                  @relation("OzonPublisherRolloutTransitionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  reason               String                                @db.VarChar(1000)
+  decidedAt            DateTime                              @map("decided_at")
+  createdAt            DateTime                              @default(now()) @map("created_at")
+
+  @@unique([gateId, transitionVersion], map: "ozon_publisher_rollout_transition_version_key")
+  @@unique([gateId, operationKey], map: "ozon_publisher_rollout_transition_operation_key")
+  @@index([gateId, createdAt], map: "ozon_publisher_rollout_transition_gate_idx")
+  @@index([actorUserId, createdAt], map: "ozon_publisher_rollout_transition_actor_idx")
+  @@map("ozon_publisher_rollout_transitions")
+}
+
+model OzonPublisherRolloutStageTransition {
+  id                       String                         @id
+  boundary                 OzonPublisherRolloutBoundary
+  configKey                String                         @map("config_key")
+  transitionVersion        Int                            @map("transition_version")
+  expectedRevision         Int                            @map("expected_revision")
+  transitionKey            String                         @unique(map: "ozon_publisher_rollout_stage_transition_key") @map("transition_key")
+  operationKey             String                         @map("operation_key")
+  requestHash              String                         @map("request_hash")
+  fromStage                OzonPublisherRolloutStage      @map("from_stage")
+  resultStage              OzonPublisherRolloutStage      @map("result_stage")
+  gateId                    String?                        @map("gate_id")
+  gate                      OzonPublisherRolloutGate?      @relation(fields: [gateId], references: [id], onDelete: Restrict)
+  rolloutRevisionSnapshot  String?                        @map("rollout_revision_snapshot")
+  gateStateVersionSnapshot Int?                           @map("gate_state_version_snapshot")
+  evidenceHashSnapshot     String?                        @map("evidence_hash_snapshot")
+  evaluationHashSnapshot   String?                        @map("evaluation_hash_snapshot")
+  actorUserId              String                         @map("actor_user_id")
+  actor                    User                           @relation("OzonPublisherRolloutStageTransitionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  reason                   String                         @db.VarChar(1000)
+  decidedAt                DateTime                       @map("decided_at")
+  createdAt                DateTime                       @default(now()) @map("created_at")
+
+  @@unique([configKey, transitionVersion], map: "ozon_publisher_rollout_stage_transition_version_key")
+  @@unique([configKey, operationKey], map: "ozon_publisher_rollout_stage_transition_operation_key")
+  @@index([configKey, createdAt], map: "ozon_publisher_rollout_stage_transition_config_idx")
+  @@index([gateId, createdAt], map: "ozon_publisher_rollout_stage_transition_gate_idx")
+  @@index([actorUserId, createdAt], map: "ozon_publisher_rollout_stage_transition_actor_idx")
+  @@map("ozon_publisher_rollout_stage_transitions")
+}
+
+model SourceOzonCategoryMapping {
+  id                    String                              @id
+  scope                 SourceOzonCategoryMappingScope
+  scopeKey              String                              @map("scope_key")
+  ownerUserId           String?                             @map("owner_user_id")
+  owner                 User?                               @relation("SourceOzonCategoryMappingOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  sourcePlatform        String                              @map("source_platform")
+  sourceCategoryId      String?                             @map("source_category_id")
+  sourceCategoryPath    Json                                @map("source_category_path_json")
+  sourceSignature       String                              @map("source_signature")
+  sourceSnapshotId      String                              @map("source_snapshot_id")
+  sourceSnapshot        SourceCaptureSnapshot               @relation("SourceOzonCategoryMappingSnapshot", fields: [sourceSnapshotId], references: [id], onDelete: Restrict)
+  sourceProfileHash     String                              @map("source_profile_hash")
+  targetCategoryId      Int                                 @map("target_category_id")
+  targetTypeId          Int                                 @map("target_type_id")
+  targetCategoryName    String                              @map("target_category_name")
+  targetTypeName        String                              @map("target_type_name")
+  catalogRevision       String                              @map("catalog_revision")
+  status                SourceOzonCategoryMappingStatus     @default(ACTIVE)
+  confirmCount          Int                                 @default(0) @map("confirm_count")
+  rejectCount           Int                                 @default(0) @map("reject_count")
+  createdByUserId       String                              @map("created_by_user_id")
+  createdBy             User                                @relation("SourceOzonCategoryMappingCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUserId       String                              @map("updated_by_user_id")
+  updatedBy             User                                @relation("SourceOzonCategoryMappingUpdater", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+  reviewedByUserId      String?                             @map("reviewed_by_user_id")
+  reviewedBy            User?                               @relation("SourceOzonCategoryMappingReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  reviewedAt            DateTime?                           @map("reviewed_at")
+  lastConfirmedAt       DateTime?                           @map("last_confirmed_at")
+  lastRejectedAt        DateTime?                           @map("last_rejected_at")
+  promotedFromMappingId String?                             @map("promoted_from_mapping_id")
+  promotedFromMapping   SourceOzonCategoryMapping?          @relation("SourceOzonCategoryMappingPromotion", fields: [promotedFromMappingId], references: [id], onDelete: Restrict)
+  promotedMappings      SourceOzonCategoryMapping[]         @relation("SourceOzonCategoryMappingPromotion")
+  decisions             SourceOzonCategoryMappingDecision[]
+  createdAt             DateTime                            @default(now()) @map("created_at")
+  updatedAt             DateTime                            @updatedAt @map("updated_at")
+
+  @@unique([scopeKey, sourceSignature, targetCategoryId, targetTypeId], name: "source_ozon_category_mapping_identity_key", map: "source_ozon_category_mapping_identity_key")
+  @@index([ownerUserId, sourceSignature, status], map: "source_ozon_category_mapping_tenant_read_idx")
+  @@index([scope, sourceSignature, status], map: "source_ozon_category_mapping_scope_read_idx")
+  @@index([sourceSnapshotId], map: "source_ozon_category_mapping_snapshot_idx")
+  @@index([reviewedByUserId, reviewedAt], map: "source_ozon_category_mapping_review_idx")
+  @@map("source_ozon_category_mappings")
+}
+
+model SourceOzonCategoryMappingDecision {
+  id                String                                  @id
+  mappingId         String                                  @map("mapping_id")
+  mapping           SourceOzonCategoryMapping               @relation(fields: [mappingId], references: [id], onDelete: Restrict)
+  operationKey      String                                  @map("operation_key")
+  transitionVersion Int                                     @map("transition_version")
+  decisionKey       String                                  @unique(map: "source_ozon_category_mapping_decision_key") @map("decision_key")
+  requestHash       String                                  @map("request_hash")
+  action            SourceOzonCategoryMappingDecisionAction
+  scope             SourceOzonCategoryMappingScope
+  scopeKey          String                                  @map("scope_key")
+  ownerUserId       String?                                 @map("owner_user_id")
+  actorUserId       String                                  @map("actor_user_id")
+  actor             User                                    @relation("SourceOzonCategoryMappingDecisionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  sourceSnapshotId  String                                  @map("source_snapshot_id")
+  sourceSnapshot    SourceCaptureSnapshot                   @relation("SourceOzonCategoryMappingDecisionSnapshot", fields: [sourceSnapshotId], references: [id], onDelete: Restrict)
+  sourceProfileHash String                                  @map("source_profile_hash")
+  catalogRevision   String                                  @map("catalog_revision")
+  reviewNote        String?                                 @map("review_note") @db.VarChar(1000)
+  createdAt         DateTime                                @default(now()) @map("created_at")
+
+  @@unique([mappingId, transitionVersion], map: "source_ozon_category_mapping_transition_key")
+  @@index([mappingId, createdAt], map: "source_ozon_category_mapping_decision_mapping_idx")
+  @@index([actorUserId, createdAt], map: "source_ozon_category_mapping_decision_actor_idx")
+  @@index([scopeKey, createdAt], map: "source_ozon_category_mapping_decision_scope_idx")
+  @@map("source_ozon_category_mapping_decisions")
 }
 
 model SourceCandidate {
@@ -1124,6 +1971,7 @@ model SystemConfig {
   label       String?
   group       String   @default("general")
   description String?
+  revision    Int      @default(0)
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -1596,46 +2444,103 @@ model OzonAttributeDictionaryCache {
   typeId                Int      @map("type_id")
   attributeId           Int      @map("attribute_id")
   language              String   @default("DEFAULT")
+  catalogRevision       String   @default("") @map("catalog_revision")
   values                Json     @map("values_json")
   valuesHash            String   @map("values_hash")
+  complete              Boolean  @default(false)
+  pageCount             Int      @default(0) @map("page_count")
+  finalCursor           BigInt?  @map("final_cursor")
   fetchedAt             DateTime @map("fetched_at")
   expiresAt             DateTime @map("expires_at")
   source                String   @default("ozon_api")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
-  @@unique([descriptionCategoryId, typeId, attributeId, language], name: "ozon_attribute_dictionary_cache_key")
+  @@unique([descriptionCategoryId, typeId, attributeId, language, catalogRevision], name: "ozon_attribute_dictionary_cache_key", map: "ozon_attribute_dictionary_cache_key")
   @@index([expiresAt])
+  @@index([catalogRevision, complete])
   @@map("ozon_attribute_dictionary_cache")
 }
 
-// OZON 类目目录缓存：按店铺保存 description category/type 叶子及中文搜索文本
-model OzonCategoryCatalog {
+model OzonAttributeDefinitionCache {
   id                    String   @id @default(cuid())
   shopId                String   @map("shop_id")
-  shop                  Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  language              String   @default("DEFAULT")
+  shop                  Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade, map: "ozon_attribute_definition_cache_shop_fkey")
   descriptionCategoryId Int      @map("description_category_id")
   typeId                Int      @map("type_id")
-  categoryPathRu        Json     @map("category_path_ru")
-  categoryPathZh        Json     @map("category_path_zh")
-  categoryLevels        Json     @default("[]") @map("category_levels_json")
-  categoryNameRu        String   @default("") @map("category_name_ru")
-  categoryNameZh        String   @default("") @map("category_name_zh")
-  typeNameRu            String   @default("") @map("type_name_ru")
-  typeNameZh            String   @default("") @map("type_name_zh")
-  displayPathRu         String   @default("") @map("display_path_ru")
-  displayPathZh         String   @default("") @map("display_path_zh")
-  translationStatus     String   @default("missing") @map("translation_status")
-  untranslatedTerms     Json     @default("[]") @map("untranslated_terms_json")
-  keywords              Json     @map("keywords_json")
-  searchText            String   @default("") @map("search_text")
+  language              String   @default("DEFAULT")
+  catalogRevision       String   @map("catalog_revision")
+  definitions           Json     @map("definitions_json")
+  definitionsHash       String   @map("definitions_hash")
+  complete              Boolean  @default(false)
   fetchedAt             DateTime @map("fetched_at")
+  expiresAt             DateTime @map("expires_at")
   source                String   @default("ozon_api")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
-  @@unique([shopId, language, descriptionCategoryId, typeId], name: "ozon_category_catalog_key")
+  @@unique([shopId, descriptionCategoryId, typeId, language, catalogRevision], name: "ozon_attribute_definition_cache_key", map: "ozon_attribute_definition_cache_key")
+  @@index([shopId, catalogRevision, complete])
+  @@index([expiresAt])
+  @@map("ozon_attribute_definition_cache")
+}
+
+model OzonCategoryCatalogSnapshot {
+  id                  String                @id @default(cuid())
+  shopId              String                @map("shop_id")
+  shop                Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade, map: "ozon_category_catalog_snapshot_shop_fkey")
+  schemaVersion       String                @map("schema_version")
+  revision            String
+  fetchedAt           DateTime              @map("fetched_at")
+  expiresAt           DateTime              @map("expires_at")
+  complete            Boolean               @default(false)
+  defaultTreeComplete Boolean               @default(false) @map("default_tree_complete")
+  zhHansTreeComplete  Boolean               @default(false) @map("zh_hans_tree_complete")
+  isCurrent           Boolean               @default(false) @map("is_current")
+  createdAt           DateTime              @default(now()) @map("created_at")
+  entries             OzonCategoryCatalog[]
+  ozonPublishAttempts OzonPublishAttempt[]
+
+  @@unique([id, shopId, revision], name: "ozon_category_catalog_snapshot_owner_revision_key", map: "ozon_category_catalog_snapshot_owner_revision_key")
+  @@index([shopId, isCurrent])
+  @@index([shopId, revision])
+  @@index([expiresAt])
+  @@map("ozon_category_catalog_snapshots")
+}
+
+// OZON 类目目录历史：每行绑定一个双语目录快照
+model OzonCategoryCatalog {
+  id                    String                      @id @default(cuid())
+  snapshotId            String                      @map("snapshot_id")
+  shopId                String                      @map("shop_id")
+  shop                  Shop                        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  catalogRevision       String                      @map("catalog_revision")
+  snapshot              OzonCategoryCatalogSnapshot @relation(fields: [snapshotId, shopId, catalogRevision], references: [id, shopId, revision], onDelete: Restrict, map: "ozon_category_catalog_snapshot_owner_revision_fkey")
+  language              String                      @default("DEFAULT")
+  descriptionCategoryId Int                         @map("description_category_id")
+  typeId                Int                         @map("type_id")
+  categoryPathRu        Json                        @map("category_path_ru")
+  categoryPathZh        Json                        @map("category_path_zh")
+  categoryLevels        Json                        @default("[]") @map("category_levels_json")
+  categoryNameRu        String                      @default("") @map("category_name_ru")
+  categoryNameZh        String                      @default("") @map("category_name_zh")
+  typeNameRu            String                      @default("") @map("type_name_ru")
+  typeNameZh            String                      @default("") @map("type_name_zh")
+  displayPathRu         String                      @default("") @map("display_path_ru")
+  displayPathZh         String                      @default("") @map("display_path_zh")
+  translationStatus     String                      @default("missing") @map("translation_status")
+  untranslatedTerms     Json                        @default("[]") @map("untranslated_terms_json")
+  keywords              Json                        @map("keywords_json")
+  searchText            String                      @default("") @map("search_text")
+  disabled              Boolean                     @default(false)
+  labelProvenance       Json                        @default("{}") @map("label_provenance_json")
+  fetchedAt             DateTime                    @map("fetched_at")
+  source                String                      @default("ozon_api")
+  createdAt             DateTime                    @default(now()) @map("created_at")
+  updatedAt             DateTime                    @updatedAt @map("updated_at")
+
+  @@unique([snapshotId, language, descriptionCategoryId, typeId], name: "ozon_category_catalog_snapshot_entry_key", map: "ozon_category_catalog_snapshot_entry_key")
+  @@index([snapshotId])
   @@index([shopId, language])
   @@index([descriptionCategoryId, typeId])
   @@index([translationStatus])
@@ -1708,72 +2613,169 @@ enum AiImageJobStatus {
 
 enum MediaAssetKind {
   AI_GENERATED
+  SOURCE_ORIGINAL
+}
+
+enum AiPromptRevisionStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum AiPromptTestRunStatus {
+  PASS
+  FAIL
+}
+
+enum AiPromptReleaseAction {
+  PUBLISH
+  ROLLBACK
+}
+
+model AiPromptTemplate {
+  key             String             @id
+  label           String
+  currentSequence Int                @default(0) @map("current_sequence")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+  revisions       AiPromptRevision[]
+  releases        AiPromptRelease[]
+
+  @@map("ai_prompt_templates")
+}
+
+model AiPromptRevision {
+  id                     String                 @id
+  templateKey            String                 @map("template_key")
+  template               AiPromptTemplate       @relation(fields: [templateKey], references: [key], onDelete: Cascade)
+  status                 AiPromptRevisionStatus @default(DRAFT)
+  promptTemplate         String                 @map("prompt_template")
+  negativePromptTemplate String                 @map("negative_prompt_template")
+  checksum               String
+  note                   String?
+  createdByUserId        String                 @map("created_by_user_id")
+  updatedByUserId        String                 @map("updated_by_user_id")
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
+  testRuns               AiPromptTestRun[]
+  releases               AiPromptRelease[]
+
+  @@index([templateKey, createdAt])
+  @@index([templateKey, status])
+  @@map("ai_prompt_revisions")
+}
+
+model AiPromptTestRun {
+  id               String                @id
+  revisionId       String                @map("revision_id")
+  revision         AiPromptRevision      @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  revisionChecksum String                @map("revision_checksum")
+  status           AiPromptTestRunStatus
+  actorUserId      String                @map("actor_user_id")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  releases         AiPromptRelease[]
+
+  @@index([revisionId, createdAt])
+  @@map("ai_prompt_test_runs")
+}
+
+model AiPromptRelease {
+  id          String                @id
+  templateKey String                @map("template_key")
+  template    AiPromptTemplate      @relation(fields: [templateKey], references: [key], onDelete: Cascade)
+  revisionId  String                @map("revision_id")
+  revision    AiPromptRevision      @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  sequence    Int
+  action      AiPromptReleaseAction
+  actorUserId String                @map("actor_user_id")
+  testRunId   String?               @map("test_run_id")
+  testRun     AiPromptTestRun?      @relation(fields: [testRunId], references: [id], onDelete: SetNull)
+  createdAt   DateTime              @default(now()) @map("created_at")
+
+  @@unique([templateKey, sequence])
+  @@index([revisionId])
+  @@index([testRunId])
+  @@map("ai_prompt_releases")
 }
 
 model AiImageJob {
-  id                  String           @id @default(cuid())
-  ownerUserId         String           @map("owner_user_id")
-  actorUserId         String?          @map("actor_user_id")
-  owner               User             @relation("AiImageJobOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
-  actor               User?            @relation("AiImageJobActor", fields: [actorUserId], references: [id], onDelete: SetNull)
-  status              AiImageJobStatus @default(PENDING)
-  provider            String
-  model               String
-  prompt              String
-  negativePrompt      String?          @map("negative_prompt")
-  inputAssets         Json?            @map("input_assets_json")
-  requestedImageCount Int              @default(1) @map("requested_image_count")
-  width               Int
-  height              Int
-  attemptCount        Int              @default(0) @map("attempt_count")
-  maxAttempts         Int              @default(3) @map("max_attempts")
-  progress            Int              @default(0)
-  idempotencyKey      String?          @map("idempotency_key")
-  providerJobId       String?          @map("provider_job_id")
-  estimatedCostCents  Int              @default(0) @map("estimated_cost_cents")
-  actualCostCents     Int?             @map("actual_cost_cents")
-  billedUnits         Int              @default(0) @map("billed_units")
-  errorCode           String?          @map("error_code")
-  errorMessage        String?          @map("error_message")
-  appliedMode         String?          @map("applied_mode")
-  applyTargetType     String?          @map("apply_target_type")
-  applyTargetId       String?          @map("apply_target_id")
-  appliedAt           DateTime?        @map("applied_at")
-  startedAt           DateTime?        @map("started_at")
-  completedAt         DateTime?        @map("completed_at")
-  createdAt           DateTime         @default(now()) @map("created_at")
-  updatedAt           DateTime         @updatedAt @map("updated_at")
-  assets              MediaAsset[]
+  id                     String           @id @default(cuid())
+  ownerUserId            String           @map("owner_user_id")
+  actorUserId            String?          @map("actor_user_id")
+  owner                  User             @relation("AiImageJobOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  actor                  User?            @relation("AiImageJobActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  status                 AiImageJobStatus @default(PENDING)
+  provider               String
+  model                  String
+  prompt                 String
+  negativePrompt         String?          @map("negative_prompt")
+  resolvedPrompt         String?          @map("resolved_prompt")
+  resolvedNegativePrompt String?          @map("resolved_negative_prompt")
+  templateKey            String?          @map("template_key")
+  templateReleaseId      String?          @map("template_release_id")
+  templateChecksum       String?          @map("template_checksum")
+  templateSnapshot       Json?            @map("template_snapshot_json")
+  requestFingerprint     String?          @map("request_fingerprint")
+  inputAssets            Json?            @map("input_assets_json")
+  requestedImageCount    Int              @default(1) @map("requested_image_count")
+  width                  Int
+  height                 Int
+  attemptCount           Int              @default(0) @map("attempt_count")
+  maxAttempts            Int              @default(3) @map("max_attempts")
+  progress               Int              @default(0)
+  idempotencyKey         String?          @map("idempotency_key")
+  providerJobId          String?          @map("provider_job_id")
+  estimatedCostCents     Int              @default(0) @map("estimated_cost_cents")
+  actualCostCents        Int?             @map("actual_cost_cents")
+  billedUnits            Int              @default(0) @map("billed_units")
+  errorCode              String?          @map("error_code")
+  errorMessage           String?          @map("error_message")
+  appliedMode            String?          @map("applied_mode")
+  applyTargetType        String?          @map("apply_target_type")
+  applyTargetId          String?          @map("apply_target_id")
+  appliedAt              DateTime?        @map("applied_at")
+  startedAt              DateTime?        @map("started_at")
+  completedAt            DateTime?        @map("completed_at")
+  createdAt              DateTime         @default(now()) @map("created_at")
+  updatedAt              DateTime         @updatedAt @map("updated_at")
+  assets                 MediaAsset[]
 
   @@unique([ownerUserId, idempotencyKey], name: "ai_image_job_owner_idempotency")
   @@index([ownerUserId, createdAt])
   @@index([actorUserId, createdAt])
   @@index([status, createdAt])
+  @@index([templateKey, templateReleaseId])
   @@map("ai_image_jobs")
 }
 
 model MediaAsset {
-  id             String         @id @default(cuid())
-  ownerUserId    String         @map("owner_user_id")
-  owner          User           @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
-  aiImageJobId   String?        @map("ai_image_job_id")
-  aiImageJob     AiImageJob?    @relation(fields: [aiImageJobId], references: [id], onDelete: SetNull)
-  kind           MediaAssetKind @default(AI_GENERATED)
-  url            String
-  storageBackend String         @map("storage_backend")
-  storageKey     String?        @map("storage_key")
-  mimeType       String         @map("mime_type")
-  sizeBytes      Int            @default(0) @map("size_bytes")
-  width          Int?
-  height         Int?
-  sha256         String?
-  metadata       Json?
-  createdAt      DateTime       @default(now()) @map("created_at")
+  id                      String                 @id @default(cuid())
+  ownerUserId             String                 @map("owner_user_id")
+  owner                   User                   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  aiImageJobId            String?                @map("ai_image_job_id")
+  aiImageJob              AiImageJob?            @relation(fields: [aiImageJobId], references: [id], onDelete: SetNull)
+  kind                    MediaAssetKind         @default(AI_GENERATED)
+  sourceCaptureSnapshotId String?                @map("source_capture_snapshot_id")
+  sourceCaptureSnapshot   SourceCaptureSnapshot? @relation(fields: [sourceCaptureSnapshotId], references: [id], onDelete: Restrict)
+  sourceMediaKey          String?                @map("source_media_key") @db.VarChar(500)
+  sourceUrl               String?                @map("source_url")
+  url                     String
+  storageBackend          String                 @map("storage_backend")
+  storageKey              String?                @map("storage_key")
+  mimeType                String                 @map("mime_type")
+  sizeBytes               Int                    @default(0) @map("size_bytes")
+  width                   Int?
+  height                  Int?
+  sha256                  String?
+  metadata                Json?
+  createdAt               DateTime               @default(now()) @map("created_at")
 
+  @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey], map: "media_asset_source_capture_key")
   @@index([ownerUserId, createdAt])
   @@index([aiImageJobId])
+  @@index([sourceCaptureSnapshotId])
   @@map("media_assets")
 }
+
 model ShopOzonCompanyBinding {
   id                            String                 @id @default(cuid())
   tenantId                      String                 @map("tenant_id")
@@ -1833,35 +2835,35 @@ model WarehouseOzonOriginBinding {
 }
 
 model LogisticsRuleChannel {
-  id                 String                  @id @default(cuid())
-  channelType        LogisticsChannelType    @map("channel_type")
-  deploymentId       String                  @default("legacy") @map("deployment_id")
-  schemaMajor        Int                     @default(1) @map("schema_major")
-  tenantId           String?                 @map("tenant_id")
-  tenant             User?                   @relation("LogisticsChannelTenant", fields: [tenantId], references: [id], onDelete: Restrict)
-  shopId             String?                 @map("shop_id")
-  shop               Shop?                   @relation("LogisticsChannelShop", fields: [shopId], references: [id], onDelete: Restrict)
-  warehouseId        String?                 @map("warehouse_id")
-  warehouse          Warehouse?              @relation("LogisticsChannelWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  ozonCompanyId      String?                 @map("ozon_company_id")
-  originCountryUid   String?                 @map("origin_country_uid")
-  originCityUid      String?                 @map("origin_city_uid")
-  originCountryCode  String?                 @map("origin_country_code")
-  originLabel        String?                 @map("origin_label")
-  companyBindingId   String?                 @map("company_binding_id")
-  companyBinding     ShopOzonCompanyBinding? @relation(fields: [companyBindingId], references: [id], onDelete: Restrict)
-  originBindingId    String?                 @map("origin_binding_id")
-  originBinding      WarehouseOzonOriginBinding? @relation(fields: [originBindingId], references: [id], onDelete: Restrict)
-  scopeKey           String                  @unique @map("scope_key")
-  currentSequence    Int                     @default(0) @map("current_sequence")
-  currentReleaseId   String?                 @unique @map("current_release_id")
-  currentRelease     LogisticsRuleRelease?   @relation("CurrentLogisticsRuleRelease", fields: [currentReleaseId], references: [id], onDelete: Restrict)
-  retiredAt          DateTime?               @map("retired_at")
-  createdAt          DateTime                @default(now()) @map("created_at")
-  updatedAt          DateTime                @updatedAt @map("updated_at")
-  releases           LogisticsRuleRelease[]  @relation("ChannelLogisticsRuleReleases")
-  assignments        LogisticsRuleAssignment[]
-  events             LogisticsRuleEvent[]
+  id                String                      @id @default(cuid())
+  channelType       LogisticsChannelType        @map("channel_type")
+  deploymentId      String                      @default("legacy") @map("deployment_id")
+  schemaMajor       Int                         @default(1) @map("schema_major")
+  tenantId          String?                     @map("tenant_id")
+  tenant            User?                       @relation("LogisticsChannelTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId            String?                     @map("shop_id")
+  shop              Shop?                       @relation("LogisticsChannelShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId       String?                     @map("warehouse_id")
+  warehouse         Warehouse?                  @relation("LogisticsChannelWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  ozonCompanyId     String?                     @map("ozon_company_id")
+  originCountryUid  String?                     @map("origin_country_uid")
+  originCityUid     String?                     @map("origin_city_uid")
+  originCountryCode String?                     @map("origin_country_code")
+  originLabel       String?                     @map("origin_label")
+  companyBindingId  String?                     @map("company_binding_id")
+  companyBinding    ShopOzonCompanyBinding?     @relation(fields: [companyBindingId], references: [id], onDelete: Restrict)
+  originBindingId   String?                     @map("origin_binding_id")
+  originBinding     WarehouseOzonOriginBinding? @relation(fields: [originBindingId], references: [id], onDelete: Restrict)
+  scopeKey          String                      @unique @map("scope_key")
+  currentSequence   Int                         @default(0) @map("current_sequence")
+  currentReleaseId  String?                     @unique @map("current_release_id")
+  currentRelease    LogisticsRuleRelease?       @relation("CurrentLogisticsRuleRelease", fields: [currentReleaseId], references: [id], onDelete: Restrict)
+  retiredAt         DateTime?                   @map("retired_at")
+  createdAt         DateTime                    @default(now()) @map("created_at")
+  updatedAt         DateTime                    @updatedAt @map("updated_at")
+  releases          LogisticsRuleRelease[]      @relation("ChannelLogisticsRuleReleases")
+  assignments       LogisticsRuleAssignment[]
+  events            LogisticsRuleEvent[]
 
   @@unique([id, tenantId, shopId, warehouseId])
   @@index([deploymentId, schemaMajor, tenantId, shopId, warehouseId])
@@ -1870,24 +2872,24 @@ model LogisticsRuleChannel {
 }
 
 model LogisticsRuleRevision {
-  id                   String                    @id @default(cuid())
-  revisionKey          String                    @unique @map("revision_key")
-  sourceOwnerType      LogisticsSourceOwnerType  @map("source_owner_type")
-  sourceTenantId       String?                   @map("source_tenant_id")
-  sourceTenant         User?                     @relation("LogisticsRevisionTenant", fields: [sourceTenantId], references: [id], onDelete: Restrict)
+  id                   String                            @id @default(cuid())
+  revisionKey          String                            @unique @map("revision_key")
+  sourceOwnerType      LogisticsSourceOwnerType          @map("source_owner_type")
+  sourceTenantId       String?                           @map("source_tenant_id")
+  sourceTenant         User?                             @relation("LogisticsRevisionTenant", fields: [sourceTenantId], references: [id], onDelete: Restrict)
   confidentiality      LogisticsConfidentiality
-  contentChecksum      String                    @map("content_checksum")
+  contentChecksum      String                            @map("content_checksum")
   payload              Json
-  schemaVersion        String                    @map("schema_version")
-  parserVersion        String?                   @map("parser_version")
-  sourceMetadata       Json?                     @map("source_metadata")
-  capturedAt           DateTime?                 @map("captured_at")
-  validationStatus     LogisticsValidationStatus @default(DRAFT) @map("validation_status")
-  validationReport     Json?                     @map("validation_report")
-  validatedAt          DateTime?                 @map("validated_at")
-  validationValidUntil DateTime?                 @map("validation_valid_until")
-  createdById          String?                   @map("created_by_id")
-  createdAt            DateTime                  @default(now()) @map("created_at")
+  schemaVersion        String                            @map("schema_version")
+  parserVersion        String?                           @map("parser_version")
+  sourceMetadata       Json?                             @map("source_metadata")
+  capturedAt           DateTime?                         @map("captured_at")
+  validationStatus     LogisticsValidationStatus         @default(DRAFT) @map("validation_status")
+  validationReport     Json?                             @map("validation_report")
+  validatedAt          DateTime?                         @map("validated_at")
+  validationValidUntil DateTime?                         @map("validation_valid_until")
+  createdById          String?                           @map("created_by_id")
+  createdAt            DateTime                          @default(now()) @map("created_at")
   releases             LogisticsRuleRelease[]
   methodBindings       ShopDeliveryMethodRuleBinding[]
   officialResolutions  OfficialSellerFormulaResolution[]
@@ -1898,24 +2900,24 @@ model LogisticsRuleRevision {
 }
 
 model LogisticsRuleRelease {
-  id                      String                 @id @default(cuid())
-  channelId               String                 @map("channel_id")
-  channel                 LogisticsRuleChannel   @relation("ChannelLogisticsRuleReleases", fields: [channelId], references: [id], onDelete: Restrict)
+  id                      String                    @id @default(cuid())
+  channelId               String                    @map("channel_id")
+  channel                 LogisticsRuleChannel      @relation("ChannelLogisticsRuleReleases", fields: [channelId], references: [id], onDelete: Restrict)
   sequence                Int
-  revisionId              String                 @map("revision_id")
-  revision                LogisticsRuleRevision  @relation(fields: [revisionId], references: [id], onDelete: Restrict)
-  releaseKind             LogisticsReleaseKind   @map("release_kind")
-  rollbackTargetReleaseId String?                @map("rollback_target_release_id")
-  rollbackTargetRelease   LogisticsRuleRelease?  @relation("LogisticsReleaseRollback", fields: [rollbackTargetReleaseId], references: [id], onDelete: Restrict)
-  rollbackReleases        LogisticsRuleRelease[] @relation("LogisticsReleaseRollback")
-  contentChecksum         String                 @map("content_checksum")
-  effectiveChecksum       String                 @map("effective_checksum")
-  frozenPayload           Json                   @map("frozen_payload")
-  validatedAt             DateTime               @map("validated_at")
-  validationValidUntil    DateTime               @map("validation_valid_until")
-  publishedById           String?                @map("published_by_id")
-  publishedAt             DateTime               @default(now()) @map("published_at")
-  currentForChannel       LogisticsRuleChannel?  @relation("CurrentLogisticsRuleRelease")
+  revisionId              String                    @map("revision_id")
+  revision                LogisticsRuleRevision     @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  releaseKind             LogisticsReleaseKind      @map("release_kind")
+  rollbackTargetReleaseId String?                   @map("rollback_target_release_id")
+  rollbackTargetRelease   LogisticsRuleRelease?     @relation("LogisticsReleaseRollback", fields: [rollbackTargetReleaseId], references: [id], onDelete: Restrict)
+  rollbackReleases        LogisticsRuleRelease[]    @relation("LogisticsReleaseRollback")
+  contentChecksum         String                    @map("content_checksum")
+  effectiveChecksum       String                    @map("effective_checksum")
+  frozenPayload           Json                      @map("frozen_payload")
+  validatedAt             DateTime                  @map("validated_at")
+  validationValidUntil    DateTime                  @map("validation_valid_until")
+  publishedById           String?                   @map("published_by_id")
+  publishedAt             DateTime                  @default(now()) @map("published_at")
+  currentForChannel       LogisticsRuleChannel?     @relation("CurrentLogisticsRuleRelease")
   pinnedAssignments       LogisticsRuleAssignment[]
   events                  LogisticsRuleEvent[]
   deviceAcks              LogisticsRuleReleaseAck[]
@@ -1928,26 +2930,26 @@ model LogisticsRuleRelease {
 }
 
 model LogisticsRuleAssignment {
-  id                     String                @id @default(cuid())
-  tenantId               String                @map("tenant_id")
-  tenant                 User                  @relation("LogisticsAssignmentTenant", fields: [tenantId], references: [id], onDelete: Restrict)
-  shopId                 String                @map("shop_id")
-  shop                   Shop                  @relation("LogisticsAssignmentShop", fields: [shopId], references: [id], onDelete: Restrict)
-  warehouseId            String                @map("warehouse_id")
-  warehouse              Warehouse             @relation("LogisticsAssignmentWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  channelId              String                @map("channel_id")
-  channel                LogisticsRuleChannel  @relation(fields: [channelId], references: [id], onDelete: Restrict)
-  destinationCountryUid  String                @map("destination_country_uid")
-  destinationLocationUid String                @map("destination_location_uid")
-  destinationCountryCode String?               @map("destination_country_code")
-  destinationLabel       String                @map("destination_label")
-  pinnedReleaseId        String?               @map("pinned_release_id")
-  pinnedRelease          LogisticsRuleRelease? @relation(fields: [pinnedReleaseId], references: [id], onDelete: SetNull)
-  retiredAt              DateTime?             @map("retired_at")
-  createdAt              DateTime              @default(now()) @map("created_at")
-  updatedAt              DateTime              @updatedAt @map("updated_at")
-  deviceGrants            ExtensionDeviceAssignmentGrant[]
-  deviceReleaseAcks       LogisticsRuleReleaseAck[]
+  id                         String                               @id @default(cuid())
+  tenantId                   String                               @map("tenant_id")
+  tenant                     User                                 @relation("LogisticsAssignmentTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                     String                               @map("shop_id")
+  shop                       Shop                                 @relation("LogisticsAssignmentShop", fields: [shopId], references: [id], onDelete: Restrict)
+  warehouseId                String                               @map("warehouse_id")
+  warehouse                  Warehouse                            @relation("LogisticsAssignmentWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  channelId                  String                               @map("channel_id")
+  channel                    LogisticsRuleChannel                 @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  destinationCountryUid      String                               @map("destination_country_uid")
+  destinationLocationUid     String                               @map("destination_location_uid")
+  destinationCountryCode     String?                              @map("destination_country_code")
+  destinationLabel           String                               @map("destination_label")
+  pinnedReleaseId            String?                              @map("pinned_release_id")
+  pinnedRelease              LogisticsRuleRelease?                @relation(fields: [pinnedReleaseId], references: [id], onDelete: SetNull)
+  retiredAt                  DateTime?                            @map("retired_at")
+  createdAt                  DateTime                             @default(now()) @map("created_at")
+  updatedAt                  DateTime                             @updatedAt @map("updated_at")
+  deviceGrants               ExtensionDeviceAssignmentGrant[]
+  deviceReleaseAcks          LogisticsRuleReleaseAck[]
   officialInputUnitContracts LogisticsOfficialInputUnitContract[] @relation("OfficialInputUnitContractAssignment")
 
   @@unique([id, tenantId, shopId, warehouseId, channelId])
@@ -2037,9 +3039,9 @@ model ExtensionDevicePairingCode {
   id             String                       @id @default(cuid())
   deploymentId   String                       @map("deployment_id")
   actorUserId    String                       @map("actor_user_id")
-  actor           User                         @relation("ExtensionPairingActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  actor          User                         @relation("ExtensionPairingActor", fields: [actorUserId], references: [id], onDelete: Restrict)
   ownerUserId    String                       @map("owner_user_id")
-  owner           User                         @relation("ExtensionPairingOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  owner          User                         @relation("ExtensionPairingOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
   codeDigest     String                       @unique @map("code_digest")
   shopIds        String[]                     @default([]) @map("shop_ids")
   scopes         String[]                     @default([])
@@ -2059,37 +3061,83 @@ model ExtensionDevicePairingCode {
 }
 
 model ExtensionDeviceSession {
-  id            String                       @id
-  pairingCodeId String                       @unique @map("pairing_code_id")
-  pairingCode   ExtensionDevicePairingCode   @relation(fields: [pairingCodeId], references: [id], onDelete: Restrict)
-  deploymentId  String                       @map("deployment_id")
-  deviceId      String                       @map("device_id")
-  deviceLabel   String?                      @map("device_label")
-  actorUserId   String                       @map("actor_user_id")
-  actor          User                         @relation("ExtensionSessionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
-  ownerUserId   String                       @map("owner_user_id")
-  owner          User                         @relation("ExtensionSessionOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
-  status         ExtensionDeviceSessionStatus @default(ACTIVE)
-  scopes         String[]                     @default([])
-  currentJti     String                       @unique @map("current_jti")
-  expiresAt      DateTime                     @map("expires_at")
-  lastSeenAt     DateTime?                    @map("last_seen_at")
-  revokedAt      DateTime?                    @map("revoked_at")
-  revokedReason  ExtensionDeviceRevocationReason? @map("revoked_reason")
-  createdAt      DateTime                     @default(now()) @map("created_at")
-  updatedAt      DateTime                     @updatedAt @map("updated_at")
-  refreshFamily  ExtensionDeviceRefreshFamily?
-  shopGrants     ExtensionDeviceShopGrant[]
-  releaseAcks    LogisticsRuleReleaseAck[]
-  assignmentGrants ExtensionDeviceAssignmentGrant[]
-  securityEvents   ExtensionDeviceSecurityEvent[]
+  id                           String                           @id
+  pairingCodeId                String                           @unique @map("pairing_code_id")
+  pairingCode                  ExtensionDevicePairingCode       @relation(fields: [pairingCodeId], references: [id], onDelete: Restrict)
+  deploymentId                 String                           @map("deployment_id")
+  deviceId                     String                           @map("device_id")
+  deviceLabel                  String?                          @map("device_label")
+  actorUserId                  String                           @map("actor_user_id")
+  actor                        User                             @relation("ExtensionSessionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  ownerUserId                  String                           @map("owner_user_id")
+  owner                        User                             @relation("ExtensionSessionOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  status                       ExtensionDeviceSessionStatus     @default(ACTIVE)
+  scopes                       String[]                         @default([])
+  currentJti                   String                           @unique @map("current_jti")
+  expiresAt                    DateTime                         @map("expires_at")
+  lastSeenAt                   DateTime?                        @map("last_seen_at")
+  revokedAt                    DateTime?                        @map("revoked_at")
+  revokedReason                ExtensionDeviceRevocationReason? @map("revoked_reason")
+  createdAt                    DateTime                         @default(now()) @map("created_at")
+  updatedAt                    DateTime                         @updatedAt @map("updated_at")
+  refreshFamily                ExtensionDeviceRefreshFamily?
+  shopGrants                   ExtensionDeviceShopGrant[]
+  releaseAcks                  LogisticsRuleReleaseAck[]
+  assignmentGrants             ExtensionDeviceAssignmentGrant[]
+  securityEvents               ExtensionDeviceSecurityEvent[]
   claimedLogisticsCaptureTasks LogisticsCaptureTask[]
+  commandGrants                ExtensionCommandGrant[]
+  sourceCaptureSnapshots       SourceCaptureSnapshot[]
 
   @@unique([id, ownerUserId])
   @@index([ownerUserId, status, expiresAt])
   @@index([actorUserId, status])
   @@index([deploymentId, deviceId, status])
   @@map("extension_device_sessions")
+}
+
+model ExtensionCommandGrant {
+  id             String                           @id
+  sessionId      String                           @map("session_id")
+  session        ExtensionDeviceSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  tokenId        String                           @map("token_id")
+  ownerUserId    String                           @map("owner_user_id")
+  owner          User                             @relation("ExtensionCommandGrantOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  shopId         String?                          @map("shop_id")
+  shop           Shop?                            @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  operation      ExtensionCommandOperation
+  workflowId     String?                          @map("workflow_id")
+  draftVersion   Int?                             @map("draft_version")
+  idempotencyKey String                           @map("idempotency_key")
+  requestHash    String                           @map("request_hash")
+  tokenDigest    String                           @unique @map("token_digest")
+  issuedAt       DateTime                         @map("issued_at")
+  expiresAt      DateTime                         @map("expires_at")
+  consumedAt     DateTime?                        @map("consumed_at")
+  revokedAt      DateTime?                        @map("revoked_at")
+  revokedReason  ExtensionDeviceRevocationReason? @map("revoked_reason")
+  receipt        ExtensionCommandReceipt?
+
+  @@unique([sessionId, idempotencyKey])
+  @@index([ownerUserId, operation, issuedAt])
+  @@index([shopId, operation, issuedAt])
+  @@index([sessionId, operation, expiresAt])
+  @@index([workflowId, draftVersion, operation])
+  @@map("extension_command_grants")
+}
+
+model ExtensionCommandReceipt {
+  id          String                        @id
+  grantId     String                        @unique @map("grant_id")
+  grant       ExtensionCommandGrant         @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  status      ExtensionCommandReceiptStatus @default(PENDING)
+  result      Json?
+  failureCode String?                       @map("failure_code")
+  createdAt   DateTime                      @default(now()) @map("created_at")
+  completedAt DateTime?                     @map("completed_at")
+
+  @@index([status, createdAt])
+  @@map("extension_command_receipts")
 }
 
 model ExtensionDeviceRefreshFamily {
@@ -2110,17 +3158,17 @@ model ExtensionDeviceRefreshFamily {
 }
 
 model ExtensionDeviceRefreshCredential {
-  id               String                       @id @default(cuid())
-  familyId         String                       @map("family_id")
-  family           ExtensionDeviceRefreshFamily @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  id               String                            @id @default(cuid())
+  familyId         String                            @map("family_id")
+  family           ExtensionDeviceRefreshFamily      @relation(fields: [familyId], references: [id], onDelete: Restrict)
   generation       Int
-  credentialDigest String                       @unique @map("credential_digest")
-  expiresAt        DateTime                     @map("expires_at")
-  consumedAt       DateTime?                    @map("consumed_at")
-  replacedById     String?                      @unique @map("replaced_by_id")
+  credentialDigest String                            @unique @map("credential_digest")
+  expiresAt        DateTime                          @map("expires_at")
+  consumedAt       DateTime?                         @map("consumed_at")
+  replacedById     String?                           @unique @map("replaced_by_id")
   replacedBy       ExtensionDeviceRefreshCredential? @relation("ExtensionRefreshRotation", fields: [replacedById], references: [id], onDelete: Restrict)
   replaces         ExtensionDeviceRefreshCredential? @relation("ExtensionRefreshRotation")
-  createdAt        DateTime                     @default(now()) @map("created_at")
+  createdAt        DateTime                          @default(now()) @map("created_at")
 
   @@unique([familyId, generation])
   @@index([familyId, expiresAt])
@@ -2128,14 +3176,14 @@ model ExtensionDeviceRefreshCredential {
 }
 
 model ExtensionDeviceShopGrant {
-  id            String                         @id @default(cuid())
-  sessionId     String                         @map("session_id")
-  session       ExtensionDeviceSession         @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  shopId        String                         @map("shop_id")
-  shop          Shop                           @relation(fields: [shopId], references: [id], onDelete: Restrict)
-  status        ExtensionDeviceShopGrantStatus @default(ACTIVE)
-  grantedAt     DateTime                       @default(now()) @map("granted_at")
-  revokedAt     DateTime?                      @map("revoked_at")
+  id            String                           @id @default(cuid())
+  sessionId     String                           @map("session_id")
+  session       ExtensionDeviceSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  shopId        String                           @map("shop_id")
+  shop          Shop                             @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  status        ExtensionDeviceShopGrantStatus   @default(ACTIVE)
+  grantedAt     DateTime                         @default(now()) @map("granted_at")
+  revokedAt     DateTime?                        @map("revoked_at")
   revokedReason ExtensionDeviceRevocationReason? @map("revoked_reason")
 
   @@unique([sessionId, shopId])
@@ -2144,21 +3192,21 @@ model ExtensionDeviceShopGrant {
 }
 
 model ExtensionDeviceAssignmentGrant {
-  id                 String                               @id @default(cuid())
-  sessionId          String                               @map("session_id")
-  session            ExtensionDeviceSession               @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  assignmentId       String                               @map("assignment_id")
-  shopId             String                               @map("shop_id")
-  assignment         LogisticsRuleAssignment              @relation(fields: [assignmentId, shopId], references: [id, shopId], onDelete: Restrict)
-  shop               Shop                                 @relation(fields: [shopId], references: [id], onDelete: Restrict)
-  scopeKeyHash       String                               @map("scope_key_hash")
-  status             ExtensionDeviceAssignmentGrantStatus @default(ACTIVE)
-  firstDeliveredAt   DateTime?                            @map("first_delivered_at")
-  lastAuthorizedAt   DateTime?                            @map("last_authorized_at")
-  revokedAt          DateTime?                            @map("revoked_at")
-  revokedReason      ExtensionDeviceRevocationReason?     @map("revoked_reason")
-  createdAt          DateTime                             @default(now()) @map("created_at")
-  updatedAt          DateTime                             @updatedAt @map("updated_at")
+  id               String                               @id @default(cuid())
+  sessionId        String                               @map("session_id")
+  session          ExtensionDeviceSession               @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  assignmentId     String                               @map("assignment_id")
+  shopId           String                               @map("shop_id")
+  assignment       LogisticsRuleAssignment              @relation(fields: [assignmentId, shopId], references: [id, shopId], onDelete: Restrict)
+  shop             Shop                                 @relation(fields: [shopId], references: [id], onDelete: Restrict)
+  scopeKeyHash     String                               @map("scope_key_hash")
+  status           ExtensionDeviceAssignmentGrantStatus @default(ACTIVE)
+  firstDeliveredAt DateTime?                            @map("first_delivered_at")
+  lastAuthorizedAt DateTime?                            @map("last_authorized_at")
+  revokedAt        DateTime?                            @map("revoked_at")
+  revokedReason    ExtensionDeviceRevocationReason?     @map("revoked_reason")
+  createdAt        DateTime                             @default(now()) @map("created_at")
+  updatedAt        DateTime                             @updatedAt @map("updated_at")
 
   @@unique([sessionId, assignmentId])
   @@index([shopId, status])
@@ -2167,16 +3215,16 @@ model ExtensionDeviceAssignmentGrant {
 }
 
 model ExtensionDeviceSecurityEvent {
-  id              String                            @id @default(cuid())
-  sessionId       String                            @map("session_id")
-  session         ExtensionDeviceSession            @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  refreshFamilyId String?                           @map("refresh_family_id")
-  refreshFamily   ExtensionDeviceRefreshFamily?     @relation(fields: [refreshFamilyId], references: [id], onDelete: Restrict)
-  actorUserId     String?                           @map("actor_user_id")
-  actor           User?                             @relation("ExtensionSecurityEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  id              String                           @id @default(cuid())
+  sessionId       String                           @map("session_id")
+  session         ExtensionDeviceSession           @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  refreshFamilyId String?                          @map("refresh_family_id")
+  refreshFamily   ExtensionDeviceRefreshFamily?    @relation(fields: [refreshFamilyId], references: [id], onDelete: Restrict)
+  actorUserId     String?                          @map("actor_user_id")
+  actor           User?                            @relation("ExtensionSecurityEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
   type            ExtensionDeviceSecurityEventType
-  reasonCode      ExtensionDeviceRevocationReason   @map("reason_code")
-  createdAt       DateTime                          @default(now()) @map("created_at")
+  reasonCode      ExtensionDeviceRevocationReason  @map("reason_code")
+  createdAt       DateTime                         @default(now()) @map("created_at")
 
   @@index([refreshFamilyId, type])
   @@index([sessionId, createdAt])
@@ -2186,11 +3234,11 @@ model ExtensionDeviceSecurityEvent {
 
 model LogisticsRuleReleaseAck {
   id                String                        @id @default(cuid())
-  idempotencyKey    String                       @unique @map("idempotency_key")
+  idempotencyKey    String                        @unique @map("idempotency_key")
   sessionId         String                        @map("session_id")
   session           ExtensionDeviceSession        @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  assignmentId      String                       @map("assignment_id")
-  assignment        LogisticsRuleAssignment      @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  assignmentId      String                        @map("assignment_id")
+  assignment        LogisticsRuleAssignment       @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
   releaseId         String                        @map("release_id")
   effectiveChecksum String                        @map("effective_checksum")
   release           LogisticsRuleRelease          @relation(fields: [releaseId, effectiveChecksum], references: [id, effectiveChecksum], onDelete: Restrict)
@@ -2207,44 +3255,44 @@ model LogisticsRuleReleaseAck {
 }
 
 model LogisticsCaptureTask {
-  id                     String                          @id
+  id                     String                     @id
   version                String
   kind                   LogisticsCaptureTaskKind
-  requestedByUserId      String                          @map("requested_by_user_id")
-  requestedBy            User                            @relation("CaptureTaskRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
-  tenantId               String                          @map("tenant_id")
-  tenant                 User                            @relation("CaptureTaskTenant", fields: [tenantId], references: [id], onDelete: Restrict)
-  shopId                 String                          @map("shop_id")
-  shop                   Shop                            @relation("CaptureTaskShop", fields: [shopId], references: [id], onDelete: Restrict)
-  companyId              String                          @map("company_id")
-  warehouseId            String                          @map("warehouse_id")
-  warehouse              Warehouse                       @relation("CaptureTaskWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  originCountryUid       String                          @map("origin_country_uid")
-  originCityUid          String                          @map("origin_city_uid")
-  companyBindingId       String                          @map("company_binding_id")
-  companyBinding         ShopOzonCompanyBinding          @relation(fields: [companyBindingId], references: [id], onDelete: Restrict)
-  originBindingId        String                          @map("origin_binding_id")
-  originBinding          WarehouseOzonOriginBinding      @relation(fields: [originBindingId], references: [id], onDelete: Restrict)
-  destinationCountryUid  String?                         @map("destination_country_uid")
-  destinationLocationUid String?                         @map("destination_location_uid")
-  officialFingerprint    Json?                           @map("official_fingerprint")
-  expectedEndpoints      String[]                        @default([]) @map("expected_endpoints")
-  fingerprintChecksum    String                          @map("fingerprint_checksum")
-  nonceDigest            String                          @unique @map("nonce_digest")
-  status                 LogisticsCaptureTaskStatus      @default(ISSUED)
-  claimedBySessionId     String?                         @map("claimed_by_session_id")
-  claimedBySession       ExtensionDeviceSession?         @relation(fields: [claimedBySessionId], references: [id], onDelete: Restrict)
-  candidateId            String?                         @map("candidate_id")
-  candidate              LogisticsCaptureCandidate?      @relation("CaptureTaskCandidate", fields: [candidateId], references: [id], onDelete: Restrict)
-  claimedAt              DateTime?                       @map("claimed_at")
-  uploadedAt             DateTime?                       @map("uploaded_at")
-  reviewableAt           DateTime?                       @map("reviewable_at")
-  cancelledAt            DateTime?                       @map("cancelled_at")
-  issuedAt               DateTime                        @map("issued_at")
-  expiresAt              DateTime                        @map("expires_at")
-  createdAt              DateTime                        @default(now()) @map("created_at")
-  updatedAt              DateTime                        @updatedAt @map("updated_at")
-  sourceCandidate        LogisticsCaptureCandidate?      @relation("CaptureCandidateSourceTask")
+  requestedByUserId      String                     @map("requested_by_user_id")
+  requestedBy            User                       @relation("CaptureTaskRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  tenantId               String                     @map("tenant_id")
+  tenant                 User                       @relation("CaptureTaskTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                 String                     @map("shop_id")
+  shop                   Shop                       @relation("CaptureTaskShop", fields: [shopId], references: [id], onDelete: Restrict)
+  companyId              String                     @map("company_id")
+  warehouseId            String                     @map("warehouse_id")
+  warehouse              Warehouse                  @relation("CaptureTaskWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  originCountryUid       String                     @map("origin_country_uid")
+  originCityUid          String                     @map("origin_city_uid")
+  companyBindingId       String                     @map("company_binding_id")
+  companyBinding         ShopOzonCompanyBinding     @relation(fields: [companyBindingId], references: [id], onDelete: Restrict)
+  originBindingId        String                     @map("origin_binding_id")
+  originBinding          WarehouseOzonOriginBinding @relation(fields: [originBindingId], references: [id], onDelete: Restrict)
+  destinationCountryUid  String?                    @map("destination_country_uid")
+  destinationLocationUid String?                    @map("destination_location_uid")
+  officialFingerprint    Json?                      @map("official_fingerprint")
+  expectedEndpoints      String[]                   @default([]) @map("expected_endpoints")
+  fingerprintChecksum    String                     @map("fingerprint_checksum")
+  nonceDigest            String                     @unique @map("nonce_digest")
+  status                 LogisticsCaptureTaskStatus @default(ISSUED)
+  claimedBySessionId     String?                    @map("claimed_by_session_id")
+  claimedBySession       ExtensionDeviceSession?    @relation(fields: [claimedBySessionId], references: [id], onDelete: Restrict)
+  candidateId            String?                    @map("candidate_id")
+  candidate              LogisticsCaptureCandidate? @relation("CaptureTaskCandidate", fields: [candidateId], references: [id], onDelete: Restrict)
+  claimedAt              DateTime?                  @map("claimed_at")
+  uploadedAt             DateTime?                  @map("uploaded_at")
+  reviewableAt           DateTime?                  @map("reviewable_at")
+  cancelledAt            DateTime?                  @map("cancelled_at")
+  issuedAt               DateTime                   @map("issued_at")
+  expiresAt              DateTime                   @map("expires_at")
+  createdAt              DateTime                   @default(now()) @map("created_at")
+  updatedAt              DateTime                   @updatedAt @map("updated_at")
+  sourceCandidate        LogisticsCaptureCandidate? @relation("CaptureCandidateSourceTask")
 
   @@unique([id, tenantId, shopId, companyId, warehouseId, originCountryUid, originCityUid])
   @@index([tenantId, shopId, warehouseId, status, expiresAt])
@@ -2253,45 +3301,44 @@ model LogisticsCaptureTask {
 }
 
 model LogisticsCaptureCandidate {
-  id                       String                          @id
-  sourceTaskId             String                          @unique @map("source_task_id")
-  sourceTask               LogisticsCaptureTask            @relation("CaptureCandidateSourceTask", fields: [sourceTaskId], references: [id], onDelete: Restrict)
-  tasks                    LogisticsCaptureTask[]          @relation("CaptureTaskCandidate")
-  taskKind                 LogisticsCaptureTaskKind        @map("task_kind")
-  taskVersion              String                          @map("task_version")
-  tenantId                 String                          @map("tenant_id")
-  tenant                   User                            @relation("CaptureCandidateTenant", fields: [tenantId], references: [id], onDelete: Restrict)
-  shopId                   String                          @map("shop_id")
-  shop                     Shop                            @relation("CaptureCandidateShop", fields: [shopId], references: [id], onDelete: Restrict)
-  companyId                String                          @map("company_id")
-  warehouseId              String                          @map("warehouse_id")
-  warehouse                Warehouse                       @relation("CaptureCandidateWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  originCountryUid         String                          @map("origin_country_uid")
-  originCityUid            String                          @map("origin_city_uid")
-  destinationCountryUid    String?                         @map("destination_country_uid")
-  destinationLocationUid   String?                         @map("destination_location_uid")
-  fingerprintChecksum      String                          @map("fingerprint_checksum")
-  responseChecksum         String                          @map("response_checksum")
-  sourceResponseChecksum   String?                         @map("source_response_checksum")
-  previousResponseChecksum String?                         @map("previous_response_checksum")
-  capturedAt               DateTime?                       @map("captured_at")
-  receivedAt               DateTime                        @map("received_at")
-  state                    LogisticsCaptureCandidateState
-  reviewStatus             LogisticsCaptureReviewStatus    @default(PENDING_REVIEW) @map("review_status")
-  reviewedBy               User?                           @relation("CaptureCandidateReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
-  reviewedById             String?                         @map("reviewed_by_id")
-  reviewedAt               DateTime?                       @map("reviewed_at")
-  reviewReason             String?                         @db.VarChar(1000) @map("review_reason")
-  sourceTrust              String                          @map("source_trust")
-  quarantineReasons        String[]                        @default([]) @map("quarantine_reasons")
-  normalizedPayload        Json?                           @map("normalized_payload")
-  diagnostics              Json
-  createdAt                DateTime                        @default(now()) @map("created_at")
+  id                         String                               @id
+  sourceTaskId               String                               @unique @map("source_task_id")
+  sourceTask                 LogisticsCaptureTask                 @relation("CaptureCandidateSourceTask", fields: [sourceTaskId], references: [id], onDelete: Restrict)
+  tasks                      LogisticsCaptureTask[]               @relation("CaptureTaskCandidate")
+  taskKind                   LogisticsCaptureTaskKind             @map("task_kind")
+  taskVersion                String                               @map("task_version")
+  tenantId                   String                               @map("tenant_id")
+  tenant                     User                                 @relation("CaptureCandidateTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  shopId                     String                               @map("shop_id")
+  shop                       Shop                                 @relation("CaptureCandidateShop", fields: [shopId], references: [id], onDelete: Restrict)
+  companyId                  String                               @map("company_id")
+  warehouseId                String                               @map("warehouse_id")
+  warehouse                  Warehouse                            @relation("CaptureCandidateWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  originCountryUid           String                               @map("origin_country_uid")
+  originCityUid              String                               @map("origin_city_uid")
+  destinationCountryUid      String?                              @map("destination_country_uid")
+  destinationLocationUid     String?                              @map("destination_location_uid")
+  fingerprintChecksum        String                               @map("fingerprint_checksum")
+  responseChecksum           String                               @map("response_checksum")
+  sourceResponseChecksum     String?                              @map("source_response_checksum")
+  previousResponseChecksum   String?                              @map("previous_response_checksum")
+  capturedAt                 DateTime?                            @map("captured_at")
+  receivedAt                 DateTime                             @map("received_at")
+  state                      LogisticsCaptureCandidateState
+  reviewStatus               LogisticsCaptureReviewStatus         @default(PENDING_REVIEW) @map("review_status")
+  reviewedBy                 User?                                @relation("CaptureCandidateReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  reviewedById               String?                              @map("reviewed_by_id")
+  reviewedAt                 DateTime?                            @map("reviewed_at")
+  reviewReason               String?                              @map("review_reason") @db.VarChar(1000)
+  sourceTrust                String                               @map("source_trust")
+  quarantineReasons          String[]                             @default([]) @map("quarantine_reasons")
+  normalizedPayload          Json?                                @map("normalized_payload")
+  diagnostics                Json
+  createdAt                  DateTime                             @default(now()) @map("created_at")
   officialInputUnitContracts LogisticsOfficialInputUnitContract[] @relation("OfficialInputUnitContractCandidate")
-  scopeEvents              LogisticsScopeEvent[]           @relation("CaptureCandidateScopeEvents")
+  scopeEvents                LogisticsScopeEvent[]                @relation("CaptureCandidateScopeEvents")
 
   @@unique([id, tenantId, shopId], map: "logistics_capture_candidate_event_scope_key")
-
   @@unique([id, tenantId, shopId, companyId, warehouseId, originCountryUid, originCityUid])
   @@index([tenantId, shopId, reviewStatus, receivedAt])
   @@index([fingerprintChecksum, receivedAt])
@@ -2299,41 +3346,41 @@ model LogisticsCaptureCandidate {
 }
 
 model LogisticsOfficialInputUnitContract {
-  id                      String   @id
-  contractVersion         String   @map("contract_version")
-  assignmentId            String   @map("assignment_id")
-  channelId               String   @map("channel_id")
-  tenantId                String   @map("tenant_id")
-  shopId                  String   @map("shop_id")
-  companyId               String   @map("company_id")
-  warehouseId             String   @map("warehouse_id")
-  originCountryUid        String   @map("origin_country_uid")
-  originCityUid           String   @map("origin_city_uid")
-  destinationCountryUid   String   @map("destination_country_uid")
-  destinationLocationUid  String   @map("destination_location_uid")
+  id                      String    @id
+  contractVersion         String    @map("contract_version")
+  assignmentId            String    @map("assignment_id")
+  channelId               String    @map("channel_id")
+  tenantId                String    @map("tenant_id")
+  shopId                  String    @map("shop_id")
+  companyId               String    @map("company_id")
+  warehouseId             String    @map("warehouse_id")
+  originCountryUid        String    @map("origin_country_uid")
+  originCityUid           String    @map("origin_city_uid")
+  destinationCountryUid   String    @map("destination_country_uid")
+  destinationLocationUid  String    @map("destination_location_uid")
   currency                String
-  weightUnit              String   @map("weight_unit")
-  dimensionUnit           String   @map("dimension_unit")
-  priceInputUnit          String   @map("price_input_unit")
-  weightIncrementG        Decimal  @map("weight_increment_g") @db.Decimal(20, 9)
-  dimensionIncrementMm    Decimal  @map("dimension_increment_mm") @db.Decimal(20, 9)
-  currencyMinorIncrement  Int      @map("currency_minor_increment")
-  sourceCandidateId       String   @map("source_candidate_id")
-  sourceCandidateChecksum String   @map("source_candidate_checksum")
-  sourceRevision          String   @unique(map: "official_input_unit_source_revision_key") @map("source_revision")
-  sourceChecksum          String   @map("source_checksum")
-  sourceEvidence          Json     @map("source_evidence")
-  reviewerId              String   @map("reviewer_id")
-  reviewNote              String   @db.VarChar(1000) @map("review_note")
-  verifiedAt              DateTime @map("verified_at")
-  validUntil              DateTime @map("valid_until")
-  supersedesId            String?  @unique(map: "official_input_unit_supersedes_key") @map("supersedes_id")
-  revokedById             String?  @map("revoked_by_id")
+  weightUnit              String    @map("weight_unit")
+  dimensionUnit           String    @map("dimension_unit")
+  priceInputUnit          String    @map("price_input_unit")
+  weightIncrementG        Decimal   @map("weight_increment_g") @db.Decimal(20, 9)
+  dimensionIncrementMm    Decimal   @map("dimension_increment_mm") @db.Decimal(20, 9)
+  currencyMinorIncrement  Int       @map("currency_minor_increment")
+  sourceCandidateId       String    @map("source_candidate_id")
+  sourceCandidateChecksum String    @map("source_candidate_checksum")
+  sourceRevision          String    @unique(map: "official_input_unit_source_revision_key") @map("source_revision")
+  sourceChecksum          String    @map("source_checksum")
+  sourceEvidence          Json      @map("source_evidence")
+  reviewerId              String    @map("reviewer_id")
+  reviewNote              String    @map("review_note") @db.VarChar(1000)
+  verifiedAt              DateTime  @map("verified_at")
+  validUntil              DateTime  @map("valid_until")
+  supersedesId            String?   @unique(map: "official_input_unit_supersedes_key") @map("supersedes_id")
+  revokedById             String?   @map("revoked_by_id")
   revokedAt               DateTime? @map("revoked_at")
-  revocationReason        String?  @db.VarChar(500) @map("revocation_reason")
-  createdAt               DateTime @default(now()) @map("created_at")
+  revocationReason        String?   @map("revocation_reason") @db.VarChar(500)
+  createdAt               DateTime  @default(now()) @map("created_at")
 
-  assignment      LogisticsRuleAssignment            @relation("OfficialInputUnitContractAssignment", fields: [assignmentId, tenantId, shopId, warehouseId, channelId], references: [id, tenantId, shopId, warehouseId, channelId], onDelete: Restrict)
+  assignment      LogisticsRuleAssignment             @relation("OfficialInputUnitContractAssignment", fields: [assignmentId, tenantId, shopId, warehouseId, channelId], references: [id, tenantId, shopId, warehouseId, channelId], onDelete: Restrict)
   sourceCandidate LogisticsCaptureCandidate           @relation("OfficialInputUnitContractCandidate", fields: [sourceCandidateId, tenantId, shopId, companyId, warehouseId, originCountryUid, originCityUid], references: [id, tenantId, shopId, companyId, warehouseId, originCountryUid, originCityUid], onDelete: Restrict)
   reviewer        User                                @relation("OfficialInputUnitContractReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
   revokedBy       User?                               @relation("OfficialInputUnitContractRevoker", fields: [revokedById], references: [id], onDelete: Restrict)
@@ -2378,17 +3425,17 @@ model LogisticsCaptureCandidateSet {
 }
 
 model LogisticsCaptureCandidateSetOfficial {
-  candidateSetId       String   @map("candidate_set_id")
-  officialCandidateId  String   @map("official_candidate_id")
-  tenantId             String   @map("tenant_id")
-  shopId               String   @map("shop_id")
-  companyId            String   @map("company_id")
-  warehouseId          String   @map("warehouse_id")
-  originCountryUid     String   @map("origin_country_uid")
-  originCityUid        String   @map("origin_city_uid")
-  fingerprintKey       String   @map("fingerprint_key")
-  responseChecksum     String   @map("response_checksum")
-  createdAt            DateTime @default(now()) @map("created_at")
+  candidateSetId      String   @map("candidate_set_id")
+  officialCandidateId String   @map("official_candidate_id")
+  tenantId            String   @map("tenant_id")
+  shopId              String   @map("shop_id")
+  companyId           String   @map("company_id")
+  warehouseId         String   @map("warehouse_id")
+  originCountryUid    String   @map("origin_country_uid")
+  originCityUid       String   @map("origin_city_uid")
+  fingerprintKey      String   @map("fingerprint_key")
+  responseChecksum    String   @map("response_checksum")
+  createdAt           DateTime @default(now()) @map("created_at")
 
   @@id([candidateSetId, officialCandidateId])
   @@unique([candidateSetId, fingerprintKey])
@@ -2397,18 +3444,18 @@ model LogisticsCaptureCandidateSetOfficial {
 }
 
 model LogisticsScopeBootstrap {
-  id                 String                         @id
-  tenantId           String                         @map("tenant_id")
-  shopId             String                         @map("shop_id")
-  warehouseId        String                         @map("warehouse_id")
-  deliveryMethodId   String                         @map("delivery_method_id")
-  status             LogisticsScopeBootstrapStatus @default(CANDIDATE)
-  openApiEvidence    Json                           @map("open_api_evidence")
-  evidenceChecksum   String                         @map("evidence_checksum")
-  createdById        String                         @map("created_by_id")
-  activatedAt        DateTime?                      @map("activated_at")
-  createdAt          DateTime                       @default(now()) @map("created_at")
-  updatedAt          DateTime                       @updatedAt @map("updated_at")
+  id               String                        @id
+  tenantId         String                        @map("tenant_id")
+  shopId           String                        @map("shop_id")
+  warehouseId      String                        @map("warehouse_id")
+  deliveryMethodId String                        @map("delivery_method_id")
+  status           LogisticsScopeBootstrapStatus @default(CANDIDATE)
+  openApiEvidence  Json                          @map("open_api_evidence")
+  evidenceChecksum String                        @map("evidence_checksum")
+  createdById      String                        @map("created_by_id")
+  activatedAt      DateTime?                     @map("activated_at")
+  createdAt        DateTime                      @default(now()) @map("created_at")
+  updatedAt        DateTime                      @updatedAt @map("updated_at")
 
   @@unique([tenantId, shopId, warehouseId, deliveryMethodId])
   @@index([tenantId, shopId, status])
@@ -2416,25 +3463,25 @@ model LogisticsScopeBootstrap {
 }
 
 model LogisticsCompanyProbe {
-  id                    String                      @id
-  bootstrapId           String                      @map("bootstrap_id")
-  requestedById         String                      @map("requested_by_id")
-  nonceDigest           String                      @unique @map("nonce_digest")
+  id                     String                      @id
+  bootstrapId            String                      @map("bootstrap_id")
+  requestedById          String                      @map("requested_by_id")
+  nonceDigest            String                      @unique @map("nonce_digest")
   issuedEvidenceChecksum String                      @map("issued_evidence_checksum")
-  status                LogisticsCompanyProbeStatus @default(ISSUED)
-  claimedBySessionId    String?                     @map("claimed_by_session_id")
-  submittedCompanyId    String?                     @map("submitted_company_id")
-  submittedEvidence     Json?                       @map("submitted_evidence")
-  companyBindingId      String?                     @map("company_binding_id")
-  issuedAt              DateTime                    @map("issued_at")
-  expiresAt             DateTime                    @map("expires_at")
-  claimedAt             DateTime?                   @map("claimed_at")
-  submittedAt           DateTime?                   @map("submitted_at")
-  reviewedById          String?                     @map("reviewed_by_id")
-  reviewedAt            DateTime?                   @map("reviewed_at")
-  reviewReason          String?                     @map("review_reason")
-  createdAt             DateTime                    @default(now()) @map("created_at")
-  updatedAt             DateTime                    @updatedAt @map("updated_at")
+  status                 LogisticsCompanyProbeStatus @default(ISSUED)
+  claimedBySessionId     String?                     @map("claimed_by_session_id")
+  submittedCompanyId     String?                     @map("submitted_company_id")
+  submittedEvidence      Json?                       @map("submitted_evidence")
+  companyBindingId       String?                     @map("company_binding_id")
+  issuedAt               DateTime                    @map("issued_at")
+  expiresAt              DateTime                    @map("expires_at")
+  claimedAt              DateTime?                   @map("claimed_at")
+  submittedAt            DateTime?                   @map("submitted_at")
+  reviewedById           String?                     @map("reviewed_by_id")
+  reviewedAt             DateTime?                   @map("reviewed_at")
+  reviewReason           String?                     @map("review_reason")
+  createdAt              DateTime                    @default(now()) @map("created_at")
+  updatedAt              DateTime                    @updatedAt @map("updated_at")
 
   @@index([bootstrapId, status, expiresAt])
   @@index([claimedBySessionId, status])
@@ -2442,22 +3489,22 @@ model LogisticsCompanyProbe {
 }
 
 model LogisticsScopeEvent {
-  id              String   @id @default(cuid())
-  tenantId        String   @map("tenant_id")
-  shopId          String   @map("shop_id")
-  captureCandidateId String? @map("capture_candidate_id")
-  captureCandidate LogisticsCaptureCandidate? @relation("CaptureCandidateScopeEvents", fields: [captureCandidateId, tenantId, shopId], references: [id, tenantId, shopId], onDelete: Restrict, map: "capture_review_event_candidate_scope_fkey")
-  bootstrapId     String?  @map("bootstrap_id")
-  probeId         String?  @map("probe_id")
-  channelId       String?  @map("channel_id")
-  assignmentId    String?  @map("assignment_id")
-  subjectType     String   @map("subject_type")
-  subjectId       String   @map("subject_id")
-  eventType       String   @map("event_type")
-  actorUserId     String?  @map("actor_user_id")
-  deviceSessionId String?  @map("device_session_id")
-  payload         Json
-  createdAt       DateTime @default(now()) @map("created_at")
+  id                 String                     @id @default(cuid())
+  tenantId           String                     @map("tenant_id")
+  shopId             String                     @map("shop_id")
+  captureCandidateId String?                    @map("capture_candidate_id")
+  captureCandidate   LogisticsCaptureCandidate? @relation("CaptureCandidateScopeEvents", fields: [captureCandidateId, tenantId, shopId], references: [id, tenantId, shopId], onDelete: Restrict, map: "capture_review_event_candidate_scope_fkey")
+  bootstrapId        String?                    @map("bootstrap_id")
+  probeId            String?                    @map("probe_id")
+  channelId          String?                    @map("channel_id")
+  assignmentId       String?                    @map("assignment_id")
+  subjectType        String                     @map("subject_type")
+  subjectId          String                     @map("subject_id")
+  eventType          String                     @map("event_type")
+  actorUserId        String?                    @map("actor_user_id")
+  deviceSessionId    String?                    @map("device_session_id")
+  payload            Json
+  createdAt          DateTime                   @default(now()) @map("created_at")
 
   @@index([tenantId, shopId, createdAt])
   @@index([bootstrapId, createdAt])

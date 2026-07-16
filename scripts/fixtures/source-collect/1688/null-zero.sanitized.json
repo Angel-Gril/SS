@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "source-collector-characterization-v1",
+  "platform": "1688",
+  "sourceUrl": "https://detail.1688.com/offer/1000000000003.html",
+  "offerId": "1000000000003",
+  "subject": "Sanitized null and zero boundary fixture",
+  "cases": [
+    {
+      "id": "missing",
+      "omit": ["stock", "shippingCny", "weightG", "lengthMm", "widthMm", "heightMm"]
+    },
+    {
+      "id": "unknown-null",
+      "stock": null,
+      "shippingCny": null,
+      "weightG": null,
+      "lengthMm": null,
+      "widthMm": null,
+      "heightMm": null
+    },
+    {
+      "id": "explicit-zero",
+      "stock": 0,
+      "shippingCny": 0,
+      "shippingFree": true,
+      "weightG": 0,
+      "lengthMm": 0,
+      "widthMm": 0,
+      "heightMm": 0
+    }
+  ]
+}

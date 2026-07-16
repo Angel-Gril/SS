@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(async (_key: string): Promise<number | undefined> => undefined),
   addBrowserOneClickListingJob: vi.fn(),
   appendBrowserOneClickListingRows: vi.fn(),
+  prepareSourceListingWorkflow: vi.fn(),
+  featureEvaluate: vi.fn(),
 }));
 
 vi.mock('../lib/auth.js', () => ({
@@ -54,9 +56,13 @@ vi.mock('../workers/browser-one-click-listing.js', () => ({
   appendBrowserOneClickListingRows: mocks.appendBrowserOneClickListingRows,
 }));
 
-async function buildApp() {
+async function buildApp(featureEvaluate = mocks.featureEvaluate) {
   const app = Fastify();
-  await app.register(listingRoutes, { prefix: '/api/listing' });
+  await app.register(listingRoutes, {
+    prefix: '/api/listing',
+    featureFlags: { evaluate: featureEvaluate },
+    sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+  });
   await app.ready();
   return app;
 }
@@ -66,6 +72,366 @@ describe('browser one-click listing jobs', () => {
     vi.clearAllMocks();
     vi.mocked(OzonClient).mockReset();
     mocks.getConfig.mockResolvedValue(undefined);
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: false,
+      legacyAllowed: true,
+      reason: 'master_off',
+      revision: 'master-off',
+    });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({ drafts: [], failures: [] });
+  });
+
+  it('shadow-writes server drafts while keeping the legacy one-click queue authoritative', async () => {
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE' });
+    mocks.syncJobCreate.mockResolvedValue({ id: 'job-1' });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({
+      drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 1, revision: 1, selectedSkuKeys: ['sku-a'] }],
+      failures: [],
+    });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'shadow_write', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r1' });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/browser-one-click-jobs',
+        payload: { shopId: 'shop-1', rows: [{ sku: 'sku-a', supplyGoodsId: 'goods-1' }] },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(mocks.prepareSourceListingWorkflow).toHaveBeenCalledWith(expect.objectContaining({ supplyGoodsIds: ['goods-1'] }));
+      expect(mocks.syncJobCreate).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          payload: expect.objectContaining({
+            sourceListingWorkflow: expect.objectContaining({ stage: 'shadow_write', draftIds: ['draft-1'] }),
+            sourceListingDraftRefs: [{
+              supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 1,
+              revision: 1, skuKey: 'sku-a',
+            }],
+          }),
+        }),
+      }));
+      expect(mocks.addBrowserOneClickListingJob).toHaveBeenCalledWith('job-1');
+    } finally { await app.close(); }
+  });
+
+  it('dual-read keeps the current legacy queue and legacy payload authoritative', async () => {
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE' });
+    mocks.syncJobCreate.mockResolvedValue({ id: 'job-1' });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'dual_read', captureStage: null, reason: 'pilot_match', revision: 'listing-r2' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r2' });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/browser-one-click-jobs',
+        payload: { shopId: 'shop-1', sourceSkus: ['sku-a'] },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ data: { queued: true, deferred: false } });
+      expect(mocks.syncJobCreate).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          payload: expect.objectContaining({
+            sourceListingWorkflow: expect.objectContaining({
+              stage: 'dual_read', readAuthority: 'legacy', publishPayloadSource: 'legacy',
+              workflowPrepared: false, legacyWriter: true,
+            }),
+          }),
+        }),
+      }));
+      expect(mocks.addBrowserOneClickListingJob).toHaveBeenCalledWith('job-1');
+    } finally { await app.close(); }
+  });
+
+  it('fails closed when listing is v2-only but publisher policy comes from another revision', async () => {
+    mocks.shopFindFirst.mockResolvedValue({ id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE' });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: false, listingStage: 'v2_only', captureStage: null, reason: 'pilot_match', revision: 'listing-r3' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'master_off', revision: 'publisher-off' });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/browser-one-click-jobs',
+        payload: { shopId: 'shop-1', sourceSkus: ['sku-a'] },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ errorCode: 'source_workflow_rollout_unavailable' });
+      expect(mocks.syncJobCreate).not.toHaveBeenCalled();
+      expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('blocks a legacy one-click job before persistence when the shop uses publisher V2', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      userId: 'user-1',
+      platform: 'OZON',
+      status: 'ACTIVE',
+    });
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: false,
+      captureStage: null,
+      listingStage: 'v2_only',
+      reason: 'pilot_match',
+      revision: 'pilot-1',
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/browser-one-click-jobs',
+        payload: { shopId: 'shop-1', sourceSkus: ['2143427743'] },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_ozon_publisher_v2_required',
+      });
+      expect(mocks.syncJobCreate).not.toHaveBeenCalled();
+      expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('blocks direct legacy Ozon imports for the same pilot shop', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      userId: 'user-1',
+      platform: 'OZON',
+      status: 'ACTIVE',
+      clientId: 'client-id',
+      apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: false,
+      captureStage: null,
+      listingStage: 'v2_only',
+      reason: 'pilot_match',
+      revision: 'pilot-1',
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/ozon/import-by-sku',
+        payload: {
+          shopId: 'shop-1',
+          items: [{ sku: 2143427743 }],
+        },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        errorCode: 'source_ozon_publisher_v2_required',
+      });
+      expect(OzonClient).not.toHaveBeenCalled();
+      expect(mocks.syncJobCreate).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects import-by-sku without exact draft identity before constructing an Ozon client', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'shadow_write', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r1' });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({
+      drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, selectedSkuKeys: ['offer-1'] }],
+      failures: [],
+    });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/ozon/import-by-sku',
+        payload: { shopId: 'shop-1', items: [{ sku: 2143427743, supplyGoodsId: 'goods-1' }] },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0, errorCode: 'SOURCE_LISTING_DRAFT_IDENTITY_REQUIRED',
+      });
+      expect(OzonClient).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('rejects batch publish when a supplied draft revision is stale', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'shadow_write', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r1' });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({
+      drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, selectedSkuKeys: ['2143427743'] }],
+      failures: [],
+    });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/batch',
+        payload: {
+          shopId: 'shop-1',
+          draftRefs: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 1, revision: 7, skuKey: 'offer-1' }],
+          items: [{
+            supplyGoodsId: 'goods-1', skuKey: 'offer-1', offerId: 'offer-1', title: 'Test',
+            categoryId: 1, typeId: 1, price: 10, images: ['https://example.com/a.jpg'],
+            weight: 100,
+          }],
+        },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0, errorCode: 'SOURCE_LISTING_DRAFT_IDENTITY_MISMATCH',
+      });
+      expect(OzonClient).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('accepts an exact import-by-sku identity and persists it with the task', async () => {
+    const importBySku = vi.fn(async () => ({
+      result: { task_id: 123, unmatched_sku_list: [] },
+    }));
+    vi.mocked(OzonClient).mockImplementationOnce(function OzonClientMock() {
+      return { importBySku } as never;
+    });
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.syncJobCreate.mockResolvedValue({ id: 'job-identity-1' });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'shadow_write', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r1' });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({
+      drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, selectedSkuKeys: ['2143427743'] }],
+      failures: [],
+    });
+    const draftRef = {
+      supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7,
+      skuKey: '2143427743',
+    };
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/ozon/import-by-sku',
+        payload: {
+          shopId: 'shop-1', draftRefs: [draftRef],
+          items: [{ sku: 2143427743, supplyGoodsId: 'goods-1' }],
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { taskId: 123, jobId: 'job-identity-1' } });
+      expect(importBySku).toHaveBeenCalledTimes(1);
+      expect(mocks.syncJobCreate).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          payload: expect.objectContaining({
+            draftRefs: [draftRef],
+            sourceListingCompatibility: expect.objectContaining({
+              rolloutRevision: 'listing-r1', workflowPrepared: true,
+            }),
+          }),
+        }),
+      }));
+    } finally { await app.close(); }
+  });
+
+  it('rejects a root STAFF actor before legacy publish policy evaluation', async () => {
+    mocks.authenticate.mockImplementationOnce(async (request: any) => {
+      request.user = {
+        userId: 'user-1',
+        actorUserId: 'user-1',
+        role: 'STAFF',
+        parentId: null,
+        isSubAccount: false,
+      };
+    });
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      userId: 'user-1',
+      platform: 'OZON',
+      status: 'ACTIVE',
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/listing/browser-one-click-jobs',
+        payload: { shopId: 'shop-1', sourceSkus: ['2143427743'] },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ errorCode: 'source_publish_owner_required' });
+      expect(mocks.featureEvaluate).not.toHaveBeenCalled();
+      expect(mocks.syncJobCreate).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('preserves deferred evidence but fails closed before queueing when rollout configuration is unavailable', async () => {
+    mocks.syncJobFindFirst.mockResolvedValue({
+      id: 'job-1',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        browserPayloadReady: false,
+      },
+      shop: { userId: 'user-1', platform: 'OZON' },
+    });
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: false,
+      legacyAllowed: false,
+      reason: 'config_unavailable',
+      revision: 'unavailable',
+    });
+    mocks.appendBrowserOneClickListingRows.mockResolvedValue({
+      accepted: 1,
+      failed: 0,
+      errors: [],
+      rows: [{ sku: '2143427743' }],
+      supplyGoodsIds: [],
+      skuGoodsIds: {},
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/api/listing/browser-one-click-jobs/job-1',
+        payload: {
+          payload: {
+            browserPayloadBatch: true,
+            browserPayloadReady: true,
+            rows: [{ sku: '2143427743' }],
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_workflow_rollout_unavailable',
+      });
+      expect(mocks.appendBrowserOneClickListingRows).toHaveBeenCalledWith(
+        'job-1',
+        [{ sku: '2143427743' }],
+      );
+      expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
+      expect(mocks.addBrowserOneClickListingJob).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
   });
 
   it('builds Ozon marking-code repair updates only for auto-corrected marking warnings', () => {
@@ -460,7 +826,7 @@ describe('browser one-click listing jobs', () => {
       });
       expect(mocks.syncJobFindFirst).toHaveBeenCalledWith({
         where: { id: 'job-1', type: 'PRODUCT_PUSH' },
-        include: { shop: { select: { userId: true } } },
+        include: { shop: { select: { id: true, userId: true, platform: true } } },
       });
       expect(mocks.syncJobUpdate).toHaveBeenCalledWith({
         where: { id: 'job-1' },

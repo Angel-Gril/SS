@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
+const repoRoot = path.resolve(import.meta.dirname, '..');
 const sourceDir = path.resolve(process.env.EXTENSION_SOURCE_DIR || 'extensions/ss-erp');
 const target = process.argv[2] || process.env.EXTENSION_TARGET || 'cloud';
 const outRoot = path.resolve(process.env.EXTENSION_OUT_DIR || 'build/extensions');
@@ -10,6 +12,13 @@ if (!['cloud', 'local'].includes(target)) {
   console.error('Usage: node scripts/build-extension-package.mjs <cloud|local>');
   process.exit(1);
 }
+
+const captureContractCheck = spawnSync(
+  process.execPath,
+  ['scripts/generate-source-capture-contract.mjs', '--check'],
+  { cwd: repoRoot, stdio: 'inherit', env: process.env },
+);
+if (captureContractCheck.status !== 0) process.exit(captureContractCheck.status || 1);
 
 if (!existsSync(path.join(sourceDir, 'manifest.json'))) {
   console.error(`Extension source missing manifest.json: ${sourceDir}`);
@@ -82,6 +91,7 @@ const logisticsFeaturePath = path.join(
   outDir,
   'shared/logistics-rules/distribution-feature.js',
 );
+mkdirSync(path.dirname(logisticsFeaturePath), { recursive: true });
 writeFileSync(logisticsFeaturePath, [
   '(function (root) {',
   '  root.SS_ERP_LOGISTICS_DISTRIBUTION_FEATURE = Object.freeze({',

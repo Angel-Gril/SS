@@ -50,9 +50,13 @@ function loadExternalConfig(): void {
       if (cfg.deploymentId) process.env.SS_ERP_DEPLOYMENT_ID = String(cfg.deploymentId);
       if (cfg.authJwtIssuer) process.env.AUTH_JWT_ISSUER = String(cfg.authJwtIssuer);
       if (cfg.extensionDeviceJwtSecret) process.env.EXTENSION_DEVICE_JWT_SECRET = String(cfg.extensionDeviceJwtSecret);
+      if (cfg.extensionCommandGrantSecret) process.env.EXTENSION_COMMAND_GRANT_SECRET = String(cfg.extensionCommandGrantSecret);
       if (cfg.extensionAuthMode) process.env.EXTENSION_AUTH_MODE = String(cfg.extensionAuthMode);
       if (cfg.logisticsDistributionEnabled !== undefined) {
         process.env.LOGISTICS_DISTRIBUTION_ENABLED = String(cfg.logisticsDistributionEnabled);
+      }
+      if (cfg.extensionDeviceAuthEnabled !== undefined) {
+        process.env.EXTENSION_DEVICE_AUTH_ENABLED = String(cfg.extensionDeviceAuthEnabled);
       }
       if (cfg.acceptLegacyAccountTokens !== undefined) {
         process.env.AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS = String(cfg.acceptLegacyAccountTokens);

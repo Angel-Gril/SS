@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import type { SourceCaptureEvidence, SourceProductCaptureV2 } from 'shared';
 
 export const SOURCE_PRODUCT_PROFILE_VERSION = 'source-product-profile-v1';
 
@@ -86,6 +87,22 @@ export interface SourceProductProfile {
     confidence: SourceProductProfileConfidence;
     missing: string[];
     warnings: string[];
+  };
+}
+
+export interface SourceProductCaptureProfile extends SourceProductProfile {
+  capture: {
+    version: SourceProductCaptureV2['captureVersion'];
+    hash: string;
+    provenanceMode: SourceProductCaptureV2['provenanceMode'];
+    completenessStatus: SourceProductCaptureV2['completeness']['status'];
+    hasEstimatedValues: boolean;
+    truncationCount: number;
+    facts: {
+      stock: { known: number; unknown: number; zero: number };
+      shippingCny: Pick<SourceCaptureEvidence, 'value' | 'missingReason' | 'sourceType' | 'isEstimated'>;
+      packageWeightG: Pick<SourceCaptureEvidence, 'value' | 'missingReason' | 'sourceType' | 'isEstimated'>;
+    };
   };
 }
 
@@ -579,4 +596,131 @@ export function buildSourceProductProfile(item: SourceProductProfileItem): Sourc
     quality: buildQuality({ sourceTitle, categoryPath, colors, sizes, materials, packaging, textEvidence }),
   };
   return { ...base, hash: profileHash(base) };
+}
+
+function valuesForCaptureAttributes(
+  capture: SourceProductCaptureV2,
+  pattern: RegExp,
+): string[] {
+  return unique(capture.attributes
+    .filter((attribute) => pattern.test(attribute.name))
+    .flatMap((attribute) => splitValueList(attribute.value)), 40);
+}
+
+function captureEvidenceSummary(evidence: SourceCaptureEvidence) {
+  return {
+    value: evidence.value,
+    missingReason: evidence.missingReason,
+    sourceType: evidence.sourceType,
+    isEstimated: evidence.isEstimated,
+  };
+}
+
+export function buildSourceProductProfileFromCapture(
+  capture: SourceProductCaptureV2,
+  options: { itemId?: string | null; captureHash: string },
+): SourceProductCaptureProfile {
+  const mainImages = capture.media
+    .filter((media) => media.kind === 'image'
+      && media.disposition === 'accepted'
+      && media.role === 'product_main'
+      && media.url)
+    .map((media) => media.url as string);
+  const detailImages = capture.media
+    .filter((media) => media.kind === 'image'
+      && media.disposition === 'accepted'
+      && media.role === 'product_detail'
+      && media.url)
+    .map((media) => media.url as string);
+  const colors = valuesForCaptureAttributes(capture, /颜色|色号|color|colour/i);
+  const sizes = valuesForCaptureAttributes(capture, /尺码|尺寸|size/i);
+  const materials = valuesForCaptureAttributes(capture, /面料|材质|成分|material|fabric|composition/i);
+  const packagingRows = capture.packaging.map((row) => ({
+    key: row.key,
+    scope: row.scope,
+    skuKeys: row.skuKeys,
+    weightG: row.weightG,
+    lengthMm: row.lengthMm,
+    widthMm: row.widthMm,
+    heightMm: row.heightMm,
+  }));
+  const base = buildSourceProductProfile({
+    id: options.itemId,
+    title: capture.facts.title,
+    sourcePlatform: capture.platform,
+    sourceProductId: capture.sourceIdentity.productId,
+    metadata: {
+      sourceTitleRaw: capture.facts.title,
+      sourcePlatform: capture.platform,
+      sourceProductId: capture.sourceIdentity.productId,
+      categoryPath: capture.sourceCategory.path.map((node) => node.name),
+      categoryName: capture.sourceCategory.name,
+      sourceAttributes: capture.attributes.map((attribute) => ({
+        name: attribute.name,
+        value: attribute.value,
+      })),
+      sourceStandardAttributes: {
+        colors,
+        sizes,
+        materials,
+        categoryHints: capture.sourceCategory.path.map((node) => node.name),
+        packageWeightG: capture.facts.packageWeightG,
+        packageDimensionsMm: capture.facts.packageLengthMm != null
+          && capture.facts.packageWidthMm != null
+          && capture.facts.packageHeightMm != null
+          ? {
+            length: capture.facts.packageLengthMm,
+            width: capture.facts.packageWidthMm,
+            height: capture.facts.packageHeightMm,
+          }
+          : null,
+      },
+      sourcePackagingRows: packagingRows,
+      sourceDescriptionRaw: capture.facts.description,
+      sourceMainImages: mainImages,
+      sourceDetailImages: detailImages,
+      extractionDiagnostics: {
+        packagingCount: packagingRows.length,
+        descriptionFound: Boolean(capture.facts.description),
+        captureVersion: capture.captureVersion,
+        completeness: capture.completeness,
+      },
+    },
+    variants: capture.skus.map((sku) => ({
+      sku: sku.sourceSkuId || sku.key,
+      attrs: Object.fromEntries(sku.attributes.map((attribute) => [attribute.name, attribute.value])),
+      price: sku.priceCny,
+      stock: sku.stock,
+      images: capture.media
+        .filter((media) => sku.mediaKeys.includes(media.key) && media.url)
+        .map((media) => media.url),
+    })),
+  });
+  const stock = capture.skus.reduce((summary, sku) => {
+    if (sku.stock == null) summary.unknown += 1;
+    else {
+      summary.known += 1;
+      if (sku.stock === 0) summary.zero += 1;
+    }
+    return summary;
+  }, { known: 0, unknown: 0, zero: 0 });
+  const captureProfile: SourceProductCaptureProfile['capture'] = {
+    version: capture.captureVersion,
+    hash: options.captureHash,
+    provenanceMode: capture.provenanceMode,
+    completenessStatus: capture.completeness.status,
+    hasEstimatedValues: capture.completeness.hasEstimatedValues,
+    truncationCount: capture.truncations.length,
+    facts: {
+      stock,
+      shippingCny: captureEvidenceSummary(capture.fieldEvidence.shippingCny),
+      packageWeightG: captureEvidenceSummary(capture.fieldEvidence.packageWeightG),
+    },
+  };
+  const { hash: _legacyHash, ...withoutHash } = base;
+  const value = { ...withoutHash, capture: captureProfile };
+  return {
+    ...value,
+    hash: createHash('sha256').update(JSON.stringify(value)).digest('hex'),
+  };
 }

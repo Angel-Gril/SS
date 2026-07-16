@@ -77,6 +77,8 @@ interface PairingRow {
   expiresAt: Date;
   ownerStatus: string;
   actorStatus: string;
+  ownerRole: string;
+  actorRole: string;
   actorParentId: string | null;
 }
 
@@ -98,6 +100,8 @@ interface RefreshRow {
   sessionExpiresAt: Date;
   ownerStatus: string;
   actorStatus: string;
+  ownerRole: string;
+  actorRole: string;
   actorParentId: string | null;
 }
 
@@ -112,6 +116,8 @@ export function resolveExtensionDeviceRefreshRevocationReason(input: {
   sessionStatus: string;
   ownerStatus: string;
   actorStatus: string;
+  ownerRole: string;
+  actorRole: string;
   actorParentId: string | null;
   actorMatchesOwner: boolean;
   totalGrants: number;
@@ -121,6 +127,10 @@ export function resolveExtensionDeviceRefreshRevocationReason(input: {
   if (input.credentialExpired || input.sessionExpired) return 'SESSION_EXPIRED';
   if (!activeAccountStatus(input.ownerStatus) || !activeAccountStatus(input.actorStatus)) {
     return 'ACCOUNT_SUSPENDED';
+  }
+  if (!['USER', 'ADMIN'].includes(input.ownerRole)
+    || !['USER', 'ADMIN'].includes(input.actorRole)) {
+    return 'AUTHORIZATION_INVALID';
   }
   if (input.actorParentId !== null || !input.actorMatchesOwner) return 'ACTOR_UNLINKED';
   if (input.totalGrants === 0 || input.validGrants !== input.totalGrants) return 'SHOP_TRANSFERRED';
@@ -309,7 +319,8 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
           `SELECT p."id", p."actor_user_id" AS "actorUserId", p."owner_user_id" AS "ownerUserId",
                   p."status"::text AS "status", p."shop_ids" AS "shopIds", p."scopes",
                   p."expires_at" AS "expiresAt", owner."status"::text AS "ownerStatus",
-                  actor."status"::text AS "actorStatus", actor."parent_id" AS "actorParentId"
+                  actor."status"::text AS "actorStatus", owner."role"::text AS "ownerRole",
+                  actor."role"::text AS "actorRole", actor."parent_id" AS "actorParentId"
            FROM "extension_device_pairing_codes" p
            JOIN "users" owner ON owner."id" = p."owner_user_id"
            JOIN "users" actor ON actor."id" = p."actor_user_id"
@@ -323,6 +334,8 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
           || pairing.expiresAt.getTime() <= input.now.getTime()
           || !activeAccountStatus(pairing.ownerStatus)
           || !activeAccountStatus(pairing.actorStatus)
+          || !['USER', 'ADMIN'].includes(pairing.ownerRole)
+          || !['USER', 'ADMIN'].includes(pairing.actorRole)
           || pairing.actorParentId !== null
           || pairing.actorUserId !== pairing.ownerUserId) {
           return { kind: 'invalid' as const };
@@ -409,7 +422,8 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
                   s."device_id" AS "deviceId", s."actor_user_id" AS "actorUserId",
                   s."owner_user_id" AS "ownerUserId", s."scopes", s."current_jti" AS "currentJti",
                   s."expires_at" AS "sessionExpiresAt", owner."status"::text AS "ownerStatus",
-                  actor."status"::text AS "actorStatus", actor."parent_id" AS "actorParentId"
+                  actor."status"::text AS "actorStatus", owner."role"::text AS "ownerRole",
+                  actor."role"::text AS "actorRole", actor."parent_id" AS "actorParentId"
            FROM "extension_device_refresh_credentials" c
            JOIN "extension_device_refresh_families" f ON f."id" = c."family_id"
            JOIN "extension_device_sessions" s ON s."id" = f."session_id"
@@ -446,6 +460,8 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
           sessionStatus: row.sessionStatus,
           ownerStatus: row.ownerStatus,
           actorStatus: row.actorStatus,
+          ownerRole: row.ownerRole,
+          actorRole: row.actorRole,
           actorParentId: row.actorParentId,
           actorMatchesOwner: row.actorUserId === row.ownerUserId,
           totalGrants,
@@ -495,6 +511,7 @@ export function createPrismaExtensionDeviceSessionRepository(options: {
                 s."device_id" AS "deviceId", s."owner_user_id" AS "ownerUserId",
                 s."actor_user_id" AS "actorUserId", s."scopes",
                 owner."status"::text AS "ownerStatus", actor."status"::text AS "actorStatus",
+                owner."role"::text AS "ownerRole", actor."role"::text AS "actorRole",
                 actor."parent_id" AS "actorParentId"
          FROM "extension_device_sessions" s
          JOIN "users" owner ON owner."id" = s."owner_user_id"

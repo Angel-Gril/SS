@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000001.html",
+  "observedAt": "2026-07-14T10:00:00.000Z",
+  "structuredSource": {
+    "offerId": "810000000001",
+    "subject": "Sanitized structured product",
+    "skuModel": {
+      "skuProps": [
+        { "prop": "颜色", "value": [{ "id": "1", "name": "结构化黑色" }] },
+        { "prop": "尺码", "value": [{ "id": "2", "name": "XL" }] }
+      ],
+      "skuMap": {
+        "1:2": { "skuId": "structured-sku", "price": "99.00", "stock": 7 }
+      }
+    }
+  },
+  "document": {
+    "queries": {
+      "#skuSelection .gyp-pro-table": [{ "text": "industrial table" }],
+      "#skuSelection .ant-table-wrapper": [{ "text": "industrial table" }],
+      "#skuSelection .ant-table-body tr[data-row-key]": [
+        {
+          "attrs": { "data-row-key": "industry-red-m" },
+          "queries": {
+            "td.ant-table-cell": [
+              {
+                "queries": {
+                  ".gyp-pro-table-title": [
+                    {
+                      "queries": {
+                        "p": [{ "text": "红色 / M" }],
+                        "img": [{ "src": "https://cbu01.alicdn.com/img/ibank/industry-red.jpg_sum.jpg" }]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "queries": {
+                  ".gyp-pro-table-price": [
+                    { "queries": { "span": [{ "text": "¥18.80" }, { "text": "库存0件" }] } }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "attrs": { "data-row-key": "industry-blue-l" },
+          "queries": {
+            "td.ant-table-cell": [
+              {
+                "queries": {
+                  ".gyp-pro-table-title": [
+                    {
+                      "queries": {
+                        "p": [{ "text": "蓝色 / L" }],
+                        "img": [{ "src": "https://cbu01.alicdn.com/img/ibank/industry-blue.jpg" }]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "queries": {
+                  ".gyp-pro-table-price": [
+                    { "queries": { "span": [{ "text": "¥19.90" }] } }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

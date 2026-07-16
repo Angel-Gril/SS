@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "source-collector-characterization-v1",
+  "platform": "1688",
+  "sourceUrl": "https://detail.1688.com/offer/1000000000236.html",
+  "offerId": "1000000000236",
+  "subject": "Sanitized 236 SKU boundary fixture",
+  "skuTemplate": {
+    "count": 236,
+    "mapKeyPrefix": "spec-",
+    "skuIdPrefix": "sku-",
+    "price": "18.80",
+    "stock": 12
+  },
+  "imageTemplate": {
+    "mainCount": 36,
+    "detailCount": 55,
+    "baseUrl": "https://cbu01.alicdn.com/img/ibank/characterization"
+  }
+}

@@ -6,6 +6,16 @@ import { prisma } from '../lib/prisma.js';
 import { signToken, storeSession } from '../lib/auth.js';
 import { resolveCollectedPrice } from '../services/collect-pricing.js';
 import { processWatermarkItemsWithConcurrency } from '../routes/collect.js';
+import {
+  assertLegacySourceOzonPublishAllowed,
+  sourceWorkflowFeatureFlags,
+  SourceWorkflowLegacyPublishError,
+  type SourceWorkflowFeatureFlagEvaluator,
+} from '../services/source-workflow-feature-flags.js';
+
+export interface BrowserOneClickListingJobOptions {
+  featureFlags?: SourceWorkflowFeatureFlagEvaluator;
+}
 
 const QUEUE_NAME = 'browser-one-click-listing';
 const EPHEMERAL_LISTING_TTL_MS = 5 * 60 * 1000;
@@ -355,9 +365,18 @@ function localApiBaseUrl(): string {
   return `http://${host}:${port}`;
 }
 
-async function callPublishOzon(job: any, ids: string[]) {
+async function callPublishOzon(
+  job: any,
+  ids: string[],
+  featureFlags: SourceWorkflowFeatureFlagEvaluator,
+) {
   const payload = objectRecord(job.payload);
   const publish = objectRecord(payload.publish);
+  await assertLegacySourceOzonPublishAllowed(featureFlags, {
+    ownerUserId: job.shop.userId,
+    shopId: job.shopId,
+    platform: String(job.shop.platform || ''),
+  });
   await mergeBrowserOneClickJobPayload(job.id, { stage: 'publishing', itemCount: ids.length }, 'RUNNING', null);
   const token = await createInternalAuthToken(job.shop.userId);
   const response = await fetch(`${localApiBaseUrl()}/api/collect/publish-ozon`, {
@@ -375,6 +394,9 @@ async function callPublishOzon(job: any, ids: string[]) {
       markupPct: Number(publish.markupPct) || 0,
       randomOfferId: publish.randomOfferId !== false,
       source: payload.entry === 'ozon-product-detail' ? 'ozon-product-detail-workbench' : 'batch-collect-page',
+      sourceListingDraftRefs: Array.isArray(payload.sourceListingDraftRefs)
+        ? payload.sourceListingDraftRefs
+        : [],
       ...(publish.categoryId ? { categoryId: Number(publish.categoryId) } : {}),
       ...(publish.typeId ? { typeId: Number(publish.typeId) } : {}),
     }),
@@ -393,7 +415,11 @@ async function callPublishOzon(job: any, ids: string[]) {
   return parsed;
 }
 
-export async function runBrowserOneClickListingJob(syncJobId: string) {
+export async function runBrowserOneClickListingJob(
+  syncJobId: string,
+  options: BrowserOneClickListingJobOptions = {},
+) {
+  const featureFlags = options.featureFlags || sourceWorkflowFeatureFlags;
   const job = await prisma.syncJob.findUnique({
     where: { id: syncJobId },
     include: { shop: { include: { user: { select: { id: true, role: true } } } } },
@@ -408,16 +434,34 @@ export async function runBrowserOneClickListingJob(syncJobId: string) {
   }
 
   try {
+    await assertLegacySourceOzonPublishAllowed(featureFlags, {
+      ownerUserId: job.shop.userId,
+      shopId: job.shopId,
+      platform: String(job.shop.platform || ''),
+    });
     const ids = await ensureBrowserOneClickSupplyGoods(job);
     if (!ids.length) throw new Error('没有可上架的 SKU 数据');
     const currentStage = String(payload.stage || '').trim();
     if (!['watermarked', 'publishing'].includes(currentStage) && !payload.publishSource) {
       await applyBrowserOneClickWatermark(job.id, job.shop.userId, ids, objectRecord(payload.watermark));
     }
-    const published = await callPublishOzon(job, ids);
+    const published = await callPublishOzon(job, ids, featureFlags);
     return { ok: true, jobId: job.id, data: published.data };
   } catch (error: any) {
     const message = error?.message ? String(error.message) : String(error);
+    if (error instanceof SourceWorkflowLegacyPublishError) {
+      await mergeBrowserOneClickJobPayload(job.id, {
+        stage: 'legacy_publish_blocked',
+        rolloutRevision: error.decision.revision,
+        rolloutReason: error.decision.reason,
+      }, 'FAILED', message);
+      return {
+        skipped: true,
+        reason: error.code,
+        statusCode: error.statusCode,
+        rolloutRevision: error.decision.revision,
+      };
+    }
     const latest = await prisma.syncJob.findUnique({ where: { id: job.id }, select: { payload: true } });
     const failedStage = String(objectRecord(latest?.payload).stage || 'failed');
     await mergeBrowserOneClickJobPayload(job.id, {

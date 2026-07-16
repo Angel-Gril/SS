@@ -5,6 +5,7 @@ const popupJs = fs.readFileSync('extensions/ss-erp/pages/popup.js', 'utf8');
 const serviceWorker = fs.readFileSync('extensions/ss-erp/background/service-worker.js', 'utf8');
 const collectContentScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 const pageBridge = fs.readFileSync('extensions/ss-erp/content/page-bridge.js', 'utf8');
+const manifest = JSON.parse(fs.readFileSync('extensions/ss-erp/manifest.json', 'utf8'));
 
 assert.match(
   popupJs,
@@ -24,7 +25,22 @@ assert.match(
 assert.match(
   serviceWorker,
   /SS_ERP_CLIENT\.submitCollect\s*\(\s*\{\s*items:/,
-  'service worker should post source products through the existing /api/collect batch path',
+  'service worker should retain the explicit legacy compatibility path',
+);
+assert.match(
+  serviceWorker,
+  /getSourceCaptureSubmitter\(\)/,
+  'service worker should submit native V2 captures through the device-authenticated helper',
+);
+assert.match(
+  serviceWorker,
+  /nativeCaptureItems[\s\S]{0,1600}submitter\.submit\(sourceItem\.captureV2\)/,
+  'service worker should prefer the native V2 capture over the legacy projection',
+);
+assert.match(
+  serviceWorker,
+  /outcome\.state === 'legacy_compatible'[\s\S]{0,350}submitted\.length/,
+  'legacy fallback must be selected before any V2 capture in the batch is admitted',
 );
 assert.match(
   serviceWorker,
@@ -68,8 +84,8 @@ assert.match(
 );
 assert.match(
   collectContentScript,
-  /domPackagingRows[\s\S]{0,120}allSources\.push/,
-  '1688 DOM packaging rows should be passed into the shared core parser sources',
+  /domFallback\.packagingRows\s*=\s*domPackagingRows\.map[\s\S]{0,240}sourceType:\s*'dom'/,
+  '1688 DOM packaging rows should enter the evidence-aware fallback bundle as DOM observations',
 );
 assert.doesNotMatch(
   collectContentScript,
@@ -100,6 +116,20 @@ assert.match(
   pageBridge,
   /["']context["']/,
   '1688 page bridge should expose window.context so productPackInfo packaging data reaches the collector',
+);
+assert.doesNotMatch(
+  pageBridge,
+  /grantToken|accessToken|refreshToken|Authorization/,
+  'MAIN-world evidence must not carry credentials or command grants',
+);
+
+const collectorScripts = manifest.content_scripts.find((entry) => (
+  Array.isArray(entry.js) && entry.js.includes('content/collect-content-script.js')
+)).js;
+assert.ok(
+  collectorScripts.indexOf('shared/contracts/source-product-capture-v2.js')
+    < collectorScripts.indexOf('shared/collectors/source-product-core.js'),
+  'generated Capture V2 validator must load before the source collector',
 );
 
 console.log('PASS source collect enters ERP workflow');

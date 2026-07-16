@@ -32,6 +32,7 @@ interface PairingCode {
   deploymentId: string;
   expiresAt: string;
   shopIds: string[];
+  scopes: string[];
 }
 
 interface DeviceSession {
@@ -51,6 +52,21 @@ type CopyTarget = 'url' | 'deployment' | 'code' | 'token' | null;
 
 const logisticsDistributionEnabled =
   process.env.NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED === 'true';
+const extensionDeviceAuthEnabled =
+  process.env.NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED === 'true' ||
+  logisticsDistributionEnabled;
+
+const DEVICE_SCOPE_OPTIONS = [
+  { value: 'logistics:discover', label: '物流发现' },
+  { value: 'logistics:read', label: '物流读取' },
+  { value: 'logistics:receipt', label: '物流回执' },
+  { value: 'logistics:capture', label: '物流采集' },
+  { value: 'capture:write', label: '来源采集' },
+  { value: 'listing:write', label: '草稿编辑' },
+  { value: 'listing:review', label: '草稿审核' },
+  { value: 'media:execute', label: 'AI 媒体执行' },
+  { value: 'listing:publish', label: 'Ozon 发布', highRisk: true },
+] as const;
 
 function responseErrorCode(response: ApiResponse<unknown>): string {
   const value = response as unknown as Record<string, unknown>;
@@ -71,9 +87,10 @@ function formatDate(value?: string | null): string {
 
 export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<View>(logisticsDistributionEnabled ? 'pairing' : 'legacy');
+  const [view, setView] = useState<View>(extensionDeviceAuthEnabled ? 'pairing' : 'legacy');
   const [shops, setShops] = useState<ShopOption[]>([]);
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([]);
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [deviceLabel, setDeviceLabel] = useState('');
   const [pairing, setPairing] = useState<PairingCode | null>(null);
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
@@ -133,12 +150,18 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
   }
 
   useEffect(() => {
-    if (open && logisticsDistributionEnabled) void loadPairingContext();
+    if (open && extensionDeviceAuthEnabled) void loadPairingContext();
   }, [open]);
 
   function toggleShop(shopId: string) {
     setSelectedShopIds((current) =>
       current.includes(shopId) ? current.filter((id) => id !== shopId) : [...current, shopId],
+    );
+  }
+
+  function toggleScope(scope: string) {
+    setSelectedScopes((current) =>
+      current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope],
     );
   }
 
@@ -151,10 +174,19 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
       });
       return;
     }
+    if (!selectedScopes.length) {
+      toast({
+        title: '请选择设备权限',
+        description: '至少选择一项设备权限。',
+        variant: 'destructive',
+      });
+      return;
+    }
     setPairingBusy(true);
     try {
       const response = await api.post<PairingCode>('/api/extension-device/pairing-codes', {
         shopIds: selectedShopIds,
+        scopes: selectedScopes,
         ...(deviceLabel.trim() ? { deviceLabel: deviceLabel.trim() } : {}),
       });
       if (response.code !== 1 || !response.data) {
@@ -203,7 +235,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
       );
       if (response.code !== 1) throw new Error(response.msg || responseErrorCode(response));
       setSessions((current) => current.filter((session) => session.id !== sessionId));
-      toast({ title: '撤销设备完成', description: '该设备下次联网时将立即停止物流规则访问。' });
+      toast({ title: '撤销设备完成', description: '该设备下次联网时将停止继续访问。' });
     } catch (error) {
       toast({
         title: '撤销设备失败',
@@ -267,7 +299,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
           <button
             type="button"
             role="tab"
-            hidden={!logisticsDistributionEnabled}
+            hidden={!extensionDeviceAuthEnabled}
             aria-selected={view === 'pairing'}
             className={
               'border-b-2 px-3 py-2 text-sm font-medium ' +
@@ -295,7 +327,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
           </button>
         </div>
 
-        {logisticsDistributionEnabled && view === 'pairing' ? (
+        {extensionDeviceAuthEnabled && view === 'pairing' ? (
           <div className="space-y-5">
             <section aria-labelledby="pairing-scope-title" className="space-y-3">
               <div className="flex items-center justify-between gap-3">
@@ -348,6 +380,31 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
                 )}
               </div>
 
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">设备权限</h3>
+                <div className="grid grid-cols-2 border-y sm:grid-cols-3">
+                  {DEVICE_SCOPE_OPTIONS.map((scope) => (
+                    <label
+                      key={scope.value}
+                      className="flex min-h-10 cursor-pointer items-center gap-2 border-b px-2 py-2 text-sm last:border-b-0 sm:border-r"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 shrink-0"
+                        checked={selectedScopes.includes(scope.value)}
+                        onChange={() => toggleScope(scope.value)}
+                      />
+                      <span className="min-w-0 flex-1">{scope.label}</span>
+                      {'highRisk' in scope && scope.highRisk ? (
+                        <Badge variant="destructive" className="px-1 py-0 text-[10px]">
+                          高风险
+                        </Badge>
+                      ) : null}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
                   value={deviceLabel}
@@ -358,7 +415,7 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
                 />
                 <Button
                   onClick={createPairingCode}
-                  disabled={pairingBusy || !selectedShopIds.length}
+                  disabled={pairingBusy || !selectedShopIds.length || !selectedScopes.length}
                   className="shrink-0"
                 >
                   {pairingBusy ? (
@@ -456,6 +513,16 @@ export function ExtensionTokenDialog({ trigger }: ExtensionTokenDialogProps) {
                           {session.shopIds.map((id) => shopNameById.get(id) || id).join('、') ||
                             '-'}{' '}
                           · 最近在线 {formatDate(session.lastSeenAt)}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          权限：
+                          {session.scopes
+                            .map(
+                              (value) =>
+                                DEVICE_SCOPE_OPTIONS.find((scope) => scope.value === value)?.label ||
+                                value,
+                            )
+                            .join('、') || '-'}
                         </div>
                       </div>
                       <Button

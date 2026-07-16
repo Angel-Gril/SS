@@ -19,6 +19,13 @@ export interface AiImageJobRecord {
   model: string;
   prompt: string;
   negativePrompt: string | null;
+  resolvedPrompt?: string | null;
+  resolvedNegativePrompt?: string | null;
+  templateKey?: string | null;
+  templateReleaseId?: string | null;
+  templateChecksum?: string | null;
+  templateSnapshot?: Record<string, unknown> | null;
+  requestFingerprint?: string | null;
   requestedImageCount: number;
   width: number;
   height: number;
@@ -96,6 +103,13 @@ export interface CreateAiImageJobInput {
   idempotencyKey: string | null;
   prompt: string;
   negativePrompt?: string | null;
+  resolvedPrompt?: string | null;
+  resolvedNegativePrompt?: string | null;
+  templateKey?: string | null;
+  templateReleaseId?: string | null;
+  templateChecksum?: string | null;
+  templateSnapshot?: Record<string, unknown> | null;
+  requestFingerprint?: string | null;
   provider: string;
   model: string;
   count: number;
@@ -179,8 +193,8 @@ export async function runAiImageJob(
   if (!claimed) return;
   try {
     const generated = await deps.provider.generate({
-      prompt: job.prompt,
-      negativePrompt: job.negativePrompt,
+      prompt: job.resolvedPrompt ?? job.prompt,
+      negativePrompt: job.resolvedNegativePrompt ?? job.negativePrompt,
       count: job.requestedImageCount,
       width: job.width,
       height: job.height,
@@ -236,6 +250,17 @@ export async function createAiImageJob(
   const result = await repository.createWithQuota(input, dailyLimit);
   if (result.kind === 'quota-exceeded') {
     throw new AiImageJobError('QUOTA_EXCEEDED', `Daily image quota exceeded (${result.used}/${result.limit})`);
+  }
+  if (
+    result.kind === 'existing'
+    && input.requestFingerprint
+    && result.job.requestFingerprint
+    && input.requestFingerprint !== result.job.requestFingerprint
+  ) {
+    throw new AiImageJobError(
+      'IDEMPOTENCY_KEY_CONFLICT',
+      'Idempotency key was already used for a different AI image request',
+    );
   }
   return { job: result.job, replayed: result.kind === 'existing' };
 }

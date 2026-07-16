@@ -4,6 +4,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+const repoRoot = path.resolve(import.meta.dirname, '..');
 const extensionDir = path.resolve(process.env.EXTENSION_DIR || 'extensions/ss-erp');
 const strict = process.env.STRICT_EXTENSION_CHECK === '1';
 const requestedTarget = process.env.EXTENSION_TARGET;
@@ -24,6 +25,17 @@ function warn(message) {
 function fail(message) {
   failures.push(message);
   console.log(`FAIL ${message}`);
+}
+
+const captureContractCheck = spawnSync(
+  process.execPath,
+  ['scripts/generate-source-capture-contract.mjs', '--check'],
+  { cwd: repoRoot, encoding: 'utf8', env: process.env },
+);
+if (captureContractCheck.status === 0) {
+  pass('source capture generated contract is current');
+} else {
+  fail(`source capture generated contract check failed\n${captureContractCheck.stderr || captureContractCheck.stdout}`);
 }
 
 function readJson(file) {

@@ -11,6 +11,9 @@ test('extension dialog creates shop-scoped one-time device pairing codes', () =>
   assert.match(source, /deploymentId/);
   assert.match(source, /一次性配对码/);
   assert.match(source, /选择 Ozon 店铺/);
+  assert.match(source, /scopes: selectedScopes/);
+  assert.match(source, /listing:publish/);
+  assert.match(source, /useState<string\[\]>\(\[\]\)/);
 });
 
 test('pairing credentials stay in the extension-owned manual claim flow', () => {
@@ -32,8 +35,8 @@ test('opening the dialog does not automatically mint a legacy account token', ()
   assert.doesNotMatch(source, /onOpenChange=.*generateToken\(\)/);
 });
 
-test('dark rollout defaults to legacy token and never loads pairing routes', () => {
-  assert.match(source, /NEXT_PUBLIC_LOGISTICS_DISTRIBUTION_ENABLED/);
-  assert.match(source, /useState<View>\(logisticsDistributionEnabled \? 'pairing' : 'legacy'\)/);
-  assert.match(source, /if \(open && logisticsDistributionEnabled\) void loadPairingContext\(\)/);
+test('device pairing rollout is independent from logistics distribution', () => {
+  assert.match(source, /NEXT_PUBLIC_EXTENSION_DEVICE_AUTH_ENABLED/);
+  assert.match(source, /useState<View>\(extensionDeviceAuthEnabled \? 'pairing' : 'legacy'\)/);
+  assert.match(source, /if \(open && extensionDeviceAuthEnabled\) void loadPairingContext\(\)/);
 });

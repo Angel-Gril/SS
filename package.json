@@ -18,6 +18,8 @@
     "preflight": "node scripts/preflight.mjs",
     "env:check": "node scripts/validate-env.mjs",
     "smoke:remote": "pnpm --filter server smoke:remote",
+    "generate:source-capture-contract": "node scripts/generate-source-capture-contract.mjs",
+    "check:source-capture-contract": "node scripts/generate-source-capture-contract.mjs --check",
     "build:extension:cloud": "node scripts/build-extension-package.mjs cloud",
     "build:extension:local": "node scripts/build-extension-package.mjs local",
     "package:extension:cloud": "node scripts/package-extension-package.mjs cloud",
@@ -28,8 +30,10 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.9.0",
+    "ajv": "^8.20.0",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
+    "json-schema-to-typescript": "^15.0.4",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.60.0"

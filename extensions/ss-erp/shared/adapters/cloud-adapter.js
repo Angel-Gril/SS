@@ -3,6 +3,25 @@
 // 不同步 cookie，不依赖本地浏览器登录态
 
 (function () {
+  async function deviceJsonRequest(operation, path, body, dedicatedHeaders) {
+    const baseUrl = String(operation && operation.baseUrl || '').replace(/\/$/, '');
+    const accessToken = String(operation && operation.accessToken || '').trim();
+    if (!baseUrl || !accessToken) throw new Error('扩展设备凭据不可用');
+    const res = await fetch(baseUrl + path, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(dedicatedHeaders || {}),
+        Authorization: 'Bearer ' + accessToken,
+      },
+      credentials: 'omit',
+      cache: 'no-store',
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  }
+
   const adapter = {
     name: 'cloud',
 
@@ -36,6 +55,53 @@
         method: 'POST',
         body: JSON.stringify(payload),
       });
+    },
+
+    async requestSourceCaptureGrant(operation, payload) {
+      return deviceJsonRequest(operation, '/api/extension-device/command-grants', {
+        operation: 'SOURCE_CAPTURE',
+        idempotencyKey: payload && payload.idempotencyKey,
+        command: payload && payload.command,
+      });
+    },
+
+    async requestOzonPublishGrant(operation, payload) {
+      return deviceJsonRequest(operation, '/api/extension-device/command-grants', {
+        operation: 'OZON_PUBLISH',
+        shopId: payload && payload.shopId,
+        workflowId: payload && payload.workflowId,
+        draftVersion: payload && payload.draftVersion,
+        idempotencyKey: payload && payload.idempotencyKey,
+        command: payload && payload.command,
+      });
+    },
+
+    async executeOzonPublish(operation, payload) {
+      return deviceJsonRequest(operation, '/api/extension-device/ozon-publish/execute', {
+        shopId: payload && payload.shopId,
+        workflowId: payload && payload.workflowId,
+        draftVersion: payload && payload.draftVersion,
+        idempotencyKey: payload && payload.idempotencyKey,
+        command: payload && payload.command,
+      }, {
+        'X-SS-ERP-Command-Grant': payload && payload.grantToken,
+      });
+    },
+
+    async submitSourceCaptureV2(operation, payload) {
+      return deviceJsonRequest(
+        operation,
+        '/api/extension-device/source-captures/v2',
+        {
+          capture: payload && payload.capture,
+          captureHash: payload && payload.captureHash,
+          payloadBytes: payload && payload.payloadBytes,
+        },
+        {
+          'X-SS-ERP-Command-Grant': payload && payload.grantToken,
+          'X-SS-ERP-Idempotency-Key': payload && payload.idempotencyKey,
+        },
+      );
     },
 
     async syncSourceCandidateQuote(payload) {

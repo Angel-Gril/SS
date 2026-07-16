@@ -3,6 +3,9 @@
   const RESPONSE_DIRECTION = "spb-self-hosted:bridge";
   const BRIDGE_ID = "spb-self-hosted-page-bridge";
   const PAGE_STATE_TIMEOUT_MS = 8000;
+  const PAGE_TEXT_CHARACTER_LIMIT = 500000;
+  const SOURCE_CAPTURE_DOM_MAIN_IMAGE_LIMIT = 500;
+  const SOURCE_CAPTURE_PACKAGING_LIMIT = 10000;
   const OZON_PANEL_ID = "spb-self-hosted-ozon-panel";
   const OZON_WORKBENCH_MODAL_ID = "ss-erp-ozon-workbench-modal";
   const OZON_QUICK_ACTIONS_ID = "ss-erp-ozon-quick-actions";
@@ -36,6 +39,8 @@
   const hasAnyKey = SourceProductCore.hasAnyKey;
   const pickFirstValue = SourceProductCore.pickFirstValue;
   const extract1688ProductFromSources = SourceProductCore.extract1688ProductFromSources;
+  const Dom1688Fallback = globalThis.SS_ERP_1688_DOM_FALLBACK || {};
+  const SourceProductCaptureV2 = globalThis.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2 || {};
   const MarketplaceCollector = globalThis.SS_ERP_MARKETPLACE_PRODUCT_COLLECTOR || {};
   let lastOzonUrl = "";
 
@@ -124,24 +129,107 @@
     return "";
   }
   async function collectCurrentPage() {
+    const sourcePage = bindCollectionSourcePage();
     // Ozon 商品页：走 entrypoint-api 拿完整数据（含图片）
     if (isOzonProductPage()) {
       return collectOzonViaApi();
     }
 
-    const pageState = await requestPageState().catch(() => ({}));
-    const platform = detectPlatform(location.hostname);
+    const platform = detectPlatform(sourcePage.sourceHost);
+    sourcePage.platform = platform;
+    const observedAt = new Date().toISOString();
+    const extensionVersion = getExtensionVersionForDiagnostics() || 'unknown';
+    const contentTruncations = [];
+    let warmupReport = null;
+    if (platform === '1688'
+      && typeof Dom1688Fallback.shouldWarm === 'function'
+      && Dom1688Fallback.shouldWarm({ document, window, location })) {
+      warmupReport = await Dom1688Fallback.warmLazyMedia({ document, window, location }).catch((error) => ({
+        status: 'failed',
+        attempted: true,
+        restored: true,
+        truncations: [buildContentTruncation({
+          fieldPath: '/media/lazyWarmup',
+          reason: 'parse_failure',
+          recoverability: 'same_page_fallback',
+          fallbackSourcePath: '/dom/media'
+        })],
+        error: error && error.message ? error.message : String(error)
+      }));
+      if (warmupReport && Array.isArray(warmupReport.truncations)) {
+        contentTruncations.push(...warmupReport.truncations);
+      }
+      assertCollectionSourcePageUnchanged(sourcePage);
+    }
+    let pageState = {};
+    try {
+      pageState = await requestPageState();
+    } catch (error) {
+      contentTruncations.push({
+        stage: 'page_bridge',
+        fieldPath: '/pageState',
+        observedCount: 1,
+        retainedCount: 0,
+        limit: 1,
+        unit: 'items',
+        reason: /超时|timeout/i.test(String(error && error.message || error)) ? 'timeout' : 'parse_failure',
+        recoverability: 'same_page_fallback',
+        fallbackSourcePath: '/dom'
+      });
+    }
+    assertCollectionSourcePageUnchanged(sourcePage);
     const allSources = collectDataSources(pageState);
-    const pageText = normalizeWhitespace(document.body ? document.body.innerText : "");
+    const pageText = collectBoundedPageText(contentTruncations);
     const jsonLd = parseJsonLd();
+    let domFallback = null;
 
     if (jsonLd.length) {
       allSources.push(...jsonLd);
     }
     if (platform === "1688") {
-      const domPackagingRows = collect1688DomPackagingRows();
-      if (domPackagingRows.length) allSources.push({ domPackagingRows });
+      const domPackagingRows = collect1688DomPackagingRows(contentTruncations);
+      if (typeof Dom1688Fallback.collect === 'function') {
+        try {
+          domFallback = Dom1688Fallback.collect({
+            document,
+            window,
+            location: sourcePage.location,
+            url: sourcePage.sourceUrl,
+            observedAt,
+            parserVersion: extensionVersion
+          });
+        } catch (error) {
+          contentTruncations.push(buildContentTruncation({
+            fieldPath: '/dom',
+            reason: 'parse_failure',
+            recoverability: 'manual_recapture',
+            fallbackSourcePath: '/pageState/knownGlobals'
+          }));
+          domFallback = { diagnostics: [{ code: 'dom_fallback_failed', message: String(error && error.message || error) }] };
+        }
+      }
+      if (!domFallback) domFallback = {};
+      if (domPackagingRows.length) {
+        domFallback.packagingRows = domPackagingRows.map((row, index) => ({
+          ...row,
+          evidence: {
+            sourceType: 'dom',
+            sourcePath: `/dom/packaging/rows/${index}`,
+            confidence: 0.85,
+            isEstimated: false,
+            observedAt,
+            parserVersion: extensionVersion,
+            derivedFrom: []
+          }
+        }));
+      }
+      mergeLegacy1688DomMainMedia(domFallback, observedAt, extensionVersion, contentTruncations);
+      if (Array.isArray(domFallback.truncations)) contentTruncations.push(...domFallback.truncations);
     }
+
+    const evidenceSources = platform === '1688'
+      ? build1688EvidenceSources(pageState, jsonLd, domFallback, observedAt, extensionVersion)
+      : [];
 
     const extractor = PLATFORM_EXTRACTORS[platform] || extractGenericProduct;
     const data = extractor({
@@ -149,8 +237,27 @@
       pageText,
       pageState,
       sources: allSources,
-      jsonLd
+      evidenceSources,
+      domFallback,
+      jsonLd,
+      observedAt,
+      extensionVersion,
+      warmupReport,
+      sourceUrl: sourcePage.sourceUrl,
+      sourceHost: sourcePage.sourceHost,
+      bridgeTruncations: [
+        ...(Array.isArray(pageState.truncations) ? pageState.truncations : []),
+        ...contentTruncations
+      ]
     });
+
+    assertCollectionSourcePageUnchanged(sourcePage);
+    assertCollectionResultMatchesSourcePage(sourcePage, data);
+    if (platform === '1688' && data && data.captureV2) {
+      await validateNativeSourceCaptureV2(data.captureV2);
+    }
+    assertCollectionSourcePageUnchanged(sourcePage);
+    assertCollectionResultMatchesSourcePage(sourcePage, data);
 
     const warnings = [];
     if (data.monthlySales == null) {
@@ -163,14 +270,158 @@
       warnings.push("未稳定提取到 SKU 明细，当前结果可能只有 SKU 数量。");
     }
 
+    assertCollectionSourcePageUnchanged(sourcePage);
+    assertCollectionResultMatchesSourcePage(sourcePage, data);
     return {
       ...data,
       warnings,
-      sourceUrl: location.href,
-      sourceHost: location.hostname,
-      extensionVersion: getExtensionVersionForDiagnostics(),
-      collectedAt: new Date().toISOString()
+      sourceUrl: sourcePage.sourceUrl,
+      sourceHost: sourcePage.sourceHost,
+      extensionVersion,
+      collectedAt: observedAt
     };
+  }
+
+  function bindCollectionSourcePage() {
+    const sourceUrl = String(location.href || '');
+    const sourceHost = String(location.hostname || '');
+    let parsedUrl = null;
+    try {
+      parsedUrl = new URL(sourceUrl);
+    } catch (_error) {}
+    return {
+      sourceUrl,
+      sourceHost,
+      platform: '',
+      offerId: pick1688OfferIdFromUrl(sourceUrl),
+      location: {
+        href: sourceUrl,
+        hostname: sourceHost,
+        host: parsedUrl ? parsedUrl.host : sourceHost,
+        origin: parsedUrl ? parsedUrl.origin : '',
+        pathname: parsedUrl ? parsedUrl.pathname : '',
+        search: parsedUrl ? parsedUrl.search : '',
+        hash: parsedUrl ? parsedUrl.hash : ''
+      }
+    };
+  }
+
+  function pick1688OfferIdFromUrl(url) {
+    const text = String(url || '');
+    const match = text.match(/[?&]offerId=(\d+)/i) || text.match(/\/offer\/(\d+)\.html/i);
+    return match ? match[1] : '';
+  }
+
+  function assertCollectionSourcePageUnchanged(sourcePage) {
+    if (!sourcePage || sourcePage.platform !== '1688') return;
+    const currentUrl = String(location.href || '');
+    const currentOfferId = pick1688OfferIdFromUrl(currentUrl);
+    if (currentUrl !== sourcePage.sourceUrl || currentOfferId !== sourcePage.offerId) {
+      throw new Error('采集期间页面已切换，请回到原商品页后重新采集');
+    }
+  }
+
+  function assertCollectionResultMatchesSourcePage(sourcePage, data) {
+    if (!sourcePage || sourcePage.platform !== '1688' || !sourcePage.offerId) return;
+    const captureProductId = data && data.captureV2 && data.captureV2.sourceIdentity
+      ? data.captureV2.sourceIdentity.productId
+      : '';
+    const resultProductId = captureProductId || data && data.productId || '';
+    if (String(resultProductId || '') !== sourcePage.offerId) {
+      throw new Error('采集结果与初始 1688 商品不一致，请重新采集');
+    }
+  }
+
+  function buildContentTruncation(input) {
+    return {
+      stage: 'content_script',
+      fieldPath: input.fieldPath,
+      observedCount: Number.isFinite(Number(input.observedCount)) ? Math.max(0, Math.floor(Number(input.observedCount))) : 1,
+      retainedCount: Number.isFinite(Number(input.retainedCount)) ? Math.max(0, Math.floor(Number(input.retainedCount))) : 0,
+      limit: Number.isFinite(Number(input.limit)) ? Math.max(0, Math.floor(Number(input.limit))) : 1,
+      unit: input.unit || 'items',
+      reason: input.reason,
+      recoverability: input.recoverability,
+      fallbackSourcePath: input.fallbackSourcePath || null
+    };
+  }
+
+  function collectBoundedPageText(truncations) {
+    const rawText = String(document.body ? document.body.innerText || '' : '');
+    if (rawText.length > PAGE_TEXT_CHARACTER_LIMIT) {
+      truncations.push(buildContentTruncation({
+        fieldPath: '/dom/body/innerText',
+        observedCount: rawText.length,
+        retainedCount: PAGE_TEXT_CHARACTER_LIMIT,
+        limit: PAGE_TEXT_CHARACTER_LIMIT,
+        unit: 'characters',
+        reason: 'size_limit',
+        recoverability: 'manual_recapture',
+        fallbackSourcePath: '/pageState/knownGlobals'
+      }));
+    }
+    return normalizeWhitespace(rawText.slice(0, PAGE_TEXT_CHARACTER_LIMIT));
+  }
+
+  function build1688EvidenceSources(pageState, jsonLd, domFallback, observedAt, parserVersion) {
+    const sources = [];
+    if (pageState && pageState.knownGlobals && typeof pageState.knownGlobals === 'object'
+      && Object.keys(pageState.knownGlobals).length) {
+      sources.push({
+        id: 'main-world-known-globals',
+        sourceType: 'main_world',
+        sourcePath: '/pageState/knownGlobals',
+        tier: 10,
+        observedAt,
+        parserVersion,
+        value: pageState.knownGlobals
+      });
+    }
+    (Array.isArray(pageState && pageState.targetedInlineEvidenceSources)
+      ? pageState.targetedInlineEvidenceSources
+      : []).forEach((source, index) => {
+      if (!source || typeof source !== 'object') return;
+      sources.push({
+        id: `targeted-inline-${index}`,
+        sourceType: 'script',
+        sourcePath: String(source.sourcePath || `/pageState/targetedInlineEvidenceSources/${index}`),
+        tier: 20,
+        observedAt,
+        parserVersion,
+        value: source
+      });
+    });
+    (Array.isArray(jsonLd) ? jsonLd : []).forEach((value, index) => {
+      sources.push({
+        id: `json-ld-${index}`,
+        sourceType: 'script',
+        sourcePath: `/document/jsonLd/${index}`,
+        tier: 25,
+        observedAt,
+        parserVersion,
+        value
+      });
+    });
+    (Array.isArray(domFallback && domFallback.evidenceSources) ? domFallback.evidenceSources : []).forEach((source) => {
+      if (source && source.value && typeof source.value === 'object') sources.push(source);
+    });
+    return sources;
+  }
+
+  async function validateNativeSourceCaptureV2(capture) {
+    if (!SourceProductCaptureV2
+      || typeof SourceProductCaptureV2.createSourceProductCaptureV2Submission !== 'function'
+      || typeof SourceProductCaptureV2.validateSourceProductCaptureV2Submission !== 'function') {
+      throw new Error('来源采集 V2 校验器不可用');
+    }
+    const submission = await SourceProductCaptureV2.createSourceProductCaptureV2Submission(capture);
+    const validated = SourceProductCaptureV2.validateSourceProductCaptureV2Submission(submission);
+    if (!validated || validated.valid !== true) {
+      const details = validated && Array.isArray(validated.errors)
+        ? validated.errors.map((item) => item && item.message).filter(Boolean).slice(0, 3).join('; ')
+        : '';
+      throw new Error('来源采集 V2 数据无效' + (details ? ': ' + details : ''));
+    }
   }
 
   function getPriceCurrencyApi() {
@@ -1924,7 +2175,7 @@
     return results;
   }
 
-  function collect1688DomPackagingRows() {
+  function collect1688DomPackagingRows(truncations) {
     const rows = [];
     const tables = Array.from(document.querySelectorAll("table"));
     tables.forEach((table) => {
@@ -1942,7 +2193,67 @@
         if (row) rows.push(row);
       });
     });
-    return dedupe1688PackagingRows(rows).slice(0, 200);
+    const dedupedRows = dedupe1688PackagingRows(rows);
+    if (dedupedRows.length > SOURCE_CAPTURE_PACKAGING_LIMIT && Array.isArray(truncations)) {
+      truncations.push(buildContentTruncation({
+        fieldPath: '/packaging',
+        observedCount: dedupedRows.length,
+        retainedCount: SOURCE_CAPTURE_PACKAGING_LIMIT,
+        limit: SOURCE_CAPTURE_PACKAGING_LIMIT,
+        unit: 'items',
+        reason: 'candidate_limit',
+        recoverability: 'chunked_resubmit',
+        fallbackSourcePath: '/dom/packaging/rows'
+      }));
+    }
+    return dedupedRows.slice(0, SOURCE_CAPTURE_PACKAGING_LIMIT);
+  }
+
+  function collectSourceCaptureDomMainImages(truncations) {
+    const imageSet = new Set();
+    document.querySelectorAll("img").forEach((img) => {
+      const rawUrl = img.currentSrc || img.src || "";
+      const normalized = normalize1688ProductImageUrl(normalizeOzonCollectedImageUrl(rawUrl));
+      if (isValidSourceProductImage(normalized)) imageSet.add(normalized);
+    });
+    const images = Array.from(imageSet);
+    if (images.length > SOURCE_CAPTURE_DOM_MAIN_IMAGE_LIMIT && Array.isArray(truncations)) {
+      truncations.push(buildContentTruncation({
+        fieldPath: '/media/product_main',
+        observedCount: images.length,
+        retainedCount: SOURCE_CAPTURE_DOM_MAIN_IMAGE_LIMIT,
+        limit: SOURCE_CAPTURE_DOM_MAIN_IMAGE_LIMIT,
+        unit: 'items',
+        reason: 'candidate_limit',
+        recoverability: 'chunked_resubmit',
+        fallbackSourcePath: '/dom/images'
+      }));
+    }
+    return images.slice(0, SOURCE_CAPTURE_DOM_MAIN_IMAGE_LIMIT);
+  }
+
+  function mergeLegacy1688DomMainMedia(domFallback, observedAt, parserVersion, truncations) {
+    const media = Array.isArray(domFallback && domFallback.media) ? domFallback.media : [];
+    const existingUrls = new Set(media.map((row) => normalize1688ProductImageUrl(row && row.url)).filter(Boolean));
+    collectSourceCaptureDomMainImages(truncations).forEach((url, index) => {
+      if (!url || existingUrls.has(url)) return;
+      existingUrls.add(url);
+      media.push({
+        kind: 'image',
+        role: 'product_main',
+        url,
+        evidence: {
+          sourceType: 'dom',
+          sourcePath: `/dom/images/${index}`,
+          confidence: 0.72,
+          isEstimated: false,
+          observedAt,
+          parserVersion,
+          derivedFrom: []
+        }
+      });
+    });
+    domFallback.media = media;
   }
 
   function isLikely1688PackagingTableText(text) {
@@ -1995,7 +2306,7 @@
   }
 
   function merge1688StructuredProduct(result, context) {
-    const structured = extract1688StructuredProduct(context);
+    const structured = extract1688StructuredProduct({ ...context, legacyResult: result });
     const productId = structured.productId || result.productId;
     const shopName = structured.shopName || result.shopName || "";
     const titleContext = { platform: "1688", productId, shopName };
@@ -2035,7 +2346,14 @@
     });
     const grossWeightGrams = Number(structured.grossWeightGrams || structured.weightG || result.grossWeightGrams || result.weightG) || null;
     const keepContextPrice = shouldKeep1688ContextPrice(result);
-    const extractionDiagnostics = structured.extractionDiagnostics || buildSourceExtractionDiagnostics({
+    const structuredDiagnosticsCoverMergedData = structured.extractionDiagnostics
+      && (!title || structured.extractionDiagnostics.titleFound)
+      && (!images.length || structured.extractionDiagnostics.imageCount >= images.length)
+      && (!attributes.length || structured.extractionDiagnostics.attributeCount >= attributes.length)
+      && (!(structured.description || result.description) || structured.extractionDiagnostics.descriptionFound);
+    const extractionDiagnostics = (structuredDiagnosticsCoverMergedData && structured.extractionDiagnostics)
+      || result.extractionDiagnostics
+      || buildSourceExtractionDiagnostics({
       title,
       images,
       skuItems,
@@ -2080,7 +2398,8 @@
       widthMm: dimensions.widthMm || result.widthMm,
       heightMm: dimensions.heightMm || result.heightMm,
       dimensionsMm: dimensions.lengthMm && dimensions.widthMm && dimensions.heightMm ? dimensions : result.dimensionsMm,
-      extractionDiagnostics
+      extractionDiagnostics,
+      captureV2: structured.captureV2 || result.captureV2
     };
   }
 
@@ -2096,10 +2415,20 @@
   function extract1688StructuredProduct(context) {
     if (typeof extract1688ProductFromSources === "function") {
       const coreResult = extract1688ProductFromSources({
-        url: location.href,
-        host: location.hostname,
+        url: context && context.sourceUrl || location.href,
+        host: context && context.sourceHost || location.hostname,
         pageText: context && context.pageText,
-        sources: Array.isArray(context && context.sources) ? context.sources : []
+        sources: Array.isArray(context && context.sources) ? context.sources : [],
+        evidenceSources: Array.isArray(context && context.evidenceSources) ? context.evidenceSources : [],
+        domFallback: context && context.domFallback,
+        legacyResult: context && context.legacyResult,
+        observedAt: context && context.observedAt,
+        extensionVersion: context && context.extensionVersion,
+        parserVersion: context && context.extensionVersion,
+        pageBridgeVersion: 'page-bridge-v2',
+        bridgeTruncations: Array.isArray(context && context.bridgeTruncations) ? context.bridgeTruncations : [],
+        shippingCny: context && context.legacyResult && context.legacyResult.shippingCny,
+        shippingFree: context && context.legacyResult && context.legacyResult.shippingFree
       });
       const hasCoreData = coreResult && (
         Boolean(coreResult.title) ||
@@ -2140,6 +2469,7 @@
           rejectedAssets: coreResult.rejectedAssets,
           sourceRichContentDraft: coreResult.sourceRichContentDraft,
           extractionDiagnostics: coreResult.extractionDiagnostics,
+          captureV2: coreResult.captureV2,
           fromCore: true
         };
       }
@@ -2172,6 +2502,7 @@
       packagingRows,
       description,
       sourceVideos,
+      captureV2: null,
       fromCore: false
     };
   }
@@ -4279,7 +4610,7 @@
     if (!/^https?:\/\//i.test(text) || text.length >= 1000) return false;
     const lower = text.toLowerCase();
     if (/\.(svg)(?:[?#]|$)/i.test(lower)) return false;
-    if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/)/i.test(lower)) return false;
+    if (/(?:^|[\/_-])(?:logo|icon)(?:[\/_-]|\.|$)|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\//i.test(lower)) return false;
     if (/[-_]tps[-_]\d{1,4}[-x]\d{1,4}|55-tps|\b2-tps\b|gg_dtc|[-_/]rate(?:[._/-]|$)/i.test(lower)) return false;
     if (/imgextra\/i\d\/600000\d+\/.*(?:-tps-|gg_dtc|160-160|44-45|24-24|16-16|15-14)/i.test(lower)) return false;
     const sizeMatch = lower.match(/(?:[-_]|\/)(\d{1,4})[-x](\d{1,4})(?:[._/-]|$)/i);

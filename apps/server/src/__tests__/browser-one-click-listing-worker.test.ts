@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   signToken: vi.fn(() => 'internal-token'),
   storeSession: vi.fn(),
   registerWorker: vi.fn(),
+  featureEvaluate: vi.fn(),
 }));
 
 vi.mock('../lib/redis.js', () => ({
@@ -54,11 +55,165 @@ vi.mock('../routes/collect.js', () => ({
   processWatermarkItemsWithConcurrency: mocks.processWatermarkItemsWithConcurrency,
 }));
 
+vi.mock('../services/source-workflow-feature-flags.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/source-workflow-feature-flags.js')>(
+    '../services/source-workflow-feature-flags.js',
+  );
+  return {
+    ...actual,
+    sourceWorkflowFeatureFlags: { evaluate: mocks.featureEvaluate },
+  };
+});
+
 describe('browser one-click listing worker', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: false,
+      legacyAllowed: true,
+      reason: 'master_off',
+      revision: 'master-off',
+    });
+  });
+
+  it('blocks a legacy job before creating temporary goods when publisher V2 is enabled', async () => {
+    mocks.syncJobFindUnique.mockResolvedValue({
+      id: 'job-blocked',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'submitted',
+        rows: [{ sku: '2143427743', title: 'Ozon product' }],
+      },
+      shop: {
+        userId: 'user-1',
+        platform: 'OZON',
+        user: { id: 'user-1', role: 'USER' },
+      },
+    });
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: false,
+      captureStage: null,
+      listingStage: 'v2_only',
+      reason: 'pilot_match',
+      revision: 'pilot-1',
+    });
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-blocked', {
+      featureFlags: { evaluate: mocks.featureEvaluate },
+    })).resolves.toMatchObject({
+      skipped: true,
+      reason: 'source_ozon_publisher_v2_required',
+      statusCode: 409,
+    });
+
+    expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+    expect(mocks.processWatermarkItemsWithConcurrency).not.toHaveBeenCalled();
+  });
+
+  it('rechecks rollout immediately before the final publish request', async () => {
+    const payload = {
+      source: 'browser-one-click-listing',
+      browserOneClickJob: true,
+      stage: 'publishing',
+      sourceItemIds: ['sg-1'],
+      publish: { publishMode: 'clone' },
+    };
+    mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
+      if (args.include) {
+        return {
+          id: 'job-rollout-switch',
+          shopId: 'shop-1',
+          status: 'RUNNING',
+          payload,
+          shop: {
+            userId: 'user-1',
+            platform: 'OZON',
+            user: { id: 'user-1', role: 'USER' },
+          },
+        };
+      }
+      return { payload };
+    });
+    mocks.supplyGoodsFindMany.mockResolvedValue([{ id: 'sg-1' }]);
+    mocks.featureEvaluate
+      .mockResolvedValueOnce({
+        enabled: false,
+        legacyAllowed: true,
+        listingStage: 'off',
+        reason: 'pilot_miss',
+        revision: 'pilot-1',
+      })
+      .mockResolvedValueOnce({
+        enabled: false,
+        legacyAllowed: true,
+        reason: 'pilot_miss',
+        revision: 'pilot-1',
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        legacyAllowed: false,
+        listingStage: 'v2_only',
+        reason: 'pilot_match',
+        revision: 'pilot-2',
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        legacyAllowed: false,
+        reason: 'pilot_match',
+        revision: 'pilot-2',
+      });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-rollout-switch')).resolves.toMatchObject({
+      skipped: true,
+      reason: 'source_ozon_publisher_v2_required',
+      rolloutRevision: 'pilot-2',
+    });
+
+    expect(mocks.featureEvaluate).toHaveBeenCalledTimes(4);
+    expect(mocks.userFindUnique).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps reconciliation available for a job that already has an Ozon task id', async () => {
+    mocks.syncJobFindUnique.mockResolvedValue({
+      id: 'job-submitted',
+      shopId: 'shop-1',
+      status: 'RUNNING',
+      payload: {
+        source: 'browser-one-click-listing',
+        stage: 'published',
+        taskId: 987,
+      },
+      shop: {
+        userId: 'user-1',
+        platform: 'OZON',
+        user: { id: 'user-1', role: 'USER' },
+      },
+    });
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: false,
+      reason: 'pilot_match',
+      revision: 'pilot-2',
+    });
+
+    const { runBrowserOneClickListingJob } = await import('../workers/browser-one-click-listing.js');
+    await expect(runBrowserOneClickListingJob('job-submitted')).resolves.toEqual({
+      skipped: true,
+      status: 'RUNNING',
+      taskId: 987,
+    });
+    expect(mocks.featureEvaluate).not.toHaveBeenCalled();
+    expect(mocks.syncJobUpdate).not.toHaveBeenCalled();
   });
 
   it('appends browser-enriched rows into temporary supply goods one SKU at a time', async () => {
@@ -154,6 +309,10 @@ describe('browser one-click listing worker', () => {
       }],
       watermark: { type: 'image', imageUrl: 'https://cdn.example/watermark.png' },
       publish: { publishMode: 'clone', markupPct: 15, randomOfferId: true },
+      sourceListingDraftRefs: [{
+        supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2,
+        revision: 7, skuKey: '2143427743',
+      }],
     };
     let currentPayload = payload;
     mocks.syncJobFindUnique.mockImplementation(async (args: any) => {
@@ -234,6 +393,7 @@ describe('browser one-click listing worker', () => {
       mode: 'clone',
       markupPct: 15,
       randomOfferId: true,
+      sourceListingDraftRefs: payload.sourceListingDraftRefs,
     });
   });
 

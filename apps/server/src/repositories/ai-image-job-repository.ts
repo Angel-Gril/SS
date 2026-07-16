@@ -21,7 +21,27 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         const billed = await tx.aiImageJob.aggregate({ where: { ownerUserId: input.ownerUserId, createdAt: { gte: dayStart }, status: 'SUCCEEDED' }, _sum: { billedUnits: true } });
         const used = Number(reserved._sum.requestedImageCount || 0) + Number(billed._sum.billedUnits || 0);
         if (dailyLimit > 0 && used + input.count > dailyLimit) return { kind: 'quota-exceeded', used, limit: dailyLimit };
-        const created = await tx.aiImageJob.create({ data: { ownerUserId: input.ownerUserId, actorUserId: input.actorUserId, status: 'QUEUED', provider: input.provider, model: input.model, prompt: input.prompt, negativePrompt: input.negativePrompt || null, requestedImageCount: input.count, width: input.width, height: input.height, idempotencyKey: input.idempotencyKey, estimatedCostCents: input.estimatedCostCents } });
+        const created = await tx.aiImageJob.create({ data: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          status: 'QUEUED',
+          provider: input.provider,
+          model: input.model,
+          prompt: input.prompt,
+          negativePrompt: input.negativePrompt || null,
+          resolvedPrompt: input.resolvedPrompt || null,
+          resolvedNegativePrompt: input.resolvedNegativePrompt ?? null,
+          templateKey: input.templateKey || null,
+          templateReleaseId: input.templateReleaseId || null,
+          templateChecksum: input.templateChecksum || null,
+          templateSnapshot: input.templateSnapshot || undefined,
+          requestFingerprint: input.requestFingerprint || null,
+          requestedImageCount: input.count,
+          width: input.width,
+          height: input.height,
+          idempotencyKey: input.idempotencyKey,
+          estimatedCostCents: input.estimatedCostCents,
+        } });
         return { kind: 'created', job: record(created) };
       }, { isolationLevel: 'Serializable' });
     } catch (error: any) {

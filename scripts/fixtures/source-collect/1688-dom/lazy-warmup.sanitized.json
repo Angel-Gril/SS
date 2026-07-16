@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "ss-erp-1688-lazy-warmup-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000004.html",
+  "initialScroll": { "x": 37, "y": 640 },
+  "scrollHeight": 4200,
+  "maxDurationMs": 120,
+  "pollIntervalMs": 40,
+  "mediaCounts": [2, 2, 2, 2],
+  "expectedTimeout": {
+    "stage": "content_script",
+    "fieldPath": "/media/lazyWarmup",
+    "reason": "timeout",
+    "recoverability": "same_page_fallback"
+  }
+}

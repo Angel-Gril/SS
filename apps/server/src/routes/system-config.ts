@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { authenticate, requireSuperAdmin } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
@@ -29,6 +29,14 @@ const upsertSchema = z.object({
 const batchUpdateSchema = z.object({
   items: z.array(z.object({ key: z.string().min(1), value: z.string() })).min(1).max(50),
 });
+
+const PROTECTED_OZON_PUBLISHER_STAGE_KEYS = new Set<string>([
+  'source_ozon_publisher_collect_publish_stage',
+  'source_ozon_publisher_listing_batch_stage',
+  'source_ozon_publisher_listing_import_by_sku_stage',
+  'source_ozon_publisher_browser_one_click_stage',
+  'source_ozon_publisher_extension_adapter_stage',
+] as const satisfies readonly SystemConfigKey[]);
 
 const SECRET_FIELDS: string[] = [];
 
@@ -90,6 +98,23 @@ function toPublicConfigValue(key: string, storedValue: string): string {
   return maskSecretValue(key, decryptConfigValue(key, storedValue));
 }
 
+function requireLiveAccountSession(request: FastifyRequest, reply: FastifyReply) {
+  if ((request as any).user?.tokenUse === 'account_session') return;
+  return reply.status(403).send({
+    code: 0,
+    errorCode: 'system_config_account_session_required',
+    msg: '系统配置修改需要当前账号会话',
+  });
+}
+
+function rejectProtectedStageMutation(reply: FastifyReply, key: string) {
+  return reply.status(409).send({
+    code: 0,
+    errorCode: 'system_config_rollout_stage_cas_required',
+    msg: `发布阶段配置 ${key} 只能通过专用 CAS 接口修改`,
+  });
+}
+
 // 从 schema 生成 DEFAULTS（启动时 seed）
 const DEFAULTS = (Object.keys(SystemConfigSchema) as SystemConfigKey[]).map((key) => {
   const meta = SystemConfigMeta[key];
@@ -141,6 +166,10 @@ export async function seedSystemConfig() {
 export async function systemConfigRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireSuperAdmin);
+  app.addHook('preHandler', async (request, reply) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return;
+    return requireLiveAccountSession(request, reply);
+  });
 
   app.get('/', async (request, reply) => {
     const { group } = request.query as { group?: string };
@@ -175,6 +204,9 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     if (duplicateKeys.length > 0) {
       return reply.status(400).send({ code: 0, msg: `配置项重复: ${duplicateKeys[0]?.key}` });
     }
+
+    const protectedItem = parsed.data.items.find((item) => PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(item.key));
+    if (protectedItem) return rejectProtectedStageMutation(reply, protectedItem.key);
 
     const prepared = [] as Array<{
       key: SystemConfigKey;
@@ -246,6 +278,10 @@ export async function systemConfigRoutes(app: FastifyInstance) {
       return reply.status(400).send({ code: 0, msg: '缺少 value 字段' });
     }
 
+    if (PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(key)) {
+      return rejectProtectedStageMutation(reply, key);
+    }
+
     if (!validateKey(key)) {
       return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
     }
@@ -296,6 +332,9 @@ export async function systemConfigRoutes(app: FastifyInstance) {
     }
 
     const { key } = parsed.data;
+    if (PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(key)) {
+      return rejectProtectedStageMutation(reply, key);
+    }
     if (!validateKey(key)) {
       return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
     }
@@ -352,6 +391,9 @@ export async function systemConfigRoutes(app: FastifyInstance) {
 
   app.delete('/:key', async (request, reply) => {
     const { key } = request.params as { key: string };
+    if (PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(key)) {
+      return rejectProtectedStageMutation(reply, key);
+    }
     if (!validateKey(key)) {
       return reply.status(400).send({ code: 0, msg: `未知配置项: ${key}` });
     }

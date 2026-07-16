@@ -28,6 +28,22 @@ async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1', role: 'USER' };
     },
     getSettings: async () => ({ enabled: true, provider, model: provider === 'fake' ? 'fake-image-v1' : 'wanx-v1', dailyLimit: 5, estimatedCostCents: 4 }),
+    resolvePrompt: async ({
+      templateKey,
+      userPrompt,
+      userNegativePrompt,
+    }: {
+      templateKey: string;
+      userPrompt: string;
+      userNegativePrompt: string;
+    }) => ({
+      templateKey,
+      release: { id: 'release-1', revisionId: 'revision-1', sequence: 1 },
+      checksum: 'a'.repeat(64),
+      snapshot: { templateKey, releaseId: 'release-1', revisionId: 'revision-1', sequence: 1 },
+      resolvedPrompt: userPrompt,
+      resolvedNegativePrompt: userNegativePrompt,
+    }),
   });
   return { app, repository, enqueue };
 }

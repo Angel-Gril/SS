@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
 const priceCurrencyScript = fs.readFileSync('extensions/ss-erp/shared/currency/price-currency.js', 'utf8');
+const sourceCaptureContractScript = fs.readFileSync('extensions/ss-erp/shared/contracts/source-product-capture-v2.js', 'utf8');
 const sourceProductCoreScript = fs.readFileSync('extensions/ss-erp/shared/collectors/source-product-core.js', 'utf8');
 const collectScript = fs.readFileSync('extensions/ss-erp/content/collect-content-script.js', 'utf8');
 const pageBridgeScript = fs.readFileSync('extensions/ss-erp/content/page-bridge.js', 'utf8');
@@ -43,10 +45,30 @@ function makeMockElement({ text = '', className = '', attrs = {}, value = '', ch
   };
 }
 
+function makeDomPackagingTable(rowCount) {
+  const makeCell = (text) => ({ innerText: text, textContent: text });
+  const makeRow = (cells) => ({
+    querySelectorAll(selector) {
+      return selector === 'th,td' ? cells.map(makeCell) : [];
+    },
+  });
+  const rows = [makeRow(['颜色', '尺码', '重量(g)'])];
+  for (let index = 0; index < rowCount; index += 1) {
+    rows.push(makeRow([`颜色-${index}`, `尺码-${index}`, String(index + 1)]));
+  }
+  return {
+    innerText: '包装信息 商品件重尺 颜色 尺码 重量(g)',
+    textContent: '包装信息 商品件重尺 颜色 尺码 重量(g)',
+    querySelectorAll(selector) {
+      return selector === 'tr' ? rows : [];
+    },
+  };
+}
+
 assert.match(pageBridgeScript, /offerDetailData/, 'page bridge should expose 1688 offer detail globals to the collector');
 assert.match(pageBridgeScript, /readLikelyProductGlobals/, 'page bridge should scan likely 1688 product globals when exact names change');
 
-async function collectWithPage({ url, title, bodyText, selectors, queryAll, pageState }) {
+async function collectWithPage({ url, title, bodyText, selectors, queryAll, pageState, navigationPhase, captureValidationMode }) {
   let messageListener = null;
   const windowListeners = {};
   const document = {
@@ -74,9 +96,15 @@ async function collectWithPage({ url, title, bodyText, selectors, queryAll, page
     addEventListener() {},
   };
   const locationUrl = new URL(url);
+  function navigateAway() {
+    const nextUrl = new URL('https://detail.1688.com/offer/999999999999.html');
+    sandbox.location.href = nextUrl.href;
+    sandbox.location.hostname = nextUrl.hostname;
+  }
   const chrome = {
     runtime: {
       getURL(value) { return value; },
+      getManifest() { return { version: '1.0.196' }; },
       onMessage: {
         addListener(fn) {
           messageListener = fn;
@@ -92,6 +120,8 @@ async function collectWithPage({ url, title, bodyText, selectors, queryAll, page
       hostname: locationUrl.hostname,
     },
     chrome,
+    crypto: webcrypto,
+    TextEncoder,
     setTimeout,
     clearTimeout,
     setInterval,
@@ -108,6 +138,7 @@ async function collectWithPage({ url, title, bodyText, selectors, queryAll, page
     postMessage(payload) {
       if (payload && payload.direction === 'spb-self-hosted:content' && windowListeners.message) {
         setTimeout(() => {
+          if (navigationPhase === 'page_bridge') navigateAway();
           windowListeners.message({
             source: sandbox.window,
             data: {
@@ -127,9 +158,45 @@ async function collectWithPage({ url, title, bodyText, selectors, queryAll, page
   sandbox.window.chrome = chrome;
   sandbox.window.globalThis = sandbox;
 
+  if (navigationPhase === 'warmup') {
+    sandbox.SS_ERP_1688_DOM_FALLBACK = {
+      shouldWarm() { return true; },
+      async warmLazyMedia() {
+        navigateAway();
+        return { status: 'completed', attempted: true, restored: true, truncations: [] };
+      },
+      collect() { return {}; },
+    };
+  }
+
   vm.createContext(sandbox);
   vm.runInContext(priceCurrencyScript, sandbox, { filename: 'price-currency.js' });
+  vm.runInContext(sourceCaptureContractScript, sandbox, { filename: 'source-product-capture-v2.js' });
   vm.runInContext(sourceProductCoreScript, sandbox, { filename: 'source-product-core.js' });
+  if (navigationPhase === 'capture_validation') {
+    const captureApi = sandbox.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2;
+    const createSubmission = captureApi.createSourceProductCaptureV2Submission;
+    sandbox.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2 = {
+      ...captureApi,
+      async createSourceProductCaptureV2Submission(...args) {
+        const submission = await createSubmission(...args);
+        navigateAway();
+        return submission;
+      },
+    };
+  }
+  if (captureValidationMode === 'accept_oversized_capture') {
+    const captureApi = sandbox.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2;
+    sandbox.SS_ERP_SOURCE_PRODUCT_CAPTURE_V2 = {
+      ...captureApi,
+      async createSourceProductCaptureV2Submission(capture) {
+        return { capture, captureHash: '0'.repeat(64), payloadBytes: 1 };
+      },
+      validateSourceProductCaptureV2Submission() {
+        return { valid: true, errors: [] };
+      },
+    };
+  }
   vm.runInContext(collectScript, sandbox, { filename: 'collect-content-script.js' });
 
   assert.equal(typeof messageListener, 'function', 'collect script should register a runtime message listener');
@@ -157,13 +224,212 @@ const aliResponse = await collectWithPage({
   },
 });
 
-assert.equal(aliResponse.ok, true);
+assert.equal(aliResponse.ok, true, JSON.stringify(aliResponse));
 assert.equal(aliResponse.data.priceCny, 15.5);
 assert.equal(aliResponse.data.priceText, '¥12.80 - ¥15.50');
 assert.equal(aliResponse.data.priceSourceType, 'rangeHigh');
 assert.equal(aliResponse.data.shippingCny, 6);
 assert.equal(aliResponse.data.totalCostCny, 21.5);
 assert.equal(aliResponse.data.currency, 'CNY');
+
+const aliDomOnlyMainImageResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455571.html',
+  title: '1688 DOM-only main image',
+  bodyText: 'DOM 主图商品 ¥15.80',
+  selectors: { h1: 'DOM 主图商品' },
+  queryAll(selector) {
+    return selector === 'img'
+      ? [makeMockElement({ src: 'https://cbu01.alicdn.com/img/ibank/silicone-dom-only-main.jpg_.webp' })]
+      : [];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455571',
+        subject: 'DOM 主图商品',
+        priceInfo: { price: '15.80' },
+      },
+    },
+  },
+});
+
+assert.equal(aliDomOnlyMainImageResponse.ok, true, JSON.stringify(aliDomOnlyMainImageResponse));
+assert.deepEqual(plain(aliDomOnlyMainImageResponse.data.images), [
+  'https://cbu01.alicdn.com/img/ibank/silicone-dom-only-main.jpg',
+]);
+const aliDomOnlyCapturedMedia = aliDomOnlyMainImageResponse.data.captureV2.media.find((row) => (
+  row.url === 'https://cbu01.alicdn.com/img/ibank/silicone-dom-only-main.jpg'
+));
+assert.ok(aliDomOnlyCapturedMedia, 'DOM-only main image should be present in Capture V2');
+assert.equal(aliDomOnlyCapturedMedia.role, 'product_main');
+assert.equal(aliDomOnlyCapturedMedia.rowEvidence.sourceType, 'dom');
+assert.equal(aliDomOnlyCapturedMedia.rowEvidence.sourcePath, '/dom/images/0');
+
+const aliDomMainImagesBeyondLegacyPreviewResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455572.html',
+  title: '1688 DOM main images beyond legacy preview',
+  bodyText: 'DOM 主图超过预览上限 ¥15.80',
+  selectors: { h1: 'DOM 主图超过预览上限商品' },
+  queryAll(selector) {
+    return selector === 'img'
+      ? Array.from({ length: 25 }, (_, index) => makeMockElement({
+        src: `https://cbu01.alicdn.com/img/ibank/dom-main-${index}.jpg`,
+      }))
+      : [];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455572',
+        subject: 'DOM 主图超过预览上限商品',
+        priceInfo: { price: '15.80' },
+      },
+    },
+  },
+});
+
+assert.equal(aliDomMainImagesBeyondLegacyPreviewResponse.ok, true, JSON.stringify(aliDomMainImagesBeyondLegacyPreviewResponse));
+assert.equal(
+  aliDomMainImagesBeyondLegacyPreviewResponse.data.captureV2.media.filter((row) => row.role === 'product_main').length,
+  25,
+);
+
+const aliDomMainImagesCaptureLimitResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455573.html',
+  title: '1688 DOM main images capture limit',
+  bodyText: 'DOM 主图超过采集上限 ¥15.80',
+  selectors: { h1: 'DOM 主图超过采集上限商品' },
+  queryAll(selector) {
+    return selector === 'img'
+      ? Array.from({ length: 501 }, (_, index) => makeMockElement({
+        src: `https://cbu01.alicdn.com/img/ibank/dom-main-limit-${index}.jpg`,
+      }))
+      : [];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455573',
+        subject: 'DOM 主图超过采集上限商品',
+        priceInfo: { price: '15.80' },
+      },
+    },
+  },
+});
+
+assert.equal(aliDomMainImagesCaptureLimitResponse.ok, true, JSON.stringify(aliDomMainImagesCaptureLimitResponse));
+assert.equal(
+  aliDomMainImagesCaptureLimitResponse.data.captureV2.media.filter((row) => row.role === 'product_main').length,
+  500,
+);
+assert.deepEqual(plain(aliDomMainImagesCaptureLimitResponse.data.captureV2.truncations.find((row) => (
+  row.stage === 'content_script' && row.fieldPath === '/media/product_main'
+))), {
+  stage: 'content_script',
+  fieldPath: '/media/product_main',
+  observedCount: 501,
+  retainedCount: 500,
+  limit: 500,
+  unit: 'items',
+  reason: 'candidate_limit',
+  recoverability: 'chunked_resubmit',
+  fallbackSourcePath: '/dom/images',
+});
+assert.deepEqual(plain(aliDomMainImagesCaptureLimitResponse.data.captureV2.counts.find((row) => (
+  row.fieldPath === '/media/product_main'
+))), {
+  fieldPath: '/media/product_main',
+  totalCount: 501,
+  capturedCount: 500,
+  submittedCount: 500,
+  truncated: true,
+  reason: 'candidate_limit',
+});
+
+const aliWarmupNavigationResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455568.html',
+  title: '1688 lazy media navigation guard',
+  bodyText: '预热期间页面跳转 ¥12.80',
+  selectors: { h1: '预热期间页面跳转' },
+  navigationPhase: 'warmup',
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455568',
+        subject: '预热期间页面跳转',
+        priceInfo: { price: '12.80' },
+      },
+    },
+  },
+});
+
+assert.equal(aliWarmupNavigationResponse.ok, false, JSON.stringify(aliWarmupNavigationResponse));
+assert.match(aliWarmupNavigationResponse.error, /采集期间页面已切换/);
+
+const aliPageBridgeNavigationResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455569.html',
+  title: '1688 page bridge navigation guard',
+  bodyText: '桥接读取期间页面跳转 ¥13.80',
+  selectors: { h1: '桥接读取期间页面跳转' },
+  navigationPhase: 'page_bridge',
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455569',
+        subject: '桥接读取期间页面跳转',
+        priceInfo: { price: '13.80' },
+      },
+    },
+  },
+});
+
+assert.equal(aliPageBridgeNavigationResponse.ok, false, JSON.stringify(aliPageBridgeNavigationResponse));
+assert.match(aliPageBridgeNavigationResponse.error, /采集期间页面已切换/);
+
+const aliCaptureValidationNavigationResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455570.html',
+  title: '1688 capture validation navigation guard',
+  bodyText: 'V2 校验期间页面跳转 ¥14.80',
+  selectors: { h1: 'V2 校验期间页面跳转' },
+  navigationPhase: 'capture_validation',
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455570',
+        subject: 'V2 校验期间页面跳转',
+        priceInfo: { price: '14.80' },
+      },
+    },
+  },
+});
+
+assert.equal(aliCaptureValidationNavigationResponse.ok, false, JSON.stringify(aliCaptureValidationNavigationResponse));
+assert.match(aliCaptureValidationNavigationResponse.error, /采集期间页面已切换/);
+
+const aliBoundedBodyResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/733344455567.html',
+  title: '1688 bounded body evidence',
+  bodyText: `商品属性 ${'x'.repeat(500_100)}`,
+  selectors: { h1: '有界正文采集商品' },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '733344455567',
+        subject: '有界正文采集商品',
+        priceInfo: { price: '10' },
+      },
+    },
+  },
+});
+
+assert.equal(aliBoundedBodyResponse.ok, true, JSON.stringify(aliBoundedBodyResponse));
+assert.ok(aliBoundedBodyResponse.data.captureV2.truncations.some((row) => (
+  row.stage === 'content_script'
+    && row.fieldPath === '/dom/body/innerText'
+    && row.observedCount === 500_105
+    && row.retainedCount === 500_000
+    && row.reason === 'size_limit'
+)));
 
 const aliTitlePriorityResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/811122233344.html',
@@ -289,7 +555,7 @@ const aliBraTextMatrixResponse = await collectWithPage({
   },
 });
 
-assert.equal(aliBraTextMatrixResponse.ok, true);
+assert.equal(aliBraTextMatrixResponse.ok, true, JSON.stringify(aliBraTextMatrixResponse));
 assert.equal(aliBraTextMatrixResponse.data.skuItems.length, 12);
 assert.ok(aliBraTextMatrixResponse.data.skuItems.every((item) => item.attrs?.颜色 && item.attrs?.尺码), '1688 text matrix variants should carry color and size attrs');
 assert.ok(aliBraTextMatrixResponse.data.skuItems.some((item) => item.attrs.颜色 === '优雅黑【超低露背 穿搭隐形】' && item.attrs.尺码 === 'L适合80/36ABC'));
@@ -640,6 +906,81 @@ const aliDomWeightOnlyPackagingResponse = await collectWithPage({
 assert.equal(aliDomWeightOnlyPackagingResponse.ok, true);
 assert.equal(aliDomWeightOnlyPackagingResponse.data.grossWeightGrams, 800);
 assert.deepEqual(plain(aliDomWeightOnlyPackagingResponse.data.sourcePackagingRows), [{ weightG: 800 }]);
+
+const aliDomPackagingBeyondLegacyPreviewResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/6095051852381.html',
+  title: '1688 DOM packaging beyond legacy preview',
+  bodyText: '批量 SKU 包装信息',
+  selectors: { h1: '批量 SKU 包装信息商品' },
+  queryAll(selector) {
+    return selector === 'table' ? [makeDomPackagingTable(201)] : [];
+  },
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '6095051852381',
+        subject: '批量 SKU 包装信息商品',
+        priceInfo: { price: '8.00' },
+      },
+    },
+  },
+});
+
+assert.equal(aliDomPackagingBeyondLegacyPreviewResponse.ok, true, JSON.stringify(aliDomPackagingBeyondLegacyPreviewResponse));
+assert.equal(aliDomPackagingBeyondLegacyPreviewResponse.data.captureV2.packaging.length, 201);
+assert.deepEqual(plain(aliDomPackagingBeyondLegacyPreviewResponse.data.captureV2.counts.find((row) => row.fieldPath === '/packaging')), {
+  fieldPath: '/packaging',
+  totalCount: 201,
+  capturedCount: 201,
+  submittedCount: 201,
+  truncated: false,
+  reason: null,
+});
+
+const aliDomPackagingSchemaLimitResponse = await collectWithPage({
+  url: 'https://detail.1688.com/offer/6095051852382.html',
+  title: '1688 DOM packaging schema limit',
+  bodyText: '超大批量 SKU 包装信息',
+  selectors: { h1: '超大批量 SKU 包装信息商品' },
+  queryAll(selector) {
+    return selector === 'table' ? [makeDomPackagingTable(10_001)] : [];
+  },
+  captureValidationMode: 'accept_oversized_capture',
+  pageState: {
+    knownGlobals: {
+      offer: {
+        offerId: '6095051852382',
+        subject: '超大批量 SKU 包装信息商品',
+        priceInfo: { price: '9.00' },
+      },
+    },
+  },
+});
+
+assert.equal(aliDomPackagingSchemaLimitResponse.ok, true, aliDomPackagingSchemaLimitResponse.error);
+const submittedDomPackagingCount = aliDomPackagingSchemaLimitResponse.data.captureV2.packaging.length;
+assert.ok(submittedDomPackagingCount > 0 && submittedDomPackagingCount < 10_000);
+assert.deepEqual(plain(aliDomPackagingSchemaLimitResponse.data.captureV2.truncations.find((row) => (
+  row.stage === 'content_script' && row.fieldPath === '/packaging'
+))), {
+  stage: 'content_script',
+  fieldPath: '/packaging',
+  observedCount: 10_001,
+  retainedCount: 10_000,
+  limit: 10_000,
+  unit: 'items',
+  reason: 'candidate_limit',
+  recoverability: 'chunked_resubmit',
+  fallbackSourcePath: '/dom/packaging/rows',
+});
+assert.deepEqual(plain(aliDomPackagingSchemaLimitResponse.data.captureV2.counts.find((row) => row.fieldPath === '/packaging')), {
+  fieldPath: '/packaging',
+  totalCount: 10_001,
+  capturedCount: 10_000,
+  submittedCount: submittedDomPackagingCount,
+  truncated: true,
+  reason: 'transport_limit',
+});
 
 const aliCleanStructuredAttributesResponse = await collectWithPage({
   url: 'https://detail.1688.com/offer/945335480485.html',

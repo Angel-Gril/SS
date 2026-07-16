@@ -241,8 +241,8 @@ export function Sidebar({
   return (
     <aside
       className={cn(
-        'fixed inset-y-0 left-0 z-50 flex h-screen w-64 -translate-x-full flex-col border-r glass-effect transition-[transform,width] duration-300 md:sticky md:top-0 md:translate-x-0',
-        mobileOpen ? 'translate-x-0' : '-translate-x-full',
+        'fixed inset-y-0 z-50 flex h-screen w-64 flex-col border-r glass-effect transition-[left,width] duration-300 md:sticky md:top-0 md:left-0',
+        mobileOpen ? 'left-0 visible' : '-left-64 invisible md:visible',
         shouldExpand ? 'md:w-64' : collapsed ? 'md:w-16' : 'md:w-64',
       )}
       onMouseEnter={() => {

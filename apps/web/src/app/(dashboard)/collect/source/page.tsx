@@ -1,7 +1,8 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
   Calculator,
@@ -23,15 +24,31 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
+import { SourceListingWorkbench } from '@/components/source-listing/source-listing-workbench';
 import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api } from '@/lib/api';
 import { evaluateSourceListingFieldDiagnostics, evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
 import type { SourceListingFieldDiagnostic, SourceListingFieldDiagnosticStatus } from '@/lib/source-listing-readiness';
+import {
+  parseSourceListingHandoff,
+  sourceListingWorkflowClient,
+  type SourceListingHandoff,
+  type SourceListingPublisherCapability,
+} from '@/lib/source-listing-workflow';
 import { formatDate } from '@/lib/utils';
 import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
+import type { OzonListingDraft } from 'shared';
 
 type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall' | 'xianyu';
 type DetailSection = 'overview' | 'sku' | 'attributes' | 'images' | 'translation' | 'listing';
@@ -102,6 +119,7 @@ interface SourceOzonCategoryCandidate {
   selected: boolean;
   source: string;
   confirmationCount: number;
+  transitionVersion: number;
   reasons: string[];
   attributePlan: {
     candidates: Array<{ standardKey: string; attributeName: string; values: string[]; needsDictionaryResolution: boolean }>; 
@@ -111,7 +129,16 @@ interface SourceOzonCategoryCandidate {
 
 interface SourceOzonCategoryCandidateResponse {
   signature: string;
+  catalogRevision: string;
+  sourceSnapshotId: string | null;
+  sourceProfileHash: string | null;
+  historyMode: 'v2' | 'legacy_tenant';
   candidates: SourceOzonCategoryCandidate[];
+}
+
+interface SourceOzonCategoryConfirmationResponse {
+  transitionVersion: number;
+  metadataPatch: Record<string, unknown>;
 }
 
 interface PackageFormState {
@@ -119,6 +146,26 @@ interface PackageFormState {
   lengthMm: string;
   widthMm: string;
   heightMm: string;
+}
+
+interface ListingWorkflowIdentityTarget {
+  identityKey: string;
+  itemId: string;
+  shopId: string;
+  selectedSkuKeys: string[];
+  skuIdentity: string;
+}
+
+interface ListingWorkflowContextSnapshot {
+  categoryContextKey: string;
+  identityKey: string;
+  workflow: OzonListingDraft;
+}
+
+interface SourcePublishContextSnapshot {
+  categoryContextKey: string;
+  identityKey: string;
+  workflowId: string | null;
 }
 
 const platformTabs: Array<{ key: PlatformFilter; label: string }> = [
@@ -143,6 +190,48 @@ const sourceListingStatusLegend = '可上架 / 待复核 / 阻断 / 真实商品
 const SOURCE_CYRILLIC_TEXT_RE = /[А-Яа-яЁё]/;
 const SOURCE_CJK_TEXT_RE = /[\u3400-\u9fff]/;
 const SOURCE_PUBLISH_SHOP_STORAGE_KEY = 'ss-erp:source-publish:last-ozon-shop-id';
+const SOURCE_LISTING_HANDOFF_KEYS = [
+  'supplyGoodsId',
+  'snapshotId',
+  'snapshotVersion',
+  'sourceProductId',
+  'section',
+  'workflowId',
+  'attemptId',
+] as const;
+
+function listingWorkflowIdentityKey(itemId: string, shopId: string, skuIdentity: string): string {
+  return JSON.stringify([itemId, shopId, skuIdentity]);
+}
+
+function listingWorkflowStageLabel(value: string): string {
+  return ({
+    CATEGORY_REVIEW: '类目复核',
+    ATTRIBUTE_REVIEW: '属性复核',
+    CONTENT_REVIEW: '文案复核',
+    MEDIA_REVIEW: '图片复核',
+    PRICING_REVIEW: '定价复核',
+    VALIDATION: '发布校验',
+    READY_TO_PUBLISH: '可发布',
+    PUBLISH_INTENT_RECORDED: '已冻结发布意图',
+    PUBLISHED: '已发布',
+  } as Record<string, string>)[value] || value;
+}
+
+function listingWorkflowRunStateLabel(value: string): string {
+  return ({
+    ACTIVE: '进行中',
+    PAUSED: '已暂停',
+    CANCELLED: '已取消',
+    RETRYABLE_FAILURE: '可重试失败',
+    PERMANENT_FAILURE: '永久失败',
+    MANUAL_REVIEW: '人工复核',
+  } as Record<string, string>)[value] || value;
+}
+
+function listingWorkflowValidationLabel(value: string): string {
+  return ({ NOT_RUN: '未校验', STALE: '校验已过期', VALID: '校验通过', INVALID: '校验未通过' } as Record<string, string>)[value] || value;
+}
 
 function normalizePlatform(value: unknown): PlatformFilter | 'other' {
   const text = String(value || '').trim().toLowerCase();
@@ -561,6 +650,10 @@ function sourceVariantKey(variant: Record<string, unknown>, index: number): stri
   return String(variant.sku || variant.skuId || variant.id || index).trim();
 }
 
+function sourceWorkflowVariantKey(variant: Record<string, unknown>, index: number): string {
+  return String(variant.key || sourceVariantKey(variant, index)).normalize('NFKC').trim();
+}
+
 function positiveVariantNumber(value: unknown): string {
   const number = Math.round(Number(value));
   return Number.isFinite(number) && number > 0 ? String(number) : '';
@@ -826,6 +919,19 @@ function readinessBadgeClass(tone: BadgeTone): string {
 
 function ozonCategoryCandidateKey(candidate: SourceOzonCategoryCandidate): string {
   return `${candidate.categoryId}:${candidate.typeId}`;
+}
+
+function sourceOzonCategoryResponseErrorCode(response: unknown): string {
+  return String(sourceRecord(response).errorCode || '').trim();
+}
+
+function sourceOzonCategoryConflictRequiresRefresh(errorCode: string): boolean {
+  return [
+    'SOURCE_OZON_CATEGORY_MAPPING_VERSION_CONFLICT',
+    'SOURCE_OZON_CATEGORY_MAPPING_IDEMPOTENCY_CONFLICT',
+    'ozon_category_catalog_stale',
+    'ozon_category_target_invalid',
+  ].includes(errorCode);
 }
 
 function ozonCandidateLabelText(label: SourceOzonCategoryCandidate['label']): string {
@@ -1350,6 +1456,9 @@ function SourceSkuSection({ item, onItemUpdate }: { item: SourceCollectItem; onI
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>删除SKU</DialogTitle>
+            <DialogDescription className="sr-only">
+              确认从当前来源商品草稿中删除所选 SKU。
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 text-sm">
             <p>确认删除「{pendingDeleteVariant?.label || '该 SKU'}」？</p>
@@ -1383,9 +1492,18 @@ function SourceSkuSection({ item, onItemUpdate }: { item: SourceCollectItem; onI
 function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
   const attrs = sourceAttributes(item);
   const standard = sourceStandardAttributeModel(item);
+  const selectedSkuKeys = sourceDisplayVariants(item).map((variant, index) => sourceWorkflowVariantKey(variant, index));
+  const workflowSkuKeys = selectedSkuKeys.length
+    ? [...new Set(selectedSkuKeys)].sort()
+    : [item.sku || item.sourceProductId || item.id];
   return (
     <div className="space-y-3">
-      <InfoPanel title="标准属性" count={standard.missingForOzon.length ? `缺口 ${standard.missingForOzon.length}` : '已归一'}>
+      <OzonAttributeEditor
+        itemId={item.id}
+        selectedSkuKeys={workflowSkuKeys}
+        shopStorageKey={SOURCE_PUBLISH_SHOP_STORAGE_KEY}
+      />
+      <InfoPanel title="来源标准属性" count={standard.missingForOzon.length ? `缺口 ${standard.missingForOzon.length}` : '已归一'}>
         <div className="grid gap-2 md:grid-cols-2">
           <KeyValue label="品牌/无品牌" value={sourceStandardBrandText(standard)} />
           <KeyValue label="颜色" value={sourceStandardListText(standard.colors)} />
@@ -1397,7 +1515,7 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
           <KeyValue label="Ozon缺口" value={sourceStandardListText(standard.missingForOzon)} />
         </div>
       </InfoPanel>
-      <InfoPanel title="属性" count={attrs.length}>
+      <InfoPanel title="来源原始属性" count={attrs.length}>
         {attrs.length ? (
           <div className="grid gap-2 md:grid-cols-2">
             {attrs.map((attr, index) => (
@@ -1621,6 +1739,20 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [confirmMessage, setConfirmMessage] = useState('');
   const [selectedCandidateKey, setSelectedCandidateKey] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [listingWorkflow, setListingWorkflow] = useState<OzonListingDraft | null>(null);
+  const [listingWorkflowLoading, setListingWorkflowLoading] = useState(false);
+  const [listingWorkflowError, setListingWorkflowError] = useState('');
+  const candidateRequestIdRef = useRef(0);
+  const confirmationRequestIdRef = useRef(0);
+  const listingWorkflowRequestIdRef = useRef(0);
+  const listingWorkflowServerRef = useRef<OzonListingDraft | null>(null);
+  const listingWorkflowIdentityQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const desiredListingWorkflowIdentityRef = useRef<ListingWorkflowIdentityTarget | null>(null);
+  const latestItemRef = useRef(item);
+  latestItemRef.current = item;
+  const categoryContextKey = `${item.id}:${shopId}`;
+  const categoryContextKeyRef = useRef(categoryContextKey);
+  categoryContextKeyRef.current = categoryContextKey;
   const [packageForm, setPackageForm] = useState({
     weightG: standard.packageWeightG ? String(standard.packageWeightG) : '',
     lengthMm: standardDims ? String(standardDims.length) : '',
@@ -1637,19 +1769,79 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   const [publishing, setPublishing] = useState(false);
   const [publishMessage, setPublishMessage] = useState('');
   const [publishError, setPublishError] = useState('');
+  const [publisherCapability, setPublisherCapability] = useState<SourceListingPublisherCapability | null>(null);
+  const [publisherCapabilityLoading, setPublisherCapabilityLoading] = useState(false);
+  const [publisherCapabilityError, setPublisherCapabilityError] = useState('');
+  const [hasV2PublishAttempt, setHasV2PublishAttempt] = useState(false);
+  const publisherCapabilityRequestIdRef = useRef(0);
   const candidates = categoryData?.candidates || [];
   const selectedCandidate = candidates.find((candidate) => ozonCategoryCandidateKey(candidate) === selectedCandidateKey) || candidates[0];
-  const confirmedCategoryId = Number(item.metadata?.descriptionCategoryId || item.metadata?.ozonCategoryId || 0);
-  const confirmedTypeId = Number(item.metadata?.typeId || item.metadata?.ozonTypeId || 0);
+  const persistedCategoryConfirmation = sourceRecord(item.metadata?.sourceOzonCategoryConfirmed);
+  const persistedCategoryConfirmationVersion = String(persistedCategoryConfirmation.version || '');
   const selectedCandidateConfirmed = Boolean(
     selectedCandidate
-      && confirmedCategoryId === Number(selectedCandidate.categoryId)
-      && confirmedTypeId === Number(selectedCandidate.typeId),
+      && categoryData
+      && Object.keys(persistedCategoryConfirmation).length
+      && [
+        'source-ozon-category-confirmed/v2',
+        'source-ozon-category-confirmed/legacy-v1',
+      ].includes(persistedCategoryConfirmationVersion)
+      && Number(persistedCategoryConfirmation.categoryId) === Number(selectedCandidate.categoryId)
+      && Number(persistedCategoryConfirmation.typeId) === Number(selectedCandidate.typeId)
+      && String(persistedCategoryConfirmation.catalogRevision || '') === categoryData.catalogRevision
+      && Number(persistedCategoryConfirmation.transitionVersion) === Number(selectedCandidate.transitionVersion),
   );
   const stableOfferId = buildStableSourceOfferId(item);
   const stableVariantOfferIds = buildStableSourceVariantOfferIds(item);
   const stableVariantOfferCount = Object.keys(stableVariantOfferIds).length;
   const displayVariants = sourceDisplayVariants(item);
+  const listingWorkflowSkuKeys = useMemo(() => {
+    const keys = displayVariants.map((variant, index) => sourceWorkflowVariantKey(variant, index));
+    return keys.length ? [...new Set(keys)].sort() : [item.sku || item.sourceProductId || item.id];
+  }, [displayVariants, item.id, item.sku, item.sourceProductId]);
+  const listingWorkflowSkuIdentity = listingWorkflowSkuKeys.join('\u0000');
+  const applyListingWorkflowDraft = useCallback((draft: OzonListingDraft) => {
+    listingWorkflowServerRef.current = draft;
+    setListingWorkflow(draft);
+  }, []);
+  const listingWorkflowId = listingWorkflow?.id || '';
+  const legacyPublisherAllowed = Boolean(
+    publisherCapability?.legacyAllowed
+      && !publisherCapability.enabled
+      && !hasV2PublishAttempt,
+  );
+
+  function captureListingWorkflowContext(itemId: string, selectedShopId: string): ListingWorkflowContextSnapshot | null {
+    const desired = desiredListingWorkflowIdentityRef.current;
+    const workflow = listingWorkflowServerRef.current;
+    if (!desired || !workflow
+      || desired.itemId !== itemId
+      || desired.shopId !== selectedShopId
+      || workflow.supplyGoodsId !== itemId
+      || workflow.shopId !== selectedShopId) return null;
+    return {
+      categoryContextKey: `${itemId}:${selectedShopId}`,
+      identityKey: desired.identityKey,
+      workflow,
+    };
+  }
+
+  function workflowContextIsCurrent(context: ListingWorkflowContextSnapshot): boolean {
+    const desired = desiredListingWorkflowIdentityRef.current;
+    const workflow = listingWorkflowServerRef.current;
+    return categoryContextKeyRef.current === context.categoryContextKey
+      && desired?.identityKey === context.identityKey
+      && workflow?.id === context.workflow.id
+      && workflow.revision === context.workflow.revision;
+  }
+
+  function publishContextIsCurrent(context: SourcePublishContextSnapshot): boolean {
+    const desired = desiredListingWorkflowIdentityRef.current;
+    const workflow = listingWorkflowServerRef.current;
+    return categoryContextKeyRef.current === context.categoryContextKey
+      && desired?.identityKey === context.identityKey
+      && (!context.workflowId || workflow?.id === context.workflowId);
+  }
   const packagingEvidence = sourcePackagingEvidence(item);
   const sourceAssets = [
     { label: `主图 ${sourcePreviewImages(item).length}/${sourceImageCount(item)}`, done: sourcePreviewImages(item).length > 0 },
@@ -1659,37 +1851,206 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   ];
 
   useEffect(() => {
-    let cancelled = false;
+    candidateRequestIdRef.current += 1;
+    confirmationRequestIdRef.current += 1;
+    setConfirming(false);
+    return () => {
+      candidateRequestIdRef.current += 1;
+      confirmationRequestIdRef.current += 1;
+    };
+  }, [categoryContextKey]);
+
+  useEffect(() => {
+    let active = true;
     setShopsLoading(true);
-    api.get<OzonShopOption[]>('/api/shops').then((res) => {
-      if (cancelled) return;
-      if (res.code === 1 && res.data) {
-        const ozonShops = res.data.filter((shop) => shop.platform === 'OZON');
-        setShops(ozonShops);
-        let rememberedShopId = '';
-        try {
-          rememberedShopId = localStorage.getItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY) || '';
-        } catch {
-          rememberedShopId = '';
-        }
-        const rememberedShop = ozonShops.find((shop) => shop.id === rememberedShopId);
-        const fallbackShop = ozonShops[0];
-        setShopId((current) => {
-          if (current && ozonShops.some((shop) => shop.id === current)) return current;
-          return rememberedShop?.id || fallbackShop?.id || '';
-        });
-        if (rememberedShop) {
-          setShopSelectionMessage(`已选择上次使用的店铺：${rememberedShop.name}`);
-        } else if (rememberedShopId && fallbackShop) {
-          setShopSelectionMessage(`上次使用的店铺不可用，已切换到：${fallbackShop.name}`);
+    void (async () => {
+      try {
+        const res = await api.get<OzonShopOption[]>('/api/shops');
+        if (!active) return;
+        if (res.code === 1 && res.data) {
+          const ozonShops = res.data.filter((shop) => shop.platform === 'OZON');
+          setShops(ozonShops);
+          let rememberedShopId = '';
+          try {
+            rememberedShopId = localStorage.getItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY) || '';
+          } catch {
+            rememberedShopId = '';
+          }
+          const rememberedShop = ozonShops.find((shop) => shop.id === rememberedShopId);
+          const fallbackShop = ozonShops[0];
+          setShopId((current) => {
+            if (current && ozonShops.some((shop) => shop.id === current)) return current;
+            return rememberedShop?.id || fallbackShop?.id || '';
+          });
+          if (rememberedShop) {
+            setShopSelectionMessage(`已选择上次使用的店铺：${rememberedShop.name}`);
+          } else if (rememberedShopId && fallbackShop) {
+            setShopSelectionMessage(`上次使用的店铺不可用，已切换到：${fallbackShop.name}`);
+          } else {
+            setShopSelectionMessage('');
+          }
         } else {
-          setShopSelectionMessage('');
+          setCandidateError(res.msg || '读取 Ozon 店铺失败');
+        }
+      } catch (error) {
+        if (active) setCandidateError(error instanceof Error ? error.message : '读取 Ozon 店铺失败');
+      } finally {
+        if (active) setShopsLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    const requestId = ++listingWorkflowRequestIdRef.current;
+    setListingWorkflowError('');
+    if (!shopId) {
+      desiredListingWorkflowIdentityRef.current = null;
+      setListingWorkflow(null);
+      setListingWorkflowLoading(false);
+      return;
+    }
+    const previousTarget = desiredListingWorkflowIdentityRef.current;
+    const target: ListingWorkflowIdentityTarget = {
+      identityKey: listingWorkflowIdentityKey(item.id, shopId, listingWorkflowSkuIdentity),
+      itemId: item.id,
+      shopId,
+      selectedSkuKeys: listingWorkflowSkuIdentity.split('\u0000'),
+      skuIdentity: listingWorkflowSkuIdentity,
+    };
+    desiredListingWorkflowIdentityRef.current = target;
+    if (listingWorkflowServerRef.current?.supplyGoodsId !== item.id) setListingWorkflow(null);
+    setListingWorkflowLoading(true);
+    const syncIdentity = async () => {
+      try {
+        if (desiredListingWorkflowIdentityRef.current?.identityKey !== target.identityKey) return;
+        const sameRequestedSkuKeys = (draft: OzonListingDraft) => (
+          [...draft.selectedSkuKeys].sort().join('\u0000') === target.skuIdentity
+        );
+        const rememberServerDraft = (draft: OzonListingDraft) => {
+          listingWorkflowServerRef.current = draft;
+          return draft;
+        };
+        const patchIdentity = async (
+          draft: OzonListingDraft,
+          body: { shopId: string } | { selectedSkuKeys: string[] },
+          applied: (candidate: OzonListingDraft) => boolean,
+        ): Promise<OzonListingDraft> => {
+          let candidate = draft;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            const res = await api.patch<OzonListingDraft>(
+              `/api/source-listing-workflows/${encodeURIComponent(candidate.id)}`,
+              { expectedRevision: candidate.revision, ...body },
+            );
+            if (res.code === 1 && res.data) return rememberServerDraft(res.data);
+            const conflict = (res as typeof res & { current?: OzonListingDraft }).current;
+            if (conflict) {
+              candidate = rememberServerDraft(conflict);
+              if (applied(candidate)) return candidate;
+              if (attempt === 0) continue;
+            }
+            throw new Error(res.msg || '更新来源商品草稿身份失败');
+          }
+          return candidate;
+        };
+
+        let current = listingWorkflowServerRef.current;
+        const resumedFromServer = !current || current.supplyGoodsId !== target.itemId;
+        if (!current || current.supplyGoodsId !== target.itemId) {
+          const res = await api.post<OzonListingDraft>('/api/source-listing-workflows', {
+            supplyGoodsId: target.itemId,
+            shopId: target.shopId,
+            selectedSkuKeys: target.selectedSkuKeys,
+          });
+          if (res.code === 1 && res.data) {
+            current = rememberServerDraft(res.data);
+          } else {
+            const errorCode = String((res as typeof res & { errorCode?: string }).errorCode || '');
+            if (errorCode !== 'source_listing_workflow_disabled') {
+              throw new Error(res.msg || '恢复来源商品草稿失败');
+            }
+            return;
+          }
+        }
+
+        if (desiredListingWorkflowIdentityRef.current?.identityKey !== target.identityKey) return;
+        if (current.shopId !== target.shopId) {
+          current = await patchIdentity(
+            current,
+            { shopId: target.shopId },
+            (candidate) => candidate.shopId === target.shopId,
+          );
+        }
+        if (desiredListingWorkflowIdentityRef.current?.identityKey !== target.identityKey) return;
+        const requestedSkuSelectionChanged = !previousTarget
+          || previousTarget.itemId !== target.itemId
+          || previousTarget.skuIdentity !== target.skuIdentity;
+        if (!resumedFromServer && requestedSkuSelectionChanged && !sameRequestedSkuKeys(current)) {
+          current = await patchIdentity(
+            current,
+            { selectedSkuKeys: target.selectedSkuKeys },
+            sameRequestedSkuKeys,
+          );
+        }
+        if (desiredListingWorkflowIdentityRef.current?.identityKey === target.identityKey
+          && current.shopId === target.shopId) {
+          applyListingWorkflowDraft(current);
+        }
+      } catch (error) {
+        if (desiredListingWorkflowIdentityRef.current?.identityKey === target.identityKey
+          && listingWorkflowRequestIdRef.current === requestId) {
+          setListingWorkflowError(error instanceof Error ? error.message : '恢复来源商品草稿失败');
+        }
+      } finally {
+        if (desiredListingWorkflowIdentityRef.current?.identityKey === target.identityKey
+          && listingWorkflowRequestIdRef.current === requestId) {
+          setListingWorkflowLoading(false);
         }
       }
-      setShopsLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, []);
+    };
+    const queued = listingWorkflowIdentityQueueRef.current
+      .catch(() => undefined)
+      .then(syncIdentity);
+    listingWorkflowIdentityQueueRef.current = queued;
+    return () => {
+      listingWorkflowRequestIdRef.current += 1;
+    };
+  }, [applyListingWorkflowDraft, item.id, listingWorkflowSkuIdentity, shopId]);
+
+  useEffect(() => {
+    const requestId = ++publisherCapabilityRequestIdRef.current;
+    setPublisherCapability(null);
+    setPublisherCapabilityError('');
+    setHasV2PublishAttempt(false);
+    if (!shopId) {
+      setPublisherCapabilityLoading(false);
+      return;
+    }
+    setPublisherCapabilityLoading(true);
+    void (async () => {
+      try {
+        const capability = await sourceListingWorkflowClient.getPublisherCapability(shopId);
+        let attemptExists = false;
+        if (listingWorkflowId) {
+          const attempts = await sourceListingWorkflowClient.listPublishAttempts(listingWorkflowId, { limit: 1 });
+          attemptExists = attempts.items.length > 0;
+        }
+        if (publisherCapabilityRequestIdRef.current !== requestId) return;
+        setPublisherCapability(capability);
+        setHasV2PublishAttempt(attemptExists);
+      } catch (error) {
+        if (publisherCapabilityRequestIdRef.current !== requestId) return;
+        setPublisherCapabilityError(error instanceof Error ? error.message : '读取发布能力失败');
+      } finally {
+        if (publisherCapabilityRequestIdRef.current === requestId) setPublisherCapabilityLoading(false);
+      }
+    })();
+    return () => {
+      if (publisherCapabilityRequestIdRef.current === requestId) {
+        publisherCapabilityRequestIdRef.current += 1;
+      }
+    };
+  }, [listingWorkflowId, shopId]);
 
   useEffect(() => {
     const nextStandard = sourceStandardAttributeModel(item);
@@ -1712,60 +2073,143 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     setPublishError('');
   }, [item.id, item.metadata, item.variants]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refreshCategoryCandidates = useCallback(async (): Promise<boolean> => {
+    const requestId = ++candidateRequestIdRef.current;
+    const requestContextKey = `${item.id}:${shopId}`;
     setCategoryData(null);
     setCandidateError('');
     setConfirmMessage('');
     setSelectedCandidateKey('');
-    if (!shopId) return () => { cancelled = true; };
+    if (!shopId) {
+      setCandidateLoading(false);
+      return false;
+    }
     setCandidateLoading(true);
-    api.get<SourceOzonCategoryCandidateResponse>(`/api/collect/${item.id}/ozon-category-candidates?shopId=${encodeURIComponent(shopId)}`).then((res) => {
-      if (cancelled) return;
+    try {
+      const res = await api.get<SourceOzonCategoryCandidateResponse>(`/api/collect/${item.id}/ozon-category-candidates?shopId=${encodeURIComponent(shopId)}`);
+      if (candidateRequestIdRef.current !== requestId || categoryContextKeyRef.current !== requestContextKey) return false;
       if (res.code === 1 && res.data) {
         setCategoryData(res.data);
         const selected = res.data.candidates.find((candidate) => candidate.selected) || res.data.candidates[0];
         setSelectedCandidateKey(selected ? ozonCategoryCandidateKey(selected) : '');
+        return true;
       } else {
         setCandidateError(res.msg || '生成 Ozon 类目候选失败');
+        return false;
       }
-      setCandidateLoading(false);
-    });
-    return () => { cancelled = true; };
+    } catch (error) {
+      if (candidateRequestIdRef.current === requestId && categoryContextKeyRef.current === requestContextKey) {
+        setCandidateError(error instanceof Error ? error.message : '生成 Ozon 类目候选失败');
+      }
+      return false;
+    } finally {
+      if (candidateRequestIdRef.current === requestId && categoryContextKeyRef.current === requestContextKey) {
+        setCandidateLoading(false);
+      }
+    }
   }, [item.id, shopId]);
 
+  useEffect(() => {
+    void refreshCategoryCandidates();
+  }, [refreshCategoryCandidates]);
+
+  async function syncConfirmedCategoryToWorkflow(
+    candidate: SourceOzonCategoryCandidate,
+    catalogRevision: string,
+    workflowContext: ListingWorkflowContextSnapshot | null,
+  ): Promise<boolean> {
+    if (!workflowContext) return true;
+    if (!workflowContextIsCurrent(workflowContext)) return false;
+    const current = workflowContext.workflow;
+    if (current.category?.categoryId === candidate.categoryId
+      && current.category.typeId === candidate.typeId
+      && current.category.catalogRevision === catalogRevision) return true;
+    const res = await api.patch<OzonListingDraft>(`/api/source-listing-workflows/${encodeURIComponent(current.id)}`, {
+      expectedRevision: current.revision,
+      category: {
+        categoryId: candidate.categoryId,
+        typeId: candidate.typeId,
+        catalogRevision,
+      },
+    });
+    if (!workflowContextIsCurrent(workflowContext)) return false;
+    if (res.code === 1 && res.data) {
+      applyListingWorkflowDraft(res.data);
+      setListingWorkflowError('');
+      return true;
+    }
+    const conflict = (res as typeof res & { current?: OzonListingDraft }).current;
+    if (conflict) applyListingWorkflowDraft(conflict);
+    setListingWorkflowError(res.msg || '同步来源商品草稿类目失败');
+    return false;
+  }
+
   async function confirmSelectedCandidate() {
-    if (!selectedCandidate || confirming) return;
+    if (!selectedCandidate || !categoryData || confirming || publishing || listingWorkflowLoading) return;
+    const requestId = ++confirmationRequestIdRef.current;
+    const confirmationItemId = item.id;
+    const confirmationShopId = shopId;
+    const confirmationCandidate = selectedCandidate;
+    const confirmationCatalogRevision = categoryData.catalogRevision;
+    const workflowContext = captureListingWorkflowContext(confirmationItemId, confirmationShopId);
+    const requestContextKey = `${confirmationItemId}:${confirmationShopId}`;
     setConfirming(true);
     setCandidateError('');
     setConfirmMessage('');
-    const res = await api.post(`/api/collect/${item.id}/ozon-category-confirm`, {
-      signature: categoryData?.signature,
-      categoryId: selectedCandidate.categoryId,
-      typeId: selectedCandidate.typeId,
-      categoryName: selectedCandidate.categoryName,
-      typeName: selectedCandidate.typeName,
-    });
-    if (res.code === 1) {
-      const metadata = {
-        ...(item.metadata || {}),
-        descriptionCategoryId: selectedCandidate.categoryId,
-        typeId: selectedCandidate.typeId,
-        sourceOzonCategoryConfirmed: {
-          signature: categoryData?.signature || '',
-          categoryId: selectedCandidate.categoryId,
-          typeId: selectedCandidate.typeId,
-          categoryName: selectedCandidate.categoryName,
-          typeName: selectedCandidate.typeName,
-          confirmedAt: new Date().toISOString(),
-        },
-      };
-      onItemUpdate({ ...item, metadata });
-      setConfirmMessage('已确认，后续同类货源会优先推荐该 Ozon 类目');
-    } else {
-      setCandidateError(res.msg || '确认 Ozon 类目失败');
+    try {
+      const res = await api.post<SourceOzonCategoryConfirmationResponse>(`/api/collect/${confirmationItemId}/ozon-category-confirm`, {
+        shopId: confirmationShopId,
+        categoryId: confirmationCandidate.categoryId,
+        typeId: confirmationCandidate.typeId,
+        expectedCatalogRevision: confirmationCatalogRevision,
+        expectedTransitionVersion: confirmationCandidate.transitionVersion,
+      });
+      if (confirmationRequestIdRef.current !== requestId || categoryContextKeyRef.current !== requestContextKey) return;
+      if (res.code === 1 && res.data?.metadataPatch) {
+        const latestItem = latestItemRef.current;
+        if (latestItem.id !== confirmationItemId) return;
+        const metadata = { ...(latestItem.metadata || {}), ...res.data.metadataPatch };
+        onItemUpdate({ ...latestItem, metadata });
+        setCategoryData((current) => current?.catalogRevision === confirmationCatalogRevision ? {
+          ...current,
+          candidates: current.candidates.map((candidate) => (
+            ozonCategoryCandidateKey(candidate) === ozonCategoryCandidateKey(confirmationCandidate)
+              ? { ...candidate, transitionVersion: res.data!.transitionVersion }
+              : candidate
+          )),
+        } : current);
+        const workflowSynced = await syncConfirmedCategoryToWorkflow(
+          confirmationCandidate,
+          confirmationCatalogRevision,
+          workflowContext,
+        );
+        if (confirmationRequestIdRef.current !== requestId || categoryContextKeyRef.current !== requestContextKey) return;
+        setConfirmMessage(workflowSynced
+          ? '已确认，后续同类货源会优先推荐该 Ozon 类目'
+          : '类目已确认，服务端草稿同步失败');
+        return;
+      }
+
+      const errorCode = sourceOzonCategoryResponseErrorCode(res);
+      if (sourceOzonCategoryConflictRequiresRefresh(errorCode)) {
+        const conflictMessage = res.msg || 'Ozon 类目候选已发生变化';
+        const refreshed = await refreshCategoryCandidates();
+        if (confirmationRequestIdRef.current !== requestId || categoryContextKeyRef.current !== requestContextKey) return;
+        setCandidateError(refreshed
+          ? `${conflictMessage}，候选已自动刷新，请重新确认`
+          : `${conflictMessage}，自动刷新失败，请稍后重试`);
+      } else {
+        setCandidateError(res.msg || '确认 Ozon 类目失败');
+      }
+    } catch (error) {
+      if (confirmationRequestIdRef.current === requestId && categoryContextKeyRef.current === requestContextKey) {
+        setCandidateError(error instanceof Error ? error.message : '确认 Ozon 类目失败');
+      }
+    } finally {
+      if (confirmationRequestIdRef.current === requestId && categoryContextKeyRef.current === requestContextKey) {
+        setConfirming(false);
+      }
     }
-    setConfirming(false);
   }
 
   function setPackageField(key: keyof typeof packageForm, value: string) {
@@ -1882,12 +2326,15 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     }
   }
 
-  async function saveSourcePublishInputs(weightG: number, lengthMm: number, widthMm: number, heightMm: number) {
-    if (!selectedCandidate) throw new Error('请选择 Ozon 类目候选');
+  async function saveSourcePublishInputs(
+    publishItem: SourceCollectItem,
+    weightG: number,
+    lengthMm: number,
+    widthMm: number,
+    heightMm: number,
+  ) {
     const res = await api.post('/api/collect/save-customization', {
-      id: item.id,
-      categoryId: selectedCandidate.categoryId,
-      typeId: selectedCandidate.typeId,
+      id: publishItem.id,
       weightG,
       lengthMm,
       widthMm,
@@ -1895,19 +2342,17 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     });
     if (res.code !== 1) throw new Error(res.msg || '保存源商品发布参数失败');
     const metadata = {
-      ...(item.metadata || {}),
-      descriptionCategoryId: selectedCandidate.categoryId,
-      typeId: selectedCandidate.typeId,
+      ...(publishItem.metadata || {}),
       weightG,
       lengthMm,
       widthMm,
       heightMm,
     };
-    onItemUpdate({ ...item, metadata });
     return metadata;
   }
 
   function handleSourcePublishShopChange(nextShopId: string) {
+    if (confirming || publishing || listingWorkflowLoading) return;
     setShopId(nextShopId);
     const shop = shops.find((entry) => entry.id === nextShopId);
     try {
@@ -1920,7 +2365,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   }
 
   async function handleSourcePublish() {
-    if (publishing) return;
+    if (publishing || confirming || listingWorkflowLoading) return;
     setPublishMessage('');
     setPublishError('');
     setPackageError('');
@@ -1928,8 +2373,32 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       setPublishError('请选择目标 Ozon 店铺');
       return;
     }
+    if (publisherCapabilityLoading) {
+      setPublishError('正在确认当前店铺的发布能力，请稍后重试');
+      return;
+    }
+    if (!publisherCapability) {
+      setPublishError(publisherCapabilityError || '无法确认当前店铺的发布能力，旧入口已失败关闭');
+      return;
+    }
+    if (publisherCapability.enabled) {
+      setPublishError('当前店铺已进入 V2 pilot，请通过快照 handoff 工作台提交不可变发布任务');
+      return;
+    }
+    if (hasV2PublishAttempt) {
+      setPublishError('当前草稿已存在 V2 发布任务，不能回退旧发布入口');
+      return;
+    }
+    if (!publisherCapability.legacyAllowed) {
+      setPublishError(`旧发布入口未开放：${publisherCapability.reason}`);
+      return;
+    }
     if (!selectedCandidate) {
       setPublishError('请选择 Ozon 类目候选');
+      return;
+    }
+    if (!selectedCandidateConfirmed) {
+      setPublishError('当前 Ozon 类目候选尚未完成权威确认');
       return;
     }
     const weightG = packageNumber(packageForm.weightG);
@@ -1940,35 +2409,75 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       setPackageError('发布前需要完整填写重量、长、宽、高');
       return;
     }
+    const publishItem = item;
+    const publishShopId = shopId;
+    const publishCandidate = selectedCandidate;
+    const desiredIdentity = desiredListingWorkflowIdentityRef.current;
+    if (!desiredIdentity
+      || desiredIdentity.itemId !== publishItem.id
+      || desiredIdentity.shopId !== publishShopId
+      || desiredIdentity.skuIdentity !== listingWorkflowSkuIdentity) {
+      setPublishError('来源商品草稿身份尚未同步，请稍后重试');
+      return;
+    }
+    const publishWorkflowContext = captureListingWorkflowContext(publishItem.id, publishShopId);
+    const currentWorkflow = publishWorkflowContext?.workflow || null;
+    const publishContext: SourcePublishContextSnapshot = {
+      categoryContextKey: `${publishItem.id}:${publishShopId}`,
+      identityKey: desiredIdentity.identityKey,
+      workflowId: currentWorkflow?.id || null,
+    };
+    const publishMarkupPercentage = parseSourcePublishNumber(publishMarkupPct, 0);
+    const publishMarkupCny = parseSourcePublishNumber(publishMarkupAmount, 0);
+    const publishOfferId = buildStableSourceOfferId(publishItem);
+    const variantOfferIds = buildStableSourceVariantOfferIds(publishItem);
 
     setPublishing(true);
     try {
-      const savedMetadata = await saveSourcePublishInputs(weightG, lengthMm, widthMm, heightMm);
-      const variantOfferIds = buildStableSourceVariantOfferIds(item);
+      const freshCapability = await sourceListingWorkflowClient.getPublisherCapability(publishShopId);
+      setPublisherCapability(freshCapability);
+      if (freshCapability.enabled) {
+        throw new Error('当前店铺已进入 V2 pilot，禁止回退旧发布入口');
+      }
+      if (!freshCapability.legacyAllowed) {
+        throw new Error(`旧发布入口未开放：${freshCapability.reason}`);
+      }
+      if (currentWorkflow) {
+        const attempts = await sourceListingWorkflowClient.listPublishAttempts(currentWorkflow.id, { limit: 1 });
+        if (attempts.items.length) {
+          setHasV2PublishAttempt(true);
+          throw new Error('当前草稿已存在 V2 发布任务，禁止回退旧发布入口');
+        }
+      }
+      const savedMetadata = await saveSourcePublishInputs(publishItem, weightG, lengthMm, widthMm, heightMm);
+      if (!publishContextIsCurrent(publishContext)) throw new Error('发布上下文已变化，请重新提交');
+      onItemUpdate({ ...publishItem, metadata: savedMetadata });
+      if (!publishContextIsCurrent(publishContext)) throw new Error('发布上下文已变化，请重新提交');
       const res = await api.post('/api/collect/publish-ozon', {
-        ids: [item.id],
-        shopId,
-        categoryId: selectedCandidate.categoryId,
-        typeId: selectedCandidate.typeId,
+        ids: [publishItem.id],
+        shopId: publishShopId,
+        categoryId: publishCandidate.categoryId,
+        typeId: publishCandidate.typeId,
         weight: weightG,
         depth: lengthMm,
         width: widthMm,
         height: heightMm,
-        markupPct: parseSourcePublishNumber(publishMarkupPct, 0),
-        markupAmount: parseSourcePublishNumber(publishMarkupAmount, 0),
+        markupPct: publishMarkupPercentage,
+        markupAmount: publishMarkupCny,
         mode: 'clone',
         followBrand: false,
         randomOfferId: false,
         useItemCategory: true,
         source: 'source-publish-page',
-        offerIds: { [item.id]: stableOfferId },
-        ...(Object.keys(variantOfferIds).length ? { variantOfferIds: { [item.id]: variantOfferIds } } : {}),
+        offerIds: { [publishItem.id]: publishOfferId },
+        ...(Object.keys(variantOfferIds).length ? { variantOfferIds: { [publishItem.id]: variantOfferIds } } : {}),
       });
+      if (!publishContextIsCurrent(publishContext)) throw new Error('发布上下文已变化，请重新提交');
       if (res.code === 1) {
         const message = res.msg || '已提交源商品上架任务';
         setPublishMessage(message);
         toast({ title: message });
-        onItemUpdate({ ...item, metadata: savedMetadata, status: 'listed' });
+        onItemUpdate({ ...publishItem, metadata: savedMetadata, status: 'listed' });
       } else {
         throw new Error(res.msg || '源商品上架失败');
       }
@@ -1996,6 +2505,43 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               <KeyValue label="预计售价" value={sourcePublishPricePreview(item, publishMarkupPct, publishMarkupAmount)} />
             </div>
             <div className="flex flex-wrap gap-2">
+              {listingWorkflowLoading ? (
+                <Badge variant="outline"><Loader2 className="mr-1 h-3 w-3 animate-spin" />草稿同步中</Badge>
+              ) : null}
+              {listingWorkflow ? (
+                <>
+                  <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">
+                    草稿 v{listingWorkflow.draftVersion} / r{listingWorkflow.revision}
+                  </Badge>
+                  <Badge variant="outline">阶段 {listingWorkflowStageLabel(listingWorkflow.stage)}</Badge>
+                  <Badge variant="outline">状态 {listingWorkflowRunStateLabel(listingWorkflow.runState)}</Badge>
+                  <Badge
+                    variant="outline"
+                    className={listingWorkflow.validation.status === 'VALID'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'}
+                  >
+                    {listingWorkflowValidationLabel(listingWorkflow.validation.status)}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={listingWorkflow.blockers.length
+                      ? 'border-red-200 bg-red-50 text-red-700'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-700'}
+                    title={listingWorkflow.blockers.map((row) => row.message).join('\n')}
+                  >
+                    阻断 {listingWorkflow.blockers.length}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="border-amber-200 bg-amber-50 text-amber-700"
+                    title={listingWorkflow.warnings.map((row) => row.message).join('\n')}
+                  >
+                    警告 {listingWorkflow.warnings.length}
+                  </Badge>
+                  <Badge variant="outline">AI 候选 {listingWorkflow.copy.candidates.length}</Badge>
+                </>
+              ) : null}
               {sourceAssets.map((asset) => (
                 <Badge
                   key={asset.label}
@@ -2007,8 +2553,35 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
                 </Badge>
               ))}
             </div>
+            {publisherCapabilityLoading ? (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
+                正在确认店铺发布能力
+              </div>
+            ) : null}
+            {publisherCapability ? (
+              <div className={`rounded-md border px-3 py-2 text-sm ${publisherCapability.enabled
+                ? 'border-blue-200 bg-blue-50 text-blue-700'
+                : legacyPublisherAllowed
+                  ? 'border-amber-200 bg-amber-50 text-amber-700'
+                  : 'border-red-200 bg-red-50 text-red-700'}`}>
+                {publisherCapability.enabled
+                  ? `V2 pilot 已开放，请从精确采集快照进入不可变发布工作台。${publisherCapability.reason}`
+                  : hasV2PublishAttempt
+                    ? '此草稿已有 V2 发布任务，旧入口已锁定。'
+                    : publisherCapability.legacyAllowed
+                      ? `Unit 6C 前兼容旧发布入口。${publisherCapability.reason}`
+                      : `发布入口未开放。${publisherCapability.reason}`}
+              </div>
+            ) : null}
+            {publisherCapabilityError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {publisherCapabilityError}；为避免错误回退，旧入口已禁用。
+              </div>
+            ) : null}
             {publishMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{publishMessage}</div> : null}
             {publishError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{publishError}</div> : null}
+            {listingWorkflowError ? <div className="text-sm text-destructive">{listingWorkflowError}</div> : null}
           </div>
           <div className="space-y-3 rounded-md border bg-muted/20 p-3">
             <label className="space-y-1 text-xs">
@@ -2024,10 +2597,22 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               size="sm"
               className="w-full"
               onClick={handleSourcePublish}
-              disabled={publishing || !shopId || !selectedCandidate}
+              disabled={publishing
+                || confirming
+                || listingWorkflowLoading
+                || publisherCapabilityLoading
+                || !legacyPublisherAllowed
+                || !shopId
+                || !selectedCandidateConfirmed}
             >
               {publishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-              确认发布到Ozon
+              {publisherCapability?.enabled
+                ? '请使用 V2 发布工作台'
+                : hasV2PublishAttempt
+                  ? '已锁定 V2 发布'
+                  : legacyPublisherAllowed
+                    ? '兼容旧版发布到 Ozon'
+                    : '发布未开放'}
             </Button>
           </div>
         </div>
@@ -2146,7 +2731,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               <select
                 value={shopId}
                 onChange={(event) => handleSourcePublishShopChange(event.target.value)}
-                disabled={shopsLoading || candidateLoading}
+                disabled={shopsLoading || candidateLoading || confirming || publishing || listingWorkflowLoading}
                 className="h-8 min-w-0 rounded-md border bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 {shops.length === 0 ? <option value="">请先添加 OZON 店铺</option> : null}
@@ -2154,7 +2739,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               </select>
             </div>
             {selectedCandidate ? (
-              <Button type="button" size="sm" onClick={confirmSelectedCandidate} disabled={confirming || candidateLoading}>
+              <Button type="button" size="sm" onClick={confirmSelectedCandidate} disabled={confirming || candidateLoading || publishing || listingWorkflowLoading}>
                 {confirming ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                 确认类目
               </Button>
@@ -2175,7 +2760,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
               <Badge variant="outline" className={selectedCandidateConfirmed ? 'border-emerald-200 bg-white text-emerald-700' : 'border-amber-200 bg-white text-amber-700'}>
                 {selectedCandidateConfirmed ? '已确认类目' : '候选待确认'}
               </Badge>
-              <span>{selectedCandidateConfirmed ? '已写入上架参数。' : '点击确认类目后解除 Ozon 类目/type 阻断；发布时也会保存当前候选。'}</span>
+              <span>{selectedCandidateConfirmed ? '已持久化当前目录版本与决策版本。' : '当前候选尚未完成权威确认，发布已阻断。'}</span>
             </div>
           ) : null}
 
@@ -2195,7 +2780,8 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
                     key={candidateKey}
                     type="button"
                     onClick={() => setSelectedCandidateKey(candidateKey)}
-                    className={`w-full rounded-md border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-ring ${isSelected ? 'border-primary bg-primary/5' : 'bg-background hover:bg-muted/40'}`}
+                    disabled={confirming || publishing || listingWorkflowLoading}
+                    className={`w-full rounded-md border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60 ${isSelected ? 'border-primary bg-primary/5' : 'bg-background hover:bg-muted/40'}`}
                   >
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
@@ -2395,7 +2981,26 @@ function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }
   return <SourceImageGrid images={urls} empty={empty} limit={8} />;
 }
 
-export default function SourceCollectPage() {
+function SourceCollectPageContent() {
+  const searchParams = useSearchParams();
+  const handoffQuery = searchParams.toString();
+  const handoffState = useMemo<{ handoff: SourceListingHandoff | null; error: string }>(() => {
+    const query = new URLSearchParams(handoffQuery);
+    if (!SOURCE_LISTING_HANDOFF_KEYS.some((key) => query.has(key))) {
+      return { handoff: null, error: '' };
+    }
+    try {
+      return {
+        handoff: { ...parseSourceListingHandoff(query), section: 'listing' },
+        error: '',
+      };
+    } catch (error) {
+      return {
+        handoff: null,
+        error: error instanceof Error ? error.message : '来源商品工作台链接无效',
+      };
+    }
+  }, [handoffQuery]);
   const systemDialog = useSystemDialog();
   const [items, setItems] = useState<SourceCollectItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2462,6 +3067,12 @@ export default function SourceCollectPage() {
 
   return (
     <div className="space-y-4">
+      {handoffState.error ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+          无法打开来源商品上架工作台：{handoffState.error}
+        </div>
+      ) : null}
+      {handoffState.handoff ? <SourceListingWorkbench handoff={handoffState.handoff} /> : null}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">1688商品采集</h1>
@@ -2536,6 +3147,9 @@ export default function SourceCollectPage() {
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>采集详情</DialogTitle>
+            <DialogDescription className="sr-only">
+              查看来源商品证据、SKU、素材、翻译和 Ozon 上架草稿状态。
+            </DialogDescription>
           </DialogHeader>
           {detailItem ? (
             <SourceDetailContent
@@ -2548,5 +3162,13 @@ export default function SourceCollectPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+export default function SourceCollectPage() {
+  return (
+    <Suspense fallback={<div className="rounded-md border px-3 py-10 text-center text-muted-foreground">正在读取来源商品工作台</div>}>
+      <SourceCollectPageContent />
+    </Suspense>
   );
 }

@@ -73,6 +73,7 @@ describe('extension device session service', () => {
       ownerUserId: 'owner-1',
       actorParentId: null,
       shopIds: ['shop-1'],
+      scopes: ['listing:review', 'listing:publish', 'listing:review'],
       deviceLabel: 'Chrome Xiamen',
     });
 
@@ -84,9 +85,38 @@ describe('extension device session service', () => {
       actorUserId: 'owner-1',
       ownerUserId: 'owner-1',
       shopIds: ['shop-1'],
-      scopes: ['logistics:discover', 'logistics:read', 'logistics:receipt', 'logistics:capture'],
+      scopes: ['listing:review', 'listing:publish'],
     }));
+    expect(result).toMatchObject({ scopes: ['listing:review', 'listing:publish'] });
     expect(JSON.stringify(repo.createPairingCode.mock.calls[0]?.[0])).not.toContain(result.code);
+  });
+
+  it('never grants publish by default and rejects unknown device scopes', async () => {
+    const module = await import('../services/extension-device-session.js');
+    const auth = await import('../lib/extension-device-auth.js');
+    const repo = repository();
+    const service = module.createExtensionDeviceSessionService({
+      repository: repo,
+      authConfig: auth.resolveExtensionDeviceAuthConfig(authEnvironment()),
+      now: () => NOW,
+    });
+
+    const created = await service.createPairingCode({
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      actorParentId: null,
+      shopIds: ['shop-1'],
+    });
+    expect(created.scopes).not.toContain('listing:publish');
+    expect(repo.createPairingCode.mock.calls.at(-1)?.[0].scopes).not.toContain('listing:publish');
+
+    await expect(service.createPairingCode({
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      actorParentId: null,
+      shopIds: ['shop-1'],
+      scopes: ['listing:publish', 'root:shell'],
+    })).rejects.toMatchObject({ code: 'invalid_device_scope', statusCode: 400 });
   });
 
   it('denies staff self-grants and enforces the outstanding pairing cap', async () => {
@@ -103,6 +133,15 @@ describe('extension device session service', () => {
       actorUserId: 'staff-1',
       ownerUserId: 'owner-1',
       actorParentId: 'owner-1',
+      shopIds: ['shop-1'],
+      actorRole: 'STAFF',
+    })).rejects.toMatchObject({ code: 'pairing_owner_required', statusCode: 403 });
+
+    await expect(service.createPairingCode({
+      actorUserId: 'owner-1',
+      ownerUserId: 'owner-1',
+      actorParentId: null,
+      actorRole: 'STAFF',
       shopIds: ['shop-1'],
     })).rejects.toMatchObject({ code: 'pairing_owner_required', statusCode: 403 });
 

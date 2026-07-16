@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000003.html",
+  "observedAt": "2026-07-14T10:10:00.000Z",
+  "document": {
+    "queries": {
+      ".next-table-body": [{ "text": "next table body" }],
+      ".selector-table": [
+        {
+          "queries": {
+            ".next-table-header-node": [
+              { "text": "颜色", "queries": { ".next-table-cell-wrapper": [{ "attrs": { "data-next-table-col": "0" } }] } },
+              { "text": "尺码", "queries": { ".next-table-cell-wrapper": [{ "attrs": { "data-next-table-col": "1" } }] } },
+              { "text": "价格", "queries": { ".next-table-cell-wrapper": [{ "attrs": { "data-next-table-col": "2" } }] } },
+              { "text": "库存", "queries": { ".next-table-cell-wrapper": [{ "attrs": { "data-next-table-col": "3" } }] } },
+              { "text": "订购数量", "queries": { ".next-table-cell-wrapper": [{ "attrs": { "data-next-table-col": "4" } }] } }
+            ],
+            ".next-table-body td.next-table-cell": [
+              { "attrs": { "data-next-table-row": "7", "data-next-table-col": "3" }, "text": "0" },
+              { "attrs": { "data-next-table-row": "3", "data-next-table-col": "2" }, "text": "13.50" },
+              { "attrs": { "data-next-table-row": "7", "data-next-table-col": "0" }, "text": "红色", "queries": { ".single-sku-img-pop": [{ "style": { "backgroundImage": "url(https://cbu01.alicdn.com/img/ibank/next-red.jpg)" } }], ".normal-text": [{ "text": "红色", "attrs": { "title": "红色" } }] } },
+              { "attrs": { "data-next-table-row": "3", "data-next-table-col": "1" }, "text": "L" },
+              { "attrs": { "data-next-table-row": "7", "data-next-table-col": "2" }, "text": "12.80" },
+              { "attrs": { "data-next-table-row": "3", "data-next-table-col": "0" }, "text": "蓝色", "queries": { ".normal-text": [{ "text": "蓝色", "attrs": { "title": "蓝色" } }] } },
+              { "attrs": { "data-next-table-row": "7", "data-next-table-col": "1" }, "text": "M" },
+              { "attrs": { "data-next-table-row": "3", "data-next-table-col": "3" }, "text": "未知" },
+              { "attrs": { "data-next-table-row": "3", "data-next-table-col": "4" }, "text": "0" }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

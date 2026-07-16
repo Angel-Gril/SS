@@ -45,6 +45,8 @@ export interface ExtensionDeviceLiveAuthorization {
   scopes: string[];
   ownerStatus: string;
   actorStatus: string;
+  ownerRole: string;
+  actorRole: string;
   actorParentId: string | null;
   shopGrants: Array<{ shopId: string; status: string }>;
 }
@@ -98,6 +100,14 @@ export function isLogisticsDistributionEnabled(env: Environment = process.env): 
   return strictBooleanFlag(env, 'LOGISTICS_DISTRIBUTION_ENABLED', false);
 }
 
+export function isExtensionDeviceAuthEnabled(env: Environment = process.env): boolean {
+  const configured = envText(env, 'EXTENSION_DEVICE_AUTH_ENABLED');
+  const explicitlyEnabled = configured
+    ? strictBooleanFlag(env, 'EXTENSION_DEVICE_AUTH_ENABLED', false)
+    : false;
+  return explicitlyEnabled || isLogisticsDistributionEnabled(env);
+}
+
 export function resolveExtensionDeviceAuthConfig(
   env: Environment = process.env,
 ): ExtensionDeviceAuthConfig {
@@ -144,21 +154,22 @@ function validateResolvedDeviceAuthConfig(env: Environment): void {
 
 export function validateExtensionDeviceAuthEnvironment(env: Environment = process.env): void {
   const mode = resolveExtensionAuthMode(env);
-  const distributionEnabled = isLogisticsDistributionEnabled(env);
+  isLogisticsDistributionEnabled(env);
+  const deviceAuthEnabled = isExtensionDeviceAuthEnabled(env);
   const acceptsLegacy = strictBooleanFlag(env, 'AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS', true);
 
   if (mode === 'device-only') {
     if (acceptsLegacy) {
       throw new Error('AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS must be false in device-only mode');
     }
-    if (!distributionEnabled) {
-      throw new Error('LOGISTICS_DISTRIBUTION_ENABLED must be true in device-only mode');
+    if (!deviceAuthEnabled) {
+      throw new Error('EXTENSION_DEVICE_AUTH_ENABLED must be true in device-only mode');
     }
     validateResolvedDeviceAuthConfig(env);
     return;
   }
 
-  if (envText(env, 'NODE_ENV') === 'production' && distributionEnabled) {
+  if (envText(env, 'NODE_ENV') === 'production' && deviceAuthEnabled) {
     validateResolvedDeviceAuthConfig(env);
   }
 }
@@ -355,6 +366,8 @@ export function authenticateExtensionDevice(options: {
     const accountsAreActive = sessionIsActive
       && authorization.ownerStatus === 'ACTIVE'
       && authorization.actorStatus === 'ACTIVE'
+      && ['USER', 'ADMIN'].includes(authorization.ownerRole)
+      && ['USER', 'ADMIN'].includes(authorization.actorRole)
       && authorization.actorParentId === null
       && authorization.actorUserId === authorization.ownerUserId;
 

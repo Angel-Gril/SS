@@ -32,6 +32,8 @@
     initializedInputs: false,
     loaded: false,
     opened: false,
+    sourceWorkflowHandoff: null,
+    openingSourceWorkflow: false,
     refreshTimer: null,
     lastCostSignature: '',
     lastProductSignature: ''
@@ -97,6 +99,7 @@
       '  <div class="ss-erp-source-actions">',
       '    <button type="button" class="primary" data-action="run-costing">重新计算</button>',
       '    <button type="button" class="secondary" data-action="collect-erp" title="采集当前货源商品到 ERP">采集货源到ERP</button>',
+      '    <button type="button" class="secondary" data-action="open-source-workflow" title="打开已保存的 ERP 来源商品" hidden>打开 ERP 继续</button>',
       '  </div>',
       '  <div class="ss-erp-source-status" data-role="status"></div>',
       '</div>'
@@ -123,6 +126,7 @@
     });
     panel.querySelector('[data-action="run-costing"]').addEventListener('click', runCosting);
     panel.querySelector('[data-action="collect-erp"]').addEventListener('click', collectToErp);
+    panel.querySelector('[data-action="open-source-workflow"]').addEventListener('click', openSourceWorkflow);
   }
 
   function openPanel(panel) {
@@ -271,6 +275,7 @@
         var nextProduct = response.data || null;
         var nextSignature = buildProductSignature(nextProduct);
         var changed = Boolean(nextSignature && nextSignature !== state.lastProductSignature);
+        if (changed) state.sourceWorkflowHandoff = null;
         state.product = response.data || null;
         if (nextSignature) state.lastProductSignature = nextSignature;
         hydrateInputs();
@@ -306,6 +311,7 @@
     var costNode = panel.querySelector('[data-role="cost"]');
     var runButton = panel.querySelector('[data-action="run-costing"]');
     var collectButton = panel.querySelector('[data-action="collect-erp"]');
+    var openWorkflowButton = panel.querySelector('[data-action="open-source-workflow"]');
 
     var cost = Number(product.totalCostCny || product.priceCny || product.price) || 0;
     if (titleNode) {
@@ -341,6 +347,10 @@
       collectButton.disabled = !product.title || state.busy;
       collectButton.title = '采集当前 ' + platformLabel() + ' 货源商品到 ERP';
     }
+    if (openWorkflowButton) {
+      openWorkflowButton.hidden = !state.sourceWorkflowHandoff;
+      openWorkflowButton.disabled = !state.sourceWorkflowHandoff || state.openingSourceWorkflow;
+    }
   }
 
   function renderLoadingContent(panel) {
@@ -352,6 +362,7 @@
     var costNode = panel.querySelector('[data-role="cost"]');
     var runButton = panel.querySelector('[data-action="run-costing"]');
     var collectButton = panel.querySelector('[data-action="collect-erp"]');
+    var openWorkflowButton = panel.querySelector('[data-action="open-source-workflow"]');
 
     if (ozonCard) {
       ozonCard.innerHTML = '<div class="ss-erp-source-loading"><b>读取 Ozon 关联</b><span>如果从 Ozon 商品页进入核价，这里会显示关联 SKU 和售价。</span></div>';
@@ -368,6 +379,7 @@
     if (costNode) costNode.textContent = '--';
     if (runButton) runButton.disabled = true;
     if (collectButton) collectButton.disabled = true;
+    if (openWorkflowButton) openWorkflowButton.hidden = true;
   }
 
   function hydrateInputs() {
@@ -560,6 +572,7 @@
       return;
     }
     state.busy = true;
+    state.sourceWorkflowHandoff = null;
     renderContent();
     setStatus('采集当前 ' + platformLabel() + ' 货源到 ERP...', '');
     try {
@@ -568,11 +581,32 @@
         payload: { product: state.product }
       });
       if (!response || !response.ok) throw new Error(response && response.error || '写入失败');
+      state.sourceWorkflowHandoff = response.handoff || null;
       setStatus('已采集当前 ' + platformLabel() + ' 货源到 ERP。', 'ok');
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error), 'fail');
     } finally {
       state.busy = false;
+      renderContent();
+    }
+  }
+
+  async function openSourceWorkflow() {
+    if (!state.sourceWorkflowHandoff || state.openingSourceWorkflow) return;
+    state.openingSourceWorkflow = true;
+    renderContent();
+    setStatus('正在打开 ERP 来源商品...', '');
+    try {
+      var response = await sendRuntimeMessage({
+        type: 'ss-erp:open-source-workflow-handoff',
+        snapshotId: state.sourceWorkflowHandoff.snapshotId
+      });
+      if (!response || !response.ok) throw new Error(response && response.error || '打开 ERP 失败');
+      setStatus('已打开 ERP，可继续处理上架信息。', 'ok');
+    } catch (error) {
+      setStatus(error && error.message ? error.message : String(error), 'fail');
+    } finally {
+      state.openingSourceWorkflow = false;
       renderContent();
     }
   }

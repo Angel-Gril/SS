@@ -4,6 +4,8 @@ import fs from 'node:fs';
 const sidebar = fs.readFileSync('apps/web/src/components/layout/sidebar.tsx', 'utf8');
 const pagePath = 'apps/web/src/app/(dashboard)/collect/source/page.tsx';
 const page = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, 'utf8') : '';
+const attributeEditorPath = 'apps/web/src/components/source-listing/ozon-attribute-editor.tsx';
+const attributeEditor = fs.existsSync(attributeEditorPath) ? fs.readFileSync(attributeEditorPath, 'utf8') : '';
 
 assert.match(
   sidebar,
@@ -67,6 +69,201 @@ assert.match(
 for (const field of ['translationStatus', 'untranslatedTerms']) {
   assert.match(page, new RegExp(field), `Ozon category candidates should expose ${field} from the catalog audit`);
 }
+for (const field of ['catalogRevision', 'sourceSnapshotId', 'sourceProfileHash', 'historyMode', 'transitionVersion']) {
+  assert.match(page, new RegExp(field), `Ozon category candidates should expose authoritative V2 contract field: ${field}`);
+}
+const sourceCategoryConfirmation = page.match(/async function confirmSelectedCandidate\(\)[\s\S]*?\n  function setPackageField/)?.[0] || '';
+for (const field of ['shopId', 'categoryId', 'typeId', 'expectedCatalogRevision', 'expectedTransitionVersion']) {
+  assert.match(sourceCategoryConfirmation, new RegExp(`\\b${field}\\s*(?:,|:)`), `source category confirmation should submit authoritative field: ${field}`);
+}
+for (const forgedField of ['signature:', 'categoryName:', 'typeName:']) {
+  assert.doesNotMatch(
+    sourceCategoryConfirmation,
+    new RegExp(forgedField),
+    `source category confirmation should not submit client-owned ${forgedField.slice(0, -1)}`,
+  );
+}
+assert.match(
+  sourceCategoryConfirmation,
+  /metadataPatch/,
+  'source category confirmation should project the server-owned metadata patch instead of rebuilding metadata locally',
+);
+assert.match(
+  page,
+  /SOURCE_OZON_CATEGORY_MAPPING_VERSION_CONFLICT|ozon_category_catalog_stale/,
+  'source category confirmation should recognize mapping CAS and catalog revision conflicts',
+);
+assert.match(
+  sourceCategoryConfirmation,
+  /sourceOzonCategoryConflictRequiresRefresh/,
+  'source category confirmation should route authoritative conflicts through the refresh classifier',
+);
+assert.match(
+  sourceCategoryConfirmation,
+  /refreshCategoryCandidates/,
+  'source category confirmation should refresh candidates after an authoritative conflict',
+);
+assert.match(
+  sourceCategoryConfirmation,
+  /finally\s*\{/,
+  'source category confirmation should always release its busy state in finally',
+);
+for (const guard of ['candidateRequestIdRef', 'confirmationRequestIdRef', 'categoryContextKeyRef']) {
+  assert.match(page, new RegExp(guard), `source category requests should use stale-response guard: ${guard}`);
+}
+for (const token of [
+  '/api/source-listing-workflows',
+  'listingWorkflowRequestIdRef',
+  'selectedSkuKeys: target.selectedSkuKeys',
+  'expectedRevision: candidate.revision',
+  'syncConfirmedCategoryToWorkflow',
+]) {
+  assert.match(
+    page,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `source listing workbench should resume and CAS-update the durable server draft via ${token}`,
+  );
+}
+const workflowCreate = page.match(/api\.post<OzonListingDraft>\(['"]\/api\/source-listing-workflows['"][\s\S]*?\n\s*\}\);/)?.[0] || '';
+assert.match(workflowCreate, /supplyGoodsId:\s*target\.itemId[\s\S]*shopId:\s*target\.shopId[\s\S]*selectedSkuKeys:\s*target\.selectedSkuKeys/, 'workflow creation should submit only frozen server-resolvable identity hints');
+assert.doesNotMatch(workflowCreate, /sourceCaptureHash|ownerUserId/, 'workflow creation must not submit client-owned capture hash or owner identity');
+assert.match(page, /草稿 v\{listingWorkflow\.draftVersion\} \/ r\{listingWorkflow\.revision\}/, 'source listing workbench should expose the resumed draft version and CAS revision');
+for (const token of [
+  'listingWorkflowStageLabel(listingWorkflow.stage)',
+  'listingWorkflowRunStateLabel(listingWorkflow.runState)',
+  'listingWorkflowValidationLabel(listingWorkflow.validation.status)',
+  'listingWorkflow.blockers.length',
+  'listingWorkflow.warnings.length',
+  'listingWorkflow.copy.candidates.length',
+]) {
+  assert.match(
+    page,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `source listing workbench should show compact server workflow state via ${token}`,
+  );
+}
+const workflowIdentitySync = page.match(/const syncIdentity = async[\s\S]*?\n    const queued = listingWorkflowIdentityQueueRef\.current/i)?.[0] || '';
+for (const token of ['api.patch<OzonListingDraft>', '{ shopId: target.shopId }', '{ selectedSkuKeys: target.selectedSkuKeys }', 'expectedRevision: candidate.revision']) {
+  assert.match(
+    workflowIdentitySync,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `existing source listing workflow should append identity changes through PATCH via ${token}`,
+  );
+}
+assert.match(
+  workflowIdentitySync,
+  /const resumedFromServer = !current[\s\S]*?if \(!resumedFromServer && requestedSkuSelectionChanged/,
+  'the source listing workbench should adopt a create/resume canonical SKU response without alias-driven re-patching',
+);
+assert.doesNotMatch(
+  workflowIdentitySync,
+  /current\.shopId === target\.shopId\s*&&\s*sameRequestedSkuKeys\(current\)/,
+  'the source listing workbench should not discard an authoritative canonical selection because the UI supplied an alias',
+);
+for (const token of [
+  'listingWorkflowIdentityQueueRef.current',
+  '.then(syncIdentity)',
+  'listingWorkflowIdentityQueueRef.current = queued',
+  'desiredListingWorkflowIdentityRef',
+  'rememberServerDraft(res.data)',
+  'rememberServerDraft(conflict)',
+]) {
+  assert.match(
+    page,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `source listing workflow identity changes should serialize against the latest server draft via ${token}`,
+  );
+}
+const selectedCandidateConfirmationGuard = page.match(/const persistedCategoryConfirmation[\s\S]*?const stableOfferId/)?.[0] || '';
+for (const token of [
+  'sourceOzonCategoryConfirmed',
+  'persistedCategoryConfirmation.version',
+  'source-ozon-category-confirmed/v2',
+  'source-ozon-category-confirmed/legacy-v1',
+  'persistedCategoryConfirmation.categoryId',
+  'persistedCategoryConfirmation.typeId',
+  'persistedCategoryConfirmation.catalogRevision',
+  'persistedCategoryConfirmation.transitionVersion',
+  'categoryData.catalogRevision',
+  'selectedCandidate.transitionVersion',
+]) {
+  assert.match(
+    selectedCandidateConfirmationGuard,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `publish eligibility should require the persisted category confirmation contract via ${token}`,
+  );
+}
+const saveSourcePublishInputs = page.match(/async function saveSourcePublishInputs[\s\S]*?\n  function handleSourcePublishShopChange/)?.[0] || '';
+assert.doesNotMatch(
+  saveSourcePublishInputs,
+  /\bcategoryId\s*:|\btypeId\s*:/,
+  'generic publish-input persistence must not overwrite category/type outside the confirmation endpoint',
+);
+const legacySourcePublish = page.match(/async function handleSourcePublish\(\)[\s\S]*?\n  return \(/)?.[0] || '';
+assert.doesNotMatch(
+  legacySourcePublish,
+  /publish-intent/,
+  'legacy source publish must not create a future authoritative publish intent',
+);
+assert.doesNotMatch(legacySourcePublish, /\/manual-facts|\/pricing/, 'legacy publish must not mutate strict V2 readiness state');
+assert.match(legacySourcePublish, /\/api\/collect\/publish-ozon/, 'legacy-compatible shops should retain the explicit legacy publisher');
+for (const token of ['if (!selectedCandidateConfirmed)', 'const publishItem = item', 'const publishShopId = shopId', 'captureListingWorkflowContext', 'publishContextIsCurrent']) {
+  assert.match(
+    legacySourcePublish,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `legacy source publish should freeze and verify its authoritative context via ${token}`,
+  );
+}
+const publishAfterFirstAwait = legacySourcePublish.slice(legacySourcePublish.indexOf('await '));
+assert.doesNotMatch(
+  publishAfterFirstAwait,
+  /listingWorkflowRef\.current/,
+  'publish must not fetch a mutable workflow draft after asynchronous work has started',
+);
+assert.match(
+  page,
+  /disabled=\{publishing[\s\S]{0,400}!legacyPublisherAllowed[\s\S]{0,300}!selectedCandidateConfirmed\}/,
+  'legacy publish should remain disabled until capability, attempt history, and category confirmation are current',
+);
+for (const token of ['getPublisherCapability', 'listPublishAttempts', 'hasV2PublishAttempt', 'legacyPublisherAllowed']) {
+  assert.match(legacySourcePublish + page, new RegExp(token), `legacy publish should fail closed through ${token}`);
+}
+assert.match(
+  sourceCategoryConfirmation,
+  /latestItemRef\.current[\s\S]*metadataPatch/,
+  'source category confirmation should merge the server patch into the latest same-item metadata',
+);
+const sourceCategoryRefresh = page.match(/const refreshCategoryCandidates[\s\S]*?\n  useEffect\(\(\) => \{\n    void refreshCategoryCandidates/)?.[0] || '';
+assert.match(
+  sourceCategoryRefresh,
+  /candidateRequestIdRef\.current !== requestId[\s\S]*categoryContextKeyRef\.current !== requestContextKey/,
+  'source category candidate refresh should reject responses from an older item or shop context',
+);
+assert.match(
+  sourceCategoryRefresh,
+  /finally\s*\{/,
+  'source category candidate refresh should always release its busy state in finally',
+);
+const categoryWorkflowSync = page.match(/async function syncConfirmedCategoryToWorkflow[\s\S]*?\n  async function confirmSelectedCandidate/)?.[0] || '';
+assert.match(
+  sourceCategoryConfirmation,
+  /captureListingWorkflowContext/,
+  'category confirmation should capture the item/shop/workflow context before awaiting the server',
+);
+assert.ok(
+  (categoryWorkflowSync.match(/workflowContextIsCurrent/g) || []).length >= 2,
+  'category-to-workflow synchronization should verify its captured context before the request and before applying the response',
+);
+assert.match(
+  page,
+  /disabled=\{shopsLoading \|\| candidateLoading \|\| confirming \|\| publishing \|\| listingWorkflowLoading\}/,
+  'shop identity changes should be disabled during confirmation, publication, and workflow identity synchronization',
+);
+assert.match(
+  page,
+  /disabled=\{confirming \|\| publishing \|\| listingWorkflowLoading\}/,
+  'category candidate changes should be disabled during confirmation, publication, and workflow identity synchronization',
+);
 for (const label of ['部分翻译', '翻译缺失']) {
   assert.match(page, new RegExp(label), `Ozon category candidate cards should show translation audit badge: ${label}`);
 }
@@ -226,7 +423,7 @@ assert.doesNotMatch(
   /去Ozon上架台/,
   'source collection page should not label the old mixed publish handoff as the source publish entry',
 );
-for (const label of ['上架到OZON', '源商品上架', '确认发布到Ozon', '稳定货号']) {
+for (const label of ['上架到OZON', '源商品上架', '兼容旧版发布到 Ozon', '稳定货号']) {
   assert.match(page, new RegExp(label), `source collection page should expose in-page source publish control: ${label}`);
 }
 for (const token of ['SOURCE_PUBLISH_SHOP_STORAGE_KEY', 'localStorage.getItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY)', 'localStorage.setItem(SOURCE_PUBLISH_SHOP_STORAGE_KEY']) {
@@ -243,7 +440,7 @@ for (const label of ['发布字段诊断', '自动填充', '需要确认', '阻�
 for (const helper of ['evaluateSourceListingFieldDiagnostics', 'SourcePublishFieldDiagnostics']) {
   assert.match(page, new RegExp(helper), `source publish confirmation should use ${helper}`);
 }
-for (const label of ['候选待确认', '点击确认类目后解除 Ozon 类目/type 阻断']) {
+for (const label of ['候选待确认', '当前候选尚未完成权威确认，发布已阻断']) {
   assert.match(page, new RegExp(label), `source Ozon category candidate panel should clarify confirmation state: ${label}`);
 }
 for (const token of [
@@ -259,9 +456,236 @@ for (const token of [
 }
 assert.match(
   page,
-  /categoryId:\s*selectedCandidate\.categoryId[\s\S]*typeId:\s*selectedCandidate\.typeId/,
+  /categoryId:\s*publishCandidate\.categoryId[\s\S]*typeId:\s*publishCandidate\.typeId/,
   'source publish should submit the selected source Ozon category candidate instead of a title-search category',
 );
+
+assert.match(
+  page,
+  /<OzonAttributeEditor[\s\S]*itemId=\{item\.id\}[\s\S]*selectedSkuKeys=/,
+  'source attribute detail should mount the durable Ozon full-field editor for the current item and SKU identity',
+);
+assert.match(
+  page,
+  /function sourceWorkflowVariantKey[\s\S]*variant\.key \|\| sourceVariantKey/,
+  'listing workflow identity should prefer the canonical Capture V2 SKU key over the supplier SKU alias',
+);
+assert.match(
+  page,
+  /displayVariants\.map\(\(variant, index\) => sourceWorkflowVariantKey\(variant, index\)\)/,
+  'listing workflow synchronization should use canonical Capture V2 SKU keys',
+);
+for (const endpoint of [
+  '/attributes`',
+  '/attributes/${field.attributeId}/dictionary?',
+  '/attributes/suggestions/apply',
+  '/validate',
+]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(endpoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `Ozon attribute editor should call durable workflow endpoint ${endpoint}`,
+  );
+}
+const applyAttributeSuggestion = attributeEditor.match(/async function applyAttributeSuggestion[\s\S]*?\n  async function validateOnServer/)?.[0] || '';
+for (const token of [
+  'expectedRevision: context.revision',
+  'candidateId: suggestion.candidateId',
+  'candidateHash: suggestion.candidateHash',
+  'schemaRevision: suggestion.schemaRevision',
+  'candidates: [candidate]',
+  'suggestion.draftRevision !== context.revision',
+  'applyListingWorkflowDraft',
+  'refreshAttributeWorkspace',
+]) {
+  assert.match(
+    applyAttributeSuggestion,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `attribute suggestions should persist only through explicit apply using ${token}`,
+  );
+}
+assert.doesNotMatch(
+  attributeEditor,
+  /useEffect\([\s\S]{0,500}attributes\/suggestions\/apply/,
+  'attribute suggestions must never auto-apply from an effect',
+);
+for (const token of [
+  'authoritativeValidationFromDraft',
+  'setAuthoritativeValidation(authoritativeValidationFromDraft(draft))',
+  'authoritativeValidation || workspace?.validationPreview',
+  "authoritativeValidation ? '服务器终检' : '缓存预检'",
+]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `authoritative validation must survive a cached workspace refresh via ${token}`,
+  );
+}
+const dictionarySearch = attributeEditor.match(/async function searchAttributeDictionary[\s\S]*?\n  async function saveAttribute/)?.[0] || '';
+for (const token of ['query=', 'limit=50', 'dictionaryRequestIdsRef', 'attributeScopeKey', 'attributeContextIsCurrent', 'dictionaryValueId', 'dictionaryValueIds']) {
+  assert.match(
+    attributeEditor,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `dictionary editing should use canonical server search and IDs via ${token}`,
+  );
+}
+for (const guard of ['invalidateDictionarySearches', 'handleDictionaryQueryChange']) {
+  assert.match(
+    attributeEditor,
+    new RegExp(guard),
+    `dictionary editing should invalidate obsolete query state via ${guard}`,
+  );
+}
+for (const reset of ["setWorkspaceLoading(false);", "setBusyAction('');"]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(reset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `attribute identity changes should clear obsolete request state via ${reset}`,
+  );
+}
+for (const token of [
+  'canonicalSkuKeys',
+  'canonicalSkuIdentity',
+  'activeSkuKeys',
+  'setActiveSkuKeys(canonicalSkuKeys)',
+  'adoptCanonicalSkuIdentity',
+  'buildEditStates(res.data, desired.canonicalSkuKeys)',
+  "[...draft.selectedSkuKeys].sort().join('\\u0000') !== desired.canonicalSkuIdentity",
+]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `attribute identity should adopt the server canonical SKU selection via ${token}`,
+  );
+}
+assert.match(
+  attributeEditor,
+  /const resumedFromServer = !current[\s\S]*?if \(!resumedFromServer && requestedSkuSelectionChanged/,
+  'a create/resume response should be authoritative and must not be patched again merely because aliases differ',
+);
+assert.doesNotMatch(
+  attributeEditor,
+  /normalizedSkuKeys\.includes\(skuKey\)|normalizedSkuKeys\.map\(\(skuKey\) => renderAttributeScope/,
+  'SKU edits and matrix rows must use the server-adopted canonical keys rather than supplier aliases',
+);
+assert.match(
+  attributeEditor,
+  /const editorLocked = listingWorkflowLoading \|\| workspaceLoading \|\| !!busyAction;[\s\S]*disabled=\{readOnly \|\| editorLocked\}/,
+  'attribute controls should prevent edits while a revision-changing mutation is in flight',
+);
+const saveAttribute = attributeEditor.match(/async function saveAttribute[\s\S]*?\n  async function applyAttributeSuggestion/)?.[0] || '';
+for (const token of ['expectedRevision: context.revision', 'changes: [change]', 'skuKey', 'evidence', 'applyListingWorkflowDraft', 'refreshAttributeWorkspace']) {
+  assert.match(
+    saveAttribute,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `manual attribute editing should CAS and refresh through ${token}`,
+  );
+}
+const clearAttribute = attributeEditor.match(/async function clearAttribute[\s\S]*?\n  async function applyAttributeSuggestion/)?.[0] || '';
+for (const token of [
+  "action: 'CLEAR' as const",
+  'expectedRevision: context.revision',
+  'changes: [change]',
+  'manual:web-source-attribute-editor:clear',
+  'applyListingWorkflowDraft',
+  'refreshAttributeWorkspace',
+]) {
+  assert.match(
+    clearAttribute,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `manual attribute clearing should CAS, audit and refresh through ${token}`,
+  );
+}
+assert.match(attributeEditor, /onClick=\{\(\) => clearAttribute\(field, skuKey\)\}/, 'SKU attribute leaves should expose an explicit clear command');
+assert.match(attributeEditor, /onClick=\{\(\) => clearAttribute\(field\)\}/, 'product attributes should expose an explicit clear command');
+assert.match(attributeEditor, /aria-label=\{skuKey \? `清除 \$\{skuKey\} 的 \$\{field\.name\}`/, 'SKU clear command should have a scope-specific accessible name');
+for (const token of [
+  'skuValues?.[skuKey]',
+  'visibleSkuKeys.map((skuKey)',
+  'attributeScopeKey(field.attributeId, skuKey)',
+  'suggestion?.skuValues?.[skuKey]',
+  'suggestedSkuCount',
+  '当前 SKU 值缺失',
+  '该 SKU 暂无建议',
+]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `SKU-owned attributes should render isolated selected-SKU leaves via ${token}`,
+  );
+}
+for (const token of [
+  'const SKU_MATRIX_PAGE_SIZE = 10',
+  'skuPageByAttribute',
+  'activeSkuKeys.slice(skuPageStart, skuPageEnd)',
+  '显示 SKU {skuPageStart + 1}-{skuPageEnd}',
+  'SKU 上一页',
+  'SKU 下一页',
+]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `SKU matrix rendering should remain page-bounded via ${token}`,
+  );
+}
+assert.doesNotMatch(
+  attributeEditor,
+  /normalizedSkuKeys\.map\(\(skuKey\) => renderAttributeScope/,
+  'SKU matrix must not mount every selected SKU editor at once',
+);
+for (const token of [
+  'aria-label={`${field.name} 官方字典搜索`}',
+  'aria-label={`搜索 ${field.name} 官方字典`}',
+  'aria-label={`${field.name} 值`}',
+]) {
+  assert.match(
+    attributeEditor,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `product-level attribute controls should expose an accessible name via ${token}`,
+  );
+}
+assert.equal(
+  (attributeEditor.match(/aria-pressed=\{selected\}/g) || []).length,
+  2,
+  'product and SKU dictionary options should expose their selected state',
+);
+const validateAttributes = attributeEditor.match(/async function validateOnServer[\s\S]*?\n  return \(/)?.[0] || '';
+for (const token of ['expectedRevision: context.revision', 'applyListingWorkflowDraft', 'refreshAttributeWorkspace']) {
+  assert.match(
+    validateAttributes,
+    new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `server validation should use the current draft and refresh through ${token}`,
+  );
+}
+for (const guard of [
+  'listingWorkflowRequestIdRef',
+  'attributeWorkspaceRequestIdRef',
+  'dictionaryRequestIdsRef',
+  'desiredListingWorkflowIdentityRef',
+  'listingWorkflowIdentityQueueRef',
+  'captureAttributeContext',
+  'attributeContextIsCurrent',
+]) {
+  assert.match(attributeEditor, new RegExp(guard), `attribute workflow should reject stale async state via ${guard}`);
+}
+for (const label of [
+  '必填',
+  '严格字典',
+  '开放字典',
+  '字段归属',
+  '当前值',
+  '置信度',
+  '证据',
+  '复核状态',
+  '采用建议',
+  '阻断原因',
+  'Ozon 导入',
+  '库存激活',
+  '成本定价',
+  '服务器校验',
+]) {
+  assert.match(attributeEditor, new RegExp(label), `attribute editor should expose operator state: ${label}`);
+}
 
 const collectRoute = fs.readFileSync('apps/server/src/routes/collect.ts', 'utf8');
 assert.match(

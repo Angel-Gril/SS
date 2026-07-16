@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000008.html",
+  "observedAt": "2026-07-15T00:15:00.000Z",
+  "document": {
+    "queries": {
+      ".content-detail img": [
+        { "src": "https://img.example.com/limit-1.jpg" },
+        { "src": "https://img.example.com/limit-2.jpg" },
+        { "src": "https://img.example.com/limit-3.jpg" },
+        { "src": "https://img.example.com/limit-4.jpg" }
+      ],
+      "#detail iframe, .content-detail iframe, .detail-description-content iframe, .offer-detail-description iframe, iframe[src*='detail'], iframe[src*='desc']": [
+        { "fixtureId": "limit-frame-1", "attrs": { "src": "https://detail.1688.com/frame/1.html" }, "contentDocument": { "locationHref": "https://detail.1688.com/frame/1.html", "queries": { "img": [] } } },
+        { "fixtureId": "limit-frame-2", "attrs": { "src": "https://detail.1688.com/frame/2.html" }, "contentDocument": { "locationHref": "https://detail.1688.com/frame/2.html", "queries": { "img": [] } } },
+        { "fixtureId": "limit-frame-3", "attrs": { "src": "https://detail.1688.com/frame/3.html" }, "contentDocument": { "locationHref": "https://detail.1688.com/frame/3.html", "queries": { "img": [] } } }
+      ],
+      "*": [
+        { "text": "node-1" },
+        { "text": "node-2" },
+        { "text": "node-3" },
+        { "text": "node-4" },
+        { "text": "node-5" }
+      ]
+    }
+  },
+  "limits": {
+    "maxMediaRows": 2,
+    "maxFrames": 1,
+    "maxNodes": 3
+  }
+}

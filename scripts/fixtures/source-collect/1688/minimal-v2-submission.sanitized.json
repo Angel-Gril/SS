@@ -1,0 +1,542 @@
+{
+  "capture": {
+    "captureVersion": "source-product-capture-v2",
+    "provenanceMode": "native_v2",
+    "platform": "1688",
+    "sourceIdentity": {
+      "productId": "1000000000003",
+      "canonicalUrl": "https://detail.1688.com/offer/1000000000003.html",
+      "host": "detail.1688.com",
+      "fieldEvidence": {
+        "productId": {
+          "value": "1000000000003",
+          "sourceType": "main_world",
+          "sourcePath": "window.offerDetailData.offerId",
+          "confidence": 1,
+          "isEstimated": false,
+          "missingReason": null,
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": []
+        },
+        "canonicalUrl": {
+          "value": "https://detail.1688.com/offer/1000000000003.html",
+          "sourceType": "dom",
+          "sourcePath": "location.href",
+          "confidence": 1,
+          "isEstimated": false,
+          "missingReason": null,
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": []
+        },
+        "host": {
+          "value": "detail.1688.com",
+          "sourceType": "derived",
+          "sourcePath": "URL(canonicalUrl).hostname",
+          "confidence": 1,
+          "isEstimated": false,
+          "missingReason": null,
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": ["/sourceIdentity/canonicalUrl"]
+        }
+      }
+    },
+    "collector": {
+      "name": "ss-erp-1688-core",
+      "parserVersion": "ss-erp-1688-core-v2",
+      "contractVersion": "source-product-capture-v2",
+      "extensionVersion": "1.0.196",
+      "pageBridgeVersion": "ss-erp-page-bridge-v2",
+      "captureChannel": "extension"
+    },
+    "capturedAt": "2026-07-14T00:00:00.000Z",
+    "sourceCategory": {
+      "id": null,
+      "name": null,
+      "path": [],
+      "fieldEvidence": {
+        "id": {
+          "value": null,
+          "sourceType": "dom",
+          "sourcePath": "document.breadcrumb.categoryId",
+          "confidence": 0,
+          "isEstimated": false,
+          "missingReason": "not_observed",
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": []
+        },
+        "name": {
+          "value": null,
+          "sourceType": "dom",
+          "sourcePath": "document.breadcrumb.categoryName",
+          "confidence": 0,
+          "isEstimated": false,
+          "missingReason": "not_observed",
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": []
+        }
+      }
+    },
+    "facts": {
+      "title": "Sanitized explicit-zero stock fixture",
+      "shopName": "Sanitized supplier",
+      "description": "Sanitized source description for the V2 capture contract.",
+      "sourceLocale": "zh-CN",
+      "currency": "CNY",
+      "selectedSkuKey": "sku-0",
+      "shippingCny": 0,
+      "shippingFree": true,
+      "totalCostCny": 18.8,
+      "packageWeightG": null,
+      "packageLengthMm": null,
+      "packageWidthMm": null,
+      "packageHeightMm": null,
+      "monthlySales": null,
+      "minimumOrderQuantity": 1
+    },
+    "fieldEvidence": {
+      "title": {
+        "value": "Sanitized explicit-zero stock fixture",
+        "sourceType": "main_world",
+        "sourcePath": "window.offerDetailData.subject",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "shopName": {
+        "value": "Sanitized supplier",
+        "sourceType": "dom",
+        "sourcePath": "document.supplierName",
+        "confidence": 0.9,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "description": {
+        "value": "Sanitized source description for the V2 capture contract.",
+        "sourceType": "script",
+        "sourcePath": "script.offerDescription",
+        "confidence": 0.9,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "sourceLocale": {
+        "value": "zh-CN",
+        "sourceType": "derived",
+        "sourcePath": "platform.defaultLocale",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": ["/platform"]
+      },
+      "currency": {
+        "value": "CNY",
+        "sourceType": "derived",
+        "sourcePath": "platform.defaultCurrency",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": ["/platform"]
+      },
+      "selectedSkuKey": {
+        "value": "sku-0",
+        "sourceType": "derived",
+        "sourcePath": "selectedSku.stableKey",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": ["/skus/0/sourceSkuId"]
+      },
+      "shippingCny": {
+        "value": 0,
+        "sourceType": "dom",
+        "sourcePath": "document.orderSummary.shippingFee",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "shippingFree": {
+        "value": true,
+        "sourceType": "dom",
+        "sourcePath": "document.orderSummary.freeShipping",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "totalCostCny": {
+        "value": 18.8,
+        "sourceType": "derived",
+        "sourcePath": "selectedPrice + shippingCny",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": ["/prices/0/amountCny", "/facts/shippingCny"]
+      },
+      "packageWeightG": {
+        "value": null,
+        "sourceType": "main_world",
+        "sourcePath": "window.offerDetailData.weightG",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": "source_returned_null",
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "packageLengthMm": {
+        "value": null,
+        "sourceType": "dom",
+        "sourcePath": "document.packaging.length",
+        "confidence": 0,
+        "isEstimated": false,
+        "missingReason": "not_observed",
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "packageWidthMm": {
+        "value": null,
+        "sourceType": "dom",
+        "sourcePath": "document.packaging.width",
+        "confidence": 0,
+        "isEstimated": false,
+        "missingReason": "not_observed",
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "packageHeightMm": {
+        "value": null,
+        "sourceType": "dom",
+        "sourcePath": "document.packaging.height",
+        "confidence": 0,
+        "isEstimated": false,
+        "missingReason": "not_observed",
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "monthlySales": {
+        "value": null,
+        "sourceType": "dom",
+        "sourcePath": "document.monthlySales",
+        "confidence": 0,
+        "isEstimated": false,
+        "missingReason": "not_observed",
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      },
+      "minimumOrderQuantity": {
+        "value": 1,
+        "sourceType": "main_world",
+        "sourcePath": "window.offerDetailData.minOrderQuantity",
+        "confidence": 1,
+        "isEstimated": false,
+        "missingReason": null,
+        "observedAt": "2026-07-14T00:00:00.000Z",
+        "parserVersion": "ss-erp-1688-core-v2",
+        "derivedFrom": []
+      }
+    },
+    "attributes": [],
+    "prices": [
+      {
+        "key": "selected-sku-price",
+        "role": "selected_sku",
+        "skuKey": "sku-0",
+        "minQuantity": null,
+        "amountCny": 18.8,
+        "maxAmountCny": null,
+        "currency": "CNY",
+        "displayText": "18.80",
+        "fieldEvidence": {
+          "skuKey": {
+            "value": "sku-0",
+            "sourceType": "derived",
+            "sourcePath": "selectedSku.stableKey",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": ["/skus/0/sourceSkuId"]
+          },
+          "minQuantity": {
+            "value": null,
+            "sourceType": "derived",
+            "sourcePath": "priceRole.minQuantity",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": "not_applicable",
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": ["/prices/0/role"]
+          },
+          "amountCny": {
+            "value": 18.8,
+            "sourceType": "main_world",
+            "sourcePath": "window.skuMap.sku-0.price",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "maxAmountCny": {
+            "value": null,
+            "sourceType": "derived",
+            "sourcePath": "priceRole.maxAmountCny",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": "not_applicable",
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": ["/prices/0/role"]
+          },
+          "currency": {
+            "value": "CNY",
+            "sourceType": "derived",
+            "sourcePath": "platform.defaultCurrency",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": ["/platform"]
+          },
+          "displayText": {
+            "value": "18.80",
+            "sourceType": "main_world",
+            "sourcePath": "window.skuMap.sku-0.price",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          }
+        }
+      }
+    ],
+    "skus": [
+      {
+        "key": "sku-0",
+        "ordinal": 0,
+        "kind": "observed",
+        "sourceSkuId": "sku-source-0",
+        "specText": "Sanitized option",
+        "priceCny": 18.8,
+        "stock": 0,
+        "attributes": [],
+        "mediaKeys": ["media-main-0"],
+        "packagingKeys": [],
+        "rowEvidence": {
+          "value": true,
+          "sourceType": "main_world",
+          "sourcePath": "window.skuMap.sku-source-0",
+          "confidence": 1,
+          "isEstimated": false,
+          "missingReason": null,
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": []
+        },
+        "fieldEvidence": {
+          "sourceSkuId": {
+            "value": "sku-source-0",
+            "sourceType": "main_world",
+            "sourcePath": "window.skuMap.sku-source-0.skuId",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "specText": {
+            "value": "Sanitized option",
+            "sourceType": "main_world",
+            "sourcePath": "window.skuMap.sku-source-0.specText",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "priceCny": {
+            "value": 18.8,
+            "sourceType": "main_world",
+            "sourcePath": "window.skuMap.sku-source-0.price",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "stock": {
+            "value": 0,
+            "sourceType": "main_world",
+            "sourcePath": "window.skuMap.sku-source-0.stock",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          }
+        }
+      }
+    ],
+    "media": [
+      {
+        "key": "media-main-0",
+        "ordinal": 0,
+        "kind": "image",
+        "role": "product_main",
+        "url": "https://cbu01.alicdn.com/img/ibank/sanitized-main.jpg",
+        "width": null,
+        "height": null,
+        "mimeType": "image/jpeg",
+        "skuKeys": [],
+        "disposition": "accepted",
+        "rejectionReason": null,
+        "duplicateOfMediaKey": null,
+        "rowEvidence": {
+          "value": true,
+          "sourceType": "main_world",
+          "sourcePath": "window.offerDetailData.imageList[0]",
+          "confidence": 1,
+          "isEstimated": false,
+          "missingReason": null,
+          "observedAt": "2026-07-14T00:00:00.000Z",
+          "parserVersion": "ss-erp-1688-core-v2",
+          "derivedFrom": []
+        },
+        "fieldEvidence": {
+          "role": {
+            "value": "product_main",
+            "sourceType": "main_world",
+            "sourcePath": "window.offerDetailData.imageList[0]",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "url": {
+            "value": "https://cbu01.alicdn.com/img/ibank/sanitized-main.jpg",
+            "sourceType": "main_world",
+            "sourcePath": "window.offerDetailData.imageList[0]",
+            "confidence": 1,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "width": {
+            "value": null,
+            "sourceType": "main_world",
+            "sourcePath": "window.offerDetailData.imageList[0].width",
+            "confidence": 0,
+            "isEstimated": false,
+            "missingReason": "not_observed",
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "height": {
+            "value": null,
+            "sourceType": "main_world",
+            "sourcePath": "window.offerDetailData.imageList[0].height",
+            "confidence": 0,
+            "isEstimated": false,
+            "missingReason": "not_observed",
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": []
+          },
+          "mimeType": {
+            "value": "image/jpeg",
+            "sourceType": "derived",
+            "sourcePath": "media.url.extension",
+            "confidence": 0.8,
+            "isEstimated": false,
+            "missingReason": null,
+            "observedAt": "2026-07-14T00:00:00.000Z",
+            "parserVersion": "ss-erp-1688-core-v2",
+            "derivedFrom": ["/media/0/url"]
+          }
+        }
+      }
+    ],
+    "packaging": [],
+    "counts": [
+      { "fieldPath": "/attributes", "totalCount": 0, "capturedCount": 0, "submittedCount": 0, "truncated": false, "reason": null },
+      { "fieldPath": "/prices", "totalCount": 1, "capturedCount": 1, "submittedCount": 1, "truncated": false, "reason": null },
+      { "fieldPath": "/skus", "totalCount": 1, "capturedCount": 1, "submittedCount": 1, "truncated": false, "reason": null },
+      { "fieldPath": "/media", "totalCount": 1, "capturedCount": 1, "submittedCount": 1, "truncated": false, "reason": null },
+      { "fieldPath": "/packaging", "totalCount": 0, "capturedCount": 0, "submittedCount": 0, "truncated": false, "reason": null },
+      { "fieldPath": "/truncations", "totalCount": 0, "capturedCount": 0, "submittedCount": 0, "truncated": false, "reason": null }
+    ],
+    "completeness": {
+      "status": "partial",
+      "hasEstimatedValues": false,
+      "sections": [
+        { "section": "identity", "status": "complete", "missingFieldPaths": [] },
+        { "section": "category", "status": "missing", "missingFieldPaths": ["/sourceCategory/id", "/sourceCategory/name"] },
+        { "section": "core_facts", "status": "partial", "missingFieldPaths": ["/facts/packageWeightG", "/facts/packageLengthMm", "/facts/packageWidthMm", "/facts/packageHeightMm"] },
+        { "section": "pricing", "status": "complete", "missingFieldPaths": [] },
+        { "section": "skus", "status": "complete", "missingFieldPaths": [] },
+        { "section": "attributes", "status": "not_applicable", "missingFieldPaths": [] },
+        { "section": "media", "status": "complete", "missingFieldPaths": [] },
+        { "section": "packaging", "status": "missing", "missingFieldPaths": ["/facts/packageWeightG", "/facts/packageLengthMm", "/facts/packageWidthMm", "/facts/packageHeightMm"] },
+        { "section": "description", "status": "complete", "missingFieldPaths": [] }
+      ],
+      "missingFieldPaths": [
+        "/sourceCategory/id",
+        "/sourceCategory/name",
+        "/facts/packageWeightG",
+        "/facts/packageLengthMm",
+        "/facts/packageWidthMm",
+        "/facts/packageHeightMm",
+        "/facts/monthlySales"
+      ],
+      "estimatedFieldPaths": []
+    },
+    "truncations": []
+  },
+  "captureHash": "f1728ab17299e9f3ea72a0faf16096e758b3adcf1e855c214ab9b685e373a4cc",
+  "payloadBytes": 13255
+}

@@ -7,12 +7,21 @@ import {
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OUTSTANDING_PAIRING_LIMIT = 5;
-const PILOT_DEVICE_SCOPES = [
+const DEFAULT_EXTENSION_DEVICE_SCOPES = [
   'logistics:discover',
   'logistics:read',
   'logistics:receipt',
   'logistics:capture',
-];
+] as const;
+
+export const EXTENSION_DEVICE_SCOPES = [
+  ...DEFAULT_EXTENSION_DEVICE_SCOPES,
+  'capture:write',
+  'listing:write',
+  'listing:review',
+  'media:execute',
+  'listing:publish',
+] as const;
 
 export const EXTENSION_DEVICE_REVOCATION_REASONS = [
   'PAIRING_APPROVED',
@@ -108,6 +117,16 @@ function normalizeIds(values: string[]): string[] {
   return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
 }
 
+function normalizeScopes(values: string[] | undefined): string[] {
+  const scopes = values == null ? [...DEFAULT_EXTENSION_DEVICE_SCOPES] : normalizeIds(values);
+  if (!scopes.length
+    || scopes.length > EXTENSION_DEVICE_SCOPES.length
+    || scopes.some((scope) => !EXTENSION_DEVICE_SCOPES.includes(scope as any))) {
+    throw new ExtensionDeviceSessionError('invalid_device_scope', 400, 'Device scope is invalid');
+  }
+  return scopes;
+}
+
 function normalizeLabel(value: string | undefined): string | null {
   const label = String(value || '').trim();
   return label ? label.slice(0, 120) : null;
@@ -145,13 +164,19 @@ export function createExtensionDeviceSessionService(options: {
       actorUserId: string;
       ownerUserId: string;
       actorParentId: string | null;
+      actorRole?: string;
       shopIds: string[];
+      scopes?: string[];
       deviceLabel?: string;
     }) {
-      if (input.actorParentId || input.actorUserId !== input.ownerUserId) {
+      const actorRole = input.actorRole || 'USER';
+      if (input.actorParentId
+        || input.actorUserId !== input.ownerUserId
+        || !['USER', 'ADMIN'].includes(actorRole)) {
         throw new ExtensionDeviceSessionError('pairing_owner_required', 403, 'Tenant owner is required');
       }
       const shopIds = normalizeIds(input.shopIds);
+      const scopes = normalizeScopes(input.scopes);
       if (!shopIds.length || shopIds.length > 50) {
         throw new ExtensionDeviceSessionError('invalid_shop_scope', 400, 'Shop scope is required');
       }
@@ -171,7 +196,7 @@ export function createExtensionDeviceSessionService(options: {
         ownerUserId: input.ownerUserId,
         codeDigest: credentialDigest(authConfig.secret, 'pairing', code),
         shopIds,
-        scopes: [...PILOT_DEVICE_SCOPES],
+        scopes,
         deviceLabel: normalizeLabel(input.deviceLabel),
         expiresAt,
         createdAt,
@@ -179,7 +204,14 @@ export function createExtensionDeviceSessionService(options: {
       if (row.kind === 'limit') {
         throw new ExtensionDeviceSessionError('pairing_limit_reached', 429, 'Too many outstanding pairing codes');
       }
-      return { id: row.id, code, expiresAt, deploymentId: authConfig.deploymentId, shopIds };
+      return {
+        id: row.id,
+        code,
+        expiresAt,
+        deploymentId: authConfig.deploymentId,
+        shopIds,
+        scopes,
+      };
     },
 
     async claimPairingCode(input: {

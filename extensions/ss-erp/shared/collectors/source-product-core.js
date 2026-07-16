@@ -1,6 +1,21 @@
 (function (root) {
   'use strict';
 
+  var SOURCE_CAPTURE_VERSION = 'source-product-capture-v2';
+  var LEGACY_SKU_LIMIT = 200;
+  var LEGACY_MAIN_IMAGE_LIMIT = 30;
+  var LEGACY_DETAIL_IMAGE_LIMIT = 50;
+  var LEGACY_REJECTED_ASSET_LIMIT = 100;
+  var LEGACY_ATTRIBUTE_LIMIT = 80;
+  var LEGACY_PACKAGING_LIMIT = 200;
+  var LEGACY_LADDER_PRICE_LIMIT = 20;
+  var CAPTURE_SKU_LIMIT = 10000;
+  var CAPTURE_ATTRIBUTE_LIMIT = 2000;
+  var CAPTURE_MEDIA_LIMIT = 20000;
+  var CAPTURE_PACKAGING_LIMIT = 10000;
+  var CAPTURE_PRICE_LIMIT = 20000;
+  var CAPTURE_PAYLOAD_BYTES_LIMIT = 8 * 1024 * 1024;
+
   function detectPlatform(hostname) {
     var host = String(hostname || '').toLowerCase();
     if (host.indexOf('1688.com') >= 0) return '1688';
@@ -95,6 +110,202 @@
       sources.push(pageState.aliExpressData);
     }
     return sources;
+  }
+
+  function normalizeEvidenceSources(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function (row, index) {
+      if (!row || typeof row !== 'object' || !row.value || typeof row.value !== 'object') return null;
+      var sourceType = /^(?:network|main_world|script|dom|derived|manual|legacy)$/.test(String(row.sourceType || ''))
+        ? String(row.sourceType)
+        : 'main_world';
+      var defaultTier = sourceType === 'main_world' ? 10 : (sourceType === 'script' ? 20 : 50);
+      return {
+        id: String(row.id || ('evidence-' + index)),
+        sourceType: sourceType,
+        sourcePath: String(row.sourcePath || '/pageState/knownGlobals'),
+        tier: Number.isFinite(Number(row.tier)) ? Number(row.tier) : defaultTier,
+        observedAt: row.observedAt,
+        parserVersion: row.parserVersion,
+        value: row.value
+      };
+    }).filter(Boolean).sort(function (left, right) {
+      return left.tier - right.tier || left.id.localeCompare(right.id);
+    });
+  }
+
+  function joinEvidencePath(base, path) {
+    var prefix = String(base || '').replace(/\/$/, '') || '';
+    var suffix = (Array.isArray(path) ? path : []).map(function (part) {
+      return String(part).replace(/~/g, '~0').replace(/\//g, '~1');
+    }).join('/');
+    return prefix + (suffix ? '/' + suffix : '');
+  }
+
+  function evidenceConfidence(sourceType) {
+    if (sourceType === 'network') return 0.98;
+    if (sourceType === 'main_world') return 0.95;
+    if (sourceType === 'script') return 0.85;
+    if (sourceType === 'dom') return 0.8;
+    if (sourceType === 'derived') return 0.5;
+    return 0.75;
+  }
+
+  function evidenceDescriptor(source, path) {
+    if (!source) return null;
+    return {
+      sourceType: source.sourceType,
+      sourcePath: joinEvidencePath(source.sourcePath, path),
+      confidence: evidenceConfidence(source.sourceType),
+      observedAt: source.observedAt,
+      parserVersion: source.parserVersion,
+      derivedFrom: source.sourceType === 'derived' ? ['/'] : []
+    };
+  }
+
+  function findEvidenceDescriptor(evidenceSources, predicate) {
+    var selected = null;
+    (Array.isArray(evidenceSources) ? evidenceSources : []).some(function (source) {
+      walkObject(source.value, [], function (value, path) {
+        if (!selected && predicate(value, path)) selected = evidenceDescriptor(source, path);
+      });
+      return Boolean(selected);
+    });
+    return selected;
+  }
+
+  function findTextEvidenceDescriptor(evidenceSources, value, keyPattern) {
+    var target = normalizeWhitespace(value || '');
+    if (!target) return null;
+    return findEvidenceDescriptor(evidenceSources, function (candidate, path) {
+      var key = path[path.length - 1] || '';
+      return typeof candidate === 'string'
+        && (!keyPattern || keyPattern.test(String(key)))
+        && normalizeWhitespace(candidate) === target;
+    });
+  }
+
+  function buildAttributeEvidenceMap(evidenceSources, attributes) {
+    var desired = new Set((Array.isArray(attributes) ? attributes : []).map(function (attribute) {
+      return normalizeWhitespace(attribute && attribute.name || '') + '\u0000'
+        + normalizeWhitespace(attribute && attribute.value || '');
+    }));
+    var result = {};
+    if (!desired.size) return result;
+    (Array.isArray(evidenceSources) ? evidenceSources : []).forEach(function (source) {
+      walkObject(source.value, [], function (candidate, path) {
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return;
+        var name = normalizeWhitespace(pickFirstValue(candidate, ['name', 'key', 'attrName', 'propertyName', 'title']) || '');
+        var value = normalizeWhitespace(pickFirstValue(candidate, ['value', 'attrValue', 'propertyValue', 'text', 'content']) || '');
+        var key = name + '\u0000' + value;
+        if (!name || !value || !desired.has(key) || result[key]) return;
+        result[key] = evidenceDescriptor(source, path);
+      });
+    });
+    return result;
+  }
+
+  function buildImageEvidenceMap(evidenceSources, urls) {
+    var desired = new Set((Array.isArray(urls) ? urls : []).map(normalize1688ImageUrl).filter(Boolean));
+    var result = {};
+    if (!desired.size) return result;
+    (Array.isArray(evidenceSources) ? evidenceSources : []).forEach(function (source) {
+      walkObject(source.value, [], function (candidate, path) {
+        if (typeof candidate !== 'string' || !/^(?:https?:)?\/\//i.test(candidate.trim())) return;
+        var normalized = normalize1688ImageUrl(candidate);
+        if (!normalized || !desired.has(normalized) || result[normalized]) return;
+        result[normalized] = evidenceDescriptor(source, path);
+      });
+    });
+    return result;
+  }
+
+  function findPriceEvidenceDescriptor(evidenceSources) {
+    return findEvidenceDescriptor(evidenceSources, function (candidate, path) {
+      var key = path[path.length - 1] || '';
+      return /(?:price|priceRange|displayPrice|offerPrice|salePrice|ladderPrice|priceRanges)$/i.test(String(key))
+        && (typeof candidate === 'string' || typeof candidate === 'number' || Array.isArray(candidate));
+    });
+  }
+
+  function find1688SkuCollectionPath(source, skuProps) {
+    var paths = collect1688SkuCollections(source, skuProps).map(function (collection) {
+      return collection.path;
+    });
+    if (!paths.length) return null;
+    var commonPath = paths[0].slice();
+    paths.slice(1).forEach(function (path) {
+      var sharedLength = 0;
+      var maxSharedLength = Math.min(commonPath.length, path.length);
+      while (sharedLength < maxSharedLength && commonPath[sharedLength] === path[sharedLength]) sharedLength += 1;
+      commonPath = commonPath.slice(0, sharedLength);
+    });
+    return commonPath;
+  }
+
+  function skuFamilySignature(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function (row) {
+      var attrs = Object.keys(row && row.attrs || {}).sort().map(function (name) {
+        return name + '=' + normalizeWhitespace(row.attrs[name]);
+      }).join('|');
+      return [row && (row.skuId || row.sku) || '', attrs, row && row.price, row && row.stock].join('::');
+    }).sort().join('||');
+  }
+
+  function pick1688StructuredSkuFamily(evidenceSources) {
+    var candidates = [];
+    (Array.isArray(evidenceSources) ? evidenceSources : []).forEach(function (source) {
+      var skuProps = pick1688SkuProps([source.value]);
+      var rows = pick1688SkuItems([source.value], skuProps);
+      if (!rows.length) return;
+      var skuCollectionPath = find1688SkuCollectionPath(source.value, skuProps);
+      var sourcePath = joinEvidencePath(source.sourcePath, skuCollectionPath || []);
+      rows = rows.map(function (row) {
+        return Object.assign({}, row, {
+          evidence: {
+            sourceType: source.sourceType,
+            sourcePath: sourcePath,
+            confidence: source.sourceType === 'main_world' ? 0.95 : 0.85,
+            isEstimated: false,
+            observedAt: source.observedAt,
+            parserVersion: source.parserVersion,
+            derivedFrom: []
+          }
+        });
+      });
+      candidates.push({
+        tier: source.tier,
+        id: source.id,
+        skuProps: skuProps,
+        rows: rows,
+        signature: skuFamilySignature(rows)
+      });
+    });
+    if (!candidates.length) return null;
+    candidates.sort(function (left, right) { return left.tier - right.tier || left.id.localeCompare(right.id); });
+    var tier = candidates[0].tier;
+    var highestPriority = candidates.filter(function (candidate) { return candidate.tier === tier; });
+    if (highestPriority.some(function (candidate) {
+      return candidate.rows.some(function (row) { return row.ambiguousConflict === true; });
+    })) {
+      return {
+        ambiguous: true,
+        tier: tier,
+        ids: highestPriority.map(function (candidate) { return candidate.id; }),
+        skuProps: [],
+        rows: []
+      };
+    }
+    var signatures = Array.from(new Set(highestPriority.map(function (candidate) { return candidate.signature; })));
+    if (signatures.length > 1) {
+      return {
+        ambiguous: true,
+        tier: tier,
+        ids: highestPriority.map(function (candidate) { return candidate.id; }),
+        skuProps: [],
+        rows: []
+      };
+    }
+    return Object.assign({ ambiguous: false }, highestPriority[0]);
   }
 
   function collectStringCandidates(sources, regex) {
@@ -202,39 +413,1237 @@
     return null;
   }
 
+  function captureDateTime(value) {
+    var text = String(value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(text)) return text;
+    return new Date().toISOString();
+  }
+
+  function captureText(value) {
+    var text = normalizeWhitespace(value == null ? '' : value);
+    return text || null;
+  }
+
+  function capturePositiveNumber(value) {
+    var number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : null;
+  }
+
+  function captureNonNegativeInteger(value) {
+    if (value == null || value === '') return null;
+    var number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.floor(number) : null;
+  }
+
+  function captureEvidence(value, options) {
+    var config = options && typeof options === 'object' ? options : {};
+    var normalizedValue = value === undefined ? null : value;
+    var sourceType = config.sourceType || 'main_world';
+    var derivedFrom = Array.isArray(config.derivedFrom) ? config.derivedFrom.filter(Boolean) : [];
+    if (sourceType === 'derived' && !derivedFrom.length) derivedFrom = ['/'];
+    return {
+      value: normalizedValue,
+      sourceType: sourceType,
+      sourcePath: String(config.sourcePath || '/pageState'),
+      confidence: Number.isFinite(Number(config.confidence)) ? Number(config.confidence) : 0.9,
+      isEstimated: normalizedValue === null ? false : config.isEstimated === true,
+      missingReason: normalizedValue === null
+        ? (config.missingReason || 'not_observed')
+        : null,
+      observedAt: captureDateTime(config.observedAt),
+      parserVersion: String(config.parserVersion || 'ss-erp-1688-core-v2'),
+      derivedFrom: derivedFrom
+    };
+  }
+
+  function captureEvidenceOptions(context, overrides) {
+    return Object.assign({
+      observedAt: context.observedAt,
+      parserVersion: context.parserVersion,
+      sourcePath: '/pageState/knownGlobals',
+      sourceType: 'main_world',
+      confidence: 0.9
+    }, overrides || {});
+  }
+
+  function captureStableKey(prefix, parts, fallbackIndex) {
+    var value = (Array.isArray(parts) ? parts : [])
+      .map(function (part) { return normalizeWhitespace(part == null ? '' : part); })
+      .filter(Boolean)
+      .join('|');
+    var key = prefix + ':' + (value || String(fallbackIndex));
+    if (key.length <= 500) return key;
+    var hash = 2166136261;
+    for (var index = 0; index < key.length; index += 1) {
+      hash ^= key.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    var suffix = '~' + (hash >>> 0).toString(36);
+    return key.slice(0, 500 - suffix.length) + suffix;
+  }
+
+  function captureAttributeValues(attrs, context, sourceType, sourcePath) {
+    return Object.keys(attrs && typeof attrs === 'object' ? attrs : {})
+      .sort()
+      .map(function (name) {
+        var value = captureText(attrs[name]);
+        if (!value) return null;
+        var options = captureEvidenceOptions(context, {
+          sourceType: sourceType,
+          sourcePath: sourcePath,
+          derivedFrom: sourceType === 'derived' ? ['/attributes'] : []
+        });
+        return {
+          name: name,
+          value: value,
+          fieldEvidence: {
+            name: captureEvidence(name, options),
+            value: captureEvidence(value, options)
+          }
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function buildCaptureSkus(rows, context) {
+    var usedKeys = new Set();
+    return (Array.isArray(rows) ? rows : []).map(function (row, index) {
+      var sourceSkuId = captureText(row && (row.skuId || row.sku));
+      var rowEvidence = row && row.evidence && typeof row.evidence === 'object' ? row.evidence : {};
+      var sourceType = rowEvidence.sourceType
+        || (row && row.source === 'attributeMatrix' ? 'derived' : 'main_world');
+      var sourcePath = rowEvidence.sourcePath
+        || (sourceType === 'derived' ? '/derived/attributeMatrix' : '/pageState/knownGlobals/skuMap');
+      var derivedFrom = Array.isArray(rowEvidence.derivedFrom) && rowEvidence.derivedFrom.length
+        ? rowEvidence.derivedFrom
+        : (sourceType === 'derived' ? ['/attributes'] : []);
+      var attributes = captureAttributeValues(
+        row && row.attrs,
+        context,
+        sourceType,
+        sourcePath
+      );
+      var attributeKey = attributes.map(function (item) { return item.name + '=' + item.value; }).join(';');
+      var key = captureStableKey('sku', [sourceSkuId, attributeKey, row && row.specText], index);
+      if (usedKeys.has(key)) key = captureStableKey(key, [String(index)], index);
+      usedKeys.add(key);
+      var specText = captureText(row && (row.specText || row.name));
+      var priceCny = capturePositiveNumber(row && row.price);
+      var stock = captureNonNegativeInteger(row && row.stock);
+      var missingStock = row && Object.prototype.hasOwnProperty.call(row, 'stock') && row.stock === null
+        ? 'source_returned_null'
+        : 'not_observed';
+      var rowOptions = captureEvidenceOptions(context, {
+        sourceType: sourceType,
+        sourcePath: sourcePath,
+        confidence: Number.isFinite(Number(rowEvidence.confidence))
+          ? Number(rowEvidence.confidence)
+          : (sourceType === 'derived' ? 0.5 : 0.95),
+        isEstimated: sourceType === 'derived' || rowEvidence.isEstimated === true,
+        observedAt: rowEvidence.observedAt || context.observedAt,
+        parserVersion: rowEvidence.parserVersion || context.parserVersion,
+        derivedFrom: derivedFrom
+      });
+      return {
+        key: key,
+        ordinal: index,
+        kind: sourceType === 'derived' ? 'derived_attribute_matrix' : 'observed',
+        sourceSkuId: sourceSkuId,
+        specText: specText,
+        priceCny: priceCny,
+        stock: stock,
+        attributes: attributes,
+        mediaKeys: [],
+        packagingKeys: [],
+        rowEvidence: captureEvidence(true, rowOptions),
+        fieldEvidence: {
+          sourceSkuId: captureEvidence(sourceSkuId, Object.assign({}, rowOptions, { missingReason: 'not_present' })),
+          specText: captureEvidence(specText, Object.assign({}, rowOptions, { missingReason: 'not_present' })),
+          priceCny: captureEvidence(priceCny, Object.assign({}, rowOptions, { missingReason: 'not_observed' })),
+          stock: captureEvidence(stock, Object.assign({}, rowOptions, { missingReason: missingStock }))
+        }
+      };
+    });
+  }
+
+  function mapRejectedMediaReason(reason) {
+    var text = String(reason || '');
+    if (text === 'invalid_url') return 'invalid_url';
+    if (text === 'duplicate') return 'duplicate';
+    if (/decorative|small_image|svg/.test(text)) return 'non_product_asset';
+    return 'other';
+  }
+
+  function buildCaptureMedia(input, context, skus) {
+    var rows = [];
+    var acceptedByUrl = new Map();
+    var evidenceByUrl = input.mediaEvidenceByUrl && typeof input.mediaEvidenceByUrl === 'object'
+      ? input.mediaEvidenceByUrl
+      : {};
+    function pushAccepted(url, role, ordinal, skuKeys, kind) {
+      var text = captureText(url);
+      if (!text) return null;
+      var mediaKind = kind === 'video' ? 'video' : 'image';
+      var key = captureStableKey('media', [mediaKind, role, String(ordinal), text], rows.length);
+      var descriptor = evidenceByUrl[text] && typeof evidenceByUrl[text] === 'object' ? evidenceByUrl[text] : {};
+      var options = captureEvidenceOptions(context, {
+        sourceType: descriptor.sourceType || 'main_world',
+        sourcePath: descriptor.sourcePath || (role === 'sku'
+          ? '/pageState/knownGlobals/skuMap/images'
+          : '/pageState/knownGlobals/' + (role === 'product_main' ? 'imageList' : (mediaKind === 'video' ? 'videoUrls' : 'detailImages'))),
+        confidence: Number.isFinite(Number(descriptor.confidence)) ? Number(descriptor.confidence) : 0.9,
+        observedAt: descriptor.observedAt || context.observedAt,
+        parserVersion: descriptor.parserVersion || context.parserVersion,
+        derivedFrom: Array.isArray(descriptor.derivedFrom) ? descriptor.derivedFrom : []
+      });
+      rows.push({
+        key: key,
+        ordinal: ordinal,
+        kind: mediaKind,
+        role: role,
+        url: text,
+        width: null,
+        height: null,
+        mimeType: null,
+        skuKeys: Array.isArray(skuKeys) ? skuKeys : [],
+        disposition: 'accepted',
+        rejectionReason: null,
+        duplicateOfMediaKey: null,
+        rowEvidence: captureEvidence(true, options),
+        fieldEvidence: {
+          role: captureEvidence(role, options),
+          url: captureEvidence(text, options),
+          width: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_observed' })),
+          height: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_observed' })),
+          mimeType: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_observed' }))
+        }
+      });
+      if (!acceptedByUrl.has(mediaKind + ':' + text)) acceptedByUrl.set(mediaKind + ':' + text, key);
+      return key;
+    }
+    (input.mainImages || []).forEach(function (url, index) { pushAccepted(url, 'product_main', index, [], 'image'); });
+    (input.detailImages || []).forEach(function (url, index) { pushAccepted(url, 'product_detail', index, [], 'image'); });
+    (input.sourceVideos || []).forEach(function (video, index) {
+      var url = video && typeof video === 'object' ? video.url : video;
+      pushAccepted(url, 'video', index, [], 'video');
+    });
+    (input.skuItems || []).forEach(function (skuRow, index) {
+      var captureSku = skus[index];
+      (Array.isArray(skuRow && skuRow.images) ? skuRow.images : []).forEach(function (url, mediaIndex) {
+        var text = captureText(url);
+        var existing = text && acceptedByUrl.get('image:' + text);
+        if (existing) {
+          if (!captureSku.mediaKeys.includes(existing)) captureSku.mediaKeys.push(existing);
+          var existingRow = rows.find(function (item) { return item.key === existing; });
+          if (existingRow && !existingRow.skuKeys.includes(captureSku.key)) existingRow.skuKeys.push(captureSku.key);
+          return;
+        }
+        var key = pushAccepted(url, 'sku', mediaIndex, [captureSku.key], 'image');
+        if (key) captureSku.mediaKeys.push(key);
+      });
+    });
+    (input.rejectedAssets || []).forEach(function (asset, index) {
+      var url = captureText(asset && asset.url);
+      var options = captureEvidenceOptions(context, {
+        sourcePath: '/pageState/knownGlobals/images',
+        confidence: 0.85
+      });
+      rows.push({
+        key: captureStableKey('rejected-media', [String(index), url, asset && asset.reason], rows.length),
+        ordinal: index,
+        kind: 'image',
+        role: 'unknown',
+        url: url,
+        width: null,
+        height: null,
+        mimeType: null,
+        skuKeys: [],
+        disposition: 'rejected',
+        rejectionReason: mapRejectedMediaReason(asset && asset.reason),
+        duplicateOfMediaKey: null,
+        rowEvidence: captureEvidence(true, options),
+        fieldEvidence: {
+          role: captureEvidence('unknown', options),
+          url: captureEvidence(url, Object.assign({}, options, { missingReason: 'invalid_source_value' })),
+          width: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_observed' })),
+          height: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_observed' })),
+          mimeType: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_observed' }))
+        }
+      });
+    });
+    return rows;
+  }
+
+  function buildCapturePackaging(rows, context, skus) {
+    return (Array.isArray(rows) ? rows : []).map(function (row, index) {
+      var rowEvidence = row && row.evidence && typeof row.evidence === 'object' ? row.evidence : {};
+      var rowSourceType = rowEvidence.sourceType || 'main_world';
+      var rowSourcePath = rowEvidence.sourcePath || '/pageState/knownGlobals/packageInfo';
+      var selectorsObject = {};
+      if (captureText(row && row.color)) selectorsObject['颜色'] = captureText(row.color);
+      if (captureText(row && row.size)) selectorsObject['尺码'] = captureText(row.size);
+      var selectors = captureAttributeValues(
+        selectorsObject,
+        context,
+        rowSourceType,
+        rowSourcePath
+      );
+      var matchedSkuKeys = skus.filter(function (sku) {
+        if (!selectors.length) return false;
+        return selectors.every(function (selector) {
+          return sku.attributes.some(function (attribute) {
+            return attribute.name === selector.name && attribute.value === selector.value;
+          });
+        });
+      }).map(function (sku) { return sku.key; });
+      var key = captureStableKey(
+        'packaging',
+        selectors.map(function (selector) { return selector.name + '=' + selector.value; }).concat([String(index)]),
+        index
+      );
+      matchedSkuKeys.forEach(function (skuKey) {
+        var sku = skus.find(function (item) { return item.key === skuKey; });
+        if (sku && !sku.packagingKeys.includes(key)) sku.packagingKeys.push(key);
+      });
+      var weightG = capturePositiveNumber(row && row.weightG);
+      var lengthMm = capturePositiveNumber(row && row.lengthMm);
+      var widthMm = capturePositiveNumber(row && row.widthMm);
+      var heightMm = capturePositiveNumber(row && row.heightMm);
+      var volumeCm3 = capturePositiveNumber(row && row.volumeCm3);
+      var invalidPhysicalFields = Array.isArray(row && row.invalidPhysicalFields)
+        ? row.invalidPhysicalFields
+        : [];
+      var options = captureEvidenceOptions(context, {
+        sourceType: rowSourceType,
+        sourcePath: rowSourcePath,
+        confidence: Number.isFinite(Number(rowEvidence.confidence)) ? Number(rowEvidence.confidence) : 0.9,
+        observedAt: rowEvidence.observedAt || context.observedAt,
+        parserVersion: rowEvidence.parserVersion || context.parserVersion,
+        derivedFrom: Array.isArray(rowEvidence.derivedFrom) ? rowEvidence.derivedFrom : []
+      });
+      function physicalEvidence(field, value, raw) {
+        return captureEvidence(value, Object.assign({}, options, {
+          missingReason: raw === 0 || invalidPhysicalFields.includes(field)
+            ? 'invalid_source_value'
+            : 'not_observed'
+        }));
+      }
+      return {
+        key: key,
+        ordinal: index,
+        scope: matchedSkuKeys.length ? 'sku' : (selectors.length ? 'attribute_set' : 'product'),
+        skuKeys: matchedSkuKeys,
+        selectors: selectors,
+        weightG: weightG,
+        lengthMm: lengthMm,
+        widthMm: widthMm,
+        heightMm: heightMm,
+        volumeCm3: volumeCm3,
+        rowEvidence: captureEvidence(true, options),
+        fieldEvidence: {
+          weightG: physicalEvidence('weightG', weightG, row && row.weightG),
+          lengthMm: physicalEvidence('lengthMm', lengthMm, row && row.lengthMm),
+          widthMm: physicalEvidence('widthMm', widthMm, row && row.widthMm),
+          heightMm: physicalEvidence('heightMm', heightMm, row && row.heightMm),
+          volumeCm3: physicalEvidence('volumeCm3', volumeCm3, row && row.volumeCm3)
+        }
+      };
+    });
+  }
+
+  function buildCaptureProductAttributes(rows, context, evidenceByKey) {
+    return (Array.isArray(rows) ? rows : []).map(function (row, index) {
+      var name = captureText(row && row.name) || 'unknown';
+      var value = captureText(row && row.value) || 'unknown';
+      var descriptor = evidenceByKey && evidenceByKey[name + '\u0000' + value] || {};
+      var options = captureEvidenceOptions(context, {
+        sourceType: descriptor.sourceType || 'main_world',
+        sourcePath: descriptor.sourcePath || '/pageState/knownGlobals/productProps',
+        confidence: Number.isFinite(Number(descriptor.confidence)) ? Number(descriptor.confidence) : 0.9,
+        observedAt: descriptor.observedAt || context.observedAt,
+        parserVersion: descriptor.parserVersion || context.parserVersion,
+        derivedFrom: Array.isArray(descriptor.derivedFrom) ? descriptor.derivedFrom : []
+      });
+      return {
+        key: captureStableKey('attribute', [name, value], index),
+        ordinal: index,
+        sourceAttributeId: null,
+        name: name,
+        value: value,
+        isSaleAttribute: is1688SalePropName(name),
+        rowEvidence: captureEvidence(true, options),
+        fieldEvidence: {
+          sourceAttributeId: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_present' })),
+          name: captureEvidence(name, options),
+          value: captureEvidence(value, options),
+          isSaleAttribute: captureEvidence(is1688SalePropName(name), options)
+        }
+      };
+    });
+  }
+
+  function buildCapturePrices(priceModel, context) {
+    var rows = [];
+    var descriptor = priceModel && priceModel.evidence && typeof priceModel.evidence === 'object'
+      ? priceModel.evidence
+      : {};
+    var options = captureEvidenceOptions(context, {
+      sourceType: descriptor.sourceType || 'main_world',
+      sourcePath: descriptor.sourcePath || '/pageState/knownGlobals/priceInfo',
+      confidence: Number.isFinite(Number(descriptor.confidence)) ? Number(descriptor.confidence) : 0.9,
+      observedAt: descriptor.observedAt || context.observedAt,
+      parserVersion: descriptor.parserVersion || context.parserVersion,
+      derivedFrom: Array.isArray(descriptor.derivedFrom) ? descriptor.derivedFrom : []
+    });
+    function pushPrice(role, key, minQuantity, amount, maxAmount, displayText) {
+      var amountCny = capturePositiveNumber(amount);
+      var maxAmountCny = capturePositiveNumber(maxAmount);
+      rows.push({
+        key: key,
+        role: role,
+        skuKey: null,
+        minQuantity: minQuantity == null ? null : Math.max(1, Math.floor(Number(minQuantity))),
+        amountCny: amountCny,
+        maxAmountCny: maxAmountCny,
+        currency: 'CNY',
+        displayText: captureText(displayText),
+        fieldEvidence: {
+          skuKey: captureEvidence(null, Object.assign({}, options, { missingReason: 'not_applicable' })),
+          minQuantity: captureEvidence(minQuantity == null ? null : Math.max(1, Math.floor(Number(minQuantity))), Object.assign({}, options, { missingReason: 'not_applicable' })),
+          amountCny: captureEvidence(amountCny, Object.assign({}, options, { missingReason: 'not_observed' })),
+          maxAmountCny: captureEvidence(maxAmountCny, Object.assign({}, options, { missingReason: 'not_applicable' })),
+          currency: captureEvidence('CNY', options),
+          displayText: captureEvidence(captureText(displayText), Object.assign({}, options, { missingReason: 'not_observed' }))
+        }
+      });
+    }
+    if (priceModel.skuMinPrice != null) {
+      pushPrice('sku_minimum', 'price:sku-minimum', null, priceModel.skuMinPrice, null, priceModel.unitPriceText);
+    }
+    (priceModel.ladderPrices || []).forEach(function (row, index) {
+      pushPrice('ladder_tier', 'price:ladder:' + index, row.minQuantity, row.price, null, '');
+    });
+    var range = parse1688PriceRange(priceModel.displayPrice);
+    if (range.length >= 2) {
+      pushPrice('displayed_range', 'price:displayed-range', null, range[0], range[range.length - 1], priceModel.displayPrice);
+    }
+    return rows;
+  }
+
+  function captureCount(fieldPath, count, truncations) {
+    var losses = (Array.isArray(truncations) ? truncations : []).filter(function (row) {
+      return row && row.stage !== 'legacy_projection' && row.fieldPath === fieldPath
+        && Number(row.observedCount) > Number(row.retainedCount);
+    });
+    var totalCount = losses.reduce(function (total, row) {
+      return Math.max(total, Math.max(0, Math.floor(Number(row.observedCount) || 0)));
+    }, count);
+    var prioritized = losses.slice().sort(function (left, right) {
+      var score = function (reason) {
+        if (reason === 'transport_limit') return 4;
+        if (reason === 'size_limit') return 3;
+        if (reason === 'source_limit') return 2;
+        return 1;
+      };
+      return score(right.reason) - score(left.reason);
+    });
+    return {
+      fieldPath: fieldPath,
+      totalCount: totalCount,
+      capturedCount: count,
+      submittedCount: count,
+      truncated: losses.length > 0,
+      reason: prioritized.length ? prioritized[0].reason : null
+    };
+  }
+
+  function collectorLimitTruncation(fieldPath, observedCount, retainedCount, limit) {
+    return {
+      stage: 'collector_core',
+      fieldPath: fieldPath,
+      observedCount: observedCount,
+      retainedCount: retainedCount,
+      limit: limit,
+      unit: 'items',
+      reason: 'source_limit',
+      recoverability: 'manual_recapture',
+      fallbackSourcePath: null
+    };
+  }
+
+  function capCanonicalRows(rows, limit, fieldPath, truncations) {
+    var list = Array.isArray(rows) ? rows : [];
+    if (list.length <= limit) return list;
+    truncations.push(collectorLimitTruncation(fieldPath, list.length, limit, limit));
+    return list.slice(0, limit);
+  }
+
+  function legacyProjectionTruncation(fieldPath, observedCount, limit) {
+    if (observedCount <= limit) return null;
+    return {
+      stage: 'legacy_projection',
+      fieldPath: fieldPath,
+      observedCount: observedCount,
+      retainedCount: limit,
+      limit: limit,
+      unit: 'items',
+      reason: 'legacy_projection_limit',
+      recoverability: 'server_refetch',
+      fallbackSourcePath: null
+    };
+  }
+
+  function normalizeBridgeTruncations(rows) {
+    var stages = /^(?:page_bridge|collector_core|content_script|service_worker|transport|api_validation|persistence|legacy_projection|ui_preview)$/;
+    var units = /^(?:items|utf8_bytes|characters|depth)$/;
+    var reasons = /^(?:source_limit|candidate_limit|size_limit|transport_limit|timeout|parse_failure|unsupported_shape|legacy_projection_limit|ui_preview_limit)$/;
+    var recoverability = /^(?:same_page_fallback|reload_page|chunked_resubmit|server_refetch|manual_recapture|not_recoverable)$/;
+    return (Array.isArray(rows) ? rows : []).filter(function (row) {
+      return row
+        && stages.test(String(row.stage || ''))
+        && units.test(String(row.unit || ''))
+        && reasons.test(String(row.reason || ''))
+        && recoverability.test(String(row.recoverability || ''))
+        && typeof row.fieldPath === 'string'
+        && row.fieldPath.charAt(0) === '/';
+    }).map(function (row) {
+      return {
+        stage: row.stage,
+        fieldPath: row.fieldPath,
+        observedCount: Math.max(0, Math.floor(Number(row.observedCount) || 0)),
+        retainedCount: Math.max(0, Math.floor(Number(row.retainedCount) || 0)),
+        limit: Math.max(0, Math.floor(Number(row.limit) || 0)),
+        unit: row.unit,
+        reason: row.reason,
+        recoverability: row.recoverability,
+        fallbackSourcePath: row.fallbackSourcePath || null
+      };
+    });
+  }
+
+  function captureUtf8Bytes(value) {
+    var text = JSON.stringify(value);
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).byteLength;
+    return unescape(encodeURIComponent(text)).length;
+  }
+
+  function applyCaptureTransportLimit(capture, arrayName, retainedCount, observedCount) {
+    var fieldPath = '/' + arrayName;
+    var rows = Array.isArray(capture[arrayName]) ? capture[arrayName] : [];
+    var originalCapturedCount = rows.length;
+    var previousMediaRoleCounts = null;
+    if (arrayName === 'media') {
+      previousMediaRoleCounts = {
+        '/media/product_main': rows.filter(function (row) { return row.role === 'product_main' && row.disposition === 'accepted'; }).length,
+        '/media/product_detail': rows.filter(function (row) { return row.role === 'product_detail' && row.disposition === 'accepted'; }).length,
+        '/media/rejected': rows.filter(function (row) { return row.disposition === 'rejected'; }).length
+      };
+    }
+    capture[arrayName] = rows.slice(0, retainedCount);
+    if (arrayName === 'skus') {
+      var retainedSkuKeys = new Set(capture.skus.map(function (row) { return row.key; }));
+      capture.media.forEach(function (row) {
+        row.skuKeys = row.skuKeys.filter(function (key) { return retainedSkuKeys.has(key); });
+      });
+      capture.packaging.forEach(function (row) {
+        row.skuKeys = row.skuKeys.filter(function (key) { return retainedSkuKeys.has(key); });
+      });
+      capture.completeness.estimatedFieldPaths = capture.completeness.estimatedFieldPaths.filter(function (path) {
+        var match = String(path).match(/^\/skus\/(\d+)/);
+        return !match || Number(match[1]) < retainedCount;
+      });
+    } else if (arrayName === 'media') {
+      var retainedMediaKeys = new Set(capture.media.map(function (row) { return row.key; }));
+      capture.skus.forEach(function (row) {
+        row.mediaKeys = row.mediaKeys.filter(function (key) { return retainedMediaKeys.has(key); });
+      });
+      var submittedMediaRoleCounts = {
+        '/media/product_main': capture.media.filter(function (row) { return row.role === 'product_main' && row.disposition === 'accepted'; }).length,
+        '/media/product_detail': capture.media.filter(function (row) { return row.role === 'product_detail' && row.disposition === 'accepted'; }).length,
+        '/media/rejected': capture.media.filter(function (row) { return row.disposition === 'rejected'; }).length
+      };
+      Object.keys(submittedMediaRoleCounts).forEach(function (rolePath) {
+        var roleCount = capture.counts.find(function (row) { return row.fieldPath === rolePath; });
+        var previousCount = previousMediaRoleCounts[rolePath];
+        var submittedCount = submittedMediaRoleCounts[rolePath];
+        var existingTransport = capture.truncations.find(function (row) {
+          return row.stage === 'transport' && row.fieldPath === rolePath;
+        });
+        var transportObservedCount = Math.max(
+          previousCount,
+          roleCount && Number(roleCount.capturedCount) || 0,
+          existingTransport && Number(existingTransport.observedCount) || 0
+        );
+        if (roleCount) {
+          roleCount.totalCount = Math.max(Number(roleCount.totalCount) || 0, transportObservedCount);
+          roleCount.capturedCount = Math.max(Number(roleCount.capturedCount) || 0, transportObservedCount);
+          roleCount.submittedCount = submittedCount;
+          if (submittedCount < transportObservedCount) {
+            roleCount.truncated = true;
+            roleCount.reason = 'transport_limit';
+          }
+        }
+        capture.truncations = capture.truncations.filter(function (row) {
+          return !(row.stage === 'transport' && row.fieldPath === rolePath);
+        });
+        if (submittedCount < transportObservedCount) {
+          capture.truncations.push({
+            stage: 'transport',
+            fieldPath: rolePath,
+            observedCount: transportObservedCount,
+            retainedCount: submittedCount,
+            limit: submittedCount,
+            unit: 'items',
+            reason: 'transport_limit',
+            recoverability: 'not_recoverable',
+            fallbackSourcePath: null
+          });
+        }
+      });
+    } else if (arrayName === 'packaging') {
+      var retainedPackagingKeys = new Set(capture.packaging.map(function (row) { return row.key; }));
+      capture.skus.forEach(function (row) {
+        row.packagingKeys = row.packagingKeys.filter(function (key) { return retainedPackagingKeys.has(key); });
+      });
+    }
+    capture.truncations = capture.truncations.filter(function (row) {
+      return !(row.stage === 'transport' && row.fieldPath === fieldPath);
+    });
+    capture.truncations.push({
+      stage: 'transport',
+      fieldPath: fieldPath,
+      observedCount: observedCount,
+      retainedCount: retainedCount,
+      limit: retainedCount,
+      unit: 'items',
+      reason: 'transport_limit',
+      recoverability: 'not_recoverable',
+      fallbackSourcePath: null
+    });
+    var count = capture.counts.find(function (row) { return row.fieldPath === fieldPath; });
+    if (count) {
+      count.totalCount = Math.max(Number(count.totalCount) || 0, observedCount);
+      count.capturedCount = Math.max(Number(count.capturedCount) || 0, originalCapturedCount);
+      count.submittedCount = retainedCount;
+      count.truncated = true;
+      count.reason = 'transport_limit';
+    }
+    var sectionName = arrayName === 'prices' ? 'pricing' : arrayName;
+    var section = capture.completeness.sections.find(function (row) { return row.section === sectionName; });
+    if (section && section.status === 'complete') section.status = 'partial';
+    if (section && section.missingFieldPaths.indexOf(fieldPath) < 0) section.missingFieldPaths.push(fieldPath);
+    if (capture.completeness.missingFieldPaths.indexOf(fieldPath) < 0) capture.completeness.missingFieldPaths.push(fieldPath);
+    if (capture.completeness.status === 'complete') capture.completeness.status = 'partial';
+    var truncationCount = capture.counts.find(function (row) { return row.fieldPath === '/truncations'; });
+    if (truncationCount) {
+      truncationCount.totalCount = capture.truncations.length;
+      truncationCount.capturedCount = capture.truncations.length;
+      truncationCount.submittedCount = capture.truncations.length;
+    }
+  }
+
+  function enforceCapturePayloadBudget(capture) {
+    var targetBytes = CAPTURE_PAYLOAD_BYTES_LIMIT - 4096;
+    var arrayNames = ['skus', 'attributes', 'media', 'packaging', 'prices'];
+    var capturedCounts = {};
+    arrayNames.forEach(function (name) {
+      var count = capture.counts.find(function (row) { return row.fieldPath === '/' + name; });
+      capturedCounts[name] = Math.max(
+        Array.isArray(capture[name]) ? capture[name].length : 0,
+        count && Number(count.capturedCount) || 0
+      );
+    });
+    var attempts = 0;
+    while (captureUtf8Bytes(capture) > targetBytes && attempts < 30) {
+      attempts += 1;
+      var candidates = arrayNames.map(function (name) {
+        var rows = Array.isArray(capture[name]) ? capture[name] : [];
+        return { name: name, rows: rows, bytes: rows.length ? captureUtf8Bytes(rows) : 0 };
+      }).filter(function (candidate) { return candidate.rows.length > 0; })
+        .sort(function (left, right) { return right.bytes - left.bytes; });
+      if (!candidates.length) break;
+      var candidate = candidates[0];
+      var currentBytes = captureUtf8Bytes(capture);
+      var ratio = Math.max(0, Math.min(0.98, targetBytes / currentBytes));
+      var nextLength = Math.max(0, Math.min(candidate.rows.length - 1, Math.floor(candidate.rows.length * ratio * 0.98)));
+      applyCaptureTransportLimit(capture, candidate.name, nextLength, capturedCounts[candidate.name]);
+    }
+    return capture;
+  }
+
+  function normalizeCaptureCategoryPath(value) {
+    var values = Array.isArray(value)
+      ? value
+      : (typeof value === 'string' ? value.split(/\s*(?:>|\/|›|»|→)\s*/) : []);
+    return values.map(function (entry, index) {
+      var data = entry && typeof entry === 'object' ? entry : {};
+      var nested = data.item && typeof data.item === 'object' ? data.item : data;
+      var name = captureText(typeof entry === 'object'
+        ? pickFirstValue(nested, ['name', 'categoryName', 'catName', 'title', 'label'])
+        : entry);
+      if (!name) return null;
+      var idValue = typeof entry === 'object'
+        ? pickFirstValue(nested, ['id', 'categoryId', 'catId', 'leafCategoryId'])
+        : null;
+      return {
+        ordinal: index,
+        id: idValue == null || idValue === '' ? null : String(idValue),
+        name: name
+      };
+    }).filter(Boolean);
+  }
+
+  function extractCaptureCategoryCandidate(value, descriptor) {
+    var candidate = {
+      id: null,
+      name: null,
+      path: [],
+      fieldEvidence: { id: null, name: null, path: null }
+    };
+    walkObject(value, [], function (entry, valuePath) {
+      var key = valuePath[valuePath.length - 1] || '';
+      if (candidate.id == null
+        && /^(?:sourceCategoryId|categoryId|leafCategoryId|catId|category_id|leaf_category_id)$/i.test(key)
+        && (typeof entry === 'string' || typeof entry === 'number')) {
+        candidate.id = String(entry);
+        candidate.fieldEvidence.id = Object.assign({}, descriptor, {
+          sourcePath: joinEvidencePath(descriptor.sourcePath, valuePath)
+        });
+      }
+      if (!candidate.name
+        && /^(?:sourceCategoryName|categoryName|leafCategoryName|catName)$/i.test(key)
+        && typeof entry === 'string') {
+        candidate.name = captureText(entry);
+        candidate.fieldEvidence.name = Object.assign({}, descriptor, {
+          sourcePath: joinEvidencePath(descriptor.sourcePath, valuePath)
+        });
+      }
+      if (!candidate.path.length
+        && /^(?:categoryPath|sourceCategoryPath|breadcrumb|breadcrumbs|categoryList)$/i.test(key)) {
+        var path = normalizeCaptureCategoryPath(entry);
+        if (path.length) {
+          candidate.path = path;
+          candidate.fieldEvidence.path = Object.assign({}, descriptor, {
+            sourcePath: joinEvidencePath(descriptor.sourcePath, valuePath)
+          });
+        }
+      }
+      if (!candidate.path.length && entry && typeof entry === 'object'
+        && /BreadcrumbList/i.test(String(entry['@type'] || ''))) {
+        var breadcrumbPath = normalizeCaptureCategoryPath(entry.itemListElement);
+        if (breadcrumbPath.length) {
+          candidate.path = breadcrumbPath;
+          candidate.fieldEvidence.path = Object.assign({}, descriptor, {
+            sourcePath: joinEvidencePath(descriptor.sourcePath, valuePath.concat('itemListElement'))
+          });
+        }
+      }
+    });
+    if (!candidate.name && candidate.path.length) {
+      candidate.name = candidate.path[candidate.path.length - 1].name;
+      candidate.fieldEvidence.name = candidate.fieldEvidence.path;
+    }
+    return candidate;
+  }
+
+  function pickCaptureSourceCategory(sources, context, domFallback) {
+    var candidates = [];
+    var normalizedSources = normalizeEvidenceSources(context && context.evidenceSources);
+    if (!normalizedSources.length && Array.isArray(sources) && sources.length) {
+      normalizedSources.push({
+        id: 'legacy-main-world-sources',
+        sourceType: 'main_world',
+        sourcePath: '/pageState/knownGlobals',
+        tier: 10,
+        observedAt: context && context.observedAt,
+        parserVersion: context && context.parserVersion,
+        value: sources
+      });
+    }
+    normalizedSources.forEach(function (source) {
+      candidates.push(extractCaptureCategoryCandidate(source.value, source));
+    });
+    (Array.isArray(domFallback && domFallback.categories) ? domFallback.categories : []).forEach(function (category) {
+      if (!category || typeof category !== 'object') return;
+      candidates.push({
+        id: category.id == null || category.id === '' ? null : String(category.id),
+        name: captureText(category.name),
+        path: normalizeCaptureCategoryPath(category.path),
+        fieldEvidence: {
+          id: category.fieldEvidence && category.fieldEvidence.id || category.evidence,
+          name: category.fieldEvidence && category.fieldEvidence.name || category.evidence,
+          path: category.fieldEvidence && category.fieldEvidence.path || category.evidence
+        }
+      });
+    });
+    var legacy = context && context.legacyResult && typeof context.legacyResult === 'object'
+      ? context.legacyResult
+      : {};
+    if (Object.keys(legacy).length) {
+      candidates.push(extractCaptureCategoryCandidate(legacy, {
+        sourceType: 'dom',
+        sourcePath: '/legacyResult',
+        confidence: 0.7,
+        observedAt: context && context.observedAt,
+        parserVersion: context && context.parserVersion,
+        derivedFrom: []
+      }));
+    }
+    var meaningful = candidates.filter(function (candidate) {
+      return candidate && (candidate.id != null || candidate.name || candidate.path.length);
+    });
+    var categoryIds = Array.from(new Set(meaningful.map(function (candidate) {
+      return candidate.id == null ? '' : String(candidate.id);
+    }).filter(Boolean)));
+    if (categoryIds.length > 1) {
+      var primary = meaningful[0] || { id: null, name: null, path: [], fieldEvidence: {} };
+      return {
+        id: primary.id == null ? null : String(primary.id),
+        name: primary.name || null,
+        path: primary.path || [],
+        fieldEvidence: primary.fieldEvidence || { id: null, name: null, path: null },
+        ambiguous: true
+      };
+    }
+    var result = { id: null, name: null, path: [], fieldEvidence: { id: null, name: null, path: null } };
+    candidates.forEach(function (candidate) {
+      if (!candidate) return;
+      if (result.id == null && candidate.id != null) {
+        result.id = String(candidate.id);
+        result.fieldEvidence.id = candidate.fieldEvidence.id;
+      }
+      if (!result.name && candidate.name) {
+        result.name = candidate.name;
+        result.fieldEvidence.name = candidate.fieldEvidence.name;
+      }
+      if (!result.path.length && candidate.path.length) {
+        result.path = candidate.path;
+        result.fieldEvidence.path = candidate.fieldEvidence.path;
+      }
+    });
+    if (!result.name && result.path.length) {
+      result.name = result.path[result.path.length - 1].name;
+      result.fieldEvidence.name = result.fieldEvidence.path;
+    }
+    return {
+      id: result.id,
+      name: result.name,
+      path: result.path,
+      fieldEvidence: result.fieldEvidence,
+      ambiguous: false
+    };
+  }
+
+  function categoryEvidenceOptions(context, descriptor, fallbackPath) {
+    var row = descriptor && typeof descriptor === 'object' ? descriptor : {};
+    return captureEvidenceOptions(context, {
+      sourceType: row.sourceType || 'main_world',
+      sourcePath: row.sourcePath || fallbackPath,
+      confidence: Number.isFinite(Number(row.confidence)) ? Number(row.confidence) : 0.9,
+      observedAt: row.observedAt || context.observedAt,
+      parserVersion: row.parserVersion || context.parserVersion,
+      derivedFrom: Array.isArray(row.derivedFrom) ? row.derivedFrom : []
+    });
+  }
+
+  function build1688SourceProductCaptureV2(input) {
+    var context = input.context && typeof input.context === 'object' ? input.context : {};
+    var observedAt = captureDateTime(context.observedAt || context.collectedAt);
+    var parserVersion = String(context.parserVersion || context.extensionVersion || 'ss-erp-1688-core-v2');
+    var evidenceContext = { observedAt: observedAt, parserVersion: parserVersion };
+    var sourceCategory = pickCaptureSourceCategory(input.sources, context, input.domFallback);
+    var productId = String(input.productId || '').trim();
+    var canonicalUrl = String(input.url || '').trim();
+    var host = String(context.host || '').trim().toLowerCase();
+    if (!host) {
+      try { host = new URL(canonicalUrl).hostname; } catch (_error) { host = 'detail.1688.com'; }
+    }
+    var truncations = normalizeBridgeTruncations(context.bridgeTruncations || context.truncations);
+    if (sourceCategory.path.length > 50) {
+      var originalLeafName = sourceCategory.path[sourceCategory.path.length - 1].name;
+      truncations.push(collectorLimitTruncation('/sourceCategory/path', sourceCategory.path.length, 50, 50));
+      sourceCategory.path = sourceCategory.path.slice(0, 50);
+      if (sourceCategory.name === originalLeafName) sourceCategory.name = sourceCategory.path[49].name;
+    }
+    var skus = buildCaptureSkus(input.skuItems, evidenceContext);
+    if (skus.length > CAPTURE_SKU_LIMIT) {
+      truncations.push(collectorLimitTruncation('/skus', skus.length, CAPTURE_SKU_LIMIT, CAPTURE_SKU_LIMIT));
+      skus = skus.slice(0, CAPTURE_SKU_LIMIT);
+    }
+    var media = buildCaptureMedia(input, evidenceContext, skus);
+    var packaging = buildCapturePackaging(input.packagingRows, evidenceContext, skus);
+    var attributes = buildCaptureProductAttributes(input.attributes, evidenceContext, input.attributeEvidenceByKey);
+    var prices = buildCapturePrices(input.priceModel, evidenceContext);
+    if (media.length > CAPTURE_MEDIA_LIMIT) {
+      truncations.push(collectorLimitTruncation('/media', media.length, CAPTURE_MEDIA_LIMIT, CAPTURE_MEDIA_LIMIT));
+      media = media.slice(0, CAPTURE_MEDIA_LIMIT);
+      var retainedMediaKeys = new Set(media.map(function (row) { return row.key; }));
+      skus.forEach(function (sku) {
+        sku.mediaKeys = sku.mediaKeys.filter(function (key) { return retainedMediaKeys.has(key); });
+      });
+    }
+    if (packaging.length > CAPTURE_PACKAGING_LIMIT) {
+      truncations.push(collectorLimitTruncation('/packaging', packaging.length, CAPTURE_PACKAGING_LIMIT, CAPTURE_PACKAGING_LIMIT));
+      packaging = packaging.slice(0, CAPTURE_PACKAGING_LIMIT);
+      var retainedPackagingKeys = new Set(packaging.map(function (row) { return row.key; }));
+      skus.forEach(function (sku) {
+        sku.packagingKeys = sku.packagingKeys.filter(function (key) { return retainedPackagingKeys.has(key); });
+      });
+    }
+    if (attributes.length > CAPTURE_ATTRIBUTE_LIMIT) {
+      truncations.push(collectorLimitTruncation('/attributes', attributes.length, CAPTURE_ATTRIBUTE_LIMIT, CAPTURE_ATTRIBUTE_LIMIT));
+      attributes = attributes.slice(0, CAPTURE_ATTRIBUTE_LIMIT);
+    }
+    if (prices.length > CAPTURE_PRICE_LIMIT) {
+      truncations.push(collectorLimitTruncation('/prices', prices.length, CAPTURE_PRICE_LIMIT, CAPTURE_PRICE_LIMIT));
+      prices = prices.slice(0, CAPTURE_PRICE_LIMIT);
+    }
+    var packageDimensions = input.packageDimensionsMm || {};
+    var title = captureText(input.title);
+    var shopName = captureText(input.shopName);
+    var description = captureText(input.description);
+    var packageWeightG = capturePositiveNumber(input.packageWeightG);
+    var packageLengthMm = capturePositiveNumber(packageDimensions.lengthMm);
+    var packageWidthMm = capturePositiveNumber(packageDimensions.widthMm);
+    var packageHeightMm = capturePositiveNumber(packageDimensions.heightMm);
+    function physicalMissingReason(field, value) {
+      if (value !== null) return 'not_observed';
+      return packaging.some(function (row) {
+        return row && row.fieldEvidence && row.fieldEvidence[field]
+          && row.fieldEvidence[field].missingReason === 'invalid_source_value';
+      }) ? 'invalid_source_value' : 'not_observed';
+    }
+    var shippingInputPresent = Object.prototype.hasOwnProperty.call(context, 'shippingCny')
+      && context.shippingCny !== undefined;
+    var shippingFree = context.shippingFree === true ? true : (context.shippingFree === false ? false : null);
+    var shippingCny = context.shippingCny == null ? null : Number(context.shippingCny);
+    if (!Number.isFinite(shippingCny) || shippingCny < 0 || (shippingCny === 0 && shippingFree !== true)) shippingCny = null;
+    var minimumOrderQuantity = input.priceModel.ladderPrices.length
+      ? Math.max(1, Math.floor(Number(input.priceModel.ladderPrices[0].minQuantity) || 1))
+      : null;
+    var capturedUnitPrice = capturePositiveNumber(input.priceModel.costPriceForOzon);
+    var totalCostCny = shippingCny !== null && capturedUnitPrice !== null && prices.length > 0
+      ? roundMoney(capturedUnitPrice + shippingCny)
+      : null;
+    var factEvidence = input.factEvidence && typeof input.factEvidence === 'object' ? input.factEvidence : {};
+    function factEvidenceOptions(name, fallbackPath) {
+      return categoryEvidenceOptions(evidenceContext, factEvidence[name], fallbackPath);
+    }
+    var factOptions = captureEvidenceOptions(evidenceContext, { sourcePath: '/pageState/knownGlobals' });
+    var physicalDescriptor = (Array.isArray(input.packagingRows) ? input.packagingRows : []).map(function (row) {
+      return row && row.evidence;
+    }).find(Boolean);
+    var physicalOptions = categoryEvidenceOptions(evidenceContext, physicalDescriptor, '/pageState/knownGlobals/packageInfo');
+    var facts = {
+      title: title,
+      shopName: shopName,
+      description: description,
+      sourceLocale: 'zh-CN',
+      currency: 'CNY',
+      selectedSkuKey: null,
+      shippingCny: shippingCny,
+      shippingFree: shippingFree,
+      totalCostCny: totalCostCny,
+      packageWeightG: packageWeightG,
+      packageLengthMm: packageLengthMm,
+      packageWidthMm: packageWidthMm,
+      packageHeightMm: packageHeightMm,
+      monthlySales: null,
+      minimumOrderQuantity: minimumOrderQuantity
+    };
+    var fieldEvidence = {
+      title: captureEvidence(title, Object.assign({}, factEvidenceOptions('title', '/pageState/knownGlobals/title'), { missingReason: 'not_observed' })),
+      shopName: captureEvidence(shopName, Object.assign({}, factEvidenceOptions('shopName', '/pageState/knownGlobals/shopName'), { missingReason: 'not_observed' })),
+      description: captureEvidence(description, Object.assign({}, factEvidenceOptions('description', '/pageState/knownGlobals/description'), { missingReason: 'not_observed' })),
+      sourceLocale: captureEvidence('zh-CN', factOptions),
+      currency: captureEvidence('CNY', factOptions),
+      selectedSkuKey: captureEvidence(null, Object.assign({}, factOptions, { missingReason: 'not_observed' })),
+      shippingCny: captureEvidence(shippingCny, Object.assign({}, factOptions, {
+        missingReason: shippingInputPresent ? (context.shippingCny === 0 ? 'invalid_source_value' : 'source_returned_null') : 'not_observed'
+      })),
+      shippingFree: captureEvidence(shippingFree, Object.assign({}, factOptions, { missingReason: 'not_observed' })),
+      totalCostCny: captureEvidence(totalCostCny, captureEvidenceOptions(evidenceContext, {
+        sourceType: 'derived',
+        sourcePath: '/derived/totalCostCny',
+        confidence: 0.95,
+        missingReason: shippingCny === null ? 'not_observed' : 'not_present',
+        derivedFrom: ['/prices/0/amountCny', '/facts/shippingCny']
+      })),
+      packageWeightG: captureEvidence(packageWeightG, Object.assign({}, physicalOptions, { missingReason: physicalMissingReason('weightG', packageWeightG) })),
+      packageLengthMm: captureEvidence(packageLengthMm, Object.assign({}, physicalOptions, { missingReason: physicalMissingReason('lengthMm', packageLengthMm) })),
+      packageWidthMm: captureEvidence(packageWidthMm, Object.assign({}, physicalOptions, { missingReason: physicalMissingReason('widthMm', packageWidthMm) })),
+      packageHeightMm: captureEvidence(packageHeightMm, Object.assign({}, physicalOptions, { missingReason: physicalMissingReason('heightMm', packageHeightMm) })),
+      monthlySales: captureEvidence(null, Object.assign({}, factOptions, { missingReason: 'not_observed' })),
+      minimumOrderQuantity: captureEvidence(minimumOrderQuantity, Object.assign({}, factOptions, { missingReason: 'not_observed' }))
+    };
+    var mainCount = media.filter(function (row) {
+      return row.role === 'product_main' && row.disposition === 'accepted';
+    }).length;
+    var detailCount = media.filter(function (row) {
+      return row.role === 'product_detail' && row.disposition === 'accepted';
+    }).length;
+    var rejectedCount = media.filter(function (row) {
+      return row.disposition === 'rejected';
+    }).length;
+    var counts = [
+      captureCount('/skus', skus.length, truncations),
+      captureCount('/attributes', attributes.length, truncations),
+      captureCount('/media', media.length, truncations),
+      captureCount('/media/product_main', mainCount, truncations),
+      captureCount('/media/product_detail', detailCount, truncations),
+      captureCount('/media/rejected', rejectedCount, truncations),
+      captureCount('/packaging', packaging.length, truncations),
+      captureCount('/prices', prices.length, truncations)
+    ];
+    [
+      legacyProjectionTruncation('/skus', skus.length, LEGACY_SKU_LIMIT),
+      legacyProjectionTruncation('/media/product_main', mainCount, LEGACY_MAIN_IMAGE_LIMIT),
+      legacyProjectionTruncation('/media/product_detail', detailCount, LEGACY_DETAIL_IMAGE_LIMIT),
+      legacyProjectionTruncation('/media/rejected', rejectedCount, LEGACY_REJECTED_ASSET_LIMIT),
+      legacyProjectionTruncation('/attributes', attributes.length, LEGACY_ATTRIBUTE_LIMIT),
+      legacyProjectionTruncation('/packaging', packaging.length, LEGACY_PACKAGING_LIMIT),
+      legacyProjectionTruncation('/prices/ladder_tier', input.priceModel.ladderPrices.length, LEGACY_LADDER_PRICE_LIMIT)
+    ].filter(Boolean).forEach(function (row) { truncations.push(row); });
+    counts.push(captureCount('/truncations', truncations.length, []));
+    var missingFieldPaths = Object.keys(facts).filter(function (key) { return facts[key] === null; }).map(function (key) { return '/facts/' + key; });
+    var estimatedFieldPaths = [];
+    skus.forEach(function (sku, index) {
+      if (sku.kind === 'derived_attribute_matrix') estimatedFieldPaths.push('/skus/' + index);
+    });
+    var observedSkuCount = skus.filter(function (sku) { return sku.kind === 'observed'; }).length;
+    function hasCanonicalLoss(fieldPath) {
+      var count = counts.find(function (row) { return row.fieldPath === fieldPath; });
+      return Boolean(count && count.truncated);
+    }
+    var categoryPathTruncated = truncations.some(function (row) {
+      return row.stage !== 'legacy_projection' && row.fieldPath === '/sourceCategory/path'
+        && row.observedCount > row.retainedCount;
+    });
+    var sections = [
+      { section: 'identity', status: productId && canonicalUrl ? 'complete' : 'missing', missingFieldPaths: productId && canonicalUrl ? [] : ['/sourceIdentity'] },
+      {
+        section: 'category',
+        status: !sourceCategory.ambiguous && !categoryPathTruncated && sourceCategory.id && sourceCategory.name && sourceCategory.path.length
+          ? 'complete'
+          : (sourceCategory.id || sourceCategory.name || sourceCategory.path.length ? 'partial' : 'missing'),
+        missingFieldPaths: [
+          sourceCategory.id ? null : '/sourceCategory/id',
+          sourceCategory.name ? null : '/sourceCategory/name',
+          sourceCategory.path.length && !categoryPathTruncated ? null : '/sourceCategory/path'
+        ].filter(Boolean)
+      },
+      { section: 'core_facts', status: title ? 'partial' : 'missing', missingFieldPaths: missingFieldPaths.filter(function (path) { return !/description|package|shipping|monthlySales/.test(path); }) },
+      { section: 'pricing', status: prices.length ? (hasCanonicalLoss('/prices') ? 'partial' : 'complete') : 'missing', missingFieldPaths: prices.length && !hasCanonicalLoss('/prices') ? [] : ['/prices'] },
+      {
+        section: 'skus',
+        status: !skus.length ? 'missing' : (observedSkuCount === skus.length && !hasCanonicalLoss('/skus') ? 'complete' : 'partial'),
+        missingFieldPaths: !skus.length ? ['/skus'] : (observedSkuCount === skus.length && !hasCanonicalLoss('/skus') ? [] : ['/skus'])
+      },
+      { section: 'attributes', status: attributes.length ? (hasCanonicalLoss('/attributes') ? 'partial' : 'complete') : 'missing', missingFieldPaths: attributes.length && !hasCanonicalLoss('/attributes') ? [] : ['/attributes'] },
+      { section: 'media', status: mainCount ? (hasCanonicalLoss('/media') ? 'partial' : 'complete') : 'missing', missingFieldPaths: mainCount && !hasCanonicalLoss('/media') ? [] : ['/media'] },
+      { section: 'packaging', status: packaging.length ? (hasCanonicalLoss('/packaging') ? 'partial' : 'complete') : 'missing', missingFieldPaths: packaging.length && !hasCanonicalLoss('/packaging') ? [] : ['/packaging'] },
+      { section: 'description', status: description ? 'complete' : (detailCount ? 'partial' : 'missing'), missingFieldPaths: description ? [] : ['/facts/description'] }
+    ];
+    counts.filter(function (row) { return row.truncated; }).forEach(function (row) {
+      if (missingFieldPaths.indexOf(row.fieldPath) < 0) missingFieldPaths.push(row.fieldPath);
+    });
+    if (categoryPathTruncated && missingFieldPaths.indexOf('/sourceCategory/path') < 0) {
+      missingFieldPaths.push('/sourceCategory/path');
+    }
+    var capture = {
+      captureVersion: SOURCE_CAPTURE_VERSION,
+      provenanceMode: 'native_v2',
+      platform: '1688',
+      sourceIdentity: {
+        productId: productId,
+        canonicalUrl: canonicalUrl,
+        host: host,
+        fieldEvidence: {
+          productId: captureEvidence(productId, Object.assign({}, factOptions, { sourcePath: '/pageState/knownGlobals/offerId' })),
+          canonicalUrl: captureEvidence(canonicalUrl, Object.assign({}, factOptions, { sourcePath: '/location/href' })),
+          host: captureEvidence(host, Object.assign({}, factOptions, { sourcePath: '/location/host' }))
+        }
+      },
+      collector: {
+        name: 'ss-erp-1688-core',
+        parserVersion: parserVersion,
+        contractVersion: SOURCE_CAPTURE_VERSION,
+        extensionVersion: String(context.extensionVersion || parserVersion),
+        pageBridgeVersion: String(context.pageBridgeVersion || 'page-bridge-v2'),
+        captureChannel: 'extension'
+      },
+      capturedAt: observedAt,
+      sourceCategory: {
+        id: sourceCategory.id,
+        name: sourceCategory.name,
+        path: sourceCategory.path.map(function (node) {
+          var categoryOptions = categoryEvidenceOptions(
+            evidenceContext,
+            sourceCategory.fieldEvidence.path,
+            '/pageState/knownGlobals/categoryPath'
+          );
+          return {
+            ordinal: node.ordinal,
+            id: node.id,
+            name: node.name,
+            fieldEvidence: {
+              id: captureEvidence(node.id, Object.assign({}, categoryOptions, { missingReason: 'not_present' })),
+              name: captureEvidence(node.name, categoryOptions)
+            }
+          };
+        }),
+        fieldEvidence: {
+          id: captureEvidence(sourceCategory.id, Object.assign({}, categoryEvidenceOptions(
+            evidenceContext,
+            sourceCategory.fieldEvidence.id,
+            '/pageState/knownGlobals/categoryId'
+          ), { missingReason: sourceCategory.ambiguous ? 'ambiguous' : 'not_observed' })),
+          name: captureEvidence(sourceCategory.name, Object.assign({}, categoryEvidenceOptions(
+            evidenceContext,
+            sourceCategory.fieldEvidence.name,
+            '/pageState/knownGlobals/categoryName'
+          ), { missingReason: sourceCategory.ambiguous ? 'ambiguous' : 'not_observed' }))
+        }
+      },
+      facts: facts,
+      fieldEvidence: fieldEvidence,
+      attributes: attributes,
+      prices: prices,
+      skus: skus,
+      media: media,
+      packaging: packaging,
+      counts: counts,
+      completeness: {
+        status: missingFieldPaths.length ? 'partial' : 'complete',
+        hasEstimatedValues: estimatedFieldPaths.length > 0,
+        sections: sections,
+        missingFieldPaths: missingFieldPaths,
+        estimatedFieldPaths: estimatedFieldPaths
+      },
+      truncations: truncations
+    };
+    return enforceCapturePayloadBudget(capture);
+  }
+
   function extract1688ProductFromSources(input) {
     var context = input && typeof input === 'object' ? input : {};
-    var sources = Array.isArray(context.sources) ? context.sources : [];
+    var collectorTruncations = [];
+    var evidenceSources = normalizeEvidenceSources(context.evidenceSources);
+    var sources = Array.isArray(context.sources) ? context.sources.slice() : [];
+    evidenceSources.forEach(function (source) {
+      if (sources.indexOf(source.value) < 0) sources.push(source.value);
+    });
     var url = String(context.url || context.sourceUrl || '').trim();
     var pageText = normalizeWhitespace(context.pageText || '');
     var productId = pick1688ProductId(url, sources);
     var shopName = pick1688StringByKey(sources, /(companyName|company|shopName|sellerName|storeName|supplierName)$/i);
     var title = pick1688Title(sources, productId, shopName);
-    var skuProps = pick1688SkuProps(sources);
-    var skuItems = pick1688SkuItems(sources, skuProps);
-    var assets = collect1688Assets(sources, skuProps);
-    var attributes = pick1688Attributes(sources, pageText);
-    var priceModel = build1688PriceModel(sources, skuItems);
-    if (!skuItems.length) {
-      skuItems = build1688SkuItemsFromAttributes(attributes, priceModel.costPriceForOzon);
+    var structuredSkuFamily = evidenceSources.length ? pick1688StructuredSkuFamily(evidenceSources) : null;
+    var skuSelectionAmbiguous = Boolean(structuredSkuFamily && structuredSkuFamily.ambiguous);
+    var skuProps = structuredSkuFamily && !structuredSkuFamily.ambiguous
+      ? structuredSkuFamily.skuProps
+      : pick1688SkuProps(sources);
+    var canonicalSkuItems = structuredSkuFamily && !structuredSkuFamily.ambiguous
+      ? structuredSkuFamily.rows
+      : (skuSelectionAmbiguous ? [] : pick1688SkuItems(sources, skuProps));
+    if (!canonicalSkuItems.length && !skuSelectionAmbiguous) {
+      canonicalSkuItems = pick1688DomFallbackSkuItems(context.domFallback);
     }
-    var packagingRows = pick1688PackagingRows(sources, pageText, attributes);
-    var packageWeightG = pick1688PackageWeightG(sources, pageText) || pick1688PackageWeightGFromRows(packagingRows);
-    var packageDimensionsMm = pick1688PackageDimensionsMmFromRows(packagingRows);
+    var structuredAssets = collect1688Assets(sources, skuProps);
+    var domMedia = merge1688DomMedia(structuredAssets, context.domFallback, evidenceSources);
+    var assets = {
+      mainImages: domMedia.mainImages,
+      detailImages: domMedia.detailImages,
+      rejectedAssets: domMedia.rejectedAssets
+    };
+    var sourceVideos = domMedia.sourceVideos;
+    var canonicalAttributes = capCanonicalRows(
+      pick1688Attributes(sources, pageText),
+      CAPTURE_ATTRIBUTE_LIMIT,
+      '/attributes',
+      collectorTruncations
+    );
+    var priceModel = build1688PriceModel(sources, canonicalSkuItems, evidenceSources);
+    if (!canonicalSkuItems.length && !skuSelectionAmbiguous) {
+      canonicalSkuItems = build1688SkuItemsFromAttributes(canonicalAttributes, priceModel.costPriceForOzon);
+    }
+    canonicalSkuItems = capCanonicalRows(canonicalSkuItems, CAPTURE_SKU_LIMIT, '/skus', collectorTruncations);
+    var canonicalPackagingRows = capCanonicalRows(
+      pick1688PackagingRows(sources, pageText, canonicalAttributes, context.domFallback, evidenceSources),
+      CAPTURE_PACKAGING_LIMIT,
+      '/packaging',
+      collectorTruncations
+    );
+    var packageWeightG = pick1688PackageWeightG(sources, pageText) || pick1688PackageWeightGFromRows(canonicalPackagingRows);
+    var packageDimensionsMm = pick1688PackageDimensionsMmFromRows(canonicalPackagingRows);
     var description = pick1688Description(sources, pageText, assets.detailImages);
-    var sourceRichContentDraft = build1688RichContentDraft(description, assets.detailImages);
+    var factEvidence = {
+      title: findTextEvidenceDescriptor(evidenceSources, title, /(subject|offerTitle|offerSubject|productName|goodsName|itemTitle|title)$/i),
+      shopName: findTextEvidenceDescriptor(evidenceSources, shopName, /(companyName|company|shopName|sellerName|storeName|supplierName)$/i),
+      description: findTextEvidenceDescriptor(evidenceSources, description, /(description|desc|detail|content|介绍|详情|描述)$/i)
+    };
+    var attributeEvidenceByKey = buildAttributeEvidenceMap(evidenceSources, canonicalAttributes);
+    var legacySkuItems = canonicalSkuItems.slice(0, LEGACY_SKU_LIMIT);
+    var legacyMainImages = assets.mainImages.slice(0, LEGACY_MAIN_IMAGE_LIMIT);
+    var legacyDetailImages = assets.detailImages.slice(0, LEGACY_DETAIL_IMAGE_LIMIT);
+    var legacyRejectedAssets = assets.rejectedAssets.slice(0, LEGACY_REJECTED_ASSET_LIMIT);
+    var legacyAttributes = canonicalAttributes.slice(0, LEGACY_ATTRIBUTE_LIMIT);
+    var legacyPackagingRows = canonicalPackagingRows.slice(0, LEGACY_PACKAGING_LIMIT).map(function (row) {
+      var legacyRow = Object.assign({}, row);
+      delete legacyRow.evidence;
+      return legacyRow;
+    });
+    var legacyLadderPrices = priceModel.ladderPrices.slice(0, LEGACY_LADDER_PRICE_LIMIT);
+    var sourceRichContentDraft = build1688RichContentDraft(description, legacyDetailImages);
     var diagnostics = build1688Diagnostics({
       title: title,
       pageText: pageText,
-      assets: assets,
-      skuItems: skuItems,
-      skuSource: skuItems.length ? (skuItems[0].source || '') : '',
-      attributes: attributes,
-      packagingRows: packagingRows,
+      assets: {
+        mainImages: legacyMainImages,
+        detailImages: legacyDetailImages,
+        rejectedAssets: legacyRejectedAssets
+      },
+      skuItems: legacySkuItems,
+      skuSource: legacySkuItems.length ? (legacySkuItems[0].source || '') : '',
+      attributes: legacyAttributes,
+      packagingRows: legacyPackagingRows,
       packageWeightG: packageWeightG,
       description: description,
-      sourceVideos: []
+      sourceVideos: sourceVideos
     }, priceModel);
+    if (skuSelectionAmbiguous) {
+      diagnostics.skuSelection = {
+        status: 'ambiguous',
+        sourceIds: structuredSkuFamily.ids,
+        message: '同优先级结构化 SKU 家族互相冲突，未自动选择或降级'
+      };
+    }
+    var captureContext = Object.assign({}, context, {
+      bridgeTruncations: (Array.isArray(context.bridgeTruncations) ? context.bridgeTruncations : []).concat(collectorTruncations)
+    });
+    var captureV2 = build1688SourceProductCaptureV2({
+      context: captureContext,
+      productId: productId,
+      url: url,
+      title: title,
+      shopName: shopName,
+      description: description,
+      priceModel: priceModel,
+      skuItems: canonicalSkuItems,
+      attributes: canonicalAttributes,
+      mainImages: assets.mainImages,
+      detailImages: assets.detailImages,
+      sourceVideos: sourceVideos,
+      mediaEvidenceByUrl: domMedia.evidenceByUrl,
+      factEvidence: factEvidence,
+      attributeEvidenceByKey: attributeEvidenceByKey,
+      rejectedAssets: assets.rejectedAssets,
+      packagingRows: canonicalPackagingRows,
+      packageWeightG: packageWeightG,
+      packageDimensionsMm: packageDimensionsMm,
+      sources: sources,
+      domFallback: context.domFallback
+    });
 
     return {
       platform: '1688',
@@ -258,33 +1667,122 @@
       priceSourceType: priceModel.sourceType,
       priceConfidence: priceModel.confidence,
       displayPrice: priceModel.displayPrice,
-      ladderPrices: priceModel.ladderPrices,
-      skuItems: skuItems,
-      skuCount: skuItems.length,
-      variants: skuItems,
+      ladderPrices: legacyLadderPrices,
+      skuItems: legacySkuItems,
+      skuCount: legacySkuItems.length,
+      variants: legacySkuItems,
       selectedSku: null,
-      images: assets.mainImages,
-      sourceMainImages: assets.mainImages,
-      sourceDetailImages: assets.detailImages,
-      rejectedAssets: assets.rejectedAssets,
-      attributes: attributes,
+      images: legacyMainImages,
+      sourceMainImages: legacyMainImages,
+      sourceDetailImages: legacyDetailImages,
+      rejectedAssets: legacyRejectedAssets,
+      attributes: legacyAttributes,
       weightG: packageWeightG || null,
       grossWeightGrams: packageWeightG || null,
       lengthMm: packageDimensionsMm ? packageDimensionsMm.lengthMm : null,
       widthMm: packageDimensionsMm ? packageDimensionsMm.widthMm : null,
       heightMm: packageDimensionsMm ? packageDimensionsMm.heightMm : null,
       dimensionsMm: packageDimensionsMm || null,
-      sourcePackagingRows: packagingRows,
+      sourcePackagingRows: legacyPackagingRows,
       description: description,
       sourceRichContentDraft: sourceRichContentDraft,
-      sourceVideos: [],
+      sourceVideos: sourceVideos,
+      sourceCategoryId: captureV2.sourceCategory.id || undefined,
+      categoryId: /^\d+$/.test(String(captureV2.sourceCategory.id || '')) ? Number(captureV2.sourceCategory.id) : undefined,
+      categoryName: captureV2.sourceCategory.name || '',
+      categoryPath: captureV2.sourceCategory.path.map(function (node) { return node.name; }),
       rawSourceProduct: {
         offerId: productId,
         skuProps: skuProps,
         priceModel: priceModel
       },
-      extractionDiagnostics: diagnostics
+      extractionDiagnostics: diagnostics,
+      captureV2: captureV2
     };
+  }
+
+  function pick1688DomFallbackSkuItems(domFallback) {
+    var fallback = domFallback && typeof domFallback === 'object' ? domFallback : {};
+    var families = Array.isArray(fallback.skuFamilies) ? fallback.skuFamilies.slice() : [];
+    families.sort(function (left, right) {
+      return (Number(left && left.tier) || 999) - (Number(right && right.tier) || 999);
+    });
+    var selected = families.find(function (family) {
+      return family && family.structurallyComplete !== false && Array.isArray(family.rows) && family.rows.length;
+    });
+    var rows = selected && selected.rows;
+    if (!Array.isArray(rows) || !rows.length) rows = Array.isArray(fallback.skus) ? fallback.skus : [];
+    return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem));
+  }
+
+  function is1688VideoUrl(value) {
+    return /^https?:\/\//i.test(String(value || ''))
+      && /\.(?:mp4|m3u8|mov|webm|m4v|flv|avi|qt|mpeg|mpg|mkv)(?:$|[?#])/i.test(String(value || ''));
+  }
+
+  function merge1688DomMedia(assets, domFallback, evidenceSources) {
+    var result = {
+      mainImages: (assets.mainImages || []).slice(),
+      detailImages: (assets.detailImages || []).slice(),
+      rejectedAssets: (assets.rejectedAssets || []).slice(),
+      sourceVideos: [],
+      evidenceByUrl: {}
+    };
+    var imageEvidence = buildImageEvidenceMap(evidenceSources, result.mainImages.concat(result.detailImages));
+    result.mainImages.concat(result.detailImages).forEach(function (url) {
+      var descriptor = imageEvidence[normalize1688ImageUrl(url)];
+      if (descriptor) result.evidenceByUrl[url] = descriptor;
+    });
+    var structuredUrls = new Set(result.mainImages.concat(result.detailImages));
+    function addEvidenceVideo(url, source, path, record) {
+      if (!is1688VideoUrl(url) || result.sourceVideos.some(function (video) { return video.url === url; })) return;
+      var next = { url: url };
+      var data = record && typeof record === 'object' && !Array.isArray(record) ? record : {};
+      var coverUrl = captureText(pickFirstValue(data, ['coverUrl', 'cover', 'poster', 'preview', 'thumbnail']));
+      var title = captureText(pickFirstValue(data, ['title', 'name', 'caption']));
+      if (coverUrl && /^https?:\/\//i.test(coverUrl)) next.coverUrl = coverUrl;
+      if (title) next.title = title.slice(0, 200);
+      result.sourceVideos.push(next);
+      result.evidenceByUrl[url] = {
+        sourceType: source.sourceType,
+        sourcePath: joinEvidencePath(source.sourcePath, path),
+        confidence: source.sourceType === 'main_world' ? 0.9 : 0.82,
+        observedAt: source.observedAt,
+        parserVersion: source.parserVersion,
+        derivedFrom: []
+      };
+    }
+    (Array.isArray(evidenceSources) ? evidenceSources : []).forEach(function (source) {
+      walkObject(source.value, [], function (value, path) {
+        if (!/(?:video|media|视频)/i.test(path.join('.'))) return;
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          var objectUrl = captureText(pickFirstValue(value, ['url', 'videoUrl', 'videoURL', 'src', 'link']));
+          if (objectUrl) addEvidenceVideo(objectUrl, source, path, value);
+          return;
+        }
+        if (typeof value === 'string') addEvidenceVideo(value, source, path, null);
+      });
+    });
+    (Array.isArray(domFallback && domFallback.media) ? domFallback.media : []).forEach(function (row) {
+      var url = captureText(row && row.url);
+      if (!url) return;
+      if (row.kind === 'video' && row.role === 'video') {
+        if (!result.sourceVideos.some(function (video) { return video.url === url; })) result.sourceVideos.push({ url: url });
+        if (!result.evidenceByUrl[url]) result.evidenceByUrl[url] = row.evidence || {};
+        return;
+      }
+      if (row.kind !== 'image') return;
+      if (row.role === 'product_main' && result.mainImages.indexOf(url) < 0) result.mainImages.push(url);
+      if (row.role === 'product_detail' && result.detailImages.indexOf(url) < 0) result.detailImages.push(url);
+      if (!structuredUrls.has(url)) result.evidenceByUrl[url] = row.evidence || {};
+    });
+    (Array.isArray(domFallback && domFallback.skus) ? domFallback.skus : []).forEach(function (sku) {
+      (Array.isArray(sku && sku.images) ? sku.images : []).forEach(function (url) {
+        var text = captureText(url);
+        if (text && !structuredUrls.has(text) && !result.evidenceByUrl[text]) result.evidenceByUrl[text] = sku.evidence || {};
+      });
+    });
+    return result;
   }
 
   function pick1688ProductId(url, sources) {
@@ -425,27 +1923,35 @@
     return name;
   }
 
+  function collect1688SkuCollections(source, skuProps) {
+    var collections = [];
+    walkObject(source, [], function (value, path) {
+      var pathText = path.join('.');
+      var rows = [];
+      if (value && typeof value === 'object' && !Array.isArray(value) && is1688SkuMapPath(pathText)) {
+        Object.keys(value).forEach(function (key) {
+          var item = normalize1688SkuMapEntry(key, value[key], skuProps);
+          if (item && isUseful1688SkuItem(item)) rows.push(item);
+        });
+      } else if (Array.isArray(value) && value.length && typeof value[0] === 'object' && is1688SkuListPath(pathText)) {
+        value.forEach(function (entry) {
+          var item = normalize1688SkuObject(entry, skuProps);
+          if (item && isUseful1688SkuItem(item)) rows.push(item);
+        });
+      }
+      if (rows.length) collections.push({ path: path.slice(), rows: rows });
+    });
+    return collections;
+  }
+
   function pick1688SkuItems(sources, skuProps) {
     var rows = [];
     (Array.isArray(sources) ? sources : []).forEach(function (source) {
-      walkObject(source, [], function (value, path) {
-        var pathText = path.join('.');
-        if (value && typeof value === 'object' && !Array.isArray(value) && is1688SkuMapPath(pathText)) {
-          Object.keys(value).forEach(function (key) {
-            var item = normalize1688SkuMapEntry(key, value[key], skuProps);
-            if (item) rows.push(item);
-          });
-          return;
-        }
-        if (Array.isArray(value) && value.length && typeof value[0] === 'object' && is1688SkuListPath(pathText)) {
-          value.forEach(function (entry) {
-            var item = normalize1688SkuObject(entry, skuProps);
-            if (item) rows.push(item);
-          });
-        }
+      collect1688SkuCollections(source, skuProps).forEach(function (collection) {
+        rows = rows.concat(collection.rows);
       });
     });
-    return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+    return dedupe1688SkuRows(rows);
   }
 
   function is1688SkuMapPath(pathText) {
@@ -484,7 +1990,8 @@
     var attrs = normalize1688Attrs(pickFirstValue(data, ['attrs', 'attributes', 'skuAttrs', 'skuAttributes', 'properties', 'props']));
     var skuId = pickFirstValue(data, ['skuId', 'sku_id', 'skuID', 'id', 'specId', 'spec_id', 'offerSkuId', 'saleSkuId']);
     var price = normalize1688Money(pickFirstValue(data, ['price', 'salePrice', 'discountPrice', 'promotionPrice', 'consignPrice', 'retailPrice', 'priceText', 'priceCent']));
-    var stock = parseLooseNumber(pickFirstValue(data, ['stock', 'stockNum', 'canBookCount', 'quantity', 'qty', 'amountOnSale', 'inventory']));
+    var rawStock = pickFirstValue(data, ['stock', 'stockNum', 'canBookCount', 'quantity', 'qty', 'amountOnSale', 'inventory']);
+    var stock = normalize1688Stock(rawStock);
     var imageCandidates = normalize1688ImageValues([
       pickFirstValue(data, ['image', 'imageUrl', 'img', 'imgUrl', 'pic', 'picUrl', 'picture', 'photo']),
       data.images,
@@ -512,6 +2019,17 @@
       images: images,
       source: 'skuMap'
     };
+  }
+
+  function normalize1688Stock(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+    }
+    var text = normalizeWhitespace(value).replace(/,/g, '');
+    if (!text || /(^|[^\d])-\s*\d/.test(text)) return null;
+    var parsed = parseLooseNumber(text);
+    return parsed != null && Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
   }
 
   function has1688SkuEvidence(item, skuProps) {
@@ -596,7 +2114,7 @@
     if (!dimensions.length) return [];
     if (dimensions.length === 1 && dimensions[0].values.length <= 1) return [];
     var total = dimensions.reduce(function (count, dimension) { return count * dimension.values.length; }, 1);
-    if (total <= 0 || total > 200) return [];
+    if (total <= 0 || total > 10000) return [];
     var skuPrice = Number(price);
     skuPrice = Number.isFinite(skuPrice) && skuPrice > 0 ? roundMoney(skuPrice) : null;
     var rows = [];
@@ -625,7 +2143,7 @@
       });
     }
     walk(0, {});
-    return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem)).slice(0, 200);
+    return dedupe1688SkuRows(rows.filter(isUseful1688SkuItem));
   }
 
   function normalize1688SizeSaleValue(value) {
@@ -739,41 +2257,96 @@
 
   function dedupe1688SkuRows(rows) {
     var out = [];
-    var seen = new Set();
+    var seen = new Map();
     (Array.isArray(rows) ? rows : []).forEach(function (row) {
-      var key = row.skuId || JSON.stringify(row.attrs || {}) || row.specText;
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      out.push(row);
+      var attributeKey = Object.keys(row && row.attrs || {}).sort().map(function (name) {
+        return name + '=' + normalizeWhitespace(row.attrs[name]);
+      }).join('|');
+      var key = row.skuId || attributeKey || row.specText;
+      if (!key) return;
+      var existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, row);
+        out.push(row);
+        return;
+      }
+      var conflict = false;
+      ['price', 'stock'].forEach(function (field) {
+        var left = existing[field];
+        var right = row[field];
+        if (left != null && right != null && Number(left) !== Number(right)) conflict = true;
+        else if (left == null && right != null) existing[field] = right;
+      });
+      Object.keys(row.attrs || {}).forEach(function (name) {
+        var left = normalizeWhitespace(existing.attrs && existing.attrs[name]);
+        var right = normalizeWhitespace(row.attrs[name]);
+        if (left && right && left !== right) conflict = true;
+        else if (!left && right) {
+          if (!existing.attrs || typeof existing.attrs !== 'object') existing.attrs = {};
+          existing.attrs[name] = row.attrs[name];
+        }
+      });
+      if (existing.specText && row.specText && normalizeWhitespace(existing.specText) !== normalizeWhitespace(row.specText)) {
+        conflict = true;
+      } else if (!existing.specText && row.specText) {
+        existing.specText = row.specText;
+        existing.name = row.name || row.specText;
+      }
+      (Array.isArray(row.images) ? row.images : []).forEach(function (url) {
+        if (!Array.isArray(existing.images)) existing.images = [];
+        if (existing.images.indexOf(url) < 0) existing.images.push(url);
+      });
+      if (conflict) existing.ambiguousConflict = true;
     });
     return out;
   }
 
-  function build1688PriceModel(sources, skuItems) {
-    var skuPrices = (Array.isArray(skuItems) ? skuItems : [])
+  function build1688PriceModel(sources, skuItems, evidenceSources) {
+    var observedSkuRows = (Array.isArray(skuItems) ? skuItems : [])
+      .filter(function (item) {
+        return item && item.source !== 'attributeMatrix'
+          && !(item.evidence && item.evidence.sourceType === 'derived');
+      });
+    var structuredSkuPrices = observedSkuRows
       .filter(function (item) { return item && item.source === 'skuMap'; })
       .map(function (item) { return Number(item && item.price); })
       .filter(function (value) { return Number.isFinite(value) && value > 0; })
       .sort(function (a, b) { return a - b; });
+    var domSkuPrices = observedSkuRows
+      .filter(function (item) { return item && item.evidence && item.evidence.sourceType === 'dom'; })
+      .map(function (item) { return Number(item && item.price); })
+      .filter(function (value) { return Number.isFinite(value) && value > 0; })
+      .sort(function (a, b) { return a - b; });
+    var skuPrices = structuredSkuPrices.length ? structuredSkuPrices : domSkuPrices;
     var displayPrice = pick1688DisplayPrice(sources);
     var ladderPrices = pick1688LadderPrices(sources);
     var cost = null;
     var sourceType = '';
     var confidence = 'low';
+    var selectedEvidence = null;
     if (skuPrices.length) {
       cost = skuPrices[0];
-      sourceType = 'sku';
-      confidence = 'high';
+      sourceType = structuredSkuPrices.length ? 'sku' : 'dom_sku';
+      confidence = structuredSkuPrices.length ? 'high' : 'medium';
+      var selectedRow = observedSkuRows.find(function (item) {
+        var matchingFamily = structuredSkuPrices.length
+          ? item && item.source === 'skuMap'
+          : item && item.evidence && item.evidence.sourceType === 'dom';
+        return matchingFamily && Number(item.price) === Number(cost);
+      });
+      selectedEvidence = selectedRow && selectedRow.evidence || null;
     } else if (ladderPrices.length) {
       cost = ladderPrices[0].price;
       sourceType = 'ladder';
       confidence = 'medium';
+      selectedEvidence = findPriceEvidenceDescriptor(evidenceSources);
     } else {
       var range = parse1688PriceRange(displayPrice);
       if (range.length) {
         cost = range[0];
         sourceType = 'display';
         confidence = 'low';
+        selectedEvidence = findPriceEvidenceDescriptor(evidenceSources);
       }
     }
     cost = cost == null ? 0 : roundMoney(cost);
@@ -784,7 +2357,8 @@
       costPriceForOzon: cost,
       unitPriceText: cost ? ('¥' + formatMoney(cost)) : '',
       sourceType: sourceType,
-      confidence: confidence
+      confidence: confidence,
+      evidence: selectedEvidence
     };
   }
 
@@ -819,7 +2393,7 @@
       });
     });
     rows.sort(function (a, b) { return a.minQuantity - b.minQuantity || a.price - b.price; });
-    return rows.slice(0, 20);
+    return rows;
   }
 
   function parse1688PriceRange(value) {
@@ -870,9 +2444,9 @@
     var main = normalize1688ImageList(mainRaw);
     var detail = normalize1688ImageList(detailRaw);
     return {
-      mainImages: main.accepted.slice(0, 30),
-      detailImages: detail.accepted.slice(0, 50),
-      rejectedAssets: dedupe1688RejectedAssets(main.rejected.concat(detail.rejected)).slice(0, 100)
+      mainImages: main.accepted,
+      detailImages: detail.accepted,
+      rejectedAssets: dedupe1688RejectedAssets(main.rejected.concat(detail.rejected))
     };
   }
 
@@ -978,7 +2552,7 @@
     if (!/^https?:\/\//i.test(text) || text.length > 1000) return 'invalid_url';
     var lower = text.toLowerCase();
     if (/\.(svg)(?:[?#]|$)/i.test(lower)) return 'svg';
-    if (/(logo|icon|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\/)/i.test(lower)) return 'decorative';
+    if (/(?:^|[\/_-])(?:logo|icon)(?:[\/_-]|\.|$)|avatar|badge|coupon|qrcode|qr-code|play_btn|playbtn|operate|operation|\/cms\//i.test(lower)) return 'decorative';
     if (/[-_]tps[-_]\d{1,4}[-x]\d{1,4}|55-tps|\b2-tps\b|gg_dtc|[-_/]rate(?:[._/-]|$)/i.test(lower)) return 'decorative';
     var sizeMatch = lower.match(/(?:[-_]|\/)(\d{1,4})[-x](\d{1,4})(?:[._/-]|$)/i);
     if (sizeMatch && (Number(sizeMatch[1]) < 200 || Number(sizeMatch[2]) < 200)) return 'small_image';
@@ -1016,7 +2590,7 @@
     attrs = attrs.concat(extract1688GeneralAttributesFromPageText(pageText));
     attrs = attrs.concat(extract1688AttributesFromPageText(pageText, attrs));
     attrs = merge1688SaleAttributes(attrs);
-    return dedupe1688Objects(attrs, function (row) { return normalizeWhitespace(row.name + ':' + row.value); }).slice(0, 80);
+    return dedupe1688Objects(attrs, function (row) { return normalizeWhitespace(row.name + ':' + row.value); });
   }
 
   function extract1688AttributesFromPageText(pageText, existingAttrs) {
@@ -1354,9 +2928,12 @@
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  function pick1688PackagingRows(sources, pageText, attributes) {
+  function pick1688PackagingRows(sources, pageText, attributes, domFallback, evidenceSources) {
     var rows = [];
     (Array.isArray(sources) ? sources : []).forEach(function (source) {
+      var sourceDescriptor = (Array.isArray(evidenceSources) ? evidenceSources : []).find(function (descriptor) {
+        return descriptor.value === source;
+      });
       walkObject(source, [], function (value, path) {
         var pathText = path.join('.');
         if (!/(package|packaging|packing|packInfo|productPackInfo|pieceWeightScale|weightScale|skuPackage|skuPackaging|商品件重尺|包装|件重尺)/i.test(pathText)) return;
@@ -1364,16 +2941,69 @@
         if (Array.isArray(value)) {
           value.forEach(function (entry) {
             var row = normalize1688PackagingRow(entry);
-            if (row) rows.push(row);
+            if (row) {
+              row.evidence = {
+                sourceType: sourceDescriptor && sourceDescriptor.sourceType || 'main_world',
+                sourcePath: sourceDescriptor ? joinEvidencePath(sourceDescriptor.sourcePath, path) : '/pageState/knownGlobals/' + path.join('/'),
+                confidence: sourceDescriptor ? evidenceConfidence(sourceDescriptor.sourceType) : 0.9,
+                isEstimated: false,
+                observedAt: sourceDescriptor && sourceDescriptor.observedAt,
+                parserVersion: sourceDescriptor && sourceDescriptor.parserVersion,
+                derivedFrom: []
+              };
+              rows.push(row);
+            }
           });
           return;
         }
         var row = normalize1688PackagingRow(value);
-        if (row) rows.push(row);
+        if (row) {
+          row.evidence = {
+            sourceType: sourceDescriptor && sourceDescriptor.sourceType || 'main_world',
+            sourcePath: sourceDescriptor ? joinEvidencePath(sourceDescriptor.sourcePath, path) : '/pageState/knownGlobals/' + path.join('/'),
+            confidence: sourceDescriptor ? evidenceConfidence(sourceDescriptor.sourceType) : 0.9,
+            isEstimated: false,
+            observedAt: sourceDescriptor && sourceDescriptor.observedAt,
+            parserVersion: sourceDescriptor && sourceDescriptor.parserVersion,
+            derivedFrom: []
+          };
+          rows.push(row);
+        }
       });
     });
-    rows = rows.concat(extract1688PackagingRowsFromPageText(pageText, attributes));
-    return dedupe1688Objects(rows, function (row) { return JSON.stringify(row); }).slice(0, 200);
+    (Array.isArray(domFallback && domFallback.packagingRows) ? domFallback.packagingRows : []).forEach(function (entry) {
+      var row = normalize1688PackagingRow(entry);
+      if (!row) return;
+      row.evidence = entry.evidence || {
+        sourceType: 'dom',
+        sourcePath: '/dom/packaging',
+        confidence: 0.8,
+        isEstimated: false,
+        derivedFrom: []
+      };
+      rows.push(row);
+    });
+    extract1688PackagingRowsFromPageText(pageText, attributes).forEach(function (row) {
+      row.evidence = {
+        sourceType: 'dom',
+        sourcePath: '/dom/body/packagingText',
+        confidence: 0.65,
+        isEstimated: false,
+        derivedFrom: []
+      };
+      rows.push(row);
+    });
+    return dedupe1688Objects(rows, function (row) {
+      return JSON.stringify({
+        color: row.color || null,
+        size: row.size || null,
+        weightG: row.weightG || null,
+        lengthMm: row.lengthMm || null,
+        widthMm: row.widthMm || null,
+        heightMm: row.heightMm || null,
+        volumeCm3: row.volumeCm3 || null
+      });
+    });
   }
 
   function pick1688PackageWeightG(sources, pageText) {
@@ -1564,6 +3194,16 @@
     if (heightMm) out.heightMm = heightMm;
     if (volumeCm3 != null) out.volumeCm3 = volumeCm3;
     if (weightG) out.weightG = weightG;
+    var invalidPhysicalFields = [];
+    function isExplicitPhysicalZero(raw) {
+      return raw !== null && raw !== undefined && raw !== '' && Number(raw) === 0;
+    }
+    if (isExplicitPhysicalZero(weightRaw)) invalidPhysicalFields.push('weightG');
+    if (isExplicitPhysicalZero(pickFirstValue(value, ['lengthMm', 'length', 'len', 'long', '长', '长(cm)']))) invalidPhysicalFields.push('lengthMm');
+    if (isExplicitPhysicalZero(pickFirstValue(value, ['widthMm', 'width', 'wid', '宽', '宽(cm)']))) invalidPhysicalFields.push('widthMm');
+    if (isExplicitPhysicalZero(pickFirstValue(value, ['heightMm', 'height', 'hgt', '高', '高(cm)']))) invalidPhysicalFields.push('heightMm');
+    if (isExplicitPhysicalZero(pickFirstValue(value, ['volumeCm3', 'volume', '体积', '体积(cm³)', '体积(cm3)']))) invalidPhysicalFields.push('volumeCm3');
+    if (invalidPhysicalFields.length) out.invalidPhysicalFields = invalidPhysicalFields;
     return out;
   }
 

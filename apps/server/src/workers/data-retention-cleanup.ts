@@ -5,7 +5,12 @@ import { existsSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
 
 const TICK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const DATA_RETENTION_INITIAL_DELAY_MS = 10 * 60 * 1000;
+export const DATA_RETENTION_PARITY_RETRY_MS = 60 * 1000;
+export const DATA_RETENTION_PARITY_BATCH_SIZE = 1_000;
+export const DATA_RETENTION_PARITY_MAX_BATCHES = 10;
 let timer: NodeJS.Timeout | null = null;
+let workerGeneration = 0;
 
 interface RetentionConfig {
   syncSuccessDays: number;
@@ -39,7 +44,11 @@ function daysAgo(days: number): Date {
   return new Date(Date.now() - days * 24 * 3600 * 1000);
 }
 
-async function cleanupOnce() {
+export interface DataRetentionCleanupResult {
+  parityObservationBacklog: boolean;
+}
+
+export async function cleanupOnce(): Promise<DataRetentionCleanupResult> {
   const cfg = await loadConfig();
   const prefix = cfg.dryRun ? '[retention][dry-run]' : '[retention]';
 
@@ -102,7 +111,50 @@ async function cleanupOnce() {
     console.log(`${prefix} sync_failed=${syncFailedCount}`);
   }
 
-  // 6. Temp images (local filesystem)
+  // 6. Sanitized Ozon publisher parity observations. Approval subjects and
+  // immutable decisions intentionally live in separate tables.
+  const parityObservation = (prisma as any).ozonPublisherParityObservation;
+  let parityObservationBacklog = false;
+  if (parityObservation) {
+    const expiredBefore = new Date();
+    if (cfg.dryRun) {
+      const expiredParityCount = await parityObservation.count({
+        where: { expiresAt: { lt: expiredBefore } },
+      });
+      if (expiredParityCount > 0) {
+        console.log(`${prefix} ozon_publisher_parity=${expiredParityCount}`);
+      }
+    } else {
+      let deletedCount = 0;
+      for (let batch = 0; batch < DATA_RETENTION_PARITY_MAX_BATCHES; batch += 1) {
+        const rows = await parityObservation.findMany({
+          where: { expiresAt: { lt: expiredBefore } },
+          orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
+          select: { id: true },
+          take: DATA_RETENTION_PARITY_BATCH_SIZE + 1,
+        });
+        const ids = rows
+          .slice(0, DATA_RETENTION_PARITY_BATCH_SIZE)
+          .map(({ id }: { id: string }) => id);
+        parityObservationBacklog = rows.length > DATA_RETENTION_PARITY_BATCH_SIZE;
+        if (ids.length > 0) {
+          const deleted = await parityObservation.deleteMany({
+            where: { id: { in: ids } },
+          });
+          deletedCount += Number(deleted?.count) || 0;
+        }
+        if (!parityObservationBacklog) break;
+      }
+      if (deletedCount > 0 || parityObservationBacklog) {
+        console.log(
+          `${prefix} ozon_publisher_parity=${deletedCount}`
+          + (parityObservationBacklog ? ' backlog=true' : ''),
+        );
+      }
+    }
+  }
+
+  // 7. Temp images (local filesystem)
   const tempDirs = ['public/watermarked', 'public/resized', 'public/uploads/tmp'];
   const tempCutoff = daysAgo(cfg.tempImagesDays);
   let tempFilesCount = 0;
@@ -126,25 +178,34 @@ async function cleanupOnce() {
   if (tempFilesCount > 0) {
     console.log(`${prefix} temp_images=${tempFilesCount}`);
   }
+
+  return { parityObservationBacklog };
 }
 
 export function startDataRetentionWorker() {
   if (timer) return;
+  const generation = ++workerGeneration;
   const tick = async () => {
+    let nextDelayMs = TICK_INTERVAL_MS;
     try {
-      await cleanupOnce();
+      const result = await cleanupOnce();
+      if (result.parityObservationBacklog) {
+        nextDelayMs = DATA_RETENTION_PARITY_RETRY_MS;
+      }
     } catch (err) {
       console.error('[DataRetention] tick failed:', err);
+      nextDelayMs = DATA_RETENTION_PARITY_RETRY_MS;
     } finally {
-      timer = setTimeout(tick, TICK_INTERVAL_MS);
+      if (workerGeneration === generation) timer = setTimeout(tick, nextDelayMs);
     }
   };
-  timer = setTimeout(tick, 10 * 60 * 1000);
+  timer = setTimeout(tick, DATA_RETENTION_INITIAL_DELAY_MS);
   registerTimer(stopDataRetentionWorker);
   console.log('[DataRetention] started (runs daily, reads config from SystemConfig)');
 }
 
 export function stopDataRetentionWorker() {
+  workerGeneration += 1;
   if (timer) {
     clearTimeout(timer);
     timer = null;

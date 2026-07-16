@@ -94,6 +94,18 @@ function sourceAttributes(item: SourceListingItemLike): Array<Record<string, unk
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && !Array.isArray(entry));
 }
 
+function sourceAttributeValue(item: SourceListingItemLike, namePattern: RegExp): string {
+  for (const attribute of sourceAttributes(item)) {
+    const name = stringValue(
+      attribute.name ?? attribute.key ?? attribute.attributeName ?? attribute.attrName,
+    );
+    if (!namePattern.test(name)) continue;
+    const value = stringValue(attribute.value ?? attribute.attrValue ?? attribute.text);
+    if (value) return value;
+  }
+  return '';
+}
+
 function sourceVariants(item: SourceListingItemLike): Array<Record<string, unknown>> {
   const variants = Array.isArray(item.variants) ? item.variants : item.metadata?.skuItems;
   return Array.isArray(variants)
@@ -196,6 +208,10 @@ export function evaluateSourceListingFieldDiagnostics(item: SourceListingItemLik
   const aiDescription = aiContentDraftText(item, 'description');
   const descriptionConfidence = aiContentDraftConfidence(item, 'description');
   const category = categoryValue(item);
+  const originCountry = sourceAttributeValue(
+    item,
+    /(?:原产国|原产地|产地|country\s+of\s+origin|страна\s+происхождения)/iu,
+  );
   const packageText = packageValue(standard);
   const packageReason = extractionPackagingReason(item);
   const hasCompletePackage = Boolean(standard.packageWeightG && standard.packageDimensionsMm);
@@ -249,12 +265,14 @@ export function evaluateSourceListingFieldDiagnostics(item: SourceListingItemLik
     diagnosticRow({
       key: 'originCountry',
       label: '原产国',
-      status: category ? 'auto' : 'review',
-      confidence: category ? 'strong' : 'weak',
-      value: category ? 'Китай' : '待类目确认后补 Китай',
-      source: '系统默认',
-      evidence: category ? '国内源商品发布时自动补中国' : '需要先知道类目是否有原产国属性',
-      action: category ? '无需手填' : '先确认 Ozon 类目',
+      status: originCountry ? 'auto' : 'manual',
+      confidence: originCountry ? 'strong' : 'missing',
+      value: originCountry || '未确认',
+      source: originCountry ? '源属性' : '缺失',
+      evidence: originCountry
+        ? '采集属性提供了原产国证据，发布前仍需匹配 Ozon 官方字典'
+        : '原产国属于合规事实，不能根据货源平台或卖家所在地推断',
+      action: originCountry ? '核对并匹配官方字典' : '人工确认原产国并选择官方字典值',
     }),
     diagnosticRow({
       key: 'package',

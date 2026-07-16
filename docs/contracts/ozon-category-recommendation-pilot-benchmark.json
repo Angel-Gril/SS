@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "ozon-category-recommendation-benchmark/v1",
+  "status": "pending_review",
+  "catalogRevision": null,
+  "pilotShopIds": [],
+  "pilotCategories": [],
+  "thresholds": null,
+  "approvedBy": null,
+  "approvedAt": null,
+  "samples": [],
+  "blockingReason": "Pilot Ozon category IDs, test-shop fixtures, human labels, and approval thresholds are not yet available."
+}

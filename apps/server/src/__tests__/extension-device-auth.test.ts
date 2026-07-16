@@ -401,10 +401,27 @@ describe('extension-device production startup configuration', () => {
     expect(() => auth.validateExtensionDeviceAuthEnvironment(deviceEnvironment({
       NODE_ENV: 'production',
       LOGISTICS_DISTRIBUTION_ENABLED: 'false',
+      EXTENSION_DEVICE_AUTH_ENABLED: 'false',
       SS_ERP_DEPLOYMENT_ID: undefined,
       AUTH_JWT_ISSUER: undefined,
       EXTENSION_DEVICE_JWT_SECRET: undefined,
     }))).not.toThrow();
+  });
+
+  it('enables device authentication independently from logistics distribution', async () => {
+    const auth = await import('../lib/extension-device-auth.js');
+
+    const environment = deviceEnvironment({
+      NODE_ENV: 'production',
+      LOGISTICS_DISTRIBUTION_ENABLED: 'false',
+      EXTENSION_DEVICE_AUTH_ENABLED: 'true',
+    });
+    expect(auth.isExtensionDeviceAuthEnabled(environment)).toBe(true);
+    expect(() => auth.validateExtensionDeviceAuthEnvironment(environment)).not.toThrow();
+    expect(() => auth.validateExtensionDeviceAuthEnvironment({
+      ...environment,
+      EXTENSION_DEVICE_JWT_SECRET: undefined,
+    })).toThrow(/EXTENSION_DEVICE_JWT_SECRET/);
   });
 
   it('fails closed when the logistics distribution flag is malformed', async () => {
@@ -439,6 +456,18 @@ describe('extension-device production startup configuration', () => {
     expect(bootstrap).toMatch(/cfg\.authJwtIssuer[\s\S]*AUTH_JWT_ISSUER/);
     expect(bootstrap).toMatch(/cfg\.extensionDeviceJwtSecret[\s\S]*EXTENSION_DEVICE_JWT_SECRET/);
     expect(bootstrap).toMatch(/cfg\.logisticsDistributionEnabled[\s\S]*LOGISTICS_DISTRIBUTION_ENABLED/);
+    expect(bootstrap).toMatch(/cfg\.extensionDeviceAuthEnabled[\s\S]*EXTENSION_DEVICE_AUTH_ENABLED/);
+  });
+
+  it('registers extension-device pairing independently from logistics routes', () => {
+    const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
+    const deviceRegistration = index.indexOf('if (isExtensionDeviceAuthEnabled())');
+    const logisticsRegistration = index.indexOf('if (isLogisticsDistributionEnabled())');
+
+    expect(index).toContain('isExtensionDeviceAuthEnabled');
+    expect(deviceRegistration).toBeGreaterThan(-1);
+    expect(logisticsRegistration).toBeGreaterThan(deviceRegistration);
+    expect(index.slice(deviceRegistration, logisticsRegistration)).toContain('extensionDeviceRoutes');
   });
 });
 
@@ -450,4 +479,5 @@ describe('extension-device production startup configuration', () => {
     expect(envExample).toMatch(/^EXTENSION_DEVICE_JWT_SECRET=/m);
     expect(envExample).toMatch(/^AUTH_ACCEPT_LEGACY_ACCOUNT_TOKENS=/m);
     expect(envExample).toMatch(/^LOGISTICS_DISTRIBUTION_ENABLED=/m);
+    expect(envExample).toMatch(/^EXTENSION_DEVICE_AUTH_ENABLED=/m);
   });

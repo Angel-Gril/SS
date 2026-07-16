@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000005.html",
+  "observedAt": "2026-07-15T00:00:00.000Z",
+  "document": {
+    "queries": {
+      ".breadcrumb": [
+        {
+          "text": "首页 > 日用百货 > 杯具 > 保温杯",
+          "queries": {
+            "a,span,li": [
+              { "text": "首页" },
+              { "text": "日用百货" },
+              { "text": "杯具" },
+              { "text": "保温杯" }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "name": "保温杯",
+    "path": ["日用百货", "杯具", "保温杯"],
+    "nameSourcePath": "/dom/breadcrumb/name",
+    "pathSourcePath": "/dom/breadcrumb/path"
+  }
+}

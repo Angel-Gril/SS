@@ -85,7 +85,7 @@ export function Topbar({ user, onToggle }: TopbarProps) {
   return (
     <header className="h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex items-center justify-between px-4 shrink-0 sticky top-0 z-30">
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={onToggle}>
+        <Button variant="ghost" size="icon" onClick={onToggle} aria-label="切换导航菜单">
           <Menu className="h-5 w-5" />
         </Button>
         <GlobalSearch />

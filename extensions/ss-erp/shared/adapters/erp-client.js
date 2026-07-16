@@ -16,6 +16,8 @@
       async request() { return { code: 0, msg: 'adapter not loaded' }; },
       async syncCookie() { return { code: 0, msg: 'adapter not loaded' }; },
       async submitCollect() { return { code: 0, msg: 'adapter not loaded' }; },
+      async requestOzonPublishGrant() { return { code: 0, msg: 'adapter not loaded' }; },
+      async executeOzonPublish() { return { code: 0, msg: 'adapter not loaded' }; },
       async syncSourceCandidateQuote() { return { code: 0, msg: 'adapter not loaded' }; },
       async uploadImage() { return { code: 0, msg: 'adapter not loaded' }; },
     };
@@ -34,6 +36,34 @@
     async submitCollect(payload) {
       const adapter = await getAdapter();
       return adapter.submitCollect(payload);
+    },
+    async requestSourceCaptureGrant(operation, payload) {
+      const adapter = await getAdapter();
+      if (typeof adapter.requestSourceCaptureGrant !== 'function') {
+        return { code: 0, errorCode: 'source_capture_v2_not_supported', msg: '当前 ERP 不支持来源采集 V2' };
+      }
+      return adapter.requestSourceCaptureGrant(operation, payload);
+    },
+    async submitSourceCaptureV2(operation, payload) {
+      const adapter = await getAdapter();
+      if (typeof adapter.submitSourceCaptureV2 !== 'function') {
+        return { code: 0, errorCode: 'source_capture_v2_not_supported', msg: '当前 ERP 不支持来源采集 V2' };
+      }
+      return adapter.submitSourceCaptureV2(operation, payload);
+    },
+    async requestOzonPublishGrant(operation, payload) {
+      const adapter = await getAdapter();
+      if (typeof adapter.requestOzonPublishGrant !== 'function') {
+        return { code: 0, errorCode: 'ozon_publish_grant_not_supported', msg: '当前 ERP 不支持 Ozon 发布授权' };
+      }
+      return adapter.requestOzonPublishGrant(operation, payload);
+    },
+    async executeOzonPublish(operation, payload) {
+      const adapter = await getAdapter();
+      if (typeof adapter.executeOzonPublish !== 'function') {
+        return { code: 0, errorCode: 'ozon_publish_executor_not_supported', msg: '当前 ERP 不支持 Ozon 发布执行' };
+      }
+      return adapter.executeOzonPublish(operation, payload);
     },
     async syncSourceCandidateQuote(payload) {
       const adapter = await getAdapter();

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "ss-erp-extension-manifest-baseline-v1",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "downloads",
+    "cookies",
+    "alarms"
+  ],
+  "hostPermissions": [
+    "file:///*",
+    "http://localhost/*",
+    "https://localhost/*",
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*",
+    "https://docs.ozon.ru/*",
+    "https://docs.ozon.com/*",
+    "https://open.er-api.com/*",
+    "https://seller.ozon.ru/*",
+    "https://*.ozon.ru/*",
+    "https://*.ozon.kz/*",
+    "https://*.ozon.by/*",
+    "<all_urls>"
+  ],
+  "scriptOrder": [
+    "shared/contracts/source-product-capture-v2.js",
+    "shared/collectors/1688-dom-fallback.js",
+    "shared/collectors/source-product-core.js",
+    "content/collect-content-script.js"
+  ]
+}

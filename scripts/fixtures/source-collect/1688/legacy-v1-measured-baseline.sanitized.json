@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "source-collector-legacy-baseline-v1",
+  "measuredAt": "2026-07-14",
+  "description": "Measured legacy losses retained for regression context; these are not accepted V2 behavior.",
+  "counts": {
+    "sku": {
+      "observed": 236,
+      "collectorPreview": 200,
+      "serviceWorker": 100,
+      "apiMetadata": 100,
+      "prismaVariants": 100,
+      "legacyProfile": 200
+    },
+    "mainImages": {
+      "observed": 36,
+      "collectorPreview": 30,
+      "serverTransfer": 20,
+      "legacyProfile": 20
+    },
+    "detailImages": {
+      "observed": 55,
+      "collectorPreview": 50,
+      "serverTransfer": 20,
+      "legacyProfile": 20
+    }
+  },
+  "limits": {
+    "pageCandidateNames": 80,
+    "pageCandidateUtf8Bytes": 500000,
+    "pageDetectedObjects": 20,
+    "legacyCollectorSkus": 200,
+    "legacyCollectorMainImages": 30,
+    "legacyCollectorDetailImages": 50,
+    "serviceWorkerSkus": 100,
+    "apiBatchItems": 50,
+    "apiMetadataSkus": 100,
+    "serverTransferredImages": 20
+  }
+}

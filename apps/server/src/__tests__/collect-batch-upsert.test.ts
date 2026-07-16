@@ -1,6 +1,16 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectRoutes } from '../routes/collect.js';
+import {
+  buildCollectedGoodsMetadata,
+  collectRoutes,
+  type CollectRoutesOptions,
+} from '../routes/collect.js';
+import {
+  createSourceCaptureService,
+  type PreparedLegacyProjection,
+  type PreparedLegacySourceCapture,
+  type SourceCaptureRepository,
+} from '../services/source-capture.js';
 
 const mocks = vi.hoisted(() => {
   const record = {
@@ -37,7 +47,10 @@ const mocks = vi.hoisted(() => {
     authenticate: vi.fn(async (request: any) => {
       request.user = { userId: 'user-1' };
     }),
-    supplyGoodsFindFirst: vi.fn(async () => ({ ...record })),
+    supplyGoodsFindFirst: vi.fn(async ({ where }: any = {}) => ({
+      ...record,
+      id: typeof where?.id === 'string' ? where.id : record.id,
+    })),
     supplyGoodsCreate: vi.fn(async ({ data }: any) => ({
       ...record,
       id: 'collect-new',
@@ -73,11 +86,24 @@ const mocks = vi.hoisted(() => {
       videos: Array.isArray(sourceVideos) ? sourceVideos : [],
       diagnostic: null,
     })),
+    featureEvaluate: vi.fn(),
+    prepareSourceListingWorkflow: vi.fn(),
+    sourceCaptureEnsureLegacyProjection: vi.fn(async () => ({
+      kind: 'created',
+      subjectId: 'subject-legacy',
+      supplyGoodsId: 'collect-new',
+      createdAt: new Date('2026-07-14T00:00:00.000Z'),
+    })),
+    sourceCaptureIngestLegacy: vi.fn(),
   };
 });
 
 vi.mock('../lib/auth.js', () => ({
   authenticate: mocks.authenticate,
+}));
+
+vi.mock('../lib/crypto.js', () => ({
+  decrypt: vi.fn((value: string) => value),
 }));
 
 vi.mock('../lib/prisma.js', () => ({
@@ -110,9 +136,25 @@ vi.mock('../services/source-video-transfer.js', () => ({
   transferSourceProductVideos: mocks.transferSourceProductVideos,
 }));
 
-async function buildApp() {
+async function buildApp(
+  featureEvaluate = mocks.featureEvaluate,
+  sourceCaptureService?: {
+    ensureLegacyProjection?: NonNullable<CollectRoutesOptions['sourceCaptureService']>['ensureLegacyProjection'];
+    ingestLegacy: NonNullable<CollectRoutesOptions['sourceCaptureService']>['ingestLegacy'];
+  },
+) {
   const app = Fastify();
-  await app.register(collectRoutes, { prefix: '/api/collect' });
+  await app.register(collectRoutes, {
+    prefix: '/api/collect',
+    featureFlags: { evaluate: featureEvaluate },
+    sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+    ...(sourceCaptureService ? {
+      sourceCaptureService: {
+        ensureLegacyProjection: mocks.sourceCaptureEnsureLegacyProjection,
+        ...sourceCaptureService,
+      },
+    } : {}),
+  });
   await app.ready();
   return app;
 }
@@ -151,6 +193,481 @@ function collectedOzonItem() {
 describe('collectRoutes batch upsert', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: false,
+      legacyAllowed: true,
+      captureStage: null,
+      reason: 'master_off',
+      revision: 'master-off',
+    });
+    mocks.sourceCaptureIngestLegacy.mockResolvedValue({
+      kind: 'created',
+      subjectId: 'subject-legacy',
+      snapshotId: 'snapshot-legacy',
+      snapshotVersion: 1,
+      supplyGoodsId: 'collect-new',
+      captureHash: 'a'.repeat(64),
+      profile: {},
+    });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({ drafts: [], failures: [] });
+    mocks.sourceCaptureEnsureLegacyProjection.mockResolvedValue({
+      kind: 'created',
+      subjectId: 'subject-legacy',
+      supplyGoodsId: 'collect-new',
+      createdAt: new Date('2026-07-14T00:00:00.000Z'),
+    });
+  });
+
+  it('shadow-writes a legacy collect as incomplete provenance without changing the legacy response', async () => {
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: true,
+      captureStage: 'shadow_write',
+      reason: 'pilot_match',
+      revision: 'capture-shadow-1',
+    });
+    const app = await buildApp(mocks.featureEvaluate, {
+      ingestLegacy: mocks.sourceCaptureIngestLegacy,
+    });
+
+    try {
+      const item = collectedOzonItem();
+      item.sourcePlatform = '1688';
+      item.sourceProductId = '1000000000236';
+      item.sourceUrl = 'https://detail.1688.com/offer/1000000000236.html';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: { items: [item] },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { saved: 1, errors: [] } });
+      expect(mocks.sourceCaptureEnsureLegacyProjection).toHaveBeenCalledWith({
+        trusted: {
+          ownerUserId: 'user-1',
+          actorUserId: 'user-1',
+          rolloutRevision: 'capture-shadow-1',
+          rolloutStage: 'shadow_write',
+          ingestChannel: 'LEGACY_ADAPTER',
+        },
+        item,
+      });
+      expect(mocks.sourceCaptureIngestLegacy).toHaveBeenCalledWith({
+        trusted: {
+          ownerUserId: 'user-1',
+          actorUserId: 'user-1',
+          rolloutRevision: 'capture-shadow-1',
+          rolloutStage: 'shadow_write',
+          ingestChannel: 'LEGACY_ADAPTER',
+        },
+        item,
+        supplyGoodsId: 'collect-new',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('preserves a legacy batch category path through the canonical snapshot, profile, and projection', async () => {
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: true,
+      captureStage: 'shadow_write',
+      reason: 'pilot_match',
+      revision: 'capture-shadow-category-1',
+    });
+    const capturedLegacyWrites: PreparedLegacySourceCapture[] = [];
+    const repository: SourceCaptureRepository = {
+      ingestNative: vi.fn(),
+      ensureLegacyProjection: vi.fn(async (_input: PreparedLegacyProjection) => ({
+        kind: 'created' as const,
+        subjectId: 'subject-category',
+        supplyGoodsId: 'collect-category',
+        createdAt: new Date('2026-07-14T00:00:00.000Z'),
+      })),
+      loadLegacyProjection: vi.fn(async () => ({
+        id: 'collect-category',
+        createdAt: new Date('2026-07-14T00:00:00.000Z'),
+      })),
+      ingestLegacy: vi.fn(async (input: PreparedLegacySourceCapture) => {
+        capturedLegacyWrites.push(input);
+        return {
+          kind: 'created' as const,
+          subjectId: 'subject-category',
+          snapshotId: 'snapshot-category',
+          snapshotVersion: 1,
+          supplyGoodsId: input.supplyGoodsId,
+          captureHash: input.captureHash,
+        };
+      }),
+    };
+    const sourceCaptureService = createSourceCaptureService({ repository });
+    const app = await buildApp(mocks.featureEvaluate, sourceCaptureService);
+
+    try {
+      const item = {
+        ...collectedOzonItem(),
+        sourcePlatform: '1688',
+        sourceProductId: '1000000000236',
+        sourceUrl: 'https://detail.1688.com/offer/1000000000236.html',
+        sourceCategoryId: '1038375',
+        categoryName: '保温杯',
+        categoryPath: ['日用百货', '杯具', '保温杯'],
+      };
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: { items: [item] },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { saved: 1, errors: [] } });
+      expect(capturedLegacyWrites).toHaveLength(1);
+      const prepared = capturedLegacyWrites[0]!;
+      expect(prepared.capture.sourceCategory).toMatchObject({
+        id: '1038375',
+        name: '保温杯',
+        path: [
+          {
+            ordinal: 0,
+            id: null,
+            name: '日用百货',
+            fieldEvidence: {
+              id: { sourceType: 'legacy', sourcePath: '/legacy/categoryPath/0/id', value: null },
+              name: { sourceType: 'legacy', sourcePath: '/legacy/categoryPath/0', value: '日用百货' },
+            },
+          },
+          { ordinal: 1, id: null, name: '杯具' },
+          { ordinal: 2, id: null, name: '保温杯' },
+        ],
+      });
+      expect(prepared.capture.completeness.sections).toContainEqual({
+        section: 'category',
+        status: 'complete',
+        missingFieldPaths: [],
+      });
+      expect(prepared.capture.completeness.missingFieldPaths).not.toContain('/sourceCategory/path');
+      expect(prepared.profile).toMatchObject({
+        categoryPath: ['日用百货', '杯具', '保温杯'],
+        categoryName: '保温杯',
+      });
+      expect(prepared.projection.metadata).toMatchObject({
+        sourceCategoryId: '1038375',
+        categoryPath: ['日用百货', '杯具', '保温杯'],
+        sourceProductProfile: {
+          categoryPath: ['日用百货', '杯具', '保温杯'],
+          categoryName: '保温杯',
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('updates the snapshot-bound legacy projection on repeated shadow capture', async () => {
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: true,
+      captureStage: 'shadow_write',
+      reason: 'pilot_match',
+      revision: 'capture-shadow-1',
+    });
+    mocks.sourceCaptureEnsureLegacyProjection.mockResolvedValueOnce({
+      kind: 'reused',
+      subjectId: 'subject-legacy',
+      supplyGoodsId: 'collect-bound',
+      createdAt: new Date('2026-07-14T00:00:00.000Z'),
+    });
+    mocks.supplyGoodsFindFirst.mockResolvedValueOnce({
+      id: 'collect-bound',
+      userId: 'user-1',
+      title: 'Previously captured title',
+      sourcePlatform: '1688',
+      sourceProductId: '1000000000236',
+      createdAt: new Date('2026-07-14T00:00:00.000Z'),
+      metadata: {
+        existingFlag: true,
+        sourceCaptureV2: {
+          subjectId: 'subject-legacy',
+          snapshotId: 'snapshot-v1',
+          snapshotVersion: 1,
+        },
+      },
+    } as any);
+    const app = await buildApp(mocks.featureEvaluate, {
+      ingestLegacy: mocks.sourceCaptureIngestLegacy,
+    });
+
+    try {
+      const item = collectedOzonItem();
+      item.sourcePlatform = '1688';
+      item.sourceProductId = '1000000000236';
+      item.sourceUrl = 'https://detail.1688.com/offer/1000000000236.html';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: { items: [item] },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+      expect(mocks.supplyGoodsUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'collect-bound' },
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({
+            sourceCaptureV2: expect.objectContaining({
+              snapshotId: 'snapshot-v1',
+              snapshotVersion: 1,
+            }),
+          }),
+        }),
+      }));
+      expect(mocks.sourceCaptureIngestLegacy).toHaveBeenCalledWith(expect.objectContaining({
+        supplyGoodsId: 'collect-bound',
+      }));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps a successful legacy collect response when its shadow snapshot fails', async () => {
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: true,
+      captureStage: 'shadow_write',
+      reason: 'pilot_match',
+      revision: 'capture-shadow-1',
+    });
+    mocks.sourceCaptureIngestLegacy.mockRejectedValueOnce(new Error('shadow unavailable'));
+    const app = await buildApp(mocks.featureEvaluate, {
+      ingestLegacy: mocks.sourceCaptureIngestLegacy,
+    });
+
+    try {
+      const item = collectedOzonItem();
+      item.sourcePlatform = '1688';
+      item.sourceProductId = '1000000000236';
+      item.sourceUrl = 'https://detail.1688.com/offer/1000000000236.html';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: { items: [item] },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { saved: 1, errors: [] } });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('blocks a legacy capture before persistence for a V2-only rollout', async () => {
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: false,
+      captureStage: 'v2_only',
+      reason: 'pilot_match',
+      revision: 'capture-v2-only-1',
+    });
+    const app = await buildApp(mocks.featureEvaluate, {
+      ingestLegacy: mocks.sourceCaptureIngestLegacy,
+    });
+
+    try {
+      const item = collectedOzonItem();
+      item.sourcePlatform = '1688';
+      item.sourceProductId = '1000000000236';
+      item.sourceUrl = 'https://detail.1688.com/offer/1000000000236.html';
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: { items: [item] },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_capture_v2_required',
+        rolloutRevision: 'capture-v2-only-1',
+      });
+      expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+      expect(mocks.sourceCaptureEnsureLegacyProjection).not.toHaveBeenCalled();
+      expect(mocks.sourceCaptureIngestLegacy).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an oversized legacy batch instead of silently slicing it', async () => {
+    const app = await buildApp(mocks.featureEvaluate, {
+      ingestLegacy: mocks.sourceCaptureIngestLegacy,
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: { items: Array.from({ length: 51 }, () => collectedOzonItem()) },
+      });
+      expect(response.statusCode).toBe(413);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_collect_batch_limit_exceeded',
+        data: { observedCount: 51, limit: 50, recoverable: true },
+      });
+      expect(mocks.supplyGoodsCreate).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('blocks the legacy publish endpoint before loading goods or an Ozon client', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1',
+      userId: 'user-1',
+      platform: 'OZON',
+      status: 'ACTIVE',
+      clientId: 'client-id',
+      apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.featureEvaluate.mockResolvedValue({
+      enabled: true,
+      legacyAllowed: false,
+      captureStage: null,
+      listingStage: 'v2_only',
+      reason: 'pilot_match',
+      revision: 'pilot-1',
+    });
+
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/publish-ozon',
+        payload: { ids: ['source-1'], shopId: 'shop-1' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 0,
+        errorCode: 'source_ozon_publisher_v2_required',
+      });
+      expect(mocks.supplyGoodsFindMany).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('blocks the legacy writer when listing is v2-only but the publisher flag is off', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.supplyGoodsFindMany.mockResolvedValueOnce([{
+      id: 'source-1', userId: 'user-1', sku: 'sku-a', title: 'Source',
+      currency: 'RUB', purchasePrice: 10, metadata: {}, images: [], variants: [],
+    }] as any);
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({
+      drafts: [{ supplyGoodsId: 'source-1', draftId: 'draft-1', draftVersion: 1, revision: 1 }],
+      failures: [],
+    });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: false, listingStage: 'v2_only', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'master_off', revision: 'publisher-off' });
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/collect/publish-ozon',
+        payload: { ids: ['source-1'], shopId: 'shop-1' },
+      });
+      expect(response.statusCode, response.body).toBe(503);
+      expect(response.json()).toMatchObject({
+        errorCode: 'source_workflow_rollout_unavailable',
+      });
+      expect(mocks.supplyGoodsFindMany).not.toHaveBeenCalled();
+      expect(mocks.prepareSourceListingWorkflow).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('characterizes null and zero survival through batch metadata and source profile today', async () => {
+    mocks.supplyGoodsCreate.mockImplementationOnce(async ({ data }: any) => ({
+      id: 'collect-null-zero',
+      ...data,
+    }));
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/batch',
+        payload: {
+          items: [{
+            title: '1688 null zero fixture',
+            sourceUrl: 'https://detail.1688.com/offer/100000000001.html',
+            sourcePlatform: '1688',
+            sourceProductId: '100000000001',
+            sku: '100000000001',
+            images: ['https://img.example.com/item.jpg'],
+            priceText: '10',
+            currency: 'CNY',
+            weightG: null,
+            lengthMm: null,
+            widthMm: 0,
+            heightMm: 0,
+            shippingCny: null,
+            totalCostCny: 0,
+            variants: [
+              { sku: 'unknown-stock', stock: null },
+              { sku: 'zero-stock', stock: 0 },
+            ],
+          }],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ code: 1, data: { saved: 1, errors: [] } });
+      const createData = mocks.supplyGoodsCreate.mock.calls[0]?.[0]?.data;
+      expect(createData.variants).toEqual([
+        { sku: 'unknown-stock', stock: null },
+        { sku: 'zero-stock', stock: 0 },
+      ]);
+      expect(createData.metadata).toMatchObject({
+        // Current V1 loss: physical nulls collapse to zero before JSONB persistence.
+        weightG: 0,
+        lengthMm: 0,
+        widthMm: 0,
+        heightMm: 0,
+        // Money retains the distinction because the batch route reapplies explicit null.
+        shippingCny: null,
+        totalCostCny: 0,
+        sourceProductProfile: {
+          packaging: {
+            hasWeight: false,
+            hasDimensions: false,
+            status: 'missing',
+          },
+        },
+      });
+      expect(createData.metadata.sourceProductProfile).not.toHaveProperty('stock');
+      expect(createData.metadata.sourceProductProfile).not.toHaveProperty('shippingCny');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('documents the metadata helper collapse independently of HTTP serialization', () => {
+    const unknown = buildCollectedGoodsMetadata({
+      sourcePlatform: '1688',
+      sourceProductId: 'unknown',
+      weightG: null,
+      shippingCny: null,
+    });
+    const explicitZero = buildCollectedGoodsMetadata({
+      sourcePlatform: '1688',
+      sourceProductId: 'zero',
+      weightG: 0,
+      shippingCny: 0,
+    });
+
+    expect(unknown).toMatchObject({ weightG: 0, shippingCny: 0 });
+    expect(explicitZero).toMatchObject({ weightG: 0, shippingCny: 0 });
   });
 
   it('saves manual package overrides per source variant SKU', async () => {

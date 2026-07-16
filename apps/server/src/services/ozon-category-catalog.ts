@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import {
   getOzonCategoryLocalExcludeExpansions,
   getOzonCategoryLocalKeywordExpansions,
@@ -21,6 +21,21 @@ export interface OzonCategoryTreeNode {
 }
 
 export type OzonCategoryTranslationStatus = 'complete' | 'partial' | 'missing';
+
+export type OzonCategoryLabelSource =
+  | 'official_default'
+  | 'official_zh_hans'
+  | 'local_dictionary'
+  | 'ai'
+  | 'legacy'
+  | 'missing';
+
+export interface OzonCategoryLabelProvenance {
+  categoryPathRu: OzonCategoryLabelSource[];
+  categoryPathZh: OzonCategoryLabelSource[];
+  typeNameRu: OzonCategoryLabelSource;
+  typeNameZh: OzonCategoryLabelSource;
+}
 
 export interface OzonCategoryLevel {
   level: number;
@@ -46,6 +61,9 @@ export interface OzonCategoryCatalogEntry {
   untranslatedTerms: string[];
   keywords: string[];
   searchText: string;
+  disabled?: boolean;
+  selectable?: boolean;
+  labelProvenance?: OzonCategoryLabelProvenance;
 }
 
 function toPositiveInt(value: unknown): number | null {
@@ -344,16 +362,18 @@ function resolveTranslationStatus(parts: Array<{ raw: string; translated: boolea
   };
 }
 
-export function buildOzonCategoryCatalog(nodes: OzonCategoryTreeNode[] | null | undefined): OzonCategoryCatalogEntry[] {
+function buildOzonCategoryCatalogInternal(
+  nodes: OzonCategoryTreeNode[] | null | undefined,
+  options: { includeDisabled: boolean },
+): OzonCategoryCatalogEntry[] {
   const catalog: OzonCategoryCatalogEntry[] = [];
 
   const walk = (rows: OzonCategoryTreeNode[], pathLevels: OzonCategoryLevel[], parentCategoryId: number | null = null) => {
     for (const row of rows) {
-      if (row.disabled) continue;
-
       const categoryName = cleanText(row.category_name);
       const rowCategoryId = toPositiveInt(row.description_category_id);
       const categoryId = rowCategoryId ?? parentCategoryId;
+      const categoryNameZh = translateOzonCategoryTextForDisplay(categoryName);
       const nextPath = categoryName
         ? [
           ...pathLevels,
@@ -361,15 +381,16 @@ export function buildOzonCategoryCatalog(nodes: OzonCategoryTreeNode[] | null | 
             level: pathLevels.length + 1,
             categoryId: categoryId || 0,
             nameRu: categoryName,
-            nameZh: translateOzonCategoryTextForDisplay(categoryName),
-            translated: !!translateOzonCategoryTextForDisplay(categoryName),
+            nameZh: categoryNameZh,
+            translated: !!categoryNameZh,
           },
         ]
         : pathLevels;
       const typeId = toPositiveInt(row.type_id);
       const typeNameRu = cleanText(row.type_name);
+      const disabled = row.disabled === true;
 
-      if (categoryId && typeId) {
+      if (categoryId && typeId && (options.includeDisabled || !disabled)) {
         const categoryLevels = nextPath.map((level) => ({ ...level }));
         const categoryPathRu = categoryLevels.map((level) => level.nameRu);
         const categoryPathZh = categoryLevels.map((level) => level.nameZh);
@@ -405,6 +426,14 @@ export function buildOzonCategoryCatalog(nodes: OzonCategoryTreeNode[] | null | 
           untranslatedTerms,
           keywords,
           searchText: normalizeToken([...ruParts, ...zhParts, ...keywords, categoryId, typeId].join(' ')),
+          disabled,
+          selectable: !disabled,
+          labelProvenance: {
+            categoryPathRu: categoryPathRu.map((name) => name ? 'official_default' : 'missing'),
+            categoryPathZh: categoryPathZh.map((name) => name ? 'local_dictionary' : 'missing'),
+            typeNameRu: typeNameRu ? 'official_default' : 'missing',
+            typeNameZh: typeNameZh ? 'local_dictionary' : 'missing',
+          },
         });
       }
 
@@ -416,6 +445,10 @@ export function buildOzonCategoryCatalog(nodes: OzonCategoryTreeNode[] | null | 
 
   if (Array.isArray(nodes)) walk(nodes, []);
   return catalog;
+}
+
+export function buildOzonCategoryCatalog(nodes: OzonCategoryTreeNode[] | null | undefined): OzonCategoryCatalogEntry[] {
+  return buildOzonCategoryCatalogInternal(nodes, { includeDisabled: false });
 }
 
 export type OzonCategoryTermTranslator = (term: string) => Promise<{ outputText: string; source?: string }>;
@@ -473,23 +506,34 @@ export function applyOzonCategoryCatalogLocalTranslations(catalog: OzonCategoryC
     }
   }
   if (translatedTerms.size === 0) return catalog.map((entry) => ({ ...entry }));
-  return catalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms));
+  return catalog.map((entry) => rebuildCatalogEntryWithTranslations(entry, translatedTerms, 'local_dictionary'));
 }
 
 function rebuildCatalogEntryWithTranslations(
   entry: OzonCategoryCatalogEntry,
   translatedTerms: Map<string, string>,
+  translatedLabelSource: OzonCategoryLabelSource = 'ai',
 ): OzonCategoryCatalogEntry {
-  const categoryLevels = entry.categoryLevels.map((level) => {
-    const translated = cleanText(level.nameZh || translatedTerms.get(level.nameRu) || '');
+  const categoryPathZhSources: OzonCategoryLabelSource[] = [];
+  const categoryLevels = entry.categoryLevels.map((level, index) => {
+    const existing = cleanText(level.nameZh);
+    const translated = cleanText(existing || translatedTerms.get(level.nameRu) || '');
+    const valid = isTranslatedDisplayText(translated);
+    categoryPathZhSources.push(valid
+      ? (existing ? entry.labelProvenance?.categoryPathZh[index] || 'legacy' : translatedLabelSource)
+      : 'missing');
     return {
       ...level,
-      nameZh: isTranslatedDisplayText(translated) ? translated : '',
-      translated: isTranslatedDisplayText(translated),
+      nameZh: valid ? translated : '',
+      translated: valid,
     };
   });
-  const typeTranslated = cleanText(entry.typeNameZh || translatedTerms.get(entry.typeNameRu) || '');
+  const existingTypeNameZh = cleanText(entry.typeNameZh);
+  const typeTranslated = cleanText(existingTypeNameZh || translatedTerms.get(entry.typeNameRu) || '');
   const typeNameZh = isTranslatedDisplayText(typeTranslated) ? typeTranslated : '';
+  const typeNameZhSource: OzonCategoryLabelSource = typeNameZh
+    ? (existingTypeNameZh ? entry.labelProvenance?.typeNameZh || 'legacy' : translatedLabelSource)
+    : 'missing';
   const categoryPathZh = categoryLevels.map((level) => level.nameZh);
   const categoryNameZh = categoryPathZh[categoryPathZh.length - 1] || '';
   const audit = resolveTranslationStatus([
@@ -511,7 +555,288 @@ function rebuildCatalogEntryWithTranslations(
     untranslatedTerms: audit.untranslatedTerms,
     keywords,
     searchText: normalizeToken([...ruParts, ...zhParts, ...keywords, entry.descriptionCategoryId, entry.typeId].join(' ')),
+    labelProvenance: {
+      categoryPathRu: entry.categoryPathRu.map((name, index) => (
+        name ? entry.labelProvenance?.categoryPathRu[index] || 'legacy' : 'missing'
+      )),
+      categoryPathZh: categoryPathZhSources,
+      typeNameRu: entry.typeNameRu ? entry.labelProvenance?.typeNameRu || 'legacy' : 'missing',
+      typeNameZh: typeNameZhSource,
+    },
   };
+}
+
+type OfficialZhTarget = {
+  typeNameZh: string;
+  disabled: boolean;
+};
+
+function preferDeterministicOfficialLabel(current: string | undefined, candidate: string): string {
+  if (!candidate) return current || '';
+  if (!current) return candidate;
+  return candidate < current ? candidate : current;
+}
+
+function indexOfficialZhHansTree(nodes: OzonCategoryTreeNode[] | null | undefined): {
+  categoryNames: Map<number, string>;
+  targets: Map<string, OfficialZhTarget>;
+} {
+  const categoryNames = new Map<number, string>();
+  const targets = new Map<string, OfficialZhTarget>();
+
+  const walk = (rows: OzonCategoryTreeNode[], parentCategoryId: number | null = null) => {
+    for (const row of rows) {
+      const rowCategoryId = toPositiveInt(row.description_category_id);
+      const categoryId = rowCategoryId ?? parentCategoryId;
+      const categoryName = cleanText(row.category_name);
+      if (rowCategoryId && isTranslatedDisplayText(categoryName)) {
+        categoryNames.set(
+          rowCategoryId,
+          preferDeterministicOfficialLabel(categoryNames.get(rowCategoryId), categoryName),
+        );
+      }
+
+      const typeId = toPositiveInt(row.type_id);
+      if (categoryId && typeId) {
+        const key = `${categoryId}:${typeId}`;
+        const existing = targets.get(key);
+        const typeName = cleanText(row.type_name);
+        targets.set(key, {
+          typeNameZh: isTranslatedDisplayText(typeName)
+            ? preferDeterministicOfficialLabel(existing?.typeNameZh, typeName)
+            : existing?.typeNameZh || '',
+          disabled: existing?.disabled === true || row.disabled === true,
+        });
+      }
+
+      if (Array.isArray(row.children) && row.children.length) {
+        walk(row.children, categoryId);
+      }
+    }
+  };
+
+  if (Array.isArray(nodes)) walk(nodes);
+  return { categoryNames, targets };
+}
+
+export function buildMergedOzonCategoryCatalog(
+  defaultNodes: OzonCategoryTreeNode[] | null | undefined,
+  zhHansNodes: OzonCategoryTreeNode[] | null | undefined,
+): OzonCategoryCatalogEntry[] {
+  const defaultCatalog = buildOzonCategoryCatalogInternal(defaultNodes, { includeDisabled: true });
+  const officialZh = indexOfficialZhHansTree(zhHansNodes);
+
+  return defaultCatalog.map((entry) => {
+    const categoryPathZhSources: OzonCategoryLabelSource[] = [];
+    const categoryLevels = entry.categoryLevels.map((level, index) => {
+      const officialName = level.categoryId > 0 ? officialZh.categoryNames.get(level.categoryId) || '' : '';
+      const nameZh = officialName || level.nameZh;
+      categoryPathZhSources.push(officialName
+        ? 'official_zh_hans'
+        : entry.labelProvenance?.categoryPathZh[index] || (nameZh ? 'legacy' : 'missing'));
+      return {
+        ...level,
+        nameZh,
+        translated: isTranslatedDisplayText(nameZh),
+      };
+    });
+    const target = officialZh.targets.get(`${entry.descriptionCategoryId}:${entry.typeId}`);
+    const officialTypeNameZh = target?.typeNameZh || '';
+    const typeNameZh = officialTypeNameZh || entry.typeNameZh;
+    const disabled = entry.disabled === true || target?.disabled === true;
+    const seeded: OzonCategoryCatalogEntry = {
+      ...entry,
+      categoryLevels,
+      categoryPathZh: categoryLevels.map((level) => level.nameZh),
+      typeNameZh,
+      disabled,
+      selectable: !disabled,
+      labelProvenance: {
+        categoryPathRu: entry.categoryPathRu.map((name, index) => (
+          name ? entry.labelProvenance?.categoryPathRu[index] || 'official_default' : 'missing'
+        )),
+        categoryPathZh: categoryPathZhSources,
+        typeNameRu: entry.typeNameRu ? entry.labelProvenance?.typeNameRu || 'official_default' : 'missing',
+        typeNameZh: officialTypeNameZh
+          ? 'official_zh_hans'
+          : entry.labelProvenance?.typeNameZh || (typeNameZh ? 'legacy' : 'missing'),
+      },
+    };
+    return rebuildCatalogEntryWithTranslations(seeded, new Map());
+  });
+}
+
+export function deriveOzonCategoryCatalogRevision(catalog: readonly OzonCategoryCatalogEntry[]): string {
+  const canonicalEntries = catalog.map((entry) => ({
+    descriptionCategoryId: entry.descriptionCategoryId,
+    typeId: entry.typeId,
+    categoryPathRu: entry.categoryPathRu,
+    categoryPathZh: entry.categoryPathZh,
+    typeNameRu: entry.typeNameRu,
+    typeNameZh: entry.typeNameZh,
+    disabled: entry.disabled === true,
+    labelProvenance: entry.labelProvenance || null,
+  })).sort((left, right) => {
+    const leftKey = `${left.descriptionCategoryId}:${left.typeId}:${JSON.stringify(left)}`;
+    const rightKey = `${right.descriptionCategoryId}:${right.typeId}:${JSON.stringify(right)}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+  return createHash('sha256').update(JSON.stringify(canonicalEntries)).digest('hex');
+}
+
+export const OZON_CATEGORY_CATALOG_SNAPSHOT_SCHEMA_VERSION = 'ozon-category-catalog-snapshot/v1' as const;
+
+export type OzonCategoryCatalogLanguage = 'DEFAULT' | 'ZH_HANS';
+
+export interface OzonCategoryCatalogSnapshot {
+  schemaVersion: typeof OZON_CATEGORY_CATALOG_SNAPSHOT_SCHEMA_VERSION;
+  entries: OzonCategoryCatalogEntry[];
+  revision: string;
+  fetchedAt: Date;
+  expiresAt: Date;
+  complete: boolean;
+  defaultTreeComplete: boolean;
+  zhHansTreeComplete: boolean;
+  stale: boolean;
+  authoritative: boolean;
+}
+
+export interface OzonCategoryCatalogSnapshotStore {
+  find(shopId: string): Promise<OzonCategoryCatalogSnapshot | null>;
+  replace(shopId: string, snapshot: OzonCategoryCatalogSnapshot): Promise<void>;
+}
+
+export interface GetOrRefreshOzonCategoryCatalogSnapshotParams {
+  shopId: string;
+  refresh?: boolean;
+}
+
+export interface GetOrRefreshOzonCategoryCatalogSnapshotDeps {
+  store: OzonCategoryCatalogSnapshotStore;
+  fetchTree(language: OzonCategoryCatalogLanguage): Promise<OzonCategoryTreeNode[]>;
+  now?: () => Date;
+  ttlMs?: number;
+}
+
+export interface GetOrRefreshOzonCategoryCatalogSnapshotResult {
+  snapshot: OzonCategoryCatalogSnapshot;
+  refreshed: boolean;
+  refreshError?: string;
+  refreshCause?: unknown;
+}
+
+export class OzonCategoryCatalogRefreshError extends Error {
+  constructor(public readonly code: string, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'OzonCategoryCatalogRefreshError';
+  }
+}
+
+const DEFAULT_CATEGORY_CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+
+function catalogRefreshErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || 'unknown catalog refresh error');
+}
+
+function hasVerifiedCompleteSnapshot(snapshot: OzonCategoryCatalogSnapshot | null): snapshot is OzonCategoryCatalogSnapshot {
+  if (!snapshot || snapshot.schemaVersion !== OZON_CATEGORY_CATALOG_SNAPSHOT_SCHEMA_VERSION) return false;
+  if (!snapshot.complete || !snapshot.defaultTreeComplete || !snapshot.zhHansTreeComplete) return false;
+  if (!Array.isArray(snapshot.entries) || snapshot.entries.length === 0) return false;
+  if (!(snapshot.fetchedAt instanceof Date) || !Number.isFinite(snapshot.fetchedAt.getTime())) return false;
+  if (!(snapshot.expiresAt instanceof Date) || !Number.isFinite(snapshot.expiresAt.getTime())) return false;
+  return snapshot.revision === deriveOzonCategoryCatalogRevision(snapshot.entries);
+}
+
+function asNonAuthoritativeStaleSnapshot(snapshot: OzonCategoryCatalogSnapshot): OzonCategoryCatalogSnapshot {
+  return {
+    ...snapshot,
+    entries: snapshot.entries.map((entry) => ({ ...entry, selectable: false })),
+    stale: true,
+    authoritative: false,
+  };
+}
+
+async function fetchOfficialBilingualCategoryTrees(
+  fetchTree: GetOrRefreshOzonCategoryCatalogSnapshotDeps['fetchTree'],
+): Promise<{ defaultTree: OzonCategoryTreeNode[]; zhHansTree: OzonCategoryTreeNode[] }> {
+  const [defaultResult, zhHansResult] = await Promise.allSettled([
+    fetchTree('DEFAULT'),
+    fetchTree('ZH_HANS'),
+  ]);
+  if (defaultResult.status === 'rejected') throw defaultResult.reason;
+  if (zhHansResult.status === 'rejected') throw zhHansResult.reason;
+  if (!Array.isArray(defaultResult.value) || defaultResult.value.length === 0
+    || !Array.isArray(zhHansResult.value) || zhHansResult.value.length === 0) {
+    throw new OzonCategoryCatalogRefreshError(
+      'OZON_CATEGORY_CATALOG_BILINGUAL_INCOMPLETE',
+      'Ozon bilingual category refresh is incomplete',
+    );
+  }
+  return { defaultTree: defaultResult.value, zhHansTree: zhHansResult.value };
+}
+
+export async function getOrRefreshOzonCategoryCatalogSnapshotForShop(
+  params: GetOrRefreshOzonCategoryCatalogSnapshotParams,
+  deps: GetOrRefreshOzonCategoryCatalogSnapshotDeps,
+): Promise<GetOrRefreshOzonCategoryCatalogSnapshotResult> {
+  const shopId = cleanText(params.shopId);
+  if (!shopId) {
+    throw new OzonCategoryCatalogRefreshError('OZON_CATEGORY_CATALOG_SHOP_REQUIRED', 'Ozon shop is required');
+  }
+  const now = deps.now?.() || new Date();
+  const configuredTtl = Number(deps.ttlMs);
+  const ttlMs = Number.isFinite(configuredTtl) && configuredTtl > 0
+    ? Math.trunc(configuredTtl)
+    : DEFAULT_CATEGORY_CATALOG_TTL_MS;
+  const cached = await deps.store.find(shopId);
+  const cachedComplete = hasVerifiedCompleteSnapshot(cached);
+  const cachedFresh = cachedComplete
+    && cached.authoritative
+    && !cached.stale
+    && cached.expiresAt.getTime() > now.getTime();
+  if (!params.refresh && cachedFresh) {
+    return { snapshot: cached, refreshed: false };
+  }
+
+  try {
+    const { defaultTree, zhHansTree } = await fetchOfficialBilingualCategoryTrees(deps.fetchTree);
+    const entries = buildMergedOzonCategoryCatalog(defaultTree, zhHansTree);
+    if (entries.length === 0) {
+      throw new OzonCategoryCatalogRefreshError(
+        'OZON_CATEGORY_CATALOG_BILINGUAL_INCOMPLETE',
+        'Ozon bilingual category refresh is incomplete',
+      );
+    }
+    const snapshot: OzonCategoryCatalogSnapshot = {
+      schemaVersion: OZON_CATEGORY_CATALOG_SNAPSHOT_SCHEMA_VERSION,
+      entries,
+      revision: deriveOzonCategoryCatalogRevision(entries),
+      fetchedAt: new Date(now),
+      expiresAt: new Date(now.getTime() + ttlMs),
+      complete: true,
+      defaultTreeComplete: true,
+      zhHansTreeComplete: true,
+      stale: false,
+      authoritative: true,
+    };
+    await deps.store.replace(shopId, snapshot);
+    return { snapshot, refreshed: true };
+  } catch (error) {
+    if (cachedComplete) {
+      return {
+        snapshot: asNonAuthoritativeStaleSnapshot(cached),
+        refreshed: false,
+        refreshError: catalogRefreshErrorMessage(error),
+        refreshCause: error,
+      };
+    }
+    if (error instanceof OzonCategoryCatalogRefreshError) throw error;
+    throw new OzonCategoryCatalogRefreshError(
+      'OZON_CATEGORY_CATALOG_REFRESH_FAILED',
+      `Ozon bilingual category refresh failed: ${catalogRefreshErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 export async function enrichMissingOzonCategoryCatalogTranslations(
@@ -580,8 +905,9 @@ export function searchOzonCategoryCatalog(
   query: unknown,
   limit = 20,
 ): OzonCategoryCatalogEntry[] {
+  const selectableCatalog = catalog.filter((entry) => entry.disabled !== true && entry.selectable !== false);
   const raw = cleanText(query);
-  if (!raw) return catalog.slice(0, limit);
+  if (!raw) return selectableCatalog.slice(0, limit);
 
   const terms = unique([
     raw,
@@ -590,7 +916,7 @@ export function searchOzonCategoryCatalog(
   ]).map(normalizeToken);
   const queryExcludeTerms = getOzonCategoryLocalExcludeExpansions([raw]).map(normalizeToken);
 
-  return catalog
+  return selectableCatalog
     .map((entry) => {
       let score = 0;
       for (const term of terms) {
@@ -718,6 +1044,38 @@ function translationStatus(value: unknown): OzonCategoryTranslationStatus {
   return value === 'complete' || value === 'partial' || value === 'missing' ? value : 'missing';
 }
 
+const OZON_CATEGORY_LABEL_SOURCES = new Set<OzonCategoryLabelSource>([
+  'official_default',
+  'official_zh_hans',
+  'local_dictionary',
+  'ai',
+  'legacy',
+  'missing',
+]);
+
+function labelSource(value: unknown, fallback: OzonCategoryLabelSource): OzonCategoryLabelSource {
+  const source = cleanText(value) as OzonCategoryLabelSource;
+  return OZON_CATEGORY_LABEL_SOURCES.has(source) ? source : fallback;
+}
+
+function mapLabelProvenance(value: unknown): OzonCategoryLabelProvenance | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const categoryPathRu = Array.isArray(row.categoryPathRu)
+    ? row.categoryPathRu.map((source) => labelSource(source, 'legacy'))
+    : [];
+  const categoryPathZh = Array.isArray(row.categoryPathZh)
+    ? row.categoryPathZh.map((source) => labelSource(source, 'legacy'))
+    : [];
+  if (!categoryPathRu.length && !categoryPathZh.length && !row.typeNameRu && !row.typeNameZh) return undefined;
+  return {
+    categoryPathRu,
+    categoryPathZh,
+    typeNameRu: labelSource(row.typeNameRu, 'legacy'),
+    typeNameZh: labelSource(row.typeNameZh, 'legacy'),
+  };
+}
+
 function buildStoredCategoryLevels(
   categoryPathRu: string[],
   categoryPathZh: string[],
@@ -755,6 +1113,7 @@ function mapCatalogRow(row: Record<string, any>): OzonCategoryCatalogEntry {
     })),
     { raw: typeNameRu, translated: isTranslatedDisplayText(typeNameZh) },
   ]);
+  const disabled = row.disabled === true;
 
   return {
     descriptionCategoryId,
@@ -772,6 +1131,233 @@ function mapCatalogRow(row: Record<string, any>): OzonCategoryCatalogEntry {
     untranslatedTerms: derivedTranslation.untranslatedTerms,
     keywords: stringArray(row.keywords),
     searchText: normalizeToken(row.searchText),
+    disabled,
+    selectable: !disabled,
+    labelProvenance: mapLabelProvenance(row.labelProvenance),
+  };
+}
+
+async function insertCatalogEntryRow(
+  tx: PrismaOzonCategoryCatalogClient,
+  input: {
+    snapshotId: string;
+    shopId: string;
+    catalogRevision: string;
+    language: string;
+    entry: OzonCategoryCatalogEntry;
+    fetchedAt: Date;
+    source: string;
+  },
+): Promise<void> {
+  const entry = input.entry;
+  await tx.$executeRaw`
+    INSERT INTO "ozon_category_catalog" (
+      "id",
+      "snapshot_id",
+      "shop_id",
+      "catalog_revision",
+      "language",
+      "description_category_id",
+      "type_id",
+      "category_path_ru",
+      "category_path_zh",
+      "category_levels_json",
+      "category_name_ru",
+      "category_name_zh",
+      "type_name_ru",
+      "type_name_zh",
+      "display_path_ru",
+      "display_path_zh",
+      "translation_status",
+      "untranslated_terms_json",
+      "keywords_json",
+      "search_text",
+      "disabled",
+      "label_provenance_json",
+      "fetched_at",
+      "source",
+      "updated_at"
+    ) VALUES (
+      ${randomUUID()},
+      ${input.snapshotId},
+      ${input.shopId},
+      ${input.catalogRevision},
+      ${input.language},
+      ${entry.descriptionCategoryId},
+      ${entry.typeId},
+      CAST(${JSON.stringify(entry.categoryPathRu)} AS jsonb),
+      CAST(${JSON.stringify(entry.categoryPathZh)} AS jsonb),
+      CAST(${JSON.stringify(entry.categoryLevels)} AS jsonb),
+      ${entry.categoryNameRu},
+      ${entry.categoryNameZh},
+      ${entry.typeNameRu},
+      ${entry.typeNameZh},
+      ${entry.displayPathRu},
+      ${entry.displayPathZh},
+      ${entry.translationStatus},
+      CAST(${JSON.stringify(entry.untranslatedTerms)} AS jsonb),
+      CAST(${JSON.stringify(entry.keywords)} AS jsonb),
+      ${entry.searchText},
+      ${entry.disabled === true},
+      CAST(${JSON.stringify(entry.labelProvenance || {})} AS jsonb),
+      ${input.fetchedAt},
+      ${input.source},
+      CURRENT_TIMESTAMP
+    )
+  `;
+}
+
+function assertPersistableCatalogSnapshot(snapshot: OzonCategoryCatalogSnapshot): void {
+  if (snapshot.schemaVersion !== OZON_CATEGORY_CATALOG_SNAPSHOT_SCHEMA_VERSION) {
+    throw new Error('Unsupported Ozon category catalog snapshot schema version');
+  }
+  if (!snapshot.complete
+    || !snapshot.defaultTreeComplete
+    || !snapshot.zhHansTreeComplete
+    || snapshot.stale
+    || !snapshot.authoritative) {
+    throw new Error('Only complete authoritative catalog snapshots can be persisted');
+  }
+  if (!Array.isArray(snapshot.entries) || snapshot.entries.length === 0) {
+    throw new Error('Catalog snapshot entries are required');
+  }
+  if (deriveOzonCategoryCatalogRevision(snapshot.entries) !== snapshot.revision) {
+    throw new Error('Catalog snapshot revision does not match its entries');
+  }
+  if (!Number.isFinite(snapshot.fetchedAt.getTime())
+    || !Number.isFinite(snapshot.expiresAt.getTime())
+    || snapshot.expiresAt.getTime() < snapshot.fetchedAt.getTime()) {
+    throw new Error('Catalog snapshot timestamps are invalid');
+  }
+}
+
+export function createPrismaOzonCategoryCatalogSnapshotStore(
+  prisma: PrismaOzonCategoryCatalogClient,
+): OzonCategoryCatalogSnapshotStore {
+  return {
+    async find(shopId) {
+      const rows = await prisma.$queryRaw<any[]>`
+        SELECT
+          snapshot."id" AS "snapshotId",
+          snapshot."schema_version" AS "schemaVersion",
+          snapshot."revision",
+          snapshot."fetched_at" AS "snapshotFetchedAt",
+          snapshot."expires_at" AS "snapshotExpiresAt",
+          snapshot."complete" AS "snapshotComplete",
+          snapshot."default_tree_complete" AS "defaultTreeComplete",
+          snapshot."zh_hans_tree_complete" AS "zhHansTreeComplete",
+          entry."id" AS "entryId",
+          entry."description_category_id" AS "descriptionCategoryId",
+          entry."type_id" AS "typeId",
+          entry."category_path_ru" AS "categoryPathRu",
+          entry."category_path_zh" AS "categoryPathZh",
+          entry."category_levels_json" AS "categoryLevels",
+          entry."category_name_ru" AS "categoryNameRu",
+          entry."category_name_zh" AS "categoryNameZh",
+          entry."type_name_ru" AS "typeNameRu",
+          entry."type_name_zh" AS "typeNameZh",
+          entry."display_path_ru" AS "displayPathRu",
+          entry."display_path_zh" AS "displayPathZh",
+          entry."translation_status" AS "translationStatus",
+          entry."untranslated_terms_json" AS "untranslatedTerms",
+          entry."keywords_json" AS "keywords",
+          entry."search_text" AS "searchText",
+          entry."disabled",
+          entry."label_provenance_json" AS "labelProvenance"
+        FROM "ozon_category_catalog_snapshots" snapshot
+        LEFT JOIN "ozon_category_catalog" entry
+          ON entry."snapshot_id" = snapshot."id"
+         AND entry."shop_id" = snapshot."shop_id"
+         AND entry."catalog_revision" = snapshot."revision"
+        WHERE snapshot."shop_id" = ${shopId}
+          AND snapshot."is_current" = TRUE
+        ORDER BY entry."display_path_zh" ASC, entry."display_path_ru" ASC
+      `;
+      const head = rows[0];
+      if (!head) return null;
+      const complete = head.snapshotComplete === true;
+      const defaultTreeComplete = head.defaultTreeComplete === true;
+      const zhHansTreeComplete = head.zhHansTreeComplete === true;
+      const storedEntries = rows
+        .filter((row) => !!row.entryId)
+        .map(mapCatalogRow)
+        .filter((entry) => entry.descriptionCategoryId > 0 && entry.typeId > 0);
+      const revision = String(head.revision || '');
+      const authoritative = String(head.schemaVersion || '') === OZON_CATEGORY_CATALOG_SNAPSHOT_SCHEMA_VERSION
+        && complete
+        && defaultTreeComplete
+        && zhHansTreeComplete
+        && storedEntries.length > 0
+        && deriveOzonCategoryCatalogRevision(storedEntries) === revision;
+      const entries = storedEntries.map((entry) => ({
+        ...entry,
+        selectable: authoritative && entry.disabled !== true,
+      }));
+      return {
+        schemaVersion: String(head.schemaVersion || '') as OzonCategoryCatalogSnapshot['schemaVersion'],
+        entries,
+        revision,
+        fetchedAt: new Date(head.snapshotFetchedAt),
+        expiresAt: new Date(head.snapshotExpiresAt),
+        complete,
+        defaultTreeComplete,
+        zhHansTreeComplete,
+        stale: false,
+        authoritative,
+      };
+    },
+
+    async replace(shopId, snapshot) {
+      assertPersistableCatalogSnapshot(snapshot);
+      if (!prisma.$transaction) throw new Error('Catalog snapshot persistence requires a transaction');
+      const snapshotId = randomUUID();
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          UPDATE "ozon_category_catalog_snapshots"
+          SET "is_current" = FALSE
+          WHERE "shop_id" = ${shopId}
+            AND "is_current" = TRUE
+        `;
+        await tx.$executeRaw`
+          INSERT INTO "ozon_category_catalog_snapshots" (
+            "id",
+            "shop_id",
+            "schema_version",
+            "revision",
+            "fetched_at",
+            "expires_at",
+            "complete",
+            "default_tree_complete",
+            "zh_hans_tree_complete",
+            "is_current",
+            "created_at"
+          ) VALUES (
+            ${snapshotId},
+            ${shopId},
+            ${snapshot.schemaVersion},
+            ${snapshot.revision},
+            ${snapshot.fetchedAt},
+            ${snapshot.expiresAt},
+            TRUE,
+            TRUE,
+            TRUE,
+            TRUE,
+            CURRENT_TIMESTAMP
+          )
+        `;
+        for (const entry of snapshot.entries) {
+          await insertCatalogEntryRow(tx, {
+            snapshotId,
+            shopId,
+            catalogRevision: snapshot.revision,
+            language: 'DEFAULT',
+            entry,
+            fetchedAt: snapshot.fetchedAt,
+            source: 'ozon_api_bilingual',
+          });
+        }
+      }, { maxWait: 10000, timeout: 120000 });
+    },
   };
 }
 
@@ -796,76 +1382,81 @@ export function createPrismaOzonCategoryCatalogStore(
           "translation_status" AS "translationStatus",
           "untranslated_terms_json" AS "untranslatedTerms",
           "keywords_json" AS "keywords",
-          "search_text" AS "searchText"
-        FROM "ozon_category_catalog"
-        WHERE "shop_id" = ${shopId}
-          AND "language" = ${language}
-        ORDER BY "display_path_zh" ASC, "display_path_ru" ASC
+          "search_text" AS "searchText",
+          catalog."disabled",
+          catalog."label_provenance_json" AS "labelProvenance"
+        FROM "ozon_category_catalog" catalog
+        JOIN "ozon_category_catalog_snapshots" snapshot
+          ON snapshot."id" = catalog."snapshot_id"
+         AND snapshot."shop_id" = catalog."shop_id"
+         AND snapshot."revision" = catalog."catalog_revision"
+        WHERE catalog."shop_id" = ${shopId}
+          AND catalog."language" = ${language}
+          AND snapshot."is_current" = TRUE
+        ORDER BY catalog."display_path_zh" ASC, catalog."display_path_ru" ASC
       `;
       return rows.map(mapCatalogRow).filter((entry) => entry.descriptionCategoryId > 0 && entry.typeId > 0);
     },
 
     async replace(shopId, language, entries, fetchedAt) {
+      if (!prisma.$transaction) throw new Error('Catalog persistence requires a transaction');
+      const snapshotId = randomUUID();
+      const revision = deriveOzonCategoryCatalogRevision(entries);
       const run = async (tx: PrismaOzonCategoryCatalogClient) => {
         await tx.$executeRaw`
-          DELETE FROM "ozon_category_catalog"
+          UPDATE "ozon_category_catalog_snapshots"
+          SET "is_current" = FALSE
           WHERE "shop_id" = ${shopId}
-            AND "language" = ${language}
+            AND "is_current" = TRUE
+            AND "complete" = FALSE
         `;
-
+        await tx.$executeRaw`
+          INSERT INTO "ozon_category_catalog_snapshots" (
+            "id",
+            "shop_id",
+            "schema_version",
+            "revision",
+            "fetched_at",
+            "expires_at",
+            "complete",
+            "default_tree_complete",
+            "zh_hans_tree_complete",
+            "is_current",
+            "created_at"
+          ) VALUES (
+            ${snapshotId},
+            ${shopId},
+            'ozon-category-catalog-snapshot/legacy-adapter-v1',
+            ${revision},
+            ${fetchedAt},
+            ${fetchedAt},
+            FALSE,
+            FALSE,
+            FALSE,
+            NOT EXISTS (
+              SELECT 1
+              FROM "ozon_category_catalog_snapshots"
+              WHERE "shop_id" = ${shopId}
+                AND "is_current" = TRUE
+            ),
+            CURRENT_TIMESTAMP
+          )
+        `;
         for (const entry of entries) {
-          await tx.$executeRaw`
-            INSERT INTO "ozon_category_catalog" (
-              "id",
-              "shop_id",
-              "language",
-              "description_category_id",
-              "type_id",
-              "category_path_ru",
-              "category_path_zh",
-              "category_levels_json",
-              "category_name_ru",
-              "category_name_zh",
-              "type_name_ru",
-              "type_name_zh",
-              "display_path_ru",
-              "display_path_zh",
-              "translation_status",
-              "untranslated_terms_json",
-              "keywords_json",
-              "search_text",
-              "fetched_at",
-              "source",
-              "updated_at"
-            ) VALUES (
-              ${randomUUID()},
-              ${shopId},
-              ${language},
-              ${entry.descriptionCategoryId},
-              ${entry.typeId},
-              CAST(${JSON.stringify(entry.categoryPathRu)} AS jsonb),
-              CAST(${JSON.stringify(entry.categoryPathZh)} AS jsonb),
-              CAST(${JSON.stringify(entry.categoryLevels)} AS jsonb),
-              ${entry.categoryNameRu},
-              ${entry.categoryNameZh},
-              ${entry.typeNameRu},
-              ${entry.typeNameZh},
-              ${entry.displayPathRu},
-              ${entry.displayPathZh},
-              ${entry.translationStatus},
-              CAST(${JSON.stringify(entry.untranslatedTerms)} AS jsonb),
-              CAST(${JSON.stringify(entry.keywords)} AS jsonb),
-              ${entry.searchText},
-              ${fetchedAt},
-              'ozon_api',
-              CURRENT_TIMESTAMP
-            )
-          `;
+          await insertCatalogEntryRow(tx, {
+            snapshotId,
+            shopId,
+            catalogRevision: revision,
+            language,
+            entry,
+            fetchedAt,
+            source: 'ozon_api_legacy_adapter',
+          });
         }
         return entries.length;
       };
 
-      return prisma.$transaction ? prisma.$transaction(run, { maxWait: 10000, timeout: 120000 }) : run(prisma);
+      return prisma.$transaction(run, { maxWait: 10000, timeout: 120000 });
     },
   };
 }

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "ss-erp-1688-dom-fixture-v1",
+  "url": "https://detail.1688.com/offer/810000000002.html",
+  "observedAt": "2026-07-14T10:05:00.000Z",
+  "document": {
+    "queries": {
+      ".pc-sku-wrapper": [
+        {
+          "queries": {
+            ".sku-prop-module .prop-item-inner-wrapper": [
+              {
+                "queries": {
+                  ".prop-name": [{ "text": "黑色", "attrs": { "title": "黑色" } }],
+                  ".prop-img": [{ "style": { "backgroundImage": "url(https://cbu01.alicdn.com/img/ibank/pc-black.jpg)" } }]
+                }
+              },
+              {
+                "queries": {
+                  ".prop-name": [{ "text": "白色", "attrs": { "title": "白色" } }],
+                  ".prop-img": [{ "style": { "backgroundImage": "url(https://cbu01.alicdn.com/img/ibank/pc-white.jpg)" } }]
+                }
+              }
+            ],
+            ".sku-item-wrapper": [
+              {
+                "queries": {
+                  ".sku-item-name": [{ "text": "M" }],
+                  ".discountPrice-price": [{ "text": "¥20.00" }],
+                  ".sku-item-sale-num": [{ "text": "库存8件" }]
+                }
+              },
+              {
+                "queries": {
+                  ".sku-item-name": [{ "text": "L" }],
+                  ".discountPrice-price": [{ "text": "¥22.00" }],
+                  ".sku-item-sale-num": [{ "text": "库存0件" }]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
