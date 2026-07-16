@@ -5,6 +5,10 @@
 *.ps1 text eol=crlf
 *.sh text eol=lf
 
+# Generated contracts are byte-compared on Linux during extension packaging.
+packages/shared/src/source-product-capture.ts text eol=lf
+extensions/ss-erp/shared/contracts/source-product-capture-v2.js text eol=lf
+
 *.png binary
 *.jpg binary
 *.jpeg binary
