@@ -9,7 +9,26 @@ Current required defaults in every environment:
 - `feature_source_listing_workflow=false`
 - `feature_source_ozon_publisher_v2=false`
 - all five `source_ozon_publisher_*_stage` rows are `off@0`
+- `feature_ai_media_workflow_v2=false`
+- `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
+
+## Release Evidence: `9afeb68`
+
+| Evidence | Result |
+|---|---|
+| Git | `9afeb68`; reviewed feature branch pushed to `origin/feat/ai-media-prompt-registry`; both VPS deployments were packaged from the exact commit in a clean detached worktree |
+| Automated verification | Server `1962 passed / 80 skipped`; workspace typecheck and production build passed; lint `0 errors / 23` existing warnings; Web AI Media executable/static contracts and dark-deployment guards passed |
+| Schema | 68 migrations current in local, domestic and international environments; all eight AI Media migrations applied successfully on both VPS deployments |
+| Local ERP | API ready with DB/Redis OK, Web HTTP 200, AI Media master false, rollout tenant list empty, listing/publisher masters false and all five publisher stages `off@0` |
+| Domestic VPS | `8.163.122.40` deployed `9afeb68`; pre-deploy backup completed; API/Web/Worker active; local and public HTTP `/ready` passed; Prisma and dark-rollout checks passed |
+| Domestic infrastructure limits | Full verifier reports four existing infrastructure failures: no HTTPS listener, UFW does not allow 443, and Nginx lacks Cloudflare real-IP/origin-guard configuration. The deployment remains reachable over HTTP and has no initialized USER/ADMIN account, so browser canary lands on first-run setup |
+| International VPS | `45.76.49.64` deployed `9afeb68`; pre-deploy backup completed; full VPS verifier passed with `0 failures / 1 warning`; the warning is that the latest backup remains local rather than remotely replicated |
+| Browser canary | `https://ss-erp.com` returned 200, loaded in about 390 ms and had no console errors. Domestic HTTP returned 200 and the setup screen loaded in about 65 ms; the initial unauthenticated `/api/user/me` 401 is expected for the uninitialized environment |
+| Rollout state | AI Media master `false`, rollout policy `revision:0` with zero tenant IDs, listing and publisher masters `false`, and all five publisher stages `off@0` in all three environments |
+| External effects | No paid AI provider call, real Ozon write or production image upload was executed |
+
+Deployment artifact note: the cloud extension package version is derived from each environment's previous build history, so this release produced `1.0.201` domestically and `1.0.236` internationally from the same application commit. Normalize cross-environment extension versioning before promoting extension artifacts as a single public release.
 
 ## Release Evidence: `50cc36b`
 
