@@ -76,7 +76,7 @@ vi.mock('../services/ai-usage.js', () => ({
   createPrismaAiUsageStore: vi.fn(() => ({ getDailySummary: vi.fn() })),
 }));
 
-import { systemConfigRoutes } from '../routes/system-config.js';
+import { seedSystemConfig, systemConfigRoutes } from '../routes/system-config.js';
 
 const PROTECTED_KEYS = [
   'source_ozon_publisher_collect_publish_stage',
@@ -99,6 +99,31 @@ describe('SystemConfig route mutation security', () => {
     state.isSuperAdmin = true;
     state.rows.clear();
     vi.clearAllMocks();
+  });
+
+  it('does not update CAS-protected rollout rows while refreshing ordinary metadata', async () => {
+    for (const key of PROTECTED_KEYS) {
+      state.rows.set(key, {
+        key,
+        value: 'off',
+        label: 'migration-owned label',
+        group: 'source_workflow',
+        description: 'migration-owned description',
+      });
+    }
+    state.rows.set('feature_announcement_popup', {
+      key: 'feature_announcement_popup',
+      value: 'false',
+      label: 'stale label',
+      group: 'stale group',
+      description: 'stale description',
+    });
+
+    await seedSystemConfig();
+
+    const updatedKeys = db.update.mock.calls.map(([input]) => input.where.key as string);
+    expect(updatedKeys).toContain('feature_announcement_popup');
+    expect(updatedKeys).not.toEqual(expect.arrayContaining([...PROTECTED_KEYS]));
   });
 
   it('preserves the existing super-admin authorization check ahead of the session gate', async () => {

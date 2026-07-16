@@ -128,9 +128,11 @@ const DEFAULTS = (Object.keys(SystemConfigSchema) as SystemConfigKey[]).map((key
   };
 });
 
-export async function seedSystemConfig() {
+export async function seedSystemConfig(
+  client: Pick<typeof prisma, 'systemConfig'> = prisma,
+) {
   // 清理已废弃的配置（storage 组已迁移到环境变量）
-  await prisma.systemConfig.deleteMany({
+  await client.systemConfig.deleteMany({
     where: {
       key: {
         in: [
@@ -143,15 +145,18 @@ export async function seedSystemConfig() {
   });
 
   for (const item of DEFAULTS) {
-    const existing = await prisma.systemConfig.findUnique({ where: { key: item.key } });
+    const existing = await client.systemConfig.findUnique({ where: { key: item.key } });
     if (!existing) {
-      await prisma.systemConfig.create({ data: item });
+      await client.systemConfig.create({ data: item });
     } else if (
-      existing.label !== item.label ||
-      existing.group !== item.group ||
-      existing.description !== item.description
+      !PROTECTED_OZON_PUBLISHER_STAGE_KEYS.has(item.key) &&
+      (
+        existing.label !== item.label ||
+        existing.group !== item.group ||
+        existing.description !== item.description
+      )
     ) {
-      await prisma.systemConfig.update({
+      await client.systemConfig.update({
         where: { key: item.key },
         data: {
           label: item.label,

@@ -4,8 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { compareOzonPublisherEntrypointParity } from '../services/ozon-publisher-entrypoint-parity.js';
 import { createPrismaOzonPublisherRolloutAdminRepository } from '../services/ozon-publisher-rollout-admin-prisma.js';
+import { OZON_PUBLISHER_ROLLOUT_STAGE_CONFIG_KEYS } from '../services/ozon-publisher-rollout-admin.js';
 import { createOzonPublisherParityObservationService } from '../services/ozon-publisher-parity-observations.js';
 import { createPrismaOzonPublisherParityObservationRepository } from '../services/ozon-publisher-parity-prisma.js';
+import { seedSystemConfig } from '../routes/system-config.js';
 
 const testDatabaseUrl = process.env.LOGISTICS_TEST_DATABASE_URL || '';
 const runRequested = process.env.RUN_LOGISTICS_POSTGRES_TESTS === '1';
@@ -395,15 +397,31 @@ describePostgres('Ozon publisher rollout gate PostgreSQL hardening', () => {
          '20260716021000_harden_ozon_publisher_rollout_gates',
          '20260716022000_complete_ozon_publisher_rollout_attempt_link',
          '20260716023000_fix_ozon_publisher_rollout_fence_order',
-         '20260716024000_make_ozon_publisher_rollout_fence_retryable'
+         '20260716024000_make_ozon_publisher_rollout_fence_retryable',
+         '20260716026000_add_ozon_publisher_rollout_stage_cas'
        )
          AND "finished_at" IS NOT NULL`,
     );
-    expect(Number(applied[0]?.count || 0)).toBe(4);
+    expect(Number(applied[0]?.count || 0)).toBe(5);
   }, 30_000);
 
   afterAll(async () => {
     await Promise.all([first?.$disconnect(), second?.$disconnect()]);
+  });
+
+  it('seeds ordinary metadata without mutating CAS-protected rollout stages', async () => {
+    const before = await first.systemConfig.findMany({
+      where: { key: { in: Object.values(OZON_PUBLISHER_ROLLOUT_STAGE_CONFIG_KEYS) } },
+      orderBy: { key: 'asc' },
+    });
+
+    await expect(seedSystemConfig(first)).resolves.toBeUndefined();
+
+    const after = await first.systemConfig.findMany({
+      where: { key: { in: Object.values(OZON_PUBLISHER_ROLLOUT_STAGE_CONFIG_KEYS) } },
+      orderBy: { key: 'asc' },
+    });
+    expect(after).toEqual(before);
   });
 
   it('rejects an eligible attempt whose timestamps are backfilled', async () => {
