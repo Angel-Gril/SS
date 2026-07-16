@@ -59,6 +59,7 @@ writeFileSync(bootstrapEnvPath, [
   'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',
   'RUNTIME_MODE=cloud',
   'NEXT_PUBLIC_RUNTIME_MODE=cloud',
+  'LEGAL_PROFILE=cloud-global',
   'NEXT_PUBLIC_API_BASE_URL=https://ss-erp.com',
   'CORS_ORIGIN=https://ss-erp.com',
   '',
@@ -86,6 +87,7 @@ writeFileSync(missingApiBaseEnvPath, [
   'ENCRYPTION_KEY=0123456789abcdef0123456789abcdef',
   'RUNTIME_MODE=cloud',
   'NEXT_PUBLIC_RUNTIME_MODE=cloud',
+  'LEGAL_PROFILE=cloud-global',
   'CORS_ORIGIN=https://ss-erp.com',
   '',
 ].join('\n'));

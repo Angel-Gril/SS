@@ -31,6 +31,14 @@ type Input = {
 };
 
 function writerOrigin(input: Input) {
+  if (input.entrypoint === 'LISTING_BATCH'
+    || input.entrypoint === 'LISTING_IMPORT_BY_SKU') {
+    return {
+      writerEntrypoint: input.entrypoint,
+      originChannel: 'DIRECT' as const,
+      parityEntrypoint: input.entrypoint,
+    };
+  }
   return {
     writerEntrypoint: 'COLLECT_PUBLISH_OZON' as const,
     originChannel: input.entrypoint === 'BROWSER_ONE_CLICK' ? 'BROWSER_ONE_CLICK' as const : 'DIRECT' as const,

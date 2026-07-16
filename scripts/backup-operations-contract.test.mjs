@@ -11,6 +11,7 @@ const localDevelopment = readFileSync(
   'utf8',
 );
 const verifier = readFileSync(new URL('./verify-vps-deploy.sh', import.meta.url), 'utf8');
+const cloudVerifier = readFileSync(new URL('./verify-cloud-runtime.sh', import.meta.url), 'utf8');
 const appDirDeployer = readFileSync(new URL('./deploy-app-dir.sh', import.meta.url), 'utf8');
 
 test('backup cron exports its env and targets the app-dir deployment script', () => {
@@ -81,6 +82,32 @@ test('VPS verification keeps logistics distribution dark unless rollout expectat
   assert.ok(verifier.includes(
     'enabled:[[:space:]]*${expected_cloud_extension}',
   ));
+});
+
+test('VPS verification accepts the complete IPv4 loopback range', () => {
+  assert.match(
+    verifier,
+    /127\\\.\[0-9\]\{1,3\}\\\.\[0-9\]\{1,3\}\\\.\[0-9\]\{1,3\}/u,
+  );
+});
+
+test('cloud verification derives the public ready target from the deployed env', () => {
+  assert.match(cloudVerifier, /NEXT_PUBLIC_API_BASE_URL/u);
+  assert.match(cloudVerifier, /VERIFY_PUBLIC_BASE_URL/u);
+  assert.match(cloudVerifier, /VERIFY_READY_URL/u);
+  assert.doesNotMatch(cloudVerifier, /VERIFY_DOMAIN:-ss-erp\.com/u);
+  for (const source of [verifier, cloudVerifier]) {
+    assert.match(source, /\['http:', 'https:'\]\.includes\(url\.protocol\)/u);
+    assert.match(source, /url\.pathname !== '\/ready'/u);
+    assert.match(source, /url\.username/u);
+    assert.match(source, /url\.password/u);
+    assert.match(source, /url\.search/u);
+    assert.match(source, /url\.hash/u);
+    assert.match(source, /configured && configured !== host/u);
+    assert.match(source, /host === 'localhost'/u);
+    assert.match(source, /privateIpv4/u);
+  }
+  assert.doesNotMatch(verifier, /curl -k /u);
 });
 
 test('VPS verification rejects stale or missing backup artifacts', () => {

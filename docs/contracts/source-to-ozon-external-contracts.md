@@ -216,6 +216,23 @@ For `SOURCE_OZON_PUBLISHER_V2`, valid context requires a non-empty owner, shop, 
 
 MAIN-world data and runtime-message payloads cannot enable a feature. Extension flags may be returned only through an authenticated ERP runtime response.
 
+### Publisher entry-point control and migration state
+
+The five persisted publisher stages form a dark control plane. Commit `50cc36b` deployed the schema, protected CAS administration, readiness gates, evidence evaluation and disabled defaults to local ERP, domestic VPS and international VPS. That deployment did not grant write authority: every entry-point stage remained `off@0`, and both `feature_source_listing_workflow` and `feature_source_ozon_publisher_v2` remained `false`.
+
+The post-`50cc36b` listing convergence slice wires the production rollout decision and compile-only shadow observer into `/api/listing/batch` and `/api/listing/ozon/import-by-sku`. These routes must:
+
+1. evaluate the exact writer/origin/revision decision before constructing an Ozon client;
+2. require exact server-owned draft, revision and SKU identity whenever the listing workflow is active;
+3. build one immutable legacy request value and use that same value for shadow comparison and the authoritative legacy call;
+4. re-evaluate the rollout decision immediately before the external call and fail closed on revision, stage, gate-version or evidence-hash drift;
+5. let diagnostic observation failure leave the shadow legacy call authoritative while recording a bounded failed recorder outcome when an eligible attempt exists; and
+6. never fall back to legacy after a `V2` decision or a V2 adapter failure.
+
+This does not complete publisher convergence. The collect writer, browser-one-click origin and extension execution boundary still require equivalent physical rollout enforcement. A real V2 switch for the two listing routes also requires a multi-draft adapter that preserves immutable publish attempts, per-draft idempotency and reconciliation; a compile-only comparison is not an execution adapter.
+
+No legacy entry point has a scheduled removal date. Each remains `UNSCHEDULED` until its own verified V2 switch. A removal date MUST be a concrete calendar date recorded at or after that switch and MUST be at least 30 days later, with rollback readers and retained evidence remaining available throughout that period.
+
 ## Retention Contract
 
 ### Existing configuration baseline

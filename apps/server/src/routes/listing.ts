@@ -28,12 +28,50 @@ import {
 import {
   assertSourceListingDraftIdentity,
   normalizeSourceListingDraftIdentityRefs,
+  type SourceListingDraftIdentityRef,
   SourceListingDraftIdentityError,
 } from '../services/source-listing-draft-identity.js';
+import type {
+  OzonPublisherEntrypointRolloutDecision,
+  OzonPublisherEntrypointRolloutService,
+  OzonPublisherWriterEntrypoint,
+} from '../services/ozon-publisher-entrypoint-rollout.js';
+import type { OzonPublisherEntrypointParityObserver } from '../services/ozon-publisher-entrypoint-parity-shadow.js';
 
 export interface ListingRoutesOptions {
   featureFlags?: SourceWorkflowFeatureFlagEvaluator;
   sourceListingWorkflowAdapter?: LegacySourceListingWorkflowAdapter;
+  publisherRollout?: OzonPublisherEntrypointRolloutService;
+  publisherParityObserver?: OzonPublisherEntrypointParityObserver;
+  publisherParityTimeoutMs?: number;
+}
+
+function sameRolloutDecision(
+  initial: OzonPublisherEntrypointRolloutDecision,
+  current: OzonPublisherEntrypointRolloutDecision,
+): boolean {
+  return initial.authority === current.authority
+    && initial.effectiveStage === current.effectiveStage
+    && initial.rolloutRevision === current.rolloutRevision
+    && initial.gateStateVersion === current.gateStateVersion
+    && initial.evidenceHash === current.evidenceHash;
+}
+
+function sendPublisherRolloutBlocked(
+  reply: FastifyReply,
+  decision: OzonPublisherEntrypointRolloutDecision,
+) {
+  return reply.status(503).send({
+    code: 0,
+    errorCode: decision.authority === 'V2'
+      ? 'ozon_publisher_entrypoint_v2_adapter_unavailable'
+      : 'ozon_publisher_entrypoint_blocked',
+    msg: decision.authority === 'V2'
+      ? '该 Ozon 发布入口尚未接入 V2 多草稿执行适配器'
+      : 'Ozon 发布入口当前不可用',
+    rolloutRevision: decision.rolloutRevision,
+    rolloutReason: decision.reason,
+  });
 }
 
 function sourcePublishActorAllowed(request: FastifyRequest): boolean {
@@ -807,6 +845,54 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
   const featureFlags = options.featureFlags || sourceWorkflowFeatureFlags;
   const sourceListingWorkflowAdapter = options.sourceListingWorkflowAdapter
     || getDefaultLegacySourceListingWorkflowAdapter();
+  const publisherRollout = options.publisherRollout;
+  const publisherParityObserver = options.publisherParityObserver;
+  const publisherParityTimeoutMs = options.publisherParityTimeoutMs ?? 2_000;
+
+  const evaluatePublisherRollout = (
+    writerEntrypoint: OzonPublisherWriterEntrypoint,
+    userId: string,
+    shop: { id: string; platform: unknown },
+  ) => publisherRollout?.evaluateWrite({
+    writerEntrypoint,
+    originChannel: 'DIRECT',
+    context: {
+      ownerUserId: userId,
+      shopId: shop.id,
+      platform: String(shop.platform || ''),
+    },
+  });
+
+  const observePublisherParity = async (input: {
+    decision: OzonPublisherEntrypointRolloutDecision;
+    entrypoint: 'LISTING_BATCH' | 'LISTING_IMPORT_BY_SKU';
+    userId: string;
+    shopId: string;
+    endpoint: '/v3/product/import' | '/v1/product/import-by-sku';
+    items: unknown[];
+    refs: SourceListingDraftIdentityRef[];
+    itemTrace?: Array<{ ordinal: number; supplyGoodsId: string; sourceSkuAlias?: string }>;
+  }) => {
+    if (!input.decision.observeParity || !publisherParityObserver || input.refs.length === 0) return;
+    const observation = publisherParityObserver.observe({
+      ownerUserId: input.userId,
+      shopId: input.shopId,
+      rolloutRevision: input.decision.rolloutRevision,
+      entrypoint: input.entrypoint,
+      legacy: {
+        endpoint: input.endpoint,
+        payload: { items: input.items },
+        ...(input.itemTrace ? { itemTrace: input.itemTrace } : {}),
+      },
+      drafts: input.refs.map(({ supplyGoodsId, draftId, draftVersion, revision }) => ({
+        supplyGoodsId, draftId, draftVersion, revision,
+      })),
+    });
+    await Promise.race<void>([
+      observation.then(() => undefined, () => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, publisherParityTimeoutMs)),
+    ]);
+  };
   app.addHook('preHandler', authenticate);
 
   app.post('/batch', async (request, reply) => {
@@ -828,7 +914,18 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
     if (shop.status !== 'ACTIVE') {
       return reply.send({ code: 0, msg: '店铺状态异常，请先测试连接' });
     }
-    if (await enforceLegacySourceOzonPublish(request, reply, shop, featureFlags)) return;
+    if (!sourcePublishActorAllowed(request)) {
+      return reply.status(403).send({
+        code: 0,
+        errorCode: 'source_publish_owner_required',
+        msg: '仅店铺所有者可提交 Ozon 发布任务',
+      });
+    }
+    const initialRollout = await evaluatePublisherRollout('LISTING_BATCH', userId, shop);
+    if (initialRollout?.authority === 'BLOCKED' || initialRollout?.authority === 'V2') {
+      return sendPublisherRolloutBlocked(reply, initialRollout);
+    }
+    if (!initialRollout && await enforceLegacySourceOzonPublish(request, reply, shop, featureFlags)) return;
 
     const compatibility = await resolveLegacySourceListingCompatibility({
       featureFlags,
@@ -839,9 +936,10 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       platform: String(shop.platform || ''),
       supplyGoodsIds: items.map((item) => item.supplyGoodsId || '').filter(Boolean),
     });
-    if (compatibility.stage !== 'off') {
+    let draftRefs: SourceListingDraftIdentityRef[] = [];
+    if (compatibility.stage !== 'off' || initialRollout?.observeParity) {
       try {
-        const refs = normalizeSourceListingDraftIdentityRefs(parsed.data.draftRefs);
+        draftRefs = normalizeSourceListingDraftIdentityRefs(parsed.data.draftRefs);
         const prepared = compatibility.drafts.map((draft) => ({
           supplyGoodsId: draft.supplyGoodsId,
           draftId: draft.draftId,
@@ -849,7 +947,7 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
           revision: draft.revision,
           selectedSkuKeys: draft.selectedSkuKeys || [],
         }));
-        assertSourceListingDraftIdentity({ refs, prepared });
+        assertSourceListingDraftIdentity({ refs: draftRefs, prepared });
       } catch (caught) {
         if (!(caught instanceof SourceListingDraftIdentityError)) throw caught;
         return reply.status(caught.statusCode).send({
@@ -858,11 +956,6 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
         });
       }
     }
-
-    const client = new OzonClient({
-      clientId: shop.clientId!,
-      apiKey: decrypt(shop.apiKeyEncrypted),
-    });
 
     const ozonItems = items.map((item) => ({
       offer_id: item.offerId,
@@ -887,6 +980,73 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       })) || [],
     }));
 
+    if (initialRollout) {
+      if (compatibility.rolloutRevision !== initialRollout.rolloutRevision) {
+        return reply.status(409).send({
+          code: 0,
+          errorCode: 'ozon_publisher_rollout_revision_mismatch',
+          msg: '发布策略版本已变化，请刷新后重试',
+          rolloutRevision: initialRollout.rolloutRevision,
+        });
+      }
+      await observePublisherParity({
+        decision: initialRollout,
+        entrypoint: 'LISTING_BATCH',
+        userId,
+        shopId,
+        endpoint: '/v3/product/import',
+        items: ozonItems,
+        refs: draftRefs,
+        itemTrace: items.map((item, ordinal) => ({
+          ordinal,
+          supplyGoodsId: item.supplyGoodsId || '',
+          sourceSkuAlias: item.skuKey,
+        })),
+      });
+      const currentRollout = await evaluatePublisherRollout('LISTING_BATCH', userId, shop);
+      if (!currentRollout || !sameRolloutDecision(initialRollout, currentRollout)) {
+        return reply.status(409).send({
+          code: 0,
+          errorCode: 'ozon_publisher_rollout_decision_changed',
+          msg: '发布策略已变化，请重试',
+        });
+      }
+      if (currentRollout.authority !== 'LEGACY') return sendPublisherRolloutBlocked(reply, currentRollout);
+      if (draftRefs.length > 0) {
+        const currentCompatibility = await resolveLegacySourceListingCompatibility({
+          featureFlags,
+          adapter: sourceListingWorkflowAdapter,
+          ownerUserId: userId,
+          actorUserId: String((request as any).user?.actorUserId || userId),
+          shopId,
+          platform: String(shop.platform || ''),
+          supplyGoodsIds: items.map((item) => item.supplyGoodsId || '').filter(Boolean),
+        });
+        try {
+          assertSourceListingDraftIdentity({
+            refs: draftRefs,
+            prepared: currentCompatibility.drafts.map((draft) => ({
+              supplyGoodsId: draft.supplyGoodsId,
+              draftId: draft.draftId,
+              draftVersion: draft.draftVersion,
+              revision: draft.revision,
+              selectedSkuKeys: draft.selectedSkuKeys || [],
+            })),
+          });
+        } catch (caught) {
+          if (!(caught instanceof SourceListingDraftIdentityError)) throw caught;
+          return reply.status(caught.statusCode).send({
+            code: 0, errorCode: caught.code, msg: caught.message,
+            rolloutRevision: currentCompatibility.rolloutRevision,
+          });
+        }
+      }
+    }
+
+    const client = new OzonClient({
+      clientId: shop.clientId!,
+      apiKey: decrypt(shop.apiKeyEncrypted),
+    });
     try {
       const result = await client.request<{ result: { task_id: number } }>(
         '/v3/product/import',
@@ -940,7 +1100,18 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
     if (!shop.clientId || !shop.apiKeyEncrypted) {
       return reply.send({ code: 0, msg: '店铺 API 配置不完整' });
     }
-    if (await enforceLegacySourceOzonPublish(request, reply, shop, featureFlags)) return;
+    if (!sourcePublishActorAllowed(request)) {
+      return reply.status(403).send({
+        code: 0,
+        errorCode: 'source_publish_owner_required',
+        msg: '仅店铺所有者可提交 Ozon 发布任务',
+      });
+    }
+    const initialRollout = await evaluatePublisherRollout('LISTING_IMPORT_BY_SKU', userId, shop);
+    if (initialRollout?.authority === 'BLOCKED' || initialRollout?.authority === 'V2') {
+      return sendPublisherRolloutBlocked(reply, initialRollout);
+    }
+    if (!initialRollout && await enforceLegacySourceOzonPublish(request, reply, shop, featureFlags)) return;
 
     const compatibility = await resolveLegacySourceListingCompatibility({
       featureFlags,
@@ -951,9 +1122,10 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       platform: String(shop.platform || ''),
       supplyGoodsIds: items.map((item) => item.supplyGoodsId || '').filter(Boolean),
     });
-    if (compatibility.stage !== 'off') {
+    let draftRefs: SourceListingDraftIdentityRef[] = [];
+    if (compatibility.stage !== 'off' || initialRollout?.observeParity) {
       try {
-        const refs = normalizeSourceListingDraftIdentityRefs(parsed.data.draftRefs);
+        draftRefs = normalizeSourceListingDraftIdentityRefs(parsed.data.draftRefs);
         const prepared = compatibility.drafts.map((draft) => ({
           supplyGoodsId: draft.supplyGoodsId,
           draftId: draft.draftId,
@@ -961,7 +1133,7 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
           revision: draft.revision,
           selectedSkuKeys: draft.selectedSkuKeys || [],
         }));
-        assertSourceListingDraftIdentity({ refs, prepared });
+        assertSourceListingDraftIdentity({ refs: draftRefs, prepared });
       } catch (caught) {
         if (!(caught instanceof SourceListingDraftIdentityError)) throw caught;
         return reply.status(caught.statusCode).send({
@@ -970,11 +1142,6 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
         });
       }
     }
-
-    const client = new OzonClient({
-      clientId: shop.clientId,
-      apiKey: decrypt(shop.apiKeyEncrypted),
-    });
 
     const seenOfferIds = new Set<string>();
     const ozonItems = items.map((item) => {
@@ -995,6 +1162,73 @@ export async function listingRoutes(app: FastifyInstance, options: ListingRoutes
       };
     });
 
+    if (initialRollout) {
+      if (compatibility.rolloutRevision !== initialRollout.rolloutRevision) {
+        return reply.status(409).send({
+          code: 0,
+          errorCode: 'ozon_publisher_rollout_revision_mismatch',
+          msg: '发布策略版本已变化，请刷新后重试',
+          rolloutRevision: initialRollout.rolloutRevision,
+        });
+      }
+      await observePublisherParity({
+        decision: initialRollout,
+        entrypoint: 'LISTING_IMPORT_BY_SKU',
+        userId,
+        shopId,
+        endpoint: '/v1/product/import-by-sku',
+        items: ozonItems,
+        refs: draftRefs,
+        itemTrace: items.map((item, ordinal) => ({
+          ordinal,
+          supplyGoodsId: item.supplyGoodsId || '',
+          sourceSkuAlias: String(item.sku),
+        })),
+      });
+      const currentRollout = await evaluatePublisherRollout('LISTING_IMPORT_BY_SKU', userId, shop);
+      if (!currentRollout || !sameRolloutDecision(initialRollout, currentRollout)) {
+        return reply.status(409).send({
+          code: 0,
+          errorCode: 'ozon_publisher_rollout_decision_changed',
+          msg: '发布策略已变化，请重试',
+        });
+      }
+      if (currentRollout.authority !== 'LEGACY') return sendPublisherRolloutBlocked(reply, currentRollout);
+      if (draftRefs.length > 0) {
+        const currentCompatibility = await resolveLegacySourceListingCompatibility({
+          featureFlags,
+          adapter: sourceListingWorkflowAdapter,
+          ownerUserId: userId,
+          actorUserId: String((request as any).user?.actorUserId || userId),
+          shopId,
+          platform: String(shop.platform || ''),
+          supplyGoodsIds: items.map((item) => item.supplyGoodsId || '').filter(Boolean),
+        });
+        try {
+          assertSourceListingDraftIdentity({
+            refs: draftRefs,
+            prepared: currentCompatibility.drafts.map((draft) => ({
+              supplyGoodsId: draft.supplyGoodsId,
+              draftId: draft.draftId,
+              draftVersion: draft.draftVersion,
+              revision: draft.revision,
+              selectedSkuKeys: draft.selectedSkuKeys || [],
+            })),
+          });
+        } catch (caught) {
+          if (!(caught instanceof SourceListingDraftIdentityError)) throw caught;
+          return reply.status(caught.statusCode).send({
+            code: 0, errorCode: caught.code, msg: caught.message,
+            rolloutRevision: currentCompatibility.rolloutRevision,
+          });
+        }
+      }
+    }
+
+    const client = new OzonClient({
+      clientId: shop.clientId,
+      apiKey: decrypt(shop.apiKeyEncrypted),
+    });
     try {
       const result = await client.importBySku(ozonItems);
       const taskId = result.result.task_id;

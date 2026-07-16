@@ -6,6 +6,10 @@ const NOW = new Date('2026-07-16T00:00:00.000Z');
 const gate = {
   id: 'gate-1', evidencePolicyHash: 'a'.repeat(64), guardContractVersion: 'ozon-publisher-rollout-guard/v1',
 };
+const directWriterCases = [
+  ['LISTING_BATCH', 'LISTING_BATCH'],
+  ['LISTING_IMPORT_BY_SKU', 'LISTING_IMPORT_BY_SKU'],
+] as const;
 
 function setup() {
   const attempt = {
@@ -56,6 +60,35 @@ describe('Ozon publisher rollout recorder', () => {
         eligibleAt: NOW, createdAt: NOW,
         expiresAt: new Date(NOW.getTime() + 45 * 86_400_000),
         writerEntrypoint: 'COLLECT_PUBLISH_OZON', originChannel: 'DIRECT',
+      }),
+    });
+  });
+
+  it.each(directWriterCases)('binds %s observations to the exact direct writer gate', async (entrypoint, writer) => {
+    const { recorder, tx } = setup();
+    await recorder.begin({
+      ownerUserId: 'owner-1', shopId: 'shop-1', rolloutRevision: 'rev-1',
+      entrypoint, endpoint: entrypoint === 'LISTING_BATCH'
+        ? '/v3/product/import'
+        : '/v1/product/import-by-sku',
+      payload: { items: [{ offer_id: 'offer-1' }] },
+    });
+
+    expect(tx.ozonPublisherRolloutGate.findUnique).toHaveBeenCalledWith({
+      where: {
+        writerEntrypoint_originChannel_rolloutRevision: {
+          writerEntrypoint: writer,
+          originChannel: 'DIRECT',
+          rolloutRevision: 'rev-1',
+        },
+      },
+      select: { id: true, evidencePolicyHash: true, guardContractVersion: true },
+    });
+    expect(tx.ozonPublisherRolloutRecorderAttempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        writerEntrypoint: writer,
+        originChannel: 'DIRECT',
+        parityEntrypoint: entrypoint,
       }),
     });
   });

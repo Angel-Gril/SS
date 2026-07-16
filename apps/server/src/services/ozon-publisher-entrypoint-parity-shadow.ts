@@ -22,7 +22,7 @@ export interface OzonPublisherEntrypointParityObservation {
   ownerUserId: string;
   shopId: string;
   rolloutRevision: string;
-  entrypoint: Extract<OzonPublisherEntrypoint, 'COLLECT_PUBLISH_OZON' | 'BROWSER_ONE_CLICK'>;
+  entrypoint: Exclude<OzonPublisherEntrypoint, 'EXTENSION_ADAPTER'>;
   legacy: {
     endpoint: '/v3/product/import' | '/v1/product/import-by-sku';
     payload: { items: unknown[] };

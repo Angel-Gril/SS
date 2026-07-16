@@ -56,12 +56,16 @@ vi.mock('../workers/browser-one-click-listing.js', () => ({
   appendBrowserOneClickListingRows: mocks.appendBrowserOneClickListingRows,
 }));
 
-async function buildApp(featureEvaluate = mocks.featureEvaluate) {
+async function buildApp(
+  featureEvaluate = mocks.featureEvaluate,
+  routeOptions: Record<string, unknown> = {},
+) {
   const app = Fastify();
   await app.register(listingRoutes, {
     prefix: '/api/listing',
     featureFlags: { evaluate: featureEvaluate },
     sourceListingWorkflowAdapter: { prepare: mocks.prepareSourceListingWorkflow },
+    ...routeOptions,
   });
   await app.ready();
   return app;
@@ -293,6 +297,123 @@ describe('browser one-click listing jobs', () => {
         code: 0, errorCode: 'SOURCE_LISTING_DRAFT_IDENTITY_MISMATCH',
       });
       expect(OzonClient).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('fails closed before constructing an Ozon client when the entrypoint is blocked', async () => {
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    const evaluateWrite = vi.fn(async () => ({
+      writerEntrypoint: 'LISTING_IMPORT_BY_SKU', originChannel: 'DIRECT',
+      configuredStages: { writer: null, origin: null }, effectiveStage: null,
+      authority: 'BLOCKED', observeParity: false, limitingBoundary: null,
+      rolloutRevision: 'listing-r1', reason: 'stage_config_unavailable',
+      gateStateVersion: null, evidenceHash: null,
+    }));
+    const app = await buildApp(mocks.featureEvaluate, { publisherRollout: { evaluateWrite } });
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/ozon/import-by-sku',
+        payload: { shopId: 'shop-1', items: [{ sku: 2143427743 }] },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ errorCode: 'ozon_publisher_entrypoint_blocked' });
+      expect(OzonClient).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('does not call Ozon when the rollout decision changes before the external write', async () => {
+    const importBySku = vi.fn();
+    vi.mocked(OzonClient).mockImplementationOnce(function OzonClientMock() {
+      return { importBySku } as never;
+    });
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.prepareSourceListingWorkflow.mockResolvedValue({
+      drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, selectedSkuKeys: ['2143427743'] }],
+      failures: [],
+    });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'shadow_write', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r1' });
+    const baseDecision = {
+      writerEntrypoint: 'LISTING_IMPORT_BY_SKU', originChannel: 'DIRECT',
+      configuredStages: { writer: 'shadow', origin: null }, effectiveStage: 'shadow',
+      authority: 'LEGACY', observeParity: true, limitingBoundary: 'LISTING_IMPORT_BY_SKU',
+      rolloutRevision: 'listing-r1', reason: 'shadow', gateStateVersion: null, evidenceHash: null,
+    } as const;
+    const evaluateWrite = vi.fn()
+      .mockResolvedValueOnce(baseDecision)
+      .mockResolvedValueOnce({ ...baseDecision, effectiveStage: 'off', observeParity: false, reason: 'effective_stage_off' });
+    const observe = vi.fn(async () => ({ status: 'MATCH' }));
+    const app = await buildApp(mocks.featureEvaluate, {
+      publisherRollout: { evaluateWrite },
+      publisherParityObserver: { observe },
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/ozon/import-by-sku',
+        payload: {
+          shopId: 'shop-1',
+          draftRefs: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, skuKey: '2143427743' }],
+          items: [{ sku: 2143427743, supplyGoodsId: 'goods-1' }],
+        },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ errorCode: 'ozon_publisher_rollout_decision_changed' });
+      expect(observe).toHaveBeenCalledTimes(1);
+      expect(importBySku).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('revalidates the reviewed draft immediately before the external write', async () => {
+    const importBySku = vi.fn();
+    vi.mocked(OzonClient).mockImplementationOnce(function OzonClientMock() {
+      return { importBySku } as never;
+    });
+    mocks.shopFindFirst.mockResolvedValue({
+      id: 'shop-1', userId: 'user-1', platform: 'OZON', status: 'ACTIVE',
+      clientId: 'client-id', apiKeyEncrypted: 'encrypted-key',
+    });
+    mocks.prepareSourceListingWorkflow
+      .mockResolvedValueOnce({
+        drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, selectedSkuKeys: ['2143427743'] }],
+        failures: [],
+      })
+      .mockResolvedValueOnce({
+        drafts: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 8, selectedSkuKeys: ['2143427743'] }],
+        failures: [],
+      });
+    mocks.featureEvaluate.mockImplementation(async (feature: string) => feature === 'SOURCE_LISTING_WORKFLOW'
+      ? { enabled: true, legacyAllowed: true, listingStage: 'shadow_write', captureStage: null, reason: 'pilot_match', revision: 'listing-r1' }
+      : { enabled: false, legacyAllowed: true, captureStage: null, reason: 'policy_off', revision: 'listing-r1' });
+    const decision = {
+      writerEntrypoint: 'LISTING_IMPORT_BY_SKU', originChannel: 'DIRECT',
+      configuredStages: { writer: 'shadow', origin: null }, effectiveStage: 'shadow',
+      authority: 'LEGACY', observeParity: true, limitingBoundary: 'LISTING_IMPORT_BY_SKU',
+      rolloutRevision: 'listing-r1', reason: 'shadow', gateStateVersion: null, evidenceHash: null,
+    } as const;
+    const evaluateWrite = vi.fn(async () => decision);
+    const app = await buildApp(mocks.featureEvaluate, {
+      publisherRollout: { evaluateWrite },
+      publisherParityObserver: { observe: vi.fn(async () => ({ status: 'MATCH' })) },
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/listing/ozon/import-by-sku',
+        payload: {
+          shopId: 'shop-1',
+          draftRefs: [{ supplyGoodsId: 'goods-1', draftId: 'draft-1', draftVersion: 2, revision: 7, skuKey: '2143427743' }],
+          items: [{ sku: 2143427743, supplyGoodsId: 'goods-1' }],
+        },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ errorCode: 'SOURCE_LISTING_DRAFT_IDENTITY_MISMATCH' });
+      expect(importBySku).not.toHaveBeenCalled();
     } finally { await app.close(); }
   });
 

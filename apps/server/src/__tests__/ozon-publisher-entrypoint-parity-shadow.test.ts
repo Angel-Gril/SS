@@ -64,6 +64,26 @@ describe('Ozon publisher entry-point parity shadow observer', () => {
     expect(Object.keys((observer as any))).toEqual(['observe']);
   });
 
+  it.each(['LISTING_BATCH', 'LISTING_IMPORT_BY_SKU'] as const)(
+    'records parity for the %s physical writer',
+    async (entrypoint) => {
+      const record = vi.fn(async () => undefined);
+      const observer = createOzonPublisherEntrypointParityObserver({
+        loadDraft: vi.fn(async () => draft as any),
+        compile: vi.fn(async () => compiled() as any),
+        record,
+      });
+
+      const result = await observer.observe(observation({ entrypoint }));
+
+      expect(result.entrypoint).toBe(entrypoint);
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({
+        entrypoint,
+        report: expect.objectContaining({ entrypoint }),
+      }));
+    },
+  );
+
   it('turns a typed strict production compiler rejection into a non-blocking V2 blocker', async () => {
     const record = vi.fn(async () => undefined);
     const observer = createOzonPublisherEntrypointParityObserver({

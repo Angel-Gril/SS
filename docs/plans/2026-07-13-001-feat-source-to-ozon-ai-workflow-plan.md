@@ -3,7 +3,7 @@ title: Source Marketplace to Ozon AI Workflow Plan
 type: feat
 status: active
 date: 2026-07-13
-updated: 2026-07-15
+updated: 2026-07-16
 implementation_started: 2026-07-14
 origin: docs/plans/2026-06-26-001-feat-1688-ozon-source-profile-plan.md
 ---
@@ -1037,7 +1037,9 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 
 **Review fixes (2026-07-16):** Pre-push review found and fixed three readiness/security defects. Repeated identical payloads previously reused one deterministic recorder operation key and could not accumulate the required attempt denominator; every shadow invocation now receives a unique, transaction-retry-stable attempt identity. Listing SKU validation previously derived its selected set from the client request; it now uses the workflow adapter's server-owned `selectedSkuKeys`. Recorder attempts previously expired after 30 days, which could never satisfy a 14-day observation window plus 30-day rollback-retention requirement; expiry is now 45 days. Extension publish failure receipts also no longer retain or return raw executor error messages. Focused review regression passed `85/85`, TypeScript and focused lint passed.
 
-**Remaining acceptance boundary:** Keep Unit 6C unchecked. The listing routes now carry exact reviewed draft/revision/SKU identity when the workflow stage is enabled, but still require route-level pilot coverage and parity observations before claiming equivalence. A real observation window with reviewed and approved production evidence, the extension `OZON_PUBLISH` grant adapter/receipt flow, explicit removal dates and real acceptance are still required before switching or deleting any legacy route. Unit 6B real 1688/Ozon test-shop acceptance also remains pending.
+**Implementation evidence (2026-07-16, listing writer decision and shadow-wiring slice):** The post-`50cc36b` worktree now injects the exact rollout/readiness decision into `/listing/batch` and `/listing/ozon/import-by-sku`, generalizes parity recording to their `LISTING_BATCH/DIRECT` and `LISTING_IMPORT_BY_SKU/DIRECT` gates, and rechecks the decision immediately before an external call. Invalid or unavailable stage/config/readiness, revision drift and a `V2` decision without an explicit physical adapter fail before an Ozon client call. Shadow diagnostics use the exact legacy payload that remains authoritative; observation failure records a bounded failure where possible but does not change the legacy response. This slice is not part of the already deployed `50cc36b` release until it completes review, push and environment promotion.
+
+**Remaining acceptance boundary:** Keep Unit 6C unchecked. Exact route identity coverage and the extension `OZON_PUBLISH` grant/consume/replay/receipt boundary are implemented. The collect writer, browser-one-click origin and extension execution boundary still need the independent production rollout decision enforced at their physical write boundary. The two listing writers still need a real multi-draft V2 adapter with per-draft idempotency, immutable attempts, reconciliation and response compatibility before either can switch to V2. Real parity observations, the 14-day window, review of every non-MATCH subject, a controlled Ozon test-shop import and an accepted-but-unrecorded recovery test remain pending. Legacy removal dates are `UNSCHEDULED`; each must be set to a concrete date no earlier than 30 days after that entry point's verified V2 switch. Unit 6B real 1688/Ozon test-shop acceptance also remains pending.
 
 - [ ] **Unit 7A: Prompt Registry and Frozen Text-to-Image Prompt**
 
@@ -1518,7 +1520,7 @@ This checklist is the execution baseline for the remaining work. A completed imp
 | Versioned parity report and bounded observation persistence | Done | Persistence/API/retention tests and migration replay | None |
 | Immutable readiness gate, evaluation, approval, revoke and stage CAS | Done | PostgreSQL gate suite, admin route tests, 60-migration replay | None |
 | Gate provisioning for exact writer/origin/revision | Done | Idempotency and control-drift tests | None |
-| Recorder attempt/outcome linked to live shadow observations | In progress | Recorder linkage is implemented and unit-tested | Requires real observation traffic |
+| Recorder attempt/outcome linked to live shadow observations | In progress | Collect direct/browser linkage is deployed dark; listing batch/import-by-SKU linkage is implemented in the post-`50cc36b` worktree | Collect/browser/extension physical enforcement and real observation traffic remain pending |
 | Real 14-day observation window | Pending | At least 100 eligible attempts, 100 valid observations, 25 scopes, 7 UTC days, latest evidence under 24h | Cannot approve from fixtures |
 | Super-admin review of every non-MATCH subject | Pending | Immutable APPROVE/REJECT decisions with notes | Any defect or unreviewed difference blocks READY |
 | Stage promotion `off -> shadow -> v2` | Pending | Approved evaluation plus exact gate binding | Keep all stages `off` until external acceptance |
@@ -1530,9 +1532,13 @@ This checklist is the execution baseline for the remaining work. A completed imp
 | `/collect/publish-ozon` shadow payload and item trace | Partially done | Existing parity observer and recorder; verify production rows |
 | `/listing/batch` carries exact draft ID, draft version, revision and SKU trace | Done | Contract schema, owner-scoped preparation and stale/conflict HTTP tests |
 | `/listing/ozon/import-by-sku` carries exact draft/SKU identity | Done | Exact success path and pre-Ozon failure tests |
+| `/listing/batch` production decision and shadow recorder wiring | Implemented in post-`50cc36b` worktree | Exact writer/origin gate, bounded parity observer and final pre-call decision recheck; not yet deployed |
+| `/listing/ozon/import-by-sku` production decision and shadow recorder wiring | Implemented in post-`50cc36b` worktree | Exact writer/origin gate, endpoint compatibility comparison and final pre-call decision recheck; not yet deployed |
 | Browser one-click preserves identity through queue/retry | Done | Job payload and worker-forwarding tests |
 | Extension `OZON_PUBLISH` grant/receipt adapter | Done for control boundary | Device-scoped grant issue/consume/replay/receipt path implemented; real publish remains disabled until rollout evidence and external acceptance |
-| Legacy fallback removal dates and rollback readers | Pending | Documented per-entry-point migration/rollback matrix |
+| Collect/browser/extension physical rollout enforcement | Pending | The physical writer/origin must consume the independent rollout decision immediately before its external write |
+| Multi-draft V2 adapters for listing writers | Pending | Per-draft publish intent/idempotency, immutable attempts, reconciliation and compatible response projection |
+| Legacy fallback removal dates and rollback readers | Documented, unscheduled | `docs/runbooks/source-to-ozon-ai-workflow.md`; removal cannot occur earlier than 30 days after each verified V2 switch |
 
 ### Track C: Real External Acceptance
 
@@ -1545,7 +1551,11 @@ This checklist is the execution baseline for the remaining work. A completed imp
 | AI provider capability tests | Pending | Selected text/image/edit/translation provider matrix and cost/quality results |
 | Media output storage and URL expiry checks | Pending | Owned storage URL, reload, expiry and retry tests |
 
-### Track D: Review, Release And Deployment (Do After A-C)
+### Track D: Review, Dark Deployment And Later Activation
+
+The disabled code/schema release may be reviewed and dark-deployed before external acceptance so migrations and read-only diagnostics can be proven. Feature activation and any Ozon write remain blocked by Tracks A-C.
+
+Commit `50cc36b` completed review, push and disabled deployment to local ERP, domestic VPS and international VPS. All five stages remained `off@0`, both publishing master flags remained `false`, and no real Ozon or image write was executed. Environment evidence and rollback constraints are recorded in `docs/runbooks/source-to-ozon-ai-workflow.md`.
 
 1. Freeze the target commit and generate a diff-focused security/code review.
 2. Run full server/Web/extension tests, Prisma validation, migration status and production builds.

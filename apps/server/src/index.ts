@@ -78,6 +78,9 @@ import {
 import { createOzonPublisherRolloutAdminService } from './services/ozon-publisher-rollout-admin.js';
 import { createPrismaOzonPublisherRolloutAdminRepository } from './services/ozon-publisher-rollout-admin-prisma.js';
 import { loadPrismaOzonPublisherRolloutControlSnapshot } from './services/ozon-publisher-rollout-control.js';
+import { createPrismaOzonPublisherRolloutReadinessRepository } from './services/ozon-publisher-rollout-readiness-prisma.js';
+import { createOzonPublisherRolloutReadinessService } from './services/ozon-publisher-rollout-readiness-service.js';
+import { createOzonPublisherEntrypointRolloutService } from './services/ozon-publisher-entrypoint-rollout.js';
 import { extensionDeviceRoutes } from './routes/extension-device.js';
 import {
   createSourceWorkflowCommandResolver,
@@ -507,6 +510,19 @@ const ozonPublisherRolloutAdminService = createOzonPublisherRolloutAdminService(
     ),
   }),
 });
+const ozonPublisherRolloutReadinessService = createOzonPublisherRolloutReadinessService({
+  repository: createPrismaOzonPublisherRolloutReadinessRepository({
+    client: prisma as never,
+    loadControlSnapshot: (tx, input) => loadPrismaOzonPublisherRolloutControlSnapshot(
+      tx as never,
+      input,
+    ),
+  }),
+});
+const ozonPublisherEntrypointRolloutService = createOzonPublisherEntrypointRolloutService({
+  featureFlags: sourceWorkflowFeatureFlags,
+  loadReadiness: (input) => ozonPublisherRolloutReadinessService.loadReadiness(input),
+});
 const sourceOzonListingCompileAuthorityLoaders: Pick<
   OzonListingProductionCompileAdapterOptions,
   'loadOwnedCapture' | 'loadCurrentCatalogAuthority' | 'loadOwnedMediaAssets'
@@ -816,6 +832,8 @@ await app.register(inventoryRoutes, { prefix: '/api/inventory' });
 await app.register(listingRoutes, {
   prefix: '/api/listing',
   featureFlags: sourceWorkflowFeatureFlags,
+  publisherRollout: ozonPublisherEntrypointRolloutService,
+  publisherParityObserver: sourceOzonPublisherEntrypointParityObserver,
 });
 await app.register(sourceCaptureViewRoutes, {
   prefix: '/api/source-capture-views',

@@ -6,8 +6,9 @@ set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/ss-erp/app}"
 ENV_FILE="${ENV_FILE:-.env.staging}"
-DOMAIN="${VERIFY_DOMAIN:-ss-erp.com}"
-READY_URL="${VERIFY_READY_URL:-https://${DOMAIN}/ready}"
+DOMAIN="${VERIFY_DOMAIN:-}"
+PUBLIC_BASE_URL="${VERIFY_PUBLIC_BASE_URL:-}"
+READY_URL="${VERIFY_READY_URL:-}"
 LOCAL_READY_URL="${VERIFY_LOCAL_READY_URL:-http://127.0.0.1:3001/ready}"
 LOG_SINCE="${VERIFY_LOG_SINCE:-10 minutes ago}"
 BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-/etc/ss-erp-backup.env}"
@@ -73,7 +74,7 @@ check_http_json_ready() {
   local label="$1"
   local url="$2"
   local body
-  if ! body=$(curl -k -fsS --max-time 10 "$url"); then
+  if ! body=$(curl -fsS --max-time 10 "$url"); then
     fail "$label unreachable: $url"
     return
   fi
@@ -100,7 +101,7 @@ check_port_loopback() {
     fail "$label port ${port} is not listening"
     return
   fi
-  if echo "$rows" | awk '{print $4}' | grep -Ev '^(127\.0\.0\.1|\[::1\]|::1):'"${port}"'$' >/dev/null; then
+  if echo "$rows" | awk '{print $4}' | grep -Ev '^(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\]|::1):'"${port}"'$' >/dev/null; then
     fail "$label port ${port} is not loopback-only: $(echo "$rows" | awk '{print $4}' | paste -sd ',' -)"
   else
     pass "$label port ${port} loopback-only"
@@ -429,9 +430,60 @@ check_no_restore_temp_db() {
   fi
 }
 
+if [ -z "$READY_URL" ]; then
+  if [ -n "$PUBLIC_BASE_URL" ]; then
+    READY_URL="${PUBLIC_BASE_URL%/}/ready"
+  elif [ -n "$DOMAIN" ]; then
+    READY_URL="https://${DOMAIN}/ready"
+  elif [ -r "$DEPLOY_DIR/$ENV_FILE" ]; then
+    PUBLIC_BASE_URL=$(
+      set +u
+      set -a
+      # shellcheck disable=SC1090
+      . "$DEPLOY_DIR/$ENV_FILE"
+      set +a
+      printf '%s' "${NEXT_PUBLIC_API_BASE_URL:-}"
+    )
+    if [ -n "$PUBLIC_BASE_URL" ]; then
+      READY_URL="${PUBLIC_BASE_URL%/}/ready"
+    fi
+  fi
+fi
+
+if [ -z "$READY_URL" ]; then
+  echo "[verify-vps] ERROR: set VERIFY_READY_URL, VERIFY_PUBLIC_BASE_URL, VERIFY_DOMAIN, or NEXT_PUBLIC_API_BASE_URL" >&2
+  exit 1
+fi
+
+PARSED_READY_DOMAIN=$(node -e '
+try {
+  const url = new URL(process.argv[1]);
+  if (!['http:', 'https:'].includes(url.protocol)
+    || !url.hostname
+    || url.username
+    || url.password
+    || url.pathname !== '/ready'
+    || url.search
+    || url.hash) process.exit(1);
+  const host = url.hostname.toLowerCase();
+  const configured = String(process.argv[2] || '').toLowerCase();
+  const privateIpv4 = /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/u.test(host);
+  if (configured && configured !== host) process.exit(1);
+  if (host === 'localhost' || host === '::1' || privateIpv4) process.exit(1);
+  process.stdout.write(url.hostname);
+} catch {
+  process.exit(1);
+}
+' "$READY_URL" "$DOMAIN") || {
+  echo "[verify-vps] ERROR: public ready URL must be an http(s) /ready endpoint without credentials, query, or hash: $READY_URL" >&2
+  exit 1
+}
+if [ -z "$DOMAIN" ]; then DOMAIN="$PARSED_READY_DOMAIN"; fi
+
 echo "=== SS ERP VPS deployment verification ==="
 echo "Deploy dir: ${DEPLOY_DIR}"
 echo "Domain: ${DOMAIN}"
+echo "Public ready URL: ${READY_URL}"
 echo ""
 
 require_command node
