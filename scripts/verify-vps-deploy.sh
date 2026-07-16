@@ -407,6 +407,18 @@ check_prisma_migrations() {
   rm -f /tmp/ss-erp-prisma-status.$$
 }
 
+check_ai_media_dark_rollout() {
+  local verifier="${DEPLOY_DIR}/scripts/verify-ai-media-dark.sh"
+  if [ ! -r "$verifier" ]; then
+    fail "AI Media dark-rollout verifier is missing or unreadable: $verifier"
+    return
+  fi
+  if DEPLOY_DIR="$DEPLOY_DIR" ENV_FILE="$ENV_FILE" bash "$verifier"; then
+    return
+  fi
+  fail "AI Media dark-rollout verification failed"
+}
+
 check_recent_logs() {
   local service="$1"
   if journalctl -u "$service" --since "$LOG_SINCE" --no-pager | grep -Eiq 'fatal|exception|unhandled|panic'; then
@@ -525,6 +537,7 @@ load_backup_config
 check_cron
 check_backup_status
 check_prisma_migrations
+check_ai_media_dark_rollout
 check_logistics_rollout_expectations
 check_no_restore_temp_db
 

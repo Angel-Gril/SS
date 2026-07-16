@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export type AiImageJobStatus =
   | 'PENDING'
@@ -15,6 +15,9 @@ export interface AiImageJobRecord {
   ownerUserId: string;
   actorUserId: string;
   status: AiImageJobStatus;
+  operation?: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE';
+  workflowId?: string | null;
+  workflowAttempt?: number | null;
   provider: string;
   model: string;
   prompt: string;
@@ -39,15 +42,25 @@ export interface AiImageJobRecord {
   errorCode: string | null;
   errorMessage: string | null;
   appliedMode?: 'append' | 'replace' | null;
+  appliedAt?: Date | null;
+  inputAssets?: Array<{
+    assetId: string;
+    role: 'REFERENCE' | 'MASK';
+    url?: string;
+    mimeType?: string;
+    sha256?: string | null;
+  }> | null;
 }
 
 export interface AiImageProviderRequest {
+  operation?: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE';
   prompt: string;
   negativePrompt: string | null;
   count: number;
   width: number;
   height: number;
   model: string;
+  inputAssets?: NonNullable<AiImageJobRecord['inputAssets']>;
 }
 
 export interface AiImageProviderResult {
@@ -71,6 +84,7 @@ export interface AiImageAssetInput {
   storageKey: string | null;
   mimeType: string;
   sizeBytes: number;
+  sha256: string;
 }
 
 export interface AiImageJobRepository {
@@ -193,12 +207,14 @@ export async function runAiImageJob(
   if (!claimed) return;
   try {
     const generated = await deps.provider.generate({
+      operation: job.operation || 'TEXT_TO_IMAGE',
       prompt: job.resolvedPrompt ?? job.prompt,
       negativePrompt: job.resolvedNegativePrompt ?? job.negativePrompt,
       count: job.requestedImageCount,
       width: job.width,
       height: job.height,
       model: job.model,
+      inputAssets: job.inputAssets || undefined,
     });
     const latest = await deps.repository.getById(job.id);
     if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
@@ -221,6 +237,7 @@ export async function runAiImageJob(
         storageKey: stored.key || stored.filename || null,
         mimeType: image.mimeType,
         sizeBytes: image.buffer.length,
+        sha256: createHash('sha256').update(image.buffer).digest('hex'),
       });
     }
     if (assets.length === 0) throw new AiImageJobError('EMPTY_RESULT', 'Provider returned no images');

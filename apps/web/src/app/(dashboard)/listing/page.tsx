@@ -26,6 +26,7 @@ interface VariantData {
 
 interface CloneItem {
   id: string;
+  updatedAt: string;
   title: string;
   description: string;
   sku: string | null;
@@ -138,8 +139,9 @@ export default function ListingPage() {
     try {
       // 1. 先把改动写回 supplyGoods
       for (const it of items) {
-        await api.post('/api/collect/save-customization', {
+        const saved = await api.post<{ updatedAt: string }>('/api/collect/save-customization', {
           id: it.id,
+          expectedUpdatedAt: it.updatedAt,
           title: it.title,
           description: it.description,
           images: it.images,
@@ -151,6 +153,7 @@ export default function ListingPage() {
           typeId: it.typeId,
           variants: it.variants.map((v) => ({ sku: v.sku, price: v.price ?? undefined, stock: v.stock })),
         });
+        if (saved.code !== 1) throw new Error(saved.msg || `${it.title} 保存失败`);
       }
       // 2. 调 publish-ozon 走复制路径。inheritCategory=true 时不传 categoryId/typeId，让后端用每个 item 自己 metadata 里的；
       //    inheritCategory=false 时表示用户在表单里手填了，已经在 save-customization 里写到 metadata，后端读取时也是 metadata 优先

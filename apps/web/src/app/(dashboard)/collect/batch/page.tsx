@@ -21,6 +21,7 @@ import { api } from '@/lib/api';
 interface Shop { id: string; name: string; platform: string; }
 interface BatchItem {
   id: string;
+  updatedAt: string;
   sku: string | null;
   title: string;
   images: string[] | null;
@@ -345,8 +346,9 @@ export default function BatchCollectPage() {
       const categoryId = Number(row.descriptionCategoryId) || 0;
       const typeId = Number(row.typeId) || 0;
       if (!categoryId && !typeId && !row.weight && !row.height && !row.width && !row.depth) continue;
-      await api.post('/api/collect/save-customization', {
+      const saved = await api.post<{ updatedAt: string }>('/api/collect/save-customization', {
         id: item.id,
+        expectedUpdatedAt: item.updatedAt,
         ...(categoryId ? { categoryId } : {}),
         ...(typeId ? { typeId } : {}),
         ...(row.weight ? { weightG: Number(row.weight) } : {}),
@@ -354,6 +356,10 @@ export default function BatchCollectPage() {
         ...(row.width ? { widthMm: Number(row.width) } : {}),
         ...(row.height ? { heightMm: Number(row.height) } : {}),
       });
+      if (saved.code !== 1) {
+        toast({ title: saved.msg || `${item.title} 继承保存失败`, variant: 'destructive' });
+        continue;
+      }
       if (categoryId && typeId) inheritedCount++;
     }
 

@@ -215,6 +215,9 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
   return {
     name: 'dashscope-wanx',
     async generate(request: AiImageProviderRequest): Promise<AiImageProviderResult> {
+      if (request.operation === 'IMAGE_TO_IMAGE') {
+        throw new AiImageJobError('UNSUPPORTED_OPERATION', 'DashScope image-to-image is not enabled for this model');
+      }
       const deadline = Date.now() + timeoutMs;
       const submitted = await requestJson('DashScope', fetcher, options.apiKey,
         `${apiBase}/services/aigc/text2image/image-synthesis`, {
@@ -274,6 +277,9 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
   return {
     name: 'openai-images',
     async generate(request: AiImageProviderRequest): Promise<AiImageProviderResult> {
+      if (request.operation === 'IMAGE_TO_IMAGE') {
+        throw new AiImageJobError('UNSUPPORTED_OPERATION', 'OpenAI image edits are not enabled for this model');
+      }
       const body = await requestJson('OpenAI Images', fetcher, options.apiKey, `${apiBase}/images/generations`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },

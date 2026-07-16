@@ -31,6 +31,7 @@ export const SystemConfigSchema = {
   source_ozon_publisher_extension_adapter_stage: sourceOzonPublisherEntrypointStage.default('off'),
   feature_source_network_capture: z.boolean().default(false),
   feature_ai_media_workflow_v2: z.boolean().default(false),
+  ai_media_workflow_v2_rollout_policy: z.string().max(100000).default('{"revision":0,"tenantIds":[]}'),
   feature_source_listing_web_media: z.boolean().default(false),
   feature_source_listing_extension_workbench: z.boolean().default(false),
   source_workflow_rollout_policy: z.string().max(100000).default('{}'),
@@ -320,7 +321,12 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
   feature_ai_media_workflow_v2: {
     label: '来源商品 AI 媒体工作流',
     group: 'feature',
-    description: '启用来源商品的持久化 AI 媒体工作流',
+    description: 'AI 媒体工作流总开关；仅 rollout policy 明确允许的租户可新建任务',
+  },
+  ai_media_workflow_v2_rollout_policy: {
+    label: 'AI 媒体工作流租户策略',
+    group: 'feature',
+    description: 'JSON：{"revision":非负整数,"tenantIds":["owner-id"]}；默认不允许任何租户',
   },
   feature_source_listing_web_media: {
     label: '来源商品 Web 工作台',

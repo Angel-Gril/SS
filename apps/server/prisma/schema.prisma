@@ -417,6 +417,10 @@ model User {
   legalAcceptances                    LegalAcceptance[]
   ownedAiImageJobs                    AiImageJob[]                           @relation("AiImageJobOwner")
   createdAiImageJobs                  AiImageJob[]                           @relation("AiImageJobActor")
+  ownedAiMediaWorkflows               AiMediaWorkflow[]                     @relation("AiMediaWorkflowOwner")
+  createdAiMediaWorkflows             AiMediaWorkflow[]                     @relation("AiMediaWorkflowActor")
+  reviewedAiMediaWorkflows            AiMediaWorkflow[]                     @relation("AiMediaWorkflowReviewer")
+  aiMediaWorkflowEvents               AiMediaWorkflowEvent[]
   mediaAssets                         MediaAsset[]
   logisticsRuleChannels               LogisticsRuleChannel[]                 @relation("LogisticsChannelTenant")
   logisticsRuleRevisions              LogisticsRuleRevision[]                @relation("LogisticsRevisionTenant")
@@ -2611,6 +2615,32 @@ enum AiImageJobStatus {
   CANCELLED
 }
 
+enum AiMediaOperation {
+  TEXT_TO_IMAGE
+  IMAGE_TO_IMAGE
+}
+
+enum AiMediaWorkflowStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCEL_REQUESTED
+  CANCELLED
+}
+
+enum AiMediaReviewStatus {
+  NOT_READY
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AiMediaInputRole {
+  REFERENCE
+  MASK
+}
+
 enum MediaAssetKind {
   AI_GENERATED
   SOURCE_ORIGINAL
@@ -2704,6 +2734,10 @@ model AiImageJob {
   owner                  User             @relation("AiImageJobOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
   actor                  User?            @relation("AiImageJobActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   status                 AiImageJobStatus @default(PENDING)
+  operation              AiMediaOperation @default(TEXT_TO_IMAGE)
+  workflowId             String?          @map("workflow_id")
+  workflowAttempt        Int?             @map("workflow_attempt")
+  workflow               AiMediaWorkflow? @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
   provider               String
   model                  String
   prompt                 String
@@ -2738,8 +2772,12 @@ model AiImageJob {
   createdAt              DateTime         @default(now()) @map("created_at")
   updatedAt              DateTime         @updatedAt @map("updated_at")
   assets                 MediaAsset[]
+  mediaLineage           MediaAssetLineage[]
+  workflowEvents         AiMediaWorkflowEvent[]
 
   @@unique([ownerUserId, idempotencyKey], name: "ai_image_job_owner_idempotency")
+  @@unique([id, ownerUserId], name: "ai_image_job_id_owner", map: "ai_image_job_id_owner")
+  @@unique([workflowId, workflowAttempt], name: "ai_image_job_workflow_attempt", map: "ai_image_job_workflow_attempt")
   @@index([ownerUserId, createdAt])
   @@index([actorUserId, createdAt])
   @@index([status, createdAt])
@@ -2752,7 +2790,7 @@ model MediaAsset {
   ownerUserId             String                 @map("owner_user_id")
   owner                   User                   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   aiImageJobId            String?                @map("ai_image_job_id")
-  aiImageJob              AiImageJob?            @relation(fields: [aiImageJobId], references: [id], onDelete: SetNull)
+  aiImageJob              AiImageJob?            @relation(fields: [aiImageJobId], references: [id], onDelete: Restrict)
   kind                    MediaAssetKind         @default(AI_GENERATED)
   sourceCaptureSnapshotId String?                @map("source_capture_snapshot_id")
   sourceCaptureSnapshot   SourceCaptureSnapshot? @relation(fields: [sourceCaptureSnapshotId], references: [id], onDelete: Restrict)
@@ -2768,12 +2806,127 @@ model MediaAsset {
   sha256                  String?
   metadata                Json?
   createdAt               DateTime               @default(now()) @map("created_at")
+  workflowInputs          AiMediaWorkflowInput[]  @relation("AiMediaWorkflowInputAsset")
+  lineageInputs           MediaAssetLineage[]     @relation("MediaAssetLineageInput")
+  lineageOutputs          MediaAssetLineage[]     @relation("MediaAssetLineageOutput")
+  selectedByWorkflows     AiMediaWorkflow[]       @relation("AiMediaWorkflowSelectedOutput")
+  workflowEvents          AiMediaWorkflowEvent[]
 
   @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey], map: "media_asset_source_capture_key")
+  @@unique([id, ownerUserId], name: "media_asset_id_owner", map: "media_asset_id_owner")
   @@index([ownerUserId, createdAt])
   @@index([aiImageJobId])
   @@index([sourceCaptureSnapshotId])
   @@map("media_assets")
+}
+
+model AiMediaWorkflow {
+  id                    String                @id @default(cuid())
+  ownerUserId           String                @map("owner_user_id")
+  actorUserId           String?               @map("actor_user_id")
+  owner                 User                  @relation("AiMediaWorkflowOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actor                 User?                 @relation("AiMediaWorkflowActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  operation             AiMediaOperation
+  status                AiMediaWorkflowStatus @default(QUEUED)
+  reviewStatus          AiMediaReviewStatus   @default(NOT_READY) @map("review_status")
+  revision              Int                   @default(1)
+  currentAttempt        Int                   @default(1) @map("current_attempt")
+  contextType           String?               @map("context_type") @db.VarChar(50)
+  contextId             String?               @map("context_id") @db.VarChar(200)
+  contextSkuKey         String?               @map("context_sku_key") @db.VarChar(500)
+  contextSlotKey        String?               @map("context_slot_key") @db.VarChar(200)
+  idempotencyKey        String?               @map("idempotency_key") @db.VarChar(128)
+  requestFingerprint    String                @map("request_fingerprint") @db.Char(64)
+  selectedOutputAssetId String?               @map("selected_output_asset_id")
+  selectedOutputAsset   MediaAsset?           @relation("AiMediaWorkflowSelectedOutput", fields: [selectedOutputAssetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  reviewedByUserId      String?               @map("reviewed_by_user_id")
+  reviewedBy            User?                 @relation("AiMediaWorkflowReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reviewedAt            DateTime?             @map("reviewed_at")
+  cancelRequestedAt     DateTime?             @map("cancel_requested_at")
+  completedAt           DateTime?             @map("completed_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  inputs                AiMediaWorkflowInput[]
+  jobs                  AiImageJob[]
+  events                AiMediaWorkflowEvent[]
+  lineage               MediaAssetLineage[]
+
+  @@unique([id, ownerUserId], name: "ai_media_workflow_id_owner", map: "ai_media_workflow_id_owner")
+  @@unique([ownerUserId, idempotencyKey], name: "ai_media_workflow_owner_idempotency", map: "ai_media_workflow_owner_idempotency")
+  @@index([ownerUserId, status, updatedAt])
+  @@index([ownerUserId, operation, createdAt])
+  @@index([ownerUserId, selectedOutputAssetId])
+  @@index([contextType, contextId, createdAt])
+  @@map("ai_media_workflows")
+}
+
+model AiMediaWorkflowInput {
+  id          String           @id @default(cuid())
+  workflowId  String           @map("workflow_id")
+  ownerUserId String           @map("owner_user_id")
+  workflow    AiMediaWorkflow  @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  assetId     String           @map("asset_id")
+  asset       MediaAsset       @relation("AiMediaWorkflowInputAsset", fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  role        AiMediaInputRole @default(REFERENCE)
+  ordinal     Int              @default(0)
+  assetSha256 String           @map("asset_sha256") @db.Char(64)
+  assetUrl    String           @map("asset_url")
+  mimeType    String           @map("mime_type")
+  width       Int?
+  height      Int?
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  @@unique([workflowId, role, ordinal], name: "ai_media_workflow_input_role_ordinal", map: "ai_media_workflow_input_role_ordinal")
+  @@unique([workflowId, assetId, role], name: "ai_media_workflow_input_asset_role", map: "ai_media_workflow_input_asset_role")
+  @@index([ownerUserId, assetId])
+  @@map("ai_media_workflow_inputs")
+}
+
+model AiMediaWorkflowEvent {
+  id          String          @id @default(cuid())
+  workflowId  String          @map("workflow_id")
+  ownerUserId String          @map("owner_user_id")
+  workflow    AiMediaWorkflow @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  actorUserId String?         @map("actor_user_id")
+  actor       User?           @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  jobId       String?         @map("job_id")
+  job         AiImageJob?     @relation(fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  assetId     String?         @map("asset_id")
+  asset       MediaAsset?     @relation(fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  eventKey    String          @unique @map("event_key") @db.VarChar(200)
+  eventType   String          @map("event_type") @db.VarChar(50)
+  payload     Json
+  payloadHash String          @map("payload_hash") @db.Char(64)
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  @@index([workflowId, createdAt])
+  @@index([ownerUserId, createdAt])
+  @@index([ownerUserId, assetId])
+  @@map("ai_media_workflow_events")
+}
+
+model MediaAssetLineage {
+  id            String           @id @default(cuid())
+  ownerUserId   String           @map("owner_user_id")
+  workflowId    String           @map("workflow_id")
+  workflow      AiMediaWorkflow  @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  jobId         String           @map("job_id")
+  job           AiImageJob       @relation(fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  inputAssetId  String           @map("input_asset_id")
+  inputAsset    MediaAsset       @relation("MediaAssetLineageInput", fields: [inputAssetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  outputAssetId String           @map("output_asset_id")
+  outputAsset   MediaAsset       @relation("MediaAssetLineageOutput", fields: [outputAssetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  inputRole     AiMediaInputRole @default(REFERENCE) @map("input_role")
+  ordinal       Int              @default(0)
+  operation     AiMediaOperation
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  @@unique([outputAssetId, inputRole, ordinal], name: "media_asset_lineage_output_role_ordinal", map: "media_asset_lineage_output_role_ordinal")
+  @@unique([outputAssetId, inputAssetId, inputRole], name: "media_asset_lineage_output_input_role", map: "media_asset_lineage_output_input_role")
+  @@index([inputAssetId, createdAt])
+  @@index([workflowId, createdAt])
+  @@index([jobId])
+  @@map("media_asset_lineage")
 }
 
 model ShopOzonCompanyBinding {

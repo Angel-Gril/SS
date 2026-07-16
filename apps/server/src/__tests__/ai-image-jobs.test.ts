@@ -140,6 +140,26 @@ describe('AI image job foundation', () => {
     expect(state.repo.markCancelled).toHaveBeenCalledWith('job-1');
   });
 
+  it('passes the frozen IMAGE_TO_IMAGE input relation to the provider', async () => {
+    const inputAssets = [{
+      assetId: 'asset-source-1', role: 'REFERENCE' as const,
+      url: 'https://cdn.example/source.png', mimeType: 'image/png', sha256: 'a'.repeat(64),
+    }];
+    const state = repository(job({ operation: 'IMAGE_TO_IMAGE', inputAssets }));
+    const provider = createFakeAiImageProvider({
+      images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+    });
+    const generate = vi.spyOn(provider, 'generate');
+    await runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(async () => ({ url: '/generated.png', backend: 'local', key: 'generated.png' })),
+    });
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'IMAGE_TO_IMAGE', inputAssets,
+    }));
+  });
+
   it('rejects disabled providers explicitly', async () => {
     await expect(createDisabledAiImageProvider().generate({
       prompt: 'x', negativePrompt: null, count: 1, width: 1024, height: 1024, model: '',

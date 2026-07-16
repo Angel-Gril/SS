@@ -942,12 +942,17 @@ function isSafeFilename(name: string): boolean {
   return !name.includes('..') && !name.includes('/') && !name.includes('\\') && !name.includes('\0') && /^[\w.\-]+$/.test(name);
 }
 
+function setPublicImageHeaders(reply: any) {
+  reply.header('Cache-Control', 'public, max-age=86400');
+  reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
+}
+
 app.get('/watermarked/:filename', async (request, reply) => {
   const { filename } = request.params as { filename: string };
   if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
   const filepath = join(process.cwd(), 'public', 'watermarked', filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
-  reply.header('Cache-Control', 'public, max-age=86400');
+  setPublicImageHeaders(reply);
   reply.type('image/jpeg');
   return reply.send(createReadStream(filepath));
 });
@@ -958,7 +963,7 @@ app.get('/uploads/:filename', async (request, reply) => {
   const filepath = join(process.cwd(), 'public', 'uploads', filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
   const ext = filename.toLowerCase().split('.').pop();
-  reply.header('Cache-Control', 'public, max-age=86400');
+  setPublicImageHeaders(reply);
   reply.type(ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
   return reply.send(createReadStream(filepath));
 });
@@ -968,7 +973,7 @@ app.get('/resized/:filename', async (request, reply) => {
   if (!isSafeFilename(filename)) return reply.status(400).send('invalid');
   const filepath = join(process.cwd(), 'public', 'resized', filename);
   if (!existsSync(filepath)) return reply.status(404).send('not found');
-  reply.header('Cache-Control', 'public, max-age=86400');
+  setPublicImageHeaders(reply);
   reply.type('image/jpeg');
   return reply.send(createReadStream(filepath));
 });

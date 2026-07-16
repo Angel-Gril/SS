@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => {
       id: where.id,
       ...data,
     })),
+    supplyGoodsUpdateMany: vi.fn(async (_args: any) => ({ count: 1 })),
     supplyGoodsCount: vi.fn(async () => 1),
     supplyGoodsFindMany: vi.fn(async () => [{ ...record, updatedAt: new Date('2026-06-18T01:00:00.000Z') }]),
     shopFindFirst: vi.fn(async (_args?: any): Promise<any> => null),
@@ -113,6 +114,7 @@ vi.mock('../lib/prisma.js', () => ({
       findFirst: mocks.supplyGoodsFindFirst,
       create: mocks.supplyGoodsCreate,
       update: mocks.supplyGoodsUpdate,
+      updateMany: mocks.supplyGoodsUpdateMany,
       count: mocks.supplyGoodsCount,
       findMany: mocks.supplyGoodsFindMany,
       deleteMany: mocks.supplyGoodsDeleteMany,
@@ -692,6 +694,7 @@ describe('collectRoutes batch upsert', () => {
         url: '/api/collect/save-customization',
         payload: {
           id: 'source-1',
+          expectedUpdatedAt: '2026-06-18T00:00:00.000Z',
           variants: [
             { sku: 'white-m', weightG: 200, lengthMm: 370, widthMm: 320, heightMm: 60 },
             { sku: 'white-l', weightG: 211, lengthMm: 370, widthMm: 320, heightMm: 60 },
@@ -701,11 +704,101 @@ describe('collectRoutes batch upsert', () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ code: 1 });
-      const updateArgs = mocks.supplyGoodsUpdate.mock.calls[0]?.[0];
+      const updateArgs = mocks.supplyGoodsUpdateMany.mock.calls[0]?.[0];
       expect(updateArgs.data.variants).toEqual([
         expect.objectContaining({ sku: 'white-m', weight: 200, depth: 370, width: 320, height: 60 }),
         expect.objectContaining({ sku: 'white-l', weight: 211, depth: 370, width: 320, height: 60 }),
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects saving an empty publish image list', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/save-customization',
+        payload: {
+          id: 'source-1',
+          images: [],
+          expectedUpdatedAt: '2026-06-18T00:00:00.000Z',
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'EMPTY_PUBLISH_IMAGES' });
+      expect(mocks.supplyGoodsUpdateMany).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('uses the expected target version when saving publish images', async () => {
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/save-customization',
+        payload: {
+          id: 'source-1',
+          images: ['approved.jpg'],
+          sourceDetailImages: ['detail.jpg'],
+          expectedUpdatedAt: '2026-06-18T00:00:00.000Z',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { images: ['approved.jpg'], metadata: { watermarkedImages: ['approved.jpg'] } },
+      });
+      expect(mocks.supplyGoodsUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'source-1', userId: 'user-1', updatedAt: new Date('2026-06-18T00:00:00.000Z'),
+        }),
+      }));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns the authoritative target state when a publish image CAS conflicts', async () => {
+    mocks.supplyGoodsUpdateMany.mockResolvedValueOnce({ count: 0 });
+    const authoritative = {
+      id: 'source-1',
+      userId: 'user-1',
+      title: '1688 product',
+      images: ['newer.jpg'],
+      metadata: { watermarkedImages: ['newer.jpg'] },
+      variants: [],
+      updatedAt: new Date('2026-06-18T02:00:00.000Z'),
+    };
+    mocks.supplyGoodsFindFirst
+      .mockResolvedValueOnce({ ...authoritative, updatedAt: new Date('2026-06-18T01:00:00.000Z') } as any)
+      .mockResolvedValueOnce(authoritative as any);
+    const app = await buildApp();
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/collect/save-customization',
+        payload: {
+          id: 'source-1',
+          images: ['stale.jpg'],
+          expectedUpdatedAt: '2026-06-18T01:00:00.000Z',
+        },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 'TARGET_CONFLICT',
+        data: {
+          updatedAt: '2026-06-18T02:00:00.000Z',
+          images: ['newer.jpg'],
+          metadata: { watermarkedImages: ['newer.jpg'] },
+        },
+      });
     } finally {
       await app.close();
     }

@@ -1,12 +1,18 @@
+import { aiMediaPayloadHash } from './ai-media-workflows.js';
+import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+
 export type AiImageApplyMode = 'append' | 'replace';
 export type AiImageApplyTargetType = 'collect' | 'product';
 
 export interface ApplyAiImageAssetsInput {
   jobId: string;
   ownerUserId: string;
+  actorUserId: string;
   mode: AiImageApplyMode;
   targetType: AiImageApplyTargetType;
   targetId: string;
+  selectedAssetId?: string | null;
+  expectedTargetUpdatedAt?: string | null;
 }
 
 export interface ApplyAiImageAssetsResult {
@@ -16,17 +22,24 @@ export interface ApplyAiImageAssetsResult {
   targetId: string;
   images: unknown[];
   mainImage: string | null;
+  editedImages: unknown[];
+  targetUpdatedAt: Date;
   appliedAt: Date;
 }
 
 export class AiImageApplicationError extends Error {
-  constructor(public readonly code: string, message: string) {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly data?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'AiImageApplicationError';
   }
 }
 
 interface GeneratedAssetRow {
+  id?: string;
   ownerUserId: string;
   aiImageJobId: string | null;
   url: string;
@@ -35,6 +48,7 @@ interface GeneratedAssetRow {
 interface AiImageJobRow {
   id: string;
   ownerUserId: string;
+  workflowId?: string | null;
   status: string;
   appliedAt: Date | null;
   assets: GeneratedAssetRow[];
@@ -43,6 +57,8 @@ interface AiImageJobRow {
 interface ImageTargetRow {
   id: string;
   images: unknown;
+  metadata?: unknown;
+  updatedAt: Date;
   userId?: string;
   shop?: { userId: string };
 }
@@ -52,13 +68,16 @@ interface TransactionClient {
     findUnique(args: unknown): Promise<AiImageJobRow | null>;
     updateMany(args: unknown): Promise<{ count: number }>;
   };
+  aiMediaWorkflowEvent: {
+    create(args: unknown): Promise<unknown>;
+  };
   supplyGoods: {
     findFirst(args: unknown): Promise<ImageTargetRow | null>;
-    update(args: unknown): Promise<unknown>;
+    updateMany(args: unknown): Promise<{ count: number }>;
   };
   product: {
     findFirst(args: unknown): Promise<ImageTargetRow | null>;
-    update(args: unknown): Promise<unknown>;
+    updateMany(args: unknown): Promise<{ count: number }>;
   };
 }
 
@@ -66,14 +85,17 @@ export interface AiImageApplicationDatabase {
   $transaction<T>(callback: (tx: TransactionClient) => Promise<T>, options?: { isolationLevel: 'Serializable' }): Promise<T>;
 }
 
-function generatedUrls(job: AiImageJobRow, ownerUserId: string): string[] {
-  if (!job.assets.length) {
+function generatedUrls(job: AiImageJobRow, ownerUserId: string, selectedAssetId?: string | null): string[] {
+  const selected = selectedAssetId
+    ? job.assets.filter((asset) => asset.id === selectedAssetId)
+    : job.assets;
+  if (!selected.length) {
     throw new AiImageApplicationError('INVALID_ASSETS', 'AI image job has no generated assets');
   }
 
   const urls: string[] = [];
   const seen = new Set<string>();
-  for (const asset of job.assets) {
+  for (const asset of selected) {
     const url = typeof asset.url === 'string' ? asset.url.trim() : '';
     if (asset.ownerUserId !== ownerUserId || asset.aiImageJobId !== job.id || !url) {
       throw new AiImageApplicationError('INVALID_ASSETS', 'Generated assets do not belong to this job and owner');
@@ -113,13 +135,13 @@ async function findOwnedTarget(tx: TransactionClient, input: ApplyAiImageAssetsI
   if (input.targetType === 'collect') {
     const target = await tx.supplyGoods.findFirst({
       where: { id: input.targetId, userId: input.ownerUserId },
-      select: { id: true, userId: true, images: true },
+      select: { id: true, userId: true, images: true, metadata: true, updatedAt: true },
     });
     if (target) return target;
   } else {
     const target = await tx.product.findFirst({
       where: { id: input.targetId, shop: { userId: input.ownerUserId } },
-      select: { id: true, images: true, shop: { select: { userId: true } } },
+      select: { id: true, images: true, updatedAt: true, shop: { select: { userId: true } } },
     });
     if (target?.shop?.userId === input.ownerUserId) return target;
   }
@@ -130,8 +152,8 @@ export async function applyAiImageAssets(
   database: AiImageApplicationDatabase,
   input: ApplyAiImageAssetsInput,
 ): Promise<ApplyAiImageAssetsResult> {
-  if (!input.jobId || !input.ownerUserId || !input.targetId) {
-    throw new AiImageApplicationError('INVALID_REQUEST', 'Job, owner and target are required');
+  if (!input.jobId || !input.ownerUserId || !input.actorUserId || !input.targetId) {
+    throw new AiImageApplicationError('INVALID_REQUEST', 'Job, owner, actor and target are required');
   }
   if (input.mode !== 'append' && input.mode !== 'replace') {
     throw new AiImageApplicationError('INVALID_REQUEST', 'Apply mode must be append or replace');
@@ -140,7 +162,8 @@ export async function applyAiImageAssets(
     throw new AiImageApplicationError('INVALID_REQUEST', 'Apply target must be collect or product');
   }
 
-  return database.$transaction(async (tx) => {
+  try {
+    return await runAiMediaSerializableTransaction(database, async (tx: TransactionClient) => {
     const job = await tx.aiImageJob.findUnique({
       where: { id: input.jobId },
       include: { assets: true },
@@ -155,15 +178,64 @@ export async function applyAiImageAssets(
       throw new AiImageApplicationError('ALREADY_APPLIED', 'AI image job has already been applied');
     }
 
-    const urls = generatedUrls(job, input.ownerUserId);
+    const urls = generatedUrls(job, input.ownerUserId, input.selectedAssetId);
     const target = await findOwnedTarget(tx, input);
-    const images = mergeImages(target.images, urls, input.mode);
+    const expectedTargetUpdatedAt = input.expectedTargetUpdatedAt
+      ? new Date(input.expectedTargetUpdatedAt)
+      : null;
+    if (input.expectedTargetUpdatedAt && Number.isNaN(expectedTargetUpdatedAt?.getTime())) {
+      throw new AiImageApplicationError('INVALID_REQUEST', 'Target version must be a valid timestamp');
+    }
+    if (job.workflowId && input.targetType === 'collect' && !expectedTargetUpdatedAt) {
+      throw new AiImageApplicationError('INVALID_REQUEST', 'Target version is required for workflow application');
+    }
+    if (expectedTargetUpdatedAt && target.updatedAt.getTime() !== expectedTargetUpdatedAt.getTime()) {
+      throw new AiImageApplicationError('TARGET_CONFLICT', 'Target images were updated by another operation', {
+        targetUpdatedAt: target.updatedAt,
+        images: target.images,
+        metadata: target.metadata || {},
+      });
+    }
+    const metadata = target.metadata && typeof target.metadata === 'object' && !Array.isArray(target.metadata)
+      ? { ...(target.metadata as Record<string, unknown>) }
+      : {};
+    const existingPublishImages = input.targetType === 'collect'
+      && Array.isArray(metadata.watermarkedImages)
+      && metadata.watermarkedImages.length > 0
+      ? metadata.watermarkedImages
+      : target.images;
+    const images = mergeImages(existingPublishImages, urls, input.mode);
+    const editedImages = mergeImages(metadata.editedImages, urls, input.mode);
     const appliedAt = new Date();
 
     if (input.targetType === 'collect') {
-      await tx.supplyGoods.update({ where: { id: target.id }, data: { images } });
+      const changed = await tx.supplyGoods.updateMany({
+        where: {
+          id: target.id,
+          userId: input.ownerUserId,
+          ...(expectedTargetUpdatedAt ? { updatedAt: expectedTargetUpdatedAt } : {}),
+        },
+        data: {
+          images,
+          metadata: { ...metadata, watermarkedImages: images, editedImages },
+          updatedAt: appliedAt,
+        },
+      });
+      if (changed.count !== 1) {
+        throw new AiImageApplicationError('TARGET_CONFLICT', 'Target images were updated by another operation');
+      }
     } else {
-      await tx.product.update({ where: { id: target.id }, data: { images } });
+      const changed = await tx.product.updateMany({
+        where: {
+          id: target.id,
+          shop: { userId: input.ownerUserId },
+          ...(expectedTargetUpdatedAt ? { updatedAt: expectedTargetUpdatedAt } : {}),
+        },
+        data: { images, updatedAt: appliedAt },
+      });
+      if (changed.count !== 1) {
+        throw new AiImageApplicationError('TARGET_CONFLICT', 'Target images were updated by another operation');
+      }
     }
 
     const application = await tx.aiImageJob.updateMany({
@@ -178,6 +250,25 @@ export async function applyAiImageAssets(
     if (application.count !== 1) {
       throw new AiImageApplicationError('ALREADY_APPLIED', 'AI image job has already been applied');
     }
+    if (job.workflowId) {
+      const payload = {
+        mode: input.mode,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        outputAssetId: input.selectedAssetId || null,
+      };
+      await tx.aiMediaWorkflowEvent.create({ data: {
+        workflowId: job.workflowId,
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        jobId: job.id,
+        assetId: input.selectedAssetId || null,
+        eventKey: `${job.workflowId}:applied:${job.id}`,
+        eventType: 'APPLIED',
+        payload,
+        payloadHash: aiMediaPayloadHash(payload),
+      } });
+    }
 
     return {
       jobId: job.id,
@@ -186,7 +277,29 @@ export async function applyAiImageAssets(
       targetId: input.targetId,
       images,
       mainImage: images.find((image): image is string => typeof image === 'string') || null,
+      editedImages,
+      targetUpdatedAt: appliedAt,
       appliedAt,
     };
-  }, { isolationLevel: 'Serializable' });
+    });
+  } catch (error) {
+    if (error instanceof AiImageApplicationError && error.code === 'TARGET_CONFLICT' && !error.data) {
+      try {
+        const current = await database.$transaction(
+          (tx) => findOwnedTarget(tx, input),
+          { isolationLevel: 'Serializable' },
+        );
+        throw new AiImageApplicationError('TARGET_CONFLICT', error.message, {
+          targetUpdatedAt: current.updatedAt,
+          images: current.images,
+          metadata: current.metadata || {},
+        });
+      } catch (reloadError) {
+        if (reloadError instanceof AiImageApplicationError && reloadError.code === 'TARGET_CONFLICT') {
+          throw reloadError;
+        }
+      }
+    }
+    throw error;
+  }
 }

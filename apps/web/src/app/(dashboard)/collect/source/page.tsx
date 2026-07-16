@@ -37,7 +37,18 @@ import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-
 import { SourceListingWorkbench } from '@/components/source-listing/source-listing-workbench';
 import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, apiUrl } from '@/lib/api';
+import { SourceAiMediaPanel } from '@/components/ai-media/source-ai-media-panel';
+import {
+  buildSaveSourceImagesRequest,
+  createMediaMutationLock,
+  createLatestRequestGuard,
+  executeLockedMediaMutation,
+  executeWithBusyState,
+  isMediaMutationConflict,
+  type RunMediaMutation,
+  type SaveSourceImagesResult,
+} from '@/components/ai-media/source-ai-media-state';
 import { evaluateSourceListingFieldDiagnostics, evaluateSourceListingReadiness, sourceListingStatusLabel } from '@/lib/source-listing-readiness';
 import type { SourceListingFieldDiagnostic, SourceListingFieldDiagnosticStatus } from '@/lib/source-listing-readiness';
 import {
@@ -375,6 +386,25 @@ function sourcePreviewImages(item: SourceCollectItem): string[] {
   const sourceMainImages = sourcePreviewableImageList(sourceMetadataArray(item, 'sourceMainImages'));
   if (sourceMainImages.length) return sourceMainImages;
   return sourcePreviewableImageList(Array.isArray(item.images) ? item.images : []);
+}
+
+function sourceManagedImageList(values: unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  values.forEach((value) => {
+    const url = String(value || '').trim();
+    if (!url || seen.has(url)) return;
+    if (!/^\/(?:uploads|watermarked)\//i.test(url) && !isPreviewableSourceImage(url)) return;
+    seen.add(url);
+    out.push(url);
+  });
+  return out;
+}
+
+function sourcePublishPreviewImages(item: SourceCollectItem): string[] {
+  const publishImages = sourceManagedImageList(sourceMetadataArray(item, 'watermarkedImages'));
+  if (publishImages.length) return publishImages;
+  return sourceManagedImageList(Array.isArray(item.images) ? item.images : []);
 }
 
 function sourceMainPreviewImage(item: SourceCollectItem): string {
@@ -1216,11 +1246,13 @@ function SourceDetailContent({
   activeSection,
   onSectionChange,
   onItemUpdate,
+  onRefreshItem,
 }: {
   item: SourceCollectItem;
   activeSection: DetailSection;
   onSectionChange: (section: DetailSection) => void;
   onItemUpdate: (item: SourceCollectItem) => void;
+  onRefreshItem: () => Promise<void>;
 }) {
   return (
     <div className="space-y-4 text-sm">
@@ -1269,7 +1301,7 @@ function SourceDetailContent({
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
       {activeSection === 'sku' ? <SourceSkuSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
-      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} onRefreshItem={onRefreshItem} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
@@ -1531,54 +1563,96 @@ function SourceAttributesSection({ item }: { item: SourceCollectItem }) {
   );
 }
 
-function SourceImagesSection({ item, onItemUpdate }: { item: SourceCollectItem; onItemUpdate: (item: SourceCollectItem) => void }) {
-  const [images, setImages] = useState<string[]>(() => sourcePreviewImages(item));
+function SourceImagesSection({
+  item,
+  onItemUpdate,
+  onRefreshItem,
+}: {
+  item: SourceCollectItem;
+  onItemUpdate: (item: SourceCollectItem) => void;
+  onRefreshItem: () => Promise<void>;
+}) {
+  const sourceImages = sourcePreviewImages(item);
+  const [images, setImages] = useState<string[]>(() => sourcePublishPreviewImages(item));
   const [detailImages, setDetailImages] = useState<string[]>(() => sourceDetailPreviewImages(item));
   const [saving, setSaving] = useState(false);
+  const [mediaMutationBusy, setMediaMutationBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const watermarked = metadataArray(item, 'watermarkedImages');
+  const mediaMutationLockRef = useRef(createMediaMutationLock());
+  const runMediaMutation = useCallback<RunMediaMutation>(
+    (action) => executeLockedMediaMutation(mediaMutationLockRef.current, setMediaMutationBusy, action),
+    [],
+  );
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   const videos = sourceVideoMaterialRows(item);
 
   useEffect(() => {
-    setImages(sourcePreviewImages(item));
+    setImages(sourcePublishPreviewImages(item));
     setDetailImages(sourceDetailPreviewImages(item));
     setMessage('');
     setError('');
   }, [item.id, item.images, item.metadata]);
 
   async function saveFilteredImages() {
-    if (saving) return;
-    setSaving(true);
+    if (saving || mediaMutationBusy) return;
     setMessage('');
     setError('');
-    const nextImages = images;
-    const nextDetailImages = detailImages;
-    const res = await api.post('/api/collect/save-customization', {
-      id: item.id,
-      images: nextImages,
-      sourceMainImages: nextImages,
-      sourceDetailImages: nextDetailImages,
-    });
-    setSaving(false);
-    if (res.code === 1) {
-      const metadata = { ...(item.metadata || {}), sourceMainImages: nextImages, sourceDetailImages: nextDetailImages, watermarkedImages: nextImages };
-      onItemUpdate({ ...item, images: nextImages, metadata });
-      setMessage('已保存图片筛选，发布时会使用保留的图片');
-    } else {
-      setError(res.msg || '保存图片筛选失败');
+    let request;
+    try {
+      request = buildSaveSourceImagesRequest({
+        id: item.id,
+        images,
+        sourceDetailImages: detailImages,
+        expectedUpdatedAt: item.updatedAt,
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '图片筛选参数无效');
+      return;
     }
+    await executeWithBusyState(setSaving, async () => {
+      try {
+        const execution = await runMediaMutation(() => api.post<SaveSourceImagesResult>('/api/collect/save-customization', request));
+        if (!execution.started) {
+          setError('图片正在处理中，请等待当前操作完成后重试');
+          return;
+        }
+        const res = execution.value!;
+        if (res.code === 1 && res.data) {
+          onItemUpdate({
+            ...item,
+            updatedAt: res.data.updatedAt,
+            images: res.data.images,
+            metadata: res.data.metadata,
+          });
+          setMessage('已保存图片筛选，发布时会使用保留的图片');
+        } else if (isMediaMutationConflict(res)) {
+          setError('商品图片已被其他操作更新，已刷新最新内容，请重新确认');
+          await onRefreshItem();
+        } else {
+          setError(res.msg || '保存图片筛选失败');
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : '保存图片筛选失败');
+      }
+    });
   }
 
   return (
     <div className="space-y-3">
-      <InfoPanel title="主图预览" count={`${images.length} / ${sourceImageCount(item)}`}>
+      <InfoPanel title="采集主图（来源证据）" count={`${sourceImages.length} / ${sourceImageCount(item)}`}>
+        <SourceImageGrid images={sourceImages} empty="未采集到可预览商品图片" limit={32} />
+      </InfoPanel>
+      <InfoPanel title="发布图片" count={images.length}>
         <SourceImageGrid
           images={images}
-          empty="未采集到可预览商品图片"
+          empty="暂无可发布商品图片"
           limit={32}
-          onRemove={(image) => setImages((current) => current.filter((entry) => entry !== image))}
+          onRemove={(image) => setImages((current) => {
+            const next = current.filter((entry) => entry !== image);
+            setError(next.length ? '' : '至少保留一张发布图片');
+            return next;
+          })}
         />
       </InfoPanel>
       <InfoPanel title="详情图原始素材" count={`${detailImages.length} / ${sourceDetailImageCount(item)}`}>
@@ -1590,27 +1664,38 @@ function SourceImagesSection({ item, onItemUpdate }: { item: SourceCollectItem; 
         />
       </InfoPanel>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={saveFilteredImages} disabled={saving}>
+        <Button type="button" size="sm" variant="outline" onClick={saveFilteredImages} disabled={saving || mediaMutationBusy || images.length === 0}>
           {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
           保存图片筛选
         </Button>
         {message ? <span className="text-xs text-emerald-700">{message}</span> : null}
         {error ? <span className="text-xs text-destructive">{error}</span> : null}
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <InfoPanel title="水印图" count={watermarked.length}>
-          <ImageStatusList images={watermarked} empty="暂无水印图" />
-        </InfoPanel>
-        <InfoPanel title="改图结果" count={edited.length}>
-          <ImageStatusList images={edited} empty="暂无改图结果" />
-        </InfoPanel>
-      </div>
+      <InfoPanel title="改图结果" count={edited.length}>
+        <ImageStatusList images={edited} empty="暂无改图结果" />
+      </InfoPanel>
       <InfoPanel title="视频素材" count={videos.length ? `已采集源视频 ${videos.length}` : '无视频'}>
         <div className="space-y-3">
           <div className="text-xs text-muted-foreground">发布时上传Ozon视频：在上架检查选择目标店铺后，系统会用该店铺登录态上传到 Ozon CDN 并生成视频属性。</div>
           <SourceVideoList videos={videos} transferEntries={[]} empty="未采集到视频素材" />
         </div>
       </InfoPanel>
+      <SourceAiMediaPanel
+        target={{ type: 'collect', id: item.id, label: item.title, updatedAt: item.updatedAt }}
+        mediaMutationBusy={mediaMutationBusy}
+        runMediaMutation={runMediaMutation}
+        onConflictRefresh={onRefreshItem}
+        onApplied={({ images: nextImages, editedImages, targetUpdatedAt }) => onItemUpdate({
+          ...item,
+          updatedAt: targetUpdatedAt,
+          images: nextImages,
+          metadata: {
+            ...(item.metadata || {}),
+            watermarkedImages: nextImages,
+            editedImages,
+          },
+        })}
+      />
     </div>
   );
 }
@@ -2262,12 +2347,12 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     setPackageSaving(true);
     setPackageMessage('');
     setPackageError('');
-    const body: Record<string, unknown> = { id: item.id };
+    const body: Record<string, unknown> = { id: item.id, expectedUpdatedAt: item.updatedAt };
     if (weightG) body.weightG = weightG;
     if (lengthMm) body.lengthMm = lengthMm;
     if (widthMm) body.widthMm = widthMm;
     if (heightMm) body.heightMm = heightMm;
-    const res = await api.post('/api/collect/save-customization', body);
+    const res = await api.post<{ updatedAt: string }>('/api/collect/save-customization', body);
     setPackageSaving(false);
     if (res.code === 1) {
       const metadata = { ...(item.metadata || {}) };
@@ -2275,7 +2360,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
       if (lengthMm) metadata.lengthMm = lengthMm;
       if (widthMm) metadata.widthMm = widthMm;
       if (heightMm) metadata.heightMm = heightMm;
-      onItemUpdate({ ...item, metadata });
+      onItemUpdate({ ...item, updatedAt: res.data?.updatedAt || item.updatedAt, metadata });
       setPackageMessage('已保存件重尺，发布时会优先使用这组数据');
     } else {
       setPackageError(res.msg || '保存件重尺失败');
@@ -2303,7 +2388,11 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
     setPackageSaving(true);
     setPackageMessage('');
     setPackageError('');
-    const res = await api.post('/api/collect/save-customization', { id: item.id, variants });
+    const res = await api.post<{ updatedAt: string }>('/api/collect/save-customization', {
+      id: item.id,
+      expectedUpdatedAt: item.updatedAt,
+      variants,
+    });
     setPackageSaving(false);
     if (res.code === 1) {
       const overrideMap = new Map(variants.map((variant) => [variant.sku, variant]));
@@ -2319,7 +2408,11 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
           ...(override.heightMm ? { height: override.heightMm } : {}),
         };
       });
-      onItemUpdate({ ...item, variants: nextVariants });
+      onItemUpdate({
+        ...item,
+        updatedAt: res.data?.updatedAt || item.updatedAt,
+        variants: nextVariants,
+      });
       setPackageMessage('已保存SKU件重尺，发布时会优先使用各 SKU 数据');
     } else {
       setPackageError(res.msg || '保存SKU件重尺失败');
@@ -2335,6 +2428,7 @@ function SourceListingCheckSection({ item, onItemUpdate }: { item: SourceCollect
   ) {
     const res = await api.post('/api/collect/save-customization', {
       id: publishItem.id,
+      expectedUpdatedAt: publishItem.updatedAt,
       weightG,
       lengthMm,
       widthMm,
@@ -2949,9 +3043,9 @@ function SourceImageGrid({ images, empty, limit, onRemove }: { images: string[];
     <div className="grid grid-cols-4 gap-2 md:grid-cols-8">
       {images.slice(0, limit).map((image, index) => (
         <div key={index} className="group relative aspect-square overflow-hidden rounded border bg-muted">
-          <a href={image} target="_blank" rel="noreferrer" className="block h-full w-full">
+          <a href={/^https?:\/\//i.test(image) ? image : apiUrl(image)} target="_blank" rel="noreferrer" className="block h-full w-full">
             <img
-              src={image}
+              src={/^https?:\/\//i.test(image) ? image : apiUrl(image)}
               alt=""
               className="h-full w-full object-cover"
               onError={(event) => {
@@ -2964,7 +3058,7 @@ function SourceImageGrid({ images, empty, limit, onRemove }: { images: string[];
               type="button"
               aria-label="删除图片"
               title="删除图片"
-              className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white/95 text-red-600 opacity-0 shadow-sm transition hover:bg-red-50 group-hover:opacity-100"
+              className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white/95 text-red-600 transition hover:bg-red-50 focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => onRemove(image)}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -2977,7 +3071,7 @@ function SourceImageGrid({ images, empty, limit, onRemove }: { images: string[];
 }
 
 function ImageStatusList({ images, empty }: { images: unknown[]; empty: string }) {
-  const urls = images.map((image) => String(image || '')).filter(isPreviewableSourceImage);
+  const urls = sourceManagedImageList(images);
   return <SourceImageGrid images={urls} empty={empty} limit={8} />;
 }
 
@@ -3009,19 +3103,31 @@ function SourceCollectPageContent() {
   const [error, setError] = useState('');
   const [detailItem, setDetailItem] = useState<SourceCollectItem | null>(null);
   const [activeDetailSection, setActiveDetailSection] = useState<DetailSection>('overview');
+  const loadItemsGuardRef = useRef(createLatestRequestGuard());
 
   async function loadItems() {
+    const isCurrent = loadItemsGuardRef.current.begin();
     setLoading(true);
     setError('');
-    const params = new URLSearchParams({ limit: '50', sourceGroup: 'source' });
-    if (search.trim()) params.set('search', search.trim());
-    const res = await api.get<{ total: number; rows: SourceCollectItem[] }>(`/api/collect?${params}`);
-    if (res.code === 1 && res.data) {
-      setItems(res.data.rows.filter(isSourceCollectItem));
-    } else {
-      setError(res.msg || '读取货源采集列表失败');
+    try {
+      const params = new URLSearchParams({ limit: '50', sourceGroup: 'source' });
+      if (search.trim()) params.set('search', search.trim());
+      const res = await api.get<{ total: number; rows: SourceCollectItem[] }>(`/api/collect?${params}`);
+      if (!isCurrent()) return;
+      if (res.code === 1 && res.data) {
+        const nextItems = res.data.rows.filter(isSourceCollectItem);
+        setItems(nextItems);
+        setDetailItem((current) => current ? nextItems.find((row) => row.id === current.id) || current : current);
+      } else {
+        setError(res.msg || '读取货源采集列表失败');
+      }
+    } catch (caught) {
+      if (isCurrent()) {
+        setError(caught instanceof Error ? caught.message : '读取货源采集列表失败');
+      }
+    } finally {
+      if (isCurrent()) setLoading(false);
     }
-    setLoading(false);
   }
 
   function updateItem(next: SourceCollectItem) {
@@ -3157,6 +3263,7 @@ function SourceCollectPageContent() {
               activeSection={activeDetailSection}
               onSectionChange={setActiveDetailSection}
               onItemUpdate={updateItem}
+              onRefreshItem={loadItems}
             />
           ) : null}
         </DialogContent>

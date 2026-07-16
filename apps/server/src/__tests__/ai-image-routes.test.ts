@@ -20,10 +20,22 @@ async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
     markRunning: vi.fn(async () => true), markRetrying: vi.fn(), markFailed: vi.fn(), markCancelled: vi.fn(), complete: vi.fn(),
   };
   const enqueue = vi.fn(async () => undefined);
+  const applyAssets = vi.fn(async (input: any) => ({
+    jobId: input.jobId,
+    mode: input.mode,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    images: ['https://cdn.example/applied.png'],
+    editedImages: ['https://cdn.example/applied.png'],
+    mainImage: 'https://cdn.example/applied.png',
+    targetUpdatedAt: new Date('2026-07-17T00:00:00.000Z'),
+    appliedAt: new Date('2026-07-17T00:00:00.000Z'),
+  }));
   const app = Fastify();
   await app.register(aiImageRoutes, {
     repository,
     enqueue,
+    applyAssets,
     authenticate: async (request: FastifyRequest) => {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1', role: 'USER' };
     },
@@ -45,7 +57,7 @@ async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
       resolvedNegativePrompt: userNegativePrompt,
     }),
   });
-  return { app, repository, enqueue };
+  return { app, repository, enqueue, applyAssets };
 }
 
 describe('AI image job routes', () => {
@@ -71,14 +83,21 @@ describe('AI image job routes', () => {
   });
 
   it('requires an explicit append or replace mode when applying', async () => {
-    const { app, repository } = await buildApp();
+    const { app, applyAssets } = await buildApp();
     const invalid = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: { targetType: 'collect', targetId: 'item-1' } });
     expect(invalid.statusCode).toBe(400);
 
     const valid = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: { mode: 'replace', targetType: 'collect', targetId: 'item-1' } });
     expect(valid.statusCode).toBe(200);
-    expect(repository.recordApplication).toHaveBeenCalledWith('job-1', expect.objectContaining({ mode: 'replace' }));
-    expect(valid.json().data).toEqual(expect.objectContaining({ jobId: 'job-1', mode: 'replace', targetType: 'collect', targetId: 'item-1' }));
+    expect(applyAssets).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', mode: 'replace',
+    }));
+    expect(valid.json().data).toEqual(expect.objectContaining({
+      jobId: 'job-1', mode: 'replace', targetType: 'collect', targetId: 'item-1',
+      images: ['https://cdn.example/applied.png'],
+      editedImages: ['https://cdn.example/applied.png'],
+      targetUpdatedAt: '2026-07-17T00:00:00.000Z',
+    }));
   });
   it('accepts supported real providers and rejects unsupported custom adapters', async () => {
     const { app: dashscope, enqueue } = await buildApp('owner-1', 'dashscope-wanx');

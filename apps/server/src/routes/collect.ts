@@ -5275,6 +5275,7 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
         : Array.isArray(it.images) ? (it.images as string[]) : [];
       return {
         id: it.id,
+        updatedAt: it.updatedAt,
         title: it.title,
         description: resolvePublishDescription(it),
         sku: it.sku,
@@ -5311,6 +5312,7 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
     const { userId } = (request as any).user;
     const body = request.body as {
       id: string;
+      expectedUpdatedAt?: string;
       title?: string;
       description?: string;
       images?: string[];
@@ -5336,11 +5338,23 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
       }>;
     };
     if (!body?.id) return reply.status(400).send({ code: 0, msg: '缺少 id' });
+    if (Array.isArray(body.images) && body.images.length === 0) {
+      return reply.status(400).send({ code: 'EMPTY_PUBLISH_IMAGES', msg: '至少保留一张发布图片' });
+    }
+    const expectedUpdatedAt = body.expectedUpdatedAt ? new Date(body.expectedUpdatedAt) : null;
+    if (body.expectedUpdatedAt && Number.isNaN(expectedUpdatedAt?.getTime())) {
+      return reply.status(400).send({ code: 'INVALID_TARGET_VERSION', msg: '商品版本时间无效' });
+    }
+    if (!expectedUpdatedAt) {
+      return reply.status(400).send({ code: 'TARGET_VERSION_REQUIRED', msg: '保存商品时必须携带当前版本' });
+    }
 
     const it = await prisma.supplyGoods.findFirst({ where: { id: body.id, userId } });
     if (!it) return reply.status(404).send({ code: 0, msg: '商品不存在或无权限' });
 
-    const meta: any = (it.metadata as any) || {};
+    const meta: any = it.metadata && typeof it.metadata === 'object' && !Array.isArray(it.metadata)
+      ? { ...(it.metadata as Record<string, unknown>) }
+      : {};
     if (body.weightG !== undefined) meta.weightG = body.weightG;
     if (body.lengthMm !== undefined) meta.lengthMm = body.lengthMm;
     if (body.widthMm !== undefined) meta.widthMm = body.widthMm;
@@ -5402,8 +5416,36 @@ export async function collectRoutes(app: FastifyInstance, options: CollectRoutes
       });
     }
 
-    await prisma.supplyGoods.update({ where: { id: body.id }, data: updateData });
-    return reply.send({ code: 1, msg: '已保存' });
+    const updatedAt = new Date();
+    updateData.updatedAt = updatedAt;
+    const updated = await prisma.supplyGoods.updateMany({
+      where: {
+        id: body.id,
+        userId,
+        updatedAt: expectedUpdatedAt,
+      },
+      data: updateData,
+    });
+    if (updated.count !== 1) {
+      const current = await prisma.supplyGoods.findFirst({
+        where: { id: body.id, userId },
+        select: { updatedAt: true, images: true, metadata: true },
+      });
+      return reply.status(409).send({
+        code: 'TARGET_CONFLICT',
+        msg: '商品图片已被其他操作更新',
+        data: current,
+      });
+    }
+    return reply.send({
+      code: 1,
+      msg: '已保存',
+      data: {
+        updatedAt,
+        images: Array.isArray(body.images) ? body.images : (it.images || []),
+        metadata: updateData.metadata,
+      },
+    });
   });
 
   app.post('/publish-ozon', { bodyLimit: 10 * 1024 * 1024 }, async (request, reply) => {

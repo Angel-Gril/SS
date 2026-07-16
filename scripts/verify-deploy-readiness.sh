@@ -90,6 +90,8 @@ check_file "$DEPLOY_DIR/package.json"
 check_optional_file "$DEPLOY_DIR/scripts/deploy-app-dir.sh"
 check_file "$DEPLOY_DIR/scripts/configure-cloud-r2-env.sh"
 check_file "$DEPLOY_DIR/scripts/verify-vps-deploy.sh"
+check_file "$DEPLOY_DIR/scripts/verify-ai-media-dark.sh"
+check_file "$DEPLOY_DIR/scripts/verify-ai-media-dark-policy.mjs"
 check_file "$DEPLOY_DIR/scripts/verify-backup-restore.sh"
 
 if [ -f "$DEPLOY_DIR/DEPLOYED_COMMIT" ]; then
@@ -151,6 +153,18 @@ if [ "$EXPECTED_PROFILE" = "cloud-r2" ]; then
   else
     warn "diagnose-runtime-env.sh unavailable; cannot validate runtime upload config"
   fi
+fi
+
+if [ -f "$DEPLOY_DIR/scripts/verify-ai-media-dark.sh" ]; then
+  echo ""
+  echo "--- AI Media dark-rollout validation ---"
+  if DEPLOY_DIR="$DEPLOY_DIR" ENV_FILE="$ENV_FILE" bash "$DEPLOY_DIR/scripts/verify-ai-media-dark.sh"; then
+    :
+  else
+    fail "AI Media dark-rollout verification failed"
+  fi
+else
+  fail "AI Media dark-rollout verifier unavailable"
 fi
 
 check_service "$API_SERVICE" "$DEPLOY_DIR/apps/server"

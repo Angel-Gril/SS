@@ -28,7 +28,7 @@ This plan extends the existing source-product-profile work rather than replacing
 
 The central conclusion from the code comparison is that the reference extension is not a better overall architecture. It is a browser-heavy implementation with useful page fallbacks, image workflow ideas, and compact operator UI. SS ERP already has the better long-term system boundary: browser-only evidence acquisition in the extension, and durable orchestration, credentials, jobs, storage, validation, and Ozon publishing on the server.
 
-## Current Delivery Status (2026-07-15)
+## Current Delivery Status (2026-07-16)
 
 This plan describes the full target program, not a claim that the source-to-Ozon workflow has shipped. The current branch contains completed-in-worktree Units 0A, 1, 2 and 5, the implemented-but-acceptance-pending Units 4, 6, 6A and 6B, plus the separate `text-to-image.base` Prompt foundation from Unit 7A. Together they establish the Phase 1 trust boundary, the evidence-backed Capture V2 snapshot contract, durable source-capture persistence, the 1688 hybrid collector, hardened Ozon catalog/mapping inputs, one owner-scoped resumable listing-draft ledger, server-owned product/per-SKU attribute preparation and validation, an immutable submit-once Ozon attempt/reconciliation boundary, and the first extension-to-ERP-Web review workflow. They do not yet complete Unit 0B, Unit 3, Unit 4 or Unit 6 acceptance, the real Ozon test-shop gates for Units 6A and 6B, Unit 7B, full R9-R12, or any later marketplace/media phase.
 
@@ -1043,7 +1043,7 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 
 - [ ] **Unit 7A: Prompt Registry and Frozen Text-to-Image Prompt**
 
-**Status:** Implemented in the current uncommitted worktree for `text-to-image.base`. Even after it lands, it completes only one R10 subset; complete R10 also requires listing-copy templates and the operation-specific templates/validators delivered with Units 7B-9C.
+**Status:** The `text-to-image.base` registry, release/CAS controls and frozen job snapshot are landed and deployed. Acceptance remains partial because Unit 0B provider/model output-quality evidence and the operation-specific templates/validators from Units 7B-9C are not complete.
 
 **Goal:** Land the reusable version/release mechanism and reproducible Prompt snapshot for the existing text-to-image path.
 
@@ -1087,6 +1087,8 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 **Verification:** The current worktree slice is code-reviewed, landed and truthfully labeled as one-template Prompt infrastructure, not as the complete media workflow.
 
 - [ ] **Unit 7B: Media Asset Graph, Parent Workflow, Provider Capabilities, and Listing-Copy Prompt Templates**
+
+**Status:** First lifecycle slice implemented and acceptance-verified in the post-`1a96b9f` worktree: feature-gated single-source `IMAGE_TO_IMAGE` parent workflows, relational frozen inputs, child attempts, immutable events and media lineage, owner/context authority, list/detail/cancel/retry/review/apply APIs, cancellation-safe fake execution, actor-audited application and contextual collect history. The 64-migration isolated replay, PostgreSQL concurrency/provenance integration test, full server suite and desktop/mobile browser lifecycle all pass. Unit 7B remains incomplete until provider capability contracts, cost reservation/settlement, listing-copy templates, multi-reference support and real provider evidence land.
 
 **Goal:** Upgrade the media domain before adding more provider operations.
 
@@ -1276,6 +1278,8 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 **Verification:** Manual full edit and inpaint are independently usable, reproducible and pixel-safe before planned suite automation is enabled.
 
 - [ ] **Unit 10A: ERP Web Media History, Recovery, and Candidate Review**
+
+**Status:** The first collect-context slice is implemented in the post-`1a96b9f` worktree. The Images tab resolves the owned current capture, internalizes a selected `SOURCE_ORIGINAL`, restores workflow history after remount, supports cancel/pre-submit retry/review and applies only an approved output to that exact collect context. Unit 10A remains incomplete until cursor pagination, second-session/browser acceptance, listing-draft/SKU contexts, submitted-provider reconciliation and broader candidate comparison/rollback are implemented.
 
 **Goal:** Remove pasted target IDs and in-memory-only job state as soon as the parent media workflow exists.
 
@@ -1550,6 +1554,18 @@ This checklist is the execution baseline for the remaining work. A completed imp
 | Accepted-but-unrecorded reconciliation test | Pending | `SUBMITTING/UNKNOWN` recovery without duplicate external submit |
 | AI provider capability tests | Pending | Selected text/image/edit/translation provider matrix and cost/quality results |
 | Media output storage and URL expiry checks | Pending | Owned storage URL, reload, expiry and retry tests |
+
+### Track E: AI Media First Lifecycle Slice
+
+| Task | Status | Completion evidence | Remaining boundary |
+|---|---|---|---|
+| Parent workflow and child attempt persistence | Acceptance-verified in post-`1a96b9f` worktree | Prisma models, all 68 migrations replayed in a fresh isolated schema, owner-scoped API/service tests, bounded serializable conflict recovery and concurrent-index deployment preparation | Commit and dark deployment |
+| Authoritative source input and output lineage | Acceptance-verified in post-`1a96b9f` worktree | Composite ownership FKs, row-locked provenance checks, frozen-input snapshot validation, immutable workflow/job/asset/event/lineage triggers, RESTRICT job/asset lifecycle and PostgreSQL tamper tests | Multi-reference and mask roles remain disabled |
+| Fake `IMAGE_TO_IMAGE` lifecycle | Acceptance-verified in post-`1a96b9f` worktree | Zero-cost provider, cancellation/provider-ID races, same/different-key retry races, concurrent apply, actor-audited APPLIED event and exact reviewed-context application | No real edit provider is enabled |
+| Contextual collect Images-tab history | Acceptance-verified in post-`1a96b9f` worktree | No pasted target ID, exact current-snapshot authority, source/candidate comparison, latest-request loading guard, CAS-safe save/apply, reload recovery, approve/apply/save persistence, flag-off history, desktop/mobile no-overflow and no-console-error browser checks | Listing-draft/SKU contexts and richer comparison remain pending |
+| Tenant rollout and deployment darkness | Acceptance-verified in post-`1a96b9f` worktree | Global kill switch plus explicit owner allowlist; create/internalize/retry fail closed; reusable local/VPS verifier rejects enabled, malformed or non-empty rollout state | Pilot activation remains prohibited until external acceptance |
+| Verification gate | Passed locally | 1962 server tests passed / 80 skipped, workspace typecheck and production build passed, lint 0 errors with 23 pre-existing warnings, 68-migration status current, fresh-schema PostgreSQL integration and focused executable Web contracts passed | Re-run deployment checks after commit on each target |
+| Real provider operation | Pending | Unit 0B capability/input-transport/cost evidence | Paid/provider calls remain prohibited in this slice |
 
 ### Track D: Review, Dark Deployment And Later Activation
 
