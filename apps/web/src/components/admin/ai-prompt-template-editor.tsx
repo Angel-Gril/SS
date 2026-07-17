@@ -34,6 +34,22 @@ interface PromptTemplateItem {
   activeRelease: PromptRelease | null;
   revisions: PromptRevision[];
   releases: PromptRelease[];
+  variableSchema?: PromptVariableSchema;
+}
+
+interface PromptVariableDefinition {
+  inputKey: string;
+  placeholder?: string;
+  token?: string;
+  requiredForTest: boolean;
+  label?: string;
+}
+
+interface PromptVariableSchema {
+  prompt: PromptVariableDefinition[];
+  negativePrompt: PromptVariableDefinition[];
+  safetyPolicy?: string;
+  outputMode?: 'media_candidate' | 'listing_copy_candidate';
 }
 
 interface PromptTemplateData {
@@ -57,6 +73,82 @@ interface DraftValues {
 }
 
 const API_BASE = '/api/admin/ai-prompt-templates';
+const LEGACY_VARIABLE_SCHEMA: PromptVariableSchema = {
+  prompt: [{ inputKey: 'userPrompt', placeholder: 'user_prompt', requiredForTest: true, label: '验证用正向输入' }],
+  negativePrompt: [{ inputKey: 'userNegativePrompt', placeholder: 'user_negative_prompt', requiredForTest: false, label: '验证用负向输入' }],
+  outputMode: 'media_candidate',
+};
+const VARIABLE_LABELS: Record<string, string> = {
+  userPrompt: '验证用正向输入',
+  userNegativePrompt: '验证用负向输入',
+  sourceFactsJson: '来源事实 JSON',
+  confirmedAttributesJson: '已确认属性 JSON',
+  ozonCategoryName: 'Ozon 类目名称',
+  targetLanguage: '目标语言',
+  userInstructions: '人工补充要求',
+  forbiddenClaims: '禁止使用的声明',
+};
+const VARIABLE_DEFAULTS: Record<string, string> = {
+  userPrompt: '白底棚拍，保持商品主体、颜色和结构一致',
+  userNegativePrompt: '水印、错误文字、虚构认证、变形商品',
+  sourceFactsJson: '{\n  "product": "不锈钢保温杯",\n  "capacityMl": 500\n}',
+  confirmedAttributesJson: '{\n  "material": "不锈钢",\n  "capacity_ml": 500\n}',
+  ozonCategoryName: '保温杯',
+  targetLanguage: '俄语',
+  userInstructions: '',
+  forbiddenClaims: '医疗级、官方认证、绝对保温时长',
+};
+
+function variableSchemaFor(template?: PromptTemplateItem | null): PromptVariableSchema {
+  return template?.variableSchema || LEGACY_VARIABLE_SCHEMA;
+}
+
+function initialSampleValues(schema: PromptVariableSchema) {
+  return [...schema.prompt, ...schema.negativePrompt].reduce<Record<string, string>>((values, variable) => {
+    values[variable.inputKey] = VARIABLE_DEFAULTS[variable.inputKey] || '';
+    return values;
+  }, {});
+}
+
+function variablePlaceholder(variable: PromptVariableDefinition) {
+  return variable.placeholder || variable.token || variable.inputKey;
+}
+
+function sampleSchemaSignature(template?: PromptTemplateItem | null) {
+  const schema = variableSchemaFor(template);
+  return JSON.stringify({
+    templateKey: template?.key || 'text-to-image.base',
+    prompt: schema.prompt.map((variable) => ({
+      inputKey: variable.inputKey,
+      placeholder: variablePlaceholder(variable),
+      requiredForTest: variable.requiredForTest,
+    })),
+    negativePrompt: schema.negativePrompt.map((variable) => ({
+      inputKey: variable.inputKey,
+      placeholder: variablePlaceholder(variable),
+      requiredForTest: variable.requiredForTest,
+    })),
+  });
+}
+
+function outputModeCopy(outputMode?: PromptVariableSchema['outputMode']) {
+  if (outputMode === 'listing_copy_candidate') {
+    return {
+      label: '商品文案候选',
+      description: '模板只生成待审核的标题或描述候选，不会自动写入商品草稿或发布到 Ozon。',
+    };
+  }
+  return {
+    label: '媒体候选',
+    description: '模板只生成待审核的媒体候选，不会自动应用到商品或发布到 Ozon。',
+  };
+}
+
+function visibleCompiledPrompt(resolvedPrompt: string, safetyPolicy?: string) {
+  if (!safetyPolicy) return resolvedPrompt;
+  const prefix = `${safetyPolicy}\n\n`;
+  return resolvedPrompt.startsWith(prefix) ? resolvedPrompt.slice(prefix.length) : resolvedPrompt;
+}
 
 export function AiPromptTemplateEditor() {
   const [data, setData] = useState<PromptTemplateData | null>(null);
@@ -65,13 +157,15 @@ export function AiPromptTemplateEditor() {
   const [promptTemplate, setPromptTemplate] = useState('');
   const [negativePromptTemplate, setNegativePromptTemplate] = useState('');
   const [note, setNote] = useState('');
-  const [samplePrompt, setSamplePrompt] = useState('白底棚拍，保持商品主体、颜色和结构一致');
-  const [sampleNegative, setSampleNegative] = useState('水印、错误文字、虚构认证、变形商品');
+  const [sampleValues, setSampleValues] = useState<Record<string, string>>(
+    () => initialSampleValues(LEGACY_VARIABLE_SCHEMA),
+  );
   const [preview, setPreview] = useState<TestResult | null>(null);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [busy, setBusy] = useState<string | null>('load');
   const [draftBaseline, setDraftBaseline] = useState<DraftValues | null>(null);
   const selectedRevisionIdRef = useRef<string | null>(null);
+  const sampleSchemaSignatureRef = useRef(sampleSchemaSignature(null));
 
   const selectedTemplate = useMemo(
     () => data?.items.find((item) => item.key === selectedKey) || data?.items[0] || null,
@@ -81,6 +175,16 @@ export function AiPromptTemplateEditor() {
     () => selectedTemplate?.revisions.find((item) => item.id === selectedRevisionId) || null,
     [selectedRevisionId, selectedTemplate],
   );
+  const selectedVariableSchema = useMemo(
+    () => variableSchemaFor(selectedTemplate),
+    [selectedTemplate],
+  );
+  const sampleGroups = useMemo(() => ([
+    { key: 'prompt', label: '正文变量', variables: selectedVariableSchema.prompt },
+    { key: 'negative', label: '约束变量', variables: selectedVariableSchema.negativePrompt },
+  ]).filter((group) => group.variables.length > 0), [selectedVariableSchema]);
+  const currentSafetyPolicy = selectedVariableSchema.safetyPolicy || data?.safetyPolicy || '';
+  const modeCopy = outputModeCopy(selectedVariableSchema.outputMode);
   const isRevisionView = Boolean(selectedRevision);
   const isBusy = busy !== null;
   const hasUnsavedDraft = !isRevisionView && Boolean(draftBaseline) && (
@@ -117,6 +221,9 @@ export function AiPromptTemplateEditor() {
         || response.data.items[0];
       if (!template) return;
       setSelectedKey(template.key);
+      if (sampleSchemaSignatureRef.current !== sampleSchemaSignature(template)) {
+        resetSampleValues(template);
+      }
       const preferred = preferredRevisionId
         ? template.revisions.find((item) => item.id === preferredRevisionId)
         : null;
@@ -134,6 +241,14 @@ export function AiPromptTemplateEditor() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function resetSampleValues(template?: PromptTemplateItem | null) {
+    const schema = variableSchemaFor(template);
+    sampleSchemaSignatureRef.current = sampleSchemaSignature(template);
+    setSampleValues(initialSampleValues(schema));
+    setPreview(null);
+    setTestResult(null);
   }
 
   function startNewRevision(source?: PromptRevision | null) {
@@ -179,7 +294,7 @@ export function AiPromptTemplateEditor() {
       if (response.code !== 1 || !response.data) {
         throw new Error(response.msg || '修订保存失败');
       }
-      toast({ title: '修订已保存', description: '请先预览验证，再发布到生图任务。' });
+      toast({ title: '修订已保存', description: '请先预览并记录 PASS，再发布该模板版本。' });
       await loadTemplates(response.data.id);
     } catch (error) {
       toast({
@@ -199,7 +314,7 @@ export function AiPromptTemplateEditor() {
     try {
       const response = await api.post<TestResult>(
         API_BASE + '/revisions/' + revisionId + '/preview',
-        { variables: { userPrompt: samplePrompt, userNegativePrompt: sampleNegative } },
+        { variables: sampleValues },
       );
       if (response.code !== 1 || !response.data) {
         throw new Error(response.msg || '预览失败');
@@ -226,7 +341,7 @@ export function AiPromptTemplateEditor() {
     try {
       const response = await api.post<TestResult>(
         API_BASE + '/revisions/' + revisionId + '/test',
-        { sampleInput: { userPrompt: samplePrompt, userNegativePrompt: sampleNegative } },
+        { sampleInput: sampleValues },
       );
       if (response.code !== 1 || !response.data) {
         throw new Error(response.msg || '模板验证失败');
@@ -260,7 +375,10 @@ export function AiPromptTemplateEditor() {
         },
       );
       if (response.code !== 1) throw new Error(response.msg || '发布失败');
-      toast({ title: '提示词已发布', description: '新创建的生图任务将冻结使用此版本。' });
+      toast({
+        title: '提示词版本已发布',
+        description: `${modeCopy.label}仍需在业务工作流中审核，不会自动应用或发布。`,
+      });
       await loadTemplates();
     } catch (error) {
       toast({
@@ -287,7 +405,10 @@ export function AiPromptTemplateEditor() {
         },
       );
       if (response.code !== 1) throw new Error(response.msg || '回滚失败');
-      toast({ title: '已追加回滚发布', description: '既有生图任务仍保留原冻结版本。' });
+      toast({
+        title: '已追加回滚发布',
+        description: '既有任务保留原冻结版本；候选内容不会自动应用或发布。',
+      });
       await loadTemplates();
     } catch (error) {
       toast({
@@ -305,9 +426,15 @@ export function AiPromptTemplateEditor() {
     <section className="space-y-4 rounded-md border p-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h3 className="text-sm font-medium">生图提示词版本管理</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-medium">AI 提示词版本管理</h3>
+            <Badge variant="outline">{modeCopy.label}</Badge>
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
             管理员修改业务模板；固定安全约束只读，任务入队后冻结版本和最终提示词。
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {modeCopy.description}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -345,6 +472,7 @@ export function AiPromptTemplateEditor() {
                 if (!confirmDiscardDraft()) return;
                 setSelectedKey(event.target.value);
                 const next = data?.items.find((item) => item.key === event.target.value);
+                resetSampleValues(next);
                 startNewRevision(next?.activeRevision);
               }}
               disabled={isBusy}
@@ -380,25 +508,37 @@ export function AiPromptTemplateEditor() {
             />
           </label>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <label className="block space-y-1 text-xs">
-              <span className="font-medium">验证用正向输入</span>
-              <textarea
-                value={samplePrompt}
-                onChange={(event) => setSamplePrompt(event.target.value)}
-                disabled={isBusy}
-                className="min-h-20 w-full rounded-md border bg-background p-2 text-xs"
-              />
-            </label>
-            <label className="block space-y-1 text-xs">
-              <span className="font-medium">验证用负向输入</span>
-              <textarea
-                value={sampleNegative}
-                onChange={(event) => setSampleNegative(event.target.value)}
-                disabled={isBusy}
-                className="min-h-20 w-full rounded-md border bg-background p-2 text-xs"
-              />
-            </label>
+          <div className="space-y-3">
+            {sampleGroups.map((group) => (
+              <div key={group.key} className="min-w-0 space-y-2">
+                <div className="text-xs font-medium text-muted-foreground">{group.label}</div>
+                <div className="grid min-w-0 gap-3 lg:grid-cols-2">
+                  {group.variables.map((variable) => (
+                    <label key={variable.inputKey} className="block min-w-0 space-y-1 text-xs">
+                      <span className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium">
+                        <span>{variable.label || VARIABLE_LABELS[variable.inputKey] || variable.inputKey}</span>
+                        {variable.requiredForTest && <Badge variant="secondary">必填</Badge>}
+                      </span>
+                      <code className="block max-w-full break-all text-[11px] text-muted-foreground">
+                        {'{{' + variablePlaceholder(variable) + '}}'}
+                      </code>
+                      <textarea
+                        value={sampleValues[variable.inputKey] || ''}
+                        onChange={(event) => setSampleValues((current) => ({
+                          ...current,
+                          [variable.inputKey]: event.target.value,
+                        }))}
+                        disabled={isBusy}
+                        required={variable.requiredForTest}
+                        aria-required={variable.requiredForTest}
+                        aria-label={variable.label || VARIABLE_LABELS[variable.inputKey] || variable.inputKey}
+                        className="min-h-20 w-full min-w-0 rounded-md border bg-background p-2 text-xs"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
 
           {!isRevisionView && (
@@ -449,25 +589,40 @@ export function AiPromptTemplateEditor() {
           {preview && (
             <div className="space-y-2 rounded-md border bg-muted/20 p-3 text-xs">
               <div className="font-medium">编译预览</div>
-              <pre className="whitespace-pre-wrap break-words">{preview.resolvedPrompt}</pre>
+              <div className="text-[11px] font-medium text-muted-foreground">固定安全前缀</div>
+              <pre className="whitespace-pre-wrap break-words rounded border bg-background p-2">
+                {currentSafetyPolicy || '服务端未返回固定安全策略'}
+              </pre>
+              <div className="text-[11px] font-medium text-muted-foreground">业务模板编译内容</div>
+              <pre className="whitespace-pre-wrap break-words">{
+                visibleCompiledPrompt(
+                  preview.resolvedPrompt,
+                  currentSafetyPolicy,
+                )
+              }</pre>
               <pre className="whitespace-pre-wrap break-words text-muted-foreground">
                 {preview.resolvedNegativePrompt}
               </pre>
             </div>
           )}
 
-          <div className="space-y-1">
-            <label htmlFor="ai-prompt-safety-policy" className="text-xs font-medium">
-              安全约束 · 只读
-            </label>
-            <textarea
-              id="ai-prompt-safety-policy"
-              readOnly
-              value={data?.safetyPolicy || ''}
-              className="min-h-20 w-full rounded-md border bg-muted/30 p-3 text-xs"
-            />
+          <div className="min-w-0 space-y-2 rounded-md border bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium">固定安全约束</span>
+              <Badge variant="secondary">服务端注入 · 不可编辑</Badge>
+            </div>
+            <pre className="max-w-full whitespace-pre-wrap break-words rounded border bg-background p-2 text-xs">
+              {currentSafetyPolicy || '服务端未返回固定安全策略'}
+            </pre>
             <div className="text-xs text-muted-foreground">
-              可用变量：<code>{'{{user_prompt}}'}</code>、<code>{'{{user_negative_prompt}}'}</code>
+              当前模板可用变量
+            </div>
+            <div className="flex min-w-0 flex-wrap gap-1.5">
+              {[...selectedVariableSchema.prompt, ...selectedVariableSchema.negativePrompt].map((variable) => (
+                <code key={variable.inputKey} className="max-w-full break-all rounded border bg-background px-1.5 py-0.5 text-[11px]">
+                  {'{{' + variablePlaceholder(variable) + '}}'}
+                </code>
+              ))}
             </div>
           </div>
         </div>

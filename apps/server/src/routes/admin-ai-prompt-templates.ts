@@ -67,17 +67,118 @@ export interface AdminAiPromptTemplateRouteOptions {
   requireSuperAdmin?: Hook;
 }
 
-const SENSITIVE_FIELD_RE = /(?:api[-_]?key|secret|token|password|authorization|cookie)/i;
+type ResponseMapper = (value: unknown) => unknown;
 
-function sanitizeResponse(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeResponse);
-  if (!value || typeof value !== 'object') return value;
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (SENSITIVE_FIELD_RE.test(key)) continue;
-    sanitized[key] = sanitizeResponse(entry);
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function allowedFields(value: unknown, fields: readonly string[]) {
+  const source = record(value);
+  const output: Record<string, unknown> = {};
+  for (const field of fields) {
+    const entry = source[field];
+    if (
+      typeof entry === 'string'
+      || typeof entry === 'number'
+      || typeof entry === 'boolean'
+      || entry === null
+    ) output[field] = entry;
   }
-  return sanitized;
+  return output;
+}
+
+function mapRevisionDto(value: unknown) {
+  return allowedFields(value, [
+    'id',
+    'templateKey',
+    'promptTemplate',
+    'negativePromptTemplate',
+    'note',
+    'status',
+    'checksum',
+    'createdAt',
+    'updatedAt',
+  ]);
+}
+
+function mapReleaseDto(value: unknown) {
+  return allowedFields(value, [
+    'id',
+    'templateKey',
+    'revisionId',
+    'sequence',
+    'action',
+    'createdAt',
+  ]);
+}
+
+function mapVariableDefinitionDto(value: unknown) {
+  const source = record(value);
+  const output = allowedFields(source, ['inputKey', 'requiredForTest', 'label']);
+  if (typeof source.token === 'string') output.placeholder = source.token;
+  return output;
+}
+
+function mapVariableSchemaDto(value: unknown) {
+  const source = record(value);
+  return {
+    prompt: Array.isArray(source.prompt) ? source.prompt.map(mapVariableDefinitionDto) : [],
+    negativePrompt: Array.isArray(source.negativePrompt)
+      ? source.negativePrompt.map(mapVariableDefinitionDto)
+      : [],
+    ...allowedFields(source, ['safetyPolicy', 'outputMode']),
+  };
+}
+
+function mapTemplateItemDto(value: unknown) {
+  const source = record(value);
+  const output: Record<string, unknown> = {
+    ...allowedFields(source, ['key', 'label', 'currentSequence', 'outputMode']),
+    activeRelease: source.activeRelease ? mapReleaseDto(source.activeRelease) : null,
+    activeRevision: source.activeRevision ? mapRevisionDto(source.activeRevision) : null,
+    revisions: Array.isArray(source.revisions) ? source.revisions.map(mapRevisionDto) : [],
+    releases: Array.isArray(source.releases) ? source.releases.map(mapReleaseDto) : [],
+  };
+  if (source.variableSchema && typeof source.variableSchema === 'object') {
+    output.variableSchema = mapVariableSchemaDto(source.variableSchema);
+  }
+  return output;
+}
+
+function mapTemplateListDto(value: unknown) {
+  const source = record(value);
+  return {
+    allowedVariables: Array.isArray(source.allowedVariables)
+      ? source.allowedVariables.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+    ...allowedFields(source, ['safetyPolicy']),
+    items: Array.isArray(source.items) ? source.items.map(mapTemplateItemDto) : [],
+  };
+}
+
+function mapPreviewDto(value: unknown) {
+  return allowedFields(value, [
+    'revisionId',
+    'checksum',
+    'resolvedPrompt',
+    'resolvedNegativePrompt',
+    'outputMode',
+  ]);
+}
+
+function mapTestDto(value: unknown) {
+  return allowedFields(value, [
+    'ok',
+    'testRunId',
+    'revisionId',
+    'checksum',
+    'resolvedPrompt',
+    'resolvedNegativePrompt',
+    'outputMode',
+  ]);
 }
 
 function actorUserId(request: FastifyRequest): string {
@@ -129,9 +230,14 @@ function safeErrorMessage(statusCode: 400 | 404 | 409): string {
   return 'Invalid AI prompt template request';
 }
 
-async function operation(reply: FastifyReply, callback: () => Promise<unknown>, statusCode = 200) {
+async function operation(
+  reply: FastifyReply,
+  callback: () => Promise<unknown>,
+  mapper: ResponseMapper,
+  statusCode = 200,
+) {
   try {
-    const data = sanitizeResponse(await callback());
+    const data = mapper(await callback());
     return reply.status(statusCode).send({ code: 1, msg: 'ok', data });
   } catch (error) {
     const responseStatus = mappedStatus(error);
@@ -152,7 +258,11 @@ export async function adminAiPromptTemplateRoutes(
   app.addHook('preHandler', options.authenticate || defaultAuthenticate);
   app.addHook('preHandler', options.requireSuperAdmin || defaultRequireSuperAdmin);
 
-  app.get('/', async (_request, reply) => operation(reply, () => options.service.listTemplates()));
+  app.get('/', async (_request, reply) => operation(
+    reply,
+    () => options.service.listTemplates(),
+    mapTemplateListDto,
+  ));
 
   app.post('/:key/revisions', async (request, reply) => {
     const params = keyParamsSchema.safeParse(request.params);
@@ -160,7 +270,7 @@ export async function adminAiPromptTemplateRoutes(
     if (!params.success || !body.success) return invalidRequest(reply);
     return operation(reply, () => options.service.createRevision({
       actorUserId: actorUserId(request), key: params.data.key, ...body.data,
-    }), 201);
+    }), mapRevisionDto, 201);
   });
 
   app.post('/revisions/:id/preview', async (request, reply) => {
@@ -169,7 +279,7 @@ export async function adminAiPromptTemplateRoutes(
     if (!params.success || !body.success) return invalidRequest(reply);
     return operation(reply, () => options.service.previewRevision({
       actorUserId: actorUserId(request), revisionId: params.data.id, variables: body.data.variables,
-    }));
+    }), mapPreviewDto);
   });
 
   app.post('/revisions/:id/test', async (request, reply) => {
@@ -178,7 +288,7 @@ export async function adminAiPromptTemplateRoutes(
     if (!params.success || !body.success) return invalidRequest(reply);
     return operation(reply, () => options.service.testRevision({
       actorUserId: actorUserId(request), revisionId: params.data.id, sampleInput: body.data.sampleInput,
-    }));
+    }), mapTestDto);
   });
 
   app.post('/:key/publish', async (request, reply) => {
@@ -187,7 +297,7 @@ export async function adminAiPromptTemplateRoutes(
     if (!params.success || !body.success) return invalidRequest(reply);
     return operation(reply, () => options.service.publishRevision({
       actorUserId: actorUserId(request), key: params.data.key, ...body.data,
-    }));
+    }), mapReleaseDto);
   });
 
   app.post('/:key/rollback', async (request, reply) => {
@@ -196,6 +306,6 @@ export async function adminAiPromptTemplateRoutes(
     if (!params.success || !body.success) return invalidRequest(reply);
     return operation(reply, () => options.service.rollbackTemplate({
       actorUserId: actorUserId(request), key: params.data.key, ...body.data,
-    }));
+    }), mapReleaseDto);
   });
 }

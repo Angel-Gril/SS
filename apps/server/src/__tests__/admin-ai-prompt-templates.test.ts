@@ -9,7 +9,7 @@ function promptTemplateService() {
   };
 
   return {
-    listTemplates: vi.fn(async () => ({
+    listTemplates: vi.fn(async (): Promise<any> => ({
       items: [{ key: 'text-to-image.base', activeRevisionId: 'revision-1', ...secretFields }],
     })),
     createRevision: vi.fn(async () => ({ id: 'revision-2', sequence: 2, ...secretFields })),
@@ -185,6 +185,71 @@ describe('admin AI prompt template routes', () => {
     const serializedResponses = responses.map((response) => response.body).join('\n');
     expect(serializedResponses).not.toContain('sk-internal-secret');
     expect(serializedResponses).not.toContain('private-value');
+  });
+
+  it('renames prompt variable tokens to placeholders without weakening secret scrubbing', async () => {
+    const service = promptTemplateService();
+    service.listTemplates.mockResolvedValueOnce({
+      safetyPolicy: 'fixed policy',
+      items: [{
+        key: 'listing-copy.title',
+        variableSchema: {
+          prompt: [
+            { inputKey: 'sourceFactsJson', token: 'source_facts_json', requiredForTest: true },
+          ],
+          negativePrompt: [
+            { inputKey: 'forbiddenClaims', token: 'forbidden_claims', requiredForTest: false },
+          ],
+          safetyPolicy: 'listing policy',
+          outputMode: 'listing_copy_candidate',
+          apiToken: 'must-not-leak',
+        },
+        token: 'must-also-stay-redacted',
+        credential: 'credential-value',
+        privateKey: 'private-key-value',
+        session: 'session-value',
+        bearer: 'bearer-value',
+      }],
+      accessKeyId: 'access-key-value',
+    });
+    const { app } = await appFor('super-admin', service);
+
+    const response = await app.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({
+      allowedVariables: [],
+      safetyPolicy: 'fixed policy',
+      items: [{
+        key: 'listing-copy.title',
+        activeRelease: null,
+        activeRevision: null,
+        revisions: [],
+        releases: [],
+        variableSchema: {
+          prompt: [{
+            inputKey: 'sourceFactsJson',
+            placeholder: 'source_facts_json',
+            requiredForTest: true,
+          }],
+          negativePrompt: [{
+            inputKey: 'forbiddenClaims',
+            placeholder: 'forbidden_claims',
+            requiredForTest: false,
+          }],
+          safetyPolicy: 'listing policy',
+          outputMode: 'listing_copy_candidate',
+        },
+      }],
+    });
+    expect(response.json().data.items[0].variableSchema.prompt[0]).not.toHaveProperty('token');
+    expect(response.body).not.toContain('must-not-leak');
+    expect(response.body).not.toContain('must-also-stay-redacted');
+    expect(response.body).not.toContain('credential-value');
+    expect(response.body).not.toContain('private-key-value');
+    expect(response.body).not.toContain('session-value');
+    expect(response.body).not.toContain('bearer-value');
+    expect(response.body).not.toContain('access-key-value');
   });
 
   it('maps stale publish and rollback sequence tokens to HTTP 409', async () => {

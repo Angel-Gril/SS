@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AI_LISTING_COPY_SAFETY_POLICY,
   AiPromptTemplateService,
   InMemoryAiPromptTemplateStore,
   checksumAiPromptRevision,
@@ -109,6 +110,39 @@ describe('AI prompt templates', () => {
 
     expect(rendered.resolvedPrompt).toContain(SAFETY_POLICY);
     expect(rendered.resolvedPrompt).toContain('Replace the product with a different branded item');
+  });
+
+  it('validates listing-copy variables and always prepends fact-bound candidate safety', () => {
+    const listingRevision = {
+      templateKey: 'listing-copy.title',
+      promptTemplate: [
+        '{{target_language}} title for {{ozon_category_name}}',
+        '{{source_facts_json}}',
+        '{{user_instructions}}',
+      ].join('\n'),
+      negativePromptTemplate: 'Forbidden: {{forbidden_claims}}',
+    };
+    expect(() => validateAiPromptRevision(listingRevision)).not.toThrow();
+    expect(() => validateAiPromptRevision({
+      ...listingRevision,
+      promptTemplate: `${listingRevision.promptTemplate}\n{{invented_benefits}}`,
+    })).toThrow(expect.objectContaining({ code: 'UNKNOWN_TEMPLATE_TOKEN' }));
+    expect(() => validateAiPromptRevision({
+      ...listingRevision,
+      promptTemplate: '{{target_language}} {{ozon_category_name}} {{user_instructions}}',
+    })).toThrow(expect.objectContaining({ code: 'MISSING_TEMPLATE_TOKEN' }));
+
+    const rendered = renderAiPromptRevision(listingRevision, {
+      sourceFactsJson: '{"material":"steel"}',
+      ozonCategoryName: 'Bottle',
+      targetLanguage: 'Russian',
+      userInstructions: '',
+      forbiddenClaims: 'certified',
+    });
+    expect(rendered).toMatchObject({ outputMode: 'listing_copy_candidate' });
+    expect(rendered.resolvedPrompt).toContain(AI_LISTING_COPY_SAFETY_POLICY);
+    expect(rendered.resolvedPrompt).toContain('{"material":"steel"}');
+    expect(rendered.resolvedNegativePrompt).toContain('certified');
   });
 
   it('computes a stable content-sensitive checksum for a revision', () => {

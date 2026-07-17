@@ -5,18 +5,102 @@ import {
   AI_PROMPT_SAFETY_POLICY,
   AiPromptTemplateError,
   AiPromptTemplateService,
+  checksumAiPromptRevision,
+  getAiPromptVariableSchema,
   renderAiPromptRevision,
   type AiPromptTemplateStore,
 } from './ai-prompt-templates.js';
 
 export const DEFAULT_AI_IMAGE_TEMPLATE_KEY = 'text-to-image.base';
-const DEFAULT_TEMPLATE_LABEL = '基础文生图';
+export const LISTING_COPY_TITLE_TEMPLATE_KEY = 'listing-copy.title';
+export const LISTING_COPY_DESCRIPTION_TEMPLATE_KEY = 'listing-copy.description';
 const BOOTSTRAP_ACTOR = 'system:ai-prompt-bootstrap';
 const DEFAULT_NEGATIVE_TEMPLATE =
   'Avoid watermarks, illegible text, invented claims, unrelated objects, and distorted products.\n{{user_negative_prompt}}';
-const MAX_RESOLVED_PROMPT_LENGTH = 16_000;
-const MAX_RESOLVED_NEGATIVE_PROMPT_LENGTH = 8_000;
+const MAX_RESOLVED_PROMPT_BYTES = 64_000;
+const MAX_RESOLVED_NEGATIVE_PROMPT_BYTES = 16_000;
 const MAX_LEGACY_PROMPT_LENGTH = 7_000;
+const MAX_PROMPT_VARIABLE_BYTES = 48_000;
+const MAX_JSON_VARIABLE_BYTES = 24_000;
+const MAX_JSON_DEPTH = 8;
+const MAX_JSON_NODES = 500;
+const SENSITIVE_FACT_KEYS = new Set([
+  'authorization',
+  'auth',
+  'bearer',
+  'cookie',
+  'credential',
+  'credentials',
+  'email',
+  'jwt',
+  'secret',
+  'password',
+  'session',
+  'token',
+  'accesstoken',
+  'refreshtoken',
+  'signature',
+  'sessionid',
+  'accountid',
+  'deviceid',
+  'phonenumber',
+  'mobilenumber',
+  'apikey',
+  'apitoken',
+  'privatekey',
+  'accesskeyid',
+]);
+const JSON_VARIABLE_KEYS = new Set(['sourceFactsJson', 'confirmedAttributesJson']);
+const SENSITIVE_FACT_KEY_PATTERNS = [
+  /^(?:proxy)?authorization(?:header)?$/,
+  /^(?:set)?cookie(?:header)?$/,
+  /^(?:x)?apikey(?:id|secret|value)?$/,
+  /^accesskey(?:id|secret|value)?$/,
+  /^privatekey(?:id|value)?$/,
+  /^(?:access|refresh|api|auth|bearer|session|device|account|user)?token(?:value)?$/,
+  /^(?:accesskey|privatekey|api|client|app|oauth)?secret(?:value)?$/,
+  /^(?:current|new|old)?password(?:hash|value)?$/,
+  /^(?:session|account|device|user|seller|phone|mobile|email)(?:id|number|address)$/,
+];
+const TEXT_VARIABLE_BYTE_LIMITS: Readonly<Record<string, number>> = {
+  userPrompt: 16_000,
+  userNegativePrompt: 8_000,
+  ozonCategoryName: 300,
+  targetLanguage: 100,
+  userInstructions: 2_000,
+  forbiddenClaims: 2_000,
+};
+
+const BUILTIN_TEMPLATE_DEFINITIONS = {
+  [DEFAULT_AI_IMAGE_TEMPLATE_KEY]: { label: '基础文生图', outputMode: 'media_candidate' as const },
+  [LISTING_COPY_TITLE_TEMPLATE_KEY]: { label: '商品标题候选', outputMode: 'listing_copy_candidate' as const },
+  [LISTING_COPY_DESCRIPTION_TEMPLATE_KEY]: { label: '商品描述候选', outputMode: 'listing_copy_candidate' as const },
+};
+
+const DEFAULT_LISTING_TITLE_TEMPLATE = [
+  'Create one concise Ozon listing title in {{target_language}} for category {{ozon_category_name}}.',
+  'Use only facts present in this JSON:',
+  '{{source_facts_json}}',
+  'Operator instructions (may be empty):',
+  '{{user_instructions}}',
+  'Return only the candidate title. Do not add commentary.',
+].join('\n');
+const DEFAULT_LISTING_DESCRIPTION_TEMPLATE = [
+  'Create an Ozon listing description in {{target_language}} for category {{ozon_category_name}}.',
+  'Use only facts present in the source JSON and confirmed attributes JSON.',
+  'Source facts:',
+  '{{source_facts_json}}',
+  'Confirmed attributes:',
+  '{{confirmed_attributes_json}}',
+  'Operator instructions (may be empty):',
+  '{{user_instructions}}',
+  'Return only the candidate description. Do not add unverified benefits or commentary.',
+].join('\n');
+const DEFAULT_LISTING_CONSTRAINTS_TEMPLATE = [
+  'Never use unsupported or prohibited claims.',
+  'Explicitly forbidden claims (may be empty):',
+  '{{forbidden_claims}}',
+].join('\n');
 
 interface RegistryOptions {
   getLegacyPrompt: () => Promise<string>;
@@ -26,51 +110,143 @@ function asVariable(value: unknown): string {
   return typeof value === 'string' ? value : String(value || '');
 }
 
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function isSensitiveFactKey(key: string): boolean {
+  const normalized = key.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  return SENSITIVE_FACT_KEYS.has(normalized)
+    || SENSITIVE_FACT_KEY_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function canonicalJsonValue(
+  value: unknown,
+  state: { nodes: number },
+  depth = 0,
+): unknown {
+  state.nodes += 1;
+  if (state.nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
+    throw new AiPromptTemplateError(
+      'INVALID_TEST_INPUT',
+      'Prompt JSON input exceeds the allowed structure budget',
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalJsonValue(entry, state, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    const output: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      if (isSensitiveFactKey(key)) {
+        throw new AiPromptTemplateError(
+          'INVALID_TEST_INPUT',
+          `Prompt JSON input contains prohibited field: ${key}`,
+        );
+      }
+      output[key] = canonicalJsonValue(
+        (value as Record<string, unknown>)[key],
+        state,
+        depth + 1,
+      );
+    }
+    return output;
+  }
+  if (
+    value == null
+    || typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean'
+  ) {
+    return value;
+  }
+  throw new AiPromptTemplateError('INVALID_TEST_INPUT', 'Prompt JSON input contains an unsupported value');
+}
+
+function normalizeJsonVariable(inputKey: string, value: string): string {
+  if (byteLength(value) > MAX_JSON_VARIABLE_BYTES) {
+    throw new AiPromptTemplateError(
+      'INVALID_TEST_INPUT',
+      `${inputKey} exceeds ${MAX_JSON_VARIABLE_BYTES} bytes`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new AiPromptTemplateError('INVALID_TEST_INPUT', `${inputKey} must be valid JSON`);
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new AiPromptTemplateError('INVALID_TEST_INPUT', `${inputKey} must be a JSON object`);
+  }
+  return JSON.stringify(canonicalJsonValue(parsed, { nodes: 0 }));
+}
+
 function promptVariables(
+  templateKey: string,
   input: Record<string, unknown>,
-  options: { requireUserPrompt: boolean },
+  options: { requireTestValues: boolean },
 ) {
-  const unknownKey = Object.keys(input).find(
-    (key) => key !== 'userPrompt' && key !== 'userNegativePrompt',
-  );
+  const schema = getAiPromptVariableSchema(templateKey);
+  const definitions = [...schema.prompt, ...schema.negativePrompt];
+  const supportedKeys = new Set(definitions.map((variable) => variable.inputKey));
+  const unknownKey = Object.keys(input).find((key) => !supportedKeys.has(key));
   if (unknownKey) {
     throw new AiPromptTemplateError(
       'INVALID_TEST_INPUT',
       `Unsupported prompt test variable: ${unknownKey}`,
     );
   }
-  if (typeof input.userPrompt !== 'string') {
-    throw new AiPromptTemplateError('INVALID_TEST_INPUT', 'userPrompt must be a string');
+  const values: Record<string, string> = {};
+  for (const variable of definitions) {
+    const value = input[variable.inputKey];
+    if (value != null && typeof value !== 'string') {
+      throw new AiPromptTemplateError('INVALID_TEST_INPUT', `${variable.inputKey} must be a string`);
+    }
+    const normalized = asVariable(value);
+    if (options.requireTestValues && variable.requiredForTest && !normalized.trim()) {
+      throw new AiPromptTemplateError(
+        'INVALID_TEST_INPUT',
+        `${variable.inputKey} is required for testing`,
+      );
+    }
+    if (normalized && JSON_VARIABLE_KEYS.has(variable.inputKey)) {
+      values[variable.inputKey] = normalizeJsonVariable(variable.inputKey, normalized);
+      continue;
+    }
+    const byteLimit = TEXT_VARIABLE_BYTE_LIMITS[variable.inputKey] || 2_000;
+    if (byteLength(normalized) > byteLimit) {
+      throw new AiPromptTemplateError(
+        'INVALID_TEST_INPUT',
+        `${variable.inputKey} exceeds ${byteLimit} bytes`,
+      );
+    }
+    values[variable.inputKey] = normalized;
   }
-  if (options.requireUserPrompt && !input.userPrompt.trim()) {
-    throw new AiPromptTemplateError('INVALID_TEST_INPUT', 'userPrompt is required for testing');
-  }
-  if (input.userNegativePrompt != null && typeof input.userNegativePrompt !== 'string') {
+  const totalBytes = Object.values(values).reduce((total, value) => total + byteLength(value), 0);
+  if (totalBytes > MAX_PROMPT_VARIABLE_BYTES) {
     throw new AiPromptTemplateError(
       'INVALID_TEST_INPUT',
-      'userNegativePrompt must be a string',
+      `Prompt variables exceed ${MAX_PROMPT_VARIABLE_BYTES} bytes`,
     );
   }
-  return {
-    userPrompt: input.userPrompt,
-    userNegativePrompt: asVariable(input.userNegativePrompt),
-  };
+  return values;
 }
 
 function validateResolvedPromptLengths(input: {
   resolvedPrompt: string;
   resolvedNegativePrompt: string;
 }) {
-  if (input.resolvedPrompt.length > MAX_RESOLVED_PROMPT_LENGTH) {
+  if (byteLength(input.resolvedPrompt) > MAX_RESOLVED_PROMPT_BYTES) {
     throw new AiPromptTemplateError(
       'INVALID_COMPILED_PROMPT',
-      `Compiled prompt exceeds ${MAX_RESOLVED_PROMPT_LENGTH} characters`,
+      `Compiled prompt exceeds ${MAX_RESOLVED_PROMPT_BYTES} bytes`,
     );
   }
-  if (input.resolvedNegativePrompt.length > MAX_RESOLVED_NEGATIVE_PROMPT_LENGTH) {
+  if (byteLength(input.resolvedNegativePrompt) > MAX_RESOLVED_NEGATIVE_PROMPT_BYTES) {
     throw new AiPromptTemplateError(
       'INVALID_COMPILED_PROMPT',
-      `Compiled negative prompt exceeds ${MAX_RESOLVED_NEGATIVE_PROMPT_LENGTH} characters`,
+      `Compiled negative prompt exceeds ${MAX_RESOLVED_NEGATIVE_PROMPT_BYTES} bytes`,
     );
   }
 }
@@ -107,7 +283,7 @@ function defaultPromptTemplate(legacyPrompt: string): {
 
 export class AiPromptTemplateRegistryService {
   private readonly domain: AiPromptTemplateService;
-  private bootstrapPromise: Promise<void> | null = null;
+  private readonly bootstrapPromises = new Map<string, Promise<void>>();
 
   constructor(
     private readonly store: AiPromptTemplateStore,
@@ -117,7 +293,7 @@ export class AiPromptTemplateRegistryService {
   }
 
   async listTemplates() {
-    await this.ensureDefaultTemplate();
+    await Promise.all(Object.keys(BUILTIN_TEMPLATE_DEFINITIONS).map((key) => this.ensureTemplate(key)));
     const templates = await this.store.listTemplates();
     const items = await Promise.all(templates.map(async (template) => {
       const [revisions, releases, activeRelease] = await Promise.all([
@@ -137,10 +313,18 @@ export class AiPromptTemplateRegistryService {
         activeRevision,
         revisions,
         releases,
+        variableSchema: getAiPromptVariableSchema(template.key),
+        outputMode: BUILTIN_TEMPLATE_DEFINITIONS[template.key as keyof typeof BUILTIN_TEMPLATE_DEFINITIONS]?.outputMode,
       };
     }));
+    const allowedVariables = [...new Set(
+      Object.keys(BUILTIN_TEMPLATE_DEFINITIONS).flatMap((key) => {
+        const schema = getAiPromptVariableSchema(key);
+        return [...schema.prompt, ...schema.negativePrompt].map((variable) => variable.token);
+      }),
+    )];
     return {
-      allowedVariables: ['user_prompt', 'user_negative_prompt'],
+      allowedVariables,
       safetyPolicy: AI_PROMPT_SAFETY_POLICY,
       items,
     };
@@ -171,8 +355,9 @@ export class AiPromptTemplateRegistryService {
     const revision = await this.domain.getRevision(input.revisionId);
     const rendered = renderAiPromptRevision(
       revision,
-      promptVariables(input.variables, { requireUserPrompt: false }),
+      promptVariables(revision.templateKey, input.variables, { requireTestValues: false }),
     );
+    validateResolvedPromptLengths(rendered);
     return {
       revisionId: revision.id,
       checksum: revision.checksum,
@@ -185,7 +370,8 @@ export class AiPromptTemplateRegistryService {
     revisionId: string;
     sampleInput: Record<string, unknown>;
   }) {
-    const variables = promptVariables(input.sampleInput, { requireUserPrompt: true });
+    const revision = await this.domain.getRevision(input.revisionId);
+    const variables = promptVariables(revision.templateKey, input.sampleInput, { requireTestValues: true });
     const preview = await this.previewRevision({
       actorUserId: input.actorUserId,
       revisionId: input.revisionId,
@@ -204,6 +390,7 @@ export class AiPromptTemplateRegistryService {
       checksum: run.revisionChecksum,
       resolvedPrompt: preview.resolvedPrompt,
       resolvedNegativePrompt: preview.resolvedNegativePrompt,
+      outputMode: preview.outputMode,
     };
   }
 
@@ -250,6 +437,19 @@ export class AiPromptTemplateRegistryService {
     userPrompt: string;
     userNegativePrompt: string;
   }) {
+    return this.resolveTemplate({
+      templateKey: input.templateKey,
+      variables: {
+        userPrompt: input.userPrompt,
+        userNegativePrompt: input.userNegativePrompt,
+      },
+    });
+  }
+
+  async resolveTemplate(input: {
+    templateKey: string;
+    variables: Record<string, unknown>;
+  }) {
     await this.ensureSupportedTemplate(input.templateKey);
     const activeRelease = await this.domain.getActiveRelease(input.templateKey);
     if (!activeRelease) {
@@ -259,10 +459,12 @@ export class AiPromptTemplateRegistryService {
       );
     }
     const activeRevision = await this.domain.getRevision(activeRelease.revisionId);
-    const rendered = renderAiPromptRevision(activeRevision, {
-      userPrompt: input.userPrompt,
-      userNegativePrompt: input.userNegativePrompt,
-    });
+    const rendered = renderAiPromptRevision(
+      activeRevision,
+      promptVariables(input.templateKey, input.variables, { requireTestValues: true }),
+    );
+    validateResolvedPromptLengths(rendered);
+    const variableSchema = getAiPromptVariableSchema(input.templateKey);
     return {
       templateKey: input.templateKey,
       release: {
@@ -279,55 +481,127 @@ export class AiPromptTemplateRegistryService {
         checksum: activeRevision.checksum,
         promptTemplate: activeRevision.promptTemplate,
         negativePromptTemplate: activeRevision.negativePromptTemplate,
+        outputMode: rendered.outputMode,
+        variableSchemaVersion: 1,
+        variableKeys: {
+          prompt: variableSchema.prompt.map((variable) => variable.inputKey),
+          negativePrompt: variableSchema.negativePrompt.map((variable) => variable.inputKey),
+        },
       },
       ...rendered,
     };
   }
 
   private async ensureSupportedTemplate(templateKey: string) {
-    if (templateKey !== DEFAULT_AI_IMAGE_TEMPLATE_KEY) {
+    if (!(templateKey in BUILTIN_TEMPLATE_DEFINITIONS)) {
       throw new AiPromptTemplateError(
         'TEMPLATE_NOT_FOUND',
         'AI prompt template is not supported',
       );
     }
-    await this.ensureDefaultTemplate();
+    await this.ensureTemplate(templateKey);
   }
 
-  private async ensureDefaultTemplate() {
-    if (!this.bootstrapPromise) {
-      this.bootstrapPromise = this.bootstrapDefaultTemplate()
+  private async ensureTemplate(templateKey: string) {
+    let promise = this.bootstrapPromises.get(templateKey);
+    if (!promise) {
+      promise = this.bootstrapTemplateKey(templateKey)
         .catch((error) => {
-          this.bootstrapPromise = null;
+          this.bootstrapPromises.delete(templateKey);
           throw error;
         });
+      this.bootstrapPromises.set(templateKey, promise);
     }
-    return this.bootstrapPromise;
+    return promise;
   }
 
-  private async bootstrapDefaultTemplate() {
+  private async bootstrapTemplateKey(templateKey: string) {
     const now = new Date().toISOString();
+    const definition = BUILTIN_TEMPLATE_DEFINITIONS[templateKey as keyof typeof BUILTIN_TEMPLATE_DEFINITIONS];
     await this.store.ensureTemplate({
-      key: DEFAULT_AI_IMAGE_TEMPLATE_KEY,
-      label: DEFAULT_TEMPLATE_LABEL,
+      key: templateKey,
+      label: definition.label,
       createdAt: now,
       updatedAt: now,
     });
-    if (await this.domain.getActiveRelease(DEFAULT_AI_IMAGE_TEMPLATE_KEY)) return;
+    if (await this.domain.getActiveRelease(templateKey)) return;
 
-    const initial = defaultPromptTemplate(await this.options.getLegacyPrompt());
-    const draft = await this.domain.createDraft({
-      templateKey: DEFAULT_AI_IMAGE_TEMPLATE_KEY,
-      promptTemplate: initial.promptTemplate,
-      negativePromptTemplate: DEFAULT_NEGATIVE_TEMPLATE,
-      note: initial.note,
-      actorUserId: BOOTSTRAP_ACTOR,
-    });
-    const run = await this.domain.recordTestRun({
-      revisionId: draft.id,
-      status: 'PASS',
-      actorUserId: BOOTSTRAP_ACTOR,
-    });
+    let template;
+    if (templateKey === DEFAULT_AI_IMAGE_TEMPLATE_KEY) {
+      const initial = defaultPromptTemplate(await this.options.getLegacyPrompt());
+      template = {
+        key: DEFAULT_AI_IMAGE_TEMPLATE_KEY,
+        promptTemplate: initial.promptTemplate,
+        negativePromptTemplate: DEFAULT_NEGATIVE_TEMPLATE,
+        note: initial.note,
+      };
+    } else if (templateKey === LISTING_COPY_TITLE_TEMPLATE_KEY) {
+      template = {
+        key: LISTING_COPY_TITLE_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_LISTING_TITLE_TEMPLATE,
+        negativePromptTemplate: DEFAULT_LISTING_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized as a fact-bound candidate-only listing title template',
+      };
+    } else {
+      template = {
+        key: LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_LISTING_DESCRIPTION_TEMPLATE,
+        negativePromptTemplate: DEFAULT_LISTING_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized as a fact-bound candidate-only listing description template',
+      };
+    }
+    await this.bootstrapTemplate(template);
+  }
+
+  private async bootstrapTemplate(input: {
+    key: string;
+    promptTemplate: string;
+    negativePromptTemplate: string;
+    note: string;
+  }) {
+    const revisionContent = {
+      templateKey: input.key,
+      promptTemplate: input.promptTemplate,
+      negativePromptTemplate: input.negativePromptTemplate,
+    };
+    const checksum = checksumAiPromptRevision(revisionContent);
+    const revisionId = `bootstrap:${input.key}:${checksum.slice(0, 24)}`;
+    const testRunId = `bootstrap-test:${input.key}:${checksum.slice(0, 24)}`;
+    let draft;
+    try {
+      draft = await this.domain.createDraft({
+        ...revisionContent,
+        revisionId,
+        note: input.note,
+        actorUserId: BOOTSTRAP_ACTOR,
+      });
+    } catch (error) {
+      const existing = await this.domain.getRevision(revisionId).catch(() => null);
+      if (!existing || existing.checksum !== checksum || existing.templateKey !== input.key) {
+        throw error;
+      }
+      draft = existing;
+    }
+    let run;
+    try {
+      run = await this.domain.recordTestRun({
+        revisionId: draft.id,
+        testRunId,
+        status: 'PASS',
+        actorUserId: BOOTSTRAP_ACTOR,
+      });
+    } catch (error) {
+      const existing = await this.store.getTestRun(testRunId);
+      if (
+        !existing
+        || existing.revisionId !== draft.id
+        || existing.revisionChecksum !== draft.checksum
+        || existing.status !== 'PASS'
+      ) {
+        throw error;
+      }
+      run = existing;
+    }
     try {
       await this.domain.publish({
         revisionId: draft.id,
@@ -336,14 +610,9 @@ export class AiPromptTemplateRegistryService {
         actorUserId: BOOTSTRAP_ACTOR,
       });
     } catch (error) {
-      if (
-        !(error instanceof AiPromptTemplateError)
-        || error.code !== 'RELEASE_SEQUENCE_CONFLICT'
-      ) {
-        throw error;
-      }
+      if (!await this.domain.getActiveRelease(input.key)) throw error;
     }
-    if (!await this.domain.getActiveRelease(DEFAULT_AI_IMAGE_TEMPLATE_KEY)) {
+    if (!await this.domain.getActiveRelease(input.key)) {
       throw new AiPromptTemplateError(
         'ACTIVE_RELEASE_NOT_FOUND',
         'AI prompt template initialization failed',

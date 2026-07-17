@@ -3,8 +3,61 @@ import { createHash, randomUUID } from 'node:crypto';
 export const AI_PROMPT_SAFETY_POLICY =
   "Preserve the product's identity. Do not invent product facts, certifications, logos, or visible claims.";
 
-const PROMPT_TOKEN = 'user_prompt';
-const NEGATIVE_PROMPT_TOKEN = 'user_negative_prompt';
+export const AI_LISTING_COPY_SAFETY_POLICY =
+  'Use only the supplied source facts and confirmed attributes. Do not invent specifications, certifications, brands, origins, compatibility, quantities, or commercial claims. Return a review candidate only; never represent it as approved or published.';
+
+export interface AiPromptVariableDefinition {
+  inputKey: string;
+  token: string;
+  requiredForTest: boolean;
+}
+
+export interface AiPromptVariableSchema {
+  prompt: readonly AiPromptVariableDefinition[];
+  negativePrompt: readonly AiPromptVariableDefinition[];
+  safetyPolicy: string;
+  outputMode: 'media_candidate' | 'listing_copy_candidate';
+}
+
+const AI_PROMPT_VARIABLE_SCHEMAS: Readonly<Record<string, AiPromptVariableSchema>> = {
+  'text-to-image.base': {
+    prompt: [{ inputKey: 'userPrompt', token: 'user_prompt', requiredForTest: true }],
+    negativePrompt: [{ inputKey: 'userNegativePrompt', token: 'user_negative_prompt', requiredForTest: false }],
+    safetyPolicy: AI_PROMPT_SAFETY_POLICY,
+    outputMode: 'media_candidate',
+  },
+  'listing-copy.title': {
+    prompt: [
+      { inputKey: 'sourceFactsJson', token: 'source_facts_json', requiredForTest: true },
+      { inputKey: 'ozonCategoryName', token: 'ozon_category_name', requiredForTest: true },
+      { inputKey: 'targetLanguage', token: 'target_language', requiredForTest: true },
+      { inputKey: 'userInstructions', token: 'user_instructions', requiredForTest: false },
+    ],
+    negativePrompt: [{ inputKey: 'forbiddenClaims', token: 'forbidden_claims', requiredForTest: false }],
+    safetyPolicy: AI_LISTING_COPY_SAFETY_POLICY,
+    outputMode: 'listing_copy_candidate',
+  },
+  'listing-copy.description': {
+    prompt: [
+      { inputKey: 'sourceFactsJson', token: 'source_facts_json', requiredForTest: true },
+      { inputKey: 'confirmedAttributesJson', token: 'confirmed_attributes_json', requiredForTest: true },
+      { inputKey: 'ozonCategoryName', token: 'ozon_category_name', requiredForTest: true },
+      { inputKey: 'targetLanguage', token: 'target_language', requiredForTest: true },
+      { inputKey: 'userInstructions', token: 'user_instructions', requiredForTest: false },
+    ],
+    negativePrompt: [{ inputKey: 'forbiddenClaims', token: 'forbidden_claims', requiredForTest: false }],
+    safetyPolicy: AI_LISTING_COPY_SAFETY_POLICY,
+    outputMode: 'listing_copy_candidate',
+  },
+};
+
+export function getAiPromptVariableSchema(templateKey: string): AiPromptVariableSchema {
+  const schema = AI_PROMPT_VARIABLE_SCHEMAS[templateKey];
+  if (!schema) {
+    throw new AiPromptTemplateError('TEMPLATE_NOT_FOUND', 'AI prompt template is not supported');
+  }
+  return schema;
+}
 
 export type AiPromptRevisionStatus = 'DRAFT' | 'PUBLISHED';
 export type AiPromptTestRunStatus = 'PASS' | 'FAIL';
@@ -94,7 +147,11 @@ function tokensIn(value: string): string[] {
   return [...value.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)].map((match) => match[1]!);
 }
 
-function validateTemplateTokens(value: string, requiredToken: string, field: string) {
+function validateTemplateTokens(
+  value: string,
+  variables: readonly AiPromptVariableDefinition[],
+  field: string,
+) {
   const withoutWellFormedTokens = value.replace(
     /\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g,
     '',
@@ -109,18 +166,21 @@ function validateTemplateTokens(value: string, requiredToken: string, field: str
     );
   }
   const tokens = tokensIn(value);
-  const unknown = tokens.find((token) => token !== requiredToken);
+  const allowedTokens = new Set(variables.map((variable) => variable.token));
+  const unknown = tokens.find((token) => !allowedTokens.has(token));
   if (unknown) {
     throw new AiPromptTemplateError(
       'UNKNOWN_TEMPLATE_TOKEN',
       `${field} contains unsupported token {{${unknown}}}`,
     );
   }
-  if (!tokens.includes(requiredToken)) {
-    throw new AiPromptTemplateError(
-      'MISSING_TEMPLATE_TOKEN',
-      `${field} must contain {{${requiredToken}}}`,
-    );
+  for (const variable of variables) {
+    if (!tokens.includes(variable.token)) {
+      throw new AiPromptTemplateError(
+        'MISSING_TEMPLATE_TOKEN',
+        `${field} must contain {{${variable.token}}}`,
+      );
+    }
   }
 }
 
@@ -130,10 +190,11 @@ export function validateAiPromptRevision(input: AiPromptRevisionContent): AiProm
     promptTemplate: requiredText(input?.promptTemplate, 'promptTemplate'),
     negativePromptTemplate: requiredText(input?.negativePromptTemplate, 'negativePromptTemplate'),
   };
-  validateTemplateTokens(revision.promptTemplate, PROMPT_TOKEN, 'promptTemplate');
+  const schema = getAiPromptVariableSchema(revision.templateKey);
+  validateTemplateTokens(revision.promptTemplate, schema.prompt, 'promptTemplate');
   validateTemplateTokens(
     revision.negativePromptTemplate,
-    NEGATIVE_PROMPT_TOKEN,
+    schema.negativePrompt,
     'negativePromptTemplate',
   );
   return revision;
@@ -148,22 +209,22 @@ function replaceToken(template: string, token: string, value: string): string {
 
 export function renderAiPromptRevision(
   input: AiPromptRevisionContent,
-  variables: { userPrompt: string; userNegativePrompt: string },
+  variables: Record<string, unknown>,
 ) {
   const revision = validateAiPromptRevision(input);
-  const renderedPrompt = replaceToken(
+  const schema = getAiPromptVariableSchema(revision.templateKey);
+  const renderedPrompt = schema.prompt.reduce(
+    (result, variable) => replaceToken(result, variable.token, String(variables?.[variable.inputKey] || '')),
     revision.promptTemplate,
-    PROMPT_TOKEN,
-    String(variables?.userPrompt || ''),
   );
-  const resolvedNegativePrompt = replaceToken(
+  const resolvedNegativePrompt = schema.negativePrompt.reduce(
+    (result, variable) => replaceToken(result, variable.token, String(variables?.[variable.inputKey] || '')),
     revision.negativePromptTemplate,
-    NEGATIVE_PROMPT_TOKEN,
-    String(variables?.userNegativePrompt || ''),
   );
   return {
-    resolvedPrompt: `${AI_PROMPT_SAFETY_POLICY}\n\n${renderedPrompt}`,
+    resolvedPrompt: `${schema.safetyPolicy}\n\n${renderedPrompt}`,
     resolvedNegativePrompt,
+    outputMode: schema.outputMode,
   };
 }
 
@@ -200,6 +261,9 @@ export class InMemoryAiPromptTemplateStore implements AiPromptTemplateStore {
   }
 
   async createRevision(revision: AiPromptRevision) {
+    if (this.revisions.has(revision.id)) {
+      throw new AiPromptTemplateError('REVISION_EXISTS', 'AI prompt revision already exists');
+    }
     this.revisions.set(revision.id, clone(revision));
     return clone(revision);
   }
@@ -236,6 +300,9 @@ export class InMemoryAiPromptTemplateStore implements AiPromptTemplateStore {
   }
 
   async createTestRun(testRun: AiPromptTestRun) {
+    if (this.testRuns.has(testRun.id)) {
+      throw new AiPromptTemplateError('TEST_RUN_EXISTS', 'AI prompt test run already exists');
+    }
     this.testRuns.set(testRun.id, clone(testRun));
     return clone(testRun);
   }
@@ -314,11 +381,14 @@ export class AiPromptTemplateService {
   async createDraft(input: AiPromptRevisionContent & {
     actorUserId: string;
     note?: string | null;
+    revisionId?: string;
   }) {
     const content = validateAiPromptRevision(input);
     const now = new Date().toISOString();
     return this.store.createRevision({
-      id: randomUUID(),
+      id: input.revisionId == null
+        ? randomUUID()
+        : requiredText(input.revisionId, 'revisionId'),
       ...content,
       note: typeof input.note === 'string' && input.note.trim() ? input.note.trim() : null,
       status: 'DRAFT',
@@ -361,13 +431,16 @@ export class AiPromptTemplateService {
     revisionId: string;
     status: AiPromptTestRunStatus;
     actorUserId: string;
+    testRunId?: string;
   }) {
     const revision = await this.requireRevision(input.revisionId);
     if (input.status !== 'PASS' && input.status !== 'FAIL') {
       throw new AiPromptTemplateError('INVALID_TEST_STATUS', 'Test status must be PASS or FAIL');
     }
     return this.store.createTestRun({
-      id: randomUUID(),
+      id: input.testRunId == null
+        ? randomUUID()
+        : requiredText(input.testRunId, 'testRunId'),
       revisionId: revision.id,
       revisionChecksum: revision.checksum,
       status: input.status,
