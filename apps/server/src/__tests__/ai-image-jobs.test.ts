@@ -160,6 +160,22 @@ describe('AI image job foundation', () => {
     }));
   });
 
+  it('rejects an unsupported paid-provider operation before provider submission', async () => {
+    const state = repository(job({
+      provider: 'openai-images', model: 'gpt-image-1', operation: 'IMAGE_TO_IMAGE',
+      inputAssets: [{ assetId: 'asset-1', role: 'REFERENCE', url: 'https://cdn.example/source.png' }],
+    }));
+    const provider = { name: 'openai-images', generate: vi.fn() };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(),
+    })).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION' });
+    expect(provider.generate).not.toHaveBeenCalled();
+    expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'UNSUPPORTED_OPERATION' });
+  });
+
   it('rejects disabled providers explicitly', async () => {
     await expect(createDisabledAiImageProvider().generate({
       prompt: 'x', negativePrompt: null, count: 1, width: 1024, height: 1024, model: '',
@@ -185,6 +201,17 @@ describe('AI image job foundation', () => {
       ownerUserId: 'owner-1', actorUserId: 'actor-1', idempotencyKey: null, prompt: 'photo',
       provider: 'fake', model: 'fake-image-v1', count: 1, width: 1024, height: 1024, estimatedCostCents: 4,
     }, { createWithQuota }, 5)).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+  });
+
+  it('rejects an unregistered provider before quota reservation', async () => {
+    const createWithQuota = vi.fn();
+
+    await expect(createAiImageJob({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', idempotencyKey: null, prompt: 'photo',
+      provider: 'unknown', model: 'x', count: 1, width: 1024, height: 1024, estimatedCostCents: 4,
+    }, { createWithQuota }, 5)).rejects.toMatchObject({ code: 'UNSUPPORTED_PROVIDER_MODEL' });
+
+    expect(createWithQuota).not.toHaveBeenCalled();
   });
 
   it('requires ownership, success, and an explicit append or replace mode before applying', async () => {

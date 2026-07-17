@@ -1,0 +1,12 @@
+{
+  "id": "identity-consistency-v1",
+  "kind": "evaluation-threshold-policy",
+  "status": "scaffold",
+  "description": "Threshold policy for a future product-identity evaluator; no media fixture is attached yet.",
+  "containsSecrets": false,
+  "assertions": {
+    "identityPreserved": true,
+    "maxReferenceCount": 1,
+    "manualReviewRequired": true
+  }
+}

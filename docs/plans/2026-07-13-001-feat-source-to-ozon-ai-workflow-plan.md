@@ -554,6 +554,8 @@ flowchart TB
 
 **Verification:** Each sub-gate has its own acceptance record: Unit 3 can begin with the marketplace record even if media remains undecided, and Units 7B-9C can begin with the media record even if CDP remains undecided.
 
+**Implementation evidence (2026-07-17):** A media capability foundation is present but the media sub-gate remains open. `ai-image-provider-capabilities.ts` distinguishes local-test, adapter-characterized and future sandbox-verified evidence; job creation rejects unregistered provider combinations before quota reservation and the worker revalidates operation/reference/mask rules before submission with typed permanent errors. The executable contract loads the TypeScript registry and validates three secret-free threshold-policy scaffolds. These policies are not media fixtures or quality results. No paid call, exact advanced-operation model acceptance, transport/cost evidence, real image evaluator or rollout activation was performed. The marketplace sub-gate also remains open; PDD/Taobao fixture capture and the CDP distribution decision still require measured real-page evidence.
+
 - [x] **Unit 1: Versioned Capture Contract and Complete Snapshot Persistence**
 
 **Goal:** Introduce an evidence-backed capture envelope and remove silent loss between extension and server.

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { AiMediaCapabilityError, assertAiMediaCapability } from './ai-image-provider-capabilities.js';
 
 export type AiImageJobStatus =
   | 'PENDING'
@@ -150,6 +151,11 @@ export class AiImageJobError extends Error {
   }
 }
 
+function capabilityJobError(error: unknown) {
+  if (error instanceof AiMediaCapabilityError) return new AiImageJobError(error.code, error.message);
+  return new AiImageJobError('UNSUPPORTED_OPERATION', error instanceof Error ? error.message : 'Unsupported AI media operation');
+}
+
 export function createDisabledAiImageProvider(): AiImageProvider {
   return {
     name: 'disabled',
@@ -206,8 +212,18 @@ export async function runAiImageJob(
   const claimed = await deps.repository.markRunning(job.id, attemptNumber);
   if (!claimed) return;
   try {
+    const operation = job.operation || 'TEXT_TO_IMAGE';
+    try {
+      assertAiMediaCapability({
+        provider: job.provider,
+        model: job.model,
+        operation,
+        inputCount: job.inputAssets?.filter((asset) => asset.role === 'REFERENCE').length || 0,
+        hasMask: Boolean(job.inputAssets?.some((asset) => asset.role === 'MASK')),
+      });
+    } catch (error) { throw capabilityJobError(error); }
     const generated = await deps.provider.generate({
-      operation: job.operation || 'TEXT_TO_IMAGE',
+      operation,
       prompt: job.resolvedPrompt ?? job.prompt,
       negativePrompt: job.resolvedNegativePrompt ?? job.negativePrompt,
       count: job.requestedImageCount,
@@ -249,7 +265,8 @@ export async function runAiImageJob(
     });
   } catch (error) {
     const details = { attemptCount: attemptNumber, ...errorDetails(error) };
-    if (attemptNumber < (deps.maxAttempts ?? job.maxAttempts)) await deps.repository.markRetrying(job.id, details);
+    const permanent = error instanceof AiImageJobError && ['UNSUPPORTED_PROVIDER_MODEL', 'UNSUPPORTED_OPERATION', 'INVALID_MEDIA_INPUT'].includes(error.code);
+    if (!permanent && attemptNumber < (deps.maxAttempts ?? job.maxAttempts)) await deps.repository.markRetrying(job.id, details);
     else await deps.repository.markFailed(job.id, details);
     throw error;
   }
@@ -264,6 +281,9 @@ export async function createAiImageJob(
   if (!Number.isInteger(input.count) || input.count < 1 || input.count > 4) {
     throw new AiImageJobError('INVALID_REQUEST', 'Image count must be between 1 and 4');
   }
+  try {
+    assertAiMediaCapability({ provider: input.provider, model: input.model, operation: 'TEXT_TO_IMAGE' });
+  } catch (error) { throw capabilityJobError(error); }
   const result = await repository.createWithQuota(input, dailyLimit);
   if (result.kind === 'quota-exceeded') {
     throw new AiImageJobError('QUOTA_EXCEEDED', `Daily image quota exceeded (${result.used}/${result.limit})`);

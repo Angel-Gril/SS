@@ -19,6 +19,11 @@ const steps = [
     args: ['--filter', 'web', 'typecheck'],
   },
   {
+    name: 'AI media provider foundation contract',
+    command: 'node',
+    args: ['scripts/ai-media-provider-contract.test.mjs'],
+  },
+  {
     name: 'server tests',
     command: 'pnpm',
     args: ['--filter', 'server', 'test'],

@@ -1,0 +1,11 @@
+{
+  "id": "chinese-residue-v1",
+  "kind": "evaluation-threshold-policy",
+  "status": "scaffold",
+  "description": "Threshold policy for a future Chinese-text residue evaluator; no media fixture is attached yet.",
+  "containsSecrets": false,
+  "assertions": {
+    "maxUntranslatedChineseRatio": 0.05,
+    "manualReviewRequired": true
+  }
+}

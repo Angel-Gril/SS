@@ -1,0 +1,12 @@
+{
+  "id": "russian-readability-v1",
+  "kind": "evaluation-threshold-policy",
+  "status": "scaffold",
+  "description": "Threshold policy for a future Cyrillic readability evaluator; no media fixture is attached yet.",
+  "containsSecrets": false,
+  "assertions": {
+    "language": "ru",
+    "minimumReadableTextScore": 0.9,
+    "manualReviewRequired": true
+  }
+}
