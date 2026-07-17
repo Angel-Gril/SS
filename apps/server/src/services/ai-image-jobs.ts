@@ -40,6 +40,7 @@ export interface AiImageJobRecord {
   actualCostCents: number | null;
   billedUnits: number;
   providerJobId: string | null;
+  providerDispatchedAt?: Date | null;
   errorCode: string | null;
   errorMessage: string | null;
   appliedMode?: 'append' | 'replace' | null;
@@ -94,10 +95,15 @@ export interface AiImageJobRepository {
   markRunning(id: string, attemptCount: number): Promise<boolean>;
   markRetrying(id: string, data: FailureUpdate): Promise<void>;
   markFailed(id: string, data: FailureUpdate): Promise<void>;
-  markCancelled(id: string): Promise<void>;
-  recordProviderJobId?(id: string, providerJobId: string): Promise<void>;
+  markEnqueueFailed?(id: string, data: FailureUpdate): Promise<boolean>;
+  markCancelled(id: string, data?: { providerSubmissionUncertain?: boolean }): Promise<void>;
+  markSubmissionUncertain?(id: string, data: FailureUpdate): Promise<void>;
+  recoverInterruptedJob?(id: string, data: FailureUpdate): Promise<'FAILED_PRE_DISPATCH' | 'SUBMISSION_UNCERTAIN' | null>;
+  recordProviderDispatchStarted?(id: string, providerDispatchedAt: Date): Promise<boolean>;
+  recordProviderJobId?(id: string, providerJobId: string, providerAcceptedAt?: Date): Promise<void>;
   complete(id: string, data: {
     providerJobId: string | null;
+    providerResultReceivedWithoutIdentity?: boolean;
     actualCostCents: number;
     billedUnits: number;
     assets: AiImageAssetInput[];
@@ -111,6 +117,10 @@ interface FailureUpdate {
   attemptCount: number;
   errorCode: string;
   errorMessage: string;
+  providerJobId?: string;
+  providerAcceptedAt?: Date;
+  providerSubmissionUncertain?: boolean;
+  providerSubmissionRejected?: boolean;
 }
 
 export interface CreateAiImageJobInput {
@@ -181,10 +191,34 @@ function extensionForMime(mimeType: string) {
   return 'png';
 }
 
-function errorDetails(error: unknown): Pick<FailureUpdate, 'errorCode' | 'errorMessage'> {
-  if (error instanceof AiImageJobError) return { errorCode: error.code, errorMessage: error.message };
-  if (error instanceof Error) return { errorCode: 'PROVIDER_ERROR', errorMessage: error.message };
-  return { errorCode: 'PROVIDER_ERROR', errorMessage: String(error) };
+function errorDetails(error: unknown): Omit<FailureUpdate, 'attemptCount'> {
+  const candidate = error && typeof error === 'object'
+    ? error as {
+      providerJobId?: unknown;
+      providerAcceptedAt?: unknown;
+      providerSubmissionUncertain?: unknown;
+      providerSubmissionRejected?: unknown;
+    }
+    : {};
+  const providerJobId = typeof candidate.providerJobId === 'string' && candidate.providerJobId.trim()
+    ? candidate.providerJobId.trim()
+    : undefined;
+  const providerAcceptedAt = candidate.providerAcceptedAt instanceof Date
+    && !Number.isNaN(candidate.providerAcceptedAt.getTime())
+    ? candidate.providerAcceptedAt
+    : undefined;
+  const details = error instanceof AiImageJobError
+    ? { errorCode: error.code, errorMessage: error.message }
+    : error instanceof Error
+      ? { errorCode: 'PROVIDER_ERROR', errorMessage: error.message }
+      : { errorCode: 'PROVIDER_ERROR', errorMessage: String(error) };
+  return {
+    ...details,
+    ...(providerJobId ? { providerJobId } : {}),
+    ...(providerAcceptedAt ? { providerAcceptedAt } : {}),
+    ...(candidate.providerSubmissionUncertain === true ? { providerSubmissionUncertain: true } : {}),
+    ...(candidate.providerSubmissionRejected === true ? { providerSubmissionRejected: true } : {}),
+  };
 }
 
 export async function runAiImageJob(
@@ -212,6 +246,9 @@ export async function runAiImageJob(
 
   const claimed = await deps.repository.markRunning(job.id, attemptNumber);
   if (!claimed) return;
+  let acceptedProviderEvidence: Pick<FailureUpdate, 'providerJobId' | 'providerAcceptedAt'> = {};
+  let paidProviderResultReceived = false;
+  let providerDispatchStarted = false;
   try {
     const operation = job.operation || 'TEXT_TO_IMAGE';
     try {
@@ -223,6 +260,18 @@ export async function runAiImageJob(
         hasMask: Boolean(job.inputAssets?.some((asset) => asset.role === 'MASK')),
       });
     } catch (error) { throw capabilityJobError(error); }
+    const paidProviderInvocation = job.provider !== 'fake' && deps.provider.name !== 'disabled';
+    if (paidProviderInvocation && deps.repository.recordProviderDispatchStarted) {
+      const dispatchFenced = await deps.repository.recordProviderDispatchStarted(job.id, new Date());
+      if (!dispatchFenced) {
+        const latest = await deps.repository.getById(job.id);
+        if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
+          await deps.repository.markCancelled(job.id);
+        }
+        return;
+      }
+    }
+    providerDispatchStarted = paidProviderInvocation;
     const generated = await deps.provider.generate({
       operation,
       prompt: job.resolvedPrompt ?? job.prompt,
@@ -233,11 +282,32 @@ export async function runAiImageJob(
       model: job.model,
       inputAssets: job.inputAssets || undefined,
     });
+    paidProviderResultReceived = job.provider !== 'fake' && deps.provider.name !== 'disabled';
+    if (generated.providerJobId) {
+      const providerAcceptedAt = new Date();
+      acceptedProviderEvidence = { providerJobId: generated.providerJobId, providerAcceptedAt };
+      if (deps.repository.recordProviderJobId) {
+        try {
+          await deps.repository.recordProviderJobId(job.id, generated.providerJobId, providerAcceptedAt);
+        } catch (error) {
+          const acceptedError = error instanceof Error ? error : new Error(String(error));
+          throw Object.assign(acceptedError, {
+            providerJobId: generated.providerJobId,
+            providerAcceptedAt,
+          });
+        }
+      }
+    }
     const latest = await deps.repository.getById(job.id);
     if (latest?.status === 'CANCEL_REQUESTED' || latest?.status === 'CANCELLED') {
-      await deps.repository.markCancelled(job.id);
+      const cancellationEvidence = paidProviderResultReceived && !acceptedProviderEvidence.providerJobId
+        ? { providerSubmissionUncertain: true }
+        : undefined;
+      if (cancellationEvidence) await deps.repository.markCancelled(job.id, cancellationEvidence);
+      else await deps.repository.markCancelled(job.id);
       return;
     }
+    if (!latest || latest.status !== 'RUNNING') return;
 
     const assets: AiImageAssetInput[] = [];
     for (const image of generated.images) {
@@ -260,13 +330,33 @@ export async function runAiImageJob(
     if (assets.length === 0) throw new AiImageJobError('EMPTY_RESULT', 'Provider returned no images');
     await deps.repository.complete(job.id, {
       providerJobId: generated.providerJobId || null,
+      providerResultReceivedWithoutIdentity: paidProviderResultReceived && !generated.providerJobId,
       actualCostCents: generated.actualCostCents ?? job.estimatedCostCents,
       billedUnits: assets.length,
       assets,
     });
   } catch (error) {
-    const details = { attemptCount: attemptNumber, ...errorDetails(error) };
-    const permanent = error instanceof AiImageJobError && ['UNSUPPORTED_PROVIDER_MODEL', 'UNSUPPORTED_OPERATION', 'INVALID_MEDIA_INPUT'].includes(error.code);
+    const details = {
+      attemptCount: attemptNumber,
+      ...acceptedProviderEvidence,
+      ...errorDetails(error),
+    };
+    if ((details.providerSubmissionUncertain
+      || paidProviderResultReceived
+      || (providerDispatchStarted && details.providerSubmissionRejected !== true))
+      && !details.providerJobId) {
+      const uncertainDetails = { ...details, providerSubmissionUncertain: true };
+      if (deps.repository.markSubmissionUncertain) {
+        await deps.repository.markSubmissionUncertain(job.id, uncertainDetails);
+      } else {
+        await deps.repository.markFailed(job.id, uncertainDetails);
+      }
+      throw error;
+    }
+    const permanent = Boolean(details.providerJobId)
+      || details.providerSubmissionRejected === true
+      || (error instanceof AiImageJobError
+        && ['UNSUPPORTED_PROVIDER_MODEL', 'UNSUPPORTED_OPERATION', 'INVALID_MEDIA_INPUT'].includes(error.code));
     if (!permanent && attemptNumber < (deps.maxAttempts ?? job.maxAttempts)) await deps.repository.markRetrying(job.id, details);
     else await deps.repository.markFailed(job.id, details);
     throw error;

@@ -67,6 +67,8 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
       negativePrompt: null, count: 1, width: 1024, height: 1024,
       idempotencyKey: `create-${suffix}`, context: { type: 'collect', id: goodsId },
     });
+    expect(await client!.aiCostReservation.findUnique({ where: { jobId: created.jobId } }))
+      .toMatchObject({ status: 'RESERVED', estimatedCostMinor: 0, maximumCostMinor: 0 });
     await expect(client!.aiMediaWorkflow.update({
       where: { id: created.workflow.id }, data: { contextSlotKey: 'tampered-slot' },
     })).rejects.toThrow(/workflow identity is immutable/i);
@@ -110,6 +112,13 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     });
     const succeeded = await workflowService.get(created.workflow.id, ownerUserId);
     expect(succeeded).toMatchObject({ status: 'SUCCEEDED', reviewStatus: 'PENDING' });
+    const settledCost = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { jobId: created.jobId }, include: { settlements: true },
+    });
+    expect(settledCost).toMatchObject({ status: 'SETTLED' });
+    expect(settledCost.settlements).toEqual([expect.objectContaining({
+      kind: 'CHARGE', actualCostMinor: 0, billedUnits: 1,
+    })]);
     const output = (succeeded.jobs?.[0] as any)?.assets?.[0];
     expect(output?.id).toBeTruthy();
     expect(await client!.mediaAssetLineage.count({ where: {
@@ -184,6 +193,72 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     const cancelled = await workflowService.get(running.id, ownerUserId);
     expect(cancelled.status).toBe('CANCELLED');
     expect(await client!.mediaAsset.count({ where: { aiImageJobId: cancelling.jobId } })).toBe(0);
+    const cancellingCost = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { jobId: cancelling.jobId }, include: { settlements: true },
+    });
+    expect(cancellingCost).toMatchObject({
+      status: 'RECONCILIATION_REQUIRED', providerRequestId: `provider-task-${suffix}`,
+    });
+    expect(cancellingCost.providerAcceptedAt).toBeInstanceOf(Date);
+    expect(cancellingCost.settlements).toEqual([expect.objectContaining({
+      kind: 'RECONCILIATION_REQUIRED', actualCostMinor: null,
+    })]);
+
+    const interrupted = await workflowService.createImageToImage({
+      ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Interrupted provider recovery',
+      negativePrompt: null, count: 1, width: 1024, height: 1024,
+      idempotencyKey: `interrupted-${suffix}`, context: { type: 'collect', id: goodsId },
+    });
+    await jobRepository.markRunning(interrupted.jobId, 1);
+    const interruptedProviderJobId = `provider-interrupted-${suffix}`;
+    await jobRepository.recordProviderJobId(interrupted.jobId, interruptedProviderJobId);
+    const acceptanceEvent = await client!.aiMediaWorkflowEvent.findUniqueOrThrow({
+      where: { eventKey: `${interrupted.workflow.id}:PROVIDER_SUBMITTED:${interrupted.jobId}:1` },
+    });
+    const providerAcceptedAt = new Date(String((acceptanceEvent.payload as any).providerAcceptedAt));
+    await jobRepository.markFailed(interrupted.jobId, {
+      attemptCount: 2,
+      errorCode: 'PROVIDER_RECOVERY_REQUIRED',
+      errorMessage: 'worker interrupted after provider acceptance',
+      providerJobId: interruptedProviderJobId,
+    });
+    expect(await client!.aiImageJob.findUnique({ where: { id: interrupted.jobId } }))
+      .toMatchObject({ status: 'FAILED', providerJobId: interruptedProviderJobId });
+    expect(await workflowService.get(interrupted.workflow.id, ownerUserId))
+      .toMatchObject({ status: 'FAILED', reviewStatus: 'NOT_READY' });
+    const interruptedCost = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { jobId: interrupted.jobId }, include: { settlements: true },
+    });
+    expect(interruptedCost).toMatchObject({
+      status: 'RECONCILIATION_REQUIRED',
+      providerRequestId: interruptedProviderJobId,
+      providerAcceptedAt,
+    });
+    expect(interruptedCost.settlements).toEqual([expect.objectContaining({
+      kind: 'RECONCILIATION_REQUIRED', idempotencyKey: `${interrupted.jobId}:cost:unknown`,
+    })]);
+
+    const missingEvidence = await workflowService.createImageToImage({
+      ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Missing provider evidence',
+      negativePrompt: null, count: 1, width: 1024, height: 1024,
+      idempotencyKey: `missing-evidence-${suffix}`, context: { type: 'collect', id: goodsId },
+    });
+    await jobRepository.markRunning(missingEvidence.jobId, 1);
+    await client!.aiImageJob.update({
+      where: { id: missingEvidence.jobId },
+      data: { providerJobId: `provider-without-event-${suffix}` },
+    });
+    await expect(jobRepository.markFailed(missingEvidence.jobId, {
+      attemptCount: 2,
+      errorCode: 'PROVIDER_RECOVERY_REQUIRED',
+      errorMessage: 'provider identity has no acceptance event',
+    })).rejects.toMatchObject({ code: 'PROVIDER_ACCEPTANCE_EVIDENCE_MISSING' });
+    expect(await client!.aiImageJob.findUnique({ where: { id: missingEvidence.jobId } }))
+      .toMatchObject({ status: 'RUNNING', providerJobId: `provider-without-event-${suffix}` });
+    expect(await client!.aiCostReservation.findUnique({ where: { jobId: missingEvidence.jobId } }))
+      .toMatchObject({ status: 'RESERVED' });
+    expect(await client!.aiCostSettlement.count({ where: { reservation: { jobId: missingEvidence.jobId } } }))
+      .toBe(0);
 
     const retrying = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Retry idempotency race',
@@ -193,6 +268,8 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     await jobRepository.markFailed(retrying.jobId, {
       attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'integration retry fixture',
     });
+    expect(await client!.aiCostReservation.findUnique({ where: { jobId: retrying.jobId } }))
+      .toMatchObject({ status: 'RELEASED' });
     const failed = await workflowService.get(retrying.workflow.id, ownerUserId);
     const retryInput = {
       id: failed.id, ownerUserId, actorUserId: ownerUserId,
@@ -204,6 +281,11 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     ]);
     expect(new Set(retries.map((result) => result.jobId)).size).toBe(1);
     expect(retries.some((result) => result.replayed)).toBe(true);
+    expect(await client!.aiCostReservation.count({ where: {
+      workflowId: retrying.workflow.id,
+    } })).toBe(2);
+    expect(await client!.aiCostReservation.findUnique({ where: { jobId: retries[0]!.jobId } }))
+      .toMatchObject({ status: 'RESERVED' });
 
     const competing = await workflowService.createImageToImage({
       ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Competing retry keys',
@@ -228,5 +310,90 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
     expect(competingRetries.find((result) => result.status === 'rejected')).toMatchObject({
       status: 'rejected', reason: { code: 'RECOVERY_REQUIRED' },
     });
+
+    const enqueueRace = await workflowService.createImageToImage({
+      ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Enqueue acknowledgement race',
+      negativePrompt: null, count: 1, width: 1024, height: 1024,
+      idempotencyKey: `enqueue-race-${suffix}`, context: { type: 'collect', id: goodsId },
+    });
+    const enqueueRaceResults = await Promise.all([
+      jobRepository.markRunning(enqueueRace.jobId, 1),
+      jobRepository.markEnqueueFailed(enqueueRace.jobId, {
+        attemptCount: 0,
+        errorCode: 'QUEUE_UNAVAILABLE',
+        errorMessage: 'queue acknowledgement lost',
+      }),
+    ]);
+    expect(enqueueRaceResults.filter(Boolean)).toHaveLength(1);
+    const enqueueRaceJob = await client!.aiImageJob.findUniqueOrThrow({ where: { id: enqueueRace.jobId } });
+    const enqueueRaceWorkflow = await workflowService.get(enqueueRace.workflow.id, ownerUserId);
+    const enqueueRaceCost = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { jobId: enqueueRace.jobId },
+    });
+    if (enqueueRaceJob.status === 'RUNNING') {
+      expect(enqueueRaceWorkflow.status).toBe('RUNNING');
+      expect(enqueueRaceCost.status).toBe('RESERVED');
+    } else {
+      expect(enqueueRaceJob).toMatchObject({ status: 'FAILED', errorCode: 'QUEUE_UNAVAILABLE' });
+      expect(enqueueRaceWorkflow.status).toBe('FAILED');
+      expect(enqueueRaceCost.status).toBe('RELEASED');
+    }
+
+    const completionRace = await workflowService.createImageToImage({
+      ownerUserId, actorUserId: ownerUserId, sourceAssetId, prompt: 'Completion cancellation race',
+      negativePrompt: null, count: 1, width: 1024, height: 1024,
+      idempotencyKey: `completion-race-${suffix}`, context: { type: 'collect', id: goodsId },
+    });
+    await jobRepository.markRunning(completionRace.jobId, 1);
+    const runningCompletionRace = await workflowService.get(completionRace.workflow.id, ownerUserId);
+    await Promise.allSettled([
+      workflowService.cancel(
+        runningCompletionRace.id,
+        ownerUserId,
+        ownerUserId,
+        runningCompletionRace.revision,
+      ),
+      jobRepository.complete(completionRace.jobId, {
+        providerJobId: null,
+        actualCostCents: 0,
+        billedUnits: 1,
+        assets: [{
+          ownerUserId,
+          jobId: completionRace.jobId,
+          url: `/uploads/completion-race-${suffix}.png`,
+          storageBackend: 'local',
+          storageKey: `completion-race-${suffix}.png`,
+          mimeType: 'image/png',
+          sizeBytes: 68,
+          sha256: 'e'.repeat(64),
+        }],
+      }),
+    ]);
+    const completionRaceJob = await client!.aiImageJob.findUniqueOrThrow({
+      where: { id: completionRace.jobId },
+    });
+    const completionRaceWorkflow = await workflowService.get(completionRace.workflow.id, ownerUserId);
+    const completionRaceCost = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { jobId: completionRace.jobId }, include: { settlements: true },
+    });
+    const completionRaceAssetCount = await client!.mediaAsset.count({
+      where: { aiImageJobId: completionRace.jobId },
+    });
+    if (completionRaceJob.status === 'SUCCEEDED') {
+      expect(completionRaceWorkflow.status).toBe('SUCCEEDED');
+      expect(completionRaceCost.status).toBe('SETTLED');
+      expect(completionRaceCost.settlements).toEqual([
+        expect.objectContaining({ kind: 'CHARGE', billedUnits: 1 }),
+      ]);
+      expect(completionRaceAssetCount).toBe(1);
+    } else {
+      expect(completionRaceJob.status).toBe('CANCELLED');
+      expect(completionRaceWorkflow.status).toBe('CANCELLED');
+      expect(completionRaceCost.status).toBe('RELEASED');
+      expect(completionRaceCost.settlements).toEqual([
+        expect.objectContaining({ kind: 'RELEASE', billedUnits: 0 }),
+      ]);
+      expect(completionRaceAssetCount).toBe(0);
+    }
   });
 });

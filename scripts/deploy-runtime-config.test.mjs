@@ -21,7 +21,7 @@ assert.match(
   'app-dir deploy should run runtime config diagnostics in pre-switch mode',
 );
 
-const migrateIndex = deployAppDir.indexOf('npx prisma generate && npx prisma migrate deploy');
+const migrateIndex = deployAppDir.indexOf('npx prisma migrate deploy');
 const diagnosticsIndex = deployAppDir.indexOf('diagnose-runtime-env.sh');
 assert.ok(migrateIndex >= 0, 'app-dir deploy should still run Prisma migration');
 assert.ok(diagnosticsIndex > migrateIndex, 'runtime config diagnostics must run after Prisma migration');

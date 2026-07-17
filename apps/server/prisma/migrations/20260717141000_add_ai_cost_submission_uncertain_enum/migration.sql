@@ -1,0 +1,8 @@
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '15min';
+
+ALTER TYPE "AiCostReservationStatus" ADD VALUE IF NOT EXISTS 'SUBMISSION_UNCERTAIN';
+ALTER TYPE "AiCostSettlementKind" ADD VALUE IF NOT EXISTS 'SUBMISSION_UNCERTAIN';
+
+COMMIT;

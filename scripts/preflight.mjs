@@ -29,6 +29,11 @@ const steps = [
     args: ['scripts/ai-media-evaluation-contract.test.mjs'],
   },
   {
+    name: 'AI provider dispatch deployment safety contract',
+    command: 'node',
+    args: ['scripts/ai-provider-dispatch-deploy-safety.test.mjs'],
+  },
+  {
     name: 'source marketplace network contract',
     command: 'node',
     args: ['scripts/source-marketplace-contract.test.mjs'],

@@ -10,6 +10,18 @@ import {
   type CreateAiMediaWorkflowInput,
 } from '../services/ai-media-workflows.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
+import {
+  releaseAiCostInTransaction,
+  reserveAiCostInTransaction,
+} from '../services/ai-cost-ledger.js';
+
+function costReservationIdempotencyKey(jobId: string) {
+  return `${jobId}:cost:reserve`;
+}
+
+function costReleaseIdempotencyKey(jobId: string) {
+  return `${jobId}:cost:release`;
+}
 
 function workflowRecord(row: any): AiMediaWorkflowRecord {
   return row as AiMediaWorkflowRecord;
@@ -31,7 +43,10 @@ function eventData(input: {
 
 const detailInclude = {
   inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
-  jobs: { include: { assets: true }, orderBy: { workflowAttempt: 'asc' } },
+  jobs: {
+    include: { assets: true, costReservation: { select: { status: true } } },
+    orderBy: { workflowAttempt: 'asc' },
+  },
   events: { orderBy: { createdAt: 'asc' }, take: 200 },
 } as const;
 
@@ -167,6 +182,20 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         })),
         estimatedCostCents: 0,
       } });
+      await reserveAiCostInTransaction(tx, {
+        ownerUserId: input.ownerUserId,
+        actorUserId: input.actorUserId,
+        workflowId: workflow.id,
+        jobId: job.id,
+        idempotencyKey: costReservationIdempotencyKey(job.id),
+        requestFingerprint: fingerprint,
+        provider: AI_MEDIA_WORKFLOW_PROVIDER,
+        model: AI_MEDIA_WORKFLOW_MODEL,
+        operation: 'IMAGE_TO_IMAGE',
+        currency: 'USD',
+        estimatedCostMinor: 0,
+        maximumCostMinor: 0,
+      });
       await tx.aiMediaWorkflowEvent.create({ data: eventData({
         workflowId: workflow.id, ownerUserId: input.ownerUserId, actorUserId: input.actorUserId,
         jobId: job.id, eventKey: `${workflow.id}:created`, eventType: 'CREATED',
@@ -219,7 +248,11 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
       },
       include: {
         inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
-        jobs: { include: { assets: true }, orderBy: { workflowAttempt: 'desc' }, take: 1 },
+        jobs: {
+          include: { assets: true, costReservation: { select: { status: true } } },
+          orderBy: { workflowAttempt: 'desc' },
+          take: 1,
+        },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: input.limit,
@@ -249,6 +282,23 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         ...(status === 'CANCELLED' ? { completedAt: new Date() } : {}),
       } });
       if (active) await tx.aiImageJob.update({ where: { id: active.id }, data: { status } });
+      if (active && status === 'CANCELLED') {
+        const reservation = await tx.aiCostReservation.findUnique({
+          where: { ai_cost_reservation_job_owner: { jobId: active.id, ownerUserId } },
+        });
+        if (reservation) {
+          await releaseAiCostInTransaction(tx, {
+            reservationId: reservation.id,
+            ownerUserId,
+            actorUserId,
+            idempotencyKey: costReleaseIdempotencyKey(active.id),
+            requestFingerprint: reservation.requestFingerprint,
+            actualCostMinor: 0,
+            billedUnits: 0,
+            reason: 'cancelled before provider submission',
+          });
+        }
+      }
       await tx.aiMediaWorkflowEvent.create({ data: eventData({
         workflowId: id, ownerUserId, actorUserId, jobId: active?.id,
         eventKey: `${id}:cancel:${expectedRevision}`, eventType: status,
@@ -270,7 +320,17 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         const workflow = await tx.aiMediaWorkflow.findFirst({ where: { id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision } });
         if (!workflow || workflow.status !== 'FAILED') return null;
         const previous = await tx.aiImageJob.findFirst({ where: { workflowId: input.id, workflowAttempt: workflow.currentAttempt } });
-        if (!previous || previous.providerJobId) return null;
+        if (!previous) return null;
+        const previousCost = tx.aiCostReservation?.findUnique
+          ? await tx.aiCostReservation.findUnique({ where: {
+            ai_cost_reservation_job_owner: { jobId: previous.id, ownerUserId: previous.ownerUserId },
+          } })
+          : null;
+        if (previousCost) {
+          if (!['SETTLED', 'RELEASED'].includes(previousCost.status)) return null;
+        } else if (previous.providerJobId || previous.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN') {
+          return null;
+        }
         const attempt = workflow.currentAttempt + 1;
         const job = await tx.aiImageJob.create({ data: {
           ownerUserId: previous.ownerUserId, actorUserId: input.actorUserId,
@@ -284,6 +344,20 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           requestedImageCount: previous.requestedImageCount, width: previous.width, height: previous.height,
           maxAttempts: 1, idempotencyKey: `${workflow.id}:attempt:${attempt}`, estimatedCostCents: 0,
         } });
+        await reserveAiCostInTransaction(tx, {
+          ownerUserId: previous.ownerUserId,
+          actorUserId: input.actorUserId,
+          workflowId: input.id,
+          jobId: job.id,
+          idempotencyKey: costReservationIdempotencyKey(job.id),
+          requestFingerprint: previous.requestFingerprint,
+          provider: previous.provider,
+          model: previous.model,
+          operation: previous.operation,
+          currency: 'USD',
+          estimatedCostMinor: 0,
+          maximumCostMinor: 0,
+        });
         await tx.aiMediaWorkflow.update({ where: { id: input.id }, data: {
           status: 'QUEUED', reviewStatus: 'NOT_READY', selectedOutputAssetId: null,
           currentAttempt: attempt, revision: { increment: 1 }, completedAt: null,

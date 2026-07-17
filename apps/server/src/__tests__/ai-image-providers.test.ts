@@ -9,10 +9,10 @@ import {
 const png = Buffer.from('89504e470d0a1a0a', 'hex');
 const webp = Buffer.from('524946460400000057454250', 'hex');
 
-function json(body: unknown, status = 200) {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extraHeaders },
   });
 }
 
@@ -41,7 +41,7 @@ describe('AI image provider adapters', () => {
     });
 
     expect(result).toMatchObject({ providerJobId: 'task-1', actualCostCents: 6 });
-    expect(onProviderJobCreated).toHaveBeenCalledWith('task-1');
+    expect(onProviderJobCreated).toHaveBeenCalledWith('task-1', expect.any(Date));
     expect(result.images).toEqual([{ buffer: png, mimeType: 'image/png', filename: 'dashscope-task-1-1.png' }]);
     expect(fetch).toHaveBeenNthCalledWith(1,
       'https://dashscope.example/api/v1/services/aigc/text2image/image-synthesis',
@@ -68,6 +68,30 @@ describe('AI image provider adapters', () => {
       'https://temp.example/1.png',
       expect.objectContaining({ method: 'GET', redirect: 'error', signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it('preserves provider acceptance evidence when the DashScope callback cannot persist it', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      output: { task_id: 'task-accepted', task_status: 'PENDING' },
+    }));
+    const onProviderJobCreated = vi.fn(async () => {
+      throw new Error('database unavailable');
+    });
+    const provider = createDashScopeWanxProvider({
+      baseUrl: 'https://dashscope.example', apiKey: 'secret', model: 'wanx-v1', fetch,
+      pollIntervalMs: 0, timeoutMs: 1000, onProviderJobCreated,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'wanx-v1',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_ACCEPTED_PERSISTENCE_FAILED',
+      providerJobId: 'task-accepted',
+      providerAcceptedAt: expect.any(Date),
+    });
+    expect(onProviderJobCreated).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it('keeps the DashScope temporary URL download inside the asynchronous task deadline', async () => {
@@ -142,9 +166,10 @@ describe('AI image provider adapters', () => {
         data: [{ url: 'https://temp.example/2.webp' }],
       }))
       .mockResolvedValueOnce(new Response(webp, { headers: { 'content-type': 'image/webp' } }));
+    const onProviderJobCreated = vi.fn(async () => undefined);
     const provider = createOpenAiImagesProvider({
       baseUrl: 'https://api.openai.example/v1', apiKey: 'openai-secret', model: 'gpt-image-1', fetch,
-      timeoutMs: 1000, costPerImageCents: 9,
+      timeoutMs: 1000, costPerImageCents: 9, onProviderJobCreated,
     });
 
     const result = await provider.generate({
@@ -165,8 +190,168 @@ describe('AI image provider adapters', () => {
       'https://temp.example/2.webp',
       expect.objectContaining({ method: 'GET', redirect: 'error', signal: expect.any(AbortSignal) }),
     );
+    expect(onProviderJobCreated).toHaveBeenCalledWith('response-url', expect.any(Date));
+    expect(onProviderJobCreated.mock.invocationCallOrder[0])
+      .toBeLessThan(fetch.mock.invocationCallOrder[1]!);
     const request = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
     expect(request).toEqual({ model: 'gpt-image-1', prompt: 'photo', n: 1, size: '1024x1024' });
+  });
+
+  it('uses an OpenAI response request id when the body has no provider identity', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      data: [{ b64_json: png.toString('base64') }],
+    }, 200, { 'x-request-id': 'request-from-header' }));
+    const onProviderJobCreated = vi.fn(async () => undefined);
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000, onProviderJobCreated,
+    });
+
+    const result = await provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    });
+
+    expect(result.providerJobId).toBe('request-from-header');
+    expect(onProviderJobCreated).toHaveBeenCalledWith('request-from-header', expect.any(Date));
+  });
+
+  it('marks a definite provider client rejection as safe to release', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({ error: { code: 'invalid_request' } }, 400));
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_REQUEST_FAILED',
+      providerSubmissionRejected: true,
+    });
+  });
+
+  it('keeps an oversized DashScope client error classified as a definite rejection', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(new Response('rejected', {
+      status: 400,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(33 * 1024 * 1024),
+      },
+    }));
+    const provider = createDashScopeWanxProvider({
+      baseUrl: 'https://dashscope.example', apiKey: 'secret', model: 'wanx-v1', fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'wanx-v1',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_REQUEST_FAILED',
+      providerSubmissionRejected: true,
+    });
+  });
+
+  it('rejects a non-string OpenAI provider identity instead of inventing one', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      id: { unexpected: 'object' },
+      data: [{ b64_json: png.toString('base64') }],
+    }));
+    const onProviderJobCreated = vi.fn(async () => undefined);
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000, onProviderJobCreated,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    })).rejects.toMatchObject({
+      code: 'INVALID_PROVIDER_RESULT',
+      providerSubmissionUncertain: true,
+    });
+    expect(onProviderJobCreated).not.toHaveBeenCalled();
+  });
+
+  it('keeps a definite client rejection even when its request id header is invalid', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json(
+      { error: { code: 'invalid_request' } },
+      400,
+      { 'x-request-id': 'x'.repeat(501) },
+    ));
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_REQUEST_FAILED',
+      providerSubmissionRejected: true,
+    });
+  });
+
+  it('prefers a valid response body identity over an invalid fallback header identity', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      id: 'valid-body-id',
+      data: [{ b64_json: png.toString('base64') }],
+    }, 200, { 'x-request-id': 'x'.repeat(501) }));
+    const onProviderJobCreated = vi.fn(async () => undefined);
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000, onProviderJobCreated,
+    });
+
+    const result = await provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    });
+
+    expect(result.providerJobId).toBe('valid-body-id');
+    expect(onProviderJobCreated).toHaveBeenCalledWith('valid-body-id', expect.any(Date));
+  });
+
+  it.each([
+    ['server failure', () => json({ error: { code: 'internal_error' } }, 500), 'PROVIDER_REQUEST_FAILED'],
+    ['network timeout', () => Promise.reject(new DOMException('aborted', 'AbortError')), 'PROVIDER_TIMEOUT'],
+  ])('quarantines an ambiguous OpenAI %s after dispatch', async (_label, response, code) => {
+    const fetch = vi.fn().mockImplementationOnce(response);
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    })).rejects.toMatchObject({
+      code,
+      providerSubmissionUncertain: true,
+    });
+  });
+
+  it('returns a successful OpenAI result without inventing a provider identity', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      data: [{ b64_json: png.toString('base64') }],
+    }));
+    const onProviderJobCreated = vi.fn(async () => undefined);
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000, onProviderJobCreated,
+    });
+
+    const result = await provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    });
+
+    expect(result.providerJobId).toBeNull();
+    expect(result.images).toHaveLength(1);
+    expect(onProviderJobCreated).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -202,7 +387,30 @@ describe('AI image provider adapters', () => {
 
     await expect(provider.generate({
       prompt: 'photo', negativePrompt: null, count: 1, width: 1024, height: 1024, model: 'wanx-v1',
-    })).rejects.toMatchObject({ code: 'PROVIDER_TIMEOUT' });
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_TIMEOUT',
+      providerJobId: 'task-timeout',
+      providerAcceptedAt: expect.any(Date),
+    });
+  });
+
+  it('preserves an OpenAI response identity when temporary image download fails', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(json({ id: 'response-download-failed', data: [{ url: 'https://temp.example/fail.png' }] }))
+      .mockRejectedValueOnce(new Error('temporary URL unavailable'));
+    const onProviderJobCreated = vi.fn(async () => undefined);
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000, onProviderJobCreated,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1, width: 1024, height: 1024, model: 'gpt-image-1',
+    })).rejects.toMatchObject({
+      providerJobId: 'response-download-failed',
+      providerAcceptedAt: expect.any(Date),
+    });
+    expect(onProviderJobCreated).toHaveBeenCalledWith('response-download-failed', expect.any(Date));
   });
 
   it('never includes an API key in provider errors', async () => {

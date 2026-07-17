@@ -3,12 +3,14 @@ import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.j
 
 export type AiCostReservationStatus =
   | 'RESERVED'
+  | 'SUBMISSION_UNCERTAIN'
   | 'RECONCILIATION_REQUIRED'
   | 'SETTLED'
   | 'RELEASED';
 export type AiCostSettlementKind =
   | 'CHARGE'
   | 'RELEASE'
+  | 'SUBMISSION_UNCERTAIN'
   | 'RECONCILIATION_REQUIRED'
   | 'RECONCILED_CHARGE'
   | 'RECONCILED_RELEASE';
@@ -61,6 +63,13 @@ function nonNegativeInteger(value: unknown, label: string): number {
     throw new AiCostLedgerError('INVALID_REQUEST', `${label} must be a non-negative integer`);
   }
   return number;
+}
+
+function validDate(value: unknown, label: string): Date {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+    throw new AiCostLedgerError('INVALID_REQUEST', `${label} must be a valid Date`);
+  }
+  return value;
 }
 
 function sha256(value: unknown, label: string): string {
@@ -154,37 +163,57 @@ function assertSameSettlement(existing: any, input: {
   }
 }
 
+function assertSameProviderAcceptance(reservation: any, providerRequestId: string, providerAcceptedAt: Date) {
+  const persistedAt = reservation.providerAcceptedAt;
+  if (reservation.providerRequestId !== providerRequestId
+    || !(persistedAt instanceof Date)
+    || persistedAt.getTime() !== providerAcceptedAt.getTime()) {
+    throw new AiCostLedgerError(
+      'IDEMPOTENCY_KEY_CONFLICT',
+      'Provider acceptance evidence changed during replay',
+    );
+  }
+}
+
+export async function reserveAiCostInTransaction(
+  database: AiCostLedgerDatabase,
+  rawInput: AiCostReservationInput,
+) {
+  const input = normalizedInput(rawInput);
+  const existing = await database.aiCostReservation.findUnique({
+    where: reservationWhere(input),
+    include: { settlements: true },
+  });
+  if (existing) {
+    assertSameReservation(existing, input);
+    return { reservation: existing, replayed: true };
+  }
+  const reservation = await database.aiCostReservation.create({ data: {
+    ownerUserId: input.ownerUserId,
+    actorUserId: input.actorUserId,
+    workflowId: input.workflowId || null,
+    jobId: input.jobId,
+    idempotencyKey: input.idempotencyKey,
+    requestFingerprint: input.requestFingerprint,
+    provider: input.provider,
+    model: input.model,
+    operation: input.operation,
+    currency: input.currency,
+    roundingMode: input.roundingMode,
+    estimatedCostMinor: input.estimatedCostMinor,
+    maximumCostMinor: input.maximumCostMinor,
+    status: 'RESERVED',
+  } });
+  return { reservation, replayed: false };
+}
+
 export async function reserveAiCost(database: AiCostLedgerDatabase, rawInput: AiCostReservationInput) {
   const input = normalizedInput(rawInput);
-  const create = async (db: AiCostLedgerDatabase) => {
-    const existing = await db.aiCostReservation.findUnique({
-      where: reservationWhere(input),
-      include: { settlements: true },
-    });
-    if (existing) {
-      assertSameReservation(existing, input);
-      return { reservation: existing, replayed: true };
-    }
-    const reservation = await db.aiCostReservation.create({ data: {
-      ownerUserId: input.ownerUserId,
-      actorUserId: input.actorUserId,
-      workflowId: input.workflowId || null,
-      jobId: input.jobId,
-      idempotencyKey: input.idempotencyKey,
-      requestFingerprint: input.requestFingerprint,
-      provider: input.provider,
-      model: input.model,
-      operation: input.operation,
-      currency: input.currency,
-      roundingMode: input.roundingMode,
-      estimatedCostMinor: input.estimatedCostMinor,
-      maximumCostMinor: input.maximumCostMinor,
-      status: 'RESERVED',
-    } });
-    return { reservation, replayed: false };
-  };
   try {
-    return await runAiMediaSerializableTransaction(database, create);
+    return await runAiMediaSerializableTransaction(
+      database,
+      (transaction) => reserveAiCostInTransaction(transaction, input),
+    );
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     const raced = await database.aiCostReservation.findUnique({
@@ -196,19 +225,21 @@ export async function reserveAiCost(database: AiCostLedgerDatabase, rawInput: Ai
   }
 }
 
-async function appendTerminalSettlement(
+export interface AiCostSettlementInput {
+  reservationId: string;
+  ownerUserId: string;
+  actorUserId: string;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  kind: AiCostSettlementKind;
+  actualCostMinor?: number | null;
+  billedUnits?: number;
+  reason?: string | null;
+}
+
+export async function appendAiCostSettlementInTransaction(
   database: AiCostLedgerDatabase,
-  input: {
-    reservationId: string;
-    ownerUserId: string;
-    actorUserId: string;
-    idempotencyKey: string;
-    requestFingerprint: string;
-    kind: AiCostSettlementKind;
-    actualCostMinor?: number | null;
-    billedUnits?: number;
-    reason?: string | null;
-  },
+  input: AiCostSettlementInput,
 ) {
   if (!['CHARGE', 'RELEASE', 'RECONCILED_CHARGE', 'RECONCILED_RELEASE'].includes(input.kind)) {
     throw new AiCostLedgerError('INVALID_REQUEST', 'Use markAiCostUnknown for reconciliation-required events');
@@ -223,7 +254,7 @@ async function appendTerminalSettlement(
     idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
     requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
   };
-  const action = async (tx: AiCostLedgerDatabase) => {
+  const tx = database;
     const reservation = await loadReservation(tx, normalized.reservationId, normalized.ownerUserId);
     const existing = await tx.aiCostSettlement.findUnique({
       where: { ai_cost_settlement_reservation_idempotency: {
@@ -238,8 +269,8 @@ async function appendTerminalSettlement(
     if (reservation.requestFingerprint !== normalized.requestFingerprint) {
       throw new AiCostLedgerError('IDEMPOTENCY_KEY_CONFLICT', 'Cost settlement fingerprint does not match reservation');
     }
-    const allowed = normalized.kind === 'RECONCILED_CHARGE' || normalized.kind === 'RECONCILED_RELEASE'
-      ? reservation.status === 'RECONCILIATION_REQUIRED'
+  const allowed = normalized.kind === 'RECONCILED_CHARGE' || normalized.kind === 'RECONCILED_RELEASE'
+      ? ['RECONCILIATION_REQUIRED', 'SUBMISSION_UNCERTAIN'].includes(reservation.status)
       : reservation.status === 'RESERVED';
     if (!allowed) throw new AiCostLedgerError('INVALID_STATE', `Reservation is ${reservation.status}`);
     if ((normalized.kind === 'CHARGE' || normalized.kind === 'RECONCILED_CHARGE') && actualCostMinor == null) {
@@ -272,10 +303,34 @@ async function appendTerminalSettlement(
       },
     });
     if (updated.count !== 1) throw new AiCostLedgerError('CONFLICT', 'Cost reservation changed during settlement');
-    return { reservation: { ...reservation, status: terminal }, settlement, replayed: false };
+  return {
+    reservation: await loadReservation(tx, reservation.id, normalized.ownerUserId),
+    settlement,
+    replayed: false,
+  };
+}
+
+async function appendTerminalSettlement(
+  database: AiCostLedgerDatabase,
+  input: AiCostSettlementInput,
+) {
+  const actualCostMinor = input.actualCostMinor == null
+    ? null
+    : nonNegativeInteger(input.actualCostMinor, 'actualCostMinor');
+  const billedUnits = nonNegativeInteger(input.billedUnits ?? 0, 'billedUnits');
+  const normalized = {
+    ...input,
+    reservationId: required(input.reservationId, 'reservationId'),
+    ownerUserId: required(input.ownerUserId, 'ownerUserId'),
+    actorUserId: required(input.actorUserId, 'actorUserId'),
+    idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
+    requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
   };
   try {
-    return await runAiMediaSerializableTransaction(database, action);
+    return await runAiMediaSerializableTransaction(
+      database,
+      (transaction) => appendAiCostSettlementInTransaction(transaction, normalized),
+    );
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     const reservation = await loadReservation(database, normalized.reservationId, normalized.ownerUserId);
@@ -295,16 +350,126 @@ export function settleAiCost(database: AiCostLedgerDatabase, input: Omit<Paramet
   return appendTerminalSettlement(database, { ...input, kind: 'CHARGE' });
 }
 
+export function settleAiCostInTransaction(
+  database: AiCostLedgerDatabase,
+  input: Omit<AiCostSettlementInput, 'kind'>,
+) {
+  return appendAiCostSettlementInTransaction(database, { ...input, kind: 'CHARGE' });
+}
+
 export function releaseAiCost(database: AiCostLedgerDatabase, input: Omit<Parameters<typeof appendTerminalSettlement>[1], 'kind'>) {
   return appendTerminalSettlement(database, { ...input, kind: 'RELEASE', actualCostMinor: 0 });
 }
 
-export async function markAiCostUnknown(
+export function releaseAiCostInTransaction(
   database: AiCostLedgerDatabase,
-  input: Omit<Parameters<typeof appendTerminalSettlement>[1], 'kind' | 'actualCostMinor'> & {
-    providerRequestId: string;
-    providerAcceptedAt?: Date;
-  },
+  input: Omit<AiCostSettlementInput, 'kind'>,
+) {
+  return appendAiCostSettlementInTransaction(database, { ...input, kind: 'RELEASE', actualCostMinor: 0 });
+}
+
+export type AiCostSubmissionUncertainInput = Omit<AiCostSettlementInput, 'kind' | 'actualCostMinor'>;
+
+export async function markAiCostSubmissionUncertainInTransaction(
+  database: AiCostLedgerDatabase,
+  input: AiCostSubmissionUncertainInput,
+) {
+  const normalized = {
+    ...input,
+    reservationId: required(input.reservationId, 'reservationId'),
+    ownerUserId: required(input.ownerUserId, 'ownerUserId'),
+    actorUserId: required(input.actorUserId, 'actorUserId'),
+    idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
+    requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
+  };
+  const reservation = await loadReservation(database, normalized.reservationId, normalized.ownerUserId);
+  const existing = await database.aiCostSettlement.findUnique({ where: {
+    ai_cost_settlement_reservation_idempotency: {
+      reservationId: normalized.reservationId,
+      idempotencyKey: normalized.idempotencyKey,
+    },
+  } });
+  if (existing) {
+    assertSameSettlement(existing, {
+      kind: 'SUBMISSION_UNCERTAIN',
+      requestFingerprint: normalized.requestFingerprint,
+      actualCostMinor: null,
+      billedUnits: 0,
+    });
+    return { reservation, settlement: existing, replayed: true };
+  }
+  if (reservation.requestFingerprint !== normalized.requestFingerprint) {
+    throw new AiCostLedgerError('IDEMPOTENCY_KEY_CONFLICT', 'Cost settlement fingerprint does not match reservation');
+  }
+  if (reservation.status !== 'RESERVED') throw new AiCostLedgerError('INVALID_STATE', `Reservation is ${reservation.status}`);
+  const settlement = await database.aiCostSettlement.create({ data: {
+    reservationId: reservation.id,
+    ownerUserId: normalized.ownerUserId,
+    actorUserId: normalized.actorUserId,
+    kind: 'SUBMISSION_UNCERTAIN',
+    idempotencyKey: normalized.idempotencyKey,
+    requestFingerprint: normalized.requestFingerprint,
+    actualCostMinor: null,
+    billedUnits: 0,
+    reason: normalized.reason || 'provider submission outcome is uncertain',
+  } });
+  const updated = await database.aiCostReservation.updateMany({
+    where: { id: reservation.id, ownerUserId: normalized.ownerUserId, status: 'RESERVED' },
+    data: { status: 'SUBMISSION_UNCERTAIN', reconciliationRequiredAt: new Date() },
+  });
+  if (updated.count !== 1) throw new AiCostLedgerError('CONFLICT', 'Cost reservation changed during submission quarantine');
+  return {
+    reservation: await loadReservation(database, reservation.id, normalized.ownerUserId),
+    settlement,
+    replayed: false,
+  };
+}
+
+export async function markAiCostSubmissionUncertain(
+  database: AiCostLedgerDatabase,
+  input: AiCostSubmissionUncertainInput,
+) {
+  const normalized = {
+    ...input,
+    reservationId: required(input.reservationId, 'reservationId'),
+    ownerUserId: required(input.ownerUserId, 'ownerUserId'),
+    actorUserId: required(input.actorUserId, 'actorUserId'),
+    idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
+    requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
+  };
+  try {
+    return await runAiMediaSerializableTransaction(
+      database,
+      (transaction) => markAiCostSubmissionUncertainInTransaction(transaction, normalized),
+    );
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const reservation = await loadReservation(database, normalized.reservationId, normalized.ownerUserId);
+    const existing = await database.aiCostSettlement.findUnique({ where: {
+      ai_cost_settlement_reservation_idempotency: {
+        reservationId: normalized.reservationId,
+        idempotencyKey: normalized.idempotencyKey,
+      },
+    } });
+    if (!existing) throw error;
+    assertSameSettlement(existing, {
+      kind: 'SUBMISSION_UNCERTAIN',
+      requestFingerprint: normalized.requestFingerprint,
+      actualCostMinor: null,
+      billedUnits: 0,
+    });
+    return { reservation, settlement: existing, replayed: true };
+  }
+}
+
+export type AiCostUnknownInput = Omit<AiCostSettlementInput, 'kind' | 'actualCostMinor'> & {
+  providerRequestId: string;
+  providerAcceptedAt: Date;
+};
+
+export async function markAiCostUnknownInTransaction(
+  database: AiCostLedgerDatabase,
+  input: AiCostUnknownInput,
 ) {
   const normalized = {
     ...input,
@@ -314,17 +479,15 @@ export async function markAiCostUnknown(
     idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
     requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
     providerRequestId: required(input.providerRequestId, 'providerRequestId'),
-    providerAcceptedAt: input.providerAcceptedAt || new Date(),
+    providerAcceptedAt: validDate(input.providerAcceptedAt, 'providerAcceptedAt'),
   };
-  const action = async (tx: AiCostLedgerDatabase) => {
+  const tx = database;
     const reservation = await loadReservation(tx, normalized.reservationId, normalized.ownerUserId);
     const existing = await tx.aiCostSettlement.findUnique({ where: { ai_cost_settlement_reservation_idempotency: {
       reservationId: normalized.reservationId, idempotencyKey: normalized.idempotencyKey,
     } } });
     if (existing) {
-      if (reservation.providerRequestId !== normalized.providerRequestId) {
-        throw new AiCostLedgerError('IDEMPOTENCY_KEY_CONFLICT', 'Provider request identity changed during replay');
-      }
+      assertSameProviderAcceptance(reservation, normalized.providerRequestId, normalized.providerAcceptedAt);
       assertSameSettlement(existing, {
         kind: 'RECONCILIATION_REQUIRED',
         requestFingerprint: normalized.requestFingerprint,
@@ -336,7 +499,9 @@ export async function markAiCostUnknown(
     if (reservation.requestFingerprint !== normalized.requestFingerprint) {
       throw new AiCostLedgerError('IDEMPOTENCY_KEY_CONFLICT', 'Cost settlement fingerprint does not match reservation');
     }
-    if (reservation.status !== 'RESERVED') throw new AiCostLedgerError('INVALID_STATE', `Reservation is ${reservation.status}`);
+    if (!['RESERVED', 'SUBMISSION_UNCERTAIN'].includes(reservation.status)) {
+      throw new AiCostLedgerError('INVALID_STATE', `Reservation is ${reservation.status}`);
+    }
     const settlement = await tx.aiCostSettlement.create({ data: {
       reservationId: reservation.id, ownerUserId: normalized.ownerUserId, actorUserId: normalized.actorUserId,
       kind: 'RECONCILIATION_REQUIRED', idempotencyKey: normalized.idempotencyKey,
@@ -344,28 +509,45 @@ export async function markAiCostUnknown(
       reason: normalized.reason || 'provider result is unknown',
     } });
     const updated = await tx.aiCostReservation.updateMany({
-      where: { id: reservation.id, ownerUserId: normalized.ownerUserId, status: 'RESERVED' },
+      where: {
+        id: reservation.id,
+        ownerUserId: normalized.ownerUserId,
+        status: { in: ['RESERVED', 'SUBMISSION_UNCERTAIN'] },
+      },
       data: {
         status: 'RECONCILIATION_REQUIRED',
         providerRequestId: normalized.providerRequestId,
         providerAcceptedAt: normalized.providerAcceptedAt,
-        reconciliationRequiredAt: new Date(),
+        ...(reservation.status === 'RESERVED' ? { reconciliationRequiredAt: new Date() } : {}),
       },
     });
     if (updated.count !== 1) throw new AiCostLedgerError('CONFLICT', 'Cost reservation changed during reconciliation');
-    return {
-      reservation: {
-        ...reservation,
-        status: 'RECONCILIATION_REQUIRED',
-        providerRequestId: normalized.providerRequestId,
-        providerAcceptedAt: normalized.providerAcceptedAt,
-      },
+  return {
+      reservation: await loadReservation(tx, reservation.id, normalized.ownerUserId),
       settlement,
       replayed: false,
     };
+}
+
+export async function markAiCostUnknown(
+  database: AiCostLedgerDatabase,
+  input: AiCostUnknownInput,
+) {
+  const normalized = {
+    ...input,
+    reservationId: required(input.reservationId, 'reservationId'),
+    ownerUserId: required(input.ownerUserId, 'ownerUserId'),
+    actorUserId: required(input.actorUserId, 'actorUserId'),
+    idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
+    requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
+    providerRequestId: required(input.providerRequestId, 'providerRequestId'),
+    providerAcceptedAt: validDate(input.providerAcceptedAt, 'providerAcceptedAt'),
   };
   try {
-    return await runAiMediaSerializableTransaction(database, action);
+    return await runAiMediaSerializableTransaction(
+      database,
+      (transaction) => markAiCostUnknownInTransaction(transaction, normalized),
+    );
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     const reservation = await loadReservation(database, normalized.reservationId, normalized.ownerUserId);
@@ -376,9 +558,7 @@ export async function markAiCostUnknown(
       },
     } });
     if (!existing) throw error;
-    if (reservation.providerRequestId !== normalized.providerRequestId) {
-      throw new AiCostLedgerError('IDEMPOTENCY_KEY_CONFLICT', 'Provider request identity changed during replay');
-    }
+    assertSameProviderAcceptance(reservation, normalized.providerRequestId, normalized.providerAcceptedAt);
     assertSameSettlement(existing, {
       kind: 'RECONCILIATION_REQUIRED', requestFingerprint: normalized.requestFingerprint,
       actualCostMinor: null, billedUnits: 0,

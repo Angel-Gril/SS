@@ -8,6 +8,9 @@ set -euo pipefail
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/ss-erp}"
 ENV_FILE="${ENV_FILE:-.env.staging}"
 DEPLOY_ENV_PROFILE="${DEPLOY_ENV_PROFILE:-}"
+API_SERVICE="${API_SERVICE:-ss-erp-api}"
+WEB_SERVICE="${WEB_SERVICE:-ss-erp-web}"
+WORKER_SERVICE="${WORKER_SERVICE:-ss-erp-worker}"
 SKIP_BUILD=false
 
 for arg in "$@"; do
@@ -69,22 +72,31 @@ git pull --ff-only origin "$BRANCH"
 echo "[2/7] Installing dependencies..."
 pnpm install --frozen-lockfile
 
-# 3. 数据库迁移
-echo "[3/7] Running database migrations..."
+# 3. Prisma Client
+echo "[3/7] Generating Prisma client..."
 cd apps/server
 npx prisma generate
-npx prisma migrate deploy
 cd "$DEPLOY_DIR"
 
-if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
-  echo "[3b/7] Validating runtime upload config..."
-  DEPLOY_DIR="$DEPLOY_DIR" \
-  ENV_FILE="$ENV_FILE" \
-  SKIP_SERVICE_CHECKS=1 \
-  SKIP_PROCESS_ENV_CHECKS=1 \
-  SKIP_HTTP_CHECK=1 \
-  bash scripts/diagnose-runtime-env.sh
+SERVICES_QUIESCED=0
+restore_quiesced_services() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
+    echo "[deploy] Restoring current Worker/API after failed deploy"
+    sudo systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+  fi
+  exit "$status"
+}
+trap restore_quiesced_services EXIT
+
+echo "[3b/7] Quiescing AI provider services before in-place build and migration..."
+if ! sudo systemctl stop "$WORKER_SERVICE" "$API_SERVICE"; then
+  sudo systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+  echo "ERROR: could not quiesce Worker/API before build and database migration" >&2
+  exit 1
 fi
+SERVICES_QUIESCED=1
 
 # 4. 构建
 if [ "$SKIP_BUILD" = false ]; then
@@ -97,11 +109,27 @@ else
   echo "[4-5/7] Skipping build (--skip-build)"
 fi
 
-# 6. 重启服务
+# 6. 迁移并重启服务
+echo "[6b/7] Running database migrations..."
+cd apps/server
+npx prisma migrate deploy
+cd "$DEPLOY_DIR"
+
+if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+  echo "[6c/7] Validating runtime upload config..."
+  DEPLOY_DIR="$DEPLOY_DIR" \
+  ENV_FILE="$ENV_FILE" \
+  SKIP_SERVICE_CHECKS=1 \
+  SKIP_PROCESS_ENV_CHECKS=1 \
+  SKIP_HTTP_CHECK=1 \
+  bash scripts/diagnose-runtime-env.sh
+fi
+
 echo "[6/7] Restarting services..."
-sudo systemctl restart ss-erp-worker
-sudo systemctl restart ss-erp-api
-sudo systemctl restart ss-erp-web
+sudo systemctl restart "$WORKER_SERVICE"
+sudo systemctl restart "$API_SERVICE"
+sudo systemctl restart "$WEB_SERVICE"
+SERVICES_QUIESCED=0
 
 # 7. 健康检查
 echo "[7/7] Health check..."

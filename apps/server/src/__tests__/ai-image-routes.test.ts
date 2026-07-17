@@ -17,7 +17,8 @@ async function buildApp(ownerUserId = 'owner-1', provider = 'fake') {
     createWithQuota: vi.fn(async () => ({ kind: 'created' as const, job: { ...baseJob, status: 'QUEUED' as const } })),
     requestCancellation: vi.fn(async (_id, owner) => owner === 'owner-1' ? { ...baseJob, status: 'CANCEL_REQUESTED' as const } : null),
     recordApplication: vi.fn(async (_id, data) => ({ ...baseJob, appliedMode: data.mode })),
-    markRunning: vi.fn(async () => true), markRetrying: vi.fn(), markFailed: vi.fn(), markCancelled: vi.fn(), complete: vi.fn(),
+    markRunning: vi.fn(async () => true), markRetrying: vi.fn(), markFailed: vi.fn(),
+    markEnqueueFailed: vi.fn(async () => true), markCancelled: vi.fn(), complete: vi.fn(),
   };
   const enqueue = vi.fn(async () => undefined);
   const applyAssets = vi.fn(async (input: any) => ({
@@ -67,6 +68,35 @@ describe('AI image job routes', () => {
     expect(response.statusCode).toBe(202);
     expect(repository.createWithQuota).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'owner-1', actorUserId: 'actor-1' }), 5);
     expect(enqueue).toHaveBeenCalledWith('job-1');
+  });
+
+  it('marks a queued job failed when enqueueing never reached a worker', async () => {
+    const { app, repository, enqueue } = await buildApp();
+    enqueue.mockRejectedValueOnce(new Error('queue offline'));
+
+    const response = await app.inject({
+      method: 'POST', url: '/jobs',
+      payload: { prompt: 'photo', count: 1, width: 1024, height: 1024, idempotencyKey: 'idem-offline-1' },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      errorCode: 'QUEUE_UNAVAILABLE',
+    }));
+  });
+
+  it('keeps the accepted response when a worker claimed the job before enqueue reported failure', async () => {
+    const { app, repository, enqueue } = await buildApp();
+    enqueue.mockRejectedValueOnce(new Error('queue acknowledgement lost'));
+    vi.mocked(repository.markEnqueueFailed!).mockResolvedValueOnce(false);
+
+    const response = await app.inject({
+      method: 'POST', url: '/jobs',
+      payload: { prompt: 'photo', count: 1, width: 1024, height: 1024, idempotencyKey: 'idem-claimed-1' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(repository.markFailed).not.toHaveBeenCalled();
   });
 
   it('does not expose a job owned by another tenant', async () => {

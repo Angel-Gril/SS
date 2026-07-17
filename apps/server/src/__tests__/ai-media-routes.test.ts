@@ -13,7 +13,8 @@ const workflow: AiMediaWorkflowRecord = {
   inputs: [{ id: 'input-1', assetId: 'asset-1', role: 'REFERENCE', ordinal: 0, assetUrl: '/images/source.png', mimeType: 'image/png', asset: { storageKey: 'secret-key' } }],
   jobs: [{
     id: 'job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1', status: 'SUCCEEDED',
-    prompt: 'Keep product', assets: [{ id: 'output-1', url: '/output.png', storageKey: 'secret-output-key', storageBackend: 'oss' }],
+    prompt: 'Keep product', costReservation: { status: 'RELEASED', maximumCostMinor: 99 },
+    assets: [{ id: 'output-1', url: '/output.png', storageKey: 'secret-output-key', storageBackend: 'oss' }],
   }], events: [],
 };
 
@@ -26,7 +27,8 @@ function jobRepository() {
     createWithQuota: vi.fn(), requestCancellation: vi.fn(), recordApplication: vi.fn(async () => ({
       id: 'job-1', ownerUserId: 'owner-1', status: 'SUCCEEDED', appliedMode: 'append', assets: [],
     })),
-    markRunning: vi.fn(), markRetrying: vi.fn(), markFailed: vi.fn(), markCancelled: vi.fn(), complete: vi.fn(),
+    markRunning: vi.fn(), markRetrying: vi.fn(), markFailed: vi.fn(),
+    markEnqueueFailed: vi.fn(async () => true), markCancelled: vi.fn(), complete: vi.fn(),
   } as any;
 }
 
@@ -79,6 +81,25 @@ describe('AI media workflow routes', () => {
     expect(response.json().data).not.toHaveProperty('requestFingerprint');
     expect(JSON.stringify(response.json())).not.toContain('secret-key');
     expect(JSON.stringify(response.json())).not.toContain('secret-output-key');
+    expect(response.json().data.jobs[0]).toMatchObject({ costStatus: 'RELEASED' });
+    expect(response.json().data.jobs[0]).not.toHaveProperty('costReservation');
+    expect(JSON.stringify(response.json())).not.toContain('maximumCostMinor');
+  });
+
+  it('compensates a workflow that could not be enqueued', async () => {
+    const { app, repository, enqueue } = await build();
+    enqueue.mockRejectedValueOnce(new Error('queue offline'));
+
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE', sourceAssetId: 'asset-1', prompt: 'Keep product',
+      count: 1, width: 1024, height: 1024, idempotencyKey: 'workflow-idem-offline',
+      context: { type: 'collect', id: 'goods-1' },
+    } });
+
+    expect(response.statusCode).toBe(503);
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      errorCode: 'QUEUE_UNAVAILABLE',
+    }));
   });
 
   it('accepts ordered references while preserving the legacy single-reference request', async () => {
@@ -210,9 +231,22 @@ describe('AI media workflow routes', () => {
       expectedRevision: 2, idempotencyKey: 'retry-idem-offline',
     } });
     expect(response.statusCode).toBe(503);
-    expect(repository.markFailed).toHaveBeenCalledWith('job-2', expect.objectContaining({
+    expect(repository.markEnqueueFailed).toHaveBeenCalledWith('job-2', expect.objectContaining({
       errorCode: 'QUEUE_UNAVAILABLE',
     }));
+  });
+
+  it('does not overwrite a retry already claimed by a worker when queue acknowledgement fails', async () => {
+    const { app, repository, enqueue } = await build();
+    enqueue.mockRejectedValueOnce(new Error('queue acknowledgement lost'));
+    repository.markEnqueueFailed.mockResolvedValueOnce(false);
+
+    const response = await app.inject({ method: 'POST', url: '/workflows/workflow-1/retry', payload: {
+      expectedRevision: 2, idempotencyKey: 'retry-idem-claimed',
+    } });
+
+    expect(response.statusCode).toBe(202);
+    expect(repository.markFailed).not.toHaveBeenCalled();
   });
 
   it('binds approved output application to the reviewed collect context', async () => {

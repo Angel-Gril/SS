@@ -40,8 +40,10 @@ interface AiMediaWorkflow {
     id: string;
     status: string;
     prompt?: string;
+    errorCode?: string | null;
     errorMessage?: string | null;
     providerJobId?: string | null;
+    costStatus?: 'RESERVED' | 'SUBMISSION_UNCERTAIN' | 'RECONCILIATION_REQUIRED' | 'SETTLED' | 'RELEASED' | null;
     appliedMode?: 'append' | 'replace' | null;
     assets?: Array<{ id: string; url: string }>;
   }>;
@@ -277,15 +279,21 @@ export function SourceAiMediaPanel({
           const job = workflow.jobs[workflow.jobs.length - 1];
           const output = job?.assets?.[0];
           const source = workflow.inputs[0];
+          const costReconciled = job?.costStatus === 'SETTLED' || job?.costStatus === 'RELEASED';
+          const requiresReconciliation = workflow.status === 'FAILED' && (
+            job?.costStatus
+              ? !costReconciled
+              : job?.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN' || Boolean(job?.providerJobId)
+          );
           return <div key={workflow.id} className="grid gap-3 rounded-md border p-3 md:grid-cols-[148px_minmax(0,1fr)_auto] md:items-center">
             <div className="grid grid-cols-2 gap-1">
               {source ? <a href={imageUrl(source.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开源图"><img src={imageUrl(source.url)} alt="改图源图" className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">源图</span></a> : <div className="h-[72px] w-[72px] rounded border bg-muted" />}
               {output ? <a href={imageUrl(output.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开候选原图"><img src={imageUrl(output.url)} alt="AI 改图候选" className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">候选</span></a> : <div className="flex h-[72px] w-[72px] items-center justify-center rounded border bg-muted"><ImageIcon className="h-5 w-5 text-muted-foreground" /></div>}
             </div>
-            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant={workflow.status === 'FAILED' ? 'destructive' : 'secondary'}>{workflow.status === 'SUCCEEDED' && workflow.reviewStatus !== 'PENDING' ? '已完成' : STATUS_LABEL[workflow.status]}</Badge>{workflow.reviewStatus === 'APPROVED' ? <Badge>已通过</Badge> : workflow.reviewStatus === 'REJECTED' ? <Badge variant="outline">已拒绝</Badge> : null}{job?.appliedMode ? <Badge variant="outline">{job.appliedMode === 'replace' ? '已替换' : '已追加'}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">第 {workflow.currentAttempt} 次尝试 · {new Date(workflow.createdAt).toLocaleString()}</p>{job?.prompt ? <p className="mt-1 line-clamp-2 text-xs">{job.prompt}</p> : null}{job?.errorMessage ? <p className="mt-1 truncate text-xs text-destructive">{job.errorMessage}</p> : null}</div>
+            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant={workflow.status === 'FAILED' ? 'destructive' : 'secondary'}>{workflow.status === 'SUCCEEDED' && workflow.reviewStatus !== 'PENDING' ? '已完成' : STATUS_LABEL[workflow.status]}</Badge>{workflow.reviewStatus === 'APPROVED' ? <Badge>已通过</Badge> : workflow.reviewStatus === 'REJECTED' ? <Badge variant="outline">已拒绝</Badge> : null}{job?.appliedMode ? <Badge variant="outline">{job.appliedMode === 'replace' ? '已替换' : '已追加'}</Badge> : null}{requiresReconciliation ? <Badge variant="outline">待人工核对</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">第 {workflow.currentAttempt} 次尝试 · {new Date(workflow.createdAt).toLocaleString()}</p>{job?.prompt ? <p className="mt-1 line-clamp-2 text-xs">{job.prompt}</p> : null}{job?.errorMessage ? <p className="mt-1 truncate text-xs text-destructive">{job.errorMessage}</p> : null}</div>
             <div className="flex flex-wrap gap-1.5">
               {ACTIVE.has(workflow.status) ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`cancel:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/cancel`, { expectedRevision: workflow.revision }, '已请求取消')}><Square className="h-3.5 w-3.5" />取消</Button> : null}
-              {workflow.status === 'FAILED' && !job?.providerJobId ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`retry:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/retry`, { expectedRevision: workflow.revision, idempotencyKey: idempotencyKey('retry') }, '已重新排队')}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
+              {workflow.status === 'FAILED' && !requiresReconciliation ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`retry:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/retry`, { expectedRevision: workflow.revision, idempotencyKey: idempotencyKey('retry') }, '已重新排队')}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
               {workflow.status === 'SUCCEEDED' && workflow.reviewStatus === 'PENDING' && output ? <><Button size="sm" disabled={Boolean(pendingAction)} onClick={() => void action(`approve:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'APPROVE' }, '候选图已通过审核')}><Check className="h-3.5 w-3.5" />通过</Button><Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`reject:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'REJECT' }, '候选图已拒绝')}><X className="h-3.5 w-3.5" />拒绝</Button></> : null}
               {workflow.reviewStatus === 'APPROVED' && job && !job.appliedMode ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || !target.updatedAt} onClick={() => void applyWorkflow(workflow, job)}><ImageIcon className="h-3.5 w-3.5" />追加</Button> : null}
             </div>

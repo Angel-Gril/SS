@@ -124,9 +124,50 @@ fi
 echo "[deploy] Installing dependencies"
 pnpm install --frozen-lockfile
 
-echo "[deploy] Generating Prisma client and migrating database"
+echo "[deploy] Generating Prisma client"
 cd apps/server
 npx prisma generate
+cd "$RELEASE_DIR"
+
+echo "[deploy] Building server and web"
+pnpm --filter server build
+pnpm --filter web build
+
+echo "[deploy] Building cloud extension package"
+PREVIOUS_RELEASE="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
+EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension:cloud
+
+SERVICES_QUIESCED=0
+restore_quiesced_services() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
+    echo "[deploy] Restoring current Worker/API after failed deploy"
+    systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+  fi
+  exit "$status"
+}
+trap restore_quiesced_services EXIT
+
+rollback() {
+  if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+    echo "[deploy] Rolling back to ${PREVIOUS_RELEASE##*/}"
+    ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
+  fi
+  systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+  SERVICES_QUIESCED=0
+}
+
+echo "[deploy] Quiescing AI provider services before migration"
+if ! systemctl stop "$WORKER_SERVICE" "$API_SERVICE"; then
+  systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+  echo "[deploy] ERROR: could not quiesce Worker/API before database migration" >&2
+  exit 1
+fi
+SERVICES_QUIESCED=1
+
+echo "[deploy] Migrating database"
+cd apps/server
 npx prisma migrate deploy
 cd "$RELEASE_DIR"
 
@@ -140,30 +181,15 @@ if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
   bash scripts/diagnose-runtime-env.sh
 fi
 
-echo "[deploy] Building server and web"
-pnpm --filter server build
-pnpm --filter web build
-
-echo "[deploy] Building cloud extension package"
-PREVIOUS_RELEASE="$(readlink "$CURRENT_LINK" 2>/dev/null || true)"
-EXTENSION_PREVIOUS_BUILD_ROOT="$PREVIOUS_RELEASE/build/extensions" pnpm package:extension:cloud
-
 echo "[deploy] Switching current symlink"
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
-
-rollback() {
-  if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
-    echo "[deploy] Rolling back to ${PREVIOUS_RELEASE##*/}"
-    ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
-    systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"
-  fi
-}
 
 echo "[deploy] Restarting services"
 if ! systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
   rollback
   exit 1
 fi
+SERVICES_QUIESCED=0
 
 sleep 3
 echo "[deploy] Health check: $HEALTH_URL"

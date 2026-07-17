@@ -205,11 +205,15 @@ function publicJob(job: Record<string, unknown>) {
     templateSnapshot: _templateSnapshot,
     requestFingerprint: _requestFingerprint,
     workflow: _workflow,
+    costReservation,
     assets,
     ...visible
   } = job;
   return {
     ...visible,
+    costStatus: typeof (costReservation as { status?: unknown } | null)?.status === 'string'
+      ? (costReservation as { status: string }).status
+      : null,
     assets: Array.isArray(assets) ? assets.map((asset: any) => ({
       id: asset.id,
       url: asset.url,
@@ -301,9 +305,17 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!result.replayed) {
         try {
           await enqueue(result.job.id);
-        } catch (error: any) {
-          await repository.markFailed(result.job.id, { attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: error?.message || 'Queue unavailable' });
-          return reply.status(503).send({ code: 'QUEUE_UNAVAILABLE', msg: 'AI image queue is temporarily unavailable' });
+        } catch {
+          const failed = repository.markEnqueueFailed
+            ? await repository.markEnqueueFailed(result.job.id, {
+              attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'AI image queue is temporarily unavailable',
+            })
+            : (await repository.markFailed(result.job.id, {
+              attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'AI image queue is temporarily unavailable',
+            }), true);
+          if (failed) {
+            return reply.status(503).send({ code: 'QUEUE_UNAVAILABLE', msg: 'AI image queue is temporarily unavailable' });
+          }
         }
       }
       return reply.status(result.replayed ? 200 : 202).send({
@@ -395,13 +407,17 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!created.replayed) {
         try {
           await enqueue(created.jobId);
-        } catch (error: any) {
-          await repository.markFailed(created.jobId, {
-            attemptCount: 0,
-            errorCode: 'QUEUE_UNAVAILABLE',
-            errorMessage: error?.message || 'Queue unavailable',
-          });
-          return reply.status(503).send({ code: 'QUEUE_UNAVAILABLE', msg: 'AI media queue is temporarily unavailable' });
+        } catch {
+          const failed = repository.markEnqueueFailed
+            ? await repository.markEnqueueFailed(created.jobId, {
+              attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'AI media queue is temporarily unavailable',
+            })
+            : (await repository.markFailed(created.jobId, {
+              attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'AI media queue is temporarily unavailable',
+            }), true);
+          if (failed) {
+            return reply.status(503).send({ code: 'QUEUE_UNAVAILABLE', msg: 'AI media queue is temporarily unavailable' });
+          }
         }
       }
       return reply.status(created.replayed ? 200 : 202).send({
@@ -462,13 +478,17 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!result.replayed) {
         try {
           await enqueue(result.jobId);
-        } catch (error: any) {
-          await repository.markFailed(result.jobId, {
-            attemptCount: 0,
-            errorCode: 'QUEUE_UNAVAILABLE',
-            errorMessage: error?.message || 'Queue unavailable',
-          });
-          return reply.status(503).send({ code: 'QUEUE_UNAVAILABLE', msg: 'AI media queue is temporarily unavailable' });
+        } catch {
+          const failed = repository.markEnqueueFailed
+            ? await repository.markEnqueueFailed(result.jobId, {
+              attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'AI media queue is temporarily unavailable',
+            })
+            : (await repository.markFailed(result.jobId, {
+              attemptCount: 0, errorCode: 'QUEUE_UNAVAILABLE', errorMessage: 'AI media queue is temporarily unavailable',
+            }), true);
+          if (failed) {
+            return reply.status(503).send({ code: 'QUEUE_UNAVAILABLE', msg: 'AI media queue is temporarily unavailable' });
+          }
         }
       }
       return reply.status(result.replayed ? 200 : 202).send({

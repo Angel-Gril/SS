@@ -2646,6 +2646,7 @@ enum AiMediaInputRole {
 
 enum AiCostReservationStatus {
   RESERVED
+  SUBMISSION_UNCERTAIN
   RECONCILIATION_REQUIRED
   SETTLED
   RELEASED
@@ -2654,6 +2655,7 @@ enum AiCostReservationStatus {
 enum AiCostSettlementKind {
   CHARGE
   RELEASE
+  SUBMISSION_UNCERTAIN
   RECONCILIATION_REQUIRED
   RECONCILED_CHARGE
   RECONCILED_RELEASE
@@ -2775,6 +2777,7 @@ model AiImageJob {
   maxAttempts            Int              @default(3) @map("max_attempts")
   progress               Int              @default(0)
   idempotencyKey         String?          @map("idempotency_key")
+  providerDispatchedAt   DateTime?        @map("provider_dispatched_at")
   providerJobId          String?          @map("provider_job_id")
   estimatedCostCents     Int              @default(0) @map("estimated_cost_cents")
   actualCostCents        Int?             @map("actual_cost_cents")

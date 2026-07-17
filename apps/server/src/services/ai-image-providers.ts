@@ -11,11 +11,11 @@ interface ProviderOptions {
   fetch?: FetchLike;
   timeoutMs?: number;
   costPerImageCents?: number;
+  onProviderJobCreated?: (providerJobId: string, providerAcceptedAt: Date) => Promise<void>;
 }
 
 interface DashScopeOptions extends ProviderOptions {
   pollIntervalMs?: number;
-  onProviderJobCreated?: (providerJobId: string) => Promise<void>;
 }
 
 export interface AiImageConnectionConfig extends ProviderOptions {
@@ -53,13 +53,126 @@ function delay(ms: number) {
 
 function safeProviderError(provider: string, status: number, code?: string) {
   if (status === 401 || status === 403) {
-    return new AiImageJobError('PROVIDER_AUTH_FAILED', `${provider} authentication failed (HTTP ${status})`);
+    return Object.assign(
+      new AiImageJobError('PROVIDER_AUTH_FAILED', `${provider} authentication failed (HTTP ${status})`),
+      { providerHttpStatus: status },
+    );
   }
   const safeCode = String(code || '').replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 80);
-  return new AiImageJobError(
-    'PROVIDER_REQUEST_FAILED',
-    `${provider} request failed (HTTP ${status}${safeCode ? `, ${safeCode}` : ''})`,
+  return Object.assign(
+    new AiImageJobError(
+      'PROVIDER_REQUEST_FAILED',
+      `${provider} request failed (HTTP ${status}${safeCode ? `, ${safeCode}` : ''})`,
+    ),
+    { providerHttpStatus: status },
   );
+}
+
+function withProviderAcceptance(error: unknown, providerJobId: string, providerAcceptedAt: Date) {
+  const acceptedError = error instanceof Error ? error : new Error(String(error));
+  return Object.assign(acceptedError, { providerJobId, providerAcceptedAt });
+}
+
+function withProviderSubmissionUncertain(error: unknown) {
+  const uncertainError = error instanceof Error ? error : new Error(String(error));
+  return Object.assign(uncertainError, { providerSubmissionUncertain: true });
+}
+
+function withProviderSubmissionRejected(error: unknown) {
+  const rejectedError = error instanceof Error ? error : new Error(String(error));
+  return Object.assign(rejectedError, { providerSubmissionRejected: true });
+}
+
+function isDefiniteProviderRejection(error: unknown) {
+  if (!(error instanceof AiImageJobError)) return false;
+  if (error.code === 'INVALID_PROVIDER_URL') return true;
+  const status = Number((error as AiImageJobError & { providerHttpStatus?: number }).providerHttpStatus);
+  return Number.isInteger(status)
+    && status >= 400
+    && status < 500
+    && ![408, 409, 425, 429].includes(status);
+}
+
+function normalizedProviderIdentity(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') {
+    throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Provider request identity must be a string');
+  }
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.length > 500) {
+    throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Provider request identity exceeds 500 characters');
+  }
+  return normalized;
+}
+
+function providerHeaderIdentity(response: Response): string | null {
+  return normalizedProviderIdentity(
+    response.headers.get('x-request-id')
+      || response.headers.get('request-id')
+      || response.headers.get('openai-request-id'),
+  );
+}
+
+async function requestJsonWithIdentity(
+  provider: string,
+  fetcher: FetchLike,
+  apiKey: string,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+) {
+  return fetchWithTimeout(fetcher, url, init, timeoutMs, async (response) => {
+    const providerAcceptedAt = new Date();
+    let body: any;
+    if (!response.ok) {
+      try {
+        body = await readJson(response);
+      } catch {
+        body = null;
+      }
+      throw safeProviderError(provider, response.status, body?.code || body?.error?.code);
+    }
+    try {
+      body = await readJson(response);
+    } catch (error) {
+      let headerIdentity: string | null = null;
+      try {
+        headerIdentity = providerHeaderIdentity(response);
+      } catch {
+        throw withProviderSubmissionUncertain(error);
+      }
+      if (headerIdentity) throw withProviderAcceptance(error, headerIdentity, providerAcceptedAt);
+      throw withProviderSubmissionUncertain(error);
+    }
+    let providerJobId: string | null;
+    try {
+      providerJobId = normalizedProviderIdentity(body?.id);
+      if (!providerJobId) providerJobId = providerHeaderIdentity(response);
+    } catch (error) {
+      throw withProviderSubmissionUncertain(error);
+    }
+    return { body, providerJobId, providerAcceptedAt };
+  });
+}
+
+async function recordProviderAcceptance(
+  callback: ProviderOptions['onProviderJobCreated'],
+  providerJobId: string,
+  providerAcceptedAt: Date,
+) {
+  try {
+    await callback?.(providerJobId, providerAcceptedAt);
+  } catch {
+    throw withProviderAcceptance(
+      new AiImageJobError(
+        'PROVIDER_ACCEPTED_PERSISTENCE_FAILED',
+        'Provider task was accepted but its recovery identity could not be persisted',
+      ),
+      providerJobId,
+      providerAcceptedAt,
+    );
+  }
 }
 
 function isPrivateIp(address: string): boolean {
@@ -165,9 +278,16 @@ async function requestJson(
   timeoutMs: number,
 ) {
   return fetchWithTimeout(fetcher, url, init, timeoutMs, async (response) => {
-    const body = await readJson(response);
-    if (!response.ok) throw safeProviderError(provider, response.status, body?.code || body?.error?.code);
-    return body;
+    if (!response.ok) {
+      let body: any = null;
+      try {
+        body = await readJson(response);
+      } catch {
+        // HTTP status remains authoritative when an error body is malformed or oversized.
+      }
+      throw safeProviderError(provider, response.status, body?.code || body?.error?.code);
+    }
+    return readJson(response);
   });
 }
 
@@ -219,8 +339,10 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
         throw new AiImageJobError('UNSUPPORTED_OPERATION', 'DashScope image-to-image is not enabled for this model');
       }
       const deadline = Date.now() + timeoutMs;
-      const submitted = await requestJson('DashScope', fetcher, options.apiKey,
-        `${apiBase}/services/aigc/text2image/image-synthesis`, {
+      let submitted: any;
+      try {
+        submitted = await requestJson('DashScope', fetcher, options.apiKey,
+          `${apiBase}/services/aigc/text2image/image-synthesis`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${options.apiKey}`,
@@ -236,36 +358,54 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
             parameters: { n: request.count, size: `${request.width}*${request.height}` },
           }),
         }, Math.max(1, deadline - Date.now()));
-      const taskId = String(submitted?.output?.task_id || '');
-      if (!taskId) throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope did not return a task id');
-      await options.onProviderJobCreated?.(taskId);
-
-      let completed: any = submitted;
-      while (String(completed?.output?.task_status || '').toUpperCase() !== 'SUCCEEDED') {
-        const status = String(completed?.output?.task_status || '').toUpperCase();
-        if (status === 'FAILED' || status === 'CANCELED' || status === 'CANCELLED') {
-          throw new AiImageJobError('PROVIDER_TASK_FAILED', `DashScope task failed (${status})`);
-        }
-        if (Date.now() >= deadline) throw new AiImageJobError('PROVIDER_TIMEOUT', 'DashScope image task timed out');
-        await delay(pollIntervalMs);
-        if (Date.now() >= deadline) throw new AiImageJobError('PROVIDER_TIMEOUT', 'DashScope image task timed out');
-        completed = await requestJson('DashScope', fetcher, options.apiKey, `${apiBase}/tasks/${encodeURIComponent(taskId)}`, {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${options.apiKey}` },
-        }, Math.max(1, deadline - Date.now()));
+      } catch (error) {
+        if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
+        throw withProviderSubmissionUncertain(error);
       }
+      let taskId: string | null;
+      try {
+        taskId = normalizedProviderIdentity(submitted?.output?.task_id);
+      } catch (error) {
+        throw withProviderSubmissionUncertain(error);
+      }
+      if (!taskId) {
+        throw withProviderSubmissionUncertain(
+          new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope did not return a task id'),
+        );
+      }
+      const providerAcceptedAt = new Date();
+      await recordProviderAcceptance(options.onProviderJobCreated, taskId, providerAcceptedAt);
 
-      const results = Array.isArray(completed?.output?.results) ? completed.output.results : [];
-      const images = await Promise.all(results.map(async (item: any, index: number) => {
-        if (!item?.url) throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope returned an image without a URL');
-        const image = await downloadImage(fetcher, String(item.url), Math.max(1, deadline - Date.now()));
-        return { ...image, filename: `dashscope-${taskId}-${index + 1}.${extensionForMime(image.mimeType)}` };
-      }));
-      return {
-        images,
-        providerJobId: taskId,
-        actualCostCents: normalizedCost(options.costPerImageCents, images.length),
-      };
+      try {
+        let completed: any = submitted;
+        while (String(completed?.output?.task_status || '').toUpperCase() !== 'SUCCEEDED') {
+          const status = String(completed?.output?.task_status || '').toUpperCase();
+          if (status === 'FAILED' || status === 'CANCELED' || status === 'CANCELLED') {
+            throw new AiImageJobError('PROVIDER_TASK_FAILED', `DashScope task failed (${status})`);
+          }
+          if (Date.now() >= deadline) throw new AiImageJobError('PROVIDER_TIMEOUT', 'DashScope image task timed out');
+          await delay(pollIntervalMs);
+          if (Date.now() >= deadline) throw new AiImageJobError('PROVIDER_TIMEOUT', 'DashScope image task timed out');
+          completed = await requestJson('DashScope', fetcher, options.apiKey, `${apiBase}/tasks/${encodeURIComponent(taskId)}`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${options.apiKey}` },
+          }, Math.max(1, deadline - Date.now()));
+        }
+
+        const results = Array.isArray(completed?.output?.results) ? completed.output.results : [];
+        const images = await Promise.all(results.map(async (item: any, index: number) => {
+          if (!item?.url) throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope returned an image without a URL');
+          const image = await downloadImage(fetcher, String(item.url), Math.max(1, deadline - Date.now()));
+          return { ...image, filename: `dashscope-${taskId}-${index + 1}.${extensionForMime(image.mimeType)}` };
+        }));
+        return {
+          images,
+          providerJobId: taskId,
+          actualCostCents: normalizedCost(options.costPerImageCents, images.length),
+        };
+      } catch (error) {
+        throw withProviderAcceptance(error, taskId, providerAcceptedAt);
+      }
     },
   };
 }
@@ -280,36 +420,52 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
       if (request.operation === 'IMAGE_TO_IMAGE') {
         throw new AiImageJobError('UNSUPPORTED_OPERATION', 'OpenAI image edits are not enabled for this model');
       }
-      const body = await requestJson('OpenAI Images', fetcher, options.apiKey, `${apiBase}/images/generations`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: request.model || options.model,
-          prompt: request.negativePrompt ? `${request.prompt}\n\nAvoid: ${request.negativePrompt}` : request.prompt,
-          n: request.count,
-          size: `${request.width}x${request.height}`,
-        }),
-      }, timeoutMs);
+      let accepted: { body: any; providerJobId: string | null; providerAcceptedAt: Date };
+      try {
+        accepted = await requestJsonWithIdentity('OpenAI Images', fetcher, options.apiKey, `${apiBase}/images/generations`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: request.model || options.model,
+            prompt: request.negativePrompt ? `${request.prompt}\n\nAvoid: ${request.negativePrompt}` : request.prompt,
+            n: request.count,
+            size: `${request.width}x${request.height}`,
+          }),
+        }, timeoutMs);
+      } catch (error) {
+        if (error && typeof error === 'object' && 'providerJobId' in error) throw error;
+        if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
+        throw withProviderSubmissionUncertain(error);
+      }
+      const { body, providerJobId, providerAcceptedAt } = accepted;
+      if (providerJobId) {
+        await recordProviderAcceptance(options.onProviderJobCreated, providerJobId, providerAcceptedAt);
+      }
       const data = Array.isArray(body?.data) ? body.data : [];
-      const images = await Promise.all(data.map(async (item: any, index: number) => {
-        if (item?.b64_json) {
-          const buffer = Buffer.from(String(item.b64_json), 'base64');
-          if (buffer.byteLength > MAX_IMAGE_BYTES) {
-            throw new AiImageJobError('PROVIDER_RESPONSE_TOO_LARGE', `AI image provider response exceeds ${MAX_IMAGE_BYTES} bytes`);
+      try {
+        const images = await Promise.all(data.map(async (item: any, index: number) => {
+          if (item?.b64_json) {
+            const buffer = Buffer.from(String(item.b64_json), 'base64');
+            if (buffer.byteLength > MAX_IMAGE_BYTES) {
+              throw new AiImageJobError('PROVIDER_RESPONSE_TOO_LARGE', `AI image provider response exceeds ${MAX_IMAGE_BYTES} bytes`);
+            }
+            return { buffer, mimeType: validatedImageMime(buffer, 'image/png'), filename: `openai-${index + 1}.png` };
           }
-          return { buffer, mimeType: validatedImageMime(buffer, 'image/png'), filename: `openai-${index + 1}.png` };
-        }
-        if (item?.url) {
-          const image = await downloadImage(fetcher, String(item.url), timeoutMs);
-          return { ...image, filename: `openai-${index + 1}.${extensionForMime(image.mimeType)}` };
-        }
-        throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'OpenAI Images returned an empty image result');
-      }));
-      return {
-        images,
-        providerJobId: body?.id ? String(body.id) : null,
-        actualCostCents: normalizedCost(options.costPerImageCents, images.length),
-      };
+          if (item?.url) {
+            const image = await downloadImage(fetcher, String(item.url), timeoutMs);
+            return { ...image, filename: `openai-${index + 1}.${extensionForMime(image.mimeType)}` };
+          }
+          throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'OpenAI Images returned an empty image result');
+        }));
+        return {
+          images,
+          providerJobId,
+          actualCostCents: normalizedCost(options.costPerImageCents, images.length),
+        };
+      } catch (error) {
+        if (providerJobId) throw withProviderAcceptance(error, providerJobId, providerAcceptedAt);
+        throw withProviderSubmissionUncertain(error);
+      }
     },
   };
 }

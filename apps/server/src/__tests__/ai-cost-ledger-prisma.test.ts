@@ -18,6 +18,22 @@ const acceptanceMigration = readFileSync(
   new URL('../../prisma/migrations/20260717140000_pair_ai_cost_provider_acceptance/migration.sql', import.meta.url),
   'utf8',
 );
+const uncertainEnumMigration = readFileSync(
+  new URL('../../prisma/migrations/20260717141000_add_ai_cost_submission_uncertain_enum/migration.sql', import.meta.url),
+  'utf8',
+);
+const uncertainLifecycleMigration = readFileSync(
+  new URL('../../prisma/migrations/20260717142000_enable_ai_cost_submission_uncertain/migration.sql', import.meta.url),
+  'utf8',
+);
+const uncertainValidationMigration = readFileSync(
+  new URL('../../prisma/migrations/20260717142500_validate_ai_cost_submission_uncertain/migration.sql', import.meta.url),
+  'utf8',
+);
+const dispatchMigration = readFileSync(
+  new URL('../../prisma/migrations/20260717143000_persist_ai_provider_dispatch_fence/migration.sql', import.meta.url),
+  'utf8',
+);
 
 describe('AI cost ledger persistence contract', () => {
   it('stores one reservation per job and append-only idempotent settlements', () => {
@@ -45,5 +61,23 @@ describe('AI cost ledger persistence contract', () => {
     expect(identityMigration).toMatch(/costed AI job identity is immutable/u);
     expect(acceptanceMigration).toMatch(/provider request identity and acceptance time must be paired/u);
     expect(acceptanceMigration).toMatch(/provider acceptance may only be bound when reconciliation starts/u);
+    expect(uncertainEnumMigration).toMatch(/ALTER TYPE "AiCostReservationStatus" ADD VALUE IF NOT EXISTS 'SUBMISSION_UNCERTAIN'/u);
+    expect(uncertainEnumMigration).toMatch(/COMMIT;/u);
+    expect(uncertainLifecycleMigration).toMatch(/ai_cost_reservations_lifecycle_check/u);
+    expect(uncertainLifecycleMigration).toMatch(/status" = 'RESERVED'.*provider_request_id" IS NULL.*reconciliation_required_at" IS NULL/su);
+    expect(uncertainLifecycleMigration).toMatch(/cost provider request identity is immutable/u);
+    expect(uncertainLifecycleMigration).toMatch(/cost provider acceptance time is immutable/u);
+    expect(uncertainLifecycleMigration).toMatch(/cost reconciliation time is immutable/u);
+    expect(uncertainLifecycleMigration).toMatch(/CREATE OR REPLACE FUNCTION ai_cost_settlements_validate/u);
+    expect(uncertainLifecycleMigration).not.toMatch(/VALIDATE CONSTRAINT/u);
+    expect(uncertainValidationMigration).toMatch(/VALIDATE CONSTRAINT "ai_cost_settlements_identity_check"/u);
+    expect(uncertainValidationMigration).toMatch(/VALIDATE CONSTRAINT "ai_cost_reservations_lifecycle_check"/u);
+    expect(schema).toContain('providerDispatchedAt   DateTime?');
+    expect(dispatchMigration).toMatch(/ADD COLUMN "provider_dispatched_at" TIMESTAMP\(3\)/u);
+    expect(dispatchMigration).toMatch(/UPDATE "ai_image_jobs"/u);
+    expect(dispatchMigration).toMatch(/status" IN \('RUNNING', 'RETRYING', 'CANCEL_REQUESTED'\)/u);
+    expect(dispatchMigration).toMatch(/LOWER\("provider"\) <> 'fake'/u);
+    expect(dispatchMigration).toMatch(/AI image provider dispatch time is immutable/u);
+    expect(dispatchMigration).toMatch(/AI image provider dispatch may only start for an unbound running job/u);
   });
 });

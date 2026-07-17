@@ -173,19 +173,26 @@ fi
 log "Installing dependencies"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm install --frozen-lockfile"
 
-log "Generating Prisma client and migrating database"
-run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; npx prisma generate && npx prisma migrate deploy"
-
-if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
-  log "Validating runtime upload config for profile: $DEPLOY_ENV_PROFILE"
-  run_in_dir "$NEXT_DIR" "DEPLOY_DIR='$NEXT_DIR' ENV_FILE='$ENV_FILE_NAME' SKIP_SERVICE_CHECKS=1 SKIP_PROCESS_ENV_CHECKS=1 SKIP_HTTP_CHECK=1 bash scripts/diagnose-runtime-env.sh"
-fi
+log "Generating Prisma client"
+run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; npx prisma generate"
 
 log "Building server and web"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; pnpm --filter server build && pnpm --filter web build"
 
 log "Building cloud extension package"
 run_in_dir "$NEXT_DIR" "set -a; . './$ENV_FILE_NAME'; set +a; EXTENSION_PREVIOUS_BUILD_ROOT='$APP_DIR/build/extensions' pnpm package:extension:cloud"
+
+SERVICES_QUIESCED=0
+restore_quiesced_services() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$SERVICES_QUIESCED" = "1" ]; then
+    log "Restoring current Worker/API after failed deploy"
+    systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+  fi
+  exit "$status"
+}
+trap restore_quiesced_services EXIT
 
 rollback() {
   log "Rolling back app dir"
@@ -198,7 +205,23 @@ rollback() {
     mv "$BACKUP_TARGET" "$APP_DIR"
   fi
   systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE" || true
+  SERVICES_QUIESCED=0
 }
+
+log "Quiescing AI provider services before migration"
+if ! systemctl stop "$WORKER_SERVICE" "$API_SERVICE"; then
+  systemctl restart "$WORKER_SERVICE" "$API_SERVICE" || true
+  fail "could not quiesce Worker/API before database migration"
+fi
+SERVICES_QUIESCED=1
+
+log "Migrating database"
+run_in_dir "$NEXT_DIR/apps/server" "set -a; . '../../$ENV_FILE_NAME'; set +a; npx prisma migrate deploy"
+
+if [ "$DEPLOY_ENV_PROFILE" = "cloud-r2" ]; then
+  log "Validating runtime upload config for profile: $DEPLOY_ENV_PROFILE"
+  run_in_dir "$NEXT_DIR" "DEPLOY_DIR='$NEXT_DIR' ENV_FILE='$ENV_FILE_NAME' SKIP_SERVICE_CHECKS=1 SKIP_PROCESS_ENV_CHECKS=1 SKIP_HTTP_CHECK=1 bash scripts/diagnose-runtime-env.sh"
+fi
 
 log "Switching $APP_DIR"
 mv "$APP_DIR" "$BACKUP_TARGET"
@@ -209,6 +232,7 @@ if ! systemctl restart "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; then
   rollback
   exit 1
 fi
+SERVICES_QUIESCED=0
 
 sleep 3
 for service in "$WORKER_SERVICE" "$API_SERVICE" "$WEB_SERVICE"; do

@@ -54,6 +54,20 @@ function repository(initial = job()) {
     markCancelled: vi.fn(async () => {
       current = { ...current, status: 'CANCELLED', billedUnits: 0 };
     }),
+    markSubmissionUncertain: vi.fn(async (_id, data) => {
+      current = {
+        ...current,
+        status: 'FAILED',
+        attemptCount: data.attemptCount,
+        errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+        errorMessage: 'Provider submission outcome requires manual reconciliation',
+        billedUnits: 0,
+      };
+    }),
+    recordProviderDispatchStarted: vi.fn(async () => true),
+    recordProviderJobId: vi.fn(async (_id, providerJobId) => {
+      current = { ...current, providerJobId };
+    }),
     complete: vi.fn(async (_id, data) => {
       current = {
         ...current,
@@ -138,6 +152,230 @@ describe('AI image job foundation', () => {
 
     expect(generate).not.toHaveBeenCalled();
     expect(state.repo.markCancelled).toHaveBeenCalledWith('job-1');
+  });
+
+  it('records a final-result provider identity before honoring post-generation cancellation', async () => {
+    const state = repository();
+    const getById = state.repo.getById as ReturnType<typeof vi.fn>;
+    getById
+      .mockResolvedValueOnce(job())
+      .mockResolvedValueOnce(job({ status: 'CANCEL_REQUESTED', providerJobId: 'provider-final' }));
+    const provider = createFakeAiImageProvider({
+      images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+      providerJobId: 'provider-final',
+    });
+    const uploadBuffer = vi.fn();
+
+    await runAiImageJob('job-1', 1, { repository: state.repo, provider, uploadBuffer });
+
+    expect(state.repo.recordProviderJobId).toHaveBeenCalledWith('job-1', 'provider-final', expect.any(Date));
+    expect(state.repo.markCancelled).toHaveBeenCalledWith('job-1');
+    expect((state.repo.recordProviderJobId as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
+      .toBeLessThan((state.repo.markCancelled as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
+    expect(uploadBuffer).not.toHaveBeenCalled();
+    expect(state.repo.complete).not.toHaveBeenCalled();
+  });
+
+  it('quarantines a paid synchronous result without an ID when cancellation wins', async () => {
+    const initial = job({ provider: 'openai-images', model: 'gpt-image-1' });
+    const state = repository(initial);
+    const getById = state.repo.getById as ReturnType<typeof vi.fn>;
+    getById
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce({ ...initial, status: 'CANCEL_REQUESTED' });
+    const provider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+        actualCostCents: 3,
+      })),
+    };
+    const uploadBuffer = vi.fn();
+
+    await runAiImageJob('job-1', 1, { repository: state.repo, provider, uploadBuffer });
+
+    expect(state.repo.markCancelled).toHaveBeenCalledWith('job-1', {
+      providerSubmissionUncertain: true,
+    });
+    expect(uploadBuffer).not.toHaveBeenCalled();
+    expect(state.repo.complete).not.toHaveBeenCalled();
+  });
+
+  it('fails accepted provider errors terminally without resubmitting on retry', async () => {
+    const state = repository();
+    const providerAcceptedAt = new Date('2026-07-17T04:00:00.000Z');
+    const provider = {
+      name: 'fake',
+      generate: vi.fn(async () => {
+        throw Object.assign(new Error('accepted task persistence failed'), {
+          providerJobId: 'provider-accepted',
+          providerAcceptedAt,
+        });
+      }),
+    };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(),
+    })).rejects.toThrow('accepted task persistence failed');
+
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+    expect(state.repo.markFailed).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      attemptCount: 1,
+      providerJobId: 'provider-accepted',
+      providerAcceptedAt,
+    }));
+  });
+
+  it('fails storage errors terminally after a provider identity has been recorded', async () => {
+    const state = repository();
+    const provider = createFakeAiImageProvider({
+      images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+      providerJobId: 'provider-before-upload',
+    });
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(async () => { throw new Error('storage unavailable'); }),
+    })).rejects.toThrow('storage unavailable');
+
+    expect(state.repo.recordProviderJobId).toHaveBeenCalledWith('job-1', 'provider-before-upload', expect.any(Date));
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+    expect(state.repo.markFailed).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      providerJobId: 'provider-before-upload',
+      providerAcceptedAt: expect.any(Date),
+    }));
+  });
+
+  it('quarantines a paid result without provider identity when storage fails', async () => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1' }));
+    const provider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+        actualCostCents: 4,
+      })),
+    };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(async () => { throw new Error('storage unavailable after generation'); }),
+    })).rejects.toThrow('storage unavailable after generation');
+
+    expect(state.repo.markSubmissionUncertain).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      attemptCount: 1,
+      errorCode: 'PROVIDER_ERROR',
+      providerSubmissionUncertain: true,
+    }));
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+    expect(state.repo.markFailed).not.toHaveBeenCalled();
+    expect(state.repo.complete).not.toHaveBeenCalled();
+    expect(state.current()).toMatchObject({
+      status: 'FAILED', errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN', billedUnits: 0,
+    });
+  });
+
+  it('quarantines a paid result without provider identity when completion fails', async () => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1' }));
+    const provider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+        actualCostCents: 4,
+      })),
+    };
+    state.repo.complete = vi.fn(async () => { throw new Error('completion transaction unavailable'); });
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(async () => ({
+        url: '/generated.png', backend: 'local', key: 'generated.png',
+      })),
+    })).rejects.toThrow('completion transaction unavailable');
+
+    expect(state.repo.markSubmissionUncertain).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      attemptCount: 1,
+      errorCode: 'PROVIDER_ERROR',
+      providerSubmissionUncertain: true,
+    }));
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+    expect(state.repo.markFailed).not.toHaveBeenCalled();
+    expect(state.current()).toMatchObject({
+      status: 'FAILED', errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN', billedUnits: 0,
+    });
+  });
+
+  it('quarantines unclassified paid provider failures after the dispatch fence', async () => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1' }));
+    delete (state.repo as Partial<AiImageJobRepository>).recordProviderDispatchStarted;
+    const provider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => { throw new Error('provider rejected before result'); }),
+    };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(),
+    })).rejects.toThrow('provider rejected before result');
+
+    expect(state.repo.markSubmissionUncertain).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      attemptCount: 1, errorCode: 'PROVIDER_ERROR', providerSubmissionUncertain: true,
+    }));
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+  });
+
+  it('passes no-ID paid result evidence into the completion transaction', async () => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1' }));
+    const provider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],
+        actualCostCents: 4,
+      })),
+    };
+
+    await runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(async () => ({
+        url: '/generated.png', backend: 'local', key: 'generated.png',
+      })),
+    });
+
+    expect(state.repo.complete).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      providerJobId: null,
+      providerResultReceivedWithoutIdentity: true,
+    }));
+  });
+
+  it('does not retry a provider request that was definitely rejected', async () => {
+    const state = repository(job({ provider: 'openai-images', model: 'gpt-image-1' }));
+    const provider = {
+      name: 'openai-images',
+      generate: vi.fn(async () => {
+        throw Object.assign(new AiImageJobError('PROVIDER_REQUEST_FAILED', 'Provider rejected the request'), {
+          providerSubmissionRejected: true,
+        });
+      }),
+    };
+
+    await expect(runAiImageJob('job-1', 1, {
+      repository: state.repo,
+      provider,
+      uploadBuffer: vi.fn(),
+      maxAttempts: 3,
+    })).rejects.toMatchObject({ code: 'PROVIDER_REQUEST_FAILED' });
+
+    expect(state.repo.markRetrying).not.toHaveBeenCalled();
+    expect(state.repo.markFailed).toHaveBeenCalledWith('job-1', expect.objectContaining({
+      attemptCount: 1,
+      providerSubmissionRejected: true,
+    }));
   });
 
   it('passes frozen IMAGE_TO_IMAGE references to the provider in request order', async () => {
