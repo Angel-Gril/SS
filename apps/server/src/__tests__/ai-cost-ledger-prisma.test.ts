@@ -34,6 +34,10 @@ const dispatchMigration = readFileSync(
   new URL('../../prisma/migrations/20260717143000_persist_ai_provider_dispatch_fence/migration.sql', import.meta.url),
   'utf8',
 );
+const reconciliationQueueMigration = readFileSync(
+  new URL('../../prisma/migrations/20260718010000_add_ai_cost_reconciliation_queue_index/migration.sql', import.meta.url),
+  'utf8',
+);
 
 describe('AI cost ledger persistence contract', () => {
   it('stores one reservation per job and append-only idempotent settlements', () => {
@@ -79,5 +83,8 @@ describe('AI cost ledger persistence contract', () => {
     expect(dispatchMigration).toMatch(/LOWER\("provider"\) <> 'fake'/u);
     expect(dispatchMigration).toMatch(/AI image provider dispatch time is immutable/u);
     expect(dispatchMigration).toMatch(/AI image provider dispatch may only start for an unbound running job/u);
+    expect(schema).toContain('@@index([status, reconciliationRequiredAt, id], map: "ai_cost_reservations_reconciliation_queue_idx")');
+    expect(reconciliationQueueMigration).toMatch(/CREATE INDEX CONCURRENTLY IF NOT EXISTS/u);
+    expect(reconciliationQueueMigration).toMatch(/"status", "reconciliation_required_at", "id"/u);
   });
 });

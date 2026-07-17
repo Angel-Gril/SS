@@ -2985,6 +2985,7 @@ model AiCostReservation {
   @@unique([jobId, ownerUserId], name: "ai_cost_reservation_job_owner", map: "ai_cost_reservation_job_owner_key")
   @@unique([ownerUserId, idempotencyKey], name: "ai_cost_reservation_owner_idempotency", map: "ai_cost_reservations_owner_idempotency_key")
   @@index([ownerUserId, status, updatedAt], map: "ai_cost_reservations_owner_status_updated_idx")
+  @@index([status, reconciliationRequiredAt, id], map: "ai_cost_reservations_reconciliation_queue_idx")
   @@index([workflowId, createdAt], map: "ai_cost_reservations_workflow_created_idx")
   @@map("ai_cost_reservations")
 }

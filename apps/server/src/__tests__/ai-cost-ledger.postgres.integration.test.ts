@@ -9,6 +9,7 @@ import {
   reserveAiCost,
   settleAiCost,
 } from '../services/ai-cost-ledger.js';
+import { createAiCostReconciliationAdminService } from '../services/ai-cost-reconciliation-admin.js';
 
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1' && Boolean(databaseUrl);
@@ -22,6 +23,121 @@ describePostgres('AI cost ledger PostgreSQL state machine', () => {
     await client!.$connect();
   });
   afterAll(async () => client!.$disconnect());
+
+  it('allows exactly one operator decision for the same reconciliation evidence', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `reconcile_owner_${suffix}`;
+    const jobId = `reconcile_job_${suffix}`;
+    const fingerprint = 'f'.repeat(64);
+    await client!.user.create({ data: {
+      id: ownerUserId, phone: `reconcile_${suffix}`, passwordHash: 'integration-test',
+    } });
+    await client!.aiImageJob.create({ data: {
+      id: jobId, ownerUserId, actorUserId: ownerUserId, status: 'FAILED',
+      operation: 'IMAGE_TO_IMAGE', provider: 'openai', model: 'gpt-image-1',
+      prompt: 'admin reconciliation integration', width: 1024, height: 1024,
+      requestFingerprint: fingerprint, errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+      providerDispatchedAt: new Date(),
+    } });
+    const reserved = await reserveAiCost(client! as any, {
+      ownerUserId, actorUserId: ownerUserId, jobId, idempotencyKey: `reserve-${suffix}`,
+      requestFingerprint: fingerprint, provider: 'openai', model: 'gpt-image-1',
+      operation: 'IMAGE_TO_IMAGE', estimatedCostMinor: 10, maximumCostMinor: 20,
+    });
+    await markAiCostSubmissionUncertain(client! as any, {
+      reservationId: reserved.reservation.id, ownerUserId, actorUserId: ownerUserId,
+      idempotencyKey: `uncertain-${suffix}`, requestFingerprint: fingerprint,
+      reason: 'integration test submission uncertainty',
+    });
+
+    const service = createAiCostReconciliationAdminService({ database: client! as any });
+    const listed = await service.listReconciliations({ status: 'SUBMISSION_UNCERTAIN', limit: 100 });
+    const item = listed.items.find((candidate: any) => candidate.id === reserved.reservation.id);
+    if (!item) throw new Error('reconciliation item missing');
+    expect(item?.evidenceHash).toMatch(/^[a-f0-9]{64}$/u);
+    const common = {
+      reservationId: reserved.reservation.id, actorUserId: ownerUserId,
+      expectedStatus: 'SUBMISSION_UNCERTAIN' as const, expectedEvidenceHash: item.evidenceHash,
+    };
+    const outcomes = await Promise.allSettled([
+      service.reconcileReservation({
+        ...common, requestId: randomUUID(), outcome: 'SETTLED', actualCostMinor: 12, billedUnits: 1,
+        reason: 'Provider invoice confirms one billable request',
+      }),
+      service.reconcileReservation({
+        ...common, requestId: randomUUID(), outcome: 'RELEASED', billedUnits: 0,
+        reason: 'Provider dashboard confirms no billable request exists',
+      }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: 'RESERVATION_CHANGED', statusCode: 409 });
+    const terminal = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { id: reserved.reservation.id }, include: { settlements: true },
+    });
+    expect(['SETTLED', 'RELEASED']).toContain(terminal.status);
+    expect(terminal.settlements.filter((settlement) =>
+      ['RECONCILED_CHARGE', 'RECONCILED_RELEASE'].includes(settlement.kind))).toHaveLength(1);
+    const projectedJob = await client!.aiImageJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(projectedJob).toMatchObject(terminal.status === 'SETTLED'
+      ? { actualCostCents: 12, billedUnits: 1 }
+      : { actualCostCents: 0, billedUnits: 0 });
+  });
+
+  it('replays the same operator request exactly once and rejects changed evidence text', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `replay_owner_${suffix}`;
+    const jobId = `replay_job_${suffix}`;
+    const fingerprint = 'e'.repeat(64);
+    await client!.user.create({ data: {
+      id: ownerUserId, phone: `replay_${suffix}`, passwordHash: 'integration-test',
+    } });
+    await client!.aiImageJob.create({ data: {
+      id: jobId, ownerUserId, actorUserId: ownerUserId, status: 'FAILED',
+      operation: 'IMAGE_TO_IMAGE', provider: 'openai', model: 'gpt-image-1',
+      prompt: 'admin reconciliation replay', width: 1024, height: 1024,
+      requestFingerprint: fingerprint, errorCode: 'PROVIDER_SUBMISSION_UNCERTAIN',
+      providerDispatchedAt: new Date(),
+    } });
+    const reserved = await reserveAiCost(client! as any, {
+      ownerUserId, actorUserId: ownerUserId, jobId, idempotencyKey: `reserve-${suffix}`,
+      requestFingerprint: fingerprint, provider: 'openai', model: 'gpt-image-1',
+      operation: 'IMAGE_TO_IMAGE', estimatedCostMinor: 10, maximumCostMinor: 20,
+    });
+    await markAiCostSubmissionUncertain(client! as any, {
+      reservationId: reserved.reservation.id, ownerUserId, actorUserId: ownerUserId,
+      idempotencyKey: `uncertain-${suffix}`, requestFingerprint: fingerprint,
+      reason: 'integration test submission uncertainty',
+    });
+    const service = createAiCostReconciliationAdminService({ database: client! as any });
+    const listed = await service.listReconciliations({ status: 'SUBMISSION_UNCERTAIN', limit: 100 });
+    const item = listed.items.find((candidate: any) => candidate.id === reserved.reservation.id);
+    if (!item) throw new Error('reconciliation replay item missing');
+    const requestId = randomUUID();
+    const input = {
+      reservationId: reserved.reservation.id, actorUserId: ownerUserId, requestId,
+      expectedStatus: 'SUBMISSION_UNCERTAIN' as const, expectedEvidenceHash: item.evidenceHash,
+      outcome: 'SETTLED' as const, actualCostMinor: 13, billedUnits: 1,
+      reason: 'Provider invoice confirms exactly one billable request',
+    };
+
+    const replayed = await Promise.all([
+      service.reconcileReservation(input),
+      service.reconcileReservation(input),
+    ]);
+    expect(replayed).toHaveLength(2);
+    expect(replayed.every((result) => result.status === 'SETTLED')).toBe(true);
+    await expect(service.reconcileReservation({
+      ...input, reason: 'A changed reason must not reuse the same request identifier',
+    })).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT', statusCode: 409 });
+
+    const terminal = await client!.aiCostReservation.findUniqueOrThrow({
+      where: { id: reserved.reservation.id }, include: { settlements: true, job: true },
+    });
+    expect(terminal.settlements.filter((settlement) => settlement.kind === 'RECONCILED_CHARGE')).toHaveLength(1);
+    expect(terminal.job).toMatchObject({ actualCostCents: 13, billedUnits: 1 });
+  });
 
   it('recovers concurrent reservation replay and preserves immutable reconciliation evidence', async () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);

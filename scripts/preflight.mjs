@@ -34,6 +34,11 @@ const steps = [
     args: ['scripts/ai-provider-dispatch-deploy-safety.test.mjs'],
   },
   {
+    name: 'admin AI cost reconciliation contract',
+    command: 'node',
+    args: ['scripts/web-admin-ai-cost-reconciliation.test.mjs'],
+  },
+  {
     name: 'source marketplace network contract',
     command: 'node',
     args: ['scripts/source-marketplace-contract.test.mjs'],

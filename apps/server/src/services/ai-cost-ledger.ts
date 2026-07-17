@@ -235,6 +235,7 @@ export interface AiCostSettlementInput {
   actualCostMinor?: number | null;
   billedUnits?: number;
   reason?: string | null;
+  expectedReservationUpdatedAt?: Date;
 }
 
 export async function appendAiCostSettlementInTransaction(
@@ -253,6 +254,9 @@ export async function appendAiCostSettlementInTransaction(
     actorUserId: required(input.actorUserId, 'actorUserId'),
     idempotencyKey: required(input.idempotencyKey, 'idempotencyKey'),
     requestFingerprint: sha256(input.requestFingerprint, 'requestFingerprint'),
+    expectedReservationUpdatedAt: input.expectedReservationUpdatedAt
+      ? validDate(input.expectedReservationUpdatedAt, 'expectedReservationUpdatedAt')
+      : undefined,
   };
   const tx = database;
     const reservation = await loadReservation(tx, normalized.reservationId, normalized.ownerUserId);
@@ -296,7 +300,14 @@ export async function appendAiCostSettlementInTransaction(
     } });
     const terminal = normalized.kind === 'CHARGE' || normalized.kind === 'RECONCILED_CHARGE' ? 'SETTLED' : 'RELEASED';
     const updated = await tx.aiCostReservation.updateMany({
-      where: { id: reservation.id, ownerUserId: normalized.ownerUserId, status: reservation.status },
+      where: {
+        id: reservation.id,
+        ownerUserId: normalized.ownerUserId,
+        status: reservation.status,
+        ...(normalized.expectedReservationUpdatedAt
+          ? { updatedAt: normalized.expectedReservationUpdatedAt }
+          : {}),
+      },
       data: {
         status: terminal,
         ...(terminal === 'SETTLED' ? { settledAt: new Date() } : { releasedAt: new Date() }),

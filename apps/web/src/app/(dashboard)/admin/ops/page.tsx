@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
+import { AiCostReconciliationPanel } from '@/components/admin/ai-cost-reconciliation-panel';
 
 interface OpsResponse {
   checks: Record<string, { status: string; detail?: string }>;
@@ -97,6 +98,8 @@ export default function AdminOpsPage() {
           <KvRow label="进程已运行" value={formatUptime(data.uptimeSeconds)} />
         </CardContent>
       </Card>
+
+      <AiCostReconciliationPanel />
     </div>
   );
 }
