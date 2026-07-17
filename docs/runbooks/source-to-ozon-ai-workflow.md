@@ -41,6 +41,17 @@ Deployment artifact note: the cloud extension package version is derived from ea
 | International VPS | `45.76.49.64` deployed `d932a9a`, backup completed, full verifier passed with `0 failures / 1 warning`; the warning is local-only backup replication |
 | External effects | No paid AI call, real Ozon write or production image upload was executed |
 
+## Release Evidence: `c704692`
+
+| Evidence | Result |
+|---|---|
+| Git | `c704692` pushed to `origin/feat/ai-media-prompt-registry`; deployment packaged from a clean detached worktree |
+| Automated verification | Default preflight passed: server `1972 passed / 80 skipped`, server/Web typecheck, Provider adapter characterization, AI evaluation policy contract, marketplace network contract and extension static verification all passed |
+| Contract state | Six synthetic PDD/Taobao fixtures pass schema, signature, identity, SKU, price and recursive secret checks; three AI evaluation policies pass Draft-07 and semantic boundary checks, explicitly without image corpus or quality results |
+| Domestic VPS | `8.163.122.40` deployed `c704692`; 68 migrations current, services and public HTTP `/ready` passed. Existing HTTPS/Cloudflare verifier failures remain unchanged |
+| International VPS | `45.76.49.64` deployed `c704692`; 68 migrations current, full verifier passed with `0 failures / 1 warning` for local-only backup replication |
+| External effects | No paid AI call, real Ozon write or production image upload was executed |
+
 ## Release Evidence: `50cc36b`
 
 | Evidence | Result |
