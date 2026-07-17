@@ -691,6 +691,8 @@ flowchart TB
 
 **Verification:** PDD/Taobao fixtures demonstrate trusted SKU-level prices without requiring `debugger` in the default path.
 
+**Implementation slice (2026-07-17):** The bounded PDD/Taobao/Tmall projection modules, isolated policy bridge, platform normalizers, SPA identity checks, TTL/byte budgets and lifecycle contracts are present. The production manifest intentionally does not register the MAIN observer until the ERP policy-signature sync and dynamic registration path exist; network rows remain `page_observed_network`/untrusted and only a bounded `extractionDiagnostics.networkCapture` summary is persisted. Sanitized real response fixtures and browser canaries are still required before this unit can be marked complete.
+
 - [ ] **Unit 4: Ozon Catalog, Mapping, and Dictionary Foundation**
 
 **Implementation status (2026-07-15):** Catalog/mapping/dictionary services, persistence, rollout flags, server-owned confirmation, Web conflict handling, and benchmark metric code are implemented. Final acceptance remains blocked on the explicitly `pending_review` pilot fixture in `docs/contracts/ozon-category-recommendation-pilot-benchmark.json`: real pilot shop/category IDs, human labels, catalog revision, and approved thresholds are still `UNKNOWN` and have not been fabricated.
@@ -1091,6 +1093,8 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 - [ ] **Unit 7B: Media Asset Graph, Parent Workflow, Provider Capabilities, and Listing-Copy Prompt Templates**
 
 **Status:** First lifecycle slice implemented and acceptance-verified in the post-`1a96b9f` worktree: feature-gated single-source `IMAGE_TO_IMAGE` parent workflows, relational frozen inputs, child attempts, immutable events and media lineage, owner/context authority, list/detail/cancel/retry/review/apply APIs, cancellation-safe fake execution, actor-audited application and contextual collect history. The 64-migration isolated replay, PostgreSQL concurrency/provenance integration test, full server suite and desktop/mobile browser lifecycle all pass. Unit 7B remains incomplete until provider capability contracts, cost reservation/settlement, listing-copy templates, multi-reference support and real provider evidence land.
+
+**Implementation slice (2026-07-17):** Provider capability preflight and versioned `listing-copy.title`/`listing-copy.description` candidate-only Prompt templates are now present. JSON facts are bounded/canonicalized, compiled Prompt limits are enforced at preview/test/runtime, frozen snapshots record output mode and schema version, and the admin API uses explicit secret-free DTOs. No text Provider execution, candidate persistence/application, cost settlement, multi-reference support or real provider evidence is claimed by this slice.
 
 **Goal:** Upgrade the media domain before adding more provider operations.
 
