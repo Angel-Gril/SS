@@ -13,6 +13,21 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Release Evidence: `a79e0e4`
+
+This release hardens the dark Unit 7B provider-cost lifecycle. It fences paid-provider dispatch before submission, quarantines ambiguous outcomes without resubmission, supports operator reconciliation terminal states, and quiesces Worker/API execution around schema deployment. It does not enable a paid Provider, tenant rollout, image write or Ozon write.
+
+| Evidence | Result |
+|---|---|
+| Git | `a79e0e4` (`feat(ai-media): harden provider cost lifecycle`) pushed to `origin/feat/ai-media-prompt-registry`; deployments used the exact clean commit |
+| Automated verification | Server `2062 passed / 83 skipped`; all workspace type checks and production builds passed; lint `0 errors / 23` existing warnings; preflight `192 pass / 3` existing extension-permission warnings; Prisma validate/generate, all 77 migrations from zero, PostgreSQL integration and deployment safety contracts passed |
+| Local ERP | All 77 migrations current; API `/ready` reports DB/Redis OK; Web returns HTTP 200; browser login page loaded with only the expected unauthenticated `/api/user/me` 401 |
+| Domestic VPS | `8.163.122.40` deployed `a79e0e4`; pre-deploy database backup completed; 77 migrations current; API/Web/Worker, local/public `/ready`, Prisma and AI Media dark checks passed; cloud extension package `1.0.205`; browser setup page returned 200 |
+| Domestic infrastructure limits | Full verifier retained four existing failures: no HTTPS listener, no UFW 443 rule, no Cloudflare real-IP restoration and no Cloudflare origin guard. It also retained warnings for local-only backup replication and missing Cloudflare IP update; bootstrap validation separately warns that Turnstile keys are empty |
+| International VPS | `45.76.49.64` deployed `a79e0e4`; pre-deploy database backup completed; 77 migrations current; full runtime verifier passed with `0 failures / 1 warning`; `https://ss-erp.com` loaded with no browser console errors; cloud extension package `1.0.240` |
+| Rollout state | AI Media master `false`, rollout policy revision `0` with zero tenant IDs, logistics distribution flags `false`, and extension auth remains `compat` in both VPS environments |
+| External effects | No paid AI Provider call, real image generation/upload, commercial charge, tenant activation or Ozon write was executed |
+
 ## Release Evidence: `3b8460d`
 
 This release adds the fail-closed PDD/Taobao/Tmall network-evidence boundary. It is a dark, provider-neutral capability and does not authorize marketplace interception, paid AI calls, image writes, or Ozon writes.

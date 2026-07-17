@@ -86,6 +86,7 @@ DEPLOY_ENV_PROFILE=cloud-r2 \
 
 - 不要从 WSL 里运行 Windows Git 创建的 worktree。`.git` 文件会指向类似 `D:/AI Agent/.../.git/worktrees/...` 的 Windows 路径，WSL Git 会报 `fatal: not a git repository`。
 - 在 WSL/Git Bash 里写 `SSH_KEY=~/.ssh/ss_erp_vultr_sg` 会解析到 Unix home，例如 `/home/miku/.ssh/...`，不是 Windows 的 `C:\Users\550W\.ssh\...`。如果 key 实际在 Windows 用户目录，必须用当前 shell 能读到的绝对路径。
+- 在这台机器上，PowerShell 中的裸 `bash` 解析到 WSL，不能复用 Windows OpenSSH 的可用链路。执行发布脚本时显式调用 `C:\Program Files\Git\bin\bash.exe`（或 `C:\Progra~1\Git\bin\bash.exe`），并使用 Git Bash 可读的 `/c/Users/550W/.ssh/<key>` 路径。
 - `ssh root@45.76.49.64 echo ok` 通过，只能证明认证和 exec 通道正常；`scp` 还会走文件传输通道，可能因为客户端默认 SFTP、远端策略或中间网络被关闭而失败。
 - 当前机器上 Windows OpenSSH 到 VPS 可用；优先用 Windows 侧确认连通，再决定是否用 Git Bash/WSL 执行脚本。
 
