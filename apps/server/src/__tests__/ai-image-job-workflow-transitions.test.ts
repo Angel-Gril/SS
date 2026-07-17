@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 
 describe('AI image workflow child terminal transitions', () => {
+  it('loads frozen workflow inputs in ordinal order for provider execution', async () => {
+    const findUnique = vi.fn(async () => null);
+    await new PrismaAiImageJobRepository({ aiImageJob: { findUnique } } as never).getById('job-1');
+    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        workflow: { include: { inputs: { orderBy: { ordinal: 'asc' } } } },
+      }),
+    }));
+  });
+
   it('does not attach outputs or overwrite cancellation when completion loses the race', async () => {
     const job = {
       id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',

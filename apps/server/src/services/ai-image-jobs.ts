@@ -47,6 +47,7 @@ export interface AiImageJobRecord {
   inputAssets?: Array<{
     assetId: string;
     role: 'REFERENCE' | 'MASK';
+    ordinal?: number;
     url?: string;
     mimeType?: string;
     sha256?: string | null;

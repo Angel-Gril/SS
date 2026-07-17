@@ -26,6 +26,8 @@ describe('AI image provider capability matrix', () => {
 
   it('keeps the fake provider available for deterministic lifecycle tests only', () => {
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 1)).toBe(true);
+    expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 4)).toBe(true);
+    expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 5)).toBe(false);
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 0)).toBe(false);
   });
 
@@ -46,7 +48,7 @@ describe('AI image provider capability matrix', () => {
         provider: 'fake',
         model: 'test',
         operation: 'IMAGE_TO_IMAGE',
-        inputCount: 2,
+        inputCount: 5,
       }),
     ).toThrow(expect.objectContaining({ code: 'INVALID_MEDIA_INPUT' }));
     expect(() =>

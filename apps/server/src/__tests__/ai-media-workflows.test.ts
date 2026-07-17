@@ -45,6 +45,34 @@ describe('AI media workflow service', () => {
     expect(repo.createImageToImage).toHaveBeenCalledWith(createInput);
   });
 
+  it('accepts ordered multi-reference inputs within the provider capability', async () => {
+    const repo = repository();
+    const input: CreateAiMediaWorkflowInput = {
+      ...createInput,
+      sourceAssetId: undefined,
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+    };
+    await expect(createAiMediaWorkflowService(repo).createImageToImage(input)).resolves.toMatchObject({
+      jobId: 'job-1',
+    });
+    expect(repo.createImageToImage).toHaveBeenCalledWith(input);
+  });
+
+  it('rejects duplicate or over-capability reference sets before persistence', async () => {
+    const repo = repository();
+    await expect(createAiMediaWorkflowService(repo).createImageToImage({
+      ...createInput,
+      sourceAssetId: undefined,
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-1' }],
+    })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    await expect(createAiMediaWorkflowService(repo).createImageToImage({
+      ...createInput,
+      sourceAssetId: undefined,
+      references: Array.from({ length: 5 }, (_, index) => ({ assetId: `asset-${index + 1}` })),
+    })).rejects.toMatchObject({ code: 'INVALID_MEDIA_INPUT' });
+    expect(repo.createImageToImage).not.toHaveBeenCalled();
+  });
+
   it('rejects more than one output in the first lifecycle slice', async () => {
     await expect(createAiMediaWorkflowService(repository()).createImageToImage({
       ...createInput, count: 2,
@@ -70,6 +98,15 @@ describe('AI media workflow service', () => {
     expect(createAiMediaWorkflowFingerprint(createInput)).toBe(createAiMediaWorkflowFingerprint(createInput));
     expect(createAiMediaWorkflowFingerprint(createInput)).not.toBe(createAiMediaWorkflowFingerprint({
       ...createInput, context: { type: 'collect', id: 'goods-2' },
+    }));
+    const multi = {
+      ...createInput,
+      sourceAssetId: undefined,
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+    };
+    expect(createAiMediaWorkflowFingerprint(multi)).not.toBe(createAiMediaWorkflowFingerprint({
+      ...multi,
+      references: [...multi.references].reverse(),
     }));
   });
 

@@ -1,7 +1,10 @@
 import type { PrismaClient } from '@prisma/client';
 import {
+  AI_MEDIA_WORKFLOW_MODEL,
+  AI_MEDIA_WORKFLOW_PROVIDER,
   aiMediaPayloadHash,
   createAiMediaWorkflowFingerprint,
+  normalizeAiMediaWorkflowReferences,
   type AiMediaWorkflowRecord,
   type AiMediaWorkflowRepository,
   type CreateAiMediaWorkflowInput,
@@ -32,18 +35,54 @@ const detailInclude = {
   events: { orderBy: { createdAt: 'asc' }, take: 200 },
 } as const;
 
+interface FrozenSourceAsset {
+  id: string;
+  sha256: string | null;
+  sourceCaptureSnapshotId: string | null;
+  url: string;
+  mimeType: string;
+  width: number | null;
+  height: number | null;
+}
+
+function orderSourceAssets(
+  rows: FrozenSourceAsset[],
+  references: Array<{ assetId: string }>,
+): FrozenSourceAsset[] | null {
+  const assetsById = new Map(rows.map((asset) => [String(asset.id), asset]));
+  const ordered: FrozenSourceAsset[] = [];
+  for (const reference of references) {
+    const asset = assetsById.get(reference.assetId);
+    if (!asset) return null;
+    ordered.push(asset);
+  }
+  return ordered;
+}
+
 export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async createImageToImage(input: CreateAiMediaWorkflowInput) {
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
-      const asset = await tx.mediaAsset.findFirst({
-        where: { id: input.sourceAssetId, ownerUserId: input.ownerUserId, kind: 'SOURCE_ORIGINAL' },
-      });
-      if (!asset) throw Object.assign(new Error('Owned source asset not found'), { code: 'SOURCE_ASSET_NOT_FOUND' });
-      if (!/^[a-f0-9]{64}$/u.test(String(asset.sha256 || ''))) {
+      const references = normalizeAiMediaWorkflowReferences(input);
+      const assetRows = await tx.mediaAsset.findMany({
+        where: {
+          id: { in: references.map((reference) => reference.assetId) },
+          ownerUserId: input.ownerUserId,
+          kind: 'SOURCE_ORIGINAL',
+        },
+      }) as FrozenSourceAsset[];
+      const assets = orderSourceAssets(assetRows, references);
+      if (!assets) {
+        throw Object.assign(new Error('Owned source asset not found'), { code: 'SOURCE_ASSET_NOT_FOUND' });
+      }
+      const primaryAsset = assets[0]!;
+      if (assets.some((asset) => !/^[a-f0-9]{64}$/u.test(String(asset.sha256 || '')))) {
         throw Object.assign(new Error('Source asset has no immutable content hash'), { code: 'SOURCE_ASSET_INVALID' });
+      }
+      if (new Set(assets.map((asset) => asset.sha256)).size !== assets.length) {
+        throw Object.assign(new Error('Source references must have unique content'), { code: 'SOURCE_ASSET_DUPLICATE' });
       }
       const context = await tx.supplyGoods.findFirst({
         where: { id: input.context.id, userId: input.ownerUserId },
@@ -51,14 +90,17 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           snapshots: { orderBy: [{ version: 'desc' }, { createdAt: 'desc' }], take: 1, select: { id: true } },
         } } },
       });
-      if (!context || context.sourceCaptureSubject?.snapshots[0]?.id !== asset.sourceCaptureSnapshotId) {
+      const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id;
+      if (!context || assets.some((asset) => asset.sourceCaptureSnapshotId !== snapshotId)) {
         throw Object.assign(new Error('Source asset does not belong to the requested collect context'), {
           code: 'AI_MEDIA_CONTEXT_MISMATCH',
         });
       }
       const fingerprint = aiMediaPayloadHash({
         request: createAiMediaWorkflowFingerprint(input),
-        sourceAssetSha256: asset.sha256,
+        ...(input.references
+          ? { referenceAssetSha256: assets.map((asset) => asset.sha256) }
+          : { sourceAssetSha256: primaryAsset.sha256 }),
       });
       const existing = await tx.aiMediaWorkflow.findUnique({
         where: { ai_media_workflow_owner_idempotency: {
@@ -86,18 +128,20 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         contextSkuKey: input.context.skuKey || null,
         contextSlotKey: input.context.slotKey || null,
       } });
-      await tx.aiMediaWorkflowInput.create({ data: {
-        workflowId: workflow.id,
-        ownerUserId: input.ownerUserId,
-        assetId: asset.id,
-        role: 'REFERENCE',
-        ordinal: 0,
-        assetSha256: asset.sha256,
-        assetUrl: asset.url,
-        mimeType: asset.mimeType,
-        width: asset.width,
-        height: asset.height,
-      } });
+      for (const [ordinal, asset] of assets.entries()) {
+        await tx.aiMediaWorkflowInput.create({ data: {
+          workflowId: workflow.id,
+          ownerUserId: input.ownerUserId,
+          assetId: asset.id,
+          role: 'REFERENCE',
+          ordinal,
+          assetSha256: asset.sha256,
+          assetUrl: asset.url,
+          mimeType: asset.mimeType,
+          width: asset.width,
+          height: asset.height,
+        } });
+      }
       const job = await tx.aiImageJob.create({ data: {
         ownerUserId: input.ownerUserId,
         actorUserId: input.actorUserId,
@@ -105,8 +149,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         workflowId: workflow.id,
         workflowAttempt: 1,
         status: 'QUEUED',
-        provider: 'fake',
-        model: 'fake-image-to-image-v1',
+        provider: AI_MEDIA_WORKFLOW_PROVIDER,
+        model: AI_MEDIA_WORKFLOW_MODEL,
         prompt: input.prompt,
         negativePrompt: input.negativePrompt,
         requestedImageCount: input.count,
@@ -115,22 +159,32 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         maxAttempts: 1,
         idempotencyKey: `${input.idempotencyKey}:attempt:1`,
         requestFingerprint: fingerprint,
-        inputAssets: [{ assetId: asset.id, role: 'REFERENCE', sha256: asset.sha256 }],
+        inputAssets: assets.map((asset, ordinal) => ({
+          assetId: asset.id,
+          role: 'REFERENCE',
+          ordinal,
+          sha256: asset.sha256,
+        })),
         estimatedCostCents: 0,
       } });
       await tx.aiMediaWorkflowEvent.create({ data: eventData({
         workflowId: workflow.id, ownerUserId: input.ownerUserId, actorUserId: input.actorUserId,
         jobId: job.id, eventKey: `${workflow.id}:created`, eventType: 'CREATED',
-        payload: { operation: 'IMAGE_TO_IMAGE', attempt: 1 },
+        payload: { operation: 'IMAGE_TO_IMAGE', attempt: 1, referenceCount: assets.length },
       }) });
       const created = await tx.aiMediaWorkflow.findUnique({ where: { id: workflow.id }, include: detailInclude });
       return { kind: 'created' as const, workflow: workflowRecord(created), jobId: job.id };
       });
     } catch (error: any) {
       if (error?.code !== 'P2002') throw error;
-      const [asset, existing] = await Promise.all([
-        (this.prisma as any).mediaAsset.findFirst({
-          where: { id: input.sourceAssetId, ownerUserId: input.ownerUserId, kind: 'SOURCE_ORIGINAL' },
+      const references = normalizeAiMediaWorkflowReferences(input);
+      const [assetRows, existing] = await Promise.all([
+        (this.prisma as any).mediaAsset.findMany({
+          where: {
+            id: { in: references.map((reference) => reference.assetId) },
+            ownerUserId: input.ownerUserId,
+            kind: 'SOURCE_ORIGINAL',
+          },
         }),
         (this.prisma as any).aiMediaWorkflow.findUnique({
           where: { ai_media_workflow_owner_idempotency: {
@@ -139,10 +193,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           include: detailInclude,
         }),
       ]);
-      if (!asset || !existing) throw error;
+      const assets = orderSourceAssets(assetRows as FrozenSourceAsset[], references);
+      if (!assets || !existing) throw error;
+      const primaryAsset = assets[0]!;
       const fingerprint = aiMediaPayloadHash({
         request: createAiMediaWorkflowFingerprint(input),
-        sourceAssetSha256: asset.sha256,
+        ...(input.references
+          ? { referenceAssetSha256: assets.map((asset) => asset.sha256) }
+          : { sourceAssetSha256: primaryAsset.sha256 }),
       });
       const jobId = String(existing.jobs?.[existing.jobs.length - 1]?.id || '');
       return {
@@ -159,7 +217,10 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         ...(input.contextType ? { contextType: input.contextType } : {}),
         ...(input.contextId ? { contextId: input.contextId } : {}),
       },
-      include: { inputs: { include: { asset: true } }, jobs: { include: { assets: true }, orderBy: { workflowAttempt: 'desc' }, take: 1 } },
+      include: {
+        inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
+        jobs: { include: { assets: true }, orderBy: { workflowAttempt: 'desc' }, take: 1 },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: input.limit,
     });

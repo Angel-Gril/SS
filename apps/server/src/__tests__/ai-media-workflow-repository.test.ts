@@ -2,6 +2,63 @@ import { describe, expect, it, vi } from 'vitest';
 import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workflow-repository.js';
 
 describe('Prisma AI media workflow repository recovery fence', () => {
+  it('freezes ordered multi-reference inputs and child-job compatibility JSON', async () => {
+    const assets = [
+      { id: 'asset-2', sha256: 'b'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1', url: 'https://cdn/2.png', mimeType: 'image/png', width: 900, height: 900 },
+      { id: 'asset-1', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1', url: 'https://cdn/1.png', mimeType: 'image/png', width: 1000, height: 1000 },
+    ];
+    const inputCreates: any[] = [];
+    const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'job-1', ...data }));
+    const tx = {
+      mediaAsset: { findMany: vi.fn(async () => assets) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: {
+        findUnique: vi.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ id: 'workflow-1', inputs: [], jobs: [], events: [] }),
+        create: vi.fn(async ({ data }: any) => ({ id: 'workflow-1', ...data })),
+      },
+      aiMediaWorkflowInput: { create: vi.fn(async ({ data }: any) => { inputCreates.push(data); return data; }) },
+      aiImageJob: { create: jobCreate },
+      aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+    };
+    const client = { $transaction: vi.fn(async (callback: any) => callback(tx)) };
+    await new PrismaAiMediaWorkflowRepository(client as never).createImageToImage({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+      prompt: 'Use both views', negativePrompt: null, count: 1, width: 1024, height: 1024,
+      idempotencyKey: 'workflow-idem-multi', context: { type: 'collect', id: 'goods-1' },
+    });
+    expect(inputCreates.map(({ assetId, ordinal }) => ({ assetId, ordinal }))).toEqual([
+      { assetId: 'asset-1', ordinal: 0 },
+      { assetId: 'asset-2', ordinal: 1 },
+    ]);
+    expect(jobCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      inputAssets: [
+        { assetId: 'asset-1', role: 'REFERENCE', ordinal: 0, sha256: 'a'.repeat(64) },
+        { assetId: 'asset-2', role: 'REFERENCE', ordinal: 1, sha256: 'b'.repeat(64) },
+      ],
+    }) }));
+  });
+
+  it('rejects different asset IDs with the same immutable content hash', async () => {
+    const tx = {
+      mediaAsset: { findMany: vi.fn(async () => [
+        { id: 'asset-1', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1' },
+        { id: 'asset-2', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1' },
+      ]) },
+    };
+    const client = { $transaction: vi.fn(async (callback: any) => callback(tx)) };
+    await expect(new PrismaAiMediaWorkflowRepository(client as never).createImageToImage({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+      prompt: 'Use both views', negativePrompt: null, count: 1, width: 1024, height: 1024,
+      idempotencyKey: 'workflow-idem-duplicate', context: { type: 'collect', id: 'goods-1' },
+    })).rejects.toMatchObject({ code: 'SOURCE_ASSET_DUPLICATE' });
+  });
+
   it('never creates a new attempt after the provider accepted the previous request', async () => {
     const tx = {
       aiMediaWorkflowEvent: { findUnique: vi.fn(async () => null) },

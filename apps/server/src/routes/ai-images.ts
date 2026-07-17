@@ -43,7 +43,10 @@ const applySchema = z.object({
 });
 const createWorkflowSchema = z.object({
   operation: z.literal('IMAGE_TO_IMAGE'),
-  sourceAssetId: z.string().trim().min(1).max(128),
+  sourceAssetId: z.string().trim().min(1).max(128).optional(),
+  references: z.array(z.object({
+    assetId: z.string().trim().min(1).max(128),
+  }).strict()).min(1).max(20).optional(),
   prompt: z.string().trim().min(1).max(8000),
   negativePrompt: z.string().trim().max(4000).nullable().optional(),
   count: z.literal(1).default(1),
@@ -56,6 +59,14 @@ const createWorkflowSchema = z.object({
     skuKey: z.string().trim().min(1).max(500).nullable().optional(),
     slotKey: z.string().trim().min(1).max(200).nullable().optional(),
   }),
+}).superRefine((value, context) => {
+  if (Boolean(value.sourceAssetId) === Boolean(value.references)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['references'],
+      message: 'Use either sourceAssetId or references',
+    });
+  }
 });
 const revisionSchema = z.object({ expectedRevision: z.number().int().min(1) });
 const retrySchema = revisionSchema.extend({ idempotencyKey: z.string().trim().min(8).max(128) });
@@ -372,6 +383,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       const created = await mediaWorkflowService.createImageToImage({
         ...ids,
         sourceAssetId: parsed.data.sourceAssetId,
+        references: parsed.data.references,
         prompt: parsed.data.prompt,
         negativePrompt: parsed.data.negativePrompt || null,
         count: parsed.data.count,
@@ -399,7 +411,9 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (error?.code === 'SOURCE_ASSET_NOT_FOUND') {
         return reply.status(404).send({ code: 'SOURCE_ASSET_NOT_FOUND', msg: 'Owned source image was not found' });
       }
-      if (error?.code === 'SOURCE_ASSET_INVALID' || error?.code === 'AI_MEDIA_CONTEXT_MISMATCH') {
+      if (error?.code === 'SOURCE_ASSET_INVALID'
+        || error?.code === 'SOURCE_ASSET_DUPLICATE'
+        || error?.code === 'AI_MEDIA_CONTEXT_MISMATCH') {
         return reply.status(409).send({ code: error.code, msg: error.message });
       }
       return sendError(reply, error);

@@ -1,4 +1,11 @@
 import { createHash } from 'node:crypto';
+import {
+  AiMediaCapabilityError,
+  assertAiMediaCapability,
+} from './ai-image-provider-capabilities.js';
+
+export const AI_MEDIA_WORKFLOW_PROVIDER = 'fake';
+export const AI_MEDIA_WORKFLOW_MODEL = 'fake-image-to-image-v1';
 
 export type AiMediaWorkflowStatus =
   | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCEL_REQUESTED' | 'CANCELLED';
@@ -31,7 +38,8 @@ export interface AiMediaWorkflowRecord {
 export interface CreateAiMediaWorkflowInput {
   ownerUserId: string;
   actorUserId: string;
-  sourceAssetId: string;
+  sourceAssetId?: string;
+  references?: Array<{ assetId: string }>;
   prompt: string;
   negativePrompt: string | null;
   count: number;
@@ -39,6 +47,29 @@ export interface CreateAiMediaWorkflowInput {
   height: number;
   idempotencyKey: string;
   context: { type: 'collect'; id: string; skuKey?: string | null; slotKey?: string | null };
+}
+
+export function normalizeAiMediaWorkflowReferences(
+  input: Pick<CreateAiMediaWorkflowInput, 'sourceAssetId' | 'references'>,
+) {
+  if (input.sourceAssetId && input.references) {
+    throw new AiMediaWorkflowError(
+      'INVALID_REQUEST',
+      'Use either sourceAssetId or references, not both',
+    );
+  }
+  const references = input.references
+    ? input.references.map((reference) => ({ assetId: String(reference?.assetId || '').trim() }))
+    : input.sourceAssetId
+      ? [{ assetId: input.sourceAssetId.trim() }]
+      : [];
+  if (!references.length || references.some((reference) => !reference.assetId)) {
+    throw new AiMediaWorkflowError('INVALID_REQUEST', 'At least one source reference is required');
+  }
+  if (new Set(references.map((reference) => reference.assetId)).size !== references.length) {
+    throw new AiMediaWorkflowError('INVALID_REQUEST', 'Source references must be unique');
+  }
+  return references;
 }
 
 export interface AiMediaWorkflowRepository {
@@ -85,10 +116,13 @@ export function aiMediaPayloadHash(payload: unknown) {
 }
 
 export function createAiMediaWorkflowFingerprint(input: Omit<CreateAiMediaWorkflowInput, 'actorUserId' | 'idempotencyKey'>) {
+  const references = normalizeAiMediaWorkflowReferences(input);
   return aiMediaPayloadHash({
     operation: 'IMAGE_TO_IMAGE',
     ownerUserId: input.ownerUserId,
-    sourceAssetId: input.sourceAssetId,
+    ...(input.references
+      ? { references }
+      : { sourceAssetId: references[0]!.assetId }),
     prompt: input.prompt,
     negativePrompt: input.negativePrompt,
     count: input.count,
@@ -103,6 +137,20 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
     async createImageToImage(input: CreateAiMediaWorkflowInput) {
       if (!input.prompt.trim()) throw new AiMediaWorkflowError('INVALID_REQUEST', 'Prompt is required');
       if (input.count !== 1) throw new AiMediaWorkflowError('INVALID_REQUEST', 'The first image-to-image slice supports one output');
+      const references = normalizeAiMediaWorkflowReferences(input);
+      try {
+        assertAiMediaCapability({
+          provider: AI_MEDIA_WORKFLOW_PROVIDER,
+          model: AI_MEDIA_WORKFLOW_MODEL,
+          operation: 'IMAGE_TO_IMAGE',
+          inputCount: references.length,
+        });
+      } catch (error) {
+        if (error instanceof AiMediaCapabilityError) {
+          throw new AiMediaWorkflowError(error.code, error.message);
+        }
+        throw error;
+      }
       const result = await repository.createImageToImage(input);
       if (result.kind === 'conflict') {
         throw new AiMediaWorkflowError('IDEMPOTENCY_KEY_CONFLICT', 'Idempotency key was used for another media workflow');

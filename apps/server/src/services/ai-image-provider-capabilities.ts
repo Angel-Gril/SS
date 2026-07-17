@@ -41,7 +41,7 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
     provider: 'fake',
     model: '*',
     operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'],
-    maxReferences: 1,
+    maxReferences: 4,
     supportsMask: false,
     inputTransport: 'none',
     resultMode: 'sync',

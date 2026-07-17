@@ -3,7 +3,7 @@ title: Source Marketplace to Ozon AI Workflow Plan
 type: feat
 status: active
 date: 2026-07-13
-updated: 2026-07-16
+updated: 2026-07-17
 implementation_started: 2026-07-14
 origin: docs/plans/2026-06-26-001-feat-1688-ozon-source-profile-plan.md
 ---
@@ -1096,6 +1096,8 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 
 **Implementation slice (2026-07-17):** Provider capability preflight and versioned `listing-copy.title`/`listing-copy.description` candidate-only Prompt templates are now present. JSON facts are bounded/canonicalized, compiled Prompt limits are enforced at preview/test/runtime, frozen snapshots record output mode and schema version, and the admin API uses explicit secret-free DTOs. No text Provider execution, candidate persistence/application, cost settlement, multi-reference support or real provider evidence is claimed by this slice.
 
+**Implementation slice (2026-07-17, Unit 7B media-boundary continuation):** The disabled media boundary now accepts either the legacy single `sourceAssetId` or an ordered `references` list. References are owner-, kind-, snapshot- and hash-checked before persistence; relation inputs and the compatibility job JSON both freeze ordinals and content hashes, and the worker forwards them in the frozen order. The local fake capability accepts at most four references so the contract is executable without enabling a paid provider. A provider-neutral cost ledger now persists one owner/job-scoped reservation and append-only, idempotent charge, release, reconciliation-required and reconciled terminal events with database checks and immutable settlement rows. All 73 migrations replayed in a fresh isolated schema, and the real PostgreSQL test covered concurrent reservation replay plus settlement, Provider acceptance and job-identity immutability. This slice remains dark: it does not call paid Providers, enable tenant rollout, wire the ledger into the paid worker path, or claim real pricing evidence. Existing text-to-image and single-reference jobs remain compatibility-readable.
+
 **Goal:** Upgrade the media domain before adding more provider operations.
 
 **Requirements:** R9, R10, R11, R12, R15
@@ -1565,7 +1567,7 @@ This checklist is the execution baseline for the remaining work. A completed imp
 
 | Task | Status | Completion evidence | Remaining boundary |
 |---|---|---|---|
-| Parent workflow and child attempt persistence | Acceptance-verified in post-`1a96b9f` worktree | Prisma models, all 68 migrations replayed in a fresh isolated schema, owner-scoped API/service tests, bounded serializable conflict recovery and concurrent-index deployment preparation | Commit and dark deployment |
+| Parent workflow and child attempt persistence | Acceptance-verified in post-`1a96b9f` worktree; cost/multi-reference boundary continued on `20260717` slice | Prisma models, owner-scoped API/service tests, bounded serializable conflict recovery, ordered frozen references, fake capability preflight, append-only cost reservation/settlement migration and idempotency tests | Paid-provider wiring, real pricing evidence and tenant activation remain pending |
 | Authoritative source input and output lineage | Acceptance-verified in post-`1a96b9f` worktree | Composite ownership FKs, row-locked provenance checks, frozen-input snapshot validation, immutable workflow/job/asset/event/lineage triggers, RESTRICT job/asset lifecycle and PostgreSQL tamper tests | Multi-reference and mask roles remain disabled |
 | Fake `IMAGE_TO_IMAGE` lifecycle | Acceptance-verified in post-`1a96b9f` worktree | Zero-cost provider, cancellation/provider-ID races, same/different-key retry races, concurrent apply, actor-audited APPLIED event and exact reviewed-context application | No real edit provider is enabled |
 | Contextual collect Images-tab history | Acceptance-verified in post-`1a96b9f` worktree | No pasted target ID, exact current-snapshot authority, source/candidate comparison, latest-request loading guard, CAS-safe save/apply, reload recovery, approve/apply/save persistence, flag-off history, desktop/mobile no-overflow and no-console-error browser checks | Listing-draft/SKU contexts and richer comparison remain pending |

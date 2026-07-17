@@ -422,6 +422,9 @@ model User {
   reviewedAiMediaWorkflows            AiMediaWorkflow[]                     @relation("AiMediaWorkflowReviewer")
   aiMediaWorkflowEvents               AiMediaWorkflowEvent[]
   mediaAssets                         MediaAsset[]
+  ownedAiCostReservations             AiCostReservation[]                   @relation("AiCostReservationOwner")
+  createdAiCostReservations           AiCostReservation[]                   @relation("AiCostReservationActor")
+  aiCostSettlementsAsActor            AiCostSettlement[]                    @relation("AiCostSettlementActor")
   logisticsRuleChannels               LogisticsRuleChannel[]                 @relation("LogisticsChannelTenant")
   logisticsRuleRevisions              LogisticsRuleRevision[]                @relation("LogisticsRevisionTenant")
   logisticsRuleAssignments            LogisticsRuleAssignment[]              @relation("LogisticsAssignmentTenant")
@@ -2641,6 +2644,21 @@ enum AiMediaInputRole {
   MASK
 }
 
+enum AiCostReservationStatus {
+  RESERVED
+  RECONCILIATION_REQUIRED
+  SETTLED
+  RELEASED
+}
+
+enum AiCostSettlementKind {
+  CHARGE
+  RELEASE
+  RECONCILIATION_REQUIRED
+  RECONCILED_CHARGE
+  RECONCILED_RELEASE
+}
+
 enum MediaAssetKind {
   AI_GENERATED
   SOURCE_ORIGINAL
@@ -2774,6 +2792,7 @@ model AiImageJob {
   assets                 MediaAsset[]
   mediaLineage           MediaAssetLineage[]
   workflowEvents         AiMediaWorkflowEvent[]
+  costReservation        AiCostReservation?
 
   @@unique([ownerUserId, idempotencyKey], name: "ai_image_job_owner_idempotency")
   @@unique([id, ownerUserId], name: "ai_image_job_id_owner", map: "ai_image_job_id_owner")
@@ -2850,6 +2869,7 @@ model AiMediaWorkflow {
   jobs                  AiImageJob[]
   events                AiMediaWorkflowEvent[]
   lineage               MediaAssetLineage[]
+  costReservations      AiCostReservation[]
 
   @@unique([id, ownerUserId], name: "ai_media_workflow_id_owner", map: "ai_media_workflow_id_owner")
   @@unique([ownerUserId, idempotencyKey], name: "ai_media_workflow_owner_idempotency", map: "ai_media_workflow_owner_idempotency")
@@ -2927,6 +2947,63 @@ model MediaAssetLineage {
   @@index([workflowId, createdAt])
   @@index([jobId])
   @@map("media_asset_lineage")
+}
+
+model AiCostReservation {
+  id                       String                  @id @default(cuid())
+  ownerUserId              String                  @map("owner_user_id")
+  owner                    User                    @relation("AiCostReservationOwner", fields: [ownerUserId], references: [id], onDelete: Restrict, map: "ai_cost_reservations_owner_fkey")
+  actorUserId              String                  @map("actor_user_id")
+  actor                    User                    @relation("AiCostReservationActor", fields: [actorUserId], references: [id], onDelete: Restrict, map: "ai_cost_reservations_actor_fkey")
+  workflowId               String?                 @map("workflow_id")
+  workflow                 AiMediaWorkflow?        @relation(fields: [workflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "ai_cost_reservations_workflow_owner_fkey")
+  jobId                    String                  @unique(map: "ai_cost_reservations_job_id_key") @map("job_id")
+  job                      AiImageJob              @relation(fields: [jobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "ai_cost_reservations_reservation_job_fkey")
+  idempotencyKey           String                  @map("idempotency_key") @db.VarChar(128)
+  requestFingerprint       String                  @map("request_fingerprint") @db.Char(64)
+  provider                 String
+  model                    String
+  operation                AiMediaOperation
+  currency                 String                  @default("USD") @db.Char(3)
+  roundingMode             String                  @default("HALF_UP") @map("rounding_mode") @db.VarChar(32)
+  estimatedCostMinor       Int                     @map("estimated_cost_minor")
+  maximumCostMinor         Int                     @map("maximum_cost_minor")
+  status                   AiCostReservationStatus @default(RESERVED)
+  providerRequestId        String?                 @map("provider_request_id") @db.VarChar(500)
+  providerAcceptedAt       DateTime?               @map("provider_accepted_at")
+  reconciliationRequiredAt DateTime?               @map("reconciliation_required_at")
+  settledAt                DateTime?               @map("settled_at")
+  releasedAt               DateTime?               @map("released_at")
+  createdAt                DateTime                @default(now()) @map("created_at")
+  updatedAt                DateTime                @updatedAt @map("updated_at")
+  settlements              AiCostSettlement[]
+
+  @@unique([id, ownerUserId], name: "ai_cost_reservation_id_owner", map: "ai_cost_reservations_id_owner_key")
+  @@unique([jobId, ownerUserId], name: "ai_cost_reservation_job_owner", map: "ai_cost_reservation_job_owner_key")
+  @@unique([ownerUserId, idempotencyKey], name: "ai_cost_reservation_owner_idempotency", map: "ai_cost_reservations_owner_idempotency_key")
+  @@index([ownerUserId, status, updatedAt], map: "ai_cost_reservations_owner_status_updated_idx")
+  @@index([workflowId, createdAt], map: "ai_cost_reservations_workflow_created_idx")
+  @@map("ai_cost_reservations")
+}
+
+model AiCostSettlement {
+  id                 String               @id @default(cuid())
+  reservationId      String               @map("reservation_id")
+  ownerUserId        String               @map("owner_user_id")
+  reservation        AiCostReservation    @relation(fields: [reservationId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict, map: "ai_cost_settlements_reservation_owner_fkey")
+  actorUserId        String               @map("actor_user_id")
+  actor              User                 @relation("AiCostSettlementActor", fields: [actorUserId], references: [id], onDelete: Restrict, map: "ai_cost_settlements_actor_fkey")
+  kind               AiCostSettlementKind
+  idempotencyKey     String               @map("idempotency_key") @db.VarChar(128)
+  requestFingerprint String               @map("request_fingerprint") @db.Char(64)
+  actualCostMinor    Int?                 @map("actual_cost_minor")
+  billedUnits        Int                  @default(0) @map("billed_units")
+  reason             String?              @db.VarChar(500)
+  createdAt          DateTime             @default(now()) @map("created_at")
+
+  @@unique([reservationId, idempotencyKey], name: "ai_cost_settlement_reservation_idempotency", map: "ai_cost_settlement_reservation_idempotency")
+  @@index([ownerUserId, createdAt], map: "ai_cost_settlements_owner_created_idx")
+  @@map("ai_cost_settlements")
 }
 
 model ShopOzonCompanyBinding {

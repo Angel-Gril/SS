@@ -140,11 +140,17 @@ describe('AI image job foundation', () => {
     expect(state.repo.markCancelled).toHaveBeenCalledWith('job-1');
   });
 
-  it('passes the frozen IMAGE_TO_IMAGE input relation to the provider', async () => {
-    const inputAssets = [{
-      assetId: 'asset-source-1', role: 'REFERENCE' as const,
-      url: 'https://cdn.example/source.png', mimeType: 'image/png', sha256: 'a'.repeat(64),
-    }];
+  it('passes frozen IMAGE_TO_IMAGE references to the provider in request order', async () => {
+    const inputAssets = [
+      {
+        assetId: 'asset-source-2', role: 'REFERENCE' as const, ordinal: 0,
+        url: 'https://cdn.example/source-2.png', mimeType: 'image/png', sha256: 'b'.repeat(64),
+      },
+      {
+        assetId: 'asset-source-1', role: 'REFERENCE' as const, ordinal: 1,
+        url: 'https://cdn.example/source-1.png', mimeType: 'image/png', sha256: 'a'.repeat(64),
+      },
+    ];
     const state = repository(job({ operation: 'IMAGE_TO_IMAGE', inputAssets }));
     const provider = createFakeAiImageProvider({
       images: [{ buffer: Buffer.from('img'), mimeType: 'image/png' }],

@@ -9,6 +9,7 @@ const record = (row: any): AiImageJobRecord => ({
     ? row.workflow.inputs.map((input: any) => ({
       assetId: input.assetId,
       role: input.role,
+      ordinal: input.ordinal,
       url: input.assetUrl,
       mimeType: input.mimeType,
       sha256: input.assetSha256,
@@ -37,7 +38,8 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
   constructor(private readonly prisma: PrismaClient) {}
   async getById(id: string) {
     const row = await (this.prisma as any).aiImageJob.findUnique({
-      where: { id }, include: { assets: true, workflow: { include: { inputs: true } } },
+      where: { id },
+      include: { assets: true, workflow: { include: { inputs: { orderBy: { ordinal: 'asc' } } } } },
     });
     return row ? record(row) : null;
   }

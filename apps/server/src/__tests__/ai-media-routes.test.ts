@@ -81,6 +81,50 @@ describe('AI media workflow routes', () => {
     expect(JSON.stringify(response.json())).not.toContain('secret-output-key');
   });
 
+  it('accepts ordered references while preserving the legacy single-reference request', async () => {
+    const { app, mediaWorkflowService, enqueue } = await build();
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE',
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+      prompt: 'Keep product identity from both references',
+      count: 1, width: 1024, height: 1024, idempotencyKey: 'workflow-idem-multi',
+      context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(202);
+    expect(mediaWorkflowService.createImageToImage).toHaveBeenCalledWith(expect.objectContaining({
+      sourceAssetId: undefined,
+      references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+    }));
+    expect(enqueue).toHaveBeenCalledWith('job-1');
+  });
+
+  it('rejects ambiguous legacy and references payloads', async () => {
+    const { app, mediaWorkflowService, enqueue } = await build();
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE', sourceAssetId: 'asset-1',
+      references: [{ assetId: 'asset-2' }], prompt: 'Ambiguous inputs',
+      idempotencyKey: 'workflow-idem-ambiguous', context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(400);
+    expect(mediaWorkflowService.createImageToImage).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict for duplicate immutable reference content', async () => {
+    const { app, mediaWorkflowService, enqueue } = await build();
+    mediaWorkflowService.createImageToImage.mockRejectedValueOnce(
+      Object.assign(new Error('Source references must have unique content'), { code: 'SOURCE_ASSET_DUPLICATE' }),
+    );
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE', references: [{ assetId: 'asset-1' }, { assetId: 'asset-2' }],
+      prompt: 'Use both views', idempotencyKey: 'workflow-idem-duplicate-content',
+      context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'SOURCE_ASSET_DUPLICATE' });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the workflow feature is disabled', async () => {
     const { app, mediaWorkflowService } = await build(false);
     const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
