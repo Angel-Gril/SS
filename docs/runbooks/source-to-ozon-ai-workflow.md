@@ -13,6 +13,22 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Release Evidence: `d27f0e1`
+
+This release adds the dark Unit 7B operator reconciliation surface. It lets account-session super administrators inspect bounded evidence for ambiguous Provider submissions and record an audited `SETTLED` or `RELEASED` decision without enabling Provider execution or tenant rollout.
+
+| Evidence | Result |
+|---|---|
+| Git | `d27f0e1` (`feat(ai-media): add operator cost reconciliation`) pushed to `origin/feat/ai-media-prompt-registry`; deployments used the exact clean commit |
+| Automated verification | Server `2071 passed / 85 skipped`; workspace type checks and production builds passed; lint `0 errors / 22` existing warnings; preflight and extension verification passed with the same three permission warnings |
+| PostgreSQL | A guarded runner created an isolated `ai_media_test_*` schema, replayed all 78 migrations, passed six real ledger/workflow tests including concurrent opposite decisions and exact-request replay, then dropped the schema in `finally` |
+| Local ERP | 78 migrations current; API DB/Redis ready; Web `/admin/ops` returned 200; the super-admin cost queue rendered its empty state with no console errors and no page overflow at 375px; AI Media dark verification passed |
+| Domestic VPS | `8.163.122.40` deployed `d27f0e1`; pre-deploy backup completed; 78 migrations current; API/Web/Worker, local/public `/ready`, Prisma and dark checks passed; cloud extension package `1.0.206`; unauthenticated reconciliation API returned 401 |
+| Domestic infrastructure limits | Full verifier retained the four existing HTTPS/Cloudflare failures and two existing backup/IP-update warnings; bootstrap validation separately retains the two empty-Turnstile-key warnings |
+| International VPS | `45.76.49.64` deployed `d27f0e1`; pre-deploy backup completed; 78 migrations current; full verifier passed with `0 failures / 1 warning`; cloud extension package `1.0.241`; unauthenticated reconciliation API returned 401 |
+| Reconciliation safety | Evidence hash covers reservation and Job state; exact request replay is idempotent; changed evidence/reason or concurrent opposite decisions return 409; terminal ledger and public Job cost fields update in the same Serializable transaction |
+| External effects | No paid AI Provider call, real image generation/upload, commercial charge, tenant activation or Ozon write was executed |
+
 ## Release Evidence: `a79e0e4`
 
 This release hardens the dark Unit 7B provider-cost lifecycle. It fences paid-provider dispatch before submission, quarantines ambiguous outcomes without resubmission, supports operator reconciliation terminal states, and quiesces Worker/API execution around schema deployment. It does not enable a paid Provider, tenant rollout, image write or Ozon write.
