@@ -13,6 +13,20 @@ Current required defaults in every environment:
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
 
+## Release Evidence: `3b8460d`
+
+This release adds the fail-closed PDD/Taobao/Tmall network-evidence boundary. It is a dark, provider-neutral capability and does not authorize marketplace interception, paid AI calls, image writes, or Ozon writes.
+
+| Evidence | Result |
+|---|---|
+| Git | `3b8460d` deployed from `origin/feat/ai-media-prompt-registry`; the follow-up plan documentation is recorded separately in `f94cf45` |
+| Automated verification | Server `1982 passed / 80 skipped`; server/Web typecheck and production builds passed; provider, evaluation, marketplace and extension lifecycle contracts passed; extension verification `192 passed / 0 failures` with three existing permission warnings |
+| Network capture boundary | MAIN hook removed from the production manifest; local feature flags and page messages cannot enable capture; policy, nonce, sequence, TTL, identity, URL/port and byte-budget checks fail closed; only bounded, redacted diagnostics are persisted |
+| Domestic VPS | `8.163.122.40` deployed `3b8460d`; 68 migrations current; API/Web/Worker active; local and public `/ready` passed; AI Media dark verification passed |
+| International VPS | `45.76.49.64` deployed `3b8460d`; 68 migrations current; API/Web/Worker active; `https://ss-erp.com` `/ready` passed; AI Media dark verification passed; verifier reported `0 failures / 1 warning` for local-only backup replication |
+| Rollout state | AI Media master `false`, rollout policy revision `0` with zero tenants, listing/publisher masters `false`, all publisher stages `off@0`, `feature_source_network_capture=false` in both VPS environments |
+| External effects | No paid AI provider call, real Ozon write, production image upload, or enabled network interception was executed |
+
 ## Release Evidence: `9afeb68`
 
 | Evidence | Result |
