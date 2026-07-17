@@ -30,6 +30,17 @@ Current required defaults in every environment:
 
 Deployment artifact note: the cloud extension package version is derived from each environment's previous build history, so this release produced `1.0.201` domestically and `1.0.236` internationally from the same application commit. Normalize cross-environment extension versioning before promoting extension artifacts as a single public release.
 
+## Release Evidence: `d932a9a`
+
+| Evidence | Result |
+|---|---|
+| Git | `d932a9a` pushed to `origin/feat/ai-media-prompt-registry`; deployment packaged from a clean detached worktree |
+| Automated verification | Default preflight passed: server `1968 passed / 80 skipped`, server/Web typecheck, provider foundation contract and extension static verification all passed |
+| Schema and rollout | Both VPS databases remained current at 68 migrations; AI Media master false, rollout policy revision 0 with zero tenants, listing/publisher masters false and all five stages `off@0` |
+| Domestic VPS | `8.163.122.40` deployed `d932a9a`, backup completed, services and local/public HTTP `/ready` passed. The verifier retains the same four infrastructure failures recorded for `9afeb68` and two warnings for missing Turnstile keys and local-only backup |
+| International VPS | `45.76.49.64` deployed `d932a9a`, backup completed, full verifier passed with `0 failures / 1 warning`; the warning is local-only backup replication |
+| External effects | No paid AI call, real Ozon write or production image upload was executed |
+
 ## Release Evidence: `50cc36b`
 
 | Evidence | Result |
