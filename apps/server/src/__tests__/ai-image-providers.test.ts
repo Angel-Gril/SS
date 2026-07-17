@@ -60,16 +60,86 @@ describe('AI image provider adapters', () => {
       'https://dashscope.example/api/v1/tasks/task-1',
       expect.objectContaining({ method: 'GET' }),
     );
+    expect(fetch).toHaveBeenNthCalledWith(3,
+      'https://dashscope.example/api/v1/tasks/task-1',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(4,
+      'https://temp.example/1.png',
+      expect.objectContaining({ method: 'GET', redirect: 'error', signal: expect.any(AbortSignal) }),
+    );
   });
 
-  it('supports both base64 and temporary URL results from OpenAI Images', async () => {
+  it('keeps the DashScope temporary URL download inside the asynchronous task deadline', async () => {
+    let downloadSignal: AbortSignal | undefined;
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(json({ output: { task_id: 'task-window', task_status: 'PENDING' } }))
+      .mockResolvedValueOnce(json({
+        output: {
+          task_id: 'task-window',
+          task_status: 'SUCCEEDED',
+          results: [{ url: 'https://temp.example/window.png' }],
+        },
+      }))
+      .mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
+        downloadSignal = init?.signal || undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          downloadSignal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('aborted', 'AbortError')),
+            { once: true },
+          );
+        });
+      });
+    const provider = createDashScopeWanxProvider({
+      baseUrl: 'https://dashscope.example', apiKey: 'secret', model: 'wanx-v1', fetch,
+      pollIntervalMs: 0, timeoutMs: 250,
+    });
+
+    await expect(provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'wanx-v1',
+    })).rejects.toMatchObject({ code: 'PROVIDER_TIMEOUT' });
+
+    expect(fetch).toHaveBeenNthCalledWith(3,
+      'https://temp.example/window.png',
+      expect.objectContaining({ method: 'GET', redirect: 'error', signal: expect.any(AbortSignal) }),
+    );
+    expect(downloadSignal?.aborted).toBe(true);
+  });
+
+  it('decodes OpenAI b64_json results without a follow-up network request', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({
+      id: 'response-b64',
+      data: [{ b64_json: png.toString('base64') }],
+    }));
+    const provider = createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'openai-secret', model: 'gpt-image-1', fetch,
+      timeoutMs: 1000, costPerImageCents: 9,
+    });
+
+    const result = await provider.generate({
+      prompt: 'photo', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model: 'gpt-image-1',
+    });
+
+    expect(result).toEqual({
+      images: [{ buffer: png, mimeType: 'image/png', filename: 'openai-1.png' }],
+      providerJobId: 'response-b64',
+      actualCostCents: 9,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.openai.example/v1/images/generations',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('downloads OpenAI temporary URL results after /images/generations', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(json({
-        created: 1,
-        data: [
-          { b64_json: png.toString('base64') },
-          { url: 'https://temp.example/2.webp' },
-        ],
+        id: 'response-url',
+        data: [{ url: 'https://temp.example/2.webp' }],
       }))
       .mockResolvedValueOnce(new Response(webp, { headers: { 'content-type': 'image/webp' } }));
     const provider = createOpenAiImagesProvider({
@@ -78,17 +148,47 @@ describe('AI image provider adapters', () => {
     });
 
     const result = await provider.generate({
-      prompt: 'photo', negativePrompt: null, count: 2,
+      prompt: 'photo', negativePrompt: null, count: 1,
       width: 1024, height: 1024, model: 'gpt-image-1',
     });
 
-    expect(result.actualCostCents).toBe(18);
-    expect(result.images.map((image) => [image.mimeType, image.buffer.toString('hex')])).toEqual([
-      ['image/png', png.toString('hex')],
-      ['image/webp', webp.toString('hex')],
-    ]);
+    expect(result).toEqual({
+      images: [{ buffer: webp, mimeType: 'image/webp', filename: 'openai-1.webp' }],
+      providerJobId: 'response-url',
+      actualCostCents: 9,
+    });
+    expect(fetch).toHaveBeenNthCalledWith(1,
+      'https://api.openai.example/v1/images/generations',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(2,
+      'https://temp.example/2.webp',
+      expect.objectContaining({ method: 'GET', redirect: 'error', signal: expect.any(AbortSignal) }),
+    );
     const request = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
-    expect(request).toEqual({ model: 'gpt-image-1', prompt: 'photo', n: 2, size: '1024x1024' });
+    expect(request).toEqual({ model: 'gpt-image-1', prompt: 'photo', n: 1, size: '1024x1024' });
+  });
+
+  it.each([
+    ['DashScope Wanx', 'wanx-v1', (fetch: typeof globalThis.fetch) => createDashScopeWanxProvider({
+      baseUrl: 'https://dashscope.example', apiKey: 'secret', model: 'wanx-v1', fetch,
+    })],
+    ['OpenAI Images', 'gpt-image-1', (fetch: typeof globalThis.fetch) => createOpenAiImagesProvider({
+      baseUrl: 'https://api.openai.example/v1', apiKey: 'secret', model: 'gpt-image-1', fetch,
+    })],
+  ])('rejects IMAGE_TO_IMAGE source assets before %s submits a request', async (_label, model, factory) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const provider = factory(fetch);
+    await expect(provider.generate({
+      operation: 'IMAGE_TO_IMAGE',
+      prompt: 'preserve the product', negativePrompt: null, count: 1,
+      width: 1024, height: 1024, model,
+      inputAssets: [{
+        assetId: 'source-asset-1', role: 'REFERENCE',
+        url: 'https://source.example/private-product.png', mimeType: 'image/png',
+      }],
+    })).rejects.toMatchObject({ code: 'UNSUPPORTED_OPERATION' });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('times out an unfinished asynchronous provider task', async () => {

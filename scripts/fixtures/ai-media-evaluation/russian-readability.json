@@ -1,12 +1,24 @@
 {
+  "schemaVersion": 1,
   "id": "russian-readability-v1",
   "kind": "evaluation-threshold-policy",
-  "status": "scaffold",
-  "description": "Threshold policy for a future Cyrillic readability evaluator; no media fixture is attached yet.",
+  "status": "policy_only",
+  "description": "Future Cyrillic readability threshold; no image corpus or quality result exists yet.",
   "containsSecrets": false,
-  "assertions": {
-    "language": "ru",
-    "minimumReadableTextScore": 0.9,
-    "manualReviewRequired": true
+  "metric": {
+    "key": "russian_readability_score",
+    "unit": "score",
+    "direction": "higher_is_better",
+    "validRange": { "minimum": 0, "maximum": 1 },
+    "threshold": { "operator": "gte", "value": 0.9 }
+  },
+  "manualReview": {
+    "required": true,
+    "instructions": "Verify Cyrillic spelling, punctuation, line breaks, legibility, and semantic agreement with the approved Russian copy."
+  },
+  "evidence": {
+    "corpusAvailable": false,
+    "qualityMeasured": false,
+    "note": "Policy definition only; OCR and human-review results are not available."
   }
 }

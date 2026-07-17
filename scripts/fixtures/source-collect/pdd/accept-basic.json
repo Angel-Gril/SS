@@ -1,0 +1,39 @@
+{
+  "fixtureVersion": "source-marketplace-network-fixture/v1",
+  "id": "pdd-accept-basic-v1",
+  "platform": "pdd",
+  "responseSignature": "pdd.mobile.goods.detail.v2",
+  "capturedAt": "2026-07-17T04:00:00Z",
+  "pageIdentity": {
+    "productId": "730012340001",
+    "canonicalUrl": "https://mobile.yangkeduo.com/goods.html?goods_id=730012340001"
+  },
+  "priceSemantics": "minor_units_cny",
+  "responseBody": {
+    "result": {
+      "goods_id": "730012340001",
+      "goods_name": "示例不锈钢保温杯",
+      "goods_image_url": "https://fixtures.example.invalid/pdd/730012340001-main.jpg",
+      "skus": [
+        {
+          "sku_id": "pdd-sku-black-500",
+          "specs": [
+            { "name": "颜色", "value": "黑色" },
+            { "name": "容量", "value": "500ml" }
+          ],
+          "price_fen": 2599
+        },
+        {
+          "sku_id": "pdd-sku-white-500",
+          "specs": [
+            { "name": "颜色", "value": "白色" },
+            { "name": "容量", "value": "500ml" }
+          ],
+          "price_fen": 2699
+        }
+      ]
+    }
+  },
+  "sanitization": { "containsSecrets": false, "removedPaths": [] },
+  "expected": { "decision": "accept", "rejectionCodes": [] }
+}

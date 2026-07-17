@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ss-erp.local/contracts/source-pdd-network-fixture-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fixtureVersion",
+    "id",
+    "platform",
+    "responseSignature",
+    "capturedAt",
+    "pageIdentity",
+    "priceSemantics",
+    "responseBody",
+    "sanitization",
+    "expected"
+  ],
+  "properties": {
+    "fixtureVersion": { "const": "source-marketplace-network-fixture/v1" },
+    "id": { "type": "string", "minLength": 3, "maxLength": 120 },
+    "platform": { "const": "pdd" },
+    "responseSignature": { "type": "string", "minLength": 3, "maxLength": 120 },
+    "capturedAt": {
+      "type": "string",
+      "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "pageIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["productId", "canonicalUrl"],
+      "properties": {
+        "productId": { "type": "string", "pattern": "^[0-9]{4,32}$" },
+        "canonicalUrl": {
+          "type": "string",
+          "pattern": "^https://mobile\\.yangkeduo\\.com/goods\\.html\\?goods_id=[0-9]{4,32}$"
+        }
+      }
+    },
+    "priceSemantics": { "const": "minor_units_cny" },
+    "responseBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result"],
+      "properties": {
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["goods_id", "goods_name", "goods_image_url", "skus"],
+          "properties": {
+            "goods_id": { "type": "string", "pattern": "^[0-9]{4,32}$" },
+            "goods_name": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "goods_image_url": { "type": "string", "pattern": "^https://" },
+            "skus": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 500,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sku_id", "specs", "price_fen"],
+                "properties": {
+                  "sku_id": { "type": "string", "minLength": 1, "maxLength": 80 },
+                  "specs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "value"],
+                      "properties": {
+                        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+                        "value": { "type": "string", "minLength": 1, "maxLength": 160 }
+                      }
+                    }
+                  },
+                  "price_fen": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "sanitization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["containsSecrets", "removedPaths"],
+      "properties": {
+        "containsSecrets": { "const": false },
+        "removedPaths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "maxItems": 100
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "rejectionCodes"],
+      "properties": {
+        "decision": { "enum": ["accept", "reject"] },
+        "rejectionCodes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "SIGNATURE_NOT_ALLOWED",
+              "IDENTITY_MISMATCH",
+              "INVALID_PRODUCT",
+              "INVALID_SKU",
+              "INVALID_PRICE",
+              "SENSITIVE_DATA"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

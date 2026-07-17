@@ -1,0 +1,33 @@
+{
+  "fixtureVersion": "source-marketplace-network-fixture/v1",
+  "id": "taobao-accept-basic-v1",
+  "platform": "taobao",
+  "responseSignature": "mtop.taobao.detail.getdetail.v7",
+  "capturedAt": "2026-07-17T04:10:00Z",
+  "pageIdentity": {
+    "productId": "860012340001",
+    "canonicalUrl": "https://item.taobao.com/item.htm?id=860012340001"
+  },
+  "priceSemantics": "decimal_cny",
+  "responseBody": {
+    "item": {
+      "itemId": "860012340001",
+      "title": "示例便携收纳盒",
+      "images": ["https://fixtures.example.invalid/taobao/860012340001-main.jpg"]
+    },
+    "skuBase": {
+      "skus": [
+        { "skuId": "tb-sku-small-green", "propPath": "颜色:绿色;规格:小号" },
+        { "skuId": "tb-sku-large-green", "propPath": "颜色:绿色;规格:大号" }
+      ]
+    },
+    "skuCore": {
+      "sku2info": {
+        "tb-sku-small-green": { "price": { "priceText": "12.80" } },
+        "tb-sku-large-green": { "price": { "priceText": "18.50" } }
+      }
+    }
+  },
+  "sanitization": { "containsSecrets": false, "removedPaths": [] },
+  "expected": { "decision": "accept", "rejectionCodes": [] }
+}

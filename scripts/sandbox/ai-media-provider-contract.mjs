@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 const root = process.cwd();
 const matrixPath = path.join(root, 'docs/contracts/ai-media-provider-matrix.md');
 const policyDir = path.join(root, 'scripts/fixtures/ai-media-evaluation');
+const evaluationContractPath = path.join(root, 'scripts/ai-media-evaluation-contract.test.mjs');
 
 function fail(message) {
   console.error(`FAIL ${message}`);
@@ -14,6 +15,7 @@ function fail(message) {
 
 if (!fs.existsSync(matrixPath)) fail('provider matrix is missing');
 if (!fs.existsSync(policyDir)) fail('AI media evaluation policy directory is missing');
+if (!fs.existsSync(evaluationContractPath)) fail('AI media evaluation contract is missing');
 
 let capabilities = [];
 try {
@@ -65,7 +67,9 @@ for (const required of [
     fail(`provider matrix is missing ${required}`);
 }
 
-const policyFiles = fs.readdirSync(policyDir).filter((name) => name.endsWith('.json'));
+const policyFiles = fs
+  .readdirSync(policyDir)
+  .filter((name) => name.endsWith('.json') && name !== 'policy.schema.json');
 if (policyFiles.length < 3) fail('at least three evaluation threshold policies are required');
 for (const name of policyFiles) {
   try {
@@ -74,24 +78,20 @@ for (const name of policyFiles) {
     if (
       !policy.id ||
       policy.kind !== 'evaluation-threshold-policy' ||
-      policy.status !== 'scaffold'
+      policy.status !== 'policy_only'
     ) {
       fail(`${name} has invalid policy metadata`);
     }
-    if (!policy.assertions || typeof policy.assertions !== 'object')
-      fail(`${name} has invalid assertions`);
+    if (!policy.metric || typeof policy.metric !== 'object') fail(`${name} has invalid metric`);
     if (policy.containsSecrets !== false)
       fail(`${name} must explicitly declare containsSecrets=false`);
     if (/(?:"authorization"|"cookie"|"apiKey"|"accessToken"|"refreshToken")\s*:/iu.test(raw)) {
       fail(`${name} contains a secret-bearing field`);
     }
-    for (const [key, value] of Object.entries(policy.assertions)) {
-      if (
-        typeof value === 'number' &&
-        (!Number.isFinite(value) || value < 0 || (/(?:ratio|score)/iu.test(key) && value > 1))
-      ) {
-        fail(`${name} has an invalid threshold: ${key}`);
-      }
+    const threshold = policy.metric.threshold?.value;
+    const range = policy.metric.validRange;
+    if (!Number.isFinite(threshold) || !range || threshold < range.minimum || threshold > range.maximum) {
+      fail(`${name} has an invalid metric threshold`);
     }
   } catch (error) {
     fail(`${name} is not valid JSON: ${error.message}`);

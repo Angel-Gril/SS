@@ -1,0 +1,23 @@
+{
+  "fixtureVersion": "source-marketplace-network-fixture/v1",
+  "id": "taobao-reject-identity-mismatch-v1",
+  "platform": "taobao",
+  "responseSignature": "mtop.taobao.detail.getdetail.v7",
+  "capturedAt": "2026-07-17T04:11:00Z",
+  "pageIdentity": {
+    "productId": "860012340002",
+    "canonicalUrl": "https://item.tmall.com/item.htm?id=860012340002"
+  },
+  "priceSemantics": "decimal_cny",
+  "responseBody": {
+    "item": {
+      "itemId": "860012349999",
+      "title": "来自其他商品请求的响应",
+      "images": ["https://fixtures.example.invalid/taobao/other-main.jpg"]
+    },
+    "skuBase": { "skus": [{ "skuId": "tb-other-sku", "propPath": "颜色:黑色" }] },
+    "skuCore": { "sku2info": { "tb-other-sku": { "price": { "priceText": "9.90" } } } }
+  },
+  "sanitization": { "containsSecrets": false, "removedPaths": [] },
+  "expected": { "decision": "reject", "rejectionCodes": ["IDENTITY_MISMATCH"] }
+}

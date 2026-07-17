@@ -1,0 +1,28 @@
+{
+  "fixtureVersion": "source-marketplace-network-fixture/v1",
+  "id": "pdd-reject-identity-mismatch-v1",
+  "platform": "pdd",
+  "responseSignature": "pdd.mobile.goods.detail.v2",
+  "capturedAt": "2026-07-17T04:01:00Z",
+  "pageIdentity": {
+    "productId": "730012340002",
+    "canonicalUrl": "https://mobile.yangkeduo.com/goods.html?goods_id=730012340002"
+  },
+  "priceSemantics": "minor_units_cny",
+  "responseBody": {
+    "result": {
+      "goods_id": "730012349999",
+      "goods_name": "来自其他商品请求的响应",
+      "goods_image_url": "https://fixtures.example.invalid/pdd/other-main.jpg",
+      "skus": [
+        {
+          "sku_id": "pdd-other-sku",
+          "specs": [{ "name": "颜色", "value": "蓝色" }],
+          "price_fen": 1999
+        }
+      ]
+    }
+  },
+  "sanitization": { "containsSecrets": false, "removedPaths": [] },
+  "expected": { "decision": "reject", "rejectionCodes": ["IDENTITY_MISMATCH"] }
+}

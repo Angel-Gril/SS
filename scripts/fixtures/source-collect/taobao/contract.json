@@ -1,0 +1,32 @@
+{
+  "contractVersion": "source-marketplace-network-contract/v1",
+  "platform": "taobao",
+  "allowedResponseSignatures": ["mtop.taobao.detail.getdetail.v7"],
+  "identity": {
+    "pageProductIdPath": "pageIdentity.productId",
+    "responseProductIdPath": "responseBody.item.itemId"
+  },
+  "price": {
+    "semantics": "decimal_cny",
+    "skuCollectionPath": "responseBody.skuBase.skus",
+    "skuPriceMapPath": "responseBody.skuCore.sku2info",
+    "valuePath": "price.priceText",
+    "minimumExclusive": 0
+  },
+  "sanitization": {
+    "forbiddenKeys": [
+      "authorization",
+      "cookie",
+      "set-cookie",
+      "x-api-key",
+      "access_token",
+      "refresh_token",
+      "password",
+      "account_id",
+      "user_id",
+      "phone",
+      "email"
+    ],
+    "maxFixtureBytes": 65536
+  }
+}

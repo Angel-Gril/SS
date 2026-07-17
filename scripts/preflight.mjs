@@ -24,6 +24,16 @@ const steps = [
     args: ['scripts/ai-media-provider-contract.test.mjs'],
   },
   {
+    name: 'AI media evaluation policy contract',
+    command: 'node',
+    args: ['scripts/ai-media-evaluation-contract.test.mjs'],
+  },
+  {
+    name: 'source marketplace network contract',
+    command: 'node',
+    args: ['scripts/source-marketplace-contract.test.mjs'],
+  },
+  {
     name: 'server tests',
     command: 'pnpm',
     args: ['--filter', 'server', 'test'],

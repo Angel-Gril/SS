@@ -1,12 +1,24 @@
 {
+  "schemaVersion": 1,
   "id": "identity-consistency-v1",
   "kind": "evaluation-threshold-policy",
-  "status": "scaffold",
-  "description": "Threshold policy for a future product-identity evaluator; no media fixture is attached yet.",
+  "status": "policy_only",
+  "description": "Future product-identity preservation threshold; no image corpus or quality result exists yet.",
   "containsSecrets": false,
-  "assertions": {
-    "identityPreserved": true,
-    "maxReferenceCount": 1,
-    "manualReviewRequired": true
+  "metric": {
+    "key": "identity_preservation_score",
+    "unit": "score",
+    "direction": "higher_is_better",
+    "validRange": { "minimum": 0, "maximum": 1 },
+    "threshold": { "operator": "gte", "value": 0.9 }
+  },
+  "manualReview": {
+    "required": true,
+    "instructions": "Confirm product shape, color, visible components, packaging count, and branding against the source reference."
+  },
+  "evidence": {
+    "corpusAvailable": false,
+    "qualityMeasured": false,
+    "note": "Policy definition only; attach a versioned image corpus and measured results in a later acceptance slice."
   }
 }

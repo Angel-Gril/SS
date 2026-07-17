@@ -1,0 +1,31 @@
+{
+  "contractVersion": "source-marketplace-network-contract/v1",
+  "platform": "pdd",
+  "allowedResponseSignatures": ["pdd.mobile.goods.detail.v2"],
+  "identity": {
+    "pageProductIdPath": "pageIdentity.productId",
+    "responseProductIdPath": "responseBody.result.goods_id"
+  },
+  "price": {
+    "semantics": "minor_units_cny",
+    "skuCollectionPath": "responseBody.result.skus",
+    "valuePath": "price_fen",
+    "minimumExclusive": 0
+  },
+  "sanitization": {
+    "forbiddenKeys": [
+      "authorization",
+      "cookie",
+      "set-cookie",
+      "x-api-key",
+      "access_token",
+      "refresh_token",
+      "password",
+      "account_id",
+      "user_id",
+      "phone",
+      "email"
+    ],
+    "maxFixtureBytes": 65536
+  }
+}

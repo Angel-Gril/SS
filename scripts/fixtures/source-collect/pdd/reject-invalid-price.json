@@ -1,0 +1,28 @@
+{
+  "fixtureVersion": "source-marketplace-network-fixture/v1",
+  "id": "pdd-reject-invalid-price-v1",
+  "platform": "pdd",
+  "responseSignature": "pdd.mobile.goods.detail.v2",
+  "capturedAt": "2026-07-17T04:02:00Z",
+  "pageIdentity": {
+    "productId": "730012340003",
+    "canonicalUrl": "https://mobile.yangkeduo.com/goods.html?goods_id=730012340003"
+  },
+  "priceSemantics": "minor_units_cny",
+  "responseBody": {
+    "result": {
+      "goods_id": "730012340003",
+      "goods_name": "价格不可用示例",
+      "goods_image_url": "https://fixtures.example.invalid/pdd/730012340003-main.jpg",
+      "skus": [
+        {
+          "sku_id": "pdd-zero-price-sku",
+          "specs": [{ "name": "颜色", "value": "红色" }],
+          "price_fen": 0
+        }
+      ]
+    }
+  },
+  "sanitization": { "containsSecrets": false, "removedPaths": [] },
+  "expected": { "decision": "reject", "rejectionCodes": ["INVALID_PRICE"] }
+}

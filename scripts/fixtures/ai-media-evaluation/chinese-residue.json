@@ -1,11 +1,24 @@
 {
+  "schemaVersion": 1,
   "id": "chinese-residue-v1",
   "kind": "evaluation-threshold-policy",
-  "status": "scaffold",
-  "description": "Threshold policy for a future Chinese-text residue evaluator; no media fixture is attached yet.",
+  "status": "policy_only",
+  "description": "Future untranslated Chinese-text residue threshold; no image corpus or quality result exists yet.",
   "containsSecrets": false,
-  "assertions": {
-    "maxUntranslatedChineseRatio": 0.05,
-    "manualReviewRequired": true
+  "metric": {
+    "key": "untranslated_chinese_ratio",
+    "unit": "ratio",
+    "direction": "lower_is_better",
+    "validRange": { "minimum": 0, "maximum": 1 },
+    "threshold": { "operator": "lte", "value": 0.05 }
+  },
+  "manualReview": {
+    "required": true,
+    "instructions": "Inspect all visible text regions and confirm that remaining Chinese text is absent or explicitly approved as part of the product identity."
+  },
+  "evidence": {
+    "corpusAvailable": false,
+    "qualityMeasured": false,
+    "note": "Policy definition only; OCR residue measurements are not available."
   }
 }

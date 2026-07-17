@@ -1,0 +1,23 @@
+{
+  "fixtureVersion": "source-marketplace-network-fixture/v1",
+  "id": "taobao-reject-invalid-price-v1",
+  "platform": "taobao",
+  "responseSignature": "mtop.taobao.detail.getdetail.v7",
+  "capturedAt": "2026-07-17T04:12:00Z",
+  "pageIdentity": {
+    "productId": "860012340003",
+    "canonicalUrl": "https://item.taobao.com/item.htm?id=860012340003"
+  },
+  "priceSemantics": "decimal_cny",
+  "responseBody": {
+    "item": {
+      "itemId": "860012340003",
+      "title": "价格不可用示例",
+      "images": ["https://fixtures.example.invalid/taobao/860012340003-main.jpg"]
+    },
+    "skuBase": { "skus": [{ "skuId": "tb-zero-price-sku", "propPath": "颜色:白色" }] },
+    "skuCore": { "sku2info": { "tb-zero-price-sku": { "price": { "priceText": "0.00" } } } }
+  },
+  "sanitization": { "containsSecrets": false, "removedPaths": [] },
+  "expected": { "decision": "reject", "rejectionCodes": ["INVALID_PRICE"] }
+}
