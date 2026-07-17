@@ -137,6 +137,7 @@
 
     const platform = detectPlatform(sourcePage.sourceHost);
     sourcePage.platform = platform;
+    sourcePage.productId = pickBoundProductId(platform, sourcePage.sourceUrl);
     const observedAt = new Date().toISOString();
     const extensionVersion = getExtensionVersionForDiagnostics() || 'unknown';
     const contentTruncations = [];
@@ -179,6 +180,18 @@
     }
     assertCollectionSourcePageUnchanged(sourcePage);
     const allSources = collectDataSources(pageState);
+    const networkSnapshot = globalThis.SS_ERP_SOURCE_NETWORK_BRIDGE
+      && typeof globalThis.SS_ERP_SOURCE_NETWORK_BRIDGE.snapshot === 'function'
+      ? globalThis.SS_ERP_SOURCE_NETWORK_BRIDGE.snapshot()
+      : null;
+    const expectedNetworkPlatform = platform === 'tmall' ? 'taobao' : platform;
+    const networkSnapshotMatchesSource = Boolean(
+      networkSnapshot && networkSnapshot.productId === sourcePage.productId
+      && networkSnapshot.platform === expectedNetworkPlatform,
+    );
+    const networkEvidence = networkSnapshotMatchesSource && Array.isArray(networkSnapshot.candidates)
+      ? networkSnapshot.candidates.filter((entry) => entry && entry.source && entry.source.value)
+      : [];
     const pageText = collectBoundedPageText(contentTruncations);
     const jsonLd = parseJsonLd();
     let domFallback = null;
@@ -250,6 +263,18 @@
         ...contentTruncations
       ]
     });
+    const existingExtractionDiagnostics = data && data.extractionDiagnostics
+      && typeof data.extractionDiagnostics === 'object' && !Array.isArray(data.extractionDiagnostics)
+      ? data.extractionDiagnostics
+      : {};
+    data.extractionDiagnostics = {
+      ...existingExtractionDiagnostics,
+      networkCapture: buildNetworkCaptureDiagnostic(
+        networkSnapshot,
+        networkEvidence.length,
+        Boolean(networkSnapshot && !networkSnapshotMatchesSource),
+      ),
+    };
 
     assertCollectionSourcePageUnchanged(sourcePage);
     assertCollectionResultMatchesSourcePage(sourcePage, data);
@@ -312,23 +337,39 @@
     return match ? match[1] : '';
   }
 
+  function pickBoundProductId(platform, url) {
+    const text = String(url || '');
+    if (platform === '1688') return pick1688OfferIdFromUrl(text);
+    try {
+      const parsed = new URL(text);
+      if (platform === 'pdd') return /^\d{4,32}$/.test(parsed.searchParams.get('goods_id') || '')
+        ? parsed.searchParams.get('goods_id') : '';
+      if (platform === 'taobao' || platform === 'tmall') {
+        const id = parsed.searchParams.get('id') || '';
+        return /^\d{4,32}$/.test(id) ? id : '';
+      }
+    } catch (_error) {}
+    return '';
+  }
+
   function assertCollectionSourcePageUnchanged(sourcePage) {
-    if (!sourcePage || sourcePage.platform !== '1688') return;
+    if (!sourcePage || !['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePage.platform)) return;
     const currentUrl = String(location.href || '');
-    const currentOfferId = pick1688OfferIdFromUrl(currentUrl);
-    if (currentUrl !== sourcePage.sourceUrl || currentOfferId !== sourcePage.offerId) {
+    const currentProductId = pickBoundProductId(sourcePage.platform, currentUrl);
+    if (currentUrl !== sourcePage.sourceUrl || currentProductId !== sourcePage.productId) {
       throw new Error('采集期间页面已切换，请回到原商品页后重新采集');
     }
   }
 
   function assertCollectionResultMatchesSourcePage(sourcePage, data) {
-    if (!sourcePage || sourcePage.platform !== '1688' || !sourcePage.offerId) return;
+    if (!sourcePage || !sourcePage.productId
+      || !['1688', 'pdd', 'taobao', 'tmall'].includes(sourcePage.platform)) return;
     const captureProductId = data && data.captureV2 && data.captureV2.sourceIdentity
       ? data.captureV2.sourceIdentity.productId
       : '';
     const resultProductId = captureProductId || data && data.productId || '';
-    if (String(resultProductId || '') !== sourcePage.offerId) {
-      throw new Error('采集结果与初始 1688 商品不一致，请重新采集');
+    if (String(resultProductId || '') !== sourcePage.productId) {
+      throw new Error('采集结果与初始商品不一致，请重新采集');
     }
   }
 
@@ -343,6 +384,34 @@
       reason: input.reason,
       recoverability: input.recoverability,
       fallbackSourcePath: input.fallbackSourcePath || null
+    };
+  }
+
+  function buildNetworkCaptureDiagnostic(snapshot, evidenceCount, identityMismatch) {
+    const rows = snapshot && Array.isArray(snapshot.degradations)
+      ? snapshot.degradations.slice(-10)
+      : [];
+    const degradations = rows.map((entry) => {
+      const rawReason = String(entry && entry.reason || 'unknown');
+      const reason = rawReason.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 80) || 'unknown';
+      const parsedTime = Date.parse(String(entry && entry.observedAt || ''));
+      return {
+        reason,
+        observedAt: Number.isFinite(parsedTime) ? new Date(parsedTime).toISOString() : null,
+        generation: Number.isSafeInteger(entry && entry.generation) ? entry.generation : 0,
+      };
+    });
+    if (identityMismatch) degradations.push({
+      reason: 'source_identity_mismatch',
+      observedAt: new Date().toISOString(),
+      generation: Number.isSafeInteger(snapshot && snapshot.generation) ? snapshot.generation : 0,
+    });
+    return {
+      enabled: Boolean(snapshot && snapshot.enabled === true),
+      applied: false,
+      trust: 'untrusted',
+      evidenceCount: Math.min(20, Math.max(0, Number(evidenceCount) || 0)),
+      degradations: degradations.slice(-10),
     };
   }
 

@@ -6,6 +6,10 @@ PDD and Taobao/Tmall network evidence must be captured by a document-start MAIN-
 
 The repository currently contains six synthetic, secret-free fixtures under `scripts/fixtures/source-collect/{pdd,taobao}`. `scripts/source-marketplace-contract.test.mjs` validates their Draft-07 schemas, response-signature allowlists, identity binding, SKU uniqueness/options, platform-specific price units, recursive secret scanning and explicit reject decisions.
 
+The first Unit 3 code slice adds the bounded MAIN observer module, a document-start isolated policy bridge, platform normalizers, SPA identity binding and executable channel lifecycle tests. The MAIN observer is intentionally not registered in the production manifest yet. The isolated bridge treats accepted rows as `page_observed_network` with `trust=untrusted`; collection persists only a bounded `extractionDiagnostics.networkCapture` summary, and observed rows cannot outrank or replace structured/DOM facts.
+
+Runtime activation remains deliberately fail-closed. A local `feature_source_network_capture=true` value is ignored unless an ERP-issued, expiring platform policy is accepted by an extension-owned signature verifier. That trusted policy synchronization/verifier and dynamic MAIN-world registration are not shipped in this slice, so deployed builds cannot enable passive capture yet. This avoids turning local extension storage or page messages into a rollout bypass while real response fixtures and browser canaries remain unavailable.
+
 Each accepted candidate must include:
 
 - platform and product identity;

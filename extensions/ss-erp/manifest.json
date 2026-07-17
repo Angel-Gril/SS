@@ -52,6 +52,19 @@
   "content_scripts": [
     {
       "matches": [
+        "https://mobile.yangkeduo.com/goods.html*",
+        "https://item.taobao.com/item.htm*",
+        "https://detail.tmall.com/item.htm*"
+      ],
+      "js": [
+        "shared/collectors/pdd-network-normalizer.js",
+        "shared/collectors/taobao-network-normalizer.js",
+        "content/source-network-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
         "https://seller.ozon.ru/*",
         "https://globalcalculator.ozon.ru/*"
       ],
@@ -128,6 +141,8 @@
         "shared/collectors/1688-dom-fallback.js",
         "shared/collectors/source-product-core.js",
         "shared/collectors/pdd-product.js",
+        "shared/collectors/pdd-network-normalizer.js",
+        "shared/collectors/taobao-network-normalizer.js",
         "shared/collectors/marketplace-product.js",
         "shared/ozon/variant-spec.js",
         "shared/ozon/sku-workbench.js",

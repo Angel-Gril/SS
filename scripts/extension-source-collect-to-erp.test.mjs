@@ -74,6 +74,21 @@ assert.match(
 );
 assert.match(
   collectContentScript,
+  /networkCapture:\s*buildNetworkCaptureDiagnostic/,
+  'source collection should persist a bounded network-capture diagnostic summary',
+);
+assert.match(
+  collectContentScript,
+  /applied:\s*false[\s\S]{0,120}trust:\s*'untrusted'[\s\S]{0,160}evidenceCount/,
+  'network observations must remain untrusted and unapplied in persisted diagnostics',
+);
+assert.match(
+  serviceWorker,
+  /const item\s*=\s*\{\s*\.\.\.source,/,
+  'legacy collect payload must preserve extractionDiagnostics, including networkCapture',
+);
+assert.match(
+  collectContentScript,
   /!structured\.fromCore[\s\S]{0,160}infer1688SkuItemsFromText/,
   '1688 merge should not infer sku rows from full page text when shared core already extracted product data',
 );

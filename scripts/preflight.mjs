@@ -34,6 +34,11 @@ const steps = [
     args: ['scripts/source-marketplace-contract.test.mjs'],
   },
   {
+    name: 'extension source network lifecycle contract',
+    command: 'node',
+    args: ['scripts/extension-source-network-capture.test.mjs'],
+  },
+  {
     name: 'server tests',
     command: 'pnpm',
     args: ['--filter', 'server', 'test'],
