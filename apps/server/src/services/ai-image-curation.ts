@@ -4,6 +4,9 @@ import {
   isAiMediaPlanningJsonWithinBudget,
 } from './ai-media-planning-contract.js';
 
+// Bump when parser, normalization, deterministic rules, or fallback semantics change.
+export const AI_IMAGE_CURATION_IMPLEMENTATION_VERSION = 'ai-image-curation-implementation/v1' as const;
+
 export const AI_IMAGE_CURATION_RULES = Object.freeze({
   minWidth: 200,
   minHeight: 200,
@@ -464,6 +467,10 @@ function parseModelOutput(value: unknown): z.infer<typeof modelOutputSchema> | n
   }
   const result = modelOutputSchema.safeParse(parsed);
   return result.success ? result.data : null;
+}
+
+export function validateImageCurationModelOutput(value: unknown): boolean {
+  return parseModelOutput(value) !== null;
 }
 
 export function normalizeImageCurationModelOutput(

@@ -2,6 +2,15 @@ import { getConfig } from '../config/system-config-schema.js';
 import { prisma } from '../lib/prisma.js';
 import { PrismaAiPromptTemplateStore } from './ai-prompt-template-prisma.js';
 import {
+  AI_MEDIA_CURATION_TEMPLATE_KEY,
+  AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
+  AI_MEDIA_VISION_TEMPLATE_KEY,
+  AiPromptConsumerContractError,
+  getAiPromptConsumerContract,
+  verifyAiPromptConsumerContract,
+  type AiPromptConsumerContractDescriptor,
+} from './ai-prompt-consumer-contracts.js';
+import {
   AI_PROMPT_SAFETY_POLICY,
   AiPromptTemplateError,
   AiPromptTemplateService,
@@ -14,6 +23,11 @@ import {
 export const DEFAULT_AI_IMAGE_TEMPLATE_KEY = 'text-to-image.base';
 export const LISTING_COPY_TITLE_TEMPLATE_KEY = 'listing-copy.title';
 export const LISTING_COPY_DESCRIPTION_TEMPLATE_KEY = 'listing-copy.description';
+export {
+  AI_MEDIA_CURATION_TEMPLATE_KEY,
+  AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
+  AI_MEDIA_VISION_TEMPLATE_KEY,
+} from './ai-prompt-consumer-contracts.js';
 const BOOTSTRAP_ACTOR = 'system:ai-prompt-bootstrap';
 const DEFAULT_NEGATIVE_TEMPLATE =
   'Avoid watermarks, illegible text, invented claims, unrelated objects, and distorted products.\n{{user_negative_prompt}}';
@@ -50,7 +64,14 @@ const SENSITIVE_FACT_KEYS = new Set([
   'privatekey',
   'accesskeyid',
 ]);
-const JSON_VARIABLE_KEYS = new Set(['sourceFactsJson', 'confirmedAttributesJson']);
+const JSON_VARIABLE_KEYS = new Set([
+  'sourceFactsJson',
+  'confirmedAttributesJson',
+  'candidateManifestJson',
+  'verifiedFactsJson',
+  'slotPlanningInputJson',
+  'visionEvidenceJson',
+]);
 const SENSITIVE_FACT_KEY_PATTERNS = [
   /^(?:proxy)?authorization(?:header)?$/,
   /^(?:set)?cookie(?:header)?$/,
@@ -69,12 +90,22 @@ const TEXT_VARIABLE_BYTE_LIMITS: Readonly<Record<string, number>> = {
   targetLanguage: 100,
   userInstructions: 2_000,
   forbiddenClaims: 2_000,
+  platformConstraints: 4_000,
 };
 
 const BUILTIN_TEMPLATE_DEFINITIONS = {
   [DEFAULT_AI_IMAGE_TEMPLATE_KEY]: { label: '基础文生图', outputMode: 'media_candidate' as const },
   [LISTING_COPY_TITLE_TEMPLATE_KEY]: { label: '商品标题候选', outputMode: 'listing_copy_candidate' as const },
   [LISTING_COPY_DESCRIPTION_TEMPLATE_KEY]: { label: '商品描述候选', outputMode: 'listing_copy_candidate' as const },
+  [AI_MEDIA_CURATION_TEMPLATE_KEY]: {
+    label: '图片策展', outputMode: 'media_planning_json' as const, consumerRequired: true,
+  },
+  [AI_MEDIA_VISION_TEMPLATE_KEY]: {
+    label: '视觉分析', outputMode: 'media_planning_json' as const, consumerRequired: true,
+  },
+  [AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY]: {
+    label: '套图槽位规划', outputMode: 'media_planning_json' as const, consumerRequired: true,
+  },
 };
 
 const DEFAULT_LISTING_TITLE_TEMPLATE = [
@@ -102,8 +133,34 @@ const DEFAULT_LISTING_CONSTRAINTS_TEMPLATE = [
   '{{forbidden_claims}}',
 ].join('\n');
 
+const DEFAULT_MEDIA_CURATION_TEMPLATE = [
+  'Select and classify only candidates present in this manifest:',
+  '{{candidate_manifest_json}}',
+  'Return strict JSON matching ai-image-curation-output/1.0. Do not emit unknown candidate IDs.',
+].join('\n');
+const DEFAULT_MEDIA_VISION_TEMPLATE = [
+  'Analyze only candidates present in this manifest:',
+  '{{candidate_manifest_json}}',
+  'Verified facts are read-only evidence and must not be extended:',
+  '{{verified_facts_json}}',
+  'Return strict JSON matching ai-image-vision-output/1.0. Put unsupported observations in claims.',
+].join('\n');
+const DEFAULT_MEDIA_SLOT_PLANNING_TEMPLATE = [
+  'Plan references only for slots and candidates present in this input:',
+  '{{slot_planning_input_json}}',
+  'Use this normalized vision evidence without promoting unsupported claims:',
+  '{{vision_evidence_json}}',
+  'Return strict JSON matching ai-image-prompt-plan-output/2.0.',
+].join('\n');
+const DEFAULT_MEDIA_PLANNING_CONSTRAINTS_TEMPLATE = [
+  'Never invent candidate IDs, facts, SKU ownership, visible claims, or evidence.',
+  'Additional platform constraints (may be empty):',
+  '{{platform_constraints}}',
+].join('\n');
+
 interface RegistryOptions {
   getLegacyPrompt: () => Promise<string>;
+  verifyConsumerContract?: (templateKey: string) => AiPromptConsumerContractDescriptor;
 }
 
 function asVariable(value: unknown): string {
@@ -305,6 +362,29 @@ export class AiPromptTemplateRegistryService {
         ? revisions.find((item) => item.id === activeRelease.revisionId)
           || await this.domain.getRevision(activeRelease.revisionId)
         : null;
+      let consumerCompatibility: {
+        status: 'COMPATIBLE' | 'INCOMPATIBLE';
+        code?: string;
+      } | null = null;
+      const consumer = getAiPromptConsumerContract(template.key);
+      if (consumer && activeRevision) {
+        try {
+          this.assertRevisionConsumerCompatible(activeRevision);
+          consumerCompatibility = { status: 'COMPATIBLE' };
+        } catch (error) {
+          if (
+            error instanceof AiPromptConsumerContractError
+            || (error instanceof AiPromptTemplateError && error.code === 'INVALID_CONSUMER_VALIDATOR')
+          ) {
+            consumerCompatibility = {
+              status: 'INCOMPATIBLE',
+              code: error.code,
+            };
+          } else {
+            throw error;
+          }
+        }
+      }
       return {
         key: template.key,
         label: template.label,
@@ -315,6 +395,8 @@ export class AiPromptTemplateRegistryService {
         releases,
         variableSchema: getAiPromptVariableSchema(template.key),
         outputMode: BUILTIN_TEMPLATE_DEFINITIONS[template.key as keyof typeof BUILTIN_TEMPLATE_DEFINITIONS]?.outputMode,
+        consumer,
+        consumerCompatibility,
       };
     }));
     const allowedVariables = [...new Set(
@@ -353,6 +435,7 @@ export class AiPromptTemplateRegistryService {
     variables: Record<string, unknown>;
   }) {
     const revision = await this.domain.getRevision(input.revisionId);
+    this.assertRevisionConsumerCompatible(revision);
     const rendered = renderAiPromptRevision(
       revision,
       promptVariables(revision.templateKey, input.variables, { requireTestValues: false }),
@@ -361,6 +444,7 @@ export class AiPromptTemplateRegistryService {
     return {
       revisionId: revision.id,
       checksum: revision.checksum,
+      consumer: getAiPromptConsumerContract(revision.templateKey),
       ...rendered,
     };
   }
@@ -371,6 +455,7 @@ export class AiPromptTemplateRegistryService {
     sampleInput: Record<string, unknown>;
   }) {
     const revision = await this.domain.getRevision(input.revisionId);
+    this.assertRevisionConsumerCompatible(revision);
     const variables = promptVariables(revision.templateKey, input.sampleInput, { requireTestValues: true });
     const preview = await this.previewRevision({
       actorUserId: input.actorUserId,
@@ -391,6 +476,7 @@ export class AiPromptTemplateRegistryService {
       resolvedPrompt: preview.resolvedPrompt,
       resolvedNegativePrompt: preview.resolvedNegativePrompt,
       outputMode: preview.outputMode,
+      consumer: getAiPromptConsumerContract(revision.templateKey),
     };
   }
 
@@ -409,6 +495,7 @@ export class AiPromptTemplateRegistryService {
         'AI prompt revision does not belong to this template',
       );
     }
+    this.assertRevisionConsumerCompatible(revision);
     return this.domain.publish({
       revisionId: input.revisionId,
       testRunId: input.testRunId,
@@ -424,6 +511,10 @@ export class AiPromptTemplateRegistryService {
     expectedSequence: number;
   }) {
     await this.ensureSupportedTemplate(input.key);
+    const targetRevision = await this.domain.getRevision(input.targetRevisionId);
+    if (targetRevision.templateKey === input.key) {
+      this.assertRevisionConsumerCompatible(targetRevision);
+    }
     return this.domain.rollback({
       templateKey: input.key,
       targetRevisionId: input.targetRevisionId,
@@ -459,6 +550,7 @@ export class AiPromptTemplateRegistryService {
       );
     }
     const activeRevision = await this.domain.getRevision(activeRelease.revisionId);
+    this.assertRevisionConsumerCompatible(activeRevision);
     const rendered = renderAiPromptRevision(
       activeRevision,
       promptVariables(input.templateKey, input.variables, { requireTestValues: true }),
@@ -483,6 +575,7 @@ export class AiPromptTemplateRegistryService {
         negativePromptTemplate: activeRevision.negativePromptTemplate,
         outputMode: rendered.outputMode,
         variableSchemaVersion: 1,
+        consumer: getAiPromptConsumerContract(input.templateKey),
         variableKeys: {
           prompt: variableSchema.prompt.map((variable) => variable.inputKey),
           negativePrompt: variableSchema.negativePrompt.map((variable) => variable.inputKey),
@@ -502,6 +595,48 @@ export class AiPromptTemplateRegistryService {
     await this.ensureTemplate(templateKey);
   }
 
+  private verifyConsumerForActivation(templateKey: string) {
+    const definition = BUILTIN_TEMPLATE_DEFINITIONS[
+      templateKey as keyof typeof BUILTIN_TEMPLATE_DEFINITIONS
+    ];
+    if (!definition || !('consumerRequired' in definition) || !definition.consumerRequired) {
+      return null;
+    }
+    const expected = getAiPromptConsumerContract(templateKey);
+    const verified = (this.options.verifyConsumerContract || verifyAiPromptConsumerContract)(templateKey);
+    if (!expected
+      || verified.templateKey !== expected.templateKey
+      || verified.contractVersion !== expected.contractVersion
+      || verified.schemaVersion !== expected.schemaVersion
+      || verified.normalizerVersion !== expected.normalizerVersion
+      || verified.implementationVersion !== expected.implementationVersion
+      || verified.implementationHash !== expected.implementationHash
+      || verified.behaviorHash !== expected.behaviorHash
+      || verified.contractHash !== expected.contractHash) {
+      throw new AiPromptTemplateError(
+        'INVALID_CONSUMER_VALIDATOR',
+        'AI prompt structured consumer does not match the compiled contract',
+      );
+    }
+    return verified;
+  }
+
+  private assertRevisionConsumerCompatible(revision: {
+    templateKey: string;
+    promptTemplate: string;
+    negativePromptTemplate: string;
+    checksum: string;
+  }) {
+    const consumer = this.verifyConsumerForActivation(revision.templateKey);
+    if (consumer && checksumAiPromptRevision(revision) !== revision.checksum) {
+      throw new AiPromptTemplateError(
+        'INVALID_CONSUMER_VALIDATOR',
+        'AI prompt revision was tested against a different consumer contract',
+      );
+    }
+    return consumer;
+  }
+
   private async ensureTemplate(templateKey: string) {
     let promise = this.bootstrapPromises.get(templateKey);
     if (!promise) {
@@ -518,6 +653,7 @@ export class AiPromptTemplateRegistryService {
   private async bootstrapTemplateKey(templateKey: string) {
     const now = new Date().toISOString();
     const definition = BUILTIN_TEMPLATE_DEFINITIONS[templateKey as keyof typeof BUILTIN_TEMPLATE_DEFINITIONS];
+    this.verifyConsumerForActivation(templateKey);
     await this.store.ensureTemplate({
       key: templateKey,
       label: definition.label,
@@ -526,7 +662,12 @@ export class AiPromptTemplateRegistryService {
     });
     if (await this.domain.getActiveRelease(templateKey)) return;
 
-    let template;
+    let template: {
+      key: string;
+      promptTemplate: string;
+      negativePromptTemplate: string;
+      note: string;
+    };
     if (templateKey === DEFAULT_AI_IMAGE_TEMPLATE_KEY) {
       const initial = defaultPromptTemplate(await this.options.getLegacyPrompt());
       template = {
@@ -542,13 +683,36 @@ export class AiPromptTemplateRegistryService {
         negativePromptTemplate: DEFAULT_LISTING_CONSTRAINTS_TEMPLATE,
         note: 'Initialized as a fact-bound candidate-only listing title template',
       };
-    } else {
+    } else if (templateKey === LISTING_COPY_DESCRIPTION_TEMPLATE_KEY) {
       template = {
         key: LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
         promptTemplate: DEFAULT_LISTING_DESCRIPTION_TEMPLATE,
         negativePromptTemplate: DEFAULT_LISTING_CONSTRAINTS_TEMPLATE,
         note: 'Initialized as a fact-bound candidate-only listing description template',
       };
+    } else if (templateKey === AI_MEDIA_CURATION_TEMPLATE_KEY) {
+      template = {
+        key: AI_MEDIA_CURATION_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_MEDIA_CURATION_TEMPLATE,
+        negativePromptTemplate: DEFAULT_MEDIA_PLANNING_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized with ai-image-curation-output/1.0 consumer validation',
+      };
+    } else if (templateKey === AI_MEDIA_VISION_TEMPLATE_KEY) {
+      template = {
+        key: AI_MEDIA_VISION_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_MEDIA_VISION_TEMPLATE,
+        negativePromptTemplate: DEFAULT_MEDIA_PLANNING_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized with ai-image-vision-output/1.0 consumer validation',
+      };
+    } else if (templateKey === AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY) {
+      template = {
+        key: AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_MEDIA_SLOT_PLANNING_TEMPLATE,
+        negativePromptTemplate: DEFAULT_MEDIA_PLANNING_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized with ai-image-prompt-plan-output/2.0 consumer validation',
+      };
+    } else {
+      throw new AiPromptTemplateError('TEMPLATE_NOT_FOUND', 'AI prompt template is not supported');
     }
     await this.bootstrapTemplate(template);
   }

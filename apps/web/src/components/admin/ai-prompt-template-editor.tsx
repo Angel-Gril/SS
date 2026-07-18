@@ -35,6 +35,22 @@ interface PromptTemplateItem {
   revisions: PromptRevision[];
   releases: PromptRelease[];
   variableSchema?: PromptVariableSchema;
+  consumer?: PromptConsumerContract | null;
+  consumerCompatibility?: {
+    status: 'COMPATIBLE' | 'INCOMPATIBLE';
+    code?: string;
+  } | null;
+}
+
+interface PromptConsumerContract {
+  templateKey: string;
+  contractVersion: number;
+  schemaVersion: string;
+  normalizerVersion: string;
+  implementationVersion: string;
+  implementationHash: string;
+  behaviorHash: string;
+  contractHash: string;
 }
 
 interface PromptVariableDefinition {
@@ -49,7 +65,7 @@ interface PromptVariableSchema {
   prompt: PromptVariableDefinition[];
   negativePrompt: PromptVariableDefinition[];
   safetyPolicy?: string;
-  outputMode?: 'media_candidate' | 'listing_copy_candidate';
+  outputMode?: 'media_candidate' | 'listing_copy_candidate' | 'media_planning_json';
 }
 
 interface PromptTemplateData {
@@ -87,6 +103,11 @@ const VARIABLE_LABELS: Record<string, string> = {
   targetLanguage: '目标语言',
   userInstructions: '人工补充要求',
   forbiddenClaims: '禁止使用的声明',
+  candidateManifestJson: '候选图片清单 JSON',
+  verifiedFactsJson: '已验证事实 JSON',
+  slotPlanningInputJson: '槽位规划输入 JSON',
+  visionEvidenceJson: '视觉证据 JSON',
+  platformConstraints: '平台附加约束',
 };
 const VARIABLE_DEFAULTS: Record<string, string> = {
   userPrompt: '白底棚拍，保持商品主体、颜色和结构一致',
@@ -97,6 +118,11 @@ const VARIABLE_DEFAULTS: Record<string, string> = {
   targetLanguage: '俄语',
   userInstructions: '',
   forbiddenClaims: '医疗级、官方认证、绝对保温时长',
+  candidateManifestJson: '{\n  "candidates": [\n    { "candidateId": "image-1", "role": "product_main" }\n  ]\n}',
+  verifiedFactsJson: '{\n  "facts": []\n}',
+  slotPlanningInputJson: '{\n  "skus": [{ "skuKey": "sku-1" }],\n  "slots": [{ "slotKey": "sku:sku-1:hero" }]\n}',
+  visionEvidenceJson: '{\n  "images": [{ "candidateId": "image-1", "productIdentity": "same_product" }]\n}',
+  platformConstraints: '',
 };
 
 function variableSchemaFor(template?: PromptTemplateItem | null): PromptVariableSchema {
@@ -136,6 +162,12 @@ function outputModeCopy(outputMode?: PromptVariableSchema['outputMode']) {
     return {
       label: '商品文案候选',
       description: '模板只生成待审核的标题或描述候选，不会自动写入商品草稿或发布到 Ozon。',
+    };
+  }
+  if (outputMode === 'media_planning_json') {
+    return {
+      label: '结构化媒体规划',
+      description: '模板输出会经过固定 JSON consumer 校验；无效结果回退到规则规划，不会自动应用或发布。',
     };
   }
   return {
@@ -429,6 +461,9 @@ export function AiPromptTemplateEditor() {
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-medium">AI 提示词版本管理</h3>
             <Badge variant="outline">{modeCopy.label}</Badge>
+            {selectedTemplate?.consumerCompatibility?.status === 'INCOMPATIBLE' && (
+              <Badge variant="destructive">Consumer 契约失配</Badge>
+            )}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             管理员修改业务模板；固定安全约束只读，任务入队后冻结版本和最终提示词。
@@ -436,6 +471,11 @@ export function AiPromptTemplateEditor() {
           <p className="mt-1 text-xs text-muted-foreground">
             {modeCopy.description}
           </p>
+          {selectedTemplate?.consumerCompatibility?.status === 'INCOMPATIBLE' && (
+            <p className="mt-1 text-xs text-destructive">
+              当前活动版本与服务器 consumer 不兼容，请新建修订并重新验证后发布。
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           {!data && busy === null && (

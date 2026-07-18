@@ -6,6 +6,8 @@ import {
 
 export const AI_IMAGE_VISION_OUTPUT_VERSION = '1.0' as const;
 export const AI_IMAGE_VISION_VERSION = AI_IMAGE_VISION_OUTPUT_VERSION;
+// Bump when parser, normalization, or fact-quarantine semantics change.
+export const AI_IMAGE_VISION_IMPLEMENTATION_VERSION = 'ai-image-vision-implementation/v1' as const;
 
 const MAX_CANDIDATES = 25;
 const MAX_FACTS = 100;
@@ -227,6 +229,10 @@ function parseModelOutput(value: unknown): ParsedModelOutput | null {
     return null;
   }
   return { images: parsed.images };
+}
+
+export function validateAiImageVisionModelOutput(value: unknown): boolean {
+  return parseModelOutput(value) !== null;
 }
 
 function normalizeStringList(value: unknown): string[] | null {

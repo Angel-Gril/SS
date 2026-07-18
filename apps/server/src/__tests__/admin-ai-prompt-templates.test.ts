@@ -204,6 +204,23 @@ describe('admin AI prompt template routes', () => {
           outputMode: 'listing_copy_candidate',
           apiToken: 'must-not-leak',
         },
+        consumer: {
+          templateKey: 'image-curation.base',
+          contractVersion: 1,
+          schemaVersion: 'ai-image-curation-output/1.0',
+          normalizerVersion: 'ai-image-curation-normalizer/v1',
+          implementationVersion: 'ai-image-curation-implementation/v1',
+          implementationHash: 'c'.repeat(64),
+          behaviorHash: 'b'.repeat(64),
+          contractHash: 'a'.repeat(64),
+          validate: () => true,
+          rawSchema: { apiKey: 'consumer-secret' },
+        },
+        consumerCompatibility: {
+          status: 'INCOMPATIBLE',
+          code: 'INVALID_CONSUMER_VALIDATOR',
+          internalDetail: 'must-not-leak',
+        },
         token: 'must-also-stay-redacted',
         credential: 'credential-value',
         privateKey: 'private-key-value',
@@ -240,6 +257,20 @@ describe('admin AI prompt template routes', () => {
           safetyPolicy: 'listing policy',
           outputMode: 'listing_copy_candidate',
         },
+        consumer: {
+          templateKey: 'image-curation.base',
+          contractVersion: 1,
+          schemaVersion: 'ai-image-curation-output/1.0',
+          normalizerVersion: 'ai-image-curation-normalizer/v1',
+          implementationVersion: 'ai-image-curation-implementation/v1',
+          implementationHash: 'c'.repeat(64),
+          behaviorHash: 'b'.repeat(64),
+          contractHash: 'a'.repeat(64),
+        },
+        consumerCompatibility: {
+          status: 'INCOMPATIBLE',
+          code: 'INVALID_CONSUMER_VALIDATOR',
+        },
       }],
     });
     expect(response.json().data.items[0].variableSchema.prompt[0]).not.toHaveProperty('token');
@@ -250,6 +281,8 @@ describe('admin AI prompt template routes', () => {
     expect(response.body).not.toContain('session-value');
     expect(response.body).not.toContain('bearer-value');
     expect(response.body).not.toContain('access-key-value');
+    expect(response.body).not.toContain('consumer-secret');
+    expect(response.body).not.toContain('must-not-leak');
   });
 
   it('maps stale publish and rollback sequence tokens to HTTP 409', async () => {
@@ -280,6 +313,23 @@ describe('admin AI prompt template routes', () => {
         error: { code: 'SEQUENCE_CONFLICT' },
       });
     }
+  });
+
+  it('maps consumer contract drift to a retryable server error', async () => {
+    const service = promptTemplateService();
+    service.listTemplates.mockRejectedValueOnce(Object.assign(new Error('consumer drift'), {
+      code: 'INVALID_CONSUMER_VALIDATOR',
+    }));
+    const { app } = await appFor('super-admin', service);
+
+    const response = await app.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: 0,
+      msg: 'AI prompt consumer is unavailable; retry after the server contract is restored',
+      error: { code: 'INVALID_CONSUMER_VALIDATOR' },
+    });
   });
 
   it('maps an invalid rollback target to HTTP 409', async () => {

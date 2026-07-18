@@ -35,6 +35,7 @@ function template(key: 'listing-copy.title' | 'listing-copy.description', sequen
       negativePromptTemplate: 'Forbidden: {{forbidden_claims}}',
       outputMode: 'listing_copy_candidate' as const,
       variableSchemaVersion: 1,
+      consumer: null,
       variableKeys: { prompt: ['sourceFactsJson'], negativePrompt: ['forbiddenClaims'] },
     },
     resolvedPrompt: `${key} resolved prompt ${sequence}`,

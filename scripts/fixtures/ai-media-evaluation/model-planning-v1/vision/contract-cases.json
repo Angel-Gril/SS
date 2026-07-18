@@ -1,0 +1,64 @@
+[
+  {
+    "id": "vision-contract-1",
+    "kind": "vision",
+    "context": {
+      "candidateIds": ["same-1", "variant-1", "different-1"],
+      "verifiedFacts": []
+    },
+    "modelOutput": {
+      "version": "1.0",
+      "images": [
+        {
+          "candidateId": "same-1",
+          "productIdentity": "same_product",
+          "identityConfidence": 0.99,
+          "contentRoles": ["identity"],
+          "observations": {
+            "colors": ["black"],
+            "shapes": ["round"],
+            "visibleComponents": ["lid"],
+            "visibleText": []
+          },
+          "claims": { "material": "carbon fiber" }
+        },
+        {
+          "candidateId": "variant-1",
+          "productIdentity": "variant",
+          "identityConfidence": 0.95,
+          "contentRoles": ["identity"],
+          "observations": {
+            "colors": ["blue"],
+            "shapes": ["round"],
+            "visibleComponents": ["lid"],
+            "visibleText": []
+          },
+          "claims": {}
+        },
+        {
+          "candidateId": "different-1",
+          "productIdentity": "different_product",
+          "identityConfidence": 0.98,
+          "contentRoles": [],
+          "observations": {
+            "colors": [],
+            "shapes": [],
+            "visibleComponents": [],
+            "visibleText": []
+          },
+          "claims": {}
+        }
+      ]
+    },
+    "gold": {
+      "identities": {
+        "same-1": "same_product",
+        "variant-1": "variant",
+        "different-1": "different_product"
+      },
+      "unsupportedClaimFields": {
+        "same-1": ["material"]
+      }
+    }
+  }
+]

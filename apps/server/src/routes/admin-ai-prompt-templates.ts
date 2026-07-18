@@ -133,6 +133,19 @@ function mapVariableSchemaDto(value: unknown) {
   };
 }
 
+function mapConsumerDto(value: unknown) {
+  return allowedFields(value, [
+    'templateKey',
+    'contractVersion',
+    'schemaVersion',
+    'normalizerVersion',
+    'implementationVersion',
+    'implementationHash',
+    'behaviorHash',
+    'contractHash',
+  ]);
+}
+
 function mapTemplateItemDto(value: unknown) {
   const source = record(value);
   const output: Record<string, unknown> = {
@@ -144,6 +157,12 @@ function mapTemplateItemDto(value: unknown) {
   };
   if (source.variableSchema && typeof source.variableSchema === 'object') {
     output.variableSchema = mapVariableSchemaDto(source.variableSchema);
+  }
+  if (source.consumer && typeof source.consumer === 'object') {
+    output.consumer = mapConsumerDto(source.consumer);
+  }
+  if (source.consumerCompatibility && typeof source.consumerCompatibility === 'object') {
+    output.consumerCompatibility = allowedFields(source.consumerCompatibility, ['status', 'code']);
   }
   return output;
 }
@@ -160,17 +179,23 @@ function mapTemplateListDto(value: unknown) {
 }
 
 function mapPreviewDto(value: unknown) {
-  return allowedFields(value, [
+  const source = record(value);
+  const output = allowedFields(source, [
     'revisionId',
     'checksum',
     'resolvedPrompt',
     'resolvedNegativePrompt',
     'outputMode',
   ]);
+  if (source.consumer && typeof source.consumer === 'object') {
+    output.consumer = mapConsumerDto(source.consumer);
+  }
+  return output;
 }
 
 function mapTestDto(value: unknown) {
-  return allowedFields(value, [
+  const source = record(value);
+  const output = allowedFields(source, [
     'ok',
     'testRunId',
     'revisionId',
@@ -179,6 +204,10 @@ function mapTestDto(value: unknown) {
     'resolvedNegativePrompt',
     'outputMode',
   ]);
+  if (source.consumer && typeof source.consumer === 'object') {
+    output.consumer = mapConsumerDto(source.consumer);
+  }
+  return output;
 }
 
 function actorUserId(request: FastifyRequest): string {
@@ -199,12 +228,15 @@ function invalidRequest(reply: FastifyReply) {
   });
 }
 
-function mappedStatus(error: unknown): 400 | 404 | 409 | null {
+function mappedStatus(error: unknown): 400 | 404 | 409 | 503 | null {
   const candidate = error as { code?: unknown; statusCode?: unknown };
   if (candidate?.statusCode === 400 || candidate?.statusCode === 404 || candidate?.statusCode === 409) {
     return candidate.statusCode;
   }
   const code = String(candidate?.code || '').toUpperCase();
+  if (code === 'MISSING_CONSUMER_VALIDATOR' || code === 'INVALID_CONSUMER_VALIDATOR') {
+    return 503;
+  }
   if (code.includes('NOT_FOUND')) return 404;
   if (
     code.includes('CONFLICT')
@@ -224,9 +256,10 @@ function mappedStatus(error: unknown): 400 | 404 | 409 | null {
   return null;
 }
 
-function safeErrorMessage(statusCode: 400 | 404 | 409): string {
+function safeErrorMessage(statusCode: 400 | 404 | 409 | 503): string {
   if (statusCode === 404) return 'AI prompt template resource was not found';
   if (statusCode === 409) return 'AI prompt template changed; reload before retrying';
+  if (statusCode === 503) return 'AI prompt consumer is unavailable; retry after the server contract is restored';
   return 'Invalid AI prompt template request';
 }
 

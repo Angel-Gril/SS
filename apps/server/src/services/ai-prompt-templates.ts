@@ -1,10 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
+import {
+  AI_MEDIA_CURATION_TEMPLATE_KEY,
+  AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
+  AI_MEDIA_VISION_TEMPLATE_KEY,
+  getAiPromptConsumerContract,
+} from './ai-prompt-consumer-contracts.js';
 
 export const AI_PROMPT_SAFETY_POLICY =
   "Preserve the product's identity. Do not invent product facts, certifications, logos, or visible claims.";
 
 export const AI_LISTING_COPY_SAFETY_POLICY =
   'Use only the supplied source facts and confirmed attributes. Do not invent specifications, certifications, brands, origins, compatibility, quantities, or commercial claims. Return a review candidate only; never represent it as approved or published.';
+
+export const AI_MEDIA_PLANNING_SAFETY_POLICY =
+  'Use only supplied candidate IDs, verified facts, and allowed planning goals. Never invent product facts, candidate IDs, SKU relationships, or evidence. Return strict JSON for server validation; invalid output falls back to deterministic planning.';
 
 export interface AiPromptVariableDefinition {
   inputKey: string;
@@ -16,7 +25,7 @@ export interface AiPromptVariableSchema {
   prompt: readonly AiPromptVariableDefinition[];
   negativePrompt: readonly AiPromptVariableDefinition[];
   safetyPolicy: string;
-  outputMode: 'media_candidate' | 'listing_copy_candidate';
+  outputMode: 'media_candidate' | 'listing_copy_candidate' | 'media_planning_json';
 }
 
 const AI_PROMPT_VARIABLE_SCHEMAS: Readonly<Record<string, AiPromptVariableSchema>> = {
@@ -48,6 +57,38 @@ const AI_PROMPT_VARIABLE_SCHEMAS: Readonly<Record<string, AiPromptVariableSchema
     negativePrompt: [{ inputKey: 'forbiddenClaims', token: 'forbidden_claims', requiredForTest: false }],
     safetyPolicy: AI_LISTING_COPY_SAFETY_POLICY,
     outputMode: 'listing_copy_candidate',
+  },
+  [AI_MEDIA_CURATION_TEMPLATE_KEY]: {
+    prompt: [
+      { inputKey: 'candidateManifestJson', token: 'candidate_manifest_json', requiredForTest: true },
+    ],
+    negativePrompt: [
+      { inputKey: 'platformConstraints', token: 'platform_constraints', requiredForTest: false },
+    ],
+    safetyPolicy: AI_MEDIA_PLANNING_SAFETY_POLICY,
+    outputMode: 'media_planning_json',
+  },
+  [AI_MEDIA_VISION_TEMPLATE_KEY]: {
+    prompt: [
+      { inputKey: 'candidateManifestJson', token: 'candidate_manifest_json', requiredForTest: true },
+      { inputKey: 'verifiedFactsJson', token: 'verified_facts_json', requiredForTest: true },
+    ],
+    negativePrompt: [
+      { inputKey: 'platformConstraints', token: 'platform_constraints', requiredForTest: false },
+    ],
+    safetyPolicy: AI_MEDIA_PLANNING_SAFETY_POLICY,
+    outputMode: 'media_planning_json',
+  },
+  [AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY]: {
+    prompt: [
+      { inputKey: 'slotPlanningInputJson', token: 'slot_planning_input_json', requiredForTest: true },
+      { inputKey: 'visionEvidenceJson', token: 'vision_evidence_json', requiredForTest: true },
+    ],
+    negativePrompt: [
+      { inputKey: 'platformConstraints', token: 'platform_constraints', requiredForTest: false },
+    ],
+    safetyPolicy: AI_MEDIA_PLANNING_SAFETY_POLICY,
+    outputMode: 'media_planning_json',
   },
 };
 
@@ -230,11 +271,13 @@ export function renderAiPromptRevision(
 
 export function checksumAiPromptRevision(input: AiPromptRevisionContent): string {
   const revision = validateAiPromptRevision(input);
+  const consumer = getAiPromptConsumerContract(revision.templateKey);
   return createHash('sha256')
     .update(JSON.stringify({
       templateKey: revision.templateKey,
       promptTemplate: revision.promptTemplate,
       negativePromptTemplate: revision.negativePromptTemplate,
+      ...(consumer ? { consumer } : {}),
     }))
     .digest('hex');
 }

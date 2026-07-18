@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curation-contract-1",
+    "kind": "curation",
+    "context": {
+      "candidates": [
+        {
+          "id": "keep-1",
+          "url": "https://img.example.com/keep-1.jpg",
+          "width": 1000,
+          "height": 1200,
+          "mimeType": "image/jpeg",
+          "role": "product_main",
+          "skuKeys": ["sku-1"],
+          "contentHash": "hash-keep-1"
+        },
+        {
+          "id": "reject-1",
+          "url": "https://img.example.com/reject-1.jpg",
+          "width": 120,
+          "height": 120,
+          "mimeType": "image/jpeg",
+          "role": "product_detail",
+          "skuKeys": [],
+          "contentHash": "hash-reject-1"
+        },
+        {
+          "id": "manual-1",
+          "url": "https://img.example.com/manual-1.jpg",
+          "width": null,
+          "height": null,
+          "mimeType": "image/jpeg",
+          "role": "product_detail",
+          "skuKeys": [],
+          "contentHash": "hash-manual-1"
+        }
+      ]
+    },
+    "modelOutput": {
+      "version": "1.0",
+      "decisions": [
+        {
+          "candidateId": "keep-1",
+          "disposition": "keep",
+          "translation": "skip",
+          "contentRole": "identity"
+        },
+        {
+          "candidateId": "reject-1",
+          "disposition": "keep",
+          "translation": "skip",
+          "contentRole": "detail"
+        },
+        {
+          "candidateId": "manual-1",
+          "disposition": "manual",
+          "translation": "unknown",
+          "contentRole": "detail"
+        }
+      ]
+    },
+    "gold": {
+      "dispositions": {
+        "keep-1": "keep",
+        "reject-1": "reject",
+        "manual-1": "manual"
+      }
+    }
+  }
+]

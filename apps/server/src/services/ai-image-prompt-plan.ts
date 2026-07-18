@@ -9,6 +9,8 @@ import {
 
 export const AI_IMAGE_PROMPT_PLAN_VERSION = '2.0' as const;
 export const AI_IMAGE_PROMPT_PLAN_MAX_REFERENCES = 5;
+// Bump when parser, normalization, slot rules, or fallback semantics change.
+export const AI_IMAGE_PROMPT_PLAN_IMPLEMENTATION_VERSION = 'ai-image-prompt-plan-implementation/v1' as const;
 
 export type SkuIdentityImpact =
   | 'color'
@@ -490,6 +492,10 @@ function parseModelOutput(value: unknown): z.infer<typeof modelOutputSchema> | n
   }
   const result = modelOutputSchema.safeParse(parsed);
   return result.success ? result.data : null;
+}
+
+export function validateAiImagePromptPlanModelOutput(value: unknown): boolean {
+  return parseModelOutput(value) !== null;
 }
 
 function compatibleImagesForSlot(

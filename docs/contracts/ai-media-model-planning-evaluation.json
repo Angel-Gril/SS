@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "ai-media-model-planning-acceptance/v1",
+  "status": "NOT_READY",
+  "fixtureSet": {
+    "id": "unit8-contract-fixtures-v1",
+    "evidenceLevel": "CONTRACT_FIXTURE",
+    "corpusAvailable": false,
+    "qualityMeasured": false
+  },
+  "productionPolicy": {
+    "minimumCases": {
+      "curation": 20,
+      "vision": 20,
+      "slotPlanning": 20
+    },
+    "minimumKeepPrecision": 0.95,
+    "minimumKeepRecall": 0.9,
+    "minimumRejectRecall": 0.95,
+    "minimumManualRecall": 1,
+    "maximumManualEscalationRate": 0.35,
+    "minimumIdentityAccuracy": 0.95,
+    "minimumUnsupportedClaimQuarantineRecall": 1,
+    "minimumCompatibleReferencePrecision": 1,
+    "minimumSlotCoverage": 1,
+    "maximumFallbackRate": 0.05,
+    "unsafeAcceptanceCount": 0
+  },
+  "blockers": [
+    "Exact multimodal provider and model are not selected or sandbox-verified.",
+    "No sanitized human-labeled real image corpus has been approved.",
+    "No raw outputs from the exact published prompt releases have been recorded.",
+    "No human approval is bound to an immutable evaluation and template-set hash.",
+    "Durable database approval and revocation records must land before a model worker path."
+  ],
+  "rollout": {
+    "featureFlagsRemainOff": true,
+    "tenantAllowlistRemainsEmpty": true,
+    "paidCallsPerformed": false
+  },
+  "recordedAt": "2026-07-18T00:00:00.000Z"
+}

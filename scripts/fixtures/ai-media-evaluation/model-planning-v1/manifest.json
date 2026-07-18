@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "ai-media-model-planning-fixture-set/v1",
+  "fixtureSetId": "unit8-contract-fixtures-v1",
+  "evidenceLevel": "CONTRACT_FIXTURE",
+  "readiness": "NOT_READY",
+  "corpusAvailable": false,
+  "qualityMeasured": false,
+  "limitations": [
+    "Synthetic outputs validate schemas, normalizers, scoring, and fallback only.",
+    "No cloud multimodal provider or exact production model was called.",
+    "Human-labeled real image coverage and approval are still required."
+  ]
+}

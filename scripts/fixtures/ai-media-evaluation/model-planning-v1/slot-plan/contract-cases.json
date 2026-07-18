@@ -1,0 +1,67 @@
+[
+  {
+    "id": "slot-contract-1",
+    "kind": "slot_planning",
+    "context": {
+      "skus": [{ "skuKey": "sku-1", "attributes": [] }],
+      "images": [
+        {
+          "candidateId": "image-1",
+          "skuKeys": ["sku-1"],
+          "contentRole": "identity",
+          "evidenceIds": ["capture:image-1"]
+        }
+      ],
+      "verifiedFacts": []
+    },
+    "modelOutput": {
+      "version": "2.0",
+      "slots": [
+        {
+          "slotKey": "sku:sku-1:hero",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:1",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:2",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:3",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:4",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:5",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:6",
+          "referenceCandidateIds": ["image-1"]
+        },
+        {
+          "slotKey": "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:7",
+          "referenceCandidateIds": ["image-1"]
+        }
+      ]
+    },
+    "gold": {
+      "allowedReferences": {
+        "sku:sku-1:hero": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:1": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:2": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:3": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:4": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:5": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:6": ["image-1"],
+        "group:visual-1b6bf497e66ce319b8c0f3aa:gallery:7": ["image-1"]
+      }
+    }
+  }
+]

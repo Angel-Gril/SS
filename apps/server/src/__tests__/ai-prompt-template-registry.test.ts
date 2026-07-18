@@ -9,6 +9,13 @@ import {
   LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
   LISTING_COPY_TITLE_TEMPLATE_KEY,
 } from '../services/ai-prompt-template-registry.js';
+import {
+  AI_MEDIA_CURATION_TEMPLATE_KEY,
+  AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
+  AI_MEDIA_VISION_TEMPLATE_KEY,
+  AiPromptConsumerContractError,
+  verifyAiPromptConsumerContract,
+} from '../services/ai-prompt-consumer-contracts.js';
 
 const KEY = 'text-to-image.base';
 
@@ -141,6 +148,9 @@ describe('AI prompt template registry', () => {
       KEY,
       LISTING_COPY_TITLE_TEMPLATE_KEY,
       LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
+      AI_MEDIA_CURATION_TEMPLATE_KEY,
+      AI_MEDIA_VISION_TEMPLATE_KEY,
+      AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
     ]);
     const title = listed.items.find((item) => item.key === LISTING_COPY_TITLE_TEMPLATE_KEY)!;
     const description = listed.items.find((item) => item.key === LISTING_COPY_DESCRIPTION_TEMPLATE_KEY)!;
@@ -158,6 +168,121 @@ describe('AI prompt template registry', () => {
     expect(description.variableSchema.prompt).toEqual(expect.arrayContaining([
       expect.objectContaining({ inputKey: 'confirmedAttributesJson', requiredForTest: true }),
     ]));
+  });
+
+  it('bootstraps structured planning templates only with frozen consumer contracts', async () => {
+    const target = registry();
+    const listed = await target.listTemplates();
+    const curation = listed.items.find((item) => item.key === AI_MEDIA_CURATION_TEMPLATE_KEY)!;
+
+    expect(curation).toMatchObject({
+      outputMode: 'media_planning_json',
+      consumer: verifyAiPromptConsumerContract(AI_MEDIA_CURATION_TEMPLATE_KEY),
+      variableSchema: {
+        outputMode: 'media_planning_json',
+        prompt: expect.arrayContaining([
+          expect.objectContaining({ inputKey: 'candidateManifestJson', requiredForTest: true }),
+        ]),
+      },
+    });
+    const resolved = await target.resolveTemplate({
+      templateKey: AI_MEDIA_CURATION_TEMPLATE_KEY,
+      variables: {
+        candidateManifestJson: '{"candidates":[{"candidateId":"image-1"}]}',
+        platformConstraints: '',
+      },
+    });
+    expect(resolved.snapshot.consumer).toEqual(curation.consumer);
+    expect(resolved.outputMode).toBe('media_planning_json');
+  });
+
+  it('rechecks a structured consumer before test, publish, rollback, and resolve activation', async () => {
+    let consumerAvailable = true;
+    const verifyConsumer = (templateKey: string) => {
+      if (!consumerAvailable) {
+        throw new AiPromptConsumerContractError(
+          'MISSING_CONSUMER_VALIDATOR',
+          'consumer unavailable',
+        );
+      }
+      return verifyAiPromptConsumerContract(templateKey);
+    };
+    const store = new InMemoryAiPromptTemplateStore();
+    const target = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => 'Legacy prompt'),
+      verifyConsumerContract: verifyConsumer,
+    });
+    const listed = await target.listTemplates();
+    const structured = listed.items.find((item) => item.key === AI_MEDIA_CURATION_TEMPLATE_KEY)!;
+    const draft = await target.createRevision({
+      actorUserId: 'admin-1',
+      key: AI_MEDIA_CURATION_TEMPLATE_KEY,
+      promptTemplate: structured.activeRevision!.promptTemplate,
+      negativePromptTemplate: structured.activeRevision!.negativePromptTemplate,
+    });
+    const testRun = await target.testRevision({
+      actorUserId: 'admin-1',
+      revisionId: draft.id,
+      sampleInput: {
+        candidateManifestJson: '{"candidates":[{"candidateId":"image-1"}]}',
+        platformConstraints: '',
+      },
+    });
+    expect(testRun.consumer).toEqual(verifyAiPromptConsumerContract(AI_MEDIA_CURATION_TEMPLATE_KEY));
+
+    consumerAvailable = false;
+    await expect(target.testRevision({
+      actorUserId: 'admin-1',
+      revisionId: draft.id,
+      sampleInput: {
+        candidateManifestJson: '{"candidates":[{"candidateId":"image-1"}]}',
+        platformConstraints: '',
+      },
+    })).rejects.toMatchObject({ code: 'MISSING_CONSUMER_VALIDATOR' });
+    await expect(target.publishRevision({
+      actorUserId: 'admin-1',
+      key: AI_MEDIA_CURATION_TEMPLATE_KEY,
+      revisionId: draft.id,
+      testRunId: testRun.testRunId,
+      expectedSequence: 1,
+    })).rejects.toMatchObject({ code: 'MISSING_CONSUMER_VALIDATOR' });
+    await expect(target.rollbackTemplate({
+      actorUserId: 'admin-1',
+      key: AI_MEDIA_CURATION_TEMPLATE_KEY,
+      targetRevisionId: structured.activeRevision!.id,
+      expectedSequence: 1,
+    })).rejects.toMatchObject({ code: 'MISSING_CONSUMER_VALIDATOR' });
+    await expect(target.resolveTemplate({
+      templateKey: AI_MEDIA_CURATION_TEMPLATE_KEY,
+      variables: {
+        candidateManifestJson: '{"candidates":[{"candidateId":"image-1"}]}',
+        platformConstraints: '',
+      },
+    })).rejects.toMatchObject({ code: 'MISSING_CONSUMER_VALIDATOR' });
+    const incompatible = (await target.listTemplates()).items.find(
+      (item) => item.key === AI_MEDIA_CURATION_TEMPLATE_KEY,
+    );
+    expect(incompatible?.currentSequence).toBe(1);
+    expect(incompatible?.consumerCompatibility).toEqual({
+      status: 'INCOMPATIBLE',
+      code: 'MISSING_CONSUMER_VALIDATOR',
+    });
+  });
+
+  it('rejects a verifier whose descriptor differs from the compiled consumer contract', async () => {
+    const store = new InMemoryAiPromptTemplateStore();
+    const target = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => 'Legacy prompt'),
+      verifyConsumerContract: (templateKey) => ({
+        ...verifyAiPromptConsumerContract(templateKey),
+        contractHash: 'f'.repeat(64),
+      }),
+    });
+
+    await expect(target.listTemplates()).rejects.toMatchObject({
+      code: 'INVALID_CONSUMER_VALIDATOR',
+    });
+    await expect(store.listReleases(AI_MEDIA_CURATION_TEMPLATE_KEY)).resolves.toHaveLength(0);
   });
 
   it('resolves listing-copy candidates only from supplied facts and required variables', async () => {
@@ -307,7 +432,7 @@ describe('AI prompt template registry', () => {
 
     await Promise.all([first.listTemplates(), second.listTemplates()]);
     const listed = await first.listTemplates();
-    expect(listed.items).toHaveLength(3);
+    expect(listed.items).toHaveLength(6);
     for (const template of listed.items) {
       expect(template.currentSequence).toBe(1);
       expect(template.revisions).toHaveLength(1);
