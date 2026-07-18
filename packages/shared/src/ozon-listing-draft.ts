@@ -211,14 +211,73 @@ export interface OzonListingWorkflowIssue {
 
 export interface OzonListingAiCopyCandidate {
   id: string;
+  kind?: 'MANUAL' | 'AI_GENERATED';
+  fields?: Array<'title' | 'description'>;
   titleRu: string | null;
   descriptionRu: string | null;
   sourcePromptVersion: string;
   sourceCaptureSnapshotId: string;
   sourceCaptureHash: string;
+  generation?: OzonListingAiCopyGenerationProvenance;
   createdByUserId: string;
   createdAt: string;
 }
+
+export interface OzonListingAiCopyFieldProvenance {
+  templateKey: 'listing-copy.title' | 'listing-copy.description';
+  releaseId: string;
+  revisionId: string;
+  sequence: number;
+  checksum: string;
+  compileContractVersion: string;
+  temperature: number;
+  maxTokens: number;
+  allowReasoningRetry?: boolean;
+  variableSchemaVersion: number;
+  variablesHash: string;
+  sourceProfileHash: string;
+  provider: string;
+  model: string;
+  source: 'cache' | 'provider';
+  promptHash: string;
+  providerRequestHash: string;
+  providerConfigHash: string;
+  outputHash: string;
+  generatedAt: string;
+  structuredOutput?: Record<string, unknown>;
+  frozenRequest?: {
+    systemPrompt: string;
+    userPrompt: string;
+    variables: Record<string, string>;
+  };
+}
+
+export interface OzonListingAiCopyGenerationProvenance {
+  schemaVersion: 'listing-copy-generation/v1';
+  operationKey: string;
+  clientRequestHash: string;
+  draftContextHash: string;
+  fields: Array<'title' | 'description'>;
+  title?: OzonListingAiCopyFieldProvenance;
+  description?: OzonListingAiCopyFieldProvenance;
+}
+
+export type OzonListingAiCopyFieldProvenanceView = Omit<
+  OzonListingAiCopyFieldProvenance,
+  'frozenRequest'
+>;
+
+export type OzonListingAiCopyGenerationProvenanceView = Omit<
+  OzonListingAiCopyGenerationProvenance,
+  'title' | 'description'
+> & {
+  title?: OzonListingAiCopyFieldProvenanceView;
+  description?: OzonListingAiCopyFieldProvenanceView;
+};
+
+export type OzonListingAiCopyCandidateView = Omit<OzonListingAiCopyCandidate, 'generation'> & {
+  generation?: OzonListingAiCopyGenerationProvenanceView;
+};
 
 export interface OzonListingAiCopyApplyAudit {
   id: string;
@@ -324,3 +383,9 @@ export interface OzonListingDraft {
   createdAt: string;
   updatedAt: string;
 }
+
+export type OzonListingDraftView = Omit<OzonListingDraft, 'copy'> & {
+  copy: Omit<OzonListingDraft['copy'], 'candidates'> & {
+    candidates: OzonListingAiCopyCandidateView[];
+  };
+};

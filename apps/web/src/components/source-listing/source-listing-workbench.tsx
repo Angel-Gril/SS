@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -12,12 +12,13 @@ import {
   Save,
   Send,
   ShieldCheck,
+  Sparkles,
   Store,
   Upload,
 } from 'lucide-react';
 import {
   SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
-  type OzonListingDraft,
+  type OzonListingDraftView as OzonListingDraft,
 } from 'shared';
 import { OzonAttributeEditor } from '@/components/source-listing/ozon-attribute-editor';
 import { useSystemDialog } from '@/components/system-dialog-provider';
@@ -32,6 +33,7 @@ import {
   buildSourceListingPublishIdempotencyKey,
   sourceListingWorkflowClient,
   type SourceCaptureView,
+  type SourceListingAiCopyCapability,
   type SourceListingHandoff,
   type SourceListingMediaSelection,
   type SourceListingPublishAttempt,
@@ -44,6 +46,10 @@ import {
 const SKU_PAGE_SIZE = 25;
 const MEDIA_PAGE_SIZE = 12;
 const SHOP_STORAGE_KEY = 'ss-erp:source-publish:last-ozon-shop-id';
+const COPY_GENERATION_STORAGE_KEY = 'ss-erp:source-listing:pending-copy-generations:v1';
+const COPY_GENERATION_STORAGE_MAX_ITEMS = 12;
+const COPY_GENERATION_STORAGE_MAX_CHARS = 32_000;
+const COPY_GENERATION_STORAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface OzonShopOption {
   id: string;
@@ -88,6 +94,29 @@ interface PriceFormRow {
   offerId: string;
 }
 
+interface PendingCopyGeneration {
+  operationKey: string;
+  signature: string;
+  draftId: string;
+  updatedAt: number;
+}
+
+interface PendingCopyApply {
+  candidateId: string;
+  draftId: string;
+  operationKey: string;
+  startingRevision: number;
+  requestedCandidateId: string | null;
+  requestedTitle: string;
+  requestedDescription: string;
+}
+
+interface ActiveHandoffRequest {
+  epoch: number;
+  identity: string;
+  handoff: SourceListingHandoff;
+}
+
 type MediaSelectionDraft = SourceListingMediaSelection;
 type AttemptDiscoveryState = 'idle' | 'loading' | 'ready' | 'failed';
 
@@ -113,6 +142,84 @@ function mediaUrl(value: SourceCaptureView['media']['items'][number]): string {
 
 function pageCount(total: number, limit: number): number {
   return Math.max(1, Math.ceil(total / limit));
+}
+
+function clientOperationKey(prefix: string): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}:${crypto.randomUUID()}`;
+  }
+  return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function productHandoffIdentity(handoff: SourceListingHandoff): string {
+  return [
+    handoff.supplyGoodsId,
+    handoff.snapshotId,
+    handoff.snapshotVersion ?? '',
+    handoff.sourceProductId || '',
+  ].join('\u0000');
+}
+
+function activeHandoffIdentity(handoff: SourceListingHandoff): string {
+  return `${productHandoffIdentity(handoff)}\u0000${handoff.workflowId || ''}`;
+}
+
+function generationSignature(draftId: string, instructions: string): string {
+  return `${draftId}\u0000title,description\u0000${instructions}`;
+}
+
+function readPendingCopyGenerations(): PendingCopyGeneration[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(COPY_GENERATION_STORAGE_KEY) || '[]') as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const oldest = Date.now() - COPY_GENERATION_STORAGE_MAX_AGE_MS;
+    return parsed.filter((entry): entry is PendingCopyGeneration => {
+      if (!entry || typeof entry !== 'object') return false;
+      const value = entry as Record<string, unknown>;
+      return typeof value.operationKey === 'string'
+        && value.operationKey.length > 0
+        && value.operationKey.length <= 200
+        && typeof value.signature === 'string'
+        && value.signature.length > 0
+        && value.signature.length <= 2400
+        && typeof value.draftId === 'string'
+        && value.draftId.length > 0
+        && value.draftId.length <= 200
+        && typeof value.updatedAt === 'number'
+        && Number.isSafeInteger(value.updatedAt)
+        && value.updatedAt >= oldest;
+    }).sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, COPY_GENERATION_STORAGE_MAX_ITEMS);
+  } catch {
+    return [];
+  }
+}
+
+function writePendingCopyGenerations(entries: PendingCopyGeneration[]): PendingCopyGeneration[] {
+  const bounded: PendingCopyGeneration[] = [];
+  for (const entry of entries.sort((left, right) => right.updatedAt - left.updatedAt)) {
+    if (bounded.length >= COPY_GENERATION_STORAGE_MAX_ITEMS) break;
+    const candidate = [...bounded, entry];
+    if (JSON.stringify(candidate).length > COPY_GENERATION_STORAGE_MAX_CHARS) break;
+    bounded.push(entry);
+  }
+  if (typeof window !== 'undefined') {
+    try { window.localStorage.setItem(COPY_GENERATION_STORAGE_KEY, JSON.stringify(bounded)); } catch { /* unavailable */ }
+  }
+  return bounded;
+}
+
+function aiCopyCapabilityLabel(capability: SourceListingAiCopyCapability): string {
+  if (capability.enabled) return 'AI 已启用';
+  return ({
+    master_off: 'AI 全局关闭',
+    tenant_not_allowed: 'AI 未向当前租户开放',
+    invalid_policy: 'AI 策略异常',
+    listing_copy_off: 'AI 文案关闭',
+    provider_not_ready: 'AI Provider 未就绪',
+    tenant_allowed: 'AI 未启用',
+  } as const)[capability.reason];
 }
 
 function canonicalSkuIdentity(values: string[]): string {
@@ -242,6 +349,12 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const [categoryKey, setCategoryKey] = useState('');
   const [copyTitle, setCopyTitle] = useState('');
   const [copyDescription, setCopyDescription] = useState('');
+  const [copyInstructions, setCopyInstructions] = useState('');
+  const [selectedCopyCandidateId, setSelectedCopyCandidateId] = useState<string | null>(null);
+  const [aiCopyCapability, setAiCopyCapability] = useState<SourceListingAiCopyCapability | null>(null);
+  const [aiCopyCapabilityError, setAiCopyCapabilityError] = useState('');
+  const [aiCopyCapabilityLoading, setAiCopyCapabilityLoading] = useState(Boolean(handoff.workflowId));
+  const [aiCopyCapabilityReload, setAiCopyCapabilityReload] = useState(0);
   const [priceRows, setPriceRows] = useState<Record<string, PriceFormRow>>({});
   const [attempt, setAttempt] = useState<SourceListingPublishAttempt | null>(null);
   const [attemptError, setAttemptError] = useState('');
@@ -253,60 +366,174 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   const v2AttemptStartedRef = useRef(Boolean(handoff.attemptId));
   const pollControllerRef = useRef<AbortController | null>(null);
   const exactAttemptRequestedRef = useRef(Boolean(handoff.attemptId));
+  const activeHandoffRef = useRef(activeHandoff);
+  const handoffEpochRef = useRef(0);
+  const captureRequestIdRef = useRef(0);
+  const copyEditorVersionRef = useRef(0);
+  const pendingCopyGenerationRef = useRef(new Map(
+    readPendingCopyGenerations().map((entry) => [entry.signature, entry]),
+  ));
+  const pendingCopyApplyRef = useRef<PendingCopyApply | null>(null);
+  const handledHandoffIdentityRef = useRef(activeHandoffIdentity(handoff));
+
+  useLayoutEffect(() => {
+    const incomingHandoff = { ...handoff, section: 'listing' as const };
+    if (activeHandoffIdentity(activeHandoffRef.current) !== activeHandoffIdentity(incomingHandoff)) {
+      handoffEpochRef.current += 1;
+    }
+    activeHandoffRef.current = incomingHandoff;
+  }, [
+    handoff.attemptId,
+    handoff.snapshotId,
+    handoff.snapshotVersion,
+    handoff.sourceProductId,
+    handoff.supplyGoodsId,
+    handoff.workflowId,
+  ]);
+
+  function captureHandoffRequest(): ActiveHandoffRequest {
+    const current = activeHandoffRef.current;
+    return {
+      epoch: handoffEpochRef.current,
+      identity: activeHandoffIdentity(current),
+      handoff: { ...current },
+    };
+  }
+
+  function isHandoffRequestActive(request: ActiveHandoffRequest, expectedDraftId?: string): boolean {
+    const current = activeHandoffRef.current;
+    return request.epoch === handoffEpochRef.current
+      && request.identity === activeHandoffIdentity(current)
+      && (!expectedDraftId || current.workflowId === expectedDraftId);
+  }
+
+  function rememberPendingGeneration(entry: PendingCopyGeneration) {
+    pendingCopyGenerationRef.current.set(entry.signature, entry);
+    const stored = writePendingCopyGenerations([...pendingCopyGenerationRef.current.values()]);
+    pendingCopyGenerationRef.current = new Map(stored.map((value) => [value.signature, value]));
+  }
+
+  function forgetPendingGeneration(signature: string, operationKey: string) {
+    const pending = pendingCopyGenerationRef.current.get(signature);
+    if (!pending || pending.operationKey !== operationKey) return;
+    pendingCopyGenerationRef.current.delete(signature);
+    const stored = writePendingCopyGenerations([...pendingCopyGenerationRef.current.values()]);
+    pendingCopyGenerationRef.current = new Map(stored.map((value) => [value.signature, value]));
+  }
 
   const replaceHandoffUrl = useCallback((patch: {
     workflowId?: string | null;
     attemptId?: string | null;
   }) => {
-    setActiveHandoff((current) => {
-      const next: SourceListingHandoff = {
-        ...current,
-        section: 'listing',
-        ...(patch.workflowId === null ? { workflowId: undefined } : patch.workflowId ? { workflowId: patch.workflowId } : {}),
-        ...(patch.attemptId === null ? { attemptId: undefined } : patch.attemptId ? { attemptId: patch.attemptId } : {}),
-      };
-      if (patch.workflowId === null) delete next.workflowId;
-      if (patch.attemptId === null) delete next.attemptId;
-      if (typeof window !== 'undefined') {
-        const query = buildSourceListingHandoffSearchParams(next);
-        window.history.replaceState(window.history.state, '', `${window.location.pathname}?${query}`);
-      }
-      return next;
-    });
+    const current = activeHandoffRef.current;
+    const next: SourceListingHandoff = {
+      ...current,
+      section: 'listing',
+      ...(patch.workflowId === null ? { workflowId: undefined } : patch.workflowId ? { workflowId: patch.workflowId } : {}),
+      ...(patch.attemptId === null ? { attemptId: undefined } : patch.attemptId ? { attemptId: patch.attemptId } : {}),
+    };
+    if (patch.workflowId === null) delete next.workflowId;
+    if (patch.attemptId === null) delete next.attemptId;
+    if (activeHandoffIdentity(current) !== activeHandoffIdentity(next)) handoffEpochRef.current += 1;
+    activeHandoffRef.current = next;
+    handledHandoffIdentityRef.current = activeHandoffIdentity(next);
+    if (patch.workflowId && patch.workflowId !== current.workflowId) {
+      setDraft(null);
+      setDraftLoading(true);
+      setAiCopyCapability(null);
+      setAiCopyCapabilityLoading(true);
+    }
+    setActiveHandoff(next);
+    if (typeof window !== 'undefined') {
+      const query = buildSourceListingHandoffSearchParams(next);
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}?${query}`);
+    }
   }, []);
 
   useEffect(() => {
-    setActiveHandoff({ ...handoff, section: 'listing' });
-    setSkuOffset(0);
-    setMediaOffset(0);
+    const nextHandoff = { ...handoff, section: 'listing' as const };
+    const nextIdentity = activeHandoffIdentity(nextHandoff);
+    const handoffChanged = handledHandoffIdentityRef.current !== nextIdentity;
+    handledHandoffIdentityRef.current = nextIdentity;
+    activeHandoffRef.current = nextHandoff;
+    setActiveHandoff(nextHandoff);
+    if (handoffChanged) {
+      pollControllerRef.current?.abort();
+      pollControllerRef.current = null;
+      v2AttemptStartedRef.current = Boolean(handoff.attemptId);
+      setDraft(null);
+      setDraftLoading(Boolean(handoff.workflowId));
+      setDraftError('');
+      setBusyAction('');
+      setMessage('');
+      setCategoryData(null);
+      setCategoryKey('');
+      setCopyTitle('');
+      setCopyDescription('');
+      setSelectedCopyCandidateId(null);
+      setAiCopyCapability(null);
+      setAiCopyCapabilityError('');
+      setAiCopyCapabilityLoading(Boolean(handoff.workflowId));
+      setPriceRows({});
+      setAttempt(null);
+      setAttemptError('');
+      setAttemptDiscoveryState(handoff.workflowId ? 'loading' : 'idle');
+      setResolutionTaskId('');
+      setResolutionNote('');
+      pendingCopyApplyRef.current = null;
+      copyEditorVersionRef.current += 1;
+      captureRequestIdRef.current += 1;
+      setCapture(null);
+      setCaptureLoading(true);
+      setCaptureError('');
+      setSelectedSkuKeys([]);
+      setMediaSelections({});
+      setCopyInstructions('');
+      setSkuOffset(0);
+      setMediaOffset(0);
+    }
     exactAttemptRequestedRef.current = Boolean(handoff.attemptId);
     if (handoff.attemptId) v2AttemptStartedRef.current = true;
-  }, [handoff]);
+  }, [
+    handoff.attemptId,
+    handoff.snapshotId,
+    handoff.snapshotVersion,
+    handoff.sourceProductId,
+    handoff.supplyGoodsId,
+    handoff.workflowId,
+  ]);
 
   const loadCapture = useCallback(async () => {
+    const request = captureHandoffRequest();
+    const requestId = ++captureRequestIdRef.current;
     setCaptureLoading(true);
     setCaptureError('');
     try {
-      const view = await sourceListingWorkflowClient.getCaptureView(activeHandoff, {
+      const view = await sourceListingWorkflowClient.getCaptureView(request.handoff, {
         skuOffset,
         skuLimit: SKU_PAGE_SIZE,
         mediaOffset,
         mediaLimit: MEDIA_PAGE_SIZE,
       });
-      if (activeHandoff.snapshotVersion !== undefined && view.version !== activeHandoff.snapshotVersion) {
+      if (!isHandoffRequestActive(request) || captureRequestIdRef.current !== requestId) return;
+      if (request.handoff.snapshotVersion !== undefined && view.version !== request.handoff.snapshotVersion) {
         throw new Error('handoff snapshotVersion 与服务端快照不一致');
       }
-      if (activeHandoff.sourceProductId && view.sourceIdentity.productId !== activeHandoff.sourceProductId) {
+      if (request.handoff.sourceProductId && view.sourceIdentity.productId !== request.handoff.sourceProductId) {
         throw new Error('handoff sourceProductId 与服务端快照不一致');
       }
       setCapture(view);
-      if (!activeHandoff.workflowId && view.skus.total === 0) {
+      if (!request.handoff.workflowId && view.skus.total === 0) {
         setSelectedSkuKeys([SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY]);
       }
     } catch (error) {
-      setCaptureError(errorText(error, '读取完整采集快照失败'));
+      if (isHandoffRequestActive(request) && captureRequestIdRef.current === requestId) {
+        setCaptureError(errorText(error, '读取完整采集快照失败'));
+      }
     } finally {
-      setCaptureLoading(false);
+      if (isHandoffRequestActive(request) && captureRequestIdRef.current === requestId) {
+        setCaptureLoading(false);
+      }
     }
   }, [activeHandoff, mediaOffset, skuOffset]);
 
@@ -342,6 +569,8 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
     let active = true;
     setDraftLoading(true);
     setDraftError('');
+    setDraft(null);
+    setAiCopyCapability(null);
     void (async () => {
       try {
         const exact = await sourceListingWorkflowClient.getDraft(workflowId);
@@ -459,10 +688,39 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   useEffect(() => {
     if (!draft) return;
-    const latest = draft.copy.candidates.at(-1);
-    setCopyTitle(draft.copy.publishTitleRu || latest?.titleRu || '');
-    setCopyDescription(draft.copy.publishDescriptionRu || latest?.descriptionRu || '');
-  }, [draft?.copy.candidates.length, draft?.copy.publishDescriptionRu, draft?.copy.publishTitleRu, draft?.id]);
+    const appliedAudit = draft.copy.applyAudit.at(-1);
+    const appliedCandidate = appliedAudit
+      ? draft.copy.candidates.find((candidate) => candidate.id === appliedAudit.candidateId)
+      : null;
+    const initialCandidate = appliedCandidate || draft.copy.candidates.at(-1);
+    setCopyTitle(initialCandidate?.titleRu || draft.copy.publishTitleRu || '');
+    setCopyDescription(initialCandidate?.descriptionRu || draft.copy.publishDescriptionRu || '');
+    setSelectedCopyCandidateId(initialCandidate?.id || null);
+  }, [draft?.id]);
+
+  useEffect(() => {
+    if (!draft) {
+      setAiCopyCapability(null);
+      setAiCopyCapabilityError('');
+      setAiCopyCapabilityLoading(false);
+      return;
+    }
+    let active = true;
+    setAiCopyCapability(null);
+    setAiCopyCapabilityError('');
+    setAiCopyCapabilityLoading(true);
+    void sourceListingWorkflowClient.getAiCopyCapability(draft.id).then((value) => {
+      if (active) setAiCopyCapability(value);
+    }).catch((error) => {
+      if (active) {
+        setAiCopyCapability(null);
+        setAiCopyCapabilityError(errorText(error, 'AI 状态读取失败'));
+      }
+    }).finally(() => {
+      if (active) setAiCopyCapabilityLoading(false);
+    });
+    return () => { active = false; };
+  }, [aiCopyCapabilityReload, draft?.id]);
 
   useEffect(() => {
     if (!draft) return;
@@ -488,6 +746,9 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
   ), [capture]);
   const selectedCandidate = categoryData?.candidates.find((candidate) => `${candidate.categoryId}:${candidate.typeId}` === categoryKey) || null;
   const publishReady = isDraftReadyForImmutablePublish(draft);
+  const aiCopyFactsReady = Boolean(draft?.category)
+    && draft?.freshness.category.state === 'CURRENT'
+    && draft?.freshness.attributes.state === 'CURRENT';
 
   function toggleSku(key: string) {
     if (draft) return;
@@ -541,53 +802,72 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       setDraftError('请选择 Ozon 店铺和至少一个 canonical SKU');
       return;
     }
+    const request = captureHandoffRequest();
+    let handoffAdvanced = false;
     setBusyAction('create');
     setDraftError('');
     try {
+      if (!isHandoffRequestActive(request)) return;
       const created = await sourceListingWorkflowClient.createWorkflowFromSnapshot({
-        handoff: activeHandoff,
+        handoff: request.handoff,
         shopId,
         selectedSkuKeys,
       });
-      if (created.sourceCaptureSnapshotId !== activeHandoff.snapshotId
-        || created.supplyGoodsId !== activeHandoff.supplyGoodsId) throw new Error('服务端返回了不同的快照工作流');
+      if (!isHandoffRequestActive(request)) return;
+      if (created.sourceCaptureSnapshotId !== request.handoff.snapshotId
+        || created.supplyGoodsId !== request.handoff.supplyGoodsId) throw new Error('服务端返回了不同的快照工作流');
       setDraft(created);
       setSelectedSkuKeys(created.selectedSkuKeys);
       try { localStorage.setItem(SHOP_STORAGE_KEY, created.shopId); } catch { /* unavailable */ }
-      replaceHandoffUrl({ workflowId: created.id, attemptId: null });
       setMessage('已创建并绑定精确采集快照的 Ozon 草稿');
-    } catch (error) {
-      setDraftError(errorText(error, '创建来源商品草稿失败'));
-    } finally {
       setBusyAction('');
+      handoffAdvanced = true;
+      replaceHandoffUrl({ workflowId: created.id, attemptId: null });
+    } catch (error) {
+      if (isHandoffRequestActive(request)) {
+        setDraftError(errorText(error, '创建来源商品草稿失败'));
+      }
+    } finally {
+      if (!handoffAdvanced && isHandoffRequestActive(request)) setBusyAction('');
     }
   }
 
   async function refreshDraft() {
     if (!draft) return null;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
     setBusyAction('refresh');
     try {
-      const current = await sourceListingWorkflowClient.getDraft(draft.id);
-      if (current.sourceCaptureSnapshotId !== activeHandoff.snapshotId) throw new Error('草稿快照已变化');
+      const current = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return null;
+      if (!matchesExactHandoff(current, request.handoff, requestDraftId)) throw new Error('草稿快照已变化');
       setDraft(current);
       setSelectedSkuKeys(current.selectedSkuKeys);
       return current;
     } catch (error) {
-      setDraftError(errorText(error, '刷新草稿失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, '刷新草稿失败'));
+      }
       return null;
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function confirmCategory() {
     if (!draft || !selectedCandidate || !categoryData) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
     setBusyAction('category');
     setDraftError('');
     try {
-      const current = await sourceListingWorkflowClient.getDraft(draft.id);
+      const current = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      if (!matchesExactHandoff(current, request.handoff, requestDraftId)) {
+        throw new Error('当前工作流已切换，请等待最新草稿恢复');
+      }
       const confirmation = await api.post<CategoryConfirmationResponse>(
-        `/api/collect/${encodeURIComponent(activeHandoff.supplyGoodsId)}/ozon-category-confirm`,
+        `/api/collect/${encodeURIComponent(request.handoff.supplyGoodsId)}/ozon-category-confirm`,
         {
           shopId: current.shopId,
           categoryId: selectedCandidate.categoryId,
@@ -596,9 +876,11 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           expectedTransitionVersion: selectedCandidate.transitionVersion,
         },
       );
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       if (confirmation.code !== 1 || !confirmation.data?.metadataPatch) {
         throw new Error(confirmation.msg || '权威类目确认失败');
       }
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       const updated = await sourceListingWorkflowClient.updateCategory(current.id, {
         expectedRevision: current.revision,
         category: {
@@ -609,44 +891,274 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           typeName: selectedCandidate.typeName,
         },
       });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setDraft(updated);
       setMessage('Ozon 官方类目已确认并写入当前草稿');
     } catch (error) {
-      setDraftError(errorText(error, '确认 Ozon 类目失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, '确认 Ozon 类目失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function applyCopyReview() {
-    if (!draft || !copyTitle.trim()) return;
+    if (!draft || (!copyTitle.trim() && !copyDescription.trim())) return;
+    const request = captureHandoffRequest();
+    const requestEditorVersion = copyEditorVersionRef.current;
+    const requestedTitle = copyTitle.trim();
+    const requestedDescription = copyDescription.trim();
+    const requestedCandidateId = selectedCopyCandidateId;
     setBusyAction('copy');
     setDraftError('');
     try {
+      if (!isHandoffRequestActive(request, draft.id)
+        || request.handoff.snapshotId !== draft.sourceCaptureSnapshotId) {
+        throw new Error('当前工作流已切换，请等待最新草稿恢复');
+      }
       let current = await sourceListingWorkflowClient.getDraft(draft.id);
-      const candidate = await sourceListingWorkflowClient.createCopyCandidate(current.id, {
-        expectedRevision: current.revision,
-        titleRu: copyTitle.trim(),
-        descriptionRu: copyDescription.trim() || null,
-        sourcePromptVersion: 'manual:web-reviewed-copy/v1',
-      });
-      current = await sourceListingWorkflowClient.getDraft(current.id);
+      if (!isHandoffRequestActive(request, draft.id)) return;
+      if (!matchesExactHandoff(current, request.handoff, draft.id)) {
+        throw new Error('当前工作流已切换，请等待最新草稿恢复');
+      }
+      const unresolvedApply = pendingCopyApplyRef.current;
+      const unresolvedCandidate = unresolvedApply?.draftId === current.id
+        && unresolvedApply.requestedCandidateId === requestedCandidateId
+        && unresolvedApply.requestedTitle === requestedTitle
+        && unresolvedApply.requestedDescription === requestedDescription
+        ? current.copy.candidates.find((candidate) => candidate.id === unresolvedApply.candidateId)
+        : null;
+      const unresolvedAudit = unresolvedApply && unresolvedCandidate
+        ? current.copy.applyAudit.find((audit) => audit.operationKey === unresolvedApply.operationKey)
+        : null;
+      if (unresolvedAudit && unresolvedCandidate) {
+        pendingCopyApplyRef.current = null;
+        setDraft(current);
+        if (copyEditorVersionRef.current === requestEditorVersion) {
+          setCopyTitle(current.copy.publishTitleRu || '');
+          setCopyDescription(current.copy.publishDescriptionRu || '');
+          setSelectedCopyCandidateId(unresolvedCandidate.id);
+        }
+        setMessage('俄文文案采用结果已恢复');
+        return;
+      }
+      const selected = unresolvedCandidate || (requestedCandidateId
+        ? current.copy.candidates.find((candidate) => candidate.id === requestedCandidateId)
+        : null);
+      const selectedMatchesEditor = Boolean(selected
+        && (selected.titleRu || '') === requestedTitle
+        && (selected.descriptionRu || '') === requestedDescription);
+      const fullReview = current.freshness.content.state !== 'CURRENT';
+      const reviewsTitle = fullReview
+        || requestedTitle !== (current.copy.publishTitleRu || '');
+      const reviewsDescription = fullReview
+        || requestedDescription !== (current.copy.publishDescriptionRu || '');
+      const manualFields = [
+        ...(reviewsTitle ? ['title' as const] : []),
+        ...(reviewsDescription ? ['description' as const] : []),
+      ];
+      if (!unresolvedCandidate && !selectedMatchesEditor && !manualFields.length) {
+        throw new Error('当前俄文文案已是采用版本，无需重复保存');
+      }
+      const reusableManualCandidate = !unresolvedCandidate && !selectedMatchesEditor
+        ? [...current.copy.candidates].reverse().find((value) => {
+          if (value.kind === 'AI_GENERATED'
+            || value.sourcePromptVersion !== 'manual:web-reviewed-copy/v1'
+            || value.sourceCaptureSnapshotId !== current.sourceCaptureSnapshotId
+            || value.sourceCaptureHash !== current.sourceCaptureHash) return false;
+          const fields = value.fields || value.generation?.fields || ['title', 'description'];
+          return fields.length === manualFields.length
+            && manualFields.every((field) => fields.includes(field))
+            && (!reviewsTitle || value.titleRu === (requestedTitle || null))
+            && (!reviewsDescription || value.descriptionRu === (requestedDescription || null));
+        })
+        : null;
+      const candidate = unresolvedCandidate || (selected
+        && selectedMatchesEditor
+        ? selected
+        : reusableManualCandidate || await (async () => {
+          if (!isHandoffRequestActive(request, current.id)) {
+            throw new Error('当前工作流已切换，请等待最新草稿恢复');
+          }
+          return sourceListingWorkflowClient.createCopyCandidate(current.id, {
+            expectedRevision: current.revision,
+            ...(reviewsTitle ? { titleRu: requestedTitle || null } : {}),
+            ...(reviewsDescription ? { descriptionRu: requestedDescription || null } : {}),
+            sourcePromptVersion: 'manual:web-reviewed-copy/v1',
+          });
+        })());
+      if (!isHandoffRequestActive(request, current.id)) return;
+      if (!selected || candidate.id !== selected.id) {
+        current = await sourceListingWorkflowClient.getDraft(current.id);
+        if (!isHandoffRequestActive(request, current.id)) return;
+        if (!matchesExactHandoff(current, request.handoff, current.id)) return;
+      }
+      const existingPending = pendingCopyApplyRef.current;
+      const pending = existingPending?.draftId === current.id
+        && existingPending.candidateId === candidate.id
+        && existingPending.startingRevision === current.revision
+        ? existingPending
+        : {
+          draftId: current.id,
+          candidateId: candidate.id,
+          startingRevision: current.revision,
+          requestedCandidateId,
+          requestedTitle,
+          requestedDescription,
+          operationKey: clientOperationKey(
+            `source-listing-copy-review:${candidate.id.slice(0, 80)}:r${current.revision}`,
+          ),
+        };
+      pendingCopyApplyRef.current = pending;
+      const replayAudit = current.copy.applyAudit.find((audit) => audit.operationKey === pending.operationKey);
+      if (replayAudit) {
+        pendingCopyApplyRef.current = null;
+        const replayCandidate = current.copy.candidates.find((value) => value.id === replayAudit.candidateId);
+        setDraft(current);
+        if (replayCandidate && copyEditorVersionRef.current === requestEditorVersion) {
+          setCopyTitle(current.copy.publishTitleRu || '');
+          setCopyDescription(current.copy.publishDescriptionRu || '');
+          setSelectedCopyCandidateId(replayCandidate.id);
+        }
+        setMessage('俄文文案采用结果已恢复');
+        return;
+      }
+      if (!isHandoffRequestActive(request, current.id)) return;
       const applied = await sourceListingWorkflowClient.applyCopyCandidate(current.id, {
-        expectedRevision: current.revision,
+        expectedRevision: pending.startingRevision,
         candidateId: candidate.id,
-        operationKey: `source-listing-copy-review:${candidate.id}`,
+        operationKey: pending.operationKey,
       });
+      if (pendingCopyApplyRef.current?.operationKey === pending.operationKey) {
+        pendingCopyApplyRef.current = null;
+      }
+      if (!isHandoffRequestActive(request, current.id)) return;
+      const appliedAudit = applied.copy.applyAudit.find((audit) => audit.operationKey === pending.operationKey);
+      const appliedCandidate = appliedAudit
+        ? applied.copy.candidates.find((value) => value.id === appliedAudit.candidateId)
+        : null;
       setDraft(applied);
+      if (appliedCandidate && copyEditorVersionRef.current === requestEditorVersion) {
+        setCopyTitle(applied.copy.publishTitleRu || '');
+        setCopyDescription(applied.copy.publishDescriptionRu || '');
+        setSelectedCopyCandidateId(appliedCandidate.id);
+      }
       setMessage('俄文文案候选已由当前用户明确采用');
     } catch (error) {
-      setDraftError(errorText(error, '保存并采用文案候选失败'));
+      if (isHandoffRequestActive(request, draft.id)) {
+        setDraftError(errorText(error, '保存并采用文案候选失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, draft.id)) setBusyAction('');
+    }
+  }
+
+  async function generateCopyReview() {
+    if (!draft?.category
+      || draft.freshness.category.state !== 'CURRENT'
+      || draft.freshness.attributes.state !== 'CURRENT') {
+      setDraftError('请先确认当前 Ozon 类目和属性事实');
+      return;
+    }
+    const request = captureHandoffRequest();
+    const requestEditorVersion = copyEditorVersionRef.current;
+    const requestDraftId = draft.id;
+    setBusyAction('copy-generate');
+    setDraftError('');
+    const instructions = copyInstructions.trim();
+    let operationKey = '';
+    let signature = '';
+    try {
+      const current = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      if (!matchesExactHandoff(current, request.handoff, requestDraftId)) {
+        throw new Error('当前工作流已切换，请等待最新草稿恢复');
+      }
+      signature = generationSignature(current.id, instructions);
+      const pending = pendingCopyGenerationRef.current.get(signature);
+      operationKey = pending
+        ? pending.operationKey
+        : clientOperationKey('source-listing-copy-generate');
+      rememberPendingGeneration({
+        operationKey,
+        signature,
+        draftId: current.id,
+        updatedAt: Date.now(),
+      });
+
+      const persisted = current.copy.candidates.find((candidate) => (
+        candidate.generation?.operationKey === operationKey
+      ));
+      if (persisted) {
+        forgetPendingGeneration(signature, operationKey);
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
+        setDraft(current);
+        if (copyEditorVersionRef.current === requestEditorVersion) {
+          setCopyTitle(persisted.titleRu || '');
+          setCopyDescription(persisted.descriptionRu || '');
+          setSelectedCopyCandidateId(persisted.id);
+        }
+        setMessage('AI 文案候选已恢复，请审核后明确采用');
+        return;
+      }
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      const generated = await sourceListingWorkflowClient.generateCopyCandidate(current.id, {
+        expectedRevision: current.revision,
+        operationKey,
+        fields: ['title', 'description'],
+        userInstructions: instructions,
+      });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      const refreshed = await sourceListingWorkflowClient.getDraft(current.id);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      forgetPendingGeneration(signature, operationKey);
+      setDraft(refreshed);
+      const editorUnchanged = copyEditorVersionRef.current === requestEditorVersion;
+      if (editorUnchanged) {
+        setCopyTitle(generated.candidate.titleRu || '');
+        setCopyDescription(generated.candidate.descriptionRu || '');
+        setSelectedCopyCandidateId(generated.candidate.id);
+      }
+      setMessage(editorUnchanged
+        ? generated.limit
+          ? `AI 文案候选已生成，今日剩余 ${generated.limit.remaining}/${generated.limit.limit}`
+          : 'AI 文案候选已生成，请审核后明确采用'
+        : 'AI 文案候选已生成并进入历史；已保留你生成期间的编辑');
+    } catch (error) {
+      if (operationKey && signature && isHandoffRequestActive(request, requestDraftId)) {
+        try {
+          const refreshed = await sourceListingWorkflowClient.getDraft(requestDraftId);
+          const recovered = refreshed.copy.candidates.find((candidate) => (
+            candidate.generation?.operationKey === operationKey
+          ));
+          if (recovered) forgetPendingGeneration(signature, operationKey);
+          if (recovered && isHandoffRequestActive(request, requestDraftId)) {
+            setDraft(refreshed);
+            if (copyEditorVersionRef.current === requestEditorVersion) {
+              setCopyTitle(recovered.titleRu || '');
+              setCopyDescription(recovered.descriptionRu || '');
+              setSelectedCopyCandidateId(recovered.id);
+            }
+            setMessage('AI 文案候选已恢复，请审核后明确采用');
+            return;
+          }
+        } catch {
+          // Preserve the original generation failure and operation key for an exact retry.
+        }
+      }
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, 'AI 文案候选生成失败'));
+      }
+    } finally {
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function internalizeAndAssignMedia() {
     if (!draft) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
     const selections = Object.values(mediaSelections);
     if (!selections.length) {
       setDraftError('请选择至少一张来源图片');
@@ -655,21 +1167,27 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
     setBusyAction('media');
     setDraftError('');
     try {
-      const current = await sourceListingWorkflowClient.getDraft(draft.id);
+      const current = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      if (!matchesExactHandoff(current, request.handoff, requestDraftId)) return;
       const internalized = await sourceListingWorkflowClient.internalizeMedia(current.id, {
         expectedRevision: current.revision,
         selections,
       });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       const updated = await sourceListingWorkflowClient.assignMedia(current.id, {
         expectedRevision: current.revision,
         assignments: internalized.assignments,
       });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setDraft(updated);
       setMessage(`已转存并分配 ${internalized.assets.length} 张来源图片`);
     } catch (error) {
-      setDraftError(errorText(error, '来源图片转存或分配失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, '来源图片转存或分配失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
@@ -682,10 +1200,14 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
 
   async function saveStrictPricing() {
     if (!draft) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
     setBusyAction('pricing');
     setDraftError('');
     try {
-      const current = await sourceListingWorkflowClient.getDraft(draft.id);
+      const current = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      if (!matchesExactHandoff(current, request.handoff, requestDraftId)) return;
       const value = buildOzonListingPricingV1({
         selectedSkuKeys: current.selectedSkuKeys,
         items: current.selectedSkuKeys.map((skuKey) => {
@@ -704,32 +1226,44 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
         expectedRevision: current.revision,
         value,
       });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setDraft(updated);
       setMessage('逐 canonical SKU 的 RUB 定价已保存');
     } catch (error) {
-      setDraftError(errorText(error, '保存严格定价失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, '保存严格定价失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function validateFinalDraft() {
     if (!draft) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
     setBusyAction('validate');
     setDraftError('');
     try {
-      const current = await sourceListingWorkflowClient.getDraft(draft.id);
+      const current = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      if (!matchesExactHandoff(current, request.handoff, requestDraftId)) return;
       const validated = await sourceListingWorkflowClient.validateFinalDraft(current.id, current.revision);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setDraft(validated);
       setMessage(validated.validation.status === 'VALID' ? '服务端校验通过，可以明确提交' : '服务端校验未通过，请按阻断项修复');
     } catch (error) {
-      setDraftError(errorText(error, '服务端最终校验失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, '服务端最终校验失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function pollPublishAttempt(target: SourceListingPublishAttempt) {
+    const request = captureHandoffRequest();
+    if (!isHandoffRequestActive(request, target.workflowId)) return;
     pollControllerRef.current?.abort();
     const controller = new AbortController();
     pollControllerRef.current = controller;
@@ -740,20 +1274,25 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
         maxAttempts: 30,
         intervalMs: 2000,
       });
+      if (!isHandoffRequestActive(request, target.workflowId)) return;
       setAttempt(completed);
     } catch (error) {
       const value = error as SourceListingWorkflowClientError & { lastAttempt?: SourceListingPublishAttempt };
       if (value.code === 'POLL_CANCELLED') return;
-      if (value.lastAttempt) setAttempt(value.lastAttempt);
-      setAttemptError(errorText(error, '同步 Ozon 发布任务失败'));
+      if (isHandoffRequestActive(request, target.workflowId)) {
+        if (value.lastAttempt) setAttempt(value.lastAttempt);
+        setAttemptError(errorText(error, '同步 Ozon 发布任务失败'));
+      }
     } finally {
       if (pollControllerRef.current === controller) pollControllerRef.current = null;
-      setBusyAction('');
+      if (isHandoffRequestActive(request, target.workflowId)) setBusyAction('');
     }
   }
 
   async function publish() {
     if (!draft || !capability || busyAction) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
     setDraftError('');
     if (attemptDiscoveryState !== 'ready') {
       setDraftError(attemptDiscoveryState === 'failed'
@@ -768,8 +1307,9 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
     setBusyAction('publish-confirm');
     let pollingStarted = false;
     try {
-      const confirmationDraft = await sourceListingWorkflowClient.getDraft(draft.id);
-      if (!matchesExactHandoff(confirmationDraft, activeHandoff, draft.id)) {
+      const confirmationDraft = await sourceListingWorkflowClient.getDraft(requestDraftId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
+      if (!matchesExactHandoff(confirmationDraft, request.handoff, requestDraftId)) {
         setDraftError('当前草稿已不再绑定 URL 指定的精确采集快照，已禁止发布');
         return;
       }
@@ -780,6 +1320,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       }
       const confirmationCapability = await sourceListingWorkflowClient
         .getPublisherCapability(confirmationDraft.shopId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setCapability(confirmationCapability);
       if (!confirmationCapability.enabled && !confirmationCapability.legacyAllowed) {
         setDraftError(`当前店铺未开放发布：${confirmationCapability.reason}`);
@@ -797,11 +1338,13 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
         ].join('\n'),
         confirmText: confirmationCapability.enabled ? '确认提交 V2' : '确认兼容发布',
       });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       if (!confirmed) return;
 
       setBusyAction('publish');
       const freshCapability = await sourceListingWorkflowClient
         .getPublisherCapability(confirmationDraft.shopId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setCapability(freshCapability);
       if (freshCapability.revision !== confirmationCapability.revision
         || freshCapability.enabled !== confirmationCapability.enabled
@@ -811,6 +1354,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       }
       if (freshCapability.enabled) {
         v2AttemptStartedRef.current = true;
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
         const created = await sourceListingWorkflowClient.createPublishAttempt(confirmationDraft.id, {
           expectedRevision: confirmationDraft.revision,
           idempotencyKey: buildSourceListingPublishIdempotencyKey({
@@ -819,6 +1363,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
             revision: confirmationDraft.revision,
           }),
         });
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
         setAttempt(created);
         replaceHandoffUrl({ workflowId: confirmationDraft.id, attemptId: created.id });
         toast({ title: '已创建不可变 Ozon 发布任务' });
@@ -832,6 +1377,7 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
       }
       if (freshCapability.legacyAllowed) {
         const history = await sourceListingWorkflowClient.listPublishAttempts(confirmationDraft.id, { limit: 1 });
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
         const latest = history.items[0];
         if (latest) {
           v2AttemptStartedRef.current = true;
@@ -841,11 +1387,13 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           return;
         }
         const current = await sourceListingWorkflowClient.getDraft(confirmationDraft.id);
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
         if (!matchesConfirmedDraft(current, confirmationDraft)) {
           setDraft(current);
           setDraftError('草稿在确认期间已变化，请核对最新店铺、SKU 和版本后重新确认');
           return;
         }
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
         const legacy = await api.post('/api/collect/publish-ozon', {
           ids: [confirmationDraft.supplyGoodsId],
           shopId: confirmationDraft.shopId,
@@ -855,39 +1403,52 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           useItemCategory: true,
           source: 'source-listing-unit6b-legacy-compatible',
         });
+        if (!isHandoffRequestActive(request, requestDraftId)) return;
         if (legacy.code !== 1) throw new Error(legacy.msg || '兼容旧版发布失败');
         setMessage('当前店铺尚未进入 V2 pilot，已明确使用 Unit 6C 前的兼容旧入口');
         return;
       }
       setDraftError('当前店铺未开放 V2 发布，旧入口也已禁用');
     } catch (error) {
-      setDraftError(errorText(error, '提交 Ozon 发布任务失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setDraftError(errorText(error, '提交 Ozon 发布任务失败'));
+      }
     } finally {
-      if (!pollingStarted) setBusyAction('');
+      if (!pollingStarted && isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function refreshAttempt() {
     if (!attempt || !draft) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
+    const requestAttemptId = attempt.id;
     setBusyAction('attempt');
     setAttemptError('');
     try {
-      const current = await sourceListingWorkflowClient.getPublishAttempt(draft.id, attempt.id);
+      const current = await sourceListingWorkflowClient.getPublishAttempt(requestDraftId, requestAttemptId);
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       setAttempt(current);
     } catch (error) {
-      setAttemptError(errorText(error, '刷新发布任务失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setAttemptError(errorText(error, '刷新发布任务失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
   async function resolvePublishAttempt(decision: 'SUBMITTED' | 'NOT_SUBMITTED') {
     if (!attempt || !draft) return;
+    const request = captureHandoffRequest();
+    const requestDraftId = draft.id;
+    const requestAttemptId = attempt.id;
+    const requestStateVersion = attempt.stateVersion;
     setBusyAction('resolve');
     setAttemptError('');
     try {
-      const resolved = await sourceListingWorkflowClient.resolvePublishAttempt(draft.id, attempt.id, {
-        expectedStateVersion: attempt.stateVersion,
+      const resolved = await sourceListingWorkflowClient.resolvePublishAttempt(requestDraftId, requestAttemptId, {
+        expectedStateVersion: requestStateVersion,
         decision,
         ...(decision === 'SUBMITTED' ? { taskId: resolutionTaskId } : {}),
         note: resolutionNote,
@@ -897,14 +1458,17 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           note: resolutionNote,
         },
       });
+      if (!isHandoffRequestActive(request, requestDraftId)) return;
       v2AttemptStartedRef.current = true;
       setAttempt(resolved);
       setResolutionNote('');
       setMessage('人工处理结论已记录；继续在同一快照草稿中修复，不会重建 capture');
     } catch (error) {
-      setAttemptError(errorText(error, '记录人工处理结论失败'));
+      if (isHandoffRequestActive(request, requestDraftId)) {
+        setAttemptError(errorText(error, '记录人工处理结论失败'));
+      }
     } finally {
-      setBusyAction('');
+      if (isHandoffRequestActive(request, requestDraftId)) setBusyAction('');
     }
   }
 
@@ -1084,23 +1648,106 @@ export function SourceListingWorkbench({ handoff }: SourceListingWorkbenchProps)
           <div className="space-y-3 border p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="font-medium">俄文文案审核</div>
-                <div className="text-xs text-muted-foreground">保存为候选后，由当前用户明确采用到发布字段。</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="font-medium">俄文文案审核</div>
+                  {aiCopyCapabilityLoading ? (
+                    <Badge variant="outline" role="status" aria-live="polite">读取 AI 状态</Badge>
+                  ) : null}
+                  {aiCopyCapability ? (
+                    <Badge variant="outline">{aiCopyCapabilityLabel(aiCopyCapability)}</Badge>
+                  ) : null}
+                </div>
               </div>
-              <Button type="button" size="sm" onClick={applyCopyReview} disabled={!copyTitle.trim() || busyAction === 'copy'}>
-                {busyAction === 'copy' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                保存并采用候选
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={generateCopyReview} disabled={draftLoading || !aiCopyFactsReady || !aiCopyCapability?.enabled || Boolean(busyAction)}>
+                  {busyAction === 'copy-generate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  生成候选
+                </Button>
+                <Button type="button" size="sm" onClick={applyCopyReview} disabled={draftLoading || (!copyTitle.trim() && !copyDescription.trim()) || Boolean(busyAction)}>
+                  {busyAction === 'copy' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  保存并采用
+                </Button>
+              </div>
             </div>
+            {aiCopyCapabilityError ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert" aria-live="assertive">
+                <span>AI 状态读取失败：{aiCopyCapabilityError}</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7"
+                  onClick={() => {
+                    setAiCopyCapability(null);
+                    setAiCopyCapabilityError('');
+                    setAiCopyCapabilityLoading(true);
+                    setAiCopyCapabilityReload((value) => value + 1);
+                  }}
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  重试 AI 状态
+                </Button>
+              </div>
+            ) : null}
+            {!aiCopyFactsReady ? (
+              <div className="text-xs text-amber-700" role="status" aria-live="polite">
+                请先确认当前类目和属性事实，再生成文案候选。
+              </div>
+            ) : null}
+            <label className="block space-y-1 text-xs">
+              <span className="text-muted-foreground">本次生成要求（可选）</span>
+              <Input
+                value={copyInstructions}
+                onChange={(event) => setCopyInstructions(event.target.value)}
+                maxLength={2000}
+              />
+            </label>
             <label className="block space-y-1 text-xs">
               <span className="text-muted-foreground">俄文标题</span>
-              <Input value={copyTitle} onChange={(event) => setCopyTitle(event.target.value)} />
+              <Input value={copyTitle} onChange={(event) => {
+                copyEditorVersionRef.current += 1;
+                setCopyTitle(event.target.value);
+                setSelectedCopyCandidateId(null);
+              }} />
             </label>
             <label className="block space-y-1 text-xs">
               <span className="text-muted-foreground">俄文描述</span>
-              <textarea value={copyDescription} onChange={(event) => setCopyDescription(event.target.value)} rows={5} className="w-full resize-y border bg-background px-3 py-2 text-sm" />
+              <textarea value={copyDescription} onChange={(event) => {
+                copyEditorVersionRef.current += 1;
+                setCopyDescription(event.target.value);
+                setSelectedCopyCandidateId(null);
+              }} rows={5} className="w-full resize-y border bg-background px-3 py-2 text-sm" />
             </label>
             <div className="text-xs text-muted-foreground">已审核标题：{draft.copy.publishTitleRu || '-'}</div>
+            {draft.copy.candidates.length ? (
+              <div className="space-y-2 border-t pt-3">
+                <div className="text-xs font-medium">历史候选</div>
+                {draft.copy.candidates.slice(-5).reverse().map((candidate) => (
+                  <div key={candidate.id} className="flex flex-wrap items-start justify-between gap-2 border p-2 text-xs">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex flex-wrap gap-1">
+                        <Badge variant="outline">{candidate.kind === 'AI_GENERATED' ? 'AI 生成' : '人工'}</Badge>
+                        {candidate.generation?.title ? (
+                          <Badge variant="outline">模板 #{candidate.generation.title.sequence}</Badge>
+                        ) : null}
+                      </div>
+                      <div className="break-words font-medium">{candidate.titleRu || '仅描述候选'}</div>
+                      {candidate.descriptionRu ? (
+                        <div className="line-clamp-2 break-words text-muted-foreground">{candidate.descriptionRu}</div>
+                      ) : null}
+                    </div>
+                    <Button type="button" size="sm" variant="outline" aria-label={`载入候选 ${candidate.titleRu || candidate.id}`} onClick={() => {
+                      copyEditorVersionRef.current += 1;
+                      setCopyTitle(candidate.titleRu || '');
+                      setCopyDescription(candidate.descriptionRu || '');
+                      setSelectedCopyCandidateId(candidate.id);
+                    }}>
+                      载入
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {capture ? (

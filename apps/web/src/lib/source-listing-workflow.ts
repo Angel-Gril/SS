@@ -8,8 +8,8 @@ import {
   SOURCE_LISTING_IDEMPOTENCY_KEY_MIN_LENGTH,
   SOURCE_LISTING_SELECTED_SKU_MAX_ITEMS,
   SOURCE_LISTING_SKU_KEY_MAX_LENGTH,
-  type OzonListingAiCopyCandidate,
-  type OzonListingDraft,
+  type OzonListingAiCopyCandidateView as OzonListingAiCopyCandidate,
+  type OzonListingDraftView as OzonListingDraft,
   type OzonListingDraftMediaAssignment,
   type OzonListingPricingV1,
   type SourceProductCaptureV2,
@@ -59,6 +59,23 @@ export interface SourceListingHandoff {
   section?: 'listing';
   workflowId?: string;
   attemptId?: string;
+}
+
+export interface SourceListingAiCopyGenerationResult {
+  candidate: OzonListingAiCopyCandidate;
+  limit?: { used: number; remaining: number; limit: number };
+}
+
+export interface SourceListingAiCopyCapability {
+  enabled: boolean;
+  revision: number;
+  reason:
+    | 'master_off'
+    | 'tenant_allowed'
+    | 'tenant_not_allowed'
+    | 'invalid_policy'
+    | 'listing_copy_off'
+    | 'provider_not_ready';
 }
 
 export interface SourceCaptureViewPage<T> {
@@ -661,6 +678,35 @@ export function createSourceListingWorkflowClient(
           ...(input.descriptionRu !== undefined ? { descriptionRu: input.descriptionRu } : {}),
           sourcePromptVersion: exactText(input.sourcePromptVersion, 'sourcePromptVersion', HANDOFF_ID_MAX_LENGTH),
         },
+      ));
+    },
+
+    async generateCopyCandidate(draftId: string, input: {
+      expectedRevision: number;
+      operationKey: string;
+      fields: Array<'title' | 'description'>;
+      userInstructions?: string;
+    }) {
+      const fields = [...new Set(input.fields)];
+      if (!fields.length || fields.length > 2) {
+        throw new SourceListingWorkflowClientError('INVALID_INPUT', '请选择标题或描述生成范围');
+      }
+      return unwrap(await transport.post<SourceListingAiCopyGenerationResult>(
+        `${SOURCE_LISTING_API_BASE}/${encoded(exactText(draftId, 'draftId', HANDOFF_ID_MAX_LENGTH))}/ai-candidates/generate`,
+        {
+          expectedRevision: positiveInteger(input.expectedRevision, 'expectedRevision'),
+          operationKey: exactText(input.operationKey, 'operationKey', HANDOFF_ID_MAX_LENGTH),
+          fields,
+          ...(input.userInstructions?.trim()
+            ? { userInstructions: exactText(input.userInstructions, 'userInstructions', 2000) }
+            : {}),
+        },
+      ));
+    },
+
+    async getAiCopyCapability(draftId: string) {
+      return unwrap(await transport.get<SourceListingAiCopyCapability>(
+        `${SOURCE_LISTING_API_BASE}/${encoded(exactText(draftId, 'draftId', HANDOFF_ID_MAX_LENGTH))}/ai-copy-capability`,
       ));
     },
 

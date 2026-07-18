@@ -147,11 +147,14 @@ DEPLOY_HOST=<server> DEPLOY_USER=<user> ./scripts/deploy.sh
 1. 备份数据库。
 2. 拉取最新代码或切换到目标 commit。
 3. `pnpm install --frozen-lockfile`
-4. `cd apps/server && npx prisma migrate deploy`
-5. `pnpm --filter server build && pnpm --filter web build`
-6. 重启 API、Worker、Web。
-7. 跑 `pnpm smoke:remote` 或本地 smoke。
-8. 如果失败，立刻回滚到上一版。
+4. `cd apps/server && npx prisma generate`，然后回到仓库根目录执行 `pnpm --filter server build && pnpm --filter web build`。
+5. 停止旧版 API 和 Worker，确认没有旧进程继续访问数据库；Web 可在短暂停机窗口内继续提供静态错误页。
+6. `cd apps/server && npx prisma migrate deploy`。
+7. 启动新版 API、Worker、Web。
+8. 跑 `pnpm smoke:remote` 或本地 smoke。
+9. 如果失败，立刻回滚到上一版；数据库迁移不可逆时必须按该版本的发布说明恢复备份。
+
+涉及唯一索引或写入契约变化的版本不支持新旧 API 滚动共存。必须先完成构建，再停掉旧 API/Worker，迁移后整体启动新版本。
 
 线上或客户环境不要用 `prisma migrate dev` / `db push`。发布环境只用 `npx prisma migrate deploy`。
 

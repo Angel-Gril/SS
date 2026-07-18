@@ -50,6 +50,7 @@ export interface GenerateAiTextParams {
   fetchImpl?: FetchLike;
   temperature?: number;
   maxTokens?: number;
+  allowReasoningRetry?: boolean;
 }
 
 function cleanBaseUrl(value: string): string {
@@ -125,7 +126,8 @@ export async function generateAiText(params: GenerateAiTextParams): Promise<AiTe
       if (!text) {
         const reasoning = String(choice?.message?.reasoning_content || '').trim();
         const finishReason = String(choice?.finish_reason || choice?.finishReason || '').trim();
-        const retryMaxTokens = reasoning && finishReason === 'length' && attempt === 0
+        const retryMaxTokens = params.allowReasoningRetry !== false
+          && reasoning && finishReason === 'length' && attempt === 0
           ? reasoningRetryMaxTokens(maxTokens)
           : null;
         if (retryMaxTokens && retryMaxTokens !== maxTokens) {

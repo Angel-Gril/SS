@@ -59,7 +59,7 @@ import {
 } from '@/lib/source-listing-workflow';
 import { formatDate } from '@/lib/utils';
 import { normalizeSourceStandardAttributes } from 'shared/source-standard-attributes';
-import type { OzonListingDraft } from 'shared';
+import type { OzonListingDraftView as OzonListingDraft } from 'shared';
 
 type PlatformFilter = 'all' | '1688' | 'pdd' | 'taobao' | 'tmall' | 'xianyu';
 type DetailSection = 'overview' | 'sku' | 'attributes' | 'images' | 'translation' | 'listing';

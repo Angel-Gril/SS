@@ -272,6 +272,32 @@ describe('Ozon listing payload compiler', () => {
     );
   });
 
+  it('compiles independently reviewed title and description fields from separate candidates', () => {
+    const input = buildInput();
+    const titleCandidate = {
+      ...input.draft.copy.candidates[0]!,
+      id: 'copy-title-2',
+      fields: ['title'] as Array<'title' | 'description'>,
+      titleRu: 'Обновленный тестовый товар',
+      descriptionRu: null,
+      createdAt: '2026-07-15T08:03:00.000Z',
+    };
+    input.draft.copy.candidates.push(titleCandidate);
+    input.draft.copy.applyAudit.push({
+      id: 'apply-title-2', candidateId: titleCandidate.id, actorUserId: 'owner-1',
+      operationKey: 'review-title-2', draftVersion: 7,
+      previousTitleRu: input.draft.copy.publishTitleRu,
+      previousDescriptionRu: input.draft.copy.publishDescriptionRu,
+      appliedAt: '2026-07-15T08:04:00.000Z',
+    });
+    input.draft.copy.publishTitleRu = titleCandidate.titleRu;
+
+    const result = compileOzonListingPayload(input);
+    expect(result.payload.items).toHaveLength(2);
+    expect(result.payload.items.every((item) => item.name === titleCandidate.titleRu)).toBe(true);
+    expect(result.payload.items.every((item) => item.description === 'Проверенное описание')).toBe(true);
+  });
+
   it('rejects non-intent, stale, invalid, or mismatched validation authority', () => {
     const wrongStage = buildInput();
     wrongStage.draft.stage = 'READY_TO_PUBLISH';

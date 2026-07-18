@@ -2567,6 +2567,7 @@ model AiTranslationCache {
   promptHash String    @default("") @map("prompt_hash")
   provider   String
   model      String
+  providerConfigHash String @default("") @map("provider_config_hash")
   status     String    @default("success")
   usage      Json?     @map("usage_json")
   expiresAt  DateTime? @map("expires_at")
@@ -2576,7 +2577,7 @@ model AiTranslationCache {
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
-  @@unique([namespace, sourceLang, targetLang, inputHash, promptHash, provider, model], name: "ai_translation_cache_key")
+  @@unique([namespace, sourceLang, targetLang, inputHash, promptHash, provider, model, providerConfigHash], name: "ai_translation_cache_key")
   @@index([namespace, sourceLang, targetLang])
   @@index([expiresAt])
   @@index([lastUsedAt])

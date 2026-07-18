@@ -20,6 +20,7 @@ import type {
   OzonListingWorkflowIssue,
 } from 'shared';
 import { authenticate } from '../lib/auth.js';
+import { getAiListingCopyCapability } from '../services/ai-listing-copy-capability.js';
 import {
   evaluateSourceListingPublisherCapability,
   sourceWorkflowFeatureFlags,
@@ -30,6 +31,7 @@ import type {
   SourceListingWorkflowTargetContext,
   SourceListingWorkflowTargetInput,
 } from '../services/source-listing-workflow-context.js';
+import type { SourceListingAiCopyService } from '../services/source-listing-ai-copy.js';
 import {
   SOURCE_LISTING_EVIDENCE_ITEM_MAX_LENGTH,
   type SourceListingWorkflowService,
@@ -187,6 +189,8 @@ export interface SourceListingWorkflowRouteOptions {
   categoryValidator: SourceListingWorkflowCategoryValidator;
   attributeWorkflow?: SourceListingWorkflowAttributeService;
   mediaWorkflow?: SourceListingWorkflowMediaService;
+  aiCopyWorkflow?: Pick<SourceListingAiCopyService, 'generate'>;
+  evaluateAiCopyCapability?: typeof getAiListingCopyCapability;
   publisher?: SourceListingPublisherLike;
 }
 
@@ -221,6 +225,13 @@ const candidateSchema = z.object({
   (value) => value.titleRu !== undefined || value.descriptionRu !== undefined,
   { message: 'AI copy candidate must contain a title or description' },
 );
+const generateCandidateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  operationKey: id,
+  fields: z.array(z.enum(['title', 'description'])).min(1).max(2)
+    .refine((fields) => new Set(fields).size === fields.length, 'AI copy generation fields must be unique'),
+  userInstructions: z.string().trim().max(2000).optional(),
+}).strict();
 const applyCandidateSchema = z.object({ expectedRevision: z.number().int().positive(), candidateId: id, operationKey: id }).strict();
 const actionSchema = z.object({ expectedRevision: z.number().int().positive(), reason: z.string().trim().max(1000).optional() }).strict();
 const publishIntentSchema = z.object({
@@ -568,7 +579,9 @@ async function routeError(
   const status = Number(e?.statusCode)
     || repositoryStatus
     || (loweredCode.includes('conflict') || loweredCode.includes('stale') ? 409 : 500);
-  const safeServiceError = credentialError !== null;
+  const safeServiceError = credentialError !== null
+    || code === 'ai_media_workflow_disabled'
+    || code === 'source_listing_ai_copy_unavailable';
   const body: Record<string, unknown> = {
     code: 0,
     errorCode: status >= 500 && !safeServiceError ? 'source_listing_workflow_failed' : code,
@@ -652,6 +665,17 @@ async function requireInteractiveWriteFeature(
   throw rolloutError(decision);
 }
 
+async function requireAiCopyFeature(
+  evaluate: typeof getAiListingCopyCapability,
+  ownerUserId: string,
+) {
+  const decision = await evaluate(ownerUserId);
+  if (decision.enabled) return decision;
+  throw Object.assign(new Error('AI 文案生成工作流尚未启用'), {
+    code: 'ai_media_workflow_disabled', statusCode: 503,
+  });
+}
+
 async function requireReadFeature(flags: SourceWorkflowFeatureFlagEvaluator, ownerUserId: string, shopId: string) {
   const decision = await flags.evaluate('SOURCE_LISTING_WORKFLOW', { ownerUserId, shopId, platform: 'OZON' });
   if (decision.enabled && ['dual_read', 'v2_only'].includes(String(decision.listingStage || ''))) {
@@ -660,10 +684,41 @@ async function requireReadFeature(flags: SourceWorkflowFeatureFlagEvaluator, own
   throw rolloutError(decision);
 }
 
+function redactAiCopyPrivatePayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactAiCopyPrivatePayload);
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion === 'listing-copy-generation/v1') {
+    const redactField = (field: unknown) => {
+      if (!field || typeof field !== 'object' || Array.isArray(field)) return field;
+      const { frozenRequest: _frozenRequest, ...publicField } = field as Record<string, unknown>;
+      return Object.fromEntries(Object.entries(publicField).map(([key, item]) => [
+        key, redactAiCopyPrivatePayload(item),
+      ]));
+    };
+    return {
+      ...Object.fromEntries(Object.entries(record)
+        .filter(([key]) => key !== 'title' && key !== 'description')
+        .map(([key, item]) => [key, redactAiCopyPrivatePayload(item)])),
+      ...(record.title ? { title: redactField(record.title) } : {}),
+      ...(record.description ? { description: redactField(record.description) } : {}),
+    };
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [
+    key, redactAiCopyPrivatePayload(item),
+  ]));
+}
+
 export async function sourceListingWorkflowRoutes(app: FastifyInstance, options: SourceListingWorkflowRouteOptions) {
   const authHook = options.authenticate || authenticate;
   const flags = options.featureFlags || sourceWorkflowFeatureFlags;
+  const evaluateAiCopyCapability = options.evaluateAiCopyCapability || getAiListingCopyCapability;
   app.addHook('preHandler', authHook);
+  app.addHook('preSerialization', async (_request, _reply, payload) => (
+    redactAiCopyPrivatePayload(payload)
+  ));
 
   app.post('/', async (request, reply) => {
     const { ownerUserId, actorUserId } = authIds(request);
@@ -959,11 +1014,62 @@ export async function sourceListingWorkflowRoutes(app: FastifyInstance, options:
         ownerUserId,
         actorUserId,
         expectedRevision: parsed.data.expectedRevision,
-        titleRu: parsed.data.titleRu ?? null,
-        descriptionRu: parsed.data.descriptionRu ?? null,
+        ...(parsed.data.titleRu !== undefined ? { titleRu: parsed.data.titleRu } : {}),
+        ...(parsed.data.descriptionRu !== undefined ? { descriptionRu: parsed.data.descriptionRu } : {}),
         sourcePromptVersion: parsed.data.sourcePromptVersion,
       });
       return reply.status(201).send({ code: 1, data: created.candidate });
+    } catch (error) {
+      return routeError(reply, error, { service: options.service, draftId, ownerUserId });
+    }
+  });
+
+  app.get('/:draftId/ai-copy-capability', async (request, reply) => {
+    const { ownerUserId } = authIds(request);
+    const draftId = String((request.params as any).draftId || '').trim();
+    try {
+      const draft = await options.service.getDraft({ draftId, ownerUserId });
+      await requireReadFeature(flags, ownerUserId, draft.shopId);
+      const decision = await evaluateAiCopyCapability(ownerUserId);
+      return reply.send({ code: 1, data: decision });
+    } catch (error) {
+      return routeError(reply, error, { service: options.service, draftId, ownerUserId });
+    }
+  });
+
+  app.post('/:draftId/ai-candidates/generate', async (request, reply) => {
+    const { ownerUserId, actorUserId } = authIds(request);
+    const draftId = String((request.params as any).draftId || '').trim();
+    const parsed = generateCandidateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        code: 0,
+        errorCode: 'invalid_request',
+        msg: parsed.error.issues[0]?.message || '参数错误',
+      });
+    }
+    try {
+      const draft = await options.service.getDraft({ draftId, ownerUserId });
+      await requireInteractiveWriteFeature(flags, ownerUserId, draft.shopId);
+      await requireAiCopyFeature(evaluateAiCopyCapability, ownerUserId);
+      if (!options.aiCopyWorkflow) {
+        throw Object.assign(new Error('AI 文案生成服务不可用'), {
+          code: 'source_listing_ai_copy_unavailable', statusCode: 503,
+        });
+      }
+      const generated = await options.aiCopyWorkflow.generate({
+        draftId,
+        ownerUserId,
+        actorUserId,
+        expectedRevision: parsed.data.expectedRevision,
+        operationKey: parsed.data.operationKey,
+        fields: parsed.data.fields,
+        userInstructions: parsed.data.userInstructions || '',
+      });
+      return reply.status(201).send({
+        code: 1,
+        data: { candidate: generated.candidate, limit: generated.limit },
+      });
     } catch (error) {
       return routeError(reply, error, { service: options.service, draftId, ownerUserId });
     }

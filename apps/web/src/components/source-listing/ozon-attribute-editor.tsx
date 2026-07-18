@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import type {
-  OzonListingDraft,
+  OzonListingDraftView as OzonListingDraft,
   OzonListingDraftAttributeValue,
   OzonListingWorkflowIssue,
   OzonNormalizedAttributeField,

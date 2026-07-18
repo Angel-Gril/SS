@@ -102,6 +102,8 @@ function build(service: Partial<SourceListingWorkflowServiceLike>, options: {
   ownership?: (input: any) => Promise<any>;
   attributeWorkflow?: any;
   mediaWorkflow?: any;
+  aiCopyWorkflow?: any;
+  evaluateAiCopyCapability?: any;
   publisher?: SourceListingPublisherLike;
   featureFlags?: any;
 } = {}) {
@@ -129,6 +131,10 @@ function build(service: Partial<SourceListingWorkflowServiceLike>, options: {
     categoryValidator,
     attributeWorkflow: options.attributeWorkflow,
     mediaWorkflow: options.mediaWorkflow,
+    aiCopyWorkflow: options.aiCopyWorkflow,
+    evaluateAiCopyCapability: options.evaluateAiCopyCapability || vi.fn(async () => ({
+      enabled: true, reason: 'tenant_allowed', revision: 'test',
+    })),
     publisher: options.publisher,
     featureFlags: options.featureFlags || { evaluate: vi.fn(async () => ({
       enabled,
@@ -371,6 +377,10 @@ describe('source listing workflow routes', () => {
     }});
     expect(createdCandidate.statusCode).toBe(201);
     expect(createdCandidate.json().data).toMatchObject({ id: 'candidate-1', titleRu: 'Товар' });
+    expect(service.addAiCopyCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      titleRu: 'Товар',
+    }));
+    expect((service.addAiCopyCandidate.mock.calls as any[])[0]?.[0]).not.toHaveProperty('descriptionRu');
     expect((await app.inject({ method: 'POST', url: '/draft-1/ai-candidates/apply', payload: {
       expectedRevision: 2, candidateId: 'candidate-1', operationKey: 'apply-1',
     }})).json()).toMatchObject({ audit: { action: 'ai_candidate_apply', actorUserId: 'owner-1' } });
@@ -378,6 +388,112 @@ describe('source listing workflow routes', () => {
       const response = await app.inject({ method: 'POST', url: `/draft-1/${path}`, payload: { expectedRevision: 2 } });
       expect(response.json().data.runState).toBe(runState);
     }
+    await app.close();
+  });
+
+  it('generates AI copy server-side and rejects client-controlled provider or output fields', async () => {
+    const current = readinessDraft({ revision: 2, copy: {
+      publishTitleRu: null, publishDescriptionRu: null, candidates: [], applyAudit: [],
+    }});
+    const service = { getDraft: vi.fn(async () => current) };
+    const aiCopyWorkflow = {
+      generate: vi.fn(async () => ({
+        draft: draft({ revision: 3 }),
+        candidate: {
+          id: 'generated-1', kind: 'AI_GENERATED', titleRu: 'Товар для продажи', descriptionRu: null,
+          sourcePromptVersion: 'listing-copy:1', sourceCaptureSnapshotId: 'snap-1',
+          sourceCaptureHash: 'a'.repeat(64), createdByUserId: 'owner-1',
+          createdAt: '2026-07-18T00:00:00.000Z',
+          generation: {
+            schemaVersion: 'listing-copy-generation/v1',
+            operationKey: 'generate-copy-1',
+            clientRequestHash: 'a'.repeat(64),
+            draftContextHash: 'b'.repeat(64),
+            fields: ['title'],
+            title: {
+              templateKey: 'listing-copy.title',
+              sequence: 1,
+              frozenRequest: {
+                systemPrompt: 'PRIVATE SYSTEM PROMPT',
+                userPrompt: 'PRIVATE SOURCE FACTS',
+                variables: { sourceFactsJson: 'PRIVATE SOURCE FACTS' },
+              },
+            },
+          },
+        },
+        limit: { used: 1, remaining: 9, limit: 10 },
+      })),
+    };
+    const { app } = build(service, { aiCopyWorkflow });
+    await app.ready();
+
+    const generated = await app.inject({
+      method: 'POST',
+      url: '/draft-1/ai-candidates/generate',
+      payload: {
+        expectedRevision: 2,
+        operationKey: 'generate-copy-1',
+        fields: ['title'],
+        userInstructions: 'Use concise wording',
+      },
+    });
+    expect(generated.statusCode).toBe(201);
+    expect(generated.json().data.candidate).toMatchObject({ id: 'generated-1', kind: 'AI_GENERATED' });
+    expect(generated.body).not.toContain('PRIVATE SYSTEM PROMPT');
+    expect(generated.body).not.toContain('PRIVATE SOURCE FACTS');
+    expect(aiCopyWorkflow.generate).toHaveBeenCalledWith({
+      draftId: 'draft-1', ownerUserId: 'owner-1', actorUserId: 'owner-1', expectedRevision: 2,
+      operationKey: 'generate-copy-1', fields: ['title'], userInstructions: 'Use concise wording',
+    });
+
+    const forged = await app.inject({
+      method: 'POST',
+      url: '/draft-1/ai-candidates/generate',
+      payload: {
+        expectedRevision: 2,
+        operationKey: 'generate-copy-2',
+        fields: ['title'],
+        provider: 'attacker-provider',
+        titleRu: 'Поддельный результат',
+        sourcePromptVersion: 'forged',
+      },
+    });
+    expect(forged.statusCode).toBe(400);
+    expect(aiCopyWorkflow.generate).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('fails closed before generation when the AI media rollout is disabled', async () => {
+    const current = readinessDraft({ revision: 2 });
+    const service = { getDraft: vi.fn(async () => current) };
+    const aiCopyWorkflow = { generate: vi.fn() };
+    const featureFlags = {
+      evaluate: vi.fn(async () => ({
+        enabled: true,
+        legacyAllowed: false,
+        captureStage: null,
+        listingStage: 'v2_only',
+        reason: 'global',
+        revision: 'test',
+      })),
+    };
+    const evaluateAiCopyCapability = vi.fn(async () => ({
+      enabled: false, reason: 'master_off', revision: 'test',
+    }));
+    const { app } = build(service, { aiCopyWorkflow, featureFlags, evaluateAiCopyCapability });
+    await app.ready();
+    const capability = await app.inject({ method: 'GET', url: '/draft-1/ai-copy-capability' });
+    expect(capability.statusCode).toBe(200);
+    expect(capability.json().data).toMatchObject({ enabled: false, reason: 'master_off' });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/draft-1/ai-candidates/generate',
+      payload: { expectedRevision: 2, operationKey: 'generate-copy-off', fields: ['title'] },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ errorCode: 'ai_media_workflow_disabled' });
+    expect(aiCopyWorkflow.generate).not.toHaveBeenCalled();
+    expect(evaluateAiCopyCapability).toHaveBeenCalledWith('owner-1');
     await app.close();
   });
 

@@ -182,6 +182,9 @@ function attempt(overrides = {}) {
         return { code: 1, msg: 'ok', data: { enabled: true, legacyAllowed: false, reason: 'pilot_match', revision: 'rollout-1' } };
       }
       if (path === '/api/source-listing-workflows/workflow-1') return { code: 1, msg: 'ok', data: draft() };
+      if (path === '/api/source-listing-workflows/workflow-1/ai-copy-capability') {
+        return { code: 1, msg: 'ok', data: { enabled: true, revision: 4, reason: 'tenant_allowed' } };
+      }
       if (path === '/api/source-listing-workflows/workflow-1/publish-attempts?limit=20&cursor=cursor-1') {
         return { code: 1, msg: 'ok', data: { items: [attempt()], nextCursor: null } };
       }
@@ -193,6 +196,10 @@ function attempt(overrides = {}) {
     async post(path, body) {
       calls.push(['POST', path, body]);
       if (path === '/api/source-listing-workflows') return { code: 1, msg: 'ok', data: draft() };
+      if (path.endsWith('/ai-candidates/generate')) return { code: 1, msg: 'ok', data: {
+        candidate: { id: 'generated-copy-1', kind: 'AI_GENERATED' },
+        limit: { used: 1, remaining: 19, limit: 20 },
+      } };
       if (path.endsWith('/ai-candidates')) return { code: 1, msg: 'ok', data: { id: 'copy-1' } };
       if (path.endsWith('/ai-candidates/apply')) return { code: 1, msg: 'ok', data: draft(5) };
       if (path.endsWith('/media/internalize')) return { code: 1, msg: 'ok', data: {
@@ -226,6 +233,13 @@ function attempt(overrides = {}) {
     category: { categoryId: 10, typeId: 20, catalogRevision: 'catalog-1', categoryName: 'Category', typeName: 'Type' },
   });
   await client.getPublisherCapability('shop-1');
+  await client.getAiCopyCapability('workflow-1');
+  await client.generateCopyCandidate('workflow-1', {
+    expectedRevision: 4,
+    operationKey: 'generate-copy-1',
+    fields: ['title', 'description'],
+    userInstructions: 'Concise copy',
+  });
   await client.createCopyCandidate('workflow-1', { expectedRevision: 4, titleRu: 'Русское название', descriptionRu: null, sourcePromptVersion: 'copy-v1' });
   await client.applyCopyCandidate('workflow-1', { expectedRevision: 4, candidateId: 'copy-1', operationKey: 'apply-copy' });
   await client.internalizeMedia('workflow-1', {
@@ -264,6 +278,16 @@ function attempt(overrides = {}) {
   }]);
   assert.equal(calls.some((entry) => String(entry[1]).includes('/api/collect/publish-ozon')), false);
   assert.ok(calls.some((entry) => entry[0] === 'POST' && String(entry[1]).endsWith('/publish-attempts')));
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find((entry) => String(entry[1]).endsWith('/ai-candidates/generate')))), [
+    'POST',
+    '/api/source-listing-workflows/workflow-1/ai-candidates/generate',
+    {
+      expectedRevision: 4,
+      operationKey: 'generate-copy-1',
+      fields: ['title', 'description'],
+      userInstructions: 'Concise copy',
+    },
+  ]);
 }
 
 {

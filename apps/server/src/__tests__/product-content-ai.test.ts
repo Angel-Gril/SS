@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   generateProductContentDraft,
+  hashProductContentPrompt,
+  type GenerateText,
   type ProductContentAiItem,
 } from '../services/product-content-ai.js';
 import type { AiTranslationCacheStore } from '../services/ai-translation-cache.js';
@@ -16,6 +18,7 @@ function memoryCacheStore(): AiTranslationCacheStore {
     params.promptHash,
     params.provider || '',
     params.model || '',
+    params.providerConfigHash || '',
   ].join('|');
   return {
     async find(params) {
@@ -97,6 +100,46 @@ describe('product content AI drafts', () => {
     expect(generateText).not.toHaveBeenCalled();
   });
 
+  it('uses the frozen registry prompt override and records the exact compiled prompt hash', async () => {
+    const generateText = vi.fn<GenerateText>(async () => ({
+      ok: true as const,
+      text: 'Женская хлопковая футболка',
+      provider: 'custom' as const,
+      model: 'deepseek-chat',
+      usage: null,
+    }));
+    const resolvedPrompt = 'FROZEN REGISTRY PROMPT WITH TRUSTED FACTS';
+    const resolvedNegativePrompt = 'FROZEN NEGATIVE CONSTRAINTS';
+    const result = await generateProductContentDraft({
+      item: { id: 'listing-copy' },
+      actorUserId: 'user-1',
+      fields: ['title'],
+      config,
+      cacheStore: memoryCacheStore(),
+      usageStore: memoryUsageStore(),
+      generateText,
+      promptOverrides: {
+        title: { resolvedPrompt, resolvedNegativePrompt },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    const messages = generateText.mock.calls[0]![0].messages;
+    const systemMessage = messages[0]!.content;
+    expect(systemMessage).toContain('untrusted marketplace data');
+    expect(systemMessage).toContain(resolvedNegativePrompt);
+    expect(systemMessage).not.toContain(config.titlePrompt);
+    expect(systemMessage).not.toContain(resolvedPrompt);
+    expect(messages[1]).toEqual({ role: 'user', content: resolvedPrompt });
+    expect(generateText).toHaveBeenCalledWith(expect.objectContaining({ allowReasoningRetry: false }));
+    expect(result.drafts.title?.promptHash).toBe(hashProductContentPrompt(
+      'title', resolvedPrompt, resolvedNegativePrompt,
+    ));
+    expect(result.drafts.title?.providerRequestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.drafts.title?.providerConfigHash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it('generates reviewable title and description drafts and reuses cache without a second provider call', async () => {
     const cacheStore = memoryCacheStore();
     const usageStore = memoryUsageStore();
@@ -131,6 +174,78 @@ describe('product content AI drafts', () => {
     expect(second.drafts.title?.source).toBe('cache');
     expect(second.drafts.description?.source).toBe('cache');
     expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('isolates cached product copy by normalized Provider endpoint configuration', async () => {
+    const cacheStore = memoryCacheStore();
+    const usageStore = memoryUsageStore();
+    const generateText = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true, text: 'Первый русский товар', provider: 'custom', model: 'deepseek-chat', usage: null,
+      })
+      .mockResolvedValueOnce({
+        ok: true, text: 'Второй русский товар', provider: 'custom', model: 'deepseek-chat', usage: null,
+      });
+
+    const first = await generateProductContentDraft({
+      item, actorUserId: 'user-1', fields: ['title'], config,
+      cacheStore, usageStore, generateText,
+    });
+    const second = await generateProductContentDraft({
+      item, actorUserId: 'user-1', fields: ['title'],
+      config: { ...config, baseUrl: 'https://other.example.com/v1/' },
+      cacheStore, usageStore, generateText,
+    });
+
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(first.drafts.title?.text).toBe('Первый русский товар');
+    expect(second.drafts.title?.text).toBe('Второй русский товар');
+    expect(second.drafts.title?.providerConfigHash).not.toBe(first.drafts.title?.providerConfigHash);
+  });
+
+  it.each([
+    ['manual', 'approved', 'Ручной кеш без модельной привязки'],
+    ['ai', 'rejected', '被拒绝的缓存'],
+    ['ai', 'stale', 'Устаревший кеш'],
+  ] as const)('does not accept %s/%s cache rows as generated product copy', async (source, status, outputText) => {
+    const now = new Date('2026-07-18T10:00:00.000Z');
+    const cacheStore: AiTranslationCacheStore = {
+      async find(params) {
+        return {
+          ...params,
+          inputText: 'cached input',
+          outputText,
+          provider: source === 'manual' ? 'system' : 'custom',
+          model: source === 'manual' ? 'manual' : 'deepseek-chat',
+          providerConfigHash: '',
+          status,
+          usage: null,
+          expiresAt: null,
+          lastUsedAt: now,
+          hitCount: 0,
+          source,
+        };
+      },
+      async upsert() {},
+      async markUsed() {},
+    };
+    const generateText = vi.fn(async () => ({
+      ok: true as const,
+      text: 'Проверенный русский товар',
+      provider: 'custom' as const,
+      model: 'deepseek-chat',
+      usage: null,
+    }));
+
+    const result = await generateProductContentDraft({
+      item, actorUserId: 'user-1', fields: ['title'], config,
+      cacheStore, usageStore: memoryUsageStore(), generateText,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.drafts.title?.text).toBe('Проверенный русский товар');
+    expect(result.drafts.title?.source).toBe('provider');
+    expect(generateText).toHaveBeenCalledTimes(1);
   });
 
   it('parses constrained Ozon localization JSON into review metadata', async () => {

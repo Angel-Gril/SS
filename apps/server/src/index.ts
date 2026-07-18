@@ -91,6 +91,7 @@ import {
 import { extensionSourceCaptureRoutes } from './routes/extension-source-captures.js';
 import { sourceWorkflowFeatureFlags } from './services/source-workflow-feature-flags.js';
 import { createSourceListingWorkflowService } from './services/source-listing-workflow.js';
+import { createSourceListingAiCopyService } from './services/source-listing-ai-copy.js';
 import { createPrismaSourceListingWorkflowRepository } from './services/source-listing-workflow-prisma.js';
 import { createPrismaSourceListingWorkflowContextResolver } from './services/source-listing-workflow-context.js';
 import { createSourceListingWorkflowCategoryValidator } from './services/source-listing-workflow-category.js';
@@ -141,6 +142,10 @@ import { createPrismaOzonPublisherRolloutRecorder } from './services/ozon-publis
 import { createOzonPublisherParityObservationService } from './services/ozon-publisher-parity-observations.js';
 import { createPrismaOzonPublisherParityObservationRepository } from './services/ozon-publisher-parity-prisma.js';
 import { getConfig } from './config/system-config-schema.js';
+import { generateProductContentDraft } from './services/product-content-ai.js';
+import { generateAiText } from './services/ai-text.js';
+import { createPrismaAiTranslationCacheStore } from './services/ai-translation-cache.js';
+import { createPrismaAiUsageStore } from './services/ai-usage.js';
 import { runOzonPublishReconciliationTick } from './services/ozon-publish-reconciliation.js';
 import type { OzonListingDraft, SourceProductCaptureV2 } from 'shared';
 import { createExtensionDeviceSessionService } from './services/extension-device-session.js';
@@ -306,6 +311,84 @@ const loadAuthoritativeOzonCategoryCatalog: NonNullable<CollectRoutesOptions['lo
   };
 const sourceListingWorkflowService = createSourceListingWorkflowService({
   repository: createPrismaSourceListingWorkflowRepository({ client: prisma as never }),
+});
+const sourceListingAiCopyService = createSourceListingAiCopyService({
+  workflow: sourceListingWorkflowService,
+  loadOwnedSnapshot: async ({ ownerUserId, snapshotId }) => {
+    const snapshot = await prisma.sourceCaptureSnapshot.findFirst({
+      where: { id: snapshotId, subject: { ownerUserId } },
+      select: {
+        id: true,
+        captureHash: true,
+        payloadBytes: true,
+        payload: true,
+        profileHash: true,
+      },
+    });
+    if (!snapshot) return null;
+    return {
+      id: snapshot.id,
+      captureHash: snapshot.captureHash,
+      payloadBytes: snapshot.payloadBytes,
+      payload: snapshot.payload as unknown as SourceProductCaptureV2,
+      profileHash: snapshot.profileHash,
+    };
+  },
+  resolveTemplate: (input) => aiPromptTemplateRegistry.resolveTemplate(input),
+  generateContent: async (input) => {
+    const [
+      enabled,
+      provider,
+      baseUrl,
+      apiKey,
+      model,
+      titleModel,
+      descriptionModel,
+      providerLabel,
+      timeoutMs,
+      userDailyProductGenerationLimit,
+    ] = await Promise.all([
+      getConfig('ai_product_generation_enabled'),
+      getConfig('ai_provider'),
+      getConfig('ai_base_url'),
+      getConfig('ai_api_key'),
+      getConfig('ai_model'),
+      getConfig('ai_product_title_model'),
+      getConfig('ai_product_description_model'),
+      getConfig('ai_provider_label'),
+      getConfig('ai_timeout_ms'),
+      getConfig('ai_user_daily_product_generation_limit'),
+    ]);
+    return generateProductContentDraft({
+      item: { id: 'source-listing-copy' },
+      actorUserId: input.actorUserId,
+      fields: input.fields,
+      config: {
+        enabled,
+        provider,
+        baseUrl: String(baseUrl || '').trim(),
+        apiKey: String(apiKey || '').trim(),
+        model: String(model || '').trim(),
+        titleModel: String(titleModel || '').trim(),
+        descriptionModel: String(descriptionModel || '').trim(),
+        providerLabel: String(providerLabel || '').trim(),
+        timeoutMs: Number(timeoutMs) || 30_000,
+        titlePrompt: '',
+        descriptionPrompt: '',
+        userDailyProductGenerationLimit: Number(userDailyProductGenerationLimit) || 0,
+      },
+      cacheStore: createPrismaAiTranslationCacheStore(prisma),
+      usageStore: createPrismaAiUsageStore(prisma),
+      generateText: generateAiText,
+      promptOverrides: Object.fromEntries(input.fields.map((field) => {
+        const prompt = input.prompts[field]!;
+        return [field, {
+          resolvedPrompt: prompt.resolved.resolvedPrompt,
+          resolvedNegativePrompt: prompt.resolved.resolvedNegativePrompt,
+        }];
+      })),
+    });
+  },
 });
 const sourceListingWorkflowContext = createPrismaSourceListingWorkflowContextResolver({
   client: prisma,
@@ -864,6 +947,7 @@ await app.register(sourceListingWorkflowRoutes, {
   categoryValidator: sourceListingWorkflowCategoryValidator,
   attributeWorkflow: sourceListingWorkflowAttributeService,
   mediaWorkflow: sourceListingMediaImportService,
+  aiCopyWorkflow: sourceListingAiCopyService,
   publisher: sourceOzonListingPublisher,
 });
 await app.register(noticeRoutes, { prefix: '/api/notices' });

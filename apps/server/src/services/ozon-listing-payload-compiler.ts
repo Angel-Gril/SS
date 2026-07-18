@@ -350,24 +350,35 @@ function reviewedRussianCopy(draft: OzonListingDraft): { title: string; descript
     || !/[А-Яа-яЁё]/u.test(title) || /[\u3400-\u9fff]/u.test(title)) {
     fail('OZON_LISTING_COMPILE_TITLE_INVALID', 'A normalized reviewed Russian publish title is required');
   }
-  const lastApply = draft.copy.applyAudit.at(-1);
-  const candidate = lastApply
-    ? draft.copy.candidates.find((entry) => entry.id === lastApply.candidateId)
-    : undefined;
-  if (!candidate
-    || candidate.titleRu !== title
-    || candidate.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId
-    || candidate.sourceCaptureHash !== draft.sourceCaptureHash) {
+  const reviewedCandidate = (field: 'title' | 'description') => {
+    for (let index = draft.copy.applyAudit.length - 1; index >= 0; index -= 1) {
+      const audit = draft.copy.applyAudit[index]!;
+      const candidate = draft.copy.candidates.find((entry) => entry.id === audit.candidateId);
+      if (!candidate) continue;
+      const fields = candidate.fields || candidate.generation?.fields || ['title', 'description'];
+      if (fields.includes(field)) return candidate;
+    }
+    return undefined;
+  };
+  const titleCandidate = reviewedCandidate('title');
+  if (!titleCandidate
+    || titleCandidate.titleRu !== title
+    || titleCandidate.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId
+    || titleCandidate.sourceCaptureHash !== draft.sourceCaptureHash) {
     fail('OZON_LISTING_COMPILE_TITLE_UNREVIEWED', 'Publish title is not bound to the latest reviewed copy candidate');
   }
 
   if (draft.copy.publishDescriptionRu == null) return { title, description: null };
   const description = draft.copy.publishDescriptionRu;
+  const descriptionCandidate = reviewedCandidate('description');
   if (!description.trim() || description.trim() !== description
     || description.normalize('NFKC') !== description
     || description.length > MAX_DESCRIPTION_LENGTH
     || /[\u3400-\u9fff]/u.test(description)
-    || candidate.descriptionRu !== description) {
+    || !descriptionCandidate
+    || descriptionCandidate.descriptionRu !== description
+    || descriptionCandidate.sourceCaptureSnapshotId !== draft.sourceCaptureSnapshotId
+    || descriptionCandidate.sourceCaptureHash !== draft.sourceCaptureHash) {
     fail('OZON_LISTING_COMPILE_TITLE_UNREVIEWED', 'Publish description is not the reviewed Russian candidate value');
   }
   return { title, description };

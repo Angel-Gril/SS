@@ -583,6 +583,34 @@ describe('source listing workflow', () => {
     })).rejects.toMatchObject({ code: 'OZON_LISTING_AI_APPLY_OPERATION_CONFLICT', statusCode: 409 });
   });
 
+  it('preserves an approved field when a manual candidate explicitly reviews only the other field', async () => {
+    const { service, draft } = await base();
+    const initial = await service.addAiCopyCandidate({
+      draftId: draft.id, ownerUserId: draft.ownerUserId, actorUserId: 'reviewer',
+      expectedRevision: draft.revision, titleRu: 'Первый товар', descriptionRu: 'Проверенное описание',
+      sourcePromptVersion: 'manual-v1',
+    });
+    const approved = await service.applyAiCopyCandidate({
+      draftId: draft.id, ownerUserId: draft.ownerUserId, actorUserId: 'reviewer',
+      expectedRevision: initial.draft.revision, candidateId: initial.candidate.id,
+      operationKey: 'apply-manual-both',
+    });
+    const titleOnly = await service.addAiCopyCandidate({
+      draftId: draft.id, ownerUserId: draft.ownerUserId, actorUserId: 'reviewer',
+      expectedRevision: approved.revision, titleRu: 'Обновленный товар',
+      sourcePromptVersion: 'manual-v2',
+    });
+    expect(titleOnly.candidate.fields).toEqual(['title']);
+
+    const reapplied = await service.applyAiCopyCandidate({
+      draftId: draft.id, ownerUserId: draft.ownerUserId, actorUserId: 'reviewer',
+      expectedRevision: titleOnly.draft.revision, candidateId: titleOnly.candidate.id,
+      operationKey: 'apply-manual-title',
+    });
+    expect(reapplied.copy.publishTitleRu).toBe('Обновленный товар');
+    expect(reapplied.copy.publishDescriptionRu).toBe('Проверенное описание');
+  });
+
   it('models pause/cancel/retryable/permanent/manual review states', async () => {
     const { service, draft } = await base();
     let current = draft;

@@ -7,6 +7,7 @@ import {
 } from 'shared';
 import type {
   OzonListingAiCopyCandidate,
+  OzonListingAiCopyGenerationProvenance,
   OzonListingDraft,
   OzonListingDraftAttributeValue,
   OzonListingDraftAuditEventType,
@@ -30,6 +31,9 @@ import {
 type IdFactory = (prefix: string) => string;
 
 export const SOURCE_LISTING_EVIDENCE_ITEM_MAX_LENGTH = 500;
+export const SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_ITEMS = 20;
+export const SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_BYTES = 256_000;
+export const SOURCE_LISTING_AI_COPY_CANDIDATES_MAX_BYTES = 2_000_000;
 
 export class SourceListingWorkflowError extends Error {
   constructor(
@@ -40,6 +44,8 @@ export class SourceListingWorkflowError extends Error {
       | 'OZON_LISTING_AI_CANDIDATE_NOT_FOUND'
       | 'OZON_LISTING_AI_CANDIDATE_STALE'
       | 'OZON_LISTING_AI_APPLY_OPERATION_CONFLICT'
+      | 'OZON_LISTING_AI_GENERATION_OPERATION_CONFLICT'
+      | 'OZON_LISTING_AI_GENERATION_FAILED'
       | 'OZON_LISTING_WORKFLOW_TERMINAL'
       | 'OZON_LISTING_PUBLISH_NOT_READY'
       | 'OZON_LISTING_PUBLISH_INTENT_CONFLICT',
@@ -263,6 +269,20 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
+export function sourceListingAiCopyContextHash(draft: OzonListingDraft): string {
+  const reviewedAttributes = Object.fromEntries(Object.entries(draft.attributes.values)
+    .filter(([, value]) => value.reviewed)
+    .sort(([left], [right]) => left.localeCompare(right, 'en')));
+  return createHash('sha256').update(canonicalJson({
+    shopId: draft.shopId,
+    sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
+    sourceCaptureHash: draft.sourceCaptureHash,
+    selectedSkuKeys: [...draft.selectedSkuKeys].sort(),
+    category: draft.category,
+    reviewedAttributes,
+  })).digest('hex');
+}
+
 export function hashOzonListingPublishState(draft: OzonListingDraft): string {
   const frozenState = {
     schema: 'ozon-listing-publish-state/v1',
@@ -465,6 +485,7 @@ export function createSourceListingWorkflowService(options: {
         next.validation = { status: 'STALE', report: draft.validation.report };
         next.freshness.attributes = stale('CATEGORY_CHANGED');
         next.freshness.category = currentFreshness();
+        next.freshness.content = stale('CATEGORY_CHANGED');
         next.freshness.pricing = stale('CATEGORY_CHANGED');
         next.freshness.validation = stale('CATEGORY_CHANGED');
         next.grantRevocation = { required: true, reason: 'CATEGORY_CHANGED', previousShopId: null };
@@ -492,6 +513,7 @@ export function createSourceListingWorkflowService(options: {
         next.draftVersion += 1;
         next.attributes.values = structuredClone(input.values);
         next.freshness.attributes = currentFreshness();
+        next.freshness.content = stale('ATTRIBUTE_VALUES_CHANGED');
         next.freshness.validation = stale('ATTRIBUTE_VALUES_CHANGED');
         next.validation.status = 'STALE';
         next.grantRevocation = {
@@ -537,6 +559,7 @@ export function createSourceListingWorkflowService(options: {
           manualReview: 'CONFIRMED',
         };
         next.freshness.attributes = currentFreshness();
+        next.freshness.content = stale('MANUAL_FACT_CONFIRMED');
         next.freshness.validation = stale('MANUAL_FACT_CONFIRMED');
         next.validation.status = 'STALE';
         next.grantRevocation = {
@@ -659,7 +682,7 @@ export function createSourceListingWorkflowService(options: {
         next.draftVersion += 1;
         next.shopId = required(input.shopId, 'shopId');
         next.stage = 'CATEGORY_REVIEW';
-        for (const key of ['category', 'attributes', 'pricing', 'validation'] as const) {
+        for (const key of ['category', 'attributes', 'content', 'pricing', 'validation'] as const) {
           next.freshness[key] = stale('SHOP_CHANGED');
         }
         next.validation.status = 'STALE';
@@ -697,27 +720,101 @@ export function createSourceListingWorkflowService(options: {
 
     async addAiCopyCandidate(input: {
       draftId: string; ownerUserId: string; actorUserId: string; expectedRevision: number;
-      titleRu: string | null; descriptionRu: string | null; sourcePromptVersion: string;
+      titleRu?: string | null; descriptionRu?: string | null; sourcePromptVersion: string;
+      kind?: 'MANUAL' | 'AI_GENERATED';
+      generation?: OzonListingAiCopyGenerationProvenance;
     }): Promise<{ draft: OzonListingDraft; candidate: OzonListingAiCopyCandidate }> {
+      if ((input.kind === 'AI_GENERATED') !== Boolean(input.generation)) {
+        throw new SourceListingWorkflowError(
+          'OZON_LISTING_DRAFT_INPUT_INVALID',
+          'AI-generated candidates require frozen generation provenance',
+          400,
+        );
+      }
+      const fields = input.generation?.fields || [
+        ...(Object.prototype.hasOwnProperty.call(input, 'titleRu') ? ['title' as const] : []),
+        ...(Object.prototype.hasOwnProperty.call(input, 'descriptionRu') ? ['description' as const] : []),
+      ];
+      if (!fields.length) {
+        throw new SourceListingWorkflowError(
+          'OZON_LISTING_DRAFT_INPUT_INVALID', 'AI copy candidate must contain a title or description field', 400,
+        );
+      }
+      if (input.generation) {
+        const current = await getDraft(input);
+        const existing = current.copy.candidates.find((candidate) => (
+          candidate.generation?.operationKey === input.generation?.operationKey
+        ));
+        if (existing) {
+          if (existing.generation?.clientRequestHash !== input.generation.clientRequestHash) {
+            throw new SourceListingWorkflowError(
+              'OZON_LISTING_AI_GENERATION_OPERATION_CONFLICT',
+              'AI copy generation operation key was reused with different inputs',
+              409,
+            );
+          }
+          return { draft: current, candidate: existing };
+        }
+      }
       const candidateId = idFactory('copy-candidate');
-      const updated = await mutate(input, (draft) => {
+      const persist = () => mutate(input, (draft) => {
         const next = structuredClone(draft);
+        if (next.copy.candidates.length >= SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_ITEMS) {
+          throw new SourceListingWorkflowError(
+            'OZON_LISTING_DRAFT_INPUT_INVALID',
+            `AI copy candidates cannot exceed ${SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_ITEMS} items`,
+            400,
+          );
+        }
         const candidate: OzonListingAiCopyCandidate = {
           id: candidateId,
-          titleRu: input.titleRu,
-          descriptionRu: input.descriptionRu,
+          kind: input.kind || (input.generation ? 'AI_GENERATED' : 'MANUAL'),
+          fields: [...fields],
+          titleRu: input.titleRu ?? null,
+          descriptionRu: input.descriptionRu ?? null,
           sourcePromptVersion: required(input.sourcePromptVersion, 'sourcePromptVersion'),
           sourceCaptureSnapshotId: draft.sourceCaptureSnapshotId,
           sourceCaptureHash: draft.sourceCaptureHash,
+          ...(input.generation ? { generation: structuredClone(input.generation) } : {}),
           createdByUserId: input.actorUserId,
           createdAt: timestamp(),
         };
+        if (Buffer.byteLength(JSON.stringify(candidate), 'utf8') > SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_BYTES) {
+          throw new SourceListingWorkflowError(
+            'OZON_LISTING_DRAFT_INPUT_INVALID',
+            `AI copy candidate exceeds ${SOURCE_LISTING_AI_COPY_CANDIDATE_MAX_BYTES} bytes`,
+            400,
+          );
+        }
+        if (Buffer.byteLength(JSON.stringify([...next.copy.candidates, candidate]), 'utf8')
+          > SOURCE_LISTING_AI_COPY_CANDIDATES_MAX_BYTES) {
+          throw new SourceListingWorkflowError(
+            'OZON_LISTING_DRAFT_INPUT_INVALID',
+            `AI copy candidate history exceeds ${SOURCE_LISTING_AI_COPY_CANDIDATES_MAX_BYTES} bytes`,
+            400,
+          );
+        }
         next.copy.candidates.push(candidate);
         next.auditEvents.push(event(next.draftVersion, 'AI_COPY_CANDIDATE_CREATED', input.actorUserId, {
           candidateId,
         }));
         return next;
       });
+      let updated: OzonListingDraft;
+      try {
+        updated = await persist();
+      } catch (error) {
+        if (!(error instanceof SourceListingWorkflowError)
+          || error.code !== 'OZON_LISTING_DRAFT_VERSION_CONFLICT'
+          || !input.generation) throw error;
+        const latest = await getDraft(input);
+        const existing = latest.copy.candidates.find((candidate) => (
+          candidate.generation?.operationKey === input.generation?.operationKey
+        ));
+        if (!existing
+          || existing.generation?.clientRequestHash !== input.generation.clientRequestHash) throw error;
+        return { draft: latest, candidate: existing };
+      }
       return { draft: updated, candidate: updated.copy.candidates.find((value) => value.id === candidateId)! };
     },
 
@@ -755,10 +852,44 @@ export function createSourceListingWorkflowService(options: {
               'OZON_LISTING_AI_CANDIDATE_STALE', 'AI copy candidate belongs to an older source snapshot', 409,
             );
           }
+          const candidateFields = candidate.fields || candidate.generation?.fields || ['title', 'description'];
+          if (candidate.generation && (
+            draft.freshness.category.state !== 'CURRENT'
+            || draft.freshness.attributes.state !== 'CURRENT'
+          )) {
+            throw new SourceListingWorkflowError(
+              'OZON_LISTING_AI_CANDIDATE_STALE',
+              'AI copy candidate prerequisites are stale',
+              409,
+            );
+          }
+          if (candidate.generation
+            && candidate.generation.draftContextHash !== sourceListingAiCopyContextHash(draft)) {
+            throw new SourceListingWorkflowError(
+              'OZON_LISTING_AI_CANDIDATE_STALE',
+              'AI copy candidate belongs to an older listing fact context',
+              409,
+            );
+          }
+          const retainsStaleTitle = !candidateFields.includes('title') && draft.copy.publishTitleRu !== null;
+          const retainsStaleDescription = !candidateFields.includes('description')
+            && draft.copy.publishDescriptionRu !== null;
+          if (draft.freshness.content.state !== 'CURRENT'
+            && (retainsStaleTitle || retainsStaleDescription)) {
+            throw new SourceListingWorkflowError(
+              'OZON_LISTING_AI_CANDIDATE_STALE',
+              'A partial copy candidate cannot re-authorize retained stale content',
+              409,
+            );
+          }
           const next = structuredClone(draft);
           next.draftVersion += 1;
-          next.copy.publishTitleRu = candidate.titleRu;
-          next.copy.publishDescriptionRu = candidate.descriptionRu;
+          if (candidateFields.includes('title')) {
+            next.copy.publishTitleRu = candidate.titleRu;
+          }
+          if (candidateFields.includes('description')) {
+            next.copy.publishDescriptionRu = candidate.descriptionRu;
+          }
           next.copy.applyAudit.push({
             id: idFactory('copy-apply'), candidateId: candidate.id,
             actorUserId: input.actorUserId, operationKey, draftVersion: next.draftVersion,

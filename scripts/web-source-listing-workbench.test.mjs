@@ -53,7 +53,13 @@ assert.match(
 );
 assert.match(workbench, /useRef\(Boolean\(handoff\.attemptId\)\)/, 'an exact attempt handoff must fail closed before recovery starts');
 assert.match(workbench, /attemptDiscoveryState\s*!==\s*['"]ready['"]/, 'publish must wait for successful attempt discovery');
-assert.match(workbench, /source-listing-copy-review:\$\{candidate\.id\}/, 'copy apply idempotency must be scoped to the candidate');
+assert.match(
+  workbench,
+  /source-listing-copy-review:\$\{candidate\.id\.slice\(0, 80\)\}:r\$\{current\.revision\}/,
+  'copy apply idempotency must identify the candidate and starting revision',
+);
+assert.match(workbench, /pendingCopyApplyRef/, 'ambiguous copy applies must retain their exact operation key for retry');
+assert.match(workbench, /reusableManualCandidate/, 'ambiguous manual candidate creation must reconcile an exact persisted candidate');
 assert.match(workbench, /systemDialog\.confirm/, 'publish should require the in-app final confirmation dialog');
 assert.doesNotMatch(workbench, /window\.confirm/, 'publish must not use the browser confirm dialog');
 assert.match(workbench, /SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY/, 'product-only captures should receive the reserved canonical SKU');
@@ -83,6 +89,8 @@ for (const token of ['exactWorkflowId', 'exactSnapshotId', 'lockedShopId', 'sour
 assert.match(attributeEditor, /if \(exactMode\)[\s\S]{0,2500}api\.get<OzonListingDraft>/, 'exact attribute mode should GET the specified workflow');
 
 for (const token of [
+  'getAiCopyCapability',
+  'generateCopyCandidate',
   'createCopyCandidate',
   'applyCopyCandidate',
   'internalizeMedia',
@@ -93,6 +101,42 @@ for (const token of [
 ]) {
   assert.match(workbench, new RegExp(token), `workbench should close review and validation through ${token}`);
 }
+assert.match(client, /ai-candidates\/generate/, 'AI copy generation must use the server-authoritative generation route');
+assert.match(workbench, /selectedCopyCandidateId/, 'review should preserve the exact generated candidate provenance when unchanged');
+assert.match(workbench, /pendingCopyGenerationRef/, 'ambiguous generation retries must preserve the exact operation key');
+assert.match(workbench, /COPY_GENERATION_STORAGE_KEY/, 'unresolved generation operation keys must survive remounts');
+assert.match(workbench, /COPY_GENERATION_STORAGE_MAX_ITEMS/, 'persisted generation operation keys must be bounded');
+assert.match(
+  workbench,
+  /const refreshed = await sourceListingWorkflowClient\.getDraft\(current\.id\);[\s\S]{0,180}forgetPendingGeneration\(signature, operationKey\)/,
+  'paid generation recovery keys must survive until the persisted draft refresh succeeds',
+);
+assert.match(workbench, /new Map\(/, 'multiple generation instruction signatures must be retained independently');
+assert.match(workbench, /activeHandoffRef/, 'late generation responses must be checked against the active exact handoff');
+assert.match(workbench, /handoffEpochRef/, 'late handoff-scoped responses must be rejected by epoch');
+assert.match(workbench, /useLayoutEffect/, 'handoff epoch must be synchronized after React commits, not during render');
+assert.match(workbench, /captureRequestIdRef/, 'late capture pages must not overwrite the active product');
+assert.match(workbench, /pollControllerRef\.current\?\.abort\(\)/, 'product switching must abort an old publish poll');
+assert.match(workbench, /v2AttemptStartedRef\.current = Boolean\(handoff\.attemptId\)/, 'a new handoff must reset its V2 fallback boundary');
+for (const handler of ['refreshDraft', 'confirmCategory', 'internalizeAndAssignMedia', 'saveStrictPricing', 'validateFinalDraft', 'pollPublishAttempt', 'publish', 'refreshAttempt', 'resolvePublishAttempt']) {
+  const start = workbench.indexOf(`async function ${handler}`);
+  const next = workbench.indexOf('\n  async function ', start + 1);
+  const body = workbench.slice(start, next < 0 ? workbench.length : next);
+  assert.match(body, /captureHandoffRequest\(\)/, `${handler} must capture the exact handoff epoch`);
+  assert.match(body, /isHandoffRequestActive\(/, `${handler} must reject late handoff responses`);
+}
+assert.match(workbench, /copyEditorVersionRef/, 'late generation results must preserve edits made while the request was running');
+assert.match(workbench, /applied\.copy\.applyAudit\.find/, 'copy editor hydration must follow the exact apply audit');
+assert.match(workbench, /setCopyTitle\(applied\.copy\.publishTitleRu \|\| ''\)/, 'partial apply must hydrate the effective publish title');
+assert.match(workbench, /setCopyDescription\(applied\.copy\.publishDescriptionRu \|\| ''\)/, 'partial apply must hydrate the effective publish description');
+assert.match(workbench, /reviewsTitle[\s\S]{0,700}reviewsDescription/, 'manual review should submit explicit changed-field coverage');
+assert.match(
+  workbench,
+  /!copyTitle\.trim\(\)\s*&&\s*!copyDescription\.trim\(\)/,
+  'description-only candidates must remain applicable',
+);
+assert.match(workbench, /role="alert" aria-live="assertive"/, 'AI capability failures must be announced accessibly');
+assert.match(workbench, /aria-label=\{`载入候选 \$\{candidate\.titleRu \|\| candidate\.id\}`\}/, 'candidate load controls need candidate-specific accessible names');
 for (const label of ['RUB', 'VAT', '服务端校验通过', '校验已过期']) {
   assert.match(workbench, new RegExp(label), `workbench should expose ${label}`);
 }

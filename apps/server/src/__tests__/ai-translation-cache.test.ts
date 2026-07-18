@@ -49,6 +49,9 @@ describe('AI translation cache', () => {
     expect(result).toMatchObject({ source: 'cache', outputText: '内衣', status: 'approved' });
     expect(provider).not.toHaveBeenCalled();
     expect(store.markUsed).toHaveBeenCalledTimes(1);
+    expect(store.markUsed).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'system', model: 'glossary',
+    }), now);
   });
 
   it('uses prompt hash to isolate product generation cache entries', async () => {
@@ -100,5 +103,24 @@ describe('AI translation cache', () => {
     expect(executeRaw).toHaveBeenCalledTimes(2);
     expect(firstSql).toContain('ON CONFLICT');
     expect(firstSql).toContain('prompt_hash');
+  });
+
+  it('uses Provider configuration identity and strict source/status policy for product cache reads', async () => {
+    const prisma = {
+      $queryRaw: vi.fn(async () => []),
+      $executeRaw: vi.fn(async () => 1),
+    } as unknown as PrismaAiTranslationCacheClient;
+    const store = createPrismaAiTranslationCacheStore(prisma);
+
+    await store.find({
+      namespace: 'product_title', sourceLang: 'zh-CN', targetLang: 'ru',
+      inputHash: 'input', promptHash: 'prompt', provider: 'custom', model: 'deepseek-chat',
+      providerConfigHash: 'config-hash', providerSuccessOnly: true,
+    });
+
+    const sql = String((prisma.$queryRaw as any).mock.calls[0]?.[0]);
+    expect(sql).toContain('provider_config_hash');
+    expect(sql).toContain('status');
+    expect(sql).toContain('source');
   });
 });

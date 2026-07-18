@@ -13,6 +13,7 @@ export interface AiTranslationCacheRecord {
   promptHash: string;
   provider: string;
   model: string;
+  providerConfigHash?: string;
   status: AiTranslationCacheStatus;
   usage: Record<string, unknown> | null;
   expiresAt: Date | null;
@@ -29,6 +30,8 @@ export interface AiTranslationCacheLookup {
   promptHash: string;
   provider?: string;
   model?: string;
+  providerConfigHash?: string;
+  providerSuccessOnly?: boolean;
 }
 
 export interface AiTranslationCacheStore {
@@ -45,6 +48,8 @@ export interface GetCachedAiTranslationParams {
   promptHash: string;
   provider: string;
   model: string;
+  providerConfigHash?: string;
+  providerSuccessOnly?: boolean;
   now?: () => Date;
   store: AiTranslationCacheStore;
   translate(): Promise<{ outputText: string; usage?: Record<string, unknown> | null; provider?: string; model?: string }>;
@@ -77,6 +82,7 @@ function normalizeRecord(row: Record<string, any>): AiTranslationCacheRecord {
     promptHash: cleanText(row.promptHash),
     provider: cleanText(row.provider),
     model: cleanText(row.model),
+    providerConfigHash: cleanText(row.providerConfigHash),
     status: ['success', 'approved', 'rejected', 'stale'].includes(row.status) ? row.status : 'success',
     usage: row.usage && typeof row.usage === 'object' ? row.usage : null,
     expiresAt: row.expiresAt ? new Date(row.expiresAt) : null,
@@ -98,11 +104,25 @@ export async function getCachedAiTranslation(params: GetCachedAiTranslationParam
     promptHash: params.promptHash,
     provider: params.provider,
     model: params.model,
+    providerConfigHash: params.providerConfigHash || '',
+    providerSuccessOnly: params.providerSuccessOnly,
   };
 
   const cached = await params.store.find(lookup);
-  if (cached && cached.outputText && (!cached.expiresAt || cached.expiresAt.getTime() > now.getTime())) {
-    await params.store.markUsed(lookup, now);
+  const providerSuccessEligible = !params.providerSuccessOnly || (
+    ['ai', 'cache'].includes(cached?.source || '')
+    && cached?.status === 'success'
+    && cached.provider === params.provider
+    && cached.model === params.model
+    && (cached.providerConfigHash || '') === (params.providerConfigHash || '')
+  );
+  if (cached && providerSuccessEligible && cached.outputText
+    && (!cached.expiresAt || cached.expiresAt.getTime() > now.getTime())) {
+    await params.store.markUsed({
+      ...lookup,
+      provider: cached.provider,
+      model: cached.model,
+    }, now);
     return { source: 'cache', outputText: cached.outputText, status: cached.status, record: cached };
   }
 
@@ -120,6 +140,7 @@ export async function getCachedAiTranslation(params: GetCachedAiTranslationParam
     promptHash: params.promptHash,
     provider: translated.provider || params.provider,
     model: translated.model || params.model,
+    providerConfigHash: params.providerConfigHash || '',
     status: 'success',
     usage: translated.usage || null,
     expiresAt: params.expiresAt ?? null,
@@ -150,6 +171,7 @@ export function createPrismaAiTranslationCacheStore(prisma: PrismaAiTranslationC
           "prompt_hash" AS "promptHash",
           "provider",
           "model",
+          "provider_config_hash" AS "providerConfigHash",
           "status",
           "usage_json" AS "usage",
           "expires_at" AS "expiresAt",
@@ -162,6 +184,20 @@ export function createPrismaAiTranslationCacheStore(prisma: PrismaAiTranslationC
           AND "target_lang" = ${params.targetLang}
           AND "input_hash" = ${params.inputHash}
           AND "prompt_hash" = ${params.promptHash}
+          AND (
+            (${params.providerSuccessOnly === true}
+              AND "source" IN ('ai', 'cache')
+              AND "status" = 'success'
+              AND "provider" = ${params.provider || ''}
+              AND "model" = ${params.model || ''}
+              AND "provider_config_hash" = ${params.providerConfigHash || ''})
+            OR (${params.providerSuccessOnly !== true} AND (
+              "source" IN ('system_glossary', 'manual')
+              OR ("provider" = ${params.provider || ''}
+                AND "model" = ${params.model || ''}
+                AND "provider_config_hash" = ${params.providerConfigHash || ''})
+            ))
+          )
         ORDER BY CASE WHEN "source" IN ('system_glossary', 'manual') THEN 0 ELSE 1 END, "updated_at" DESC
         LIMIT 1
       `;
@@ -181,6 +217,7 @@ export function createPrismaAiTranslationCacheStore(prisma: PrismaAiTranslationC
           "prompt_hash",
           "provider",
           "model",
+          "provider_config_hash",
           "status",
           "usage_json",
           "expires_at",
@@ -199,6 +236,7 @@ export function createPrismaAiTranslationCacheStore(prisma: PrismaAiTranslationC
           ${record.promptHash},
           ${record.provider},
           ${record.model},
+          ${record.providerConfigHash || ''},
           ${record.status},
           CAST(${JSON.stringify(record.usage || null)} AS jsonb),
           ${record.expiresAt},
@@ -207,7 +245,7 @@ export function createPrismaAiTranslationCacheStore(prisma: PrismaAiTranslationC
           ${record.source},
           CURRENT_TIMESTAMP
         )
-        ON CONFLICT ("namespace", "source_lang", "target_lang", "input_hash", "prompt_hash", "provider", "model")
+        ON CONFLICT ("namespace", "source_lang", "target_lang", "input_hash", "prompt_hash", "provider", "model", "provider_config_hash")
         DO UPDATE SET
           "input_text" = EXCLUDED."input_text",
           "output_text" = EXCLUDED."output_text",
@@ -231,6 +269,9 @@ export function createPrismaAiTranslationCacheStore(prisma: PrismaAiTranslationC
           AND "target_lang" = ${params.targetLang}
           AND "input_hash" = ${params.inputHash}
           AND "prompt_hash" = ${params.promptHash}
+          AND "provider" = ${params.provider || ''}
+          AND "model" = ${params.model || ''}
+          AND "provider_config_hash" = ${params.providerConfigHash || ''}
       `;
     },
   };
