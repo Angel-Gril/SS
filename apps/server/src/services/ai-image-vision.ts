@@ -1,5 +1,6 @@
 import {
   AI_MEDIA_PLANNING_IDENTIFIER_MAX_LENGTH,
+  compareAiMediaPlanningStrings,
   isAiMediaPlanningJsonWithinBudget,
 } from './ai-media-planning-contract.js';
 
@@ -279,7 +280,9 @@ function normalizeClaims(candidateId: string, value: unknown): AiImageUnsupporte
   if (entries.length > MAX_OBJECT_KEYS) return null;
   const result: AiImageUnsupportedClaim[] = [];
   try {
-    for (const [field, claimValue] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+    for (const [field, claimValue] of entries.sort(([left], [right]) => (
+      compareAiMediaPlanningStrings(left, right)
+    ))) {
       if (!field || field.length > MAX_CLAIM_FIELD_LENGTH) return null;
       result.push({
         candidateId,

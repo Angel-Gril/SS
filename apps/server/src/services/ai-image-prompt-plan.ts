@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   AI_MEDIA_PLANNING_IDENTIFIER_MAX_LENGTH,
   AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH,
+  compareAiMediaPlanningStrings,
   isAiMediaPlanningJsonWithinBudget,
 } from './ai-media-planning-contract.js';
 
@@ -216,10 +217,10 @@ function normalizeVerifiedFacts(input: ImagePromptPlanInput): ImagePromptPlanVer
     existing.evidenceIds = [...new Set([...existing.evidenceIds, ...fact.evidenceIds])].sort();
   }
   const facts = [...byScopeAndPath.values()].sort((left, right) => (
-    left.path.localeCompare(right.path)
-    || (left.skuKeys || []).join('\u0000').localeCompare((right.skuKeys || []).join('\u0000'))
-    || JSON.stringify(left.value).localeCompare(JSON.stringify(right.value))
-    || left.evidenceIds.join('\u0000').localeCompare(right.evidenceIds.join('\u0000'))
+    compareAiMediaPlanningStrings(left.path, right.path)
+    || compareAiMediaPlanningStrings((left.skuKeys || []).join('\u0000'), (right.skuKeys || []).join('\u0000'))
+    || compareAiMediaPlanningStrings(JSON.stringify(left.value), JSON.stringify(right.value))
+    || compareAiMediaPlanningStrings(left.evidenceIds.join('\u0000'), right.evidenceIds.join('\u0000'))
   ));
   if (Buffer.byteLength(JSON.stringify(facts), 'utf8') > MAX_FACTS_JSON_BYTES) {
     throw new TypeError('Image prompt plan verified facts exceed JSON persistence limits');
@@ -269,9 +270,9 @@ function identitySignature(sku: ImagePromptPlanSku): string {
       value: normalized(attribute.value),
     }))
     .sort((left, right) => (
-      left.impact.localeCompare(right.impact)
-      || left.key.localeCompare(right.key)
-      || left.value.localeCompare(right.value)
+      compareAiMediaPlanningStrings(left.impact, right.impact)
+      || compareAiMediaPlanningStrings(left.key, right.key)
+      || compareAiMediaPlanningStrings(left.value, right.value)
     ));
   return JSON.stringify({
     dimensions,
@@ -300,8 +301,8 @@ function compatibilityGroups(skus: ImagePromptPlanSku[]): ImageCompatibilityGrou
       skuKeys: [...skuKeys].sort(),
     }))
     .sort((left, right) => (
-      left.identitySignature.localeCompare(right.identitySignature)
-      || left.skuKeys.join('|').localeCompare(right.skuKeys.join('|'))
+      compareAiMediaPlanningStrings(left.identitySignature, right.identitySignature)
+      || compareAiMediaPlanningStrings(left.skuKeys.join('|'), right.skuKeys.join('|'))
     ));
 }
 
@@ -333,7 +334,7 @@ function referencesForSku(input: ImagePromptPlanInput, skuKey: string): ImagePro
       && (image.skuKeys.length === 0 || image.skuKeys.includes(skuKey)))
     .sort((left, right) => (
       imagePriority(left, skuKey) - imagePriority(right, skuKey)
-      || left.candidateId.localeCompare(right.candidateId)
+      || compareAiMediaPlanningStrings(left.candidateId, right.candidateId)
     ));
 }
 
@@ -344,7 +345,7 @@ function referencesForGroup(input: ImagePromptPlanInput, group: ImageCompatibili
       && (image.skuKeys.length === 0 || image.skuKeys.every((skuKey) => members.has(skuKey))))
     .sort((left, right) => (
       imagePriority(left) - imagePriority(right)
-      || left.candidateId.localeCompare(right.candidateId)
+      || compareAiMediaPlanningStrings(left.candidateId, right.candidateId)
     ));
 }
 
@@ -425,7 +426,9 @@ export function createRuleBasedImagePromptPlan(input: ImagePromptPlanInput): Ima
   };
   const groups = compatibilityGroups(normalizedInput.skus);
   const slots: ImagePromptPlanSlot[] = [];
-  for (const sku of [...normalizedInput.skus].sort((left, right) => left.skuKey.localeCompare(right.skuKey))) {
+  for (const sku of [...normalizedInput.skus].sort((left, right) => (
+    compareAiMediaPlanningStrings(left.skuKey, right.skuKey)
+  ))) {
     slots.push({
       slotKey: `sku:${sku.skuKey}:hero`,
       goal: 'sku_hero',

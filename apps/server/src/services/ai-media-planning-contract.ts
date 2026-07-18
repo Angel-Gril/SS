@@ -2,6 +2,10 @@ export const AI_MEDIA_PLANNING_IDENTIFIER_MAX_LENGTH = 500;
 export const AI_MEDIA_PLANNING_SLOT_KEY_MAX_LENGTH = 1024;
 export const AI_MEDIA_PLANNING_MODEL_OUTPUT_MAX_BYTES = 256 * 1024;
 
+export function compareAiMediaPlanningStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function isAiMediaPlanningJsonWithinBudget(value: unknown): boolean {
   try {
     const serialized = typeof value === 'string' ? value : JSON.stringify(value);

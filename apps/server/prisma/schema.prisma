@@ -421,6 +421,12 @@ model User {
   createdAiMediaWorkflows             AiMediaWorkflow[]                     @relation("AiMediaWorkflowActor")
   reviewedAiMediaWorkflows            AiMediaWorkflow[]                     @relation("AiMediaWorkflowReviewer")
   aiMediaWorkflowEvents               AiMediaWorkflowEvent[]
+  ownedAiMediaPlans                    AiMediaPlan[]                          @relation("AiMediaPlanOwner")
+  createdAiMediaPlans                  AiMediaPlan[]                          @relation("AiMediaPlanActor")
+  reviewedAiMediaPlans                 AiMediaPlan[]                          @relation("AiMediaPlanReviewer")
+  aiMediaPlanningRunsAsActor           AiMediaPlanningRun[]                   @relation("AiMediaPlanningRunActor")
+  aiMediaPlanVersionsAsActor           AiMediaPlanVersion[]                   @relation("AiMediaPlanVersionActor")
+  aiMediaPlanEventsAsActor             AiMediaPlanEvent[]                     @relation("AiMediaPlanEventActor")
   mediaAssets                         MediaAsset[]
   ownedAiCostReservations             AiCostReservation[]                   @relation("AiCostReservationOwner")
   createdAiCostReservations           AiCostReservation[]                   @relation("AiCostReservationActor")
@@ -853,7 +859,9 @@ model SourceCaptureSubject {
   updatedAt              DateTime                @updatedAt @map("updated_at")
   snapshots              SourceCaptureSnapshot[]
   sourceListingWorkflows SourceListingWorkflow[]
+  aiMediaPlans           AiMediaPlan[]           @relation("AiMediaPlanSubject")
 
+  @@unique([id, ownerUserId], map: "source_capture_subject_id_owner_key")
   @@unique([ownerUserId, sourcePlatform, sourceProductId], map: "source_capture_subject_identity_key")
   @@index([ownerUserId, updatedAt])
   @@map("source_capture_subjects")
@@ -888,6 +896,8 @@ model SourceCaptureSnapshot {
   sourceListingDraftVersions         SourceListingDraftVersion[]
   ozonPublishAttempts                OzonPublishAttempt[]
   mediaAssets                        MediaAsset[]
+  aiMediaPlanningRuns                AiMediaPlanningRun[]                @relation("AiMediaPlanningRunSnapshot")
+  aiMediaPlanVersions                AiMediaPlanVersion[]                @relation("AiMediaPlanVersionSnapshot")
   ingestChannel                      SourceCaptureIngestChannel          @map("ingest_channel")
   rolloutRevision                    String                              @map("rollout_revision")
   rolloutStage                       String                              @map("rollout_stage")
@@ -896,6 +906,7 @@ model SourceCaptureSnapshot {
 
   @@unique([subjectId, version], map: "source_capture_snapshot_subject_version_key")
   @@unique([subjectId, captureHash], map: "source_capture_snapshot_subject_hash_key")
+  @@unique([id, subjectId], map: "source_capture_snapshot_id_subject_key")
   @@index([subjectId, capturedAt])
   @@index([actorUserId, createdAt])
   @@index([deviceSessionId, createdAt])
@@ -2645,6 +2656,19 @@ enum AiMediaInputRole {
   MASK
 }
 
+enum AiMediaPlanningMode {
+  RULE_BASED
+  MODEL_ASSISTED
+}
+
+enum AiMediaPlanningRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
 enum AiCostReservationStatus {
   RESERVED
   SUBMISSION_UNCERTAIN
@@ -2927,6 +2951,173 @@ model AiMediaWorkflowEvent {
   @@index([ownerUserId, createdAt])
   @@index([ownerUserId, assetId])
   @@map("ai_media_workflow_events")
+}
+
+model AiMediaPlan {
+  id                      String               @id @default(cuid())
+  ownerUserId             String               @map("owner_user_id")
+  owner                   User                 @relation("AiMediaPlanOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actorUserId             String               @map("actor_user_id")
+  actor                   User                 @relation("AiMediaPlanActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  sourceSubjectId         String               @map("source_subject_id")
+  sourceSubject           SourceCaptureSubject @relation("AiMediaPlanSubject", fields: [sourceSubjectId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  contextType             String               @map("context_type") @db.VarChar(50)
+  contextId               String               @map("context_id") @db.VarChar(200)
+  idempotencyKey          String               @map("idempotency_key") @db.VarChar(128)
+  requestFingerprint      String               @map("request_fingerprint") @db.Char(64)
+  revision                Int                  @default(1)
+  latestVersion           Int                  @default(0) @map("latest_version")
+  currentVersionId        String?              @map("current_version_id")
+  currentVersion          AiMediaPlanVersion?  @relation("AiMediaPlanCurrentVersion", fields: [currentVersionId, id, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict, onUpdate: NoAction)
+  approvedVersionId       String?              @map("approved_version_id")
+  approvedVersion         AiMediaPlanVersion?  @relation("AiMediaPlanApprovedVersion", fields: [approvedVersionId, id, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict, onUpdate: NoAction)
+  reviewStatus            AiMediaReviewStatus  @default(NOT_READY) @map("review_status")
+  staleAt                 DateTime?            @map("stale_at")
+  staleAgainstFingerprint String?              @map("stale_against_fingerprint") @db.Char(64)
+  staleReasons            Json?                @map("stale_reasons_json")
+  reviewedByUserId        String?              @map("reviewed_by_user_id")
+  reviewedBy              User?                @relation("AiMediaPlanReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  reviewedAt              DateTime?            @map("reviewed_at")
+  createdAt               DateTime             @default(now()) @map("created_at")
+  updatedAt               DateTime             @updatedAt @map("updated_at")
+  runs                    AiMediaPlanningRun[]
+  versions                AiMediaPlanVersion[] @relation("AiMediaPlanVersions")
+  events                  AiMediaPlanEvent[]
+
+  @@unique([id, ownerUserId], name: "ai_media_plan_id_owner", map: "ai_media_plan_id_owner_key")
+  @@unique([id, ownerUserId, sourceSubjectId], name: "ai_media_plan_identity", map: "ai_media_plan_identity_key")
+  @@unique([ownerUserId, idempotencyKey], name: "ai_media_plan_owner_idempotency", map: "ai_media_plan_owner_idempotency_key")
+  @@index([ownerUserId, reviewStatus, updatedAt], map: "ai_media_plan_owner_review_idx")
+  @@index([sourceSubjectId, updatedAt], map: "ai_media_plan_subject_updated_idx")
+  @@index([contextType, contextId, updatedAt], map: "ai_media_plan_context_updated_idx")
+  @@map("ai_media_plans")
+}
+
+model AiMediaPlanningRun {
+  id                      String                   @id @default(cuid())
+  planId                  String                   @map("plan_id")
+  ownerUserId             String                   @map("owner_user_id")
+  sourceSubjectId         String                   @map("source_subject_id")
+  plan                    AiMediaPlan              @relation(fields: [planId, ownerUserId, sourceSubjectId], references: [id, ownerUserId, sourceSubjectId], onDelete: Restrict)
+  actorUserId             String                   @map("actor_user_id")
+  actor                   User                     @relation("AiMediaPlanningRunActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  sourceCaptureSnapshotId String                   @map("source_capture_snapshot_id")
+  sourceCaptureSnapshot   SourceCaptureSnapshot    @relation("AiMediaPlanningRunSnapshot", fields: [sourceCaptureSnapshotId, sourceSubjectId], references: [id, subjectId], onDelete: Restrict)
+  attempt                 Int
+  revision                Int                      @default(1)
+  mode                    AiMediaPlanningMode
+  engineVersion           String                   @map("engine_version") @db.VarChar(100)
+  status                  AiMediaPlanningRunStatus @default(QUEUED)
+  idempotencyKey          String                   @map("idempotency_key") @db.VarChar(128)
+  requestFingerprint      String                   @map("request_fingerprint") @db.Char(64)
+  sourceCaptureHash       String                   @map("source_capture_hash") @db.Char(64)
+  sourceProfileHash       String                   @map("source_profile_hash") @db.Char(64)
+  inputFingerprint        String                   @map("input_fingerprint") @db.Char(64)
+  inputSnapshot           Json                     @map("input_snapshot_json")
+  inputHash               String                   @map("input_hash") @db.Char(64)
+  inputBytes              Int                      @map("input_bytes")
+  templateSnapshot        Json?                    @map("template_snapshot_json")
+  templateSetHash         String?                  @map("template_set_hash") @db.Char(64)
+  compiledPromptSnapshot  Json?                    @map("compiled_prompt_snapshot_json")
+  compiledPromptHash      String?                  @map("compiled_prompt_hash") @db.Char(64)
+  provider                String?                  @db.VarChar(100)
+  model                   String?                  @db.VarChar(200)
+  providerConfigHash      String?                  @map("provider_config_hash") @db.Char(64)
+  modelResponse           Json?                    @map("model_response_json")
+  modelResponseHash       String?                  @map("model_response_hash") @db.Char(64)
+  errorCode               String?                  @map("error_code") @db.VarChar(100)
+  errorMessage            String?                  @map("error_message") @db.VarChar(2000)
+  startedAt               DateTime?                @map("started_at")
+  completedAt             DateTime?                @map("completed_at")
+  createdAt               DateTime                 @default(now()) @map("created_at")
+  updatedAt               DateTime                 @updatedAt @map("updated_at")
+  resultVersion           AiMediaPlanVersion?
+  events                  AiMediaPlanEvent[]
+
+  @@unique([id, planId, ownerUserId], name: "ai_media_planning_run_identity", map: "ai_media_planning_run_identity_key")
+  @@unique([planId, attempt], map: "ai_media_planning_run_attempt_key")
+  @@unique([ownerUserId, idempotencyKey], name: "ai_media_planning_run_owner_idempotency", map: "ai_media_planning_run_owner_idempotency_key")
+  @@index([ownerUserId, status, createdAt], map: "ai_media_planning_run_owner_status_idx")
+  @@index([planId, createdAt], map: "ai_media_planning_run_plan_created_idx")
+  @@index([sourceCaptureSnapshotId, createdAt], map: "ai_media_planning_run_snapshot_idx")
+  @@map("ai_media_planning_runs")
+}
+
+model AiMediaPlanVersion {
+  id                      String                @id @default(cuid())
+  planId                  String                @map("plan_id")
+  ownerUserId             String                @map("owner_user_id")
+  sourceSubjectId         String                @map("source_subject_id")
+  plan                    AiMediaPlan           @relation("AiMediaPlanVersions", fields: [planId, ownerUserId, sourceSubjectId], references: [id, ownerUserId, sourceSubjectId], onDelete: Restrict)
+  currentForPlans         AiMediaPlan[]         @relation("AiMediaPlanCurrentVersion")
+  approvedForPlans        AiMediaPlan[]         @relation("AiMediaPlanApprovedVersion")
+  version                 Int
+  planningRunId           String                @map("planning_run_id")
+  planningRun             AiMediaPlanningRun    @relation(fields: [planningRunId, planId, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict)
+  parentVersionId         String?               @map("parent_version_id")
+  parentVersion           AiMediaPlanVersion?   @relation("AiMediaPlanVersionLineage", fields: [parentVersionId, planId, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict, onUpdate: NoAction)
+  childVersions           AiMediaPlanVersion[]  @relation("AiMediaPlanVersionLineage")
+  sourceCaptureSnapshotId String                @map("source_capture_snapshot_id")
+  sourceCaptureSnapshot   SourceCaptureSnapshot @relation("AiMediaPlanVersionSnapshot", fields: [sourceCaptureSnapshotId, sourceSubjectId], references: [id, subjectId], onDelete: Restrict)
+  sourceCaptureHash       String                @map("source_capture_hash") @db.Char(64)
+  sourceProfileHash       String                @map("source_profile_hash") @db.Char(64)
+  sourceSchemaVersion     String                @map("source_schema_version") @db.VarChar(100)
+  selectedSkuHash         String                @map("selected_sku_hash") @db.Char(64)
+  inputAssetSetHash       String                @map("input_asset_set_hash") @db.Char(64)
+  inputFingerprint        String                @map("input_fingerprint") @db.Char(64)
+  planSchemaVersion       String                @map("plan_schema_version") @db.VarChar(50)
+  plannerVersion          String                @map("planner_version") @db.VarChar(100)
+  mode                    AiMediaPlanningMode
+  fallbackReason          String?               @map("fallback_reason") @db.VarChar(100)
+  inputSnapshot           Json                  @map("input_snapshot_json")
+  inputHash               String                @map("input_hash") @db.Char(64)
+  curation                Json                  @map("curation_json")
+  curationHash            String                @map("curation_hash") @db.Char(64)
+  visionEvidence          Json                  @map("vision_evidence_json")
+  visionEvidenceHash      String                @map("vision_evidence_hash") @db.Char(64)
+  planPayload             Json                  @map("plan_json")
+  planHash                String                @map("plan_hash") @db.Char(64)
+  planBytes               Int                   @map("plan_bytes")
+  provenance              Json                  @map("provenance_json")
+  provenanceHash          String                @map("provenance_hash") @db.Char(64)
+  actorUserId             String                @map("actor_user_id")
+  actor                   User                  @relation("AiMediaPlanVersionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  createdAt               DateTime              @default(now()) @map("created_at")
+  events                  AiMediaPlanEvent[]
+
+  @@unique([id, planId, ownerUserId], name: "ai_media_plan_version_identity", map: "ai_media_plan_version_identity_key")
+  @@unique([planningRunId, planId, ownerUserId], map: "ai_media_plan_version_run_key")
+  @@unique([planId, version], map: "ai_media_plan_version_sequence_key")
+  @@unique([planId, inputFingerprint, planHash], map: "ai_media_plan_version_content_key")
+  @@index([ownerUserId, createdAt], map: "ai_media_plan_version_owner_created_idx")
+  @@index([sourceCaptureSnapshotId, createdAt], map: "ai_media_plan_version_snapshot_idx")
+  @@index([planId, createdAt], map: "ai_media_plan_version_plan_created_idx")
+  @@map("ai_media_plan_versions")
+}
+
+model AiMediaPlanEvent {
+  id          String              @id @default(cuid())
+  planId      String              @map("plan_id")
+  ownerUserId String              @map("owner_user_id")
+  plan        AiMediaPlan         @relation(fields: [planId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  versionId   String?             @map("version_id")
+  version     AiMediaPlanVersion? @relation(fields: [versionId, planId, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict)
+  runId       String?             @map("run_id")
+  run         AiMediaPlanningRun? @relation(fields: [runId, planId, ownerUserId], references: [id, planId, ownerUserId], onDelete: Restrict)
+  revision    Int
+  actorUserId String              @map("actor_user_id")
+  actor       User                @relation("AiMediaPlanEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  eventKey    String              @unique(map: "ai_media_plan_event_key") @map("event_key") @db.VarChar(200)
+  eventType   String              @map("event_type") @db.VarChar(50)
+  payload     Json
+  payloadHash String              @map("payload_hash") @db.Char(64)
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  @@unique([planId, revision], map: "ai_media_plan_event_revision_key")
+  @@index([planId, createdAt], map: "ai_media_plan_event_plan_created_idx")
+  @@index([ownerUserId, createdAt], map: "ai_media_plan_event_owner_created_idx")
+  @@index([versionId, createdAt], map: "ai_media_plan_event_version_created_idx")
+  @@map("ai_media_plan_events")
 }
 
 model MediaAssetLineage {
