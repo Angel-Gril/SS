@@ -10,8 +10,28 @@ Current required defaults in every environment:
 - `feature_source_ozon_publisher_v2=false`
 - all five `source_ozon_publisher_*_stage` rows are `off@0`
 - `feature_ai_media_workflow_v2=false`
+- `feature_ai_listing_copy_generation=false`
 - `ai_media_workflow_v2_rollout_policy={"revision":0,"tenantIds":[]}`
 - no readiness approval is connected to an external write unless the physical route consumes the exact rollout decision
+
+## Release Evidence: `274f9c5`
+
+This release adds the dark Unit 7B listing-copy execution path. It generates Russian title and description candidates from trusted Capture V2 and reviewed Ozon facts, freezes Prompt/Provider provenance, and requires an explicit audited apply before publish compilation. It does not enable paid generation or Ozon writes.
+
+| Evidence | Result |
+|---|---|
+| Git | `274f9c5` (`feat(ai-media): add auditable listing-copy generation`) pushed to `origin/feat/ai-media-prompt-registry`; local, domestic and international environments use the exact commit |
+| Automated verification | Server `2096 passed / 85 skipped`; workspace type checks and production builds passed; lint `0 errors / 22` existing warnings; preflight passed with `192 pass / 3` existing extension-permission warnings; Prisma validate/generate and all Web listing-copy contracts passed |
+| PostgreSQL | All 79 migrations replayed from zero in an isolated schema before release; PostgreSQL AI Media integration passed; local, domestic and international databases report all 79 migrations current |
+| Listing-copy boundary | Active Prompt Registry releases are resolved server-side; only owner-scoped verified Capture V2 and reviewed Ozon facts enter the request; candidates freeze template, request, Provider/model/config, source-profile and output provenance; public DTOs redact frozen Prompt bodies |
+| Review and publish authority | Manual and generated candidates preserve explicit per-field coverage; apply is an audited user command; retained stale fields are not re-authorized; publish compilation verifies title and description against their own latest apply audits |
+| Local ERP | API DB/Redis ready; all relevant rollout flags restored false; desktop and 390px mobile workbench QA passed without unexpected overflow; the UI showed the paid generator disabled and no Provider or Ozon write was attempted |
+| Domestic VPS | `8.163.122.40` deployed `274f9c5` after a successful 96K database backup and quiesced API/Worker migration; API/Web/Worker, local/public `/ready`, 79 migrations, dark flags and unauthenticated 401 passed; cloud extension package `1.0.207` |
+| Domestic infrastructure limits | Full verifier retains the four existing HTTPS/Cloudflare failures and two existing backup/IP-update warnings: no 443 listener/UFW rule, no Cloudflare real-IP/origin guard, no remote backup and no Cloudflare IP-update cron |
+| International VPS | `45.76.49.64` deployed `274f9c5` after a successful 33M database backup and quiesced API/Worker migration; full runtime verifier passed with `0 failures / 1 warning`; `https://ss-erp.com` loaded with no browser console errors; cloud extension package `1.0.242`; unauthenticated listing-copy capability returned 401 |
+| Rollout state | `feature_source_listing_workflow`, `feature_source_ozon_publisher_v2`, `feature_ai_media_workflow_v2` and `feature_ai_listing_copy_generation` are `false`; AI Media rollout remains revision `0` with zero tenant IDs in all three environments |
+| Activation gate | Provider dispatch locking is process-local and daily quota reservation is not atomic; validation-rejected paid outputs are not yet charged to the request quota and quota exhaustion is not yet a typed 429. Paid tenant activation remains prohibited until those controls are transactional and tested with real Provider cost/quality evidence |
+| External effects | No paid AI Provider call, real image generation/upload, commercial charge, tenant activation or Ozon write was executed |
 
 ## Release Evidence: `d27f0e1`
 
