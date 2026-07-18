@@ -1157,6 +1157,8 @@ Recorder failures now append an explicit `FAILED` outcome with a bounded failure
 
 - [ ] **Unit 8: Image Curation, Vision Evidence, and Slot Planning**
 
+**Status:** The first provider-free domain-contract slice is implemented in the post-`1c08d61` worktree. Deterministic curation now applies bounded URL/hash/dimension/aspect/role/continuity rules with explicit keep/reject/manual state, strict model-ID normalization and safe fallback. Vision output is bounded and cannot promote material, dimensions, capacity, bundle or package claims into verified facts. Rule planning creates one hero per SKU plus seven gallery goals per visual-compatibility group, isolates unknown/structure/capacity/bundle/packaging changes, scopes evidence and preserves a JSON-safe fact snapshot. Unit 8 remains incomplete until the versioned planning persistence/review contract, Prompt Registry consumer schemas, worker orchestration and real-provider evaluation gates are implemented.
+
 **Goal:** Turn collected images and source facts into a safe, structured media plan before expensive image generation.
 
 **Requirements:** R9, R10, R12

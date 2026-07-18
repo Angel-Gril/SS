@@ -1,0 +1,99 @@
+[
+  {
+    "id": "main-preferred",
+    "url": "https://img.example.com/main-preferred.jpg",
+    "width": 1200,
+    "height": 1600,
+    "mimeType": "image/jpeg",
+    "role": "product_main",
+    "skuKeys": [],
+    "contentHash": "hash-main",
+    "expectedDisposition": "keep",
+    "expectedContentRole": "identity"
+  },
+  {
+    "id": "detail-preferred",
+    "url": "https://img.example.com/detail-preferred.jpg",
+    "width": 900,
+    "height": 1200,
+    "mimeType": "image/webp",
+    "role": "product_detail",
+    "skuKeys": [],
+    "contentHash": "hash-detail",
+    "expectedDisposition": "keep",
+    "expectedContentRole": "detail"
+  },
+  {
+    "id": "tiny",
+    "url": "https://img.example.com/tiny.jpg",
+    "width": 199,
+    "height": 300,
+    "mimeType": "image/jpeg",
+    "role": "product_detail",
+    "skuKeys": [],
+    "contentHash": "hash-tiny",
+    "expectedDisposition": "reject",
+    "expectedReason": "TOO_SMALL"
+  },
+  {
+    "id": "extreme",
+    "url": "https://img.example.com/extreme.jpg",
+    "width": 1400,
+    "height": 400,
+    "mimeType": "image/jpeg",
+    "role": "product_detail",
+    "skuKeys": [],
+    "contentHash": "hash-extreme",
+    "expectedDisposition": "reject",
+    "expectedReason": "EXTREME_ASPECT_RATIO"
+  },
+  {
+    "id": "decorative",
+    "url": "https://img.example.com/decorative.png",
+    "width": 1000,
+    "height": 1000,
+    "mimeType": "image/png",
+    "role": "unknown",
+    "skuKeys": [],
+    "contentHash": "hash-decorative",
+    "decorative": true,
+    "expectedDisposition": "reject",
+    "expectedReason": "DECORATIVE"
+  },
+  {
+    "id": "duplicate-main",
+    "url": "https://img.example.com/main-copy.jpg",
+    "width": 1200,
+    "height": 1600,
+    "mimeType": "image/jpeg",
+    "role": "product_main",
+    "skuKeys": [],
+    "contentHash": "hash-main",
+    "expectedDisposition": "reject",
+    "expectedReason": "DUPLICATE"
+  },
+  {
+    "id": "unsupported",
+    "url": "https://img.example.com/spec.pdf",
+    "width": 1200,
+    "height": 1600,
+    "mimeType": "application/pdf",
+    "role": "product_detail",
+    "skuKeys": [],
+    "contentHash": "hash-pdf",
+    "expectedDisposition": "reject",
+    "expectedReason": "UNSUPPORTED_MEDIA_TYPE"
+  },
+  {
+    "id": "unknown-dimensions",
+    "url": "https://img.example.com/unknown.jpg",
+    "width": null,
+    "height": null,
+    "mimeType": "image/jpeg",
+    "role": "product_detail",
+    "skuKeys": [],
+    "contentHash": "hash-unknown",
+    "expectedDisposition": "manual",
+    "expectedReason": "DIMENSIONS_UNKNOWN"
+  }
+]

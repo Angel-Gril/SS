@@ -1,0 +1,50 @@
+{
+  "candidateIds": ["main-1", "sku-blue"],
+  "verifiedFacts": [
+    {
+      "path": "/facts/productName",
+      "value": "Insulated bottle",
+      "evidenceIds": ["capture:/facts/title"]
+    }
+  ],
+  "modelOutput": {
+    "version": "1.0",
+    "images": [
+      {
+        "candidateId": "main-1",
+        "productIdentity": "same_product",
+        "identityConfidence": 0.96,
+        "contentRoles": ["identity", "detail"],
+        "observations": {
+          "colors": ["Black"],
+          "shapes": ["Cylindrical"],
+          "visibleComponents": ["Lid"],
+          "visibleText": []
+        },
+        "claims": {
+          "material": "Carbon fiber",
+          "dimensions": { "heightMm": 250 },
+          "packageContents": ["Cleaning brush"]
+        }
+      },
+      {
+        "candidateId": "sku-blue",
+        "productIdentity": "variant",
+        "identityConfidence": 0.91,
+        "contentRoles": ["identity"],
+        "observations": {
+          "colors": ["Blue"],
+          "shapes": ["Cylindrical"],
+          "visibleComponents": ["Lid"],
+          "visibleText": []
+        },
+        "claims": {}
+      }
+    ]
+  },
+  "expectedIdentities": {
+    "main-1": "same_product",
+    "sku-blue": "variant"
+  },
+  "expectedUnsupportedClaimFields": ["dimensions", "material", "packageContents"]
+}
