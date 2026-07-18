@@ -32,9 +32,17 @@ function jobRepository() {
   } as any;
 }
 
-async function build(enabled = true, ownerUserId = 'owner-1') {
+async function build(
+  enabled = true,
+  ownerUserId = 'owner-1',
+  translationEnabled = false,
+  translationProvider = 'fake',
+) {
   const mediaWorkflowService = {
     createImageToImage: vi.fn(async () => ({ workflow, jobId: 'job-1', replayed: false })),
+    createImageTranslation: vi.fn(async () => ({
+      workflow: { ...workflow, operation: 'IMAGE_TRANSLATE' as const }, jobId: 'job-translation-1', replayed: false,
+    })),
     list: vi.fn(async () => [workflow]),
     get: vi.fn(async (_id: string, owner: string) => {
       if (owner !== 'owner-1') throw new AiMediaWorkflowError('NOT_FOUND', 'not found');
@@ -53,19 +61,92 @@ async function build(enabled = true, ownerUserId = 'owner-1') {
     internalizeCollect: vi.fn(async () => ({ id: 'asset-1', url: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000 })),
   };
   const enqueue = vi.fn(async () => undefined);
+  const enqueueTranslation = vi.fn(async () => undefined);
   const repository = jobRepository();
   const app = Fastify();
   await app.register(aiImageRoutes, {
-    repository, mediaWorkflowService, mediaContextService, enqueue,
+    repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation,
+    getTranslationSettings: async () => ({
+      enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
+      model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
+      dailyLimit: 20, estimatedCostCents: 0,
+    }),
+    resolveTranslationPrompt: async () => ({
+      templateKey: 'image-translation.base',
+      release: { id: 'translation-release-1', revisionId: 'translation-revision-1', sequence: 1 },
+      checksum: 'a'.repeat(64),
+      snapshot: { templateKey: 'image-translation.base', sequence: 1 },
+      resolvedPrompt: 'Frozen translation domain policy',
+      resolvedNegativePrompt: 'Frozen terminology policy',
+    } as any),
     getMediaWorkflowEnabled: async () => enabled,
     authenticate: async (request: FastifyRequest) => {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1' };
     },
   });
-  return { app, repository, mediaWorkflowService, mediaContextService, enqueue };
+  return { app, repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation };
 }
 
 describe('AI media workflow routes', () => {
+  it('creates and enqueues a gated IMAGE_TRANSLATE workflow with frozen language options', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(true, 'owner-1', true);
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1',
+      sourceLanguage: 'zh', targetLanguage: 'ru',
+      domainHint: 'Translate concise product banner copy',
+      terminologies: [{ src: 'piano black', tgt: 'glossy black' }],
+      idempotencyKey: 'translation-idem-1', context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(202);
+    expect(mediaWorkflowService.createImageTranslation).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', sourceAssetId: 'asset-1', sourceLanguage: 'zh', targetLanguage: 'ru',
+      domainHint: expect.stringContaining('Frozen translation domain policy'),
+      terminologies: [{ src: 'piano black', tgt: 'glossy black' }], provider: 'fake',
+      templateKey: 'image-translation.base', templateReleaseId: 'translation-release-1',
+    }));
+    expect(enqueueTranslation).toHaveBeenCalledWith('job-translation-1');
+  });
+
+  it('does not create a translation workflow while its operation gate is disabled', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(true, 'owner-1', false);
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1', idempotencyKey: 'translation-idem-off',
+      context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'AI_MEDIA_OPERATION_DISABLED' });
+    expect(mediaWorkflowService.createImageTranslation).not.toHaveBeenCalled();
+    expect(enqueueTranslation).not.toHaveBeenCalled();
+  });
+
+  it('keeps an adapter-characterized paid translation provider behind the sandbox gate', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(
+      true,
+      'owner-1',
+      true,
+      'dashscope-qwen-mt-image',
+    );
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1', idempotencyKey: 'translation-idem-paid',
+      context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(mediaWorkflowService.createImageTranslation).not.toHaveBeenCalled();
+    expect(enqueueTranslation).not.toHaveBeenCalled();
+  });
+
+  it('rejects same-language translation and duplicate terminology before persistence', async () => {
+    const { app, mediaWorkflowService } = await build(true, 'owner-1', true);
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1', sourceLanguage: 'zh', targetLanguage: 'ZH',
+      terminologies: [{ src: 'A', tgt: 'a' }, { src: 'a', tgt: 'b' }],
+      idempotencyKey: 'translation-idem-invalid', context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(400);
+    expect(mediaWorkflowService.createImageTranslation).not.toHaveBeenCalled();
+  });
+
   it('creates and enqueues a feature-gated IMAGE_TO_IMAGE workflow', async () => {
     const { app, mediaWorkflowService, enqueue } = await build();
     const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
@@ -169,6 +250,43 @@ describe('AI media workflow routes', () => {
     expect(response.json()).toMatchObject({ code: 'AI_MEDIA_WORKFLOW_DISABLED' });
     expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('checks the translation operation gate before creating a retry attempt', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(true, 'owner-1', false);
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'IMAGE_TRANSLATE' as any,
+      jobs: [{ provider: 'fake', model: 'fake-image-translation-v1' }],
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/retry',
+      payload: { expectedRevision: 2, idempotencyKey: 'translation-retry-disabled' },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'AI_MEDIA_OPERATION_DISABLED' });
+    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(enqueueTranslation).not.toHaveBeenCalled();
+  });
+
+  it('returns 429 when a translation retry exceeds its daily quota', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(true, 'owner-1', true);
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'IMAGE_TRANSLATE' as any,
+      jobs: [{ provider: 'fake', model: 'fake-image-translation-v1', estimatedCostCents: 0 }],
+    });
+    mediaWorkflowService.retry.mockRejectedValueOnce(
+      new AiMediaWorkflowError('IMAGE_TRANSLATION_QUOTA_EXCEEDED', 'quota exceeded'),
+    );
+    const response = await app.inject({
+      method: 'POST', url: '/workflows/workflow-1/retry',
+      payload: { expectedRevision: 2, idempotencyKey: 'translation-retry-quota' },
+    });
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED' });
+    expect(enqueueTranslation).not.toHaveBeenCalled();
   });
 
   it('reports a disabled read context without surfacing a transport error', async () => {

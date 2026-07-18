@@ -22,6 +22,12 @@ describe('AI image provider capability matrix', () => {
       supportsAiMediaOperation('dashscope-wanx', 'wanx2.1-t2i-turbo', 'IMAGE_TO_IMAGE', 1),
     ).toBe(false);
     expect(supportsAiMediaOperation('openai-images', 'gpt-image-1', 'FULL_EDIT', 1)).toBe(false);
+    expect(resolveAiImageProviderCapability('dashscope-qwen-mt-image', 'qwen-mt-image')).toMatchObject({
+      operations: ['IMAGE_TRANSLATE'], maxReferences: 1, inputTransport: 'public_url',
+      evidenceLevel: 'adapter-characterized',
+    });
+    expect(supportsAiMediaOperation('dashscope-qwen-mt-image', 'qwen-mt-image', 'IMAGE_TRANSLATE', 1)).toBe(true);
+    expect(supportsAiMediaOperation('dashscope-qwen-mt-image', 'qwen-mt-image', 'IMAGE_TRANSLATE', 2)).toBe(false);
   });
 
   it('keeps the fake provider available for deterministic lifecycle tests only', () => {
@@ -29,6 +35,7 @@ describe('AI image provider capability matrix', () => {
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 4)).toBe(true);
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 5)).toBe(false);
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 0)).toBe(false);
+    expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TRANSLATE', 1)).toBe(true);
   });
 
   it('preserves typed capability failure reasons', () => {

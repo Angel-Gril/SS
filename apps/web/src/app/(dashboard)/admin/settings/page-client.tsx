@@ -1305,11 +1305,20 @@ const AI_IMAGE_PROVIDER_KEYS = [
   'ai_image_model',
 ];
 
+const AI_IMAGE_TRANSLATION_PROVIDER_KEYS = [
+  'ai_image_translation_provider',
+  'ai_image_translation_base_url',
+  'ai_image_translation_api_key',
+  'ai_image_translation_model',
+];
+
 const AI_LIMIT_KEYS = [
   'ai_daily_budget_cents',
   'ai_user_daily_category_translation_limit',
   'ai_user_daily_product_generation_limit',
   'ai_user_daily_image_generation_limit',
+  'ai_user_daily_image_translation_limit',
+  'ai_image_translation_cost_cents',
 ];
 
 const AI_IMAGE_PROVIDER_PRESETS = [
@@ -1330,10 +1339,28 @@ const AI_IMAGE_PROVIDER_PRESETS = [
   },
 ] as const;
 
+const AI_IMAGE_TRANSLATION_PROVIDER_PRESETS = [
+  {
+    value: 'disabled',
+    label: '关闭',
+    desc: '未通过沙箱门禁前保持关闭',
+    baseUrl: '',
+    model: 'qwen-mt-image',
+  },
+  {
+    value: 'dashscope-qwen-mt-image',
+    label: 'DashScope · qwen-mt-image',
+    desc: '图片翻译异步任务；需要 Unit 0B 沙箱证据',
+    baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+    model: 'qwen-mt-image',
+  },
+] as const;
+
 const AI_FEATURE_KEYS = [
   'ai_category_translation_enabled',
   'ai_product_generation_enabled',
   'ai_image_generation_enabled',
+  'feature_image_translate',
 ];
 
 const AI_PROMPT_KEYS = [
@@ -1353,6 +1380,7 @@ function AiSettingsPanel({
   const configs = Object.fromEntries(items.map((item) => [item.key, item]));
   const provider = editing.ai_provider || 'disabled';
   const imageProvider = editing.ai_image_provider || 'disabled';
+  const translationProvider = editing.ai_image_translation_provider || 'disabled';
   const [testingImageProvider, setTestingImageProvider] = useState(false);
   const [imageTestResult, setImageTestResult] = useState<{
     ok: boolean;
@@ -1399,6 +1427,17 @@ function AiSettingsPanel({
       ai_image_provider: nextProvider.value,
       ai_image_base_url: nextProvider.baseUrl,
       ai_image_model: nextProvider.model,
+    });
+  }
+
+  function selectTranslationProvider(
+    nextProvider: (typeof AI_IMAGE_TRANSLATION_PROVIDER_PRESETS)[number],
+  ) {
+    setEditing({
+      ...editing,
+      ai_image_translation_provider: nextProvider.value,
+      ai_image_translation_base_url: nextProvider.baseUrl,
+      ai_image_translation_model: nextProvider.model,
     });
   }
 
@@ -1665,6 +1704,67 @@ function AiSettingsPanel({
               )}
             </section>
 
+            <section className="space-y-3 rounded-md border p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 className="text-sm font-medium">图片翻译 Provider</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    采用 qwen-mt-image 异步任务；配置可以先保存，但服务端在沙箱证据通过前不会发起付费请求。
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => saveConfigs(AI_IMAGE_TRANSLATION_PROVIDER_KEYS, 'AI 图片翻译服务')}
+                  disabled={savingKey === 'group:AI 图片翻译服务'}
+                >
+                  {savingKey === 'group:AI 图片翻译服务' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  <span className="ml-1">保存翻译配置</span>
+                </Button>
+              </div>
+              <div className="grid gap-2 lg:grid-cols-2">
+                {AI_IMAGE_TRANSLATION_PROVIDER_PRESETS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => selectTranslationProvider(option)}
+                    className={[
+                      'rounded-md border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      translationProvider === option.value
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/50',
+                    ].join(' ')}
+                  >
+                    <span className="block text-sm font-medium">{option.label}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">{option.desc}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <ConfigInput
+                  cfg={configs.ai_image_translation_base_url}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="https://dashscope.aliyuncs.com/api/v1"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_translation_model}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="qwen-mt-image"
+                />
+                <SecretConfigInput
+                  cfg={configs.ai_image_translation_api_key}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="填写图片翻译 API Key"
+                />
+              </div>
+            </section>
+
             <AiPromptTemplateEditor />
 
             <section className="space-y-3 rounded-md border p-4">
@@ -1719,6 +1819,11 @@ function AiSettingsPanel({
                   editing={editing}
                   setValue={setValue}
                 />
+                <ConfigToggle
+                  cfg={configs.feature_image_translate}
+                  editing={editing}
+                  setValue={setValue}
+                />
                 <ConfigInput
                   cfg={configs.ai_user_daily_category_translation_limit}
                   editing={editing}
@@ -1736,6 +1841,18 @@ function AiSettingsPanel({
                   editing={editing}
                   setValue={setValue}
                   placeholder="5"
+                />
+                <ConfigInput
+                  cfg={configs.ai_user_daily_image_translation_limit}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="20"
+                />
+                <ConfigInput
+                  cfg={configs.ai_image_translation_cost_cents}
+                  editing={editing}
+                  setValue={setValue}
+                  placeholder="0"
                 />
                 <ConfigInput
                   cfg={configs.ai_daily_budget_cents}

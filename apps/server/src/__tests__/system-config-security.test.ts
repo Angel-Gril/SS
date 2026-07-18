@@ -54,6 +54,9 @@ describe('SystemConfig sensitive storage', () => {
     await expect(getConfig('ai_category_translation_enabled')).resolves.toBe(false);
     await expect(getConfig('ai_product_generation_enabled')).resolves.toBe(false);
     await expect(getConfig('ai_user_daily_product_generation_limit')).resolves.toBe(20);
+    await expect(getConfig('feature_image_translate')).resolves.toBe(false);
+    await expect(getConfig('ai_image_translation_provider')).resolves.toBe('disabled');
+    await expect(getConfig('ai_image_translation_model')).resolves.toBe('qwen-mt-image');
 
     await setConfig('ai_api_key', 'ai-secret-token');
 
@@ -61,6 +64,12 @@ describe('SystemConfig sensitive storage', () => {
     expect(stored).toMatch(/^enc:v1:/);
     expect(stored).not.toContain('ai-secret-token');
     await expect(getConfig('ai_api_key')).resolves.toBe('ai-secret-token');
+
+    await setConfig('ai_image_translation_api_key', 'translation-secret-token');
+    const translationStored = configStore.get('ai_image_translation_api_key');
+    expect(translationStored).toMatch(/^enc:v1:/);
+    expect(translationStored).not.toContain('translation-secret-token');
+    await expect(getConfig('ai_image_translation_api_key')).resolves.toBe('translation-secret-token');
   });
   it('keeps reading legacy plaintext sensitive values for backward compatibility', async () => {
     const { getConfig } = await import('../config/system-config-schema.js');

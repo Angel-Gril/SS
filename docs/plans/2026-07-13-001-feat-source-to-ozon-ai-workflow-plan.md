@@ -1202,6 +1202,8 @@ The empty-database replay passed all 83 migrations; the planning PostgreSQL inte
 
 - [ ] **Unit 9A: Provider Operations for Image-to-Image and Image Translation**
 
+  **Progress (2026-07-19):** The first translation contract slice is implemented and hardened. `IMAGE_TRANSLATE` is now a durable Prisma operation with frozen operation options, owner-scoped idempotency/quota reservation, versioned positive/constraint Prompt snapshots, provider task identity persistence, a single callback persistence path, resumable submit/poll workers with bounded deadlines, Redis lease/deduplicated recovery, cancellation uncertainty handling, immediate result internalization with deterministic output keys, and fake lifecycle fixtures. The DashScope `qwen-mt-image` adapter is characterized (request/poll/download contract tests pass) but remains blocked at `adapter-characterized` until Unit 0B sandbox evidence and a verified positive price upgrade it; paid dispatch is therefore fail-closed. The Web workbench does not yet expose an end-user translation action; Unit 10B will connect it. Single image-to-image paid operations and mask/edit remain separate follow-up slices.
+
 **Goal:** Prove the two highest-value derived-image operations on the common media contract before suite automation or mask editing.
 
 **Requirements:** R9, R10, R12, R14, R15

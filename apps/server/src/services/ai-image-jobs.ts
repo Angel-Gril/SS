@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { AiMediaCapabilityError, assertAiMediaCapability } from './ai-image-provider-capabilities.js';
+import {
+  AiMediaCapabilityError,
+  assertAiMediaCapability,
+  type AiMediaOperation,
+} from './ai-image-provider-capabilities.js';
 
 export type AiImageJobStatus =
   | 'PENDING'
@@ -16,7 +20,8 @@ export interface AiImageJobRecord {
   ownerUserId: string;
   actorUserId: string;
   status: AiImageJobStatus;
-  operation?: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE';
+  operation?: AiMediaOperation;
+  operationConfig?: Record<string, unknown> | null;
   workflowId?: string | null;
   workflowAttempt?: number | null;
   provider: string;
@@ -56,7 +61,8 @@ export interface AiImageJobRecord {
 }
 
 export interface AiImageProviderRequest {
-  operation?: 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE';
+  operation?: AiMediaOperation;
+  operationConfig?: Record<string, unknown> | null;
   prompt: string;
   negativePrompt: string | null;
   count: number;
@@ -251,6 +257,12 @@ export async function runAiImageJob(
   let providerDispatchStarted = false;
   try {
     const operation = job.operation || 'TEXT_TO_IMAGE';
+    if (operation !== 'TEXT_TO_IMAGE' && operation !== 'IMAGE_TO_IMAGE') {
+      throw new AiImageJobError(
+        'UNSUPPORTED_OPERATION',
+        `${operation} must run through its operation-specific worker`,
+      );
+    }
     try {
       assertAiMediaCapability({
         provider: job.provider,

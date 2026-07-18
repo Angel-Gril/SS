@@ -24,6 +24,12 @@ assert.match(source, /OpenAI Images/);
 assert.match(source, /ai_image_base_url/);
 assert.match(source, /ai_image_api_key/);
 assert.match(source, /ai_image_model/);
+assert.match(source, /ai_image_translation_provider/);
+assert.match(source, /ai_image_translation_base_url/);
+assert.match(source, /ai_image_translation_api_key/);
+assert.match(source, /ai_image_translation_model/);
+assert.match(source, /DashScope · qwen-mt-image/);
+assert.match(source, /沙箱证据通过前不会发起付费请求/);
 assert.doesNotMatch(source, /cfg=\{configs\.ai_image_prompt\}/);
 assert.match(source, /ai_user_daily_image_generation_limit/);
 assert.match(source, /ai_daily_budget_cents/);
@@ -38,6 +44,7 @@ assert.match(source, /isSavedMaskedSecret/);
 assert.match(source, /密钥已保存；留空表示保留原密钥/);
 
 assert.match(configSchema, /label: 'AI 文生图'/);
+assert.match(configSchema, /label: '图片翻译服务来源'/);
 assert.ok(!configSchema.includes('AI 生图/改图预留'));
 assert.doesNotMatch(configSchema, /预留开关：当前只保存配置/);
 

@@ -12,6 +12,7 @@ import {
 } from './ai-prompt-consumer-contracts.js';
 import {
   AI_PROMPT_SAFETY_POLICY,
+  AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
   AiPromptTemplateError,
   AiPromptTemplateService,
   checksumAiPromptRevision,
@@ -23,6 +24,7 @@ import {
 export const DEFAULT_AI_IMAGE_TEMPLATE_KEY = 'text-to-image.base';
 export const LISTING_COPY_TITLE_TEMPLATE_KEY = 'listing-copy.title';
 export const LISTING_COPY_DESCRIPTION_TEMPLATE_KEY = 'listing-copy.description';
+export { AI_MEDIA_TRANSLATION_TEMPLATE_KEY } from './ai-prompt-templates.js';
 export {
   AI_MEDIA_CURATION_TEMPLATE_KEY,
   AI_MEDIA_SLOT_PLANNING_TEMPLATE_KEY,
@@ -71,6 +73,7 @@ const JSON_VARIABLE_KEYS = new Set([
   'verifiedFactsJson',
   'slotPlanningInputJson',
   'visionEvidenceJson',
+  'terminologyJson',
 ]);
 const SENSITIVE_FACT_KEY_PATTERNS = [
   /^(?:proxy)?authorization(?:header)?$/,
@@ -95,6 +98,7 @@ const TEXT_VARIABLE_BYTE_LIMITS: Readonly<Record<string, number>> = {
 
 const BUILTIN_TEMPLATE_DEFINITIONS = {
   [DEFAULT_AI_IMAGE_TEMPLATE_KEY]: { label: '基础文生图', outputMode: 'media_candidate' as const },
+  [AI_MEDIA_TRANSLATION_TEMPLATE_KEY]: { label: '图片翻译', outputMode: 'media_candidate' as const },
   [LISTING_COPY_TITLE_TEMPLATE_KEY]: { label: '商品标题候选', outputMode: 'listing_copy_candidate' as const },
   [LISTING_COPY_DESCRIPTION_TEMPLATE_KEY]: { label: '商品描述候选', outputMode: 'listing_copy_candidate' as const },
   [AI_MEDIA_CURATION_TEMPLATE_KEY]: {
@@ -154,6 +158,18 @@ const DEFAULT_MEDIA_SLOT_PLANNING_TEMPLATE = [
 ].join('\n');
 const DEFAULT_MEDIA_PLANNING_CONSTRAINTS_TEMPLATE = [
   'Never invent candidate IDs, facts, SKU ownership, visible claims, or evidence.',
+  'Additional platform constraints (may be empty):',
+  '{{platform_constraints}}',
+].join('\n');
+const DEFAULT_IMAGE_TRANSLATION_TEMPLATE = [
+  'Translate visible product-banner copy from {{source_language}} to {{target_language}}.',
+  'Preserve product identity, layout, numbers, model codes, and standalone brand names.',
+  'Additional domain guidance (may be empty):',
+  '{{user_instructions}}',
+].join('\n');
+const DEFAULT_IMAGE_TRANSLATION_CONSTRAINTS_TEMPLATE = [
+  'Use this frozen terminology object without inventing additional product claims:',
+  '{{terminology_json}}',
   'Additional platform constraints (may be empty):',
   '{{platform_constraints}}',
 ].join('\n');
@@ -676,6 +692,13 @@ export class AiPromptTemplateRegistryService {
         negativePromptTemplate: DEFAULT_NEGATIVE_TEMPLATE,
         note: initial.note,
       };
+    } else if (templateKey === AI_MEDIA_TRANSLATION_TEMPLATE_KEY) {
+      template = {
+        key: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+        promptTemplate: DEFAULT_IMAGE_TRANSLATION_TEMPLATE,
+        negativePromptTemplate: DEFAULT_IMAGE_TRANSLATION_CONSTRAINTS_TEMPLATE,
+        note: 'Initialized as a fact-bound image translation domain and terminology template',
+      };
     } else if (templateKey === LISTING_COPY_TITLE_TEMPLATE_KEY) {
       template = {
         key: LISTING_COPY_TITLE_TEMPLATE_KEY,
@@ -796,4 +819,11 @@ export function resolveActiveAiPrompt(input: {
   userNegativePrompt: string;
 }) {
   return aiPromptTemplateRegistry.resolvePrompt(input);
+}
+
+export function resolveActiveAiTemplate(input: {
+  templateKey: string;
+  variables: Record<string, unknown>;
+}) {
+  return aiPromptTemplateRegistry.resolveTemplate(input);
 }

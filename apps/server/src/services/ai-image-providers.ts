@@ -18,6 +18,8 @@ interface DashScopeOptions extends ProviderOptions {
   pollIntervalMs?: number;
 }
 
+export type DashScopeImageTranslationProviderOptions = ProviderOptions;
+
 export interface AiImageConnectionConfig extends ProviderOptions {
   provider: string;
 }
@@ -335,8 +337,8 @@ export function createDashScopeWanxProvider(options: DashScopeOptions): AiImageP
   return {
     name: 'dashscope-wanx',
     async generate(request: AiImageProviderRequest): Promise<AiImageProviderResult> {
-      if (request.operation === 'IMAGE_TO_IMAGE') {
-        throw new AiImageJobError('UNSUPPORTED_OPERATION', 'DashScope image-to-image is not enabled for this model');
+      if (request.operation && request.operation !== 'TEXT_TO_IMAGE') {
+        throw new AiImageJobError('UNSUPPORTED_OPERATION', `DashScope ${request.operation} is not enabled for this model`);
       }
       const deadline = Date.now() + timeoutMs;
       let submitted: any;
@@ -417,8 +419,8 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
   return {
     name: 'openai-images',
     async generate(request: AiImageProviderRequest): Promise<AiImageProviderResult> {
-      if (request.operation === 'IMAGE_TO_IMAGE') {
-        throw new AiImageJobError('UNSUPPORTED_OPERATION', 'OpenAI image edits are not enabled for this model');
+      if (request.operation && request.operation !== 'TEXT_TO_IMAGE') {
+        throw new AiImageJobError('UNSUPPORTED_OPERATION', `OpenAI ${request.operation} is not enabled for this model`);
       }
       let accepted: { body: any; providerJobId: string | null; providerAcceptedAt: Date };
       try {
@@ -465,6 +467,171 @@ export function createOpenAiImagesProvider(options: ProviderOptions): AiImagePro
       } catch (error) {
         if (providerJobId) throw withProviderAcceptance(error, providerJobId, providerAcceptedAt);
         throw withProviderSubmissionUncertain(error);
+      }
+    },
+  };
+}
+
+/**
+ * DashScope's qwen-mt-image operation is intentionally separate from the
+ * Wanx text-to-image adapter. It accepts a public source URL, returns a task
+ * identity, and exposes a temporary result URL only from the poll response.
+ */
+export function createDashScopeImageTranslationProvider(
+  options: DashScopeImageTranslationProviderOptions,
+): import('./ai-image-translation.js').AiImageTranslationProvider {
+  const fetcher = options.fetch || globalThis.fetch;
+  const timeoutMs = Math.max(1, options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const apiBase = dashScopeApiBase(options.baseUrl);
+  return {
+    name: 'dashscope-qwen-mt-image',
+    async submit(request, onAccepted) {
+      const model = request.model || options.model;
+      if (model !== 'qwen-mt-image') {
+        throw new AiImageJobError('UNSUPPORTED_PROVIDER_MODEL', 'DashScope image translation requires qwen-mt-image');
+      }
+      let imageUrl: string;
+      try {
+        imageUrl = fetcher === globalThis.fetch
+          ? await validateAiImageProviderUrl(request.imageUrl)
+          : validateProviderUrl(request.imageUrl);
+      } catch (error) {
+        throw withProviderSubmissionRejected(error instanceof AiImageJobError
+          ? error
+          : new AiImageJobError('INVALID_MEDIA_INPUT', 'Image translation source URL is invalid'));
+      }
+      if (request.imageSegment !== false) {
+        throw new AiImageJobError('INVALID_MEDIA_INPUT', 'Image translation segmentation must remain disabled');
+      }
+      let terminologies: Array<{ src: string; tgt: string }>;
+      try {
+        const rawTerminologies = Array.isArray(request.terminologies) ? request.terminologies : [];
+        const bySource = new Map<string, { src: string; tgt: string }>();
+        for (const entry of rawTerminologies) {
+          const src = String(entry?.src || '').trim();
+          const tgt = String(entry?.tgt || '').trim();
+          const key = src.toLocaleLowerCase();
+          const previous = bySource.get(key);
+          if (previous && previous.tgt.toLocaleLowerCase() !== tgt.toLocaleLowerCase()) {
+            throw new AiImageJobError('INVALID_MEDIA_INPUT', 'DashScope terminology contains conflicting source terms');
+          }
+          if (!previous) bySource.set(key, { src, tgt });
+        }
+        terminologies = [...bySource.values()];
+      } catch (error) {
+        throw withProviderSubmissionRejected(error);
+      }
+      if (
+        !/^[a-z]{2,12}(?:[-_][a-z0-9]{2,12})?$/iu.test(request.sourceLanguage)
+        || !/^[a-z]{2,12}(?:[-_][a-z0-9]{2,12})?$/iu.test(request.targetLanguage)
+        || request.sourceLanguage.toLowerCase() === request.targetLanguage.toLowerCase()
+        || !request.domainHint.trim()
+        || Buffer.byteLength(request.domainHint, 'utf8') > 16_000
+        || terminologies.length > 50
+        || terminologies.some((term) => (
+          !term.src.trim() || !term.tgt.trim() || term.src.length > 120 || term.tgt.length > 120
+        ))
+      ) {
+        throw withProviderSubmissionRejected(
+          new AiImageJobError('INVALID_MEDIA_INPUT', 'DashScope image translation options are invalid'),
+        );
+      }
+      let submitted: any;
+      try {
+        submitted = await requestJson('DashScope image translation', fetcher, options.apiKey,
+          `${apiBase}/services/aigc/image2image/image-synthesis`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${options.apiKey}`,
+              'Content-Type': 'application/json',
+              'X-DashScope-Async': 'enable',
+            },
+            body: JSON.stringify({
+              model,
+              input: {
+                image_url: imageUrl,
+                source_lang: request.sourceLanguage,
+                target_lang: request.targetLanguage,
+                ext: {
+                  domainHint: request.domainHint,
+                  terminologies,
+                  config: { imageSegment: false },
+                },
+              },
+            }),
+          }, timeoutMs);
+      } catch (error) {
+        if (isDefiniteProviderRejection(error)) throw withProviderSubmissionRejected(error);
+        throw withProviderSubmissionUncertain(error);
+      }
+      let providerJobId: string | null;
+      try {
+        providerJobId = normalizedProviderIdentity(submitted?.output?.task_id);
+      } catch (error) {
+        throw withProviderSubmissionUncertain(error);
+      }
+      if (!providerJobId) {
+        throw withProviderSubmissionUncertain(
+          new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope image translation did not return a task id'),
+        );
+      }
+      const providerAcceptedAt = new Date();
+      try {
+        await onAccepted(providerJobId, providerAcceptedAt);
+      } catch (error) {
+        throw withProviderAcceptance(error, providerJobId, providerAcceptedAt);
+      }
+      return { providerJobId, providerAcceptedAt };
+    },
+    async poll(providerJobId) {
+      const taskId = normalizedProviderIdentity(providerJobId);
+      if (!taskId) throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope task id is empty');
+      let body: any;
+      try {
+        body = await requestJson('DashScope image translation', fetcher, options.apiKey,
+          `${apiBase}/tasks/${encodeURIComponent(taskId)}`, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${options.apiKey}` },
+          }, timeoutMs);
+      } catch (error) {
+        throw withProviderAcceptance(error, taskId, new Date());
+      }
+      const status = String(body?.output?.task_status || '').trim().toUpperCase();
+      if (['PENDING', 'RUNNING', 'QUEUED', 'PROCESSING', 'WAITING'].includes(status)) {
+        return { status: 'PENDING' as const, providerStatus: status || 'PENDING' };
+      }
+      if (status === 'FAILED' || status === 'CANCELED' || status === 'CANCELLED' || status === 'UNKNOWN') {
+        throw Object.assign(
+          new AiImageJobError('PROVIDER_TASK_FAILED', `DashScope image translation task failed (${status || 'UNKNOWN'})`),
+          { providerJobId: taskId },
+        );
+      }
+      if (status !== 'SUCCEEDED') {
+        throw Object.assign(
+          new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope image translation returned an unknown task status'),
+          { providerJobId: taskId },
+        );
+      }
+      const resultUrl = String(body?.output?.image_url || body?.output?.results?.[0]?.url || '').trim();
+      if (!resultUrl) {
+        throw Object.assign(
+          new AiImageJobError('INVALID_PROVIDER_RESULT', 'DashScope image translation returned no result URL'),
+          { providerJobId: taskId },
+        );
+      }
+      try {
+        const image = await downloadImage(fetcher, resultUrl, timeoutMs);
+        return {
+          status: 'SUCCEEDED' as const,
+          providerStatus: 'SUCCEEDED' as const,
+          image: {
+            ...image,
+            filename: `dashscope-translation-${taskId}.${extensionForMime(image.mimeType)}`,
+          },
+          actualCostCents: normalizedCost(options.costPerImageCents, 1),
+        };
+      } catch (error) {
+        throw withProviderAcceptance(error, taskId, new Date());
       }
     },
   };

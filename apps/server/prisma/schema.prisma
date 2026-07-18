@@ -2633,6 +2633,7 @@ enum AiImageJobStatus {
 enum AiMediaOperation {
   TEXT_TO_IMAGE
   IMAGE_TO_IMAGE
+  IMAGE_TRANSLATE
 }
 
 enum AiMediaWorkflowStatus {
@@ -2795,6 +2796,7 @@ model AiImageJob {
   templateSnapshot       Json?            @map("template_snapshot_json")
   requestFingerprint     String?          @map("request_fingerprint")
   inputAssets            Json?            @map("input_assets_json")
+  operationConfig        Json?            @map("operation_config_json")
   requestedImageCount    Int              @default(1) @map("requested_image_count")
   width                  Int
   height                 Int

@@ -3,9 +3,11 @@ import {
   AiMediaWorkflowError,
   createAiMediaWorkflowService,
   createAiMediaWorkflowFingerprint,
+  createAiImageTranslationWorkflowFingerprint,
   type AiMediaWorkflowRecord,
   type AiMediaWorkflowRepository,
   type CreateAiMediaWorkflowInput,
+  type CreateAiImageTranslationWorkflowInput,
 } from '../services/ai-media-workflows.js';
 
 const workflow: AiMediaWorkflowRecord = {
@@ -21,6 +23,11 @@ const workflow: AiMediaWorkflowRecord = {
 function repository(overrides: Partial<AiMediaWorkflowRepository> = {}): AiMediaWorkflowRepository {
   return {
     createImageToImage: vi.fn(async () => ({ kind: 'created' as const, workflow, jobId: 'job-1' })),
+    createImageTranslation: vi.fn(async () => ({
+      kind: 'created' as const,
+      workflow: { ...workflow, operation: 'IMAGE_TRANSLATE' as const },
+      jobId: 'translation-job-1',
+    })),
     listOwned: vi.fn(async () => [workflow]),
     getOwned: vi.fn(async (id, owner) => id === workflow.id && owner === workflow.ownerUserId ? workflow : null),
     cancelOwned: vi.fn(async () => workflow),
@@ -43,6 +50,41 @@ describe('AI media workflow service', () => {
     const result = await createAiMediaWorkflowService(repo).createImageToImage(createInput);
     expect(result).toMatchObject({ workflow: { id: 'workflow-1' }, jobId: 'job-1', replayed: false });
     expect(repo.createImageToImage).toHaveBeenCalledWith(createInput);
+  });
+
+  it('normalizes and freezes IMAGE_TRANSLATE policy/options before persistence', async () => {
+    const repo = repository();
+    const input: CreateAiImageTranslationWorkflowInput = {
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      sourceLanguage: 'ZH', targetLanguage: 'RU', domainHint: 'Keep model codes',
+      terminologies: [{ src: 'piano black', tgt: 'glossy black' }],
+      provider: 'fake', model: 'fake-image-translation-v1', dailyLimit: 20,
+      estimatedCostCents: 0, idempotencyKey: 'translation-idem-1',
+      context: { type: 'collect', id: 'goods-1' },
+    };
+    const result = await createAiMediaWorkflowService(repo).createImageTranslation(input);
+    expect(result).toMatchObject({ jobId: 'translation-job-1', workflow: { operation: 'IMAGE_TRANSLATE' } });
+    expect(repo.createImageTranslation).toHaveBeenCalledWith(expect.objectContaining({
+      sourceLanguage: 'ZH', targetLanguage: 'RU',
+      options: expect.objectContaining({
+        sourceLanguage: 'zh', targetLanguage: 'ru', imageSegment: false,
+        policyVersion: expect.any(String),
+        domainHint: expect.stringContaining('Translate only visible product marketing copy.'),
+      }),
+    }));
+  });
+
+  it('rejects image translation before persistence for invalid language or terminology input', async () => {
+    const repo = repository();
+    const service = createAiMediaWorkflowService(repo);
+    await expect(service.createImageTranslation({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      sourceLanguage: 'zh', targetLanguage: 'zh', domainHint: 'safe', terminologies: [],
+      provider: 'fake', model: 'fake-image-translation-v1', dailyLimit: 20,
+      estimatedCostCents: 0, idempotencyKey: 'translation-invalid-1',
+      context: { type: 'collect', id: 'goods-1' },
+    })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(repo.createImageTranslation).not.toHaveBeenCalled();
   });
 
   it('accepts ordered multi-reference inputs within the provider capability', async () => {
@@ -94,6 +136,20 @@ describe('AI media workflow service', () => {
     })).rejects.toMatchObject({ code: 'RECOVERY_REQUIRED' });
   });
 
+  it('maps translation retry quota exhaustion to a stable workflow error', async () => {
+    const service = createAiMediaWorkflowService(repository({
+      retryOwned: vi.fn(async () => {
+        throw Object.assign(new Error('Image translation daily quota exceeded (20/20)'), {
+          code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
+        });
+      }),
+    }));
+    await expect(service.retry({
+      id: workflow.id, ownerUserId: workflow.ownerUserId, actorUserId: 'actor-1',
+      expectedRevision: 1, idempotencyKey: 'translation-retry-quota', dailyLimit: 20,
+    })).rejects.toMatchObject({ code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED' });
+  });
+
   it('uses a stable request fingerprint and includes authoritative context', () => {
     expect(createAiMediaWorkflowFingerprint(createInput)).toBe(createAiMediaWorkflowFingerprint(createInput));
     expect(createAiMediaWorkflowFingerprint(createInput)).not.toBe(createAiMediaWorkflowFingerprint({
@@ -108,6 +164,21 @@ describe('AI media workflow service', () => {
       ...multi,
       references: [...multi.references].reverse(),
     }));
+  });
+
+  it('binds translation idempotency to the complete prompt snapshot', () => {
+    const base: any = {
+      ownerUserId: 'owner-1', sourceAssetId: 'asset-1', sourceLanguage: 'zh', targetLanguage: 'ru',
+      domainHint: 'policy', terminologies: [], imageSegment: false, provider: 'fake',
+      model: 'fake-image-translation-v1', prompt: 'translate', resolvedPrompt: 'policy',
+      resolvedNegativePrompt: 'constraints', templateKey: 'image-translation.base',
+      templateReleaseId: 'release-1', templateChecksum: 'a'.repeat(64),
+      templateSnapshot: { sequence: 1 }, context: { type: 'collect', id: 'goods-1' },
+      options: { sourceLanguage: 'zh', targetLanguage: 'ru', domainHint: 'policy', terminologies: [], imageSegment: false, policyVersion: 'ai-image-translation-policy/1.0' },
+    };
+    expect(createAiImageTranslationWorkflowFingerprint(base)).not.toBe(
+      createAiImageTranslationWorkflowFingerprint({ ...base, templateSnapshot: { sequence: 2 } }),
+    );
   });
 
   it('returns NOT_FOUND instead of exposing another owner workflow', async () => {

@@ -83,9 +83,17 @@ async function bindProviderJobIdInTransaction(tx: any, job: any, providerJobId: 
       code: 'PROVIDER_JOB_ID_PERSISTENCE_CONFLICT',
     });
   }
+  const acceptedAt = providerAcceptedAt instanceof Date && !Number.isNaN(providerAcceptedAt.getTime())
+    ? providerAcceptedAt
+    : new Date();
   const updated = await tx.aiImageJob.updateMany({
     where: { id: job.id, status: { in: allowedStatuses }, providerJobId: null },
-    data: { providerJobId: normalized },
+    data: {
+      providerJobId: normalized,
+      ...(!job.providerDispatchedAt && job.status === 'RUNNING'
+        ? { providerDispatchedAt: acceptedAt }
+        : {}),
+    },
   });
   if (updated.count !== 1) {
     const current = await tx.aiImageJob.findUnique({ where: { id: job.id } });
@@ -102,10 +110,11 @@ async function bindProviderJobIdInTransaction(tx: any, job: any, providerJobId: 
       code: 'PROVIDER_JOB_ID_PERSISTENCE_CONFLICT',
     });
   }
-  const bound = { ...job, providerJobId: normalized };
-  const acceptedAt = providerAcceptedAt instanceof Date && !Number.isNaN(providerAcceptedAt.getTime())
-    ? providerAcceptedAt
-    : new Date();
+  const bound = {
+    ...job,
+    providerJobId: normalized,
+    providerDispatchedAt: job.providerDispatchedAt || (job.status === 'RUNNING' ? acceptedAt : null),
+  };
   await appendWorkflowEvent(tx, bound, 'PROVIDER_SUBMITTED', {
     providerJobId: normalized,
     providerAcceptedAt: acceptedAt.toISOString(),

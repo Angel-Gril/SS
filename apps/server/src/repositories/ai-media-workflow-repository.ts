@@ -3,10 +3,13 @@ import {
   AI_MEDIA_WORKFLOW_MODEL,
   AI_MEDIA_WORKFLOW_PROVIDER,
   aiMediaPayloadHash,
+  createAiImageTranslationWorkflowFingerprint,
   createAiMediaWorkflowFingerprint,
+  normalizeAiImageTranslationOptions,
   normalizeAiMediaWorkflowReferences,
   type AiMediaWorkflowRecord,
   type AiMediaWorkflowRepository,
+  type CreateAiImageTranslationWorkflowInput,
   type CreateAiMediaWorkflowInput,
 } from '../services/ai-media-workflows.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
@@ -239,6 +242,207 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     }
   }
 
+  async createImageTranslation(input: CreateAiImageTranslationWorkflowInput & {
+    options: ReturnType<typeof normalizeAiImageTranslationOptions>;
+  }) {
+    const sourceAssetId = input.sourceAssetId.trim();
+    const references = [{ assetId: sourceAssetId }];
+    const fingerprintForSha = (sourceAssetSha256: string | null | undefined) => aiMediaPayloadHash({
+      request: createAiImageTranslationWorkflowFingerprint({ ...input, sourceAssetId, options: input.options }),
+      sourceAssetSha256,
+    });
+    try {
+      return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
+        const existingBeforeContext = await tx.aiMediaWorkflow.findUnique({
+          where: { ai_media_workflow_owner_idempotency: {
+            ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
+          } },
+          include: detailInclude,
+        });
+        if (existingBeforeContext) {
+          const frozenInput = existingBeforeContext.inputs?.find((row: any) => row.ordinal === 0);
+          const fingerprint = fingerprintForSha(frozenInput?.assetSha256);
+          const jobId = String(existingBeforeContext.jobs?.[existingBeforeContext.jobs.length - 1]?.id || '');
+          return {
+            kind: existingBeforeContext.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
+            workflow: workflowRecord(existingBeforeContext), jobId,
+          };
+        }
+        const assetRows = await tx.mediaAsset.findMany({
+          where: {
+            id: sourceAssetId,
+            ownerUserId: input.ownerUserId,
+            kind: 'SOURCE_ORIGINAL',
+          },
+        }) as FrozenSourceAsset[];
+        const assets = orderSourceAssets(assetRows, references);
+        if (!assets) throw Object.assign(new Error('Owned source asset not found'), { code: 'SOURCE_ASSET_NOT_FOUND' });
+        const asset = assets[0]!;
+        if (!/^[a-f0-9]{64}$/u.test(String(asset.sha256 || ''))) {
+          throw Object.assign(new Error('Source asset has no immutable content hash'), { code: 'SOURCE_ASSET_INVALID' });
+        }
+        const context = await tx.supplyGoods.findFirst({
+          where: { id: input.context.id, userId: input.ownerUserId },
+          select: { id: true, sourceCaptureSubject: { select: {
+            snapshots: { orderBy: [{ version: 'desc' }, { createdAt: 'desc' }], take: 1, select: { id: true } },
+          } } },
+        });
+        const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id;
+        if (!context || asset.sourceCaptureSnapshotId !== snapshotId) {
+          throw Object.assign(new Error('Source asset does not belong to the requested collect context'), {
+            code: 'AI_MEDIA_CONTEXT_MISMATCH',
+          });
+        }
+        const fingerprint = fingerprintForSha(assets[0]?.sha256);
+        const existing = await tx.aiMediaWorkflow.findUnique({
+          where: { ai_media_workflow_owner_idempotency: {
+            ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
+          } },
+          include: detailInclude,
+        });
+        if (existing) {
+          const jobId = String(existing.jobs?.[existing.jobs.length - 1]?.id || '');
+          return {
+            kind: existing.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
+            workflow: workflowRecord(existing), jobId,
+          };
+        }
+        if (input.dailyLimit > 0) {
+          const dayStart = new Date();
+          dayStart.setUTCHours(0, 0, 0, 0);
+          const active = await tx.aiImageJob.aggregate({
+            where: {
+              ownerUserId: input.ownerUserId,
+              operation: 'IMAGE_TRANSLATE',
+              createdAt: { gte: dayStart },
+              status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] },
+            },
+            _sum: { requestedImageCount: true },
+          });
+          const completed = await tx.aiImageJob.aggregate({
+            where: {
+              ownerUserId: input.ownerUserId,
+              operation: 'IMAGE_TRANSLATE',
+              createdAt: { gte: dayStart },
+              status: 'SUCCEEDED',
+            },
+            _sum: { billedUnits: true },
+          });
+          const used = Number(active._sum.requestedImageCount || 0) + Number(completed._sum.billedUnits || 0);
+          if (used + 1 > input.dailyLimit) {
+            throw Object.assign(new Error(`Image translation daily quota exceeded (${used}/${input.dailyLimit})`), {
+              code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
+            });
+          }
+        }
+        const workflow = await tx.aiMediaWorkflow.create({ data: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          operation: 'IMAGE_TRANSLATE',
+          status: 'QUEUED',
+          reviewStatus: 'NOT_READY',
+          idempotencyKey: input.idempotencyKey,
+          requestFingerprint: fingerprint,
+          contextType: input.context.type,
+          contextId: input.context.id,
+          contextSkuKey: input.context.skuKey || null,
+          contextSlotKey: input.context.slotKey || null,
+        } });
+        await tx.aiMediaWorkflowInput.create({ data: {
+          workflowId: workflow.id,
+          ownerUserId: input.ownerUserId,
+          assetId: asset.id,
+          role: 'REFERENCE',
+          ordinal: 0,
+          assetSha256: asset.sha256,
+          assetUrl: asset.url,
+          mimeType: asset.mimeType,
+          width: asset.width,
+          height: asset.height,
+        } });
+        const job = await tx.aiImageJob.create({ data: {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          operation: 'IMAGE_TRANSLATE',
+          workflowId: workflow.id,
+          workflowAttempt: 1,
+          status: 'QUEUED',
+          provider: input.provider,
+          model: input.model,
+          prompt: String(input.prompt || 'Translate the selected product image').trim(),
+          negativePrompt: null,
+          resolvedPrompt: input.resolvedPrompt || input.options.domainHint,
+          resolvedNegativePrompt: input.resolvedNegativePrompt || null,
+          templateKey: input.templateKey || null,
+          templateReleaseId: input.templateReleaseId || null,
+          templateChecksum: input.templateChecksum || null,
+          templateSnapshot: input.templateSnapshot || undefined,
+          operationConfig: input.options,
+          requestedImageCount: 1,
+          width: asset.width || 1024,
+          height: asset.height || 1024,
+          maxAttempts: 3,
+          idempotencyKey: `${input.idempotencyKey}:attempt:1`,
+          requestFingerprint: fingerprint,
+          inputAssets: [{ assetId: asset.id, role: 'REFERENCE', ordinal: 0, sha256: asset.sha256 }],
+          estimatedCostCents: Math.max(0, Math.round(input.estimatedCostCents || 0)),
+        } });
+        await reserveAiCostInTransaction(tx, {
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          workflowId: workflow.id,
+          jobId: job.id,
+          idempotencyKey: costReservationIdempotencyKey(job.id),
+          requestFingerprint: fingerprint,
+          provider: input.provider,
+          model: input.model,
+          operation: 'IMAGE_TRANSLATE',
+          currency: 'USD',
+          estimatedCostMinor: Math.max(0, Math.round(input.estimatedCostCents || 0)),
+          maximumCostMinor: Math.max(0, Math.round(input.estimatedCostCents || 0)),
+        });
+        await tx.aiMediaWorkflowEvent.create({ data: eventData({
+          workflowId: workflow.id,
+          ownerUserId: input.ownerUserId,
+          actorUserId: input.actorUserId,
+          jobId: job.id,
+          eventKey: `${workflow.id}:created`,
+          eventType: 'CREATED',
+          payload: {
+            operation: 'IMAGE_TRANSLATE',
+            attempt: 1,
+            sourceLanguage: input.options.sourceLanguage,
+            targetLanguage: input.options.targetLanguage,
+          },
+        }) });
+        const created = await tx.aiMediaWorkflow.findUnique({ where: { id: workflow.id }, include: detailInclude });
+        return { kind: 'created' as const, workflow: workflowRecord(created), jobId: job.id };
+      });
+    } catch (error: any) {
+      if (error?.code !== 'P2002') throw error;
+      const [assetRows, existing] = await Promise.all([
+        (this.prisma as any).mediaAsset.findMany({
+          where: { id: sourceAssetId, ownerUserId: input.ownerUserId, kind: 'SOURCE_ORIGINAL' },
+        }),
+        (this.prisma as any).aiMediaWorkflow.findUnique({
+          where: { ai_media_workflow_owner_idempotency: {
+            ownerUserId: input.ownerUserId, idempotencyKey: input.idempotencyKey,
+          } },
+          include: detailInclude,
+        }),
+      ]);
+      if (!existing) throw error;
+      const assets = orderSourceAssets(assetRows as FrozenSourceAsset[], references);
+      const frozenInput = existing.inputs?.find((row: any) => row.ordinal === 0);
+      const fingerprint = fingerprintForSha(assets?.[0]?.sha256 || frozenInput?.assetSha256);
+      const jobId = String(existing.jobs?.[existing.jobs.length - 1]?.id || '');
+      return {
+        kind: existing.requestFingerprint === fingerprint ? 'existing' as const : 'conflict' as const,
+        workflow: workflowRecord(existing), jobId,
+      };
+    }
+  }
+
   async listOwned(input: { ownerUserId: string; contextType?: string; contextId?: string; limit: number }) {
     const rows = await (this.prisma as any).aiMediaWorkflow.findMany({
       where: {
@@ -307,7 +511,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     });
   }
 
-  async retryOwned(input: { id: string; ownerUserId: string; actorUserId: string; expectedRevision: number; idempotencyKey: string }) {
+  async retryOwned(input: {
+    id: string;
+    ownerUserId: string;
+    actorUserId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+    dailyLimit?: number;
+  }) {
     const eventKey = `${input.id}:retry:${input.idempotencyKey}`;
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
@@ -331,6 +542,42 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
         } else if (previous.providerJobId || previous.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN') {
           return null;
         }
+        const estimatedCostCents = Math.max(0, Number(previous.estimatedCostCents || 0));
+        if (previous.operation === 'IMAGE_TRANSLATE') {
+          if (!Number.isSafeInteger(input.dailyLimit) || Number(input.dailyLimit) < 0) {
+            throw Object.assign(new Error('Image translation retry quota is not available'), {
+              code: 'IMAGE_TRANSLATION_QUOTA_UNAVAILABLE',
+            });
+          }
+        }
+        if (previous.operation === 'IMAGE_TRANSLATE' && Number(input.dailyLimit) > 0) {
+          const dayStart = new Date();
+          dayStart.setUTCHours(0, 0, 0, 0);
+          const active = await tx.aiImageJob.aggregate({
+            where: {
+              ownerUserId: input.ownerUserId,
+              operation: 'IMAGE_TRANSLATE',
+              createdAt: { gte: dayStart },
+              status: { in: ['PENDING', 'QUEUED', 'RUNNING', 'RETRYING'] },
+            },
+            _sum: { requestedImageCount: true },
+          });
+          const completed = await tx.aiImageJob.aggregate({
+            where: {
+              ownerUserId: input.ownerUserId,
+              operation: 'IMAGE_TRANSLATE',
+              createdAt: { gte: dayStart },
+              status: 'SUCCEEDED',
+            },
+            _sum: { billedUnits: true },
+          });
+          const used = Number(active._sum.requestedImageCount || 0) + Number(completed._sum.billedUnits || 0);
+          if (used + 1 > Number(input.dailyLimit)) {
+            throw Object.assign(new Error(`Image translation daily quota exceeded (${used}/${input.dailyLimit})`), {
+              code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
+            });
+          }
+        }
         const attempt = workflow.currentAttempt + 1;
         const job = await tx.aiImageJob.create({ data: {
           ownerUserId: previous.ownerUserId, actorUserId: input.actorUserId,
@@ -341,8 +588,9 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           templateKey: previous.templateKey, templateReleaseId: previous.templateReleaseId,
           templateChecksum: previous.templateChecksum, templateSnapshot: previous.templateSnapshot,
           requestFingerprint: previous.requestFingerprint, inputAssets: previous.inputAssets,
+          operationConfig: previous.operationConfig,
           requestedImageCount: previous.requestedImageCount, width: previous.width, height: previous.height,
-          maxAttempts: 1, idempotencyKey: `${workflow.id}:attempt:${attempt}`, estimatedCostCents: 0,
+          maxAttempts: 1, idempotencyKey: `${workflow.id}:attempt:${attempt}`, estimatedCostCents,
         } });
         await reserveAiCostInTransaction(tx, {
           ownerUserId: previous.ownerUserId,
@@ -355,8 +603,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           model: previous.model,
           operation: previous.operation,
           currency: 'USD',
-          estimatedCostMinor: 0,
-          maximumCostMinor: 0,
+          estimatedCostMinor: estimatedCostCents,
+          maximumCostMinor: estimatedCostCents,
         });
         await tx.aiMediaWorkflow.update({ where: { id: input.id }, data: {
           status: 'QUEUED', reviewStatus: 'NOT_READY', selectedOutputAssetId: null,

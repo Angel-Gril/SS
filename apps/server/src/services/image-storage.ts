@@ -45,6 +45,7 @@ export type ImageUploadCategory = 'raw' | 'watermarked' | 'thumbnail' | 'tmp' | 
 export interface ImageUploadOptions {
   category?: ImageUploadCategory;
   ownerId?: string;
+  idempotencyKey?: string;
 }
 
 export interface ImageStorageBackend {
@@ -377,7 +378,9 @@ class OssBackend implements ImageStorageBackend {
     const ext = filename.split('.').pop() || 'jpg';
     const category = options?.category || 'raw';
     const userId = options?.ownerId || null;
-    const objectKey = generateObjectKey(userId, category, ext);
+    const objectKey = options?.idempotencyKey
+      ? generateIdempotentObjectKey(userId, category, ext, options.idempotencyKey)
+      : generateObjectKey(userId, category, ext);
     const mime = mimeType || guessMime(filename);
 
     await client.send(new PutObjectCommand({
@@ -480,7 +483,9 @@ class LocalBackend implements ImageStorageBackend {
     await mkdir(LOCAL_UPLOAD_DIR, { recursive: true });
     const hash = createHash('md5').update(buffer).digest('hex').slice(0, 8);
     const ext = filename.split('.').pop() || 'jpg';
-    const storedName = `${Date.now()}_${hash}.${ext}`;
+    const storedName = options?.idempotencyKey
+      ? `${createHash('sha256').update(`${options.ownerId || 'shared'}:${options.category || 'raw'}:${options.idempotencyKey}`).digest('hex').slice(0, 32)}.${ext}`
+      : `${Date.now()}_${hash}.${ext}`;
     await writeFile(join(LOCAL_UPLOAD_DIR, storedName), buffer);
     const url = `${this.baseUrl}/uploads/${storedName}`;
     return { url, filename: storedName, backend: 'local' };
@@ -712,4 +717,18 @@ function generateObjectKey(
 
 function sanitizeObjectSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^\.+/, '').slice(0, 80);
+}
+
+function generateIdempotentObjectKey(
+  userId: string | null,
+  category: ImageUploadCategory,
+  ext: string,
+  idempotencyKey: string,
+): string {
+  const safeExt = sanitizeObjectSegment(ext.toLowerCase().replace(/^\.+/, '')) || 'jpg';
+  const safeUserId = sanitizeObjectSegment(userId || 'shared') || 'shared';
+  const digest = createHash('sha256')
+    .update(`${safeUserId}:${category}:${idempotencyKey}`)
+    .digest('hex');
+  return `users/${safeUserId}/${category}/idempotent/${digest}.${safeExt}`;
 }

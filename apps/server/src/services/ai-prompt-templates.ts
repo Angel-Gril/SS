@@ -15,6 +15,8 @@ export const AI_LISTING_COPY_SAFETY_POLICY =
 export const AI_MEDIA_PLANNING_SAFETY_POLICY =
   'Use only supplied candidate IDs, verified facts, and allowed planning goals. Never invent product facts, candidate IDs, SKU relationships, or evidence. Return strict JSON for server validation; invalid output falls back to deterministic planning.';
 
+export const AI_MEDIA_TRANSLATION_TEMPLATE_KEY = 'image-translation.base';
+
 export interface AiPromptVariableDefinition {
   inputKey: string;
   token: string;
@@ -32,6 +34,19 @@ const AI_PROMPT_VARIABLE_SCHEMAS: Readonly<Record<string, AiPromptVariableSchema
   'text-to-image.base': {
     prompt: [{ inputKey: 'userPrompt', token: 'user_prompt', requiredForTest: true }],
     negativePrompt: [{ inputKey: 'userNegativePrompt', token: 'user_negative_prompt', requiredForTest: false }],
+    safetyPolicy: AI_PROMPT_SAFETY_POLICY,
+    outputMode: 'media_candidate',
+  },
+  [AI_MEDIA_TRANSLATION_TEMPLATE_KEY]: {
+    prompt: [
+      { inputKey: 'sourceLanguage', token: 'source_language', requiredForTest: true },
+      { inputKey: 'targetLanguage', token: 'target_language', requiredForTest: true },
+      { inputKey: 'userInstructions', token: 'user_instructions', requiredForTest: false },
+    ],
+    negativePrompt: [
+      { inputKey: 'terminologyJson', token: 'terminology_json', requiredForTest: true },
+      { inputKey: 'platformConstraints', token: 'platform_constraints', requiredForTest: false },
+    ],
     safetyPolicy: AI_PROMPT_SAFETY_POLICY,
     outputMode: 'media_candidate',
   },

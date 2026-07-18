@@ -40,13 +40,24 @@ export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[
   {
     provider: 'fake',
     model: '*',
-    operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE'],
+    operations: ['TEXT_TO_IMAGE', 'IMAGE_TO_IMAGE', 'IMAGE_TRANSLATE'],
     maxReferences: 4,
     supportsMask: false,
     inputTransport: 'none',
     resultMode: 'sync',
     evidenceLevel: 'local-test',
     evidence: 'local deterministic lifecycle provider; it does not prove a cloud input transport',
+  },
+  {
+    provider: 'dashscope-qwen-mt-image',
+    model: 'qwen-mt-image',
+    operations: ['IMAGE_TRANSLATE'],
+    maxReferences: 1,
+    supportsMask: false,
+    inputTransport: 'public_url',
+    resultMode: 'async',
+    evidenceLevel: 'adapter-characterized',
+    evidence: 'request and polling contract characterized from the reference client; sandbox acceptance remains pending',
   },
   {
     provider: 'dashscope-wanx',
@@ -121,6 +132,7 @@ export function supportsAiMediaOperation(
   if (inputCount > capability.maxReferences) return false;
   if (hasMask && !capability.supportsMask) return false;
   if (operation === 'TEXT_TO_IMAGE' && inputCount !== 0) return false;
+  if (operation === 'IMAGE_TRANSLATE' && inputCount !== 1) return false;
   if (operation !== 'TEXT_TO_IMAGE' && inputCount < 1) return false;
   return true;
 }

@@ -77,6 +77,14 @@ export const SystemConfigSchema = {
       'Generate or edit product images suitable for Ozon marketplace listing. Return image assets only.',
     ),
   ai_user_daily_image_generation_limit: z.number().int().min(0).max(100000).default(5),
+  // Translation is deliberately isolated from generation credentials/model selection.
+  // The provider remains disabled until its Unit 0B transport evidence is accepted.
+  ai_image_translation_provider: z.enum(['disabled', 'dashscope-qwen-mt-image', 'fake']).default('disabled'),
+  ai_image_translation_base_url: z.string().default(''),
+  ai_image_translation_api_key: z.string().default(''),
+  ai_image_translation_model: z.string().default('qwen-mt-image'),
+  ai_image_translation_cost_cents: z.number().int().min(0).max(100000).default(0),
+  ai_user_daily_image_translation_limit: z.number().int().min(0).max(100000).default(20),
 
   // ─── auth / challenge ───
   auth_human_challenge_provider: z.enum(['disabled', 'cloudflare-turnstile', 'builtin-pow']).default('disabled'),
@@ -469,6 +477,38 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '用户每日生图额度',
     group: 'ai',
     description: '普通用户每日可触发的新文生图调用次数；缓存命中不扣额度',
+  },
+  ai_image_translation_provider: {
+    label: '图片翻译服务来源',
+    group: 'ai',
+    description: 'disabled 表示关闭；dashscope-qwen-mt-image 仅在沙箱证据通过后启用，fake 仅供本地生命周期测试',
+  },
+  ai_image_translation_base_url: {
+    label: '图片翻译 Base URL',
+    group: 'ai',
+    description: '图片翻译服务接口地址；生产必须使用 HTTPS 公网地址',
+  },
+  ai_image_translation_api_key: {
+    label: '图片翻译 API Key',
+    group: 'ai',
+    description: '图片翻译服务访问密钥',
+    sensitive: true,
+    encrypted: true,
+  },
+  ai_image_translation_model: {
+    label: '图片翻译模型',
+    group: 'ai',
+    description: '默认 qwen-mt-image；模型能力需先通过 Unit 0B 验证',
+  },
+  ai_image_translation_cost_cents: {
+    label: '图片翻译单张成本（分）',
+    group: 'ai',
+    description: '用于提交前成本预留和完成后对账；0 表示尚未配置已验证价格',
+  },
+  ai_user_daily_image_translation_limit: {
+    label: '用户每日图片翻译额度',
+    group: 'ai',
+    description: '普通用户每日可触发的新图片翻译调用次数',
   },
 
   auth_human_challenge_provider: {

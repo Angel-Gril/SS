@@ -48,9 +48,25 @@ for (const entry of capabilities) {
   }
   if (
     entry.provider !== 'fake' &&
-    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE')
+    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE') &&
+    entry.provider !== 'dashscope-qwen-mt-image'
   ) {
-    fail(`paid provider exposes an unaccepted operation: ${entry.provider}`);
+    fail(`registry contains an unreviewed paid derived-image provider: ${entry.provider}`);
+  }
+  if (
+    entry.provider !== 'fake' &&
+    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE') &&
+    !['adapter-characterized', 'sandbox-verified'].includes(entry.evidenceLevel)
+  ) {
+    fail(`paid provider operation lacks an evidence classification: ${entry.provider}`);
+  }
+  if (
+    entry.provider !== 'fake' &&
+    entry.operations?.some((operation) => operation !== 'TEXT_TO_IMAGE') &&
+    entry.evidenceLevel === 'sandbox-verified' &&
+    !entry.evidence.toLowerCase().includes('sandbox')
+  ) {
+    fail(`paid provider sandbox capability is missing sandbox evidence: ${entry.provider}`);
   }
 }
 

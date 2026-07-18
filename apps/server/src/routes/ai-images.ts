@@ -24,7 +24,12 @@ import {
   type ApplyAiImageAssetsResult,
 } from '../services/ai-image-application.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
-import { resolveActiveAiPrompt } from '../services/ai-prompt-template-registry.js';
+import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
+import {
+  AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+  resolveActiveAiPrompt,
+  resolveActiveAiTemplate,
+} from '../services/ai-prompt-template-registry.js';
 import { AiPromptTemplateError } from '../services/ai-prompt-templates.js';
 
 const createSchema = z.object({
@@ -41,7 +46,13 @@ const applySchema = z.object({
   targetId: z.string().trim().min(1).max(128),
   expectedTargetUpdatedAt: z.string().datetime().nullable().optional(),
 });
-const createWorkflowSchema = z.object({
+const workflowContextSchema = z.object({
+  type: z.literal('collect'),
+  id: z.string().trim().min(1).max(200),
+  skuKey: z.string().trim().min(1).max(500).nullable().optional(),
+  slotKey: z.string().trim().min(1).max(200).nullable().optional(),
+});
+const imageToImageWorkflowSchema = z.object({
   operation: z.literal('IMAGE_TO_IMAGE'),
   sourceAssetId: z.string().trim().min(1).max(128).optional(),
   references: z.array(z.object({
@@ -53,19 +64,59 @@ const createWorkflowSchema = z.object({
   width: z.number().int().min(256).max(4096).default(1024),
   height: z.number().int().min(256).max(4096).default(1024),
   idempotencyKey: z.string().trim().min(8).max(128),
-  context: z.object({
-    type: z.literal('collect'),
-    id: z.string().trim().min(1).max(200),
-    skuKey: z.string().trim().min(1).max(500).nullable().optional(),
-    slotKey: z.string().trim().min(1).max(200).nullable().optional(),
-  }),
-}).superRefine((value, context) => {
-  if (Boolean(value.sourceAssetId) === Boolean(value.references)) {
+  context: workflowContextSchema,
+});
+const imageTranslationWorkflowSchema = z.object({
+  operation: z.literal('IMAGE_TRANSLATE'),
+  sourceAssetId: z.string().trim().min(1).max(128),
+  sourceLanguage: z.string().trim().regex(/^[a-z]{2,12}(?:[-_][a-z0-9]{2,12})?$/iu).default('zh'),
+  targetLanguage: z.string().trim().regex(/^[a-z]{2,12}(?:[-_][a-z0-9]{2,12})?$/iu).default('ru'),
+  domainHint: z.string().trim().max(2_000).refine(
+    (value) => Buffer.byteLength(value, 'utf8') <= 2_000,
+    'Image translation domain hint exceeds 2000 bytes',
+  ).optional().default(''),
+  terminologies: z.array(z.object({
+    src: z.string().trim().min(1).max(120),
+    tgt: z.string().trim().min(1).max(120),
+  }).strict()).max(50).default([]),
+  idempotencyKey: z.string().trim().min(8).max(128),
+  context: workflowContextSchema,
+});
+const createWorkflowSchema = z.discriminatedUnion('operation', [
+  imageToImageWorkflowSchema,
+  imageTranslationWorkflowSchema,
+]).superRefine((value, context) => {
+  if (value.operation === 'IMAGE_TO_IMAGE') {
+    if (Boolean(value.sourceAssetId) === Boolean(value.references)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['references'],
+        message: 'Use either sourceAssetId or references',
+      });
+    }
+    return;
+  }
+  if (value.sourceLanguage.toLowerCase() === value.targetLanguage.toLowerCase()) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['references'],
-      message: 'Use either sourceAssetId or references',
+      path: ['targetLanguage'],
+      message: 'Source and target languages must differ',
     });
+  }
+  const sources = new Set<string>();
+  const targetsBySource = new Map<string, string>();
+  for (const [index, term] of value.terminologies.entries()) {
+    const key = term.src.toLocaleLowerCase();
+    const target = term.tgt.toLocaleLowerCase();
+    if (sources.has(key) && targetsBySource.get(key) !== target) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['terminologies', index, 'src'],
+        message: 'Terminology source terms must not map to conflicting targets',
+      });
+    }
+    sources.add(key);
+    targetsBySource.set(key, target);
   }
 });
 const revisionSchema = z.object({ expectedRevision: z.number().int().min(1) });
@@ -84,11 +135,21 @@ interface AiImageRouteSettings {
   estimatedCostCents: number;
 }
 
+interface AiImageTranslationRouteSettings {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  dailyLimit: number;
+  estimatedCostCents: number;
+}
+
 interface AiImageRouteOptions {
   repository?: AiImageJobRepository;
   enqueue?: (jobId: string) => Promise<void>;
+  enqueueTranslation?: (jobId: string) => Promise<void>;
   authenticate?: (request: FastifyRequest, reply: any) => Promise<unknown>;
   getSettings?: () => Promise<AiImageRouteSettings>;
+  getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
   resolvePrompt?: (input: {
     templateKey: string;
     userPrompt: string;
@@ -101,6 +162,7 @@ interface AiImageRouteOptions {
     resolvedPrompt: string;
     resolvedNegativePrompt: string;
   }>;
+  resolveTranslationPrompt?: typeof resolveActiveAiTemplate;
   mediaWorkflowService?: AiMediaWorkflowService;
   mediaContextService?: AiMediaContextService;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
@@ -124,8 +186,14 @@ function sendError(reply: any, error: unknown) {
       : error.code === 'IDEMPOTENCY_KEY_CONFLICT'
         || error.code === 'WORKFLOW_CONFLICT'
         || error.code === 'RECOVERY_REQUIRED'
+        || error.code === 'PROVIDER_CONFIG_CHANGED'
         ? 409
-        : 400;
+        : error.code === 'IMAGE_TRANSLATION_QUOTA_EXCEEDED'
+          ? 429
+        : error.code === 'AI_MEDIA_OPERATION_DISABLED'
+          || error.code === 'PROVIDER_NOT_READY'
+          ? 503
+          : 400;
     return reply.status(status).send({ code: error.code, msg: error.message });
   }
   if (error instanceof AiMediaContextError) {
@@ -147,6 +215,7 @@ function sendError(reply: any, error: unknown) {
         : error.code === 'QUOTA_EXCEEDED'
           ? 429
           : error.code === 'PROVIDER_DISABLED'
+            || error.code === 'PROVIDER_NOT_READY'
             ? 503
             : 400;
     return reply.status(status).send({ code: error.code, msg: error.message });
@@ -158,6 +227,24 @@ function sendError(reply: any, error: unknown) {
     });
   }
   throw error;
+}
+
+function canonicalTranslationTerminologies(terms: Array<{ src: string; tgt: string }>) {
+  const bySource = new Map<string, { src: string; tgt: string }>();
+  for (const term of terms) {
+    const key = term.src.toLocaleLowerCase();
+    if (!bySource.has(key)) bySource.set(key, { src: term.src.trim(), tgt: term.tgt.trim() });
+  }
+  return [...bySource.values()];
+}
+
+function compileTranslationProviderPolicy(resolvedPrompt: string, resolvedNegativePrompt: string) {
+  return [
+    resolvedPrompt.trim(),
+    resolvedNegativePrompt.trim()
+      ? `Frozen terminology and platform constraints:\n${resolvedNegativePrompt.trim()}`
+      : '',
+  ].filter(Boolean).join('\n\n');
 }
 
 function publicWorkflow(workflow: any) {
@@ -203,14 +290,25 @@ function publicJob(job: Record<string, unknown>) {
     resolvedPrompt: _resolvedPrompt,
     resolvedNegativePrompt: _resolvedNegativePrompt,
     templateSnapshot: _templateSnapshot,
+    operationConfig,
     requestFingerprint: _requestFingerprint,
     workflow: _workflow,
     costReservation,
     assets,
     ...visible
   } = job;
+  const translationConfig = operationConfig && typeof operationConfig === 'object'
+    ? operationConfig as Record<string, unknown>
+    : null;
   return {
     ...visible,
+    ...(visible.operation === 'IMAGE_TRANSLATE' && translationConfig ? {
+      translation: {
+        sourceLanguage: String(translationConfig.sourceLanguage || ''),
+        targetLanguage: String(translationConfig.targetLanguage || ''),
+        policyVersion: String(translationConfig.policyVersion || ''),
+      },
+    } : {}),
     costStatus: typeof (costReservation as { status?: unknown } | null)?.status === 'string'
       ? (costReservation as { status: string }).status
       : null,
@@ -248,11 +346,23 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
     estimatedCostCents: 0,
   }));
+  const getTranslationSettings = options.getTranslationSettings || (async () => ({
+    enabled: await getConfig('feature_image_translate'),
+    provider: await getConfig('ai_image_translation_provider'),
+    model: await getConfig('ai_image_translation_model'),
+    dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
+    estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
+  }));
   const enqueue = options.enqueue || (async (jobId: string) => {
     const worker = await import('../workers/ai-image-generation.js');
     await worker.enqueueAiImageJob(jobId);
   });
+  const enqueueTranslation = options.enqueueTranslation || (async (jobId: string) => {
+    const worker = await import('../workers/ai-image-translation.js');
+    await worker.enqueueAiImageTranslationJob(jobId);
+  });
   const resolvePrompt = options.resolvePrompt || resolveActiveAiPrompt;
+  const resolveTranslationPrompt = options.resolveTranslationPrompt || resolveActiveAiTemplate;
   const getMediaWorkflowEnabled = options.getMediaWorkflowEnabled
     || (async (ownerUserId: string) => (await getAiMediaRolloutDecision(ownerUserId)).enabled);
   const applyAssets = options.applyAssets
@@ -392,21 +502,106 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
     }
     try {
-      const created = await mediaWorkflowService.createImageToImage({
-        ...ids,
-        sourceAssetId: parsed.data.sourceAssetId,
-        references: parsed.data.references,
-        prompt: parsed.data.prompt,
-        negativePrompt: parsed.data.negativePrompt || null,
-        count: parsed.data.count,
-        width: parsed.data.width,
-        height: parsed.data.height,
-        idempotencyKey: parsed.data.idempotencyKey,
-        context: parsed.data.context,
-      });
+      let created: any;
+      let enqueueOperation: (jobId: string) => Promise<void> = enqueue;
+      if (parsed.data.operation === 'IMAGE_TRANSLATE') {
+        const translationSettings = await getTranslationSettings();
+        if (!translationSettings.enabled || translationSettings.provider === 'disabled') {
+          return reply.status(503).send({
+            code: 'AI_MEDIA_OPERATION_DISABLED',
+            msg: 'AI image translation is disabled',
+          });
+        }
+        if (!['fake', 'dashscope-qwen-mt-image'].includes(translationSettings.provider)) {
+          return reply.status(503).send({
+            code: 'PROVIDER_NOT_READY',
+            msg: 'AI image translation provider adapter is not enabled yet',
+          });
+        }
+        if (translationSettings.provider === 'fake' && process.env.NODE_ENV === 'production') {
+          return reply.status(503).send({
+            code: 'PROVIDER_NOT_READY',
+            msg: 'The fake image translation provider is test-only',
+          });
+        }
+        const capability = resolveAiImageProviderCapability(
+          translationSettings.provider,
+          translationSettings.model,
+        );
+        if (translationSettings.provider !== 'fake' && capability?.evidenceLevel !== 'sandbox-verified') {
+          return reply.status(503).send({
+            code: 'PROVIDER_NOT_READY',
+            msg: 'AI image translation provider has not passed its sandbox capability gate',
+          });
+        }
+        if (translationSettings.provider !== 'fake' && translationSettings.estimatedCostCents <= 0) {
+          return reply.status(503).send({
+            code: 'PROVIDER_NOT_READY',
+            msg: 'A verified positive image translation cost is required before paid dispatch',
+          });
+        }
+        const createTranslation = (mediaWorkflowService as AiMediaWorkflowService & {
+          createImageTranslation?: (input: Record<string, unknown>) => Promise<unknown>;
+        }).createImageTranslation;
+        if (!createTranslation) {
+          throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'AI image translation workflow is not installed');
+        }
+        const sourceLanguage = parsed.data.sourceLanguage.toLowerCase();
+        const targetLanguage = parsed.data.targetLanguage.toLowerCase();
+        const terminologies = canonicalTranslationTerminologies(parsed.data.terminologies);
+        const resolved = await resolveTranslationPrompt({
+          templateKey: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+          variables: {
+            sourceLanguage,
+            targetLanguage,
+            userInstructions: parsed.data.domainHint,
+            terminologyJson: JSON.stringify({ terms: terminologies }),
+            platformConstraints: '',
+          },
+        });
+        const providerPolicy = compileTranslationProviderPolicy(
+          resolved.resolvedPrompt,
+          resolved.resolvedNegativePrompt,
+        );
+        created = await createTranslation.call(mediaWorkflowService, {
+          ...ids,
+          sourceAssetId: parsed.data.sourceAssetId,
+          sourceLanguage,
+          targetLanguage,
+          domainHint: providerPolicy,
+          terminologies,
+          prompt: parsed.data.domainHint,
+          resolvedPrompt: resolved.resolvedPrompt,
+          resolvedNegativePrompt: resolved.resolvedNegativePrompt,
+          templateKey: resolved.templateKey,
+          templateReleaseId: resolved.release.id,
+          templateChecksum: resolved.checksum,
+          templateSnapshot: resolved.snapshot,
+          provider: translationSettings.provider,
+          model: translationSettings.model,
+          dailyLimit: translationSettings.dailyLimit,
+          estimatedCostCents: translationSettings.estimatedCostCents,
+          idempotencyKey: parsed.data.idempotencyKey,
+          context: parsed.data.context,
+        });
+        enqueueOperation = enqueueTranslation;
+      } else {
+        created = await mediaWorkflowService.createImageToImage({
+          ...ids,
+          sourceAssetId: parsed.data.sourceAssetId,
+          references: parsed.data.references,
+          prompt: parsed.data.prompt,
+          negativePrompt: parsed.data.negativePrompt || null,
+          count: parsed.data.count,
+          width: parsed.data.width,
+          height: parsed.data.height,
+          idempotencyKey: parsed.data.idempotencyKey,
+          context: parsed.data.context,
+        });
+      }
       if (!created.replayed) {
         try {
-          await enqueue(created.jobId);
+          await enqueueOperation(created.jobId);
         } catch {
           const failed = repository.markEnqueueFailed
             ? await repository.markEnqueueFailed(created.jobId, {
@@ -472,12 +667,73 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!await getMediaWorkflowEnabled(ids.ownerUserId)) {
         return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
       }
+      const existingWorkflow = await mediaWorkflowService.get(
+        (request.params as any).id,
+        ids.ownerUserId,
+      );
+      let retryEnqueue: (jobId: string) => Promise<void> = enqueue;
+      let translationRetryDailyLimit: number | undefined;
+      if ((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE') {
+        const translationSettings = await getTranslationSettings();
+        translationRetryDailyLimit = translationSettings.dailyLimit;
+        if (!translationSettings.enabled || translationSettings.provider === 'disabled') {
+          return reply.status(503).send({
+            code: 'AI_MEDIA_OPERATION_DISABLED',
+            msg: 'AI image translation is disabled',
+          });
+        }
+        const latestJob = Array.isArray(existingWorkflow.jobs)
+          ? existingWorkflow.jobs.at(-1) as { provider?: unknown; model?: unknown; estimatedCostCents?: unknown } | undefined
+          : undefined;
+        const frozenProvider = String(latestJob?.provider || '');
+        const frozenModel = String(latestJob?.model || '');
+        if (
+          !frozenProvider
+          || !frozenModel
+          || frozenProvider !== translationSettings.provider
+          || frozenModel !== translationSettings.model
+        ) {
+          return reply.status(409).send({
+            code: 'PROVIDER_CONFIG_CHANGED',
+            msg: 'AI image translation provider configuration changed; create a new workflow',
+          });
+        }
+        const capability = resolveAiImageProviderCapability(frozenProvider, frozenModel);
+        if (frozenProvider !== 'fake' && capability?.evidenceLevel !== 'sandbox-verified') {
+          return reply.status(503).send({
+            code: 'PROVIDER_NOT_READY',
+            msg: 'AI image translation provider has not passed its sandbox capability gate',
+          });
+        }
+        if (frozenProvider === 'fake' && process.env.NODE_ENV === 'production') {
+          return reply.status(503).send({
+            code: 'PROVIDER_NOT_READY',
+            msg: 'The fake image translation provider is test-only',
+          });
+        }
+        const frozenCostCents = Number(latestJob?.estimatedCostCents || 0);
+        if (frozenProvider !== 'fake' && (
+          translationSettings.estimatedCostCents <= 0
+          || frozenCostCents !== translationSettings.estimatedCostCents
+        )) {
+          return reply.status(409).send({
+            code: 'PROVIDER_CONFIG_CHANGED',
+            msg: 'AI image translation cost configuration changed; create a new workflow',
+          });
+        }
+        retryEnqueue = enqueueTranslation;
+      }
       const result = await mediaWorkflowService.retry({
-        id: (request.params as any).id, ...ids, ...parsed.data,
+        id: (request.params as any).id,
+        ...ids,
+        ...parsed.data,
+        ...((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE'
+          ? { dailyLimit: translationRetryDailyLimit }
+          : {}),
       });
       if (!result.replayed) {
         try {
-          await enqueue(result.jobId);
+          await retryEnqueue(result.jobId);
         } catch {
           const failed = repository.markEnqueueFailed
             ? await repository.markEnqueueFailed(result.jobId, {

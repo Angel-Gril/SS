@@ -6,6 +6,7 @@ import {
 } from '../services/ai-prompt-templates.js';
 import {
   AiPromptTemplateRegistryService,
+  AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
   LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
   LISTING_COPY_TITLE_TEMPLATE_KEY,
 } from '../services/ai-prompt-template-registry.js';
@@ -146,6 +147,7 @@ describe('AI prompt template registry', () => {
 
     expect(listed.items.map((item) => item.key)).toEqual([
       KEY,
+      AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
       LISTING_COPY_TITLE_TEMPLATE_KEY,
       LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
       AI_MEDIA_CURATION_TEMPLATE_KEY,
@@ -194,6 +196,30 @@ describe('AI prompt template registry', () => {
     });
     expect(resolved.snapshot.consumer).toEqual(curation.consumer);
     expect(resolved.outputMode).toBe('media_planning_json');
+  });
+
+  it('freezes translation language, domain, and terminology variables in the active template', async () => {
+    const target = registry();
+    const resolved = await target.resolveTemplate({
+      templateKey: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+      variables: {
+        sourceLanguage: 'zh',
+        targetLanguage: 'ru',
+        userInstructions: 'Keep model codes unchanged',
+        terminologyJson: JSON.stringify({ terms: [{ src: 'piano black', tgt: 'glossy black' }] }),
+        platformConstraints: 'Do not invent claims',
+      },
+    });
+    expect(resolved.snapshot).toMatchObject({
+      templateKey: AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+      sequence: 1,
+      variableKeys: expect.objectContaining({
+        prompt: expect.arrayContaining(['sourceLanguage', 'targetLanguage']),
+        negativePrompt: expect.arrayContaining(['terminologyJson']),
+      }),
+    });
+    expect(resolved.resolvedPrompt).toContain('Keep model codes unchanged');
+    expect(resolved.resolvedNegativePrompt).toContain('piano black');
   });
 
   it('rechecks a structured consumer before test, publish, rollback, and resolve activation', async () => {
@@ -432,7 +458,7 @@ describe('AI prompt template registry', () => {
 
     await Promise.all([first.listTemplates(), second.listTemplates()]);
     const listed = await first.listTemplates();
-    expect(listed.items).toHaveLength(6);
+    expect(listed.items).toHaveLength(7);
     for (const template of listed.items) {
       expect(template.currentSequence).toBe(1);
       expect(template.revisions).toHaveLength(1);

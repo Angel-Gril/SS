@@ -6,6 +6,59 @@ import {
 } from '../services/ai-media-workflows.js';
 
 describe('Prisma AI media workflow repository recovery fence', () => {
+  it('creates an IMAGE_TRANSLATE child with frozen operation config and cost reservation', async () => {
+    const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'translation-job-1', ...data }));
+    const costCreate = vi.fn(async ({ data }: any) => ({ id: 'cost-1', ...data }));
+    const tx = {
+      mediaAsset: { findMany: vi.fn(async () => [{
+        id: 'asset-1', sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+        url: 'https://cdn.example/source.png', mimeType: 'image/png', width: 1200, height: 800,
+      }]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: {
+        findUnique: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValueOnce({
+          id: 'translation-workflow-1', operation: 'IMAGE_TRANSLATE', inputs: [], jobs: [], events: [],
+        }),
+        create: vi.fn(async ({ data }: any) => ({ id: 'translation-workflow-1', ...data })),
+      },
+      aiMediaWorkflowInput: { create: vi.fn(async ({ data }: any) => data) },
+      aiImageJob: {
+        aggregate: vi.fn(async () => ({ _sum: { requestedImageCount: 0, billedUnits: 0 } })),
+        create: jobCreate,
+      },
+      aiCostReservation: { findUnique: vi.fn(async () => null), create: costCreate },
+      aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+    const result = await repository.createImageTranslation({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', sourceAssetId: 'asset-1',
+      sourceLanguage: 'zh', targetLanguage: 'ru', domainHint: 'safe', terminologies: [],
+      imageSegment: false, provider: 'fake', model: 'fake-image-translation-v1',
+      dailyLimit: 20, estimatedCostCents: 7, idempotencyKey: 'translation-idem-1',
+      context: { type: 'collect', id: 'goods-1' },
+      options: {
+        sourceLanguage: 'zh', targetLanguage: 'ru', domainHint: 'Frozen safe policy',
+        terminologies: [], imageSegment: false, policyVersion: 'ai-image-translation-policy/1.0',
+      },
+    });
+    expect(result).toMatchObject({ kind: 'created', jobId: 'translation-job-1' });
+    expect(jobCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      operation: 'IMAGE_TRANSLATE', provider: 'fake', model: 'fake-image-translation-v1',
+      requestedImageCount: 1, width: 1200, height: 800, estimatedCostCents: 7,
+      operationConfig: expect.objectContaining({
+        sourceLanguage: 'zh', targetLanguage: 'ru', imageSegment: false,
+        policyVersion: 'ai-image-translation-policy/1.0',
+      }),
+    }) });
+    expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      operation: 'IMAGE_TRANSLATE', estimatedCostMinor: 7, maximumCostMinor: 7,
+    }) });
+  });
+
   it('freezes ordered multi-reference inputs and child-job compatibility JSON', async () => {
     const assets = [
       { id: 'asset-2', sha256: 'b'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1', url: 'https://cdn/2.png', mimeType: 'image/png', width: 900, height: 900 },
@@ -320,6 +373,56 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(jobCreate.mock.invocationCallOrder[0]).toBeLessThan(costReservationCreate.mock.invocationCallOrder[0]!);
     expect(costReservationCreate.mock.invocationCallOrder[0]).toBeLessThan(workflowUpdate.mock.invocationCallOrder[0]!);
     expect(costReservationCreate.mock.invocationCallOrder[0]).toBeLessThan(eventCreate.mock.invocationCallOrder[0]!);
+  });
+
+  it('preserves translation cost and enforces the daily quota on retry', async () => {
+    const fingerprint = 'e'.repeat(64);
+    const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'translation-job-2', ...data }));
+    const costCreate = vi.fn(async ({ data }: any) => ({ id: 'translation-cost-2', ...data }));
+    const aggregate = vi.fn()
+      .mockResolvedValueOnce({ _sum: { requestedImageCount: 1 } })
+      .mockResolvedValueOnce({ _sum: { billedUnits: 2 } });
+    const tx = {
+      aiMediaWorkflowEvent: { findUnique: vi.fn(async () => null), create: vi.fn(async () => ({})) },
+      aiMediaWorkflow: {
+        findFirst: vi.fn(async () => ({
+          id: 'translation-workflow-1', ownerUserId: 'owner-1', status: 'FAILED', revision: 2,
+          currentAttempt: 1, requestFingerprint: fingerprint,
+        })),
+        update: vi.fn(async () => ({})),
+        findUnique: vi.fn(async () => ({
+          id: 'translation-workflow-1', ownerUserId: 'owner-1', status: 'QUEUED', currentAttempt: 2,
+          inputs: [], jobs: [{ id: 'translation-job-2', workflowAttempt: 2 }], events: [],
+        })),
+      },
+      aiImageJob: {
+        findFirst: vi.fn(async () => ({
+          id: 'translation-job-1', ownerUserId: 'owner-1', providerJobId: null,
+          operation: 'IMAGE_TRANSLATE', provider: 'fake', model: 'fake-image-translation-v1',
+          prompt: 'Translate', negativePrompt: null, requestFingerprint: fingerprint,
+          inputAssets: [], operationConfig: { policyVersion: 'ai-image-translation-policy/1.0' },
+          requestedImageCount: 1, width: 1024, height: 1024, estimatedCostCents: 7,
+        })),
+        aggregate,
+        create: jobCreate,
+      },
+      aiCostReservation: { findUnique: vi.fn(async () => null), create: costCreate },
+    };
+    const result = await new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never).retryOwned({
+      id: 'translation-workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 2, idempotencyKey: 'translation-retry-1', dailyLimit: 10,
+    });
+    expect(result).toMatchObject({ jobId: 'translation-job-2', replayed: false });
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    expect(jobCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      operation: 'IMAGE_TRANSLATE', estimatedCostCents: 7,
+      operationConfig: { policyVersion: 'ai-image-translation-policy/1.0' },
+    }) });
+    expect(costCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      estimatedCostMinor: 7, maximumCostMinor: 7,
+    }) });
   });
 
   it('replays the exact retry attempt recorded by the idempotency event', async () => {
