@@ -26,6 +26,11 @@ import {
   type AiImageSuiteMaterializationService,
 } from '../services/ai-image-suite-materialization.js';
 import {
+  AiImageSuiteExecutionError,
+  type AiImageSuiteExecutionService,
+  type AiImageSuiteExecutionSummary,
+} from '../services/ai-image-suite-execution.js';
+import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
   resolveAiImageProviderCapability,
@@ -61,6 +66,21 @@ const materializeChildrenSchema = z.object({
   operationKey: z.string().trim().min(8).max(128),
 }).strict();
 
+const dispatchSchema = z.object({
+  expectedRevision: z.literal(4),
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
+const cancelSchema = z.object({
+  expectedRevision: z.number().int().min(4),
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
+const retrySlotSchema = z.object({
+  expectedSlotRevision: z.number().int().min(2),
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
 const publicDiagnosticCode = /^[A-Z][A-Z0-9_]{0,99}$/u;
 const maxPublicDiagnostics = 20;
 
@@ -69,6 +89,11 @@ export interface AiImageSuiteRouteOptions {
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'>;
   promptService?: Pick<AiImageSuitePromptService, 'freeze'>;
   materializationService?: Pick<AiImageSuiteMaterializationService, 'materialize'>;
+  executionService?: Pick<
+    AiImageSuiteExecutionService,
+    'dispatch' | 'cancel' | 'retryFailedSlot'
+  >;
+  enqueueSuiteFrontier?: (suiteId: string) => Promise<void>;
   authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   getSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
@@ -146,17 +171,42 @@ function publicPreview(preview: AiImageSuitePreview) {
   };
 }
 
-function publicSuite(suite: AiImageSuiteRecord) {
+function publicSuite(
+  suite: AiImageSuiteRecord,
+  options: { includePreviewHash?: boolean } = {},
+) {
+  const counts = {
+    planned: 0,
+    queued: 0,
+    running: 0,
+    succeeded: 0,
+    failed: 0,
+    cancelRequested: 0,
+    cancelled: 0,
+  };
+  for (const rawSlot of suite.slots) {
+    if (rawSlot.status === 'PLANNED') counts.planned += 1;
+    else if (rawSlot.status === 'QUEUED') counts.queued += 1;
+    else if (rawSlot.status === 'RUNNING') counts.running += 1;
+    else if (rawSlot.status === 'SUCCEEDED') counts.succeeded += 1;
+    else if (rawSlot.status === 'FAILED') counts.failed += 1;
+    else if (rawSlot.status === 'CANCEL_REQUESTED') counts.cancelRequested += 1;
+    else if (rawSlot.status === 'CANCELLED') counts.cancelled += 1;
+  }
   return {
     id: suite.id,
     planId: suite.planId,
     planVersionId: suite.planVersionId,
     status: suite.status,
     revision: suite.revision,
-    previewHash: suite.previewHash,
+    ...(options.includePreviewHash === false ? {} : { previewHash: suite.previewHash }),
     itemCount: suite.itemCount,
     estimatedCostCents: suite.estimatedCostCents,
     maximumCostCents: suite.maximumCostCents,
+    concurrencyLimit: suite.concurrencyLimit ?? null,
+    cancelRequestedAt: suite.cancelRequestedAt || null,
+    completedAt: suite.completedAt || null,
+    counts,
     createdAt: suite.createdAt,
     updatedAt: suite.updatedAt,
     slots: suite.slots.map((rawSlot) => {
@@ -192,6 +242,7 @@ function publicSuite(suite: AiImageSuiteRecord) {
           : null,
         status: typeof slot.status === 'string' ? slot.status : null,
         attempt: typeof slot.attempt === 'number' ? slot.attempt : null,
+        revision: typeof slot.revision === 'number' ? slot.revision : null,
         childWorkflowId: typeof slot.childWorkflowId === 'string' ? slot.childWorkflowId : null,
         referenceCandidateIds: [...new Set(references)],
         diagnostics,
@@ -207,11 +258,43 @@ function publicSuite(suite: AiImageSuiteRecord) {
   };
 }
 
+function publicExecutionSummary(summary: AiImageSuiteExecutionSummary) {
+  return {
+    suiteId: summary.suiteId,
+    revision: summary.revision,
+    status: summary.status,
+    itemCount: summary.itemCount,
+    concurrencyLimit: summary.concurrencyLimit,
+    counts: {
+      planned: summary.counts.planned,
+      queued: summary.counts.queued,
+      running: summary.counts.running,
+      succeeded: summary.counts.succeeded,
+      failed: summary.counts.failed,
+      cancelRequested: summary.counts.cancelRequested,
+      cancelled: summary.counts.cancelled,
+    },
+    slots: summary.slots.map((slot) => ({
+      slotId: slot.slotId,
+      ordinal: slot.ordinal,
+      slotKey: slot.slotKey,
+      status: slot.status,
+      attempt: slot.attempt,
+      revision: slot.revision,
+      childWorkflowId: slot.childWorkflowId,
+      errorCode: slot.error && publicDiagnosticCode.test(slot.error.code)
+        ? slot.error.code
+        : null,
+    })),
+  };
+}
+
 function sendError(reply: FastifyReply, error: unknown) {
   if (error instanceof AiImageSuiteError
     || error instanceof AiImageSuiteReferenceError
     || error instanceof AiImageSuitePromptError
-    || error instanceof AiImageSuiteMaterializationError) {
+    || error instanceof AiImageSuiteMaterializationError
+    || error instanceof AiImageSuiteExecutionError) {
     return reply.status(error.statusCode).send({ code: error.code, msg: error.message });
   }
   throw error;
@@ -461,6 +544,151 @@ export async function aiImageSuiteRoutes(
     }
   });
 
+  app.post('/suites/:id/dispatch', async (request, reply) => {
+    const suiteId = String((request.params as { id?: unknown }).id || '').trim();
+    if (!suiteId || suiteId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite id is invalid' });
+    }
+    const parsed = dispatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    if (!options.executionService) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_EXECUTION_SERVICE_NOT_READY',
+        msg: 'AI image suite execution is not available',
+      });
+    }
+    if (!options.enqueueSuiteFrontier) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_QUEUE_NOT_READY',
+        msg: 'AI image suite generation queue is not available',
+      });
+    }
+    try {
+      const result = await options.executionService.dispatch({
+        suiteId,
+        ...ids,
+        ...parsed.data,
+      });
+      let enqueuePending = false;
+      try {
+        await options.enqueueSuiteFrontier(suiteId);
+      } catch {
+        enqueuePending = true;
+        request.log.error({ suiteId }, 'AI image suite frontier enqueue deferred to recovery');
+      }
+      return reply.status(result.replayed && !enqueuePending ? 200 : 202).send({
+        code: 1,
+        data: publicExecutionSummary(result),
+        replayed: result.replayed,
+        enqueuePending,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/cancel', async (request, reply) => {
+    const suiteId = String((request.params as { id?: unknown }).id || '').trim();
+    if (!suiteId || suiteId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite id is invalid' });
+    }
+    const parsed = cancelSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    if (!options.executionService) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_EXECUTION_SERVICE_NOT_READY',
+        msg: 'AI image suite execution is not available',
+      });
+    }
+    if (!options.enqueueSuiteFrontier) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_QUEUE_NOT_READY',
+        msg: 'AI image suite generation queue is not available',
+      });
+    }
+    try {
+      const result = await options.executionService.cancel({
+        suiteId,
+        ...ids,
+        ...parsed.data,
+      });
+      let enqueuePending = false;
+      try {
+        await options.enqueueSuiteFrontier(suiteId);
+      } catch {
+        enqueuePending = true;
+        request.log.error({ suiteId }, 'AI image suite cancellation enqueue deferred to recovery');
+      }
+      return reply.status(result.replayed && !enqueuePending ? 200 : 202).send({
+        code: 1,
+        data: publicExecutionSummary(result),
+        replayed: result.replayed,
+        enqueuePending,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/slots/:slotId/retry', async (request, reply) => {
+    const params = request.params as { id?: unknown; slotId?: unknown };
+    const suiteId = String(params.id || '').trim();
+    const slotId = String(params.slotId || '').trim();
+    if (!suiteId || suiteId.length > 200 || !slotId || slotId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite or slot id is invalid' });
+    }
+    const parsed = retrySlotSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    if (!options.executionService) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_EXECUTION_SERVICE_NOT_READY',
+        msg: 'AI image suite execution is not available',
+      });
+    }
+    if (!options.enqueueSuiteFrontier) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_QUEUE_NOT_READY',
+        msg: 'AI image suite generation queue is not available',
+      });
+    }
+    try {
+      const result = await options.executionService.retryFailedSlot({
+        suiteId,
+        slotId,
+        ...ids,
+        ...parsed.data,
+      });
+      let enqueuePending = false;
+      try {
+        await options.enqueueSuiteFrontier(suiteId);
+      } catch {
+        enqueuePending = true;
+        request.log.error({ suiteId }, 'AI image suite frontier enqueue deferred to recovery');
+      }
+      return reply.status(result.replayed && !enqueuePending ? 200 : 202).send({
+        code: 1,
+        data: publicExecutionSummary(result),
+        replayed: result.replayed,
+        enqueuePending,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
   app.get('/suites/:id', async (request, reply) => {
     const id = String((request.params as { id?: unknown }).id || '').trim();
     if (!id || id.length > 200) {
@@ -468,7 +696,7 @@ export async function aiImageSuiteRoutes(
     }
     try {
       const suite = await service.get(id, actor(request).ownerUserId);
-      return { code: 1, data: publicSuite(suite) };
+      return { code: 1, data: publicSuite(suite, { includePreviewHash: false }) };
     } catch (error) {
       return sendError(reply, error);
     }

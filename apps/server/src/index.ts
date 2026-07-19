@@ -73,6 +73,10 @@ import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
 import { PrismaAiImageSuiteReferenceRepository } from './repositories/ai-image-suite-reference-repository.js';
 import { PrismaAiImageSuitePromptRepository } from './repositories/ai-image-suite-prompt-repository.js';
 import { PrismaAiImageSuiteMaterializationRepository } from './repositories/ai-image-suite-materialization-repository.js';
+import {
+  PrismaAiImageSuiteExecutionRepository,
+  PrismaAiImageSuiteGenerationCoordinator,
+} from './repositories/ai-image-suite-execution-repository.js';
 import { adminAiPromptTemplateRoutes } from './routes/admin-ai-prompt-templates.js';
 import { adminAiCostReconciliationRoutes } from './routes/admin-ai-cost-reconciliations.js';
 import { adminOzonPublisherParityRoutes } from './routes/admin-ozon-publisher-parity.js';
@@ -112,6 +116,11 @@ import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
 import { createAiImageSuiteReferenceService } from './services/ai-image-suite-references.js';
 import { createAiImageSuitePromptService } from './services/ai-image-suite-prompts.js';
 import { createAiImageSuiteMaterializationService } from './services/ai-image-suite-materialization.js';
+import { createAiImageSuiteExecutionService } from './services/ai-image-suite-execution.js';
+import {
+  aiImageSuiteGenerationQueue,
+  enqueueAiImageSuiteGenerationRecoveryJob,
+} from './workers/ai-image-suite-generation.js';
 import {
   createPrismaOzonAttributeDefinitionCacheStore,
   getCachedOzonAttributeDefinitions,
@@ -1032,6 +1041,29 @@ await app.register(aiImageRoutes, {
   prefix: '/api/ai-images',
   resolvePrompt: resolveActiveAiPrompt,
 });
+const aiImageSuiteRuntimeReady = async (suite: {
+  provider: string;
+  model: string;
+  estimatedCostCents: number;
+  maximumCostCents: number;
+}) => Boolean(
+  aiImageSuiteGenerationQueue
+  && process.env.NODE_ENV !== 'production'
+  && suite.provider === 'fake'
+  && suite.model === 'fake-image-suite-v1'
+  && Number(suite.estimatedCostCents) === 0
+  && Number(suite.maximumCostCents) === 0
+);
+const aiImageSuiteExecutionRepository = new PrismaAiImageSuiteExecutionRepository(prisma, {
+  runtimeReady: aiImageSuiteRuntimeReady,
+});
+const aiImageSuiteGenerationCoordinator = new PrismaAiImageSuiteGenerationCoordinator(prisma, {
+  runtimeReady: aiImageSuiteRuntimeReady,
+});
+const enqueueAiImageSuiteFrontier = async (suiteId: string) => {
+  const tasks = await aiImageSuiteExecutionRepository.listQueueableTasks(suiteId);
+  await Promise.all(tasks.map((task) => enqueueAiImageSuiteGenerationRecoveryJob(task)));
+};
 await app.register(aiImageSuiteRoutes, {
   prefix: '/api/ai-images',
   referenceService: createAiImageSuiteReferenceService({
@@ -1055,6 +1087,8 @@ await app.register(aiImageSuiteRoutes, {
   materializationService: createAiImageSuiteMaterializationService(
     new PrismaAiImageSuiteMaterializationRepository(prisma),
   ),
+  executionService: createAiImageSuiteExecutionService(aiImageSuiteExecutionRepository),
+  enqueueSuiteFrontier: enqueueAiImageSuiteFrontier,
 });
 await app.register(aiMediaPlanningRoutes, {
   prefix: '/api/ai-images',
@@ -1176,6 +1210,7 @@ if (RUN_WORKERS) {
       { startBrowserOneClickListingWorker },
       { startAiImageGenerationWorker },
       { startAiImageTranslationWorker },
+      { startAiImageSuiteGenerationWorker },
     ] = await Promise.all([
       import('./workers/product-sync.js'),
       import('./workers/order-sync.js'),
@@ -1186,6 +1221,7 @@ if (RUN_WORKERS) {
       import('./workers/browser-one-click-listing.js'),
       import('./workers/ai-image-generation.js'),
       import('./workers/ai-image-translation.js'),
+      import('./workers/ai-image-suite-generation.js'),
     ]);
 
     startProductSyncWorker();
@@ -1197,6 +1233,7 @@ if (RUN_WORKERS) {
     startBrowserOneClickListingWorker();
     startAiImageGenerationWorker();
     startAiImageTranslationWorker();
+    startAiImageSuiteGenerationWorker(aiImageSuiteGenerationCoordinator);
   } else {
     console.log('[bootstrap] REDIS_DISABLED=1, skipping BullMQ workers');
   }

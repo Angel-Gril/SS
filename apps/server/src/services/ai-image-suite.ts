@@ -149,6 +149,9 @@ export interface AiImageSuiteRecord {
   itemCount: number;
   estimatedCostCents: number;
   maximumCostCents: number;
+  concurrencyLimit?: number;
+  cancelRequestedAt?: Date | null;
+  completedAt?: Date | null;
   slots: Array<Record<string, unknown>>;
   createdAt: Date;
   updatedAt: Date;

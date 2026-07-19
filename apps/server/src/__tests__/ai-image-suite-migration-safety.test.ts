@@ -37,6 +37,10 @@ const materializedSlotProtectionMigration = readFileSync(new URL(
   '../../prisma/migrations/20260720000000_protect_ai_media_suite_materialized_slots/migration.sql',
   import.meta.url,
 ), 'utf8');
+const executionMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260720120000_add_ai_media_suite_execution/migration.sql',
+  import.meta.url,
+), 'utf8');
 const materializationMigrations = [
   materializationMigration,
   materializationHardeningMigration,
@@ -278,5 +282,70 @@ describe('AI image suite migration safety', () => {
     expect(materializedSlotProtectionMigration).toMatch(/ai_media_suite_slots_materialized_lifecycle_protected/u);
     expect(materializedSlotProtectionMigration).toMatch(/suite\."revision" >= 4/u);
     expect(materializedSlotProtectionMigration).toMatch(/assert_ai_media_suite_materialized_graph/u);
+  });
+
+  it('replaces the revision-4 blockers with an audited execution state machine', () => {
+    expect(executionMigration).toMatch(/DROP TRIGGER "ai_media_suite_materialization_revision_ceiling"/u);
+    expect(executionMigration).toMatch(/revision beyond materialization is not enabled without revision-5 dispatch/u);
+    expect(executionMigration).toMatch(/revision 5 requires SUITE_DISPATCHED/u);
+    expect(executionMigration).toMatch(/ai-image-suite-execution-event\/v1/u);
+    expect(executionMigration).toMatch(/SUITE_CANCEL_REQUESTED/u);
+    expect(executionMigration).toMatch(/SUITE_CANCELLED/u);
+    expect(executionMigration).toMatch(/SUITE_SLOT_RETRY_REQUESTED/u);
+    expect(executionMigration).toMatch(/SUITE_CHILD_SUCCEEDED/u);
+    expect(executionMigration).toMatch(/commandFingerprint/u);
+    expect(executionMigration).toMatch(/beforeRevision/u);
+    expect(executionMigration).toMatch(/afterRevision/u);
+    expect(executionMigration).toMatch(/beforeStatus/u);
+    expect(executionMigration).toMatch(/afterStatus/u);
+    expect(executionMigration).not.toMatch(/ALTER TYPE/u);
+  });
+
+  it('enforces bounded parent aggregation and same-transaction child execution', () => {
+    expect(executionMigration).toMatch(/assert_ai_media_suite_execution_graph/u);
+    expect(executionMigration).toMatch(/active_count > stored_suite\."concurrency_limit"/u);
+    expect(executionMigration).toMatch(/parent status does not match slot aggregate/u);
+    expect(executionMigration).toMatch(/execution revision lacks its aggregate event/u);
+    expect(executionMigration).toMatch(/ai_media_suite_execution_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(executionMigration).toMatch(/ai_media_suite_execution_slot_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(executionMigration).toMatch(/ai_media_suite_execution_workflow_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(executionMigration).toMatch(/ai_media_suite_execution_job_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(executionMigration).toMatch(/ai_media_suite_execution_reservation_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(executionMigration).toMatch(/ai_media_suite_execution_asset_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+  });
+
+  it('permits only a frozen next attempt for a reconciled failed slot', () => {
+    expect(executionMigration).toMatch(/materialized AI media suite child inputs are append-closed/u);
+    expect(executionMigration).toMatch(/NEW\."workflow_attempt" IS DISTINCT FROM maximum_attempt \+ 1/u);
+    expect(executionMigration).toMatch(/stored_slot\."status" IS DISTINCT FROM 'FAILED'/u);
+    expect(executionMigration).toMatch(/previous_reservation\."status" NOT IN \('SETTLED', 'RELEASED'\)/u);
+    expect(executionMigration).toMatch(/attempt_job\."operation"[\s\S]*frozen_job\."operation"/u);
+    expect(executionMigration).toMatch(/old_job\."status" <> 'FAILED'/u);
+    expect(executionMigration).toMatch(/successful AI media suite slot is terminal|terminal AI media suite slot cannot transition/u);
+    expect(executionMigration).toMatch(/AI media suite cost reservation cannot be deleted/u);
+    expect(executionMigration).toMatch(/output does not match a successful current attempt|output requires the dispatch contract and a successful current attempt/u);
+  });
+
+  it('binds replay summaries to the exact ordered execution projection', () => {
+    expect(executionMigration).toMatch(/payload"#>>'\{result,suiteId\}'[\s\S]*stored_suite\."id"/u);
+    expect(executionMigration).toMatch(/payload"#>>'\{result,revision\}'[\s\S]*stored_suite\."revision"/u);
+    expect(executionMigration).toMatch(/payload"#>>'\{result,concurrencyLimit\}'/u);
+    expect(executionMigration).toMatch(/jsonb_array_elements\(NEW\."payload"#>'\{result,slots\}'\) WITH ORDINALITY/u);
+    expect(executionMigration).toMatch(/result_slot\.value->>'slotId'[\s\S]*slot\."id"/u);
+    expect(executionMigration).toMatch(/result_slot\.value->>'childWorkflowId'[\s\S]*slot\."child_workflow_id"/u);
+    expect(executionMigration).toMatch(/execution replay result mismatch/u);
+  });
+
+  it('adds a fail-closed execution claim lease to each suite slot', () => {
+    expect(executionMigration).toMatch(/ADD COLUMN "execution_claim_token" CHAR\(64\)/u);
+    expect(executionMigration).toMatch(/ADD COLUMN "execution_lease_expires_at" TIMESTAMP\(3\)/u);
+    expect(executionMigration).toMatch(/ai_media_suite_slot_execution_claim_check/u);
+    expect(executionMigration).toMatch(/ai_media_suite_slot_execution_lease_idx/u);
+    expect(executionMigration).toMatch(/running AI media suite slot requires a future execution lease/u);
+    expect(executionMigration).toMatch(/claim cannot be renewed or replaced/u);
+    expect(executionMigration).toMatch(/inactive AI media suite slot cannot retain an execution claim/u);
+    expect(schema).toMatch(/executionClaimToken\s+String\?\s+@map\("execution_claim_token"\)\s+@db\.Char\(64\)/u);
+    expect(schema).toMatch(/executionLeaseExpiresAt\s+DateTime\?\s+@map\("execution_lease_expires_at"\)/u);
+    expect(schema).toMatch(/@@index\(\[status, executionLeaseExpiresAt, id\].*ai_media_suite_slot_execution_lease_idx/u);
   });
 });

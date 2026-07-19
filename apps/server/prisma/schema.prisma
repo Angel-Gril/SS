@@ -3238,6 +3238,8 @@ model AiMediaSuiteSlot {
   prompt                AiMediaSuiteSlotPrompt?
   attempt               Int                     @default(0)
   revision              Int                     @default(1)
+  executionClaimToken   String?                 @map("execution_claim_token") @db.Char(64)
+  executionLeaseExpiresAt DateTime?              @map("execution_lease_expires_at")
   estimatedCostCents    Int                     @map("estimated_cost_cents")
   maximumCostCents      Int                     @map("maximum_cost_cents")
   errorCode             String?                 @map("error_code") @db.VarChar(100)
@@ -3250,6 +3252,7 @@ model AiMediaSuiteSlot {
   @@unique([id, suiteId, ownerUserId], map: "ai_media_suite_slot_id_suite_owner_key")
   @@unique([childWorkflowId, ownerUserId], map: "ai_media_suite_slot_child_workflow_owner_key")
   @@index([ownerUserId, status, updatedAt], map: "ai_media_suite_slot_owner_status_idx")
+  @@index([status, executionLeaseExpiresAt, id], map: "ai_media_suite_slot_execution_lease_idx")
   @@map("ai_media_suite_slots")
 }
 

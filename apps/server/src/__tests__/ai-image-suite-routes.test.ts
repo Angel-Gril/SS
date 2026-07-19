@@ -23,6 +23,10 @@ import {
   AiImageSuiteMaterializationError,
   type AiImageSuiteMaterializationService,
 } from '../services/ai-image-suite-materialization.js';
+import {
+  AiImageSuiteExecutionError,
+  type AiImageSuiteExecutionService,
+} from '../services/ai-image-suite-execution.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -192,11 +196,84 @@ function materializationServiceMock() {
   } as unknown as Pick<AiImageSuiteMaterializationService, 'materialize'>;
 }
 
+function executionSummary(replayed = false) {
+  return {
+    suiteId: 'suite-1',
+    revision: 5,
+    status: 'QUEUED' as const,
+    itemCount: 1,
+    concurrencyLimit: 1,
+    counts: {
+      planned: 0,
+      queued: 1,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelRequested: 0,
+      cancelled: 0,
+    },
+    slots: [{
+      slotId: 'suite-slot-1',
+      ordinal: 0,
+      slotKey: 'sku:sku-1:hero',
+      status: 'QUEUED' as const,
+      attempt: 1,
+      revision: 3,
+      childWorkflowId: 'workflow-1',
+      error: {
+        code: 'PROVIDER_FAILED',
+        message: 'https://provider.example/private-output?token=secret',
+      },
+      providerJobId: 'provider-job-secret',
+      outputUrl: 'https://provider.example/private-output?token=secret',
+      promptHash: 'a'.repeat(64),
+    }],
+    replayed,
+  };
+}
+
+function executionServiceMock() {
+  return {
+    dispatch: vi.fn(async () => executionSummary()),
+    cancel: vi.fn(async () => ({
+      ...executionSummary(),
+      revision: 6,
+      status: 'CANCELLED' as const,
+      counts: {
+        planned: 0, queued: 0, running: 0, succeeded: 0,
+        failed: 0, cancelRequested: 0, cancelled: 1,
+      },
+      slots: [{
+        ...executionSummary().slots[0],
+        status: 'CANCELLED' as const,
+        revision: 4,
+      }],
+    })),
+    retryFailedSlot: vi.fn(async () => ({
+      ...executionSummary(),
+      revision: 8,
+      slots: [{
+        ...executionSummary().slots[0],
+        attempt: 2,
+        revision: 6,
+      }],
+    })),
+  } as unknown as Pick<
+    AiImageSuiteExecutionService,
+    'dispatch' | 'cancel' | 'retryFailedSlot'
+  >;
+}
+
 async function build(options: {
   service?: AiImageSuiteService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'> | null;
   promptService?: Pick<AiImageSuitePromptService, 'freeze'> | null;
   materializationService?: Pick<AiImageSuiteMaterializationService, 'materialize'> | null;
+  executionService?: Pick<
+    AiImageSuiteExecutionService,
+    'dispatch' | 'cancel' | 'retryFailedSlot'
+  > | null;
+  enqueueSuiteFrontier?: ((suiteId: string) => Promise<void>) | null;
   suiteEnabled?: boolean;
   workflowEnabled?: boolean;
   webMediaEnabled?: boolean;
@@ -214,11 +291,19 @@ async function build(options: {
   const materializationService = options.materializationService === null
     ? undefined
     : options.materializationService || materializationServiceMock();
+  const executionService = options.executionService === null
+    ? undefined
+    : options.executionService || executionServiceMock();
+  const enqueueSuiteFrontier = options.enqueueSuiteFrontier === null
+    ? undefined
+    : options.enqueueSuiteFrontier || vi.fn(async () => undefined);
   await app.register(aiImageSuiteRoutes, {
     service,
     ...(referenceService ? { referenceService } : {}),
     ...(promptService ? { promptService } : {}),
     ...(materializationService ? { materializationService } : {}),
+    ...(executionService ? { executionService } : {}),
+    ...(enqueueSuiteFrontier ? { enqueueSuiteFrontier } : {}),
     production: options.production ?? false,
     getSuiteEnabled: async () => options.suiteEnabled ?? true,
     getMediaWorkflowEnabled: async () => options.workflowEnabled ?? true,
@@ -232,7 +317,15 @@ async function build(options: {
       };
     },
   });
-  return { app, service, referenceService, promptService, materializationService };
+  return {
+    app,
+    service,
+    referenceService,
+    promptService,
+    materializationService,
+    executionService,
+    enqueueSuiteFrontier,
+  };
 }
 
 describe('AI image suite routes', () => {
@@ -621,12 +714,203 @@ describe('AI image suite routes', () => {
     });
   });
 
+  it('dispatches a materialized suite with server-owned authority and enqueues its frontier', async () => {
+    const { app, executionService, enqueueSuiteFrontier } = await build();
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/dispatch',
+      payload: {
+        expectedRevision: 4,
+        operationKey: 'suite-dispatch-operation-1',
+        ownerUserId: 'attacker',
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(executionService?.dispatch).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/dispatch',
+      payload: { expectedRevision: 4, operationKey: 'suite-dispatch-operation-1' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(executionService?.dispatch).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: 4,
+      operationKey: 'suite-dispatch-operation-1',
+    });
+    expect(enqueueSuiteFrontier).toHaveBeenCalledWith('suite-1');
+    expect(response.json()).toMatchObject({
+      code: 1,
+      replayed: false,
+      enqueuePending: false,
+      data: {
+        suiteId: 'suite-1',
+        revision: 5,
+        status: 'QUEUED',
+        slots: [{
+          slotId: 'suite-slot-1',
+          status: 'QUEUED',
+          errorCode: 'PROVIDER_FAILED',
+        }],
+      },
+    });
+    expect(response.body).not.toContain('provider-job-secret');
+    expect(response.body).not.toContain('private-output');
+    expect(response.body).not.toContain('promptHash');
+    expect(response.body).not.toContain('token=secret');
+  });
+
+  it('re-enqueues exact dispatch replays and reports recoverable post-commit queue failure', async () => {
+    const replayService = executionServiceMock();
+    vi.mocked(replayService.dispatch).mockResolvedValueOnce(executionSummary(true));
+    const replay = await build({ executionService: replayService });
+    const replayResponse = await replay.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/dispatch',
+      payload: { expectedRevision: 4, operationKey: 'suite-dispatch-replay-ok-1' },
+    });
+    expect(replayResponse.statusCode).toBe(200);
+    expect(replayResponse.json()).toMatchObject({ replayed: true, enqueuePending: false });
+    expect(replay.enqueueSuiteFrontier).toHaveBeenCalledWith('suite-1');
+
+    const executionService = executionServiceMock();
+    vi.mocked(executionService.dispatch).mockResolvedValueOnce(executionSummary(true));
+    const enqueueSuiteFrontier = vi.fn(async () => {
+      throw new Error('redis details must not leak');
+    });
+    const { app } = await build({ executionService, enqueueSuiteFrontier });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/dispatch',
+      payload: { expectedRevision: 4, operationKey: 'suite-dispatch-replay-1' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ replayed: true, enqueuePending: true });
+    expect(response.body).not.toContain('redis details');
+    expect(enqueueSuiteFrontier).toHaveBeenCalledWith('suite-1');
+  });
+
+  it('cancels the full suite without filling another frontier slot', async () => {
+    const { app, executionService, enqueueSuiteFrontier } = await build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/cancel',
+      payload: { expectedRevision: 5, operationKey: 'suite-cancel-operation-1' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(executionService?.cancel).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: 5,
+      operationKey: 'suite-cancel-operation-1',
+    });
+    expect(enqueueSuiteFrontier).toHaveBeenCalledWith('suite-1');
+    expect(response.json()).toMatchObject({
+      replayed: false,
+      enqueuePending: false,
+      data: { suiteId: 'suite-1', revision: 6, status: 'CANCELLED' },
+    });
+  });
+
+  it('selectively retries one failed slot and re-enqueues only through the suite frontier', async () => {
+    const { app, executionService, enqueueSuiteFrontier } = await build();
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/retry',
+      payload: {
+        expectedSlotRevision: 3,
+        operationKey: 'suite-slot-retry-operation-1',
+        prompt: 'attacker Prompt',
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(executionService?.retryFailedSlot).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/retry',
+      payload: { expectedSlotRevision: 3, operationKey: 'suite-slot-retry-operation-1' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(executionService?.retryFailedSlot).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      slotId: 'suite-slot-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedSlotRevision: 3,
+      operationKey: 'suite-slot-retry-operation-1',
+    });
+    expect(enqueueSuiteFrontier).toHaveBeenCalledTimes(1);
+    expect(enqueueSuiteFrontier).toHaveBeenCalledWith('suite-1');
+    expect(response.json()).toMatchObject({
+      replayed: false,
+      enqueuePending: false,
+      data: { revision: 8, slots: [{ attempt: 2, revision: 6 }] },
+    });
+  });
+
+  it('maps typed execution failures and fails closed before an unwired execution write', async () => {
+    const executionService = executionServiceMock();
+    vi.mocked(executionService.retryFailedSlot).mockRejectedValueOnce(
+      new AiImageSuiteExecutionError(
+        'AI_MEDIA_SUITE_SLOT_NOT_FAILED',
+        409,
+        'Only failed slots can be retried',
+      ),
+    );
+    const failed = await build({ executionService });
+    const failedResponse = await failed.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/retry',
+      payload: { expectedSlotRevision: 3, operationKey: 'suite-slot-retry-failure-1' },
+    });
+    expect(failedResponse.statusCode).toBe(409);
+    expect(failedResponse.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_SLOT_NOT_FAILED',
+      msg: 'Only failed slots can be retried',
+    });
+
+    const unavailable = await build({ executionService: null });
+    const unavailableResponse = await unavailable.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/cancel',
+      payload: { expectedRevision: 5, operationKey: 'suite-cancel-unwired-1' },
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toMatchObject({
+      code: 'AI_MEDIA_SUITE_EXECUTION_SERVICE_NOT_READY',
+    });
+
+    const queueUnavailable = await build({ enqueueSuiteFrontier: null });
+    const queueUnavailableResponse = await queueUnavailable.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/dispatch',
+      payload: { expectedRevision: 4, operationKey: 'suite-dispatch-unwired-1' },
+    });
+    expect(queueUnavailableResponse.statusCode).toBe(503);
+    expect(queueUnavailable.executionService?.dispatch).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ suiteEnabled: false }, 'AI_MEDIA_SUITE_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: false }, 'AI_MEDIA_WORKFLOW_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: true, webMediaEnabled: false }, 'SOURCE_LISTING_WEB_MEDIA_DISABLED'],
   ] as const)('fails closed before suite writes when a write gate is disabled', async (flags, code) => {
-    const { app, service, referenceService, promptService, materializationService } = await build(flags);
+    const {
+      app,
+      service,
+      referenceService,
+      promptService,
+      materializationService,
+      executionService,
+      enqueueSuiteFrontier,
+    } = await build(flags);
     const previewResponse = await app.inject({
       method: 'POST', url: '/suites/preview', payload: { planId: 'plan-1' },
     });
@@ -653,22 +937,68 @@ describe('AI image suite routes', () => {
       url: '/suites/suite-1/children/materialize',
       payload: { expectedRevision: 3, operationKey: 'children-gated-operation' },
     });
+    const dispatchResponse = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/dispatch',
+      payload: { expectedRevision: 4, operationKey: 'suite-dispatch-gated-operation' },
+    });
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/retry',
+      payload: { expectedSlotRevision: 3, operationKey: 'suite-retry-gated-operation' },
+    });
 
     expect(previewResponse.statusCode).toBe(503);
     expect(claimResponse.statusCode).toBe(503);
     expect(internalizeResponse.statusCode).toBe(503);
     expect(promptResponse.statusCode).toBe(503);
     expect(materializationResponse.statusCode).toBe(503);
+    expect(dispatchResponse.statusCode).toBe(503);
+    expect(retryResponse.statusCode).toBe(503);
     expect(previewResponse.json()).toMatchObject({ code });
     expect(claimResponse.json()).toMatchObject({ code });
     expect(internalizeResponse.json()).toMatchObject({ code });
     expect(promptResponse.json()).toMatchObject({ code });
     expect(materializationResponse.json()).toMatchObject({ code });
+    expect(dispatchResponse.json()).toMatchObject({ code });
+    expect(retryResponse.json()).toMatchObject({ code });
     expect(service.preview).not.toHaveBeenCalled();
     expect(service.claim).not.toHaveBeenCalled();
     expect(referenceService?.internalize).not.toHaveBeenCalled();
     expect(promptService?.freeze).not.toHaveBeenCalled();
     expect(materializationService?.materialize).not.toHaveBeenCalled();
+    expect(executionService?.dispatch).not.toHaveBeenCalled();
+    expect(executionService?.retryFailedSlot).not.toHaveBeenCalled();
+    expect(enqueueSuiteFrontier).not.toHaveBeenCalled();
+  });
+
+  it('keeps owner-scoped cancellation available while all creation flags are dark', async () => {
+    const { app, executionService, enqueueSuiteFrontier } = await build({
+      suiteEnabled: false,
+      workflowEnabled: false,
+      webMediaEnabled: false,
+      production: true,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/cancel',
+      payload: { expectedRevision: 5, operationKey: 'suite-cancel-dark-flags-1' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(executionService?.cancel).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: 5,
+      operationKey: 'suite-cancel-dark-flags-1',
+    });
+    expect(enqueueSuiteFrontier).toHaveBeenCalledWith('suite-1');
+    expect(response.json()).toMatchObject({
+      replayed: false,
+      enqueuePending: false,
+      data: { suiteId: 'suite-1', revision: 6, status: 'CANCELLED' },
+    });
   });
 
   it('keeps fake claim fail-closed in production without blocking provider-free preview', async () => {
@@ -704,6 +1034,11 @@ describe('AI image suite routes', () => {
     expect(response.statusCode).toBe(200);
     expect(service.get).toHaveBeenCalledWith('suite-1', 'owner-1');
     expect(response.json()).toMatchObject({ code: 1, data: { id: 'suite-1' } });
+    expect(response.body).not.toContain('previewHash');
+    expect(response.body).not.toContain('slotHash');
+    expect(response.body).not.toContain('referencesHash');
+    expect(response.body).not.toContain('private-reference');
+    expect(response.body).not.toContain('secret-error');
   });
 
   it('maps an owner-scoped missing suite to 404 without consulting write gates', async () => {

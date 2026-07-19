@@ -11,6 +11,10 @@ import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planni
 import { PrismaAiImageSuiteReferenceRepository } from '../repositories/ai-image-suite-reference-repository.js';
 import { PrismaAiImageSuitePromptRepository } from '../repositories/ai-image-suite-prompt-repository.js';
 import { PrismaAiImageSuiteMaterializationRepository } from '../repositories/ai-image-suite-materialization-repository.js';
+import {
+  PrismaAiImageSuiteExecutionRepository,
+  PrismaAiImageSuiteGenerationCoordinator,
+} from '../repositories/ai-image-suite-execution-repository.js';
 import { PrismaAiImageSuiteRepository } from '../repositories/ai-image-suite-repository.js';
 import {
   AI_IMAGE_SUITE_REFERENCE_SET_VERSION,
@@ -30,6 +34,7 @@ import { AiPromptTemplateRegistryService } from '../services/ai-prompt-template-
 import { PrismaAiPromptTemplateStore } from '../services/ai-prompt-template-prisma.js';
 import { createAiMediaPlanningService, hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 import { createAiImageSuitePreview } from '../services/ai-image-suite.js';
+import { createAiImageSuiteExecutionService } from '../services/ai-image-suite-execution.js';
 import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
@@ -1055,5 +1060,129 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
       sha256: '7'.repeat(64),
     } })).rejects.toThrow(/AI media suite child output requires the dispatch contract/u);
+  });
+
+  it('runs the real dispatch coordinator, aggregates failures, retries one slot and cancels without losing success', async () => {
+    const repository = new PrismaAiImageSuiteExecutionRepository(client, {
+      runtimeReady: async () => true,
+    });
+    const service = createAiImageSuiteExecutionService(repository);
+    const dispatchInput = {
+      suiteId,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: 4,
+      operationKey: `suite-dispatch-${suffix}`,
+    };
+    const [firstDispatch, replayDispatch] = await Promise.all([
+      service.dispatch(dispatchInput),
+      service.dispatch(dispatchInput),
+    ]);
+    expect([firstDispatch.replayed, replayDispatch.replayed].sort()).toEqual([false, true]);
+    expect(firstDispatch.status).toBe('QUEUED');
+    expect(firstDispatch.counts.queued).toBeGreaterThan(0);
+    expect(firstDispatch.counts.queued).toBeLessThanOrEqual(firstDispatch.concurrencyLimit);
+
+    const suiteUploadOptions: Array<Record<string, unknown> | undefined> = [];
+    const coordinator = new PrismaAiImageSuiteGenerationCoordinator(client, {
+      runtimeReady: async () => true,
+      createFakeImage: async () => ({
+        buffer: Buffer.from('suite-integration-output'),
+        mimeType: 'image/png',
+        filename: 'suite-integration.png',
+      }),
+      uploadBuffer: async (_buffer, filename, mimeType, options) => {
+        suiteUploadOptions.push(options);
+        return {
+          url: `https://storage.example/${suffix}/${filename}`,
+          backend: 'local',
+          filename,
+          key: `${suffix}/${filename}`,
+          mimeType,
+        };
+      },
+    });
+    const firstTask = (await repository.listQueueableTasks(suiteId))[0]!;
+    const firstClaim = await coordinator.revalidateAndClaim(firstTask);
+    expect(firstClaim.kind).toBe('ready');
+    if (firstClaim.kind !== 'ready') throw new Error('suite integration claim was not ready');
+    await expect(coordinator.execute(firstTask, firstClaim)).resolves.toMatchObject({ kind: 'completed' });
+    expect(suiteUploadOptions).toEqual([expect.objectContaining({
+      category: 'ai-generated',
+      ownerId: ownerUserId,
+      idempotencyKey: `${firstTask.jobId}:${createHash('sha256')
+        .update(Buffer.from('suite-integration-output'))
+        .digest('hex')}`,
+    })]);
+
+    for (let index = 0; index < 1_000; index += 1) {
+      const task = (await repository.listQueueableTasks(suiteId))[0];
+      if (!task) break;
+      const claim = await coordinator.revalidateAndClaim(task);
+      if (claim.kind === 'ignored') continue;
+      await coordinator.rejectRuntimeGate(task, claim, {
+        code: 'AI_MEDIA_SUITE_PAID_PROVIDER_NOT_VERIFIED',
+        message: 'Integration fixture forces a deterministic failed sibling',
+      });
+    }
+    const failedSuite = await client.aiMediaSuite.findUniqueOrThrow({
+      where: { id: suiteId },
+      include: { slots: { orderBy: { ordinal: 'asc' } } },
+    });
+    expect(failedSuite.status).toBe('PARTIAL_FAILURE');
+    expect(failedSuite.slots.filter((slot) => slot.status === 'SUCCEEDED')).toHaveLength(1);
+    const failedSlot = failedSuite.slots.find((slot) => slot.status === 'FAILED')!;
+    const retry = await service.retryFailedSlot({
+      suiteId,
+      slotId: failedSlot.id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedSlotRevision: failedSlot.revision,
+      operationKey: `suite-retry-${suffix}`,
+    });
+    expect(retry).toMatchObject({ replayed: false, status: 'QUEUED' });
+    expect(retry.slots.find((slot) => slot.slotId === failedSlot.id)).toMatchObject({
+      status: 'QUEUED',
+      attempt: 2,
+    });
+    const retryTask = (await repository.listQueueableTasks(suiteId))
+      .find((task) => task.slotId === failedSlot.id)!;
+    let markGenerationStarted: (() => void) | undefined;
+    let rejectGeneration: ((error: Error) => void) | undefined;
+    const generationStarted = new Promise<void>((resolve) => {
+      markGenerationStarted = resolve;
+    });
+    const cancellationCoordinator = new PrismaAiImageSuiteGenerationCoordinator(client, {
+      runtimeReady: async () => true,
+      createFakeImage: async () => new Promise<never>((_resolve, reject) => {
+        rejectGeneration = reject;
+        markGenerationStarted?.();
+      }),
+    });
+    const retryClaim = await cancellationCoordinator.revalidateAndClaim(retryTask);
+    expect(retryClaim.kind).toBe('ready');
+    if (retryClaim.kind !== 'ready') throw new Error('suite retry claim was not ready');
+    const execution = cancellationCoordinator.execute(retryTask, retryClaim);
+    await generationStarted;
+    const runningSuite = await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } });
+    const cancelRequested = await service.cancel({
+      suiteId,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: runningSuite.revision,
+      operationKey: `suite-cancel-${suffix}`,
+    });
+    expect(cancelRequested).toMatchObject({ replayed: false, status: 'CANCEL_REQUESTED' });
+    rejectGeneration?.(new Error('integration generation failure after cancellation'));
+    await expect(execution).resolves.toMatchObject({ kind: 'completed' });
+    const cancelled = await client.aiMediaSuite.findUniqueOrThrow({
+      where: { id: suiteId },
+      include: { slots: { orderBy: { ordinal: 'asc' } } },
+    });
+    expect(cancelled.status).toBe('CANCELLED');
+    expect(cancelled.slots.filter((slot) => slot.status === 'SUCCEEDED')).toHaveLength(1);
+    expect(cancelled.slots.filter((slot) => slot.status === 'CANCELLED')).not.toHaveLength(0);
+    expect(await client.mediaAsset.count({ where: { ownerUserId, aiImageJob: { workflow: { suiteSlot: { suiteId } } } } }))
+      .toBe(1);
   });
 });
