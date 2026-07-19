@@ -27,6 +27,7 @@ function lineageWhere(input: {
     ownerUserId: input.ownerUserId,
     sourceCaptureSnapshotId: input.sourceCaptureSnapshotId,
     sourceMediaKey: input.sourceMediaKey,
+    storageBackend: { in: ['oss', 'ozon-cdn'] },
   };
 }
 
@@ -45,7 +46,10 @@ export function createPrismaSourceListingMediaImportStore(
     sourceCaptureSnapshotId: string;
     sourceMediaKey: string;
   }): Promise<SourceListingImportedMediaAsset | null> => (
-    client.mediaAsset.findFirst({ where: lineageWhere(input) }) as Promise<SourceListingImportedMediaAsset | null>
+    client.mediaAsset.findFirst({
+      where: lineageWhere(input),
+      orderBy: [{ storageBackend: 'asc' }, { createdAt: 'asc' }],
+    }) as Promise<SourceListingImportedMediaAsset | null>
   );
 
   return {
@@ -100,7 +104,19 @@ export function createPrismaSourceListingMediaImportStore(
       } catch (error) {
         if (!isUniqueConflict(error)) throw error;
         const winner = await findReusableAsset(input);
-        if (!winner) throw error;
+        if (!winner || winner.storageBackend !== input.storageBackend) {
+          const exactWinner = await client.mediaAsset.findFirst({
+            where: {
+              ownerUserId: input.ownerUserId,
+              sourceCaptureSnapshotId: input.sourceCaptureSnapshotId,
+              sourceMediaKey: input.sourceMediaKey,
+              storageBackend: input.storageBackend,
+            },
+            orderBy: { createdAt: 'asc' },
+          }) as SourceListingImportedMediaAsset | null;
+          if (!exactWinner) throw error;
+          return exactWinner;
+        }
         return winner;
       }
     },

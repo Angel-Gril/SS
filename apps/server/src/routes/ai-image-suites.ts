@@ -14,6 +14,10 @@ import {
   type AiImageSuiteService,
 } from '../services/ai-image-suite.js';
 import {
+  AiImageSuiteReferenceError,
+  type AiImageSuiteReferenceService,
+} from '../services/ai-image-suite-references.js';
+import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
   resolveAiImageProviderCapability,
@@ -34,11 +38,17 @@ const claimSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(128),
 }).strict();
 
+const internalizeReferencesSchema = z.object({
+  expectedRevision: z.number().int().min(1),
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
 const publicDiagnosticCode = /^[A-Z][A-Z0-9_]{0,99}$/u;
 const maxPublicDiagnostics = 20;
 
 export interface AiImageSuiteRouteOptions {
   service?: AiImageSuiteService;
+  referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'>;
   authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   getSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
@@ -178,7 +188,7 @@ function publicSuite(suite: AiImageSuiteRecord) {
 }
 
 function sendError(reply: FastifyReply, error: unknown) {
-  if (error instanceof AiImageSuiteError) {
+  if (error instanceof AiImageSuiteError || error instanceof AiImageSuiteReferenceError) {
     return reply.status(error.statusCode).send({ code: error.code, msg: error.message });
   }
   throw error;
@@ -298,6 +308,44 @@ export async function aiImageSuiteRoutes(
       return reply.status(result.replayed ? 200 : 202).send({
         code: 1,
         data: publicSuite(result.suite),
+        replayed: result.replayed,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/references/internalize', async (request, reply) => {
+    const suiteId = String((request.params as { id?: unknown }).id || '').trim();
+    if (!suiteId || suiteId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite id is invalid' });
+    }
+    const parsed = internalizeReferencesSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    if (!options.referenceService) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_REFERENCE_SERVICE_NOT_READY',
+        msg: 'AI image suite reference preparation is not available',
+      });
+    }
+    try {
+      const result = await options.referenceService.internalize({
+        suiteId,
+        ...ids,
+        ...parsed.data,
+      });
+      return reply.send({
+        code: 1,
+        data: {
+          suiteId: result.suiteId,
+          referenceCount: result.referenceCount,
+          referenceSetHash: result.referenceSetHash,
+        },
         replayed: result.replayed,
       });
     } catch (error) {

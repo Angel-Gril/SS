@@ -53,6 +53,28 @@ describe('AI media collect context', () => {
     });
   });
 
+  it('selects the OSS source variant deterministically when multiple storage copies exist', async () => {
+    const db = client();
+    db.mediaAsset.findMany.mockResolvedValue([
+      {
+        id: 'asset-ozon', sourceMediaKey: 'main-1', url: 'https://ozon.example/main.jpg',
+        storageBackend: 'ozon-cdn', mimeType: 'image/jpeg', width: 1000, height: 1000,
+      },
+      {
+        id: 'asset-oss', sourceMediaKey: 'main-1', url: 'https://oss.example/main.jpg',
+        storageBackend: 'oss', mimeType: 'image/jpeg', width: 1000, height: 1000,
+      },
+      {
+        id: 'asset-local', sourceMediaKey: 'main-1', url: 'http://localhost/main.jpg',
+        storageBackend: 'local', mimeType: 'image/jpeg', width: 1000, height: 1000,
+      },
+    ] as any);
+
+    const result = await createAiMediaContextService(db as never).loadCollect('owner-1', 'goods-1');
+
+    expect(result.inputs[0]).toMatchObject({ assetId: 'asset-oss', assetUrl: 'https://oss.example/main.jpg' });
+  });
+
   it('reuses an already internalized SOURCE_ORIGINAL without downloading it again', async () => {
     const result = await createAiMediaContextService(client() as never)
       .internalizeCollect('owner-1', 'goods-1', 'main-1');

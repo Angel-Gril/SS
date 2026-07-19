@@ -10,6 +10,10 @@ import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
 } from '../services/ai-image-provider-capabilities.js';
+import {
+  AiImageSuiteReferenceError,
+  type AiImageSuiteReferenceService,
+} from '../services/ai-image-suite-references.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -122,8 +126,27 @@ function serviceMock() {
   } as unknown as AiImageSuiteService;
 }
 
+function referenceServiceMock() {
+  return {
+    internalize: vi.fn(async () => ({
+      suiteId: 'suite-1',
+      referenceCount: 1,
+      referenceSetHash: '9'.repeat(64),
+      replayed: false,
+      bindings: [{
+        candidateId: 'private-candidate',
+        sourceUrl: 'https://source.example/private-reference.png',
+        assetUrl: 'https://storage.example/private-reference.png',
+        sourceSha256: '7'.repeat(64),
+        assetSha256: '8'.repeat(64),
+      }],
+    })),
+  } as unknown as Pick<AiImageSuiteReferenceService, 'internalize'>;
+}
+
 async function build(options: {
   service?: AiImageSuiteService;
+  referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'> | null;
   suiteEnabled?: boolean;
   workflowEnabled?: boolean;
   webMediaEnabled?: boolean;
@@ -132,8 +155,12 @@ async function build(options: {
 } = {}) {
   const app = Fastify();
   const service = options.service || serviceMock();
+  const referenceService = options.referenceService === null
+    ? undefined
+    : options.referenceService || referenceServiceMock();
   await app.register(aiImageSuiteRoutes, {
     service,
+    ...(referenceService ? { referenceService } : {}),
     production: options.production ?? false,
     getSuiteEnabled: async () => options.suiteEnabled ?? true,
     getMediaWorkflowEnabled: async () => options.workflowEnabled ?? true,
@@ -147,7 +174,7 @@ async function build(options: {
       };
     },
   });
-  return { app, service };
+  return { app, service, referenceService };
 }
 
 describe('AI image suite routes', () => {
@@ -276,12 +303,88 @@ describe('AI image suite routes', () => {
     expect(failedResponse.json()).toEqual({ code: 'AI_MEDIA_SUITE_NOT_APPROVED', msg: 'not approved' });
   });
 
+  it('internalizes only server-owned frozen references and strips binding secrets', async () => {
+    const { app, referenceService } = await build();
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/references/internalize',
+      payload: {
+        expectedRevision: 1,
+        operationKey: 'reference-operation-1',
+        candidateIds: ['attacker-candidate'],
+        sourceUrl: 'https://attacker.example/image.png',
+        ownerUserId: 'attacker',
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(referenceService?.internalize).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/references/internalize',
+      payload: { expectedRevision: 1, operationKey: 'reference-operation-1' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(referenceService?.internalize).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: 1,
+      operationKey: 'reference-operation-1',
+    });
+    expect(response.json()).toEqual({
+      code: 1,
+      data: {
+        suiteId: 'suite-1',
+        referenceCount: 1,
+        referenceSetHash: '9'.repeat(64),
+      },
+      replayed: false,
+    });
+    const serialized = response.body;
+    expect(serialized).not.toContain('private-candidate');
+    expect(serialized).not.toContain('private-reference');
+    expect(serialized).not.toContain('sourceSha256');
+    expect(serialized).not.toContain('assetSha256');
+  });
+
+  it('maps typed reference errors and fails closed when production wiring is unavailable', async () => {
+    const referenceService = referenceServiceMock();
+    (referenceService.internalize as any).mockRejectedValueOnce(new AiImageSuiteReferenceError(
+      'AI_MEDIA_SUITE_REFERENCE_STALE',
+      409,
+      'stale source authority',
+    ));
+    const failed = await build({ referenceService });
+    const failedResponse = await failed.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/references/internalize',
+      payload: { expectedRevision: 1, operationKey: 'reference-operation-2' },
+    });
+    expect(failedResponse.statusCode).toBe(409);
+    expect(failedResponse.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_REFERENCE_STALE',
+      msg: 'stale source authority',
+    });
+
+    const unavailable = await build({ referenceService: null });
+    const unavailableResponse = await unavailable.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/references/internalize',
+      payload: { expectedRevision: 1, operationKey: 'reference-operation-3' },
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toMatchObject({
+      code: 'AI_MEDIA_SUITE_REFERENCE_SERVICE_NOT_READY',
+    });
+  });
+
   it.each([
     [{ suiteEnabled: false }, 'AI_MEDIA_SUITE_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: false }, 'AI_MEDIA_WORKFLOW_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: true, webMediaEnabled: false }, 'SOURCE_LISTING_WEB_MEDIA_DISABLED'],
-  ] as const)('fails closed before preview and claim when a write gate is disabled', async (flags, code) => {
-    const { app, service } = await build(flags);
+  ] as const)('fails closed before suite writes when a write gate is disabled', async (flags, code) => {
+    const { app, service, referenceService } = await build(flags);
     const previewResponse = await app.inject({
       method: 'POST', url: '/suites/preview', payload: { planId: 'plan-1' },
     });
@@ -293,13 +396,21 @@ describe('AI image suite routes', () => {
         expectedPreviewHash: 'd'.repeat(64), idempotencyKey: 'suite-claim-gated',
       },
     });
+    const internalizeResponse = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/references/internalize',
+      payload: { expectedRevision: 1, operationKey: 'reference-gated-operation' },
+    });
 
     expect(previewResponse.statusCode).toBe(503);
     expect(claimResponse.statusCode).toBe(503);
+    expect(internalizeResponse.statusCode).toBe(503);
     expect(previewResponse.json()).toMatchObject({ code });
     expect(claimResponse.json()).toMatchObject({ code });
+    expect(internalizeResponse.json()).toMatchObject({ code });
     expect(service.preview).not.toHaveBeenCalled();
     expect(service.claim).not.toHaveBeenCalled();
+    expect(referenceService?.internalize).not.toHaveBeenCalled();
   });
 
   it('keeps fake claim fail-closed in production without blocking provider-free preview', async () => {

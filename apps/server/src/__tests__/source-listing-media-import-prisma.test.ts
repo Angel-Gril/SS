@@ -59,9 +59,13 @@ describe('source listing media import Prisma store', () => {
     await store.findReusableAsset({
       ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'media-1',
     });
-    expect(findFirst).toHaveBeenCalledWith({ where: {
-      ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'media-1',
-    }});
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'media-1',
+        storageBackend: { in: ['oss', 'ozon-cdn'] },
+      },
+      orderBy: [{ storageBackend: 'asc' }, { createdAt: 'asc' }],
+    });
 
     await store.createAsset(asset({ id: undefined }) as any);
     expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({
@@ -81,8 +85,38 @@ describe('source listing media import Prisma store', () => {
       },
     } as any);
     await expect(store.createAsset(asset({ id: undefined }) as any)).resolves.toEqual(winner);
-    expect(findFirst).toHaveBeenCalledWith({ where: {
-      ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'media-1',
-    }});
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        ownerUserId: 'owner-1', sourceCaptureSnapshotId: 'snapshot-1', sourceMediaKey: 'media-1',
+        storageBackend: { in: ['oss', 'ozon-cdn'] },
+      },
+      orderBy: [{ storageBackend: 'asc' }, { createdAt: 'asc' }],
+    });
+  });
+
+  it('resolves a concurrent winner from the exact storage variant', async () => {
+    const otherVariant = asset({ id: 'asset-local', storageBackend: 'local' });
+    const exactWinner = asset({ id: 'asset-oss', storageBackend: 'oss' });
+    const findFirst = vi.fn()
+      .mockResolvedValueOnce(otherVariant)
+      .mockResolvedValueOnce(exactWinner);
+    const store = createPrismaSourceListingMediaImportStore({
+      sourceCaptureSnapshot: {},
+      mediaAsset: {
+        create: vi.fn(async () => { throw Object.assign(new Error('unique'), { code: 'P2002' }); }),
+        findFirst,
+      },
+    } as any);
+
+    await expect(store.createAsset(asset({ id: undefined }) as any)).resolves.toEqual(exactWinner);
+    expect(findFirst).toHaveBeenLastCalledWith({
+      where: {
+        ownerUserId: 'owner-1',
+        sourceCaptureSnapshotId: 'snapshot-1',
+        sourceMediaKey: 'media-1',
+        storageBackend: 'oss',
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   });
 });

@@ -55,7 +55,16 @@ export function createAiMediaContextService(client: PrismaClient) {
         kind: 'SOURCE_ORIGINAL',
       },
     });
-    const assetByKey = new Map(assets.map((asset) => [asset.sourceMediaKey, asset]));
+    const assetByKey = new Map<string | null, (typeof assets)[number]>();
+    const storageRank = (backend: string) => (
+      backend === 'oss' ? 0 : backend === 'local' ? 1 : 2
+    );
+    for (const asset of assets) {
+      const existing = assetByKey.get(asset.sourceMediaKey);
+      if (!existing || storageRank(asset.storageBackend) < storageRank(existing.storageBackend)) {
+        assetByKey.set(asset.sourceMediaKey, asset);
+      }
+    }
     return {
       target: { type: 'collect' as const, id: goods.id, label: goods.title },
       snapshot: { id: snapshot.id, version: snapshot.version, captureHash: snapshot.captureHash },
@@ -121,7 +130,12 @@ export function createAiMediaContextService(client: PrismaClient) {
         metadata: {
           lineageVersion: 'ai-media-source/v1',
           sourceCaptureHash: context.snapshot.captureHash,
+          sourceUrl: selected.sourceUrl,
           finalSourceUrl: downloaded.finalUrl,
+          sourceSha256: createHash('sha256').update(downloaded.buffer).digest('hex'),
+          sourceSizeBytes: downloaded.buffer.length,
+          sourceMimeType: downloaded.contentType,
+          sourceFormat: sanitized.sourceFormat,
           redirectCount: downloaded.redirectCount,
         },
       };
@@ -130,7 +144,10 @@ export function createAiMediaContextService(client: PrismaClient) {
       } catch (error: any) {
         if (error?.code !== 'P2002') throw error;
         const winner = await client.mediaAsset.findFirst({ where: {
-          ownerUserId, sourceCaptureSnapshotId: context.snapshot.id, sourceMediaKey,
+          ownerUserId,
+          sourceCaptureSnapshotId: context.snapshot.id,
+          sourceMediaKey,
+          storageBackend: uploaded.backend,
         } });
         if (!winner) throw error;
         return winner;

@@ -70,6 +70,7 @@ import { sourceCandidateRoutes } from './routes/source-candidates.js';
 import { aiImageRoutes } from './routes/ai-images.js';
 import { aiImageSuiteRoutes } from './routes/ai-image-suites.js';
 import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
+import { PrismaAiImageSuiteReferenceRepository } from './repositories/ai-image-suite-reference-repository.js';
 import { adminAiPromptTemplateRoutes } from './routes/admin-ai-prompt-templates.js';
 import { adminAiCostReconciliationRoutes } from './routes/admin-ai-cost-reconciliations.js';
 import { adminOzonPublisherParityRoutes } from './routes/admin-ozon-publisher-parity.js';
@@ -105,6 +106,8 @@ import {
 import { createSourceListingMediaImportService } from './services/source-listing-media-import.js';
 import { createPrismaSourceListingMediaImportStore } from './services/source-listing-media-import-prisma.js';
 import { getStorageBackend } from './services/image-storage.js';
+import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
+import { createAiImageSuiteReferenceService } from './services/ai-image-suite-references.js';
 import {
   createPrismaOzonAttributeDefinitionCacheStore,
   getCachedOzonAttributeDefinitions,
@@ -1027,6 +1030,20 @@ await app.register(aiImageRoutes, {
 });
 await app.register(aiImageSuiteRoutes, {
   prefix: '/api/ai-images',
+  referenceService: createAiImageSuiteReferenceService({
+    repository: new PrismaAiImageSuiteReferenceRepository(prisma),
+    getStorage: async () => {
+      const runtime = await getRuntimeConfigForStorage();
+      if (runtime.imageStorage === 'ozon-cdn') {
+        throw new Error('AI image suite references require local or OSS storage');
+      }
+      const storage = await getStorageBackend();
+      return {
+        backend: runtime.imageStorage,
+        uploadBuffer: storage.uploadBuffer.bind(storage),
+      };
+    },
+  }),
 });
 await app.register(aiMediaPlanningRoutes, {
   prefix: '/api/ai-images',

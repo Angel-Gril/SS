@@ -20,6 +20,8 @@ export interface ImageUploadResult {
   url: string;
   filename: string;
   backend: 'ozon-cdn' | 'oss' | 'local';
+  key?: string;
+  objectKey?: string;
 }
 
 export interface PresignedUploadResult {
@@ -392,7 +394,13 @@ class OssBackend implements ImageStorageBackend {
 
     const url = this.getPublicObjectUrl(objectKey);
 
-    return { url, filename: objectKey.split('/').pop() || filename, backend: 'oss' };
+    return {
+      url,
+      filename: objectKey.split('/').pop() || filename,
+      backend: 'oss',
+      key: objectKey,
+      objectKey,
+    };
   }
 
   async getPresignedPutUrl(input: PresignedUploadInput): Promise<PresignedUploadResult> {

@@ -2886,8 +2886,9 @@ model MediaAsset {
   lineageOutputs          MediaAssetLineage[]     @relation("MediaAssetLineageOutput")
   selectedByWorkflows     AiMediaWorkflow[]       @relation("AiMediaWorkflowSelectedOutput")
   workflowEvents          AiMediaWorkflowEvent[]
+  aiMediaSuiteReferences  AiMediaSuiteReferenceAsset[]
 
-  @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey], map: "media_asset_source_capture_key")
+  @@unique([ownerUserId, sourceCaptureSnapshotId, sourceMediaKey, storageBackend], map: "media_asset_source_capture_storage_key")
   @@unique([id, ownerUserId], name: "media_asset_id_owner", map: "media_asset_id_owner")
   @@index([ownerUserId, createdAt])
   @@index([aiImageJobId])
@@ -3164,6 +3165,7 @@ model AiMediaSuite {
   updatedAt               DateTime            @updatedAt @map("updated_at")
   slots                   AiMediaSuiteSlot[]
   events                  AiMediaSuiteEvent[]
+  referenceAssets         AiMediaSuiteReferenceAsset[]
 
   @@unique([id, ownerUserId], name: "ai_media_suite_id_owner", map: "ai_media_suite_id_owner_key")
   @@unique([ownerUserId, idempotencyKey], name: "ai_media_suite_owner_idempotency", map: "ai_media_suite_owner_idempotency_key")
@@ -3171,6 +3173,37 @@ model AiMediaSuite {
   @@index([ownerUserId, status, updatedAt], map: "ai_media_suite_owner_status_idx")
   @@index([planId, createdAt], map: "ai_media_suite_plan_created_idx")
   @@map("ai_media_suites")
+}
+
+model AiMediaSuiteReferenceAsset {
+  id                  String       @id @default(cuid())
+  suiteId             String       @map("suite_id")
+  ownerUserId         String       @map("owner_user_id")
+  suite               AiMediaSuite @relation(fields: [suiteId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  ordinal             Int
+  candidateId         String       @map("candidate_id") @db.VarChar(500)
+  assetId             String       @map("asset_id")
+  asset               MediaAsset   @relation(fields: [assetId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  frozenSourceUrl     String       @map("frozen_source_url")
+  expectedContentHash String?      @map("expected_content_hash") @db.Char(64)
+  assetSha256         String       @map("asset_sha256") @db.Char(64)
+  rawSourceSha256     String       @map("raw_source_sha256") @db.Char(64)
+  assetUrl            String       @map("asset_url")
+  storageBackend      String       @map("storage_backend")
+  storageKey          String       @map("storage_key")
+  mimeType            String       @map("mime_type")
+  sizeBytes           Int          @map("size_bytes")
+  width               Int
+  height              Int
+  bindingHash         String       @map("binding_hash") @db.Char(64)
+  createdAt           DateTime     @default(now()) @map("created_at")
+
+  @@unique([suiteId, ownerUserId, candidateId], map: "ai_media_suite_reference_candidate_key")
+  @@unique([suiteId, ordinal], map: "ai_media_suite_reference_ordinal_key")
+  @@unique([suiteId, assetId], map: "ai_media_suite_reference_asset_key")
+  @@index([assetId, ownerUserId], map: "ai_media_suite_reference_asset_owner_idx")
+  @@index([ownerUserId, createdAt], map: "ai_media_suite_reference_owner_created_idx")
+  @@map("ai_media_suite_reference_assets")
 }
 
 model AiMediaSuiteSlot {

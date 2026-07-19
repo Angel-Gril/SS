@@ -431,6 +431,7 @@ export function createSourceListingMediaImportService(
             sourceUrl,
             finalSourceUrl: downloaded.finalUrl,
             sourceSha256,
+            sourceSizeBytes: downloaded.buffer.length,
             sourceMimeType: downloaded.contentType,
             sourceFormat: sanitized.sourceFormat,
             redirectCount: downloaded.redirectCount,
