@@ -9,6 +9,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planning-repository.js';
 import { PrismaAiImageSuiteReferenceRepository } from '../repositories/ai-image-suite-reference-repository.js';
+import { PrismaAiImageSuitePromptRepository } from '../repositories/ai-image-suite-prompt-repository.js';
 import { PrismaAiImageSuiteRepository } from '../repositories/ai-image-suite-repository.js';
 import {
   AI_IMAGE_SUITE_REFERENCE_SET_VERSION,
@@ -16,6 +17,9 @@ import {
   type AiImageSuiteReferenceBinding,
   type AiImageSuiteReferenceCommitInput,
 } from '../services/ai-image-suite-references.js';
+import { createAiImageSuitePromptService } from '../services/ai-image-suite-prompts.js';
+import { AiPromptTemplateRegistryService } from '../services/ai-prompt-template-registry.js';
+import { PrismaAiPromptTemplateStore } from '../services/ai-prompt-template-prisma.js';
 import { createAiMediaPlanningService, hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 import { createAiImageSuitePreview } from '../services/ai-image-suite.js';
 import {
@@ -625,5 +629,146 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
       } },
     })).rejects.toThrow(/referenced media asset identity is immutable/u);
     expect(await referenceTable.count({ where: { suiteId, ownerUserId } })).toBe(referenceFixtures.length);
+  });
+
+  it('rejects a child workflow binding before the Prompt barrier and leaves the slot unchanged', async () => {
+    const slot = await client.aiMediaSuiteSlot.findFirstOrThrow({
+      where: { suiteId, ownerUserId },
+      orderBy: { ordinal: 'asc' },
+    });
+    await expect(client.$executeRaw`
+      UPDATE "ai_media_suite_slots"
+      SET "child_workflow_id" = ${`unfrozen-child-${suffix}`}
+      WHERE "id" = ${slot.id} AND "suite_id" = ${suiteId} AND "owner_user_id" = ${ownerUserId}
+    `).rejects.toThrow(/child workflow requires frozen suite prompts/u);
+    await expect(client.aiMediaSuiteSlot.findUniqueOrThrow({ where: { id: slot.id } }))
+      .resolves.toMatchObject({ childWorkflowId: null, revision: slot.revision });
+  });
+
+  it('rolls back a revision-3 transaction when the frozen Prompt set is incomplete', async () => {
+    const payload = {
+      version: 'ai-image-suite-prompts-frozen/v1',
+      promptSetHash: '1'.repeat(64),
+      referenceSetHash: referenceCommitInput.referenceSetHash,
+      slotPromptHashes: [],
+    };
+    await expect(client.$transaction(async (tx) => {
+      await tx.aiMediaSuite.update({ where: { id: suiteId }, data: { revision: 3 } });
+      await tx.aiMediaSuiteEvent.create({ data: {
+        suiteId,
+        ownerUserId,
+        revision: 3,
+        actorUserId: ownerUserId,
+        eventKey: `incomplete-prompts-${suffix}`,
+        eventType: 'PROMPTS_FROZEN',
+        payload,
+        payloadHash: hashAiMediaPlanningJson(payload),
+      } });
+    })).rejects.toThrow(/AI media suite Prompt set is incomplete/u);
+    expect(await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } }))
+      .toMatchObject({ revision: 2, status: 'PLANNED' });
+    expect(await client.aiMediaSuitePromptSet.count({ where: { suiteId, ownerUserId } })).toBe(0);
+    expect(await client.aiMediaSuiteSlotPrompt.count({ where: { suiteId, ownerUserId } })).toBe(0);
+    expect(await client.aiMediaSuiteEvent.count({ where: { suiteId, ownerUserId, revision: 3 } })).toBe(0);
+  });
+
+  it('rejects a non-Prompt event at revision 3 before it can satisfy the generic audit barrier', async () => {
+    const payload = { version: 'unrelated-suite-event/v1' };
+    await expect(client.$transaction(async (tx) => {
+      await tx.aiMediaSuite.update({ where: { id: suiteId }, data: { revision: 3 } });
+      await tx.aiMediaSuiteEvent.create({ data: {
+        suiteId,
+        ownerUserId,
+        revision: 3,
+        actorUserId: ownerUserId,
+        eventKey: `wrong-revision-event-${suffix}`,
+        eventType: 'PLANNING_NOTE',
+        payload,
+        payloadHash: hashAiMediaPlanningJson(payload),
+      } });
+    })).rejects.toThrow(/revision 3 requires PROMPTS_FROZEN event/u);
+    expect(await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } }))
+      .toMatchObject({ revision: 2, status: 'PLANNED' });
+    expect(await client.aiMediaSuiteEvent.count({ where: { suiteId, ownerUserId, revision: 3 } })).toBe(0);
+  });
+
+  it('freezes one complete Prompt set under concurrency without materializing paid work', async () => {
+    const registry = new AiPromptTemplateRegistryService(
+      new PrismaAiPromptTemplateStore(client),
+      { getLegacyPrompt: async () => 'unused suite integration legacy Prompt' },
+    );
+    const service = createAiImageSuitePromptService({
+      repository: new PrismaAiImageSuitePromptRepository(client),
+      templateResolver: registry,
+    });
+    const operation = {
+      suiteId,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: 2,
+      operationKey: `suite-prompts-${suffix}`,
+    };
+    const results = await Promise.all([service.freeze(operation), service.freeze(operation)]);
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+    expect(new Set(results.map((result) => result.promptSetHash)).size).toBe(1);
+
+    const promptSetTable = (client as any).aiMediaSuitePromptSet;
+    const slotPromptTable = (client as any).aiMediaSuiteSlotPrompt;
+    const set = await promptSetTable.findFirstOrThrow({
+      where: { suiteId, ownerUserId },
+      include: { slots: { orderBy: { ordinal: 'asc' } } },
+    });
+    expect(set.slotCount).toBe(set.slots.length);
+    expect(set.slots.length).toBeGreaterThan(1);
+    expect(set.slots.map((row: any) => row.ordinal)).toEqual(
+      Array.from({ length: set.slotCount }, (_, index) => index),
+    );
+    expect(set.slots.every((row: any) => (
+      row.templateReleaseId === set.templateReleaseId
+      && row.templateChecksum === set.templateChecksum
+      && row.referenceSetHash === referenceCommitInput.referenceSetHash
+      && row.resolvedPrompt.includes('Generation policy ozon-image-slot-policy/v1')
+      && row.resolvedNegativePrompt.includes('Forbidden output policy ozon-image-slot-policy/v1')
+    ))).toBe(true);
+    expect(await client.aiMediaSuiteEvent.count({ where: {
+      suiteId, ownerUserId, eventType: 'PROMPTS_FROZEN', revision: 3,
+    } })).toBe(1);
+    expect((await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } })).revision).toBe(3);
+
+    const frozenRow = set.slots[0]!;
+    await expect(slotPromptTable.update({
+      where: { id: frozenRow.id }, data: { resolvedPrompt: 'tampered Prompt' },
+    })).rejects.toThrow(/AI media suite slot Prompt is immutable/u);
+    await expect(promptSetTable.delete({ where: { id: set.id } }))
+      .rejects.toThrow(/AI media suite Prompt set is immutable/u);
+
+    await client.sourceCaptureSnapshot.create({ data: {
+      id: `suite_snapshot_later_${suffix}`,
+      subjectId,
+      version: 2,
+      schemaVersion: 'source-product-capture-v2',
+      captureHash: '8'.repeat(64),
+      payloadBytes,
+      payload: capture as never,
+      stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'integration',
+      completeness: {}, truncations: [], hasEstimatedValues: false, profile: {},
+      profileHash: '7'.repeat(64), actorUserId: ownerUserId, ingestChannel: 'WEB_ACCOUNT',
+      rolloutRevision: 'integration-later', rolloutStage: 'v2_only', capturedAt: new Date(),
+    } });
+    await expect(service.freeze(operation)).resolves.toMatchObject({
+      suiteId, promptSetHash: set.promptSetHash, replayed: true,
+    });
+    await expect(service.freeze({
+      ...operation, operationKey: `suite-prompts-other-${suffix}`,
+    })).rejects.toMatchObject({
+      code: 'AI_MEDIA_SUITE_PROMPTS_ALREADY_FROZEN', statusCode: 409,
+    });
+
+    expect(await client.aiMediaSuiteSlot.count({ where: {
+      suiteId, childWorkflowId: { not: null },
+    } })).toBe(0);
+    expect(await client.aiMediaWorkflow.count({ where: { ownerUserId } })).toBe(0);
+    expect(await client.aiImageJob.count({ where: { ownerUserId } })).toBe(0);
+    expect(await client.aiCostReservation.count({ where: { ownerUserId } })).toBe(0);
   });
 });

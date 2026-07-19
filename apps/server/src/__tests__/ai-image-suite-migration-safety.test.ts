@@ -21,6 +21,10 @@ const referenceAssetsMigration = readFileSync(new URL(
   '../../prisma/migrations/20260719130000_add_ai_media_suite_reference_assets/migration.sql',
   import.meta.url,
 ), 'utf8');
+const promptFreezeMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260719140000_add_ai_media_suite_prompt_freeze/migration.sql',
+  import.meta.url,
+), 'utf8');
 const schema = readFileSync(new URL('../../prisma/schema.prisma', import.meta.url), 'utf8');
 
 describe('AI image suite migration safety', () => {
@@ -132,5 +136,71 @@ describe('AI image suite migration safety', () => {
     expect(schema).toMatch(/@@unique\(\[suiteId, ownerUserId, candidateId\].*ai_media_suite_reference_candidate_key/u);
     expect(schema).toMatch(/@@unique\(\[suiteId, ordinal\].*ai_media_suite_reference_ordinal_key/u);
     expect(schema).toMatch(/@@unique\(\[suiteId, assetId\].*ai_media_suite_reference_asset_key/u);
+  });
+
+  it('adds owner-bound prompt set and per-slot prompt models without adding provider or cost state', () => {
+    expect(promptFreezeMigration).toContain('CREATE TABLE "ai_media_suite_prompt_sets"');
+    expect(promptFreezeMigration).toContain('CREATE TABLE "ai_media_suite_slot_prompts"');
+    expect(promptFreezeMigration).toMatch(/FOREIGN KEY \("suite_id", "owner_user_id"\)[\s\S]*REFERENCES "ai_media_suites"\("id", "owner_user_id"\)/u);
+    expect(promptFreezeMigration).toMatch(/FOREIGN KEY \("slot_id", "suite_id", "owner_user_id"\)[\s\S]*REFERENCES "ai_media_suite_slots"\("id", "suite_id", "owner_user_id"\)/u);
+    expect(promptFreezeMigration).toMatch(/FOREIGN KEY \("prompt_set_id", "suite_id", "owner_user_id"\)[\s\S]*REFERENCES "ai_media_suite_prompt_sets"\("id", "suite_id", "owner_user_id"\)/u);
+    expect(promptFreezeMigration).toMatch(/FOREIGN KEY \("template_release_id", "template_key"\)[\s\S]*REFERENCES "ai_prompt_releases"\("id", "template_key"\)/u);
+    expect(promptFreezeMigration).toMatch(/FOREIGN KEY \("template_revision_id", "template_key"\)[\s\S]*REFERENCES "ai_prompt_revisions"\("id", "template_key"\)/u);
+    expect(promptFreezeMigration).toMatch(/ai_media_suite_prompt_set_suite_key/u);
+    expect(promptFreezeMigration).toMatch(/ai_media_suite_prompt_set_owner_operation_key/u);
+    expect(promptFreezeMigration).toMatch(/ai_media_suite_slot_prompt_suite_slot_key/u);
+    expect(promptFreezeMigration).toMatch(/ai_media_suite_slot_prompt_set_ordinal_key/u);
+    expect(promptFreezeMigration).toMatch(/"variables_snapshot_json" JSONB NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"resolved_prompt" TEXT NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"resolved_negative_prompt" TEXT NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"policy_hash" CHAR\(64\) NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"resolved_prompt_hash" CHAR\(64\) NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"resolved_negative_prompt_hash" CHAR\(64\) NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"binding_hash" CHAR\(64\) NOT NULL/u);
+    expect(promptFreezeMigration).toMatch(/"source_capture_snapshot_id" TEXT NOT NULL/u);
+    expect(promptFreezeMigration).not.toMatch(/ai_cost_reservations|ai_cost_settlements|CREATE TYPE "AiMediaOperation"/u);
+  });
+
+  it('binds the Prompt freeze to revision 3 and protects every immutable prompt identity', () => {
+    expect(promptFreezeMigration).toMatch(/PROMPTS_FROZEN/u);
+    expect(promptFreezeMigration).toMatch(/NEW\."version" IS DISTINCT FROM 'ai-image-suite-slot-prompt\/v1'/u);
+    expect(promptFreezeMigration).toMatch(/revision" IS DISTINCT FROM 3/u);
+    expect(promptFreezeMigration).toMatch(/REFERENCES_INTERNALIZED/u);
+    expect(promptFreezeMigration).toMatch(/validate_ai_media_suite_prompt_set_insert/u);
+    expect(promptFreezeMigration).toMatch(/validate_ai_media_suite_slot_prompt_insert/u);
+    expect(promptFreezeMigration).toMatch(/protect_ai_media_suite_prompt_set_immutable/u);
+    expect(promptFreezeMigration).toMatch(/protect_ai_media_suite_slot_prompt_immutable/u);
+    expect(promptFreezeMigration).toMatch(/BEFORE UPDATE OR DELETE ON "ai_media_suite_prompt_sets"/u);
+    expect(promptFreezeMigration).toMatch(/BEFORE UPDATE OR DELETE ON "ai_media_suite_slot_prompts"/u);
+    expect(promptFreezeMigration).toMatch(/require_ai_media_suite_prompt_frozen_set/u);
+    expect(promptFreezeMigration).toMatch(/ai_media_suite_prompt_frozen_set[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(promptFreezeMigration).toMatch(/ai_media_suite_prompt_event_set/u);
+    expect(promptFreezeMigration).toMatch(/validate_ai_media_suite_prompt_revision_event/u);
+    expect(promptFreezeMigration).toMatch(/revision 3 requires PROMPTS_FROZEN event/u);
+    expect(promptFreezeMigration).toMatch(/child_workflow_id[\s\S]*PROMPTS_FROZEN/u);
+    expect(promptFreezeMigration).toMatch(/child workflow requires frozen suite prompts/u);
+    expect(promptFreezeMigration).toMatch(/jsonb_array_elements_text\([\s\S]*slotPromptHashes/u);
+    expect(promptFreezeMigration).toMatch(/payload"->>'requestFingerprint' IS DISTINCT FROM prompt_set\."request_fingerprint/u);
+    expect(promptFreezeMigration).toMatch(/payload"->>'policyHash' IS DISTINCT FROM prompt_set\."policy_hash/u);
+    expect(promptFreezeMigration).toMatch(/payload"->>'templateSnapshotHash' IS DISTINCT FROM prompt_set\."template_snapshot_hash/u);
+    expect(promptFreezeMigration).not.toMatch(/jsonb_array_elements\(/u);
+  });
+
+  it('exposes composite tenant ownership and immutable Prompt relations in Prisma', () => {
+    expect(schema).toContain('model AiMediaSuitePromptSet {');
+    expect(schema).toContain('model AiMediaSuiteSlotPrompt {');
+    expect(schema).toMatch(/promptSet\s+AiMediaSuitePromptSet\s+@relation\(fields: \[promptSetId, suiteId, ownerUserId\], references: \[id, suiteId, ownerUserId\]/u);
+    expect(schema).toMatch(/suiteSlot\s+AiMediaSuiteSlot\s+@relation\(fields: \[slotId, suiteId, ownerUserId\], references: \[id, suiteId, ownerUserId\]/u);
+    expect(schema).toMatch(/@@unique\(\[id, suiteId, ownerUserId\].*ai_media_suite_slot_id_suite_owner_key/u);
+    expect(schema).toMatch(/@@unique\(\[suiteId, ownerUserId\].*ai_media_suite_prompt_set_suite_key/u);
+    expect(schema).toMatch(/@@unique\(\[id, suiteId, ownerUserId\].*ai_media_suite_prompt_set_id_suite_owner_key/u);
+    expect(schema).toMatch(/@@unique\(\[ownerUserId, operationKey\].*ai_media_suite_prompt_set_owner_operation_key/u);
+    expect(schema).toMatch(/@@unique\(\[slotId, suiteId, ownerUserId\].*ai_media_suite_slot_prompt_suite_slot_key/u);
+    expect(schema).toMatch(/@@unique\(\[promptSetId, ordinal\].*ai_media_suite_slot_prompt_set_ordinal_key/u);
+    expect(schema).toMatch(/templateRelease\s+AiPromptRelease/u);
+    expect(schema).toMatch(/templateRevision\s+AiPromptRevision/u);
+    expect(schema).toMatch(/resolvedPrompt\s+String\s+@map\("resolved_prompt"\)\s+@db\.Text/u);
+    expect(schema).toMatch(/suitePromptSets\s+AiMediaSuitePromptSet\[\]/u);
+    expect(schema).toMatch(/slotPrompts\s+AiMediaSuiteSlotPrompt\[\]/u);
   });
 });

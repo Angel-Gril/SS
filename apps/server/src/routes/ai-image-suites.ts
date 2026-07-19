@@ -18,6 +18,10 @@ import {
   type AiImageSuiteReferenceService,
 } from '../services/ai-image-suite-references.js';
 import {
+  AiImageSuitePromptError,
+  type AiImageSuitePromptService,
+} from '../services/ai-image-suite-prompts.js';
+import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
   resolveAiImageProviderCapability,
@@ -43,12 +47,18 @@ const internalizeReferencesSchema = z.object({
   operationKey: z.string().trim().min(8).max(128),
 }).strict();
 
+const freezePromptsSchema = z.object({
+  expectedRevision: z.literal(2),
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
 const publicDiagnosticCode = /^[A-Z][A-Z0-9_]{0,99}$/u;
 const maxPublicDiagnostics = 20;
 
 export interface AiImageSuiteRouteOptions {
   service?: AiImageSuiteService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'>;
+  promptService?: Pick<AiImageSuitePromptService, 'freeze'>;
   authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   getSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
@@ -188,7 +198,9 @@ function publicSuite(suite: AiImageSuiteRecord) {
 }
 
 function sendError(reply: FastifyReply, error: unknown) {
-  if (error instanceof AiImageSuiteError || error instanceof AiImageSuiteReferenceError) {
+  if (error instanceof AiImageSuiteError
+    || error instanceof AiImageSuiteReferenceError
+    || error instanceof AiImageSuitePromptError) {
     return reply.status(error.statusCode).send({ code: error.code, msg: error.message });
   }
   throw error;
@@ -345,6 +357,48 @@ export async function aiImageSuiteRoutes(
           suiteId: result.suiteId,
           referenceCount: result.referenceCount,
           referenceSetHash: result.referenceSetHash,
+        },
+        replayed: result.replayed,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/prompts/freeze', async (request, reply) => {
+    const suiteId = String((request.params as { id?: unknown }).id || '').trim();
+    if (!suiteId || suiteId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite id is invalid' });
+    }
+    const parsed = freezePromptsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    if (!options.promptService) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_PROMPT_SERVICE_NOT_READY',
+        msg: 'AI image suite Prompt preparation is not available',
+      });
+    }
+    try {
+      const result = await options.promptService.freeze({
+        suiteId,
+        ...ids,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 202).send({
+        code: 1,
+        data: {
+          suiteId: result.suiteId,
+          promptSetHash: result.promptSetHash,
+          promptCount: result.promptCount,
+          templateKey: result.templateKey,
+          templateReleaseId: result.templateReleaseId,
+          templateSequence: result.templateSequence,
+          templateChecksum: result.templateChecksum,
         },
         replayed: result.replayed,
       });

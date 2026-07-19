@@ -430,6 +430,8 @@ model User {
   ownedAiMediaSuites                   AiMediaSuite[]                         @relation("AiMediaSuiteOwner")
   createdAiMediaSuites                 AiMediaSuite[]                         @relation("AiMediaSuiteActor")
   aiMediaSuiteEventsAsActor            AiMediaSuiteEvent[]                    @relation("AiMediaSuiteEventActor")
+  ownedAiMediaSuitePromptSets           AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetOwner")
+  createdAiMediaSuitePromptSets         AiMediaSuitePromptSet[]                 @relation("AiMediaSuitePromptSetActor")
   mediaAssets                         MediaAsset[]
   ownedAiCostReservations             AiCostReservation[]                   @relation("AiCostReservationOwner")
   createdAiCostReservations           AiCostReservation[]                   @relation("AiCostReservationActor")
@@ -2760,9 +2762,12 @@ model AiPromptRevision {
   updatedAt              DateTime               @updatedAt @map("updated_at")
   testRuns               AiPromptTestRun[]
   releases               AiPromptRelease[]
+  suitePromptSets        AiMediaSuitePromptSet[] @relation("AiMediaSuitePromptSetRevision")
+  suiteSlotPrompts       AiMediaSuiteSlotPrompt[] @relation("AiMediaSuiteSlotPromptRevision")
 
   @@index([templateKey, createdAt])
   @@index([templateKey, status])
+  @@unique([id, templateKey], map: "ai_prompt_revision_id_template_key")
   @@map("ai_prompt_revisions")
 }
 
@@ -2791,9 +2796,12 @@ model AiPromptRelease {
   actorUserId String                @map("actor_user_id")
   testRunId   String?               @map("test_run_id")
   testRun     AiPromptTestRun?      @relation(fields: [testRunId], references: [id], onDelete: SetNull)
+  suitePromptSets AiMediaSuitePromptSet[] @relation("AiMediaSuitePromptSetRelease")
+  suiteSlotPrompts AiMediaSuiteSlotPrompt[] @relation("AiMediaSuiteSlotPromptRelease")
   createdAt   DateTime              @default(now()) @map("created_at")
 
   @@unique([templateKey, sequence])
+  @@unique([id, templateKey], map: "ai_prompt_release_id_template_key")
   @@index([revisionId])
   @@index([testRunId])
   @@map("ai_prompt_releases")
@@ -3166,6 +3174,8 @@ model AiMediaSuite {
   slots                   AiMediaSuiteSlot[]
   events                  AiMediaSuiteEvent[]
   referenceAssets         AiMediaSuiteReferenceAsset[]
+  promptSet               AiMediaSuitePromptSet?
+  slotPrompts             AiMediaSuiteSlotPrompt[]
 
   @@unique([id, ownerUserId], name: "ai_media_suite_id_owner", map: "ai_media_suite_id_owner_key")
   @@unique([ownerUserId, idempotencyKey], name: "ai_media_suite_owner_idempotency", map: "ai_media_suite_owner_idempotency_key")
@@ -3225,6 +3235,7 @@ model AiMediaSuiteSlot {
   status                AiMediaSuiteSlotStatus  @default(PLANNED)
   childWorkflowId       String?                 @unique(map: "ai_media_suite_slot_child_workflow_key") @map("child_workflow_id")
   childWorkflow         AiMediaWorkflow?       @relation("AiMediaSuiteSlotWorkflow", fields: [childWorkflowId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  prompt                AiMediaSuiteSlotPrompt?
   attempt               Int                     @default(0)
   revision              Int                     @default(1)
   estimatedCostCents    Int                     @map("estimated_cost_cents")
@@ -3236,9 +3247,102 @@ model AiMediaSuiteSlot {
 
   @@unique([suiteId, ordinal], map: "ai_media_suite_slot_ordinal_key")
   @@unique([suiteId, slotKey], map: "ai_media_suite_slot_key")
+  @@unique([id, suiteId, ownerUserId], map: "ai_media_suite_slot_id_suite_owner_key")
   @@unique([childWorkflowId, ownerUserId], map: "ai_media_suite_slot_child_workflow_owner_key")
   @@index([ownerUserId, status, updatedAt], map: "ai_media_suite_slot_owner_status_idx")
   @@map("ai_media_suite_slots")
+}
+
+model AiMediaSuitePromptSet {
+  id                    String                    @id @default(cuid())
+  suiteId               String                    @map("suite_id")
+  ownerUserId           String                    @map("owner_user_id")
+  owner                 User                      @relation("AiMediaSuitePromptSetOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  actorUserId           String                    @map("actor_user_id")
+  actor                 User                      @relation("AiMediaSuitePromptSetActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  suite                 AiMediaSuite              @relation(fields: [suiteId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  version               String                    @map("prompt_set_version") @db.VarChar(100)
+  operationKey          String                    @map("operation_key") @db.VarChar(128)
+  requestFingerprint    String                    @map("request_fingerprint") @db.Char(64)
+  planId                String                    @map("plan_id")
+  planVersionId         String                    @map("plan_version_id")
+  sourceSubjectId       String                    @map("source_subject_id")
+  sourceCaptureSnapshotId String                  @map("source_capture_snapshot_id")
+  sourceCaptureHash     String                    @map("source_capture_hash") @db.Char(64)
+  sourceProfileHash     String                    @map("source_profile_hash") @db.Char(64)
+  sourceSchemaVersion   String                    @map("source_schema_version") @db.VarChar(100)
+  templateKey           String                    @map("template_key")
+  templateReleaseId     String                    @map("template_release_id")
+  templateRelease       AiPromptRelease           @relation("AiMediaSuitePromptSetRelease", fields: [templateReleaseId, templateKey], references: [id, templateKey], onDelete: Restrict)
+  templateRevisionId    String                    @map("template_revision_id")
+  templateRevision      AiPromptRevision          @relation("AiMediaSuitePromptSetRevision", fields: [templateRevisionId, templateKey], references: [id, templateKey], onDelete: Restrict)
+  templateSequence      Int                       @map("template_sequence")
+  templateChecksum      String                    @map("template_checksum") @db.Char(64)
+  templateSnapshot      Json                      @map("template_snapshot_json")
+  templateSnapshotHash  String                    @map("template_snapshot_hash") @db.Char(64)
+  compilerVersion       String                    @map("compiler_version") @db.VarChar(100)
+  policyVersion         String                    @map("policy_version") @db.VarChar(100)
+  policyHash            String                    @map("policy_hash") @db.Char(64)
+  planHash              String                    @map("plan_hash") @db.Char(64)
+  provider              String                    @db.VarChar(100)
+  model                 String                    @db.VarChar(200)
+  providerConfigHash    String                    @map("provider_config_hash") @db.Char(64)
+  referenceSetHash      String                    @map("reference_set_hash") @db.Char(64)
+  slotCount             Int                       @map("slot_count")
+  promptSetHash         String                    @map("prompt_set_hash") @db.Char(64)
+  createdAt             DateTime                  @default(now()) @map("created_at")
+  slots                 AiMediaSuiteSlotPrompt[]
+
+  @@unique([id, ownerUserId], map: "ai_media_suite_prompt_set_id_owner_key")
+  @@unique([id, suiteId, ownerUserId], map: "ai_media_suite_prompt_set_id_suite_owner_key")
+  @@unique([suiteId, ownerUserId], map: "ai_media_suite_prompt_set_suite_key")
+  @@unique([ownerUserId, operationKey], map: "ai_media_suite_prompt_set_owner_operation_key")
+  @@index([ownerUserId, createdAt], map: "ai_media_suite_prompt_set_owner_created_idx")
+  @@map("ai_media_suite_prompt_sets")
+}
+
+model AiMediaSuiteSlotPrompt {
+  id                     String                 @id @default(cuid())
+  promptSetId            String                 @map("prompt_set_id")
+  suiteId                String                 @map("suite_id")
+  slotId                 String                 @map("slot_id")
+  ownerUserId            String                 @map("owner_user_id")
+  promptSet              AiMediaSuitePromptSet  @relation(fields: [promptSetId, suiteId, ownerUserId], references: [id, suiteId, ownerUserId], onDelete: Restrict)
+  suite                  AiMediaSuite           @relation(fields: [suiteId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
+  suiteSlot              AiMediaSuiteSlot       @relation(fields: [slotId, suiteId, ownerUserId], references: [id, suiteId, ownerUserId], onDelete: Restrict)
+  version                String                 @db.VarChar(100)
+  ordinal                Int
+  slotKey                String                 @map("slot_key") @db.VarChar(1024)
+  slotHash               String                 @map("slot_hash") @db.Char(64)
+  referencesHash         String                 @map("references_hash") @db.Char(64)
+  referenceSetHash       String                 @map("reference_set_hash") @db.Char(64)
+  templateKey            String                 @map("template_key")
+  templateReleaseId      String                 @map("template_release_id")
+  templateRelease        AiPromptRelease        @relation("AiMediaSuiteSlotPromptRelease", fields: [templateReleaseId, templateKey], references: [id, templateKey], onDelete: Restrict)
+  templateRevisionId     String                 @map("template_revision_id")
+  templateRevision       AiPromptRevision       @relation("AiMediaSuiteSlotPromptRevision", fields: [templateRevisionId, templateKey], references: [id, templateKey], onDelete: Restrict)
+  templateSequence       Int                    @map("template_sequence")
+  templateChecksum       String                 @map("template_checksum") @db.Char(64)
+  templateSnapshot       Json                   @map("template_snapshot_json")
+  templateSnapshotHash   String                 @map("template_snapshot_hash") @db.Char(64)
+  variablesSnapshot      Json                   @map("variables_snapshot_json")
+  variablesHash          String                 @map("variables_hash") @db.Char(64)
+  resolvedPrompt         String                 @map("resolved_prompt") @db.Text
+  resolvedNegativePrompt String                 @map("resolved_negative_prompt") @db.Text
+  compiledPromptHash     String                 @map("compiled_prompt_hash") @db.Char(64)
+  compilerVersion        String                 @map("compiler_version") @db.VarChar(100)
+  policyVersion          String                 @map("policy_version") @db.VarChar(100)
+  policyHash             String                 @map("policy_hash") @db.Char(64)
+  resolvedPromptHash     String                 @map("resolved_prompt_hash") @db.Char(64)
+  resolvedNegativePromptHash String              @map("resolved_negative_prompt_hash") @db.Char(64)
+  bindingHash            String                 @map("binding_hash") @db.Char(64)
+  createdAt              DateTime               @default(now()) @map("created_at")
+
+  @@unique([id, ownerUserId], map: "ai_media_suite_slot_prompt_id_owner_key")
+  @@unique([slotId, suiteId, ownerUserId], map: "ai_media_suite_slot_prompt_suite_slot_key")
+  @@unique([promptSetId, ordinal], map: "ai_media_suite_slot_prompt_set_ordinal_key")
+  @@index([ownerUserId, createdAt], map: "ai_media_suite_slot_prompt_owner_created_idx")
+  @@map("ai_media_suite_slot_prompts")
 }
 
 model AiMediaSuiteEvent {

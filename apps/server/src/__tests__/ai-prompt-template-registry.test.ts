@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AI_LISTING_COPY_SAFETY_POLICY,
+  AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
   AI_PROMPT_SAFETY_POLICY,
   InMemoryAiPromptTemplateStore,
 } from '../services/ai-prompt-templates.js';
 import {
   AiPromptTemplateRegistryService,
+  AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
   LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
   LISTING_COPY_TITLE_TEMPLATE_KEY,
@@ -19,6 +21,15 @@ import {
 } from '../services/ai-prompt-consumer-contracts.js';
 
 const KEY = 'text-to-image.base';
+
+function suiteVariables(suffix = '') {
+  return {
+    slotSpecJson: JSON.stringify({ goal: `sku_hero${suffix}`, aspectRatio: '3:4' }),
+    referenceManifestJson: JSON.stringify({ references: [{ inputOrdinal: 0, role: 'identity' }] }),
+    verifiedFactsJson: JSON.stringify({ facts: [{ path: '/title', value: `Bottle${suffix}` }] }),
+    safetyConstraintsJson: JSON.stringify({ constraints: ['preserve_product_identity'] }),
+  };
+}
 
 function registry(legacyPrompt = 'Legacy Ozon product image guidance') {
   return new AiPromptTemplateRegistryService(
@@ -148,6 +159,7 @@ describe('AI prompt template registry', () => {
     expect(listed.items.map((item) => item.key)).toEqual([
       KEY,
       AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
+      AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
       LISTING_COPY_TITLE_TEMPLATE_KEY,
       LISTING_COPY_DESCRIPTION_TEMPLATE_KEY,
       AI_MEDIA_CURATION_TEMPLATE_KEY,
@@ -220,6 +232,125 @@ describe('AI prompt template registry', () => {
     });
     expect(resolved.resolvedPrompt).toContain('Keep model codes unchanged');
     expect(resolved.resolvedNegativePrompt).toContain('piano black');
+  });
+
+  it('bootstraps the suite generation template with all frozen variable contracts', async () => {
+    const target = registry();
+    const listed = await target.listTemplates();
+    const template = listed.items.find((item) => item.key === AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY)!;
+
+    expect(template).toMatchObject({
+      currentSequence: 1,
+      outputMode: 'media_candidate',
+      variableSchema: {
+        safetyPolicy: AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
+        outputMode: 'media_candidate',
+      },
+    });
+    expect(template.variableSchema.prompt.map((variable) => variable.inputKey)).toEqual([
+      'slotSpecJson',
+      'referenceManifestJson',
+      'verifiedFactsJson',
+    ]);
+    expect(template.variableSchema.negativePrompt.map((variable) => variable.inputKey)).toEqual([
+      'safetyConstraintsJson',
+    ]);
+  });
+
+  it('resolves a bounded suite prompt batch against one active release and returns canonical variables', async () => {
+    class CountingStore extends InMemoryAiPromptTemplateStore {
+      activeReleaseReads = 0;
+      revisionReads = 0;
+
+      override async getActiveRelease(templateKey: string) {
+        this.activeReleaseReads += 1;
+        return super.getActiveRelease(templateKey);
+      }
+
+      override async getRevision(revisionId: string) {
+        this.revisionReads += 1;
+        return super.getRevision(revisionId);
+      }
+    }
+    const store = new CountingStore();
+    const target = new AiPromptTemplateRegistryService(store, {
+      getLegacyPrompt: vi.fn(async () => 'unused'),
+    });
+    await target.resolveTemplate({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      variables: suiteVariables('-warmup'),
+    });
+    store.activeReleaseReads = 0;
+    store.revisionReads = 0;
+
+    const batch = await target.resolveTemplateBatch({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      items: [
+        {
+          key: 'slot-1',
+          variables: {
+            ...suiteVariables('-1'),
+            slotSpecJson: '{"z":1,"a":{"goal":"sku_hero"}}',
+          },
+        },
+        { key: 'slot-2', variables: suiteVariables('-2') },
+      ],
+    });
+
+    expect(store.activeReleaseReads).toBe(1);
+    expect(store.revisionReads).toBe(1);
+    expect(batch).toMatchObject({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      release: { sequence: 1 },
+      checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
+      items: [
+        {
+          key: 'slot-1',
+          normalizedVariables: {
+            slotSpecJson: '{"a":{"goal":"sku_hero"},"z":1}',
+          },
+        },
+        { key: 'slot-2' },
+      ],
+    });
+    expect(batch.items.every((item) => item.resolvedPrompt.includes(
+      AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
+    ))).toBe(true);
+    expect(new Set(batch.items.map((item) => item.outputMode))).toEqual(new Set(['media_candidate']));
+
+    const single = await target.resolveTemplate({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      variables: suiteVariables('-single'),
+    });
+    expect(single).not.toHaveProperty('items');
+    expect(single).not.toHaveProperty('normalizedVariables');
+    expect(single).toMatchObject({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      release: batch.release,
+      resolvedPrompt: expect.stringContaining('sku_hero-single'),
+    });
+  });
+
+  it('rejects empty, duplicate-key, and oversized prompt batches before resolving a release', async () => {
+    const target = registry();
+    await expect(target.resolveTemplateBatch({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      items: [],
+    })).rejects.toMatchObject({ code: 'INVALID_BATCH_INPUT' });
+    await expect(target.resolveTemplateBatch({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      items: [
+        { key: 'same-slot', variables: suiteVariables('-1') },
+        { key: 'same-slot', variables: suiteVariables('-2') },
+      ],
+    })).rejects.toMatchObject({ code: 'INVALID_BATCH_INPUT' });
+    await expect(target.resolveTemplateBatch({
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      items: Array.from({ length: 501 }, (_, index) => ({
+        key: `slot-${index}`,
+        variables: suiteVariables(`-${index}`),
+      })),
+    })).rejects.toMatchObject({ code: 'INVALID_BATCH_INPUT' });
   });
 
   it('rechecks a structured consumer before test, publish, rollback, and resolve activation', async () => {
@@ -458,7 +589,7 @@ describe('AI prompt template registry', () => {
 
     await Promise.all([first.listTemplates(), second.listTemplates()]);
     const listed = await first.listTemplates();
-    expect(listed.items).toHaveLength(7);
+    expect(listed.items).toHaveLength(8);
     for (const template of listed.items) {
       expect(template.currentSequence).toBe(1);
       expect(template.revisions).toHaveLength(1);

@@ -71,6 +71,7 @@ import { aiImageRoutes } from './routes/ai-images.js';
 import { aiImageSuiteRoutes } from './routes/ai-image-suites.js';
 import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
 import { PrismaAiImageSuiteReferenceRepository } from './repositories/ai-image-suite-reference-repository.js';
+import { PrismaAiImageSuitePromptRepository } from './repositories/ai-image-suite-prompt-repository.js';
 import { adminAiPromptTemplateRoutes } from './routes/admin-ai-prompt-templates.js';
 import { adminAiCostReconciliationRoutes } from './routes/admin-ai-cost-reconciliations.js';
 import { adminOzonPublisherParityRoutes } from './routes/admin-ozon-publisher-parity.js';
@@ -108,6 +109,7 @@ import { createPrismaSourceListingMediaImportStore } from './services/source-lis
 import { getStorageBackend } from './services/image-storage.js';
 import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
 import { createAiImageSuiteReferenceService } from './services/ai-image-suite-references.js';
+import { createAiImageSuitePromptService } from './services/ai-image-suite-prompts.js';
 import {
   createPrismaOzonAttributeDefinitionCacheStore,
   getCachedOzonAttributeDefinitions,
@@ -1043,6 +1045,10 @@ await app.register(aiImageSuiteRoutes, {
         uploadBuffer: storage.uploadBuffer.bind(storage),
       };
     },
+  }),
+  promptService: createAiImageSuitePromptService({
+    repository: new PrismaAiImageSuitePromptRepository(prisma),
+    templateResolver: aiPromptTemplateRegistry,
   }),
 });
 await app.register(aiMediaPlanningRoutes, {

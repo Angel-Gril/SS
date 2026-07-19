@@ -14,6 +14,11 @@ import {
   AiImageSuiteReferenceError,
   type AiImageSuiteReferenceService,
 } from '../services/ai-image-suite-references.js';
+import {
+  AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+  AiImageSuitePromptError,
+  type AiImageSuitePromptService,
+} from '../services/ai-image-suite-prompts.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -144,9 +149,27 @@ function referenceServiceMock() {
   } as unknown as Pick<AiImageSuiteReferenceService, 'internalize'>;
 }
 
+function promptServiceMock() {
+  return {
+    freeze: vi.fn(async () => ({
+      suiteId: 'suite-1',
+      promptSetHash: '4'.repeat(64),
+      promptCount: 1,
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      templateReleaseId: 'release-7',
+      templateSequence: 7,
+      templateChecksum: '6'.repeat(64),
+      replayed: false,
+      resolvedPrompt: 'must not leak',
+      variablesSnapshot: { secret: 'must not leak' },
+    })),
+  } as unknown as Pick<AiImageSuitePromptService, 'freeze'>;
+}
+
 async function build(options: {
   service?: AiImageSuiteService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'> | null;
+  promptService?: Pick<AiImageSuitePromptService, 'freeze'> | null;
   suiteEnabled?: boolean;
   workflowEnabled?: boolean;
   webMediaEnabled?: boolean;
@@ -158,9 +181,13 @@ async function build(options: {
   const referenceService = options.referenceService === null
     ? undefined
     : options.referenceService || referenceServiceMock();
+  const promptService = options.promptService === null
+    ? undefined
+    : options.promptService || promptServiceMock();
   await app.register(aiImageSuiteRoutes, {
     service,
     ...(referenceService ? { referenceService } : {}),
+    ...(promptService ? { promptService } : {}),
     production: options.production ?? false,
     getSuiteEnabled: async () => options.suiteEnabled ?? true,
     getMediaWorkflowEnabled: async () => options.workflowEnabled ?? true,
@@ -174,7 +201,7 @@ async function build(options: {
       };
     },
   });
-  return { app, service, referenceService };
+  return { app, service, referenceService, promptService };
 }
 
 describe('AI image suite routes', () => {
@@ -379,12 +406,101 @@ describe('AI image suite routes', () => {
     });
   });
 
+  it('freezes only server-derived slot Prompts and returns a secret-free version summary', async () => {
+    const { app, promptService } = await build();
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prompts/freeze',
+      payload: {
+        expectedRevision: 2,
+        operationKey: 'prompt-freeze-operation-1',
+        templateKey: 'attacker-template',
+        variables: { userPrompt: 'attacker prompt' },
+        provider: 'attacker',
+        ownerUserId: 'attacker',
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(promptService?.freeze).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prompts/freeze',
+      payload: { expectedRevision: 2, operationKey: 'prompt-freeze-operation-1' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(promptService?.freeze).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: 2,
+      operationKey: 'prompt-freeze-operation-1',
+    });
+    expect(response.json()).toEqual({
+      code: 1,
+      data: {
+        suiteId: 'suite-1',
+        promptSetHash: '4'.repeat(64),
+        promptCount: 1,
+        templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+        templateReleaseId: 'release-7',
+        templateSequence: 7,
+        templateChecksum: '6'.repeat(64),
+      },
+      replayed: false,
+    });
+    expect(response.body).not.toContain('must not leak');
+    expect(response.body).not.toContain('variablesSnapshot');
+    expect(response.body).not.toContain('resolvedPrompt');
+  });
+
+  it('returns 200 for exact Prompt replay and maps typed/unwired Prompt failures', async () => {
+    const replayService = promptServiceMock();
+    vi.mocked(replayService.freeze).mockResolvedValueOnce({
+      suiteId: 'suite-1', promptSetHash: '4'.repeat(64), promptCount: 1,
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      templateReleaseId: 'release-7', templateSequence: 7,
+      templateChecksum: '6'.repeat(64), replayed: true,
+    });
+    const replay = await build({ promptService: replayService });
+    const replayResponse = await replay.app.inject({
+      method: 'POST', url: '/suites/suite-1/prompts/freeze',
+      payload: { expectedRevision: 2, operationKey: 'prompt-freeze-replay-1' },
+    });
+    expect(replayResponse.statusCode).toBe(200);
+    expect(replayResponse.json()).toMatchObject({ replayed: true });
+
+    const failedService = promptServiceMock();
+    vi.mocked(failedService.freeze).mockRejectedValueOnce(new AiImageSuitePromptError(
+      'AI_MEDIA_SUITE_PROMPT_STALE', 409, 'stale prompt authority',
+    ));
+    const failed = await build({ promptService: failedService });
+    const failedResponse = await failed.app.inject({
+      method: 'POST', url: '/suites/suite-1/prompts/freeze',
+      payload: { expectedRevision: 2, operationKey: 'prompt-freeze-failure-1' },
+    });
+    expect(failedResponse.statusCode).toBe(409);
+    expect(failedResponse.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_PROMPT_STALE', msg: 'stale prompt authority',
+    });
+
+    const unavailable = await build({ promptService: null });
+    const unavailableResponse = await unavailable.app.inject({
+      method: 'POST', url: '/suites/suite-1/prompts/freeze',
+      payload: { expectedRevision: 2, operationKey: 'prompt-freeze-unwired-1' },
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toMatchObject({
+      code: 'AI_MEDIA_SUITE_PROMPT_SERVICE_NOT_READY',
+    });
+  });
+
   it.each([
     [{ suiteEnabled: false }, 'AI_MEDIA_SUITE_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: false }, 'AI_MEDIA_WORKFLOW_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: true, webMediaEnabled: false }, 'SOURCE_LISTING_WEB_MEDIA_DISABLED'],
   ] as const)('fails closed before suite writes when a write gate is disabled', async (flags, code) => {
-    const { app, service, referenceService } = await build(flags);
+    const { app, service, referenceService, promptService } = await build(flags);
     const previewResponse = await app.inject({
       method: 'POST', url: '/suites/preview', payload: { planId: 'plan-1' },
     });
@@ -401,16 +517,24 @@ describe('AI image suite routes', () => {
       url: '/suites/suite-1/references/internalize',
       payload: { expectedRevision: 1, operationKey: 'reference-gated-operation' },
     });
+    const promptResponse = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prompts/freeze',
+      payload: { expectedRevision: 2, operationKey: 'prompt-gated-operation' },
+    });
 
     expect(previewResponse.statusCode).toBe(503);
     expect(claimResponse.statusCode).toBe(503);
     expect(internalizeResponse.statusCode).toBe(503);
+    expect(promptResponse.statusCode).toBe(503);
     expect(previewResponse.json()).toMatchObject({ code });
     expect(claimResponse.json()).toMatchObject({ code });
     expect(internalizeResponse.json()).toMatchObject({ code });
+    expect(promptResponse.json()).toMatchObject({ code });
     expect(service.preview).not.toHaveBeenCalled();
     expect(service.claim).not.toHaveBeenCalled();
     expect(referenceService?.internalize).not.toHaveBeenCalled();
+    expect(promptService?.freeze).not.toHaveBeenCalled();
   });
 
   it('keeps fake claim fail-closed in production without blocking provider-free preview', async () => {

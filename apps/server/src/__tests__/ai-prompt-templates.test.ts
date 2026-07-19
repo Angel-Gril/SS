@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   AI_LISTING_COPY_SAFETY_POLICY,
+  AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY,
+  AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
   AiPromptTemplateService,
   InMemoryAiPromptTemplateStore,
   checksumAiPromptRevision,
@@ -143,6 +145,39 @@ describe('AI prompt templates', () => {
     expect(rendered.resolvedPrompt).toContain(AI_LISTING_COPY_SAFETY_POLICY);
     expect(rendered.resolvedPrompt).toContain('{"material":"steel"}');
     expect(rendered.resolvedNegativePrompt).toContain('certified');
+  });
+
+  it('requires every suite generation token and prepends non-editable media safety', () => {
+    const suiteRevision = {
+      templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+      promptTemplate: [
+        'Slot: {{slot_spec_json}}',
+        'References: {{reference_manifest_json}}',
+        'Facts: {{verified_facts_json}}',
+      ].join('\n'),
+      negativePromptTemplate: 'Constraints: {{safety_constraints_json}}',
+    };
+
+    expect(() => validateAiPromptRevision(suiteRevision)).not.toThrow();
+    expect(() => validateAiPromptRevision({
+      ...suiteRevision,
+      promptTemplate: 'Slot: {{slot_spec_json}}\nFacts: {{verified_facts_json}}',
+    })).toThrow(expect.objectContaining({ code: 'MISSING_TEMPLATE_TOKEN' }));
+    expect(() => validateAiPromptRevision({
+      ...suiteRevision,
+      negativePromptTemplate: 'Constraints cannot be edited away.',
+    })).toThrow(expect.objectContaining({ code: 'MISSING_TEMPLATE_TOKEN' }));
+
+    const rendered = renderAiPromptRevision(suiteRevision, {
+      slotSpecJson: '{"goal":"sku_hero"}',
+      referenceManifestJson: '{"references":[{"inputOrdinal":0}]}',
+      verifiedFactsJson: '{"facts":[]}',
+      safetyConstraintsJson: '{"constraints":["preserve_product_identity"]}',
+    });
+    expect(rendered.outputMode).toBe('media_candidate');
+    expect(rendered.resolvedPrompt).toContain(AI_MEDIA_SUITE_GENERATION_SAFETY_POLICY);
+    expect(rendered.resolvedPrompt).toContain('{"goal":"sku_hero"}');
+    expect(rendered.resolvedNegativePrompt).toContain('preserve_product_identity');
   });
 
   it('computes a stable content-sensitive checksum for a revision', () => {
