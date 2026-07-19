@@ -22,6 +22,10 @@ import {
   type AiImageSuitePromptService,
 } from '../services/ai-image-suite-prompts.js';
 import {
+  AiImageSuiteMaterializationError,
+  type AiImageSuiteMaterializationService,
+} from '../services/ai-image-suite-materialization.js';
+import {
   AI_IMAGE_SUITE_MODEL,
   AI_IMAGE_SUITE_PROVIDER,
   resolveAiImageProviderCapability,
@@ -52,6 +56,11 @@ const freezePromptsSchema = z.object({
   operationKey: z.string().trim().min(8).max(128),
 }).strict();
 
+const materializeChildrenSchema = z.object({
+  expectedRevision: z.literal(3),
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
 const publicDiagnosticCode = /^[A-Z][A-Z0-9_]{0,99}$/u;
 const maxPublicDiagnostics = 20;
 
@@ -59,6 +68,7 @@ export interface AiImageSuiteRouteOptions {
   service?: AiImageSuiteService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'>;
   promptService?: Pick<AiImageSuitePromptService, 'freeze'>;
+  materializationService?: Pick<AiImageSuiteMaterializationService, 'materialize'>;
   authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
   getSuiteEnabled?: (ownerUserId: string) => Promise<boolean>;
   getMediaWorkflowEnabled?: (ownerUserId: string) => Promise<boolean>;
@@ -200,7 +210,8 @@ function publicSuite(suite: AiImageSuiteRecord) {
 function sendError(reply: FastifyReply, error: unknown) {
   if (error instanceof AiImageSuiteError
     || error instanceof AiImageSuiteReferenceError
-    || error instanceof AiImageSuitePromptError) {
+    || error instanceof AiImageSuitePromptError
+    || error instanceof AiImageSuiteMaterializationError) {
     return reply.status(error.statusCode).send({ code: error.code, msg: error.message });
   }
   throw error;
@@ -399,6 +410,49 @@ export async function aiImageSuiteRoutes(
           templateReleaseId: result.templateReleaseId,
           templateSequence: result.templateSequence,
           templateChecksum: result.templateChecksum,
+        },
+        replayed: result.replayed,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/children/materialize', async (request, reply) => {
+    const suiteId = String((request.params as { id?: unknown }).id || '').trim();
+    if (!suiteId || suiteId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite id is invalid' });
+    }
+    const parsed = materializeChildrenSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    if (!options.materializationService) {
+      return reply.status(503).send({
+        code: 'AI_MEDIA_SUITE_MATERIALIZATION_SERVICE_NOT_READY',
+        msg: 'AI image suite child materialization is not available',
+      });
+    }
+    try {
+      const result = await options.materializationService.materialize({
+        suiteId,
+        ...ids,
+        ...parsed.data,
+      });
+      return reply.status(result.replayed ? 200 : 202).send({
+        code: 1,
+        data: {
+          suiteId: result.suiteId,
+          revision: result.revision,
+          status: result.status,
+          childCount: result.childCount,
+          estimatedCostCents: result.estimatedCostCents,
+          maximumCostCents: result.maximumCostCents,
+          materializationHash: result.materializationHash,
+          children: result.children,
         },
         replayed: result.replayed,
       });

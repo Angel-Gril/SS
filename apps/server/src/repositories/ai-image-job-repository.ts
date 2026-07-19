@@ -459,7 +459,15 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
   async getById(id: string) {
     const row = await (this.prisma as any).aiImageJob.findUnique({
       where: { id },
-      include: { assets: true, workflow: { include: { inputs: { orderBy: { ordinal: 'asc' } } } } },
+      include: {
+        assets: true,
+        workflow: {
+          include: {
+            inputs: { orderBy: { ordinal: 'asc' } },
+            suiteSlot: { select: { suiteId: true, ownerUserId: true } },
+          },
+        },
+      },
     });
     return row ? record(row) : null;
   }

@@ -448,6 +448,15 @@ function publicWorkflow(workflow: any) {
   };
 }
 
+function assertStandaloneWorkflow(workflow: { suiteId?: string | null }): void {
+  if (workflow.suiteId) {
+    throw new AiMediaWorkflowError(
+      'WORKFLOW_CONFLICT',
+      'Suite child workflows are controlled by the suite operation',
+    );
+  }
+}
+
 function publicJob(job: Record<string, unknown>) {
   const {
     resolvedPrompt: _resolvedPrompt,
@@ -692,6 +701,12 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     const { id } = request.params as { id: string };
     const job = await repository.getById(id);
     if (!job || job.ownerUserId !== actor(request).ownerUserId) return reply.status(404).send({ code: 'NOT_FOUND', msg: 'AI image job not found' });
+    if ((job as any).workflow?.suiteSlot?.suiteId) {
+      return reply.status(409).send({
+        code: 'INVALID_STATE',
+        msg: 'Suite child jobs are available only through the suite workflow',
+      });
+    }
     return { code: 1, data: publicJob(job as unknown as Record<string, unknown>) };
   });
 
@@ -734,6 +749,12 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       let selectedAssetId: string | null = null;
       if (ownedJob.workflowId) {
         const workflow = await mediaWorkflowService.get(ownedJob.workflowId, actor(request).ownerUserId);
+        if (workflow.suiteId) {
+          throw new AiImageJobError(
+            'INVALID_STATE',
+            'Suite child outputs must be reviewed and applied through the suite workflow',
+          );
+        }
         if (parsed.data.targetType !== workflow.contextType || parsed.data.targetId !== workflow.contextId) {
           throw new AiImageJobError('INVALID_STATE', 'Workflow output can only be applied to its reviewed context');
         }
@@ -886,6 +907,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   app.get('/workflows/:id', async (request, reply) => {
     try {
       const workflow = await mediaWorkflowService.get((request.params as any).id, actor(request).ownerUserId);
+      assertStandaloneWorkflow(workflow);
       return { code: 1, data: publicWorkflow(workflow) };
     } catch (error) { return sendError(reply, error); }
   });
@@ -895,6 +917,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
     try {
       const ids = actor(request);
+      const current = await mediaWorkflowService.get((request.params as any).id, ids.ownerUserId);
+      assertStandaloneWorkflow(current);
       const workflow = await mediaWorkflowService.cancel((request.params as any).id, ids.ownerUserId, ids.actorUserId, parsed.data.expectedRevision);
       return { code: 1, data: publicWorkflow(workflow) };
     } catch (error) { return sendError(reply, error); }
@@ -913,6 +937,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         (request.params as any).id,
         ids.ownerUserId,
       );
+      assertStandaloneWorkflow(existingWorkflow);
       await assertWorkflowSourceCurrent(existingWorkflow, ids.ownerUserId);
       let retryEnqueue: (jobId: string) => Promise<void> = enqueue;
       let translationRetryDailyLimit: number | undefined;
@@ -996,6 +1021,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     try {
       const ids = actor(request);
       const current = await mediaWorkflowService.get((request.params as any).id, ids.ownerUserId);
+      assertStandaloneWorkflow(current);
       const currentJob = Array.isArray(current.jobs) ? current.jobs.at(-1) as { provider?: unknown } | undefined : undefined;
       if (String(currentJob?.provider || '') === 'fake' && production) {
         throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'Test-only AI media candidates cannot be reviewed in production');

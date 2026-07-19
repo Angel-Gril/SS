@@ -67,10 +67,21 @@ async function build(
   };
   const enqueue = vi.fn(async () => undefined);
   const enqueueTranslation = vi.fn(async () => undefined);
+  const applyAssets = vi.fn(async (input: any) => ({
+    jobId: input.jobId,
+    mode: input.mode,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    images: [],
+    mainImage: null,
+    editedImages: [],
+    targetUpdatedAt: new Date(),
+    appliedAt: new Date(),
+  }));
   const repository = jobRepository();
   const app = Fastify();
   await app.register(aiImageRoutes, {
-    repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation,
+    repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation, applyAssets,
     getTranslationSettings: async () => ({
       enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
       model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
@@ -99,7 +110,10 @@ async function build(
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1' };
     },
   });
-  return { app, repository, mediaWorkflowService, mediaContextService, enqueue, enqueueTranslation };
+  return {
+    app, repository, mediaWorkflowService, mediaContextService,
+    enqueue, enqueueTranslation, applyAssets,
+  };
 }
 
 describe('AI media workflow routes', () => {
@@ -529,6 +543,59 @@ describe('AI media workflow routes', () => {
     } });
     expect(retried.statusCode).toBe(202);
     expect(enqueue).toHaveBeenCalledWith('job-2');
+  });
+
+  it('keeps suite child workflows behind the suite-level lifecycle contract', async () => {
+    const { app, repository, mediaWorkflowService, enqueue, applyAssets } = await build();
+    mediaWorkflowService.get.mockResolvedValue({ ...workflow, suiteId: 'suite-1' });
+    repository.getById.mockResolvedValue({
+      id: 'job-1',
+      ownerUserId: 'owner-1',
+      workflowId: 'workflow-1',
+      status: 'SUCCEEDED',
+      prompt: 'frozen suite prompt must not leak',
+      workflow: { suiteSlot: { suiteId: 'suite-1', ownerUserId: 'owner-1' } },
+      assets: [],
+    });
+
+    const jobDetail = await app.inject({ method: 'GET', url: '/jobs/job-1' });
+    expect(jobDetail.statusCode).toBe(409);
+    expect(jobDetail.json()).toMatchObject({ code: 'INVALID_STATE' });
+    expect(jobDetail.body).not.toContain('frozen suite prompt');
+
+    const detail = await app.inject({ method: 'GET', url: '/workflows/workflow-1' });
+    expect(detail.statusCode).toBe(409);
+    expect(detail.json()).toMatchObject({ code: 'WORKFLOW_CONFLICT' });
+    expect(detail.body).not.toContain('prompt');
+
+    const cancel = await app.inject({ method: 'POST', url: '/workflows/workflow-1/cancel', payload: {
+      expectedRevision: 1,
+    } });
+    expect(cancel.statusCode).toBe(409);
+    expect(cancel.json()).toMatchObject({ code: 'WORKFLOW_CONFLICT' });
+    expect(mediaWorkflowService.cancel).not.toHaveBeenCalled();
+
+    const retry = await app.inject({ method: 'POST', url: '/workflows/workflow-1/retry', payload: {
+      expectedRevision: 1, idempotencyKey: 'suite-child-retry-blocked',
+    } });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({ code: 'WORKFLOW_CONFLICT' });
+    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+
+    const review = await app.inject({ method: 'POST', url: '/workflows/workflow-1/review', payload: {
+      expectedRevision: 1, outputAssetId: 'output-1', decision: 'APPROVE',
+    } });
+    expect(review.statusCode).toBe(409);
+    expect(review.json()).toMatchObject({ code: 'WORKFLOW_CONFLICT' });
+    expect(mediaWorkflowService.review).not.toHaveBeenCalled();
+
+    const apply = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
+      mode: 'append', targetType: 'collect', targetId: 'goods-1',
+    } });
+    expect(apply.statusCode).toBe(400);
+    expect(apply.json()).toMatchObject({ code: 'INVALID_STATE' });
+    expect(applyAssets).not.toHaveBeenCalled();
   });
 
   it('rejects retry when the frozen source capture snapshot is no longer current', async () => {

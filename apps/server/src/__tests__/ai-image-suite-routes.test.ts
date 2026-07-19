@@ -19,6 +19,10 @@ import {
   AiImageSuitePromptError,
   type AiImageSuitePromptService,
 } from '../services/ai-image-suite-prompts.js';
+import {
+  AiImageSuiteMaterializationError,
+  type AiImageSuiteMaterializationService,
+} from '../services/ai-image-suite-materialization.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -166,10 +170,33 @@ function promptServiceMock() {
   } as unknown as Pick<AiImageSuitePromptService, 'freeze'>;
 }
 
+function materializationServiceMock() {
+  return {
+    materialize: vi.fn(async () => ({
+      suiteId: 'suite-1',
+      revision: 4 as const,
+      status: 'PLANNED' as const,
+      childCount: 1,
+      estimatedCostCents: 0,
+      maximumCostCents: 0,
+      materializationHash: '8'.repeat(64),
+      children: [{
+        ordinal: 0,
+        slotKey: 'sku:sku-1:hero',
+        childWorkflowId: 'workflow-1',
+      }],
+      replayed: false,
+      resolvedPrompt: 'must not leak',
+      sourceUrl: 'https://source.example/private-reference.png',
+    })),
+  } as unknown as Pick<AiImageSuiteMaterializationService, 'materialize'>;
+}
+
 async function build(options: {
   service?: AiImageSuiteService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'> | null;
   promptService?: Pick<AiImageSuitePromptService, 'freeze'> | null;
+  materializationService?: Pick<AiImageSuiteMaterializationService, 'materialize'> | null;
   suiteEnabled?: boolean;
   workflowEnabled?: boolean;
   webMediaEnabled?: boolean;
@@ -184,10 +211,14 @@ async function build(options: {
   const promptService = options.promptService === null
     ? undefined
     : options.promptService || promptServiceMock();
+  const materializationService = options.materializationService === null
+    ? undefined
+    : options.materializationService || materializationServiceMock();
   await app.register(aiImageSuiteRoutes, {
     service,
     ...(referenceService ? { referenceService } : {}),
     ...(promptService ? { promptService } : {}),
+    ...(materializationService ? { materializationService } : {}),
     production: options.production ?? false,
     getSuiteEnabled: async () => options.suiteEnabled ?? true,
     getMediaWorkflowEnabled: async () => options.workflowEnabled ?? true,
@@ -201,7 +232,7 @@ async function build(options: {
       };
     },
   });
-  return { app, service, referenceService, promptService };
+  return { app, service, referenceService, promptService, materializationService };
 }
 
 describe('AI image suite routes', () => {
@@ -495,12 +526,107 @@ describe('AI image suite routes', () => {
     });
   });
 
+  it('materializes only server-authorized frozen children and returns a secret-free summary', async () => {
+    const { app, materializationService } = await build();
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/children/materialize',
+      payload: {
+        expectedRevision: 3,
+        operationKey: 'children-materialize-operation-1',
+        prompt: 'attacker prompt',
+        referenceAssetIds: ['attacker-asset'],
+        ownerUserId: 'attacker',
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(materializationService?.materialize).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/children/materialize',
+      payload: { expectedRevision: 3, operationKey: 'children-materialize-operation-1' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(materializationService?.materialize).toHaveBeenCalledWith({
+      suiteId: 'suite-1',
+      ownerUserId: 'owner-1',
+      actorUserId: 'actor-1',
+      expectedRevision: 3,
+      operationKey: 'children-materialize-operation-1',
+    });
+    expect(response.json()).toEqual({
+      code: 1,
+      data: {
+        suiteId: 'suite-1',
+        revision: 4,
+        status: 'PLANNED',
+        childCount: 1,
+        estimatedCostCents: 0,
+        maximumCostCents: 0,
+        materializationHash: '8'.repeat(64),
+        children: [{
+          ordinal: 0,
+          slotKey: 'sku:sku-1:hero',
+          childWorkflowId: 'workflow-1',
+        }],
+      },
+      replayed: false,
+    });
+    expect(response.body).not.toContain('must not leak');
+    expect(response.body).not.toContain('private-reference');
+    expect(response.body).not.toContain('reservation');
+    expect(response.body).not.toContain('jobId');
+  });
+
+  it('returns 200 for exact child replay and maps typed/unwired materialization failures', async () => {
+    const replayService = materializationServiceMock();
+    vi.mocked(replayService.materialize).mockResolvedValueOnce({
+      suiteId: 'suite-1', revision: 4, status: 'PLANNED', childCount: 1,
+      estimatedCostCents: 0, maximumCostCents: 0,
+      materializationHash: '8'.repeat(64),
+      children: [{ ordinal: 0, slotKey: 'sku:sku-1:hero', childWorkflowId: 'workflow-1' }],
+      replayed: true,
+    });
+    const replay = await build({ materializationService: replayService });
+    const replayResponse = await replay.app.inject({
+      method: 'POST', url: '/suites/suite-1/children/materialize',
+      payload: { expectedRevision: 3, operationKey: 'children-materialize-replay-1' },
+    });
+    expect(replayResponse.statusCode).toBe(200);
+    expect(replayResponse.json()).toMatchObject({ replayed: true });
+
+    const failedService = materializationServiceMock();
+    vi.mocked(failedService.materialize).mockRejectedValueOnce(new AiImageSuiteMaterializationError(
+      'AI_MEDIA_SUITE_MATERIALIZATION_STALE', 409, 'stale materialization authority',
+    ));
+    const failed = await build({ materializationService: failedService });
+    const failedResponse = await failed.app.inject({
+      method: 'POST', url: '/suites/suite-1/children/materialize',
+      payload: { expectedRevision: 3, operationKey: 'children-materialize-failure-1' },
+    });
+    expect(failedResponse.statusCode).toBe(409);
+    expect(failedResponse.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_MATERIALIZATION_STALE', msg: 'stale materialization authority',
+    });
+
+    const unavailable = await build({ materializationService: null });
+    const unavailableResponse = await unavailable.app.inject({
+      method: 'POST', url: '/suites/suite-1/children/materialize',
+      payload: { expectedRevision: 3, operationKey: 'children-materialize-unwired-1' },
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json()).toMatchObject({
+      code: 'AI_MEDIA_SUITE_MATERIALIZATION_SERVICE_NOT_READY',
+    });
+  });
+
   it.each([
     [{ suiteEnabled: false }, 'AI_MEDIA_SUITE_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: false }, 'AI_MEDIA_WORKFLOW_DISABLED'],
     [{ suiteEnabled: true, workflowEnabled: true, webMediaEnabled: false }, 'SOURCE_LISTING_WEB_MEDIA_DISABLED'],
   ] as const)('fails closed before suite writes when a write gate is disabled', async (flags, code) => {
-    const { app, service, referenceService, promptService } = await build(flags);
+    const { app, service, referenceService, promptService, materializationService } = await build(flags);
     const previewResponse = await app.inject({
       method: 'POST', url: '/suites/preview', payload: { planId: 'plan-1' },
     });
@@ -522,19 +648,27 @@ describe('AI image suite routes', () => {
       url: '/suites/suite-1/prompts/freeze',
       payload: { expectedRevision: 2, operationKey: 'prompt-gated-operation' },
     });
+    const materializationResponse = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/children/materialize',
+      payload: { expectedRevision: 3, operationKey: 'children-gated-operation' },
+    });
 
     expect(previewResponse.statusCode).toBe(503);
     expect(claimResponse.statusCode).toBe(503);
     expect(internalizeResponse.statusCode).toBe(503);
     expect(promptResponse.statusCode).toBe(503);
+    expect(materializationResponse.statusCode).toBe(503);
     expect(previewResponse.json()).toMatchObject({ code });
     expect(claimResponse.json()).toMatchObject({ code });
     expect(internalizeResponse.json()).toMatchObject({ code });
     expect(promptResponse.json()).toMatchObject({ code });
+    expect(materializationResponse.json()).toMatchObject({ code });
     expect(service.preview).not.toHaveBeenCalled();
     expect(service.claim).not.toHaveBeenCalled();
     expect(referenceService?.internalize).not.toHaveBeenCalled();
     expect(promptService?.freeze).not.toHaveBeenCalled();
+    expect(materializationService?.materialize).not.toHaveBeenCalled();
   });
 
   it('keeps fake claim fail-closed in production without blocking provider-free preview', async () => {

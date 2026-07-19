@@ -25,6 +25,23 @@ const promptFreezeMigration = readFileSync(new URL(
   '../../prisma/migrations/20260719140000_add_ai_media_suite_prompt_freeze/migration.sql',
   import.meta.url,
 ), 'utf8');
+const materializationMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260719150000_add_ai_media_suite_materialization/migration.sql',
+  import.meta.url,
+), 'utf8');
+const materializationHardeningMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260719153000_harden_ai_media_suite_materialization/migration.sql',
+  import.meta.url,
+), 'utf8');
+const materializedSlotProtectionMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260720000000_protect_ai_media_suite_materialized_slots/migration.sql',
+  import.meta.url,
+), 'utf8');
+const materializationMigrations = [
+  materializationMigration,
+  materializationHardeningMigration,
+  materializedSlotProtectionMigration,
+].join('\n');
 const schema = readFileSync(new URL('../../prisma/schema.prisma', import.meta.url), 'utf8');
 
 describe('AI image suite migration safety', () => {
@@ -202,5 +219,64 @@ describe('AI image suite migration safety', () => {
     expect(schema).toMatch(/resolvedPrompt\s+String\s+@map\("resolved_prompt"\)\s+@db\.Text/u);
     expect(schema).toMatch(/suitePromptSets\s+AiMediaSuitePromptSet\[\]/u);
     expect(schema).toMatch(/slotPrompts\s+AiMediaSuiteSlotPrompt\[\]/u);
+  });
+
+  it('aligns workflow slot keys and reserves revision 4 for complete child materialization', () => {
+    expect(materializationMigrations).toMatch(/ALTER COLUMN "context_slot_key" TYPE VARCHAR\(1024\)/u);
+    expect(schema).toMatch(/contextSlotKey\s+String\?\s+@map\("context_slot_key"\)\s+@db\.VarChar\(1024\)/u);
+    expect(materializationHardeningMigration).toMatch(/revision beyond materialization is not enabled/u);
+    expect(materializationHardeningMigration).toMatch(/ai_media_suite_materialization_revision_ceiling/u);
+    expect(materializationMigrations).toMatch(/revision 4 requires CHILDREN_MATERIALIZED event/u);
+    expect(materializationMigrations).toMatch(/ai-image-suite-children-materialized\/v1/u);
+    expect(materializationMigrations).toMatch(/stored_suite\."revision" IS DISTINCT FROM 4/u);
+    expect(materializationMigrations).toMatch(/child workflow requires frozen suite prompts \(suite revision 4 required\)/u);
+    expect(materializationMigrations).toMatch(/assert_ai_media_suite_materialized_graph/u);
+    expect(materializationMigrations).toMatch(/ai_media_suite_materialized_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(materializationMigrations).toMatch(/ai_media_suite_materialized_slot_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(materializationMigrations).toMatch(/ai_media_suite_materialized_event_graph[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+  });
+
+  it('binds every materialized child to the frozen Prompt, references and reserved cost', () => {
+    expect(materializationMigrations).toMatch(/slot\."status" IS DISTINCT FROM 'PLANNED'/u);
+    expect(materializationMigrations).toMatch(/slot\."attempt" IS DISTINCT FROM 1/u);
+    expect(materializationMigrations).toMatch(/slot\."revision" IS DISTINCT FROM 2/u);
+    expect(materializationMigrations).toMatch(/workflow\."status" IS DISTINCT FROM 'QUEUED'/u);
+    expect(materializationMigrations).toMatch(/child_job\."status" = 'PENDING'/u);
+    expect(materializationMigrations).toMatch(/child_job\."operation" = 'IMAGE_TO_IMAGE'/u);
+    expect(materializationMigrations).toMatch(/ai-image-suite-child-operation\/v1/u);
+    expect(materializationMigrations).toMatch(/ozon-suite-3x4-900x1200\/v1/u);
+    expect(materializationMigrations).toMatch(/child_job\."width" = 900/u);
+    expect(materializationMigrations).toMatch(/child_job\."height" = 1200/u);
+    expect(materializationMigrations).toMatch(/slotPromptId'[\s\S]*slot_prompt\."id"/u);
+    expect(materializationMigrations).toMatch(/promptBindingHash'[\s\S]*slot_prompt\."binding_hash"/u);
+    expect(materializationMigrations).toMatch(/referenceSetHash'[\s\S]*slot_prompt\."reference_set_hash"/u);
+    expect(materializationMigrations).toMatch(/FROM "ai_media_workflow_inputs"/u);
+    expect(materializationMigrations).toMatch(/FROM "ai_media_suite_reference_assets"/u);
+    expect(materializationMigrations).toMatch(/FROM "ai_cost_reservations"/u);
+    expect(materializationMigrations).toMatch(/context_sku_key[\s\S]*ownership_key/u);
+    expect(materializationMigrations).toMatch(/child_job\."prompt" = slot_prompt\."resolved_prompt"/u);
+    expect(materializationMigrations).toMatch(/child_job\."negative_prompt" = slot_prompt\."resolved_negative_prompt"/u);
+    expect(materializationMigrations).toMatch(/payload[\s\S]*actorUserId[\s\S]*actor_user_id/u);
+    expect(materializationMigrations).toMatch(/materialized_event\."actor_user_id"/u);
+    expect(materializationMigrations).toMatch(/reservation\."status" = 'RESERVED'/u);
+    expect(materializationMigrations).toMatch(/aggregate_estimated_cost/u);
+    expect(materializationMigrations).toMatch(/aggregate_maximum_cost/u);
+    expect(materializationMigrations).toMatch(/provider_dispatched_at" IS NULL/u);
+    expect(materializationMigrations).toMatch(/provider_job_id" IS NULL/u);
+    expect(materializationMigrations).toMatch(/jsonb_array_elements\(materialized_event\."payload"->'children'\)/u);
+    expect(materializationMigrations).toMatch(/childWorkflowId'[\s\S]*workflow\."id"/u);
+    expect(materializationMigrations).toMatch(/reservationId'[\s\S]*reservation\."id"/u);
+    expect(materializationHardeningMigration).toMatch(/prevent_ai_media_suite_bound_child_insert/u);
+    expect(materializationHardeningMigration).toMatch(/ai_image_jobs_suite_child_append_closed/u);
+    expect(materializationHardeningMigration).toMatch(/ai_media_workflow_inputs_suite_child_append_closed/u);
+    expect(materializationHardeningMigration).toMatch(/protect_ai_media_suite_child_reservation_lifecycle/u);
+    expect(materializationHardeningMigration).toMatch(/ai_cost_reservations_suite_child_lifecycle_protected/u);
+    expect(materializationHardeningMigration).toMatch(/TG_OP = 'DELETE'[\s\S]*RETURN OLD[\s\S]*RETURN NEW/u);
+    expect(materializationHardeningMigration).toMatch(/OLD\."workflow_id"[\s\S]*NEW\."workflow_id"/u);
+    expect(materializationHardeningMigration).toMatch(/prevent_ai_media_suite_child_output_before_dispatch/u);
+    expect(materializedSlotProtectionMigration).toMatch(/protect_ai_media_suite_materialized_slot_lifecycle/u);
+    expect(materializedSlotProtectionMigration).toMatch(/ai_media_suite_slots_materialized_lifecycle_protected/u);
+    expect(materializedSlotProtectionMigration).toMatch(/suite\."revision" >= 4/u);
+    expect(materializedSlotProtectionMigration).toMatch(/assert_ai_media_suite_materialized_graph/u);
   });
 });

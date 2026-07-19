@@ -26,6 +26,8 @@ export interface AiMediaWorkflowRecord {
   contextId: string | null;
   contextSkuKey: string | null;
   contextSlotKey: string | null;
+  /** Present only for internal routing; suite children are parent-owned. */
+  suiteId?: string | null;
   idempotencyKey: string | null;
   requestFingerprint: string;
   selectedOutputAssetId: string | null;

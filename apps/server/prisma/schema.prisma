@@ -2918,7 +2918,7 @@ model AiMediaWorkflow {
   contextType           String?               @map("context_type") @db.VarChar(50)
   contextId             String?               @map("context_id") @db.VarChar(200)
   contextSkuKey         String?               @map("context_sku_key") @db.VarChar(500)
-  contextSlotKey        String?               @map("context_slot_key") @db.VarChar(200)
+  contextSlotKey        String?               @map("context_slot_key") @db.VarChar(1024)
   idempotencyKey        String?               @map("idempotency_key") @db.VarChar(128)
   requestFingerprint    String                @map("request_fingerprint") @db.Char(64)
   selectedOutputAssetId String?               @map("selected_output_asset_id")

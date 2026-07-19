@@ -42,7 +42,12 @@ describe('AI image workflow child terminal transitions', () => {
     await new PrismaAiImageJobRepository({ aiImageJob: { findUnique } } as never).getById('job-1');
     expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({
-        workflow: { include: { inputs: { orderBy: { ordinal: 'asc' } } } },
+        workflow: {
+          include: {
+            inputs: { orderBy: { ordinal: 'asc' } },
+            suiteSlot: { select: { suiteId: true, ownerUserId: true } },
+          },
+        },
       }),
     }));
   });

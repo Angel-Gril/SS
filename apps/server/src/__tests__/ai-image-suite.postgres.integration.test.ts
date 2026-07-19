@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planning-repository.js';
 import { PrismaAiImageSuiteReferenceRepository } from '../repositories/ai-image-suite-reference-repository.js';
 import { PrismaAiImageSuitePromptRepository } from '../repositories/ai-image-suite-prompt-repository.js';
+import { PrismaAiImageSuiteMaterializationRepository } from '../repositories/ai-image-suite-materialization-repository.js';
 import { PrismaAiImageSuiteRepository } from '../repositories/ai-image-suite-repository.js';
 import {
   AI_IMAGE_SUITE_REFERENCE_SET_VERSION,
@@ -18,6 +19,13 @@ import {
   type AiImageSuiteReferenceCommitInput,
 } from '../services/ai-image-suite-references.js';
 import { createAiImageSuitePromptService } from '../services/ai-image-suite-prompts.js';
+import {
+  AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION,
+  AI_IMAGE_SUITE_OUTPUT_HEIGHT,
+  AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
+  AI_IMAGE_SUITE_OUTPUT_WIDTH,
+  createAiImageSuiteMaterializationService,
+} from '../services/ai-image-suite-materialization.js';
 import { AiPromptTemplateRegistryService } from '../services/ai-prompt-template-registry.js';
 import { PrismaAiPromptTemplateStore } from '../services/ai-prompt-template-prisma.js';
 import { createAiMediaPlanningService, hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
@@ -742,19 +750,6 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     await expect(promptSetTable.delete({ where: { id: set.id } }))
       .rejects.toThrow(/AI media suite Prompt set is immutable/u);
 
-    await client.sourceCaptureSnapshot.create({ data: {
-      id: `suite_snapshot_later_${suffix}`,
-      subjectId,
-      version: 2,
-      schemaVersion: 'source-product-capture-v2',
-      captureHash: '8'.repeat(64),
-      payloadBytes,
-      payload: capture as never,
-      stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'integration',
-      completeness: {}, truncations: [], hasEstimatedValues: false, profile: {},
-      profileHash: '7'.repeat(64), actorUserId: ownerUserId, ingestChannel: 'WEB_ACCOUNT',
-      rolloutRevision: 'integration-later', rolloutStage: 'v2_only', capturedAt: new Date(),
-    } });
     await expect(service.freeze(operation)).resolves.toMatchObject({
       suiteId, promptSetHash: set.promptSetHash, replayed: true,
     });
@@ -770,5 +765,295 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     expect(await client.aiMediaWorkflow.count({ where: { ownerUserId } })).toBe(0);
     expect(await client.aiImageJob.count({ where: { ownerUserId } })).toBe(0);
     expect(await client.aiCostReservation.count({ where: { ownerUserId } })).toBe(0);
+  });
+
+  it('rolls back revision 4 when the materialized child graph is incomplete', async () => {
+    const [storedSuite, promptSet] = await Promise.all([
+      client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } }),
+      client.aiMediaSuitePromptSet.findFirstOrThrow({ where: { suiteId, ownerUserId } }),
+    ]);
+    const payload = {
+      version: 'ai-image-suite-children-materialized/v1',
+      suiteId,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      promptSetHash: promptSet.promptSetHash,
+      referenceSetHash: promptSet.referenceSetHash,
+      operation: 'IMAGE_TO_IMAGE',
+      provider: storedSuite.provider,
+      model: storedSuite.model,
+      providerConfigHash: storedSuite.providerConfigHash,
+      pricingVersion: storedSuite.pricingVersion,
+      outputProfile: AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION,
+      width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
+      height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
+      slotCount: storedSuite.itemCount,
+      childCount: storedSuite.itemCount,
+      estimatedCostCents: storedSuite.estimatedCostCents,
+      maximumCostCents: storedSuite.maximumCostCents,
+      children: Array.from({ length: storedSuite.itemCount }, () => ({})),
+      operationKey: `incomplete-materialization-${suffix}`,
+      requestFingerprint: '5'.repeat(64),
+      materializationHash: '6'.repeat(64),
+    };
+    await expect(client.$transaction(async (tx) => {
+      await tx.aiMediaSuite.update({ where: { id: suiteId }, data: { revision: 4 } });
+      await tx.aiMediaSuiteEvent.create({ data: {
+        suiteId,
+        ownerUserId,
+        revision: 4,
+        actorUserId: ownerUserId,
+        eventKey: `incomplete-materialization-${suffix}`,
+        eventType: 'CHILDREN_MATERIALIZED',
+        payload,
+        payloadHash: hashAiMediaPlanningJson(payload),
+      } });
+    })).rejects.toThrow(/AI media suite child authority does not match frozen slots/u);
+    expect(await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } }))
+      .toMatchObject({ revision: 3, status: 'PLANNED' });
+    expect(await client.aiMediaSuiteEvent.count({ where: { suiteId, ownerUserId, revision: 4 } }))
+      .toBe(0);
+    expect(await client.aiMediaWorkflow.count({ where: { ownerUserId } })).toBe(0);
+    expect(await client.aiImageJob.count({ where: { ownerUserId } })).toBe(0);
+    expect(await client.aiCostReservation.count({ where: { ownerUserId } })).toBe(0);
+  });
+
+  it('materializes the frozen suite atomically into child graphs and replays without dispatch', async () => {
+    const service = createAiImageSuiteMaterializationService(
+      new PrismaAiImageSuiteMaterializationRepository(client),
+    );
+    const operation = {
+      suiteId,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      expectedRevision: 3,
+      operationKey: `suite-materialize-${suffix}`,
+    };
+    const results = await Promise.all([
+      service.materialize(operation),
+      service.materialize(operation),
+    ]);
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+    expect(new Set(results.map((result) => result.materializationHash)).size).toBe(1);
+    const materialized = results[0]!;
+    expect(materialized.revision).toBe(4);
+    expect(materialized.status).toBe('PLANNED');
+    expect(materialized.childCount).toBe(materialized.children.length);
+    expect(materialized.estimatedCostCents).toBe(0);
+    expect(materialized.maximumCostCents).toBe(0);
+
+    const storedSuite = await client.aiMediaSuite.findUniqueOrThrow({
+      where: { id: suiteId },
+      include: {
+        slots: {
+          orderBy: { ordinal: 'asc' },
+          include: {
+            childWorkflow: {
+              include: {
+                inputs: { orderBy: { ordinal: 'asc' } },
+                jobs: { include: { costReservation: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(storedSuite.revision).toBe(4);
+    expect(storedSuite.status).toBe('PLANNED');
+    expect(storedSuite.slots).toHaveLength(storedSuite.itemCount);
+    expect(storedSuite.slots.every((slot) => (
+      slot.status === 'PLANNED'
+      && slot.attempt === 1
+      && slot.revision === 2
+      && Boolean(slot.childWorkflowId)
+    ))).toBe(true);
+    const workflows = await client.aiMediaWorkflow.findMany({
+      where: { ownerUserId, contextId: goodsId },
+      include: {
+        inputs: { orderBy: { ordinal: 'asc' } },
+        jobs: { include: { costReservation: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(workflows).toHaveLength(storedSuite.itemCount);
+    expect(workflows.every((workflow) => (
+      workflow.operation === 'IMAGE_TO_IMAGE'
+      && workflow.status === 'QUEUED'
+      && workflow.contextType === 'collect'
+      && workflow.contextId === goodsId
+      && workflow.jobs.length === 1
+      && workflow.jobs[0]!.status === 'PENDING'
+      && workflow.jobs[0]!.width === AI_IMAGE_SUITE_OUTPUT_WIDTH
+      && workflow.jobs[0]!.height === AI_IMAGE_SUITE_OUTPUT_HEIGHT
+      && workflow.jobs[0]!.operationConfig
+      && (workflow.jobs[0]!.operationConfig as Record<string, unknown>).version
+        === AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION
+      && (workflow.jobs[0]!.operationConfig as Record<string, unknown>).outputProfile
+        === AI_IMAGE_SUITE_OUTPUT_PROFILE_VERSION
+      && (workflow.jobs[0]!.operationConfig as Record<string, unknown>).width
+        === AI_IMAGE_SUITE_OUTPUT_WIDTH
+      && (workflow.jobs[0]!.operationConfig as Record<string, unknown>).height
+        === AI_IMAGE_SUITE_OUTPUT_HEIGHT
+      && workflow.jobs[0]!.costReservation?.status === 'RESERVED'
+      && workflow.jobs[0]!.costReservation?.estimatedCostMinor === 0
+      && workflow.jobs[0]!.costReservation?.maximumCostMinor === 0
+    ))).toBe(true);
+    expect(await client.aiMediaSuiteEvent.count({
+      where: { suiteId, ownerUserId, revision: 4, eventType: 'CHILDREN_MATERIALIZED' },
+    })).toBe(1);
+    const materializedEvent = await client.aiMediaSuiteEvent.findFirstOrThrow({
+      where: { suiteId, ownerUserId, revision: 4, eventType: 'CHILDREN_MATERIALIZED' },
+    });
+    expect(materializedEvent.actorUserId).toBe(ownerUserId);
+    expect(materializedEvent.payload).toMatchObject({ actorUserId: ownerUserId });
+    expect(await client.aiMediaWorkflowEvent.count({ where: { ownerUserId } }))
+      .toBe(storedSuite.itemCount);
+    expect(await client.aiImageJob.count({ where: { ownerUserId } }))
+      .toBe(storedSuite.itemCount);
+    expect(await client.aiCostReservation.count({ where: { ownerUserId } }))
+      .toBe(storedSuite.itemCount);
+
+    const promptSet = await client.aiMediaSuitePromptSet.findFirstOrThrow({
+      where: { suiteId, ownerUserId },
+    });
+    expect(workflows.every((workflow) => workflow.jobs[0]!.prompt.length > 0)).toBe(true);
+    expect(workflows.every((workflow) => (
+      workflow.jobs[0]!.templateReleaseId === promptSet.templateReleaseId
+      && workflow.jobs[0]!.templateChecksum === promptSet.templateChecksum
+    ))).toBe(true);
+
+    const replay = await service.materialize(operation);
+    expect(replay).toMatchObject({ replayed: true, materializationHash: materialized.materializationHash });
+    await expect(service.materialize({
+      ...operation,
+      operationKey: `suite-materialize-other-${suffix}`,
+    })).rejects.toMatchObject({
+      code: 'AI_MEDIA_SUITE_CHILDREN_ALREADY_MATERIALIZED',
+      statusCode: 409,
+    });
+
+    await client.sourceCaptureSnapshot.create({ data: {
+      id: `suite_snapshot_later_${suffix}`,
+      subjectId,
+      version: 2,
+      schemaVersion: 'source-product-capture-v2',
+      captureHash: '8'.repeat(64),
+      payloadBytes,
+      payload: capture as never,
+      stageCounts: {}, provenance: {}, provenanceComplete: true, parserVersion: 'integration',
+      completeness: {}, truncations: [], hasEstimatedValues: false, profile: {},
+      profileHash: '7'.repeat(64), actorUserId: ownerUserId, ingestChannel: 'WEB_ACCOUNT',
+      rolloutRevision: 'integration-later', rolloutStage: 'v2_only', capturedAt: new Date(),
+    } });
+    await expect(service.materialize(operation)).resolves.toMatchObject({
+      replayed: true,
+      materializationHash: materialized.materializationHash,
+    });
+  });
+
+  it('keeps revision 4 terminal until the dispatch contract explicitly replaces the barrier', async () => {
+    await expect(client.aiMediaSuite.update({
+      where: { id: suiteId },
+      data: { revision: { increment: 1 } },
+    })).rejects.toThrow(/revision beyond materialization is not enabled/u);
+    expect((await client.aiMediaSuite.findUniqueOrThrow({ where: { id: suiteId } })).revision).toBe(4);
+  });
+
+  it('rejects extra jobs, inputs and lifecycle/output mutations after a suite child graph is materialized', async () => {
+    const workflow = await client.aiMediaWorkflow.findFirstOrThrow({
+      where: { ownerUserId, contextId: goodsId },
+      include: {
+        inputs: { orderBy: { ordinal: 'asc' } },
+        jobs: { include: { costReservation: true }, orderBy: { workflowAttempt: 'asc' } },
+      },
+    });
+    const job = workflow.jobs[0]!;
+    const workflowInput = workflow.inputs[0]!;
+    const suiteSlot = await client.aiMediaSuiteSlot.findFirstOrThrow({
+      where: { suiteId, ownerUserId, childWorkflowId: workflow.id },
+    });
+
+    await expect(client.aiMediaSuiteSlot.update({
+      where: { id: suiteSlot.id },
+      data: {
+        status: 'QUEUED',
+        attempt: { increment: 1 },
+        revision: { increment: 1 },
+      },
+    })).rejects.toThrow(/materialized AI media suite slot lifecycle is parent-controlled/u);
+
+    await expect(client.aiImageJob.create({ data: {
+      ownerUserId,
+      actorUserId: ownerUserId,
+      operation: 'IMAGE_TO_IMAGE',
+      workflowId: workflow.id,
+      workflowAttempt: 2,
+      status: 'PENDING',
+      provider: job.provider,
+      model: job.model,
+      prompt: job.prompt,
+      negativePrompt: job.negativePrompt,
+      resolvedPrompt: job.resolvedPrompt,
+      resolvedNegativePrompt: job.resolvedNegativePrompt,
+      templateKey: job.templateKey,
+      templateReleaseId: job.templateReleaseId,
+      templateChecksum: job.templateChecksum,
+      templateSnapshot: job.templateSnapshot ?? undefined,
+      requestFingerprint: job.requestFingerprint,
+      inputAssets: job.inputAssets ?? undefined,
+      operationConfig: job.operationConfig ?? undefined,
+      requestedImageCount: job.requestedImageCount,
+      width: job.width,
+      height: job.height,
+      maxAttempts: 1,
+      idempotencyKey: `forged-suite-child-job-${suffix}`,
+      estimatedCostCents: job.estimatedCostCents,
+    } })).rejects.toThrow(/materialized AI media suite child graph is append-closed/u);
+
+    await expect(client.aiMediaWorkflowInput.create({ data: {
+      workflowId: workflow.id,
+      ownerUserId,
+      assetId: workflowInput.assetId,
+      role: 'MASK',
+      ordinal: 999,
+      assetSha256: workflowInput.assetSha256,
+      assetUrl: workflowInput.assetUrl,
+      mimeType: workflowInput.mimeType,
+      width: workflowInput.width,
+      height: workflowInput.height,
+    } })).rejects.toThrow(/materialized AI media suite child graph is append-closed/u);
+
+    await expect(client.aiCostReservation.delete({
+      where: { id: job.costReservation!.id },
+    })).rejects.toThrow(/materialized AI media suite cost reservation is parent-controlled/u);
+
+    await expect(client.aiMediaWorkflow.update({
+      where: { id: workflow.id },
+      data: { status: 'RUNNING' },
+    })).rejects.toThrow(/materialized AI media suite child lifecycle is parent-controlled/u);
+
+    await expect(client.aiImageJob.update({
+      where: { id: job.id },
+      data: { status: 'RUNNING' },
+    })).rejects.toThrow(/materialized AI media suite child job lifecycle is parent-controlled/u);
+
+    await expect(client.aiCostReservation.update({
+      where: { id: job.costReservation!.id },
+      data: { updatedAt: new Date(Date.now() + 1_000) },
+    })).rejects.toThrow(/materialized AI media suite cost reservation is parent-controlled/u);
+
+    await expect(client.mediaAsset.create({ data: {
+      ownerUserId,
+      aiImageJobId: job.id,
+      kind: 'AI_GENERATED',
+      url: `https://storage.example/forged-suite-output-${suffix}.png`,
+      storageBackend: 'local',
+      storageKey: `suite-output/${suffix}/forged.png`,
+      mimeType: 'image/png',
+      sizeBytes: 68,
+      width: AI_IMAGE_SUITE_OUTPUT_WIDTH,
+      height: AI_IMAGE_SUITE_OUTPUT_HEIGHT,
+      sha256: '7'.repeat(64),
+    } })).rejects.toThrow(/AI media suite child output requires the dispatch contract/u);
   });
 });

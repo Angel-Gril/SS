@@ -27,7 +27,10 @@ function costReleaseIdempotencyKey(jobId: string) {
 }
 
 function workflowRecord(row: any): AiMediaWorkflowRecord {
-  return row as AiMediaWorkflowRecord;
+  return {
+    ...row,
+    suiteId: row?.suiteSlot?.suiteId ?? null,
+  } as AiMediaWorkflowRecord;
 }
 
 function eventData(input: {
@@ -45,6 +48,7 @@ function eventData(input: {
 }
 
 const detailInclude = {
+  suiteSlot: { select: { suiteId: true, ownerUserId: true } },
   inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
   jobs: {
     include: { assets: true, costReservation: { select: { status: true } } },
@@ -479,6 +483,7 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     const rows = await (this.prisma as any).aiMediaWorkflow.findMany({
       where: {
         ownerUserId: input.ownerUserId,
+        suiteSlot: { is: null },
         ...(input.contextType ? { contextType: input.contextType } : {}),
         ...(input.contextId ? { contextId: input.contextId } : {}),
       },
@@ -505,7 +510,9 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
 
   async cancelOwned(id: string, ownerUserId: string, actorUserId: string, expectedRevision: number) {
     return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
-      const workflow = await tx.aiMediaWorkflow.findFirst({ where: { id, ownerUserId, revision: expectedRevision } });
+      const workflow = await tx.aiMediaWorkflow.findFirst({
+        where: { id, ownerUserId, revision: expectedRevision, suiteSlot: { is: null } },
+      });
       if (!workflow || !['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(workflow.status)) return null;
       if (workflow.status === 'CANCEL_REQUESTED') {
         return workflowRecord(await tx.aiMediaWorkflow.findUnique({ where: { id }, include: detailInclude }));
@@ -556,12 +563,20 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
         const replay = await tx.aiMediaWorkflowEvent.findUnique({ where: { eventKey } });
         if (replay) {
-          const workflow = await tx.aiMediaWorkflow.findFirst({ where: { id: input.id, ownerUserId: input.ownerUserId }, include: detailInclude });
+          const workflow = await tx.aiMediaWorkflow.findFirst({
+            where: { id: input.id, ownerUserId: input.ownerUserId, suiteSlot: { is: null } },
+            include: detailInclude,
+          });
           const job = workflow?.jobs?.find((row: any) => row.id === replay.jobId);
           return workflow && job ? { workflow: workflowRecord(workflow), jobId: job.id, replayed: true } : null;
         }
         const workflow = await tx.aiMediaWorkflow.findFirst({
-          where: { id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision },
+          where: {
+            id: input.id,
+            ownerUserId: input.ownerUserId,
+            revision: input.expectedRevision,
+            suiteSlot: { is: null },
+          },
           include: {
             inputs: { include: { asset: { select: { sourceCaptureSnapshotId: true } } } },
           },
@@ -660,14 +675,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
       const replay = await (this.prisma as any).aiMediaWorkflowEvent.findUnique({ where: { eventKey } });
       if (replay?.workflowId === input.id && replay.ownerUserId === input.ownerUserId) {
         const workflow = await (this.prisma as any).aiMediaWorkflow.findFirst({
-          where: { id: input.id, ownerUserId: input.ownerUserId }, include: detailInclude,
+          where: { id: input.id, ownerUserId: input.ownerUserId, suiteSlot: { is: null } }, include: detailInclude,
         });
         const job = workflow?.jobs?.find((row: any) => row.id === replay.jobId);
         if (!workflow || !job) throw error;
         return { workflow: workflowRecord(workflow), jobId: job.id, replayed: true };
       }
       const current = await (this.prisma as any).aiMediaWorkflow.findFirst({
-        where: { id: input.id, ownerUserId: input.ownerUserId },
+        where: { id: input.id, ownerUserId: input.ownerUserId, suiteSlot: { is: null } },
         select: { revision: true, status: true },
       });
       if (!current || current.revision !== input.expectedRevision || current.status !== 'FAILED') return null;
@@ -678,7 +693,8 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
   async reviewOwned(input: { id: string; ownerUserId: string; actorUserId: string; expectedRevision: number; outputAssetId: string; decision: 'APPROVE' | 'REJECT'; note: string | null }) {
     return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       const workflow = await tx.aiMediaWorkflow.findFirst({ where: {
-        id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision, status: 'SUCCEEDED', reviewStatus: 'PENDING',
+        id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision,
+        status: 'SUCCEEDED', reviewStatus: 'PENDING', suiteSlot: { is: null },
       }, include: {
         inputs: { include: { asset: { select: { sourceCaptureSnapshotId: true } } } },
       } });
