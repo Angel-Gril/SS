@@ -11,6 +11,7 @@ function createState() {
     id: 'job-1',
     ownerUserId: 'owner-1',
     workflowId: null as string | null,
+    operation: 'TEXT_TO_IMAGE' as string,
     status: 'SUCCEEDED',
     appliedMode: null as string | null,
     applyTargetType: null as string | null,
@@ -20,10 +21,16 @@ function createState() {
       { id: 'asset-1', ownerUserId: 'owner-1', aiImageJobId: 'job-1', url: 'https://cdn.example/generated-1.png' },
       { id: 'asset-2', ownerUserId: 'owner-1', aiImageJobId: 'job-1', url: 'https://cdn.example/generated-2.png' },
     ],
+    workflow: {
+      contextType: 'collect',
+      contextId: 'collect-1',
+      inputs: [{ asset: { sourceCaptureSnapshotId: 'snapshot-1' } }],
+    },
   };
   const collect = {
     id: 'collect-1', userId: 'owner-1', images: ['https://cdn.example/original.png'] as unknown,
     metadata: {} as Record<string, unknown>, updatedAt: new Date('2026-07-16T00:00:00.000Z'),
+    sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
   };
   const product = {
     id: 'product-1', images: ['https://cdn.example/product-original.png'] as unknown,
@@ -203,6 +210,18 @@ describe('AI image asset application', () => {
     expect(db.tx.supplyGoods.updateMany).not.toHaveBeenCalled();
   });
 
+  it('keeps image translation application append-only', async () => {
+    const state = createState();
+    state.job.operation = 'IMAGE_TRANSLATE';
+    const db = database(state);
+
+    await expect(apply(db, { mode: 'replace' })).rejects.toMatchObject({
+      code: 'UNSAFE_APPLY_MODE',
+    });
+    expect(db.tx.supplyGoods.updateMany).not.toHaveBeenCalled();
+    expect(db.tx.aiImageJob.updateMany).not.toHaveBeenCalled();
+  });
+
   it('prevents applying the same job twice', async () => {
     const state = createState();
     const db = database(state);
@@ -240,6 +259,20 @@ describe('AI image asset application', () => {
 
     await expect(apply(db, { selectedAssetId: 'asset-1' })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
     expect(db.tx.supplyGoods.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects a workflow candidate when the collect source snapshot changed', async () => {
+    const state = createState();
+    state.job.workflowId = 'workflow-1';
+    state.collect.sourceCaptureSubject.snapshots = [{ id: 'snapshot-2' }];
+    const db = database(state);
+
+    await expect(apply(db, {
+      selectedAssetId: 'asset-1',
+      expectedTargetUpdatedAt: state.collect.updatedAt.toISOString(),
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(db.tx.supplyGoods.updateMany).not.toHaveBeenCalled();
+    expect(db.tx.aiImageJob.updateMany).not.toHaveBeenCalled();
   });
 
   it('reloads authoritative target state when the target CAS loses after the initial read', async () => {

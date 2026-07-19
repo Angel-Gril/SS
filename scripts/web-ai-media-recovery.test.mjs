@@ -4,6 +4,7 @@ import fs from 'node:fs';
 const panel = fs.readFileSync('apps/web/src/components/ai-media/source-ai-media-panel.tsx', 'utf8');
 const sourcePage = fs.readFileSync('apps/web/src/app/(dashboard)/collect/source/page.tsx', 'utf8');
 const state = fs.readFileSync('apps/web/src/components/ai-media/source-ai-media-state.ts', 'utf8');
+const workflow = fs.readFileSync('apps/web/src/lib/ai-media-workflow.ts', 'utf8');
 const route = fs.readFileSync('apps/server/src/routes/ai-images.ts', 'utf8');
 
 assert.match(sourcePage, /SourceAiMediaPanel/u);
@@ -14,8 +15,8 @@ assert.match(panel, /contextType=collect/u);
 assert.match(panel, /IMAGE_TO_IMAGE/u);
 assert.match(panel, /\/cancel/u);
 assert.match(panel, /\/retry/u);
-assert.match(panel, /errorCode\?: string \| null/u);
-assert.match(panel, /costStatus\?:/u);
+assert.match(workflow, /errorCode\?: string \| null/u);
+assert.match(workflow, /costStatus\?:/u);
 assert.match(panel, /job\?\.costStatus === 'SETTLED'/u);
 assert.match(panel, /job\?\.costStatus === 'RELEASED'/u);
 assert.match(panel, /job\?\.errorCode === 'PROVIDER_SUBMISSION_UNCERTAIN'/u);

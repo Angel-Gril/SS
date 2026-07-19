@@ -150,6 +150,21 @@ describe('AI media workflow service', () => {
     })).rejects.toMatchObject({ code: 'IMAGE_TRANSLATION_QUOTA_EXCEEDED' });
   });
 
+  it('maps a stale retry source snapshot to a stable workflow error', async () => {
+    const service = createAiMediaWorkflowService(repository({
+      retryOwned: vi.fn(async () => {
+        throw Object.assign(new Error('The workflow source snapshot changed'), {
+          code: 'STALE_MEDIA_WORKFLOW',
+        });
+      }),
+    }));
+
+    await expect(service.retry({
+      id: workflow.id, ownerUserId: workflow.ownerUserId, actorUserId: 'actor-1',
+      expectedRevision: 1, idempotencyKey: 'retry-stale-snapshot',
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+  });
+
   it('uses a stable request fingerprint and includes authoritative context', () => {
     expect(createAiMediaWorkflowFingerprint(createInput)).toBe(createAiMediaWorkflowFingerprint(createInput));
     expect(createAiMediaWorkflowFingerprint(createInput)).not.toBe(createAiMediaWorkflowFingerprint({

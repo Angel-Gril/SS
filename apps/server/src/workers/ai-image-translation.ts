@@ -9,6 +9,11 @@ import { registerWorker } from '../lib/worker-registry.js';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
 import { getStorageBackend } from '../services/image-storage.js';
 import {
+  isPublicHttpsStorageUrl,
+  resolveAiImageTranslationStorageReadiness,
+  type AiImageTranslationStorageReadiness,
+} from '../services/ai-image-translation-storage.js';
+import {
   createDashScopeImageTranslationProvider,
   type DashScopeImageTranslationProviderOptions,
 } from '../services/ai-image-providers.js';
@@ -112,6 +117,7 @@ type TranslationWorkerOverrides = {
   repository?: AiImageJobRepository;
   resolveProvider?: typeof resolveAiImageTranslationProvider;
   getProviderConfig?: typeof getAiImageTranslationProviderRuntimeConfig;
+  getStorageConfig?: typeof getRuntimeConfigForStorage;
   uploadBuffer?: (...args: any[]) => Promise<any>;
   schedulePoll?: (jobId: string, delayMs: number) => Promise<void>;
   acquireLease?: (jobId: string, token: string) => Promise<boolean>;
@@ -243,12 +249,29 @@ async function processClaimedTranslationJob(
       providerConfig,
     );
     if (!overrides.uploadBuffer) {
-      const storageConfig = await getRuntimeConfigForStorage();
-      if (storageConfig.imageStorage === 'ozon-cdn') {
+      const storageConfig = await (overrides.getStorageConfig || getRuntimeConfigForStorage)();
+      const storageReadiness: AiImageTranslationStorageReadiness =
+        resolveAiImageTranslationStorageReadiness(storageConfig);
+      if (
+        !storageReadiness.ready
+        || (persisted.provider !== 'fake'
+          && (storageReadiness.backend !== 'oss' || storageReadiness.publicHttps !== true))
+      ) {
         throw new AiImageJobError(
-          'STORAGE_CONTEXT_REQUIRED',
-          'Image translation requires OSS or local storage because no shop context is frozen',
+          'STORAGE_NOT_READY',
+          storageReadiness.reason || 'Image translation storage is not ready for Provider dispatch',
         );
+      }
+      if (persisted.provider !== 'fake') {
+        const frozenSourceUrl = persisted.inputAssets
+          ?.find((asset) => asset.role === 'REFERENCE')
+          ?.url;
+        if (!isPublicHttpsStorageUrl(frozenSourceUrl)) {
+          throw new AiImageJobError(
+            'STORAGE_NOT_READY',
+            'The frozen image translation source is not reachable over public HTTPS',
+          );
+        }
       }
     }
     const storage = overrides.uploadBuffer ? null : await getStorageBackend();

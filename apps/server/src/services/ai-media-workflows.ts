@@ -315,6 +315,9 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
         if (error?.code === 'IMAGE_TRANSLATION_QUOTA_UNAVAILABLE') {
           throw new AiMediaWorkflowError('PROVIDER_NOT_READY', error.message);
         }
+        if (error?.code === 'STALE_MEDIA_WORKFLOW') {
+          throw new AiMediaWorkflowError('STALE_MEDIA_WORKFLOW', error.message);
+        }
         throw error;
       }
       if (result.kind === 'conflict') {
@@ -362,7 +365,15 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
     },
 
     async review(input: Parameters<AiMediaWorkflowRepository['reviewOwned']>[0]) {
-      const workflow = await repository.reviewOwned(input);
+      let workflow;
+      try {
+        workflow = await repository.reviewOwned(input);
+      } catch (error: any) {
+        if (error?.code === 'STALE_MEDIA_WORKFLOW') {
+          throw new AiMediaWorkflowError('STALE_MEDIA_WORKFLOW', error.message);
+        }
+        throw error;
+      }
       if (!workflow) throw new AiMediaWorkflowError('WORKFLOW_CONFLICT', 'Workflow changed or output cannot be reviewed');
       return workflow;
     },

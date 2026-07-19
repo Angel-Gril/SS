@@ -49,9 +49,16 @@ interface AiImageJobRow {
   id: string;
   ownerUserId: string;
   workflowId?: string | null;
+  operation?: string | null;
+  provider?: string | null;
   status: string;
   appliedAt: Date | null;
   assets: GeneratedAssetRow[];
+  workflow?: {
+    contextType: string | null;
+    contextId: string | null;
+    inputs: Array<{ asset?: { sourceCaptureSnapshotId: string | null } | null }>;
+  } | null;
 }
 
 interface ImageTargetRow {
@@ -61,6 +68,7 @@ interface ImageTargetRow {
   updatedAt: Date;
   userId?: string;
   shop?: { userId: string };
+  sourceCaptureSubject?: { snapshots: Array<{ id: string }> } | null;
 }
 
 interface TransactionClient {
@@ -131,11 +139,56 @@ function mergeImages(existing: unknown, generated: string[], mode: AiImageApplyM
   return result;
 }
 
+function assertWorkflowSourceSnapshotCurrent(
+  job: AiImageJobRow,
+  target: ImageTargetRow,
+  input: ApplyAiImageAssetsInput,
+) {
+  if (!job.workflowId) return;
+  if (
+    input.targetType !== 'collect'
+    || job.workflow?.contextType !== 'collect'
+    || job.workflow.contextId !== input.targetId
+  ) {
+    throw new AiImageApplicationError(
+      'INVALID_STATE',
+      'Workflow output can only be applied to its frozen collect context',
+    );
+  }
+  const currentSnapshotId = target.sourceCaptureSubject?.snapshots[0]?.id || null;
+  const inputSnapshotIds = job.workflow.inputs.map((row) => row.asset?.sourceCaptureSnapshotId || null);
+  if (
+    !currentSnapshotId
+    || !inputSnapshotIds.length
+    || inputSnapshotIds.some((snapshotId) => snapshotId !== currentSnapshotId)
+  ) {
+    throw new AiImageApplicationError(
+      'STALE_MEDIA_WORKFLOW',
+      'The workflow source snapshot changed; review and generate a new candidate',
+    );
+  }
+}
+
 async function findOwnedTarget(tx: TransactionClient, input: ApplyAiImageAssetsInput): Promise<ImageTargetRow> {
   if (input.targetType === 'collect') {
     const target = await tx.supplyGoods.findFirst({
       where: { id: input.targetId, userId: input.ownerUserId },
-      select: { id: true, userId: true, images: true, metadata: true, updatedAt: true },
+      select: {
+        id: true,
+        userId: true,
+        images: true,
+        metadata: true,
+        updatedAt: true,
+        sourceCaptureSubject: {
+          select: {
+            snapshots: {
+              orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+              take: 1,
+              select: { id: true },
+            },
+          },
+        },
+      },
     });
     if (target) return target;
   } else {
@@ -166,10 +219,29 @@ export async function applyAiImageAssets(
     return await runAiMediaSerializableTransaction(database, async (tx: TransactionClient) => {
     const job = await tx.aiImageJob.findUnique({
       where: { id: input.jobId },
-      include: { assets: true },
+      include: {
+        assets: true,
+        workflow: {
+          include: {
+            inputs: { include: { asset: { select: { sourceCaptureSnapshotId: true } } } },
+          },
+        },
+      },
     });
     if (!job || job.ownerUserId !== input.ownerUserId) {
       throw new AiImageApplicationError('NOT_FOUND', 'AI image job not found');
+    }
+    if (job.workflowId && job.provider === 'fake' && process.env.NODE_ENV === 'production') {
+      throw new AiImageApplicationError(
+        'PROVIDER_NOT_READY',
+        'Test-only AI media candidates cannot be applied in production',
+      );
+    }
+    if (job.operation === 'IMAGE_TRANSLATE' && input.mode !== 'append') {
+      throw new AiImageApplicationError(
+        'UNSAFE_APPLY_MODE',
+        'Image translation candidates can only be appended to existing product images',
+      );
     }
     if (job.status !== 'SUCCEEDED') {
       throw new AiImageApplicationError('INVALID_STATE', 'Only succeeded jobs can be applied');
@@ -180,6 +252,7 @@ export async function applyAiImageAssets(
 
     const urls = generatedUrls(job, input.ownerUserId, input.selectedAssetId);
     const target = await findOwnedTarget(tx, input);
+    assertWorkflowSourceSnapshotCurrent(job, target, input);
     const expectedTargetUpdatedAt = input.expectedTargetUpdatedAt
       ? new Date(input.expectedTargetUpdatedAt)
       : null;

@@ -47,8 +47,10 @@ export function apiUrl(path: string): string {
   return `${getApiBase()}${path}`;
 }
 
+export type ApiResponseCode = number | string;
+
 export interface ApiResponse<T = unknown> {
-  code: number;
+  code: ApiResponseCode;
   msg: string;
   data?: T;
   meta?: unknown;
@@ -105,7 +107,13 @@ export async function apiFetch<T = unknown>(
       if (data?.maintenance) {
         return { code: 0, msg: data.msg || '系统维护中，请稍后再试', maintenance: true } as ApiResponse<T>;
       }
-      return { code: 0, msg: data?.msg || '服务暂不可用' } as ApiResponse<T>;
+      // Preserve typed service errors (for example PROVIDER_NOT_READY) so callers
+      // can distinguish retryable transport failures from definitive business gates.
+      return {
+        ...(data && typeof data === 'object' ? data : {}),
+        code: typeof data?.code === 'string' || typeof data?.code === 'number' ? data.code : 0,
+        msg: data?.msg || '服务暂不可用',
+      } as ApiResponse<T>;
     } catch {
       return { code: 0, msg: '系统维护中，请稍后再试' } as ApiResponse<T>;
     }

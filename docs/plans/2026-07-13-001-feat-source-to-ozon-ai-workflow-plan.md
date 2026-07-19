@@ -3,7 +3,7 @@ title: Source Marketplace to Ozon AI Workflow Plan
 type: feat
 status: active
 date: 2026-07-13
-updated: 2026-07-17
+updated: 2026-07-19
 implementation_started: 2026-07-14
 origin: docs/plans/2026-06-26-001-feat-1688-ozon-source-profile-plan.md
 ---
@@ -28,9 +28,9 @@ This plan extends the existing source-product-profile work rather than replacing
 
 The central conclusion from the code comparison is that the reference extension is not a better overall architecture. It is a browser-heavy implementation with useful page fallbacks, image workflow ideas, and compact operator UI. SS ERP already has the better long-term system boundary: browser-only evidence acquisition in the extension, and durable orchestration, credentials, jobs, storage, validation, and Ozon publishing on the server.
 
-## Current Delivery Status (2026-07-18)
+## Current Delivery Status (2026-07-19)
 
-This plan describes the full target program, not a claim that the source-to-Ozon workflow has shipped. The current branch contains completed-in-worktree Units 0A, 1, 2 and 5, the implemented-but-acceptance-pending Units 4, 6, 6A and 6B, plus the separate `text-to-image.base` Prompt foundation from Unit 7A. Together they establish the Phase 1 trust boundary, the evidence-backed Capture V2 snapshot contract, durable source-capture persistence, the 1688 hybrid collector, hardened Ozon catalog/mapping inputs, one owner-scoped resumable listing-draft ledger, server-owned product/per-SKU attribute preparation and validation, an immutable submit-once Ozon attempt/reconciliation boundary, and the first extension-to-ERP-Web review workflow. They do not yet complete Unit 0B, Unit 3, Unit 4 or Unit 6 acceptance, the real Ozon test-shop gates for Units 6A and 6B, Unit 7B, full R9-R12, or any later marketplace/media phase.
+This plan describes the full target program, not a claim that the source-to-Ozon workflow has shipped. The current branch includes the Phase 1 trust/capture/listing foundations, the provider-neutral media workflow and cost ledger, versioned Prompt registry, deterministic curation/vision/slot planning contracts, the first collect-context Web history/review shell, and the hardened Unit 9A `IMAGE_TRANSLATE` backend at commit `8c52513`. The current Unit 10B translation Web slice adds owner-scoped capability/storage readiness, source selection/internalization, language and terminology input, recoverable submission, mixed-operation history, stale-source protection, review and append-only apply. Paid `qwen-mt-image`, real image-to-image/edit providers, PDD/Taobao network evidence, complete Unit 10A contexts, and all real Ozon/provider acceptance gates remain pending.
 
 Status terms used below:
 
@@ -49,26 +49,27 @@ Status terms used below:
 | Ozon category and attribute engine | Implemented in worktree through Unit 6; acceptance pending | Tenant-scoped mapping history, server-owned source identity, current official catalog validation, complete dictionary pagination/cache policy, deterministic category candidates, normalized product/SKU attribute schemas, evidence-bound suggestions, strict validation and CAS-protected editing | Approve the real pilot benchmark, verify official open-dictionary and test-shop behavior, wire production AI attribute candidate generation, and complete the Unit 6A live test-shop gate |
 | AI title and description | Partial | Fact-bound Russian drafts, cache, validation and quota | Durable staged workflow, versioned text templates, explicit candidate review and no default application to publish fields |
 | Text-to-image | Partial | DashScope and OpenAI generation adapters, job persistence, stored outputs | Move into the common media operation/workflow and lineage contract; reconcile retries, cost, cancellation and recovery |
-| Prompt registry and frozen job Prompt | Implemented in worktree for `text-to-image.base` only | Draft, validation, publish, rollback, CAS/sequence protection, admin UI, immutable history and frozen positive/negative Prompt consumed by the worker | Land and close acceptance; add meaningful fixture/capability tests, remaining template families, source/slot variables and all media operations |
-| Image curation, vision, multi-reference generation, translation, editing and inpaint | Missing / decision-blocked | Feature flag and reference implementation research only | Provider capability matrix, media lineage, parent workflow, curation/vision, `qwen-mt-image`, edit/mask operations and server composition |
-| Durable listing/media workbench | Implemented in worktree for the Unit 6B minimum closure; advanced media remains partial | Owner-scoped versioned listing drafts, exact Capture V2 handoff, immutable revisions/events/intents/attempts, CAS, resume/run states, blockers/warnings, category/attribute/copy/media/pricing review, revision-bound final confirmation, submit leases, UNKNOWN recovery and item-level reconciliation | Unit 6 acceptance, Units 6A/6B live test-shop gates, Unit 7B/10 advanced media lineage and the richer Unit 11 extension workbench |
+| Prompt registry and frozen job Prompt | Implemented for text generation, planning and translation families | Draft, validation, publish, rollback, CAS/sequence protection, admin UI, consumer contracts, immutable history and frozen positive/constraint Prompt snapshots | Provider quality evidence, edit/inpaint families and real-model acceptance remain gated |
+| Image curation, vision, multi-reference generation, translation, editing and inpaint | Partial | Provider capability matrix, persistent workflow/input/output lineage, provider-neutral planning contracts and a resumable `IMAGE_TRANSLATE` adapter/worker are implemented; paid dispatch remains fail-closed | Unit 0B provider evidence, planned suites, real image-to-image, full edit, mask/inpaint and quality thresholds |
+| Durable listing/media workbench | Partial; listing and first collect media shells implemented | Owner-scoped listing drafts plus collect-context source internalization, media history recovery, cancel/retry/review, CAS apply and the first translation controls | Unit 10A pagination/listing-draft/SKU contexts/reconciliation, remaining Unit 10B tools and the richer Unit 11 extension workbench |
 | Extension security for the new workflow | Implemented in worktree for the Phase 1 boundary | Explicit device scopes, durable payload-bound command grants/receipts, replay-safe consumption, sender/origin separation and V2 legacy-write blocking | Apply the same authority to the final listing/media commands as those units are implemented |
 | Cost, billing and operations | Partial; dark infrastructure implemented | Text usage, image daily limit, system status and audit; provider-neutral image reservation, dispatch fence, submission quarantine, settlement/release and manual-reconciliation states | Real provider/model prices, an operator reconciliation surface, workflow metrics/alerts and commercial charging only after internal-tool/SaaS and key-ownership decisions |
 
-### Current Prompt Slice Boundary
+### Current AI Media Slice Boundary
 
-The current worktree slice completes only these mechanics for the existing `text-to-image.base` path:
+The current landed and active worktree slices provide:
 
 - versioned Prompt drafts, validation, PASS record, publish, rollback and immutable release history;
 - optimistic/transactional concurrency protection for edits and releases;
-- safe bootstrap from the legacy `ai_image_prompt` setting;
-- resolved positive/negative Prompt, release, checksum and template snapshot frozen on new image jobs;
-- worker preference for frozen Prompt values with legacy-job fallback;
-- super-admin APIs and editor.
+- consumer contracts for provider-free curation, vision and slot planning templates;
+- resolved positive/constraint Prompt, release, checksum and template snapshot frozen on image jobs;
+- durable media workflows, immutable source inputs, output lineage, cost reservation and candidate review;
+- resumable fake lifecycle and `qwen-mt-image` submit/poll/download adapter with paid dispatch sandbox-gated;
+- collect-context Web history/recovery and the first image-translation controls.
 
-It does **not** provide a Provider capability matrix, durable input-asset relations, a media lineage graph, a parent workflow, image-to-image, multi-reference input, translation, editing, inpainting, curation, vision, slot planning, history recovery or an extension media workbench. The current template test checks syntax, rendering and compiled length; it is not yet a provider/model or structured-output quality gate. Only `text-to-image.base` is registered.
+It does **not** yet prove a paid image Provider, real-model quality, temporary URL fetch windows, image-to-image editing, suite execution, inpainting, complete Web contexts, or the extension media workbench. All paid and production activation gates remain off until Unit 0B and the external acceptance track provide evidence.
 
-The Prompt editor's earlier browser checks cover save/PASS/publish/rollback and desktop/mobile layout for that slice only. Program-level verification through the current Unit 6 worktree records 1436 server tests passed with 62 skipped, 62 isolated PostgreSQL integration tests passed with all 47 migrations, workspace typecheck and production build passing, and lint at zero errors with 23 pre-existing warnings. Current generated Capture V2 artifacts and the prior source extension/package verification remain part of the earlier unit evidence. This evidence validates the implemented worktree units only; it is not end-to-end evidence for publication or any later phase.
+The Prompt editor's earlier browser checks cover save/PASS/publish/rollback and desktop/mobile layout for that slice only. Unit 10B-T verification records 2216 server tests passed with 96 skipped, workspace typecheck and production build passing, and lint at zero errors with 20 pre-existing warnings. Browser QA used the dedicated local media fixture to submit, recover, review and append a fake translation candidate; incompatible `ozon-cdn`-without-shop storage was first observed and then made a fail-closed readiness condition. Paid dispatch now also rejects frozen source URLs that are not public HTTPS before the worker calls a Provider. Desktop, tablet and mobile checks had no horizontal overflow or console errors. The local feature/provider/storage flags were restored after QA, and no paid Provider or Ozon write was invoked. This evidence validates the implemented slices only; it is not end-to-end evidence for publication, paid Provider quality or any later phase.
 
 ## Executive Decision Matrix
 
@@ -84,10 +85,10 @@ The Prompt editor's earlier browser checks cover save/PASS/publish/rollback and 
 | Ozon publish | Browser stores credentials and calls `/v3/product/import` | Server stores credentials and calls `/v3/product/import`, with durable jobs and repair paths | Keep SS ERP; consolidate duplicate publish builders |
 | Seller login bridge | Supplemental seller analytics and variant lookup | Supplemental analytics, category reverse lookup, logistics, and CDN assistance | Keep separated from official write APIs |
 | AI image generation | Multi-reference image generation and slot prompt plans in the extension | Working text-to-image MVP with server jobs and assets | Reuse ERP jobs; extend the contract for source assets and operations |
-| Image translation | DashScope `qwen-mt-image` async task | Feature flag only | Implement server-side using persistent assets and resumable polling |
+| Image translation | DashScope `qwen-mt-image` async task | Durable operation, Prompt snapshot, resumable worker and first Web controls; paid adapter remains sandbox-blocked | Run Unit 0B provider/cost/input-transport acceptance before activation |
 | Full-image edit | Provider edit request exists | Not implemented | Implement through the server capability contract |
 | Masked inpainting | Prototype code exists but product flag is disabled | Not implemented | Reimplement and validate; do not copy as proven code |
-| Prompt administration | Hardcoded templates distributed across client modules | Baseline had one editable but unused `ai_image_prompt`; the current uncommitted slice adds a versioned `text-to-image.base` registry and frozen job Prompt | Land the slice honestly, then extend the same mechanism to every curation/vision/slot/edit/translation template and capability test |
+| Prompt administration | Hardcoded templates distributed across client modules | Baseline had one editable but unused `ai_image_prompt`; the landed slices add versioned text/planning/translation registries and frozen job Prompt snapshots | Extend the same mechanism to every curation/vision/slot/edit template and provider capability test |
 | Image persistence | Mixed temporary URLs and client state | `MediaAsset`, object storage, ownership checks | Make ERP assets the only durable source of truth |
 | Extension UI | Full iframe workbench and client-side state | Existing popup, source costing panel, Ozon workbench, and one-click jobs | Add a source listing workbench using shared ERP APIs |
 | Activation/license | Client activation code and HTTP license server | ERP authentication, users, quotas, and extension pairing | Do not adopt |
@@ -1202,7 +1203,7 @@ The empty-database replay passed all 83 migrations; the planning PostgreSQL inte
 
 - [ ] **Unit 9A: Provider Operations for Image-to-Image and Image Translation**
 
-  **Progress (2026-07-19):** The first translation contract slice is implemented and hardened. `IMAGE_TRANSLATE` is now a durable Prisma operation with frozen operation options, owner-scoped idempotency/quota reservation, versioned positive/constraint Prompt snapshots, provider task identity persistence, a single callback persistence path, resumable submit/poll workers with bounded deadlines, Redis lease/deduplicated recovery, cancellation uncertainty handling, immediate result internalization with deterministic output keys, and fake lifecycle fixtures. The DashScope `qwen-mt-image` adapter is characterized (request/poll/download contract tests pass) but remains blocked at `adapter-characterized` until Unit 0B sandbox evidence and a verified positive price upgrade it; paid dispatch is therefore fail-closed. The Web workbench does not yet expose an end-user translation action; Unit 10B will connect it. Single image-to-image paid operations and mask/edit remain separate follow-up slices.
+  **Progress (2026-07-19):** The first translation contract slice is implemented and hardened. `IMAGE_TRANSLATE` is now a durable Prisma operation with frozen operation options, owner-scoped idempotency/quota reservation, versioned positive/constraint Prompt snapshots, provider task identity persistence, a single callback persistence path, resumable submit/poll workers with bounded deadlines, Redis lease/deduplicated recovery, cancellation uncertainty handling, immediate result internalization with deterministic output keys, and fake lifecycle fixtures. The DashScope `qwen-mt-image` adapter is characterized (request/poll/download contract tests pass) but remains blocked at `adapter-characterized` until Unit 0B sandbox evidence and a verified positive price upgrade it; paid dispatch is therefore fail-closed. Unit 10B-T now exposes the first collect-context translation action in the Web workbench; listing-draft/SKU contexts and richer media controls remain follow-up slices. Single image-to-image paid operations and mask/edit remain separate follow-up slices.
 
 **Goal:** Prove the two highest-value derived-image operations on the common media contract before suite automation or mask editing.
 
@@ -1335,6 +1336,8 @@ The empty-database replay passed all 83 migrations; the planning PostgreSQL inte
 
 - [ ] **Unit 10B: ERP Web Curation, Translation, Suite, and Edit Tools**
 
+**Progress (2026-07-19):** The first `10B-T` collect-context translation slice is implemented. It reuses the Unit 10A `SourceAiMediaPanel` shell and adds an owner-scoped capability/readiness DTO, source-image selection and internalization, language/domain/terminology controls, 15-minute session-persisted idempotency across ambiguous network failures, mixed-operation history, stale-source detection, review, cancellation/retry and append-only candidate application. Create/retry/internalize actions enforce the Web rollout on the server; review and apply recheck the frozen source snapshot, fake candidates cannot cross the production boundary, and incompatible output storage disables submission before a job is created. The UI never enables paid translation when the provider is only `adapter-characterized`; `qwen-mt-image` remains blocked by the Unit 0B sandbox/cost gate. Curation, suite, full-edit and mask controls remain independently disabled until their backend slices are accepted.
+
 **Goal:** Add each advanced media tool to Unit 10A's stable workflow shell as its backend capability becomes available.
 
 **Requirements:** R6, R8-R12, R15
@@ -1345,6 +1348,8 @@ The empty-database replay passed all 83 migrations; the planning PostgreSQL inte
 - Create: `apps/web/src/components/source-listing-workbench/media/`
 - Modify: `apps/web/src/lib/source-listing-workflow.ts`
 - Modify: `apps/web/src/lib/source-listing-readiness.ts`
+- Create: `apps/web/src/lib/ai-media-workflow.ts`
+- Modify: `apps/web/src/components/ai-media/source-ai-media-panel.tsx`
 - Create: `scripts/web-source-listing-media-workbench.test.mjs`
 - Modify: `scripts/web-source-listing-readiness.test.mjs`
 

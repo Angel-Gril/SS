@@ -133,6 +133,107 @@ describe('AI image translation worker recovery', () => {
     expect(provider.submit).not.toHaveBeenCalled();
   });
 
+  it('fails paid work before dispatch when storage has no public HTTPS owned transport', async () => {
+    const paidJob = {
+      ...job('QUEUED', null),
+      provider: 'dashscope-qwen-mt-image',
+      model: 'qwen-mt-image',
+      estimatedCostCents: 10,
+    };
+    const state = repositoryState(paidJob);
+    const provider: AiImageTranslationProvider = {
+      name: 'dashscope-qwen-mt-image', submit: vi.fn(), poll: vi.fn(),
+    };
+
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, {
+      repository: state.repository,
+      getProviderConfig: async () => ({
+        enabled: true,
+        provider: 'dashscope-qwen-mt-image',
+        baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+        apiKey: 'test-only-key',
+        model: 'qwen-mt-image',
+        costPerImageCents: 10,
+      }),
+      getStorageConfig: async () => ({
+        source: 'system-config',
+        mode: 'local',
+        imageStorage: 'oss',
+        authSource: 'cookie',
+        extensionSync: 'direct',
+        oss: {
+          endpoint: 'https://storage.example.com',
+          bucket: 'media',
+          accessKeyId: 'key',
+          accessKeySecret: 'secret',
+          region: 'auto',
+        },
+        ozonCdnRelayUrl: undefined,
+        ossFallbackToCdn: false,
+        localBaseUrl: 'http://localhost:3001',
+      }),
+      resolveProvider: () => provider,
+      schedulePoll: vi.fn(),
+    })).rejects.toMatchObject({ code: 'STORAGE_NOT_READY' });
+
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).not.toHaveBeenCalled();
+    expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'STORAGE_NOT_READY' });
+  });
+
+  it('fails paid work before dispatch when its frozen source URL is private', async () => {
+    const paidJob = {
+      ...job('QUEUED', null),
+      provider: 'dashscope-qwen-mt-image',
+      model: 'qwen-mt-image',
+      estimatedCostCents: 10,
+      inputAssets: [{
+        assetId: 'asset-1', role: 'REFERENCE' as const, ordinal: 0,
+        url: 'http://localhost:3001/uploads/source.png', mimeType: 'image/png', sha256: 'a'.repeat(64),
+      }],
+    };
+    const state = repositoryState(paidJob);
+    const provider: AiImageTranslationProvider = {
+      name: 'dashscope-qwen-mt-image', submit: vi.fn(), poll: vi.fn(),
+    };
+
+    await expect(processAiImageTranslationQueueJob('translation-job-1', 1, {
+      repository: state.repository,
+      getProviderConfig: async () => ({
+        enabled: true,
+        provider: 'dashscope-qwen-mt-image',
+        baseUrl: 'https://dashscope.aliyuncs.com/api/v1',
+        apiKey: 'test-only-key',
+        model: 'qwen-mt-image',
+        costPerImageCents: 10,
+      }),
+      getStorageConfig: async () => ({
+        source: 'system-config',
+        mode: 'cloud',
+        imageStorage: 'oss',
+        authSource: 'token',
+        extensionSync: 'queue',
+        oss: {
+          endpoint: 'https://storage.example.com',
+          bucket: 'media',
+          accessKeyId: 'key',
+          accessKeySecret: 'secret',
+          region: 'auto',
+          cdnDomain: 'https://cdn.example.com',
+        },
+        ozonCdnRelayUrl: undefined,
+        ossFallbackToCdn: false,
+        localBaseUrl: 'https://erp.example.com',
+      }),
+      resolveProvider: () => provider,
+      schedulePoll: vi.fn(),
+    })).rejects.toMatchObject({ code: 'STORAGE_NOT_READY' });
+
+    expect(provider.submit).not.toHaveBeenCalled();
+    expect(provider.poll).not.toHaveBeenCalled();
+    expect(state.current()).toMatchObject({ status: 'FAILED', errorCode: 'STORAGE_NOT_READY' });
+  });
+
   it('does not reschedule permanent accepted-task authentication failures', async () => {
     const state = repositoryState({ ...job('RUNNING', 'provider-task-auth'), providerDispatchedAt: new Date() });
     const schedulePoll = vi.fn(async () => undefined);

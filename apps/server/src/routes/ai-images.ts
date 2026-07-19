@@ -24,6 +24,15 @@ import {
   type ApplyAiImageAssetsResult,
 } from '../services/ai-image-application.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
+import {
+  sourceWorkflowFeatureFlags,
+  type SourceWorkflowFeatureFlagEvaluator,
+} from '../services/source-workflow-feature-flags.js';
+import { getRuntimeConfigForStorage } from '../adapters/runtime-config.js';
+import {
+  resolveAiImageTranslationStorageReadiness,
+  type AiImageTranslationStorageReadiness,
+} from '../services/ai-image-translation-storage.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import {
   AI_MEDIA_TRANSLATION_TEMPLATE_KEY,
@@ -143,6 +152,15 @@ interface AiImageTranslationRouteSettings {
   estimatedCostCents: number;
 }
 
+export interface AiImageOperationReadiness {
+  enabled: boolean;
+  ready: boolean;
+  reasonCode: 'READY' | 'AI_MEDIA_WORKFLOW_DISABLED' | 'AI_MEDIA_OPERATION_DISABLED'
+    | 'SOURCE_LISTING_WEB_MEDIA_DISABLED' | 'PROVIDER_NOT_READY' | 'STORAGE_NOT_READY';
+  reason: string;
+  testOnly?: boolean;
+}
+
 interface AiImageRouteOptions {
   repository?: AiImageJobRepository;
   enqueue?: (jobId: string) => Promise<void>;
@@ -150,6 +168,10 @@ interface AiImageRouteOptions {
   authenticate?: (request: FastifyRequest, reply: any) => Promise<unknown>;
   getSettings?: () => Promise<AiImageRouteSettings>;
   getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
+  getTranslationStorageReadiness?: () => Promise<AiImageTranslationStorageReadiness>;
+  getSourceListingWebMediaEnabled?: () => Promise<boolean>;
+  sourceWorkflowFeatureFlags?: SourceWorkflowFeatureFlagEvaluator;
+  production?: boolean;
   resolvePrompt?: (input: {
     templateKey: string;
     userPrompt: string;
@@ -187,11 +209,14 @@ function sendError(reply: any, error: unknown) {
         || error.code === 'WORKFLOW_CONFLICT'
         || error.code === 'RECOVERY_REQUIRED'
         || error.code === 'PROVIDER_CONFIG_CHANGED'
+        || error.code === 'STALE_MEDIA_WORKFLOW'
         ? 409
         : error.code === 'IMAGE_TRANSLATION_QUOTA_EXCEEDED'
           ? 429
         : error.code === 'AI_MEDIA_OPERATION_DISABLED'
+          || error.code === 'SOURCE_LISTING_WEB_MEDIA_DISABLED'
           || error.code === 'PROVIDER_NOT_READY'
+          || error.code === 'STORAGE_NOT_READY'
           ? 503
           : 400;
     return reply.status(status).send({ code: error.code, msg: error.message });
@@ -202,7 +227,11 @@ function sendError(reply: any, error: unknown) {
   if (error instanceof AiImageApplicationError) {
     const status = error.code === 'NOT_FOUND' || error.code === 'TARGET_NOT_FOUND'
       ? 404
-      : error.code === 'ALREADY_APPLIED' || error.code === 'TARGET_CONFLICT'
+      : error.code === 'PROVIDER_NOT_READY'
+        ? 503
+      : error.code === 'ALREADY_APPLIED'
+        || error.code === 'TARGET_CONFLICT'
+        || error.code === 'STALE_MEDIA_WORKFLOW'
         ? 409
         : 400;
     return reply.status(status).send({ code: error.code, msg: error.message, data: error.data });
@@ -211,6 +240,7 @@ function sendError(reply: any, error: unknown) {
     const status = error.code === 'NOT_FOUND'
       ? 404
       : error.code === 'IDEMPOTENCY_KEY_CONFLICT'
+        || error.code === 'STALE_MEDIA_WORKFLOW'
         ? 409
         : error.code === 'QUOTA_EXCEEDED'
           ? 429
@@ -236,6 +266,139 @@ function canonicalTranslationTerminologies(terms: Array<{ src: string; tgt: stri
     if (!bySource.has(key)) bySource.set(key, { src: term.src.trim(), tgt: term.tgt.trim() });
   }
   return [...bySource.values()];
+}
+
+export function resolveAiImageTranslationReadiness(
+  settings: AiImageTranslationRouteSettings,
+  options: {
+    workflowEnabled?: boolean;
+    production?: boolean;
+    storageReadiness?: AiImageTranslationStorageReadiness;
+  } = {},
+): AiImageOperationReadiness {
+  if (options.workflowEnabled === false) {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_WORKFLOW_DISABLED',
+      reason: 'AI media workflow is not enabled for this account',
+    };
+  }
+  if (!settings.enabled || settings.provider === 'disabled') {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
+      reason: 'AI image translation is disabled',
+    };
+  }
+  if (!['fake', 'dashscope-qwen-mt-image'].includes(settings.provider)) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'AI image translation provider adapter is not enabled yet',
+    };
+  }
+  if (settings.provider === 'fake' && (options.production ?? process.env.NODE_ENV === 'production')) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'The fake image translation provider is test-only',
+      testOnly: true,
+    };
+  }
+  const storage = options.storageReadiness;
+  if (settings.provider !== 'fake' && (
+    !storage
+    || !storage.ready
+    || storage.backend !== 'oss'
+    || storage.publicHttps !== true
+  )) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'STORAGE_NOT_READY',
+      reason: storage?.reason || 'Paid image translation requires an owned OSS/CDN URL reachable over public HTTPS',
+    };
+  }
+  const capability = resolveAiImageProviderCapability(settings.provider, settings.model);
+  if (settings.provider !== 'fake' && capability?.evidenceLevel !== 'sandbox-verified') {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'AI image translation provider has not passed its sandbox capability gate',
+    };
+  }
+  if (settings.provider !== 'fake' && settings.estimatedCostCents <= 0) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'A verified positive image translation cost is required before paid dispatch',
+    };
+  }
+  if (options.storageReadiness && !options.storageReadiness.ready) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'STORAGE_NOT_READY',
+      reason: options.storageReadiness.reason,
+      ...(settings.provider === 'fake' ? { testOnly: true } : {}),
+    };
+  }
+  return {
+    enabled: true,
+    ready: true,
+    reasonCode: 'READY',
+    reason: 'AI image translation is ready',
+    ...(settings.provider === 'fake' ? { testOnly: true } : {}),
+  };
+}
+
+export function resolveAiImageToImageReadiness(
+  options: { workflowEnabled?: boolean; production?: boolean } = {},
+): AiImageOperationReadiness {
+  if (options.workflowEnabled === false) {
+    return {
+      enabled: false,
+      ready: false,
+      reasonCode: 'AI_MEDIA_WORKFLOW_DISABLED',
+      reason: 'AI media workflow is not enabled for this account',
+    };
+  }
+  if (options.production ?? process.env.NODE_ENV === 'production') {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      reason: 'AI image-to-image provider is not available in production yet',
+      testOnly: true,
+    };
+  }
+  return {
+    enabled: true,
+    ready: true,
+    reasonCode: 'READY',
+    reason: 'AI image-to-image workflow is ready',
+    testOnly: true,
+  };
+}
+
+function gateReadinessByWebMedia(
+  readiness: AiImageOperationReadiness,
+  webMediaEnabled: boolean,
+): AiImageOperationReadiness {
+  if (webMediaEnabled) return readiness;
+  return {
+    enabled: false,
+    ready: false,
+    reasonCode: 'SOURCE_LISTING_WEB_MEDIA_DISABLED',
+    reason: 'Web AI media tools are not enabled for this account',
+    ...(readiness.testOnly ? { testOnly: readiness.testOnly } : {}),
+  };
 }
 
 function compileTranslationProviderPolicy(resolvedPrompt: string, resolvedNegativePrompt: string) {
@@ -300,6 +463,15 @@ function publicJob(job: Record<string, unknown>) {
   const translationConfig = operationConfig && typeof operationConfig === 'object'
     ? operationConfig as Record<string, unknown>
     : null;
+  const translationTerminologies = Array.isArray(translationConfig?.terminologies)
+    ? translationConfig.terminologies.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const term = entry as Record<string, unknown>;
+      const src = String(term.src || '').trim().slice(0, 120);
+      const tgt = String(term.tgt || '').trim().slice(0, 120);
+      return src && tgt ? [{ src, tgt }] : [];
+    }).slice(0, 50)
+    : [];
   return {
     ...visible,
     ...(visible.operation === 'IMAGE_TRANSLATE' && translationConfig ? {
@@ -307,6 +479,7 @@ function publicJob(job: Record<string, unknown>) {
         sourceLanguage: String(translationConfig.sourceLanguage || ''),
         targetLanguage: String(translationConfig.targetLanguage || ''),
         policyVersion: String(translationConfig.policyVersion || ''),
+        terminologies: translationTerminologies,
       },
     } : {}),
     costStatus: typeof (costReservation as { status?: unknown } | null)?.status === 'string'
@@ -338,6 +511,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   const mediaWorkflowService = options.mediaWorkflowService
     || createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(prisma));
   const mediaContextService = options.mediaContextService || createAiMediaContextService(prisma);
+  const production = options.production ?? process.env.NODE_ENV === 'production';
   const authHook = options.authenticate || authenticate;
   const getSettings = options.getSettings || (async () => ({
     enabled: await getConfig('ai_image_generation_enabled'),
@@ -353,6 +527,39 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     dailyLimit: await getConfig('ai_user_daily_image_translation_limit'),
     estimatedCostCents: await getConfig('ai_image_translation_cost_cents'),
   }));
+  const getTranslationStorageReadiness = options.getTranslationStorageReadiness || (async () => {
+    try {
+      const storage = await getRuntimeConfigForStorage();
+      return resolveAiImageTranslationStorageReadiness(storage);
+    } catch {
+      return {
+        ready: false,
+        reason: 'Image translation storage readiness could not be verified',
+      };
+    }
+  });
+  const featureFlags = options.sourceWorkflowFeatureFlags || sourceWorkflowFeatureFlags;
+  const getSourceListingWebMediaDecision = async (ownerUserId: string) => {
+    if (options.getSourceListingWebMediaEnabled) {
+      const enabled = await options.getSourceListingWebMediaEnabled();
+      return {
+        enabled,
+        reason: enabled ? 'global' as const : 'master_off' as const,
+        revision: 'test-hook',
+      };
+    }
+    return featureFlags.evaluate('SOURCE_LISTING_WEB_MEDIA', { ownerUserId });
+  };
+  const requireSourceListingWebMedia = async (ownerUserId: string) => {
+    const decision = await getSourceListingWebMediaDecision(ownerUserId);
+    if (!decision.enabled) {
+      throw new AiMediaWorkflowError(
+        'SOURCE_LISTING_WEB_MEDIA_DISABLED',
+        'Web AI media tools are not enabled for this account',
+      );
+    }
+    return decision;
+  };
   const enqueue = options.enqueue || (async (jobId: string) => {
     const worker = await import('../workers/ai-image-generation.js');
     await worker.enqueueAiImageJob(jobId);
@@ -367,8 +574,53 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     || (async (ownerUserId: string) => (await getAiMediaRolloutDecision(ownerUserId)).enabled);
   const applyAssets = options.applyAssets
     || ((input: ApplyAiImageAssetsInput) => applyAiImageAssets(prisma as any, input));
+  const assertWorkflowSourceCurrent = async (workflow: any, ownerUserId: string) => {
+    if (workflow.contextType !== 'collect' || !workflow.contextId) return;
+    const currentContext = await mediaContextService.loadCollect(ownerUserId, workflow.contextId);
+    const currentAssetIds = new Set(
+      currentContext.inputs.map((input) => input.assetId).filter((id): id is string => Boolean(id)),
+    );
+    const workflowInputAssets = Array.isArray(workflow.inputs)
+      ? workflow.inputs.map((input: any) => String(input.assetId || '').trim()).filter(Boolean)
+      : [];
+    if (!workflowInputAssets.length || workflowInputAssets.some((assetId: string) => !currentAssetIds.has(assetId))) {
+      throw new AiMediaWorkflowError(
+        'STALE_MEDIA_WORKFLOW',
+        'The source image snapshot changed; review and generate a new candidate',
+      );
+    }
+  };
 
   app.addHook('preHandler', authHook as any);
+
+  app.get('/capabilities', async (request) => {
+    const ids = actor(request);
+    const [workflowEnabled, webMediaDecision, translationSettings, translationStorageReadiness] = await Promise.all([
+      getMediaWorkflowEnabled(ids.ownerUserId),
+      getSourceListingWebMediaDecision(ids.ownerUserId),
+      getTranslationSettings(),
+      getTranslationStorageReadiness(),
+    ]);
+    const translation = resolveAiImageTranslationReadiness(translationSettings, {
+      workflowEnabled,
+      production,
+      storageReadiness: translationStorageReadiness,
+    });
+    const imageToImage = resolveAiImageToImageReadiness({ workflowEnabled, production });
+    return {
+      code: 1,
+      data: {
+        webMediaEnabled: webMediaDecision.enabled,
+        webMediaReason: webMediaDecision.reason,
+        webMediaRevision: webMediaDecision.revision,
+        workflowEnabled,
+        operations: {
+          IMAGE_TO_IMAGE: gateReadinessByWebMedia(imageToImage, webMediaDecision.enabled),
+          IMAGE_TRANSLATE: gateReadinessByWebMedia(translation, webMediaDecision.enabled),
+        },
+      },
+    };
+  });
 
   app.post('/jobs', async (request, reply) => {
     const parsed = createSchema.safeParse(request.body);
@@ -470,6 +722,15 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!ownedJob || ownedJob.ownerUserId !== actor(request).ownerUserId) {
         throw new AiImageJobError('NOT_FOUND', 'AI image job not found');
       }
+      if (ownedJob.workflowId && ownedJob.provider === 'fake' && production) {
+        throw new AiImageJobError('PROVIDER_NOT_READY', 'Test-only AI media candidates cannot be applied in production');
+      }
+      if (ownedJob.operation === 'IMAGE_TRANSLATE' && parsed.data.mode !== 'append') {
+        throw new AiImageJobError(
+          'UNSAFE_APPLY_MODE',
+          'Image translation candidates can only be appended to existing product images',
+        );
+      }
       let selectedAssetId: string | null = null;
       if (ownedJob.workflowId) {
         const workflow = await mediaWorkflowService.get(ownedJob.workflowId, actor(request).ownerUserId);
@@ -481,6 +742,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         if (workflow.reviewStatus !== 'APPROVED' || !selectedBelongsToJob) {
           throw new AiImageJobError('INVALID_STATE', 'Workflow output must be approved before it can be applied');
         }
+        await assertWorkflowSourceCurrent(workflow, actor(request).ownerUserId);
         selectedAssetId = workflow.selectedOutputAssetId;
       }
       const application = await applyAssets({
@@ -502,44 +764,19 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
     }
     try {
+      await requireSourceListingWebMedia(ids.ownerUserId);
       let created: any;
       let enqueueOperation: (jobId: string) => Promise<void> = enqueue;
       if (parsed.data.operation === 'IMAGE_TRANSLATE') {
-        const translationSettings = await getTranslationSettings();
-        if (!translationSettings.enabled || translationSettings.provider === 'disabled') {
-          return reply.status(503).send({
-            code: 'AI_MEDIA_OPERATION_DISABLED',
-            msg: 'AI image translation is disabled',
-          });
-        }
-        if (!['fake', 'dashscope-qwen-mt-image'].includes(translationSettings.provider)) {
-          return reply.status(503).send({
-            code: 'PROVIDER_NOT_READY',
-            msg: 'AI image translation provider adapter is not enabled yet',
-          });
-        }
-        if (translationSettings.provider === 'fake' && process.env.NODE_ENV === 'production') {
-          return reply.status(503).send({
-            code: 'PROVIDER_NOT_READY',
-            msg: 'The fake image translation provider is test-only',
-          });
-        }
-        const capability = resolveAiImageProviderCapability(
-          translationSettings.provider,
-          translationSettings.model,
-        );
-        if (translationSettings.provider !== 'fake' && capability?.evidenceLevel !== 'sandbox-verified') {
-          return reply.status(503).send({
-            code: 'PROVIDER_NOT_READY',
-            msg: 'AI image translation provider has not passed its sandbox capability gate',
-          });
-        }
-        if (translationSettings.provider !== 'fake' && translationSettings.estimatedCostCents <= 0) {
-          return reply.status(503).send({
-            code: 'PROVIDER_NOT_READY',
-            msg: 'A verified positive image translation cost is required before paid dispatch',
-          });
-        }
+        const [translationSettings, translationStorageReadiness] = await Promise.all([
+          getTranslationSettings(),
+          getTranslationStorageReadiness(),
+        ]);
+        const readiness = resolveAiImageTranslationReadiness(translationSettings, {
+          production,
+          storageReadiness: translationStorageReadiness,
+        });
+        if (!readiness.ready) return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         const createTranslation = (mediaWorkflowService as AiMediaWorkflowService & {
           createImageTranslation?: (input: Record<string, unknown>) => Promise<unknown>;
         }).createImageTranslation;
@@ -586,6 +823,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         });
         enqueueOperation = enqueueTranslation;
       } else {
+        const readiness = resolveAiImageToImageReadiness({ production });
+        if (!readiness.ready) {
+          return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
         created = await mediaWorkflowService.createImageToImage({
           ...ids,
           sourceAssetId: parsed.data.sourceAssetId,
@@ -667,21 +908,25 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       if (!await getMediaWorkflowEnabled(ids.ownerUserId)) {
         return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
       }
+      await requireSourceListingWebMedia(ids.ownerUserId);
       const existingWorkflow = await mediaWorkflowService.get(
         (request.params as any).id,
         ids.ownerUserId,
       );
+      await assertWorkflowSourceCurrent(existingWorkflow, ids.ownerUserId);
       let retryEnqueue: (jobId: string) => Promise<void> = enqueue;
       let translationRetryDailyLimit: number | undefined;
       if ((existingWorkflow as { operation?: string }).operation === 'IMAGE_TRANSLATE') {
-        const translationSettings = await getTranslationSettings();
+        const [translationSettings, translationStorageReadiness] = await Promise.all([
+          getTranslationSettings(),
+          getTranslationStorageReadiness(),
+        ]);
         translationRetryDailyLimit = translationSettings.dailyLimit;
-        if (!translationSettings.enabled || translationSettings.provider === 'disabled') {
-          return reply.status(503).send({
-            code: 'AI_MEDIA_OPERATION_DISABLED',
-            msg: 'AI image translation is disabled',
-          });
-        }
+        const readiness = resolveAiImageTranslationReadiness(translationSettings, {
+          production,
+          storageReadiness: translationStorageReadiness,
+        });
+        if (!readiness.ready) return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
         const latestJob = Array.isArray(existingWorkflow.jobs)
           ? existingWorkflow.jobs.at(-1) as { provider?: unknown; model?: unknown; estimatedCostCents?: unknown } | undefined
           : undefined;
@@ -698,19 +943,6 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
             msg: 'AI image translation provider configuration changed; create a new workflow',
           });
         }
-        const capability = resolveAiImageProviderCapability(frozenProvider, frozenModel);
-        if (frozenProvider !== 'fake' && capability?.evidenceLevel !== 'sandbox-verified') {
-          return reply.status(503).send({
-            code: 'PROVIDER_NOT_READY',
-            msg: 'AI image translation provider has not passed its sandbox capability gate',
-          });
-        }
-        if (frozenProvider === 'fake' && process.env.NODE_ENV === 'production') {
-          return reply.status(503).send({
-            code: 'PROVIDER_NOT_READY',
-            msg: 'The fake image translation provider is test-only',
-          });
-        }
         const frozenCostCents = Number(latestJob?.estimatedCostCents || 0);
         if (frozenProvider !== 'fake' && (
           translationSettings.estimatedCostCents <= 0
@@ -722,6 +954,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
           });
         }
         retryEnqueue = enqueueTranslation;
+      } else {
+        const readiness = resolveAiImageToImageReadiness({ production });
+        if (!readiness.ready) {
+          return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
+        }
       }
       const result = await mediaWorkflowService.retry({
         id: (request.params as any).id,
@@ -758,6 +995,12 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
     try {
       const ids = actor(request);
+      const current = await mediaWorkflowService.get((request.params as any).id, ids.ownerUserId);
+      const currentJob = Array.isArray(current.jobs) ? current.jobs.at(-1) as { provider?: unknown } | undefined : undefined;
+      if (String(currentJob?.provider || '') === 'fake' && production) {
+        throw new AiMediaWorkflowError('PROVIDER_NOT_READY', 'Test-only AI media candidates cannot be reviewed in production');
+      }
+      await assertWorkflowSourceCurrent(current, ids.ownerUserId);
       const workflow = await mediaWorkflowService.review({
         id: (request.params as any).id, ...ids, ...parsed.data, note: parsed.data.note || null,
       });
@@ -782,6 +1025,7 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
     }
     try {
+      await requireSourceListingWebMedia(actor(request).ownerUserId);
       const asset = await mediaContextService.internalizeCollect(
         actor(request).ownerUserId,
         (request.params as any).id,

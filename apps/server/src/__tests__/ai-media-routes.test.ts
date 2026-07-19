@@ -1,6 +1,6 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
-import { aiImageRoutes } from '../routes/ai-images.js';
+import { aiImageRoutes, resolveAiImageToImageReadiness } from '../routes/ai-images.js';
 import { AiMediaWorkflowError, type AiMediaWorkflowRecord } from '../services/ai-media-workflows.js';
 
 const workflow: AiMediaWorkflowRecord = {
@@ -37,6 +37,11 @@ async function build(
   ownerUserId = 'owner-1',
   translationEnabled = false,
   translationProvider = 'fake',
+  webMediaEnabled = true,
+  production = false,
+  translationStorageReady = true,
+  translationStorageBackend: 'oss' | 'local' | 'ozon-cdn' = 'oss',
+  translationStoragePublicHttps = true,
 ) {
   const mediaWorkflowService = {
     createImageToImage: vi.fn(async () => ({ workflow, jobId: 'job-1', replayed: false })),
@@ -79,6 +84,16 @@ async function build(
       resolvedPrompt: 'Frozen translation domain policy',
       resolvedNegativePrompt: 'Frozen terminology policy',
     } as any),
+    getSourceListingWebMediaEnabled: async () => webMediaEnabled,
+    getTranslationStorageReadiness: async () => ({
+      ready: translationStorageReady,
+      backend: translationStorageBackend,
+      publicHttps: translationStoragePublicHttps,
+      reason: translationStorageReady
+        ? 'Image translation storage is ready'
+        : 'Image translation requires OSS or local storage because no shop context is frozen',
+    }),
+    production,
     getMediaWorkflowEnabled: async () => enabled,
     authenticate: async (request: FastifyRequest) => {
       (request as any).user = { userId: ownerUserId, actorUserId: 'actor-1' };
@@ -88,6 +103,169 @@ async function build(
 }
 
 describe('AI media workflow routes', () => {
+  it('reports owner-scoped Web operation readiness without exposing provider secrets', async () => {
+    const { app } = await build(true, 'owner-1', true);
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        webMediaEnabled: true,
+        workflowEnabled: true,
+        operations: {
+          IMAGE_TO_IMAGE: { enabled: true, ready: true, reasonCode: 'READY' },
+          IMAGE_TRANSLATE: { enabled: true, ready: true, reasonCode: 'READY' },
+        },
+      },
+    });
+    expect(JSON.stringify(response.json())).not.toContain('apiKey');
+  });
+
+  it('keeps paid image translation unavailable until sandbox evidence is verified', async () => {
+    const { app } = await build(true, 'owner-1', true, 'dashscope-qwen-mt-image');
+    const response = await app.inject({ method: 'GET', url: '/capabilities' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.operations.IMAGE_TRANSLATE).toMatchObject({
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+    });
+  });
+
+  it('rejects paid image translation when storage is local instead of owned public HTTPS OSS', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(
+      true,
+      'owner-1',
+      true,
+      'dashscope-qwen-mt-image',
+      true,
+      false,
+      true,
+      'local',
+      false,
+    );
+    const capabilities = await app.inject({ method: 'GET', url: '/capabilities' });
+    const create = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1',
+      idempotencyKey: 'paid-translation-local-storage', context: { type: 'collect', id: 'goods-1' },
+    } });
+
+    expect(capabilities.json().data.operations.IMAGE_TRANSLATE).toMatchObject({
+      ready: false,
+      reasonCode: 'STORAGE_NOT_READY',
+    });
+    expect(create.statusCode).toBe(503);
+    expect(create.json()).toMatchObject({ code: 'STORAGE_NOT_READY' });
+    expect(mediaWorkflowService.createImageTranslation).not.toHaveBeenCalled();
+    expect(enqueueTranslation).not.toHaveBeenCalled();
+  });
+
+  it('reports and enforces an incompatible translation storage backend before enqueue', async () => {
+    const { app, mediaWorkflowService, enqueueTranslation } = await build(
+      true,
+      'owner-1',
+      true,
+      'fake',
+      true,
+      false,
+      false,
+    );
+    const capabilities = await app.inject({ method: 'GET', url: '/capabilities' });
+    const create = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TRANSLATE', sourceAssetId: 'asset-1',
+      idempotencyKey: 'translation-storage-off', context: { type: 'collect', id: 'goods-1' },
+    } });
+
+    expect(capabilities.json().data.operations.IMAGE_TRANSLATE).toMatchObject({
+      enabled: true,
+      ready: false,
+      reasonCode: 'STORAGE_NOT_READY',
+    });
+    expect(create.statusCode).toBe(503);
+    expect(create.json()).toMatchObject({ code: 'STORAGE_NOT_READY' });
+    expect(mediaWorkflowService.createImageTranslation).not.toHaveBeenCalled();
+    expect(enqueueTranslation).not.toHaveBeenCalled();
+  });
+
+  it('keeps the fake image-to-image lifecycle unavailable in production', () => {
+    expect(resolveAiImageToImageReadiness({ workflowEnabled: true, production: true })).toMatchObject({
+      enabled: true,
+      ready: false,
+      reasonCode: 'PROVIDER_NOT_READY',
+      testOnly: true,
+    });
+    expect(resolveAiImageToImageReadiness({ workflowEnabled: true, production: false })).toMatchObject({
+      ready: true,
+      testOnly: true,
+    });
+  });
+
+  it('does not review or apply historical fake workflow candidates in production', async () => {
+    const { app, repository, mediaWorkflowService } = await build(
+      true,
+      'owner-1',
+      true,
+      'fake',
+      true,
+      true,
+    );
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      jobs: [{ id: 'job-1', provider: 'fake', assets: [{ id: 'output-1', url: '/output.png' }] }],
+    });
+    const review = await app.inject({ method: 'POST', url: '/workflows/workflow-1/review', payload: {
+      expectedRevision: 1, outputAssetId: 'output-1', decision: 'APPROVE',
+    } });
+    repository.getById.mockResolvedValueOnce({
+      id: 'job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1', operation: 'IMAGE_TO_IMAGE',
+      provider: 'fake', status: 'SUCCEEDED', assets: [{ id: 'output-1', url: '/output.png' }],
+    } as any);
+    const apply = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
+      mode: 'append', targetType: 'collect', targetId: 'goods-1',
+    } });
+
+    expect(review.statusCode).toBe(503);
+    expect(apply.statusCode).toBe(503);
+    expect(review.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(apply.json()).toMatchObject({ code: 'PROVIDER_NOT_READY' });
+    expect(mediaWorkflowService.review).not.toHaveBeenCalled();
+  });
+
+  it('gates Web media create, retry and internalization by the owner rollout decision', async () => {
+    const { app, mediaWorkflowService, mediaContextService, enqueue } = await build(
+      true,
+      'owner-1',
+      true,
+      'fake',
+      false,
+    );
+    const create = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'IMAGE_TO_IMAGE', sourceAssetId: 'asset-1', prompt: 'Keep product',
+      idempotencyKey: 'web-media-disabled-create', context: { type: 'collect', id: 'goods-1' },
+    } });
+    const retry = await app.inject({ method: 'POST', url: '/workflows/workflow-1/retry', payload: {
+      expectedRevision: 1, idempotencyKey: 'web-media-disabled-retry',
+    } });
+    const internalize = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/internalize',
+      payload: { sourceMediaKey: 'main-1' },
+    });
+
+    for (const response of [create, retry, internalize]) {
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: 'SOURCE_LISTING_WEB_MEDIA_DISABLED' });
+    }
+    expect(mediaWorkflowService.createImageToImage).not.toHaveBeenCalled();
+    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(mediaContextService.internalizeCollect).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('creates and enqueues a gated IMAGE_TRANSLATE workflow with frozen language options', async () => {
     const { app, mediaWorkflowService, enqueueTranslation } = await build(true, 'owner-1', true);
     const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
@@ -307,6 +485,31 @@ describe('AI media workflow routes', () => {
     expect(response.json().data).toHaveLength(1);
   });
 
+  it('returns safe translation metadata while keeping the frozen operation config private', async () => {
+    const { app, mediaWorkflowService } = await build(true, 'owner-1', true);
+    mediaWorkflowService.list.mockResolvedValueOnce([{
+      ...workflow,
+      operation: 'IMAGE_TRANSLATE' as any,
+      jobs: [{
+        id: 'translation-job-1', operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED',
+        operationConfig: {
+          sourceLanguage: 'zh', targetLanguage: 'ru', policyVersion: 'ai-image-translation-policy/1.0',
+          terminologies: [{ src: '钢琴黑', tgt: 'глянцевый черный' }],
+          domainHint: 'private compiled provider policy',
+        },
+        assets: [],
+      }],
+    }]);
+
+    const response = await app.inject({ method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1' });
+    expect(response.json().data[0].jobs[0].translation).toEqual({
+      sourceLanguage: 'zh', targetLanguage: 'ru', policyVersion: 'ai-image-translation-policy/1.0',
+      terminologies: [{ src: '钢琴黑', tgt: 'глянцевый черный' }],
+    });
+    expect(response.json().data[0].jobs[0]).not.toHaveProperty('operationConfig');
+    expect(JSON.stringify(response.json())).not.toContain('private compiled provider policy');
+  });
+
   it('does not expose another tenant workflow', async () => {
     const { app } = await build(true, 'owner-2');
     const response = await app.inject({ method: 'GET', url: '/workflows/workflow-1' });
@@ -326,6 +529,25 @@ describe('AI media workflow routes', () => {
     } });
     expect(retried.statusCode).toBe(202);
     expect(enqueue).toHaveBeenCalledWith('job-2');
+  });
+
+  it('rejects retry when the frozen source capture snapshot is no longer current', async () => {
+    const { app, mediaWorkflowService, enqueue } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      status: 'FAILED',
+      inputs: [{ assetId: 'asset-from-old-snapshot', url: '/images/old-source.png' }],
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/workflows/workflow-1/retry', payload: {
+      expectedRevision: 1,
+      idempotencyKey: 'retry-stale-source',
+    } });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it('resolves and internalizes an owner-scoped collect image context', async () => {
@@ -378,6 +600,58 @@ describe('AI media workflow routes', () => {
     } });
     expect(response.statusCode).toBe(400);
     expect(repository.recordApplication).not.toHaveBeenCalled();
+  });
+
+  it('rejects review when the source capture snapshot is no longer current', async () => {
+    const { app, mediaWorkflowService } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      contextType: 'collect',
+      contextId: 'goods-1',
+      inputs: [{ assetId: 'asset-from-old-snapshot', url: '/images/old-source.png' }],
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/workflows/workflow-1/review', payload: {
+      expectedRevision: 1, outputAssetId: 'output-1', decision: 'APPROVE',
+    } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(mediaWorkflowService.review).not.toHaveBeenCalled();
+  });
+
+  it('rejects replace application for translation candidates', async () => {
+    const { app, repository } = await build();
+    repository.getById.mockResolvedValueOnce({
+      id: 'job-translation-1', ownerUserId: 'owner-1', workflowId: 'workflow-1',
+      operation: 'IMAGE_TRANSLATE', status: 'SUCCEEDED', assets: [{ id: 'output-1', url: '/output.png' }],
+    } as any);
+    const response = await app.inject({ method: 'POST', url: '/jobs/job-translation-1/apply', payload: {
+      mode: 'replace', targetType: 'collect', targetId: 'goods-1',
+    } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'UNSAFE_APPLY_MODE' });
+  });
+
+  it('rejects an approved candidate after its source capture snapshot changes', async () => {
+    const { app, mediaWorkflowService } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      status: 'SUCCEEDED',
+      reviewStatus: 'APPROVED',
+      contextType: 'collect',
+      contextId: 'goods-1',
+      selectedOutputAssetId: 'output-1',
+      inputs: [{ assetId: 'asset-from-old-snapshot', url: '/images/old-source.png' }],
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/jobs/job-1/apply', payload: {
+      mode: 'append', targetType: 'collect', targetId: 'goods-1',
+      expectedTargetUpdatedAt: '2026-07-19T00:00:00.000Z',
+    } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
   });
 
   it('requires workflow cancellation for a workflow-backed child job', async () => {

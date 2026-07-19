@@ -53,6 +53,38 @@ const detailInclude = {
   events: { orderBy: { createdAt: 'asc' }, take: 200 },
 } as const;
 
+async function assertWorkflowSourceSnapshotCurrent(tx: any, workflow: any) {
+  if (workflow?.contextType !== 'collect' || !workflow.contextId) return;
+  const inputSnapshotIds = Array.isArray(workflow.inputs)
+    ? workflow.inputs.map((input: any) => String(input.asset?.sourceCaptureSnapshotId || '').trim())
+    : [];
+  if (!inputSnapshotIds.length || inputSnapshotIds.some((id: string) => !id)) {
+    throw Object.assign(new Error('The workflow source snapshot is no longer available'), {
+      code: 'STALE_MEDIA_WORKFLOW',
+    });
+  }
+  const context = await tx.supplyGoods.findFirst({
+    where: { id: workflow.contextId, userId: workflow.ownerUserId },
+    select: {
+      sourceCaptureSubject: {
+        select: {
+          snapshots: {
+            orderBy: [{ version: 'desc' }, { createdAt: 'desc' }],
+            take: 1,
+            select: { id: true },
+          },
+        },
+      },
+    },
+  });
+  const currentSnapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id || null;
+  if (!currentSnapshotId || inputSnapshotIds.some((id: string) => id !== currentSnapshotId)) {
+    throw Object.assign(new Error('The workflow source snapshot changed; review and generate a new candidate'), {
+      code: 'STALE_MEDIA_WORKFLOW',
+    });
+  }
+}
+
 interface FrozenSourceAsset {
   id: string;
   sha256: string | null;
@@ -528,8 +560,14 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           const job = workflow?.jobs?.find((row: any) => row.id === replay.jobId);
           return workflow && job ? { workflow: workflowRecord(workflow), jobId: job.id, replayed: true } : null;
         }
-        const workflow = await tx.aiMediaWorkflow.findFirst({ where: { id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision } });
+        const workflow = await tx.aiMediaWorkflow.findFirst({
+          where: { id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision },
+          include: {
+            inputs: { include: { asset: { select: { sourceCaptureSnapshotId: true } } } },
+          },
+        });
         if (!workflow || workflow.status !== 'FAILED') return null;
+        await assertWorkflowSourceSnapshotCurrent(tx, workflow);
         const previous = await tx.aiImageJob.findFirst({ where: { workflowId: input.id, workflowAttempt: workflow.currentAttempt } });
         if (!previous) return null;
         const previousCost = tx.aiCostReservation?.findUnique
@@ -641,8 +679,11 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
       const workflow = await tx.aiMediaWorkflow.findFirst({ where: {
         id: input.id, ownerUserId: input.ownerUserId, revision: input.expectedRevision, status: 'SUCCEEDED', reviewStatus: 'PENDING',
+      }, include: {
+        inputs: { include: { asset: { select: { sourceCaptureSnapshotId: true } } } },
       } });
       if (!workflow) return null;
+      await assertWorkflowSourceSnapshotCurrent(tx, workflow);
       const output = await tx.mediaAsset.findFirst({ where: {
         id: input.outputAssetId, ownerUserId: input.ownerUserId,
         aiImageJob: { workflowId: input.id, status: 'SUCCEEDED' },

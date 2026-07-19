@@ -231,6 +231,37 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(tx.aiImageJob.create).not.toHaveBeenCalled();
   });
 
+  it('never creates a retry attempt after the collect source snapshot changes', async () => {
+    const findPrevious = vi.fn();
+    const createJob = vi.fn();
+    const tx = {
+      aiMediaWorkflowEvent: { findUnique: vi.fn(async () => null) },
+      aiMediaWorkflow: {
+        findFirst: vi.fn(async () => ({
+          id: 'workflow-1', ownerUserId: 'owner-1', status: 'FAILED', revision: 3,
+          currentAttempt: 1, contextType: 'collect', contextId: 'goods-1',
+          inputs: [{ asset: { sourceCaptureSnapshotId: 'snapshot-old' } }],
+        })),
+      },
+      supplyGoods: {
+        findFirst: vi.fn(async () => ({
+          sourceCaptureSubject: { snapshots: [{ id: 'snapshot-current' }] },
+        })),
+      },
+      aiImageJob: { findFirst: findPrevious, create: createJob },
+    };
+
+    await expect(new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never).retryOwned({
+      id: 'workflow-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedRevision: 3, idempotencyKey: 'retry-stale-snapshot',
+    })).rejects.toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+
+    expect(findPrevious).not.toHaveBeenCalled();
+    expect(createJob).not.toHaveBeenCalled();
+  });
+
   it.each(['SETTLED', 'RELEASED'])('allows retry after provider cost is manually reconciled to %s', async (status) => {
     const fingerprint = 'f'.repeat(64);
     const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'job-2', ...data }));
