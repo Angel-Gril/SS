@@ -1586,6 +1586,8 @@ function SourceImagesSection({
   );
   const edited = metadataArray(item, 'editedImages').concat(metadataArray(item, 'processedImages'));
   const videos = sourceVideoMaterialRows(item);
+  const selectedSkuKeys = sourceDisplayVariants(item).map((variant, index) => sourceWorkflowVariantKey(variant, index));
+  const planningSkuKeys = [...new Set(selectedSkuKeys.filter(Boolean))].sort();
 
   useEffect(() => {
     setImages(sourcePublishPreviewImages(item));
@@ -1682,6 +1684,7 @@ function SourceImagesSection({
       </InfoPanel>
       <SourceAiMediaPanel
         target={{ type: 'collect', id: item.id, label: item.title, updatedAt: item.updatedAt }}
+        selectedSkuKeys={planningSkuKeys}
         mediaMutationBusy={mediaMutationBusy}
         runMediaMutation={runMediaMutation}
         onConflictRefresh={onRefreshItem}

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared';
 import {
   buildRuleBasedAiMediaPlanningArtifacts,
   createAiMediaPlanningService,
@@ -184,6 +185,31 @@ describe('AI media planning rule worker', () => {
     expect(resolved.candidates.map((candidate) => candidate.id)).toEqual(['main-1']);
   });
 
+  it('plans a stable product-only identity when the source has no explicit SKUs', () => {
+    const productOnly = authority();
+    productOnly.capture.skus = [];
+    productOnly.capture.media[0]!.skuKeys = [];
+    const request = {
+      ...planningInput(),
+      selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+    };
+
+    const resolved = resolveRuleBasedAiMediaPlanningInput(request, productOnly);
+    const artifacts = buildRuleBasedAiMediaPlanningArtifacts(resolved);
+
+    expect(resolved.skus).toEqual([{
+      skuKey: SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
+      attributes: [],
+    }]);
+    expect(artifacts.plan.compatibilityGroups).toEqual([
+      expect.objectContaining({ skuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY] }),
+    ]);
+    expect(artifacts.plan.slots).toHaveLength(8);
+    expect(artifacts.plan.slots.every((slot) => (
+      slot.status === 'READY' && slot.references[0]?.candidateId === 'main-1'
+    ))).toBe(true);
+  });
+
   it('uses identity-changing attributes beyond the first fifty when grouping SKUs', () => {
     const deepAuthority = authority();
     const evidence = (value: string, path: string) => ({
@@ -296,5 +322,180 @@ describe('AI media planning rule worker', () => {
       statusCode: 400,
     });
     expect(repository.reviewCurrent).not.toHaveBeenCalled();
+  });
+
+  it('resolves the current owned capture before creating a provider-free plan', async () => {
+    const source = authority();
+    const repository = {
+      resolveCurrentRulePlanningTarget: vi.fn().mockResolvedValue({
+        sourceSubjectId: 'subject-current',
+        sourceCaptureSnapshotId: 'snapshot-current',
+        selectedSkuKeys: ['red-single'],
+      }),
+      loadRulePlanningAuthority: vi.fn().mockResolvedValue(source),
+      createRulePlan: vi.fn().mockResolvedValue({
+        kind: 'created',
+        plan: {
+          id: 'plan-current', revision: 1, reviewStatus: 'PENDING', staleAt: null,
+          ownerUserId: 'owner-current', sourceSubjectId: 'subject-current',
+          contextType: 'collect', contextId: 'goods-current',
+          currentVersion: {
+            sourceCaptureSnapshotId: 'snapshot-current',
+            sourceCaptureHash: source.sourceCaptureHash,
+            sourceProfileHash: source.sourceProfileHash,
+            sourceSchemaVersion: source.sourceSchemaVersion,
+          },
+        },
+      }),
+      loadLatestSourceAuthority: vi.fn().mockResolvedValue({
+        snapshotId: 'snapshot-current', captureHash: source.sourceCaptureHash,
+        profileHash: source.sourceProfileHash, schemaVersion: source.sourceSchemaVersion,
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+    const result = await service.createCurrentRuleBased({
+      ownerUserId: 'owner-current',
+      actorUserId: 'actor-current',
+      context: { type: 'collect', id: 'goods-current' },
+      idempotencyKey: 'current-plan-create',
+      candidateMediaKeys: ['main-1'],
+    });
+
+    expect(result).toMatchObject({
+      plan: { id: 'plan-current' }, replayed: false, sourceCurrent: true,
+    });
+    expect(repository.resolveCurrentRulePlanningTarget).toHaveBeenCalledWith({
+      ownerUserId: 'owner-current', context: { type: 'collect', id: 'goods-current' },
+    });
+    expect(repository.loadRulePlanningAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-current', actorUserId: 'actor-current',
+      sourceSubjectId: 'subject-current', sourceCaptureSnapshotId: 'snapshot-current',
+      selectedSkuKeys: ['red-single'],
+    }));
+  });
+
+  it('uses the shared product-only identity when a current target returns an empty SKU list', async () => {
+    const source = authority();
+    source.capture.skus = [];
+    source.capture.media[0]!.skuKeys = [];
+    const repository = {
+      resolveCurrentRulePlanningTarget: vi.fn().mockResolvedValue({
+        sourceSubjectId: 'subject-product-only',
+        sourceCaptureSnapshotId: 'snapshot-product-only',
+        selectedSkuKeys: [],
+      }),
+      loadRulePlanningAuthority: vi.fn().mockResolvedValue(source),
+      createRulePlan: vi.fn().mockResolvedValue({
+        kind: 'created',
+        plan: { id: 'plan-product-only', revision: 1, reviewStatus: 'PENDING' },
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+    await service.createCurrentRuleBased({
+      ownerUserId: 'owner-product-only',
+      actorUserId: 'actor-product-only',
+      context: { type: 'collect', id: 'goods-product-only' },
+      idempotencyKey: 'product-only-current',
+      candidateMediaKeys: ['main-1'],
+    });
+
+    expect(repository.loadRulePlanningAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      selectedSkuKeys: [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+    }));
+  });
+
+  it('computes sourceCurrent without mutating the plan and keeps the comparison tenant-scoped', async () => {
+    const currentVersion = {
+      id: 'version-current', planId: 'plan-current', ownerUserId: 'owner-current', version: 1,
+      sourceCaptureSnapshotId: 'snapshot-current', sourceCaptureHash: 'a'.repeat(64),
+      sourceProfileHash: 'b'.repeat(64), sourceSchemaVersion: 'source-product-capture-v2',
+      inputFingerprint: 'c'.repeat(64), planSchemaVersion: 'plan/v1', plannerVersion: 'rule/v1',
+      mode: 'RULE_BASED' as const, fallbackReason: null, curation: {}, curationHash: 'd'.repeat(64),
+      visionEvidence: {}, visionEvidenceHash: 'e'.repeat(64), planHash: 'f'.repeat(64),
+      planPayload: {}, provenance: {}, provenanceHash: '1'.repeat(64), createdAt: new Date(),
+    };
+    const currentPlan = {
+      id: 'plan-current', ownerUserId: 'owner-current', actorUserId: 'actor-current',
+      sourceSubjectId: 'subject-current', contextType: 'collect', contextId: 'goods-current',
+      revision: 1, latestVersion: 1, currentVersionId: currentVersion.id, approvedVersionId: null,
+      reviewStatus: 'PENDING' as const, staleAt: null, staleAgainstFingerprint: null,
+      staleReasons: null, reviewedByUserId: null, reviewedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      currentVersion, approvedVersion: null,
+    };
+    const repository = {
+      getLatestOwnedByContext: vi.fn().mockResolvedValue(currentPlan),
+      loadLatestSourceAuthority: vi.fn().mockResolvedValue({
+        snapshotId: 'snapshot-current', captureHash: 'a'.repeat(64),
+        profileHash: 'b'.repeat(64), schemaVersion: 'source-product-capture-v2',
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+    const result = await service.getCurrentByContext('owner-current', {
+      type: 'collect', id: 'goods-current',
+    });
+
+    expect(result).toMatchObject({ plan: { id: 'plan-current' }, sourceCurrent: true });
+    expect(repository.getLatestOwnedByContext).toHaveBeenCalledWith({
+      ownerUserId: 'owner-current', contextType: 'collect', contextId: 'goods-current',
+    });
+    expect(repository.loadLatestSourceAuthority).toHaveBeenCalledWith({
+      ownerUserId: 'owner-current', sourceSubjectId: 'subject-current',
+      contextType: 'collect', contextId: 'goods-current',
+    });
+  });
+
+  it('projects the current source status on an exact review replay', async () => {
+    const currentVersion = {
+      id: 'version-replay', planId: 'plan-replay', ownerUserId: 'owner-replay', version: 1,
+      sourceCaptureSnapshotId: 'snapshot-old', sourceCaptureHash: 'a'.repeat(64),
+      sourceProfileHash: 'b'.repeat(64), sourceSchemaVersion: 'source-product-capture-v2',
+      inputFingerprint: 'c'.repeat(64), planSchemaVersion: 'plan/v1', plannerVersion: 'rule/v1',
+      mode: 'RULE_BASED' as const, fallbackReason: null, curation: {}, curationHash: 'd'.repeat(64),
+      visionEvidence: {}, visionEvidenceHash: 'e'.repeat(64), planHash: 'f'.repeat(64),
+      planPayload: {}, provenance: {}, provenanceHash: '1'.repeat(64), createdAt: new Date(),
+    };
+    const replayPlan = {
+      id: 'plan-replay', ownerUserId: 'owner-replay', actorUserId: 'owner-replay',
+      sourceSubjectId: 'subject-replay', contextType: 'collect', contextId: 'goods-replay',
+      revision: 2, latestVersion: 1, currentVersionId: currentVersion.id, approvedVersionId: currentVersion.id,
+      reviewStatus: 'APPROVED' as const, staleAt: null, staleAgainstFingerprint: null,
+      staleReasons: null, reviewedByUserId: 'owner-replay', reviewedAt: new Date(),
+      createdAt: new Date(), updatedAt: new Date(), currentVersion, approvedVersion: currentVersion,
+    };
+    const repository = {
+      reviewCurrent: vi.fn().mockResolvedValue({ kind: 'replayed', plan: replayPlan }),
+      loadLatestSourceAuthority: vi.fn().mockResolvedValue({
+        snapshotId: 'snapshot-new', captureHash: '9'.repeat(64),
+        profileHash: '8'.repeat(64), schemaVersion: 'source-product-capture-v2',
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+    const result = await service.review({
+      planId: 'plan-replay', ownerUserId: 'owner-replay', actorUserId: 'owner-replay',
+      expectedRevision: 1, operationKey: 'review-replay-1', decision: 'APPROVE', note: null,
+    });
+
+    expect(result).toMatchObject({ replayed: true, sourceCurrent: false, plan: { id: 'plan-replay' } });
+    expect(repository.loadLatestSourceAuthority).toHaveBeenCalledWith({
+      ownerUserId: 'owner-replay', sourceSubjectId: 'subject-replay',
+      contextType: 'collect', contextId: 'goods-replay',
+    });
+  });
+
+  it('maps an evidence-incomplete approval to a stable not-ready error', async () => {
+    const repository = {
+      reviewCurrent: vi.fn().mockResolvedValue({
+        kind: 'not-ready',
+        plan: { id: 'plan-not-ready' },
+      }),
+    };
+    const service = createAiMediaPlanningService(repository as never);
+
+    await expect(service.review({
+      planId: 'plan-not-ready', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      expectedRevision: 1, operationKey: 'not-ready-review', decision: 'APPROVE', note: null,
+    })).rejects.toMatchObject({
+      code: 'AI_MEDIA_PLANNING_NOT_READY', statusCode: 409,
+    });
   });
 });

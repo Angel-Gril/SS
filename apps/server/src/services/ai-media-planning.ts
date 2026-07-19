@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { SourceCaptureEvidence, SourceProductCaptureV2 } from 'shared';
+import {
+  SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY,
+  type SourceCaptureEvidence,
+  type SourceProductCaptureV2,
+} from 'shared';
 import {
   createDeterministicImageCuration,
   type ImageCurationCandidate,
@@ -26,6 +30,8 @@ export const AI_MEDIA_PLANNING_MAX_JSON_BYTES = 1024 * 1024;
 export const AI_MEDIA_PLANNING_MAX_SELECTED_SKUS = 50;
 export const AI_MEDIA_PLANNING_MAX_CANDIDATES = 25;
 export const AI_MEDIA_PLANNING_MAX_VERIFIED_FACTS = 32;
+export const AI_MEDIA_PLAN_VERSION_PAGE_DEFAULT = 10;
+export const AI_MEDIA_PLAN_VERSION_PAGE_MAX = 20;
 
 export const AI_MEDIA_GALLERY_GOALS = Object.freeze([
   'scene',
@@ -50,6 +56,31 @@ export interface CreateRuleBasedAiMediaPlanningInput {
   selectedSkuKeys: string[];
   candidateMediaKeys?: string[];
   galleryGoals?: AiMediaGalleryGoal[];
+}
+
+export type CreateCurrentRuleBasedAiMediaPlanningInput = Omit<
+  CreateRuleBasedAiMediaPlanningInput,
+  'sourceSubjectId' | 'sourceCaptureSnapshotId' | 'selectedSkuKeys'
+> & {
+  selectedSkuKeys?: string[];
+};
+
+export interface AiMediaPlanningCurrentTarget {
+  sourceSubjectId: string;
+  sourceCaptureSnapshotId: string;
+  selectedSkuKeys?: string[];
+}
+
+export interface AiMediaPlanningSourceAuthority {
+  snapshotId: string;
+  captureHash: string;
+  profileHash: string;
+  schemaVersion: string;
+}
+
+export interface AiMediaPlanVersionPageInput {
+  limit: number;
+  beforeVersion?: number;
 }
 
 export interface AiMediaPlanningAuthority {
@@ -109,9 +140,21 @@ export interface AiMediaPlanVersionRecord {
   sourceCaptureSnapshotId: string;
   sourceCaptureHash: string;
   sourceProfileHash: string;
+  sourceSchemaVersion: string;
   inputFingerprint: string;
+  planSchemaVersion: string;
+  plannerVersion: string;
+  mode: 'RULE_BASED' | 'MODEL' | 'FALLBACK';
+  fallbackReason: string | null;
+  inputSnapshot: unknown;
+  curation: unknown;
+  curationHash: string;
+  visionEvidence: unknown;
+  visionEvidenceHash: string;
   planHash: string;
   planPayload: unknown;
+  provenance: unknown;
+  provenanceHash: string;
   createdAt: Date;
 }
 
@@ -161,22 +204,42 @@ export type ReviewRulePlanResult = {
     | 'operation-conflict'
     | 'revision-conflict'
     | 'state-conflict'
+    | 'not-ready'
     | 'stale';
   plan: AiMediaPlanRecord | null;
 };
 
 export type ExecutionPlanResult = {
-  kind: 'ready' | 'not-found' | 'not-approved' | 'stale';
+  kind: 'ready' | 'not-found' | 'not-approved' | 'not-ready' | 'stale';
   plan: AiMediaPlanRecord | null;
 };
 
 export interface AiMediaPlanningRepository {
+  resolveCurrentRulePlanningTarget(input: {
+    ownerUserId: string;
+    context: { type: 'collect'; id: string };
+  }): Promise<AiMediaPlanningCurrentTarget | null>;
   loadRulePlanningAuthority(
     input: CreateRuleBasedAiMediaPlanningInput,
   ): Promise<AiMediaPlanningAuthority | null>;
   createRulePlan(input: RuleBasedAiMediaPlanningArtifacts): Promise<CreateRulePlanResult>;
   getOwned(planId: string, ownerUserId: string): Promise<AiMediaPlanRecord | null>;
-  listVersionsOwned(planId: string, ownerUserId: string): Promise<AiMediaPlanVersionRecord[]>;
+  getLatestOwnedByContext(input: {
+    ownerUserId: string;
+    contextType: 'collect';
+    contextId: string;
+  }): Promise<AiMediaPlanRecord | null>;
+  loadLatestSourceAuthority(input: {
+    ownerUserId: string;
+    sourceSubjectId: string;
+    contextType: string;
+    contextId: string;
+  }): Promise<AiMediaPlanningSourceAuthority | null>;
+  listVersionsOwned(
+    planId: string,
+    ownerUserId: string,
+    page: AiMediaPlanVersionPageInput,
+  ): Promise<AiMediaPlanVersionRecord[]>;
   reviewCurrent(input: ReviewAiMediaPlanInput): Promise<ReviewRulePlanResult>;
   requireApprovedForExecution(input: {
     planId: string;
@@ -186,6 +249,8 @@ export interface AiMediaPlanningRepository {
 }
 
 export type AiMediaPlanningErrorCode =
+  | 'AI_MEDIA_WORKFLOW_DISABLED'
+  | 'SOURCE_LISTING_WEB_MEDIA_DISABLED'
   | 'AI_MEDIA_PLANNING_NOT_FOUND'
   | 'AI_MEDIA_PLANNING_INVALID_INPUT'
   | 'AI_MEDIA_PLANNING_IDEMPOTENCY_CONFLICT'
@@ -193,6 +258,7 @@ export type AiMediaPlanningErrorCode =
   | 'AI_MEDIA_PLANNING_REVISION_CONFLICT'
   | 'AI_MEDIA_PLANNING_CONTEXT_CHANGED'
   | 'AI_MEDIA_PLANNING_STALE'
+  | 'AI_MEDIA_PLANNING_NOT_READY'
   | 'AI_MEDIA_PLANNING_REVIEW_STATE_CONFLICT'
   | 'AI_MEDIA_PLANNING_NOT_APPROVED';
 
@@ -419,12 +485,15 @@ export function resolveRuleBasedAiMediaPlanningInput(
   const skuByKey = new Map(authority.capture.skus.map((sku) => [sku.key, sku]));
   const selectedSkus = input.selectedSkuKeys.map((key) => {
     const sku = skuByKey.get(key);
+    if (!sku
+      && authority.capture.skus.length === 0
+      && key === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY) return null;
     if (!sku) throw new TypeError(`AI media planning SKU is not present in the source capture: ${key}`);
     return sku;
   });
-  const skus: ImagePromptPlanSku[] = selectedSkus.map((sku) => ({
-    skuKey: sku.key,
-    attributes: sku.attributes.map((attribute) => ({
+  const skus: ImagePromptPlanSku[] = selectedSkus.map((sku, index) => ({
+    skuKey: sku?.key || input.selectedSkuKeys[index]!,
+    attributes: (sku?.attributes || []).map((attribute) => ({
       key: attribute.name,
       value: attribute.value,
       identityImpact: trustedEvidence(attribute.fieldEvidence.name, attribute.name)
@@ -467,7 +536,11 @@ export function resolveRuleBasedAiMediaPlanningInput(
     sourceSchemaVersion: required(authority.sourceSchemaVersion, 'sourceSchemaVersion', 100),
     skus,
     candidates,
-    verifiedFacts: verifiedFactsFromCapture(input.sourceCaptureSnapshotId, authority.capture, selectedSkus),
+    verifiedFacts: verifiedFactsFromCapture(
+      input.sourceCaptureSnapshotId,
+      authority.capture,
+      selectedSkus.filter((sku): sku is SourceProductCaptureV2['skus'][number] => Boolean(sku)),
+    ),
   });
 }
 
@@ -597,8 +670,7 @@ function inputError(error: unknown): never {
 }
 
 export function createAiMediaPlanningService(repository: AiMediaPlanningRepository) {
-  return {
-    async createRuleBased(input: CreateRuleBasedAiMediaPlanningInput) {
+  const createRuleBased = async (input: CreateRuleBasedAiMediaPlanningInput) => {
       let normalized: CreateRuleBasedAiMediaPlanningInput;
       let artifacts: RuleBasedAiMediaPlanningArtifacts;
       try {
@@ -637,6 +709,68 @@ export function createAiMediaPlanningService(repository: AiMediaPlanningReposito
         );
       }
       return { plan: result.plan, replayed: result.kind === 'existing' };
+  };
+
+  const sourceCurrent = async (plan: AiMediaPlanRecord): Promise<boolean> => {
+    if (plan.staleAt || !plan.currentVersion) return false;
+    const latest = await repository.loadLatestSourceAuthority({
+      ownerUserId: plan.ownerUserId,
+      sourceSubjectId: plan.sourceSubjectId,
+      contextType: plan.contextType,
+      contextId: plan.contextId,
+    });
+    return Boolean(latest
+      && latest.snapshotId === plan.currentVersion.sourceCaptureSnapshotId
+      && latest.captureHash === plan.currentVersion.sourceCaptureHash
+      && latest.profileHash === plan.currentVersion.sourceProfileHash
+      && latest.schemaVersion === plan.currentVersion.sourceSchemaVersion);
+  };
+
+  return {
+    createRuleBased,
+
+    async createCurrentRuleBased(input: CreateCurrentRuleBasedAiMediaPlanningInput) {
+      let ownerUserId: string;
+      let actorUserId: string;
+      let contextId: string;
+      try {
+        ownerUserId = required(input.ownerUserId, 'ownerUserId', 200);
+        actorUserId = required(input.actorUserId, 'actorUserId', 200);
+        if (!input.context || input.context.type !== 'collect') {
+          throw new TypeError('AI media planning context is invalid');
+        }
+        contextId = required(input.context.id, 'context.id', 200);
+      } catch (error) {
+        return inputError(error);
+      }
+      const target = await repository.resolveCurrentRulePlanningTarget({
+        ownerUserId,
+        context: { type: 'collect', id: contextId },
+      });
+      if (!target) {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_CONTEXT_CHANGED',
+          'Source capture context changed or does not belong to this tenant',
+          409,
+        );
+      }
+      const created = await createRuleBased({
+        ...input,
+        ownerUserId,
+        actorUserId,
+        context: { type: 'collect', id: contextId },
+        sourceSubjectId: target.sourceSubjectId,
+        sourceCaptureSnapshotId: target.sourceCaptureSnapshotId,
+        selectedSkuKeys: input.selectedSkuKeys?.length
+          ? input.selectedSkuKeys
+          : target.selectedSkuKeys?.length
+            ? target.selectedSkuKeys
+            : [SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY],
+      });
+      return {
+        ...created,
+        sourceCurrent: await sourceCurrent(created.plan),
+      };
     },
 
     async get(planId: string, ownerUserId: string) {
@@ -647,12 +781,58 @@ export function createAiMediaPlanningService(repository: AiMediaPlanningReposito
       return plan;
     },
 
-    async listVersions(planId: string, ownerUserId: string) {
+    async getWithSourceStatus(planId: string, ownerUserId: string) {
       const plan = await repository.getOwned(planId, ownerUserId);
       if (!plan) {
         throw new AiMediaPlanningError('AI_MEDIA_PLANNING_NOT_FOUND', 'AI media plan was not found', 404);
       }
-      return repository.listVersionsOwned(planId, ownerUserId);
+      return { plan, sourceCurrent: await sourceCurrent(plan) };
+    },
+
+    async getCurrentByContext(
+      ownerUserId: string,
+      context: { type: 'collect'; id: string },
+    ) {
+      let normalizedOwner: string;
+      let contextId: string;
+      try {
+        normalizedOwner = required(ownerUserId, 'ownerUserId', 200);
+        if (!context || context.type !== 'collect') throw new TypeError('AI media planning context is invalid');
+        contextId = required(context.id, 'context.id', 200);
+      } catch (error) {
+        return inputError(error);
+      }
+      const plan = await repository.getLatestOwnedByContext({
+        ownerUserId: normalizedOwner,
+        contextType: 'collect',
+        contextId,
+      });
+      if (!plan) return { plan: null, sourceCurrent: null };
+      return { plan, sourceCurrent: await sourceCurrent(plan) };
+    },
+
+    async listVersions(
+      planId: string,
+      ownerUserId: string,
+      page: Partial<AiMediaPlanVersionPageInput> = {},
+    ) {
+      const limit = page.limit ?? AI_MEDIA_PLAN_VERSION_PAGE_DEFAULT;
+      const beforeVersion = page.beforeVersion;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > AI_MEDIA_PLAN_VERSION_PAGE_MAX
+        || (beforeVersion !== undefined
+          && (!Number.isSafeInteger(beforeVersion) || beforeVersion < 1))) {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_INVALID_INPUT', 'AI media plan version page is invalid', 400,
+        );
+      }
+      const plan = await repository.getOwned(planId, ownerUserId);
+      if (!plan) {
+        throw new AiMediaPlanningError('AI_MEDIA_PLANNING_NOT_FOUND', 'AI media plan was not found', 404);
+      }
+      return repository.listVersionsOwned(planId, ownerUserId, {
+        limit,
+        ...(beforeVersion === undefined ? {} : { beforeVersion }),
+      });
     },
 
     async review(input: ReviewAiMediaPlanInput) {
@@ -692,12 +872,26 @@ export function createAiMediaPlanningService(repository: AiMediaPlanningReposito
           'AI_MEDIA_PLANNING_REVIEW_STATE_CONFLICT', 'AI media plan cannot be reviewed in its current state', 409,
         );
       }
+      if (result.kind === 'not-ready') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_NOT_READY',
+          'AI media plan still has manual or evidence-incomplete slots',
+          409,
+        );
+      }
       if (result.kind === 'stale') {
         throw new AiMediaPlanningError(
           'AI_MEDIA_PLANNING_STALE', 'AI media plan is stale against the current source context', 409,
         );
       }
-      return { plan: result.plan, replayed: result.kind === 'replayed' };
+      // A review replay remains idempotent, but source authority is mutable.
+      // Project the current source state separately so an old approval cannot
+      // be presented as executable after a newer capture arrives.
+      return {
+        plan: result.plan,
+        replayed: result.kind === 'replayed',
+        sourceCurrent: await sourceCurrent(result.plan),
+      };
     },
 
     async requireApprovedForExecution(input: {
@@ -719,6 +913,13 @@ export function createAiMediaPlanningService(repository: AiMediaPlanningReposito
       if (result.kind === 'stale') {
         throw new AiMediaPlanningError(
           'AI_MEDIA_PLANNING_STALE', 'AI media plan is stale against the current source context', 409,
+        );
+      }
+      if (result.kind === 'not-ready') {
+        throw new AiMediaPlanningError(
+          'AI_MEDIA_PLANNING_NOT_READY',
+          'AI media plan still has manual or evidence-incomplete slots',
+          409,
         );
       }
       if (result.kind !== 'ready') {

@@ -1,3 +1,5 @@
+import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared/ozon-listing-draft';
+
 export type AiMediaOperation = 'IMAGE_TO_IMAGE' | 'IMAGE_TRANSLATE';
 export type AiMediaWorkflowStatus =
   | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCEL_REQUESTED' | 'CANCELLED';
@@ -71,6 +73,361 @@ export interface AiMediaCapabilities {
   webMediaEnabled: boolean;
   workflowEnabled: boolean;
   operations: Partial<Record<AiMediaOperation, AiMediaOperationReadiness>>;
+}
+
+/**
+ * Public, provider-neutral planning data. The server owns the source of truth;
+ * these DTOs deliberately contain only reviewable evidence and plan metadata.
+ */
+export type AiMediaPlanningReviewStatus = 'NOT_READY' | 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface AiMediaPlanRecord {
+  id: string;
+  revision: number;
+  latestVersion: number;
+  currentVersionId: string | null;
+  approvedVersionId: string | null;
+  reviewStatus: AiMediaPlanningReviewStatus;
+  sourceCaptureSnapshotId: string | null;
+  staleAt: string | null;
+  staleReasons: string[];
+  sourceCurrent: boolean | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface AiMediaPlanCurationDecision {
+  candidateId: string;
+  disposition: 'keep' | 'reject' | 'manual';
+  reasonCodes: string[];
+  translation: 'translate' | 'skip' | 'unknown';
+  contentRole: 'identity' | 'context' | 'detail' | 'unknown';
+  score: number | null;
+  duplicateOfCandidateId: string | null;
+  continuity: { groupKey: string; index: number; total: number } | null;
+}
+
+export interface AiMediaPlanCuration {
+  version: string;
+  mode: 'deterministic' | 'model' | 'fallback';
+  consideredCandidateIds: string[];
+  selectedCandidateIds: string[];
+  decisions: AiMediaPlanCurationDecision[];
+  selectionTarget: {
+    minimum: number;
+    maximum: number;
+    eligibleCount: number;
+    selectedCount: number;
+    met: boolean;
+  } | null;
+  diagnostics: Array<{ code: string; candidateId: string }>;
+  fallbackReason: string | null;
+}
+
+export interface AiMediaPlanCompatibilityGroup {
+  groupKey: string;
+  identitySignature: string;
+  skuKeys: string[];
+}
+
+export interface AiMediaPlanSlotReference {
+  candidateId: string;
+  evidenceIds: string[];
+}
+
+export interface AiMediaPlanSlot {
+  slotKey: string;
+  goal: string;
+  status: 'READY' | 'MANUAL_REQUIRED';
+  aspectRatio: string;
+  ownership: { level: 'sku' | 'compatibility_group'; key: string };
+  references: AiMediaPlanSlotReference[];
+  factEvidenceIds: string[];
+  safetyConstraints: string[];
+  acceptanceChecks: string[];
+}
+
+export interface AiMediaPlanPayload {
+  version: string;
+  mode: 'rule_based' | 'model' | 'fallback';
+  compatibilityGroups: AiMediaPlanCompatibilityGroup[];
+  slots: AiMediaPlanSlot[];
+  verifiedFacts: Array<{ path: string; value: unknown; evidenceIds: string[]; skuKeys: string[] }>;
+  diagnostics: Array<{ code: string; slotKey: string; candidateId: string | null }>;
+  fallbackReason: string | null;
+}
+
+export interface AiMediaPlanVersion {
+  id: string;
+  planId: string;
+  version: number;
+  sourceCaptureSnapshotId: string;
+  planPayload: AiMediaPlanPayload | null;
+  curation: AiMediaPlanCuration | null;
+  visionEvidence: unknown;
+  provenance: unknown;
+  createdAt: string | null;
+}
+
+export interface AiMediaPlanBundle {
+  plan: AiMediaPlanRecord;
+  currentVersion: AiMediaPlanVersion | null;
+}
+
+const AI_MEDIA_PLAN_MAX_ITEMS = 500;
+const AI_MEDIA_PLAN_MAX_TEXT = 2_000;
+
+function planningObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function planningText(value: unknown, max = AI_MEDIA_PLAN_MAX_TEXT): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized && normalized.length <= max ? normalized : null;
+}
+
+function planningTextArray(value: unknown, max = AI_MEDIA_PLAN_MAX_ITEMS): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, max)
+    .map((item) => planningText(item))
+    .filter((item): item is string => Boolean(item));
+}
+
+function planningNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function planningDate(value: unknown): string | null {
+  const text = planningText(value, 128);
+  return text;
+}
+
+function planningReviewStatus(value: unknown): AiMediaPlanningReviewStatus {
+  return value === 'PENDING' || value === 'APPROVED' || value === 'REJECTED' ? value : 'NOT_READY';
+}
+
+function normalizePlanningCuration(value: unknown): AiMediaPlanCuration | null {
+  const object = planningObject(value);
+  if (!object) return null;
+  const decisions: AiMediaPlanCurationDecision[] = Array.isArray(object.decisions) ? object.decisions.slice(0, AI_MEDIA_PLAN_MAX_ITEMS).flatMap((entry) => {
+    const item = planningObject(entry);
+    const candidateId = planningText(item?.candidateId, 500);
+    if (!item || !candidateId) return [];
+    const disposition: AiMediaPlanCurationDecision['disposition'] = item.disposition === 'keep' || item.disposition === 'reject' || item.disposition === 'manual'
+      ? item.disposition
+      : 'manual';
+    const translation: AiMediaPlanCurationDecision['translation'] = item.translation === 'translate' || item.translation === 'skip' ? item.translation : 'unknown';
+    const contentRole: AiMediaPlanCurationDecision['contentRole'] = item.contentRole === 'identity' || item.contentRole === 'context' || item.contentRole === 'detail'
+      ? item.contentRole
+      : 'unknown';
+    const continuityValue = planningObject(item.continuity);
+    const continuity = continuityValue && planningText(continuityValue.groupKey, 500)
+      ? {
+        groupKey: planningText(continuityValue.groupKey, 500)!,
+        index: Math.max(0, Math.floor(planningNumber(continuityValue.index))),
+        total: Math.max(0, Math.floor(planningNumber(continuityValue.total))),
+      }
+      : null;
+    const score = item.score === null ? null : planningNumber(item.score, Number.NaN);
+    return [{
+      candidateId,
+      disposition,
+      reasonCodes: planningTextArray(item.reasonCodes, 32),
+      translation,
+      contentRole,
+      score: Number.isFinite(score) ? score : null,
+      duplicateOfCandidateId: planningText(item.duplicateOfCandidateId, 500),
+      continuity,
+    }];
+  }) : [];
+  const selectionTargetValue = planningObject(object.selectionTarget);
+  const selectionTarget = selectionTargetValue ? {
+    minimum: Math.max(0, Math.floor(planningNumber(selectionTargetValue.minimum))),
+    maximum: Math.max(0, Math.floor(planningNumber(selectionTargetValue.maximum))),
+    eligibleCount: Math.max(0, Math.floor(planningNumber(selectionTargetValue.eligibleCount))),
+    selectedCount: Math.max(0, Math.floor(planningNumber(selectionTargetValue.selectedCount))),
+    met: selectionTargetValue.met === true,
+  } : null;
+  return {
+    version: planningText(object.version, 100) || 'unknown',
+    mode: object.mode === 'model' || object.mode === 'fallback' ? object.mode : 'deterministic',
+    consideredCandidateIds: planningTextArray(object.consideredCandidateIds, AI_MEDIA_PLAN_MAX_ITEMS),
+    selectedCandidateIds: planningTextArray(object.selectedCandidateIds, AI_MEDIA_PLAN_MAX_ITEMS),
+    decisions,
+    selectionTarget,
+    diagnostics: Array.isArray(object.diagnostics) ? object.diagnostics.slice(0, AI_MEDIA_PLAN_MAX_ITEMS).flatMap((entry) => {
+      const item = planningObject(entry);
+      const code = planningText(item?.code, 200);
+      const candidateId = planningText(item?.candidateId, 500);
+      return code && candidateId ? [{ code, candidateId }] : [];
+    }) : [],
+    fallbackReason: planningText(object.fallbackReason, 200),
+  };
+}
+
+function normalizePlanningPayload(value: unknown): AiMediaPlanPayload | null {
+  const object = planningObject(value);
+  if (!object) return null;
+  const groups = Array.isArray(object.compatibilityGroups) ? object.compatibilityGroups.slice(0, AI_MEDIA_PLAN_MAX_ITEMS).flatMap((entry) => {
+    const item = planningObject(entry);
+    const groupKey = planningText(item?.groupKey, 500);
+    if (!item || !groupKey) return [];
+    return [{
+      groupKey,
+      identitySignature: planningText(item.identitySignature, 500) || 'unknown',
+      skuKeys: planningTextArray(item.skuKeys, AI_MEDIA_PLAN_MAX_ITEMS),
+    }];
+  }) : [];
+  const slots: AiMediaPlanSlot[] = Array.isArray(object.slots) ? object.slots.slice(0, AI_MEDIA_PLAN_MAX_ITEMS).flatMap((entry) => {
+    const item = planningObject(entry);
+    const slotKey = planningText(item?.slotKey, 1_024);
+    const ownershipValue = planningObject(item?.ownership);
+    const ownershipKey = planningText(ownershipValue?.key, 500);
+    if (!item || !slotKey || !ownershipKey) return [];
+    const ownershipLevel: AiMediaPlanSlot['ownership']['level'] = ownershipValue?.level === 'sku' ? 'sku' : 'compatibility_group';
+    const references = Array.isArray(item.references) ? item.references.slice(0, 20).flatMap((entry) => {
+      const reference = planningObject(entry);
+      const candidateId = planningText(reference?.candidateId, 500);
+      return candidateId ? [{ candidateId, evidenceIds: planningTextArray(reference?.evidenceIds, 32) }] : [];
+    }) : [];
+    return [{
+      slotKey,
+      goal: planningText(item.goal, 200) || 'unknown',
+      status: item.status === 'READY' ? 'READY' as const : 'MANUAL_REQUIRED' as const,
+      aspectRatio: planningText(item.aspectRatio, 50) || '3:4',
+      ownership: { level: ownershipLevel, key: ownershipKey },
+      references,
+      factEvidenceIds: planningTextArray(item.factEvidenceIds, 64),
+      safetyConstraints: planningTextArray(item.safetyConstraints, 32),
+      acceptanceChecks: planningTextArray(item.acceptanceChecks, 32),
+    }];
+  }) : [];
+  const verifiedFacts = Array.isArray(object.verifiedFacts) ? object.verifiedFacts.slice(0, AI_MEDIA_PLAN_MAX_ITEMS).flatMap((entry) => {
+    const item = planningObject(entry);
+    const path = planningText(item?.path, 1_024);
+    if (!item || !path) return [];
+    return [{ path, value: item.value, evidenceIds: planningTextArray(item.evidenceIds, 64), skuKeys: planningTextArray(item.skuKeys, AI_MEDIA_PLAN_MAX_ITEMS) }];
+  }) : [];
+  const diagnostics = Array.isArray(object.diagnostics) ? object.diagnostics.slice(0, AI_MEDIA_PLAN_MAX_ITEMS).flatMap((entry) => {
+    const item = planningObject(entry);
+    const code = planningText(item?.code, 200);
+    const slotKey = planningText(item?.slotKey, 1_024);
+    return code && slotKey ? [{ code, slotKey, candidateId: planningText(item?.candidateId, 500) }] : [];
+  }) : [];
+  return {
+    version: planningText(object.version, 100) || 'unknown',
+    mode: object.mode === 'model' || object.mode === 'fallback' ? object.mode : 'rule_based',
+    compatibilityGroups: groups,
+    slots,
+    verifiedFacts,
+    diagnostics,
+    fallbackReason: planningText(object.fallbackReason, 200),
+  };
+}
+
+function normalizePlanningVersion(value: unknown, fallbackPlanId: string): AiMediaPlanVersion | null {
+  const object = planningObject(value);
+  if (!object) return null;
+  const id = planningText(object.id, 200);
+  if (!id) return null;
+  const planId = planningText(object.planId, 200) || fallbackPlanId;
+  const payloadObject = planningObject(object.planPayload);
+  const payloadCandidate = payloadObject && planningObject(payloadObject.plan)
+    ? payloadObject.plan
+    : object.planPayload;
+  const planPayload = normalizePlanningPayload(payloadCandidate);
+  const curation = normalizePlanningCuration(object.curation)
+    || (payloadObject ? normalizePlanningCuration(payloadObject.curation) : null);
+  return {
+    id,
+    planId,
+    version: Math.max(0, Math.floor(planningNumber(object.version))),
+    sourceCaptureSnapshotId: planningText(object.sourceCaptureSnapshotId, 200) || '',
+    planPayload,
+    curation,
+    visionEvidence: object.visionEvidence ?? null,
+    provenance: object.provenance ?? null,
+    createdAt: planningDate(object.createdAt),
+  };
+}
+
+/** Normalize an API plan response and reject malformed/oversized payloads. */
+export function normalizeAiMediaPlanBundle(value: unknown): AiMediaPlanBundle | null {
+  if (value === null || value === undefined) return null;
+  const root = planningObject(value);
+  if (!root) return null;
+  const planValue = planningObject(root.plan) || root;
+  const id = planningText(planValue.id, 200);
+  if (!id) return null;
+  const plan: AiMediaPlanRecord = {
+    id,
+    revision: Math.max(1, Math.floor(planningNumber(planValue.revision, 1))),
+    latestVersion: Math.max(0, Math.floor(planningNumber(planValue.latestVersion))),
+    currentVersionId: planningText(planValue.currentVersionId, 200),
+    approvedVersionId: planningText(planValue.approvedVersionId, 200),
+    reviewStatus: planningReviewStatus(planValue.reviewStatus),
+    sourceCaptureSnapshotId: planningText(planValue.sourceCaptureSnapshotId, 200),
+    staleAt: planningDate(planValue.staleAt),
+    staleReasons: planningTextArray(planValue.staleReasons, 32),
+    sourceCurrent: typeof planValue.sourceCurrent === 'boolean' ? planValue.sourceCurrent : null,
+    createdAt: planningDate(planValue.createdAt),
+    updatedAt: planningDate(planValue.updatedAt),
+  };
+  const versionValue = root.currentVersion ?? root.version ?? planValue.currentVersion;
+  const currentVersion = normalizePlanningVersion(versionValue, id);
+  if (currentVersion && !plan.sourceCaptureSnapshotId) plan.sourceCaptureSnapshotId = currentVersion.sourceCaptureSnapshotId || null;
+  return { plan, currentVersion };
+}
+
+export function canRegenerateAiMediaPlan(
+  plan: Pick<AiMediaPlanRecord, 'reviewStatus' | 'staleAt' | 'sourceCurrent'>,
+): boolean {
+  return plan.reviewStatus === 'REJECTED' || Boolean(plan.staleAt) || plan.sourceCurrent === false;
+}
+
+export function canApproveAiMediaPlan(bundle: AiMediaPlanBundle): boolean {
+  const version = bundle.currentVersion;
+  const target = version?.curation?.selectionTarget;
+  const slots = version?.planPayload?.slots;
+  if (!version || !target?.met || !slots?.length) return false;
+  return slots.every((slot) => (
+    slot.status === 'READY'
+    && slot.goal !== 'unknown'
+    && Boolean(slot.ownership.key)
+    && slot.references.length > 0
+    && slot.references.every((reference) => (
+      Boolean(reference.candidateId) && reference.evidenceIds.length > 0
+    ))
+    && slot.safetyConstraints.length > 0
+    && slot.acceptanceChecks.length > 0
+  ));
+}
+
+export function formatAiMediaPlanningIdentity(value: string): string {
+  return value === SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY ? '商品级' : value;
+}
+
+export function formatAiMediaPlanningSlotKey(value: string): string {
+  return value.replaceAll(SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY, '商品级');
+}
+
+export function buildAiMediaPlanReviewRequest(input: {
+  expectedRevision: number;
+  operationKey: string;
+  decision: 'APPROVE' | 'REJECT';
+  note?: string | null;
+}) {
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    throw new Error('计划版本已失效，请刷新后重试');
+  }
+  const operationKey = input.operationKey.trim();
+  if (operationKey.length < 8 || operationKey.length > 128) throw new Error('审核操作标识无效');
+  const note = input.note?.trim() || null;
+  if (note && note.length > 2_000) throw new Error('审核备注不能超过 2000 个字符');
+  return { expectedRevision: input.expectedRevision, operationKey, decision: input.decision, note };
 }
 
 export function describeAiMediaReadiness(

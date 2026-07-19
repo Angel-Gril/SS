@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
+import { SourceAiMediaPlanningPanel } from './source-ai-media-planning-panel';
 import {
   createLatestLoadCoordinator,
   isMediaMutationConflict,
@@ -67,12 +68,14 @@ function normalizeLanguageForFingerprint(value: string) {
 
 export function SourceAiMediaPanel({
   target,
+  selectedSkuKeys,
   onApplied,
   mediaMutationBusy,
   runMediaMutation,
   onConflictRefresh,
 }: {
   target: { type: 'collect'; id: string; label: string; updatedAt?: string };
+  selectedSkuKeys?: string[];
   onApplied?: (result: AiImageApplyResult) => void;
   mediaMutationBusy: boolean;
   runMediaMutation: RunMediaMutation;
@@ -416,6 +419,13 @@ export function SourceAiMediaPanel({
       {disabled ? <p className="text-sm text-muted-foreground">新建 AI 图片任务当前关闭，已有任务仍可查看和处理。</p> : null}
       {capabilities && !capabilities.webMediaEnabled ? <p className="text-sm text-muted-foreground">Web 媒体工具当前关闭，已有任务仍可查看和处理。</p> : null}
       {!disabled && !context?.inputs.length ? <p className="text-sm text-muted-foreground">当前采集快照没有可用于 AI 图片处理的商品级图片。</p> : null}
+
+      <SourceAiMediaPlanningPanel
+        targetId={target.id}
+        enabled={!disabled}
+        planningEnabled={Boolean(capabilities?.webMediaEnabled && capabilities?.workflowEnabled)}
+        selectedSkuKeys={selectedSkuKeys}
+      />
 
       {!disabled && context?.inputs.length ? <>
       <div className="flex flex-wrap gap-1 rounded-md border p-1" role="group" aria-label="AI 图片操作">
