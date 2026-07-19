@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
-import type { SourceProductCaptureV2Submission } from 'shared';
+import {
+  createSourceProductCaptureV2Submission,
+  type SourceProductCaptureV2,
+  type SourceProductCaptureV2Submission,
+} from 'shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaAiMediaPlanningRepository } from '../repositories/ai-media-planning-repository.js';
 import {
@@ -37,11 +41,10 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
   const subjectId = `plan_subject_${suffix}`;
   const snapshotId = `plan_snapshot_${suffix}`;
   const goodsId = `plan_goods_${suffix}`;
-  const captureHash = sourceCaptureFixture.captureHash;
-  const profileHash = buildSourceProductProfileFromCapture(sourceCaptureFixture.capture, {
-    itemId: captureHash,
-    captureHash,
-  }).hash;
+  let capture: SourceProductCaptureV2;
+  let captureHash = '';
+  let payloadBytes = 0;
+  let profileHash = '';
   const selectedSkuKey = sourceCaptureFixture.capture.skus[0]!.key;
   const selectedMediaKey = sourceCaptureFixture.capture.media.find((media) => (
     media.kind === 'image'
@@ -51,7 +54,7 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
   ))!.key;
 
   function capturePayload() {
-    return structuredClone(sourceCaptureFixture.capture);
+    return structuredClone(capture);
   }
 
   function input(overrides: Partial<CreateRuleBasedAiMediaPlanningInput> = {}): CreateRuleBasedAiMediaPlanningInput {
@@ -70,6 +73,27 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
 
   beforeAll(async () => {
     assertIsolatedDatabaseUrl();
+    capture = structuredClone(sourceCaptureFixture.capture);
+    const selectedMedia = capture.media.find((media) => media.key === selectedMediaKey)!;
+    selectedMedia.width = 900;
+    selectedMedia.height = 1200;
+    selectedMedia.fieldEvidence.width = {
+      ...selectedMedia.fieldEvidence.width,
+      value: 900,
+      missingReason: null,
+    };
+    selectedMedia.fieldEvidence.height = {
+      ...selectedMedia.fieldEvidence.height,
+      value: 1200,
+      missingReason: null,
+    };
+    const submission = await createSourceProductCaptureV2Submission(capture);
+    captureHash = submission.captureHash;
+    payloadBytes = submission.payloadBytes;
+    profileHash = buildSourceProductProfileFromCapture(capture, {
+      itemId: captureHash,
+      captureHash,
+    }).hash;
     client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     service = createAiMediaPlanningService(new PrismaAiMediaPlanningRepository(client));
     await client.user.createMany({ data: [{
@@ -101,7 +125,7 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
       version: 1,
       schemaVersion: 'source-product-capture-v2',
       captureHash,
-      payloadBytes: sourceCaptureFixture.payloadBytes,
+      payloadBytes,
       payload: capturePayload() as never,
       stageCounts: {},
       provenance: {},
@@ -300,7 +324,7 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
       version: 1,
       schemaVersion: 'source-product-capture-v2',
       captureHash,
-      payloadBytes: sourceCaptureFixture.payloadBytes,
+      payloadBytes,
       payload: capturePayload() as never,
       stageCounts: {},
       provenance: {},
@@ -330,7 +354,7 @@ describe.skipIf(!enabled)('AI media planning PostgreSQL persistence', () => {
       version: 2,
       schemaVersion: 'source-product-capture-v2',
       captureHash: 'd'.repeat(64),
-      payloadBytes: sourceCaptureFixture.payloadBytes,
+      payloadBytes,
       payload: capturePayload() as never,
       stageCounts: {},
       provenance: {},

@@ -68,6 +68,7 @@ import { systemStatusRoutes } from './routes/system-status.js';
 import { opsRoutes } from './routes/ops.js';
 import { sourceCandidateRoutes } from './routes/source-candidates.js';
 import { aiImageRoutes } from './routes/ai-images.js';
+import { aiImageSuiteRoutes } from './routes/ai-image-suites.js';
 import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
 import { adminAiPromptTemplateRoutes } from './routes/admin-ai-prompt-templates.js';
 import { adminAiCostReconciliationRoutes } from './routes/admin-ai-cost-reconciliations.js';
@@ -1023,6 +1024,9 @@ await app.register(sourceCandidateRoutes, { prefix: '/api/source-candidates' });
 await app.register(aiImageRoutes, {
   prefix: '/api/ai-images',
   resolvePrompt: resolveActiveAiPrompt,
+});
+await app.register(aiImageSuiteRoutes, {
+  prefix: '/api/ai-images',
 });
 await app.register(aiMediaPlanningRoutes, {
   prefix: '/api/ai-images',

@@ -26,6 +26,9 @@ export interface AiImageProviderCapability {
   evidence: string;
 }
 
+export const AI_IMAGE_SUITE_PROVIDER = 'fake';
+export const AI_IMAGE_SUITE_MODEL = 'fake-image-suite-v1';
+
 export class AiMediaCapabilityError extends Error {
   constructor(
     public readonly code: AiMediaCapabilityErrorCode,
@@ -37,6 +40,17 @@ export class AiMediaCapabilityError extends Error {
 }
 
 export const AI_IMAGE_PROVIDER_CAPABILITIES: readonly AiImageProviderCapability[] = [
+  {
+    provider: AI_IMAGE_SUITE_PROVIDER,
+    model: AI_IMAGE_SUITE_MODEL,
+    operations: ['IMAGE_TO_IMAGE'],
+    maxReferences: 5,
+    supportsMask: false,
+    inputTransport: 'none',
+    resultMode: 'sync',
+    evidenceLevel: 'local-test',
+    evidence: 'provider-free suite preview and claim contract; it does not dispatch a model',
+  },
   {
     provider: 'fake',
     model: '*',

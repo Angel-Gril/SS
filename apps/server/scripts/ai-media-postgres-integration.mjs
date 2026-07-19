@@ -37,6 +37,7 @@ try {
     'src/__tests__/ai-cost-ledger.postgres.integration.test.ts',
     'src/__tests__/ai-media-workflow.postgres.integration.test.ts',
     'src/__tests__/ai-media-planning.postgres.integration.test.ts',
+    'src/__tests__/ai-image-suite.postgres.integration.test.ts',
   ], {
     DATABASE_URL: testUrl.toString(),
     AI_MEDIA_TEST_DATABASE_URL: testUrl.toString(),

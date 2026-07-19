@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AI_IMAGE_SUITE_MODEL,
+  AI_IMAGE_SUITE_PROVIDER,
   AI_IMAGE_PROVIDER_CAPABILITIES,
   AiMediaCapabilityError,
   assertAiMediaCapability,
@@ -36,6 +38,12 @@ describe('AI image provider capability matrix', () => {
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 5)).toBe(false);
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TO_IMAGE', 0)).toBe(false);
     expect(supportsAiMediaOperation('fake', 'test', 'IMAGE_TRANSLATE', 1)).toBe(true);
+    expect(supportsAiMediaOperation(
+      AI_IMAGE_SUITE_PROVIDER,
+      AI_IMAGE_SUITE_MODEL,
+      'IMAGE_TO_IMAGE',
+      5,
+    )).toBe(true);
   });
 
   it('preserves typed capability failure reasons', () => {

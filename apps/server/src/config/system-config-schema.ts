@@ -31,6 +31,7 @@ export const SystemConfigSchema = {
   source_ozon_publisher_extension_adapter_stage: sourceOzonPublisherEntrypointStage.default('off'),
   feature_source_network_capture: z.boolean().default(false),
   feature_ai_media_workflow_v2: z.boolean().default(false),
+  feature_ai_media_suite: z.boolean().default(false),
   feature_ai_listing_copy_generation: z.boolean().default(false),
   ai_media_workflow_v2_rollout_policy: z.string().max(100000).default('{"revision":0,"tenantIds":[]}'),
   feature_source_listing_web_media: z.boolean().default(false),
@@ -331,6 +332,11 @@ export const SystemConfigMeta: Record<SystemConfigKey, ConfigMeta> = {
     label: '来源商品 AI 媒体工作流',
     group: 'feature',
     description: 'AI 媒体工作流总开关；仅 rollout policy 明确允许的租户可新建任务',
+  },
+  feature_ai_media_suite: {
+    label: 'AI 商品套图生成',
+    group: 'feature',
+    description: '启用已审核图片计划的套图预览与认领；默认关闭，且仍受 AI 媒体租户策略约束',
   },
   feature_ai_listing_copy_generation: {
     label: '来源商品 AI 文案生成',

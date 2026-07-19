@@ -109,7 +109,7 @@ function eventPayload<T extends Record<string, unknown>>(payload: T) {
   return { payload, payloadHash: hashAiMediaPlanningJson(payload) };
 }
 
-async function readOwnedPlan(client: any, planId: string, ownerUserId: string) {
+export async function readOwnedAiMediaPlan(client: any, planId: string, ownerUserId: string) {
   return client.aiMediaPlan.findFirst({
     where: { id: planId, ownerUserId },
     include: planDetailInclude,
@@ -131,7 +131,7 @@ async function readCreateReplay(
   };
 }
 
-async function loadLatestOwnedSourceAuthority(
+export async function loadLatestOwnedSourceAuthority(
   client: any,
   input: {
     ownerUserId: string;
@@ -174,7 +174,7 @@ async function loadLatestOwnedSourceAuthority(
   } : null;
 }
 
-function sameSourceAuthority(
+export function sameSourceAuthority(
   latest: SourceAuthority | null,
   expected: {
     sourceCaptureSnapshotId: string;
@@ -210,7 +210,7 @@ function staleReasons(current: any, latest: SourceAuthority | null): string[] {
   return reasons;
 }
 
-async function markStaleIfChanged(
+export async function markAiMediaPlanStaleIfChanged(
   client: any,
   plan: any,
   actorUserId: string,
@@ -254,7 +254,7 @@ async function markStaleIfChanged(
     },
   });
   if (updated.count !== 1) {
-    const current = await readOwnedPlan(client, plan.id, plan.ownerUserId);
+    const current = await readOwnedAiMediaPlan(client, plan.id, plan.ownerUserId);
     if (current?.staleAt) return { kind: 'stale', plan: planRecord(current) };
     return { kind: 'conflict', plan: current ? planRecord(current) : null };
   }
@@ -275,7 +275,7 @@ async function markStaleIfChanged(
       ...eventPayload(payload),
     },
   });
-  const stale = await readOwnedPlan(client, plan.id, plan.ownerUserId);
+  const stale = await readOwnedAiMediaPlan(client, plan.id, plan.ownerUserId);
   if (stale?.staleAt) return { kind: 'stale', plan: planRecord(stale) };
   return { kind: 'conflict', plan: stale ? planRecord(stale) : null };
 }
@@ -318,7 +318,7 @@ function candidateEvidenceId(snapshotId: string, candidateId: string): string {
   return `capture:${snapshotId}:evidence:${evidenceHash}`;
 }
 
-function hasExecutionEvidence(plan: any): boolean {
+export function hasAiMediaPlanExecutionEvidence(plan: any): boolean {
   const version = plan?.currentVersion;
   const payload = version?.planPayload;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
@@ -622,7 +622,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
             ...eventPayload(payload),
           },
         });
-        const created = await readOwnedPlan(tx, plan.id, input.ownerUserId);
+        const created = await readOwnedAiMediaPlan(tx, plan.id, input.ownerUserId);
         return { kind: 'created' as const, plan: created ? planRecord(created) : null };
       });
     } catch (error) {
@@ -634,7 +634,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
   }
 
   async getOwned(planId: string, ownerUserId: string): Promise<AiMediaPlanRecord | null> {
-    const row = await readOwnedPlan(this.prisma as any, planId, ownerUserId);
+    const row = await readOwnedAiMediaPlan(this.prisma as any, planId, ownerUserId);
     return row ? planRecord(row) : null;
   }
 
@@ -691,7 +691,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
     const eventKey = reviewEventKey(input);
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
-        const plan = await readOwnedPlan(tx, input.planId, input.ownerUserId);
+        const plan = await readOwnedAiMediaPlan(tx, input.planId, input.ownerUserId);
         if (!plan) return { kind: 'not-found' as const, plan: null };
 
         const existingEvent = await tx.aiMediaPlanEvent.findUnique({ where: { eventKey } });
@@ -700,7 +700,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
             return { kind: 'operation-conflict' as const, plan: planRecord(plan) };
           }
           if (plan.staleAt) return { kind: 'replayed' as const, plan: planRecord(plan) };
-          const staleCheck = await markStaleIfChanged(tx, plan, input.actorUserId);
+          const staleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
           if (staleCheck.kind === 'conflict') retryStaleCasConflict();
           return {
             kind: 'replayed' as const,
@@ -708,7 +708,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
           };
         }
         if (plan.staleAt) return { kind: 'stale' as const, plan: planRecord(plan) };
-        const staleCheck = await markStaleIfChanged(tx, plan, input.actorUserId);
+        const staleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
         if (staleCheck.kind === 'stale') return { kind: 'stale' as const, plan: staleCheck.plan };
         if (staleCheck.kind === 'conflict') {
           if (!staleCheck.plan) return { kind: 'not-found' as const, plan: null };
@@ -723,7 +723,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
         if (plan.reviewStatus !== 'PENDING' || !plan.currentVersionId || !plan.currentVersion) {
           return { kind: 'state-conflict' as const, plan: planRecord(plan) };
         }
-        if (input.decision === 'APPROVE' && !hasExecutionEvidence(plan)) {
+        if (input.decision === 'APPROVE' && !hasAiMediaPlanExecutionEvidence(plan)) {
           return { kind: 'not-ready' as const, plan: planRecord(plan) };
         }
 
@@ -745,7 +745,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
           },
         });
         if (updated.count !== 1) {
-          const current = await readOwnedPlan(tx, input.planId, input.ownerUserId);
+          const current = await readOwnedAiMediaPlan(tx, input.planId, input.ownerUserId);
           if (!current) return { kind: 'not-found' as const, plan: null };
           if (current.staleAt) return { kind: 'stale' as const, plan: planRecord(current) };
           if (Number(current.revision) !== input.expectedRevision) {
@@ -766,7 +766,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
             payloadHash: operationHash,
           },
         });
-        const reviewed = await readOwnedPlan(tx, input.planId, input.ownerUserId);
+        const reviewed = await readOwnedAiMediaPlan(tx, input.planId, input.ownerUserId);
         return { kind: 'updated' as const, plan: reviewed ? planRecord(reviewed) : null };
       });
     } catch (error) {
@@ -775,7 +775,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
       // complete decision inside Serializable so replay and stale marking use
       // one atomic snapshot; never mutate stale state in autocommit fallback.
       return runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
-        const plan = await readOwnedPlan(tx, input.planId, input.ownerUserId);
+        const plan = await readOwnedAiMediaPlan(tx, input.planId, input.ownerUserId);
         if (!plan) return { kind: 'not-found' as const, plan: null };
         const existingEvent = await tx.aiMediaPlanEvent.findUnique({ where: { eventKey } });
         if (existingEvent) {
@@ -783,7 +783,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
             return { kind: 'operation-conflict' as const, plan: planRecord(plan) };
           }
           if (plan.staleAt) return { kind: 'replayed' as const, plan: planRecord(plan) };
-          const staleCheck = await markStaleIfChanged(tx, plan, input.actorUserId);
+          const staleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
           if (staleCheck.kind === 'conflict') retryStaleCasConflict();
           return {
             kind: 'replayed' as const,
@@ -791,7 +791,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
           };
         }
         if (plan.staleAt) return { kind: 'stale' as const, plan: planRecord(plan) };
-        const staleCheck = await markStaleIfChanged(tx, plan, input.actorUserId);
+        const staleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
         if (staleCheck.kind === 'stale') return { kind: 'stale' as const, plan: staleCheck.plan };
         if (staleCheck.kind === 'conflict') {
           if (!staleCheck.plan) return { kind: 'not-found' as const, plan: null };
@@ -806,7 +806,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
         if (plan.reviewStatus !== 'PENDING') {
           return { kind: 'state-conflict' as const, plan: planRecord(plan) };
         }
-        if (input.decision === 'APPROVE' && !hasExecutionEvidence(plan)) {
+        if (input.decision === 'APPROVE' && !hasAiMediaPlanExecutionEvidence(plan)) {
           return { kind: 'not-ready' as const, plan: planRecord(plan) };
         }
         throw error;
@@ -821,11 +821,11 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
   }): Promise<ExecutionPlanResult> {
     try {
       return await runAiMediaSerializableTransaction(this.prisma as any, async (tx: any) => {
-        const plan = await readOwnedPlan(tx, input.planId, input.ownerUserId);
+        const plan = await readOwnedAiMediaPlan(tx, input.planId, input.ownerUserId);
         if (!plan) return { kind: 'not-found' as const, plan: null };
         if (plan.staleAt) return { kind: 'stale' as const, plan: planRecord(plan) };
 
-        const staleCheck = await markStaleIfChanged(tx, plan, input.actorUserId);
+        const staleCheck = await markAiMediaPlanStaleIfChanged(tx, plan, input.actorUserId);
         if (staleCheck.kind === 'stale') return { kind: 'stale' as const, plan: staleCheck.plan };
         if (staleCheck.kind === 'conflict') {
           return {
@@ -840,7 +840,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
           && plan.approvedVersion?.id === plan.approvedVersionId
           && Boolean(plan.reviewedByUserId)
           && plan.reviewedAt instanceof Date;
-        if (approved && !hasExecutionEvidence(plan)) {
+        if (approved && !hasAiMediaPlanExecutionEvidence(plan)) {
           return { kind: 'not-ready' as const, plan: planRecord(plan) };
         }
         return {
@@ -850,7 +850,7 @@ export class PrismaAiMediaPlanningRepository implements AiMediaPlanningRepositor
       });
     } catch (error) {
       if (!isUniqueConstraintError(error)) throw error;
-      const plan = await readOwnedPlan(this.prisma as any, input.planId, input.ownerUserId);
+      const plan = await readOwnedAiMediaPlan(this.prisma as any, input.planId, input.ownerUserId);
       if (!plan) return { kind: 'not-found', plan: null };
       if (plan.staleAt) return { kind: 'stale', plan: planRecord(plan) };
       throw error;
