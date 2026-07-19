@@ -4,6 +4,12 @@ import { connection } from '../lib/bullmq-connection.js';
 import { redis, redisDisabled } from '../lib/redis.js';
 import { registerWorker } from '../lib/worker-registry.js';
 import { AI_IMAGE_SUITE_MAX_CONCURRENCY } from '../services/ai-image-suite.js';
+import {
+  AI_IMAGE_SUITE_WORKER_HEARTBEAT_INTERVAL_MS,
+  clearAiImageSuiteWorkerHeartbeat,
+  recordAiImageSuiteWorkerHeartbeat,
+  type AiImageSuiteRuntimeRedis,
+} from '../services/ai-image-suite-runtime-readiness.js';
 
 export const AI_IMAGE_SUITE_GENERATION_QUEUE_NAME = 'ai-image-suite-generation';
 const AI_IMAGE_SUITE_GENERATION_QUEUE_TASK_NAME = 'generate-suite-slot';
@@ -403,12 +409,41 @@ export function startAiImageSuiteGenerationWorker(
     console.error(`[ai-image-suite] job ${job?.id || 'unknown'} failed:`, error.message);
   });
   registerWorker(worker);
+  const heartbeatToken = randomUUID();
+  let heartbeatInFlight = false;
+  const heartbeat = async () => {
+    if (heartbeatInFlight || !worker.isRunning() || worker.isPaused()) return;
+    heartbeatInFlight = true;
+    try {
+      const client = await worker.client;
+      await recordAiImageSuiteWorkerHeartbeat(
+        client as unknown as Pick<AiImageSuiteRuntimeRedis, 'set'>,
+        heartbeatToken,
+      );
+    } catch (error) {
+      console.error('[ai-image-suite] worker heartbeat failed:', error);
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
+  worker.on('ready', () => void heartbeat());
+  const heartbeatTimer = setInterval(
+    () => void heartbeat(),
+    AI_IMAGE_SUITE_WORKER_HEARTBEAT_INTERVAL_MS,
+  );
+  heartbeatTimer.unref();
   const recover = () => enqueueRecoverableAiImageSuiteGenerationJobs({ coordinator }).catch((error) => {
     console.error('[ai-image-suite] recovery scan failed:', error);
   });
   void recover();
   const recoveryTimer = setInterval(() => void recover(), AI_IMAGE_SUITE_GENERATION_RECOVERY_INTERVAL_MS);
   recoveryTimer.unref();
-  worker.on('closed', () => clearInterval(recoveryTimer));
+  worker.on('closed', () => {
+    clearInterval(recoveryTimer);
+    clearInterval(heartbeatTimer);
+    void clearAiImageSuiteWorkerHeartbeat(redis, heartbeatToken).catch((error) => {
+      console.error('[ai-image-suite] worker heartbeat cleanup failed:', error);
+    });
+  });
   return worker;
 }

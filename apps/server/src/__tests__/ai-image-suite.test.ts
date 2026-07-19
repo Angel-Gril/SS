@@ -166,6 +166,8 @@ describe('AI image suite preview', () => {
       loadApprovedAuthority: vi.fn(async () => authority()),
       claimApproved: vi.fn(),
       getOwned: vi.fn(),
+      getCurrentOwnedByPlan: vi.fn(),
+      getActiveOwnedByPlan: vi.fn(),
     };
     const service = createAiImageSuiteService(repository as never);
 
@@ -242,6 +244,8 @@ describe('AI image suite preview', () => {
       loadApprovedAuthority: vi.fn(async () => null),
       claimApproved: vi.fn(),
       getOwned: vi.fn(),
+      getCurrentOwnedByPlan: vi.fn(),
+      getActiveOwnedByPlan: vi.fn(),
     };
     const service = createAiImageSuiteService(repository as never);
 
@@ -253,5 +257,59 @@ describe('AI image suite preview', () => {
       statusCode: 409,
     });
     expect(repository.claimApproved).not.toHaveBeenCalled();
+  });
+
+  it('maps another actionable plan-version suite to a stable typed conflict', async () => {
+    const repository = {
+      loadApprovedAuthority: vi.fn(),
+      claimApproved: vi.fn(async () => ({
+        kind: 'active-suite-conflict' as const,
+        suite: null,
+      })),
+      getOwned: vi.fn(),
+      getCurrentOwnedByPlan: vi.fn(),
+      getActiveOwnedByPlan: vi.fn(),
+    };
+    const service = createAiImageSuiteService(repository as never);
+    const expectedPreviewHash = createAiImageSuitePreview(authority(), provider()).previewHash;
+
+    await expect(service.claim({
+      ownerUserId: 'owner-1',
+      actorUserId: 'owner-1',
+      planId: 'plan-1',
+      expectedPlanRevision: 2,
+      idempotencyKey: 'suite-active-plan-conflict',
+      expectedPreviewHash,
+      providerConfig: provider(),
+    })).rejects.toMatchObject({
+      code: 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+      statusCode: 409,
+    });
+  });
+
+  it('reads the current suite by exact owner and plan without converting an empty result to an error', async () => {
+    const current = {
+      id: 'suite-1', ownerUserId: 'owner-1', actorUserId: 'owner-1',
+      planId: 'plan-1', planVersionId: 'version-1', status: 'PLANNED', revision: 1,
+      previewHash: 'a'.repeat(64), itemCount: 1, estimatedCostCents: 0, maximumCostCents: 0,
+      slots: [], createdAt: new Date(), updatedAt: new Date(),
+    };
+    const repository = {
+      loadApprovedAuthority: vi.fn(),
+      claimApproved: vi.fn(),
+      getOwned: vi.fn(),
+      getCurrentOwnedByPlan: vi.fn()
+        .mockResolvedValueOnce(current)
+        .mockResolvedValueOnce(null),
+      getActiveOwnedByPlan: vi.fn().mockResolvedValueOnce(current),
+    };
+    const service = createAiImageSuiteService(repository as never);
+
+    await expect(service.getCurrentByPlan('plan-1', 'owner-1')).resolves.toEqual(current);
+    await expect(service.getCurrentByPlan('plan-2', 'owner-1')).resolves.toBeNull();
+    expect(repository.getCurrentOwnedByPlan).toHaveBeenNthCalledWith(1, 'plan-1', 'owner-1');
+    expect(repository.getCurrentOwnedByPlan).toHaveBeenNthCalledWith(2, 'plan-2', 'owner-1');
+    await expect(service.getActiveByPlan('plan-1', 'owner-1')).resolves.toEqual(current);
+    expect(repository.getActiveOwnedByPlan).toHaveBeenCalledWith('plan-1', 'owner-1');
   });
 });

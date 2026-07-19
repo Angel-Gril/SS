@@ -16,6 +16,8 @@ import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 
 const EXECUTION_MIGRATION = '20260720120000_add_ai_media_suite_execution';
+const PLAN_ACTIVITY_MIGRATION = '20260720130000_enforce_ai_media_suite_plan_activity';
+const OUTPUT_JOB_OWNERSHIP_MIGRATION = '20260720140000_enforce_ai_media_output_job_ownership';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,8 +67,15 @@ function prepareHistoricalMigrations() {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  if (names.at(-1) !== EXECUTION_MIGRATION || names.filter((name) => name === EXECUTION_MIGRATION).length !== 1) {
-    throw new Error(`${EXECUTION_MIGRATION} must be the single latest migration`);
+  if (names.at(-3) !== EXECUTION_MIGRATION
+    || names.at(-2) !== PLAN_ACTIVITY_MIGRATION
+    || names.at(-1) !== OUTPUT_JOB_OWNERSHIP_MIGRATION
+    || names.filter((name) => name === EXECUTION_MIGRATION).length !== 1
+    || names.filter((name) => name === PLAN_ACTIVITY_MIGRATION).length !== 1
+    || names.filter((name) => name === OUTPUT_JOB_OWNERSHIP_MIGRATION).length !== 1) {
+    throw new Error(
+      `${EXECUTION_MIGRATION}, ${PLAN_ACTIVITY_MIGRATION}, and ${OUTPUT_JOB_OWNERSHIP_MIGRATION} must be the three latest migrations`,
+    );
   }
 
   mkdirSync(join(tempPrismaRoot, 'migrations'), { recursive: true });
@@ -75,14 +84,14 @@ function prepareHistoricalMigrations() {
     join(migrationsRoot, 'migration_lock.toml'),
     join(tempPrismaRoot, 'migrations', 'migration_lock.toml'),
   );
-  for (const name of names.slice(0, -1)) {
+  for (const name of names.slice(0, -3)) {
     cpSync(
       join(migrationsRoot, name),
       join(tempPrismaRoot, 'migrations', name),
       { recursive: true, errorOnExist: true },
     );
   }
-  return names.length - 1;
+  return names.length - 3;
 }
 
 async function addCurrentClientCompatibilityColumns(client) {

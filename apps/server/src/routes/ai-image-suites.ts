@@ -8,6 +8,7 @@ import { PrismaAiImageSuiteRepository } from '../repositories/ai-image-suite-rep
 import {
   AiImageSuiteError,
   createAiImageSuiteService,
+  normalizeAiImageSuiteProviderConfig,
   type AiImageSuiteProviderConfig,
   type AiImageSuitePreview,
   type AiImageSuiteRecord,
@@ -41,6 +42,10 @@ import {
   type SourceWorkflowFeatureFlagEvaluator,
 } from '../services/source-workflow-feature-flags.js';
 const previewSchema = z.object({
+  planId: z.string().trim().min(1).max(200),
+}).strict();
+
+const currentSuiteSchema = z.object({
   planId: z.string().trim().min(1).max(200),
 }).strict();
 
@@ -81,6 +86,10 @@ const retrySlotSchema = z.object({
   operationKey: z.string().trim().min(8).max(128),
 }).strict();
 
+const prepareSchema = z.object({
+  operationKey: z.string().trim().min(8).max(128),
+}).strict();
+
 const publicDiagnosticCode = /^[A-Z][A-Z0-9_]{0,99}$/u;
 const maxPublicDiagnostics = 20;
 
@@ -100,6 +109,19 @@ export interface AiImageSuiteRouteOptions {
   getSourceListingWebMediaEnabled?: (ownerUserId: string) => Promise<boolean>;
   sourceWorkflowFeatureFlags?: SourceWorkflowFeatureFlagEvaluator;
   getProviderConfig?: (ownerUserId: string) => Promise<AiImageSuiteProviderConfig>;
+  getSuiteRuntimeReadiness?: (
+    ownerUserId: string,
+    providerConfig: AiImageSuiteProviderConfig,
+  ) => Promise<{ queueReady: boolean; runtimeReady: boolean }>;
+  getReferenceStorageReadiness?: (
+    ownerUserId: string,
+    providerConfig: AiImageSuiteProviderConfig,
+  ) => Promise<{
+    ready: boolean;
+    backend: 'local' | 'oss' | 'ozon-cdn' | null;
+    publicHttps: boolean;
+    reason: string;
+  }>;
   production?: boolean;
 }
 
@@ -171,6 +193,36 @@ function publicPreview(preview: AiImageSuitePreview) {
   };
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function publicSlotOutputAssets(slot: Record<string, unknown>, ownerUserId: string) {
+  const workflow = record(slot.childWorkflow);
+  const currentJob = Array.isArray(workflow?.jobs) ? record(workflow.jobs[0]) : null;
+  if (!Array.isArray(currentJob?.assets)) return [];
+  return currentJob.assets.slice(0, 1).flatMap((entry) => {
+    const asset = record(entry);
+    if (!asset) return [];
+    const id = typeof asset?.id === 'string' ? asset.id.trim() : '';
+    const assetOwnerUserId = typeof asset.ownerUserId === 'string' ? asset.ownerUserId : '';
+    const url = typeof asset?.url === 'string' ? asset.url.trim() : '';
+    if (assetOwnerUserId !== ownerUserId
+      || !id || id.length > 200 || !url || url.length > 4_096) return [];
+    return [{
+      id,
+      url,
+      mimeType: typeof asset.mimeType === 'string' && asset.mimeType.length <= 100
+        ? asset.mimeType
+        : null,
+      width: Number.isSafeInteger(asset.width) && Number(asset.width) > 0 ? Number(asset.width) : null,
+      height: Number.isSafeInteger(asset.height) && Number(asset.height) > 0 ? Number(asset.height) : null,
+    }];
+  });
+}
+
 function publicSuite(
   suite: AiImageSuiteRecord,
   options: { includePreviewHash?: boolean } = {},
@@ -200,6 +252,9 @@ function publicSuite(
     status: suite.status,
     revision: suite.revision,
     ...(options.includePreviewHash === false ? {} : { previewHash: suite.previewHash }),
+    provider: suite.provider,
+    model: suite.model,
+    pricingVersion: suite.pricingVersion,
     itemCount: suite.itemCount,
     estimatedCostCents: suite.estimatedCostCents,
     maximumCostCents: suite.maximumCostCents,
@@ -244,6 +299,7 @@ function publicSuite(
         attempt: typeof slot.attempt === 'number' ? slot.attempt : null,
         revision: typeof slot.revision === 'number' ? slot.revision : null,
         childWorkflowId: typeof slot.childWorkflowId === 'string' ? slot.childWorkflowId : null,
+        outputAssets: publicSlotOutputAssets(slot, suite.ownerUserId),
         referenceCandidateIds: [...new Set(references)],
         diagnostics,
         estimatedCostCents: typeof slot.estimatedCostCents === 'number'
@@ -302,22 +358,21 @@ function sendError(reply: FastifyReply, error: unknown) {
 
 type GateFailure = { statusCode: 503; code: string; msg: string };
 
-async function writeGate(
+interface SuiteFeatureState {
+  suiteEnabled: boolean;
+  workflowEnabled: boolean;
+  webMediaEnabled: boolean;
+}
+
+async function readFeatureState(
   ownerUserId: string,
   options: AiImageSuiteRouteOptions,
-): Promise<GateFailure | null> {
+): Promise<SuiteFeatureState> {
   let suiteEnabled = false;
   try {
     suiteEnabled = await (options.getSuiteEnabled || (async () => getConfig('feature_ai_media_suite')))(ownerUserId);
   } catch {
     suiteEnabled = false;
-  }
-  if (!suiteEnabled) {
-    return {
-      statusCode: 503,
-      code: 'AI_MEDIA_SUITE_DISABLED',
-      msg: 'AI image suite generation is disabled',
-    };
   }
 
   let workflowEnabled = false;
@@ -326,13 +381,6 @@ async function writeGate(
       || (async (ownerId: string) => (await getAiMediaRolloutDecision(ownerId)).enabled))(ownerUserId);
   } catch {
     workflowEnabled = false;
-  }
-  if (!workflowEnabled) {
-    return {
-      statusCode: 503,
-      code: 'AI_MEDIA_WORKFLOW_DISABLED',
-      msg: 'AI media workflow is disabled',
-    };
   }
 
   let webMediaEnabled = false;
@@ -346,6 +394,31 @@ async function writeGate(
   } catch {
     webMediaEnabled = false;
   }
+
+  return { suiteEnabled, workflowEnabled, webMediaEnabled };
+}
+
+async function writeGate(
+  ownerUserId: string,
+  options: AiImageSuiteRouteOptions,
+): Promise<GateFailure | null> {
+  const { suiteEnabled, workflowEnabled, webMediaEnabled } = await readFeatureState(ownerUserId, options);
+  if (!suiteEnabled) {
+    return {
+      statusCode: 503,
+      code: 'AI_MEDIA_SUITE_DISABLED',
+      msg: 'AI image suite generation is disabled',
+    };
+  }
+
+  if (!workflowEnabled) {
+    return {
+      statusCode: 503,
+      code: 'AI_MEDIA_WORKFLOW_DISABLED',
+      msg: 'AI media workflow is disabled',
+    };
+  }
+
   if (!webMediaEnabled) {
     return {
       statusCode: 503,
@@ -354,6 +427,36 @@ async function writeGate(
     };
   }
   return null;
+}
+
+function preparationOperationKey(
+  suiteId: string,
+  operationKey: string,
+  stage: 'references' | 'prompts' | 'children',
+) {
+  const digest = createHash('sha256').update(JSON.stringify({
+    version: 'ai-image-suite-prepare/v1',
+    suiteId,
+    operationKey,
+    stage,
+  })).digest('hex');
+  return `suite-prepare-${stage}-${digest}`;
+}
+
+function isPreparationAdvanceConflict(error: unknown, expectedRevision: 1 | 2 | 3): boolean {
+  if (expectedRevision === 1 && error instanceof AiImageSuiteReferenceError) {
+    return error.code === 'AI_MEDIA_SUITE_REFERENCE_ALREADY_INTERNALIZED'
+      || error.code === 'AI_MEDIA_SUITE_REFERENCE_COMMIT_CONFLICT';
+  }
+  if (expectedRevision === 2 && error instanceof AiImageSuitePromptError) {
+    return error.code === 'AI_MEDIA_SUITE_PROMPTS_ALREADY_FROZEN'
+      || error.code === 'AI_MEDIA_SUITE_PROMPT_COMMIT_CONFLICT';
+  }
+  if (expectedRevision === 3 && error instanceof AiImageSuiteMaterializationError) {
+    return error.code === 'AI_MEDIA_SUITE_CHILDREN_ALREADY_MATERIALIZED'
+      || error.code === 'AI_MEDIA_SUITE_MATERIALIZATION_CONFLICT';
+  }
+  return false;
 }
 
 export async function aiImageSuiteRoutes(
@@ -366,8 +469,195 @@ export async function aiImageSuiteRoutes(
   const authHook = options.authenticate || authenticate;
   const production = options.production ?? process.env.NODE_ENV === 'production';
   const getProviderConfig = options.getProviderConfig || (async () => providerFreeConfig());
+  const getOperationalReadiness = async (
+    ownerUserId: string,
+    providerConfig: AiImageSuiteProviderConfig,
+  ) => {
+    let runtime = { queueReady: false, runtimeReady: false };
+    let storage: {
+      ready: boolean;
+      backend: 'local' | 'oss' | 'ozon-cdn' | null;
+      publicHttps: boolean;
+      reason: string;
+    } = {
+      ready: false,
+      backend: null,
+      publicHttps: false,
+      reason: 'AI image suite reference storage readiness is not installed',
+    };
+    if (options.getSuiteRuntimeReadiness) {
+      try {
+        const value = await options.getSuiteRuntimeReadiness(ownerUserId, providerConfig);
+        runtime = {
+          queueReady: value.queueReady === true,
+          runtimeReady: value.runtimeReady === true,
+        };
+      } catch {
+        runtime = { queueReady: false, runtimeReady: false };
+      }
+    }
+    if (options.getReferenceStorageReadiness) {
+      try {
+        const value = await options.getReferenceStorageReadiness(ownerUserId, providerConfig);
+        storage = {
+          ready: value.ready === true,
+          backend: ['local', 'oss', 'ozon-cdn'].includes(String(value.backend))
+            ? value.backend
+            : null,
+          publicHttps: value.publicHttps === true,
+          reason: String(value.reason || 'AI image suite reference storage is not ready').slice(0, 500),
+        };
+      } catch {
+        storage = {
+          ready: false,
+          backend: null,
+          publicHttps: false,
+          reason: 'AI image suite reference storage readiness is unavailable',
+        };
+      }
+    }
+    return { ...runtime, storage };
+  };
 
   app.addHook('preHandler', authHook as any);
+
+  app.get('/suites/readiness', async (request) => {
+    const ids = actor(request);
+    const features = await readFeatureState(ids.ownerUserId, options);
+    const installedServices = {
+      references: Boolean(options.referenceService),
+      prompts: Boolean(options.promptService),
+      materialization: Boolean(options.materializationService),
+      execution: Boolean(options.executionService),
+    };
+    let providerConfig: AiImageSuiteProviderConfig | null = null;
+    try {
+      providerConfig = normalizeAiImageSuiteProviderConfig(
+        await getProviderConfig(ids.ownerUserId),
+      );
+    } catch {
+      providerConfig = null;
+    }
+    const providerName = typeof providerConfig?.provider === 'string'
+      ? providerConfig.provider.trim()
+      : '';
+    const providerModel = typeof providerConfig?.model === 'string'
+      ? providerConfig.model.trim()
+      : '';
+    const capability = providerName && providerModel
+      ? resolveAiImageProviderCapability(providerName, providerModel)
+      : null;
+    const providerConfigReady = Boolean(
+      providerConfig
+      && capability?.operations.includes('IMAGE_TO_IMAGE')
+    );
+    const testOnly = Boolean(capability && capability.evidenceLevel !== 'sandbox-verified');
+    const providerReady = providerConfigReady && (!production || !testOnly);
+    const operational = providerConfig
+      ? await getOperationalReadiness(ids.ownerUserId, providerConfig)
+      : {
+        queueReady: false,
+        runtimeReady: false,
+        storage: {
+          ready: false,
+          backend: null,
+          publicHttps: false,
+          reason: 'AI image suite reference storage is not ready',
+        },
+      };
+    const services = {
+      ...installedServices,
+      queue: Boolean(options.enqueueSuiteFrontier) && operational.queueReady,
+      runtime: operational.runtimeReady,
+    };
+    const installedServicesReady = Object.values(installedServices).every(Boolean);
+
+    let reasonCode = 'READY';
+    let reason = 'AI image suite generation is ready';
+    if (!features.suiteEnabled) {
+      reasonCode = 'AI_MEDIA_SUITE_DISABLED';
+      reason = 'AI image suite generation is disabled';
+    } else if (!features.workflowEnabled) {
+      reasonCode = 'AI_MEDIA_WORKFLOW_DISABLED';
+      reason = 'AI media workflow is disabled';
+    } else if (!features.webMediaEnabled) {
+      reasonCode = 'SOURCE_LISTING_WEB_MEDIA_DISABLED';
+      reason = 'Web AI media tools are not enabled for this account';
+    } else if (!installedServicesReady) {
+      reasonCode = 'AI_MEDIA_SUITE_SERVICE_NOT_READY';
+      reason = 'AI image suite services are not fully installed';
+    } else if (!providerReady) {
+      reasonCode = 'AI_MEDIA_SUITE_PROVIDER_NOT_READY';
+      reason = production && testOnly
+        ? 'The AI image suite provider is not sandbox verified'
+        : 'The AI image suite provider configuration is not ready';
+    } else if (!operational.storage.ready) {
+      reasonCode = 'AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY';
+      reason = operational.storage.reason;
+    } else if (!services.queue) {
+      reasonCode = 'AI_MEDIA_SUITE_QUEUE_NOT_READY';
+      reason = 'AI image suite generation queue is not available';
+    } else if (!operational.runtimeReady) {
+      reasonCode = 'AI_MEDIA_SUITE_RUNTIME_NOT_READY';
+      reason = 'AI image suite generation runtime is not available';
+    }
+
+    return {
+      code: 1,
+      data: {
+        ...features,
+        provider: {
+          provider: providerName || null,
+          model: providerModel || null,
+          evidenceLevel: capability?.evidenceLevel || null,
+          ready: providerReady,
+        },
+        services,
+        storage: {
+          ready: operational.storage.ready,
+          backend: operational.storage.backend,
+          publicHttps: operational.storage.publicHttps,
+        },
+        ready: features.suiteEnabled
+          && features.workflowEnabled
+          && features.webMediaEnabled
+          && installedServicesReady
+          && providerReady
+          && operational.storage.ready
+          && services.queue
+          && operational.runtimeReady,
+        testOnly,
+        reasonCode,
+        reason,
+      },
+    };
+  });
+
+  app.get('/suites/current', async (request, reply) => {
+    const parsed = currentSuiteSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    try {
+      const suite = await service.getCurrentByPlan(parsed.data.planId, actor(request).ownerUserId);
+      return { code: 1, data: suite ? publicSuite(suite, { includePreviewHash: false }) : null };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.get('/suites/active', async (request, reply) => {
+    const parsed = currentSuiteSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    try {
+      const suite = await service.getActiveByPlan(parsed.data.planId, actor(request).ownerUserId);
+      return { code: 1, data: suite ? publicSuite(suite, { includePreviewHash: false }) : null };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
 
   app.post('/suites/preview', async (request, reply) => {
     const parsed = previewSchema.safeParse(request.body);
@@ -378,7 +668,9 @@ export async function aiImageSuiteRoutes(
     const gate = await writeGate(ids.ownerUserId, options);
     if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
     try {
-      const providerConfig = await getProviderConfig(ids.ownerUserId);
+      const providerConfig = normalizeAiImageSuiteProviderConfig(
+        await getProviderConfig(ids.ownerUserId),
+      );
       const preview = await service.preview({ ...ids, planId: parsed.data.planId, providerConfig });
       return { code: 1, data: publicPreview(preview) };
     } catch (error) {
@@ -395,7 +687,9 @@ export async function aiImageSuiteRoutes(
     const gate = await writeGate(ids.ownerUserId, options);
     if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
     try {
-      const providerConfig = await getProviderConfig(ids.ownerUserId);
+      const providerConfig = normalizeAiImageSuiteProviderConfig(
+        await getProviderConfig(ids.ownerUserId),
+      );
       const capability = resolveAiImageProviderCapability(
         providerConfig.provider,
         providerConfig.model,
@@ -404,6 +698,13 @@ export async function aiImageSuiteRoutes(
         return reply.status(503).send({
           code: 'AI_MEDIA_SUITE_PROVIDER_NOT_READY',
           msg: 'The AI image suite provider is not sandbox verified',
+        });
+      }
+      const storageReadiness = (await getOperationalReadiness(ids.ownerUserId, providerConfig)).storage;
+      if (!storageReadiness.ready) {
+        return reply.status(503).send({
+          code: 'AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY',
+          msg: storageReadiness.reason,
         });
       }
       const result = await service.claim({
@@ -453,6 +754,97 @@ export async function aiImageSuiteRoutes(
           referenceSetHash: result.referenceSetHash,
         },
         replayed: result.replayed,
+      });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/prepare', async (request, reply) => {
+    const suiteId = String((request.params as { id?: unknown }).id || '').trim();
+    if (!suiteId || suiteId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite id is invalid' });
+    }
+    const parsed = prepareSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    try {
+      let suite = await service.get(suiteId, ids.ownerUserId);
+      const replayed = suite.revision >= 4;
+      const referenceService = options.referenceService;
+      const promptService = options.promptService;
+      const materializationService = options.materializationService;
+      if (suite.revision <= 1 && !referenceService) {
+        return reply.status(503).send({
+          code: 'AI_MEDIA_SUITE_REFERENCE_SERVICE_NOT_READY',
+          msg: 'AI image suite reference preparation is not available',
+        });
+      }
+      if (suite.revision <= 2 && !promptService) {
+        return reply.status(503).send({
+          code: 'AI_MEDIA_SUITE_PROMPT_SERVICE_NOT_READY',
+          msg: 'AI image suite Prompt preparation is not available',
+        });
+      }
+      if (suite.revision <= 3 && !materializationService) {
+        return reply.status(503).send({
+          code: 'AI_MEDIA_SUITE_MATERIALIZATION_SERVICE_NOT_READY',
+          msg: 'AI image suite child materialization is not available',
+        });
+      }
+      const advance = async (
+        expectedRevision: 1 | 2 | 3,
+        action: () => Promise<unknown>,
+      ) => {
+        try {
+          await action();
+        } catch (error) {
+          if (!isPreparationAdvanceConflict(error, expectedRevision)) throw error;
+          const refreshed = await service.get(suiteId, ids.ownerUserId);
+          if (refreshed.revision <= expectedRevision) throw error;
+          return refreshed;
+        }
+        return service.get(suiteId, ids.ownerUserId);
+      };
+      if (suite.revision === 1) {
+        suite = await advance(1, () => referenceService!.internalize({
+          suiteId,
+          ...ids,
+          expectedRevision: 1,
+          operationKey: preparationOperationKey(suiteId, parsed.data.operationKey, 'references'),
+        }));
+      }
+      if (suite.revision === 2) {
+        suite = await advance(2, () => promptService!.freeze({
+          suiteId,
+          ...ids,
+          expectedRevision: 2,
+          operationKey: preparationOperationKey(suiteId, parsed.data.operationKey, 'prompts'),
+        }));
+      }
+      if (suite.revision === 3) {
+        suite = await advance(3, () => materializationService!.materialize({
+          suiteId,
+          ...ids,
+          expectedRevision: 3,
+          operationKey: preparationOperationKey(suiteId, parsed.data.operationKey, 'children'),
+        }));
+      }
+      if (suite.revision < 4) {
+        throw new AiImageSuiteError(
+          'AI_MEDIA_SUITE_NOT_READY',
+          'AI media suite could not reach the materialized preparation barrier',
+          409,
+        );
+      }
+      return reply.status(replayed ? 200 : 202).send({
+        code: 1,
+        data: publicSuite(suite, { includePreviewHash: false }),
+        replayed,
       });
     } catch (error) {
       return sendError(reply, error);

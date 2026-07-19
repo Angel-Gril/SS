@@ -17,7 +17,9 @@ function candidateEvidenceId(snapshotId: string, candidateId: string) {
   return `capture:${snapshotId}:evidence:${hash}`;
 }
 
-function planAuthority(): AiImageSuitePlanAuthority {
+function planAuthority(
+  overrides: Partial<AiImageSuitePlanAuthority> = {},
+): AiImageSuitePlanAuthority {
   return {
     planId: 'plan-1',
     planVersionId: 'version-1',
@@ -52,6 +54,7 @@ function planAuthority(): AiImageSuitePlanAuthority {
         acceptanceChecks: ['product_matches_references'],
       }],
     },
+    ...overrides,
   };
 }
 
@@ -166,13 +169,20 @@ function clientFixture(options: { latestId?: string } = {}) {
     supplyGoods: { findFirst: vi.fn(async () => ({ id: 'goods-1' })) },
     sourceCaptureSubject: { findFirst: vi.fn(async () => ({ snapshots: [latest] })) },
     aiMediaSuite: {
-      findFirst: vi.fn(async ({ where }: any) => (
-        suite
-        && suite.ownerUserId === where.ownerUserId
-        && suite.idempotencyKey === where.idempotencyKey
-          ? { ...suite, slots }
-          : null
-      )),
+      findFirst: vi.fn(async ({ where }: any) => {
+        if (!suite || suite.ownerUserId !== where.ownerUserId) return null;
+        if (where.idempotencyKey && suite.idempotencyKey !== where.idempotencyKey) return null;
+        if (where.planId && suite.planId !== where.planId) return null;
+        if (typeof where.planVersionId === 'string' && suite.planVersionId !== where.planVersionId) return null;
+        if (where.planVersionId?.not && suite.planVersionId === where.planVersionId.not) return null;
+        if (where.OR) {
+          const actionable = ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(String(suite.status))
+            || (suite.status === 'PLANNED' && Number(suite.revision) >= 4);
+          if (!actionable) return null;
+        }
+        if (where.id && suite.id !== where.id) return null;
+        return { ...suite, slots };
+      }),
       findUnique: vi.fn(async ({ where }: any) => {
         if (where.planVersionId) return suite?.planVersionId === where.planVersionId ? { ...suite, slots } : null;
         if (where.id) return suite?.id === where.id ? { ...suite, slots } : null;
@@ -206,6 +216,22 @@ function clientFixture(options: { latestId?: string } = {}) {
         return action(tx);
       }),
     } as any,
+    updateSuite(values: Record<string, unknown>) {
+      if (suite) Object.assign(suite, values);
+    },
+    advancePlanVersion(versionId: string) {
+      const currentVersion = {
+        ...plan.currentVersion,
+        id: versionId,
+        planId: plan.id,
+        ownerUserId: plan.ownerUserId,
+      };
+      plan.currentVersionId = versionId;
+      plan.approvedVersionId = versionId;
+      plan.currentVersion = currentVersion;
+      plan.approvedVersion = currentVersion;
+      plan.revision += 1;
+    },
   };
 }
 
@@ -257,6 +283,72 @@ describe('Prisma AI image suite repository', () => {
     expect(fixture.tx.aiMediaSuite.create).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['PLANNED', 4],
+    ['QUEUED', 5],
+    ['RUNNING', 6],
+    ['CANCEL_REQUESTED', 7],
+  ] as const)(
+    'rejects a new plan-version claim while an older %s suite at revision %i is actionable',
+    async (status, revision) => {
+      const fixture = clientFixture();
+      const repository = new PrismaAiImageSuiteRepository(fixture.client);
+      await repository.claimApproved(claimInput());
+      fixture.updateSuite({ status, revision });
+      fixture.advancePlanVersion('version-2');
+      const nextAuthority = planAuthority({
+        planVersionId: 'version-2',
+        planRevision: fixture.plan.revision,
+      });
+      const nextInput = claimInput({
+        expectedPlanRevision: fixture.plan.revision,
+        idempotencyKey: `suite-claim-${status.toLowerCase()}`,
+        expectedPreviewHash: createAiImageSuitePreview(
+          nextAuthority,
+          providerConfig(),
+        ).previewHash,
+      });
+
+      await expect(repository.claimApproved(nextInput)).resolves.toEqual({
+        kind: 'active-suite-conflict',
+        suite: null,
+      });
+      expect(fixture.tx.aiMediaSuite.create).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ['PLANNED', 3],
+    ['PARTIAL_FAILURE', 7],
+    ['FAILED', 7],
+    ['SUCCEEDED', 7],
+    ['CANCELLED', 7],
+  ] as const)(
+    'allows a new plan-version claim after an older %s suite at revision %i is non-actionable',
+    async (status, revision) => {
+      const fixture = clientFixture();
+      const repository = new PrismaAiImageSuiteRepository(fixture.client);
+      await repository.claimApproved(claimInput());
+      fixture.updateSuite({ status, revision });
+      fixture.advancePlanVersion('version-2');
+      const nextAuthority = planAuthority({
+        planVersionId: 'version-2',
+        planRevision: fixture.plan.revision,
+      });
+      const result = await repository.claimApproved(claimInput({
+        expectedPlanRevision: fixture.plan.revision,
+        idempotencyKey: `suite-claim-after-${status.toLowerCase()}`,
+        expectedPreviewHash: createAiImageSuitePreview(
+          nextAuthority,
+          providerConfig(),
+        ).previewHash,
+      }));
+
+      expect(result.kind).toBe('created');
+      expect(fixture.tx.aiMediaSuite.create).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it('recovers an exact committed claim even after the mutable source authority becomes stale', async () => {
     const fixture = clientFixture();
     const repository = new PrismaAiImageSuiteRepository(fixture.client);
@@ -292,5 +384,82 @@ describe('Prisma AI image suite repository', () => {
     expect((await repository.claimApproved(claimInput({ ownerUserId: 'owner-2' }))).kind).toBe('not-found');
     expect((await repository.claimApproved(claimInput({ expectedPlanRevision: 1 }))).kind).toBe('not-approved');
     expect(fixture.tx.aiMediaSuite.create).not.toHaveBeenCalled();
+  });
+
+  it('finds only the suite bound to the owned plan current version using current-attempt public asset columns', async () => {
+    const fixture = clientFixture();
+    const repository = new PrismaAiImageSuiteRepository(fixture.client);
+    await repository.claimApproved(claimInput());
+    fixture.tx.aiMediaSuite.findFirst.mockClear();
+
+    const current = await repository.getCurrentOwnedByPlan('plan-1', 'owner-1');
+
+    expect(current).toMatchObject({ id: 'suite-1', ownerUserId: 'owner-1', planId: 'plan-1' });
+    expect(fixture.tx.aiMediaPlan.findFirst).toHaveBeenLastCalledWith({
+      where: { id: 'plan-1', ownerUserId: 'owner-1' },
+      select: { currentVersionId: true },
+    });
+    expect(fixture.tx.aiMediaSuite.findFirst).toHaveBeenCalledWith({
+      where: {
+        planId: 'plan-1',
+        ownerUserId: 'owner-1',
+        planVersionId: 'version-1',
+        plan: { currentVersionId: 'version-1' },
+      },
+      include: {
+        slots: {
+          orderBy: { ordinal: 'asc' },
+          include: {
+            childWorkflow: {
+              select: {
+                jobs: {
+                  orderBy: { workflowAttempt: 'desc' },
+                  take: 1,
+                  select: {
+                    assets: {
+                      orderBy: { createdAt: 'asc' },
+                      take: 1,
+                      select: {
+                        id: true,
+                        ownerUserId: true,
+                        url: true,
+                        mimeType: true,
+                        width: true,
+                        height: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(repository.getCurrentOwnedByPlan('plan-1', 'owner-2')).resolves.toBeNull();
+
+    fixture.plan.currentVersionId = 'version-2';
+    fixture.plan.approvedVersionId = 'version-2';
+    await expect(repository.getCurrentOwnedByPlan('plan-1', 'owner-1')).resolves.toBeNull();
+
+    await expect(repository.getActiveOwnedByPlan('plan-1', 'owner-1')).resolves.toBeNull();
+    fixture.updateSuite({ revision: 4, status: 'PLANNED' });
+    await expect(repository.getActiveOwnedByPlan('plan-1', 'owner-1')).resolves.toMatchObject({
+      id: 'suite-1', planVersionId: 'version-1', revision: 4,
+    });
+    expect(fixture.tx.aiMediaSuite.findFirst).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: {
+        planId: 'plan-1',
+        ownerUserId: 'owner-1',
+        planVersionId: { not: 'version-2' },
+        plan: { currentVersionId: 'version-2' },
+        OR: [
+          { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+          { status: 'PLANNED', revision: { gte: 4 } },
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
   });
 });

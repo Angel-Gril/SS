@@ -22,6 +22,10 @@ import {
   type AiImageSuiteReferenceBinding,
   type AiImageSuiteReferenceCommitInput,
 } from '../services/ai-image-suite-references.js';
+import type {
+  AiImageSuitePreparationLease,
+  AiImageSuitePreparationLeaseGuard,
+} from '../services/ai-image-suite-preparation-lease.js';
 import { createAiImageSuitePromptService } from '../services/ai-image-suite-prompts.js';
 import {
   AI_IMAGE_SUITE_CHILD_OPERATION_CONFIG_VERSION,
@@ -43,6 +47,16 @@ import { buildSourceProductProfileFromCapture } from '../services/source-product
 
 const enabled = process.env.RUN_AI_MEDIA_POSTGRES_TESTS === '1';
 const databaseUrl = process.env.AI_MEDIA_TEST_DATABASE_URL || '';
+
+const passThroughPreparationLease: AiImageSuitePreparationLease = {
+  async runExclusive<T>(
+    _scope: Parameters<AiImageSuitePreparationLease['runExclusive']>[0],
+    work: (guard: AiImageSuitePreparationLeaseGuard) => Promise<T>,
+  ): Promise<T> {
+    return await work({ ensureOwned: async () => undefined });
+  },
+  async isReady() { return true; },
+};
 const sourceFixture = JSON.parse(readFileSync(new URL(
   '../../../../scripts/fixtures/source-collect/1688/minimal-v2-submission.sanitized.json',
   import.meta.url,
@@ -571,6 +585,7 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL claim', () => {
     const repository = new PrismaAiImageSuiteReferenceRepository(client);
     const service = createAiImageSuiteReferenceService({
       repository,
+      preparationLease: passThroughPreparationLease,
       getStorage: async () => {
         throw new Error('fully internalized fixtures must not access storage');
       },

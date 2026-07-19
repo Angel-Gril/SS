@@ -719,6 +719,31 @@ async function readAnyMaterialized(
   return null;
 }
 
+async function anotherPlanVersionIsActionable(
+  client: any,
+  input: MaterializeAiImageSuiteInput,
+): Promise<boolean> {
+  const suite = await client.aiMediaSuite.findFirst({
+    where: { id: input.suiteId, ownerUserId: input.ownerUserId },
+    select: { planId: true, planVersionId: true },
+  });
+  if (!suite) return false;
+  const active = await client.aiMediaSuite.findFirst({
+    where: {
+      ownerUserId: input.ownerUserId,
+      planId: suite.planId,
+      id: { not: input.suiteId },
+      planVersionId: { not: suite.planVersionId },
+      OR: [
+        { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+        { status: 'PLANNED', revision: { gte: 4 } },
+      ],
+    },
+    select: { id: true },
+  });
+  return Boolean(active);
+}
+
 async function createChildGraph(
   tx: any,
   suite: any,
@@ -941,6 +966,9 @@ implements AiImageSuiteMaterializationRepository {
       if (replay?.kind === 'existing'
         || replay?.kind === 'already-materialized'
         || replay?.kind === 'conflict') return replay;
+      if (await anotherPlanVersionIsActionable(this.prisma as any, input)) {
+        return { kind: 'active-suite-conflict' };
+      }
       throw error;
     }
   }

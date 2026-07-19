@@ -51,7 +51,7 @@ import { logisticsRoutes } from './routes/logistics.js';
 import { exportRoutes } from './routes/export.js';
 import { searchRoutes } from './routes/search.js';
 import { prisma } from './lib/prisma.js';
-import { redis } from './lib/redis.js';
+import { redis, redisDisabled } from './lib/redis.js';
 import { providerRoutes } from './routes/provider.js';
 import { ozonLogisticsRoutes, domesticAddressRoutes } from './routes/ozon-logistics.js';
 import { systemConfigRoutes } from './routes/system-config.js';
@@ -70,6 +70,7 @@ import { sourceCandidateRoutes } from './routes/source-candidates.js';
 import { aiImageRoutes } from './routes/ai-images.js';
 import { aiImageSuiteRoutes } from './routes/ai-image-suites.js';
 import { aiMediaPlanningRoutes } from './routes/ai-media-plans.js';
+import type { AiImageSuiteProviderConfig } from './services/ai-image-suite.js';
 import { PrismaAiImageSuiteReferenceRepository } from './repositories/ai-image-suite-reference-repository.js';
 import { PrismaAiImageSuitePromptRepository } from './repositories/ai-image-suite-prompt-repository.js';
 import { PrismaAiImageSuiteMaterializationRepository } from './repositories/ai-image-suite-materialization-repository.js';
@@ -113,7 +114,13 @@ import { createSourceListingMediaImportService } from './services/source-listing
 import { createPrismaSourceListingMediaImportStore } from './services/source-listing-media-import-prisma.js';
 import { getStorageBackend } from './services/image-storage.js';
 import { getRuntimeConfigForStorage } from './adapters/runtime-config.js';
-import { createAiImageSuiteReferenceService } from './services/ai-image-suite-references.js';
+import {
+  createAiImageSuiteReferenceService,
+  normalizeAiImageSuiteOssCdnDomain,
+  resolveAiImageSuiteReferenceStorageReadiness,
+} from './services/ai-image-suite-references.js';
+import { createRedisAiImageSuitePreparationLease } from './services/ai-image-suite-preparation-lease.js';
+import { probeAiImageSuiteRuntime } from './services/ai-image-suite-runtime-readiness.js';
 import { createAiImageSuitePromptService } from './services/ai-image-suite-prompts.js';
 import { createAiImageSuiteMaterializationService } from './services/ai-image-suite-materialization.js';
 import { createAiImageSuiteExecutionService } from './services/ai-image-suite-execution.js';
@@ -1060,14 +1067,54 @@ const aiImageSuiteExecutionRepository = new PrismaAiImageSuiteExecutionRepositor
 const aiImageSuiteGenerationCoordinator = new PrismaAiImageSuiteGenerationCoordinator(prisma, {
   runtimeReady: aiImageSuiteRuntimeReady,
 });
+const aiImageSuitePreparationLease = createRedisAiImageSuitePreparationLease({
+  redis,
+  disabled: redisDisabled,
+});
 const enqueueAiImageSuiteFrontier = async (suiteId: string) => {
   const tasks = await aiImageSuiteExecutionRepository.listQueueableTasks(suiteId);
   await Promise.all(tasks.map((task) => enqueueAiImageSuiteGenerationRecoveryJob(task)));
 };
 await app.register(aiImageSuiteRoutes, {
   prefix: '/api/ai-images',
+  getSuiteRuntimeReadiness: async (
+    _ownerUserId: string,
+    providerConfig: AiImageSuiteProviderConfig,
+  ) => {
+    const operational = await probeAiImageSuiteRuntime({
+      redis,
+      queueAvailable: Boolean(aiImageSuiteGenerationQueue),
+    });
+    const providerRuntimeReady = await aiImageSuiteRuntimeReady({
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      estimatedCostCents: providerConfig.estimatedCostPerImageCents,
+      maximumCostCents: providerConfig.maximumCostPerImageCents,
+    });
+    return {
+      queueReady: operational.queueReady,
+      runtimeReady: operational.workerReady && providerRuntimeReady,
+    };
+  },
+  getReferenceStorageReadiness: async (
+    _ownerUserId: string,
+    providerConfig: AiImageSuiteProviderConfig,
+  ) => {
+    const runtime = await getRuntimeConfigForStorage();
+    const backend = runtime.imageStorage;
+    const publicBaseUrl = backend === 'oss'
+      ? normalizeAiImageSuiteOssCdnDomain(runtime.oss?.cdnDomain) || runtime.localBaseUrl
+      : runtime.localBaseUrl;
+    return resolveAiImageSuiteReferenceStorageReadiness({
+      provider: providerConfig.provider,
+      backend,
+      ossConfigured: Boolean(runtime.oss),
+      publicBaseUrl: publicBaseUrl || null,
+    });
+  },
   referenceService: createAiImageSuiteReferenceService({
     repository: new PrismaAiImageSuiteReferenceRepository(prisma),
+    preparationLease: aiImageSuitePreparationLease,
     getStorage: async () => {
       const runtime = await getRuntimeConfigForStorage();
       if (runtime.imageStorage === 'ozon-cdn') {

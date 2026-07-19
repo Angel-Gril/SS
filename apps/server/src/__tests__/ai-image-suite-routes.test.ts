@@ -91,6 +91,9 @@ function suite() {
     status: 'PLANNED',
     revision: 1,
     previewHash: 'd'.repeat(64),
+    provider: AI_IMAGE_SUITE_PROVIDER,
+    model: AI_IMAGE_SUITE_MODEL,
+    pricingVersion: 'provider-free-zero/v1',
     itemCount: 1,
     estimatedCostCents: 0,
     maximumCostCents: 0,
@@ -136,6 +139,8 @@ function serviceMock() {
     preview: vi.fn(async () => preview()),
     claim: vi.fn(async () => ({ suite: suite(), replayed: false })),
     get: vi.fn(async () => suite()),
+    getCurrentByPlan: vi.fn(async () => suite()),
+    getActiveByPlan: vi.fn(async () => suite()),
   } as unknown as AiImageSuiteService;
 }
 
@@ -279,6 +284,13 @@ async function build(options: {
   webMediaEnabled?: boolean;
   production?: boolean;
   config?: AiImageSuiteProviderConfig;
+  runtimeReadiness?: { queueReady: boolean; runtimeReady: boolean };
+  storageReadiness?: {
+    ready: boolean;
+    backend: 'local' | 'oss' | 'ozon-cdn' | null;
+    publicHttps: boolean;
+    reason: string;
+  };
 } = {}) {
   const app = Fastify();
   const service = options.service || serviceMock();
@@ -309,6 +321,16 @@ async function build(options: {
     getMediaWorkflowEnabled: async () => options.workflowEnabled ?? true,
     getSourceListingWebMediaEnabled: async () => options.webMediaEnabled ?? true,
     getProviderConfig: async () => options.config || providerConfig,
+    getSuiteRuntimeReadiness: async () => options.runtimeReadiness || {
+      queueReady: true,
+      runtimeReady: true,
+    },
+    getReferenceStorageReadiness: async () => options.storageReadiness || {
+      ready: true,
+      backend: 'local',
+      publicHttps: false,
+      reason: 'Local test storage is ready',
+    },
     authenticate: async (request: FastifyRequest) => {
       (request as any).user = {
         userId: 'owner-1',
@@ -452,6 +474,27 @@ describe('AI image suite routes', () => {
     });
     expect(failedResponse.statusCode).toBe(409);
     expect(failedResponse.json()).toEqual({ code: 'AI_MEDIA_SUITE_NOT_APPROVED', msg: 'not approved' });
+
+    const activeConflictService = serviceMock();
+    (activeConflictService.claim as any).mockRejectedValueOnce(new AiImageSuiteError(
+      'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+      'another plan version is active',
+      409,
+    ));
+    const activeConflict = await build({ service: activeConflictService });
+    const activeConflictResponse = await activeConflict.app.inject({
+      method: 'POST',
+      url: '/suites/claim',
+      payload: {
+        planId: 'plan-1', expectedPlanRevision: 3,
+        expectedPreviewHash: 'd'.repeat(64), idempotencyKey: 'suite-active-conflict',
+      },
+    });
+    expect(activeConflictResponse.statusCode).toBe(409);
+    expect(activeConflictResponse.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+      msg: 'another plan version is active',
+    });
   });
 
   it('internalizes only server-owned frozen references and strips binding secrets', async () => {
@@ -876,6 +919,26 @@ describe('AI image suite routes', () => {
       msg: 'Only failed slots can be retried',
     });
 
+    const activeConflictService = executionServiceMock();
+    vi.mocked(activeConflictService.retryFailedSlot).mockRejectedValueOnce(
+      new AiImageSuiteExecutionError(
+        'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+        409,
+        'Another plan version already has an actionable AI media suite',
+      ),
+    );
+    const activeConflict = await build({ executionService: activeConflictService });
+    const activeConflictResponse = await activeConflict.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/retry',
+      payload: { expectedSlotRevision: 3, operationKey: 'suite-slot-retry-active-conflict' },
+    });
+    expect(activeConflictResponse.statusCode).toBe(409);
+    expect(activeConflictResponse.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+      msg: 'Another plan version already has an actionable AI media suite',
+    });
+
     const unavailable = await build({ executionService: null });
     const unavailableResponse = await unavailable.app.inject({
       method: 'POST',
@@ -927,6 +990,11 @@ describe('AI image suite routes', () => {
       url: '/suites/suite-1/references/internalize',
       payload: { expectedRevision: 1, operationKey: 'reference-gated-operation' },
     });
+    const prepareResponse = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prepare',
+      payload: { operationKey: 'prepare-gated-operation' },
+    });
     const promptResponse = await app.inject({
       method: 'POST',
       url: '/suites/suite-1/prompts/freeze',
@@ -951,6 +1019,7 @@ describe('AI image suite routes', () => {
     expect(previewResponse.statusCode).toBe(503);
     expect(claimResponse.statusCode).toBe(503);
     expect(internalizeResponse.statusCode).toBe(503);
+    expect(prepareResponse.statusCode).toBe(503);
     expect(promptResponse.statusCode).toBe(503);
     expect(materializationResponse.statusCode).toBe(503);
     expect(dispatchResponse.statusCode).toBe(503);
@@ -958,6 +1027,7 @@ describe('AI image suite routes', () => {
     expect(previewResponse.json()).toMatchObject({ code });
     expect(claimResponse.json()).toMatchObject({ code });
     expect(internalizeResponse.json()).toMatchObject({ code });
+    expect(prepareResponse.json()).toMatchObject({ code });
     expect(promptResponse.json()).toMatchObject({ code });
     expect(materializationResponse.json()).toMatchObject({ code });
     expect(dispatchResponse.json()).toMatchObject({ code });
@@ -1033,7 +1103,15 @@ describe('AI image suite routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(service.get).toHaveBeenCalledWith('suite-1', 'owner-1');
-    expect(response.json()).toMatchObject({ code: 1, data: { id: 'suite-1' } });
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        id: 'suite-1',
+        provider: AI_IMAGE_SUITE_PROVIDER,
+        model: AI_IMAGE_SUITE_MODEL,
+        pricingVersion: 'provider-free-zero/v1',
+      },
+    });
     expect(response.body).not.toContain('previewHash');
     expect(response.body).not.toContain('slotHash');
     expect(response.body).not.toContain('referencesHash');
@@ -1059,5 +1137,535 @@ describe('AI image suite routes', () => {
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ code: 'AI_MEDIA_SUITE_NOT_FOUND', msg: 'missing' });
     expect(service.get).toHaveBeenCalledWith('other-owner-suite', 'owner-1');
+  });
+
+  it('reads the current owner-scoped suite with only current-attempt public assets while flags are dark', async () => {
+    const service = serviceMock();
+    const current = suite() as any;
+    current.revision = 7;
+    current.status = 'SUCCEEDED';
+    current.slots[0] = {
+      ...current.slots[0],
+      status: 'SUCCEEDED',
+      childWorkflowId: 'workflow-1',
+      childWorkflow: {
+        jobs: [{
+          providerJobId: 'provider-job-secret',
+          resolvedPrompt: 'secret frozen Prompt',
+          assets: [{
+            id: 'asset-1',
+            ownerUserId: 'owner-1',
+            url: '/uploads/suite-output.png',
+            mimeType: 'image/png',
+            width: 900,
+            height: 1200,
+            storageKey: 'tenant/private/storage-key',
+            sha256: 'a'.repeat(64),
+          }, {
+            id: 'asset-2-must-not-be-projected',
+            ownerUserId: 'owner-1',
+            url: '/uploads/non-current-output.png',
+            mimeType: 'image/png',
+            width: 900,
+            height: 1200,
+          }],
+        }],
+      },
+    };
+    vi.mocked(service.getCurrentByPlan).mockResolvedValueOnce(current);
+    const { app } = await build({
+      service,
+      suiteEnabled: false,
+      workflowEnabled: false,
+      webMediaEnabled: false,
+      production: true,
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/suites/current?planId=plan-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.getCurrentByPlan).toHaveBeenCalledWith('plan-1', 'owner-1');
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        id: 'suite-1',
+        revision: 7,
+        provider: AI_IMAGE_SUITE_PROVIDER,
+        model: AI_IMAGE_SUITE_MODEL,
+        pricingVersion: 'provider-free-zero/v1',
+        slots: [{
+          id: 'suite-slot-1',
+          outputAssets: [{
+            id: 'asset-1',
+            url: '/uploads/suite-output.png',
+            mimeType: 'image/png',
+            width: 900,
+            height: 1200,
+          }],
+        }],
+      },
+    });
+    expect(response.body).not.toContain('previewHash');
+    expect(response.body).not.toContain('provider-job-secret');
+    expect(response.body).not.toContain('secret frozen Prompt');
+    expect(response.body).not.toContain('storage-key');
+    expect(response.body).not.toContain('sha256');
+    expect(response.body).not.toContain('asset-2-must-not-be-projected');
+    expect(response.body).not.toContain('token=secret-error');
+  });
+
+  it('keeps the suite readable while dropping an oversized current output URL', async () => {
+    const service = serviceMock();
+    const current = suite() as any;
+    current.slots[0].childWorkflow = {
+      jobs: [{
+        assets: [{
+          id: 'asset-oversized-url',
+          ownerUserId: 'owner-1',
+          url: `https://cdn.example.com/${'x'.repeat(4_100)}`,
+          mimeType: 'image/png',
+          width: 900,
+          height: 1200,
+        }],
+      }],
+    };
+    vi.mocked(service.getCurrentByPlan).mockResolvedValueOnce(current);
+    const { app } = await build({ service });
+
+    const response = await app.inject({ method: 'GET', url: '/suites/current?planId=plan-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: { id: 'suite-1', slots: [{ outputAssets: [] }] },
+    });
+    expect(response.body).not.toContain('asset-oversized-url');
+  });
+
+  it('drops a current job asset whose owner does not match the suite owner', async () => {
+    const service = serviceMock();
+    const current = suite() as any;
+    current.slots[0].childWorkflow = {
+      jobs: [{
+        assets: [{
+          id: 'asset-other-owner',
+          ownerUserId: 'owner-2',
+          url: '/uploads/other-owner.png',
+          mimeType: 'image/png',
+          width: 900,
+          height: 1200,
+        }],
+      }],
+    };
+    vi.mocked(service.getCurrentByPlan).mockResolvedValueOnce(current);
+    const { app } = await build({ service });
+
+    const response = await app.inject({ method: 'GET', url: '/suites/current?planId=plan-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: { id: 'suite-1', slots: [{ outputAssets: [] }] },
+    });
+    expect(response.body).not.toContain('asset-other-owner');
+    expect(response.body).not.toContain('other-owner.png');
+  });
+
+  it('returns a successful null current-suite lookup without consulting write gates', async () => {
+    const service = serviceMock();
+    vi.mocked(service.getCurrentByPlan).mockResolvedValueOnce(null);
+    const { app } = await build({
+      service,
+      suiteEnabled: false,
+      workflowEnabled: false,
+      webMediaEnabled: false,
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/suites/current?planId=plan-without-suite' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ code: 1, data: null });
+    expect(service.getCurrentByPlan).toHaveBeenCalledWith('plan-without-suite', 'owner-1');
+  });
+
+  it('keeps an older active suite owner-readable after the plan current version changes', async () => {
+    const service = serviceMock();
+    vi.mocked(service.getCurrentByPlan).mockResolvedValueOnce(null);
+    const active = { ...suite(), revision: 5, status: 'RUNNING' };
+    vi.mocked(service.getActiveByPlan).mockResolvedValueOnce(active);
+    const { app } = await build({
+      service,
+      suiteEnabled: false,
+      workflowEnabled: false,
+      webMediaEnabled: false,
+    });
+
+    const [currentResponse, activeResponse] = await Promise.all([
+      app.inject({ method: 'GET', url: '/suites/current?planId=plan-1' }),
+      app.inject({ method: 'GET', url: '/suites/active?planId=plan-1' }),
+    ]);
+
+    expect(currentResponse.json()).toEqual({ code: 1, data: null });
+    expect(activeResponse.json()).toMatchObject({
+      code: 1,
+      data: { id: 'suite-1', revision: 5, status: 'RUNNING' },
+    });
+    expect(service.getActiveByPlan).toHaveBeenCalledWith('plan-1', 'owner-1');
+  });
+
+  it('reports composite suite readiness without performing a write', async () => {
+    const ready = await build();
+    const readyResponse = await ready.app.inject({ method: 'GET', url: '/suites/readiness' });
+    expect(readyResponse.statusCode).toBe(200);
+    expect(readyResponse.json()).toMatchObject({
+      code: 1,
+      data: {
+        suiteEnabled: true,
+        workflowEnabled: true,
+        webMediaEnabled: true,
+        provider: {
+          provider: AI_IMAGE_SUITE_PROVIDER,
+          model: AI_IMAGE_SUITE_MODEL,
+          evidenceLevel: 'local-test',
+          ready: true,
+        },
+        services: {
+          references: true,
+          prompts: true,
+          materialization: true,
+          execution: true,
+          queue: true,
+          runtime: true,
+        },
+        storage: { ready: true, backend: 'local', publicHttps: false },
+        ready: true,
+        testOnly: true,
+        reasonCode: 'READY',
+      },
+    });
+    expect(ready.service.preview).not.toHaveBeenCalled();
+    expect(ready.service.claim).not.toHaveBeenCalled();
+
+    const dark = await build({ suiteEnabled: false });
+    expect((await dark.app.inject({ method: 'GET', url: '/suites/readiness' })).json()).toMatchObject({
+      code: 1,
+      data: { ready: false, reasonCode: 'AI_MEDIA_SUITE_DISABLED' },
+    });
+
+    const production = await build({ production: true });
+    expect((await production.app.inject({ method: 'GET', url: '/suites/readiness' })).json()).toMatchObject({
+      code: 1,
+      data: {
+        ready: false,
+        testOnly: true,
+        reasonCode: 'AI_MEDIA_SUITE_PROVIDER_NOT_READY',
+        provider: { ready: false },
+      },
+    });
+
+    const unwired = await build({ referenceService: null });
+    expect((await unwired.app.inject({ method: 'GET', url: '/suites/readiness' })).json()).toMatchObject({
+      code: 1,
+      data: {
+        ready: false,
+        reasonCode: 'AI_MEDIA_SUITE_SERVICE_NOT_READY',
+        services: { references: false },
+      },
+    });
+
+    const queueDown = await build({ runtimeReadiness: { queueReady: false, runtimeReady: false } });
+    expect((await queueDown.app.inject({ method: 'GET', url: '/suites/readiness' })).json()).toMatchObject({
+      code: 1,
+      data: {
+        ready: false,
+        reasonCode: 'AI_MEDIA_SUITE_QUEUE_NOT_READY',
+        services: { queue: false, runtime: false },
+      },
+    });
+
+    const queueUnwired = await build({ enqueueSuiteFrontier: null });
+    expect((await queueUnwired.app.inject({ method: 'GET', url: '/suites/readiness' })).json()).toMatchObject({
+      code: 1,
+      data: {
+        ready: false,
+        reasonCode: 'AI_MEDIA_SUITE_QUEUE_NOT_READY',
+        services: { queue: false, runtime: true },
+      },
+    });
+  });
+
+  it.each([1, 2, 3, 4])(
+    'prepares or resumes an owned suite from durable revision %s',
+    async (initialRevision) => {
+      let revision = initialRevision;
+      const service = serviceMock();
+      vi.mocked(service.get).mockImplementation(async () => ({ ...suite(), revision }));
+      const referenceService = referenceServiceMock();
+      (referenceService.internalize as any).mockImplementation(async () => {
+        revision = 2;
+        return { suiteId: 'suite-1', referenceCount: 1, referenceSetHash: '9'.repeat(64), replayed: false };
+      });
+      const promptService = promptServiceMock();
+      (promptService.freeze as any).mockImplementation(async () => {
+        revision = 3;
+        return {
+          suiteId: 'suite-1', promptSetHash: '4'.repeat(64), promptCount: 1,
+          templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+          templateReleaseId: 'release-7', templateSequence: 7,
+          templateChecksum: '6'.repeat(64), replayed: false,
+        };
+      });
+      const materializationService = materializationServiceMock();
+      (materializationService.materialize as any).mockImplementation(async () => {
+        revision = 4;
+        return {
+          suiteId: 'suite-1', revision: 4, status: 'PLANNED', childCount: 1,
+          estimatedCostCents: 0, maximumCostCents: 0,
+          materializationHash: '8'.repeat(64), children: [], replayed: false,
+        };
+      });
+      const { app } = await build({
+        service,
+        referenceService,
+        promptService,
+        materializationService,
+      });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/suites/suite-1/prepare',
+        payload: { operationKey: 'suite-prepare-browser-intent-1' },
+      });
+
+      expect(response.statusCode).toBe(initialRevision === 4 ? 200 : 202);
+      expect(response.json()).toMatchObject({
+        code: 1,
+        data: { id: 'suite-1', revision: 4 },
+        replayed: initialRevision === 4,
+      });
+      expect(response.body).not.toContain('previewHash');
+      expect(referenceService.internalize).toHaveBeenCalledTimes(initialRevision <= 1 ? 1 : 0);
+      expect(promptService.freeze).toHaveBeenCalledTimes(initialRevision <= 2 ? 1 : 0);
+      expect(materializationService.materialize).toHaveBeenCalledTimes(initialRevision <= 3 ? 1 : 0);
+      for (const call of [
+        ...(referenceService.internalize as any).mock.calls,
+        ...(promptService.freeze as any).mock.calls,
+        ...(materializationService.materialize as any).mock.calls,
+      ]) {
+        expect(call[0].operationKey).toMatch(/^suite-prepare-(references|prompts|children)-[a-f0-9]{64}$/u);
+        expect(call[0].operationKey).not.toContain('browser-intent');
+        expect(call[0]).toMatchObject({
+          suiteId: 'suite-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+        });
+      }
+    },
+  );
+
+  it('reloads and continues when another prepare request wins a stage with a different operation key', async () => {
+    let revision = 1;
+    const service = serviceMock();
+    vi.mocked(service.get).mockImplementation(async () => ({ ...suite(), revision }));
+    const referenceService = referenceServiceMock();
+    (referenceService.internalize as any).mockImplementation(async () => {
+      revision = 2;
+      throw new AiImageSuiteReferenceError(
+        'AI_MEDIA_SUITE_REFERENCE_ALREADY_INTERNALIZED',
+        409,
+        'another request committed references',
+      );
+    });
+    const promptService = promptServiceMock();
+    (promptService.freeze as any).mockImplementation(async () => {
+      revision = 3;
+      return {
+        suiteId: 'suite-1', promptSetHash: '4'.repeat(64), promptCount: 1,
+        templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+        templateReleaseId: 'release-7', templateSequence: 7,
+        templateChecksum: '6'.repeat(64), replayed: false,
+      };
+    });
+    const materializationService = materializationServiceMock();
+    (materializationService.materialize as any).mockImplementation(async () => {
+      revision = 4;
+      return {
+        suiteId: 'suite-1', revision: 4, status: 'PLANNED', childCount: 1,
+        estimatedCostCents: 0, maximumCostCents: 0,
+        materializationHash: '8'.repeat(64), children: [], replayed: false,
+      };
+    });
+    const { app } = await build({ service, referenceService, promptService, materializationService });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prepare',
+      payload: { operationKey: 'suite-prepare-concurrent-loser' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ code: 1, data: { revision: 4 }, replayed: false });
+    expect(referenceService.internalize).toHaveBeenCalledOnce();
+    expect(promptService.freeze).toHaveBeenCalledOnce();
+    expect(materializationService.materialize).toHaveBeenCalledOnce();
+  });
+
+  it('fails prepare before any partial write when a later preparation service is not installed', async () => {
+    const { app, referenceService } = await build({ promptService: null });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prepare',
+      payload: { operationKey: 'suite-prepare-unwired-service' },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'AI_MEDIA_SUITE_PROMPT_SERVICE_NOT_READY' });
+    expect(referenceService?.internalize).not.toHaveBeenCalled();
+  });
+
+  it('preflights only preparation stages that remain after the persisted revision', async () => {
+    const preparedService = serviceMock();
+    vi.mocked(preparedService.get).mockResolvedValue({ ...suite(), revision: 4 });
+    const prepared = await build({
+      service: preparedService,
+      referenceService: null,
+      promptService: null,
+      materializationService: null,
+    });
+    const replay = await prepared.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prepare',
+      payload: { operationKey: 'suite-prepared-services-down' },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ code: 1, data: { revision: 4 }, replayed: true });
+
+    let revision = 2;
+    const resumedService = serviceMock();
+    vi.mocked(resumedService.get).mockImplementation(async () => ({ ...suite(), revision }));
+    const promptService = promptServiceMock();
+    (promptService.freeze as any).mockImplementation(async () => {
+      revision = 3;
+      return {
+        suiteId: 'suite-1', promptSetHash: '4'.repeat(64), promptCount: 1,
+        templateKey: AI_MEDIA_SUITE_GENERATION_TEMPLATE_KEY,
+        templateReleaseId: 'release-7', templateSequence: 7,
+        templateChecksum: '6'.repeat(64), replayed: false,
+      };
+    });
+    const materializationService = materializationServiceMock();
+    (materializationService.materialize as any).mockImplementation(async () => {
+      revision = 4;
+      return {
+        suiteId: 'suite-1', revision: 4, status: 'PLANNED', childCount: 1,
+        estimatedCostCents: 0, maximumCostCents: 0,
+        materializationHash: '8'.repeat(64), children: [], replayed: false,
+      };
+    });
+    const resumed = await build({
+      service: resumedService,
+      referenceService: null,
+      promptService,
+      materializationService,
+    });
+    const response = await resumed.app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/prepare',
+      payload: { operationKey: 'suite-resume-without-reference-service' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ code: 1, data: { revision: 4 }, replayed: false });
+    expect(promptService.freeze).toHaveBeenCalledOnce();
+    expect(materializationService.materialize).toHaveBeenCalledOnce();
+  });
+
+  it('fails claim before persistence when reference storage cannot satisfy the suite provider', async () => {
+    const { app, service } = await build({
+      storageReadiness: {
+        ready: false,
+        backend: 'ozon-cdn',
+        publicHttps: true,
+        reason: 'Suite references cannot use Ozon CDN without frozen shop authority',
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/claim',
+      payload: {
+        planId: 'plan-1',
+        expectedPlanRevision: 3,
+        expectedPreviewHash: 'd'.repeat(64),
+        idempotencyKey: 'suite-storage-blocked-claim',
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY',
+      msg: 'Suite references cannot use Ozon CDN without frozen shop authority',
+    });
+    expect(service.claim).not.toHaveBeenCalled();
+
+    const readiness = await app.inject({ method: 'GET', url: '/suites/readiness' });
+    expect(readiness.json()).toMatchObject({
+      code: 1,
+      data: {
+        ready: false,
+        reasonCode: 'AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY',
+        storage: { ready: false, backend: 'ozon-cdn', publicHttps: true },
+      },
+    });
+  });
+
+  it('marks malformed provider configuration not ready and rejects claim before storage or persistence', async () => {
+    const storage = vi.fn(async () => ({
+      ready: true as const,
+      backend: 'local' as const,
+      publicHttps: false,
+      reason: 'ready',
+    }));
+    const app = Fastify();
+    const service = serviceMock();
+    await app.register(aiImageSuiteRoutes, {
+      service,
+      referenceService: referenceServiceMock(),
+      promptService: promptServiceMock(),
+      materializationService: materializationServiceMock(),
+      executionService: executionServiceMock(),
+      enqueueSuiteFrontier: vi.fn(async () => undefined),
+      production: false,
+      getSuiteEnabled: async () => true,
+      getMediaWorkflowEnabled: async () => true,
+      getSourceListingWebMediaEnabled: async () => true,
+      getProviderConfig: async () => ({
+        ...providerConfig,
+        providerConfigHash: 'not-a-sha256',
+      }),
+      getSuiteRuntimeReadiness: async () => ({ queueReady: true, runtimeReady: true }),
+      getReferenceStorageReadiness: storage,
+      authenticate: async (request: FastifyRequest) => {
+        (request as any).user = {
+          userId: 'owner-1', effectiveUserId: 'owner-1', actorUserId: 'actor-1',
+        };
+      },
+    });
+
+    const readiness = await app.inject({ method: 'GET', url: '/suites/readiness' });
+    expect(readiness.json()).toMatchObject({
+      code: 1,
+      data: { ready: false, reasonCode: 'AI_MEDIA_SUITE_PROVIDER_NOT_READY' },
+    });
+    const claim = await app.inject({
+      method: 'POST',
+      url: '/suites/claim',
+      payload: {
+        planId: 'plan-1', expectedPlanRevision: 3,
+        expectedPreviewHash: 'd'.repeat(64), idempotencyKey: 'suite-invalid-provider-claim',
+      },
+    });
+    expect(claim.statusCode).toBe(400);
+    expect(claim.json()).toMatchObject({ code: 'AI_MEDIA_SUITE_INVALID_INPUT' });
+    expect(storage).not.toHaveBeenCalled();
+    expect(service.claim).not.toHaveBeenCalled();
   });
 });

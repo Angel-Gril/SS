@@ -12,6 +12,7 @@ import {
   type DispatchAiImageSuiteInput,
   type RetryAiImageSuiteSlotInput,
 } from '../services/ai-image-suite-execution.js';
+import { PrismaAiImageSuiteExecutionRepository } from '../repositories/ai-image-suite-execution-repository.js';
 
 const dispatchInput: DispatchAiImageSuiteInput = {
   suiteId: 'suite-1',
@@ -310,6 +311,7 @@ describe('AI image suite execution service', () => {
     ['slot-not-found', 'AI_MEDIA_SUITE_SLOT_NOT_FOUND', 404],
     ['slot-not-failed', 'AI_MEDIA_SUITE_SLOT_NOT_FAILED', 409],
     ['retry-not-allowed', 'AI_MEDIA_SUITE_SLOT_RETRY_NOT_ALLOWED', 409],
+    ['active-suite-conflict', 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT', 409],
     ['slot-revision-conflict', 'AI_MEDIA_SUITE_SLOT_RETRY_CONFLICT', 409],
     ['conflict', 'AI_MEDIA_SUITE_SLOT_RETRY_CONFLICT', 409],
   ] as const)('maps retry result %s to a typed error', async (kind, code, statusCode) => {
@@ -319,5 +321,39 @@ describe('AI image suite execution service', () => {
     const failure = await service.retryFailedSlot(retryInput).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(AiImageSuiteExecutionError);
     expect(failure).toMatchObject({ code, statusCode });
+  });
+
+  it('classifies a retry partial-index collision after confirming another plan version is active', async () => {
+    const prisma = {
+      $transaction: vi.fn(async () => {
+        throw Object.assign(new Error('unique constraint'), { code: 'P2002' });
+      }),
+      aiMediaSuiteEvent: {
+        findUnique: vi.fn(async () => null),
+      },
+      aiMediaSuite: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce({ planId: 'plan-1', planVersionId: 'version-1' })
+          .mockResolvedValueOnce({ id: 'suite-new-version' }),
+      },
+    };
+    const repo = new PrismaAiImageSuiteExecutionRepository(prisma as never);
+
+    await expect(repo.retryFailedSlot(retryInput)).resolves.toEqual({
+      kind: 'active-suite-conflict',
+    });
+    expect(prisma.aiMediaSuite.findFirst).toHaveBeenNthCalledWith(2, {
+      where: {
+        ownerUserId: 'owner-1',
+        planId: 'plan-1',
+        id: { not: 'suite-1' },
+        planVersionId: { not: 'version-1' },
+        OR: [
+          { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+          { status: 'PLANNED', revision: { gte: 4 } },
+        ],
+      },
+      select: { id: true },
+    });
   });
 });

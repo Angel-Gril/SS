@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify the AI Media master flag and tenant rollout remain disabled in SystemConfig.
+# Verify the AI Media entry-point flags and tenant rollout remain disabled in SystemConfig.
 
 set -euo pipefail
 
@@ -37,7 +37,12 @@ try {
   const rows = await prisma.systemConfig.findMany({
     where: {
       key: {
-        in: ['feature_ai_media_workflow_v2', 'ai_media_workflow_v2_rollout_policy'],
+        in: [
+          'feature_ai_media_workflow_v2',
+          'feature_ai_media_suite',
+          'feature_source_listing_web_media',
+          'ai_media_workflow_v2_rollout_policy',
+        ],
       },
     },
     select: { key: true, value: true },

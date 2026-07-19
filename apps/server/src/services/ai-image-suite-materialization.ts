@@ -46,6 +46,7 @@ export type AiImageSuiteMaterializationCommitResult =
   | {
     kind:
       | 'already-materialized'
+      | 'active-suite-conflict'
       | 'conflict'
       | 'not-found'
       | 'stale'
@@ -64,6 +65,7 @@ export type AiImageSuiteMaterializationErrorCode =
   | 'AI_MEDIA_SUITE_MATERIALIZATION_STALE'
   | 'AI_MEDIA_SUITE_PROMPTS_NOT_READY'
   | 'AI_MEDIA_SUITE_CHILDREN_ALREADY_MATERIALIZED'
+  | 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT'
   | 'AI_MEDIA_SUITE_MATERIALIZATION_CONFLICT';
 
 export class AiImageSuiteMaterializationError extends Error {
@@ -177,6 +179,13 @@ function mapCommitFailure(result: AiImageSuiteMaterializationCommitResult): neve
       'AI_MEDIA_SUITE_CHILDREN_ALREADY_MATERIALIZED',
       409,
       'AI media suite children are already materialized',
+    );
+  }
+  if (result.kind === 'active-suite-conflict') {
+    return fail(
+      'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+      409,
+      'Another plan version already has an actionable AI media suite',
     );
   }
   return fail(

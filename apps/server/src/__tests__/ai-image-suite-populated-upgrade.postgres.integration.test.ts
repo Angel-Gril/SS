@@ -57,6 +57,39 @@ describe.skipIf(!enabled)('AI image suite populated migration upgrade', () => {
         AND indexname = 'ai_media_suite_slot_execution_lease_idx'
     `);
     expect(indexes).toHaveLength(1);
+    const planActivityIndexes = await client.$queryRawUnsafe<Array<{ indexdef: string }>>(`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'ai_media_suites'
+        AND indexname = 'ai_media_suite_plan_active_key'
+    `);
+    expect(planActivityIndexes).toHaveLength(1);
+    expect(planActivityIndexes[0]?.indexdef).toMatch(/UNIQUE INDEX[\s\S]*\(plan_id\)/u);
+    const outputJobConstraints = await client.$queryRawUnsafe<Array<{
+      conname: string;
+      convalidated: boolean;
+      definition: string;
+    }>>(`
+      SELECT
+        constraint_row.conname,
+        constraint_row.convalidated,
+        pg_get_constraintdef(constraint_row.oid) AS definition
+      FROM pg_constraint constraint_row
+      WHERE constraint_row.conrelid = 'media_assets'::regclass
+        AND constraint_row.conname IN (
+          'media_assets_ai_image_job_id_owner_user_id_fkey',
+          'media_assets_ai_image_job_id_fkey'
+        )
+      ORDER BY constraint_row.conname
+    `);
+    expect(outputJobConstraints).toEqual([expect.objectContaining({
+      conname: 'media_assets_ai_image_job_id_owner_user_id_fkey',
+      convalidated: true,
+      definition: expect.stringMatching(
+        /FOREIGN KEY \(ai_image_job_id, owner_user_id\) REFERENCES ai_image_jobs\(id, owner_user_id\)/u,
+      ),
+    })]);
 
     await client.$queryRawUnsafe(
       'SELECT assert_ai_media_suite_materialized_graph($1::text, $2::text)::text AS "result"',

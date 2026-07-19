@@ -118,6 +118,7 @@ export type AiImageSuiteSlotRetryResult =
       | 'slot-not-found'
       | 'slot-not-failed'
       | 'retry-not-allowed'
+      | 'active-suite-conflict'
       | 'slot-revision-conflict'
       | 'conflict';
   };
@@ -144,6 +145,7 @@ export type AiImageSuiteExecutionErrorCode =
   | 'AI_MEDIA_SUITE_SLOT_NOT_FOUND'
   | 'AI_MEDIA_SUITE_SLOT_NOT_FAILED'
   | 'AI_MEDIA_SUITE_SLOT_RETRY_NOT_ALLOWED'
+  | 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT'
   | 'AI_MEDIA_SUITE_SLOT_RETRY_CONFLICT';
 
 export class AiImageSuiteExecutionError extends Error {
@@ -402,6 +404,13 @@ function mapRetryFailure(result: AiImageSuiteSlotRetryResult): never {
       'AI_MEDIA_SUITE_SLOT_RETRY_NOT_ALLOWED',
       409,
       'AI media suite does not allow slot retry in its current state',
+    );
+  }
+  if (result.kind === 'active-suite-conflict') {
+    return fail(
+      'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+      409,
+      'Another plan version already has an actionable AI media suite',
     );
   }
   return fail(

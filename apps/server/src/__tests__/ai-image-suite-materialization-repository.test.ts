@@ -253,7 +253,11 @@ function authorityFixture() {
   return { suite, slot, prompt, promptSet, events };
 }
 
-function clientFixture(options: { stale?: boolean; transactionFailure?: 'P2002' | 'P2034' } = {}) {
+function clientFixture(options: {
+  stale?: boolean;
+  transactionFailure?: 'P2002' | 'P2034';
+  activePlanConflict?: boolean;
+} = {}) {
   const authority = authorityFixture();
   const { suite, slot, events } = authority;
   const eventByKey = new Map<string, any>();
@@ -283,7 +287,21 @@ function clientFixture(options: { stale?: boolean; transactionFailure?: 'P2002' 
     aiMediaSuite: {
       findFirst: vi.fn(async ({ where }: any) => {
         hydrate();
-        return where.id === suite.id && where.ownerUserId === suite.ownerUserId ? suite : null;
+        if (where.id === suite.id && where.ownerUserId === suite.ownerUserId) return suite;
+        if (options.activePlanConflict
+          && where.planId === suite.planId
+          && where.ownerUserId === suite.ownerUserId
+          && where.id?.not === suite.id) {
+          return {
+            id: 'suite-other-version',
+            planId: suite.planId,
+            planVersionId: 'version-2',
+            ownerUserId: suite.ownerUserId,
+            status: 'RUNNING',
+            revision: 5,
+          };
+        }
+        return null;
       }),
       updateMany: vi.fn(async ({ where }: any) => {
         if (where.id !== suite.id
@@ -294,6 +312,11 @@ function clientFixture(options: { stale?: boolean; transactionFailure?: 'P2002' 
           || where.planVersionId !== suite.planVersionId
           || where.sourceCaptureSnapshotId !== suite.sourceCaptureSnapshotId
           || where.providerConfigHash !== suite.providerConfigHash) return { count: 0 };
+        if (options.activePlanConflict) {
+          throw Object.assign(new Error(
+            'Unique constraint failed on ai_media_suite_plan_active_key',
+          ), { code: 'P2002' });
+        }
         suite.revision += 1;
         return { count: 1 };
       }),
@@ -599,6 +622,19 @@ describe('Prisma AI image suite materialization repository', () => {
     const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client);
 
     await expect(repository.materialize(input)).resolves.toEqual({ kind: 'conflict' });
+  });
+
+  it('maps the plan-level partial unique index winner to a recoverable active-suite conflict', async () => {
+    const fixture = clientFixture({ activePlanConflict: true });
+    const repository = new PrismaAiImageSuiteMaterializationRepository(fixture.client);
+
+    await expect(repository.materialize(input)).resolves.toEqual({
+      kind: 'active-suite-conflict',
+    });
+    expect(fixture.tx.aiMediaSuite.updateMany).toHaveBeenCalledOnce();
+    expect(fixture.tx.aiMediaWorkflow.create).not.toHaveBeenCalled();
+    expect(fixture.tx.aiImageJob.create).not.toHaveBeenCalled();
+    expect(fixture.tx.aiCostReservation.create).not.toHaveBeenCalled();
   });
 
   it.each(['P2002', 'P2034'] as const)(

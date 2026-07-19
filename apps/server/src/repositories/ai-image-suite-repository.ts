@@ -16,8 +16,39 @@ import {
 } from './ai-media-planning-repository.js';
 
 const suiteInclude = {
-  slots: { orderBy: { ordinal: 'asc' } },
+  slots: {
+    orderBy: { ordinal: 'asc' },
+    include: {
+      childWorkflow: {
+        select: {
+          jobs: {
+            orderBy: { workflowAttempt: 'desc' },
+            take: 1,
+            select: {
+              assets: {
+                orderBy: { createdAt: 'asc' },
+                take: 1,
+                select: {
+                  id: true,
+                  ownerUserId: true,
+                  url: true,
+                  mimeType: true,
+                  width: true,
+                  height: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
 } as const;
+
+const actionableSuiteWhere = [
+  { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+  { status: 'PLANNED', revision: { gte: 4 } },
+] as const;
 
 function suiteRecord(row: any): AiImageSuiteRecord {
   return {
@@ -29,6 +60,9 @@ function suiteRecord(row: any): AiImageSuiteRecord {
     status: String(row.status),
     revision: Number(row.revision),
     previewHash: String(row.previewHash),
+    provider: String(row.provider),
+    model: String(row.model),
+    pricingVersion: String(row.pricingVersion),
     itemCount: Number(row.itemCount),
     estimatedCostCents: Number(row.estimatedCostCents),
     maximumCostCents: Number(row.maximumCostCents),
@@ -202,6 +236,18 @@ export class PrismaAiImageSuiteRepository implements AiImageSuiteRepository {
           include: suiteInclude,
         });
         if (existingClaim) return { kind: 'claimed' as const, suite: suiteRecord(existingClaim) };
+        const activeOtherVersion = await tx.aiMediaSuite.findFirst({
+          where: {
+            ownerUserId: input.ownerUserId,
+            planId: planAuthority.planId,
+            planVersionId: { not: planAuthority.planVersionId },
+            OR: actionableSuiteWhere,
+          },
+          select: { id: true },
+        });
+        if (activeOtherVersion) {
+          return { kind: 'active-suite-conflict' as const, suite: null };
+        }
 
         const suite = await tx.aiMediaSuite.create({ data: {
           ownerUserId: input.ownerUserId,
@@ -295,6 +341,44 @@ export class PrismaAiImageSuiteRepository implements AiImageSuiteRepository {
     const row = await (this.prisma as any).aiMediaSuite.findFirst({
       where: { id, ownerUserId },
       include: suiteInclude,
+    });
+    return row ? suiteRecord(row) : null;
+  }
+
+  async getCurrentOwnedByPlan(planId: string, ownerUserId: string) {
+    const plan = await (this.prisma as any).aiMediaPlan.findFirst({
+      where: { id: planId, ownerUserId },
+      select: { currentVersionId: true },
+    });
+    if (!plan?.currentVersionId) return null;
+    const row = await (this.prisma as any).aiMediaSuite.findFirst({
+      where: {
+        planId,
+        ownerUserId,
+        planVersionId: plan.currentVersionId,
+        plan: { currentVersionId: plan.currentVersionId },
+      },
+      include: suiteInclude,
+    });
+    return row ? suiteRecord(row) : null;
+  }
+
+  async getActiveOwnedByPlan(planId: string, ownerUserId: string) {
+    const plan = await (this.prisma as any).aiMediaPlan.findFirst({
+      where: { id: planId, ownerUserId },
+      select: { currentVersionId: true },
+    });
+    if (!plan) return null;
+    const row = await (this.prisma as any).aiMediaSuite.findFirst({
+      where: {
+        planId,
+        ownerUserId,
+        ...(plan.currentVersionId ? { planVersionId: { not: plan.currentVersionId } } : {}),
+        plan: { currentVersionId: plan.currentVersionId },
+        OR: actionableSuiteWhere,
+      },
+      include: suiteInclude,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     return row ? suiteRecord(row) : null;
   }

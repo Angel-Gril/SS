@@ -7,6 +7,10 @@ import {
 import sharp from 'sharp';
 import { isPublicHttpsStorageUrl } from './ai-image-translation-storage.js';
 import { hashAiMediaPlanningJson } from './ai-media-planning.js';
+import {
+  AiImageSuitePreparationLeaseError,
+  type AiImageSuitePreparationLease,
+} from './ai-image-suite-preparation-lease.js';
 import { sanitizeOzonPublishImageBuffer } from './ozon-image-sanitizer.js';
 import {
   downloadPublicImage,
@@ -203,6 +207,7 @@ export interface AiImageSuiteReferenceStorage {
 
 export interface AiImageSuiteReferenceDependencies {
   repository: AiImageSuiteReferenceRepository;
+  preparationLease: AiImageSuitePreparationLease;
   getStorage(): Promise<AiImageSuiteReferenceStorage>;
   download?: (
     url: string,
@@ -245,6 +250,8 @@ export type AiImageSuiteReferenceErrorCode =
   | 'AI_MEDIA_SUITE_REFERENCE_SOURCE_FETCH_FAILED'
   | 'AI_MEDIA_SUITE_REFERENCE_LIMIT_EXCEEDED'
   | 'AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY'
+  | 'AI_MEDIA_SUITE_REFERENCE_PREPARATION_BUSY'
+  | 'AI_MEDIA_SUITE_REFERENCE_PREPARATION_UNAVAILABLE'
   | 'AI_MEDIA_SUITE_REFERENCE_ASSET_CONFLICT'
   | 'AI_MEDIA_SUITE_REFERENCE_ALREADY_INTERNALIZED'
   | 'AI_MEDIA_SUITE_REFERENCE_COMMIT_CONFLICT';
@@ -569,6 +576,62 @@ function validStoredUrl(value: string): boolean {
   }
 }
 
+export function normalizeAiImageSuiteOssCdnDomain(value: string | null | undefined): string | null {
+  const domain = String(value || '').trim().replace(/\/+$/u, '');
+  if (!domain) return null;
+  return domain.startsWith('http') ? domain : `https://${domain}`;
+}
+
+export function resolveAiImageSuiteReferenceStorageReadiness(input: {
+  provider: string;
+  backend: 'local' | 'oss' | 'ozon-cdn';
+  ossConfigured: boolean;
+  publicBaseUrl: string | null;
+}) {
+  const publicBaseUrl = String(input.publicBaseUrl || '').trim().replace(/\/+$/u, '');
+  const publicHttps = isPublicHttpsStorageUrl(publicBaseUrl);
+  if (!SUPPORTED_STORAGE_BACKENDS.has(input.backend)) {
+    return {
+      ready: false,
+      backend: input.backend,
+      publicHttps,
+      reason: 'AI image suite references require local or owned OSS storage',
+    };
+  }
+  if (input.backend === 'oss' && !input.ossConfigured) {
+    return {
+      ready: false,
+      backend: input.backend,
+      publicHttps,
+      reason: 'AI image suite OSS storage is not fully configured',
+    };
+  }
+  if (input.provider === 'fake' && !validStoredUrl(publicBaseUrl)) {
+    return {
+      ready: false,
+      backend: input.backend,
+      publicHttps,
+      reason: 'Fake AI image suite storage requires an absolute HTTP(S) URL',
+    };
+  }
+  if (input.provider !== 'fake' && (input.backend !== 'oss' || !publicHttps)) {
+    return {
+      ready: false,
+      backend: input.backend,
+      publicHttps,
+      reason: 'Paid AI image suite references require owned OSS with a public HTTPS URL',
+    };
+  }
+  return {
+    ready: true,
+    backend: input.backend,
+    publicHttps,
+    reason: input.backend === 'oss'
+      ? 'AI image suite OSS storage is ready'
+      : 'Local AI image suite storage is ready for fake execution',
+  };
+}
+
 function assertStoragePolicy(
   provider: string,
   backend: string,
@@ -775,6 +838,24 @@ function mapCommitFailure(result: AiImageSuiteReferenceCommitResult): never {
   fail('AI_MEDIA_SUITE_REFERENCE_COMMIT_CONFLICT', 409, 'AI media suite reference binding conflicts with persisted state');
 }
 
+function mapPreparationLeaseFailure(error: unknown): never {
+  if (!(error instanceof AiImageSuitePreparationLeaseError)) throw error;
+  if (error.code === 'AI_MEDIA_SUITE_PREPARATION_LEASE_BUSY') {
+    fail(
+      'AI_MEDIA_SUITE_REFERENCE_PREPARATION_BUSY',
+      409,
+      'AI image suite reference preparation is already in progress',
+      error,
+    );
+  }
+  fail(
+    'AI_MEDIA_SUITE_REFERENCE_PREPARATION_UNAVAILABLE',
+    503,
+    'AI image suite reference preparation coordination is unavailable',
+    error,
+  );
+}
+
 export function createAiImageSuiteReferenceService(
   dependencies: AiImageSuiteReferenceDependencies,
   rawLimits: AiImageSuiteReferenceLimits = {},
@@ -787,6 +868,11 @@ export function createAiImageSuiteReferenceService(
       input: InternalizeAiImageSuiteReferencesInput,
     ): Promise<InternalizeAiImageSuiteReferencesResult> {
       validateInput(input);
+      try {
+        return await dependencies.preparationLease.runExclusive({
+          ownerUserId: input.ownerUserId,
+          suiteId: input.suiteId,
+        }, async (lease) => {
       const replay = await dependencies.repository.findCommitReplay(input);
       if (replay?.kind === 'conflict') {
         fail('AI_MEDIA_SUITE_REFERENCE_COMMIT_CONFLICT', 409, 'AI media suite reference operation key conflicts');
@@ -895,6 +981,7 @@ export function createAiImageSuiteReferenceService(
             continue;
           }
         }
+        await lease.ensureOwned();
         let downloaded: DownloadedPublicImage;
         try {
           downloaded = await download(reference.source.url, {
@@ -913,6 +1000,7 @@ export function createAiImageSuiteReferenceService(
           || downloaded.buffer.length > resolvedLimits.maxBytesPerImage) {
           fail('AI_MEDIA_SUITE_REFERENCE_LIMIT_EXCEEDED', 413, 'A suite source image exceeds its byte limit');
         }
+        await lease.ensureOwned();
         totalSourceBytes += downloaded.buffer.length;
         if (totalSourceBytes > resolvedLimits.maxTotalBytes) {
           fail('AI_MEDIA_SUITE_REFERENCE_LIMIT_EXCEEDED', 413, 'Suite source images exceed the total byte limit');
@@ -1075,6 +1163,7 @@ export function createAiImageSuiteReferenceService(
           assetSha256,
         ].join('\u0000')).digest('hex');
         let uploaded: AiImageSuiteReferenceStorageUploadResult;
+        await lease.ensureOwned();
         try {
           uploaded = await storage.uploadBuffer(
             sanitized.buffer,
@@ -1089,6 +1178,7 @@ export function createAiImageSuiteReferenceService(
         } catch (error) {
           fail('AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY', 503, 'Suite reference storage upload failed', error);
         }
+        await lease.ensureOwned();
         assertStoragePolicy(authority.provider, uploaded.backend, uploaded.url);
         if (uploaded.backend !== storage.backend) {
           fail('AI_MEDIA_SUITE_REFERENCE_STORAGE_NOT_READY', 503, 'Suite reference storage changed backend during upload');
@@ -1151,6 +1241,7 @@ export function createAiImageSuiteReferenceService(
         sourceCaptureSnapshotId: authority.sourceCaptureSnapshotId,
         bindings,
       });
+      await lease.ensureOwned();
       const committed = await dependencies.repository.commitBindings({
         suiteId: input.suiteId,
         ownerUserId: input.ownerUserId,
@@ -1179,6 +1270,10 @@ export function createAiImageSuiteReferenceService(
         bindings,
         replayed: committed.kind !== 'committed',
       };
+        });
+      } catch (error) {
+        return mapPreparationLeaseFailure(error);
+      }
     },
   };
 }

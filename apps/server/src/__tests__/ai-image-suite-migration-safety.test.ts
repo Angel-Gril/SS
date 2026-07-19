@@ -41,6 +41,10 @@ const executionMigration = readFileSync(new URL(
   '../../prisma/migrations/20260720120000_add_ai_media_suite_execution/migration.sql',
   import.meta.url,
 ), 'utf8');
+const planActivityMigration = readFileSync(new URL(
+  '../../prisma/migrations/20260720130000_enforce_ai_media_suite_plan_activity/migration.sql',
+  import.meta.url,
+), 'utf8');
 const materializationMigrations = [
   materializationMigration,
   materializationHardeningMigration,
@@ -347,5 +351,20 @@ describe('AI image suite migration safety', () => {
     expect(schema).toMatch(/executionClaimToken\s+String\?\s+@map\("execution_claim_token"\)\s+@db\.Char\(64\)/u);
     expect(schema).toMatch(/executionLeaseExpiresAt\s+DateTime\?\s+@map\("execution_lease_expires_at"\)/u);
     expect(schema).toMatch(/@@index\(\[status, executionLeaseExpiresAt, id\].*ai_media_suite_slot_execution_lease_idx/u);
+  });
+
+  it('allows only one actionable suite across all versions of a plan', () => {
+    expect(planActivityMigration).toMatch(
+      /CREATE UNIQUE INDEX "ai_media_suite_plan_active_key"[\s\S]*ON "ai_media_suites" \("plan_id"\)/u,
+    );
+    expect(planActivityMigration).toMatch(
+      /"status" IN \('QUEUED', 'RUNNING', 'CANCEL_REQUESTED'\)/u,
+    );
+    expect(planActivityMigration).toMatch(
+      /"status" = 'PLANNED' AND "revision" >= 4/u,
+    );
+    expect(planActivityMigration).not.toMatch(
+      /"status" IN \([^)]*(?:PARTIAL_FAILURE|FAILED|SUCCEEDED|CANCELLED)/u,
+    );
   });
 });

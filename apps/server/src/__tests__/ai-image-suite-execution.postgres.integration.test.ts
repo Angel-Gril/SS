@@ -428,6 +428,114 @@ describe.skipIf(!enabled)('AI image suite PostgreSQL execution state machine', (
     await client?.$disconnect();
   });
 
+  it('enforces one actionable suite per plan when another version crosses revision 4', async () => {
+    const indexes = await client.$queryRaw<Array<{ indexdef: string }>>`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = 'ai_media_suite_plan_active_key'
+    `;
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0]?.indexdef).toMatch(
+      /UNIQUE INDEX ai_media_suite_plan_active_key[\s\S]*\(plan_id\)[\s\S]*revision >= 4/u,
+    );
+
+    const otherRunId = `suite_exec_run_other_${suffix}`;
+    const otherVersionId = `suite_exec_version_other_${suffix}`;
+    const otherSuiteId = `suite_exec_suite_other_${suffix}`;
+    const failure = await client.$transaction(async (tx: any) => {
+      await tx.$executeRawUnsafe('ALTER TABLE "ai_media_suites" DISABLE TRIGGER USER');
+      await tx.aiMediaPlanningRun.create({ data: {
+        id: otherRunId,
+        planId,
+        ownerUserId,
+        sourceSubjectId: subjectId,
+        actorUserId: ownerUserId,
+        sourceCaptureSnapshotId: snapshotId,
+        attempt: 2,
+        revision: 1,
+        mode: 'RULE_BASED',
+        engineVersion: 'integration',
+        status: 'SUCCEEDED',
+        idempotencyKey: `suite-exec-run-other-${suffix}`,
+        requestFingerprint: digest(`suite-exec-request-other-${suffix}`),
+        sourceCaptureHash: 'a'.repeat(64),
+        sourceProfileHash: 'b'.repeat(64),
+        inputFingerprint: digest(`suite-exec-input-other-${suffix}`),
+        inputSnapshot: {},
+        inputHash: digest(`suite-exec-input-hash-other-${suffix}`),
+        inputBytes: 2,
+        completedAt: new Date(),
+      } });
+      await tx.aiMediaPlanVersion.create({ data: {
+        id: otherVersionId,
+        planId,
+        ownerUserId,
+        sourceSubjectId: subjectId,
+        version: 2,
+        planningRunId: otherRunId,
+        parentVersionId: versionId,
+        sourceCaptureSnapshotId: snapshotId,
+        sourceCaptureHash: 'a'.repeat(64),
+        sourceProfileHash: 'b'.repeat(64),
+        sourceSchemaVersion: 'source-product-capture-v2',
+        selectedSkuHash: digest(`suite-exec-selected-other-${suffix}`),
+        inputAssetSetHash: digest(`suite-exec-assets-other-${suffix}`),
+        inputFingerprint: digest(`suite-exec-input-other-${suffix}`),
+        planSchemaVersion: 'integration',
+        plannerVersion: 'integration',
+        mode: 'RULE_BASED',
+        inputSnapshot: {},
+        inputHash: digest(`suite-exec-input-hash-other-${suffix}`),
+        curation: {},
+        curationHash: digest(`suite-exec-curation-other-${suffix}`),
+        visionEvidence: {},
+        visionEvidenceHash: digest(`suite-exec-vision-other-${suffix}`),
+        planPayload: {},
+        planHash: digest(`suite-exec-plan-other-${suffix}`),
+        planBytes: 2,
+        provenance: {},
+        provenanceHash: digest(`suite-exec-provenance-other-${suffix}`),
+        actorUserId: ownerUserId,
+      } });
+      await tx.aiMediaSuite.create({ data: {
+        id: otherSuiteId,
+        ownerUserId,
+        actorUserId: ownerUserId,
+        planId,
+        planVersionId: otherVersionId,
+        sourceSubjectId: subjectId,
+        sourceCaptureSnapshotId: snapshotId,
+        sourceCaptureHash: 'a'.repeat(64),
+        sourceProfileHash: 'b'.repeat(64),
+        sourceSchemaVersion: 'source-product-capture-v2',
+        contextType: 'collect',
+        contextId: `goods-${suffix}`,
+        status: 'PLANNED',
+        revision: 3,
+        idempotencyKey: `suite-exec-suite-other-${suffix}`,
+        requestFingerprint: digest(`suite-exec-suite-request-other-${suffix}`),
+        previewHash: digest(`suite-exec-preview-other-${suffix}`),
+        provider: 'fake',
+        model: 'fake-image-suite-v1',
+        providerConfigHash: digest(`suite-exec-provider-other-${suffix}`),
+        pricingVersion: 'integration',
+        itemCount: 1,
+        estimatedCostCents: 0,
+        maximumCostCents: 0,
+        concurrencyLimit: 1,
+      } });
+      return tx.aiMediaSuite.update({
+        where: { id: otherSuiteId },
+        data: { revision: { increment: 1 } },
+      });
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: 'P2002' });
+    await expect(client.aiMediaSuite.findUnique({ where: { id: otherSuiteId } }))
+      .resolves.toBeNull();
+  });
+
   it('dispatches a bounded frontier and rejects an over-concurrency commit', async () => {
     await expect(client.$transaction(async (tx: any) => {
       const now = new Date();

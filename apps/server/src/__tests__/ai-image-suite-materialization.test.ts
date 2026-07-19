@@ -121,6 +121,7 @@ describe('AI image suite child materialization service', () => {
     ['stale', 'AI_MEDIA_SUITE_MATERIALIZATION_STALE', 409],
     ['prompts-not-ready', 'AI_MEDIA_SUITE_PROMPTS_NOT_READY', 409],
     ['already-materialized', 'AI_MEDIA_SUITE_CHILDREN_ALREADY_MATERIALIZED', 409],
+    ['active-suite-conflict', 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT', 409],
     ['conflict', 'AI_MEDIA_SUITE_MATERIALIZATION_CONFLICT', 409],
     ['revision-conflict', 'AI_MEDIA_SUITE_MATERIALIZATION_CONFLICT', 409],
   ] as const)('maps commit result %s to a typed service error', async (kind, code, statusCode) => {

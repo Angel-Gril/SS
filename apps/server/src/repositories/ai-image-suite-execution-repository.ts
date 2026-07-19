@@ -239,6 +239,31 @@ async function readCommandReplay(
   return { kind: 'existing' as const, ...summary };
 }
 
+async function anotherPlanVersionIsActionable(
+  client: any,
+  input: { suiteId: string; ownerUserId: string },
+): Promise<boolean> {
+  const suite = await client.aiMediaSuite.findFirst({
+    where: { id: input.suiteId, ownerUserId: input.ownerUserId },
+    select: { planId: true, planVersionId: true },
+  });
+  if (!suite) return false;
+  const active = await client.aiMediaSuite.findFirst({
+    where: {
+      ownerUserId: input.ownerUserId,
+      planId: suite.planId,
+      id: { not: input.suiteId },
+      planVersionId: { not: suite.planVersionId },
+      OR: [
+        { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+        { status: 'PLANNED', revision: { gte: 4 } },
+      ],
+    },
+    select: { id: true },
+  });
+  return Boolean(active);
+}
+
 async function loadOwnedSuite(client: any, suiteId: string, ownerUserId: string) {
   return client.aiMediaSuite.findFirst({
     where: { id: suiteId, ownerUserId },
@@ -747,7 +772,12 @@ export class PrismaAiImageSuiteExecutionRepository implements AiImageSuiteExecut
       });
     } catch (error: any) {
       if (String(error?.code || '') !== 'P2002') throw error;
-      return await this.findRetryReplay(input) || { kind: 'conflict' as const };
+      const replay = await this.findRetryReplay(input);
+      if (replay) return replay;
+      if (await anotherPlanVersionIsActionable(this.prisma as any, input)) {
+        return { kind: 'active-suite-conflict' as const };
+      }
+      return { kind: 'conflict' as const };
     }
   }
 

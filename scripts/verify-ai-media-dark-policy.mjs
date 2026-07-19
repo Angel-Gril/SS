@@ -7,6 +7,14 @@ function fail(message) {
   throw new Error(message);
 }
 
+function verifyDarkFlag(values, key) {
+  const value = values.get(key);
+  if (value !== undefined && value.trim() !== 'false') {
+    fail(`${key} must be false or absent, found ${JSON.stringify(value)}`);
+  }
+  return value === undefined ? 'absent' : 'false';
+}
+
 export function verifyAiMediaDarkPolicy(rows) {
   if (!Array.isArray(rows)) fail('SystemConfig query did not return an array');
 
@@ -18,14 +26,13 @@ export function verifyAiMediaDarkPolicy(rows) {
     values.set(row.key, row.value);
   }
 
-  const master = values.get('feature_ai_media_workflow_v2');
-  if (master !== undefined && master.trim() !== 'false') {
-    fail(`feature_ai_media_workflow_v2 must be false or absent, found ${JSON.stringify(master)}`);
-  }
+  const master = verifyDarkFlag(values, 'feature_ai_media_workflow_v2');
+  const suite = verifyDarkFlag(values, 'feature_ai_media_suite');
+  const webMedia = verifyDarkFlag(values, 'feature_source_listing_web_media');
 
   const rawPolicy = values.get('ai_media_workflow_v2_rollout_policy');
   if (rawPolicy === undefined) {
-    return { master: master === undefined ? 'absent' : 'false', policy: 'absent' };
+    return { master, suite, webMedia, policy: 'absent' };
   }
 
   let policy;
@@ -50,7 +57,9 @@ export function verifyAiMediaDarkPolicy(rows) {
   }
 
   return {
-    master: master === undefined ? 'absent' : 'false',
+    master,
+    suite,
+    webMedia,
     policy: `revision:${policy.revision},tenantIds:0`,
   };
 }
@@ -59,7 +68,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   try {
     const rows = JSON.parse(process.argv[2] || 'null');
     const result = verifyAiMediaDarkPolicy(rows);
-    console.log(`PASS AI Media rollout is dark (master=${result.master}; policy=${result.policy})`);
+    console.log(
+      `PASS AI Media rollout is dark (master=${result.master}; suite=${result.suite}; webMedia=${result.webMedia}; policy=${result.policy})`,
+    );
   } catch (error) {
     console.error(
       `FAIL AI Media rollout is not dark: ${error instanceof Error ? error.message : String(error)}`,

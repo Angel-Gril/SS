@@ -10,10 +10,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AiImageSuiteReferenceError,
   createAiImageSuiteReferenceService,
+  normalizeAiImageSuiteOssCdnDomain,
+  resolveAiImageSuiteReferenceStorageReadiness,
   type AiImageSuiteReferenceAsset,
   type AiImageSuiteReferenceAuthority,
   type AiImageSuiteReferenceRepository,
 } from '../services/ai-image-suite-references.js';
+import {
+  AiImageSuitePreparationLeaseError,
+  type AiImageSuitePreparationLease,
+  type AiImageSuitePreparationLeaseGuard,
+} from '../services/ai-image-suite-preparation-lease.js';
 import { buildSourceProductProfileFromCapture } from '../services/source-product-profile.js';
 
 const fixture = JSON.parse(readFileSync(new URL(
@@ -162,9 +169,22 @@ function repository(overrides: Partial<AiImageSuiteReferenceRepository> = {}) {
   return value;
 }
 
+function passThroughPreparationLease(): AiImageSuitePreparationLease {
+  return {
+    async runExclusive<T>(
+      _scope: Parameters<AiImageSuitePreparationLease['runExclusive']>[0],
+      work: (guard: AiImageSuitePreparationLeaseGuard) => Promise<T>,
+    ): Promise<T> {
+      return await work({ ensureOwned: async () => undefined });
+    },
+    async isReady() { return true; },
+  };
+}
+
 function dependencies(repo: AiImageSuiteReferenceRepository) {
   return {
     repository: repo,
+    preparationLease: passThroughPreparationLease(),
     download: vi.fn(async () => ({
       sourceUrl,
       finalUrl: sourceUrl,
@@ -190,6 +210,62 @@ const input = {
   expectedRevision: 1,
   operationKey: 'suite-reference-operation-1',
 };
+
+describe('AI image suite reference storage readiness', () => {
+  it('allows configured OSS without a public CDN only for fake execution', () => {
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'fake',
+      backend: 'oss',
+      ossConfigured: true,
+      publicBaseUrl: 'http://127.0.0.1:3001/uploads',
+    })).toMatchObject({ ready: true, backend: 'oss', publicHttps: false });
+
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'paid-provider',
+      backend: 'oss',
+      ossConfigured: true,
+      publicBaseUrl: 'http://127.0.0.1:3001/uploads',
+    })).toMatchObject({ ready: false, backend: 'oss', publicHttps: false });
+
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'paid-provider',
+      backend: 'oss',
+      ossConfigured: true,
+      publicBaseUrl: 'https://cdn.example.com/media',
+    })).toMatchObject({ ready: true, backend: 'oss', publicHttps: true });
+
+    expect(normalizeAiImageSuiteOssCdnDomain('cdn.example.com/media/')).toBe(
+      'https://cdn.example.com/media',
+    );
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'paid-provider',
+      backend: 'oss',
+      ossConfigured: true,
+      publicBaseUrl: normalizeAiImageSuiteOssCdnDomain('cdn.example.com/media/'),
+    })).toMatchObject({ ready: true, backend: 'oss', publicHttps: true });
+
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'paid-provider',
+      backend: 'oss',
+      ossConfigured: true,
+      publicBaseUrl: 'app.example.com',
+    })).toMatchObject({ ready: false, backend: 'oss', publicHttps: false });
+
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'fake',
+      backend: 'ozon-cdn',
+      ossConfigured: false,
+      publicBaseUrl: 'https://cdn.ozon.example/media',
+    })).toMatchObject({ ready: false, backend: 'ozon-cdn' });
+
+    expect(resolveAiImageSuiteReferenceStorageReadiness({
+      provider: 'fake',
+      backend: 'local',
+      ossConfigured: false,
+      publicBaseUrl: '/uploads',
+    })).toMatchObject({ ready: false, backend: 'local', publicHttps: false });
+  });
+});
 
 describe('AI image suite reference internalization', () => {
   beforeEach(async () => {
@@ -224,6 +300,35 @@ describe('AI image suite reference internalization', () => {
     const storage = await deps.getStorage.mock.results[0]!.value;
     const upload = vi.mocked((await storage).uploadBuffer);
     expect(upload.mock.calls[0]?.[3].idempotencyKey).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('stops before download when preparation lease ownership is lost', async () => {
+    const repo = repository();
+    const deps = dependencies(repo);
+    deps.preparationLease = {
+      async runExclusive<T>(
+        _scope: Parameters<AiImageSuitePreparationLease['runExclusive']>[0],
+        work: (guard: AiImageSuitePreparationLeaseGuard) => Promise<T>,
+      ): Promise<T> {
+        return await work({
+          ensureOwned: async () => {
+            throw new AiImageSuitePreparationLeaseError(
+              'AI_MEDIA_SUITE_PREPARATION_LEASE_LOST',
+              'lease expired',
+            );
+          },
+        });
+      },
+      async isReady() { return true; },
+    };
+
+    await expect(createAiImageSuiteReferenceService(deps).internalize(input)).rejects.toMatchObject({
+      code: 'AI_MEDIA_SUITE_REFERENCE_PREPARATION_UNAVAILABLE',
+      statusCode: 503,
+    });
+    expect(deps.download).not.toHaveBeenCalled();
+    expect(repo.createAsset).not.toHaveBeenCalled();
+    expect(repo.commitBindings).not.toHaveBeenCalled();
   });
 
   it('reuses a fully frozen source asset without storage or network access', async () => {

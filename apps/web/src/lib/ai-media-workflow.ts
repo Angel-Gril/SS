@@ -414,6 +414,22 @@ export function formatAiMediaPlanningSlotKey(value: string): string {
   return value.replaceAll(SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY, '商品级');
 }
 
+const AI_MEDIA_PLANNING_GOAL_LABELS: Record<string, string> = {
+  sku_hero: 'SKU 主图',
+  scene: '场景图',
+  detail: '细节图',
+  function: '功能图',
+  fitment: '适配图',
+  spec: '规格图',
+  package: '包装图',
+  poster: '海报图',
+};
+
+export function formatAiMediaPlanningGoal(value: string): string {
+  const normalized = value.trim();
+  return AI_MEDIA_PLANNING_GOAL_LABELS[normalized.toLowerCase()] || normalized || '未命名槽位';
+}
+
 export function buildAiMediaPlanReviewRequest(input: {
   expectedRevision: number;
   operationKey: string;
@@ -428,6 +444,686 @@ export function buildAiMediaPlanReviewRequest(input: {
   const note = input.note?.trim() || null;
   if (note && note.length > 2_000) throw new Error('审核备注不能超过 2000 个字符');
   return { expectedRevision: input.expectedRevision, operationKey, decision: input.decision, note };
+}
+
+export type AiMediaSuiteStatus =
+  | 'PLANNED' | 'QUEUED' | 'RUNNING' | 'PARTIAL_FAILURE' | 'FAILED'
+  | 'SUCCEEDED' | 'CANCEL_REQUESTED' | 'CANCELLED';
+export type AiMediaSuiteSlotStatus =
+  | 'PLANNED' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  | 'CANCEL_REQUESTED' | 'CANCELLED';
+
+export interface AiMediaSuiteReadiness {
+  suiteEnabled: boolean;
+  workflowEnabled: boolean;
+  webMediaEnabled: boolean;
+  provider: {
+    provider: string | null;
+    model: string | null;
+    evidenceLevel: 'local-test' | 'adapter-characterized' | 'sandbox-verified' | null;
+    ready: boolean;
+  };
+  services: {
+    references: boolean;
+    prompts: boolean;
+    materialization: boolean;
+    execution: boolean;
+    runtime: boolean;
+    queue: boolean;
+  };
+  storage: {
+    ready: boolean;
+    backend: string | null;
+    publicHttps: boolean;
+  };
+  ready: boolean;
+  testOnly: boolean;
+  reasonCode: string;
+  reason: string;
+}
+
+export interface AiMediaSuitePreview {
+  version: string;
+  planId: string;
+  planVersionId: string;
+  planRevision: number;
+  provider: string;
+  model: string;
+  pricingVersion: string;
+  concurrencyLimit: number;
+  itemCount: number;
+  estimatedCostCents: number;
+  maximumCostCents: number;
+  previewHash: string;
+  slots: Array<{
+    ordinal: number;
+    slotKey: string;
+    goal: string;
+    ownership: { level: 'sku' | 'compatibility_group'; key: string };
+    compatibilityGroupKey: string | null;
+    references: Array<{
+      candidateId: string;
+      source: {
+        width: number | null;
+        height: number | null;
+        mimeType: string | null;
+        role: string;
+        skuKeys: string[];
+      };
+    }>;
+    estimatedCostCents: number;
+    maximumCostCents: number;
+  }>;
+}
+
+export interface AiMediaSuiteOutputAsset {
+  id: string;
+  url: string;
+  mimeType: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface AiMediaSuiteSlot {
+  id: string;
+  ordinal: number;
+  slotKey: string;
+  goal: string;
+  ownership: { level: 'sku' | 'compatibility_group'; key: string };
+  compatibilityGroupKey: string | null;
+  status: AiMediaSuiteSlotStatus;
+  attempt: number;
+  revision: number;
+  childWorkflowId: string | null;
+  referenceCandidateIds: string[];
+  diagnostics: string[];
+  estimatedCostCents: number;
+  maximumCostCents: number;
+  errorCode: string | null;
+  outputAssets: AiMediaSuiteOutputAsset[];
+}
+
+export interface AiMediaSuite {
+  id: string;
+  planId: string;
+  planVersionId: string;
+  status: AiMediaSuiteStatus;
+  revision: number;
+  previewHash: string | null;
+  provider: string;
+  model: string;
+  pricingVersion: string;
+  itemCount: number;
+  estimatedCostCents: number;
+  maximumCostCents: number;
+  concurrencyLimit: number;
+  cancelRequestedAt: string | null;
+  completedAt: string | null;
+  counts: {
+    planned: number;
+    queued: number;
+    running: number;
+    succeeded: number;
+    failed: number;
+    cancelRequested: number;
+    cancelled: number;
+  };
+  createdAt: string;
+  updatedAt: string;
+  slots: AiMediaSuiteSlot[];
+}
+
+const AI_MEDIA_SUITE_MAX_ITEMS = 25;
+const AI_MEDIA_SUITE_MAX_REFERENCES = 20;
+const AI_MEDIA_SUITE_MAX_OUTPUTS = 1;
+const AI_MEDIA_SUITE_HASH = /^[a-f0-9]{64}$/u;
+const AI_MEDIA_SUITE_PUBLIC_CODE = /^[A-Z][A-Z0-9_]{0,99}$/u;
+const AI_MEDIA_SUITE_STATUSES: readonly AiMediaSuiteStatus[] = [
+  'PLANNED', 'QUEUED', 'RUNNING', 'PARTIAL_FAILURE', 'FAILED',
+  'SUCCEEDED', 'CANCEL_REQUESTED', 'CANCELLED',
+];
+const AI_MEDIA_SUITE_SLOT_STATUSES: readonly AiMediaSuiteSlotStatus[] = [
+  'PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED',
+  'CANCEL_REQUESTED', 'CANCELLED',
+];
+
+function suiteSafeInteger(value: unknown, minimum = 0): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= minimum ? Number(value) : null;
+}
+
+function suiteNullableDimension(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  const normalized = suiteSafeInteger(value, 1);
+  return normalized === null ? undefined : normalized;
+}
+
+function suiteNullableText(value: unknown, max: number): string | null | undefined {
+  if (value === null) return null;
+  const normalized = planningText(value, max);
+  return normalized === null ? undefined : normalized;
+}
+
+function suiteDate(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  const normalized = planningText(value, 128);
+  return normalized && Number.isFinite(Date.parse(normalized)) ? normalized : undefined;
+}
+
+function suitePublicCode(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  const normalized = planningText(value, 100);
+  return normalized && AI_MEDIA_SUITE_PUBLIC_CODE.test(normalized) ? normalized : undefined;
+}
+
+export function normalizeAiMediaSuiteReadiness(value: unknown): AiMediaSuiteReadiness | null {
+  const root = planningObject(value);
+  const provider = planningObject(root?.provider);
+  const services = planningObject(root?.services);
+  const storage = planningObject(root?.storage);
+  if (!root || !provider || !services || !storage) return null;
+  const providerName = suiteNullableText(provider.provider, 100);
+  const model = suiteNullableText(provider.model, 200);
+  const reasonCode = planningText(root.reasonCode, 100);
+  const reason = planningText(root.reason, 1_000);
+  const evidenceLevel = provider.evidenceLevel;
+  const storageBackend = suiteNullableText(storage.backend, 100);
+  if (providerName === undefined || model === undefined || !reasonCode || !reason
+    || storageBackend === undefined
+    || !AI_MEDIA_SUITE_PUBLIC_CODE.test(reasonCode)
+    || (evidenceLevel !== null
+      && evidenceLevel !== 'local-test'
+      && evidenceLevel !== 'adapter-characterized'
+      && evidenceLevel !== 'sandbox-verified')) return null;
+  const booleans = [
+    root.suiteEnabled, root.workflowEnabled, root.webMediaEnabled, root.ready, root.testOnly,
+    provider.ready, services.references, services.prompts, services.materialization,
+    services.execution, services.runtime, services.queue, storage.ready, storage.publicHttps,
+  ];
+  if (booleans.some((entry) => typeof entry !== 'boolean')) return null;
+  if ((provider.ready === true || root.ready === true)
+    && (!providerName || !model || !evidenceLevel)) return null;
+  if (root.ready === true && (
+    root.suiteEnabled !== true || root.workflowEnabled !== true || root.webMediaEnabled !== true
+    || provider.ready !== true || services.references !== true || services.prompts !== true
+    || services.materialization !== true || services.execution !== true
+    || services.runtime !== true || services.queue !== true || storage.ready !== true
+  )) return null;
+  return {
+    suiteEnabled: root.suiteEnabled as boolean,
+    workflowEnabled: root.workflowEnabled as boolean,
+    webMediaEnabled: root.webMediaEnabled as boolean,
+    provider: {
+      provider: providerName,
+      model,
+      evidenceLevel,
+      ready: provider.ready as boolean,
+    },
+    services: {
+      references: services.references as boolean,
+      prompts: services.prompts as boolean,
+      materialization: services.materialization as boolean,
+      execution: services.execution as boolean,
+      runtime: services.runtime as boolean,
+      queue: services.queue as boolean,
+    },
+    storage: {
+      ready: storage.ready as boolean,
+      backend: storageBackend,
+      publicHttps: storage.publicHttps as boolean,
+    },
+    ready: root.ready as boolean,
+    testOnly: root.testOnly as boolean,
+    reasonCode,
+    reason,
+  };
+}
+
+export function normalizeAiMediaSuitePreview(value: unknown): AiMediaSuitePreview | null {
+  const root = planningObject(value);
+  if (!root || !Array.isArray(root.slots) || root.slots.length < 1
+    || root.slots.length > AI_MEDIA_SUITE_MAX_ITEMS) return null;
+  const version = planningText(root.version, 100);
+  const planId = planningText(root.planId, 200);
+  const planVersionId = planningText(root.planVersionId, 200);
+  const provider = planningText(root.provider, 100);
+  const model = planningText(root.model, 200);
+  const pricingVersion = planningText(root.pricingVersion, 200);
+  const planRevision = suiteSafeInteger(root.planRevision, 1);
+  const concurrencyLimit = suiteSafeInteger(root.concurrencyLimit, 1);
+  const itemCount = suiteSafeInteger(root.itemCount, 1);
+  const estimatedCostCents = suiteSafeInteger(root.estimatedCostCents);
+  const maximumCostCents = suiteSafeInteger(root.maximumCostCents);
+  const previewHash = planningText(root.previewHash, 64);
+  if (!version || !planId || !planVersionId || !provider || !model || !pricingVersion
+    || planRevision === null || concurrencyLimit === null || itemCount === null
+    || estimatedCostCents === null || maximumCostCents === null
+    || maximumCostCents < estimatedCostCents || !previewHash
+    || !AI_MEDIA_SUITE_HASH.test(previewHash) || itemCount !== root.slots.length) return null;
+  const slots: AiMediaSuitePreview['slots'] = [];
+  const ordinals = new Set<number>();
+  const slotKeys = new Set<string>();
+  for (const entry of root.slots) {
+    const slot = planningObject(entry);
+    const ownership = planningObject(slot?.ownership);
+    const ordinal = suiteSafeInteger(slot?.ordinal);
+    const slotKey = planningText(slot?.slotKey, 1_024);
+    const goal = planningText(slot?.goal, 200);
+    const ownershipKey = planningText(ownership?.key, 500);
+    const compatibilityGroupKey = suiteNullableText(slot?.compatibilityGroupKey, 500);
+    const slotEstimated = suiteSafeInteger(slot?.estimatedCostCents);
+    const slotMaximum = suiteSafeInteger(slot?.maximumCostCents);
+    if (!slot || !ownership || ordinal === null || !slotKey || !goal || !ownershipKey
+      || (ownership.level !== 'sku' && ownership.level !== 'compatibility_group')
+      || compatibilityGroupKey === undefined || slotEstimated === null || slotMaximum === null
+      || slotMaximum < slotEstimated || ordinals.has(ordinal) || slotKeys.has(slotKey)
+      || !Array.isArray(slot.references) || slot.references.length < 1
+      || slot.references.length > AI_MEDIA_SUITE_MAX_REFERENCES) return null;
+    const references: AiMediaSuitePreview['slots'][number]['references'] = [];
+    const candidateIds = new Set<string>();
+    for (const rawReference of slot.references) {
+      const reference = planningObject(rawReference);
+      const source = planningObject(reference?.source);
+      const candidateId = planningText(reference?.candidateId, 500);
+      const width = suiteNullableDimension(source?.width);
+      const height = suiteNullableDimension(source?.height);
+      const mimeType = suiteNullableText(source?.mimeType, 100);
+      const role = planningText(source?.role, 100);
+      if (!reference || !source || !candidateId || candidateIds.has(candidateId)
+        || width === undefined || height === undefined || mimeType === undefined || !role
+        || !Array.isArray(source.skuKeys) || source.skuKeys.length > AI_MEDIA_PLAN_MAX_ITEMS) return null;
+      const skuKeys = planningTextArray(source.skuKeys, AI_MEDIA_PLAN_MAX_ITEMS);
+      if (skuKeys.length !== source.skuKeys.length) return null;
+      candidateIds.add(candidateId);
+      references.push({ candidateId, source: { width, height, mimeType, role, skuKeys } });
+    }
+    ordinals.add(ordinal);
+    slotKeys.add(slotKey);
+    slots.push({
+      ordinal,
+      slotKey,
+      goal,
+      ownership: { level: ownership.level, key: ownershipKey },
+      compatibilityGroupKey,
+      references,
+      estimatedCostCents: slotEstimated,
+      maximumCostCents: slotMaximum,
+    });
+  }
+  slots.sort((left, right) => left.ordinal - right.ordinal);
+  if (slots.some((slot, index) => slot.ordinal !== index)) return null;
+  return {
+    version, planId, planVersionId, planRevision, provider, model, pricingVersion,
+    concurrencyLimit, itemCount, estimatedCostCents, maximumCostCents, previewHash, slots,
+  };
+}
+
+export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
+  const root = planningObject(value);
+  const counts = planningObject(root?.counts);
+  if (!root || !counts || !Array.isArray(root.slots)
+    || root.slots.length < 1 || root.slots.length > AI_MEDIA_SUITE_MAX_ITEMS) return null;
+  const id = planningText(root.id, 200);
+  const planId = planningText(root.planId, 200);
+  const planVersionId = planningText(root.planVersionId, 200);
+  const status = root.status;
+  const revision = suiteSafeInteger(root.revision, 1);
+  const previewHashValue = suiteNullableText(root.previewHash ?? null, 64);
+  const provider = planningText(root.provider, 100);
+  const model = planningText(root.model, 200);
+  const pricingVersion = planningText(root.pricingVersion, 100);
+  const itemCount = suiteSafeInteger(root.itemCount, 1);
+  const estimatedCostCents = suiteSafeInteger(root.estimatedCostCents);
+  const maximumCostCents = suiteSafeInteger(root.maximumCostCents);
+  const concurrencyLimit = root.concurrencyLimit === null
+    ? null
+    : suiteSafeInteger(root.concurrencyLimit, 1);
+  const cancelRequestedAt = suiteDate(root.cancelRequestedAt ?? null);
+  const completedAt = suiteDate(root.completedAt ?? null);
+  const createdAt = suiteDate(root.createdAt);
+  const updatedAt = suiteDate(root.updatedAt);
+  if (!id || !planId || !planVersionId || !provider || !model || !pricingVersion
+    || !AI_MEDIA_SUITE_STATUSES.includes(status as AiMediaSuiteStatus)
+    || revision === null || previewHashValue === undefined
+    || (previewHashValue !== null && !AI_MEDIA_SUITE_HASH.test(previewHashValue))
+    || itemCount === null || itemCount !== root.slots.length
+    || estimatedCostCents === null || maximumCostCents === null
+    || maximumCostCents < estimatedCostCents || concurrencyLimit === null
+    || cancelRequestedAt === undefined || completedAt === undefined
+    || !createdAt || !updatedAt) return null;
+  const normalizedCounts = {
+    planned: suiteSafeInteger(counts.planned),
+    queued: suiteSafeInteger(counts.queued),
+    running: suiteSafeInteger(counts.running),
+    succeeded: suiteSafeInteger(counts.succeeded),
+    failed: suiteSafeInteger(counts.failed),
+    cancelRequested: suiteSafeInteger(counts.cancelRequested),
+    cancelled: suiteSafeInteger(counts.cancelled),
+  };
+  if (Object.values(normalizedCounts).some((entry) => entry === null)
+    || Object.values(normalizedCounts).reduce<number>((total, entry) => total + (entry ?? 0), 0) !== itemCount) return null;
+  const slots: AiMediaSuiteSlot[] = [];
+  const slotIds = new Set<string>();
+  const ordinals = new Set<number>();
+  for (const entry of root.slots) {
+    const slot = planningObject(entry);
+    const ownership = planningObject(slot?.ownership);
+    const slotId = planningText(slot?.id, 200);
+    const ordinal = suiteSafeInteger(slot?.ordinal);
+    const slotKey = planningText(slot?.slotKey, 1_024);
+    const goal = planningText(slot?.goal, 200);
+    const ownershipKey = planningText(ownership?.key, 500);
+    const compatibilityGroupKey = suiteNullableText(slot?.compatibilityGroupKey, 500);
+    const slotStatus = slot?.status;
+    const attempt = suiteSafeInteger(slot?.attempt);
+    const slotRevision = suiteSafeInteger(slot?.revision, 1);
+    const childWorkflowId = suiteNullableText(slot?.childWorkflowId, 200);
+    const slotEstimated = suiteSafeInteger(slot?.estimatedCostCents);
+    const slotMaximum = suiteSafeInteger(slot?.maximumCostCents);
+    const errorCode = suitePublicCode(slot?.errorCode ?? null);
+    if (!slot || !ownership || !slotId || ordinal === null || !slotKey || !goal || !ownershipKey
+      || slotIds.has(slotId) || ordinals.has(ordinal)
+      || (ownership.level !== 'sku' && ownership.level !== 'compatibility_group')
+      || compatibilityGroupKey === undefined
+      || !AI_MEDIA_SUITE_SLOT_STATUSES.includes(slotStatus as AiMediaSuiteSlotStatus)
+      || attempt === null || slotRevision === null || childWorkflowId === undefined
+      || slotEstimated === null || slotMaximum === null || slotMaximum < slotEstimated
+      || errorCode === undefined || !Array.isArray(slot.referenceCandidateIds)
+      || slot.referenceCandidateIds.length > AI_MEDIA_SUITE_MAX_REFERENCES
+      || !Array.isArray(slot.diagnostics) || slot.diagnostics.length > 20
+      || !Array.isArray(slot.outputAssets) || slot.outputAssets.length > AI_MEDIA_SUITE_MAX_OUTPUTS) return null;
+    const referenceCandidateIds = planningTextArray(slot.referenceCandidateIds, AI_MEDIA_SUITE_MAX_REFERENCES);
+    const diagnostics = planningTextArray(slot.diagnostics, 20);
+    if (referenceCandidateIds.length !== slot.referenceCandidateIds.length
+      || diagnostics.length !== slot.diagnostics.length
+      || diagnostics.some((code) => !AI_MEDIA_SUITE_PUBLIC_CODE.test(code))) return null;
+    const outputAssets: AiMediaSuiteOutputAsset[] = [];
+    for (const entryAsset of slot.outputAssets) {
+      const asset = planningObject(entryAsset);
+      const assetId = planningText(asset?.id, 200);
+      const url = planningText(asset?.url, 8_000);
+      const mimeType = suiteNullableText(asset?.mimeType, 200);
+      const width = suiteNullableDimension(asset?.width);
+      const height = suiteNullableDimension(asset?.height);
+      if (!asset || !assetId || !url || mimeType === undefined
+        || width === undefined || height === undefined) return null;
+      outputAssets.push({ id: assetId, url, mimeType, width, height });
+    }
+    slotIds.add(slotId);
+    ordinals.add(ordinal);
+    slots.push({
+      id: slotId,
+      ordinal,
+      slotKey,
+      goal,
+      ownership: { level: ownership.level, key: ownershipKey },
+      compatibilityGroupKey,
+      status: slotStatus as AiMediaSuiteSlotStatus,
+      attempt,
+      revision: slotRevision,
+      childWorkflowId,
+      referenceCandidateIds,
+      diagnostics,
+      estimatedCostCents: slotEstimated,
+      maximumCostCents: slotMaximum,
+      errorCode,
+      outputAssets,
+    });
+  }
+  slots.sort((left, right) => left.ordinal - right.ordinal);
+  if (slots.some((slot, index) => slot.ordinal !== index)) return null;
+  const derivedCounts = {
+    planned: slots.filter((slot) => slot.status === 'PLANNED').length,
+    queued: slots.filter((slot) => slot.status === 'QUEUED').length,
+    running: slots.filter((slot) => slot.status === 'RUNNING').length,
+    succeeded: slots.filter((slot) => slot.status === 'SUCCEEDED').length,
+    failed: slots.filter((slot) => slot.status === 'FAILED').length,
+    cancelRequested: slots.filter((slot) => slot.status === 'CANCEL_REQUESTED').length,
+    cancelled: slots.filter((slot) => slot.status === 'CANCELLED').length,
+  };
+  if (Object.entries(derivedCounts).some(([key, count]) => (
+    count !== normalizedCounts[key as keyof typeof normalizedCounts]
+  ))) return null;
+  return {
+    id,
+    planId,
+    planVersionId,
+    status: status as AiMediaSuiteStatus,
+    revision,
+    previewHash: previewHashValue,
+    provider,
+    model,
+    pricingVersion,
+    itemCount,
+    estimatedCostCents,
+    maximumCostCents,
+    concurrencyLimit,
+    cancelRequestedAt,
+    completedAt,
+    counts: normalizedCounts as AiMediaSuite['counts'],
+    createdAt,
+    updatedAt,
+    slots,
+  };
+}
+
+export interface AiMediaSuiteActionState {
+  planCurrent: boolean;
+  suiteBelongsToPlan: boolean;
+  suiteCurrent: boolean;
+  blockedByActiveSuite: boolean;
+  canPreview: boolean;
+  canClaim: boolean;
+  canPrepare: boolean;
+  canDispatch: boolean;
+  canCancel: boolean;
+  shouldPoll: boolean;
+  terminal: boolean;
+  retryableSlotIds: string[];
+}
+
+export function isAiMediaSuitePlanCurrent(plan: AiMediaPlanRecord): boolean {
+  return plan.reviewStatus === 'APPROVED'
+    && !plan.staleAt
+    && plan.sourceCurrent === true
+    && Boolean(plan.currentVersionId)
+    && plan.currentVersionId === plan.approvedVersionId;
+}
+
+export function resolveAiMediaSuiteActions(input: {
+  plan: AiMediaPlanRecord;
+  readiness: AiMediaSuiteReadiness | null;
+  preview: AiMediaSuitePreview | null;
+  suite: AiMediaSuite | null;
+  activeSuite?: AiMediaSuite | null;
+}): AiMediaSuiteActionState {
+  const { plan, readiness, preview, suite, activeSuite = null } = input;
+  const planCurrent = isAiMediaSuitePlanCurrent(plan);
+  const writesReady = planCurrent && readiness?.ready === true;
+  const suiteBelongsToPlan = Boolean(suite && suite.planId === plan.id);
+  const suiteCurrent = Boolean(
+    suiteBelongsToPlan && plan.currentVersionId && suite?.planVersionId === plan.currentVersionId,
+  );
+  const status = suiteBelongsToPlan ? suite!.status : null;
+  const blockedByActiveSuite = Boolean(
+    activeSuite
+    && activeSuite.planId === plan.id
+    && activeSuite.id !== suite?.id
+    && ((activeSuite.status === 'PLANNED' && activeSuite.revision >= 4) || activeSuite.status === 'QUEUED'
+      || activeSuite.status === 'RUNNING' || activeSuite.status === 'CANCEL_REQUESTED'),
+  );
+  const retryableSlotIds = writesReady && suiteCurrent
+    && (status === 'PARTIAL_FAILURE' || status === 'FAILED')
+    ? suite!.slots.filter((slot) => slot.status === 'FAILED').map((slot) => slot.id)
+    : [];
+  return {
+    planCurrent,
+    suiteBelongsToPlan,
+    suiteCurrent,
+    blockedByActiveSuite,
+    canPreview: writesReady && !suiteCurrent && !blockedByActiveSuite,
+    canClaim: writesReady && !suiteCurrent && !blockedByActiveSuite && Boolean(preview
+      && preview.planId === plan.id
+      && preview.planVersionId === plan.currentVersionId
+      && preview.planRevision === plan.revision),
+    canPrepare: writesReady && suiteCurrent && status === 'PLANNED'
+      && suite!.revision >= 1 && suite!.revision < 4,
+    canDispatch: writesReady && suiteCurrent && status === 'PLANNED' && suite!.revision === 4,
+    canCancel: suiteBelongsToPlan && suite!.revision >= 4
+      && (status === 'PLANNED' || status === 'QUEUED' || status === 'RUNNING'),
+    shouldPoll: suiteBelongsToPlan
+      && (status === 'QUEUED' || status === 'RUNNING' || status === 'CANCEL_REQUESTED'),
+    terminal: suiteBelongsToPlan
+      && (status === 'PARTIAL_FAILURE' || status === 'FAILED'
+        || status === 'SUCCEEDED' || status === 'CANCELLED'),
+    retryableSlotIds,
+  };
+}
+
+export type AiMediaSuitePreparationDecision = 'dispatch' | 'reconcile' | 'incomplete' | 'invalid';
+
+export function resolveAiMediaSuitePreparationDecision(input: {
+  plan: AiMediaPlanRecord;
+  suite: AiMediaSuite | null | undefined;
+}): AiMediaSuitePreparationDecision {
+  const { plan, suite } = input;
+  if (!suite
+    || suite.planId !== plan.id
+    || !plan.currentVersionId
+    || suite.planVersionId !== plan.currentVersionId) return 'invalid';
+  if (suite.status === 'PLANNED' && suite.revision === 4) return 'dispatch';
+  if (suite.revision >= 4) return 'reconcile';
+  return 'incomplete';
+}
+
+export type AiMediaSuiteClaimOutcome = 'accepted' | 'rejected' | 'unknown';
+
+export type AiMediaSuiteClaimDecision =
+  | { kind: 'proceed'; suite: AiMediaSuite }
+  | { kind: 'manual-continue'; suite: AiMediaSuite }
+  | { kind: 'rejected' | 'uncertain'; suite: null };
+
+export function resolveAiMediaSuiteClaimDecision(input: {
+  outcome: AiMediaSuiteClaimOutcome;
+  plan: AiMediaPlanRecord;
+  preview: AiMediaSuitePreview;
+  claimedSuite?: AiMediaSuite | null;
+  recoveredSuite?: AiMediaSuite | null;
+}): AiMediaSuiteClaimDecision {
+  const { outcome, plan, preview, claimedSuite = null, recoveredSuite = null } = input;
+  const acceptedClaimMatches = outcome === 'accepted'
+    && preview.planId === plan.id
+    && preview.planVersionId === plan.currentVersionId
+    && preview.planRevision === plan.revision
+    && claimedSuite?.planId === preview.planId
+    && claimedSuite.planVersionId === preview.planVersionId
+    && claimedSuite.previewHash === preview.previewHash;
+  if (acceptedClaimMatches) return { kind: 'proceed', suite: claimedSuite };
+  if (outcome === 'accepted') return { kind: 'uncertain', suite: null };
+
+  const recoveredCurrentSuite = recoveredSuite?.planId === plan.id
+    && Boolean(plan.currentVersionId)
+    && recoveredSuite.planVersionId === plan.currentVersionId;
+  if (recoveredCurrentSuite) return { kind: 'manual-continue', suite: recoveredSuite };
+  return { kind: outcome === 'rejected' ? 'rejected' : 'uncertain', suite: null };
+}
+
+export function startAiMediaSuitePolling<TimerHandle>(input: {
+  delayMs: number;
+  schedule: (callback: () => void, delayMs: number) => TimerHandle;
+  cancel: (handle: TimerHandle) => void;
+  canPoll: () => boolean;
+  poll: () => unknown | Promise<unknown>;
+  onError?: (error: unknown) => void;
+}): () => void {
+  if (!Number.isSafeInteger(input.delayMs) || input.delayMs < 0) {
+    throw new Error('套图轮询间隔无效');
+  }
+  let stopped = false;
+  let scheduled = false;
+  let timer: TimerHandle | null = null;
+
+  const scheduleNext = () => {
+    if (stopped) return;
+    scheduled = true;
+    timer = input.schedule(() => {
+      scheduled = false;
+      timer = null;
+      if (stopped) return;
+      void (async () => {
+        try {
+          if (input.canPoll()) await input.poll();
+        } catch (error) {
+          input.onError?.(error);
+        } finally {
+          scheduleNext();
+        }
+      })();
+    }, input.delayMs);
+  };
+
+  scheduleNext();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (scheduled && timer !== null) input.cancel(timer);
+    scheduled = false;
+    timer = null;
+  };
+}
+
+function suiteOperationKey(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length < 8 || normalized.length > 128) throw new Error('套图操作标识无效');
+  return normalized;
+}
+
+export function buildAiMediaSuitePreviewRequest(planId: string) {
+  const normalized = planId.trim();
+  if (!normalized || normalized.length > 200) throw new Error('图片策展计划无效');
+  return { planId: normalized };
+}
+
+export function buildAiMediaSuiteClaimRequest(input: {
+  plan: AiMediaPlanRecord;
+  preview: AiMediaSuitePreview;
+  idempotencyKey: string;
+}) {
+  if (!isAiMediaSuitePlanCurrent(input.plan)
+    || input.preview.planId !== input.plan.id
+    || input.preview.planVersionId !== input.plan.currentVersionId
+    || input.preview.planRevision !== input.plan.revision) {
+    throw new Error('套图预览已失效，请刷新后重试');
+  }
+  return {
+    planId: input.plan.id,
+    expectedPlanRevision: input.preview.planRevision,
+    expectedPreviewHash: input.preview.previewHash,
+    idempotencyKey: suiteOperationKey(input.idempotencyKey),
+  };
+}
+
+export function buildAiMediaSuitePrepareRequest(operationKey: string) {
+  return { operationKey: suiteOperationKey(operationKey) };
+}
+
+export function buildAiMediaSuiteDispatchRequest(suite: AiMediaSuite, operationKey: string) {
+  if (suite.status !== 'PLANNED' || suite.revision !== 4) {
+    throw new Error('套图任务尚未完成准备或已开始执行');
+  }
+  return { expectedRevision: suite.revision, operationKey: suiteOperationKey(operationKey) };
+}
+
+export function buildAiMediaSuiteCancelRequest(suite: AiMediaSuite, operationKey: string) {
+  if (suite.revision < 4
+    || (suite.status !== 'PLANNED' && suite.status !== 'QUEUED' && suite.status !== 'RUNNING')) {
+    throw new Error('当前套图任务不能取消');
+  }
+  return { expectedRevision: suite.revision, operationKey: suiteOperationKey(operationKey) };
+}
+
+export function buildAiMediaSuiteRetryRequest(slot: AiMediaSuiteSlot, operationKey: string) {
+  if (slot.status !== 'FAILED') throw new Error('仅失败的套图槽位可以重试');
+  return { expectedSlotRevision: slot.revision, operationKey: suiteOperationKey(operationKey) };
 }
 
 export function describeAiMediaReadiness(

@@ -146,6 +146,9 @@ export interface AiImageSuiteRecord {
   status: string;
   revision: number;
   previewHash: string;
+  provider: string;
+  model: string;
+  pricingVersion: string;
   itemCount: number;
   estimatedCostCents: number;
   maximumCostCents: number;
@@ -164,10 +167,21 @@ export interface AiImageSuiteRepository {
     planId: string;
   }): Promise<AiImageSuitePlanAuthority | null>;
   claimApproved(input: ClaimAiImageSuiteInput): Promise<{
-    kind: 'created' | 'existing' | 'conflict' | 'claimed' | 'not-found' | 'not-approved' | 'stale' | 'preview-changed';
+    kind:
+      | 'created'
+      | 'existing'
+      | 'conflict'
+      | 'claimed'
+      | 'active-suite-conflict'
+      | 'not-found'
+      | 'not-approved'
+      | 'stale'
+      | 'preview-changed';
     suite: AiImageSuiteRecord | null;
   }>;
   getOwned(id: string, ownerUserId: string): Promise<AiImageSuiteRecord | null>;
+  getCurrentOwnedByPlan(planId: string, ownerUserId: string): Promise<AiImageSuiteRecord | null>;
+  getActiveOwnedByPlan(planId: string, ownerUserId: string): Promise<AiImageSuiteRecord | null>;
 }
 
 export type AiImageSuiteErrorCode =
@@ -180,6 +194,7 @@ export type AiImageSuiteErrorCode =
   | 'AI_MEDIA_SUITE_PROVIDER_NOT_READY'
   | 'AI_MEDIA_SUITE_PREVIEW_CHANGED'
   | 'AI_MEDIA_SUITE_IDEMPOTENCY_CONFLICT'
+  | 'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT'
   | 'AI_MEDIA_SUITE_ALREADY_CLAIMED';
 
 export class AiImageSuiteError extends Error {
@@ -225,7 +240,9 @@ function safeTotal(unit: number, count: number): number {
   return total;
 }
 
-function normalizeProviderConfig(config: AiImageSuiteProviderConfig): AiImageSuiteProviderConfig {
+export function normalizeAiImageSuiteProviderConfig(
+  config: AiImageSuiteProviderConfig,
+): AiImageSuiteProviderConfig {
   const provider = exactString(config.provider, 'provider', 100);
   const model = exactString(config.model, 'model', 200);
   const providerConfigHash = sha256(config.providerConfigHash, 'providerConfigHash');
@@ -262,7 +279,7 @@ export function createAiImageSuitePreview(
   authority: AiImageSuitePlanAuthority,
   rawProviderConfig: AiImageSuiteProviderConfig,
 ): AiImageSuitePreview {
-  const providerConfig = normalizeProviderConfig(rawProviderConfig);
+  const providerConfig = normalizeAiImageSuiteProviderConfig(rawProviderConfig);
   const payload = planPayloadSchema.safeParse(authority.planPayload);
   const input = inputSnapshotSchema.safeParse(authority.inputSnapshot);
   if (!payload.success || !input.success) {
@@ -396,7 +413,7 @@ export function createAiImageSuiteService(repository: AiImageSuiteRepository) {
       }
       const result = await repository.claimApproved({
         ...input,
-        providerConfig: normalizeProviderConfig(input.providerConfig),
+        providerConfig: normalizeAiImageSuiteProviderConfig(input.providerConfig),
       });
       if (result.kind === 'not-found') {
         throw new AiImageSuiteError('AI_MEDIA_SUITE_NOT_FOUND', 'AI media plan was not found', 404);
@@ -416,14 +433,35 @@ export function createAiImageSuiteService(repository: AiImageSuiteRepository) {
       if (result.kind === 'claimed') {
         throw new AiImageSuiteError('AI_MEDIA_SUITE_ALREADY_CLAIMED', 'Approved plan version already has a suite claim', 409);
       }
+      if (result.kind === 'active-suite-conflict') {
+        throw new AiImageSuiteError(
+          'AI_MEDIA_SUITE_PLAN_ACTIVE_CONFLICT',
+          'Another plan version already has an actionable AI media suite',
+          409,
+        );
+      }
       if (!result.suite) throw new AiImageSuiteError('AI_MEDIA_SUITE_PREVIEW_CHANGED', 'AI media suite preview changed before claim', 409);
       return { suite: result.suite, replayed: result.kind === 'existing' };
     },
 
     async get(id: string, ownerUserId: string) {
+      exactString(id, 'suiteId', 200);
+      exactString(ownerUserId, 'ownerUserId', 200);
       const suite = await repository.getOwned(id, ownerUserId);
       if (!suite) throw new AiImageSuiteError('AI_MEDIA_SUITE_NOT_FOUND', 'AI media suite was not found', 404);
       return suite;
+    },
+
+    async getCurrentByPlan(planId: string, ownerUserId: string) {
+      exactString(planId, 'planId', 200);
+      exactString(ownerUserId, 'ownerUserId', 200);
+      return repository.getCurrentOwnedByPlan(planId, ownerUserId);
+    },
+
+    async getActiveByPlan(planId: string, ownerUserId: string) {
+      exactString(planId, 'planId', 200);
+      exactString(ownerUserId, 'ownerUserId', 200);
+      return repository.getActiveOwnedByPlan(planId, ownerUserId);
     },
   };
 }

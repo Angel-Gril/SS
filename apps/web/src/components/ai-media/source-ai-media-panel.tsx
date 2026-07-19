@@ -422,7 +422,7 @@ export function SourceAiMediaPanel({
 
       <SourceAiMediaPlanningPanel
         targetId={target.id}
-        enabled={!disabled}
+        enabled
         planningEnabled={Boolean(capabilities?.webMediaEnabled && capabilities?.workflowEnabled)}
         selectedSkuKeys={selectedSkuKeys}
       />

@@ -2873,7 +2873,7 @@ model MediaAsset {
   ownerUserId             String                 @map("owner_user_id")
   owner                   User                   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   aiImageJobId            String?                @map("ai_image_job_id")
-  aiImageJob              AiImageJob?            @relation(fields: [aiImageJobId], references: [id], onDelete: Restrict)
+  aiImageJob              AiImageJob?            @relation(fields: [aiImageJobId, ownerUserId], references: [id, ownerUserId], onDelete: Restrict)
   kind                    MediaAssetKind         @default(AI_GENERATED)
   sourceCaptureSnapshotId String?                @map("source_capture_snapshot_id")
   sourceCaptureSnapshot   SourceCaptureSnapshot? @relation(fields: [sourceCaptureSnapshotId], references: [id], onDelete: Restrict)
