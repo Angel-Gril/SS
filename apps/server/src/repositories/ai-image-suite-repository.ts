@@ -16,21 +16,57 @@ import {
 } from './ai-media-planning-repository.js';
 
 const suiteInclude = {
+  referenceAssets: {
+    orderBy: { ordinal: 'asc' },
+    take: 25,
+    include: {
+      asset: {
+        select: {
+          id: true,
+          ownerUserId: true,
+          url: true,
+          mimeType: true,
+          width: true,
+          height: true,
+        },
+      },
+    },
+  },
   slots: {
     orderBy: { ordinal: 'asc' },
     include: {
       childWorkflow: {
         select: {
+          id: true,
+          revision: true,
+          reviewStatus: true,
+          selectedOutputAssetId: true,
+          reviewedAt: true,
+          events: {
+            where: { eventType: 'SUITE_CANDIDATE_APPLIED' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: {
+              eventType: true,
+              jobId: true,
+              assetId: true,
+              payload: true,
+              payloadHash: true,
+              createdAt: true,
+            },
+          },
           jobs: {
             orderBy: { workflowAttempt: 'desc' },
             take: 1,
             select: {
+              id: true,
               assets: {
                 orderBy: { createdAt: 'asc' },
                 take: 1,
                 select: {
                   id: true,
                   ownerUserId: true,
+                  aiImageJobId: true,
                   url: true,
                   mimeType: true,
                   width: true,
@@ -70,6 +106,7 @@ function suiteRecord(row: any): AiImageSuiteRecord {
     cancelRequestedAt: row.cancelRequestedAt || null,
     completedAt: row.completedAt || null,
     slots: Array.isArray(row.slots) ? row.slots : [],
+    referenceAssets: Array.isArray(row.referenceAssets) ? row.referenceAssets : [],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

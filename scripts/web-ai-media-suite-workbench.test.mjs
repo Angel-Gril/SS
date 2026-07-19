@@ -7,6 +7,8 @@ import {
   buildAiMediaSuitePrepareRequest,
   buildAiMediaSuitePreviewRequest,
   buildAiMediaSuiteRetryRequest,
+  buildAiMediaSuiteSlotApplyRequest,
+  buildAiMediaSuiteSlotReviewRequest,
   formatAiMediaPlanningGoal,
   normalizeAiMediaSuite,
   normalizeAiMediaSuitePreview,
@@ -14,6 +16,9 @@ import {
   resolveAiMediaSuiteActions,
   resolveAiMediaSuiteClaimDecision,
   resolveAiMediaSuitePreparationDecision,
+  resolveAiMediaSuiteSlotActions,
+  resolveAiMediaSuiteSlotApplyRecovery,
+  resolveAiMediaSuiteSlotReviewRecovery,
   startAiMediaSuitePolling,
 } from '../apps/web/src/lib/ai-media-workflow.ts';
 
@@ -139,11 +144,24 @@ function suitePayload({
       attempt: slotStatus === 'PLANNED' ? 0 : 1,
       revision: revision >= 4 ? 3 : 1,
       childWorkflowId: revision >= 4 ? `workflow-${ordinal + 1}` : null,
+      workflowRevision: revision >= 4 ? 2 : null,
       referenceCandidateIds: ['candidate-1'],
+      referenceAssets: revision >= 2 ? [{
+        candidateId: 'candidate-1',
+        id: 'reference-asset-1',
+        url: '/api/images/reference-asset-1',
+        mimeType: 'image/png',
+        width: 900,
+        height: 1200,
+      }] : [],
       diagnostics: slotStatus === 'FAILED' ? ['PROVIDER_FAILED'] : [],
       estimatedCostCents: 0,
       maximumCostCents: 0,
       errorCode: slotStatus === 'FAILED' ? 'PROVIDER_FAILED' : null,
+      reviewStatus: slotStatus === 'SUCCEEDED' ? 'PENDING' : 'NOT_READY',
+      selectedOutputAssetId: null,
+      reviewedAt: null,
+      application: null,
       outputAssets: slotStatus === 'SUCCEEDED' ? [{
         id: `asset-${ordinal + 1}`,
         url: `/api/images/asset-${ordinal + 1}`,
@@ -204,6 +222,7 @@ assert.equal(prepared.provider, 'fake');
 assert.equal(prepared.model, 'fake-image-suite-v1');
 assert.equal(prepared.pricingVersion, 'provider-free-zero/v1');
 assert.equal(failed.slots[1].outputAssets[0].url, '/api/images/asset-2');
+assert.equal(failed.slots[1].referenceAssets[0].candidateId, 'candidate-1');
 assert.equal('storageKey' in failed.slots[1].outputAssets[0], false);
 assert.equal(normalizeAiMediaSuite({
   ...suitePayload(),
@@ -212,6 +231,18 @@ assert.equal(normalizeAiMediaSuite({
 assert.equal(normalizeAiMediaSuite({
   ...suitePayload(),
   slots: [{ ...suitePayload().slots[0], outputAssets: [{ id: 'asset-1' }] }],
+}), null);
+const missingFrozenReference = suitePayload({ revision: 4 });
+missingFrozenReference.slots[0].referenceAssets = [];
+assert.equal(normalizeAiMediaSuite(missingFrozenReference), null);
+assert.equal(normalizeAiMediaSuite({
+  ...suitePayload({ status: 'SUCCEEDED', revision: 5, slotStatuses: ['SUCCEEDED'] }),
+  slots: [{
+    ...suitePayload({ status: 'SUCCEEDED', revision: 5, slotStatuses: ['SUCCEEDED'] }).slots[0],
+    reviewStatus: 'APPROVED',
+    selectedOutputAssetId: 'other-asset',
+    reviewedAt: '2026-07-20T00:03:00.000Z',
+  }],
 }), null);
 const succeededWithTwoOutputs = suitePayload({
   status: 'SUCCEEDED', revision: 5, slotStatuses: ['SUCCEEDED'],
@@ -238,6 +269,9 @@ assert.equal(resolveAiMediaSuiteActions({
 }).canPreview, false);
 
 const claimed = normalizeAiMediaSuite(suitePayload());
+const claimedWithNullReview = suitePayload();
+claimedWithNullReview.slots[0].reviewStatus = null;
+assert.ok(normalizeAiMediaSuite(claimedWithNullReview));
 const exactClaimed = normalizeAiMediaSuite({
   ...suitePayload(), previewHash: preview.previewHash,
 });
@@ -299,6 +333,106 @@ assert.equal(notBlockedByAbandonedPreparation.canClaim, true);
 const darkOldActions = resolveAiMediaSuiteActions({ plan, readiness: blockedReadiness, preview, suite: oldRunning });
 assert.equal(darkOldActions.canClaim, false);
 assert.equal(darkOldActions.canCancel, true);
+
+const pendingReviewSuite = normalizeAiMediaSuite(suitePayload({
+  status: 'SUCCEEDED', revision: 6, slotStatuses: ['SUCCEEDED'],
+}));
+assert.ok(pendingReviewSuite);
+const approvedReviewPayload = suitePayload({
+  status: 'SUCCEEDED', revision: 7, slotStatuses: ['SUCCEEDED'],
+});
+approvedReviewPayload.slots[0] = {
+  ...approvedReviewPayload.slots[0],
+  workflowRevision: 3,
+  reviewStatus: 'APPROVED',
+  selectedOutputAssetId: 'asset-1',
+  reviewedAt: '2026-07-20T00:03:00.000Z',
+};
+const approvedReviewSuite = normalizeAiMediaSuite(approvedReviewPayload);
+assert.ok(approvedReviewSuite);
+const appliedPayload = structuredClone(approvedReviewPayload);
+appliedPayload.slots[0].workflowRevision = 4;
+appliedPayload.slots[0].application = {
+  jobId: 'job-1', outputAssetId: 'asset-1', appliedAt: '2026-07-20T00:04:00.000Z',
+};
+const appliedSuite = normalizeAiMediaSuite(appliedPayload);
+assert.ok(appliedSuite);
+
+assert.deepEqual(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: true }, suite: pendingReviewSuite, slot: pendingReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}), {
+  candidateCurrent: true, canReview: true, canApply: false, applied: false,
+  viewOnlyReason: null,
+});
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: true }, suite: approvedReviewSuite, slot: approvedReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}).canApply, true);
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: true }, suite: approvedReviewSuite, slot: approvedReviewSuite.slots[0], targetUpdatedAt: null,
+}).canApply, false);
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: true }, suite: appliedSuite, slot: appliedSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}).applied, true);
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan: { ...plan, sourceCurrent: false }, readiness: { ready: true }, suite: pendingReviewSuite,
+  slot: pendingReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}).viewOnlyReason, 'SOURCE_CHANGED');
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: true }, suite: { ...pendingReviewSuite, planVersionId: 'old-version' },
+  slot: pendingReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}).viewOnlyReason, 'HISTORICAL_VERSION');
+assert.equal(resolveAiMediaSuiteSlotActions({
+  plan, readiness: { ready: false }, suite: pendingReviewSuite,
+  slot: pendingReviewSuite.slots[0], targetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}).canReview, false);
+
+assert.deepEqual(buildAiMediaSuiteSlotReviewRequest({
+  slot: pendingReviewSuite.slots[0], outputAssetId: 'asset-1', decision: 'APPROVE',
+  note: '  商品主体一致  ', operationKey: 'suite-review-123',
+}), {
+  expectedWorkflowRevision: 2,
+  operationKey: 'suite-review-123',
+  outputAssetId: 'asset-1',
+  decision: 'APPROVE',
+  note: '商品主体一致',
+});
+assert.deepEqual(buildAiMediaSuiteSlotApplyRequest({
+  slot: approvedReviewSuite.slots[0], operationKey: 'suite-apply-123',
+  expectedTargetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}), {
+  expectedWorkflowRevision: 3,
+  operationKey: 'suite-apply-123',
+  expectedTargetUpdatedAt: '2026-07-20T00:05:00.000Z',
+});
+assert.equal('mode' in buildAiMediaSuiteSlotApplyRequest({
+  slot: approvedReviewSuite.slots[0], operationKey: 'suite-apply-123',
+  expectedTargetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}), false, 'the suite apply endpoint is append-only and accepts no client-selected mode');
+assert.throws(() => buildAiMediaSuiteSlotReviewRequest({
+  slot: approvedReviewSuite.slots[0], outputAssetId: 'asset-1', decision: 'REJECT',
+  note: '', operationKey: 'suite-review-123',
+}), /不能审核/u);
+assert.throws(() => buildAiMediaSuiteSlotApplyRequest({
+  slot: appliedSuite.slots[0], operationKey: 'suite-apply-123',
+  expectedTargetUpdatedAt: '2026-07-20T00:05:00.000Z',
+}), /已经追加/u);
+
+assert.equal(resolveAiMediaSuiteSlotReviewRecovery({
+  slot: approvedReviewSuite.slots[0], outputAssetId: 'asset-1', decision: 'APPROVE',
+}), 'confirmed');
+assert.equal(resolveAiMediaSuiteSlotReviewRecovery({
+  slot: pendingReviewSuite.slots[0], outputAssetId: 'asset-1', decision: 'APPROVE',
+}), 'retry');
+assert.equal(resolveAiMediaSuiteSlotReviewRecovery({
+  slot: { ...approvedReviewSuite.slots[0], reviewStatus: 'REJECTED' },
+  outputAssetId: 'asset-1', decision: 'APPROVE',
+}), 'conflict');
+assert.equal(resolveAiMediaSuiteSlotApplyRecovery({
+  slot: appliedSuite.slots[0], outputAssetId: 'asset-1',
+}), 'confirmed');
+assert.equal(resolveAiMediaSuiteSlotApplyRecovery({
+  slot: approvedReviewSuite.slots[0], outputAssetId: 'asset-1',
+}), 'retry');
 
 const acceptedClaimDecision = resolveAiMediaSuiteClaimDecision({
   outcome: 'accepted', plan, preview, claimedSuite: exactClaimed,
@@ -456,7 +590,12 @@ const workflow = fs.readFileSync('apps/web/src/lib/ai-media-workflow.ts', 'utf8'
 
 assert.match(planningPanel, /SourceAiMediaSuitePanel/u);
 assert.match(planningPanel, /plan=\{bundle\.plan\}/u);
+assert.match(planningPanel, /targetUpdatedAt=\{targetUpdatedAt\}/u);
+assert.match(planningPanel, /runMediaMutation=\{runMediaMutation\}/u);
+assert.match(planningPanel, /onConflictRefresh=\{onConflictRefresh\}/u);
 assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?enabled[\s\S]*?planningEnabled=/u);
+assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?targetUpdatedAt=\{target\.updatedAt\}/u);
+assert.match(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?onApplied=\{onApplied\}/u);
 assert.doesNotMatch(mediaPanel, /<SourceAiMediaPlanningPanel[\s\S]*?enabled=\{!disabled\}/u);
 assert.match(planningPanel, /if \(!planningEnabled \|\| !bundle/u);
 assert.match(planningPanel, /planningEnabled && REVIEWABLE\.has\(bundle\.plan\.reviewStatus\)/u);
@@ -489,6 +628,14 @@ assert.match(panel, /slot\.outputAssets\[0\]/u);
 assert.match(panel, /测试输出/u);
 assert.match(panel, /onError=\{\(\) => setState\('error'\)\}/u);
 assert.match(panel, /actions\.retryableSlotIds\.includes\(slot\.id\)/u);
+assert.match(panel, /slots\/\$\{encodeURIComponent\(slot\.id\)\}\/review/u);
+assert.match(panel, /slots\/\$\{encodeURIComponent\(slot\.id\)\}\/apply/u);
+assert.match(panel, /审核套图候选/u);
+assert.match(panel, /追加到商品/u);
+assert.match(panel, /resolveAiMediaSuiteSlotReviewRecovery/u);
+assert.match(panel, /resolveAiMediaSuiteSlotApplyRecovery/u);
+assert.match(panel, /recovered === undefined[\s\S]*保留本次操作/u);
+assert.match(panel, /AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT[\s\S]*onConflictRefresh/u);
 assert.match(panel, /enqueuePending/u);
 assert.match(panel, /isCurrentIdentity\(identity, context\)\) endAction/u);
 assert.ok([...panel.matchAll(/isCurrentIdentity\(identity, context\)\) endAction/gu)].length >= 5);

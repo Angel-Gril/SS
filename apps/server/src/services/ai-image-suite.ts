@@ -156,6 +156,7 @@ export interface AiImageSuiteRecord {
   cancelRequestedAt?: Date | null;
   completedAt?: Date | null;
   slots: Array<Record<string, unknown>>;
+  referenceAssets?: Array<Record<string, unknown>>;
   createdAt: Date;
   updatedAt: Date;
 }

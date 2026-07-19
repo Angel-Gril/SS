@@ -407,21 +407,57 @@ describe('Prisma AI image suite repository', () => {
         plan: { currentVersionId: 'version-1' },
       },
       include: {
+        referenceAssets: {
+          orderBy: { ordinal: 'asc' },
+          take: 25,
+          include: {
+            asset: {
+              select: {
+                id: true,
+                ownerUserId: true,
+                url: true,
+                mimeType: true,
+                width: true,
+                height: true,
+              },
+            },
+          },
+        },
         slots: {
           orderBy: { ordinal: 'asc' },
           include: {
             childWorkflow: {
               select: {
+                id: true,
+                revision: true,
+                reviewStatus: true,
+                selectedOutputAssetId: true,
+                reviewedAt: true,
+                events: {
+                  where: { eventType: 'SUITE_CANDIDATE_APPLIED' },
+                  orderBy: { createdAt: 'desc' },
+                  take: 1,
+                  select: {
+                    eventType: true,
+                    jobId: true,
+                    assetId: true,
+                    payload: true,
+                    payloadHash: true,
+                    createdAt: true,
+                  },
+                },
                 jobs: {
                   orderBy: { workflowAttempt: 'desc' },
                   take: 1,
                   select: {
+                    id: true,
                     assets: {
                       orderBy: { createdAt: 'asc' },
                       take: 1,
                       select: {
                         id: true,
                         ownerUserId: true,
+                        aiImageJobId: true,
                         url: true,
                         mimeType: true,
                         width: true,

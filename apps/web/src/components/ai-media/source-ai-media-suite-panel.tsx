@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Check,
   Eye,
   ImageOff,
+  ImagePlus,
   Images,
   Loader2,
   Play,
   RefreshCw,
   RotateCcw,
   Square,
+  X,
 } from 'lucide-react';
 import { api, apiUrl } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +26,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
+import type {
+  AiImageApplyResult,
+  RunMediaMutation,
+} from './source-ai-media-state';
 import {
   buildAiMediaSuiteCancelRequest,
   buildAiMediaSuiteClaimRequest,
@@ -30,6 +37,8 @@ import {
   buildAiMediaSuitePrepareRequest,
   buildAiMediaSuitePreviewRequest,
   buildAiMediaSuiteRetryRequest,
+  buildAiMediaSuiteSlotApplyRequest,
+  buildAiMediaSuiteSlotReviewRequest,
   clearWorkflowSubmissionIntent,
   formatAiMediaPlanningGoal,
   formatAiMediaPlanningIdentity,
@@ -41,6 +50,9 @@ import {
   resolveAiMediaSuiteActions,
   resolveAiMediaSuiteClaimDecision,
   resolveAiMediaSuitePreparationDecision,
+  resolveAiMediaSuiteSlotActions,
+  resolveAiMediaSuiteSlotApplyRecovery,
+  resolveAiMediaSuiteSlotReviewRecovery,
   resolveWorkflowSubmissionIntent,
   saveWorkflowSubmissionIntent,
   startAiMediaSuitePolling,
@@ -74,6 +86,13 @@ const SLOT_STATUS_LABEL: Record<AiMediaSuiteSlot['status'], string> = {
   CANCELLED: '已取消',
 };
 
+const SLOT_REVIEW_STATUS_LABEL: Record<AiMediaSuiteSlot['reviewStatus'], string> = {
+  NOT_READY: '未生成',
+  PENDING: '待审核',
+  APPROVED: '已通过',
+  REJECTED: '已拒绝',
+};
+
 function suiteImageUrl(value: string) {
   return /^https?:\/\//iu.test(value) ? value : apiUrl(value);
 }
@@ -105,6 +124,43 @@ function slotStatusVariant(status: AiMediaSuiteSlot['status']) {
   if (status === 'FAILED') return 'destructive' as const;
   if (status === 'QUEUED' || status === 'RUNNING' || status === 'CANCEL_REQUESTED') return 'warning' as const;
   return 'outline' as const;
+}
+
+function slotReviewStatusVariant(status: AiMediaSuiteSlot['reviewStatus']) {
+  if (status === 'APPROVED') return 'success' as const;
+  if (status === 'REJECTED') return 'destructive' as const;
+  if (status === 'PENDING') return 'warning' as const;
+  return 'outline' as const;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function normalizeApplyResult(value: unknown, targetId: string): AiImageApplyResult | null {
+  const candidate = record(value);
+  const images = Array.isArray(candidate?.images) ? candidate.images : null;
+  const editedImages = Array.isArray(candidate?.editedImages) ? candidate.editedImages : null;
+  if (!candidate
+    || typeof candidate.jobId !== 'string'
+    || candidate.mode !== 'append'
+    || candidate.targetType !== 'collect'
+    || candidate.targetId !== targetId
+    || typeof candidate.targetUpdatedAt !== 'string'
+    || !Number.isFinite(Date.parse(candidate.targetUpdatedAt))
+    || !images || images.some((entry) => typeof entry !== 'string')
+    || !editedImages || editedImages.some((entry) => typeof entry !== 'string')) return null;
+  return {
+    jobId: candidate.jobId,
+    mode: 'append',
+    targetType: 'collect',
+    targetId,
+    targetUpdatedAt: candidate.targetUpdatedAt,
+    images: images as string[],
+    editedImages: editedImages as string[],
+  };
 }
 
 function formatCost(cents: number) {
@@ -167,10 +223,20 @@ function SuiteOutputPreview({
 
 export function SourceAiMediaSuitePanel({
   targetId,
+  targetUpdatedAt,
   plan,
+  mediaMutationBusy,
+  runMediaMutation,
+  onApplied,
+  onConflictRefresh,
 }: {
   targetId: string;
+  targetUpdatedAt?: string;
   plan: AiMediaPlanRecord;
+  mediaMutationBusy: boolean;
+  runMediaMutation: RunMediaMutation;
+  onApplied?: (result: AiImageApplyResult) => void;
+  onConflictRefresh: () => Promise<void>;
 }) {
   const [readiness, setReadiness] = useState<AiMediaSuiteReadiness | null>(null);
   const [preview, setPreview] = useState<AiMediaSuitePreview | null>(null);
@@ -181,6 +247,9 @@ export function SourceAiMediaSuitePanel({
   const [readinessError, setReadinessError] = useState('');
   const [enqueuePending, setEnqueuePending] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [reviewSlotId, setReviewSlotId] = useState<string | null>(null);
+  const [reviewNote, setReviewNote] = useState('');
+  const [rejectConfirm, setRejectConfirm] = useState(false);
   const [pendingActions, setPendingActions] = useState<Set<string>>(() => new Set());
   const pendingActionsRef = useRef(new Set<string>());
   const contextVersion = useRef(0);
@@ -204,8 +273,18 @@ export function SourceAiMediaSuitePanel({
     () => resolveAiMediaSuiteActions({ plan, readiness, preview: null, suite: distinctActiveSuite }),
     [distinctActiveSuite, plan, readiness],
   );
-  const mutationBusy = pendingActions.size > 0;
+  const mutationBusy = pendingActions.size > 0 || mediaMutationBusy;
   const error = suiteError || readinessError;
+  const reviewSlot = suite?.slots.find((slot) => slot.id === reviewSlotId) || null;
+  const reviewSlotActions = suite && reviewSlot
+    ? resolveAiMediaSuiteSlotActions({ plan, readiness, suite, slot: reviewSlot, targetUpdatedAt })
+    : null;
+  const reviewCounts = useMemo(() => ({
+    pending: suite?.slots.filter((slot) => slot.reviewStatus === 'PENDING').length || 0,
+    approved: suite?.slots.filter((slot) => slot.reviewStatus === 'APPROVED').length || 0,
+    rejected: suite?.slots.filter((slot) => slot.reviewStatus === 'REJECTED').length || 0,
+    applied: suite?.slots.filter((slot) => Boolean(slot.application)).length || 0,
+  }), [suite]);
 
   function isCurrentIdentity(snapshot: typeof identityRef.current, version: number) {
     const current = identityRef.current;
@@ -217,7 +296,7 @@ export function SourceAiMediaSuitePanel({
   }
 
   function beginAction(key: string) {
-    if (pendingActionsRef.current.size > 0) return false;
+    if (pendingActionsRef.current.size > 0 || mediaMutationBusy) return false;
     pendingActionsRef.current.add(key);
     setPendingActions(new Set(pendingActionsRef.current));
     return true;
@@ -358,6 +437,9 @@ export function SourceAiMediaSuitePanel({
     setReadinessError('');
     setEnqueuePending(false);
     setConfirmOpen(false);
+    setReviewSlotId(null);
+    setReviewNote('');
+    setRejectConfirm(false);
     void loadAll();
     return () => {
       contextVersion.current += 1;
@@ -651,6 +733,206 @@ export function SourceAiMediaSuitePanel({
     }
   }
 
+  async function reviewCandidate(slot: AiMediaSuiteSlot, decision: 'APPROVE' | 'REJECT') {
+    if (!suite) return;
+    const slotActions = resolveAiMediaSuiteSlotActions({ plan, readiness, suite, slot, targetUpdatedAt });
+    const output = slot.outputAssets[0];
+    const actionKey = `review:${slot.id}`;
+    if (!slotActions.canReview || !output || !beginAction(actionKey)) return;
+    const identity = { ...identityRef.current };
+    const context = contextVersion.current;
+    const operation = submissionIntent(
+      `review:${suite.id}:${slot.id}:${decision.toLowerCase()}`,
+      JSON.stringify({
+        suiteId: suite.id,
+        slotId: slot.id,
+        workflowRevision: slot.workflowRevision,
+        outputAssetId: output.id,
+        decision,
+        note: reviewNote.trim(),
+      }),
+    );
+    const recover = async (ambiguous: boolean, failureMessage = '') => {
+      const recovered = await loadCurrentSuite(true);
+      if (!isCurrentIdentity(identity, context)) return 'ignored' as const;
+      if (recovered === undefined) {
+        toast({
+          title: '套图审核状态待确认',
+          description: '暂时无法读取服务器状态；已保留本次操作，可安全重试',
+          variant: 'destructive',
+        });
+        return 'retry' as const;
+      }
+      const recoveredSlot = recovered?.id === suite.id
+        ? recovered.slots.find((candidate) => candidate.id === slot.id)
+        : null;
+      const recovery = recoveredSlot
+        ? resolveAiMediaSuiteSlotReviewRecovery({
+          slot: recoveredSlot, outputAssetId: output.id, decision,
+        })
+        : 'conflict';
+      if (recovery === 'confirmed') {
+        clearSubmissionIntent(operation);
+        setReviewSlotId(null);
+        setReviewNote('');
+        setRejectConfirm(false);
+        toast({ title: decision === 'APPROVE' ? '套图候选已通过审核' : '套图候选已拒绝' });
+        return recovery;
+      }
+      if (!ambiguous || recovery === 'conflict') clearSubmissionIntent(operation);
+      toast({
+        title: ambiguous && recovery === 'retry' ? '套图审核状态待确认' : '套图候选审核失败',
+        description: ambiguous && recovery === 'retry'
+          ? '网络响应未确认；已保留本次操作，可安全重试'
+          : failureMessage || '候选状态已变化，请核对最新结果',
+        variant: 'destructive',
+      });
+      return recovery;
+    };
+    try {
+      const result = await api.post<unknown>(
+        `/api/ai-images/suites/${encodeURIComponent(suite.id)}/slots/${encodeURIComponent(slot.id)}/review`,
+        buildAiMediaSuiteSlotReviewRequest({
+          slot,
+          operationKey: operation.intent.idempotencyKey,
+          outputAssetId: output.id,
+          decision,
+          note: reviewNote,
+        }),
+      );
+      if (!isCurrentIdentity(identity, context)) return;
+      const normalized = result.code === 1 ? normalizeAiMediaSuite(result.data) : null;
+      if (!normalized || normalized.id !== suite.id) {
+        await recover(result.code === 1, result.msg);
+        return;
+      }
+      const normalizedSlot = normalized.slots.find((candidate) => candidate.id === slot.id);
+      if (!normalizedSlot || resolveAiMediaSuiteSlotReviewRecovery({
+        slot: normalizedSlot, outputAssetId: output.id, decision,
+      }) !== 'confirmed') {
+        await recover(true);
+        return;
+      }
+      setSuite(normalized);
+      clearSubmissionIntent(operation);
+      setReviewSlotId(null);
+      setReviewNote('');
+      setRejectConfirm(false);
+      toast({ title: decision === 'APPROVE' ? '套图候选已通过审核' : '套图候选已拒绝' });
+    } catch {
+      await recover(true);
+    } finally {
+      if (isCurrentIdentity(identity, context)) endAction(actionKey);
+    }
+  }
+
+  async function applyCandidate(slot: AiMediaSuiteSlot) {
+    if (!suite) return;
+    const slotActions = resolveAiMediaSuiteSlotActions({ plan, readiness, suite, slot, targetUpdatedAt });
+    const output = slot.outputAssets[0];
+    const actionKey = `apply:${slot.id}`;
+    if (!slotActions.canApply || !output || !targetUpdatedAt || !beginAction(actionKey)) return;
+    const identity = { ...identityRef.current };
+    const context = contextVersion.current;
+    const operation = submissionIntent(
+      `apply:${suite.id}:${slot.id}`,
+      JSON.stringify({
+        suiteId: suite.id,
+        slotId: slot.id,
+        workflowRevision: slot.workflowRevision,
+        outputAssetId: output.id,
+        targetId,
+        targetUpdatedAt,
+      }),
+    );
+    const recover = async (ambiguous: boolean, failureMessage = '', refreshTarget = false) => {
+      if (refreshTarget) {
+        try { await onConflictRefresh(); } catch { /* the target refresh can be retried manually */ }
+      }
+      const recovered = await loadCurrentSuite(true);
+      if (!isCurrentIdentity(identity, context)) return 'ignored' as const;
+      if (recovered === undefined) {
+        toast({
+          title: '套图追加状态待确认',
+          description: '暂时无法读取服务器状态；已保留本次操作，可安全重试',
+          variant: 'destructive',
+        });
+        return 'retry' as const;
+      }
+      const recoveredSlot = recovered?.id === suite.id
+        ? recovered.slots.find((candidate) => candidate.id === slot.id)
+        : null;
+      const recovery = recoveredSlot
+        ? resolveAiMediaSuiteSlotApplyRecovery({ slot: recoveredSlot, outputAssetId: output.id })
+        : 'conflict';
+      if (recovery === 'confirmed') {
+        clearSubmissionIntent(operation);
+        try { await onConflictRefresh(); } catch { /* suite state remains authoritative */ }
+        toast({ title: '套图候选已由服务器追加到商品' });
+        return recovery;
+      }
+      if (!ambiguous || recovery === 'conflict') clearSubmissionIntent(operation);
+      if (recovery === 'conflict') {
+        try { await onConflictRefresh(); } catch { /* a later manual refresh can recover */ }
+      }
+      toast({
+        title: ambiguous && recovery === 'retry' ? '套图追加状态待确认' : '套图候选追加失败',
+        description: ambiguous && recovery === 'retry'
+          ? '网络响应未确认；已保留本次操作，可安全重试'
+          : failureMessage || '商品图片或候选状态已变化，请刷新后重新确认',
+        variant: 'destructive',
+      });
+      return recovery;
+    };
+    try {
+      const execution = await runMediaMutation(() => api.post<unknown>(
+        `/api/ai-images/suites/${encodeURIComponent(suite.id)}/slots/${encodeURIComponent(slot.id)}/apply`,
+        buildAiMediaSuiteSlotApplyRequest({
+          slot,
+          operationKey: operation.intent.idempotencyKey,
+          expectedTargetUpdatedAt: targetUpdatedAt,
+        }),
+      ));
+      if (!execution.started) {
+        toast({ title: '图片正在保存', description: '请等待当前图片操作完成后重试' });
+        return;
+      }
+      const result = execution.value!;
+      if (!isCurrentIdentity(identity, context)) return;
+      const response = record(result.data);
+      const normalized = result.code === 1 ? normalizeAiMediaSuite(response?.suite) : null;
+      const application = result.code === 1 ? normalizeApplyResult(response?.application, targetId) : null;
+      const normalizedSlot = normalized?.id === suite.id
+        ? normalized.slots.find((candidate) => candidate.id === slot.id)
+        : null;
+      if (result.code !== 1 || !normalized || normalized.id !== suite.id || !normalizedSlot
+        || resolveAiMediaSuiteSlotApplyRecovery({
+          slot: normalizedSlot, outputAssetId: output.id,
+        }) !== 'confirmed') {
+        const resultCode = String(result.code || '').toUpperCase();
+        await recover(
+          result.code === 1,
+          result.msg,
+          resultCode === 'AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT'
+            || resultCode === 'AI_MEDIA_SUITE_CANDIDATE_STALE',
+        );
+        return;
+      }
+      setSuite(normalized);
+      clearSubmissionIntent(operation);
+      if (application) onApplied?.(application);
+      else {
+        try { await onConflictRefresh(); } catch { /* suite application remains visible */ }
+      }
+      setReviewSlotId(null);
+      toast({ title: '套图候选已追加到商品' });
+    } catch {
+      await recover(true);
+    } finally {
+      if (isCurrentIdentity(identity, context)) endAction(actionKey);
+    }
+  }
+
   if (loading) {
     return <div className="flex items-center gap-2 border-t pt-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />加载套图任务</div>;
   }
@@ -720,6 +1002,13 @@ export function SourceAiMediaSuitePanel({
           <div className="border bg-muted/20 px-3 py-2"><div className="text-muted-foreground">最高成本</div><div className="mt-1 font-medium">{formatCost(suite.maximumCostCents)}</div></div>
         </div>
         <div className="h-1.5 w-full overflow-hidden bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label="套图生成进度"><div className="h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} /></div>
+        {suite.counts.succeeded ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border px-3 py-2 text-xs">
+          <span className="font-medium">候选处理</span>
+          <span className="text-muted-foreground">待审核 {reviewCounts.pending}</span>
+          <span className="text-muted-foreground">已通过 {reviewCounts.approved}</span>
+          <span className="text-muted-foreground">已拒绝 {reviewCounts.rejected}</span>
+          <span className="text-muted-foreground">已追加 {reviewCounts.applied}</span>
+        </div> : null}
         {readiness && !readiness.ready && actions.retryableSlotIds.length === 0 && suite.status !== 'SUCCEEDED' ? <p className="break-words text-xs text-muted-foreground">{readiness.reason}</p> : null}
         <div className="flex flex-wrap gap-2">
           {(actions.canPrepare || actions.canDispatch) ? <Button type="button" size="sm" onClick={() => void continueSuite()} disabled={mutationBusy}>{pendingActions.has('continue') ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}{actions.canPrepare ? '继续准备并生成' : '开始生成'}</Button> : null}
@@ -729,16 +1018,30 @@ export function SourceAiMediaSuitePanel({
           {suite.slots.map((slot) => {
             const output = slot.outputAssets[0];
             const canRetry = actions.retryableSlotIds.includes(slot.id);
-            return <div key={slot.id} className="grid min-w-0 gap-3 border px-3 py-3 sm:grid-cols-[80px_minmax(0,1fr)_auto] sm:items-center">
+            const slotActions = resolveAiMediaSuiteSlotActions({ plan, readiness, suite, slot, targetUpdatedAt });
+            const viewOnlyLabel = slotActions.viewOnlyReason === 'SOURCE_CHANGED'
+              ? '来源快照已变化，候选仅供查看'
+              : slotActions.viewOnlyReason === 'HISTORICAL_VERSION'
+                ? '历史计划候选，仅供查看'
+                : slotActions.viewOnlyReason === 'PLAN_NOT_CURRENT'
+                  ? '计划不再是当前已审核版本'
+                  : null;
+            return <div key={slot.id} className="grid min-w-0 grid-cols-[80px_minmax(0,1fr)] gap-3 border px-3 py-3 sm:grid-cols-[80px_minmax(0,1fr)_auto] sm:items-center">
               {output ? <SuiteOutputPreview key={output.id} output={output} testOnly={suite.provider === 'fake'} /> : <div className="flex h-20 w-20 items-center justify-center border bg-muted"><Images className="h-5 w-5 text-muted-foreground" /></div>}
               <div className="min-w-0 text-xs">
-                <div className="flex min-w-0 flex-wrap items-center gap-2"><span className="font-medium">{formatAiMediaPlanningGoal(slot.goal)}</span><Badge variant={slotStatusVariant(slot.status)}>{SLOT_STATUS_LABEL[slot.status]}</Badge></div>
+                <div className="flex min-w-0 flex-wrap items-center gap-2"><span className="font-medium">{formatAiMediaPlanningGoal(slot.goal)}</span><Badge variant={slotStatusVariant(slot.status)}>{SLOT_STATUS_LABEL[slot.status]}</Badge>{slot.reviewStatus !== 'NOT_READY' ? <Badge variant={slotReviewStatusVariant(slot.reviewStatus)}>{SLOT_REVIEW_STATUS_LABEL[slot.reviewStatus]}</Badge> : null}{slot.application ? <Badge variant="outline">已追加</Badge> : null}</div>
                 <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{formatAiMediaPlanningSlotKey(slot.slotKey)}</div>
                 <div className="mt-1 break-words text-muted-foreground">{slot.ownership.level === 'sku' ? 'SKU' : '兼容组'}：{formatAiMediaPlanningIdentity(slot.ownership.key)} · 第 {slot.attempt} 次尝试</div>
+                {slot.referenceAssets.length ? <div className="mt-2 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">参考</span>{slot.referenceAssets.slice(0, 3).map((reference) => <a key={reference.id} href={suiteImageUrl(reference.url)} target="_blank" rel="noreferrer" className="h-8 w-8 shrink-0 overflow-hidden border bg-muted" title={`打开冻结参考图 ${reference.candidateId}`}><img src={suiteImageUrl(reference.url)} alt="冻结参考图" className="h-full w-full object-cover" /></a>)}{slot.referenceAssets.length > 3 ? <span className="text-muted-foreground">+{slot.referenceAssets.length - 3}</span> : null}</div> : null}
                 {slot.errorCode ? <div className="mt-1 break-all text-destructive">{slot.errorCode}</div> : null}
                 {slot.diagnostics.length ? <div className="mt-1 flex flex-wrap gap-1">{slot.diagnostics.map((code) => <Badge key={code} variant="outline">{code}</Badge>)}</div> : null}
+                {viewOnlyLabel && output ? <div className="mt-1 break-words text-amber-700">{viewOnlyLabel}</div> : null}
               </div>
-              {canRetry ? <Button type="button" size="icon" variant="outline" onClick={() => void retrySlot(slot)} disabled={mutationBusy} title="重试失败槽位" aria-label={`重试失败槽位 ${slot.slotKey}`}>{pendingActions.has(`retry:${slot.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}</Button> : null}
+              <div className="col-span-2 flex min-w-0 flex-wrap gap-2 sm:col-span-1 sm:justify-end">
+                {canRetry ? <Button type="button" size="icon" variant="outline" onClick={() => void retrySlot(slot)} disabled={mutationBusy} title="重试失败槽位" aria-label={`重试失败槽位 ${slot.slotKey}`}>{pendingActions.has(`retry:${slot.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}</Button> : null}
+                {output ? <Button type="button" size="sm" variant="outline" className="min-h-10 flex-1 sm:flex-none" onClick={() => { setReviewSlotId(slot.id); setReviewNote(''); setRejectConfirm(false); }} disabled={mutationBusy}><Eye className="h-3.5 w-3.5" />{slotActions.canReview ? '审核候选' : '查看候选'}</Button> : null}
+                {slotActions.canApply ? <Button type="button" size="sm" className="min-h-10 flex-1 sm:flex-none" onClick={() => void applyCandidate(slot)} disabled={mutationBusy}><ImagePlus className="h-3.5 w-3.5" />{pendingActions.has(`apply:${slot.id}`) ? '追加中' : '追加到商品'}</Button> : null}
+              </div>
             </div>;
           })}
         </div>
@@ -754,6 +1057,45 @@ export function SourceAiMediaSuitePanel({
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)} disabled={mutationBusy}>取消</Button>
             <Button type="button" onClick={() => void claimAndStart()} disabled={!actions.canClaim || mutationBusy}>{pendingActions.has('start') ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}确认并开始</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(reviewSlot)} onOpenChange={(open) => {
+        if (open || pendingActionsRef.current.size > 0) return;
+        setReviewSlotId(null);
+        setReviewNote('');
+        setRejectConfirm(false);
+      }}>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>审核套图候选</DialogTitle>
+            <DialogDescription>{reviewSlot ? `${formatAiMediaPlanningGoal(reviewSlot.goal)} · ${reviewSlot.ownership.level === 'sku' ? 'SKU' : '兼容组'} ${formatAiMediaPlanningIdentity(reviewSlot.ownership.key)}` : '查看生成结果和冻结参考图'}</DialogDescription>
+          </DialogHeader>
+          {reviewSlot?.outputAssets[0] ? <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+            <div className="min-w-0">
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><span className="font-medium">生成候选</span><Badge variant={slotReviewStatusVariant(reviewSlot.reviewStatus)}>{SLOT_REVIEW_STATUS_LABEL[reviewSlot.reviewStatus]}</Badge>{reviewSlot.application ? <Badge variant="outline">已追加</Badge> : null}</div>
+              <a href={suiteImageUrl(reviewSlot.outputAssets[0].url)} target="_blank" rel="noreferrer" className="flex aspect-square max-h-[56dvh] w-full items-center justify-center overflow-hidden border bg-muted/30" title="打开原始尺寸候选图"><img src={suiteImageUrl(reviewSlot.outputAssets[0].url)} alt="套图生成候选" className="h-full w-full object-contain" /></a>
+            </div>
+            <div className="min-w-0">
+              <div className="mb-2 text-xs font-medium">冻结参考图（{reviewSlot.referenceAssets.length}）</div>
+              {reviewSlot.referenceAssets.length ? <div className="grid max-h-[56dvh] grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 md:grid-cols-2">{reviewSlot.referenceAssets.map((reference) => <a key={reference.id} href={suiteImageUrl(reference.url)} target="_blank" rel="noreferrer" className="min-w-0" title={`打开冻结参考图 ${reference.candidateId}`}><span className="flex aspect-square items-center justify-center overflow-hidden border bg-muted/30"><img src={suiteImageUrl(reference.url)} alt="冻结参考图" className="h-full w-full object-contain" /></span><span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{reference.candidateId}</span></a>)}</div> : <div className="border border-dashed px-3 py-3 text-xs text-muted-foreground">没有可展示的冻结参考图，审核入口已关闭。</div>}
+            </div>
+          </div> : null}
+          {reviewSlot && reviewSlotActions?.viewOnlyReason ? <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{reviewSlotActions.viewOnlyReason === 'SOURCE_CHANGED' ? '来源快照已变化，此候选只能查看。' : reviewSlotActions.viewOnlyReason === 'HISTORICAL_VERSION' ? '此候选属于历史计划版本，只能查看。' : '计划不再是当前已审核版本，此候选只能查看。'}</div> : null}
+          {reviewSlotActions?.canReview ? <div className="space-y-2"><label htmlFor={`ai-media-suite-review-note-${reviewSlot?.id || 'none'}`} className="text-xs font-medium">审核备注（可选）</label><textarea id={`ai-media-suite-review-note-${reviewSlot?.id || 'none'}`} value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} maxLength={2_000} rows={2} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" placeholder="记录商品一致性、文字或画面问题" /></div> : null}
+          {rejectConfirm ? <div className="border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">拒绝后候选会保留在审计历史，但不能再追加到商品。请确认当前图片确实不符合要求。</div> : null}
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" className="min-h-10" onClick={() => { setReviewSlotId(null); setReviewNote(''); setRejectConfirm(false); }} disabled={pendingActionsRef.current.size > 0}>关闭</Button>
+            {reviewSlotActions?.canReview && !rejectConfirm ? <>
+              <Button type="button" variant="outline" className="min-h-10" onClick={() => setRejectConfirm(true)} disabled={mutationBusy}><X className="h-4 w-4" />拒绝</Button>
+              <Button type="button" className="min-h-10" onClick={() => reviewSlot && void reviewCandidate(reviewSlot, 'APPROVE')} disabled={mutationBusy}>{reviewSlot && pendingActions.has(`review:${reviewSlot.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}通过</Button>
+            </> : null}
+            {reviewSlotActions?.canReview && rejectConfirm ? <>
+              <Button type="button" variant="outline" className="min-h-10" onClick={() => setRejectConfirm(false)} disabled={mutationBusy}>返回</Button>
+              <Button type="button" variant="destructive" className="min-h-10" onClick={() => reviewSlot && void reviewCandidate(reviewSlot, 'REJECT')} disabled={mutationBusy}>{reviewSlot && pendingActions.has(`review:${reviewSlot.id}`) ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}确认拒绝</Button>
+            </> : null}
+            {reviewSlot && reviewSlotActions?.canApply ? <Button type="button" className="min-h-10" onClick={() => void applyCandidate(reviewSlot)} disabled={mutationBusy}><ImagePlus className="h-4 w-4" />{pendingActions.has(`apply:${reviewSlot.id}`) ? '追加中' : '追加到商品'}</Button> : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

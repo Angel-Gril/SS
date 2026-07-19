@@ -139,6 +139,35 @@ function mergeImages(existing: unknown, generated: string[], mode: AiImageApplyM
   return result;
 }
 
+export interface CollectImageAppendProjection {
+  images: unknown[];
+  editedImages: unknown[];
+  metadata: Record<string, unknown>;
+  mainImage: string | null;
+}
+
+export function projectCollectImageAppend(
+  currentImages: unknown,
+  currentMetadata: unknown,
+  generatedUrls: string[],
+): CollectImageAppendProjection {
+  const metadata = currentMetadata && typeof currentMetadata === 'object' && !Array.isArray(currentMetadata)
+    ? { ...(currentMetadata as Record<string, unknown>) }
+    : {};
+  const existingPublishImages = Array.isArray(metadata.watermarkedImages)
+    && metadata.watermarkedImages.length > 0
+    ? metadata.watermarkedImages
+    : currentImages;
+  const images = mergeImages(existingPublishImages, generatedUrls, 'append');
+  const editedImages = mergeImages(metadata.editedImages, generatedUrls, 'append');
+  return {
+    images,
+    editedImages,
+    metadata: { ...metadata, watermarkedImages: images, editedImages },
+    mainImage: images.find((image): image is string => typeof image === 'string') || null,
+  };
+}
+
 function assertWorkflowSourceSnapshotCurrent(
   job: AiImageJobRow,
   target: ImageTargetRow,
@@ -272,13 +301,16 @@ export async function applyAiImageAssets(
     const metadata = target.metadata && typeof target.metadata === 'object' && !Array.isArray(target.metadata)
       ? { ...(target.metadata as Record<string, unknown>) }
       : {};
+    const projected = input.targetType === 'collect' && input.mode === 'append'
+      ? projectCollectImageAppend(target.images, metadata, urls)
+      : null;
     const existingPublishImages = input.targetType === 'collect'
       && Array.isArray(metadata.watermarkedImages)
       && metadata.watermarkedImages.length > 0
       ? metadata.watermarkedImages
       : target.images;
-    const images = mergeImages(existingPublishImages, urls, input.mode);
-    const editedImages = mergeImages(metadata.editedImages, urls, input.mode);
+    const images = projected?.images || mergeImages(existingPublishImages, urls, input.mode);
+    const editedImages = projected?.editedImages || mergeImages(metadata.editedImages, urls, input.mode);
     const appliedAt = new Date();
 
     if (input.targetType === 'collect') {
@@ -290,7 +322,7 @@ export async function applyAiImageAssets(
         },
         data: {
           images,
-          metadata: { ...metadata, watermarkedImages: images, editedImages },
+          metadata: projected?.metadata || { ...metadata, watermarkedImages: images, editedImages },
           updatedAt: appliedAt,
         },
       });
@@ -349,7 +381,9 @@ export async function applyAiImageAssets(
       targetType: input.targetType,
       targetId: input.targetId,
       images,
-      mainImage: images.find((image): image is string => typeof image === 'string') || null,
+      mainImage: projected?.mainImage
+        ?? images.find((image): image is string => typeof image === 'string')
+        ?? null,
       editedImages,
       targetUpdatedAt: appliedAt,
       appliedAt,

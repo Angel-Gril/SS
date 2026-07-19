@@ -422,9 +422,14 @@ export function SourceAiMediaPanel({
 
       <SourceAiMediaPlanningPanel
         targetId={target.id}
+        targetUpdatedAt={target.updatedAt}
         enabled
         planningEnabled={Boolean(capabilities?.webMediaEnabled && capabilities?.workflowEnabled)}
         selectedSkuKeys={selectedSkuKeys}
+        mediaMutationBusy={mediaMutationBusy}
+        runMediaMutation={runMediaMutation}
+        onApplied={onApplied}
+        onConflictRefresh={onConflictRefresh}
       />
 
       {!disabled && context?.inputs.length ? <>

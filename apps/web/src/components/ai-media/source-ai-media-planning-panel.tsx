@@ -7,6 +7,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 import { SourceAiMediaSuitePanel } from './source-ai-media-suite-panel';
+import type {
+  AiImageApplyResult,
+  RunMediaMutation,
+} from './source-ai-media-state';
 import {
   buildAiMediaPlanReviewRequest,
   canApproveAiMediaPlan,
@@ -217,14 +221,24 @@ function SlotDetails({ payload }: { payload: AiMediaPlanPayload | null }) {
 
 export function SourceAiMediaPlanningPanel({
   targetId,
+  targetUpdatedAt,
   enabled = true,
   planningEnabled = false,
   selectedSkuKeys = [],
+  mediaMutationBusy,
+  runMediaMutation,
+  onApplied,
+  onConflictRefresh,
 }: {
   targetId: string;
+  targetUpdatedAt?: string;
   enabled?: boolean;
   planningEnabled?: boolean;
   selectedSkuKeys?: string[];
+  mediaMutationBusy: boolean;
+  runMediaMutation: RunMediaMutation;
+  onApplied?: (result: AiImageApplyResult) => void;
+  onConflictRefresh: () => Promise<void>;
 }) {
   const [bundle, setBundle] = useState<AiMediaPlanBundle | null>(null);
   const [loading, setLoading] = useState(enabled);
@@ -457,7 +471,15 @@ export function SourceAiMediaPlanningPanel({
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>版本 {bundle.currentVersion?.version || bundle.plan.latestVersion || '-'}</span>{bundle.currentVersion?.sourceCaptureSnapshotId ? <span className="break-all font-mono">快照 {bundle.currentVersion.sourceCaptureSnapshotId}</span> : null}</div>
           {REVIEWABLE.has(bundle.plan.reviewStatus) && !approvalReady ? <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">计划仍有待人工补选或证据不完整的槽位，当前不能通过审核。</div> : null}
           {planningEnabled && REVIEWABLE.has(bundle.plan.reviewStatus) && !bundle.plan.staleAt && bundle.plan.sourceCurrent !== false ? <div className="space-y-2 border px-3 py-3"><label className="block text-xs font-medium" htmlFor={`ai-media-plan-review-note-${targetId}`}>审核备注（可选）</label><textarea id={`ai-media-plan-review-note-${targetId}`} value={note} onChange={(event) => setNote(event.target.value)} maxLength={2_000} rows={2} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" placeholder="记录人工确认或拒绝原因" /><div className="flex flex-wrap gap-2"><Button type="button" size="sm" onClick={() => void review('APPROVE')} disabled={Boolean(reviewing) || !approvalReady}><Check className="h-3.5 w-3.5" />{reviewing === 'APPROVE' ? '提交中' : '通过计划'}</Button><Button type="button" size="sm" variant="outline" onClick={() => void review('REJECT')} disabled={Boolean(reviewing)}><X className="h-3.5 w-3.5" />{reviewing === 'REJECT' ? '提交中' : '拒绝计划'}</Button></div></div> : null}
-          <SourceAiMediaSuitePanel targetId={targetId} plan={bundle.plan} />
+          <SourceAiMediaSuitePanel
+            targetId={targetId}
+            targetUpdatedAt={targetUpdatedAt}
+            plan={bundle.plan}
+            mediaMutationBusy={mediaMutationBusy}
+            runMediaMutation={runMediaMutation}
+            onApplied={onApplied}
+            onConflictRefresh={onConflictRefresh}
+          />
         </>
       ) : null}
     </section>

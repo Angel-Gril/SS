@@ -1,6 +1,7 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { aiImageSuiteRoutes } from '../routes/ai-image-suites.js';
+import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 import {
   AiImageSuiteError,
   type AiImageSuiteProviderConfig,
@@ -27,6 +28,10 @@ import {
   AiImageSuiteExecutionError,
   type AiImageSuiteExecutionService,
 } from '../services/ai-image-suite-execution.js';
+import {
+  AiImageSuiteCandidateError,
+  type AiImageSuiteCandidateService,
+} from '../services/ai-image-suite-candidates.js';
 
 const providerConfig: AiImageSuiteProviderConfig = {
   provider: AI_IMAGE_SUITE_PROVIDER,
@@ -269,6 +274,31 @@ function executionServiceMock() {
   >;
 }
 
+function candidateServiceMock() {
+  return {
+    review: vi.fn(async () => ({
+      review: {
+        suiteId: 'suite-1', slotId: 'suite-slot-1', workflowId: 'workflow-1',
+        outputAssetId: 'asset-1', reviewStatus: 'APPROVED' as const,
+        workflowRevision: 4, reviewedAt: new Date('2026-07-20T01:00:00.000Z'),
+      },
+      replayed: false,
+    })),
+    apply: vi.fn(async () => ({
+      application: {
+        suiteId: 'suite-1', slotId: 'suite-slot-1', workflowId: 'workflow-1',
+        jobId: 'job-1', outputAssetId: 'asset-1', mode: 'append' as const,
+        targetType: 'collect' as const, targetId: 'goods-1',
+        images: ['/original.png', '/suite-output.png'], mainImage: '/original.png',
+        editedImages: ['/suite-output.png'],
+        targetUpdatedAt: new Date('2026-07-20T01:01:00.000Z'),
+        appliedAt: new Date('2026-07-20T01:01:00.000Z'),
+      },
+      replayed: false,
+    })),
+  } as unknown as AiImageSuiteCandidateService;
+}
+
 async function build(options: {
   service?: AiImageSuiteService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'> | null;
@@ -278,6 +308,7 @@ async function build(options: {
     AiImageSuiteExecutionService,
     'dispatch' | 'cancel' | 'retryFailedSlot'
   > | null;
+  candidateService?: AiImageSuiteCandidateService;
   enqueueSuiteFrontier?: ((suiteId: string) => Promise<void>) | null;
   suiteEnabled?: boolean;
   workflowEnabled?: boolean;
@@ -306,11 +337,13 @@ async function build(options: {
   const executionService = options.executionService === null
     ? undefined
     : options.executionService || executionServiceMock();
+  const candidateService = options.candidateService || candidateServiceMock();
   const enqueueSuiteFrontier = options.enqueueSuiteFrontier === null
     ? undefined
     : options.enqueueSuiteFrontier || vi.fn(async () => undefined);
   await app.register(aiImageSuiteRoutes, {
     service,
+    candidateService,
     ...(referenceService ? { referenceService } : {}),
     ...(promptService ? { promptService } : {}),
     ...(materializationService ? { materializationService } : {}),
@@ -346,6 +379,7 @@ async function build(options: {
     promptService,
     materializationService,
     executionService,
+    candidateService,
     enqueueSuiteFrontier,
   };
 }
@@ -1667,5 +1701,216 @@ describe('AI image suite routes', () => {
     expect(claim.json()).toMatchObject({ code: 'AI_MEDIA_SUITE_INVALID_INPUT' });
     expect(storage).not.toHaveBeenCalled();
     expect(service.claim).not.toHaveBeenCalled();
+  });
+
+  it('reviews one suite output with server-owned identities and strict input', async () => {
+    const candidateService = candidateServiceMock();
+    const { app } = await build({ candidateService });
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/review',
+      payload: {
+        expectedWorkflowRevision: 3,
+        operationKey: 'suite-review-route-1',
+        outputAssetId: 'asset-1',
+        decision: 'APPROVE',
+        ownerUserId: 'attacker',
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(candidateService.review).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/review',
+      payload: {
+        expectedWorkflowRevision: 3,
+        operationKey: 'suite-review-route-1',
+        outputAssetId: 'asset-1',
+        decision: 'APPROVE',
+        note: 'approved',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(candidateService.review).toHaveBeenCalledWith({
+      suiteId: 'suite-1', slotId: 'suite-slot-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedWorkflowRevision: 3, operationKey: 'suite-review-route-1', outputAssetId: 'asset-1',
+      decision: 'APPROVE', note: 'approved', production: false,
+    });
+    expect(response.json()).toMatchObject({ code: 1, replayed: false, data: { id: 'suite-1' } });
+  });
+
+  it('applies only the server-derived collect append target', async () => {
+    const candidateService = candidateServiceMock();
+    const { app } = await build({ candidateService });
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4,
+        operationKey: 'suite-apply-route-1',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+        mode: 'replace',
+        targetId: 'attacker-target',
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(candidateService.apply).not.toHaveBeenCalled();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4,
+        operationKey: 'suite-apply-route-1',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(candidateService.apply).toHaveBeenCalledWith({
+      suiteId: 'suite-1', slotId: 'suite-slot-1', ownerUserId: 'owner-1', actorUserId: 'actor-1',
+      expectedWorkflowRevision: 4, operationKey: 'suite-apply-route-1',
+      expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z', production: false,
+    });
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: {
+        suite: { id: 'suite-1' },
+        application: {
+          jobId: 'job-1', outputAssetId: 'asset-1', mode: 'append',
+          targetType: 'collect', targetId: 'goods-1',
+        },
+      },
+      replayed: false,
+    });
+  });
+
+  it('preserves candidate target conflict data for the client refresh path', async () => {
+    const candidateService = candidateServiceMock();
+    vi.mocked(candidateService.apply).mockRejectedValueOnce(new AiImageSuiteCandidateError(
+      'AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT',
+      'Product images were updated by another operation',
+      409,
+      { targetUpdatedAt: new Date('2026-07-20T02:00:00.000Z') },
+    ));
+    const { app } = await build({ candidateService });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4,
+        operationKey: 'suite-apply-target-conflict',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_CANDIDATE_TARGET_CONFLICT',
+      msg: 'Product images were updated by another operation',
+      data: { targetUpdatedAt: '2026-07-20T02:00:00.000Z' },
+    });
+  });
+
+  it('fails review and application closed while suite writes are dark', async () => {
+    const candidateService = candidateServiceMock();
+    const { app } = await build({ candidateService, suiteEnabled: false });
+    const review = await app.inject({
+      method: 'POST', url: '/suites/suite-1/slots/suite-slot-1/review',
+      payload: {
+        expectedWorkflowRevision: 3, operationKey: 'suite-review-dark-1',
+        outputAssetId: 'asset-1', decision: 'REJECT',
+      },
+    });
+    const apply = await app.inject({
+      method: 'POST', url: '/suites/suite-1/slots/suite-slot-1/apply',
+      payload: {
+        expectedWorkflowRevision: 4, operationKey: 'suite-apply-dark-1',
+        expectedTargetUpdatedAt: '2026-07-20T01:00:00.000Z',
+      },
+    });
+
+    expect(review.statusCode).toBe(503);
+    expect(apply.statusCode).toBe(503);
+    expect(review.json()).toMatchObject({ code: 'AI_MEDIA_SUITE_DISABLED' });
+    expect(candidateService.review).not.toHaveBeenCalled();
+    expect(candidateService.apply).not.toHaveBeenCalled();
+  });
+
+  it('maps an in-transaction production fake rejection without refreshing suite state', async () => {
+    const candidateService = candidateServiceMock();
+    vi.mocked(candidateService.review).mockRejectedValueOnce(new AiImageSuiteCandidateError(
+      'AI_MEDIA_SUITE_CANDIDATE_PROVIDER_NOT_READY', 'fake rejected', 503,
+    ));
+    const service = serviceMock();
+    const { app } = await build({ candidateService, service, production: true });
+
+    const response = await app.inject({
+      method: 'POST', url: '/suites/suite-1/slots/suite-slot-1/review',
+      payload: {
+        expectedWorkflowRevision: 3, operationKey: 'suite-review-fake-prod',
+        outputAssetId: 'asset-1', decision: 'APPROVE',
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: 'AI_MEDIA_SUITE_CANDIDATE_PROVIDER_NOT_READY', msg: 'fake rejected',
+    });
+    expect(service.get).not.toHaveBeenCalled();
+  });
+
+  it('projects bounded slot references, workflow review and exact current application state', async () => {
+    const service = serviceMock();
+    const current = suite() as any;
+    current.status = 'SUCCEEDED';
+    current.revision = 7;
+    current.referenceAssets = [{
+      candidateId: 'main-1', ownerUserId: 'owner-1',
+      asset: {
+        id: 'source-asset-1', ownerUserId: 'owner-1', url: '/uploads/source.png',
+        mimeType: 'image/png', width: 900, height: 1200,
+      },
+    }];
+    const applicationPayload = {
+      version: 'ai-image-suite-candidate-application/v1', requestFingerprint: 'a'.repeat(64),
+      suiteId: 'suite-1', slotId: 'suite-slot-1', workflowId: 'workflow-1', jobId: 'job-1',
+      outputAssetId: 'asset-1', targetType: 'collect', targetId: 'goods-1', mode: 'append',
+      appliedAt: '2026-07-20T01:01:00.000Z', targetUpdatedAt: '2026-07-20T01:01:00.000Z',
+    };
+    current.slots[0] = {
+      ...current.slots[0], status: 'SUCCEEDED', attempt: 1, revision: 4,
+      childWorkflowId: 'workflow-1',
+      childWorkflow: {
+        id: 'workflow-1', revision: 5, reviewStatus: 'APPROVED',
+        selectedOutputAssetId: 'asset-1', reviewedAt: new Date('2026-07-20T01:00:00.000Z'),
+        jobs: [{ id: 'job-1', assets: [{
+          id: 'asset-1', ownerUserId: 'owner-1', aiImageJobId: 'job-1',
+          url: '/uploads/output.png', mimeType: 'image/png', width: 900, height: 1200,
+        }] }],
+        events: [{
+          eventType: 'SUITE_CANDIDATE_APPLIED', jobId: 'job-1', assetId: 'asset-1',
+          payload: applicationPayload,
+          payloadHash: hashAiMediaPlanningJson(applicationPayload),
+        }],
+      },
+    };
+    vi.mocked(service.get).mockResolvedValueOnce(current);
+    const { app } = await build({ service });
+
+    const response = await app.inject({ method: 'GET', url: '/suites/suite-1' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      code: 1,
+      data: { slots: [{
+        workflowRevision: 5, reviewStatus: 'APPROVED', selectedOutputAssetId: 'asset-1',
+        referenceAssets: [{ candidateId: 'main-1', id: 'source-asset-1', url: '/uploads/source.png' }],
+        application: { jobId: 'job-1', outputAssetId: 'asset-1', appliedAt: '2026-07-20T01:01:00.000Z' },
+      }] },
+    });
   });
 });

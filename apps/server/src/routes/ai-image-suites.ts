@@ -5,6 +5,7 @@ import { authenticate } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from '../config/system-config-schema.js';
 import { PrismaAiImageSuiteRepository } from '../repositories/ai-image-suite-repository.js';
+import { PrismaAiImageSuiteCandidateRepository } from '../repositories/ai-image-suite-candidate-repository.js';
 import {
   AiImageSuiteError,
   createAiImageSuiteService,
@@ -37,6 +38,12 @@ import {
   resolveAiImageProviderCapability,
 } from '../services/ai-image-provider-capabilities.js';
 import { getAiMediaRolloutDecision } from '../services/ai-media-rollout.js';
+import {
+  AiImageSuiteCandidateError,
+  createAiImageSuiteCandidateService,
+  type AiImageSuiteCandidateService,
+} from '../services/ai-image-suite-candidates.js';
+import { hashAiMediaPlanningJson } from '../services/ai-media-planning.js';
 import {
   sourceWorkflowFeatureFlags,
   type SourceWorkflowFeatureFlagEvaluator,
@@ -86,6 +93,20 @@ const retrySlotSchema = z.object({
   operationKey: z.string().trim().min(8).max(128),
 }).strict();
 
+const reviewCandidateSchema = z.object({
+  expectedWorkflowRevision: z.number().int().min(1),
+  operationKey: z.string().trim().min(8).max(128),
+  outputAssetId: z.string().trim().min(1).max(200),
+  decision: z.enum(['APPROVE', 'REJECT']),
+  note: z.string().trim().max(2_000).nullable().optional(),
+}).strict();
+
+const applyCandidateSchema = z.object({
+  expectedWorkflowRevision: z.number().int().min(1),
+  operationKey: z.string().trim().min(8).max(128),
+  expectedTargetUpdatedAt: z.string().datetime(),
+}).strict();
+
 const prepareSchema = z.object({
   operationKey: z.string().trim().min(8).max(128),
 }).strict();
@@ -95,6 +116,7 @@ const maxPublicDiagnostics = 20;
 
 export interface AiImageSuiteRouteOptions {
   service?: AiImageSuiteService;
+  candidateService?: AiImageSuiteCandidateService;
   referenceService?: Pick<AiImageSuiteReferenceService, 'internalize'>;
   promptService?: Pick<AiImageSuitePromptService, 'freeze'>;
   materializationService?: Pick<AiImageSuiteMaterializationService, 'materialize'>;
@@ -223,6 +245,84 @@ function publicSlotOutputAssets(slot: Record<string, unknown>, ownerUserId: stri
   });
 }
 
+function publicSlotReferenceAssets(
+  suite: AiImageSuiteRecord,
+  candidateIds: string[],
+) {
+  const byCandidateId = new Map<string, Record<string, unknown>>();
+  for (const rawReference of (suite.referenceAssets || []).slice(0, 25)) {
+    const reference = record(rawReference);
+    const asset = record(reference?.asset);
+    if (!reference || !asset) continue;
+    const candidateId = typeof reference?.candidateId === 'string'
+      ? reference.candidateId.trim()
+      : '';
+    const id = typeof asset?.id === 'string' ? asset.id.trim() : '';
+    const ownerUserId = typeof asset?.ownerUserId === 'string' ? asset.ownerUserId : '';
+    const url = typeof asset?.url === 'string' ? asset.url.trim() : '';
+    if (!candidateId || candidateId.length > 500
+      || !id || id.length > 200
+      || ownerUserId !== suite.ownerUserId
+      || !url || url.length > 4_096) continue;
+    byCandidateId.set(candidateId, {
+      candidateId,
+      id,
+      url,
+      mimeType: typeof asset.mimeType === 'string' && asset.mimeType.length <= 100
+        ? asset.mimeType
+        : null,
+      width: Number.isSafeInteger(asset.width) && Number(asset.width) > 0 ? Number(asset.width) : null,
+      height: Number.isSafeInteger(asset.height) && Number(asset.height) > 0 ? Number(asset.height) : null,
+    });
+  }
+  return candidateIds.slice(0, 20).flatMap((candidateId) => {
+    const asset = byCandidateId.get(candidateId);
+    return asset ? [asset] : [];
+  });
+}
+
+function publicSlotApplication(
+  suite: AiImageSuiteRecord,
+  slot: Record<string, unknown>,
+) {
+  const workflow = record(slot.childWorkflow);
+  const currentJob = Array.isArray(workflow?.jobs) ? record(workflow.jobs[0]) : null;
+  const event = Array.isArray(workflow?.events) ? record(workflow.events[0]) : null;
+  const payload = record(event?.payload);
+  if (!workflow || !currentJob || !event || !payload
+    || event.eventType !== 'SUITE_CANDIDATE_APPLIED'
+    || event.payloadHash !== hashAiMediaPlanningJson(payload)
+    || payload.version !== 'ai-image-suite-candidate-application/v1'
+    || String(payload.suiteId || '') !== suite.id
+    || String(payload.slotId || '') !== String(slot.id || '')
+    || String(payload.workflowId || '') !== String(workflow.id || '')
+    || String(payload.jobId || '') !== String(currentJob.id || '')
+    || String(event.jobId || '') !== String(currentJob.id || '')
+    || String(payload.outputAssetId || '') !== String(event.assetId || '')) return null;
+  const outputAssetId = String(payload.outputAssetId || '');
+  const currentOutputIds = new Set(
+    Array.isArray(currentJob.assets)
+      ? currentJob.assets.flatMap((entry) => {
+        const asset = record(entry);
+        return asset?.ownerUserId === suite.ownerUserId && typeof asset.id === 'string'
+          ? [asset.id]
+          : [];
+      })
+      : [],
+  );
+  const appliedAt = String(payload.appliedAt || '');
+  const targetUpdatedAt = String(payload.targetUpdatedAt || '');
+  if (!outputAssetId || !currentOutputIds.has(outputAssetId)
+    || !Number.isFinite(Date.parse(appliedAt))
+    || !Number.isFinite(Date.parse(targetUpdatedAt))) return null;
+  return {
+    jobId: String(currentJob.id),
+    outputAssetId,
+    appliedAt,
+    targetUpdatedAt,
+  };
+}
+
 function publicSuite(
   suite: AiImageSuiteRecord,
   options: { includePreviewHash?: boolean } = {},
@@ -283,6 +383,20 @@ function publicSuite(
       const errorCode = typeof slot.errorCode === 'string' && publicDiagnosticCode.test(slot.errorCode)
         ? slot.errorCode
         : null;
+      const workflow = record(slot.childWorkflow);
+      const outputAssets = publicSlotOutputAssets(slot, suite.ownerUserId);
+      const outputAssetIds = new Set(outputAssets.map((asset) => asset.id));
+      const reviewStatus = ['NOT_READY', 'PENDING', 'APPROVED', 'REJECTED'].includes(
+        String(workflow?.reviewStatus || ''),
+      ) ? String(workflow?.reviewStatus) : null;
+      const selectedOutputAssetId = typeof workflow?.selectedOutputAssetId === 'string'
+        && outputAssetIds.has(workflow.selectedOutputAssetId)
+        ? workflow.selectedOutputAssetId
+        : null;
+      const reviewedAt = workflow?.reviewedAt instanceof Date
+        || (typeof workflow?.reviewedAt === 'string' && Number.isFinite(Date.parse(workflow.reviewedAt)))
+        ? workflow.reviewedAt
+        : null;
       return {
         id: typeof slot.id === 'string' ? slot.id : null,
         ordinal: typeof slot.ordinal === 'number' ? slot.ordinal : null,
@@ -299,8 +413,16 @@ function publicSuite(
         attempt: typeof slot.attempt === 'number' ? slot.attempt : null,
         revision: typeof slot.revision === 'number' ? slot.revision : null,
         childWorkflowId: typeof slot.childWorkflowId === 'string' ? slot.childWorkflowId : null,
-        outputAssets: publicSlotOutputAssets(slot, suite.ownerUserId),
+        outputAssets,
         referenceCandidateIds: [...new Set(references)],
+        referenceAssets: publicSlotReferenceAssets(suite, [...new Set(references)]),
+        workflowRevision: Number.isSafeInteger(workflow?.revision) && Number(workflow?.revision) > 0
+          ? Number(workflow?.revision)
+          : null,
+        reviewStatus,
+        selectedOutputAssetId,
+        reviewedAt,
+        application: publicSlotApplication(suite, slot),
         diagnostics,
         estimatedCostCents: typeof slot.estimatedCostCents === 'number'
           ? slot.estimatedCostCents
@@ -346,6 +468,13 @@ function publicExecutionSummary(summary: AiImageSuiteExecutionSummary) {
 }
 
 function sendError(reply: FastifyReply, error: unknown) {
+  if (error instanceof AiImageSuiteCandidateError) {
+    return reply.status(error.statusCode).send({
+      code: error.code,
+      msg: error.message,
+      ...(error.data ? { data: error.data } : {}),
+    });
+  }
   if (error instanceof AiImageSuiteError
     || error instanceof AiImageSuiteReferenceError
     || error instanceof AiImageSuitePromptError
@@ -465,6 +594,9 @@ export async function aiImageSuiteRoutes(
 ) {
   const service = options.service || createAiImageSuiteService(
     new PrismaAiImageSuiteRepository(prisma),
+  );
+  const candidateService = options.candidateService || createAiImageSuiteCandidateService(
+    new PrismaAiImageSuiteCandidateRepository(prisma),
   );
   const authHook = options.authenticate || authenticate;
   const production = options.production ?? process.env.NODE_ENV === 'production';
@@ -1076,6 +1208,76 @@ export async function aiImageSuiteRoutes(
         replayed: result.replayed,
         enqueuePending,
       });
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/slots/:slotId/review', async (request, reply) => {
+    const params = request.params as { id?: unknown; slotId?: unknown };
+    const suiteId = String(params.id || '').trim();
+    const slotId = String(params.slotId || '').trim();
+    if (!suiteId || suiteId.length > 200 || !slotId || slotId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite or slot id is invalid' });
+    }
+    const parsed = reviewCandidateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    try {
+      const result = await candidateService.review({
+        suiteId,
+        slotId,
+        ...ids,
+        ...parsed.data,
+        note: parsed.data.note || null,
+        production,
+      });
+      const refreshed = await service.get(suiteId, ids.ownerUserId);
+      return {
+        code: 1,
+        data: publicSuite(refreshed, { includePreviewHash: false }),
+        replayed: result.replayed,
+      };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/suites/:id/slots/:slotId/apply', async (request, reply) => {
+    const params = request.params as { id?: unknown; slotId?: unknown };
+    const suiteId = String(params.id || '').trim();
+    const slotId = String(params.slotId || '').trim();
+    if (!suiteId || suiteId.length > 200 || !slotId || slotId.length > 200) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: 'suite or slot id is invalid' });
+    }
+    const parsed = applyCandidateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
+    }
+    const ids = actor(request);
+    const gate = await writeGate(ids.ownerUserId, options);
+    if (gate) return reply.status(gate.statusCode).send({ code: gate.code, msg: gate.msg });
+    try {
+      const result = await candidateService.apply({
+        suiteId,
+        slotId,
+        ...ids,
+        ...parsed.data,
+        production,
+      });
+      const refreshed = await service.get(suiteId, ids.ownerUserId);
+      return {
+        code: 1,
+        data: {
+          suite: publicSuite(refreshed, { includePreviewHash: false }),
+          application: result.application,
+        },
+        replayed: result.replayed,
+      };
     } catch (error) {
       return sendError(reply, error);
     }

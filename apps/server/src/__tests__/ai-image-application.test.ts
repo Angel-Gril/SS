@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AiImageApplicationError,
   applyAiImageAssets,
+  projectCollectImageAppend,
 } from '../services/ai-image-application.js';
 
 type State = ReturnType<typeof createState>;
@@ -89,6 +90,32 @@ const apply = (db: ReturnType<typeof database>, overrides: Partial<Parameters<ty
 });
 
 describe('AI image asset application', () => {
+  it('projects append-only collect images from the current publish authority without mutating input', () => {
+    const metadata = {
+      marker: 'keep',
+      watermarkedImages: ['https://cdn.example/approved.png'],
+      editedImages: ['https://cdn.example/edited.png'],
+    };
+
+    const result = projectCollectImageAppend(
+      ['https://cdn.example/legacy.png'],
+      metadata,
+      ['https://cdn.example/generated.png', 'https://cdn.example/generated.png'],
+    );
+
+    expect(result).toEqual({
+      images: ['https://cdn.example/approved.png', 'https://cdn.example/generated.png'],
+      editedImages: ['https://cdn.example/edited.png', 'https://cdn.example/generated.png'],
+      mainImage: 'https://cdn.example/approved.png',
+      metadata: {
+        marker: 'keep',
+        watermarkedImages: ['https://cdn.example/approved.png', 'https://cdn.example/generated.png'],
+        editedImages: ['https://cdn.example/edited.png', 'https://cdn.example/generated.png'],
+      },
+    });
+    expect(metadata.watermarkedImages).toEqual(['https://cdn.example/approved.png']);
+  });
+
   it('rejects a job owned by another tenant without touching a target', async () => {
     const state = createState();
     const db = database(state);

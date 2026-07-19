@@ -524,6 +524,16 @@ export interface AiMediaSuiteOutputAsset {
   height: number | null;
 }
 
+export interface AiMediaSuiteReferenceAsset extends AiMediaSuiteOutputAsset {
+  candidateId: string;
+}
+
+export interface AiMediaSuiteApplication {
+  jobId: string;
+  outputAssetId: string;
+  appliedAt: string;
+}
+
 export interface AiMediaSuiteSlot {
   id: string;
   ordinal: number;
@@ -535,11 +545,17 @@ export interface AiMediaSuiteSlot {
   attempt: number;
   revision: number;
   childWorkflowId: string | null;
+  workflowRevision: number | null;
   referenceCandidateIds: string[];
+  referenceAssets: AiMediaSuiteReferenceAsset[];
   diagnostics: string[];
   estimatedCostCents: number;
   maximumCostCents: number;
   errorCode: string | null;
+  reviewStatus: AiMediaReviewStatus;
+  selectedOutputAssetId: string | null;
+  reviewedAt: string | null;
+  application: AiMediaSuiteApplication | null;
   outputAssets: AiMediaSuiteOutputAsset[];
 }
 
@@ -817,25 +833,56 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
     const attempt = suiteSafeInteger(slot?.attempt);
     const slotRevision = suiteSafeInteger(slot?.revision, 1);
     const childWorkflowId = suiteNullableText(slot?.childWorkflowId, 200);
+    const workflowRevision = slot?.workflowRevision === null
+      ? null
+      : suiteSafeInteger(slot?.workflowRevision, 1);
     const slotEstimated = suiteSafeInteger(slot?.estimatedCostCents);
     const slotMaximum = suiteSafeInteger(slot?.maximumCostCents);
     const errorCode = suitePublicCode(slot?.errorCode ?? null);
+    const reviewStatus = slot?.reviewStatus === null && childWorkflowId === null
+      ? 'NOT_READY'
+      : slot?.reviewStatus;
+    const selectedOutputAssetId = suiteNullableText(slot?.selectedOutputAssetId, 200);
+    const reviewedAt = suiteDate(slot?.reviewedAt);
     if (!slot || !ownership || !slotId || ordinal === null || !slotKey || !goal || !ownershipKey
       || slotIds.has(slotId) || ordinals.has(ordinal)
       || (ownership.level !== 'sku' && ownership.level !== 'compatibility_group')
       || compatibilityGroupKey === undefined
       || !AI_MEDIA_SUITE_SLOT_STATUSES.includes(slotStatus as AiMediaSuiteSlotStatus)
       || attempt === null || slotRevision === null || childWorkflowId === undefined
+      || workflowRevision === undefined
       || slotEstimated === null || slotMaximum === null || slotMaximum < slotEstimated
       || errorCode === undefined || !Array.isArray(slot.referenceCandidateIds)
       || slot.referenceCandidateIds.length > AI_MEDIA_SUITE_MAX_REFERENCES
+      || !Array.isArray(slot.referenceAssets)
+      || slot.referenceAssets.length > AI_MEDIA_SUITE_MAX_REFERENCES
       || !Array.isArray(slot.diagnostics) || slot.diagnostics.length > 20
-      || !Array.isArray(slot.outputAssets) || slot.outputAssets.length > AI_MEDIA_SUITE_MAX_OUTPUTS) return null;
+      || !Array.isArray(slot.outputAssets) || slot.outputAssets.length > AI_MEDIA_SUITE_MAX_OUTPUTS
+      || !['NOT_READY', 'PENDING', 'APPROVED', 'REJECTED'].includes(String(reviewStatus))
+      || selectedOutputAssetId === undefined || reviewedAt === undefined) return null;
     const referenceCandidateIds = planningTextArray(slot.referenceCandidateIds, AI_MEDIA_SUITE_MAX_REFERENCES);
     const diagnostics = planningTextArray(slot.diagnostics, 20);
     if (referenceCandidateIds.length !== slot.referenceCandidateIds.length
       || diagnostics.length !== slot.diagnostics.length
       || diagnostics.some((code) => !AI_MEDIA_SUITE_PUBLIC_CODE.test(code))) return null;
+    const referenceAssets: AiMediaSuiteReferenceAsset[] = [];
+    const referenceAssetIds = new Set<string>();
+    const referenceAssetCandidateIds = new Set<string>();
+    for (const entryAsset of slot.referenceAssets) {
+      const asset = planningObject(entryAsset);
+      const candidateId = planningText(asset?.candidateId, 500);
+      const assetId = planningText(asset?.id, 200);
+      const url = planningText(asset?.url, 8_000);
+      const mimeType = suiteNullableText(asset?.mimeType, 200);
+      const width = suiteNullableDimension(asset?.width);
+      const height = suiteNullableDimension(asset?.height);
+      if (!asset || !candidateId || !referenceCandidateIds.includes(candidateId)
+        || referenceAssetCandidateIds.has(candidateId) || !assetId || referenceAssetIds.has(assetId)
+        || !url || mimeType === undefined || width === undefined || height === undefined) return null;
+      referenceAssetCandidateIds.add(candidateId);
+      referenceAssetIds.add(assetId);
+      referenceAssets.push({ candidateId, id: assetId, url, mimeType, width, height });
+    }
     const outputAssets: AiMediaSuiteOutputAsset[] = [];
     for (const entryAsset of slot.outputAssets) {
       const asset = planningObject(entryAsset);
@@ -848,6 +895,32 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
         || width === undefined || height === undefined) return null;
       outputAssets.push({ id: assetId, url, mimeType, width, height });
     }
+    const applicationValue = slot.application === null ? null : planningObject(slot.application);
+    let application: AiMediaSuiteApplication | null = null;
+    if (slot.application !== null) {
+      const applicationJobId = planningText(applicationValue?.jobId, 200);
+      const applicationOutputAssetId = planningText(applicationValue?.outputAssetId, 200);
+      const appliedAt = suiteDate(applicationValue?.appliedAt);
+      if (!applicationValue || !applicationJobId || !applicationOutputAssetId || !appliedAt) return null;
+      application = {
+        jobId: applicationJobId,
+        outputAssetId: applicationOutputAssetId,
+        appliedAt,
+      };
+    }
+    const outputAssetIds = new Set(outputAssets.map((asset) => asset.id));
+    const hasTerminalReview = reviewStatus === 'APPROVED' || reviewStatus === 'REJECTED';
+    if ((childWorkflowId === null) !== (workflowRevision === null)
+      || (childWorkflowId === null && reviewStatus !== 'NOT_READY')
+      || (childWorkflowId !== null && referenceAssets.length !== referenceCandidateIds.length)
+      || (slotStatus === 'SUCCEEDED' && (outputAssets.length !== 1 || reviewStatus === 'NOT_READY'))
+      || (slotStatus !== 'SUCCEEDED' && (outputAssets.length > 0 || reviewStatus !== 'NOT_READY'))
+      || (hasTerminalReview
+        ? (!selectedOutputAssetId || !outputAssetIds.has(selectedOutputAssetId) || !reviewedAt)
+        : (selectedOutputAssetId !== null || reviewedAt !== null))
+      || (application && (reviewStatus !== 'APPROVED'
+        || application.outputAssetId !== selectedOutputAssetId
+        || !outputAssetIds.has(application.outputAssetId)))) return null;
     slotIds.add(slotId);
     ordinals.add(ordinal);
     slots.push({
@@ -861,11 +934,17 @@ export function normalizeAiMediaSuite(value: unknown): AiMediaSuite | null {
       attempt,
       revision: slotRevision,
       childWorkflowId,
+      workflowRevision,
       referenceCandidateIds,
+      referenceAssets,
       diagnostics,
       estimatedCostCents: slotEstimated,
       maximumCostCents: slotMaximum,
       errorCode,
+      reviewStatus: reviewStatus as AiMediaReviewStatus,
+      selectedOutputAssetId,
+      reviewedAt,
+      application,
       outputAssets,
     });
   }
@@ -919,6 +998,20 @@ export interface AiMediaSuiteActionState {
   shouldPoll: boolean;
   terminal: boolean;
   retryableSlotIds: string[];
+}
+
+export type AiMediaSuiteSlotViewOnlyReason =
+  | 'HISTORICAL_VERSION'
+  | 'SOURCE_CHANGED'
+  | 'PLAN_NOT_CURRENT'
+  | null;
+
+export interface AiMediaSuiteSlotActionState {
+  candidateCurrent: boolean;
+  canReview: boolean;
+  canApply: boolean;
+  applied: boolean;
+  viewOnlyReason: AiMediaSuiteSlotViewOnlyReason;
 }
 
 export function isAiMediaSuitePlanCurrent(plan: AiMediaPlanRecord): boolean {
@@ -976,6 +1069,50 @@ export function resolveAiMediaSuiteActions(input: {
       && (status === 'PARTIAL_FAILURE' || status === 'FAILED'
         || status === 'SUCCEEDED' || status === 'CANCELLED'),
     retryableSlotIds,
+  };
+}
+
+export function resolveAiMediaSuiteSlotActions(input: {
+  plan: AiMediaPlanRecord;
+  readiness: Pick<AiMediaSuiteReadiness, 'ready'> | null | undefined;
+  suite: AiMediaSuite;
+  slot: AiMediaSuiteSlot;
+  targetUpdatedAt: string | null | undefined;
+}): AiMediaSuiteSlotActionState {
+  const { plan, readiness, suite, slot } = input;
+  const writesReady = readiness?.ready === true;
+  const suiteCurrent = suite.planId === plan.id
+    && Boolean(plan.currentVersionId)
+    && suite.planVersionId === plan.currentVersionId;
+  const sourceCurrent = !plan.staleAt && plan.sourceCurrent === true;
+  const planCurrent = isAiMediaSuitePlanCurrent(plan);
+  const slotBelongsToSuite = suite.slots.some((candidate) => candidate.id === slot.id);
+  const candidateCurrent = suiteCurrent && sourceCurrent && planCurrent && slotBelongsToSuite;
+  const output = slot.outputAssets[0] || null;
+  const selectedOutputCurrent = Boolean(output && slot.selectedOutputAssetId === output.id);
+  const applied = Boolean(slot.application
+    && output
+    && slot.application.outputAssetId === output.id);
+  let viewOnlyReason: AiMediaSuiteSlotViewOnlyReason = null;
+  if (!suiteCurrent) viewOnlyReason = 'HISTORICAL_VERSION';
+  else if (!sourceCurrent) viewOnlyReason = 'SOURCE_CHANGED';
+  else if (!planCurrent) viewOnlyReason = 'PLAN_NOT_CURRENT';
+  return {
+    candidateCurrent,
+    canReview: writesReady && candidateCurrent
+      && slot.status === 'SUCCEEDED'
+      && slot.reviewStatus === 'PENDING'
+      && slot.workflowRevision !== null
+      && Boolean(output),
+    canApply: writesReady && candidateCurrent
+      && slot.status === 'SUCCEEDED'
+      && slot.reviewStatus === 'APPROVED'
+      && slot.workflowRevision !== null
+      && selectedOutputCurrent
+      && !applied
+      && Boolean(input.targetUpdatedAt),
+    applied,
+    viewOnlyReason,
   };
 }
 
@@ -1124,6 +1261,84 @@ export function buildAiMediaSuiteCancelRequest(suite: AiMediaSuite, operationKey
 export function buildAiMediaSuiteRetryRequest(slot: AiMediaSuiteSlot, operationKey: string) {
   if (slot.status !== 'FAILED') throw new Error('仅失败的套图槽位可以重试');
   return { expectedSlotRevision: slot.revision, operationKey: suiteOperationKey(operationKey) };
+}
+
+export function buildAiMediaSuiteSlotReviewRequest(input: {
+  slot: AiMediaSuiteSlot;
+  operationKey: string;
+  outputAssetId: string;
+  decision: 'APPROVE' | 'REJECT';
+  note: string;
+}) {
+  const outputAssetId = input.outputAssetId.trim();
+  const note = input.note.trim();
+  if (input.slot.status !== 'SUCCEEDED'
+    || input.slot.reviewStatus !== 'PENDING'
+    || input.slot.workflowRevision === null
+    || !input.slot.outputAssets.some((asset) => asset.id === outputAssetId)) {
+    throw new Error('当前套图候选不能审核');
+  }
+  if (note.length > 2_000) throw new Error('审核备注不能超过 2000 个字符');
+  return {
+    expectedWorkflowRevision: input.slot.workflowRevision,
+    operationKey: suiteOperationKey(input.operationKey),
+    outputAssetId,
+    decision: input.decision,
+    note: note || null,
+  };
+}
+
+export function buildAiMediaSuiteSlotApplyRequest(input: {
+  slot: AiMediaSuiteSlot;
+  operationKey: string;
+  expectedTargetUpdatedAt: string;
+}) {
+  const expectedTargetUpdatedAt = input.expectedTargetUpdatedAt.trim();
+  const output = input.slot.outputAssets[0] || null;
+  if (input.slot.application) throw new Error('当前套图候选已经追加到商品');
+  if (input.slot.status !== 'SUCCEEDED'
+    || input.slot.reviewStatus !== 'APPROVED'
+    || input.slot.workflowRevision === null
+    || !output
+    || input.slot.selectedOutputAssetId !== output.id) {
+    throw new Error('当前套图候选尚未通过审核');
+  }
+  if (!expectedTargetUpdatedAt || !Number.isFinite(Date.parse(expectedTargetUpdatedAt))) {
+    throw new Error('商品图片版本无效，请刷新后重试');
+  }
+  return {
+    expectedWorkflowRevision: input.slot.workflowRevision,
+    operationKey: suiteOperationKey(input.operationKey),
+    expectedTargetUpdatedAt,
+  };
+}
+
+export type AiMediaSuiteSlotRecoveryDecision = 'confirmed' | 'retry' | 'conflict';
+
+export function resolveAiMediaSuiteSlotReviewRecovery(input: {
+  slot: AiMediaSuiteSlot;
+  outputAssetId: string;
+  decision: 'APPROVE' | 'REJECT';
+}): AiMediaSuiteSlotRecoveryDecision {
+  const expectedReviewStatus = input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+  if (input.slot.reviewStatus === expectedReviewStatus
+    && input.slot.selectedOutputAssetId === input.outputAssetId) return 'confirmed';
+  if (input.slot.status === 'SUCCEEDED'
+    && input.slot.reviewStatus === 'PENDING'
+    && input.slot.outputAssets.some((asset) => asset.id === input.outputAssetId)) return 'retry';
+  return 'conflict';
+}
+
+export function resolveAiMediaSuiteSlotApplyRecovery(input: {
+  slot: AiMediaSuiteSlot;
+  outputAssetId: string;
+}): AiMediaSuiteSlotRecoveryDecision {
+  if (input.slot.application?.outputAssetId === input.outputAssetId) return 'confirmed';
+  if (input.slot.status === 'SUCCEEDED'
+    && input.slot.reviewStatus === 'APPROVED'
+    && input.slot.selectedOutputAssetId === input.outputAssetId
+    && !input.slot.application) return 'retry';
+  return 'conflict';
 }
 
 export function describeAiMediaReadiness(
