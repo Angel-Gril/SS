@@ -91,7 +91,7 @@ MIGRATION_TIMEOUT=20m
 
 ## AI Media 暗态发布门禁
 
-Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约，应用版本回滚不得尝试回退这些 additive database guards。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI 和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
+Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史分页、优先任务续页和候选对比恢复，但不改变暗态边界。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约；`1670`/`1680` 以 `CREATE INDEX CONCURRENTLY` 增加 owner/context 的 history/updates keyset 索引。应用版本回滚不得尝试回退这些 additive database guards 或有效索引。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI、listing-draft/SKU 上下文和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
 
 - `feature_ai_media_workflow_v2`
 - `feature_ai_media_suite`
@@ -111,6 +111,15 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 2. 确认没有经过审批的试点后，通过受审计的管理员变更将五个开关恢复为 `false`，将 rollout policy 恢复为空 tenant 列表；不要用 shell 忽略 verifier 的退出码。
 3. Compose 修复配置后重新运行 `deploy-compose.sh`，并检查一次性 migrate/gate 日志；systemd/手工部署重新运行宿主机 verifier。通过后再恢复服务；仍失败则恢复上一版应用，数据库保持 additive migration 的前向状态。
 4. 若失败来自 `20260720153000_bind_ai_image_edit_outputs` 并发索引 migration，禁止直接 `resolve --applied`。按 `docs/RUNBOOK.md` 检查 `pg_index.indisvalid` 和 `pg_get_indexdef`，必要时 `DROP INDEX CONCURRENTLY`、`prisma migrate resolve --rolled-back`、重新 deploy 并复核定义。
+5. 若失败来自 `1670`/`1680`，分别检查 `ai_media_workflow_owner_context_history` 和 `ai_media_workflow_owner_context_updates` 的 `indisvalid`、`indisready` 与精确定义。对失败项留下的同名 invalid index 执行独立 `DROP INDEX CONCURRENTLY`，只把实际失败的 migration resolve 为 rolled back，再重跑 deploy；完整命令见 `docs/RUNBOOK.md`。
+
+### Unit 10A-H1 滚动部署边界
+
+H1 的 `GET /workflows` 只有在显式 `pageVersion=1` 时返回 additive `{items, priorityItems, priorityItemsTruncated, priorityNextCursor, nextCursor}` DTO；未带版本的旧客户端继续接收 legacy 数组。history cursor 使用 `createdAt/id`，priority cursor 使用固定 recent cutoff 的 `updatedAt/id`，两者均绑定 owner、context 和 lane，不能互换。新 Web 首屏最多合并 100 条 priority 记录，更多待处理记录只在用户显式点击后通过 `GET /workflows/priority` 逐页加载，因此 API 应先于或与 Web 同批部署；旧 Web 不依赖新端点。
+
+Web 以 revision、再以 `updatedAt` 合并响应，并保持 `appliedMode` 和 cost 状态单调；运行中任务每 2 秒、待人工审核/应用任务每 30 秒刷新，页面 hidden 时暂停并在恢复可见时刷新。候选绑定使用 `selectedOutputAssetId`，最多并排比较两张，并显示商品/SKU/slot scope。上述行为仍全部处于暗态、fake-only，不允许据此启用付费 Provider 或真实 Ozon 写入。
+
+Unit 10A-H1 是 111 migrations；本地关闭证据为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过，并已通过 workspace typecheck、full preflight、production build 及桌面/移动多会话浏览器验收。部署前仍必须按 Runbook 验证 `1670`/`1680` 的两个索引均 valid/ready。Unit 10A 仍缺 listing-draft/SKU、submitted-provider reconciliation 和 H2 mutation-ledger/compensating rollback。
 
 ## Cloudflare 设置
 
@@ -126,6 +135,7 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 - 应用回滚：保留最近 3 个镜像 tag，Nginx 或 compose 切回上一版。
 - 数据库回滚：优先前向修复；破坏性 migration 必须先备份并准备手写回滚 SQL。
 - Unit 9C 暗态回滚：关闭 AI Media master/suite/full-edit/inpaint/Web-media 开关并清空 rollout tenant 列表；保留 workflow、asset、job 和 migration 数据供兼容读取与审计。
+- Unit 10A-H1 应用回滚：旧客户端继续使用未版本化数组；保留 `1670`/`1680` 有效索引和所有 workflow/job/asset 历史，不删除候选或伪造回滚。H2 上线前没有自动媒体回滚能力。
 - OSS 回滚：对象 key 不覆盖，用版本化路径，如 `ss-erp/images/yyyy/mm/...`。
 
 ## 备份策略

@@ -2947,6 +2947,8 @@ model AiMediaWorkflow {
   @@index([ownerUserId, operation, createdAt])
   @@index([ownerUserId, selectedOutputAssetId])
   @@index([contextType, contextId, createdAt])
+  @@index([ownerUserId, contextType, contextId, createdAt(sort: Desc), id(sort: Desc)], map: "ai_media_workflow_owner_context_history")
+  @@index([ownerUserId, contextType, contextId, updatedAt(sort: Desc), id(sort: Desc)], map: "ai_media_workflow_owner_context_updates")
   @@map("ai_media_workflows")
 }
 

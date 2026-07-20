@@ -67,7 +67,11 @@ async function build(
     createImageEdit: vi.fn(async (input: any) => ({
       workflow: { ...workflow, operation: input.operation }, jobId: 'job-edit-1', replayed: false,
     })),
-    list: vi.fn(async () => [workflow]),
+    list: vi.fn(async (): Promise<any> => ({
+      items: [workflow], priorityItems: [], priorityItemsTruncated: false,
+      priorityNextCursor: null, nextCursor: null,
+    })),
+    listPriority: vi.fn(async (): Promise<any> => ({ items: [workflow], nextCursor: null })),
     get: vi.fn(async (_id: string, owner: string) => {
       if (owner !== 'owner-1') throw new AiMediaWorkflowError('NOT_FOUND', 'not found');
       return { ...workflow, operation: existingWorkflowOperation };
@@ -815,17 +819,98 @@ describe('AI media workflow routes', () => {
 
   it('lists owner-scoped contextual workflow history', async () => {
     const { app, mediaWorkflowService } = await build();
-    const response = await app.inject({ method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&limit=10' });
+    const response = await app.inject({ method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&limit=10&pageVersion=1' });
     expect(response.statusCode).toBe(200);
     expect(mediaWorkflowService.list).toHaveBeenCalledWith({
       ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 10,
+      includePriority: true,
     });
-    expect(response.json().data).toHaveLength(1);
+    expect(response.json().data).toEqual({
+      items: [expect.objectContaining({ id: 'workflow-1' })],
+      priorityItems: [],
+      priorityItemsTruncated: false,
+      priorityNextCursor: null,
+      nextCursor: null,
+    });
+  });
+
+  it('forwards an opaque contextual cursor and rejects incomplete context filters', async () => {
+    const { app, mediaWorkflowService } = await build();
+    const cursor = 'eyJ2IjoxfQ';
+    const response = await app.inject({
+      method: 'GET',
+      url: `/workflows?contextType=collect&contextId=goods-1&limit=10&pageVersion=1&cursor=${cursor}`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(mediaWorkflowService.list).toHaveBeenCalledWith(expect.objectContaining({
+      cursor, includePriority: false,
+    }));
+
+    const missingId = await app.inject({
+      method: 'GET', url: '/workflows?contextType=collect&pageVersion=1',
+    });
+    expect(missingId.statusCode).toBe(400);
+    expect(mediaWorkflowService.list).toHaveBeenCalledTimes(1);
+
+    const unversionedCursor = await app.inject({
+      method: 'GET',
+      url: `/workflows?contextType=collect&contextId=goods-1&cursor=${cursor}`,
+    });
+    expect(unversionedCursor.statusCode).toBe(400);
+
+    const unscopedPage = await app.inject({ method: 'GET', url: '/workflows?pageVersion=1' });
+    expect(unscopedPage.statusCode).toBe(400);
+  });
+
+  it('continues the owner/context priority lane through its independent endpoint', async () => {
+    const { app, mediaWorkflowService } = await build();
+    mediaWorkflowService.listPriority.mockResolvedValueOnce({
+      items: [workflow], nextCursor: 'priority-next',
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/workflows/priority?contextType=collect&contextId=goods-1&limit=100&cursor=priority-current',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mediaWorkflowService.listPriority).toHaveBeenCalledWith({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+      limit: 100, cursor: 'priority-current',
+    });
+    expect(response.json().data).toEqual({
+      items: [expect.objectContaining({ id: workflow.id })], nextCursor: 'priority-next',
+    });
+
+    const incomplete = await app.inject({
+      method: 'GET', url: '/workflows/priority?contextType=collect',
+    });
+    expect(incomplete.statusCode).toBe(400);
+    expect(mediaWorkflowService.listPriority).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the legacy unversioned workflow array during rolling deploys', async () => {
+    const { app, mediaWorkflowService } = await build();
+    const response = await app.inject({
+      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&limit=10',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual([expect.objectContaining({ id: 'workflow-1' })]);
+    expect(mediaWorkflowService.list).toHaveBeenCalledWith(expect.objectContaining({ includePriority: false }));
+
+    mediaWorkflowService.list.mockClear();
+    const partialLegacyFilter = await app.inject({
+      method: 'GET', url: '/workflows?contextType=collect',
+    });
+    expect(partialLegacyFilter.statusCode).toBe(200);
+    expect(partialLegacyFilter.json().data).toEqual([expect.objectContaining({ id: 'workflow-1' })]);
+    expect(mediaWorkflowService.list).toHaveBeenCalledWith(expect.objectContaining({
+      contextType: 'collect', contextId: undefined, includePriority: false,
+    }));
   });
 
   it('exposes only a current successful standalone edit final as an edit-ready candidate', async () => {
     const { app, mediaWorkflowService } = await build();
-    mediaWorkflowService.list.mockResolvedValueOnce([{
+    mediaWorkflowService.list.mockResolvedValueOnce({ items: [{
       ...workflow,
       operation: 'FULL_EDIT', status: 'SUCCEEDED', reviewStatus: 'PENDING', suiteId: null,
       completedAt: new Date('2026-07-20T08:00:00.000Z'),
@@ -857,14 +942,14 @@ describe('AI media workflow routes', () => {
           },
         }],
       }],
-    } as any]);
+    } as any], nextCursor: null });
 
     const response = await app.inject({
-      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1',
+      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&pageVersion=1',
     });
 
     expect(response.statusCode).toBe(200);
-    const returnedWorkflow = response.json().data[0];
+    const returnedWorkflow = response.json().data.items[0];
     expect(returnedWorkflow.inputs).toEqual([
       expect.objectContaining({ kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: 'snapshot-1' }),
     ]);
@@ -930,14 +1015,14 @@ describe('AI media workflow routes', () => {
       }],
     };
     mutate(candidateWorkflow);
-    mediaWorkflowService.list.mockResolvedValueOnce([candidateWorkflow]);
+    mediaWorkflowService.list.mockResolvedValueOnce({ items: [candidateWorkflow], nextCursor: null });
 
     const response = await app.inject({
-      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1',
+      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&pageVersion=1',
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().data[0].jobs[0].assets[0]).toMatchObject({
+    expect(response.json().data.items[0].jobs[0].assets[0]).toMatchObject({
       id: 'candidate-1', editReady: false,
     });
   });
@@ -953,7 +1038,7 @@ describe('AI media workflow routes', () => {
 
   it('returns safe translation metadata while keeping the frozen operation config private', async () => {
     const { app, mediaWorkflowService } = await build(true, 'owner-1', true);
-    mediaWorkflowService.list.mockResolvedValueOnce([{
+    mediaWorkflowService.list.mockResolvedValueOnce({ items: [{
       ...workflow,
       operation: 'IMAGE_TRANSLATE' as any,
       jobs: [{
@@ -965,14 +1050,14 @@ describe('AI media workflow routes', () => {
         },
         assets: [],
       }],
-    }]);
+    }], nextCursor: null });
 
-    const response = await app.inject({ method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1' });
-    expect(response.json().data[0].jobs[0].translation).toEqual({
+    const response = await app.inject({ method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1&pageVersion=1' });
+    expect(response.json().data.items[0].jobs[0].translation).toEqual({
       sourceLanguage: 'zh', targetLanguage: 'ru', policyVersion: 'ai-image-translation-policy/1.0',
       terminologies: [{ src: '钢琴黑', tgt: 'глянцевый черный' }],
     });
-    expect(response.json().data[0].jobs[0]).not.toHaveProperty('operationConfig');
+    expect(response.json().data.items[0].jobs[0]).not.toHaveProperty('operationConfig');
     expect(JSON.stringify(response.json())).not.toContain('private compiled provider policy');
   });
 
@@ -980,6 +1065,27 @@ describe('AI media workflow routes', () => {
     const { app } = await build(true, 'owner-2');
     const response = await app.inject({ method: 'GET', url: '/workflows/workflow-1' });
     expect(response.statusCode).toBe(404);
+  });
+
+  it('binds workflow detail recovery to the requested context', async () => {
+    const { app } = await build();
+    const current = await app.inject({
+      method: 'GET',
+      url: '/workflows/workflow-1?contextType=collect&contextId=goods-1',
+    });
+    expect(current.statusCode).toBe(200);
+
+    const otherContext = await app.inject({
+      method: 'GET',
+      url: '/workflows/workflow-1?contextType=collect&contextId=goods-2',
+    });
+    expect(otherContext.statusCode).toBe(404);
+
+    const incomplete = await app.inject({
+      method: 'GET',
+      url: '/workflows/workflow-1?contextType=collect',
+    });
+    expect(incomplete.statusCode).toBe(400);
   });
 
   it('uses workflow revision CAS for review and retry', async () => {

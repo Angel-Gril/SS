@@ -35,4 +35,20 @@ describe('AI media migration safety', () => {
     expect(identity).toMatch(/media asset job binding is insert-time immutable/u);
     expect(identity).toMatch(/media_assets_ai_image_job_id_fkey[\s\S]*ON DELETE RESTRICT/u);
   });
+
+  it('adds the contextual history keyset index without blocking workflow writes', () => {
+    const history = migration('20260720167000_add_ai_media_workflow_history_index').trim();
+    expect(history.replace(/\s+/gu, ' ')).toBe(
+      'CREATE INDEX CONCURRENTLY "ai_media_workflow_owner_context_history" ON "ai_media_workflows" ( "owner_user_id", "context_type", "context_id", "created_at" DESC, "id" DESC );',
+    );
+    expect(history.match(/CREATE\s/gu)).toHaveLength(1);
+    expect(history).not.toMatch(/BEGIN|COMMIT|SET /u);
+
+    const priority = migration('20260720168000_add_ai_media_workflow_priority_index').trim();
+    expect(priority.replace(/\s+/gu, ' ')).toBe(
+      'CREATE INDEX CONCURRENTLY "ai_media_workflow_owner_context_updates" ON "ai_media_workflows" ( "owner_user_id", "context_type", "context_id", "updated_at" DESC, "id" DESC );',
+    );
+    expect(priority.match(/CREATE\s/gu)).toHaveLength(1);
+    expect(priority).not.toMatch(/BEGIN|COMMIT|SET /u);
+  });
 });

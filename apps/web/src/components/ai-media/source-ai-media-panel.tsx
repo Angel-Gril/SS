@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ImageIcon, Languages, Loader2, Plus, RefreshCw, RotateCcw, ScanLine, Square, Trash2, WandSparkles, X } from 'lucide-react';
-import { api, apiUrl } from '@/lib/api';
+import { Check, ChevronDown, Columns2, ImageIcon, Languages, Loader2, Plus, RefreshCw, RotateCcw, ScanLine, Square, Trash2, WandSparkles, X } from 'lucide-react';
+import { api, apiUrl, type ApiResponse } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -21,6 +21,9 @@ import {
   type RunMediaMutation,
 } from './source-ai-media-state';
 import {
+  appendAiMediaWorkflowHistoryPage,
+  aiMediaWorkflowPollInterval,
+  aiMediaWorkflowReviewOutput,
   buildAiImageEditWorkflowRequest,
   buildImageTranslationWorkflowRequest,
   clearWorkflowSubmissionIntent,
@@ -28,9 +31,13 @@ import {
   isAiMediaWorkflowInputCurrent,
   isDefinitiveWorkflowSubmissionFailure,
   loadWorkflowSubmissionIntent,
+  mergeAiMediaWorkflowHistoryHead,
+  normalizeAiMediaWorkflowPage,
+  normalizeAiMediaWorkflowPriorityPage,
   normalizeImageTranslationTerminologies,
   resolveWorkflowSubmissionIntent,
   saveWorkflowSubmissionIntent,
+  shouldRefreshAiMediaWorkflow,
   type AiImageEditMaskAsset,
   type AiImageTranslationTerminology,
   type AiMediaCapabilities,
@@ -39,6 +46,8 @@ import {
   type AiMediaOperation,
   type AiMediaWorkflow,
   type AiMediaWorkflowJob,
+  type AiMediaWorkflowPage,
+  type AiMediaWorkflowPriorityPage,
   type WorkflowIntentStorage,
   type WorkflowSubmissionIntent,
 } from '@/lib/ai-media-workflow';
@@ -85,6 +94,29 @@ function maskHistoryState(token: string) {
   };
 }
 
+function workflowOperationLabel(operation: AiMediaOperation) {
+  return operation === 'IMAGE_TRANSLATE'
+    ? '图片翻译'
+    : operation === 'FULL_EDIT'
+      ? '全图编辑'
+      : operation === 'INPAINT'
+        ? '局部重绘'
+        : '参考改图';
+}
+
+function workflowScopeLabel(workflow: AiMediaWorkflow) {
+  if (workflow.contextSkuKey && workflow.contextSlotKey) {
+    return `${workflow.contextSkuKey} · ${workflow.contextSlotKey}`;
+  }
+  if (workflow.contextSkuKey) return workflow.contextSkuKey;
+  if (workflow.contextSlotKey) return workflow.contextSlotKey;
+  return '商品级';
+}
+
+function priorityHeadSignature(workflows: AiMediaWorkflow[]) {
+  return workflows.map((workflow) => workflow.id).sort().join('|');
+}
+
 export function SourceAiMediaPanel({
   target,
   selectedSkuKeys,
@@ -105,6 +137,11 @@ export function SourceAiMediaPanel({
   const [context, setContext] = useState<AiMediaContextResponse | null>(null);
   const [capabilities, setCapabilities] = useState<AiMediaCapabilities | null>(null);
   const [workflows, setWorkflows] = useState<AiMediaWorkflow[]>([]);
+  const [historyNextCursor, setHistoryNextCursor] = useState<string | null>(null);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyPriorityTruncated, setHistoryPriorityTruncated] = useState(false);
+  const [historyPriorityLoading, setHistoryPriorityLoading] = useState(false);
+  const [comparisonWorkflowIds, setComparisonWorkflowIds] = useState<string[]>([]);
   const [selectedKey, setSelectedKey] = useState('');
   const [candidateSource, setCandidateSource] = useState<AiMediaContextResponse['inputs'][number] | null>(null);
   const [operation, setOperation] = useState<AiMediaOperation>('IMAGE_TO_IMAGE');
@@ -130,6 +167,21 @@ export function SourceAiMediaPanel({
   const inpaintIntentRef = useRef<WorkflowSubmissionIntent | null>(null);
   const maskEditorRef = useRef<SourceAiImageMaskEditorHandle | null>(null);
   const retryIntentRef = useRef(new Map<string, WorkflowSubmissionIntent>());
+  const workflowsRef = useRef<AiMediaWorkflow[]>([]);
+  const targetIdRef = useRef(target.id);
+  const historyLoadedTargetRef = useRef<string | null>(null);
+  const historyNextCursorRef = useRef<string | null>(null);
+  const historyExpandedRef = useRef(false);
+  const historyPageGenerationRef = useRef(0);
+  const priorityNextCursorRef = useRef<string | null>(null);
+  const priorityPageGenerationRef = useRef(0);
+  const priorityLoadingRef = useRef(false);
+  const prioritySeenCursorsRef = useRef(new Set<string>());
+  const priorityHeadSignatureRef = useRef('');
+  const priorityWorkflowIdsRef = useRef(new Set<string>());
+  const detailRefreshOffsetRef = useRef(0);
+  const detailRefreshGenerationRef = useRef(0);
+  const workflowPollingRef = useRef(false);
   const capabilitiesRef = useRef<AiMediaCapabilities | null>(null);
   const contextRef = useRef<AiMediaContextResponse | null>(null);
   const maskDirtyRef = useRef(false);
@@ -143,6 +195,7 @@ export function SourceAiMediaPanel({
   const translationIntentStorageKey = intentStorageKey(target.id, 'image-translate');
   const fullEditIntentStorageKey = intentStorageKey(target.id, 'full-edit');
   const inpaintIntentStorageKey = intentStorageKey(target.id, 'inpaint');
+  targetIdRef.current = target.id;
 
   function operationReadiness(operationKey: AiMediaWorkflow['operation']) {
     return capabilities?.operations?.[operationKey] || null;
@@ -169,6 +222,48 @@ export function SourceAiMediaPanel({
     }
   }, []);
 
+  const loadNextPriorityHistoryPage = useCallback(async (
+    requestTargetId: string,
+    requestedCursor: string,
+  ) => {
+    if (priorityLoadingRef.current) return;
+    const generation = ++priorityPageGenerationRef.current;
+    priorityLoadingRef.current = true;
+    priorityNextCursorRef.current = requestedCursor;
+    setHistoryPriorityLoading(true);
+    try {
+      if (prioritySeenCursorsRef.current.has(requestedCursor)) {
+        throw new Error('Priority history cursor repeated');
+      }
+      const result: ApiResponse<AiMediaWorkflowPriorityPage> = await api.get<AiMediaWorkflowPriorityPage>(
+        `/api/ai-images/workflows/priority?contextType=collect&contextId=${encodeURIComponent(requestTargetId)}&limit=100&cursor=${encodeURIComponent(requestedCursor)}`,
+      );
+      if (targetIdRef.current !== requestTargetId || generation !== priorityPageGenerationRef.current) return;
+      const page: AiMediaWorkflowPriorityPage | null = result.code === 1
+        ? normalizeAiMediaWorkflowPriorityPage(result.data)
+        : null;
+      if (!page) throw new Error(result.msg || 'Invalid priority history page');
+      if (
+        page.nextCursor === requestedCursor
+        || Boolean(page.nextCursor && prioritySeenCursorsRef.current.has(page.nextCursor))
+      ) throw new Error('Priority history cursor did not advance');
+      prioritySeenCursorsRef.current.add(requestedCursor);
+      setWorkflows((current) => appendAiMediaWorkflowHistoryPage(current, page.items));
+      priorityNextCursorRef.current = page.nextCursor;
+      setHistoryPriorityTruncated(Boolean(page.nextCursor));
+    } catch {
+      if (targetIdRef.current === requestTargetId && generation === priorityPageGenerationRef.current) {
+        priorityNextCursorRef.current = requestedCursor;
+        setHistoryPriorityTruncated(true);
+      }
+    } finally {
+      if (targetIdRef.current === requestTargetId && generation === priorityPageGenerationRef.current) {
+        priorityLoadingRef.current = false;
+        setHistoryPriorityLoading(false);
+      }
+    }
+  }, []);
+
   const executeLoad = useCallback(async (request: LatestLoadRequest, isCurrent: () => boolean) => {
     try {
       const capabilitiesRequest = capabilitiesRef.current
@@ -176,7 +271,7 @@ export function SourceAiMediaPanel({
         : api.get<AiMediaCapabilities>('/api/ai-images/capabilities');
       const [contextResult, historyResult, capabilitiesResult] = await Promise.all([
         api.get<AiMediaContextResponse>(`/api/ai-images/contexts/collect/${encodeURIComponent(request.targetId)}`),
-        api.get<AiMediaWorkflow[]>(`/api/ai-images/workflows?contextType=collect&contextId=${encodeURIComponent(request.targetId)}&limit=20`),
+        api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(`/api/ai-images/workflows?contextType=collect&contextId=${encodeURIComponent(request.targetId)}&limit=20&pageVersion=1`),
         capabilitiesRequest,
       ]);
       if (!isCurrent()) return;
@@ -225,8 +320,41 @@ export function SourceAiMediaPanel({
       } else {
         setError(contextResult.msg || '图片上下文加载失败');
       }
-      if (historyResult.code === 1 && historyResult.data) setWorkflows(historyResult.data);
-      else setError(historyResult.msg || '任务历史加载失败');
+      const historyPage = historyResult.code === 1
+        ? normalizeAiMediaWorkflowPage(historyResult.data)
+        : null;
+      if (historyPage) {
+        priorityWorkflowIdsRef.current = new Set(
+          historyPage.priorityItems.map((workflow) => workflow.id),
+        );
+        const firstPageItems = mergeAiMediaWorkflowHistoryHead(
+          historyPage.items,
+          historyPage.priorityItems,
+        );
+        const replaceHistory = historyLoadedTargetRef.current !== request.targetId;
+        historyLoadedTargetRef.current = request.targetId;
+        setWorkflows((current) => replaceHistory
+          ? firstPageItems
+          : mergeAiMediaWorkflowHistoryHead(current, firstPageItems));
+        if (replaceHistory || !historyExpandedRef.current) {
+          historyNextCursorRef.current = historyPage.nextCursor;
+          setHistoryNextCursor(historyPage.nextCursor);
+        }
+        if (replaceHistory) {
+          prioritySeenCursorsRef.current.clear();
+          priorityHeadSignatureRef.current = priorityHeadSignature(historyPage.priorityItems);
+          priorityNextCursorRef.current = historyPage.priorityNextCursor || null;
+          setHistoryPriorityTruncated(historyPage.priorityItemsTruncated);
+        } else if (
+          !priorityNextCursorRef.current
+          && priorityHeadSignatureRef.current !== priorityHeadSignature(historyPage.priorityItems)
+        ) {
+          priorityHeadSignatureRef.current = priorityHeadSignature(historyPage.priorityItems);
+          prioritySeenCursorsRef.current.clear();
+          priorityNextCursorRef.current = historyPage.priorityNextCursor || null;
+          setHistoryPriorityTruncated(historyPage.priorityItemsTruncated);
+        }
+      } else setError(historyResult.msg || '任务历史加载失败');
       if (capabilitiesResult.code === 1 && capabilitiesResult.data) {
         capabilitiesRef.current = capabilitiesResult.data;
         setCapabilities(capabilitiesResult.data);
@@ -247,15 +375,58 @@ export function SourceAiMediaPanel({
   loadCoordinatorRef.current.setTarget(target.id);
   useEffect(() => () => {
     loadCoordinatorRef.current?.invalidate();
+    historyPageGenerationRef.current += 1;
+    priorityPageGenerationRef.current += 1;
+    priorityLoadingRef.current = false;
+    prioritySeenCursorsRef.current.clear();
+    priorityHeadSignatureRef.current = '';
+    detailRefreshGenerationRef.current += 1;
     contextRef.current = null;
     maskDirtyRef.current = false;
   }, []);
+  useEffect(() => {
+    workflowsRef.current = workflows;
+  }, [workflows]);
   const load = useCallback((quiet = false, refreshCapabilities = false, interactive = false) => {
     if (refreshCapabilities) {
       capabilitiesRef.current = null;
       setCapabilities(null);
     }
     return loadCoordinatorRef.current!.load(quiet, interactive);
+  }, []);
+
+  const refreshActiveWorkflows = useCallback(async () => {
+    const requestTargetId = targetIdRef.current;
+    const generation = ++detailRefreshGenerationRef.current;
+    const refreshableIds = workflowsRef.current
+      .filter(shouldRefreshAiMediaWorkflow)
+      .map((workflow) => workflow.id)
+      .filter((workflowId) => !priorityWorkflowIdsRef.current.has(workflowId));
+    const offset = refreshableIds.length
+      ? detailRefreshOffsetRef.current % refreshableIds.length
+      : 0;
+    const activeIds = refreshableIds.length <= 20
+      ? refreshableIds
+      : Array.from({ length: 20 }, (_, index) => refreshableIds[(offset + index) % refreshableIds.length]!);
+    detailRefreshOffsetRef.current = offset + activeIds.length;
+    if (!activeIds.length) return;
+    const results = await Promise.all(activeIds.map((workflowId) => api.get<AiMediaWorkflow>(
+      `/api/ai-images/workflows/${encodeURIComponent(workflowId)}?contextType=collect&contextId=${encodeURIComponent(requestTargetId)}`,
+    ).catch(() => null)));
+    if (
+      targetIdRef.current !== requestTargetId
+      || generation !== detailRefreshGenerationRef.current
+    ) return;
+    const updates = new Map(results.flatMap((result) => (
+      result?.code === 1 && result.data ? [[result.data.id, result.data] as const] : []
+    )));
+    if (!updates.size) return;
+    setWorkflows((current) => current.map((workflow) => {
+      const updated = updates.get(workflow.id);
+      return updated
+        ? mergeAiMediaWorkflowHistoryHead([workflow], [updated])[0] || workflow
+        : workflow;
+    }));
   }, []);
 
   useEffect(() => {
@@ -265,6 +436,24 @@ export function SourceAiMediaPanel({
     setCapabilities(null);
     capabilitiesRef.current = null;
     setWorkflows([]);
+    workflowsRef.current = [];
+    historyLoadedTargetRef.current = null;
+    historyNextCursorRef.current = null;
+    historyExpandedRef.current = false;
+    historyPageGenerationRef.current += 1;
+    priorityPageGenerationRef.current += 1;
+    priorityLoadingRef.current = false;
+    priorityNextCursorRef.current = null;
+    prioritySeenCursorsRef.current.clear();
+    priorityHeadSignatureRef.current = '';
+    detailRefreshGenerationRef.current += 1;
+    priorityWorkflowIdsRef.current.clear();
+    detailRefreshOffsetRef.current = 0;
+    setHistoryNextCursor(null);
+    setHistoryLoadingMore(false);
+    setHistoryPriorityTruncated(false);
+    setHistoryPriorityLoading(false);
+    setComparisonWorkflowIds([]);
     setSelectedKey('');
     setCandidateSource(null);
     updateMaskDirty(false);
@@ -279,11 +468,34 @@ export function SourceAiMediaPanel({
     retryIntentRef.current.clear();
     void load();
   }, [fullEditIntentStorageKey, imageIntentStorageKey, inpaintIntentStorageKey, load, target.id, translationIntentStorageKey, updateMaskDirty]);
+  const workflowPollInterval = aiMediaWorkflowPollInterval(workflows);
   useEffect(() => {
-    if (!workflows.some((workflow) => ACTIVE.has(workflow.status))) return;
-    const timer = window.setInterval(() => void load(true), 2_000);
-    return () => window.clearInterval(timer);
-  }, [load, workflows]);
+    if (!workflowPollInterval) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled || workflowPollingRef.current || document.visibilityState === 'hidden') return;
+      workflowPollingRef.current = true;
+      try {
+        await load(true);
+        if (!cancelled) await refreshActiveWorkflows();
+      } finally {
+        workflowPollingRef.current = false;
+      }
+    };
+    const timer = window.setInterval(
+      () => void poll(),
+      workflowPollInterval,
+    );
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [load, refreshActiveWorkflows, workflowPollInterval]);
 
   const selected = useMemo(() => (
     candidateSource
@@ -743,6 +955,47 @@ export function SourceAiMediaPanel({
     }
   }
 
+  async function loadMoreHistory() {
+    const cursor = historyNextCursorRef.current;
+    if (!cursor || historyLoadingMore) return;
+    const requestTargetId = target.id;
+    const generation = ++historyPageGenerationRef.current;
+    setHistoryLoadingMore(true);
+    try {
+      const result = await api.get<AiMediaWorkflowPage | AiMediaWorkflow[]>(
+        `/api/ai-images/workflows?contextType=collect&contextId=${encodeURIComponent(requestTargetId)}&limit=20&pageVersion=1&cursor=${encodeURIComponent(cursor)}`,
+      );
+      if (
+        generation !== historyPageGenerationRef.current
+        || targetIdRef.current !== requestTargetId
+        || historyNextCursorRef.current !== cursor
+      ) return;
+      const page = result.code === 1 ? normalizeAiMediaWorkflowPage(result.data) : null;
+      if (!page) {
+        toast({ title: '历史加载失败', description: result.msg || '服务端返回了无效分页结果', variant: 'destructive' });
+        return;
+      }
+      historyExpandedRef.current = true;
+      historyNextCursorRef.current = page.nextCursor;
+      setHistoryNextCursor(page.nextCursor);
+      setWorkflows((current) => appendAiMediaWorkflowHistoryPage(current, page.items));
+    } catch (caught) {
+      if (generation === historyPageGenerationRef.current && targetIdRef.current === requestTargetId) {
+        toast({ title: '历史加载失败', description: caught instanceof Error ? caught.message : '网络错误', variant: 'destructive' });
+      }
+    } finally {
+      if (generation === historyPageGenerationRef.current && targetIdRef.current === requestTargetId) {
+        setHistoryLoadingMore(false);
+      }
+    }
+  }
+
+  function toggleCandidateComparison(workflowId: string) {
+    setComparisonWorkflowIds((current) => current.includes(workflowId)
+      ? current.filter((id) => id !== workflowId)
+      : [...current.slice(-1), workflowId]);
+  }
+
   async function applyWorkflow(workflow: AiMediaWorkflow, job: AiMediaWorkflow['jobs'][number]) {
     if (!context || !isAiMediaWorkflowInputCurrent(
       workflow,
@@ -780,6 +1033,13 @@ export function SourceAiMediaPanel({
     }
     if (execution.value) onApplied?.(execution.value);
   }
+
+  const comparisonCandidates = comparisonWorkflowIds.flatMap((workflowId) => {
+    const workflow = workflows.find((candidate) => candidate.id === workflowId);
+    const job = workflow?.jobs[workflow.jobs.length - 1];
+    const output = workflow ? aiMediaWorkflowReviewOutput(workflow, job) : undefined;
+    return workflow && output ? [{ workflow, output }] : [];
+  });
 
   if (loading) return <div className="flex items-center gap-2 border-t pt-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />加载 AI 图片工作流</div>;
 
@@ -920,10 +1180,31 @@ export function SourceAiMediaPanel({
       </> : null}
 
       <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground">任务历史</h4>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <h4 className="text-xs font-medium text-muted-foreground">任务历史</h4>
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+            {comparisonCandidates.length ? <Badge variant="outline">对比 {comparisonCandidates.length}/2</Badge> : null}
+            {historyPriorityLoading ? <Badge variant="outline"><Loader2 className="mr-1 h-3 w-3 animate-spin" />正在加载任务</Badge> : null}
+            {historyPriorityTruncated && !historyPriorityLoading ? <>
+              <Badge variant="outline">还有待处理任务</Badge>
+              {priorityNextCursorRef.current ? <Button type="button" size="sm" variant="outline" title="加载更多待处理任务" onClick={() => void loadNextPriorityHistoryPage(target.id, priorityNextCursorRef.current!)}><ChevronDown className="h-3.5 w-3.5" />加载待处理任务</Button> : null}
+            </> : null}
+          </div>
+        </div>
+        {comparisonCandidates.length ? <div className="grid min-w-0 gap-2 sm:grid-cols-2" aria-label="候选图对比">
+          {comparisonCandidates.map(({ workflow, output }) => <div key={workflow.id} className="min-w-0 rounded-md border p-2">
+            <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-xs font-medium">{workflowOperationLabel(workflow.operation)} · {workflowScopeLabel(workflow)} · {new Date(workflow.createdAt).toLocaleString()}</span>
+              <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0" title="移出对比" aria-label="移出对比" onClick={() => toggleCandidateComparison(workflow.id)}><X className="h-3.5 w-3.5" /></Button>
+            </div>
+            <a href={imageUrl(output.url)} target="_blank" rel="noreferrer" className="block aspect-[4/3] w-full overflow-hidden rounded border bg-muted" title="打开候选图">
+              <img src={imageUrl(output.url)} alt={`${workflowOperationLabel(workflow.operation)}对比候选`} loading="lazy" className="h-full w-full object-contain" />
+            </a>
+          </div>)}
+        </div> : null}
         {!workflows.length ? <p className="text-sm text-muted-foreground">暂无 AI 图片任务</p> : workflows.map((workflow) => {
           const job = workflow.jobs[workflow.jobs.length - 1];
-          const output = job?.assets?.[0];
+          const output = aiMediaWorkflowReviewOutput(workflow, job);
           const source = workflow.inputs.find((input) => input.role === 'REFERENCE')
             || workflow.inputs.find((input) => input.role !== 'MASK');
           const mask = workflow.inputs.find((input) => input.role === 'MASK');
@@ -941,13 +1222,7 @@ export function SourceAiMediaPanel({
           const isTranslation = workflow.operation === 'IMAGE_TRANSLATE';
           const isFullEdit = workflow.operation === 'FULL_EDIT';
           const isInpaint = workflow.operation === 'INPAINT';
-          const operationLabel = isTranslation
-            ? '图片翻译'
-            : isFullEdit
-              ? '全图编辑'
-              : isInpaint
-                ? '局部重绘'
-                : '参考改图';
+          const operationLabel = workflowOperationLabel(workflow.operation);
           const retryReadiness = operationReadiness(workflow.operation);
           const retryReady = Boolean(capabilities?.webMediaEnabled && retryReadiness?.ready);
           const candidateCanChain = Boolean(
@@ -963,14 +1238,15 @@ export function SourceAiMediaPanel({
           const inpaintChainReady = Boolean(capabilities?.webMediaEnabled && inpaintReadiness?.ready);
           return <div key={workflow.id} className="grid min-w-0 gap-3 rounded-md border p-3 lg:grid-cols-[minmax(148px,224px)_minmax(0,1fr)] lg:items-center">
             <div className="flex flex-wrap gap-1">
-              {source ? <a href={imageUrl(source.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开源图"><img src={imageUrl(source.url)} alt={`${operationLabel}源图`} className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">源图</span></a> : <div className="h-[72px] w-[72px] rounded border bg-muted" />}
-              {mask ? <a href={imageUrl(mask.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开遮罩"><img src={imageUrl(mask.url)} alt="局部重绘遮罩" className="h-full w-full object-contain" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">遮罩</span></a> : null}
-              {output ? <a href={imageUrl(output.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开候选图"><img src={imageUrl(output.url)} alt={`${operationLabel}候选`} className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">候选</span></a> : <div className="flex h-[72px] w-[72px] items-center justify-center rounded border bg-muted"><ImageIcon className="h-5 w-5 text-muted-foreground" /></div>}
+              {source ? <a href={imageUrl(source.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开源图"><img src={imageUrl(source.url)} alt={`${operationLabel}源图`} loading="lazy" className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">源图</span></a> : <div className="h-[72px] w-[72px] rounded border bg-muted" />}
+              {mask ? <a href={imageUrl(mask.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开遮罩"><img src={imageUrl(mask.url)} alt="局部重绘遮罩" loading="lazy" className="h-full w-full object-contain" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">遮罩</span></a> : null}
+              {output ? <a href={imageUrl(output.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开候选图"><img src={imageUrl(output.url)} alt={`${operationLabel}候选`} loading="lazy" className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">候选</span></a> : <div className="flex h-[72px] w-[72px] items-center justify-center rounded border bg-muted"><ImageIcon className="h-5 w-5 text-muted-foreground" /></div>}
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant={workflow.status === 'FAILED' ? 'destructive' : 'secondary'}>{operationLabel} · {workflow.status === 'SUCCEEDED' && workflow.reviewStatus !== 'PENDING' ? '已完成' : STATUS_LABEL[workflow.status]}</Badge>
                 {workflow.reviewStatus === 'APPROVED' ? <Badge>已通过</Badge> : workflow.reviewStatus === 'REJECTED' ? <Badge variant="outline">已拒绝</Badge> : null}
+                <Badge variant="outline" className="max-w-full truncate">{workflowScopeLabel(workflow)}</Badge>
                 {job?.appliedMode ? <Badge variant="outline">{job.appliedMode === 'replace' ? '已替换' : '已追加'}</Badge> : null}
                 {requiresReconciliation ? <Badge variant="outline">待人工核对</Badge> : null}
                 {!sourceIsCurrent ? <Badge variant="outline">源图已过期</Badge> : null}
@@ -982,6 +1258,7 @@ export function SourceAiMediaPanel({
               {!sourceIsCurrent ? <p className="mt-1 text-xs text-amber-700">采集快照已变化，候选仅供查看，不能继续审核或应用。</p> : null}
             </div>
             <div className="flex min-w-0 flex-wrap gap-1.5 lg:col-start-2">
+              {output ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => toggleCandidateComparison(workflow.id)}><Columns2 className="h-3.5 w-3.5" />{comparisonWorkflowIds.includes(workflow.id) ? '移出对比' : '加入对比'}</Button> : null}
               {ACTIVE.has(workflow.status) ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`cancel:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/cancel`, { expectedRevision: workflow.revision }, '已请求取消')}><Square className="h-3.5 w-3.5" />取消</Button> : null}
               {workflow.status === 'FAILED' && !requiresReconciliation && sourceIsCurrent ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || !retryReady} title={retryReady ? '重试任务' : retryReadiness ? describeAiMediaReadiness(workflow.operation, retryReadiness) : '当前操作状态未知'} onClick={() => void retryWorkflow(workflow)}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
               {workflow.status === 'SUCCEEDED' && workflow.reviewStatus === 'PENDING' && output && sourceIsCurrent ? <><Button size="sm" disabled={Boolean(pendingAction)} onClick={() => void action(`approve:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'APPROVE' }, '候选图已通过审核')}><Check className="h-3.5 w-3.5" />通过</Button><Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`reject:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'REJECT' }, '候选图已拒绝')}><X className="h-3.5 w-3.5" />拒绝</Button></> : null}
@@ -993,6 +1270,7 @@ export function SourceAiMediaPanel({
             </div>
           </div>;
         })}
+        {historyNextCursor ? <div className="flex justify-center pt-1"><Button type="button" size="sm" variant="outline" disabled={historyLoadingMore} onClick={() => void loadMoreHistory()}>{historyLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}{historyLoadingMore ? '正在加载' : '加载更多'}</Button></div> : null}
       </div>
     </section>
   );

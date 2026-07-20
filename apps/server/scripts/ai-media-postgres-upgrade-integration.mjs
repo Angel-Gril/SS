@@ -26,6 +26,8 @@ const CANDIDATE_DEPENDENCY_MIGRATION = '20260720163000_guard_ai_image_edit_candi
 const CANDIDATE_AUTHORITY_LOCK_MIGRATION = '20260720164000_lock_ai_image_edit_candidate_authority';
 const CANDIDATE_MUTATION_SERIALIZATION_MIGRATION = '20260720165000_serialize_ai_image_edit_candidate_mutations';
 const UNBOUND_CANDIDATE_REJECTION_MIGRATION = '20260720166000_reject_unbound_ai_image_edit_candidates';
+const WORKFLOW_HISTORY_INDEX_MIGRATION = '20260720167000_add_ai_media_workflow_history_index';
+const WORKFLOW_PRIORITY_INDEX_MIGRATION = '20260720168000_add_ai_media_workflow_priority_index';
 const TEST_SCHEMA_PATTERN = /^ai_media_test_[a-z0-9_]+$/u;
 const TEMP_ROOT_PREFIX = 'ss-erp-ai-media-upgrade-';
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -112,6 +114,8 @@ function prepareHistoricalMigrations() {
   const candidateAuthorityLockIndex = names.indexOf(CANDIDATE_AUTHORITY_LOCK_MIGRATION);
   const candidateMutationSerializationIndex = names.indexOf(CANDIDATE_MUTATION_SERIALIZATION_MIGRATION);
   const unboundCandidateRejectionIndex = names.indexOf(UNBOUND_CANDIDATE_REJECTION_MIGRATION);
+  const workflowHistoryIndex = names.indexOf(WORKFLOW_HISTORY_INDEX_MIGRATION);
+  const workflowPriorityIndex = names.indexOf(WORKFLOW_PRIORITY_INDEX_MIGRATION);
   if (executionIndex < 0
     || names[executionIndex + 1] !== PLAN_ACTIVITY_MIGRATION
     || names[executionIndex + 2] !== OUTPUT_JOB_OWNERSHIP_MIGRATION
@@ -130,6 +134,8 @@ function prepareHistoricalMigrations() {
     || candidateAuthorityLockIndex !== candidateDependencyIndex + 1
     || candidateMutationSerializationIndex !== candidateAuthorityLockIndex + 1
     || unboundCandidateRejectionIndex !== candidateMutationSerializationIndex + 1
+    || workflowHistoryIndex !== unboundCandidateRejectionIndex + 1
+    || workflowPriorityIndex !== workflowHistoryIndex + 1
     || names.filter((name) => name === EDIT_OUTPUT_GUARD_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CHAINING_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_CONTRACT_MIGRATION).length !== 1
@@ -137,9 +143,11 @@ function prepareHistoricalMigrations() {
     || names.filter((name) => name === CANDIDATE_DEPENDENCY_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_AUTHORITY_LOCK_MIGRATION).length !== 1
     || names.filter((name) => name === CANDIDATE_MUTATION_SERIALIZATION_MIGRATION).length !== 1
-    || names.filter((name) => name === UNBOUND_CANDIDATE_REJECTION_MIGRATION).length !== 1) {
+    || names.filter((name) => name === UNBOUND_CANDIDATE_REJECTION_MIGRATION).length !== 1
+    || names.filter((name) => name === WORKFLOW_HISTORY_INDEX_MIGRATION).length !== 1
+    || names.filter((name) => name === WORKFLOW_PRIORITY_INDEX_MIGRATION).length !== 1) {
     throw new Error(
-      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${UNBOUND_CANDIDATE_REJECTION_MIGRATION} must be one unique consecutive migration block`,
+      `${EDIT_OUTPUT_GUARD_MIGRATION} through ${WORKFLOW_PRIORITY_INDEX_MIGRATION} must be one unique consecutive migration block`,
     );
   }
 
@@ -165,6 +173,8 @@ function prepareHistoricalMigrations() {
     candidateAuthorityLockIndex,
     candidateMutationSerializationIndex,
     unboundCandidateRejectionIndex,
+    workflowHistoryIndex,
+    workflowPriorityIndex,
   };
 }
 
@@ -562,6 +572,75 @@ async function restoreExactHistoricalSchema(client) {
   }
 }
 
+async function validateWorkflowHistoryIndexes(client) {
+  const rows = await client.$queryRawUnsafe(`
+    SELECT
+      index_class.relname AS "name",
+      index_namespace.nspname AS "indexSchema",
+      table_class.relname AS "tableName",
+      table_namespace.nspname AS "tableSchema",
+      index_state.indisvalid AS "valid",
+      index_state.indisready AS "ready",
+      array_agg(attribute.attname ORDER BY key.ordinality) AS "columns",
+      array_agg(
+        CASE WHEN pg_index_column_has_property(index_state.indexrelid, key.ordinality::int, 'desc')
+          THEN 'DESC'
+          ELSE 'ASC'
+        END
+        ORDER BY key.ordinality
+      ) AS "directions"
+    FROM pg_index index_state
+    JOIN pg_class index_class ON index_class.oid = index_state.indexrelid
+    JOIN pg_namespace index_namespace ON index_namespace.oid = index_class.relnamespace
+    JOIN pg_class table_class ON table_class.oid = index_state.indrelid
+    JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+    JOIN LATERAL unnest(index_state.indkey) WITH ORDINALITY AS key(attnum, ordinality)
+      ON key.ordinality <= index_state.indnkeyatts
+    JOIN pg_attribute attribute
+      ON attribute.attrelid = table_class.oid
+      AND attribute.attnum = key.attnum
+    WHERE index_namespace.nspname = current_schema()
+      AND table_namespace.nspname = current_schema()
+      AND table_class.relname = 'ai_media_workflows'
+      AND index_class.relname IN (
+        'ai_media_workflow_owner_context_history',
+        'ai_media_workflow_owner_context_updates'
+      )
+    GROUP BY
+      index_class.relname,
+      index_namespace.nspname,
+      table_class.relname,
+      table_namespace.nspname,
+      index_state.indisvalid,
+      index_state.indisready
+    ORDER BY index_class.relname
+  `);
+  const expected = new Map([
+    ['ai_media_workflow_owner_context_history', {
+      columns: ['owner_user_id', 'context_type', 'context_id', 'created_at', 'id'],
+      directions: ['ASC', 'ASC', 'ASC', 'DESC', 'DESC'],
+    }],
+    ['ai_media_workflow_owner_context_updates', {
+      columns: ['owner_user_id', 'context_type', 'context_id', 'updated_at', 'id'],
+      directions: ['ASC', 'ASC', 'ASC', 'DESC', 'DESC'],
+    }],
+  ]);
+  if (rows.length !== expected.size) throw new Error('AI media workflow history indexes are missing');
+  for (const row of rows) {
+    const contract = expected.get(String(row.name));
+    if (!contract
+      || row.indexSchema !== schema
+      || row.tableSchema !== schema
+      || row.tableName !== 'ai_media_workflows'
+      || row.valid !== true
+      || row.ready !== true
+      || JSON.stringify(row.columns) !== JSON.stringify(contract.columns)
+      || JSON.stringify(row.directions) !== JSON.stringify(contract.directions)) {
+      throw new Error(`AI media workflow history index is invalid: ${String(row.name)}`);
+    }
+  }
+}
+
 const selectedFixtureTests = [
   'allows one serializable claim and exact replay under concurrent requests',
   'rejects cross-authority and forged reference bindings without leaving partial rows',
@@ -734,6 +813,12 @@ try {
       DATABASE_URL: testUrl.toString(),
     });
   }
+
+  fixtureClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+  await fixtureClient.$connect();
+  await validateWorkflowHistoryIndexes(fixtureClient);
+  await fixtureClient.$disconnect();
+  fixtureClient = undefined;
 
   run([
     'exec', 'vitest', 'run', '--no-file-parallelism',

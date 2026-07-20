@@ -26,6 +26,223 @@ describePostgres('AI media workflow PostgreSQL graph', () => {
   });
   afterAll(async () => client!.$disconnect());
 
+  it('walks owner/context history without duplicates across an equal-timestamp boundary', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `history_owner_${suffix}`;
+    const otherOwnerUserId = `history_other_${suffix}`;
+    const createdAt = new Date('2026-07-20T12:00:00.000Z');
+    await client!.user.createMany({ data: [
+      { id: ownerUserId, phone: `history_${suffix}`, passwordHash: 'integration-test' },
+      { id: otherOwnerUserId, phone: `history_other_${suffix}`, passwordHash: 'integration-test' },
+    ] });
+    await client!.aiMediaWorkflow.createMany({ data: [
+      {
+        id: `history_${suffix}_c`, ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        contextType: 'collect', contextId: `goods_${suffix}`,
+        requestFingerprint: '1'.repeat(64), createdAt,
+      },
+      {
+        id: `history_${suffix}_b`, ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        contextType: 'collect', contextId: `goods_${suffix}`,
+        requestFingerprint: '2'.repeat(64), createdAt,
+      },
+      {
+        id: `history_${suffix}_a`, ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        contextType: 'collect', contextId: `goods_${suffix}`,
+        requestFingerprint: '3'.repeat(64), createdAt,
+      },
+      {
+        id: `history_${suffix}_other_context`, ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        contextType: 'collect', contextId: `other_goods_${suffix}`,
+        requestFingerprint: '4'.repeat(64), createdAt,
+      },
+      {
+        id: `history_${suffix}_other_owner`, ownerUserId: otherOwnerUserId,
+        operation: 'IMAGE_TO_IMAGE', contextType: 'collect', contextId: `goods_${suffix}`,
+        requestFingerprint: '5'.repeat(64), createdAt,
+      },
+    ] });
+
+    const repository = new PrismaAiMediaWorkflowRepository(client!);
+    const first = await repository.listOwned({
+      ownerUserId, contextType: 'collect', contextId: `goods_${suffix}`, limit: 2,
+      includePriority: true,
+    });
+    expect(first.items.map((workflow: { id: string }) => workflow.id)).toEqual([
+      `history_${suffix}_c`, `history_${suffix}_b`,
+    ]);
+    expect(first.nextCursor).toEqual({ createdAt, id: `history_${suffix}_b` });
+    expect(first.priorityItems?.map((workflow: { id: string }) => workflow.id)).toEqual([
+      `history_${suffix}_c`, `history_${suffix}_b`, `history_${suffix}_a`,
+    ]);
+
+    const second = await repository.listOwned({
+      ownerUserId, contextType: 'collect', contextId: `goods_${suffix}`, limit: 2,
+      cursor: first.nextCursor,
+    });
+    expect(second.items.map((workflow: { id: string }) => workflow.id)).toEqual([`history_${suffix}_a`]);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.items, ...second.items].map((workflow: { id: string }) => workflow.id)).size).toBe(3);
+  });
+
+  it('walks more than 100 equal-updated priority rows without owner/context leakage or duplicates', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `priority_owner_${suffix}`;
+    const otherOwnerUserId = `priority_other_${suffix}`;
+    const contextId = `priority_goods_${suffix}`;
+    const otherContextId = `priority_other_goods_${suffix}`;
+    const updatedAt = new Date('2026-07-20T12:30:00.000Z');
+    const ids = Array.from(
+      { length: 103 },
+      (_, index) => `priority_${suffix}_${String(index).padStart(3, '0')}`,
+    );
+    await client!.user.createMany({ data: [
+      { id: ownerUserId, phone: `priority_${suffix}`, passwordHash: 'integration-test' },
+      { id: otherOwnerUserId, phone: `priority_other_${suffix}`, passwordHash: 'integration-test' },
+    ] });
+    await client!.aiMediaWorkflow.createMany({ data: [
+      ...ids.map((id, index) => ({
+        id,
+        ownerUserId,
+        operation: 'IMAGE_TO_IMAGE' as const,
+        contextType: 'collect',
+        contextId,
+        requestFingerprint: String(index % 10).repeat(64),
+        createdAt: updatedAt,
+        updatedAt,
+      })),
+      {
+        id: `priority_${suffix}_other_context`, ownerUserId,
+        operation: 'IMAGE_TO_IMAGE' as const, contextType: 'collect', contextId: otherContextId,
+        requestFingerprint: 'a'.repeat(64), createdAt: updatedAt, updatedAt,
+      },
+      {
+        id: `priority_${suffix}_other_owner`, ownerUserId: otherOwnerUserId,
+        operation: 'IMAGE_TO_IMAGE' as const, contextType: 'collect', contextId,
+        requestFingerprint: 'b'.repeat(64), createdAt: updatedAt, updatedAt,
+      },
+    ] });
+
+    const service = createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(client!));
+    const first = await service.listPriority({
+      ownerUserId, contextType: 'collect', contextId, limit: 100,
+    });
+    expect(first.items).toHaveLength(100);
+    expect(first.nextCursor).toEqual(expect.any(String));
+
+    const second = await service.listPriority({
+      ownerUserId, contextType: 'collect', contextId, limit: 100, cursor: first.nextCursor!,
+    });
+    expect(second.items).toHaveLength(3);
+    expect(second.nextCursor).toBeNull();
+    const returnedIds = [...first.items, ...second.items].map((workflow) => workflow.id);
+    expect(new Set(returnedIds).size).toBe(103);
+    expect(new Set(returnedIds)).toEqual(new Set(ids));
+
+    await expect(service.listPriority({
+      ownerUserId: otherOwnerUserId, contextType: 'collect', contextId, cursor: first.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    await expect(service.listPriority({
+      ownerUserId, contextType: 'collect', contextId: otherContextId, cursor: first.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+  });
+
+  it('selects every actionable and recent priority state while excluding applied and cold terminal rows', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const ownerUserId = `priority_matrix_owner_${suffix}`;
+    const contextId = `priority_matrix_goods_${suffix}`;
+    const recentAt = new Date(Date.now() - 60 * 60 * 1_000);
+    const oldAt = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+    const workflowId = (label: string) => `priority_matrix_${suffix}_${label}`;
+    await client!.user.create({ data: {
+      id: ownerUserId, phone: `priority_matrix_${suffix}`, passwordHash: 'integration-test',
+    } });
+    await client!.aiMediaWorkflow.createMany({ data: [
+      {
+        id: workflowId('running'), ownerUserId, operation: 'IMAGE_TO_IMAGE', status: 'RUNNING',
+        contextType: 'collect', contextId, requestFingerprint: '1'.repeat(64),
+        createdAt: oldAt, updatedAt: oldAt,
+      },
+      {
+        id: workflowId('cancel_requested'), ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        status: 'CANCEL_REQUESTED', contextType: 'collect', contextId,
+        requestFingerprint: '2'.repeat(64), cancelRequestedAt: oldAt,
+        createdAt: oldAt, updatedAt: oldAt,
+      },
+      {
+        id: workflowId('pending_review'), ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        status: 'SUCCEEDED', reviewStatus: 'PENDING', contextType: 'collect', contextId,
+        requestFingerprint: '3'.repeat(64), completedAt: oldAt,
+        createdAt: oldAt, updatedAt: oldAt,
+      },
+      {
+        id: workflowId('approved_unapplied'), ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        status: 'SUCCEEDED', reviewStatus: 'PENDING', contextType: 'collect', contextId,
+        requestFingerprint: '4'.repeat(64), completedAt: oldAt,
+        createdAt: oldAt, updatedAt: oldAt,
+      },
+      {
+        id: workflowId('approved_applied'), ownerUserId, operation: 'IMAGE_TO_IMAGE',
+        status: 'SUCCEEDED', reviewStatus: 'PENDING', contextType: 'collect', contextId,
+        requestFingerprint: '5'.repeat(64), completedAt: oldAt,
+        createdAt: oldAt, updatedAt: oldAt,
+      },
+      {
+        id: workflowId('recent_failed'), ownerUserId, operation: 'IMAGE_TO_IMAGE', status: 'FAILED',
+        contextType: 'collect', contextId, requestFingerprint: '6'.repeat(64), completedAt: recentAt,
+        createdAt: recentAt, updatedAt: recentAt,
+      },
+      {
+        id: workflowId('cold_failed'), ownerUserId, operation: 'IMAGE_TO_IMAGE', status: 'FAILED',
+        contextType: 'collect', contextId, requestFingerprint: '7'.repeat(64), completedAt: oldAt,
+        createdAt: oldAt, updatedAt: oldAt,
+      },
+    ] });
+
+    for (const applied of [false, true]) {
+      const label = applied ? 'approved_applied' : 'approved_unapplied';
+      const jobId = `priority_matrix_job_${suffix}_${label}`;
+      const assetId = `priority_matrix_asset_${suffix}_${label}`;
+      await client!.aiImageJob.create({ data: {
+        id: jobId, ownerUserId, status: 'SUCCEEDED', operation: 'IMAGE_TO_IMAGE',
+        workflowId: workflowId(label), workflowAttempt: 1,
+        provider: 'fake', model: 'priority-matrix', prompt: 'priority matrix',
+        width: 1024, height: 1024, progress: 100, completedAt: oldAt,
+        ...(applied ? {
+          appliedMode: 'append', applyTargetType: 'collect', applyTargetId: contextId, appliedAt: oldAt,
+        } : {}),
+        createdAt: oldAt, updatedAt: oldAt,
+      } });
+      await client!.mediaAsset.create({ data: {
+        id: assetId, ownerUserId, aiImageJobId: jobId, kind: 'AI_GENERATED',
+        url: `/priority/${assetId}.png`, storageBackend: 'local', storageKey: `${assetId}.png`,
+        mimeType: 'image/png', sizeBytes: 68, sha256: (applied ? '9' : '8').repeat(64),
+        createdAt: oldAt,
+      } });
+      await client!.aiMediaWorkflow.update({
+        where: { id: workflowId(label) },
+        data: {
+          reviewStatus: 'APPROVED', selectedOutputAssetId: assetId,
+          reviewedByUserId: ownerUserId, reviewedAt: oldAt, updatedAt: oldAt,
+        },
+      });
+    }
+
+    const page = await new PrismaAiMediaWorkflowRepository(client!).listPriorityOwned({
+      ownerUserId, contextType: 'collect', contextId, limit: 100,
+    });
+    const returnedIds = new Set(page.items.map((workflow: { id: string }) => workflow.id));
+    expect(returnedIds).toEqual(new Set([
+      workflowId('running'),
+      workflowId('cancel_requested'),
+      workflowId('pending_review'),
+      workflowId('approved_unapplied'),
+      workflowId('recent_failed'),
+    ]));
+    expect(returnedIds.has(workflowId('approved_applied'))).toBe(false);
+    expect(returnedIds.has(workflowId('cold_failed'))).toBe(false);
+  });
+
   it('persists lineage/review and fences cancellation against late completion', async () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
     const ownerUserId = `ai_owner_${suffix}`;

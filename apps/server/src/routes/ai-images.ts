@@ -1179,16 +1179,102 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       contextType: z.enum(['collect', 'listing-draft']).optional(),
       contextId: z.string().trim().min(1).max(200).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
-    }).safeParse(request.query);
+      cursor: z.string().trim().min(1).max(1000).optional(),
+      pageVersion: z.literal('1').optional(),
+    }).refine(
+      (value) => !value.cursor || value.pageVersion === '1',
+      { message: 'Workflow cursor requires pageVersion=1' },
+    ).refine(
+      (value) => value.pageVersion !== '1' || Boolean(value.contextType && value.contextId),
+      { message: 'Paginated workflow history requires an explicit context' },
+    ).safeParse(request.query);
     if (!query.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: query.error.issues[0]?.message });
-    const rows = await mediaWorkflowService.list({ ownerUserId: actor(request).ownerUserId, ...query.data });
-    return { code: 1, data: rows.map(publicWorkflow) };
+    try {
+      const result = await mediaWorkflowService.list({
+        ownerUserId: actor(request).ownerUserId,
+        contextType: query.data.contextType,
+        contextId: query.data.contextId,
+        limit: query.data.limit,
+        cursor: query.data.cursor,
+        includePriority: query.data.pageVersion === '1' && !query.data.cursor,
+      });
+      const page = Array.isArray(result)
+        ? {
+          items: result,
+          priorityItems: [],
+          priorityItemsTruncated: false,
+          priorityNextCursor: null,
+          nextCursor: null,
+        }
+        : result;
+      if (query.data.pageVersion !== '1') {
+        return { code: 1, data: page.items.map(publicWorkflow) };
+      }
+      return {
+        code: 1,
+        data: {
+          items: page.items.map(publicWorkflow),
+          priorityItems: (page.priorityItems || []).map(publicWorkflow),
+          priorityItemsTruncated: page.priorityItemsTruncated === true,
+          priorityNextCursor: page.priorityNextCursor || null,
+          nextCursor: page.nextCursor,
+        },
+      };
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.get('/workflows/priority', async (request, reply) => {
+    const query = z.object({
+      contextType: z.enum(['collect', 'listing-draft']),
+      contextId: z.string().trim().min(1).max(200),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+      cursor: z.string().trim().min(1).max(1000).optional(),
+    }).safeParse(request.query);
+    if (!query.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: query.error.issues[0]?.message });
+    }
+    try {
+      const page = await mediaWorkflowService.listPriority({
+        ownerUserId: actor(request).ownerUserId,
+        contextType: query.data.contextType,
+        contextId: query.data.contextId,
+        limit: query.data.limit,
+        cursor: query.data.cursor,
+      });
+      return {
+        code: 1,
+        data: {
+          items: page.items.map(publicWorkflow),
+          nextCursor: page.nextCursor,
+        },
+      };
+    } catch (error) {
+      return sendError(reply, error);
+    }
   });
 
   app.get('/workflows/:id', async (request, reply) => {
+    const query = z.object({
+      contextType: z.enum(['collect', 'listing-draft']).optional(),
+      contextId: z.string().trim().min(1).max(200).optional(),
+    }).refine(
+      (value) => Boolean(value.contextType) === Boolean(value.contextId),
+      { message: 'Workflow context type and id must be provided together' },
+    ).safeParse(request.query);
+    if (!query.success) {
+      return reply.status(400).send({ code: 'INVALID_REQUEST', msg: query.error.issues[0]?.message });
+    }
     try {
       const workflow = await mediaWorkflowService.get((request.params as any).id, actor(request).ownerUserId);
       assertStandaloneWorkflow(workflow);
+      if (query.data.contextType && (
+        workflow.contextType !== query.data.contextType
+        || workflow.contextId !== query.data.contextId
+      )) {
+        throw new AiMediaWorkflowError('NOT_FOUND', 'AI media workflow not found');
+      }
       return { code: 1, data: publicWorkflow(workflow) };
     } catch (error) { return sendError(reply, error); }
   });

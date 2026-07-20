@@ -73,6 +73,15 @@ const detailInclude = {
   events: { orderBy: { createdAt: 'asc' }, take: 200 },
 } as const;
 
+const historyInclude = {
+  inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
+  jobs: {
+    include: { assets: true, costReservation: { select: { status: true } } },
+    orderBy: { workflowAttempt: 'desc' },
+    take: 1,
+  },
+} as const;
+
 async function assertWorkflowSourceSnapshotCurrent(tx: any, workflow: any) {
   if (workflow?.contextType !== 'collect' || !workflow.contextId) return;
   const inputSnapshotIds = Array.isArray(workflow.inputs)
@@ -802,26 +811,105 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     }
   }
 
-  async listOwned(input: { ownerUserId: string; contextType?: string; contextId?: string; limit: number }) {
+  async listOwned(input: {
+    ownerUserId: string;
+    contextType?: string;
+    contextId?: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+    includePriority?: boolean;
+  }) {
+    const baseWhere = {
+      ownerUserId: input.ownerUserId,
+      suiteSlot: { is: null },
+      ...(input.contextType ? { contextType: input.contextType } : {}),
+      ...(input.contextId ? { contextId: input.contextId } : {}),
+    };
+    const [rows, priorityPage] = await Promise.all([
+      (this.prisma as any).aiMediaWorkflow.findMany({
+        where: {
+          ...baseWhere,
+          ...(input.cursor ? {
+            OR: [
+              { createdAt: { lt: input.cursor.createdAt } },
+              { createdAt: input.cursor.createdAt, id: { lt: input.cursor.id } },
+            ],
+          } : {}),
+        },
+        include: historyInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: input.limit + 1,
+      }),
+      input.includePriority && input.contextType && input.contextId
+        ? this.listPriorityOwned({
+          ownerUserId: input.ownerUserId,
+          contextType: input.contextType,
+          contextId: input.contextId,
+          limit: 100,
+        })
+        : Promise.resolve({ items: [], nextCursor: null }),
+    ]);
+    const pageRows = rows.slice(0, input.limit);
+    const last = pageRows.at(-1);
+    return {
+      items: pageRows.map(workflowRecord),
+      priorityItems: priorityPage.items,
+      priorityItemsTruncated: Boolean(priorityPage.nextCursor),
+      priorityNextCursor: priorityPage.nextCursor,
+      nextCursor: rows.length > input.limit && last
+        ? { createdAt: last.createdAt, id: last.id }
+        : null,
+    };
+  }
+
+  async listPriorityOwned(input: {
+    ownerUserId: string;
+    contextType: string;
+    contextId: string;
+    limit: number;
+    cursor?: { updatedAt: Date; id: string; recentCutoff: Date } | null;
+  }) {
+    const recentCutoff = input.cursor?.recentCutoff
+      || new Date(Date.now() - 24 * 60 * 60 * 1_000);
     const rows = await (this.prisma as any).aiMediaWorkflow.findMany({
       where: {
         ownerUserId: input.ownerUserId,
         suiteSlot: { is: null },
-        ...(input.contextType ? { contextType: input.contextType } : {}),
-        ...(input.contextId ? { contextId: input.contextId } : {}),
+        contextType: input.contextType,
+        contextId: input.contextId,
+        AND: [
+          {
+            OR: [
+              { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+              { status: 'SUCCEEDED', reviewStatus: 'PENDING' },
+              {
+                status: 'SUCCEEDED',
+                reviewStatus: 'APPROVED',
+                selectedOutputAsset: { is: { aiImageJob: { is: { appliedAt: null } } } },
+              },
+              { updatedAt: { gte: recentCutoff } },
+            ],
+          },
+          ...(input.cursor ? [{
+            OR: [
+              { updatedAt: { lt: input.cursor.updatedAt } },
+              { updatedAt: input.cursor.updatedAt, id: { lt: input.cursor.id } },
+            ],
+          }] : []),
+        ],
       },
-      include: {
-        inputs: { include: { asset: true }, orderBy: { ordinal: 'asc' } },
-        jobs: {
-          include: { assets: true, costReservation: { select: { status: true } } },
-          orderBy: { workflowAttempt: 'desc' },
-          take: 1,
-        },
-      },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: input.limit,
+      include: historyInclude,
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      take: input.limit + 1,
     });
-    return rows.map(workflowRecord);
+    const pageRows = rows.slice(0, input.limit);
+    const last = pageRows.at(-1);
+    return {
+      items: pageRows.map(workflowRecord),
+      nextCursor: rows.length > input.limit && last
+        ? { updatedAt: last.updatedAt, id: last.id, recentCutoff }
+        : null,
+    };
   }
 
   async getOwned(id: string, ownerUserId: string) {

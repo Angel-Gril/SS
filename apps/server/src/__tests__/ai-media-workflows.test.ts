@@ -28,7 +28,8 @@ function repository(overrides: Partial<AiMediaWorkflowRepository> = {}): AiMedia
       workflow: { ...workflow, operation: 'IMAGE_TRANSLATE' as const },
       jobId: 'translation-job-1',
     })),
-    listOwned: vi.fn(async () => [workflow]),
+    listOwned: vi.fn(async () => ({ items: [workflow], nextCursor: null })),
+    listPriorityOwned: vi.fn(async () => ({ items: [workflow], nextCursor: null })),
     getOwned: vi.fn(async (id, owner) => id === workflow.id && owner === workflow.ownerUserId ? workflow : null),
     cancelOwned: vi.fn(async () => workflow),
     retryOwned: vi.fn(async () => ({ workflow, jobId: 'job-2', replayed: false })),
@@ -45,6 +46,123 @@ const createInput: CreateAiMediaWorkflowInput = {
 };
 
 describe('AI media workflow service', () => {
+  it('paginates history with a cursor bound to the owner and context', async () => {
+    const createdAt = new Date('2026-07-16T00:00:00.000Z');
+    const listOwned = vi.fn()
+      .mockResolvedValueOnce({
+        items: [workflow],
+        priorityItems: [{ ...workflow, id: 'workflow-active-old' }],
+        nextCursor: { createdAt, id: 'workflow-1' },
+      })
+      .mockResolvedValueOnce({ items: [], nextCursor: null });
+    const service = createAiMediaWorkflowService(repository({ listOwned }));
+
+    const first = await service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 1,
+      includePriority: true,
+    });
+    expect(first).toMatchObject({ items: [{ id: 'workflow-1' }] });
+    expect(first.priorityItems).toEqual([expect.objectContaining({ id: 'workflow-active-old' })]);
+    expect(first.nextCursor).toEqual(expect.any(String));
+
+    await expect(service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+      limit: 1, cursor: first.nextCursor!,
+    })).resolves.toEqual({
+      items: [], priorityItems: [], priorityItemsTruncated: false,
+      priorityNextCursor: null, nextCursor: null,
+    });
+    expect(listOwned).toHaveBeenLastCalledWith(expect.objectContaining({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 1,
+      cursor: { createdAt, id: 'workflow-1' }, includePriority: false,
+    }));
+    expect(listOwned).toHaveBeenNthCalledWith(1, expect.objectContaining({ includePriority: true }));
+
+    await expect(service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-2',
+      limit: 1, cursor: first.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    expect(listOwned).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects malformed and non-canonical history cursors before persistence', async () => {
+    const listOwned = vi.fn(async () => ({ items: [], nextCursor: null }));
+    const service = createAiMediaWorkflowService(repository({ listOwned }));
+    await expect(service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', cursor: 'not+base64',
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    expect(listOwned).not.toHaveBeenCalled();
+  });
+
+  it('paginates the priority lane with a canonical cursor bound to owner and context', async () => {
+    const updatedAt = new Date('2026-07-20T08:00:00.000Z');
+    const recentCutoff = new Date('2026-07-19T09:00:00.000Z');
+    const listPriorityOwned = vi.fn()
+      .mockResolvedValueOnce({
+        items: [workflow],
+        nextCursor: { updatedAt, id: workflow.id, recentCutoff },
+      })
+      .mockResolvedValueOnce({ items: [], nextCursor: null });
+    const service = createAiMediaWorkflowService(repository({ listPriorityOwned }));
+
+    const first = await service.listPriority({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 1,
+    });
+    expect(first).toMatchObject({ items: [{ id: workflow.id }], nextCursor: expect.any(String) });
+
+    await expect(service.listPriority({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+      limit: 1, cursor: first.nextCursor!,
+    })).resolves.toEqual({ items: [], nextCursor: null });
+    expect(listPriorityOwned).toHaveBeenLastCalledWith({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 1,
+      cursor: { updatedAt, id: workflow.id, recentCutoff },
+    });
+
+    await expect(service.listPriority({
+      ownerUserId: 'owner-2', contextType: 'collect', contextId: 'goods-1',
+      cursor: first.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    await expect(service.listPriority({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-2',
+      cursor: first.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    await expect(service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+      cursor: first.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    expect(listPriorityOwned).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a history cursor in the priority lane before persistence', async () => {
+    const listOwned = vi.fn(async () => ({
+      items: [workflow],
+      nextCursor: { createdAt: workflow.createdAt, id: workflow.id },
+    }));
+    const listPriorityOwned = vi.fn(async () => ({ items: [], nextCursor: null }));
+    const service = createAiMediaWorkflowService(repository({ listOwned, listPriorityOwned }));
+    const history = await service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 1,
+    });
+
+    await expect(service.listPriority({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+      cursor: history.nextCursor!,
+    })).rejects.toMatchObject({ code: 'INVALID_CURSOR' });
+    expect(listPriorityOwned).not.toHaveBeenCalled();
+  });
+
+  it('does not query priority history unless the caller requests the paginated contract', async () => {
+    const listOwned = vi.fn(async () => ({ items: [workflow], nextCursor: null }));
+    const service = createAiMediaWorkflowService(repository({ listOwned }));
+
+    await service.list({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 20,
+    });
+
+    expect(listOwned).toHaveBeenCalledWith(expect.objectContaining({ includePriority: false }));
+  });
+
   it('creates a single-source IMAGE_TO_IMAGE workflow and returns the child job identity', async () => {
     const repo = repository();
     const result = await createAiMediaWorkflowService(repo).createImageToImage(createInput);

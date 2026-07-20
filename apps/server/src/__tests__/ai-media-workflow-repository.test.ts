@@ -8,6 +8,96 @@ import {
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 
 describe('Prisma AI media workflow repository recovery fence', () => {
+  it('returns a stable owner/context keyset page and probes one extra row', async () => {
+    const createdAt = new Date('2026-07-20T09:00:00.000Z');
+    const findMany = vi.fn(async () => [
+      { id: 'workflow-c', createdAt, suiteSlot: null },
+      { id: 'workflow-b', createdAt, suiteSlot: null },
+      { id: 'workflow-a', createdAt, suiteSlot: null },
+    ]);
+    const repository = new PrismaAiMediaWorkflowRepository({
+      aiMediaWorkflow: { findMany },
+    } as never);
+
+    const page = await repository.listOwned({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 2,
+      cursor: { createdAt: new Date('2026-07-20T10:00:00.000Z'), id: 'workflow-z' },
+    });
+
+    expect(page.items.map((item: { id: string }) => item.id)).toEqual(['workflow-c', 'workflow-b']);
+    expect(page.nextCursor).toEqual({ createdAt, id: 'workflow-b' });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+        suiteSlot: { is: null },
+        OR: [
+          { createdAt: { lt: new Date('2026-07-20T10:00:00.000Z') } },
+          {
+            createdAt: new Date('2026-07-20T10:00:00.000Z'),
+            id: { lt: 'workflow-z' },
+          },
+        ],
+      }),
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 3,
+    }));
+  });
+
+  it('queries priority as one owner/context lane with a frozen recent cutoff', async () => {
+    const updatedAt = new Date('2026-07-20T09:00:00.000Z');
+    const recentCutoff = new Date('2026-07-19T10:00:00.000Z');
+    const findMany = vi.fn(async () => [
+      { id: 'workflow-c', updatedAt, suiteSlot: null },
+      { id: 'workflow-b', updatedAt, suiteSlot: null },
+      { id: 'workflow-a', updatedAt, suiteSlot: null },
+    ]);
+    const repository = new PrismaAiMediaWorkflowRepository({
+      aiMediaWorkflow: { findMany },
+    } as never);
+
+    const page = await repository.listPriorityOwned({
+      ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1', limit: 2,
+      cursor: {
+        updatedAt: new Date('2026-07-20T10:00:00.000Z'),
+        id: 'workflow-z',
+        recentCutoff,
+      },
+    });
+
+    expect(page.items.map((item: { id: string }) => item.id)).toEqual(['workflow-c', 'workflow-b']);
+    expect(page.nextCursor).toEqual({ updatedAt, id: 'workflow-b', recentCutoff });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        ownerUserId: 'owner-1', contextType: 'collect', contextId: 'goods-1',
+        suiteSlot: { is: null },
+        AND: [
+          {
+            OR: [
+              { status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+              { status: 'SUCCEEDED', reviewStatus: 'PENDING' },
+              {
+                status: 'SUCCEEDED', reviewStatus: 'APPROVED',
+                selectedOutputAsset: { is: { aiImageJob: { is: { appliedAt: null } } } },
+              },
+              { updatedAt: { gte: recentCutoff } },
+            ],
+          },
+          {
+            OR: [
+              { updatedAt: { lt: new Date('2026-07-20T10:00:00.000Z') } },
+              {
+                updatedAt: new Date('2026-07-20T10:00:00.000Z'),
+                id: { lt: 'workflow-z' },
+              },
+            ],
+          },
+        ],
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+      take: 3,
+    }));
+  });
+
   it('atomically freezes an owner-scoped INPAINT source, mask, Prompt and zero-cost job', async () => {
     const inputCreates: any[] = [];
     const jobCreate = vi.fn(async ({ data }: any) => ({ id: 'edit-job-1', ...data }));

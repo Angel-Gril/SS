@@ -2,16 +2,122 @@ import assert from 'node:assert/strict';
 import { createLatestLoadCoordinator, createLatestRequestGuard, createMediaMutationLock, buildSaveSourceImagesRequest, executeLockedMediaMutation, executeWithBusyState } from '../apps/web/src/components/ai-media/source-ai-media-state.ts';
 import {
   AI_MEDIA_INTENT_TTL_MS,
+  AI_MEDIA_EXECUTION_POLL_INTERVAL_MS,
+  AI_MEDIA_REVIEW_POLL_INTERVAL_MS,
+  appendAiMediaWorkflowHistoryPage,
+  aiMediaWorkflowPollInterval,
+  aiMediaWorkflowReviewOutput,
   buildImageTranslationWorkflowRequest,
   clearWorkflowSubmissionIntent,
   describeAiMediaReadiness,
   isAiMediaWorkflowInputCurrent,
   isDefinitiveWorkflowSubmissionFailure,
   loadWorkflowSubmissionIntent,
+  mergeAiMediaWorkflowHistoryHead,
+  normalizeAiMediaWorkflowPage,
+  normalizeAiMediaWorkflowPriorityPage,
   normalizeImageTranslationTerminologies,
   resolveWorkflowSubmissionIntent,
   saveWorkflowSubmissionIntent,
 } from '../apps/web/src/lib/ai-media-workflow.ts';
+
+const historyHead = [{ id: 'workflow-3', status: 'RUNNING' }, { id: 'workflow-2', status: 'SUCCEEDED' }];
+const historyCurrent = [{ id: 'workflow-2', status: 'QUEUED' }, { id: 'workflow-1', status: 'SUCCEEDED' }];
+assert.deepEqual(
+  mergeAiMediaWorkflowHistoryHead(historyCurrent, historyHead).map(({ id, status }) => ({ id, status })),
+  [
+    { id: 'workflow-3', status: 'RUNNING' },
+    { id: 'workflow-2', status: 'SUCCEEDED' },
+    { id: 'workflow-1', status: 'SUCCEEDED' },
+  ],
+);
+assert.deepEqual(
+  appendAiMediaWorkflowHistoryPage(historyHead, [
+    { id: 'workflow-2', status: 'APPROVED' },
+    { id: 'workflow-1', status: 'SUCCEEDED' },
+  ]).map(({ id, status }) => ({ id, status })),
+  [
+    { id: 'workflow-3', status: 'RUNNING' },
+    { id: 'workflow-2', status: 'APPROVED' },
+    { id: 'workflow-1', status: 'SUCCEEDED' },
+  ],
+);
+assert.deepEqual(normalizeAiMediaWorkflowPage({
+  items: historyHead,
+  priorityItems: [{ id: 'workflow-old-active', status: 'RUNNING' }],
+  priorityItemsTruncated: false,
+  priorityNextCursor: 'priority_cursor-1',
+  nextCursor: 'valid_cursor-1',
+}), {
+  items: historyHead,
+  priorityItems: [{ id: 'workflow-old-active', status: 'RUNNING' }],
+  priorityItemsTruncated: false,
+  priorityNextCursor: 'priority_cursor-1',
+  nextCursor: 'valid_cursor-1',
+});
+assert.equal(normalizeAiMediaWorkflowPage({ items: historyHead, nextCursor: 'invalid+cursor' }), null);
+assert.equal(normalizeAiMediaWorkflowPage({
+  items: historyHead, nextCursor: null, priorityNextCursor: 'invalid+cursor',
+}), null);
+assert.equal(
+  Object.hasOwn(normalizeAiMediaWorkflowPage({ items: historyHead, nextCursor: null }), 'priorityNextCursor'),
+  false,
+  'an old server response must not look like it supports priority continuation',
+);
+assert.deepEqual(normalizeAiMediaWorkflowPriorityPage({
+  items: [{ id: 'workflow-priority-2', status: 'RUNNING' }], nextCursor: 'priority_cursor-2',
+}), {
+  items: [{ id: 'workflow-priority-2', status: 'RUNNING' }], nextCursor: 'priority_cursor-2',
+});
+assert.equal(normalizeAiMediaWorkflowPriorityPage({ items: historyHead, nextCursor: 'invalid+cursor' }), null);
+assert.equal(aiMediaWorkflowPollInterval([{ status: 'RUNNING', jobs: [] }]), AI_MEDIA_EXECUTION_POLL_INTERVAL_MS);
+assert.equal(aiMediaWorkflowPollInterval([{
+  status: 'SUCCEEDED', reviewStatus: 'PENDING', jobs: [{ id: 'job-pending', appliedMode: null }],
+}]), AI_MEDIA_REVIEW_POLL_INTERVAL_MS);
+assert.equal(aiMediaWorkflowPollInterval([{
+  status: 'SUCCEEDED', reviewStatus: 'APPROVED', jobs: [{ id: 'job-applied', appliedMode: 'append' }],
+}]), null);
+const selectedOutput = aiMediaWorkflowReviewOutput(
+  { selectedOutputAssetId: 'asset-selected' },
+  { assets: [{ id: 'asset-first' }, { id: 'asset-selected' }] },
+);
+assert.equal(selectedOutput.id, 'asset-selected');
+assert.equal(aiMediaWorkflowReviewOutput(
+  { selectedOutputAssetId: null },
+  { assets: [{ id: 'asset-first' }, { id: 'asset-second' }] },
+), undefined, 'multiple outputs require an explicit selectedOutputAssetId');
+
+const currentRevision = [{
+  id: 'workflow-race', status: 'APPROVED', revision: 4,
+  createdAt: '2026-07-20T08:00:00.000Z', updatedAt: '2026-07-20T08:04:00.000Z',
+}];
+const staleRevision = [{
+  id: 'workflow-race', status: 'RUNNING', revision: 3,
+  createdAt: '2026-07-20T08:00:00.000Z', updatedAt: '2026-07-20T08:03:00.000Z',
+}];
+assert.equal(
+  mergeAiMediaWorkflowHistoryHead(currentRevision, staleRevision)[0].status,
+  'APPROVED',
+  'a late head response must not replace a newer workflow revision',
+);
+assert.equal(
+  appendAiMediaWorkflowHistoryPage(currentRevision, staleRevision)[0].status,
+  'APPROVED',
+  'a late history or priority page must not replace a newer workflow revision',
+);
+const appliedCurrent = [{
+  id: 'workflow-applied', status: 'SUCCEEDED', reviewStatus: 'APPROVED', revision: 5,
+  createdAt: '2026-07-20T08:00:00.000Z', updatedAt: '2026-07-20T08:05:00.000Z',
+  jobs: [{ id: 'job-applied', appliedMode: 'append', costStatus: 'SETTLED' }],
+}];
+const staleJobProjection = [{
+  id: 'workflow-applied', status: 'SUCCEEDED', reviewStatus: 'APPROVED', revision: 5,
+  createdAt: '2026-07-20T08:00:00.000Z', updatedAt: '2026-07-20T08:05:00.000Z',
+  jobs: [{ id: 'job-applied', appliedMode: null, costStatus: 'RESERVED' }],
+}];
+const mergedApplied = mergeAiMediaWorkflowHistoryHead(appliedCurrent, staleJobProjection)[0];
+assert.equal(mergedApplied.jobs[0].appliedMode, 'append', 'appliedMode must be monotonic within one workflow revision');
+assert.equal(mergedApplied.jobs[0].costStatus, 'SETTLED', 'a final cost state must not regress to RESERVED');
 
 const waiters = new Map();
 const applied = [];

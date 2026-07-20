@@ -5,6 +5,9 @@ export type AiMediaWorkflowStatus =
   | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCEL_REQUESTED' | 'CANCELLED';
 export type AiMediaReviewStatus = 'NOT_READY' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
+export const AI_MEDIA_EXECUTION_POLL_INTERVAL_MS = 2_000;
+export const AI_MEDIA_REVIEW_POLL_INTERVAL_MS = 30_000;
+
 export interface AiMediaContextInput {
   sourceMediaKey: string;
   role: string;
@@ -91,8 +94,12 @@ export interface AiMediaWorkflow {
   createdAt: string;
   updatedAt?: string;
   completedAt: string | null;
+  contextType: string | null;
+  contextId: string | null;
   contextSkuKey: string | null;
   contextSlotKey: string | null;
+  selectedOutputAssetId?: string | null;
+  reviewedAt?: string | null;
   inputs: Array<{
     assetId: string;
     role?: 'REFERENCE' | 'MASK' | string;
@@ -105,6 +112,178 @@ export interface AiMediaWorkflow {
     sourceCaptureSnapshotId?: string | null;
   }>;
   jobs: AiMediaWorkflowJob[];
+}
+
+export interface AiMediaWorkflowPage {
+  items: AiMediaWorkflow[];
+  priorityItems: AiMediaWorkflow[];
+  priorityItemsTruncated: boolean;
+  priorityNextCursor?: string | null;
+  nextCursor: string | null;
+}
+
+export function aiMediaWorkflowReviewOutput(
+  workflow: AiMediaWorkflow,
+  job?: AiMediaWorkflowJob,
+) {
+  const assets = job?.assets || [];
+  if (workflow.selectedOutputAssetId) {
+    return assets.find((asset) => asset.id === workflow.selectedOutputAssetId);
+  }
+  return assets.length === 1 ? assets[0] : undefined;
+}
+
+export function shouldRefreshAiMediaWorkflow(workflow: AiMediaWorkflow) {
+  if (workflow.status === 'QUEUED' || workflow.status === 'RUNNING' || workflow.status === 'CANCEL_REQUESTED') {
+    return true;
+  }
+  const latestJob = workflow.jobs[workflow.jobs.length - 1];
+  return workflow.status === 'SUCCEEDED' && (
+    workflow.reviewStatus === 'PENDING'
+    || (workflow.reviewStatus === 'APPROVED' && !latestJob?.appliedMode)
+  );
+}
+
+export function aiMediaWorkflowPollInterval(workflows: AiMediaWorkflow[]) {
+  if (workflows.some((workflow) => (
+    workflow.status === 'QUEUED'
+    || workflow.status === 'RUNNING'
+    || workflow.status === 'CANCEL_REQUESTED'
+  ))) return AI_MEDIA_EXECUTION_POLL_INTERVAL_MS;
+  return workflows.some(shouldRefreshAiMediaWorkflow)
+    ? AI_MEDIA_REVIEW_POLL_INTERVAL_MS
+    : null;
+}
+
+export interface AiMediaWorkflowPriorityPage {
+  items: AiMediaWorkflow[];
+  nextCursor: string | null;
+}
+
+function validAiMediaWorkflowCursor(value: unknown): value is string | null {
+  return value === null || (
+    typeof value === 'string'
+    && Boolean(value)
+    && value.length <= 1_000
+    && /^[A-Za-z0-9_-]+$/u.test(value)
+  );
+}
+
+export function normalizeAiMediaWorkflowPage(value: unknown): AiMediaWorkflowPage | null {
+  if (Array.isArray(value)) {
+    return {
+      items: value as AiMediaWorkflow[],
+      priorityItems: [],
+      priorityItemsTruncated: false,
+      nextCursor: null,
+    };
+  }
+  if (!value || typeof value !== 'object') return null;
+  const page = value as Record<string, unknown>;
+  if (!Array.isArray(page.items)) return null;
+  if (page.priorityItems !== undefined && !Array.isArray(page.priorityItems)) return null;
+  if (page.priorityItemsTruncated !== undefined && typeof page.priorityItemsTruncated !== 'boolean') return null;
+  if (!validAiMediaWorkflowCursor(page.nextCursor)) return null;
+  const hasPriorityCursor = Object.prototype.hasOwnProperty.call(page, 'priorityNextCursor');
+  if (hasPriorityCursor && !validAiMediaWorkflowCursor(page.priorityNextCursor)) return null;
+  return {
+    items: page.items as AiMediaWorkflow[],
+    priorityItems: (page.priorityItems || []) as AiMediaWorkflow[],
+    priorityItemsTruncated: page.priorityItemsTruncated === true,
+    ...(hasPriorityCursor ? { priorityNextCursor: page.priorityNextCursor as string | null } : {}),
+    nextCursor: page.nextCursor as string | null,
+  };
+}
+
+export function normalizeAiMediaWorkflowPriorityPage(value: unknown): AiMediaWorkflowPriorityPage | null {
+  if (!value || typeof value !== 'object') return null;
+  const page = value as Record<string, unknown>;
+  if (!Array.isArray(page.items) || !validAiMediaWorkflowCursor(page.nextCursor)) return null;
+  return { items: page.items as AiMediaWorkflow[], nextCursor: page.nextCursor as string | null };
+}
+
+function sortAiMediaWorkflowHistory(items: AiMediaWorkflow[]) {
+  return items.sort((left, right) => {
+    const dateOrder = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+    if (dateOrder) return dateOrder;
+    return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
+  });
+}
+
+const AI_MEDIA_COST_STATUS_RANK: Record<NonNullable<AiMediaWorkflowJob['costStatus']>, number> = {
+  RESERVED: 0,
+  SUBMISSION_UNCERTAIN: 1,
+  RECONCILIATION_REQUIRED: 2,
+  SETTLED: 3,
+  RELEASED: 3,
+};
+
+function mergeMonotonicAiMediaJobState(
+  current: AiMediaWorkflow,
+  incoming: AiMediaWorkflow,
+) {
+  const currentJobs = new Map((current.jobs || []).map((job) => [job.id, job]));
+  return {
+    ...incoming,
+    jobs: (incoming.jobs || []).map((job) => {
+      const existing = currentJobs.get(job.id);
+      if (!existing) return job;
+      const currentCostRank = existing.costStatus ? AI_MEDIA_COST_STATUS_RANK[existing.costStatus] : -1;
+      const incomingCostRank = job.costStatus ? AI_MEDIA_COST_STATUS_RANK[job.costStatus] : -1;
+      return {
+        ...job,
+        appliedMode: job.appliedMode || existing.appliedMode,
+        costStatus: currentCostRank > incomingCostRank ? existing.costStatus : job.costStatus,
+      };
+    }),
+  };
+}
+
+function newerAiMediaWorkflow(
+  current: AiMediaWorkflow,
+  incoming: AiMediaWorkflow,
+) {
+  if (Number.isFinite(current.revision) && Number.isFinite(incoming.revision)) {
+    if (incoming.revision < current.revision) return current;
+    if (incoming.revision > current.revision) return mergeMonotonicAiMediaJobState(current, incoming);
+  }
+  const currentUpdatedAt = current.updatedAt ? Date.parse(current.updatedAt) : Number.NaN;
+  const incomingUpdatedAt = incoming.updatedAt ? Date.parse(incoming.updatedAt) : Number.NaN;
+  if (Number.isFinite(currentUpdatedAt) && Number.isFinite(incomingUpdatedAt)) {
+    if (incomingUpdatedAt < currentUpdatedAt) return current;
+    if (incomingUpdatedAt > currentUpdatedAt) return mergeMonotonicAiMediaJobState(current, incoming);
+  }
+  return mergeMonotonicAiMediaJobState(current, incoming);
+}
+
+export function mergeAiMediaWorkflowHistoryHead(
+  current: AiMediaWorkflow[],
+  head: AiMediaWorkflow[],
+) {
+  const headById = new Map(head.map((workflow) => [workflow.id, workflow]));
+  const currentIds = new Set(current.map((workflow) => workflow.id));
+  return sortAiMediaWorkflowHistory([
+    ...current.map((workflow) => {
+      const incoming = headById.get(workflow.id);
+      return incoming ? newerAiMediaWorkflow(workflow, incoming) : workflow;
+    }),
+    ...head.filter((workflow) => !currentIds.has(workflow.id)),
+  ]);
+}
+
+export function appendAiMediaWorkflowHistoryPage(
+  current: AiMediaWorkflow[],
+  page: AiMediaWorkflow[],
+) {
+  const updates = new Map(page.map((workflow) => [workflow.id, workflow]));
+  const seen = new Set(current.map((workflow) => workflow.id));
+  return sortAiMediaWorkflowHistory([
+    ...current.map((workflow) => {
+      const incoming = updates.get(workflow.id);
+      return incoming ? newerAiMediaWorkflow(workflow, incoming) : workflow;
+    }),
+    ...page.filter((workflow) => !seen.has(workflow.id)),
+  ]);
 }
 
 export interface AiMediaOperationReadiness {

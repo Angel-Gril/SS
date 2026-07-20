@@ -46,6 +46,49 @@ export interface AiMediaWorkflowRecord {
   events?: Array<Record<string, unknown>>;
 }
 
+export interface AiMediaWorkflowListCursor {
+  createdAt: Date;
+  id: string;
+}
+
+export interface AiMediaWorkflowPriorityCursor {
+  updatedAt: Date;
+  id: string;
+  recentCutoff: Date;
+}
+
+export interface AiMediaWorkflowPriorityPage {
+  items: AiMediaWorkflowRecord[];
+  nextCursor: AiMediaWorkflowPriorityCursor | null;
+}
+
+export interface AiMediaWorkflowPage {
+  items: AiMediaWorkflowRecord[];
+  priorityItems?: AiMediaWorkflowRecord[];
+  priorityItemsTruncated?: boolean;
+  priorityNextCursor?: AiMediaWorkflowPriorityCursor | null;
+  nextCursor: AiMediaWorkflowListCursor | null;
+}
+
+export interface AiMediaWorkflowPublicPage {
+  items: AiMediaWorkflowRecord[];
+  priorityItems: AiMediaWorkflowRecord[];
+  priorityItemsTruncated: boolean;
+  priorityNextCursor: string | null;
+  nextCursor: string | null;
+}
+
+export interface AiMediaWorkflowPriorityPublicPage {
+  items: AiMediaWorkflowRecord[];
+  nextCursor: string | null;
+}
+
+interface AiMediaWorkflowListScope {
+  ownerUserId: string;
+  contextType?: string;
+  contextId?: string;
+}
+
 export interface CreateAiMediaWorkflowInput {
   ownerUserId: string;
   actorUserId: string;
@@ -195,7 +238,16 @@ export interface AiMediaWorkflowRepository {
     contextType?: string;
     contextId?: string;
     limit: number;
-  }): Promise<AiMediaWorkflowRecord[]>;
+    cursor?: AiMediaWorkflowListCursor | null;
+    includePriority?: boolean;
+  }): Promise<AiMediaWorkflowPage>;
+  listPriorityOwned(input: {
+    ownerUserId: string;
+    contextType: string;
+    contextId: string;
+    limit: number;
+    cursor?: AiMediaWorkflowPriorityCursor | null;
+  }): Promise<AiMediaWorkflowPriorityPage>;
   getOwned(id: string, ownerUserId: string): Promise<AiMediaWorkflowRecord | null>;
   cancelOwned(id: string, ownerUserId: string, actorUserId: string, expectedRevision: number): Promise<AiMediaWorkflowRecord | null>;
   retryOwned(input: {
@@ -226,6 +278,126 @@ export class AiMediaWorkflowError extends Error {
 
 export function aiMediaPayloadHash(payload: unknown) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function aiMediaWorkflowListScopeHash(scope: AiMediaWorkflowListScope, lane: 'history' | 'priority') {
+  return aiMediaPayloadHash({
+    lane,
+    ownerUserId: scope.ownerUserId,
+    contextType: scope.contextType || null,
+    contextId: scope.contextId || null,
+  });
+}
+
+export function encodeAiMediaWorkflowListCursor(
+  scope: AiMediaWorkflowListScope,
+  cursor: AiMediaWorkflowListCursor,
+) {
+  return Buffer.from(JSON.stringify({
+    v: 1,
+    l: 'history',
+    c: cursor.createdAt.toISOString(),
+    i: cursor.id,
+    s: aiMediaWorkflowListScopeHash(scope, 'history'),
+  }), 'utf8').toString('base64url');
+}
+
+export function decodeAiMediaWorkflowListCursor(
+  scope: AiMediaWorkflowListScope,
+  value: string,
+): AiMediaWorkflowListCursor {
+  try {
+    if (!value || value.length > 1_000 || !/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error();
+    const bytes = Buffer.from(value, 'base64url');
+    if (!bytes.length || bytes.toString('base64url') !== value) throw new Error();
+    const serialized = bytes.toString('utf8');
+    const payload = JSON.parse(serialized) as Record<string, unknown>;
+    if (
+      !payload
+      || Array.isArray(payload)
+      || Object.keys(payload).sort().join(',') !== 'c,i,l,s,v'
+      || payload.v !== 1
+      || payload.l !== 'history'
+      || typeof payload.c !== 'string'
+      || typeof payload.i !== 'string'
+      || !payload.i
+      || payload.i.length > 200
+      || typeof payload.s !== 'string'
+      || payload.s !== aiMediaWorkflowListScopeHash(scope, 'history')
+    ) throw new Error();
+    const createdAt = new Date(payload.c);
+    if (Number.isNaN(createdAt.getTime()) || createdAt.toISOString() !== payload.c) throw new Error();
+    if (serialized !== JSON.stringify({
+      v: 1,
+      l: 'history',
+      c: payload.c,
+      i: payload.i,
+      s: payload.s,
+    })) throw new Error();
+    return { createdAt, id: payload.i };
+  } catch {
+    throw new AiMediaWorkflowError('INVALID_CURSOR', 'AI media workflow cursor is invalid for this history');
+  }
+}
+
+export function encodeAiMediaWorkflowPriorityCursor(
+  scope: AiMediaWorkflowListScope,
+  cursor: AiMediaWorkflowPriorityCursor,
+) {
+  return Buffer.from(JSON.stringify({
+    v: 1,
+    l: 'priority',
+    u: cursor.updatedAt.toISOString(),
+    i: cursor.id,
+    r: cursor.recentCutoff.toISOString(),
+    s: aiMediaWorkflowListScopeHash(scope, 'priority'),
+  }), 'utf8').toString('base64url');
+}
+
+export function decodeAiMediaWorkflowPriorityCursor(
+  scope: AiMediaWorkflowListScope,
+  value: string,
+): AiMediaWorkflowPriorityCursor {
+  try {
+    if (!value || value.length > 1_000 || !/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error();
+    const bytes = Buffer.from(value, 'base64url');
+    if (!bytes.length || bytes.toString('base64url') !== value) throw new Error();
+    const serialized = bytes.toString('utf8');
+    const payload = JSON.parse(serialized) as Record<string, unknown>;
+    if (
+      !payload
+      || Array.isArray(payload)
+      || Object.keys(payload).sort().join(',') !== 'i,l,r,s,u,v'
+      || payload.v !== 1
+      || payload.l !== 'priority'
+      || typeof payload.u !== 'string'
+      || typeof payload.i !== 'string'
+      || !payload.i
+      || payload.i.length > 200
+      || typeof payload.r !== 'string'
+      || typeof payload.s !== 'string'
+      || payload.s !== aiMediaWorkflowListScopeHash(scope, 'priority')
+    ) throw new Error();
+    const updatedAt = new Date(payload.u);
+    const recentCutoff = new Date(payload.r);
+    if (
+      Number.isNaN(updatedAt.getTime())
+      || updatedAt.toISOString() !== payload.u
+      || Number.isNaN(recentCutoff.getTime())
+      || recentCutoff.toISOString() !== payload.r
+    ) throw new Error();
+    if (serialized !== JSON.stringify({
+      v: 1,
+      l: 'priority',
+      u: payload.u,
+      i: payload.i,
+      r: payload.r,
+      s: payload.s,
+    })) throw new Error();
+    return { updatedAt, id: payload.i, recentCutoff };
+  } catch {
+    throw new AiMediaWorkflowError('INVALID_CURSOR', 'AI media workflow cursor is invalid for this priority lane');
+  }
 }
 
 export function createAiMediaWorkflowFingerprint(input: Omit<CreateAiMediaWorkflowInput, 'actorUserId' | 'idempotencyKey'>) {
@@ -445,8 +617,61 @@ export function createAiMediaWorkflowService(repository: AiMediaWorkflowReposito
       return { workflow: result.workflow, jobId: result.jobId, replayed: result.kind === 'existing' };
     },
 
-    list(input: { ownerUserId: string; contextType?: string; contextId?: string; limit?: number }) {
-      return repository.listOwned({ ...input, limit: Math.min(100, Math.max(1, input.limit || 20)) });
+    async list(input: {
+      ownerUserId: string;
+      contextType?: string;
+      contextId?: string;
+      limit?: number;
+      cursor?: string;
+      includePriority?: boolean;
+    }): Promise<AiMediaWorkflowPublicPage> {
+      const scope = {
+        ownerUserId: input.ownerUserId,
+        contextType: input.contextType,
+        contextId: input.contextId,
+      };
+      const page = await repository.listOwned({
+        ...scope,
+        limit: Math.min(100, Math.max(1, input.limit || 20)),
+        cursor: input.cursor ? decodeAiMediaWorkflowListCursor(scope, input.cursor) : null,
+        includePriority: input.includePriority === true && !input.cursor,
+      });
+      return {
+        items: page.items,
+        priorityItems: page.priorityItems || [],
+        priorityItemsTruncated: page.priorityItemsTruncated === true,
+        priorityNextCursor: page.priorityNextCursor
+          ? encodeAiMediaWorkflowPriorityCursor(scope, page.priorityNextCursor)
+          : null,
+        nextCursor: page.nextCursor
+          ? encodeAiMediaWorkflowListCursor(scope, page.nextCursor)
+          : null,
+      };
+    },
+
+    async listPriority(input: {
+      ownerUserId: string;
+      contextType: string;
+      contextId: string;
+      limit?: number;
+      cursor?: string;
+    }): Promise<AiMediaWorkflowPriorityPublicPage> {
+      const scope = {
+        ownerUserId: input.ownerUserId,
+        contextType: input.contextType,
+        contextId: input.contextId,
+      };
+      const page = await repository.listPriorityOwned({
+        ...scope,
+        limit: Math.min(100, Math.max(1, input.limit || 100)),
+        cursor: input.cursor ? decodeAiMediaWorkflowPriorityCursor(scope, input.cursor) : null,
+      });
+      return {
+        items: page.items,
+        nextCursor: page.nextCursor
+          ? encodeAiMediaWorkflowPriorityCursor(scope, page.nextCursor)
+          : null,
+      };
     },
 
     async get(id: string, ownerUserId: string) {

@@ -412,9 +412,9 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
-### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B）
+### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B / 10A-H1）
 
-Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选；这些 migration 只能前向保留，应用回滚不得删除其数据或函数。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
+Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑；Unit 10A-H1 已增加 collect-context 历史/优先任务恢复，但不是功能激活。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选，`1670`/`1680` 通过并发索引支持 owner/context 的 history/updates keyset 查询；这些 migration 只能前向保留，应用回滚不得删除其数据、函数或有效索引。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI、listing-draft/SKU 上下文和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
 
 ```bash
 # app-dir 模式
@@ -447,6 +447,89 @@ docker compose -f docker-compose.prod.yml --env-file .env.production logs migrat
 ```
 
 超时或非零退出时 API/Worker 必须保持停止。若当前 migration 使用 `CREATE INDEX CONCURRENTLY`，超时也可能留下 invalid index；先执行本页“Prisma migration 失败”的 `pg_index` / `pg_get_indexdef` 检查，不得把重跑当作恢复策略。
+
+### AI Media 历史分页索引检查与恢复（Unit 10A-H1）
+
+Unit 10A-H1 对应 111 个 migration。`20260720167000_add_ai_media_workflow_history_index` 和 `20260720168000_add_ai_media_workflow_priority_index` 都是单语句 `CREATE INDEX CONCURRENTLY`；前者建立 `ai_media_workflow_owner_context_history`，后者建立 `ai_media_workflow_owner_context_updates`。部署完成、超时或 migration 非零退出后，在 API/Worker 保持停止时执行：
+
+```bash
+cd /opt/ss-erp/current/apps/server   # app-dir 模式改为 /opt/ss-erp/app/apps/server
+set -a
+. ../../.env.staging
+set +a
+
+npx prisma migrate status
+
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT migration_name, started_at, finished_at, rolled_back_at, logs
+FROM "_prisma_migrations"
+WHERE migration_name IN (
+  '20260720167000_add_ai_media_workflow_history_index',
+  '20260720168000_add_ai_media_workflow_priority_index'
+)
+ORDER BY migration_name;
+
+SELECT index_ns.nspname AS index_schema,
+       c.relname AS index_name,
+       table_ns.nspname AS table_schema,
+       t.relname AS table_name,
+       i.indisvalid,
+       i.indisready,
+       pg_get_indexdef(i.indexrelid) AS index_definition
+FROM pg_index AS i
+JOIN pg_class AS c ON c.oid = i.indexrelid
+JOIN pg_namespace AS index_ns ON index_ns.oid = c.relnamespace
+JOIN pg_class AS t ON t.oid = i.indrelid
+JOIN pg_namespace AS table_ns ON table_ns.oid = t.relnamespace
+WHERE index_ns.nspname = current_schema()
+  AND table_ns.nspname = current_schema()
+  AND t.relname = 'ai_media_workflows'
+  AND c.relname IN (
+  'ai_media_workflow_owner_context_history',
+  'ai_media_workflow_owner_context_updates'
+)
+ORDER BY c.relname;
+SQL
+```
+
+两个索引都必须同时满足 `indisvalid=true`、`indisready=true`。定义必须以 `owner_user_id, context_type, context_id` 开头；history 索引随后为 `created_at DESC, id DESC`，updates 索引随后为 `updated_at DESC, id DESC`。索引缺失、无效、未 ready 或定义漂移都不能通过，且不能用 `prisma migrate resolve --applied` 掩盖。
+
+若失败 migration 留下同名 invalid index，先确认没有重复写入进程，再对对应索引执行独立的并发删除。`DROP INDEX CONCURRENTLY` 不能放入 transaction block。只有 ledger 显示 `1670` 实际失败且未 rolled back 时，运行：
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT format(
+  'DROP INDEX CONCURRENTLY IF EXISTS %I.%I;',
+  current_schema(),
+  'ai_media_workflow_owner_context_history'
+)
+\gexec
+SQL
+npx prisma migrate resolve --rolled-back 20260720167000_add_ai_media_workflow_history_index
+```
+
+只有 ledger 显示 `1680` 实际失败且未 rolled back 时，运行：
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT format(
+  'DROP INDEX CONCURRENTLY IF EXISTS %I.%I;',
+  current_schema(),
+  'ai_media_workflow_owner_context_updates'
+)
+\gexec
+SQL
+npx prisma migrate resolve --rolled-back 20260720168000_add_ai_media_workflow_priority_index
+```
+
+处理所有实际失败项后再重放：
+
+```bash
+npx prisma migrate deploy
+npx prisma migrate status
+```
+
+若只有一个 migration 失败，不得对另一个已成功 migration 执行 `resolve --rolled-back`；只运行失败项对应的 drop/resolve，然后执行一次 `migrate deploy`。重放后必须再次执行 `pg_index` 查询，确认两个索引均 valid、ready 且定义精确，再运行 `verify-ai-media-dark.sh`。H1 本地关闭基线为 PostgreSQL 45/45、populated upgrade 1/1、2627 项服务端测试通过且 125 项按环境跳过、192 项扩展检查通过；workspace typecheck、full preflight 和 production build 均通过，桌面/移动多会话浏览器验收无横向溢出或控制台错误。该基线不替代目标环境的 migration/status/index/dark-gate 复核，也不代表 Unit 10A 的 listing-draft/SKU、reconciliation 或 H2 回滚能力已经完成。
 
 ## 服务器功能验收清单
 
