@@ -78,6 +78,7 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
       sourceMediaKey: 'main-1', sourceUrl: 'https://source.example/main.png',
       url: `/uploads/${sourceAssetId}.png`, storageBackend: 'local', storageKey: `${sourceAssetId}.png`,
       mimeType: 'image/png', sizeBytes: source.length, width: 2, height: 2, sha256: digest(source),
+      metadata: { pixelOrientationNormalized: true },
     } });
     await (client! as any).mediaAsset.create({ data: {
       id: maskAssetId, ownerUserId, kind: 'EDIT_MASK', sourceCaptureSnapshotId: snapshotId,

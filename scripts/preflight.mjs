@@ -49,6 +49,21 @@ const steps = [
     args: ['scripts/web-admin-ai-cost-reconciliation.test.mjs'],
   },
   {
+    name: 'Web AI media edit workbench contract',
+    command: 'node',
+    args: ['scripts/web-ai-media-edit-workbench.test.mjs'],
+  },
+  {
+    name: 'Web AI media behavior contract',
+    command: 'node',
+    args: ['scripts/web-ai-media-behavior.test.mjs'],
+  },
+  {
+    name: 'Web AI media recovery contract',
+    command: 'node',
+    args: ['scripts/web-ai-media-recovery.test.mjs'],
+  },
+  {
     name: 'source marketplace network contract',
     command: 'node',
     args: ['scripts/source-marketplace-contract.test.mjs'],

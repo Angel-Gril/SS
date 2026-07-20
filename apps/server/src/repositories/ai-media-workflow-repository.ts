@@ -23,6 +23,7 @@ import {
   AI_IMAGE_EDIT_MAX_INPUT_BYTES,
   AI_IMAGE_EDIT_POLICY_VERSION,
 } from '../services/ai-image-edit.js';
+import { isAiMediaEditReadySourceAsset } from '../services/ai-image-edit-source.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import {
   releaseAiCostInTransaction,
@@ -120,6 +121,7 @@ interface FrozenEditAsset extends FrozenSourceAsset {
 }
 
 function validFrozenEditAsset(asset: FrozenEditAsset | undefined, kind: 'SOURCE_ORIGINAL' | 'EDIT_MASK') {
+  if (kind === 'SOURCE_ORIGINAL') return isAiMediaEditReadySourceAsset(asset);
   return Boolean(
     asset
     && asset.kind === kind

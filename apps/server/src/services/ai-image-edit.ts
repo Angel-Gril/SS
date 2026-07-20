@@ -19,8 +19,12 @@ import {
   type AiImageJobRepository,
   type AiImageProvider,
 } from './ai-image-jobs.js';
+import {
+  AI_MEDIA_EDIT_SOURCE_MAX_BYTES,
+  isAiMediaEditReadySourceAsset,
+} from './ai-image-edit-source.js';
 
-export const AI_IMAGE_EDIT_MAX_INPUT_BYTES = 20 * 1024 * 1024;
+export const AI_IMAGE_EDIT_MAX_INPUT_BYTES = AI_MEDIA_EDIT_SOURCE_MAX_BYTES;
 
 export const AI_IMAGE_EDIT_POLICY_VERSION = 'ai-image-edit-policy/1.0';
 
@@ -103,17 +107,7 @@ export async function createAiImageEditMask(
   if (
     !authority
     || !snapshotId
-    || !source
-    || !/^[a-f0-9]{64}$/u.test(String(source.sha256 || ''))
-    || !['local', 'oss'].includes(String(source.storageBackend || ''))
-    || !String(source.storageKey || '').trim()
-    || !Number.isSafeInteger(source.sizeBytes)
-    || source.sizeBytes < 1
-    || !Number.isSafeInteger(source.width)
-    || !Number.isSafeInteger(source.height)
-    || source.width < 1
-    || source.height < 1
-    || source.width * source.height > 12_000_000
+    || !isAiMediaEditReadySourceAsset(source)
   ) {
     throw new AiImageJobError('SOURCE_ASSET_NOT_FOUND', 'Owned current source asset was not found');
   }

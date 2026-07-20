@@ -55,6 +55,9 @@ async function build(
   editDailyLimit = 5,
   editMaskUploadAllowed = true,
   editMaskRateAllowed = true,
+  editStorageReady = true,
+  editStorageBackend: 'oss' | 'local' | 'ozon-cdn' = 'oss',
+  existingWorkflowOperation: AiMediaWorkflowRecord['operation'] = 'IMAGE_TO_IMAGE',
 ) {
   const mediaWorkflowService = {
     createImageToImage: vi.fn(async () => ({ workflow, jobId: 'job-1', replayed: false })),
@@ -67,7 +70,7 @@ async function build(
     list: vi.fn(async () => [workflow]),
     get: vi.fn(async (_id: string, owner: string) => {
       if (owner !== 'owner-1') throw new AiMediaWorkflowError('NOT_FOUND', 'not found');
-      return workflow;
+      return { ...workflow, operation: existingWorkflowOperation };
     }),
     cancel: vi.fn(async () => ({ ...workflow, status: 'CANCELLED' as const })),
     retry: vi.fn(async () => ({ workflow, jobId: 'job-2', replayed: false })),
@@ -77,7 +80,7 @@ async function build(
     loadCollect: vi.fn(async () => ({
       target: { type: 'collect' as const, id: 'goods-1', label: 'Product' },
       snapshot: { id: 'snapshot-1', version: 1, captureHash: 'hash-1' },
-      inputs: [{ sourceMediaKey: 'main-1', role: 'main', sourceUrl: 'https://source.example/main.jpg', assetId: 'asset-1', assetUrl: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000 }],
+      inputs: [{ sourceMediaKey: 'main-1', role: 'main', sourceUrl: 'https://source.example/main.jpg', assetId: 'asset-1', compatibleAssetIds: ['asset-1'], assetUrl: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000, editReady: false }],
     })),
     internalizeCollect: vi.fn(async () => ({ id: 'asset-1', url: 'https://cdn.example/main.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000 })),
   };
@@ -121,6 +124,13 @@ async function build(
     checkEditMaskUploadQuota: async () => editMaskUploadAllowed
       ? ({ allowed: true })
       : ({ allowed: false, reason: 'Edit mask upload quota exceeded' }),
+    getEditStorageReadiness: async () => ({
+      ready: editStorageReady,
+      backend: editStorageBackend,
+      reason: editStorageReady
+        ? 'AI image edit storage is ready'
+        : 'AI image edit requires owned local or OSS storage',
+    }),
     getTranslationSettings: async () => ({
       enabled: translationEnabled, provider: translationEnabled ? translationProvider : 'disabled',
       model: translationProvider === 'fake' ? 'fake-image-translation-v1' : 'qwen-mt-image',
@@ -211,6 +221,27 @@ describe('AI media workflow routes', () => {
     expect(enqueueEdit).not.toHaveBeenCalled();
   });
 
+  it('fails edit capabilities and creation closed when storage is incompatible', async () => {
+    const { app, mediaWorkflowService, enqueueEdit } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true,
+      true, true, 5, true, true, false, 'ozon-cdn',
+    );
+    const capabilities = await app.inject({ method: 'GET', url: '/capabilities' });
+    expect(capabilities.json().data.operations).toMatchObject({
+      FULL_EDIT: { ready: false, reasonCode: 'STORAGE_NOT_READY' },
+      INPAINT: { ready: false, reasonCode: 'STORAGE_NOT_READY' },
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/workflows', payload: {
+      operation: 'FULL_EDIT', sourceAssetId: 'asset-1', userPrompt: 'Clean background',
+      idempotencyKey: 'manual-full-edit-storage', context: { type: 'collect', id: 'goods-1' },
+    } });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'STORAGE_NOT_READY' });
+    expect(mediaWorkflowService.createImageEdit).not.toHaveBeenCalled();
+    expect(enqueueEdit).not.toHaveBeenCalled();
+  });
+
   it('finalizes a mask only through the owner-scoped inpaint endpoint', async () => {
     const { app, createEditMask } = await build(
       true, 'owner-1', false, 'fake', true, false, true, 'oss', true, false, true,
@@ -272,6 +303,35 @@ describe('AI media workflow routes', () => {
     expect(response.statusCode).toBe(429);
     expect(response.json()).toMatchObject({ code: 'EDIT_RESOURCE_RATE_LIMITED' });
     expect(createEditMask).not.toHaveBeenCalled();
+  });
+
+  it('blocks mask upload and edit retry before work when storage is incompatible', async () => {
+    const { app, createEditMask, mediaWorkflowService, enqueueEdit } = await build(
+      true, 'owner-1', false, 'fake', true, false, true, 'oss', true,
+      true, true, 5, true, true, false, 'ozon-cdn', 'FULL_EDIT',
+    );
+    const maskResponse = await app.inject({
+      method: 'POST',
+      url: '/contexts/collect/goods-1/edit-masks',
+      payload: {
+        sourceAssetId: 'asset-1',
+        maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
+        maskDataUrl: `data:image/png;base64,${Buffer.from('mask-mask-mask-mask').toString('base64')}`,
+      },
+    });
+    expect(maskResponse.statusCode).toBe(503);
+    expect(maskResponse.json()).toMatchObject({ code: 'STORAGE_NOT_READY' });
+    expect(createEditMask).not.toHaveBeenCalled();
+
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/retry',
+      payload: { expectedRevision: 1, idempotencyKey: 'manual-edit-retry-storage' },
+    });
+    expect(retryResponse.statusCode).toBe(503);
+    expect(retryResponse.json()).toMatchObject({ code: 'STORAGE_NOT_READY' });
+    expect(mediaWorkflowService.retry).not.toHaveBeenCalled();
+    expect(enqueueEdit).not.toHaveBeenCalled();
   });
 
   it('authenticates edit-mask requests before parsing their large JSON body', async () => {
@@ -842,6 +902,39 @@ describe('AI media workflow routes', () => {
     }));
   });
 
+  it('keeps a legacy workflow current after an edit companion becomes preferred', async () => {
+    const { app, mediaWorkflowService, mediaContextService } = await build();
+    mediaContextService.loadCollect.mockResolvedValueOnce({
+      target: { type: 'collect', id: 'goods-1', label: 'Product' },
+      snapshot: { id: 'snapshot-1', version: 1, captureHash: 'hash-1' },
+      inputs: [{
+        sourceMediaKey: 'main-1', role: 'main', sourceUrl: 'https://source.example/main.jpg',
+        assetId: 'asset-edit-companion', compatibleAssetIds: ['asset-edit-companion', 'asset-legacy'],
+        assetUrl: '/uploads/edit-source.jpg', mimeType: 'image/jpeg', width: 1000, height: 1000,
+        editReady: true,
+      }],
+    });
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      contextType: 'collect',
+      contextId: 'goods-1',
+      inputs: [{ assetId: 'asset-legacy', role: 'REFERENCE', ordinal: 0 }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/review',
+      payload: { expectedRevision: 2, outputAssetId: 'output-1', decision: 'APPROVE' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mediaWorkflowService.review).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'workflow-1', outputAssetId: 'output-1', decision: 'APPROVE',
+    }));
+  });
+
   it('keeps suite child workflows behind the suite-level lifecycle contract', async () => {
     const { app, repository, mediaWorkflowService, enqueue, applyAssets } = await build();
     mediaWorkflowService.get.mockResolvedValue({ ...workflow, suiteId: 'suite-1' });
@@ -927,10 +1020,12 @@ describe('AI media workflow routes', () => {
     expect(mediaContextService.loadCollect).toHaveBeenCalledWith('owner-1', 'goods-1');
 
     const internalized = await app.inject({
-      method: 'POST', url: '/contexts/collect/goods-1/internalize', payload: { sourceMediaKey: 'main-1' },
+      method: 'POST', url: '/contexts/collect/goods-1/internalize', payload: {
+        sourceMediaKey: 'main-1', purpose: 'EDIT',
+      },
     });
     expect(internalized.statusCode).toBe(200);
-    expect(mediaContextService.internalizeCollect).toHaveBeenCalledWith('owner-1', 'goods-1', 'main-1');
+    expect(mediaContextService.internalizeCollect).toHaveBeenCalledWith('owner-1', 'goods-1', 'main-1', 'EDIT');
   });
 
   it('compensates a retry when the queue is unavailable', async () => {

@@ -454,7 +454,9 @@ describe('AI image edit mask authority', () => {
           .mockResolvedValueOnce({
             id: 'source-asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
             sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64), width: 2, height: 2,
+            url: '/uploads/source.png', mimeType: 'image/png',
             storageBackend: 'local', storageKey: 'source.png', sizeBytes: 100,
+            metadata: { pixelOrientationNormalized: true },
           })
           .mockResolvedValueOnce(null),
         create,
@@ -511,7 +513,9 @@ describe('AI image edit mask authority', () => {
       id: 'source-asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
       sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64),
       width: 2, height: 2, sizeBytes: 100,
+      url: '/uploads/source.png', mimeType: 'image/png',
       storageBackend: 'local', storageKey: 'source.png',
+      metadata: { pixelOrientationNormalized: true },
     };
     const existing = {
       id: 'mask-asset-1', ownerUserId: 'owner-1', kind: 'EDIT_MASK',
@@ -569,7 +573,9 @@ describe('AI image edit mask authority', () => {
               id: 'source-asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
               sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64),
               width: 2, height: 2, sizeBytes: 100,
+              url: '/uploads/source.png', mimeType: 'image/png',
               storageBackend: 'local', storageKey: 'source.png',
+              metadata: { pixelOrientationNormalized: true },
             })
             .mockResolvedValueOnce(null),
           create,
@@ -629,7 +635,9 @@ describe('AI image edit mask authority', () => {
               id: 'source-asset-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
               sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64),
               width: 2, height: 2, sizeBytes: 100,
+              url: '/uploads/source.png', mimeType: 'image/png',
               storageBackend: 'local', storageKey: 'source.png',
+              metadata: { pixelOrientationNormalized: true },
             })
             .mockResolvedValueOnce({
               id: 'mask-asset-1', ownerUserId: 'owner-1', kind: 'EDIT_MASK',

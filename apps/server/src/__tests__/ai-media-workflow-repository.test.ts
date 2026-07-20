@@ -16,7 +16,8 @@ describe('Prisma AI media workflow repository recovery fence', () => {
       id: 'source-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
       sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
       url: '/uploads/source.png', mimeType: 'image/png', width: 1000, height: 1000,
-      storageBackend: 'local', storageKey: 'source.png', sizeBytes: 100, metadata: {},
+      storageBackend: 'local', storageKey: 'source.png', sizeBytes: 100,
+      metadata: { pixelOrientationNormalized: true },
     };
     const mask = {
       id: 'mask-1', ownerUserId: 'owner-1', kind: 'EDIT_MASK',
@@ -133,12 +134,42 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     expect(tx.supplyGoods.findFirst).not.toHaveBeenCalled();
   });
 
+  it('rejects a legacy source that has not frozen orientation-normalized pixels', async () => {
+    const source = {
+      id: 'source-legacy', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
+      sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+      url: '/uploads/source.jpg', mimeType: 'image/jpeg', width: 3, height: 2,
+      storageBackend: 'local', storageKey: 'source.jpg', sizeBytes: 100, metadata: {},
+    };
+    const tx = {
+      aiMediaWorkflow: { findUnique: vi.fn(async () => null) },
+      mediaAsset: { findMany: vi.fn(async () => [source]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.createImageEdit({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
+      sourceAssetId: 'source-legacy', prompt: 'Clean background', negativePrompt: null,
+      resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
+      templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
+      templateChecksum: 'c'.repeat(64), templateSnapshot: { sequence: 1 },
+      dailyLimit: 5, idempotencyKey: 'legacy-edit-source',
+      context: { type: 'collect', id: 'goods-1' },
+    })).rejects.toMatchObject({ code: 'SOURCE_ASSET_NOT_FOUND' });
+  });
+
   it('rejects a new edit when the shared image-generation daily limit is exhausted', async () => {
     const source = {
       id: 'source-1', ownerUserId: 'owner-1', kind: 'SOURCE_ORIGINAL',
       sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
       url: '/uploads/source.png', mimeType: 'image/png', width: 1000, height: 1000,
-      storageBackend: 'local', storageKey: 'source.png', sizeBytes: 100, metadata: {},
+      storageBackend: 'local', storageKey: 'source.png', sizeBytes: 100,
+      metadata: { pixelOrientationNormalized: true },
     };
     const aggregate = vi.fn()
       .mockResolvedValueOnce({ _sum: { requestedImageCount: 1 } })

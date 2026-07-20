@@ -1,6 +1,6 @@
 import { SOURCE_LISTING_PRODUCT_ONLY_SKU_KEY } from 'shared/ozon-listing-draft';
 
-export type AiMediaOperation = 'IMAGE_TO_IMAGE' | 'IMAGE_TRANSLATE';
+export type AiMediaOperation = 'IMAGE_TO_IMAGE' | 'IMAGE_TRANSLATE' | 'FULL_EDIT' | 'INPAINT';
 export type AiMediaWorkflowStatus =
   | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCEL_REQUESTED' | 'CANCELLED';
 export type AiMediaReviewStatus = 'NOT_READY' | 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -14,12 +14,35 @@ export interface AiMediaContextInput {
   mimeType: string | null;
   width: number | null;
   height: number | null;
+  editReady?: boolean;
+  compatibleAssetIds?: string[];
 }
 
 export interface AiMediaContextResponse {
   target: { type: 'collect'; id: string; label: string };
   snapshot: { id: string; version: number; captureHash: string };
   inputs: AiMediaContextInput[];
+}
+
+export interface AiMediaInternalizedAsset {
+  id: string;
+  url: string;
+  mimeType: string;
+  width: number | null;
+  height: number | null;
+  editReady?: boolean;
+}
+
+export interface AiImageEditMaskAsset {
+  id: string;
+  url: string;
+  mimeType: 'image/png' | string;
+  width: number;
+  height: number;
+  maskSemantics: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
+  editPixelCount: number;
+  preservedPixelCount: number;
+  featheredPixelCount: number;
 }
 
 export interface AiImageTranslationTerminology {
@@ -56,7 +79,15 @@ export interface AiMediaWorkflow {
   createdAt: string;
   updatedAt?: string;
   completedAt: string | null;
-  inputs: Array<{ assetId: string; url: string }>;
+  inputs: Array<{
+    assetId: string;
+    role?: 'REFERENCE' | 'MASK' | string;
+    ordinal?: number;
+    url: string;
+    mimeType?: string | null;
+    width?: number | null;
+    height?: number | null;
+  }>;
   jobs: AiMediaWorkflowJob[];
 }
 
@@ -1355,15 +1386,21 @@ export function describeAiMediaReadiness(
     return 'AI 媒体工作流当前未对该账号开放。';
   }
   if (readiness.reasonCode === 'AI_MEDIA_OPERATION_DISABLED') {
-    return operation === 'IMAGE_TRANSLATE' ? '图片翻译当前关闭。' : 'AI 改图当前关闭。';
+    if (operation === 'IMAGE_TRANSLATE') return '图片翻译当前关闭。';
+    if (operation === 'FULL_EDIT') return 'AI 全图编辑当前关闭。';
+    if (operation === 'INPAINT') return 'AI 局部重绘当前关闭。';
+    return 'AI 改图当前关闭。';
   }
   if (readiness.reasonCode === 'PROVIDER_NOT_READY') {
-    return operation === 'IMAGE_TRANSLATE'
-      ? '图片翻译 Provider 尚未完成生产验证。'
-      : 'AI 改图 Provider 尚未完成生产验证。';
+    if (operation === 'IMAGE_TRANSLATE') return '图片翻译 Provider 尚未完成生产验证。';
+    if (operation === 'FULL_EDIT') return 'AI 全图编辑 Provider 尚未完成生产验证。';
+    if (operation === 'INPAINT') return 'AI 局部重绘 Provider 尚未完成生产验证。';
+    return 'AI 改图 Provider 尚未完成生产验证。';
   }
   if (readiness.reasonCode === 'STORAGE_NOT_READY') {
-    return '图片翻译需要可用的 OSS 或本地存储，当前存储配置不兼容。';
+    return operation === 'IMAGE_TRANSLATE'
+      ? '图片翻译需要可用的 OSS 或本地存储，当前存储配置不兼容。'
+      : 'AI 图片编辑需要可用的 OSS 或本地存储，当前存储配置不兼容。';
   }
   return readiness.reason;
 }
@@ -1474,6 +1511,11 @@ export function isDefinitiveWorkflowSubmissionFailure(code: unknown): boolean {
     'AI_MEDIA_CONTEXT_MISMATCH',
     'IDEMPOTENCY_KEY_CONFLICT',
     'IMAGE_TRANSLATION_QUOTA_EXCEEDED',
+    'AI_IMAGE_EDIT_QUOTA_EXCEEDED',
+    'MASK_ASSET_NOT_FOUND',
+    'MASK_ASSET_INVALID',
+    'EDIT_RESOURCE_QUOTA_EXCEEDED',
+    'EDIT_RESOURCE_RATE_LIMITED',
     'QUEUE_UNAVAILABLE',
   ]).has(String(code || '').toUpperCase());
 }
@@ -1538,11 +1580,64 @@ export function buildImageTranslationWorkflowRequest(input: {
   };
 }
 
+export const AI_IMAGE_EDIT_MASK_SEMANTICS = 'WHITE_EDIT_BLACK_PRESERVE_V1' as const;
+
+export function buildAiImageEditWorkflowRequest(input: {
+  operation: 'FULL_EDIT' | 'INPAINT';
+  sourceAssetId: string;
+  maskAssetId?: string | null;
+  userPrompt: string;
+  userNegativePrompt: string;
+  idempotencyKey: string;
+  contextId: string;
+}) {
+  const sourceAssetId = input.sourceAssetId.trim();
+  const contextId = input.contextId.trim();
+  const userPrompt = input.userPrompt.trim();
+  const userNegativePrompt = input.userNegativePrompt.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+  if (!sourceAssetId || !contextId) throw new Error('请选择当前商品的源图');
+  if (!userPrompt) throw new Error('请填写编辑要求');
+  if (userPrompt.length > 8_000) throw new Error('编辑要求不能超过 8000 个字符');
+  if (userNegativePrompt.length > 4_000) throw new Error('排除要求不能超过 4000 个字符');
+  if (idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+    throw new Error('编辑请求幂等键无效');
+  }
+  const context = { type: 'collect' as const, id: contextId };
+  if (input.operation === 'FULL_EDIT') {
+    if (String(input.maskAssetId || '').trim()) throw new Error('全图编辑不能包含遮罩');
+    return {
+      operation: 'FULL_EDIT' as const,
+      sourceAssetId,
+      userPrompt,
+      userNegativePrompt,
+      idempotencyKey,
+      context,
+    };
+  }
+  const maskAssetId = String(input.maskAssetId || '').trim();
+  if (!maskAssetId) throw new Error('局部重绘需要有效遮罩');
+  return {
+    operation: 'INPAINT' as const,
+    sourceAssetId,
+    maskAssetId,
+    maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    userPrompt,
+    userNegativePrompt,
+    idempotencyKey,
+    context,
+  };
+}
+
 export function isAiMediaWorkflowInputCurrent(
   workflow: Pick<AiMediaWorkflow, 'inputs'>,
   currentInputs: AiMediaContextInput[],
 ) {
-  if (!workflow.inputs.length) return false;
-  const currentAssetIds = new Set(currentInputs.map((input) => input.assetId).filter(Boolean));
-  return workflow.inputs.every((input) => currentAssetIds.has(input.assetId));
+  const sourceInputs = workflow.inputs.filter((input) => input.role !== 'MASK');
+  if (!sourceInputs.length) return false;
+  const currentAssetIds = new Set(currentInputs.flatMap((input) => [
+    input.assetId,
+    ...(Array.isArray(input.compatibleAssetIds) ? input.compatibleAssetIds : []),
+  ]).filter(Boolean));
+  return sourceInputs.every((input) => currentAssetIds.has(input.assetId));
 }

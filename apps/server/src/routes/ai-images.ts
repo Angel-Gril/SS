@@ -35,6 +35,10 @@ import {
   resolveAiImageTranslationStorageReadiness,
   type AiImageTranslationStorageReadiness,
 } from '../services/ai-image-translation-storage.js';
+import {
+  resolveAiImageEditStorageReadiness,
+  type AiImageEditStorageReadiness,
+} from '../services/ai-image-edit-storage.js';
 import { resolveAiImageProviderCapability } from '../services/ai-image-provider-capabilities.js';
 import {
   AI_MEDIA_FULL_EDIT_TEMPLATE_KEY,
@@ -211,6 +215,7 @@ interface AiImageRouteOptions {
   getTranslationSettings?: () => Promise<AiImageTranslationRouteSettings>;
   getTranslationStorageReadiness?: () => Promise<AiImageTranslationStorageReadiness>;
   getEditSettings?: () => Promise<AiImageEditRouteSettings>;
+  getEditStorageReadiness?: () => Promise<AiImageEditStorageReadiness>;
   getSourceListingWebMediaEnabled?: () => Promise<boolean>;
   sourceWorkflowFeatureFlags?: SourceWorkflowFeatureFlagEvaluator;
   production?: boolean;
@@ -450,7 +455,11 @@ export function resolveAiImageToImageReadiness(
 export function resolveAiImageEditReadiness(
   operation: 'FULL_EDIT' | 'INPAINT',
   settings: { fullEditEnabled: boolean; inpaintEnabled: boolean },
-  options: { workflowEnabled?: boolean; production?: boolean } = {},
+  options: {
+    workflowEnabled?: boolean;
+    production?: boolean;
+    storageReadiness?: AiImageEditStorageReadiness;
+  } = {},
 ): AiImageOperationReadiness {
   if (options.workflowEnabled === false) {
     return {
@@ -469,6 +478,15 @@ export function resolveAiImageEditReadiness(
       ready: false,
       reasonCode: 'AI_MEDIA_OPERATION_DISABLED',
       reason: operation === 'FULL_EDIT' ? 'Full-image edit is disabled' : 'Masked inpaint is disabled',
+      testOnly: true,
+    };
+  }
+  if (options.storageReadiness && !options.storageReadiness.ready) {
+    return {
+      enabled: true,
+      ready: false,
+      reasonCode: 'STORAGE_NOT_READY',
+      reason: options.storageReadiness.reason,
       testOnly: true,
     };
   }
@@ -659,6 +677,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     inpaintEnabled: await getConfig('feature_ai_media_inpaint'),
     dailyLimit: await getConfig('ai_user_daily_image_generation_limit'),
   }));
+  const getEditStorageReadiness = options.getEditStorageReadiness || (async () => {
+    try {
+      return resolveAiImageEditStorageReadiness(await getRuntimeConfigForStorage());
+    } catch {
+      return {
+        ready: false,
+        reason: 'AI image edit storage readiness could not be verified',
+      };
+    }
+  });
   const featureFlags = options.sourceWorkflowFeatureFlags || sourceWorkflowFeatureFlags;
   const getSourceListingWebMediaDecision = async (ownerUserId: string) => {
     if (options.getSourceListingWebMediaEnabled) {
@@ -728,7 +756,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
     if (workflow.contextType !== 'collect' || !workflow.contextId) return;
     const currentContext = await mediaContextService.loadCollect(ownerUserId, workflow.contextId);
     const currentAssetIds = new Set(
-      currentContext.inputs.map((input) => input.assetId).filter((id): id is string => Boolean(id)),
+      currentContext.inputs.flatMap((input) => [
+        input.assetId,
+        ...(Array.isArray(input.compatibleAssetIds) ? input.compatibleAssetIds : []),
+      ]).filter((id): id is string => Boolean(id)),
     );
     const workflowInputAssets = Array.isArray(workflow.inputs)
       ? workflow.inputs
@@ -748,12 +779,20 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
 
   app.get('/capabilities', async (request) => {
     const ids = actor(request);
-    const [workflowEnabled, webMediaDecision, translationSettings, translationStorageReadiness, editSettings] = await Promise.all([
+    const [
+      workflowEnabled,
+      webMediaDecision,
+      translationSettings,
+      translationStorageReadiness,
+      editSettings,
+      editStorageReadiness,
+    ] = await Promise.all([
       getMediaWorkflowEnabled(ids.ownerUserId),
       getSourceListingWebMediaDecision(ids.ownerUserId),
       getTranslationSettings(),
       getTranslationStorageReadiness(),
       getEditSettings(),
+      getEditStorageReadiness(),
     ]);
     const translation = resolveAiImageTranslationReadiness(translationSettings, {
       workflowEnabled,
@@ -761,8 +800,16 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       storageReadiness: translationStorageReadiness,
     });
     const imageToImage = resolveAiImageToImageReadiness({ workflowEnabled, production });
-    const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, { workflowEnabled, production });
-    const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, { workflowEnabled, production });
+    const fullEdit = resolveAiImageEditReadiness('FULL_EDIT', editSettings, {
+      workflowEnabled,
+      production,
+      storageReadiness: editStorageReadiness,
+    });
+    const inpaint = resolveAiImageEditReadiness('INPAINT', editSettings, {
+      workflowEnabled,
+      production,
+      storageReadiness: editStorageReadiness,
+    });
     return {
       code: 1,
       data: {
@@ -993,10 +1040,14 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         });
         enqueueOperation = enqueueTranslation;
       } else if (parsed.data.operation === 'FULL_EDIT' || parsed.data.operation === 'INPAINT') {
-        const editSettings = await getEditSettings();
+        const [editSettings, editStorageReadiness] = await Promise.all([
+          getEditSettings(),
+          getEditStorageReadiness(),
+        ]);
         const readiness = resolveAiImageEditReadiness(parsed.data.operation, editSettings, {
           workflowEnabled: true,
           production,
+          storageReadiness: editStorageReadiness,
         });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
@@ -1174,11 +1225,15 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         retryEnqueue = enqueueTranslation;
       } else if (['FULL_EDIT', 'INPAINT'].includes(String(existingWorkflow.operation))) {
         const operation = existingWorkflow.operation as 'FULL_EDIT' | 'INPAINT';
-        const editSettings = await getEditSettings();
+        const [editSettings, editStorageReadiness] = await Promise.all([
+          getEditSettings(),
+          getEditStorageReadiness(),
+        ]);
         editRetryDailyLimit = editSettings.dailyLimit;
         const readiness = resolveAiImageEditReadiness(operation, editSettings, {
           workflowEnabled: true,
           production,
+          storageReadiness: editStorageReadiness,
         });
         if (!readiness.ready) {
           return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
@@ -1273,9 +1328,14 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
       }
       await requireSourceListingWebMedia(ids.ownerUserId);
-      const readiness = resolveAiImageEditReadiness('INPAINT', await getEditSettings(), {
+      const [editSettings, editStorageReadiness] = await Promise.all([
+        getEditSettings(),
+        getEditStorageReadiness(),
+      ]);
+      const readiness = resolveAiImageEditReadiness('INPAINT', editSettings, {
         workflowEnabled: true,
         production,
+        storageReadiness: editStorageReadiness,
       });
       if (!readiness.ready) {
         return reply.status(503).send({ code: readiness.reasonCode, msg: readiness.reason });
@@ -1311,7 +1371,10 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
   });
 
   app.post('/contexts/collect/:id/internalize', async (request, reply) => {
-    const parsed = z.object({ sourceMediaKey: z.string().trim().min(1).max(500) }).safeParse(request.body);
+    const parsed = z.object({
+      sourceMediaKey: z.string().trim().min(1).max(500),
+      purpose: z.enum(['GENERAL', 'EDIT']).default('GENERAL'),
+    }).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ code: 'INVALID_REQUEST', msg: parsed.error.issues[0]?.message });
     if (!await getMediaWorkflowEnabled(actor(request).ownerUserId)) {
       return reply.status(503).send({ code: 'AI_MEDIA_WORKFLOW_DISABLED', msg: 'AI media workflow is disabled' });
@@ -1322,10 +1385,11 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         actor(request).ownerUserId,
         (request.params as any).id,
         parsed.data.sourceMediaKey,
+        parsed.data.purpose,
       );
       return { code: 1, data: {
         id: asset.id, url: asset.url, mimeType: asset.mimeType,
-        width: asset.width, height: asset.height,
+        width: asset.width, height: asset.height, editReady: asset.editReady,
       } };
     } catch (error) { return sendError(reply, error); }
   });
