@@ -39,6 +39,7 @@ import { useSystemDialog } from '@/components/system-dialog-provider';
 import { toast } from '@/components/ui/use-toast';
 import { api, apiUrl } from '@/lib/api';
 import { SourceAiMediaPanel } from '@/components/ai-media/source-ai-media-panel';
+import { confirmAiImageMaskDraftDiscard } from '@/lib/ai-image-mask';
 import {
   buildSaveSourceImagesRequest,
   createMediaMutationLock,
@@ -1247,13 +1248,24 @@ function SourceDetailContent({
   onSectionChange,
   onItemUpdate,
   onRefreshItem,
+  aiMaskDraftDirty,
+  onAiMaskDraftDirtyChange,
 }: {
   item: SourceCollectItem;
   activeSection: DetailSection;
   onSectionChange: (section: DetailSection) => void;
   onItemUpdate: (item: SourceCollectItem) => void;
   onRefreshItem: () => Promise<void>;
+  aiMaskDraftDirty: boolean;
+  onAiMaskDraftDirtyChange: (dirty: boolean) => void;
 }) {
+  function selectSection(section: DetailSection) {
+    if (section === activeSection) return;
+    if (!confirmAiImageMaskDraftDiscard(aiMaskDraftDirty, (message) => window.confirm(message))) return;
+    onAiMaskDraftDirtyChange(false);
+    onSectionChange(section);
+  }
+
   return (
     <div className="space-y-4 text-sm">
       <div className="flex gap-4">
@@ -1291,7 +1303,7 @@ function SourceDetailContent({
             type="button"
             variant={activeSection === section.key ? 'default' : 'ghost'}
             size="sm"
-            onClick={() => onSectionChange(section.key)}
+            onClick={() => selectSection(section.key)}
           >
             {section.label}
           </Button>
@@ -1301,7 +1313,7 @@ function SourceDetailContent({
       {activeSection === 'overview' ? <SourceOverviewSection item={item} /> : null}
       {activeSection === 'sku' ? <SourceSkuSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'attributes' ? <SourceAttributesSection item={item} /> : null}
-      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} onRefreshItem={onRefreshItem} /> : null}
+      {activeSection === 'images' ? <SourceImagesSection item={item} onItemUpdate={onItemUpdate} onRefreshItem={onRefreshItem} onAiMaskDraftDirtyChange={onAiMaskDraftDirtyChange} /> : null}
       {activeSection === 'translation' ? <SourceTranslationSection item={item} onItemUpdate={onItemUpdate} /> : null}
       {activeSection === 'listing' ? <SourceListingCheckSection item={item} onItemUpdate={onItemUpdate} /> : null}
     </div>
@@ -1567,10 +1579,12 @@ function SourceImagesSection({
   item,
   onItemUpdate,
   onRefreshItem,
+  onAiMaskDraftDirtyChange,
 }: {
   item: SourceCollectItem;
   onItemUpdate: (item: SourceCollectItem) => void;
   onRefreshItem: () => Promise<void>;
+  onAiMaskDraftDirtyChange: (dirty: boolean) => void;
 }) {
   const sourceImages = sourcePreviewImages(item);
   const [images, setImages] = useState<string[]>(() => sourcePublishPreviewImages(item));
@@ -1688,6 +1702,7 @@ function SourceImagesSection({
         mediaMutationBusy={mediaMutationBusy}
         runMediaMutation={runMediaMutation}
         onConflictRefresh={onRefreshItem}
+        onMaskDraftDirtyChange={onAiMaskDraftDirtyChange}
         onApplied={({ images: nextImages, editedImages, targetUpdatedAt }) => onItemUpdate({
           ...item,
           updatedAt: targetUpdatedAt,
@@ -3106,6 +3121,7 @@ function SourceCollectPageContent() {
   const [error, setError] = useState('');
   const [detailItem, setDetailItem] = useState<SourceCollectItem | null>(null);
   const [activeDetailSection, setActiveDetailSection] = useState<DetailSection>('overview');
+  const [aiMaskDraftDirty, setAiMaskDraftDirty] = useState(false);
   const loadItemsGuardRef = useRef(createLatestRequestGuard());
 
   async function loadItems() {
@@ -3173,6 +3189,12 @@ function SourceCollectPageContent() {
       return acc;
     }, {});
   }, [items]);
+
+  function closeDetail() {
+    if (!confirmAiImageMaskDraftDiscard(aiMaskDraftDirty, (message) => window.confirm(message))) return;
+    setAiMaskDraftDirty(false);
+    setDetailItem(null);
+  }
 
   return (
     <div className="space-y-4">
@@ -3242,6 +3264,7 @@ function SourceCollectPageContent() {
                 key={item.id}
                 item={item}
                 onDetail={(next, section = 'overview') => {
+                  setAiMaskDraftDirty(false);
                   setDetailItem(next);
                   setActiveDetailSection(section);
                 }}
@@ -3252,7 +3275,7 @@ function SourceCollectPageContent() {
         </CardContent>
       </Card>
 
-      <Dialog open={!!detailItem} onOpenChange={(open) => { if (!open) setDetailItem(null); }}>
+      <Dialog open={!!detailItem} onOpenChange={(open) => { if (!open) closeDetail(); }}>
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>采集详情</DialogTitle>
@@ -3267,6 +3290,8 @@ function SourceCollectPageContent() {
               onSectionChange={setActiveDetailSection}
               onItemUpdate={updateItem}
               onRefreshItem={loadItems}
+              aiMaskDraftDirty={aiMaskDraftDirty}
+              onAiMaskDraftDirtyChange={setAiMaskDraftDirty}
             />
           ) : null}
         </DialogContent>

@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
+import { confirmAiImageMaskDraftDiscard } from '@/lib/ai-image-mask';
 import { SourceAiMediaPlanningPanel } from './source-ai-media-planning-panel';
 import {
   SourceAiImageMaskEditor,
@@ -37,11 +38,13 @@ import {
   type AiMediaInternalizedAsset,
   type AiMediaOperation,
   type AiMediaWorkflow,
+  type AiMediaWorkflowJob,
   type WorkflowIntentStorage,
   type WorkflowSubmissionIntent,
 } from '@/lib/ai-media-workflow';
 
 const ACTIVE = new Set(['QUEUED', 'RUNNING', 'CANCEL_REQUESTED']);
+const AI_MASK_HISTORY_GUARD_KEY = '__ssErpAiMaskDraftGuard';
 const STATUS_LABEL: Record<AiMediaWorkflow['status'], string> = {
   QUEUED: '排队中', RUNNING: '处理中', SUCCEEDED: '待审核', FAILED: '失败',
   CANCEL_REQUESTED: '取消中', CANCELLED: '已取消',
@@ -74,6 +77,14 @@ function normalizeLanguageForFingerprint(value: string) {
   return value.trim().toLowerCase();
 }
 
+function maskHistoryState(token: string) {
+  const current = window.history.state;
+  return {
+    ...(current && typeof current === 'object' ? current : {}),
+    [AI_MASK_HISTORY_GUARD_KEY]: token,
+  };
+}
+
 export function SourceAiMediaPanel({
   target,
   selectedSkuKeys,
@@ -81,6 +92,7 @@ export function SourceAiMediaPanel({
   mediaMutationBusy,
   runMediaMutation,
   onConflictRefresh,
+  onMaskDraftDirtyChange,
 }: {
   target: { type: 'collect'; id: string; label: string; updatedAt?: string };
   selectedSkuKeys?: string[];
@@ -88,11 +100,13 @@ export function SourceAiMediaPanel({
   mediaMutationBusy: boolean;
   runMediaMutation: RunMediaMutation;
   onConflictRefresh: () => Promise<void>;
+  onMaskDraftDirtyChange?: (dirty: boolean) => void;
 }) {
   const [context, setContext] = useState<AiMediaContextResponse | null>(null);
   const [capabilities, setCapabilities] = useState<AiMediaCapabilities | null>(null);
   const [workflows, setWorkflows] = useState<AiMediaWorkflow[]>([]);
   const [selectedKey, setSelectedKey] = useState('');
+  const [candidateSource, setCandidateSource] = useState<AiMediaContextResponse['inputs'][number] | null>(null);
   const [operation, setOperation] = useState<AiMediaOperation>('IMAGE_TO_IMAGE');
   const [prompt, setPrompt] = useState('保持商品主体、颜色、结构和包装数量不变，优化为干净明亮的电商展示背景，不添加文字或 Logo。');
   const [editPrompt, setEditPrompt] = useState('保持商品主体、颜色、结构、包装数量和可见事实不变，只修改明确指定的区域或背景。');
@@ -117,6 +131,14 @@ export function SourceAiMediaPanel({
   const maskEditorRef = useRef<SourceAiImageMaskEditorHandle | null>(null);
   const retryIntentRef = useRef(new Map<string, WorkflowSubmissionIntent>());
   const capabilitiesRef = useRef<AiMediaCapabilities | null>(null);
+  const contextRef = useRef<AiMediaContextResponse | null>(null);
+  const maskDirtyRef = useRef(false);
+  const maskHistoryGuardRef = useRef<{ token: string | null; suppressNextPop: boolean }>({
+    token: null,
+    suppressNextPop: false,
+  });
+  const onMaskDraftDirtyChangeRef = useRef(onMaskDraftDirtyChange);
+  onMaskDraftDirtyChangeRef.current = onMaskDraftDirtyChange;
   const imageIntentStorageKey = intentStorageKey(target.id, 'image-to-image');
   const translationIntentStorageKey = intentStorageKey(target.id, 'image-translate');
   const fullEditIntentStorageKey = intentStorageKey(target.id, 'full-edit');
@@ -125,6 +147,27 @@ export function SourceAiMediaPanel({
   function operationReadiness(operationKey: AiMediaWorkflow['operation']) {
     return capabilities?.operations?.[operationKey] || null;
   }
+
+  const updateMaskDirty = useCallback((dirty: boolean) => {
+    maskDirtyRef.current = dirty;
+    setMaskDirty(dirty);
+    onMaskDraftDirtyChangeRef.current?.(dirty);
+    if (typeof window === 'undefined') return;
+    const guard = maskHistoryGuardRef.current;
+    // A same-URL sentinel lets popstate ask before Next unmounts the editor.
+    if (dirty && !guard.token) {
+      guard.token = idempotencyKey('mask-draft');
+      window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
+    } else if (!dirty && guard.token && !guard.suppressNextPop) {
+      if (window.history.state?.[AI_MASK_HISTORY_GUARD_KEY] === guard.token) {
+        guard.suppressNextPop = true;
+        window.history.back();
+      } else {
+        guard.token = null;
+        guard.suppressNextPop = false;
+      }
+    }
+  }, []);
 
   const executeLoad = useCallback(async (request: LatestLoadRequest, isCurrent: () => boolean) => {
     try {
@@ -139,16 +182,46 @@ export function SourceAiMediaPanel({
       if (!isCurrent()) return;
       if (contextResult.code === 1 && contextResult.data) {
         const nextContext = contextResult.data;
-        setContext(nextContext);
-        setSelectedKey((current) => nextContext.inputs.some((input) => input.sourceMediaKey === current)
-          ? current
-          : nextContext.inputs[0]?.sourceMediaKey || '');
-        setDisabled(false);
-        setError('');
+        const currentContext = contextRef.current;
+        const snapshotChanged = Boolean(
+          currentContext
+          && currentContext.snapshot.id !== nextContext.snapshot.id,
+        );
+        const discardDirtyMask = snapshotChanged
+          && maskDirtyRef.current
+          && request.interactive
+          && confirmAiImageMaskDraftDiscard(true, (message) => window.confirm(
+            `采集快照已更新。${message}`,
+          ));
+        if (snapshotChanged && maskDirtyRef.current && !discardDirtyMask) {
+          setError('采集快照已更新，当前遮罩草稿已保留。请先提交或丢弃草稿，再刷新最新快照。');
+        } else {
+          if (discardDirtyMask) {
+            updateMaskDirty(false);
+            setMaskReady(false);
+            setMaskResetNonce((current) => current + 1);
+          }
+          contextRef.current = nextContext;
+          setContext(nextContext);
+          setSelectedKey((current) => nextContext.inputs.some((input) => input.sourceMediaKey === current)
+            ? current
+            : nextContext.inputs[0]?.sourceMediaKey || '');
+          setDisabled(false);
+          setError('');
+        }
       } else if (contextResult.msg?.includes('disabled') || contextResult.msg?.includes('未启用')) {
-        setDisabled(true);
-        setContext(null);
-        setError('');
+        const discardDirtyMask = maskDirtyRef.current
+          && request.interactive
+          && confirmAiImageMaskDraftDiscard(true, (message) => window.confirm(message));
+        if (maskDirtyRef.current && !discardDirtyMask) {
+          setError('AI 图片工作流状态已变化，当前遮罩草稿已保留。请先提交或丢弃草稿，再刷新。');
+        } else {
+          if (discardDirtyMask) updateMaskDirty(false);
+          contextRef.current = null;
+          setDisabled(true);
+          setContext(null);
+          setError('');
+        }
       } else {
         setError(contextResult.msg || '图片上下文加载失败');
       }
@@ -165,28 +238,37 @@ export function SourceAiMediaPanel({
     } catch (caught) {
       if (isCurrent()) setError(caught instanceof Error ? caught.message : '网络错误，请重试');
     }
-  }, []);
+  }, [updateMaskDirty]);
 
   const loadCoordinatorRef = useRef<ReturnType<typeof createLatestLoadCoordinator> | null>(null);
   if (!loadCoordinatorRef.current) {
     loadCoordinatorRef.current = createLatestLoadCoordinator({ execute: executeLoad, onLoadingChange: setLoading });
   }
   loadCoordinatorRef.current.setTarget(target.id);
-  const load = useCallback((quiet = false, refreshCapabilities = false) => {
+  useEffect(() => () => {
+    loadCoordinatorRef.current?.invalidate();
+    contextRef.current = null;
+    maskDirtyRef.current = false;
+  }, []);
+  const load = useCallback((quiet = false, refreshCapabilities = false, interactive = false) => {
     if (refreshCapabilities) {
       capabilitiesRef.current = null;
       setCapabilities(null);
     }
-    return loadCoordinatorRef.current!.load(quiet);
+    return loadCoordinatorRef.current!.load(quiet, interactive);
   }, []);
 
   useEffect(() => {
+    contextRef.current = null;
     setLoading(true);
     setContext(null);
     setCapabilities(null);
     capabilitiesRef.current = null;
     setWorkflows([]);
     setSelectedKey('');
+    setCandidateSource(null);
+    updateMaskDirty(false);
+    setMaskReady(false);
     setError('');
     setDisabled(false);
     const storage = browserSessionStorage();
@@ -196,20 +278,29 @@ export function SourceAiMediaPanel({
     inpaintIntentRef.current = loadWorkflowSubmissionIntent(storage, inpaintIntentStorageKey);
     retryIntentRef.current.clear();
     void load();
-  }, [fullEditIntentStorageKey, imageIntentStorageKey, inpaintIntentStorageKey, load, target.id, translationIntentStorageKey]);
+  }, [fullEditIntentStorageKey, imageIntentStorageKey, inpaintIntentStorageKey, load, target.id, translationIntentStorageKey, updateMaskDirty]);
   useEffect(() => {
     if (!workflows.some((workflow) => ACTIVE.has(workflow.status))) return;
     const timer = window.setInterval(() => void load(true), 2_000);
     return () => window.clearInterval(timer);
   }, [load, workflows]);
 
-  const selected = useMemo(
-    () => context?.inputs.find((input) => input.sourceMediaKey === selectedKey) || null,
-    [context, selectedKey],
-  );
+  const selected = useMemo(() => (
+    candidateSource
+    && context
+    && candidateSource.sourceCaptureSnapshotId === context.snapshot.id
+      ? candidateSource
+      : context?.inputs.find((input) => input.sourceMediaKey === selectedKey) || null
+  ), [candidateSource, context, selectedKey]);
+  useEffect(() => {
+    setCandidateSource((current) => current && context
+      && current.sourceCaptureSnapshotId === context.snapshot.id
+      ? current
+      : null);
+  }, [context?.snapshot.id]);
   useEffect(() => {
     if (operation === 'INPAINT') setMaskReady(false);
-  }, [operation, selectedKey]);
+  }, [candidateSource?.sourceMediaKey, operation, selectedKey]);
   useEffect(() => {
     if (!maskDirty) return;
     const warn = (event: BeforeUnloadEvent) => {
@@ -219,6 +310,41 @@ export function SourceAiMediaPanel({
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [maskDirty]);
+  useEffect(() => {
+    const handlePopState = () => {
+      const guard = maskHistoryGuardRef.current;
+      if (guard.suppressNextPop) {
+        guard.suppressNextPop = false;
+        guard.token = null;
+        if (maskDirtyRef.current) {
+          guard.token = idempotencyKey('mask-draft');
+          window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
+        }
+        return;
+      }
+      if (!maskDirtyRef.current || !guard.token) return;
+      if (!confirmAiImageMaskDraftDiscard(true, (message) => window.confirm(message))) {
+        window.history.pushState(maskHistoryState(guard.token), '', window.location.href);
+        return;
+      }
+      guard.token = null;
+      updateMaskDirty(false);
+      window.setTimeout(() => window.history.back(), 0);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      const guard = maskHistoryGuardRef.current;
+      const shouldRemoveGuard = Boolean(
+        guard.token
+        && !guard.suppressNextPop
+        && window.history.state?.[AI_MASK_HISTORY_GUARD_KEY] === guard.token,
+      );
+      guard.token = null;
+      guard.suppressNextPop = false;
+      if (shouldRemoveGuard) window.history.back();
+    };
+  }, [updateMaskDirty]);
   const currentReadiness = operationReadiness(operation);
   const canCreateCurrentOperation = Boolean(
     capabilities?.webMediaEnabled
@@ -254,9 +380,11 @@ export function SourceAiMediaPanel({
       return null;
     }
     const asset = internalized.data;
-    setContext((current) => current ? {
-      ...current,
-      inputs: current.inputs.map((input) => input.sourceMediaKey === selected.sourceMediaKey
+    setContext((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        inputs: current.inputs.map((input) => input.sourceMediaKey === selected.sourceMediaKey
         ? {
             ...input,
             assetId: asset.id,
@@ -272,7 +400,10 @@ export function SourceAiMediaPanel({
             ])],
           }
         : input),
-    } : current);
+      };
+      contextRef.current = next;
+      return next;
+    });
     return asset;
   }
 
@@ -294,29 +425,64 @@ export function SourceAiMediaPanel({
   }
 
   function confirmMaskDraftDiscard() {
-    return !maskDirty || window.confirm('当前局部重绘遮罩尚未提交，继续将丢弃这些笔画。');
+    return confirmAiImageMaskDraftDiscard(maskDirty, (message) => window.confirm(message));
   }
 
   function selectOperation(next: AiMediaOperation) {
     if (next === operation) return;
     if (operation === 'INPAINT' && !confirmMaskDraftDiscard()) return;
     if (operation === 'INPAINT') {
-      setMaskDirty(false);
+      updateMaskDirty(false);
       setMaskReady(false);
       setMaskResetNonce((current) => current + 1);
     }
+    if (next !== 'FULL_EDIT' && next !== 'INPAINT') setCandidateSource(null);
     setOperation(next);
   }
 
   function selectSource(nextSourceMediaKey: string) {
-    if (nextSourceMediaKey === selectedKey) return;
+    if (!candidateSource && nextSourceMediaKey === selectedKey) return;
     if (operation === 'INPAINT' && !confirmMaskDraftDiscard()) return;
     if (operation === 'INPAINT') {
-      setMaskDirty(false);
+      updateMaskDirty(false);
       setMaskReady(false);
       setMaskResetNonce((current) => current + 1);
     }
+    setCandidateSource(null);
     setSelectedKey(nextSourceMediaKey);
+  }
+
+  function selectCandidateSource(
+    workflow: AiMediaWorkflow,
+    output: NonNullable<AiMediaWorkflowJob['assets']>[number],
+    nextOperation: 'FULL_EDIT' | 'INPAINT',
+  ) {
+    if (
+      !context
+      || workflow.status !== 'SUCCEEDED'
+      || (workflow.operation !== 'FULL_EDIT' && workflow.operation !== 'INPAINT')
+      || !output.editReady
+      || output.sourceCaptureSnapshotId !== context.snapshot.id
+    ) return;
+    if (operation === 'INPAINT' && !confirmMaskDraftDiscard()) return;
+    updateMaskDirty(false);
+    setMaskReady(false);
+    setMaskResetNonce((current) => current + 1);
+    setCandidateSource({
+      sourceMediaKey: `candidate:${output.id}`,
+      role: 'generated-candidate',
+      sourceUrl: output.url,
+      assetId: output.id,
+      assetUrl: output.url,
+      mimeType: output.mimeType || null,
+      width: output.width ?? null,
+      height: output.height ?? null,
+      editReady: true,
+      sourceCaptureSnapshotId: output.sourceCaptureSnapshotId,
+      contextSkuKey: workflow.contextSkuKey,
+      contextSlotKey: workflow.contextSlotKey,
+    });
+    setOperation(nextOperation);
   }
 
   async function submit() {
@@ -407,6 +573,8 @@ export function SourceAiMediaPanel({
             `/api/ai-images/contexts/collect/${encodeURIComponent(target.id)}/edit-masks`,
             {
               sourceAssetId: assetId,
+              skuKey: selected.contextSkuKey ?? null,
+              slotKey: selected.contextSlotKey ?? null,
               maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
               maskDataUrl,
             },
@@ -426,6 +594,8 @@ export function SourceAiMediaPanel({
           editPrompt: editPrompt.trim(),
           editNegativePrompt: editNegativePrompt.trim(),
           targetId: target.id,
+          contextSkuKey: selected.contextSkuKey ?? null,
+          contextSlotKey: selected.contextSlotKey ?? null,
         });
         const intentRef = operation === 'FULL_EDIT' ? fullEditIntentRef : inpaintIntentRef;
         const storageKey = operation === 'FULL_EDIT' ? fullEditIntentStorageKey : inpaintIntentStorageKey;
@@ -444,6 +614,8 @@ export function SourceAiMediaPanel({
           userNegativePrompt: editNegativePrompt,
           idempotencyKey: intent.idempotencyKey,
           contextId: target.id,
+          contextSkuKey: selected.contextSkuKey ?? null,
+          contextSlotKey: selected.contextSlotKey ?? null,
         });
         const result = await api.post<AiMediaWorkflow>('/api/ai-images/workflows', payload);
         if (result.code !== 1) {
@@ -463,7 +635,7 @@ export function SourceAiMediaPanel({
         clearWorkflowSubmissionIntent(storage, storageKey);
         if (operation === 'INPAINT') {
           setMaskResetNonce((current) => current + 1);
-          setMaskDirty(false);
+          updateMaskDirty(false);
         }
         toast({ title: operation === 'FULL_EDIT' ? '全图编辑任务已提交' : '局部重绘任务已提交' });
         await refreshQuietly();
@@ -572,7 +744,11 @@ export function SourceAiMediaPanel({
   }
 
   async function applyWorkflow(workflow: AiMediaWorkflow, job: AiMediaWorkflow['jobs'][number]) {
-    if (!context || !isAiMediaWorkflowInputCurrent(workflow, context.inputs)) {
+    if (!context || !isAiMediaWorkflowInputCurrent(
+      workflow,
+      context.inputs,
+      context.snapshot.id,
+    )) {
       toast({ title: '源图版本已变化', description: '请基于当前采集快照重新生成候选图', variant: 'destructive' });
       await refreshQuietly();
       return;
@@ -611,7 +787,7 @@ export function SourceAiMediaPanel({
     <section className="space-y-4 border-t pt-4" aria-label="AI 图片工作流">
       <div className="flex items-center justify-between gap-3">
         <div><h3 className="text-sm font-medium">AI 图片工作流</h3><p className="mt-1 text-xs text-muted-foreground">从当前商品源图创建候选结果，审核前不会修改商品图片。</p></div>
-        <Button type="button" size="icon" variant="ghost" onClick={() => void load(false, true)} title="刷新任务与能力状态" aria-label="刷新任务与能力状态"><RefreshCw className="h-4 w-4" /></Button>
+        <Button type="button" size="icon" variant="ghost" onClick={() => void load(true, true, true)} title="刷新任务与能力状态" aria-label="刷新任务与能力状态"><RefreshCw className="h-4 w-4" /></Button>
       </div>
 
       {error ? <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</div> : null}
@@ -647,12 +823,17 @@ export function SourceAiMediaPanel({
         </button>
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
+        {candidateSource ? <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-md border-2 border-primary bg-muted" title="当前使用历史候选作为编辑源">
+          <img src={imageUrl(candidateSource.assetUrl || candidateSource.sourceUrl)} alt="历史编辑候选源图" className="h-full w-full object-cover" />
+          <span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">候选源</span>
+          <button type="button" className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-background/90 text-foreground" title="恢复采集源图" aria-label="恢复采集源图" onClick={() => selectSource(selectedKey)}><X className="h-3.5 w-3.5" /></button>
+        </div> : null}
         {context.inputs.map((input) => (
           <button key={input.sourceMediaKey} type="button" onClick={() => selectSource(input.sourceMediaKey)}
-            className={`relative h-20 w-20 shrink-0 overflow-hidden rounded-md border-2 bg-muted ${selectedKey === input.sourceMediaKey ? 'border-primary' : 'border-transparent'}`}
-            title={operation === 'IMAGE_TRANSLATE' ? '选择为翻译源图' : operation === 'INPAINT' ? '选择为局部重绘源图' : '选择为编辑源图'} aria-pressed={selectedKey === input.sourceMediaKey} aria-label={`选择商品源图 ${input.sourceMediaKey}`}>
+            className={`relative h-20 w-20 shrink-0 overflow-hidden rounded-md border-2 bg-muted ${!candidateSource && selectedKey === input.sourceMediaKey ? 'border-primary' : 'border-transparent'}`}
+            title={operation === 'IMAGE_TRANSLATE' ? '选择为翻译源图' : operation === 'INPAINT' ? '选择为局部重绘源图' : '选择为编辑源图'} aria-pressed={!candidateSource && selectedKey === input.sourceMediaKey} aria-label={`选择商品源图 ${input.sourceMediaKey}`}>
             <img src={imageUrl(input.assetUrl || input.sourceUrl)} alt="商品源图" className="h-full w-full object-cover" />
-            {selectedKey === input.sourceMediaKey ? <span className="absolute right-1 top-1 rounded-full bg-primary p-0.5 text-primary-foreground"><Check className="h-3 w-3" /></span> : null}
+            {!candidateSource && selectedKey === input.sourceMediaKey ? <span className="absolute right-1 top-1 rounded-full bg-primary p-0.5 text-primary-foreground"><Check className="h-3 w-3" /></span> : null}
           </button>
         ))}
       </div>
@@ -716,7 +897,7 @@ export function SourceAiMediaPanel({
             resetKey={`${selected.sourceMediaKey}:${selected.assetId}:${selected.width}x${selected.height}:${maskResetNonce}`}
             disabled={submitting}
             onReadyChange={setMaskReady}
-            onDirtyChange={setMaskDirty}
+            onDirtyChange={updateMaskDirty}
           />
         ) : selected.assetId && selected.editReady ? (
           <p className="text-xs text-destructive">源图缺少可验证的像素尺寸，无法创建局部重绘遮罩。</p>
@@ -746,7 +927,11 @@ export function SourceAiMediaPanel({
           const source = workflow.inputs.find((input) => input.role === 'REFERENCE')
             || workflow.inputs.find((input) => input.role !== 'MASK');
           const mask = workflow.inputs.find((input) => input.role === 'MASK');
-          const sourceIsCurrent = Boolean(context) && isAiMediaWorkflowInputCurrent(workflow, context!.inputs);
+          const sourceIsCurrent = Boolean(context) && isAiMediaWorkflowInputCurrent(
+            workflow,
+            context!.inputs,
+            context!.snapshot.id,
+          );
           const costReconciled = job?.costStatus === 'SETTLED' || job?.costStatus === 'RELEASED';
           const requiresReconciliation = workflow.status === 'FAILED' && (
             job?.costStatus
@@ -765,6 +950,17 @@ export function SourceAiMediaPanel({
                 : '参考改图';
           const retryReadiness = operationReadiness(workflow.operation);
           const retryReady = Boolean(capabilities?.webMediaEnabled && retryReadiness?.ready);
+          const candidateCanChain = Boolean(
+            output?.editReady
+            && sourceIsCurrent
+            && output.sourceCaptureSnapshotId === context?.snapshot.id
+            && workflow.status === 'SUCCEEDED'
+            && (isFullEdit || isInpaint),
+          );
+          const fullEditReadiness = operationReadiness('FULL_EDIT');
+          const inpaintReadiness = operationReadiness('INPAINT');
+          const fullEditChainReady = Boolean(capabilities?.webMediaEnabled && fullEditReadiness?.ready);
+          const inpaintChainReady = Boolean(capabilities?.webMediaEnabled && inpaintReadiness?.ready);
           return <div key={workflow.id} className="grid min-w-0 gap-3 rounded-md border p-3 lg:grid-cols-[minmax(148px,224px)_minmax(0,1fr)] lg:items-center">
             <div className="flex flex-wrap gap-1">
               {source ? <a href={imageUrl(source.url)} target="_blank" rel="noreferrer" className="relative h-[72px] w-[72px] overflow-hidden rounded border bg-muted" title="打开源图"><img src={imageUrl(source.url)} alt={`${operationLabel}源图`} className="h-full w-full object-cover" /><span className="absolute bottom-0 left-0 bg-black/65 px-1 text-[10px] text-white">源图</span></a> : <div className="h-[72px] w-[72px] rounded border bg-muted" />}
@@ -790,6 +986,10 @@ export function SourceAiMediaPanel({
               {workflow.status === 'FAILED' && !requiresReconciliation && sourceIsCurrent ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || !retryReady} title={retryReady ? '重试任务' : retryReadiness ? describeAiMediaReadiness(workflow.operation, retryReadiness) : '当前操作状态未知'} onClick={() => void retryWorkflow(workflow)}><RotateCcw className="h-3.5 w-3.5" />重试</Button> : null}
               {workflow.status === 'SUCCEEDED' && workflow.reviewStatus === 'PENDING' && output && sourceIsCurrent ? <><Button size="sm" disabled={Boolean(pendingAction)} onClick={() => void action(`approve:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'APPROVE' }, '候选图已通过审核')}><Check className="h-3.5 w-3.5" />通过</Button><Button size="sm" variant="outline" disabled={Boolean(pendingAction)} onClick={() => void action(`reject:${workflow.id}`, `/api/ai-images/workflows/${workflow.id}/review`, { expectedRevision: workflow.revision, outputAssetId: output.id, decision: 'REJECT' }, '候选图已拒绝')}><X className="h-3.5 w-3.5" />拒绝</Button></> : null}
               {workflow.reviewStatus === 'APPROVED' && job && !job.appliedMode && sourceIsCurrent ? <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || mediaMutationBusy || !target.updatedAt} onClick={() => void applyWorkflow(workflow, job)}><ImageIcon className="h-3.5 w-3.5" />{isTranslation ? '追加翻译图' : isFullEdit ? '追加全图编辑' : isInpaint ? '追加局部重绘' : '追加候选'}</Button> : null}
+              {candidateCanChain && output ? <>
+                <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || submitting || !fullEditChainReady} title={fullEditChainReady ? '使用该候选继续全图编辑' : fullEditReadiness ? describeAiMediaReadiness('FULL_EDIT', fullEditReadiness) : '全图编辑状态未知'} onClick={() => selectCandidateSource(workflow, output, 'FULL_EDIT')}><WandSparkles className="h-3.5 w-3.5" />继续全图编辑</Button>
+                <Button size="sm" variant="outline" disabled={Boolean(pendingAction) || submitting || !inpaintChainReady} title={inpaintChainReady ? '使用该候选继续局部重绘' : inpaintReadiness ? describeAiMediaReadiness('INPAINT', inpaintReadiness) : '局部重绘状态未知'} onClick={() => selectCandidateSource(workflow, output, 'INPAINT')}><ScanLine className="h-3.5 w-3.5" />继续局部重绘</Button>
+              </> : null}
             </div>
           </div>;
         })}

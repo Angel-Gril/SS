@@ -1,6 +1,8 @@
 export interface LatestLoadRequest {
   targetId: string;
   generation: number;
+  quiet: boolean;
+  interactive: boolean;
 }
 
 export function createLatestLoadCoordinator(options: {
@@ -10,6 +12,7 @@ export function createLatestLoadCoordinator(options: {
   let latestTargetId = '';
   let generation = 0;
   let active: Promise<void> | null = null;
+  let activeRequest: LatestLoadRequest | null = null;
   let queued: LatestLoadRequest | null = null;
   let showsLoading = false;
 
@@ -17,22 +20,37 @@ export function createLatestLoadCoordinator(options: {
     setTarget(targetId: string) {
       latestTargetId = targetId;
     },
-    async load(quiet = false) {
+    async load(quiet = false, interactive = false) {
       if (!quiet) {
         if (!showsLoading) options.onLoadingChange(true);
         showsLoading = true;
       }
-      queued = { targetId: latestTargetId, generation: ++generation };
+      const previousQueued = queued;
+      const sameQueuedTarget = previousQueued?.targetId === latestTargetId;
+      const sameActiveTarget = activeRequest?.targetId === latestTargetId;
+      queued = {
+        targetId: latestTargetId,
+        generation: ++generation,
+        quiet: sameQueuedTarget ? previousQueued.quiet && quiet : quiet,
+        interactive: interactive
+          || Boolean(sameQueuedTarget && previousQueued.interactive)
+          || Boolean(sameActiveTarget && activeRequest?.interactive),
+      };
       if (active) return active;
 
       const drain = (async () => {
         while (queued) {
           const request = queued;
           queued = null;
-          await options.execute(
-            request,
-            () => request.generation === generation && request.targetId === latestTargetId,
-          );
+          activeRequest = request;
+          try {
+            await options.execute(
+              request,
+              () => request.generation === generation && request.targetId === latestTargetId,
+            );
+          } finally {
+            if (activeRequest === request) activeRequest = null;
+          }
         }
       })();
       active = drain;
@@ -47,6 +65,12 @@ export function createLatestLoadCoordinator(options: {
           }
         }
       }
+    },
+    invalidate() {
+      generation += 1;
+      queued = null;
+      activeRequest = null;
+      showsLoading = false;
     },
   };
 }

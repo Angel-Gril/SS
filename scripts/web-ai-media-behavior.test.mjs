@@ -15,17 +15,23 @@ import {
 
 const waiters = new Map();
 const applied = [];
+const quietModes = [];
+const interactiveModes = [];
 let loadingStates = [];
 const coordinator = createLatestLoadCoordinator({
   onLoadingChange: (loading) => loadingStates.push(loading),
   execute: async (request, isCurrent) => {
+    quietModes.push(request.quiet);
+    interactiveModes.push(request.interactive);
     await new Promise((resolve) => waiters.set(request.targetId, resolve));
     if (isCurrent()) applied.push(request.targetId);
   },
 });
 async function release(targetId) {
   while (!waiters.has(targetId)) await Promise.resolve();
-  waiters.get(targetId)();
+  const waiter = waiters.get(targetId);
+  waiters.delete(targetId);
+  waiter();
 }
 
 coordinator.setTarget('collect-a');
@@ -37,7 +43,70 @@ await release('collect-a');
 await release('collect-b');
 await Promise.all([first, second, staleActionRefresh]);
 assert.deepEqual(applied, ['collect-b']);
+assert.deepEqual(quietModes, [false, false]);
+assert.deepEqual(interactiveModes, [false, false]);
 assert.deepEqual(loadingStates, [true, false]);
+
+coordinator.setTarget('collect-c');
+const interactiveRefresh = coordinator.load(true, true);
+await release('collect-c');
+await interactiveRefresh;
+assert.deepEqual(applied, ['collect-b', 'collect-c']);
+assert.deepEqual(quietModes, [false, false, true]);
+assert.deepEqual(interactiveModes, [false, false, true]);
+assert.deepEqual(loadingStates, [true, false]);
+
+coordinator.setTarget('collect-d');
+const activeSameTarget = coordinator.load(true);
+coordinator.setTarget('collect-e');
+const queuedInteractive = coordinator.load(true, true);
+const queuedPoll = coordinator.load(true);
+await release('collect-d');
+await release('collect-e');
+await Promise.all([activeSameTarget, queuedInteractive, queuedPoll]);
+assert.equal(interactiveModes.at(-1), true, 'a same-target poll must preserve a queued interactive refresh');
+assert.deepEqual(applied, ['collect-b', 'collect-c', 'collect-e']);
+
+coordinator.setTarget('collect-f');
+const activeOldTarget = coordinator.load(true);
+coordinator.setTarget('collect-g');
+const supersededInteractive = coordinator.load(true, true);
+coordinator.setTarget('collect-h');
+const replacementPoll = coordinator.load(true);
+await release('collect-f');
+await release('collect-h');
+await Promise.all([activeOldTarget, supersededInteractive, replacementPoll]);
+assert.equal(interactiveModes.at(-1), false, 'interactive intent must not cross target changes');
+assert.deepEqual(applied, ['collect-b', 'collect-c', 'collect-e', 'collect-h']);
+
+coordinator.setTarget('collect-i');
+const activeInteractiveRefresh = coordinator.load(true, true);
+while (!waiters.has('collect-i')) await Promise.resolve();
+const supersedingSameTargetPoll = coordinator.load(true);
+await release('collect-i');
+await release('collect-i');
+await Promise.all([activeInteractiveRefresh, supersedingSameTargetPoll]);
+assert.deepEqual(
+  interactiveModes.slice(-2),
+  [true, true],
+  'a same-target poll that supersedes an active interactive refresh must inherit its prompt authority',
+);
+assert.deepEqual(applied, ['collect-b', 'collect-c', 'collect-e', 'collect-h', 'collect-i']);
+
+coordinator.setTarget('collect-j');
+const invalidatedLoad = coordinator.load(true, true);
+while (!waiters.has('collect-j')) await Promise.resolve();
+coordinator.invalidate();
+coordinator.setTarget('collect-k');
+const replacementAfterInvalidation = coordinator.load(true);
+await release('collect-j');
+await release('collect-k');
+await Promise.all([invalidatedLoad, replacementAfterInvalidation]);
+assert.deepEqual(
+  applied,
+  ['collect-b', 'collect-c', 'collect-e', 'collect-h', 'collect-i', 'collect-k'],
+  'invalidating an active load must suppress its result while leaving the coordinator reusable',
+);
 
 const lock = createMediaMutationLock();
 const busy = [];

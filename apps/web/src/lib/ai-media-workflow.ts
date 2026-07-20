@@ -16,6 +16,9 @@ export interface AiMediaContextInput {
   height: number | null;
   editReady?: boolean;
   compatibleAssetIds?: string[];
+  sourceCaptureSnapshotId?: string | null;
+  contextSkuKey?: string | null;
+  contextSlotKey?: string | null;
 }
 
 export interface AiMediaContextResponse {
@@ -66,7 +69,16 @@ export interface AiMediaWorkflowJob {
     policyVersion: string;
     terminologies?: AiImageTranslationTerminology[];
   };
-  assets?: Array<{ id: string; url: string; mimeType?: string; width?: number | null; height?: number | null }>;
+  assets?: Array<{
+    id: string;
+    kind?: string;
+    url: string;
+    mimeType?: string;
+    width?: number | null;
+    height?: number | null;
+    sourceCaptureSnapshotId?: string | null;
+    editReady?: boolean;
+  }>;
 }
 
 export interface AiMediaWorkflow {
@@ -79,6 +91,8 @@ export interface AiMediaWorkflow {
   createdAt: string;
   updatedAt?: string;
   completedAt: string | null;
+  contextSkuKey: string | null;
+  contextSlotKey: string | null;
   inputs: Array<{
     assetId: string;
     role?: 'REFERENCE' | 'MASK' | string;
@@ -87,6 +101,8 @@ export interface AiMediaWorkflow {
     mimeType?: string | null;
     width?: number | null;
     height?: number | null;
+    kind?: string;
+    sourceCaptureSnapshotId?: string | null;
   }>;
   jobs: AiMediaWorkflowJob[];
 }
@@ -1582,6 +1598,13 @@ export function buildImageTranslationWorkflowRequest(input: {
 
 export const AI_IMAGE_EDIT_MASK_SEMANTICS = 'WHITE_EDIT_BLACK_PRESERVE_V1' as const;
 
+function normalizeAiMediaContextKey(value: string | null | undefined, maximum: number, label: string) {
+  if (value == null) return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maximum) throw new Error(`${label}无效`);
+  return normalized;
+}
+
 export function buildAiImageEditWorkflowRequest(input: {
   operation: 'FULL_EDIT' | 'INPAINT';
   sourceAssetId: string;
@@ -1590,6 +1613,8 @@ export function buildAiImageEditWorkflowRequest(input: {
   userNegativePrompt: string;
   idempotencyKey: string;
   contextId: string;
+  contextSkuKey?: string | null;
+  contextSlotKey?: string | null;
 }) {
   const sourceAssetId = input.sourceAssetId.trim();
   const contextId = input.contextId.trim();
@@ -1603,7 +1628,12 @@ export function buildAiImageEditWorkflowRequest(input: {
   if (idempotencyKey.length < 8 || idempotencyKey.length > 128) {
     throw new Error('编辑请求幂等键无效');
   }
-  const context = { type: 'collect' as const, id: contextId };
+  const context = {
+    type: 'collect' as const,
+    id: contextId,
+    skuKey: normalizeAiMediaContextKey(input.contextSkuKey, 500, 'SKU 上下文'),
+    slotKey: normalizeAiMediaContextKey(input.contextSlotKey, 200, '图片槽位上下文'),
+  };
   if (input.operation === 'FULL_EDIT') {
     if (String(input.maskAssetId || '').trim()) throw new Error('全图编辑不能包含遮罩');
     return {
@@ -1632,6 +1662,7 @@ export function buildAiImageEditWorkflowRequest(input: {
 export function isAiMediaWorkflowInputCurrent(
   workflow: Pick<AiMediaWorkflow, 'inputs'>,
   currentInputs: AiMediaContextInput[],
+  currentSnapshotId?: string | null,
 ) {
   const sourceInputs = workflow.inputs.filter((input) => input.role !== 'MASK');
   if (!sourceInputs.length) return false;
@@ -1639,5 +1670,9 @@ export function isAiMediaWorkflowInputCurrent(
     input.assetId,
     ...(Array.isArray(input.compatibleAssetIds) ? input.compatibleAssetIds : []),
   ]).filter(Boolean));
-  return sourceInputs.every((input) => currentAssetIds.has(input.assetId));
+  return sourceInputs.every((input) => currentAssetIds.has(input.assetId) || Boolean(
+    input.kind === 'AI_GENERATED'
+    && currentSnapshotId
+    && input.sourceCaptureSnapshotId === currentSnapshotId,
+  ));
 }

@@ -9,6 +9,7 @@ import {
   createAiImageEditMask,
   runAiImageEditJob,
 } from '../services/ai-image-edit.js';
+import { AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION } from '../services/ai-image-edit-source.js';
 import type {
   AiImageJobRecord,
   AiImageJobRepository,
@@ -162,11 +163,15 @@ describe('AI image manual edit lifecycle', () => {
       actualCostCents: 0,
       billedUnits: 1,
       assets: [expect.objectContaining({
-        kind: 'AI_GENERATED', sha256: digest(candidate),
-        metadata: expect.objectContaining({ outputRole: 'FINAL_CANDIDATE' }),
+        kind: 'AI_GENERATED',
+        metadata: expect.objectContaining({
+          outputRole: 'FINAL_CANDIDATE',
+          pixelOrientationNormalized: true,
+          editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
+        }),
       })],
     });
-    expect(uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(uploadBuffer).toHaveBeenCalledTimes(2);
   });
 
   it('derives the durable raw filename and MIME type from the decoded Provider bytes', async () => {
@@ -200,7 +205,52 @@ describe('AI image manual edit lifecycle', () => {
     );
     expect(state.rawAssets[0]).toMatchObject({ mimeType: 'image/webp' });
     expect(state.completions[0]).toMatchObject({
-      assets: [expect.objectContaining({ mimeType: 'image/webp' })],
+      assets: [expect.objectContaining({
+        mimeType: 'image/png',
+        metadata: expect.objectContaining({ pixelOrientationNormalized: true }),
+      })],
+    });
+  });
+
+  it('normalizes EXIF-oriented Provider output into source-sized reviewable pixels', async () => {
+    const source = await rgbaPng(2, 3, new Array(24).fill(10));
+    const candidate = await sharp({
+      create: { width: 3, height: 2, channels: 3, background: { r: 180, g: 170, b: 160 } },
+    }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    const initial = editJob({ operation: 'FULL_EDIT', source });
+    initial.width = 2;
+    initial.height = 3;
+    initial.inputAssets![0]!.width = 2;
+    initial.inputAssets![0]!.height = 3;
+    const state = memoryRepository(initial);
+    const uploads: Array<{ buffer: Buffer; filename: string }> = [];
+
+    await runAiImageEditJob('edit-job-1', 1, {
+      repository: state.repository,
+      provider: provider(candidate),
+      loadInputBuffer: vi.fn(async () => source),
+      uploadBuffer: vi.fn(async (buffer, filename) => {
+        uploads.push({ buffer, filename });
+        return { url: `/uploads/${filename}`, backend: 'local', key: filename };
+      }),
+    });
+
+    const rawMetadata = await sharp(candidate).metadata();
+    expect(rawMetadata).toMatchObject({ width: 3, height: 2, orientation: 6 });
+    const finalUpload = uploads.find((upload) => upload.filename.endsWith('-final.jpg'));
+    expect(finalUpload).toBeTruthy();
+    const finalMetadata = await sharp(finalUpload!.buffer).metadata();
+    expect(finalMetadata.width).toBe(2);
+    expect(finalMetadata.height).toBe(3);
+    expect(finalMetadata.orientation ?? 1).toBe(1);
+    expect(state.completions[0]).toMatchObject({
+      assets: [expect.objectContaining({
+        mimeType: 'image/jpeg', width: 2, height: 3,
+        metadata: expect.objectContaining({
+          pixelOrientationNormalized: true,
+          editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
+        }),
+      })],
     });
   });
 
@@ -237,6 +287,8 @@ describe('AI image manual edit lifecycle', () => {
           outputRole: 'FINAL_COMPOSITE',
           maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
           preservedPixelCount: 2,
+          pixelOrientationNormalized: true,
+          editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
         }),
       })],
     });
@@ -503,6 +555,52 @@ describe('AI image edit mask authority', () => {
       getStorage: async () => ({ uploadBuffer }),
     })).rejects.toMatchObject({ code: 'SOURCE_ASSET_NOT_FOUND' });
     expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
+  it('accepts a normalized candidate from a successful standalone edit in the same context', async () => {
+    const mask = await maskPng(2, 2, [0, 255, 0, 255]);
+    const candidateSource = {
+      id: 'candidate-asset-1', ownerUserId: 'owner-1', kind: 'AI_GENERATED',
+      aiImageJobId: 'source-job-1',
+      sourceCaptureSnapshotId: 'snapshot-1', sha256: 'a'.repeat(64),
+      url: '/uploads/candidate.png', mimeType: 'image/png', width: 2, height: 2,
+      sizeBytes: 100, storageBackend: 'local', storageKey: 'candidate.png',
+      metadata: {
+        pixelOrientationNormalized: true,
+        outputRole: 'FINAL_CANDIDATE',
+        editSourceContractVersion: 'ai-media-edit-source/v1',
+      },
+      aiImageJob: {
+        id: 'source-job-1', ownerUserId: 'owner-1', status: 'SUCCEEDED', operation: 'FULL_EDIT',
+        workflowId: 'source-workflow-1', workflowAttempt: 1,
+        workflow: {
+          id: 'source-workflow-1', ownerUserId: 'owner-1', contextType: 'collect',
+          contextId: 'goods-1', suiteSlot: null, status: 'SUCCEEDED', operation: 'FULL_EDIT',
+          currentAttempt: 1, completedAt: new Date('2026-07-20T08:00:00.000Z'),
+        },
+      },
+    };
+    const create = vi.fn(async ({ data }: any) => ({ id: 'mask-for-candidate', ...data }));
+    const uploadBuffer = vi.fn(async () => ({
+      url: '/uploads/mask.png', backend: 'local', key: 'mask.png',
+    }));
+
+    await expect(createAiImageEditMask({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', contextId: 'goods-1',
+      sourceAssetId: candidateSource.id, maskBuffer: mask,
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+    }, {
+      database: {
+        supplyGoods: { findFirst: vi.fn(async () => ({
+          id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+        })) },
+        mediaAsset: {
+          findFirst: vi.fn().mockResolvedValueOnce(candidateSource).mockResolvedValueOnce(null),
+          create,
+        },
+      },
+      getStorage: async () => ({ uploadBuffer }),
+    })).resolves.toMatchObject({ asset: { id: 'mask-for-candidate' }, replayed: false });
   });
 
   it('does not consume upload quota when a content-addressed mask is replayed', async () => {

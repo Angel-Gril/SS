@@ -50,6 +50,7 @@ import {
 import { AiPromptTemplateError } from '../services/ai-prompt-templates.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 import { createAiImageEditMask } from '../services/ai-image-edit.js';
+import { isAiMediaEditReadyCandidateAsset } from '../services/ai-image-edit-source.js';
 
 const createSchema = z.object({
   prompt: z.string().trim().min(1).max(8000),
@@ -168,6 +169,8 @@ const reviewSchema = revisionSchema.extend({
 });
 const editMaskSchema = z.object({
   sourceAssetId: z.string().trim().min(1).max(128),
+  skuKey: z.string().trim().min(1).max(500).nullable().optional(),
+  slotKey: z.string().trim().min(1).max(200).nullable().optional(),
   maskSemantics: z.literal(AI_IMAGE_EDIT_MASK_SEMANTICS),
   maskDataUrl: z.string().min(32).max(28 * 1024 * 1024),
 });
@@ -557,8 +560,10 @@ function publicWorkflow(workflow: any) {
       mimeType: input.mimeType || input.asset?.mimeType,
       width: input.width ?? input.asset?.width,
       height: input.height ?? input.asset?.height,
+      kind: input.kind || input.asset?.kind,
+      sourceCaptureSnapshotId: input.sourceCaptureSnapshotId || input.asset?.sourceCaptureSnapshotId,
     })) : [],
-    jobs: Array.isArray(workflow.jobs) ? workflow.jobs.map((job: any) => publicJob(job)) : [],
+    jobs: Array.isArray(workflow.jobs) ? workflow.jobs.map((job: any) => publicJob(job, workflow)) : [],
     events: Array.isArray(workflow.events) ? workflow.events.map((event: any) => ({
       id: event.id,
       eventType: event.eventType,
@@ -578,7 +583,7 @@ function assertStandaloneWorkflow(workflow: { suiteId?: string | null }): void {
   }
 }
 
-function publicJob(job: Record<string, unknown>) {
+function publicJob(job: Record<string, unknown>, workflow?: Record<string, unknown>) {
   const {
     resolvedPrompt: _resolvedPrompt,
     resolvedNegativePrompt: _resolvedNegativePrompt,
@@ -625,6 +630,22 @@ function publicJob(job: Record<string, unknown>) {
       mimeType: asset.mimeType,
       width: asset.width,
       height: asset.height,
+      sourceCaptureSnapshotId: asset.sourceCaptureSnapshotId,
+      editReady: Boolean(
+        workflow
+        && workflow.status === 'SUCCEEDED'
+        && workflow.completedAt != null
+        && ['FULL_EDIT', 'INPAINT'].includes(String(workflow.operation || ''))
+        && !workflow.suiteId
+        && job.ownerUserId === workflow.ownerUserId
+        && job.workflowId === workflow.id
+        && job.status === 'SUCCEEDED'
+        && job.operation === workflow.operation
+        && job.workflowAttempt === workflow.currentAttempt
+        && asset.ownerUserId === job.ownerUserId
+        && asset.aiImageJobId === job.id
+        && isAiMediaEditReadyCandidateAsset(asset)
+      ),
       })) : [],
   };
 }
@@ -761,13 +782,29 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
         ...(Array.isArray(input.compatibleAssetIds) ? input.compatibleAssetIds : []),
       ]).filter((id): id is string => Boolean(id)),
     );
+    const currentSnapshotId = String(currentContext.snapshot?.id || '').trim();
     const workflowInputAssets = Array.isArray(workflow.inputs)
       ? workflow.inputs
         .filter((input: any) => input?.role !== 'MASK')
-        .map((input: any) => String(input.assetId || '').trim())
-        .filter(Boolean)
+        .map((input: any) => ({
+          assetId: String(input.assetId || '').trim(),
+          kind: String(input.kind || input.asset?.kind || '').trim(),
+          sourceCaptureSnapshotId: String(
+            input.sourceCaptureSnapshotId || input.asset?.sourceCaptureSnapshotId || '',
+          ).trim(),
+        }))
+        .filter((input: { assetId: string }) => Boolean(input.assetId))
       : [];
-    if (!workflowInputAssets.length || workflowInputAssets.some((assetId: string) => !currentAssetIds.has(assetId))) {
+    if (!workflowInputAssets.length || workflowInputAssets.some((input: {
+      assetId: string;
+      kind: string;
+      sourceCaptureSnapshotId: string;
+    }) => !currentAssetIds.has(input.assetId) && !(
+      input.kind === 'AI_GENERATED'
+      && ['FULL_EDIT', 'INPAINT'].includes(String(workflow.operation || ''))
+      && currentSnapshotId
+      && input.sourceCaptureSnapshotId === currentSnapshotId
+    ))) {
       throw new AiMediaWorkflowError(
         'STALE_MEDIA_WORKFLOW',
         'The source image snapshot changed; review and generate a new candidate',
@@ -1344,6 +1381,8 @@ export async function aiImageRoutes(app: FastifyInstance, options: AiImageRouteO
       const result = await createEditMaskAsset({
         ...ids,
         contextId: (request.params as any).id,
+        contextSkuKey: parsed.data.skuKey,
+        contextSlotKey: parsed.data.slotKey,
         sourceAssetId: parsed.data.sourceAssetId,
         maskBuffer,
         maskSemantics: parsed.data.maskSemantics,

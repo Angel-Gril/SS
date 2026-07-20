@@ -22,6 +22,34 @@ const outputGuardMigrationUrl = new URL(
   '../../prisma/migrations/20260720154000_install_ai_image_edit_output_guards/migration.sql',
   import.meta.url,
 );
+const candidateChainingMigrationUrl = new URL(
+  '../../prisma/migrations/20260720160000_allow_ai_image_edit_candidate_chaining/migration.sql',
+  import.meta.url,
+);
+const candidateContractMigrationUrl = new URL(
+  '../../prisma/migrations/20260720161000_require_ai_image_edit_candidate_contract/migration.sql',
+  import.meta.url,
+);
+const candidateScopeMigrationUrl = new URL(
+  '../../prisma/migrations/20260720162000_require_ai_image_edit_candidate_scope/migration.sql',
+  import.meta.url,
+);
+const candidateDependencyMigrationUrl = new URL(
+  '../../prisma/migrations/20260720163000_guard_ai_image_edit_candidate_dependencies/migration.sql',
+  import.meta.url,
+);
+const candidateAuthorityLockMigrationUrl = new URL(
+  '../../prisma/migrations/20260720164000_lock_ai_image_edit_candidate_authority/migration.sql',
+  import.meta.url,
+);
+const candidateMutationSerializationMigrationUrl = new URL(
+  '../../prisma/migrations/20260720165000_serialize_ai_image_edit_candidate_mutations/migration.sql',
+  import.meta.url,
+);
+const unboundCandidateMigrationUrl = new URL(
+  '../../prisma/migrations/20260720166000_reject_unbound_ai_image_edit_candidates/migration.sql',
+  import.meta.url,
+);
 
 describe('AI image edit persistence migrations', () => {
   it('adds edit operations and asset kinds in a dedicated additive enum migration', async () => {
@@ -101,5 +129,124 @@ describe('AI image edit persistence migrations', () => {
     expect(migration).toMatch(/AI image edit asset metadata is immutable/u);
     expect(migration).toMatch(/COMMIT;\s*$/u);
     expect(migration).not.toMatch(/CREATE (?:UNIQUE )?INDEX|ALTER TYPE|DROP TABLE|DROP TYPE/u);
+  });
+
+  it('allows only normalized successful standalone edit finals as chained sources', async () => {
+    const migration = await readFile(candidateChainingMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION assert_standalone_ai_image_edit_graph/u);
+    expect(migration).toMatch(/source_asset\."kind" NOT IN \('SOURCE_ORIGINAL', 'AI_GENERATED'\)/u);
+    expect(migration).toMatch(/source_asset\."kind" = 'AI_GENERATED'/u);
+    expect(migration).toMatch(/source_asset\."source_capture_snapshot_id"/u);
+    expect(migration).toMatch(/origin_source\."source_capture_snapshot_id" IS NOT DISTINCT FROM source_asset\."source_capture_snapshot_id"/u);
+    expect(migration).toMatch(/origin_job\."status" = 'SUCCEEDED'/u);
+    expect(migration).toMatch(/origin_workflow\."status" = 'SUCCEEDED'/u);
+    expect(migration).toMatch(/origin_workflow\."operation" IN \('FULL_EDIT', 'INPAINT'\)/u);
+    expect(migration).toMatch(/origin_workflow\."context_id" IS NOT DISTINCT FROM workflow\."context_id"/u);
+    expect(migration).toMatch(/NOT EXISTS \([\s\S]*"ai_media_suite_slots"/u);
+    expect(migration).toMatch(/source_asset\."metadata"->>'pixelOrientationNormalized' IS DISTINCT FROM 'true'/u);
+    expect(migration).toMatch(/source_asset\."metadata"->>'outputRole' NOT IN \('FINAL_CANDIDATE', 'FINAL_COMPOSITE'\)/u);
+    expect(migration).not.toMatch(/ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('separately hardens the normalized candidate contract without rewriting the prior migration', async () => {
+    const migration = await readFile(candidateContractMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/editSourceContractVersion/u);
+    expect(migration).toMatch(/ai-media-edit-source\/v1/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_contract_input"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_contract_workflow"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).not.toMatch(/ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('keeps chained candidates in the exact nullable SKU and slot scope', async () => {
+    const migration = await readFile(candidateScopeMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/origin_workflow\."context_sku_key" IS NOT DISTINCT FROM workflow\."context_sku_key"/u);
+    expect(migration).toMatch(/origin_workflow\."context_slot_key" IS NOT DISTINCT FROM workflow\."context_slot_key"/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_scope_input"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_scope_workflow"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).not.toMatch(/ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('revalidates chained consumers when origin bindings are mutated', async () => {
+    const migration = await readFile(candidateDependencyMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/assert_ai_image_edit_candidate_consumers/u);
+    expect(migration).toMatch(/assert_ai_image_edit_candidate_dependents_from_workflow/u);
+    expect(migration).toMatch(/assert_ai_image_edit_candidate_dependents_from_job/u);
+    expect(migration).toMatch(/PERFORM assert_standalone_ai_image_edit_graph/u);
+    expect(migration).toMatch(/PERFORM assert_ai_image_edit_candidate_contract/u);
+    expect(migration).toMatch(/PERFORM assert_ai_image_edit_candidate_scope/u);
+    expect(migration).toMatch(/jsonb_typeof\(source_asset\."metadata"->'pixelOrientationNormalized'\) IS DISTINCT FROM 'boolean'/u);
+    expect(migration).toMatch(/source_asset\."metadata"->'pixelOrientationNormalized' IS DISTINCT FROM 'true'::jsonb/u);
+    expect(migration).toMatch(/TG_OP <> 'INSERT'[\s\S]*OLD\."id"[\s\S]*TG_OP <> 'DELETE'[\s\S]*NEW\."id"/u);
+    expect(migration).toMatch(/TG_OP <> 'INSERT'[\s\S]*OLD\."workflow_id"[\s\S]*TG_OP <> 'DELETE'[\s\S]*NEW\."workflow_id"/u);
+    expect(migration).toMatch(/OLD\."child_workflow_id"[\s\S]*NEW\."child_workflow_id"/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_dependency_workflow"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_dependency_job"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_dependency_input"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_dependency_suite_slot"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).toMatch(/CREATE CONSTRAINT TRIGGER "ai_media_edit_candidate_dependency_asset"[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    expect(migration).not.toMatch(/source_capture_snapshots|ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('serializes candidate authority and mirrors the application edit-ready limits', async () => {
+    const migration = await readFile(candidateAuthorityLockMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/LOCK TABLE[\s\S]*"ai_image_jobs"[\s\S]*"ai_media_workflow_inputs"[\s\S]*IN SHARE ROW EXCLUSIVE MODE/u);
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION lock_ai_image_edit_origin_graph/u);
+    expect(migration).toMatch(/FROM "ai_media_workflows" workflow[\s\S]*FOR UPDATE[\s\S]*FROM "ai_image_jobs" job[\s\S]*FOR UPDATE/u);
+    expect(migration).toMatch(/CREATE TRIGGER "ai_media_edit_candidate_origin_lock"[\s\S]*BEFORE INSERT ON "ai_media_workflow_inputs"/u);
+    expect(migration).toMatch(/source_asset\."mime_type" NOT IN \('image\/jpeg', 'image\/png'\)/u);
+    expect(migration).toMatch(/coalesce\(source_asset\."sha256", ''\) !~ '\^\[a-f0-9\]\{64\}\$'/u);
+    expect(migration).toMatch(/source_asset\."size_bytes" > 20971520/u);
+    expect(migration).toMatch(/source_asset\."width" > 16384/u);
+    expect(migration).toMatch(/source_asset\."height" > 16384/u);
+    expect(migration).toMatch(/source_asset\."width"::BIGINT \* source_asset\."height"::BIGINT > 12000000/u);
+    expect(migration).toMatch(/greatest\(source_asset\."width", source_asset\."height"\)::BIGINT[\s\S]*least\(source_asset\."width", source_asset\."height"\)::BIGINT \* 20/u);
+    expect(migration).toMatch(/coalesce\(source_asset\."storage_key", ''\) !~ '\[\^\[:space:\]\]'/u);
+    expect(migration).toMatch(/coalesce\(source_asset\."url", ''\) !~ '\[\^\[:space:\]\]'/u);
+    expect(migration).toMatch(/jsonb_typeof\(source_asset\."metadata"->'pixelOrientationNormalized'\) IS DISTINCT FROM 'boolean'/u);
+    expect(migration).toMatch(/PERFORM assert_standalone_ai_image_edit_graph/u);
+    expect(migration).toMatch(/PERFORM assert_ai_image_edit_candidate_scope/u);
+    expect(migration).not.toMatch(/origin_operation|origin_job\."operation"|workflow\."operation"::TEXT INTO origin_operation/u);
+    expect(migration).not.toMatch(/source_capture_snapshots|ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('uses the origin workflow as the sole candidate mutation mutex', async () => {
+    const migration = await readFile(candidateMutationSerializationMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION lock_ai_image_edit_origin_workflows/u);
+    expect(migration).toMatch(/FROM "ai_media_workflows" workflow[\s\S]*ORDER BY workflow\."id"[\s\S]*FOR UPDATE/u);
+    expect(migration).not.toMatch(/FROM "ai_image_jobs" job[\s\S]{0,300}FOR UPDATE/u);
+    expect(migration).toMatch(/DROP TRIGGER "ai_media_edit_candidate_origin_lock"/u);
+    expect(migration).toMatch(/CREATE TRIGGER "zz_ai_media_edit_candidate_origin_lock"[\s\S]*BEFORE INSERT ON "ai_media_workflow_inputs"/u);
+    expect(migration).toMatch(/CREATE TRIGGER "ai_image_jobs_lock_edit_candidate_origin"[\s\S]*BEFORE UPDATE OR DELETE ON "ai_image_jobs"/u);
+    expect(migration).toMatch(/CREATE TRIGGER "media_assets_lock_edit_candidate_origin"[\s\S]*BEFORE UPDATE OR DELETE ON "media_assets"/u);
+    expect(migration).toMatch(/OLD\."workflow_id"[\s\S]*NEW\."workflow_id"/u);
+    expect(migration).toMatch(/OLD\."ai_image_job_id"[\s\S]*NEW\."ai_image_job_id"/u);
+    expect(migration).toMatch(/Do not return when the current binding is NULL[\s\S]*FOR candidate IN/u);
+    expect([...migration.matchAll(/SELECT asset\.\*\s+INTO source_asset/gu)]).toHaveLength(2);
+    expect(migration).toMatch(/source_asset\."ai_image_job_id" IS DISTINCT FROM origin_job_id[\s\S]*ERRCODE = '40001'/u);
+    expect(migration).toMatch(/rechecked_origin_workflow_id IS DISTINCT FROM origin_workflow_id/u);
+    expect(migration).not.toMatch(/origin_operation|origin_job\."operation"/u);
+    expect(migration).not.toMatch(/source_capture_snapshots|ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
+  });
+
+  it('rejects generated candidates that have no origin workflow mutex', async () => {
+    const migration = await readFile(unboundCandidateMigrationUrl, 'utf8');
+
+    expect(migration).toMatch(/CREATE OR REPLACE FUNCTION assert_ai_image_edit_candidate_contract/u);
+    expect(migration).toMatch(/IF origin_workflow_id IS NULL THEN[\s\S]*ERRCODE = '23514'/u);
+    expect(migration).toMatch(/IF origin_workflow_id IS NULL THEN[\s\S]*PERFORM lock_ai_image_edit_origin_workflows/u);
+    expect([...migration.matchAll(/SELECT asset\.\*\s+INTO source_asset/gu)]).toHaveLength(2);
+    expect(migration).toMatch(/source_asset\."ai_image_job_id" IS DISTINCT FROM origin_job_id[\s\S]*ERRCODE = '40001'/u);
+    expect(migration).toMatch(/rechecked_origin_workflow_id IS DISTINCT FROM origin_workflow_id/u);
+    expect(migration).toMatch(/source_asset\."mime_type" NOT IN \('image\/jpeg', 'image\/png'\)/u);
+    expect(migration).toMatch(/source_asset\."width"::BIGINT \* source_asset\."height"::BIGINT > 12000000/u);
+    expect(migration).toMatch(/DO \$\$[\s\S]*PERFORM assert_ai_image_edit_candidate_contract/u);
+    expect(migration).not.toMatch(/origin_operation|origin_job\."operation"/u);
+    expect(migration).not.toMatch(/source_capture_snapshots|ALTER TYPE|DROP TABLE|DROP TYPE|CREATE (?:UNIQUE )?INDEX/u);
   });
 });

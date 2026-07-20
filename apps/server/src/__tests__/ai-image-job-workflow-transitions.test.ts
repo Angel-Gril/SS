@@ -54,6 +54,51 @@ describe('AI image workflow child terminal transitions', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('inherits the frozen source snapshot onto a final edit candidate with one input read', async () => {
+    const job = {
+      id: 'job-1', ownerUserId: 'owner-1', actorUserId: 'actor-1', workflowId: 'workflow-1',
+      workflowAttempt: 1, attemptCount: 1, operation: 'FULL_EDIT', status: 'RUNNING',
+      providerJobId: null,
+    };
+    const inputs = [{
+      assetId: 'source-1', role: 'REFERENCE', ordinal: 0,
+      asset: { sourceCaptureSnapshotId: 'snapshot-1' },
+    }];
+    const findInputs = vi.fn(async () => inputs);
+    const createAsset = vi.fn(async ({ data }: any) => ({ id: 'candidate-1', ...data }));
+    const tx = {
+      aiImageJob: {
+        findUnique: vi.fn(async () => job),
+        updateMany: vi.fn(async ({ data }: any) => {
+          Object.assign(job, data);
+          return { count: 1 };
+        }),
+      },
+      aiMediaWorkflowInput: { findMany: findInputs },
+      mediaAsset: { count: vi.fn(async () => 1), create: createAsset },
+      mediaAssetLineage: { create: vi.fn(async () => ({})) },
+      aiMediaWorkflow: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+    };
+    const repository = new PrismaAiImageJobRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await repository.complete('job-1', {
+      providerJobId: null, actualCostCents: 0, billedUnits: 1,
+      assets: [{
+        ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_GENERATED',
+        url: '/candidate.png', storageBackend: 'local', storageKey: 'candidate.png',
+        mimeType: 'image/png', sizeBytes: 10, width: 2, height: 2, sha256: 'a'.repeat(64),
+      }],
+    });
+
+    expect(findInputs).toHaveBeenCalledTimes(1);
+    expect(createAsset).toHaveBeenCalledWith({ data: expect.objectContaining({
+      kind: 'AI_GENERATED', sourceCaptureSnapshotId: 'snapshot-1',
+    }) });
+  });
+
   it('recovers the exact raw-output winner after a concurrent unique-key race', async () => {
     const asset = {
       ownerUserId: 'owner-1', jobId: 'job-1', kind: 'AI_PROVIDER_OUTPUT' as const,

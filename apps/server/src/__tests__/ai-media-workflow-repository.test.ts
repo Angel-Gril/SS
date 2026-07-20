@@ -68,9 +68,14 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     });
 
     expect(result).toMatchObject({ kind: 'created', jobId: 'edit-job-1' });
-    expect(findMany).toHaveBeenCalledWith({ where: {
-      id: { in: ['source-1', 'mask-1'] }, ownerUserId: 'owner-1',
-    } });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['source-1', 'mask-1'] }, ownerUserId: 'owner-1' },
+      include: {
+        aiImageJob: {
+          include: { workflow: { include: { suiteSlot: true } } },
+        },
+      },
+    });
     expect(inputCreates.map(({ role, ordinal, assetId }) => ({ role, ordinal, assetId }))).toEqual([
       { role: 'REFERENCE', ordinal: 0, assetId: 'source-1' },
       { role: 'MASK', ordinal: 0, assetId: 'mask-1' },
@@ -132,6 +137,68 @@ describe('Prisma AI media workflow repository recovery fence', () => {
     });
     expect(tx.mediaAsset.findMany).not.toHaveBeenCalled();
     expect(tx.supplyGoods.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('freezes a normalized final candidate from a successful standalone edit in the same context', async () => {
+    const candidate = {
+      id: 'candidate-1', ownerUserId: 'owner-1', kind: 'AI_GENERATED',
+      aiImageJobId: 'source-job-1',
+      sha256: 'a'.repeat(64), sourceCaptureSnapshotId: 'snapshot-1',
+      url: '/uploads/candidate.png', mimeType: 'image/png', width: 900, height: 1200,
+      storageBackend: 'local', storageKey: 'candidate.png', sizeBytes: 100,
+      metadata: {
+        pixelOrientationNormalized: true,
+        outputRole: 'FINAL_CANDIDATE',
+        editSourceContractVersion: 'ai-media-edit-source/v1',
+      },
+      aiImageJob: {
+        id: 'source-job-1', ownerUserId: 'owner-1', status: 'SUCCEEDED', operation: 'FULL_EDIT',
+        workflowId: 'source-workflow-1', workflowAttempt: 1,
+        workflow: {
+          id: 'source-workflow-1', ownerUserId: 'owner-1', contextType: 'collect',
+          contextId: 'goods-1', suiteSlot: null, status: 'SUCCEEDED', operation: 'FULL_EDIT',
+          currentAttempt: 1, completedAt: new Date('2026-07-20T08:00:00.000Z'),
+        },
+      },
+    };
+    const inputCreates: any[] = [];
+    const tx = {
+      mediaAsset: { findMany: vi.fn(async () => [candidate]) },
+      supplyGoods: { findFirst: vi.fn(async () => ({
+        id: 'goods-1', sourceCaptureSubject: { snapshots: [{ id: 'snapshot-1' }] },
+      })) },
+      aiMediaWorkflow: {
+        findUnique: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({
+          id: 'chained-workflow-1', operation: 'FULL_EDIT', inputs: [], jobs: [], events: [],
+        }),
+        create: vi.fn(async ({ data }: any) => ({ id: 'chained-workflow-1', ...data })),
+      },
+      aiMediaWorkflowInput: {
+        create: vi.fn(async ({ data }: any) => { inputCreates.push(data); return data; }),
+      },
+      aiImageJob: {
+        aggregate: vi.fn(async () => ({ _sum: { requestedImageCount: 0, billedUnits: 0 } })),
+        create: vi.fn(async ({ data }: any) => ({ id: 'chained-job-1', ...data })),
+      },
+      aiCostReservation: { findUnique: vi.fn(async () => null), create: vi.fn(async () => ({})) },
+      aiMediaWorkflowEvent: { create: vi.fn(async () => ({})) },
+    };
+    const repository = new PrismaAiMediaWorkflowRepository({
+      $transaction: vi.fn(async (callback: any) => callback(tx)),
+    } as never);
+
+    await expect(repository.createImageEdit({
+      ownerUserId: 'owner-1', actorUserId: 'actor-1', operation: 'FULL_EDIT',
+      sourceAssetId: candidate.id, prompt: 'Refine the candidate', negativePrompt: null,
+      resolvedPrompt: 'Frozen edit prompt', resolvedNegativePrompt: 'Frozen constraints',
+      templateKey: 'full-image-edit.base', templateReleaseId: 'release-1',
+      templateChecksum: 'c'.repeat(64), templateSnapshot: { sequence: 1 },
+      dailyLimit: 5, idempotencyKey: 'candidate-chain-1',
+      context: { type: 'collect', id: 'goods-1' },
+    })).resolves.toMatchObject({ kind: 'created', jobId: 'chained-job-1' });
+    expect(inputCreates).toEqual([expect.objectContaining({
+      assetId: candidate.id, role: 'REFERENCE', ordinal: 0,
+    })]);
   });
 
   it('rejects a legacy source that has not frozen orientation-normalized pixels', async () => {

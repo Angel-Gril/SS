@@ -23,7 +23,11 @@ import {
   AI_IMAGE_EDIT_MAX_INPUT_BYTES,
   AI_IMAGE_EDIT_POLICY_VERSION,
 } from '../services/ai-image-edit.js';
-import { isAiMediaEditReadySourceAsset } from '../services/ai-image-edit-source.js';
+import {
+  isAiMediaEditInputFromContext,
+  isAiMediaEditReadyCandidateAsset,
+  isAiMediaEditReadySourceAsset,
+} from '../services/ai-image-edit-source.js';
 import { runAiMediaSerializableTransaction } from '../lib/ai-media-transaction.js';
 import {
   releaseAiCostInTransaction,
@@ -121,7 +125,9 @@ interface FrozenEditAsset extends FrozenSourceAsset {
 }
 
 function validFrozenEditAsset(asset: FrozenEditAsset | undefined, kind: 'SOURCE_ORIGINAL' | 'EDIT_MASK') {
-  if (kind === 'SOURCE_ORIGINAL') return isAiMediaEditReadySourceAsset(asset);
+  if (kind === 'SOURCE_ORIGINAL') {
+    return isAiMediaEditReadySourceAsset(asset) || isAiMediaEditReadyCandidateAsset(asset);
+  }
   return Boolean(
     asset
     && asset.kind === kind
@@ -394,6 +400,11 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
     const loadAssets = async (client: any) => {
       const rows = await client.mediaAsset.findMany({
         where: { id: { in: assetIds }, ownerUserId: input.ownerUserId },
+        include: {
+          aiImageJob: {
+            include: { workflow: { include: { suiteSlot: true } } },
+          },
+        },
       }) as FrozenEditAsset[];
       const byId = new Map(rows.map((asset) => [asset.id, asset]));
       return {
@@ -455,7 +466,13 @@ export class PrismaAiMediaWorkflowRepository implements AiMediaWorkflowRepositor
           } } },
         });
         const snapshotId = context?.sourceCaptureSubject?.snapshots[0]?.id || null;
-        if (!context || !snapshotId || source.sourceCaptureSnapshotId !== snapshotId) {
+        if (!context || !snapshotId || !isAiMediaEditInputFromContext(source, {
+          ownerUserId: input.ownerUserId,
+          contextId: input.context.id,
+          contextSkuKey: input.context.skuKey,
+          contextSlotKey: input.context.slotKey,
+          sourceCaptureSnapshotId: snapshotId,
+        })) {
           throw Object.assign(new Error('Source asset does not belong to the current collect context'), {
             code: 'AI_MEDIA_CONTEXT_MISMATCH',
           });

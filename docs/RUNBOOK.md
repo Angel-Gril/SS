@@ -412,9 +412,9 @@ DEPLOY_DIR=/opt/ss-erp/current ./scripts/verify-vps-deploy.sh
 
 覆盖 systemd 服务、Nginx 配置、端口绑定、防火墙、Cloudflare 真源保护、备份 cron、备份状态文件、Prisma migration、临时恢复库残留、`/ready` 和最近错误日志。
 
-### AI Media 暗态门禁（Unit 9C-A）
+### AI Media 暗态门禁（Unit 9C-A / 10B-E / 9C-B）
 
-Unit 9C-A 只交付 fake-only 后端 `FULL_EDIT` / `INPAINT` 契约。真实 Provider、Web/扩展 Mask 编辑器、候选图链式编辑和回滚 UI 尚未验收，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
+Unit 9C-A、10B-E 和 9C-B 已交付 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器和受约束的候选链式编辑。`1600` 至 `1660` migration 通过来源工作流互斥锁、OLD/NEW 反向重验和完整图片契约保护链式候选；这些 migration 只能前向保留，应用回滚不得删除其数据或函数。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI 和外部质量验收尚未完成，因此所有环境必须保持暗态。标准 `deploy.sh`、`deploy-app-dir.sh` 和 `deploy-staging.sh` 会在 migration 完成后、切换 release 或重启 API/Worker 前执行同一检查；生产/staging Compose 则由一次性 `migrate` service 串行执行 migration 和容器内暗态 verifier，API/Worker 只依赖其成功退出。手工部署也必须显式执行：
 
 ```bash
 # app-dir 模式

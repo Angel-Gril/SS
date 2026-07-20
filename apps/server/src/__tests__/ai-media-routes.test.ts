@@ -251,6 +251,8 @@ describe('AI media workflow routes', () => {
       url: '/contexts/collect/goods-1/edit-masks',
       payload: {
         sourceAssetId: 'asset-1',
+        skuKey: 'sku-a',
+        slotKey: 'hero',
         maskSemantics: 'WHITE_EDIT_BLACK_PRESERVE_V1',
         maskDataUrl: `data:image/png;base64,${Buffer.from('mask-mask-mask-mask').toString('base64')}`,
       },
@@ -258,6 +260,7 @@ describe('AI media workflow routes', () => {
     expect(response.statusCode).toBe(201);
     expect(createEditMask).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'owner-1', actorUserId: 'actor-1', contextId: 'goods-1',
+      contextSkuKey: 'sku-a', contextSlotKey: 'hero',
       sourceAssetId: 'asset-1', maskBuffer: Buffer.from('mask-mask-mask-mask'),
     }), expect.any(Object));
     expect(response.json()).toMatchObject({
@@ -820,6 +823,125 @@ describe('AI media workflow routes', () => {
     expect(response.json().data).toHaveLength(1);
   });
 
+  it('exposes only a current successful standalone edit final as an edit-ready candidate', async () => {
+    const { app, mediaWorkflowService } = await build();
+    mediaWorkflowService.list.mockResolvedValueOnce([{
+      ...workflow,
+      operation: 'FULL_EDIT', status: 'SUCCEEDED', reviewStatus: 'PENDING', suiteId: null,
+      completedAt: new Date('2026-07-20T08:00:00.000Z'),
+      currentAttempt: 1,
+      inputs: [{
+        id: 'candidate-input-1', assetId: 'source-asset-1', role: 'REFERENCE', ordinal: 0,
+        asset: { kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: 'snapshot-1' },
+      }],
+      jobs: [{
+        id: 'edit-job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1',
+        workflowAttempt: 1, status: 'SUCCEEDED', operation: 'FULL_EDIT',
+        assets: [{
+          id: 'candidate-1', ownerUserId: 'owner-1', aiImageJobId: 'edit-job-1',
+          kind: 'AI_GENERATED', sourceCaptureSnapshotId: 'snapshot-1',
+          url: '/candidate.png', storageBackend: 'local', storageKey: 'candidate.png',
+          mimeType: 'image/png', sizeBytes: 100, width: 900, height: 1200,
+          sha256: 'a'.repeat(64), metadata: {
+            outputRole: 'FINAL_CANDIDATE', pixelOrientationNormalized: true,
+            editSourceContractVersion: 'ai-media-edit-source/v1',
+          },
+        }, {
+          id: 'forged-candidate-1', ownerUserId: 'owner-1', aiImageJobId: 'another-job',
+          kind: 'AI_GENERATED', sourceCaptureSnapshotId: 'snapshot-1',
+          url: '/forged.png', storageBackend: 'local', storageKey: 'forged.png',
+          mimeType: 'image/png', sizeBytes: 100, width: 900, height: 1200,
+          sha256: 'b'.repeat(64), metadata: {
+            outputRole: 'FINAL_CANDIDATE', pixelOrientationNormalized: true,
+            editSourceContractVersion: 'ai-media-edit-source/v1',
+          },
+        }],
+      }],
+    } as any]);
+
+    const response = await app.inject({
+      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const returnedWorkflow = response.json().data[0];
+    expect(returnedWorkflow.inputs).toEqual([
+      expect.objectContaining({ kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: 'snapshot-1' }),
+    ]);
+    expect(returnedWorkflow.jobs[0].assets[0]).toMatchObject({
+      id: 'candidate-1', editReady: true, sourceCaptureSnapshotId: 'snapshot-1',
+    });
+    expect(returnedWorkflow.jobs[0].assets[1]).toMatchObject({
+      id: 'forged-candidate-1', editReady: false,
+    });
+  });
+
+  it.each([
+    {
+      label: 'failed workflow',
+      mutate: (candidateWorkflow: any) => { candidateWorkflow.status = 'FAILED'; },
+    },
+    {
+      label: 'successful workflow without completion time',
+      mutate: (candidateWorkflow: any) => { candidateWorkflow.completedAt = null; },
+    },
+    {
+      label: 'failed job',
+      mutate: (candidateWorkflow: any) => { candidateWorkflow.jobs[0].status = 'FAILED'; },
+    },
+    {
+      label: 'historical attempt',
+      mutate: (candidateWorkflow: any) => { candidateWorkflow.currentAttempt = 2; },
+    },
+    {
+      label: 'suite child',
+      mutate: (candidateWorkflow: any) => { candidateWorkflow.suiteId = 'suite-1'; },
+    },
+    {
+      label: 'legacy candidate metadata',
+      mutate: (candidateWorkflow: any) => {
+        delete candidateWorkflow.jobs[0].assets[0].metadata.editSourceContractVersion;
+      },
+    },
+    {
+      label: 'mismatched job operation',
+      mutate: (candidateWorkflow: any) => { candidateWorkflow.jobs[0].operation = 'IMAGE_TRANSLATE'; },
+    },
+  ])('marks a $label as not edit-ready in the public workflow DTO', async ({ mutate }) => {
+    const { app, mediaWorkflowService } = await build();
+    const candidateWorkflow: any = {
+      ...workflow,
+      operation: 'FULL_EDIT', status: 'SUCCEEDED', reviewStatus: 'PENDING', suiteId: null,
+      completedAt: new Date('2026-07-20T08:00:00.000Z'),
+      currentAttempt: 1,
+      jobs: [{
+        id: 'edit-job-1', ownerUserId: 'owner-1', workflowId: 'workflow-1',
+        workflowAttempt: 1, status: 'SUCCEEDED', operation: 'FULL_EDIT',
+        assets: [{
+          id: 'candidate-1', ownerUserId: 'owner-1', aiImageJobId: 'edit-job-1',
+          kind: 'AI_GENERATED', sourceCaptureSnapshotId: 'snapshot-1',
+          url: '/candidate.png', storageBackend: 'local', storageKey: 'candidate.png',
+          mimeType: 'image/png', sizeBytes: 100, width: 900, height: 1200,
+          sha256: 'a'.repeat(64), metadata: {
+            outputRole: 'FINAL_CANDIDATE', pixelOrientationNormalized: true,
+            editSourceContractVersion: 'ai-media-edit-source/v1',
+          },
+        }],
+      }],
+    };
+    mutate(candidateWorkflow);
+    mediaWorkflowService.list.mockResolvedValueOnce([candidateWorkflow]);
+
+    const response = await app.inject({
+      method: 'GET', url: '/workflows?contextType=collect&contextId=goods-1',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data[0].jobs[0].assets[0]).toMatchObject({
+      id: 'candidate-1', editReady: false,
+    });
+  });
+
   it('does not expose trusted input storage coordinates from the job detail DTO', async () => {
     const { app } = await build();
     const response = await app.inject({ method: 'GET', url: '/jobs/job-1' });
@@ -933,6 +1055,61 @@ describe('AI media workflow routes', () => {
     expect(mediaWorkflowService.review).toHaveBeenCalledWith(expect.objectContaining({
       id: 'workflow-1', outputAssetId: 'output-1', decision: 'APPROVE',
     }));
+  });
+
+  it('keeps a chained edit current when its normalized candidate belongs to the current snapshot', async () => {
+    const { app, mediaWorkflowService } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'FULL_EDIT' as any,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      contextType: 'collect',
+      contextId: 'goods-1',
+      inputs: [{
+        assetId: 'candidate-1', role: 'REFERENCE', ordinal: 0,
+        asset: {
+          kind: 'AI_GENERATED', sourceCaptureSnapshotId: 'snapshot-1',
+        },
+      }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/review',
+      payload: { expectedRevision: 2, outputAssetId: 'output-1', decision: 'APPROVE' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mediaWorkflowService.review).toHaveBeenCalled();
+  });
+
+  it('rejects a chained edit when its generated source belongs to an old snapshot', async () => {
+    const { app, mediaWorkflowService } = await build();
+    mediaWorkflowService.get.mockResolvedValueOnce({
+      ...workflow,
+      operation: 'FULL_EDIT' as any,
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      contextType: 'collect',
+      contextId: 'goods-1',
+      inputs: [{
+        assetId: 'candidate-old', role: 'REFERENCE', ordinal: 0,
+        asset: {
+          kind: 'AI_GENERATED', sourceCaptureSnapshotId: 'snapshot-old',
+        },
+      }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/workflows/workflow-1/review',
+      payload: { expectedRevision: 2, outputAssetId: 'output-1', decision: 'APPROVE' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'STALE_MEDIA_WORKFLOW' });
+    expect(mediaWorkflowService.review).not.toHaveBeenCalled();
   });
 
   it('keeps suite child workflows behind the suite-level lifecycle contract', async () => {

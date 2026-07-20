@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import sharp from 'sharp';
 import {
   AiMediaCapabilityError,
   AI_IMAGE_EDIT_MODEL,
@@ -20,8 +21,10 @@ import {
   type AiImageProvider,
 } from './ai-image-jobs.js';
 import {
+  AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
   AI_MEDIA_EDIT_SOURCE_MAX_BYTES,
-  isAiMediaEditReadySourceAsset,
+  AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
+  isAiMediaEditInputFromContext,
 } from './ai-image-edit-source.js';
 
 export const AI_IMAGE_EDIT_MAX_INPUT_BYTES = AI_MEDIA_EDIT_SOURCE_MAX_BYTES;
@@ -34,6 +37,8 @@ export interface CreateAiImageEditMaskInput {
   ownerUserId: string;
   actorUserId: string;
   contextId: string;
+  contextSkuKey?: string | null;
+  contextSlotKey?: string | null;
   sourceAssetId: string;
   maskBuffer: Buffer;
   maskSemantics: typeof AI_IMAGE_EDIT_MASK_SEMANTICS;
@@ -100,14 +105,23 @@ export async function createAiImageEditMask(
     where: {
       id: input.sourceAssetId,
       ownerUserId: input.ownerUserId,
-      kind: 'SOURCE_ORIGINAL',
-      sourceCaptureSnapshotId: snapshotId || '__missing__',
+    },
+    include: {
+      aiImageJob: {
+        include: { workflow: { include: { suiteSlot: true } } },
+      },
     },
   });
   if (
     !authority
     || !snapshotId
-    || !isAiMediaEditReadySourceAsset(source)
+    || !isAiMediaEditInputFromContext(source, {
+      ownerUserId: input.ownerUserId,
+      contextId: input.contextId,
+      contextSkuKey: input.contextSkuKey,
+      contextSlotKey: input.contextSlotKey,
+      sourceCaptureSnapshotId: snapshotId,
+    })
   ) {
     throw new AiImageJobError('SOURCE_ASSET_NOT_FOUND', 'Owned current source asset was not found');
   }
@@ -250,9 +264,9 @@ function editInputs(job: AiImageJobRecord) {
   return { source: references[0]!, mask: masks[0] || null };
 }
 
-function assertFrozenAsset(asset: FrozenInputAsset, job: AiImageJobRecord, expectedKind: string) {
+function assertFrozenAsset(asset: FrozenInputAsset, job: AiImageJobRecord, expectedKinds: string[]) {
   if (
-    asset.kind !== expectedKind
+    !expectedKinds.includes(String(asset.kind || ''))
     || !/^[a-f0-9]{64}$/u.test(String(asset.sha256 || ''))
     || !Number.isSafeInteger(asset.sizeBytes)
     || Number(asset.sizeBytes) < 1
@@ -327,6 +341,38 @@ function storedAsset(input: {
   };
 }
 
+async function normalizeReviewableEditCandidate(input: {
+  buffer: Buffer;
+  expectedWidth: number;
+  expectedHeight: number;
+}) {
+  const metadata = await sharp(input.buffer, {
+    animated: false,
+    limitInputPixels: AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
+  }).metadata();
+  const pipeline = sharp(input.buffer, {
+    animated: false,
+    limitInputPixels: AI_MEDIA_EDIT_SOURCE_MAX_PIXELS,
+  }).autoOrient();
+  const jpeg = metadata.format === 'jpeg';
+  const buffer = jpeg
+    ? await pipeline.jpeg({ quality: 95, mozjpeg: true }).toBuffer()
+    : await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+  if (buffer.length > AI_IMAGE_EDIT_MAX_INPUT_BYTES) {
+    throw new AiImageJobError('INVALID_PROVIDER_RESULT', 'Normalized edit candidate exceeds the byte limit');
+  }
+  await validateAiImageEditCandidate({
+    buffer,
+    expectedWidth: input.expectedWidth,
+    expectedHeight: input.expectedHeight,
+  });
+  return {
+    buffer,
+    mimeType: jpeg ? 'image/jpeg' : 'image/png',
+    extension: jpeg ? 'jpg' : 'png',
+  };
+}
+
 export async function runAiImageEditJob(
   jobId: string,
   attemptNumber: number,
@@ -378,8 +424,8 @@ export async function runAiImageEditJob(
       throw new AiImageJobError('EDIT_PERSISTENCE_NOT_READY', 'Raw edit output persistence is not installed');
     }
     const { source, mask } = editInputs(job);
-    assertFrozenAsset(source, job, 'SOURCE_ORIGINAL');
-    if (mask) assertFrozenAsset(mask, job, 'EDIT_MASK');
+    assertFrozenAsset(source, job, ['SOURCE_ORIGINAL', 'AI_GENERATED']);
+    if (mask) assertFrozenAsset(mask, job, ['EDIT_MASK']);
     try {
       assertAiMediaCapability({
         provider: job.provider,
@@ -487,7 +533,6 @@ export async function runAiImageEditJob(
 
     let finalBuffer = raw.buffer;
     let finalMimeType = rawDiagnostics.mimeType;
-    let finalStored = rawStored;
     let finalMetadata: Record<string, unknown> = {
       outputRole: 'FINAL_CANDIDATE',
       policyVersion: AI_IMAGE_EDIT_POLICY_VERSION,
@@ -510,18 +555,30 @@ export async function runAiImageEditJob(
         providerOutputAssetId: persistedRaw.id,
         ...composite.diagnostics,
       };
-      const finalSha256 = sha256(finalBuffer);
-      finalStored = await deps.uploadBuffer(
-        finalBuffer,
-        `edit-${job.id}-composite.png`,
-        finalMimeType,
-        {
-          category: 'ai-generated',
-          ownerId: job.ownerUserId,
-          idempotencyKey: `${job.id}:final:${finalSha256}`,
-        },
-      );
     }
+    const normalizedFinal = await normalizeReviewableEditCandidate({
+      buffer: finalBuffer,
+      expectedWidth: job.width,
+      expectedHeight: job.height,
+    });
+    finalBuffer = normalizedFinal.buffer;
+    finalMimeType = normalizedFinal.mimeType;
+    finalMetadata = {
+      ...finalMetadata,
+      pixelOrientationNormalized: true,
+      editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
+    };
+    const finalSha256 = sha256(finalBuffer);
+    const finalStored = await deps.uploadBuffer(
+      finalBuffer,
+      `edit-${job.id}-final.${normalizedFinal.extension}`,
+      finalMimeType,
+      {
+        category: 'ai-generated',
+        ownerId: job.ownerUserId,
+        idempotencyKey: `${job.id}:final:${finalSha256}`,
+      },
+    );
     const finalAsset = storedAsset({
       stored: finalStored,
       job,

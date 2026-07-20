@@ -22,7 +22,15 @@ export const AI_IMAGE_MASK_STROKE_POINT_LIMIT = 4096;
 export const AI_IMAGE_MASK_MAX_PIXELS = 12_000_000;
 export const AI_IMAGE_MASK_MAX_EDGE = 16_384;
 export const AI_IMAGE_MASK_MAX_ASPECT_RATIO = 20;
+export const AI_IMAGE_MASK_DRAFT_DISCARD_MESSAGE = '当前局部重绘遮罩尚未提交，继续将丢弃这些笔画。';
 const MIN_POINT_DISTANCE = 0.001;
+
+export function confirmAiImageMaskDraftDiscard(
+  dirty: boolean,
+  confirm: (message: string) => boolean,
+): boolean {
+  return !dirty || confirm(AI_IMAGE_MASK_DRAFT_DISCARD_MESSAGE);
+}
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));

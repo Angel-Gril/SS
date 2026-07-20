@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { PrismaAiImageJobRepository } from '../repositories/ai-image-job-repository.js';
@@ -7,6 +7,7 @@ import { PrismaAiMediaWorkflowRepository } from '../repositories/ai-media-workfl
 import { applyAiImageAssets } from '../services/ai-image-application.js';
 import { AI_IMAGE_EDIT_MASK_SEMANTICS } from '../services/ai-image-compositor.js';
 import { runAiImageEditJob } from '../services/ai-image-edit.js';
+import { AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION } from '../services/ai-image-edit-source.js';
 import { createFakeAiImageProvider } from '../services/ai-image-jobs.js';
 import { createAiMediaWorkflowService } from '../services/ai-media-workflows.js';
 
@@ -19,6 +20,232 @@ const digest = (buffer: Buffer) => createHash('sha256').update(buffer).digest('h
 
 async function rgbaPng(width: number, height: number, pixels: number[]) {
   return sharp(Buffer.from(pixels), { raw: { width, height, channels: 4 } }).png().toBuffer();
+}
+
+async function createSucceededCandidateFixture(database: PrismaClient, suffix: string) {
+  const ownerUserId = `edit_race_owner_${suffix}`;
+  const goodsId = `edit_race_goods_${suffix}`;
+  const subjectId = `edit_race_subject_${suffix}`;
+  const snapshotId = `edit_race_snapshot_${suffix}`;
+  const sourceAssetId = `edit_race_source_${suffix}`;
+  const source = await rgbaPng(2, 2, new Array(16).fill(40));
+  const generated = await rgbaPng(2, 2, new Array(16).fill(180));
+
+  await database.user.create({ data: {
+    id: ownerUserId, phone: `edit_race_${suffix}`, passwordHash: 'integration-test',
+  } });
+  await database.supplyGoods.create({ data: {
+    id: goodsId, userId: ownerUserId, title: 'AI edit race fixture',
+    sourcePlatform: '1688', sourceProductId: `race_product_${suffix}`,
+  } });
+  await database.sourceCaptureSubject.create({ data: {
+    id: subjectId, ownerUserId, sourcePlatform: '1688', sourceProductId: `race_product_${suffix}`,
+    legacySupplyGoodsId: goodsId,
+  } });
+  await database.sourceCaptureSnapshot.create({ data: {
+    id: snapshotId, subjectId, version: 1, schemaVersion: 'source-product-capture-v2',
+    captureHash: '7'.repeat(64), payloadBytes: 2, payload: {}, stageCounts: {}, provenance: {},
+    provenanceComplete: true, parserVersion: 'integration', completeness: {}, truncations: [],
+    hasEstimatedValues: false, profile: {}, profileHash: '8'.repeat(64), actorUserId: ownerUserId,
+    ingestChannel: 'WEB_ACCOUNT', rolloutRevision: 'integration', rolloutStage: 'v2_only',
+    capturedAt: new Date(),
+  } });
+  await (database as any).mediaAsset.create({ data: {
+    id: sourceAssetId, ownerUserId, kind: 'SOURCE_ORIGINAL', sourceCaptureSnapshotId: snapshotId,
+    sourceMediaKey: 'main-race', sourceUrl: 'https://source.example/race.png',
+    url: `/uploads/${sourceAssetId}.png`, storageBackend: 'local', storageKey: `${sourceAssetId}.png`,
+    mimeType: 'image/png', sizeBytes: source.length, width: 2, height: 2, sha256: digest(source),
+    metadata: { pixelOrientationNormalized: true },
+  } });
+
+  const workflowService = createAiMediaWorkflowService(new PrismaAiMediaWorkflowRepository(database));
+  const created = await workflowService.createImageEdit({
+    ownerUserId, actorUserId: ownerUserId, operation: 'FULL_EDIT', sourceAssetId,
+    prompt: 'Create a race candidate', negativePrompt: null,
+    resolvedPrompt: 'Frozen race prompt', resolvedNegativePrompt: 'Preserve identity',
+    templateKey: 'full-image-edit.base', templateReleaseId: `edit-race-release-${suffix}`,
+    templateChecksum: '9'.repeat(64), templateSnapshot: { sequence: 1 }, dailyLimit: 20,
+    idempotencyKey: `edit-race-origin-${suffix}`, context: { type: 'collect', id: goodsId },
+  });
+  const uploads = new Map<string, Buffer>();
+  await runAiImageEditJob(created.jobId, 1, {
+    repository: new PrismaAiImageJobRepository(database),
+    provider: createFakeAiImageProvider({ images: [{ buffer: generated, mimeType: 'image/png' }] }),
+    loadInputBuffer: async () => source,
+    uploadBuffer: async (buffer, filename) => {
+      uploads.set(filename, buffer);
+      return { url: `/uploads/${filename}`, backend: 'local', key: filename };
+    },
+  });
+  const candidate = await (database as any).mediaAsset.findFirstOrThrow({
+    where: { aiImageJobId: created.jobId, kind: 'AI_GENERATED' },
+  });
+  const candidateBuffer = [...uploads.entries()].find(([name]) => name.endsWith('-final.png'))?.[1];
+  if (!candidateBuffer) throw new Error('Race fixture did not persist a final candidate');
+  return {
+    ownerUserId,
+    goodsId,
+    snapshotId,
+    originWorkflowId: created.workflow.id,
+    candidate,
+  };
+}
+
+type SucceededCandidateFixture = Awaited<ReturnType<typeof createSucceededCandidateFixture>>;
+
+async function createCandidateConsumerRequest(tx: any, input: {
+  fixture: SucceededCandidateFixture;
+  suffix: string;
+  workflowId: string;
+  jobId: string;
+  requestFingerprint: string;
+}) {
+  const { fixture, suffix, workflowId, jobId, requestFingerprint } = input;
+  await tx.aiMediaWorkflow.create({ data: {
+    id: workflowId,
+    ownerUserId: fixture.ownerUserId,
+    actorUserId: fixture.ownerUserId,
+    operation: 'FULL_EDIT',
+    status: 'QUEUED',
+    reviewStatus: 'NOT_READY',
+    currentAttempt: 1,
+    contextType: 'collect',
+    contextId: fixture.goodsId,
+    idempotencyKey: `edit-race-consumer-${suffix}`,
+    requestFingerprint,
+  } });
+  await tx.aiImageJob.create({ data: {
+    id: jobId,
+    ownerUserId: fixture.ownerUserId,
+    actorUserId: fixture.ownerUserId,
+    operation: 'FULL_EDIT',
+    workflowId,
+    workflowAttempt: 1,
+    status: 'QUEUED',
+    provider: 'fake',
+    model: 'fake-image-edit-v1',
+    prompt: 'Race candidate consumer',
+    negativePrompt: null,
+    resolvedPrompt: 'Frozen race candidate consumer',
+    resolvedNegativePrompt: 'Preserve identity',
+    templateKey: 'full-image-edit.base',
+    templateReleaseId: `edit-race-consumer-release-${suffix}`,
+    templateChecksum: '3'.repeat(64),
+    templateSnapshot: { sequence: 1 },
+    requestFingerprint,
+    inputAssets: [{
+      assetId: fixture.candidate.id,
+      role: 'REFERENCE',
+      ordinal: 0,
+      sha256: fixture.candidate.sha256,
+      sizeBytes: fixture.candidate.sizeBytes,
+    }],
+    operationConfig: { policyVersion: 'ai-image-edit-policy/1.0' },
+    requestedImageCount: 1,
+    width: fixture.candidate.width,
+    height: fixture.candidate.height,
+    maxAttempts: 1,
+    idempotencyKey: `${workflowId}:attempt:1`,
+    estimatedCostCents: 0,
+  } });
+}
+
+async function insertCandidateConsumerInput(tx: any, input: {
+  fixture: SucceededCandidateFixture;
+  workflowId: string;
+}) {
+  const { fixture, workflowId } = input;
+  await tx.aiMediaWorkflowInput.create({ data: {
+    workflowId,
+    ownerUserId: fixture.ownerUserId,
+    assetId: fixture.candidate.id,
+    role: 'REFERENCE',
+    ordinal: 0,
+    assetSha256: fixture.candidate.sha256,
+    assetUrl: fixture.candidate.url,
+    mimeType: fixture.candidate.mimeType,
+    width: fixture.candidate.width,
+    height: fixture.candidate.height,
+  } });
+}
+
+async function createUnboundSuiteSlotFixture(database: PrismaClient, input: {
+  suffix: string;
+  ownerUserId: string;
+  goodsId: string;
+  subjectId: string;
+  snapshotId: string;
+}) {
+  const planId = `edit_suite_plan_${input.suffix}`;
+  const runId = `edit_suite_run_${input.suffix}`;
+  const versionId = `edit_suite_version_${input.suffix}`;
+  const suiteId = `edit_suite_${input.suffix}`;
+  const slotId = `edit_suite_slot_${input.suffix}`;
+  const requestFingerprint = '6'.repeat(64);
+  const triggerTables = [
+    'ai_media_plans',
+    'ai_media_planning_runs',
+    'ai_media_plan_versions',
+    'ai_media_suites',
+    'ai_media_suite_slots',
+  ];
+  await database.$transaction(async (tx: any) => {
+    for (const table of triggerTables) {
+      await tx.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
+    }
+    await tx.aiMediaPlan.create({ data: {
+      id: planId, ownerUserId: input.ownerUserId, actorUserId: input.ownerUserId,
+      sourceSubjectId: input.subjectId, contextType: 'collect', contextId: input.goodsId,
+      idempotencyKey: `edit-suite-plan-${input.suffix}`, requestFingerprint,
+      revision: 2, latestVersion: 0, reviewStatus: 'NOT_READY',
+    } });
+    await tx.aiMediaPlanningRun.create({ data: {
+      id: runId, planId, ownerUserId: input.ownerUserId, sourceSubjectId: input.subjectId,
+      actorUserId: input.ownerUserId, sourceCaptureSnapshotId: input.snapshotId,
+      attempt: 1, revision: 1, mode: 'RULE_BASED', engineVersion: 'integration', status: 'SUCCEEDED',
+      idempotencyKey: `edit-suite-run-${input.suffix}`, requestFingerprint,
+      sourceCaptureHash: 'b'.repeat(64), sourceProfileHash: 'c'.repeat(64),
+      inputFingerprint: 'd'.repeat(64), inputSnapshot: {}, inputHash: 'e'.repeat(64),
+      inputBytes: 2, completedAt: new Date(),
+    } });
+    await tx.aiMediaPlanVersion.create({ data: {
+      id: versionId, planId, ownerUserId: input.ownerUserId, sourceSubjectId: input.subjectId,
+      version: 1, planningRunId: runId, sourceCaptureSnapshotId: input.snapshotId,
+      sourceCaptureHash: 'b'.repeat(64), sourceProfileHash: 'c'.repeat(64),
+      sourceSchemaVersion: 'source-product-capture-v2', selectedSkuHash: 'f'.repeat(64),
+      inputAssetSetHash: '1'.repeat(64), inputFingerprint: 'd'.repeat(64),
+      planSchemaVersion: 'integration', plannerVersion: 'integration', mode: 'RULE_BASED',
+      inputSnapshot: {}, inputHash: 'e'.repeat(64), curation: {}, curationHash: '2'.repeat(64),
+      visionEvidence: {}, visionEvidenceHash: '3'.repeat(64), planPayload: {}, planHash: '4'.repeat(64),
+      planBytes: 2, provenance: {}, provenanceHash: '5'.repeat(64), actorUserId: input.ownerUserId,
+    } });
+    await tx.aiMediaPlan.update({ where: { id: planId }, data: {
+      latestVersion: 1, currentVersionId: versionId, approvedVersionId: versionId,
+      reviewStatus: 'APPROVED', reviewedByUserId: input.ownerUserId, reviewedAt: new Date(),
+    } });
+    await tx.aiMediaSuite.create({ data: {
+      id: suiteId, ownerUserId: input.ownerUserId, actorUserId: input.ownerUserId,
+      planId, planVersionId: versionId, sourceSubjectId: input.subjectId,
+      sourceCaptureSnapshotId: input.snapshotId, sourceCaptureHash: 'b'.repeat(64),
+      sourceProfileHash: 'c'.repeat(64), sourceSchemaVersion: 'source-product-capture-v2',
+      contextType: 'collect', contextId: input.goodsId, status: 'PLANNED', revision: 1,
+      idempotencyKey: `edit-suite-${input.suffix}`, requestFingerprint, previewHash: 'a'.repeat(64),
+      provider: 'fake', model: 'fake-image-suite-v1', providerConfigHash: '7'.repeat(64),
+      pricingVersion: 'integration', itemCount: 1, estimatedCostCents: 0,
+      maximumCostCents: 0, concurrencyLimit: 1,
+    } });
+    await tx.aiMediaSuiteSlot.create({ data: {
+      id: slotId, suiteId, ownerUserId: input.ownerUserId, ordinal: 0, slotKey: 'hero',
+      goal: 'hero', ownershipLevel: 'sku', ownershipKey: `sku-${input.suffix}`,
+      slotSnapshot: {}, slotHash: '8'.repeat(64), referencesSnapshot: [],
+      referencesHash: '9'.repeat(64), diagnostics: {}, status: 'PLANNED', attempt: 0,
+      revision: 1, estimatedCostCents: 0, maximumCostCents: 0,
+    } });
+    for (const table of [...triggerTables].reverse()) {
+      await tx.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER USER`);
+    }
+  });
+  return { suiteId, slotId };
 }
 
 function assertIsolatedSchema() {
@@ -35,7 +262,7 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
   });
   afterAll(async () => client!.$disconnect());
 
-  it('persists raw/composite lineage, reviews only the final candidate, and appends without replacing originals', async () => {
+  it('persists raw/composite lineage, executes chained candidates, and appends without replacing originals', async () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
     const ownerUserId = `edit_owner_${suffix}`;
     const goodsId = `edit_goods_${suffix}`;
@@ -127,9 +354,13 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
     const final = persistedAssets.find((asset: any) => asset.kind === 'AI_GENERATED');
     expect(raw).toBeTruthy();
     expect(final).toBeTruthy();
-    expect(final.metadata).toMatchObject({ providerOutputAssetId: raw.id });
+    expect(final).toMatchObject({ sourceCaptureSnapshotId: snapshotId });
+    expect(final.metadata).toMatchObject({
+      providerOutputAssetId: raw.id,
+      pixelOrientationNormalized: true,
+    });
     expect(await client!.mediaAssetLineage.count({ where: { jobId: created.jobId } })).toBe(4);
-    const finalBuffer = [...uploaded.entries()].find(([name]) => name.endsWith('-composite.png'))?.[1];
+    const finalBuffer = [...uploaded.entries()].find(([name]) => name.endsWith('-final.png'))?.[1];
     expect(finalBuffer).toBeTruthy();
     expect([...(await sharp(finalBuffer!).ensureAlpha().raw().toBuffer())]).toEqual([
       10, 20, 30, 255, 200, 200, 200, 200,
@@ -147,6 +378,368 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
       decision: 'APPROVE', note: null,
     });
     expect(approved.reviewStatus).toBe('APPROVED');
+
+    const chained = await workflowService.createImageEdit({
+      ownerUserId, actorUserId: ownerUserId, operation: 'FULL_EDIT',
+      sourceAssetId: final.id,
+      prompt: 'Polish the approved candidate', negativePrompt: null,
+      resolvedPrompt: 'Frozen chained edit prompt', resolvedNegativePrompt: 'Preserve product identity',
+      templateKey: 'full-image-edit.base', templateReleaseId: `edit-chain-release-${suffix}`,
+      templateChecksum: 'e'.repeat(64), templateSnapshot: { sequence: 1 },
+      dailyLimit: 20,
+      idempotencyKey: `edit-chain-${suffix}`, context: { type: 'collect', id: goodsId },
+    });
+    expect(chained).toMatchObject({ workflow: { operation: 'FULL_EDIT' }, replayed: false });
+
+    const chainedUploads = new Map<string, Buffer>();
+    await runAiImageEditJob(chained.jobId, 1, {
+      repository: jobRepository,
+      provider: createFakeAiImageProvider({ images: [{ buffer: candidate, mimeType: 'image/png' }] }),
+      loadInputBuffer: async (asset) => {
+        expect(asset).toMatchObject({
+          assetId: final.id,
+          role: 'REFERENCE',
+          kind: 'AI_GENERATED',
+        });
+        return finalBuffer!;
+      },
+      uploadBuffer: async (buffer, filename) => {
+        chainedUploads.set(filename, buffer);
+        return { url: `/uploads/${filename}`, backend: 'local', key: filename };
+      },
+    });
+    expect(await workflowService.get(chained.workflow.id, ownerUserId)).toMatchObject({
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      operation: 'FULL_EDIT',
+    });
+    const chainedFinal = await (client! as any).mediaAsset.findFirstOrThrow({
+      where: { aiImageJobId: chained.jobId, kind: 'AI_GENERATED' },
+    });
+    expect(chainedFinal).toMatchObject({
+      sourceCaptureSnapshotId: snapshotId,
+      metadata: {
+        outputRole: 'FINAL_CANDIDATE',
+        pixelOrientationNormalized: true,
+        editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
+      },
+    });
+    expect([...chainedUploads.keys()].some((name) => name.endsWith('-final.png'))).toBe(true);
+
+    const candidateMaskAssetId = `edit_candidate_mask_${suffix}`;
+    await (client! as any).mediaAsset.create({ data: {
+      id: candidateMaskAssetId,
+      ownerUserId,
+      kind: 'EDIT_MASK',
+      sourceCaptureSnapshotId: snapshotId,
+      sourceMediaKey: `edit-mask:${final.id}:${digest(mask)}`,
+      url: `/uploads/${candidateMaskAssetId}.png`,
+      storageBackend: 'local',
+      storageKey: `${candidateMaskAssetId}.png`,
+      mimeType: 'image/png',
+      sizeBytes: mask.length,
+      width: 2,
+      height: 2,
+      sha256: digest(mask),
+      metadata: {
+        contractVersion: 'ai-image-edit-policy/1.0',
+        maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+        sourceAssetId: final.id,
+        sourceSha256: final.sha256,
+      },
+    } });
+    const chainedInpaint = await workflowService.createImageEdit({
+      ownerUserId, actorUserId: ownerUserId, operation: 'INPAINT',
+      sourceAssetId: final.id, maskAssetId: candidateMaskAssetId,
+      maskSemantics: AI_IMAGE_EDIT_MASK_SEMANTICS,
+      prompt: 'Remove one mark from the approved candidate', negativePrompt: null,
+      resolvedPrompt: 'Frozen chained inpaint prompt', resolvedNegativePrompt: 'Preserve product identity',
+      templateKey: 'inpaint.base', templateReleaseId: `edit-chain-inpaint-release-${suffix}`,
+      templateChecksum: 'f'.repeat(64), templateSnapshot: { sequence: 1 },
+      dailyLimit: 20,
+      idempotencyKey: `edit-chain-inpaint-${suffix}`, context: { type: 'collect', id: goodsId },
+    });
+    expect(chainedInpaint).toMatchObject({ workflow: { operation: 'INPAINT' }, replayed: false });
+
+    const chainedInpaintUploads = new Map<string, Buffer>();
+    await runAiImageEditJob(chainedInpaint.jobId, 1, {
+      repository: jobRepository,
+      provider: createFakeAiImageProvider({ images: [{ buffer: candidate, mimeType: 'image/png' }] }),
+      loadInputBuffer: async (asset) => {
+        if (asset.role === 'MASK') {
+          expect(asset).toMatchObject({ assetId: candidateMaskAssetId, kind: 'EDIT_MASK' });
+          return mask;
+        }
+        expect(asset).toMatchObject({
+          assetId: final.id,
+          role: 'REFERENCE',
+          kind: 'AI_GENERATED',
+        });
+        return finalBuffer!;
+      },
+      uploadBuffer: async (buffer, filename) => {
+        chainedInpaintUploads.set(filename, buffer);
+        return { url: `/uploads/${filename}`, backend: 'local', key: filename };
+      },
+    });
+    expect(await workflowService.get(chainedInpaint.workflow.id, ownerUserId)).toMatchObject({
+      status: 'SUCCEEDED',
+      reviewStatus: 'PENDING',
+      operation: 'INPAINT',
+    });
+    const chainedInpaintFinal = await (client! as any).mediaAsset.findFirstOrThrow({
+      where: { aiImageJobId: chainedInpaint.jobId, kind: 'AI_GENERATED' },
+    });
+    expect(chainedInpaintFinal).toMatchObject({
+      sourceCaptureSnapshotId: snapshotId,
+      metadata: {
+        outputRole: 'FINAL_COMPOSITE',
+        pixelOrientationNormalized: true,
+        editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
+      },
+    });
+    expect([...chainedInpaintUploads.keys()].some((name) => name.endsWith('-final.png'))).toBe(true);
+
+    const suiteFixture = await createUnboundSuiteSlotFixture(client!, {
+      suffix, ownerUserId, goodsId, subjectId, snapshotId,
+    });
+    const unrelatedWorkflowId = `edit_reverse_new_workflow_${suffix}`;
+    await client!.aiMediaWorkflow.create({ data: {
+      id: unrelatedWorkflowId, ownerUserId, actorUserId: ownerUserId,
+      operation: 'IMAGE_TO_IMAGE', status: 'QUEUED', reviewStatus: 'NOT_READY',
+      contextType: 'collect', contextId: goodsId,
+      idempotencyKey: `edit-reverse-new-${suffix}`, requestFingerprint: '5'.repeat(64),
+    } });
+    const originReferenceInput = await client!.aiMediaWorkflowInput.findFirstOrThrow({
+      where: { workflowId: created.workflow.id, role: 'REFERENCE', ordinal: 0 },
+    });
+    const disableTriggers = async (tx: any, table: string, triggers: string[]) => {
+      for (const trigger of triggers) {
+        await tx.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER "${trigger}"`);
+      }
+      return async () => {
+        for (const trigger of [...triggers].reverse()) {
+          await tx.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER "${trigger}"`);
+        }
+      };
+    };
+    const expectDeferredMutationRejected = async (
+      mutate: (tx: any) => Promise<void | (() => Promise<void>)>,
+      expected: RegExp,
+    ) => {
+      await expect(client!.$transaction(async (tx: any) => {
+        await tx.$executeRawUnsafe('SET CONSTRAINTS ALL DEFERRED');
+        const restoreDisabledTriggers = await mutate(tx);
+        await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+        await restoreDisabledTriggers?.();
+      })).rejects.toThrow(expected);
+    };
+
+    await expectDeferredMutationRejected(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_media_workflows" SET "status" = 'RUNNING'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.workflow.id,
+        ownerUserId,
+      );
+    }, /generated source authority is invalid/i);
+    await expectDeferredMutationRejected(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_media_workflows" SET "completed_at" = NULL
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.workflow.id,
+        ownerUserId,
+      );
+    }, /generated source authority is invalid/i);
+    await expectDeferredMutationRejected(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_image_jobs" SET "status" = 'RUNNING'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.jobId,
+        ownerUserId,
+      );
+    }, /generated source authority is invalid|output graph is invalid/i);
+    await expectDeferredMutationRejected(async (tx) => {
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_media_workflows" SET "current_attempt" = 2
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.workflow.id,
+        ownerUserId,
+      );
+    }, /generated source authority is invalid|job graph is invalid/i);
+
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'ai_image_jobs', [
+        'ai_image_jobs_workflow_request_immutable',
+        'protect_ai_cost_job_identity',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_image_jobs"
+         SET "workflow_id" = NULL, "workflow_attempt" = NULL
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.jobId,
+        ownerUserId,
+      );
+      return restore;
+    }, /generated source (?:authority is invalid|origin workflow is required)|job graph is invalid/i);
+
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'ai_image_jobs', [
+        'ai_image_jobs_validate_workflow_binding',
+        'ai_image_jobs_workflow_request_immutable',
+        'protect_ai_cost_job_identity',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_image_jobs" SET "operation" = 'IMAGE_TO_IMAGE'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.jobId,
+        ownerUserId,
+      );
+      return restore;
+    }, /generated source authority is invalid|job graph is invalid/i);
+
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'ai_media_workflows', [
+        'ai_media_workflows_identity_immutable',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_media_workflows" SET "operation" = 'IMAGE_TO_IMAGE'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        created.workflow.id,
+        ownerUserId,
+      );
+      return restore;
+    }, /generated source authority is invalid|job graph is invalid/i);
+
+    for (const [column, value] of [
+      ['context_sku_key', `wrong-sku-${suffix}`],
+      ['context_slot_key', `wrong-slot-${suffix}`],
+    ] as const) {
+      await expectDeferredMutationRejected(async (tx) => {
+        const restore = await disableTriggers(tx, 'ai_media_workflows', [
+          'ai_media_workflows_identity_immutable',
+        ]);
+        await tx.$executeRawUnsafe(
+          `UPDATE "ai_media_workflows" SET "${column}" = $1
+           WHERE "id" = $2 AND "owner_user_id" = $3`,
+          value,
+          created.workflow.id,
+          ownerUserId,
+        );
+        return restore;
+      }, /candidate SKU or slot scope is invalid/i);
+    }
+
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'media_assets', [
+        'media_assets_ai_image_edit_metadata_immutable',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "media_assets"
+         SET "metadata" = "metadata" - 'editSourceContractVersion'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        final.id,
+        ownerUserId,
+      );
+      return restore;
+    }, /candidate contract is invalid/i);
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'media_assets', [
+        'media_assets_referenced_identity_immutable',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "media_assets"
+         SET "mime_type" = 'image/webp', "sha256" = 'NOT-A-LOWERCASE-SHA256'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        final.id,
+        ownerUserId,
+      );
+      return restore;
+    }, /candidate contract is invalid|inpaint mask authority is invalid/i);
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'media_assets', [
+        'media_assets_referenced_identity_immutable',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "media_assets" SET "storage_key" = E'\t\n', "url" = E' \t'
+         WHERE "id" = $1 AND "owner_user_id" = $2`,
+        final.id,
+        ownerUserId,
+      );
+      return restore;
+    }, /candidate contract is invalid/i);
+
+    await expectDeferredMutationRejected(async (tx) => {
+      const restore = await disableTriggers(tx, 'ai_media_workflow_inputs', [
+        'ai_media_workflow_inputs_immutable',
+      ]);
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_media_workflow_inputs" SET "workflow_id" = $1, "ordinal" = 1
+         WHERE "id" = $2 AND "owner_user_id" = $3`,
+        unrelatedWorkflowId,
+        originReferenceInput.id,
+        ownerUserId,
+      );
+      return restore;
+    }, /generated source authority is invalid/i);
+
+    await expectDeferredMutationRejected(async (tx) => {
+      await tx.$executeRawUnsafe('ALTER TABLE "ai_media_suite_slots" DISABLE TRIGGER USER');
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "ai_media_suite_slots" ENABLE TRIGGER "ai_media_edit_suite_slot_graph"',
+      );
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "ai_media_suite_slots" ENABLE TRIGGER "ai_media_edit_candidate_dependency_suite_slot"',
+      );
+      await tx.$executeRawUnsafe(
+        `UPDATE "ai_media_suite_slots" SET "child_workflow_id" = $1
+         WHERE "id" = $2 AND "suite_id" = $3 AND "owner_user_id" = $4`,
+        created.workflow.id,
+        suiteFixture.slotId,
+        suiteFixture.suiteId,
+        ownerUserId,
+      );
+      return async () => {
+        await tx.$executeRawUnsafe('ALTER TABLE "ai_media_suite_slots" ENABLE TRIGGER USER');
+      };
+    }, /cannot be suite children|generated source authority is invalid/i);
+
+    expect(await client!.aiMediaWorkflow.findUniqueOrThrow({
+      where: { id: created.workflow.id },
+      select: {
+        status: true, completedAt: true, currentAttempt: true, operation: true,
+        contextSkuKey: true, contextSlotKey: true,
+      },
+    })).toMatchObject({
+      status: 'SUCCEEDED', completedAt: expect.any(Date), currentAttempt: 1,
+      operation: 'INPAINT', contextSkuKey: null, contextSlotKey: null,
+    });
+    expect(await client!.aiImageJob.findUniqueOrThrow({
+      where: { id: created.jobId },
+      select: { status: true, operation: true, workflowId: true, workflowAttempt: true },
+    })).toMatchObject({
+      status: 'SUCCEEDED', operation: 'INPAINT',
+      workflowId: created.workflow.id, workflowAttempt: 1,
+    });
+    expect(await client!.mediaAsset.findUniqueOrThrow({
+      where: { id: final.id }, select: {
+        storageKey: true, url: true, mimeType: true, sha256: true, metadata: true,
+      },
+    })).toMatchObject({
+      storageKey: expect.stringMatching(/\S/u),
+      url: expect.stringMatching(/\S/u),
+      mimeType: 'image/png',
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      metadata: expect.objectContaining({
+        editSourceContractVersion: AI_MEDIA_EDIT_SOURCE_CONTRACT_VERSION,
+      }),
+    });
+    expect(await client!.aiMediaWorkflowInput.findUniqueOrThrow({
+      where: { id: originReferenceInput.id }, select: { workflowId: true, ordinal: true },
+    })).toMatchObject({ workflowId: created.workflow.id, ordinal: 0 });
+    expect(await client!.aiMediaSuiteSlot.findUniqueOrThrow({
+      where: { id: suiteFixture.slotId }, select: { childWorkflowId: true },
+    })).toMatchObject({ childWorkflowId: null });
 
     const target = await client!.supplyGoods.findUniqueOrThrow({ where: { id: goodsId } });
     const applied = await applyAiImageAssets(client! as any, {
@@ -169,6 +762,273 @@ describePostgres('AI image edit PostgreSQL workflow', () => {
       where: { id: final.id },
       data: { metadata: { ...(final.metadata as object), providerOutputAssetId: 'forged-raw-id' } },
     })).rejects.toThrow(/metadata is immutable|output graph is invalid/i);
+  });
+
+  it('serializes candidate consumption against origin invalidation at READ COMMITTED', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const fixture = await createSucceededCandidateFixture(client!, suffix);
+    const consumerWorkflowId = `edit_race_consumer_workflow_${suffix}`;
+    const consumerJobId = `edit_race_consumer_job_${suffix}`;
+    const requestFingerprint = '4'.repeat(64);
+    const clientA = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    const clientB = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    await Promise.all([clientA.$connect(), clientB.$connect()]);
+
+    let readyCount = 0;
+    let resolveBothReady!: () => void;
+    const bothReady = new Promise<void>((resolve) => { resolveBothReady = resolve; });
+    const markReady = () => {
+      readyCount += 1;
+      if (readyCount === 2) resolveBothReady();
+    };
+    let resolveStart!: () => void;
+    const start = new Promise<void>((resolve) => { resolveStart = resolve; });
+    let mutationDoneCount = 0;
+    let resolveFirstMutation!: () => void;
+    const firstMutation = new Promise<void>((resolve) => { resolveFirstMutation = resolve; });
+    const markMutationDone = () => {
+      mutationDoneCount += 1;
+      resolveFirstMutation();
+    };
+    let resolveCommit!: () => void;
+    const commit = new Promise<void>((resolve) => { resolveCommit = resolve; });
+    const transactionOptions = {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      maxWait: 5_000,
+      timeout: 15_000,
+    } as const;
+
+    const consume = clientA.$transaction(async (tx) => {
+      await createCandidateConsumerRequest(tx, {
+        fixture, suffix, workflowId: consumerWorkflowId, jobId: consumerJobId, requestFingerprint,
+      });
+      markReady();
+      await start;
+      await insertCandidateConsumerInput(tx, { fixture, workflowId: consumerWorkflowId });
+      markMutationDone();
+      await commit;
+      return 'consumer-committed';
+    }, transactionOptions);
+    const invalidate = clientB.$transaction(async (tx) => {
+      markReady();
+      await start;
+      await tx.aiMediaWorkflow.update({
+        where: { id: fixture.originWorkflowId },
+        data: { status: 'RUNNING' },
+      });
+      markMutationDone();
+      await commit;
+      return 'invalidation-committed';
+    }, transactionOptions);
+
+    let outcomes: PromiseSettledResult<string>[] = [];
+    try {
+      await bothReady;
+      resolveStart();
+      await Promise.race([
+        firstMutation,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('Candidate authority race did not reach either mutation')), 5_000);
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(mutationDoneCount).toBe(1);
+      resolveCommit();
+      outcomes = await Promise.allSettled([consume, invalidate]);
+    } finally {
+      resolveStart();
+      resolveCommit();
+      if (!outcomes.length) outcomes = await Promise.allSettled([consume, invalidate]);
+      await Promise.all([clientA.$disconnect(), clientB.$disconnect()]);
+    }
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(rejected?.status === 'rejected'
+      && /generated source authority is invalid|candidate contract is invalid/i.test(
+        String(rejected.reason?.message || ''),
+      )).toBe(true);
+
+    const [origin, consumerCount] = await Promise.all([
+      client!.aiMediaWorkflow.findUniqueOrThrow({
+        where: { id: fixture.originWorkflowId }, select: { status: true },
+      }),
+      client!.aiMediaWorkflow.count({ where: { id: consumerWorkflowId } }),
+    ]);
+    expect(
+      (consumerCount === 1 && origin.status === 'SUCCEEDED')
+      || (consumerCount === 0 && origin.status === 'RUNNING'),
+    ).toBe(true);
+    if (consumerCount === 1) {
+      await client!.$executeRawUnsafe(
+        'SELECT assert_standalone_ai_image_edit_graph($1::text, $2::text)',
+        consumerWorkflowId,
+        fixture.ownerUserId,
+      );
+      await client!.$executeRawUnsafe(
+        'SELECT assert_ai_image_edit_candidate_contract($1::text, $2::text)',
+        consumerWorkflowId,
+        fixture.ownerUserId,
+      );
+      await client!.$executeRawUnsafe(
+        'SELECT assert_ai_image_edit_candidate_scope($1::text, $2::text)',
+        consumerWorkflowId,
+        fixture.ownerUserId,
+      );
+    }
+  });
+
+  it('serializes candidate contract mutation against consumption at READ COMMITTED', async () => {
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const fixture = await createSucceededCandidateFixture(client!, suffix);
+    const consumerWorkflowId = `edit_asset_race_workflow_${suffix}`;
+    const consumerJobId = `edit_asset_race_job_${suffix}`;
+    const requestFingerprint = '2'.repeat(64);
+    const invalidStorageKey = ' \t';
+    const clientA = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    const clientB = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    const transactionOptions = {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      maxWait: 5_000,
+      timeout: 15_000,
+    } as const;
+
+    let readyCount = 0;
+    let resolveBothReady!: () => void;
+    const bothReady = new Promise<void>((resolve) => { resolveBothReady = resolve; });
+    const markReady = () => {
+      readyCount += 1;
+      if (readyCount === 2) resolveBothReady();
+    };
+    let resolveStart!: () => void;
+    const start = new Promise<void>((resolve) => { resolveStart = resolve; });
+    let mutationDoneCount = 0;
+    let resolveFirstMutation!: () => void;
+    const firstMutation = new Promise<void>((resolve) => { resolveFirstMutation = resolve; });
+    const markMutationDone = () => {
+      mutationDoneCount += 1;
+      resolveFirstMutation();
+    };
+    let resolveCommit!: () => void;
+    const commit = new Promise<void>((resolve) => { resolveCommit = resolve; });
+
+    let triggerDisabled = false;
+    let primaryError: unknown;
+    let cleanupError: unknown;
+    let consume: Promise<string> | null = null;
+    let mutateContract: Promise<string> | null = null;
+    let outcomes: PromiseSettledResult<string>[] = [];
+    try {
+      await client!.$executeRawUnsafe(
+        'ALTER TABLE "media_assets" DISABLE TRIGGER "media_assets_referenced_identity_immutable"',
+      );
+      triggerDisabled = true;
+      await Promise.all([clientA.$connect(), clientB.$connect()]);
+
+      consume = clientA.$transaction(async (tx) => {
+        await createCandidateConsumerRequest(tx, {
+          fixture, suffix, workflowId: consumerWorkflowId, jobId: consumerJobId, requestFingerprint,
+        });
+        markReady();
+        await start;
+        await insertCandidateConsumerInput(tx, { fixture, workflowId: consumerWorkflowId });
+        markMutationDone();
+        await commit;
+        return 'consumer-committed';
+      }, transactionOptions);
+      mutateContract = clientB.$transaction(async (tx) => {
+        markReady();
+        await start;
+        await tx.mediaAsset.update({
+          where: { id: fixture.candidate.id },
+          data: { storageKey: invalidStorageKey },
+        });
+        markMutationDone();
+        await commit;
+        return 'asset-mutation-committed';
+      }, transactionOptions);
+
+      await bothReady;
+      resolveStart();
+      await Promise.race([
+        firstMutation,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('Candidate contract race did not reach either mutation')), 5_000);
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(mutationDoneCount).toBe(1);
+      resolveCommit();
+      outcomes = await Promise.allSettled([consume, mutateContract]);
+    } catch (error) {
+      primaryError = error;
+    } finally {
+      resolveStart();
+      resolveCommit();
+      try {
+        if (!outcomes.length && consume && mutateContract) {
+          outcomes = await Promise.allSettled([consume, mutateContract]);
+        } else {
+          await Promise.allSettled([consume, mutateContract].filter(
+            (promise): promise is Promise<string> => promise !== null,
+          ));
+        }
+      } catch (error) {
+        cleanupError = error;
+      }
+      try {
+        await Promise.all([clientA.$disconnect(), clientB.$disconnect()]);
+      } catch (error) {
+        cleanupError ||= error;
+      }
+      if (triggerDisabled) {
+        try {
+          await client!.$executeRawUnsafe(
+            'ALTER TABLE "media_assets" ENABLE TRIGGER "media_assets_referenced_identity_immutable"',
+          );
+        } catch (error) {
+          cleanupError ||= error;
+        }
+      }
+    }
+    if (primaryError) throw primaryError;
+    if (cleanupError) throw cleanupError;
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(rejected?.status === 'rejected'
+      && /generated source authority is invalid|candidate contract is invalid/i.test(
+        String(rejected.reason?.message || ''),
+      )).toBe(true);
+
+    const [candidate, consumerCount, origin] = await Promise.all([
+      client!.mediaAsset.findUniqueOrThrow({
+        where: { id: fixture.candidate.id }, select: { storageKey: true },
+      }),
+      client!.aiMediaWorkflow.count({ where: { id: consumerWorkflowId } }),
+      client!.aiMediaWorkflow.findUniqueOrThrow({
+        where: { id: fixture.originWorkflowId }, select: { status: true },
+      }),
+    ]);
+    expect(origin.status).toBe('SUCCEEDED');
+    expect(
+      (consumerCount === 1 && candidate.storageKey === fixture.candidate.storageKey)
+      || (consumerCount === 0 && candidate.storageKey === invalidStorageKey),
+    ).toBe(true);
+    if (consumerCount === 1) {
+      await client!.$executeRawUnsafe(
+        'SELECT assert_standalone_ai_image_edit_graph($1::text, $2::text)',
+        consumerWorkflowId,
+        fixture.ownerUserId,
+      );
+      await client!.$executeRawUnsafe(
+        'SELECT assert_ai_image_edit_candidate_contract($1::text, $2::text)',
+        consumerWorkflowId,
+        fixture.ownerUserId,
+      );
+    }
   });
 
   it('allows only one final candidate when concurrent transactions target the same edit job', async () => {

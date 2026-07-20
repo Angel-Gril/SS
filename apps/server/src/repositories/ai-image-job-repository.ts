@@ -848,6 +848,22 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
         actualCostCents: data.actualCostCents,
         billedUnits: data.billedUnits,
       });
+      const inputs = job.workflowId
+        ? await tx.aiMediaWorkflowInput.findMany({
+          where: { workflowId: job.workflowId },
+          orderBy: { ordinal: 'asc' },
+          include: { asset: { select: { sourceCaptureSnapshotId: true } } },
+        })
+        : [];
+      const editSourceSnapshotId = ['FULL_EDIT', 'INPAINT'].includes(String(job.operation))
+        ? String(inputs.find((input: any) => input.role === 'REFERENCE')
+          ?.asset?.sourceCaptureSnapshotId || '').trim()
+        : '';
+      if (['FULL_EDIT', 'INPAINT'].includes(String(job.operation)) && !editSourceSnapshotId) {
+        throw Object.assign(new Error('Edit completion requires a frozen source snapshot'), {
+          code: 'INVALID_EDIT_OUTPUT_GRAPH',
+        });
+      }
       const outputs = [];
       for (const asset of data.assets) {
         outputs.push(await tx.mediaAsset.create({ data: {
@@ -863,10 +879,10 @@ export class PrismaAiImageJobRepository implements AiImageJobRepository {
           height: asset.height ?? null,
           sha256: asset.sha256,
           metadata: asset.metadata || undefined,
+          ...(editSourceSnapshotId ? { sourceCaptureSnapshotId: editSourceSnapshotId } : {}),
         } }));
       }
       if (job.workflowId) {
-        const inputs = await tx.aiMediaWorkflowInput.findMany({ where: { workflowId: job.workflowId }, orderBy: { ordinal: 'asc' } });
         for (const output of outputs) {
           for (const input of inputs) {
             await tx.mediaAssetLineage.create({ data: {

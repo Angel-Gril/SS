@@ -91,7 +91,7 @@ MIGRATION_TIMEOUT=20m
 
 ## AI Media 暗态发布门禁
 
-Unit 9C-A 仅实现后端 fake-only `FULL_EDIT` / `INPAINT`。真实 Provider、Web/扩展 Mask 编辑器、候选图链式编辑、回滚 UI 和外部质量验收均未完成。发布时以下状态必须为 `false` 或 absent：
+Unit 9C-A、10B-E 和 9C-B 已实现暗态 fake-only `FULL_EDIT` / `INPAINT`、Web Mask 编辑器及受约束的候选链式编辑。`1600` 至 `1660` migration 会前向保留来源工作流互斥锁、OLD/NEW 反向重验和完整候选图片契约，应用版本回滚不得尝试回退这些 additive database guards。真实 Provider、扩展端 Mask 编辑器、替换/回滚 UI 和外部质量验收仍未完成。发布时以下状态必须为 `false` 或 absent：
 
 - `feature_ai_media_workflow_v2`
 - `feature_ai_media_suite`
@@ -125,7 +125,7 @@ DEPLOY_DIR=/opt/ss-erp/current ENV_FILE=.env.staging bash scripts/verify-ai-medi
 
 - 应用回滚：保留最近 3 个镜像 tag，Nginx 或 compose 切回上一版。
 - 数据库回滚：优先前向修复；破坏性 migration 必须先备份并准备手写回滚 SQL。
-- Unit 9C-A 暗态回滚：关闭 AI Media master/suite/full-edit/inpaint/Web-media 开关并清空 rollout tenant 列表；保留 workflow、asset、job 和 migration 数据供兼容读取与审计。
+- Unit 9C 暗态回滚：关闭 AI Media master/suite/full-edit/inpaint/Web-media 开关并清空 rollout tenant 列表；保留 workflow、asset、job 和 migration 数据供兼容读取与审计。
 - OSS 回滚：对象 key 不覆盖，用版本化路径，如 `ss-erp/images/yyyy/mm/...`。
 
 ## 备份策略
